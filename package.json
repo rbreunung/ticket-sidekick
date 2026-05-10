@@ -1,0 +1,68 @@
+{
+  "name": "jira-copilot",
+  "displayName": "Jira Copilot",
+  "description": "Manage Jira tickets with GitHub Copilot Chat",
+  "version": "0.0.1",
+  "publisher": "your-publisher-id",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["AI"],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "jira-copilot.jira",
+        "name": "jira",
+        "fullName": "Jira Copilot",
+        "description": "Manage Jira tickets with natural language",
+        "isSticky": true
+      }
+    ],
+    "commands": [
+      {
+        "command": "jira-copilot.setDataCenterToken",
+        "title": "Jira Copilot: Set Personal Access Token"
+      },
+      {
+        "command": "jira-copilot.configureCloud",
+        "title": "Jira Copilot: Configure Cloud Credentials"
+      }
+    ],
+    "configuration": {
+      "title": "Jira Copilot",
+      "properties": {
+        "jiraCopilot.baseUrl": {
+          "type": "string",
+          "description": "Base URL of your Jira instance (e.g. https://jira.mycompany.com)"
+        },
+        "jiraCopilot.authType": {
+          "type": "string",
+          "enum": ["datacenter", "cloud"],
+          "default": "datacenter",
+          "description": "Authentication mode: 'datacenter' uses Bearer PAT, 'cloud' uses Basic email:apiToken"
+        },
+        "jiraCopilot.requiredFields": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Field names that must be set for ticket validation (e.g. [\"assignee\", \"priority\"])"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "vitest run",
+    "test:e2e": "node ./out/test/runTest.js",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/test-electron": "^2.4.0",
+    "@vscode/vsce": "^2.26.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  }
+}
