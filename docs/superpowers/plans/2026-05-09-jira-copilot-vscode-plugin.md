@@ -485,7 +485,7 @@ Create `src/test/branchParser.test.ts`:
 
 ```typescript
 import { describe, it, expect } from 'vitest';
-import { extractTicketId } from '../../utils/branchParser';
+import { extractTicketId } from '../utils/branchParser';
 
 describe('extractTicketId', () => {
   it('extracts ticket ID from standard feature branch', () => {
@@ -571,8 +571,8 @@ Create `src/test/JiraApiClient.test.ts`:
 
 ```typescript
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { JiraApiClient } from '../../jira/JiraApiClient';
-import type { JiraIssue } from '../../jira/IJiraClient';
+import { JiraApiClient } from '../jira/JiraApiClient';
+import type { JiraIssue } from '../jira/IJiraClient';
 
 const BASE_CONFIG = {
   baseUrl: 'https://jira.example.com',
@@ -887,8 +887,8 @@ Create `src/test/TicketService.test.ts`:
 
 ```typescript
 import { describe, it, expect, beforeEach } from 'vitest';
-import { TicketService } from '../../services/TicketService';
-import { MockJiraClient } from '../mocks/MockJiraClient';
+import { TicketService } from '../services/TicketService';
+import { MockJiraClient } from './mocks/MockJiraClient';
 
 describe('TicketService', () => {
   let client: MockJiraClient;
@@ -1152,7 +1152,7 @@ export class TicketService {
 npm test
 ```
 
-Expected: all tests pass (8 + 7 + 13 = 28 total).
+Expected: all tests pass (8 + 7 + 16 = 31 total).
 
 - [ ] **Step 5: Commit**
 
@@ -1393,7 +1393,7 @@ Expected: exit code 0.
 npm test
 ```
 
-Expected: 28 tests pass.
+Expected: 31 tests pass.
 
 - [ ] **Step 5: Commit**
 
@@ -1558,7 +1558,7 @@ Used by the `check required fields` command.
 npm run compile && npm test
 ```
 
-Expected: compile succeeds, 28 tests pass.
+Expected: compile succeeds, 31 tests pass.
 
 - [ ] **Step 4: Commit**
 
