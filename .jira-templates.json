@@ -1,0 +1,37 @@
+{
+  "templates": [
+    {
+      "name": "Billing App Bug",
+      "defaultFields": {
+        "priority": "High",
+        "labels": ["billing"]
+      },
+      "resolveFields": {
+        "customfield_10020": { "type": "sprint", "name": "Sprint 5" },
+        "customfield_10200": { "type": "team", "name": "Backend Team" }
+      },
+      "descriptionSections": [
+        "Steps to reproduce",
+        "Expected behavior",
+        "Actual behavior",
+        "Environment"
+      ]
+    },
+    {
+      "name": "Frontend Story",
+      "defaultFields": {
+        "priority": "Medium",
+        "labels": ["frontend"]
+      },
+      "resolveFields": {
+        "customfield_10020": { "type": "sprint", "id": 42 },
+        "customfield_10200": [{ "type": "team", "id": "abc-team-id" }]
+      },
+      "descriptionSections": [
+        "User story",
+        "Acceptance criteria",
+        "Design link"
+      ]
+    }
+  ]
+}

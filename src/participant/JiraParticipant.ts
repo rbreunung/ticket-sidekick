@@ -2,8 +2,12 @@ import * as vscode from 'vscode';
 import { execSync } from 'child_process';
 import { JiraApiClient } from '../jira/JiraApiClient';
 import { ConfigService } from '../services/ConfigService';
-import { TicketService } from '../services/TicketService';
+import { TicketService, assembleDescription, wrapInAdf } from '../services/TicketService';
+import { TemplateService } from '../templates/TemplateService';
+import type { JiraTemplate } from '../templates/TemplateService';
+import { FieldResolver } from '../templates/FieldResolver';
 import { extractTicketId } from '../utils/branchParser';
+import { type CreationSession, extractCreationSessionFromText } from './sessionState';
 
 type Operation =
   | 'getTicket'
@@ -72,6 +76,27 @@ async function generateContent(
   return content.trim();
 }
 
+async function checkSectionCoverage(
+  prompt: string,
+  sections: string[],
+  model: vscode.LanguageModelChat,
+  token: vscode.CancellationToken,
+): Promise<string[]> {
+  const message = vscode.LanguageModelChatMessage.User(
+    `Does this text address any of these sections? Reply with ONLY a JSON array of section names that are clearly covered.\nSections: ${JSON.stringify(sections)}\nText: ${JSON.stringify(prompt)}`,
+  );
+  const response = await model.sendRequest([message], {}, token);
+  let raw = '';
+  for await (const chunk of response.text) raw += chunk;
+  const match = raw.match(/\[[\s\S]*\]/);
+  if (!match) return [];
+  try {
+    return JSON.parse(match[0]) as string[];
+  } catch {
+    return [];
+  }
+}
+
 function resolveTicketFromBranch(): string | null {
   try {
     const branch = execSync('git branch --show-current', { encoding: 'utf-8' }).trim();
@@ -129,13 +154,181 @@ async function resolveIssueType(
   return picked ?? null;
 }
 
+function parseCreationSession(context: vscode.ChatContext): CreationSession | null {
+  for (let i = context.history.length - 1; i >= 0; i--) {
+    const turn = context.history[i];
+    if (turn instanceof vscode.ChatResponseTurn) {
+      const text = turn.response
+        .map((p) => (p instanceof vscode.ChatResponseMarkdownPart ? p.value.value : ''))
+        .join('');
+      const result = extractCreationSessionFromText(text);
+      if (result) return result;
+    }
+  }
+  return null;
+}
+
+function streamNextSection(session: CreationSession, stream: vscode.ChatResponseStream): void {
+  const next = session.pending[0];
+  const isLast = session.pending.length === 1;
+  stream.markdown(isLast ? `Last one:\n\n**${next}** — ` : `**${next}** — `);
+  stream.markdown(`\n\n<!-- @jira-create:${JSON.stringify(session)} -->`);
+}
+
+async function finishTicketCreation(
+  session: CreationSession,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+): Promise<void> {
+  const descriptionText = assembleDescription(session.allSections, session.answers);
+  const additionalFields: Record<string, unknown> = {
+    ...session.fields,
+    description: wrapInAdf(descriptionText),
+  };
+  const result = await ticketService.createTicket(
+    session.project,
+    session.summary,
+    session.issueType,
+    additionalFields,
+  );
+  stream.markdown(result);
+}
+
+async function handleCreateTicket(
+  request: vscode.ChatRequest,
+  context: vscode.ChatContext,
+  stream: vscode.ChatResponseStream,
+  token: vscode.CancellationToken,
+  jiraClient: JiraApiClient,
+  ticketService: TicketService,
+): Promise<void> {
+  // --- Continuing an in-progress session ---
+  const session = parseCreationSession(context);
+  if (session) {
+    const justAnswered = session.pending[0];
+    session.answers[justAnswered] = request.prompt;
+    session.pending = session.pending.slice(1);
+    if (session.pending.length === 0) {
+      await finishTicketCreation(session, ticketService, stream);
+    } else {
+      streamNextSection(session, stream);
+    }
+    return;
+  }
+
+  // --- Fresh start: load templates ---
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+  let templates: JiraTemplate[] = [];
+  if (workspaceRoot) {
+    try {
+      templates = new TemplateService(workspaceRoot).loadTemplates();
+    } catch (err) {
+      const pick = await vscode.window.showQuickPick(['Proceed without template', 'Cancel'], {
+        title: `Template error: ${err instanceof Error ? err.message : String(err)}`,
+        ignoreFocusOut: true,
+      });
+      if (pick !== 'Proceed without template') { stream.markdown('Cancelled.'); return; }
+    }
+  }
+
+  let selectedTemplate: JiraTemplate | null = null;
+  if (templates.length > 0) {
+    const items = [...templates.map((t) => t.name), 'Proceed without template'];
+    const picked = await vscode.window.showQuickPick(items, {
+      title: 'Select a ticket template',
+      ignoreFocusOut: true,
+    });
+    if (!picked) { stream.markdown('Cancelled.'); return; }
+    if (picked !== 'Proceed without template') {
+      selectedTemplate = templates.find((t) => t.name === picked) ?? null;
+    }
+  }
+
+  // Resolve project, summary, issueType
+  const intent = await parseIntent(request.prompt, request.model, token);
+  const projectKey = await resolveProjectKey(intent.projectKey, stream);
+  if (!projectKey) { stream.markdown('No project key provided — cancelled.'); return; }
+
+  let summary = intent.summary;
+  if (!summary) {
+    summary = await vscode.window.showInputBox({ prompt: 'Enter a summary for the new ticket', ignoreFocusOut: true }) ?? null;
+  }
+  if (!summary) { stream.markdown('No summary provided — cancelled.'); return; }
+
+  const issueType = await resolveIssueType(intent.issueType, projectKey, ticketService, stream);
+  if (!issueType) { stream.markdown('No issue type selected — cancelled.'); return; }
+
+  // Resolve template fields
+  let resolvedFields: Record<string, unknown> = {};
+  if (selectedTemplate) {
+    const resolver = new FieldResolver(jiraClient, projectKey);
+    try {
+      resolvedFields = await resolver.resolve(selectedTemplate.defaultFields, selectedTemplate.resolveFields);
+    } catch (err) {
+      const pick = await vscode.window.showQuickPick(['Proceed without template', 'Cancel'], {
+        title: `Field resolution error: ${err instanceof Error ? err.message : String(err)}`,
+        ignoreFocusOut: true,
+      });
+      if (pick !== 'Proceed without template') { stream.markdown('Cancelled.'); return; }
+      resolvedFields = {};
+      selectedTemplate = null;
+    }
+  }
+
+  // Check which description sections the user's prompt already covers
+  if (selectedTemplate && selectedTemplate.descriptionSections.length > 0) {
+    const covered = await checkSectionCoverage(
+      request.prompt,
+      selectedTemplate.descriptionSections,
+      request.model,
+      token,
+    );
+    const answers: Record<string, string> = {};
+    for (const s of covered) answers[s] = request.prompt;
+    const pending = selectedTemplate.descriptionSections.filter((s) => !covered.includes(s));
+
+    if (pending.length === 0) {
+      const descriptionText = assembleDescription(selectedTemplate.descriptionSections, answers);
+      resolvedFields.description = wrapInAdf(descriptionText);
+      const result = await ticketService.createTicket(projectKey, summary, issueType, resolvedFields);
+      stream.markdown(result);
+    } else {
+      const fieldNames = Object.keys(resolvedFields).filter((k) => k !== 'description').join(', ');
+      stream.markdown(`_Using template **${selectedTemplate.name}**${fieldNames ? ` — defaults: ${fieldNames}` : ''}._\n\n`);
+      if (covered.length > 0) {
+        stream.markdown(`_Your description already covers **${covered.join(', ')}**._\n\n`);
+      }
+      const newSession: CreationSession = {
+        template: selectedTemplate.name,
+        project: projectKey,
+        summary,
+        issueType,
+        allSections: selectedTemplate.descriptionSections,
+        pending,
+        answers,
+        fields: resolvedFields,
+      };
+      streamNextSection(newSession, stream);
+    }
+  } else {
+    // No template or no sections — create directly
+    const result = await ticketService.createTicket(
+      projectKey,
+      summary,
+      issueType,
+      Object.keys(resolvedFields).length > 0 ? resolvedFields : undefined,
+    );
+    stream.markdown(result);
+  }
+}
+
 export function createParticipant(
   context: vscode.ExtensionContext,
   configService: ConfigService,
 ): vscode.ChatParticipant {
   const handler: vscode.ChatRequestHandler = async (
     request: vscode.ChatRequest,
-    _chatContext: vscode.ChatContext,
+    chatContext: vscode.ChatContext,
     stream: vscode.ChatResponseStream,
     token: vscode.CancellationToken,
   ): Promise<void> => {
@@ -174,26 +367,21 @@ export function createParticipant(
       return;
     }
 
-    // createTicket has its own resolution flow — handle before the generic ticketKey logic
+    // createTicket has its own multi-turn flow — handle before the generic ticketKey logic
     if (intent.operation === 'createTicket') {
       try {
-        const projectKey = await resolveProjectKey(intent.projectKey, stream);
-        if (!projectKey) { stream.markdown('No project key provided — cancelled.'); return; }
+        await handleCreateTicket(request, chatContext, stream, token, jiraClient, ticketService);
+      } catch (err) {
+        stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
 
-        let summary = intent.summary;
-        if (!summary) {
-          summary = await vscode.window.showInputBox({
-            prompt: 'Enter a summary for the new ticket',
-            ignoreFocusOut: true,
-          }) ?? null;
-        }
-        if (!summary) { stream.markdown('No summary provided — cancelled.'); return; }
-
-        const issueType = await resolveIssueType(intent.issueType, projectKey, ticketService, stream);
-        if (!issueType) { stream.markdown('No issue type selected — cancelled.'); return; }
-
-        const result = await ticketService.createTicket(projectKey, summary, issueType);
-        stream.markdown(result);
+    // Also handle in-progress creation sessions (user answered a section question)
+    const session = parseCreationSession(chatContext);
+    if (session) {
+      try {
+        await handleCreateTicket(request, chatContext, stream, token, jiraClient, ticketService);
       } catch (err) {
         stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
       }
