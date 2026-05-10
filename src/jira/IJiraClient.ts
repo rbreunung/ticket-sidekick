@@ -60,5 +60,7 @@ export interface IJiraClient {
   getTransitions(issueKey: string): Promise<JiraTransition[]>;
   executeTransition(issueKey: string, transitionId: string): Promise<void>;
   getProject(projectKey: string): Promise<JiraProject>;
-  createIssue(projectKey: string, summary: string, issueType: string): Promise<JiraCreatedIssue>;
+  getSprintByName(projectKey: string, sprintName: string): Promise<{ id: number }>;
+  getTeamByName(name: string): Promise<{ id: string }>;
+  createIssue(projectKey: string, summary: string, issueType: string, additionalFields?: Record<string, unknown>): Promise<JiraCreatedIssue>;
 }

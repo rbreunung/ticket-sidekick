@@ -20,6 +20,7 @@ export class MockJiraClient implements IJiraClient {
   public updateIssueCalls: Array<{ issueKey: string; fields: Record<string, unknown> }> = [];
   public addCommentCalls: Array<{ issueKey: string; body: string }> = [];
   public executeTransitionCalls: Array<{ issueKey: string; transitionId: string }> = [];
+  public createIssueCalls: Array<{ projectKey: string; summary: string; issueType: string; additionalFields?: Record<string, unknown> }> = [];
 
   async getIssue(issueKey: string): Promise<JiraIssue> {
     if (issueKey === 'PROJ-404') {
@@ -64,7 +65,18 @@ export class MockJiraClient implements IJiraClient {
     return loadFixture<JiraProject>('project-PROJ.json');
   }
 
-  async createIssue(_projectKey: string, _summary: string, _issueType: string): Promise<JiraCreatedIssue> {
+  async getSprintByName(_projectKey: string, sprintName: string): Promise<{ id: number }> {
+    if (sprintName === 'Sprint 5') return loadFixture<{ id: number }>('sprint-PROJ.json');
+    throw new Error(`Sprint '${sprintName}' not found in project PROJ.`);
+  }
+
+  async getTeamByName(name: string): Promise<{ id: string }> {
+    if (name.toLowerCase().includes('backend')) return loadFixture<{ id: string }>('team-backend.json');
+    throw new Error(`Could not resolve team '${name}' — use id instead`);
+  }
+
+  async createIssue(_projectKey: string, _summary: string, _issueType: string, additionalFields?: Record<string, unknown>): Promise<JiraCreatedIssue> {
+    this.createIssueCalls.push({ projectKey: _projectKey, summary: _summary, issueType: _issueType, additionalFields });
     return loadFixture<JiraCreatedIssue>('created-issue.json');
   }
 }
