@@ -19,9 +19,11 @@ export interface JiraApiClientConfig {
 export class JiraApiClient implements IJiraClient {
   private readonly baseUrl: string;
   private readonly authHeader: string;
+  private readonly authType: AuthType;
 
   constructor(config: JiraApiClientConfig) {
     this.baseUrl = config.baseUrl.replace(/\/$/, '');
+    this.authType = config.authType;
     this.authHeader = config.authType === 'cloud'
       ? `Basic ${config.token}`
       : `Bearer ${config.token}`;
@@ -39,15 +41,37 @@ export class JiraApiClient implements IJiraClient {
       },
     });
     if (!response.ok) {
-      if (response.status === 401) {
-        throw new Error('Authentication failed. Check your credentials.');
-      }
-      if (response.status === 404) {
-        throw new Error(`Not found: ${path}`);
-      }
+      if (response.status === 401) throw new Error('Authentication failed. Check your credentials.');
+      if (response.status === 404) throw new Error(`Not found: ${path}`);
       throw new Error(`Jira API error: ${response.status} ${response.statusText}`);
     }
     if (response.status === 204) return undefined as T;
+    return response.json() as Promise<T>;
+  }
+
+  private async agileRequest<T>(path: string): Promise<T> {
+    const url = `${this.baseUrl}/rest/agile/1.0${path}`;
+    const response = await fetch(url, {
+      headers: {
+        Authorization: this.authHeader,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+    });
+    if (!response.ok) throw new Error(`Jira Agile API error: ${response.status} ${response.statusText}`);
+    return response.json() as Promise<T>;
+  }
+
+  private async teamsRequest<T>(path: string): Promise<T> {
+    const url = `${this.baseUrl}/rest/teams/1.0${path}`;
+    const response = await fetch(url, {
+      headers: {
+        Authorization: this.authHeader,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+    });
+    if (!response.ok) throw new Error(`Jira Teams API error: ${response.status} ${response.statusText}`);
     return response.json() as Promise<T>;
   }
 
@@ -69,9 +93,7 @@ export class JiraApiClient implements IJiraClient {
         body: {
           type: 'doc',
           version: 1,
-          content: [
-            { type: 'paragraph', content: [{ type: 'text', text: body }] },
-          ],
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: body }] }],
         },
       }),
     });
@@ -83,10 +105,7 @@ export class JiraApiClient implements IJiraClient {
       body: JSON.stringify({
         jql,
         maxResults,
-        fields: [
-          'summary', 'status', 'assignee', 'priority',
-          'description', 'labels', 'fixVersions', 'reporter',
-        ],
+        fields: ['summary', 'status', 'assignee', 'priority', 'description', 'labels', 'fixVersions', 'reporter'],
       }),
     });
   }
@@ -96,9 +115,7 @@ export class JiraApiClient implements IJiraClient {
   }
 
   async getTransitions(issueKey: string): Promise<JiraTransition[]> {
-    const result = await this.request<{ transitions: JiraTransition[] }>(
-      `/issue/${issueKey}/transitions`,
-    );
+    const result = await this.request<{ transitions: JiraTransition[] }>(`/issue/${issueKey}/transitions`);
     return result.transitions;
   }
 
@@ -117,7 +134,38 @@ export class JiraApiClient implements IJiraClient {
     return this.request<JiraProject>(`/project/${projectKey}`);
   }
 
-  async createIssue(projectKey: string, summary: string, issueType: string): Promise<JiraCreatedIssue> {
+  async getSprintByName(projectKey: string, sprintName: string): Promise<{ id: number }> {
+    const boards = await this.agileRequest<{ values: Array<{ id: number }> }>(
+      `/board?projectKeyOrId=${encodeURIComponent(projectKey)}`,
+    );
+    for (const board of boards.values) {
+      const sprints = await this.agileRequest<{ values: Array<{ id: number; name: string }> }>(
+        `/board/${board.id}/sprint?state=active,future`,
+      );
+      const match = sprints.values.find((s) => s.name === sprintName);
+      if (match) return { id: match.id };
+    }
+    throw new Error(`Sprint '${sprintName}' not found in project ${projectKey}.`);
+  }
+
+  async getTeamByName(name: string): Promise<{ id: string }> {
+    if (this.authType !== 'datacenter') {
+      throw new Error(`Could not resolve team '${name}' — use id instead`);
+    }
+    const result = await this.teamsRequest<{ values: Array<{ id: string; displayName: string }> }>(
+      `/teams/find?query=${encodeURIComponent(name)}`,
+    );
+    const match = result.values?.find((t) => t.displayName.toLowerCase() === name.toLowerCase());
+    if (!match) throw new Error(`Could not resolve team '${name}' — use id instead`);
+    return { id: match.id };
+  }
+
+  async createIssue(
+    projectKey: string,
+    summary: string,
+    issueType: string,
+    additionalFields?: Record<string, unknown>,
+  ): Promise<JiraCreatedIssue> {
     return this.request<JiraCreatedIssue>('/issue', {
       method: 'POST',
       body: JSON.stringify({
@@ -125,6 +173,7 @@ export class JiraApiClient implements IJiraClient {
           project: { key: projectKey },
           summary,
           issuetype: { name: issueType },
+          ...additionalFields,
         },
       }),
     });
