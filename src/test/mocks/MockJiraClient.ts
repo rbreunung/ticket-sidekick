@@ -40,6 +40,10 @@ export class MockJiraClient implements IJiraClient {
     return loadFixture<JiraSearchResult>('search-results.json');
   }
 
+  async getCurrentUser(): Promise<JiraUser> {
+    return loadFixture<JiraUser>('myself.json');
+  }
+
   async findUser(query: string): Promise<JiraUser[]> {
     if (query.toLowerCase().includes('jane')) {
       return [{ accountId: 'abc123', displayName: 'Jane Doe', emailAddress: 'jane.doe@example.com' }];

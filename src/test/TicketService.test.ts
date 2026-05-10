@@ -76,6 +76,16 @@ describe('TicketService', () => {
       const result = await service.updateField('PROJ-123', 'assignee', 'nobody-unknown');
       expect(result).toContain('No user found');
     });
+
+    it('assigns to current user when value is "me"', async () => {
+      await service.updateField('PROJ-123', 'assignee', 'me');
+      expect(client.updateIssueCalls[0]?.fields).toEqual({ assignee: { accountId: 'currentuser123' } });
+    });
+
+    it('assigns to current user when value is "myself"', async () => {
+      await service.updateField('PROJ-123', 'assignee', 'myself');
+      expect(client.updateIssueCalls[0]?.fields).toEqual({ assignee: { accountId: 'currentuser123' } });
+    });
   });
 
   describe('searchTickets', () => {

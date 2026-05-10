@@ -13,6 +13,11 @@ type Operation =
   | 'validateFields'
   | 'createTicket';
 
+interface FieldUpdate {
+  fieldName: string;
+  fieldValue: string;
+}
+
 interface ParsedIntent {
   operation: Operation;
   ticketKey: string | null;
@@ -20,16 +25,15 @@ interface ParsedIntent {
   summary: string | null;
   issueType: string | null;
   comment: string | null;
-  fieldName: string | null;
-  fieldValue: string | null;
+  fieldUpdates: FieldUpdate[];
   jql: string | null;
 }
 
 const INTENT_PROMPT = `Parse this Jira command and respond with ONLY a JSON object. No markdown, no explanation.
-Schema: {"operation":"getTicket"|"addComment"|"updateField"|"searchJql"|"validateFields"|"createTicket","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"comment":string|null,"fieldName":string|null,"fieldValue":string|null,"jql":string|null}
+Schema: {"operation":"getTicket"|"addComment"|"updateField"|"searchJql"|"validateFields"|"createTicket","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"comment":string|null,"fieldUpdates":[{"fieldName":string,"fieldValue":string}],"jql":string|null}
 - getTicket: show, summarise, describe, look up a specific ticket
 - addComment: add, post, write a comment on a ticket
-- updateField: set, change, update a field (priority, assignee, summary, description, labels, fix version)
+- updateField: set, change, update one or more fields; put each field change in fieldUpdates array; for description/comment content instructions (e.g. "write a poem") put the instruction as fieldValue — do NOT generate the content
 - searchJql: find, search, list tickets; review multiple tickets against criteria; use literal JQL if provided
 - validateFields: check, validate required fields on a ticket
 - createTicket: create, open, add a new ticket/issue/bug/story/task
@@ -50,6 +54,22 @@ async function parseIntent(
   const jsonMatch = raw.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error(`Model did not return a JSON object. Response: ${raw.slice(0, 200)}`);
   return JSON.parse(jsonMatch[0]) as ParsedIntent;
+}
+
+async function generateContent(
+  instruction: string,
+  model: vscode.LanguageModelChat,
+  token: vscode.CancellationToken,
+): Promise<string> {
+  const message = vscode.LanguageModelChatMessage.User(
+    `Generate content for a Jira ticket field based on this instruction: "${instruction}". Respond with only the content itself, no markdown fences, no explanation.`,
+  );
+  const response = await model.sendRequest([message], {}, token);
+  let content = '';
+  for await (const chunk of response.text) {
+    content += chunk;
+  }
+  return content.trim();
 }
 
 function resolveTicketFromBranch(): string | null {
@@ -204,13 +224,21 @@ export function createParticipant(
           }
           result = await ticketService.addComment(ticketKey!, intent.comment);
           break;
-        case 'updateField':
-          if (!intent.fieldName || !intent.fieldValue) {
-            stream.markdown('Please specify both the field name and the new value.');
+        case 'updateField': {
+          if (!intent.fieldUpdates || intent.fieldUpdates.length === 0) {
+            stream.markdown('Please specify a field name and value to update.');
             return;
           }
-          result = await ticketService.updateField(ticketKey!, intent.fieldName, intent.fieldValue);
+          const results: string[] = [];
+          for (const { fieldName, fieldValue } of intent.fieldUpdates) {
+            const value = fieldName.toLowerCase() === 'description'
+              ? await generateContent(fieldValue, request.model, token)
+              : fieldValue;
+            results.push(await ticketService.updateField(ticketKey!, fieldName, value));
+          }
+          result = results.join('\n');
           break;
+        }
         case 'searchJql':
           result = await ticketService.searchTickets(intent.jql ?? request.prompt);
           break;

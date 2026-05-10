@@ -78,12 +78,18 @@ export class TicketService {
     if (jiraField === 'priority') {
       fieldValue = { name: value };
     } else if (jiraField === 'assignee') {
-      const users = await this.client.findUser(value);
-      if (users.length === 0) return `No user found matching "${value}".`;
-      if (users.length > 1) {
-        return `Multiple users found: ${users.map((u) => u.displayName).join(', ')}. Please be more specific.`;
+      const ME_KEYWORDS = new Set(['me', 'myself', 'i']);
+      if (ME_KEYWORDS.has(value.toLowerCase().trim())) {
+        const currentUser = await this.client.getCurrentUser();
+        fieldValue = { accountId: currentUser.accountId };
+      } else {
+        const users = await this.client.findUser(value);
+        if (users.length === 0) return `No user found matching "${value}".`;
+        if (users.length > 1) {
+          return `Multiple users found: ${users.map((u) => u.displayName).join(', ')}. Please be more specific.`;
+        }
+        fieldValue = { accountId: users[0].accountId };
       }
-      fieldValue = { accountId: users[0].accountId };
     } else if (jiraField === 'description') {
       fieldValue = wrapInAdf(value);
     } else if (jiraField === 'labels') {

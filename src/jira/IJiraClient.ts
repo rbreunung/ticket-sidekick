@@ -56,6 +56,7 @@ export interface IJiraClient {
   addComment(issueKey: string, body: string): Promise<void>;
   searchJql(jql: string, maxResults?: number): Promise<JiraSearchResult>;
   findUser(query: string): Promise<JiraUser[]>;
+  getCurrentUser(): Promise<JiraUser>;
   getTransitions(issueKey: string): Promise<JiraTransition[]>;
   executeTransition(issueKey: string, transitionId: string): Promise<void>;
   getProject(projectKey: string): Promise<JiraProject>;

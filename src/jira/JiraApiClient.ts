@@ -109,6 +109,10 @@ export class JiraApiClient implements IJiraClient {
     });
   }
 
+  async getCurrentUser(): Promise<JiraUser> {
+    return this.request<JiraUser>('/myself');
+  }
+
   async getProject(projectKey: string): Promise<JiraProject> {
     return this.request<JiraProject>(`/project/${projectKey}`);
   }
