@@ -83,7 +83,7 @@ At least one of `name` or `id` must be provided per spec. If both are present, `
 
 1. Handler checks `ChatContext` history for a `@jira-create` state marker → none found, start fresh.
 2. `TemplateService.loadTemplates()` reads `.jira-templates.json`. If the file is absent, skip template selection and use the existing creation flow unchanged.
-3. `vscode.window.showQuickPick` presents template names. User selects one.
+3. `vscode.window.showQuickPick` presents template names plus a **"Proceed without template"** option at the bottom. Selecting it skips all template logic and falls back to the existing creation flow.
 4. Intent parsed for `project`, `summary`, `issueType` (existing flow). Missing mandatory fields are prompted via input box / quick pick as before.
 5. `FieldResolver.resolve(template, config)` resolves all `resolveFields` upfront. Results stored in the state marker so no re-resolution occurs on subsequent turns.
 6. LM call checks which `descriptionSections` the user's initial prompt already covers. Covered sections are pre-populated in `answers`.
@@ -230,10 +230,10 @@ Team resolution is best-effort. If the Jira instance does not expose a standard 
 ## Error Handling
 
 - **`.jira-templates.json` absent** — skip template selection, fall back to existing creation flow unchanged.
-- **Invalid JSON in template file** — show error in chat: `"Could not parse .jira-templates.json: <parse error>"`. Abort creation.
-- **Sprint not found by name** — surface error: `"Sprint '{name}' not found in project {key}."` Abort creation.
-- **Team not found / API unsupported** — surface error: `"Could not resolve team '{name}' — use id instead."` Abort creation.
-- **User cancels quick pick** — `"No template selected — cancelled."`.
+- **Invalid JSON in template file** — show error in chat: `"Could not parse .jira-templates.json: <parse error>"` and offer `showQuickPick` with `["Proceed without template", "Cancel"]`. Selecting proceed falls back to the existing creation flow.
+- **Sprint not found by name** — show error: `"Sprint '{name}' not found in project {key}."` and offer `["Proceed without template", "Cancel"]`.
+- **Team not found / API unsupported** — show error: `"Could not resolve team '{name}' — use id instead."` and offer `["Proceed without template", "Cancel"]`.
+- **User cancels quick pick or selects Cancel** — `"Cancelled."`.
 - **State marker not parseable** — treat as fresh start (no partial state recovery).
 
 ---
