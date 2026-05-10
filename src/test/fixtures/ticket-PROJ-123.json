@@ -1,0 +1,31 @@
+{
+  "id": "10001",
+  "key": "PROJ-123",
+  "fields": {
+    "summary": "Implement user authentication",
+    "description": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [{ "type": "text", "text": "We need OAuth2 authentication for the mobile app." }]
+        }
+      ]
+    },
+    "status": { "name": "In Progress" },
+    "assignee": {
+      "accountId": "abc123",
+      "displayName": "Jane Doe",
+      "emailAddress": "jane.doe@example.com"
+    },
+    "reporter": {
+      "accountId": "def456",
+      "displayName": "John Smith",
+      "emailAddress": "john.smith@example.com"
+    },
+    "priority": { "name": "High" },
+    "labels": ["auth", "security"],
+    "fixVersions": [{ "name": "v1.0" }]
+  }
+}

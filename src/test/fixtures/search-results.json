@@ -1,0 +1,34 @@
+{
+  "total": 2,
+  "maxResults": 20,
+  "issues": [
+    {
+      "id": "10001",
+      "key": "PROJ-123",
+      "fields": {
+        "summary": "Implement user authentication",
+        "description": null,
+        "status": { "name": "In Progress" },
+        "assignee": { "accountId": "abc123", "displayName": "Jane Doe" },
+        "reporter": { "accountId": "def456", "displayName": "John Smith" },
+        "priority": { "name": "High" },
+        "labels": ["auth"],
+        "fixVersions": []
+      }
+    },
+    {
+      "id": "10002",
+      "key": "PROJ-124",
+      "fields": {
+        "summary": "Add password reset flow",
+        "description": null,
+        "status": { "name": "To Do" },
+        "assignee": null,
+        "reporter": { "accountId": "def456", "displayName": "John Smith" },
+        "priority": { "name": "Medium" },
+        "labels": [],
+        "fixVersions": [{ "name": "v1.0" }]
+      }
+    }
+  ]
+}
