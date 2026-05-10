@@ -26,10 +26,6 @@
       {
         "command": "jira-copilot.configureCloud",
         "title": "Jira Copilot: Configure Cloud Credentials"
-      },
-      {
-        "command": "jira-copilot.showModels",
-        "title": "Jira Copilot: Show Available Language Models"
       }
     ],
     "configuration": {
@@ -50,11 +46,6 @@
           "items": { "type": "string" },
           "default": [],
           "description": "Field names that must be set for ticket validation (e.g. [\"assignee\", \"priority\"])"
-        },
-        "jiraCopilot.languageModelFamily": {
-          "type": "string",
-          "default": "",
-          "description": "Language model family for intent parsing (e.g. 'gemma3', 'gpt-4o'). Leave empty to use the first available model. Run 'Jira Copilot: Show Available Language Models' to find the right value."
         },
         "jiraCopilot.defaultProject": {
           "type": "string",
