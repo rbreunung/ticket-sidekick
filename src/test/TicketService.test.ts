@@ -108,4 +108,29 @@ describe('TicketService', () => {
       expect(result).toContain('jiraCopilot.requiredFields');
     });
   });
+
+  describe('getIssueTypes', () => {
+    it('returns non-subtask issue types for a project', async () => {
+      const types = await service.getIssueTypes('PROJ');
+      expect(types.length).toBeGreaterThan(0);
+      expect(types.every((t) => !t.subtask)).toBe(true);
+    });
+
+    it('returns names as strings', async () => {
+      const types = await service.getIssueTypes('PROJ');
+      expect(types[0].name).toBe('Bug');
+    });
+  });
+
+  describe('createTicket', () => {
+    it('returns confirmation with the new ticket key', async () => {
+      const result = await service.createTicket('PROJ', 'Login timeout bug', 'Bug');
+      expect(result).toContain('PROJ-125');
+    });
+
+    it('includes the summary in the confirmation', async () => {
+      const result = await service.createTicket('PROJ', 'Login timeout bug', 'Bug');
+      expect(result).toContain('Login timeout bug');
+    });
+  });
 });

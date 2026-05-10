@@ -1,4 +1,4 @@
-import type { IJiraClient, JiraIssue } from '../jira/IJiraClient';
+import type { IJiraClient, JiraIssue, JiraIssueType } from '../jira/IJiraClient';
 
 const SUPPORTED_FIELDS: Record<string, string> = {
   summary: 'summary',
@@ -130,5 +130,15 @@ export class TicketService {
     });
     if (missing.length === 0) return `All required fields are set on ${issueKey}.`;
     return `${issueKey} is missing required fields: ${missing.join(', ')}.`;
+  }
+
+  async getIssueTypes(projectKey: string): Promise<JiraIssueType[]> {
+    const project = await this.client.getProject(projectKey);
+    return project.issueTypes.filter((t) => !t.subtask);
+  }
+
+  async createTicket(projectKey: string, summary: string, issueType: string): Promise<string> {
+    const created = await this.client.createIssue(projectKey, summary, issueType);
+    return `Created ${created.key}: **${summary}** (${issueType} in ${projectKey})`;
   }
 }

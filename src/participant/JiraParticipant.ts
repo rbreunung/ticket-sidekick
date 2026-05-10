@@ -10,11 +10,15 @@ type Operation =
   | 'addComment'
   | 'updateField'
   | 'searchJql'
-  | 'validateFields';
+  | 'validateFields'
+  | 'createTicket';
 
 interface ParsedIntent {
   operation: Operation;
   ticketKey: string | null;
+  projectKey: string | null;
+  summary: string | null;
+  issueType: string | null;
   comment: string | null;
   fieldName: string | null;
   fieldValue: string | null;
@@ -22,32 +26,30 @@ interface ParsedIntent {
 }
 
 const INTENT_PROMPT = `Parse this Jira command and respond with ONLY a JSON object. No markdown, no explanation.
-Schema: {"operation":"getTicket"|"addComment"|"updateField"|"searchJql"|"validateFields","ticketKey":string|null,"comment":string|null,"fieldName":string|null,"fieldValue":string|null,"jql":string|null}
+Schema: {"operation":"getTicket"|"addComment"|"updateField"|"searchJql"|"validateFields"|"createTicket","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"comment":string|null,"fieldName":string|null,"fieldValue":string|null,"jql":string|null}
 - getTicket: show, summarise, describe, look up a specific ticket
 - addComment: add, post, write a comment on a ticket
 - updateField: set, change, update a field (priority, assignee, summary, description, labels, fix version)
 - searchJql: find, search, list tickets; review multiple tickets against criteria; use literal JQL if provided
 - validateFields: check, validate required fields on a ticket
+- createTicket: create, open, add a new ticket/issue/bug/story/task
 
 Command: `;
 
 async function parseIntent(
   prompt: string,
+  model: vscode.LanguageModelChat,
   token: vscode.CancellationToken,
 ): Promise<ParsedIntent> {
-  const models = await vscode.lm.selectChatModels({ family: 'gpt-4o' });
-  const model = models[0];
-  if (!model) {
-    throw new Error('No language model available. Ensure GitHub Copilot is installed and signed in.');
-  }
   const message = vscode.LanguageModelChatMessage.User(INTENT_PROMPT + JSON.stringify(prompt));
   const response = await model.sendRequest([message], {}, token);
-  let json = '';
+  let raw = '';
   for await (const chunk of response.text) {
-    json += chunk;
+    raw += chunk;
   }
-  const cleaned = json.trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, '');
-  return JSON.parse(cleaned) as ParsedIntent;
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error(`Model did not return a JSON object. Response: ${raw.slice(0, 200)}`);
+  return JSON.parse(jsonMatch[0]) as ParsedIntent;
 }
 
 function resolveTicketFromBranch(): string | null {
@@ -57,6 +59,54 @@ function resolveTicketFromBranch(): string | null {
   } catch {
     return null;
   }
+}
+
+async function resolveProjectKey(
+  fromIntent: string | null,
+  stream: vscode.ChatResponseStream,
+): Promise<string | null> {
+  if (fromIntent) return fromIntent;
+
+  const defaultProject = vscode.workspace.getConfiguration('jiraCopilot').get<string>('defaultProject') ?? '';
+  if (defaultProject) return defaultProject;
+
+  stream.markdown('_No project key found in your message or settings — opening input box…_\n\n');
+  const entered = await vscode.window.showInputBox({
+    prompt: 'Enter the Jira project key (e.g. VSJI)',
+    placeHolder: 'PROJECT',
+    ignoreFocusOut: true,
+  });
+  return entered ?? null;
+}
+
+async function resolveIssueType(
+  fromIntent: string | null,
+  projectKey: string,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+): Promise<string | null> {
+  if (fromIntent) return fromIntent;
+
+  let types: { name: string }[];
+  try {
+    types = await ticketService.getIssueTypes(projectKey);
+  } catch {
+    types = [];
+  }
+
+  if (types.length === 0) {
+    stream.markdown('_Could not fetch issue types — opening input box…_\n\n');
+    return vscode.window.showInputBox({
+      prompt: 'Enter the issue type (e.g. Bug, Story, Task)',
+      ignoreFocusOut: true,
+    }).then((v) => v ?? null);
+  }
+
+  const picked = await vscode.window.showQuickPick(
+    types.map((t) => t.name),
+    { title: `Issue type for ${projectKey}`, ignoreFocusOut: true },
+  );
+  return picked ?? null;
 }
 
 export function createParticipant(
@@ -98,9 +148,35 @@ export function createParticipant(
 
     let intent: ParsedIntent;
     try {
-      intent = await parseIntent(request.prompt, token);
+      intent = await parseIntent(request.prompt, request.model, token);
     } catch (err) {
       stream.markdown(`Could not understand the request: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+
+    // createTicket has its own resolution flow — handle before the generic ticketKey logic
+    if (intent.operation === 'createTicket') {
+      try {
+        const projectKey = await resolveProjectKey(intent.projectKey, stream);
+        if (!projectKey) { stream.markdown('No project key provided — cancelled.'); return; }
+
+        let summary = intent.summary;
+        if (!summary) {
+          summary = await vscode.window.showInputBox({
+            prompt: 'Enter a summary for the new ticket',
+            ignoreFocusOut: true,
+          }) ?? null;
+        }
+        if (!summary) { stream.markdown('No summary provided — cancelled.'); return; }
+
+        const issueType = await resolveIssueType(intent.issueType, projectKey, ticketService, stream);
+        if (!issueType) { stream.markdown('No issue type selected — cancelled.'); return; }
+
+        const result = await ticketService.createTicket(projectKey, summary, issueType);
+        stream.markdown(result);
+      } catch (err) {
+        stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+      }
       return;
     }
 

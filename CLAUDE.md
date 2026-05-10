@@ -2,7 +2,7 @@
 
 ## What this is
 
-A VS Code extension that exposes a `@jira` GitHub Copilot Chat participant. Users manage Jira tickets (read, edit fields, comment, search) in natural language without leaving VS Code.
+A VS Code extension that exposes a `@jira` GitHub Copilot Chat participant. Users manage Jira tickets (create, read, edit fields, comment, search) in natural language without leaving VS Code.
 
 ## Architecture (three layers — never skip)
 
@@ -55,6 +55,16 @@ npm run test:e2e  # @vscode/test-electron participant tests (requires VS Code)
 
 Regex: `[A-Z][A-Z0-9]+-\d+` applied to `git branch --show-current` output.
 Example: `feature/PROJ-123-add-login` → `PROJ-123`
+
+## Ticket creation flow
+
+`createTicket` in `JiraParticipant` resolves missing mandatory fields interactively:
+
+1. **Project key** — from prompt, then `jiraCopilot.defaultProject` setting, then `showInputBox`
+2. **Summary** — from prompt (LLM extraction), then `showInputBox`
+3. **Issue type** — from prompt, then `showQuickPick` populated from `GET /rest/api/3/project/{key}` (subtasks filtered out)
+
+API endpoint: `POST /rest/api/3/issue` with `{ fields: { project: { key }, summary, issuetype: { name } } }`
 
 ## Credentials
 

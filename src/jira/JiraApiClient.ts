@@ -1,6 +1,8 @@
 import type {
   IJiraClient,
+  JiraCreatedIssue,
   JiraIssue,
+  JiraProject,
   JiraSearchResult,
   JiraTransition,
   JiraUser,
@@ -104,6 +106,23 @@ export class JiraApiClient implements IJiraClient {
     await this.request<void>(`/issue/${issueKey}/transitions`, {
       method: 'POST',
       body: JSON.stringify({ transition: { id: transitionId } }),
+    });
+  }
+
+  async getProject(projectKey: string): Promise<JiraProject> {
+    return this.request<JiraProject>(`/project/${projectKey}`);
+  }
+
+  async createIssue(projectKey: string, summary: string, issueType: string): Promise<JiraCreatedIssue> {
+    return this.request<JiraCreatedIssue>('/issue', {
+      method: 'POST',
+      body: JSON.stringify({
+        fields: {
+          project: { key: projectKey },
+          summary,
+          issuetype: { name: issueType },
+        },
+      }),
     });
   }
 }

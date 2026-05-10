@@ -43,6 +43,8 @@ Open GitHub Copilot Chat and use `@jira`:
 | --- | --- |
 | `@jira show me PROJ-123` | Displays ticket details |
 | `@jira summarise this ticket` | Shows current branch ticket |
+| `@jira create a bug: login times out` | Creates a new ticket (asks for project and type if missing) |
+| `@jira create Story in VSJI: add dark mode` | Creates a ticket with project and type from the prompt |
 | `@jira set priority to High` | Updates priority on current branch ticket |
 | `@jira assign this to jane.doe` | Assigns ticket (searches by name) |
 | `@jira comment that the fix is in PR #42` | Adds a comment |
@@ -52,6 +54,14 @@ Open GitHub Copilot Chat and use `@jira`:
 ### Ticket detection
 
 If you don't name a ticket, the plugin reads your current git branch. A branch named `feature/PROJ-123-my-work` will automatically use `PROJ-123`.
+
+### Optional: default project
+
+```json
+"jiraCopilot.defaultProject": "VSJI"
+```
+
+When set, the `create` command skips the project input box and uses this key automatically. You can still override it by including a project key in your prompt.
 
 ### Optional: required fields
 

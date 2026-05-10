@@ -2,7 +2,9 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import type {
   IJiraClient,
+  JiraCreatedIssue,
   JiraIssue,
+  JiraProject,
   JiraSearchResult,
   JiraTransition,
   JiraUser,
@@ -52,5 +54,13 @@ export class MockJiraClient implements IJiraClient {
 
   async executeTransition(issueKey: string, transitionId: string): Promise<void> {
     this.executeTransitionCalls.push({ issueKey, transitionId });
+  }
+
+  async getProject(_projectKey: string): Promise<JiraProject> {
+    return loadFixture<JiraProject>('project-PROJ.json');
+  }
+
+  async createIssue(_projectKey: string, _summary: string, _issueType: string): Promise<JiraCreatedIssue> {
+    return loadFixture<JiraCreatedIssue>('created-issue.json');
   }
 }

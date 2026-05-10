@@ -32,6 +32,24 @@ export interface JiraTransition {
   to: { name: string };
 }
 
+export interface JiraIssueType {
+  id: string;
+  name: string;
+  subtask: boolean;
+}
+
+export interface JiraProject {
+  id: string;
+  key: string;
+  name: string;
+  issueTypes: JiraIssueType[];
+}
+
+export interface JiraCreatedIssue {
+  id: string;
+  key: string;
+}
+
 export interface IJiraClient {
   getIssue(issueKey: string): Promise<JiraIssue>;
   updateIssue(issueKey: string, fields: Record<string, unknown>): Promise<void>;
@@ -40,4 +58,6 @@ export interface IJiraClient {
   findUser(query: string): Promise<JiraUser[]>;
   getTransitions(issueKey: string): Promise<JiraTransition[]>;
   executeTransition(issueKey: string, transitionId: string): Promise<void>;
+  getProject(projectKey: string): Promise<JiraProject>;
+  createIssue(projectKey: string, summary: string, issueType: string): Promise<JiraCreatedIssue>;
 }
