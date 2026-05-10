@@ -1,0 +1,134 @@
+import type { IJiraClient, JiraIssue } from '../jira/IJiraClient';
+
+const SUPPORTED_FIELDS: Record<string, string> = {
+  summary: 'summary',
+  description: 'description',
+  priority: 'priority',
+  assignee: 'assignee',
+  labels: 'labels',
+  'fix version': 'fixVersions',
+  fixversions: 'fixVersions',
+};
+
+function extractTextFromAdf(node: unknown): string {
+  if (!node || typeof node !== 'object') return '';
+  const n = node as { text?: string; content?: unknown[] };
+  if (typeof n.text === 'string') return n.text;
+  if (Array.isArray(n.content)) return n.content.map(extractTextFromAdf).join(' ');
+  return '';
+}
+
+function wrapInAdf(text: string): object {
+  return {
+    type: 'doc',
+    version: 1,
+    content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
+  };
+}
+
+function formatIssue(issue: JiraIssue): string {
+  const f = issue.fields;
+  const description = f.description
+    ? extractTextFromAdf(f.description).trim() || '_No description_'
+    : '_No description_';
+  const assignee = f.assignee ? f.assignee.displayName : '_Unassigned_';
+  const priority = f.priority ? f.priority.name : '_None_';
+  const labels = f.labels.length > 0 ? f.labels.join(', ') : '_None_';
+  const fixVersions = f.fixVersions.length > 0
+    ? f.fixVersions.map((v) => v.name).join(', ')
+    : '_None_';
+  return [
+    `## ${issue.key}: ${f.summary}`,
+    `**Status:** ${f.status.name}`,
+    `**Assignee:** ${assignee}`,
+    `**Reporter:** ${f.reporter ? f.reporter.displayName : '_Unknown_'}`,
+    `**Priority:** ${priority}`,
+    `**Labels:** ${labels}`,
+    `**Fix Versions:** ${fixVersions}`,
+    '',
+    '**Description:**',
+    description,
+  ].join('\n');
+}
+
+export class TicketService {
+  constructor(private readonly client: IJiraClient) {}
+
+  async getTicket(issueKey: string): Promise<string> {
+    const issue = await this.client.getIssue(issueKey);
+    return formatIssue(issue);
+  }
+
+  async addComment(issueKey: string, body: string): Promise<string> {
+    await this.client.addComment(issueKey, body);
+    return `comment added to ${issueKey}.`;
+  }
+
+  async updateField(issueKey: string, fieldName: string, value: string): Promise<string> {
+    const jiraField = SUPPORTED_FIELDS[fieldName.toLowerCase()];
+    if (!jiraField) {
+      const supported = Object.keys(SUPPORTED_FIELDS)
+        .filter((k) => !k.includes('fix'))
+        .concat(['fix version'])
+        .join(', ');
+      return `Field "${fieldName}" is not supported. Supported fields: ${supported}.`;
+    }
+
+    let fieldValue: unknown;
+    if (jiraField === 'priority') {
+      fieldValue = { name: value };
+    } else if (jiraField === 'assignee') {
+      const users = await this.client.findUser(value);
+      if (users.length === 0) return `No user found matching "${value}".`;
+      if (users.length > 1) {
+        return `Multiple users found: ${users.map((u) => u.displayName).join(', ')}. Please be more specific.`;
+      }
+      fieldValue = { accountId: users[0].accountId };
+    } else if (jiraField === 'description') {
+      fieldValue = wrapInAdf(value);
+    } else if (jiraField === 'labels') {
+      fieldValue = value.split(',').map((l) => l.trim());
+    } else if (jiraField === 'fixVersions') {
+      fieldValue = [{ name: value }];
+    } else {
+      fieldValue = value;
+    }
+
+    await this.client.updateIssue(issueKey, { [jiraField]: fieldValue });
+    return `Updated ${fieldName} on ${issueKey}.`;
+  }
+
+  async searchTickets(jql: string): Promise<string> {
+    const result = await this.client.searchJql(jql);
+    if (result.issues.length === 0) return 'No tickets found.';
+    const rows = result.issues.map((issue) => {
+      const assignee = issue.fields.assignee ? issue.fields.assignee.displayName : 'Unassigned';
+      return `| ${issue.key} | ${issue.fields.summary} | ${issue.fields.status.name} | ${assignee} |`;
+    });
+    return [
+      `Found ${result.total} ticket(s):`,
+      '',
+      '| Key | Summary | Status | Assignee |',
+      '| --- | --- | --- | --- |',
+      ...rows,
+    ].join('\n');
+  }
+
+  async validateRequiredFields(issueKey: string, requiredFields: string[]): Promise<string> {
+    if (requiredFields.length === 0) {
+      return 'No required fields configured. Add field names to `jiraCopilot.requiredFields` in settings.';
+    }
+    const issue = await this.client.getIssue(issueKey);
+    const missing = requiredFields.filter((field) => {
+      const value = issue.fields[field];
+      return (
+        value === null ||
+        value === undefined ||
+        value === '' ||
+        (Array.isArray(value) && value.length === 0)
+      );
+    });
+    if (missing.length === 0) return `All required fields are set on ${issueKey}.`;
+    return `${issueKey} is missing required fields: ${missing.join(', ')}.`;
+  }
+}
