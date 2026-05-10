@@ -18,12 +18,19 @@ function extractTextFromAdf(node: unknown): string {
   return '';
 }
 
-function wrapInAdf(text: string): object {
+export function wrapInAdf(text: string): object {
   return {
     type: 'doc',
     version: 1,
     content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
   };
+}
+
+export function assembleDescription(sections: string[], answers: Record<string, string>): string {
+  return sections
+    .filter((s) => s in answers)
+    .map((s) => `**${s}**\n${answers[s]}`)
+    .join('\n\n');
 }
 
 function formatIssue(issue: JiraIssue): string {
@@ -143,8 +150,13 @@ export class TicketService {
     return project.issueTypes.filter((t) => !t.subtask);
   }
 
-  async createTicket(projectKey: string, summary: string, issueType: string): Promise<string> {
-    const created = await this.client.createIssue(projectKey, summary, issueType);
+  async createTicket(
+    projectKey: string,
+    summary: string,
+    issueType: string,
+    additionalFields?: Record<string, unknown>,
+  ): Promise<string> {
+    const created = await this.client.createIssue(projectKey, summary, issueType, additionalFields);
     return `Created ${created.key}: **${summary}** (${issueType} in ${projectKey})`;
   }
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { TicketService } from '../services/TicketService';
+import { TicketService, assembleDescription } from '../services/TicketService';
 import { MockJiraClient } from './mocks/MockJiraClient';
 
 describe('TicketService', () => {
@@ -141,6 +141,42 @@ describe('TicketService', () => {
     it('includes the summary in the confirmation', async () => {
       const result = await service.createTicket('PROJ', 'Login timeout bug', 'Bug');
       expect(result).toContain('Login timeout bug');
+    });
+  });
+
+  describe('assembleDescription', () => {
+    it('formats sections in template order regardless of collection order', () => {
+      const result = assembleDescription(
+        ['Steps to reproduce', 'Expected behavior', 'Actual behavior'],
+        {
+          'Actual behavior': 'Got 404',
+          'Steps to reproduce': 'Click login',
+          'Expected behavior': 'Go to dashboard',
+        },
+      );
+      expect(result).toBe(
+        '**Steps to reproduce**\nClick login\n\n**Expected behavior**\nGo to dashboard\n\n**Actual behavior**\nGot 404',
+      );
+    });
+
+    it('skips sections not yet present in answers', () => {
+      const result = assembleDescription(
+        ['Steps to reproduce', 'Expected behavior'],
+        { 'Steps to reproduce': 'Click login' },
+      );
+      expect(result).toBe('**Steps to reproduce**\nClick login');
+    });
+  });
+
+  describe('createTicket with additionalFields', () => {
+    it('passes additionalFields to createIssue', async () => {
+      await service.createTicket('PROJ', 'Login bug', 'Bug', { priority: 'High' });
+      expect(client.createIssueCalls[0].additionalFields).toEqual({ priority: 'High' });
+    });
+
+    it('works without additionalFields', async () => {
+      await service.createTicket('PROJ', 'Login bug', 'Bug');
+      expect(client.createIssueCalls[0].additionalFields).toBeUndefined();
     });
   });
 });
