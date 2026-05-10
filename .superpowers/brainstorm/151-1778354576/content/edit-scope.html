@@ -1,0 +1,48 @@
+<h2>What does "editing" a ticket mean in this MVP?</h2>
+<p class="subtitle">"Read" and "comment" are clear. "Edit" can mean very different things — this shapes how much Jira API surface we need to cover.</p>
+
+<div class="options">
+  <div class="option" data-choice="status" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Status transitions only</h3>
+      <p>Move a ticket through its workflow — e.g. <em>"move PROJ-123 to In Review"</em> or <em>"close this ticket"</em>.</p>
+      <ul>
+        <li>Very common, high-value use case</li>
+        <li>Jira transitions API is a separate endpoint — needs extra handling</li>
+        <li>Focused scope, easier to test without a real Jira instance</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="option" data-choice="fields" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Field updates (no status)</h3>
+      <p>Change standard fields like summary, description, priority, assignee, story points, fix version.</p>
+      <ul>
+        <li>Uses the simpler PUT /issue endpoint</li>
+        <li>Good for keeping ticket data accurate while working</li>
+        <li>Field names and types vary per Jira project configuration</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="option" data-choice="both" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Both — fields + status transitions</h3>
+      <p>Full editing: change any standard field and move the ticket through the workflow.</p>
+      <ul>
+        <li>Most useful end state</li>
+        <li>More API surface to cover in MVP</li>
+        <li>Status transitions and field updates use different Jira endpoints</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <p class="subtitle"><strong>My recommendation: C — both, but phased.</strong><br>
+  Define both in the spec now so the architecture accommodates them, but implement status transitions first (higher daily value) and field edits second. This way the MVP is useful immediately and we don't paint ourselves into a corner.</p>
+</div>

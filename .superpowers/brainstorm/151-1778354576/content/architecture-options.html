@@ -1,0 +1,70 @@
+<h2>How should the extension be structured internally?</h2>
+<p class="subtitle">Three approaches — same user-facing behaviour, very different internal shapes</p>
+
+<div class="options">
+  <div class="option" data-choice="monolith" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Monolithic handler</h3>
+      <p>One large function receives every <code>@jira</code> message and handles everything: parse intent, call Jira, format reply.</p>
+      <div class="mockup" style="margin-top:8px;font-size:0.82em">
+        <div class="mockup-body" style="font-family:monospace">
+          participant.onMessage → [parse + fetch + format + respond]
+        </div>
+      </div>
+      <ul style="margin-top:8px">
+        <li>Fast to start, minimal boilerplate</li>
+        <li>Becomes hard to test and extend very quickly</li>
+        <li>Hard to mock Jira calls without touching the whole function</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="option" data-choice="commands" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>VS Code Commands as operations</h3>
+      <p>Each operation (getTicket, updateField, addComment) is a registered VS Code command. The participant parses intent and dispatches to the right command.</p>
+      <div class="mockup" style="margin-top:8px;font-size:0.82em">
+        <div class="mockup-body" style="font-family:monospace">
+          participant.onMessage → commands.executeCommand("jira.getTicket", …)
+        </div>
+      </div>
+      <ul style="margin-top:8px">
+        <li>Operations are individually triggerable from the command palette — useful for debugging</li>
+        <li>Commands are VS Code's first-class unit — tooling support is good</li>
+        <li>Business logic still tangled with VS Code API</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="option" data-choice="services" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Service layer — clean separation (Recommended)</h3>
+      <p>Three distinct layers: the participant handles conversation; services contain business logic; a Jira client handles HTTP. Each layer is testable in isolation.</p>
+      <div class="mockup" style="margin-top:8px;font-size:0.82em">
+        <div class="mockup-body" style="font-family:monospace">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <span style="background:var(--card-bg);padding:4px 8px;border-radius:4px;border:1px solid var(--border)">JiraParticipant<br><small>understands chat</small></span>
+            <span>→</span>
+            <span style="background:var(--card-bg);padding:4px 8px;border-radius:4px;border:1px solid var(--border)">TicketService<br><small>business logic</small></span>
+            <span>→</span>
+            <span style="background:var(--card-bg);padding:4px 8px;border-radius:4px;border:1px solid var(--border)">JiraApiClient<br><small>HTTP + auth</small></span>
+          </div>
+        </div>
+      </div>
+      <ul style="margin-top:8px">
+        <li>JiraApiClient can be swapped for a mock in tests — no real Jira needed</li>
+        <li>TicketService logic is testable with plain unit tests</li>
+        <li>Each layer has one job — easy to extend without breaking others</li>
+        <li>Slightly more upfront structure, but pays back immediately in testability</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <p class="subtitle"><strong>My recommendation: C.</strong><br>
+  You specifically asked for testing without a real Jira instance. That requires the HTTP layer to be injectable/swappable — which only Option C makes easy. The extra structure is minimal in TypeScript and immediately pays off.</p>
+</div>
