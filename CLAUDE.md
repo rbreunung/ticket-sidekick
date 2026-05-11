@@ -39,18 +39,11 @@ npm run test:e2e  # @vscode/test-electron participant tests (requires VS Code)
 
 **`npm test` must be green before every commit.** Run `npm run compile` to catch TypeScript errors first.
 
-## Testing rules — read before writing any code
+## Testing
 
-`JiraParticipant.ts` imports `vscode` at the top level. Vitest cannot load it. **Never put pure logic directly in `JiraParticipant.ts`.**
+Write tests for **user-facing use cases**, not internal mechanics. A test should read like a scenario: given this input, what does the user get back? Cover the happy path and the main failure case for every new feature.
 
-| What you're writing | Where it lives | How it's tested |
-| --- | --- | --- |
-| String extraction / parsing helper | `src/participant/sessionState.ts` | `JiraParticipant.test.ts` |
-| Business logic (API calls, formatting) | `src/services/TicketService.ts` | `TicketService.test.ts` |
-| Template loading / field resolution | `src/templates/` | `TemplateService.test.ts`, `FieldResolver.test.ts` |
-| VS Code UI + intent routing | `src/participant/JiraParticipant.ts` | e2e only |
-
-Every new user-facing feature must have unit tests that exercise the happy path and at least one failure/edge case. Write the tests first, then implement.
+`JiraParticipant.ts` imports `vscode` and cannot be loaded by Vitest. Keep pure logic (string extraction, data formatting) in `sessionState.ts` or `TicketService.ts` so it can be unit-tested. VS Code-dependent glue code is covered by the e2e suite only.
 
 ## Adding a new Jira operation
 
