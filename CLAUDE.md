@@ -77,26 +77,28 @@ Multi-turn flows store structured state in `vscode.ExtensionContext.workspaceSta
 | Session | workspaceState key | Tag in response |
 | --- | --- | --- |
 | `TemplateSelectionSession` | `jira.session.templateSelection` | `<!-- jira:selecting-template -->` |
+| `IssueTypeSelectionSession` | `jira.session.typeSelection` | `<!-- jira:selecting-type -->` |
 | `CreationSession` | `jira.session.creating` | `<!-- jira:creating -->` |
 | `ContentSession` | `jira.session.previewing` | `<!-- jira:previewing -->` |
 | `MoreCommentsSession` | `jira.session.moreComments` | `<!-- jira:more-comments -->` |
 
-Detection order in the handler: template selection → creation → content → more-comments → intent parse.
+Detection order in the handler: template selection → issue type selection → creation → content → more-comments → intent parse.
 
 ## Ticket creation flow
 
 `handleCreateTicket` in `JiraParticipant` resolves missing mandatory fields interactively:
 
-1. **Template** — chat-native numbered list streamed from `.jira-templates.json`; user replies with number, name, or `"no template"`; unrecognised reply re-presents the list; template load errors surface as chat messages and fall through to templateless creation
+1. **Template** — chat-native numbered list streamed from `.jira-templates.json`; user replies with number, name, `(n)` / `"no template"` to skip, or `(c)` to cancel entirely; unrecognised reply re-presents the list; template load errors surface as chat messages and fall through to templateless creation
 2. **Project key** — from prompt, then `jiraCopilot.defaultProject` setting, then `showInputBox`
 3. **Summary** — from prompt (LLM extraction), then `showInputBox`
-4. **Issue type** — from prompt, then `showQuickPick` populated from `GET /rest/api/3/project/{key}` (subtasks filtered out)
+4. **Issue type** — from template `issueType` field or prompt (LLM extraction); if neither is present, chat-native numbered list via `IssueTypeSelectionSession` (subtasks filtered out); `(c)` to cancel; fallback to `showInputBox` if no types can be fetched from `GET /rest/api/3/project/{key}`
 
 If a template is chosen:
 
 - `FieldResolver.resolve(defaultFields, resolveFields)` maps any `name`-based specs to Jira field values via API lookups; `id`-based specs pass through directly; array entries produce array results
-- `descriptionSections` drives a multi-turn Q&A via `CreationSession` (see session state table above)
+- `descriptionSections` (optional) drives a multi-turn Q&A via `CreationSession`; if absent or empty, ticket is created directly
 - When all sections are answered `finishTicketCreation` assembles the description and calls `TicketService.createTicket`
+- Field resolution + section handling are in `continueAfterIssueType`, called from both `handleCreateTicket` and the issue type session handler
 
 API endpoint: `POST /rest/api/3/issue` with `{ fields: { project: { key }, summary, issuetype: { name }, ...additionalFields } }`
 
