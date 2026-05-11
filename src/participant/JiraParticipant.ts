@@ -55,7 +55,7 @@ Schema: {"operation":"getTicket"|"getComments"|"addComment"|"updateField"|"searc
 - validateFields: check, validate required fields on a ticket
 - createTicket: create, open, add a new ticket/issue/bug/story/task; description is any additional body content the user provided beyond the summary (e.g. code blocks, steps to reproduce, specifications) — null if no extra content; assignee is the person to assign the ticket to ("me"/"myself" for the current user, or a name/email) — null if not mentioned
 - discoverWorkflow: discover or refresh the workflow graph for a project and issue type; projectKey and issueType are required
-- runCleanup: bulk-transition tickets using a named cleanup rule or ad-hoc criteria; cleanupRuleName is the quoted rule name if given; fixVersion is the exact fix version name if given (must be quoted in the prompt, e.g. "Fix Version 3.2")
+- runCleanup: bulk-close or bulk-transition ALL tickets of a type in a project; triggered by "close all", "run cleanup", or "close PROJECT ISSUETYPE" where PROJECT is a project key and ISSUETYPE is an issue type name (not a ticket key like PROJ-123); projectKey and issueType are extracted from the prompt; cleanupRuleName is the quoted rule name if given; fixVersion is the exact fix version string if given (must be quoted in the prompt, e.g. "Fix Version 3.2"); examples: "@jira close VSJI Bug", "@jira run cleanup 'Close released bugs'", "@jira close BILLING bugs in 'Release 3.2'"
 - contentSource: how the comment or description content should be produced
   - "literal": user provided the exact text to post (e.g. "add comment: LGTM")
   - "generate": user gave an instruction to create new content with no reference to the conversation (e.g. "write a poem about Star Trek", "add a 12-line poem as comment")
@@ -596,7 +596,10 @@ async function handleRunCleanup(
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
   const { cleanupRules } = new TemplateService(workspaceRoot).loadTemplates();
-  const rule: CleanupRule | null = cleanupRules.find((r) => r.name === intent.cleanupRuleName) ?? null;
+  const rule: CleanupRule | null =
+    cleanupRules.find((r) => r.name === intent.cleanupRuleName) ??
+    cleanupRules.find((r) => r.project === intent.projectKey && r.issueType === intent.issueType) ??
+    null;
   if (!rule && !intent.projectKey) {
     stream.markdown('No cleanup rule found. Use `@jira run cleanup "rule name"` or specify a project and issue type.');
     return;
@@ -624,8 +627,9 @@ async function handleRunCleanup(
     stream.markdown('No tickets found matching the criteria.');
     return;
   }
-  if (result.total > 50) {
-    stream.markdown(`_Found ${result.total} tickets — showing first 50. Refine your filter if needed._\n\n`);
+  if ((result.total ?? 0) > 50 || result.isLast === false) {
+    const count = result.total ? `${result.total} tickets` : 'more tickets';
+    stream.markdown(`_Found ${count} — showing first 50. Refine your filter if needed._\n\n`);
   }
 
   const BATCH_LIMIT = 50;

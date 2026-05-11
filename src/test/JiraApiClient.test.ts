@@ -88,15 +88,16 @@ describe('JiraApiClient', () => {
   });
 
   describe('searchJql', () => {
-    it('posts JQL and returns issues', async () => {
-      const mockFetch = makeFetch({ issues: [], total: 0, maxResults: 20 });
+    it('sends JQL as a GET query param to /search/jql', async () => {
+      const mockFetch = makeFetch({ issues: [], isLast: true });
       vi.stubGlobal('fetch', mockFetch);
       const client = new JiraApiClient(BASE_CONFIG);
       const result = await client.searchJql('project = PROJ');
-      expect(result.total).toBe(0);
-      const [, options] = mockFetch.mock.calls[0] as [string, RequestInit];
-      const body = JSON.parse(options.body as string);
-      expect(body.jql).toBe('project = PROJ');
+      expect(result.issues).toHaveLength(0);
+      const [url, options] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(url).toContain('/search/jql');
+      expect(url).toContain('jql=project%20%3D%20PROJ');
+      expect(options.method).toBeUndefined(); // GET has no explicit method
     });
   });
 });

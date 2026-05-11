@@ -136,7 +136,7 @@ export class TicketService {
       return `| ${issue.key} | ${issue.fields.summary} | ${issue.fields.status.name} | ${assignee} |`;
     });
     return [
-      `Found ${result.total} ticket(s):`,
+      `Found ${result.total ?? result.issues.length} ticket(s):`,
       '',
       '| Key | Summary | Status | Assignee |',
       '| --- | --- | --- | --- |',
@@ -186,7 +186,16 @@ export class TicketService {
     for (const step of path) {
       const fields: Record<string, unknown> = {};
       if (resolution && step.to === path.at(-1)!.to) fields.resolution = { name: resolution };
-      await this.client.executeTransition(issueKey, step.id, Object.keys(fields).length > 0 ? fields : undefined);
+      const hasFields = Object.keys(fields).length > 0;
+      try {
+        await this.client.executeTransition(issueKey, step.id, hasFields ? fields : undefined);
+      } catch (err) {
+        if (hasFields && err instanceof Error && err.message.includes('"resolution"')) {
+          await this.client.executeTransition(issueKey, step.id, undefined);
+        } else {
+          throw err;
+        }
+      }
     }
   }
 

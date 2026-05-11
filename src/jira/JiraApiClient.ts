@@ -44,7 +44,8 @@ export class JiraApiClient implements IJiraClient {
     if (!response.ok) {
       if (response.status === 401) throw new Error('Authentication failed. Check your credentials.');
       if (response.status === 404) throw new Error(`Not found: ${path}`);
-      throw new Error(`Jira API error: ${response.status} ${response.statusText}`);
+      const body = await response.text().catch(() => '');
+      throw new Error(`Jira API error: ${response.status} ${response.statusText}${body ? ` — ${body}` : ''}`);
     }
     if (response.status === 204) return undefined as T;
     return response.json() as Promise<T>;
@@ -101,14 +102,9 @@ export class JiraApiClient implements IJiraClient {
   }
 
   async searchJql(jql: string, maxResults = 20): Promise<JiraSearchResult> {
-    return this.request<JiraSearchResult>('/issue/search', {
-      method: 'POST',
-      body: JSON.stringify({
-        jql,
-        maxResults,
-        fields: ['summary', 'status', 'assignee', 'priority', 'description', 'labels', 'fixVersions', 'reporter'],
-      }),
-    });
+    const fields = ['summary', 'status', 'assignee', 'priority', 'labels', 'fixVersions', 'reporter', 'subtasks'];
+    const qs = `jql=${encodeURIComponent(jql)}&maxResults=${maxResults}&${fields.map(f => `fields=${f}`).join('&')}`;
+    return this.request<JiraSearchResult>(`/search/jql?${qs}`);
   }
 
   async findUser(query: string): Promise<JiraUser[]> {

@@ -257,6 +257,29 @@ describe('TicketService', () => {
       await service.transitionAlongPath('PROJ-123', path);
       expect(client.executeTransitionCalls[0].fields).toBeUndefined();
     });
+
+    it('retries without resolution when Jira rejects the resolution field with 400', async () => {
+      let callCount = 0;
+      client.executeTransition = async (_key, _id, fields) => {
+        callCount++;
+        if (fields && 'resolution' in fields) {
+          throw new Error('Jira API error: 400 Bad Request — {"errors":{"resolution":"Field \'resolution\' cannot be set."}}');
+        }
+        client.executeTransitionCalls.push({ issueKey: _key, transitionId: _id, fields });
+      };
+      const path = [{ id: '41', name: 'Close', to: 'Done' }];
+      await service.transitionAlongPath('PROJ-123', path, 'Fixed');
+      expect(callCount).toBe(2);
+      expect(client.executeTransitionCalls[0].fields).toBeUndefined();
+    });
+
+    it('does not retry for non-resolution 400 errors', async () => {
+      client.executeTransition = async () => {
+        throw new Error('Jira API error: 400 Bad Request — {"errors":{"status":"Invalid transition"}}');
+      };
+      const path = [{ id: '41', name: 'Close', to: 'Done' }];
+      await expect(service.transitionAlongPath('PROJ-123', path, 'Fixed')).rejects.toThrow('Invalid transition');
+    });
   });
 
   describe('createTicket with additionalFields', () => {

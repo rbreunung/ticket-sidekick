@@ -4,7 +4,9 @@
             "name": "User Story for Ticket Sidekick",
             "issueType": "Story",
             "defaultFields": {
-                "priority": { "name": "Medium" },
+                "priority": {
+                    "name": "Medium"
+                },
                 "labels": [
                     "generated"
                 ],
@@ -20,7 +22,9 @@
             "name": "Bug for Ticket Sidekick",
             "issueType": "Bug",
             "defaultFields": {
-                "priority": { "name": "High" },
+                "priority": {
+                    "name": "High"
+                },
                 "labels": [
                     "generated"
                 ],
@@ -32,6 +36,16 @@
                 "Expectation",
                 "Environment"
             ]
+        }
+    ],
+    "cleanupRules": [
+        {
+            "name": "Close VSJI Bugs",
+            "project": "VSJI",
+            "issueType": "Bug",
+            "targetState": "Erledigt",
+            "resolution": "Fixed",
+            "closeSubtasks": true
         }
     ]
 }

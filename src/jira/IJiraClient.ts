@@ -36,8 +36,9 @@ export interface JiraIssue {
 
 export interface JiraSearchResult {
   issues: JiraIssue[];
-  total: number;
-  maxResults: number;
+  total?: number;
+  maxResults?: number;
+  isLast?: boolean;
 }
 
 export interface JiraTransition {
