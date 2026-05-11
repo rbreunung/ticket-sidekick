@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers } from '../participant/sessionState';
+import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection } from '../participant/sessionState';
 
 describe('stripHiddenMarkers', () => {
   it('removes a jira-ticket marker', () => {
@@ -131,6 +131,45 @@ describe('isCancellation', () => {
   });
 });
 
+
+describe('parseTemplateSelection', () => {
+  const templates = ['User Story for Jira Copilot', 'Bug Report', 'Task'];
+
+  it('selects by 1-based number', () => {
+    expect(parseTemplateSelection('1', templates)).toBe('User Story for Jira Copilot');
+    expect(parseTemplateSelection('2', templates)).toBe('Bug Report');
+    expect(parseTemplateSelection('3', templates)).toBe('Task');
+  });
+
+  it('selects by exact name (case-insensitive)', () => {
+    expect(parseTemplateSelection('Bug Report', templates)).toBe('Bug Report');
+    expect(parseTemplateSelection('bug report', templates)).toBe('Bug Report');
+    expect(parseTemplateSelection('BUG REPORT', templates)).toBe('Bug Report');
+  });
+
+  it('returns null for no-template phrases', () => {
+    expect(parseTemplateSelection('no template', templates)).toBeNull();
+    expect(parseTemplateSelection('none', templates)).toBeNull();
+    expect(parseTemplateSelection('skip', templates)).toBeNull();
+    expect(parseTemplateSelection('0', templates)).toBeNull();
+    expect(parseTemplateSelection('no', templates)).toBeNull();
+  });
+
+  it('returns invalid for out-of-range number', () => {
+    expect(parseTemplateSelection('4', templates)).toBe('invalid');
+    expect(parseTemplateSelection('0', templates)).toBeNull();
+  });
+
+  it('returns invalid for unrecognised text', () => {
+    expect(parseTemplateSelection('something else', templates)).toBe('invalid');
+    expect(parseTemplateSelection('', templates)).toBe('invalid');
+  });
+
+  it('trims whitespace before matching', () => {
+    expect(parseTemplateSelection('  2  ', templates)).toBe('Bug Report');
+    expect(parseTemplateSelection('  no template  ', templates)).toBeNull();
+  });
+});
 
 describe('isConfirmation (load-more phrases)', () => {
   it('returns true for "load all"', () => {

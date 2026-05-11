@@ -21,6 +21,20 @@ export interface MoreCommentsSession {
   commentQuery: string | null;
 }
 
+export interface TemplateSelectionSession {
+  templateNames: string[];
+}
+
+export function parseTemplateSelection(reply: string, templateNames: string[]): string | null | 'invalid' {
+  const normalized = reply.trim().toLowerCase();
+  const NO_TEMPLATE = new Set(['no template', 'none', 'skip', '0', 'no', 'without template']);
+  if (NO_TEMPLATE.has(normalized)) return null;
+  const num = parseInt(normalized, 10);
+  if (!isNaN(num) && num >= 1 && num <= templateNames.length) return templateNames[num - 1];
+  const match = templateNames.find((n) => n.toLowerCase() === normalized);
+  return match ?? 'invalid';
+}
+
 export function extractLastTicketFromText(text: string): string | null {
   const match = text.match(/<!--\s*@jira-ticket:([A-Z][A-Z0-9]+-\d+)\s*-->/);
   return match ? match[1] : null;

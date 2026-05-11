@@ -8,7 +8,7 @@ import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
 import { extractTicketId } from '../utils/branchParser';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection } from './sessionState';
 
 type Operation =
   | 'getTicket'
@@ -304,6 +304,17 @@ async function streamNextSection(session: CreationSession, stream: vscode.ChatRe
   stream.markdown(`${header}\n\n${cta}\n\n<!-- jira:creating -->`);
 }
 
+async function streamTemplateSelection(
+  templateNames: string[],
+  stream: vscode.ChatResponseStream,
+  workspaceState: vscode.Memento,
+): Promise<void> {
+  const session: TemplateSelectionSession = { templateNames };
+  await workspaceState.update('jira.session.templateSelection', session);
+  const list = templateNames.map((n, i) => `${i + 1}. ${n}`).join('\n');
+  stream.markdown(`Which template would you like to use?\n\n${list}\n\nOr say **"no template"** to skip.\n\n<!-- jira:selecting-template -->`);
+}
+
 async function finishTicketCreation(
   session: CreationSession,
   ticketService: TicketService,
@@ -331,32 +342,34 @@ async function handleCreateTicket(
   jiraClient: JiraApiClient,
   ticketService: TicketService,
   workspaceState: vscode.Memento,
+  preselectedTemplateName?: string | null,
 ): Promise<string | null> {
-  // --- Fresh start: load templates ---
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-  let templates: JiraTemplate[] = [];
-  if (workspaceRoot) {
-    try {
-      templates = new TemplateService(workspaceRoot).loadTemplates();
-    } catch (err) {
-      const pick = await vscode.window.showQuickPick(['Proceed without template', 'Cancel'], {
-        title: `Template error: ${err instanceof Error ? err.message : String(err)}`,
-        ignoreFocusOut: true,
-      });
-      if (pick !== 'Proceed without template') { stream.markdown('Cancelled.'); return null; }
-    }
-  }
-
   let selectedTemplate: JiraTemplate | null = null;
-  if (templates.length > 0) {
-    const items = [...templates.map((t) => t.name), 'Proceed without template'];
-    const picked = await vscode.window.showQuickPick(items, {
-      title: 'Select a ticket template',
-      ignoreFocusOut: true,
-    });
-    if (!picked) { stream.markdown('Cancelled.'); return null; }
-    if (picked !== 'Proceed without template') {
-      selectedTemplate = templates.find((t) => t.name === picked) ?? null;
+
+  if (preselectedTemplateName !== undefined) {
+    // Returning from a template selection turn — reload the chosen template by name
+    if (preselectedTemplateName !== null && workspaceRoot) {
+      try {
+        const templates = new TemplateService(workspaceRoot).loadTemplates();
+        selectedTemplate = templates.find((t) => t.name === preselectedTemplateName) ?? null;
+      } catch {
+        stream.markdown('_Could not reload template — proceeding without._\n\n');
+      }
+    }
+  } else {
+    // Fresh call — offer templates in chat if any exist
+    let templates: JiraTemplate[] = [];
+    if (workspaceRoot) {
+      try {
+        templates = new TemplateService(workspaceRoot).loadTemplates();
+      } catch (err) {
+        stream.markdown(`_Template error: ${err instanceof Error ? err.message : String(err)} — proceeding without template._\n\n`);
+      }
+    }
+    if (templates.length > 0) {
+      await streamTemplateSelection(templates.map((t) => t.name), stream, workspaceState);
+      return null;
     }
   }
 
@@ -482,6 +495,26 @@ export function createParticipant(
     const ticketService = new TicketService(jiraClient);
     const ws = context.workspaceState;
     const lastResponse = getLastAssistantText(chatContext);
+
+    // Template selection — user replied with their template choice
+    if (lastResponse.includes('<!-- jira:selecting-template -->')) {
+      const selSession = ws.get<TemplateSelectionSession>('jira.session.templateSelection');
+      if (selSession) {
+        const choice = parseTemplateSelection(request.prompt, selSession.templateNames);
+        if (choice === 'invalid') {
+          await streamTemplateSelection(selSession.templateNames, stream, ws);
+          return;
+        }
+        await ws.update('jira.session.templateSelection', undefined);
+        try {
+          const createdKey = await handleCreateTicket(request, stream, token, jiraClient, ticketService, ws, choice);
+          if (createdKey) stream.markdown(`\n\n<!-- @jira-ticket:${createdKey} -->`);
+        } catch (err) {
+          stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+        }
+        return;
+      }
+    }
 
     // Creation session continuation — user answered a section prompt
     if (lastResponse.includes('<!-- jira:creating -->')) {
