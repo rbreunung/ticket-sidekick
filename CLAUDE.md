@@ -24,7 +24,7 @@ JiraParticipant → TicketService → IJiraClient (interface)
 | `src/services/TicketService.ts` | All business logic; depends on IJiraClient |
 | `src/services/ConfigService.ts` | VS Code settings + SecretStorage |
 | `src/participant/JiraParticipant.ts` | Chat handler + intent parsing via VS Code LM API |
-| `src/participant/sessionState.ts` | VS Code-free state helpers: `CreationSession`, `extractCreationSessionFromText`, `extractLastTicketFromText` |
+| `src/participant/sessionState.ts` | VS Code-free pure helpers and multi-turn session types — all unit-testable by Vitest |
 | `src/templates/TemplateService.ts` | Reads `.jira-templates.json` from workspace root; returns `JiraTemplate[]` |
 | `src/templates/FieldResolver.ts` | Resolves `resolveFields` entries by name (API lookup) or id (pass-through) |
 | `src/utils/branchParser.ts` | Extracts ticket ID from git branch name |
@@ -70,11 +70,24 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
 Regex: `[A-Z][A-Z0-9]+-\d+` applied to `git branch --show-current` output.
 Example: `feature/PROJ-123-add-login` → `PROJ-123`
 
+## Multi-turn session state
+
+Multi-turn flows store structured state in `vscode.ExtensionContext.workspaceState` and embed a compact HTML tag in the response as an expiry signal. On the next turn, the handler checks whether the tag appears in the **last** assistant response; if it does, it reads from `workspaceState`. If the user moved on (different response is last), the tag is absent and the session is silently ignored.
+
+| Session | workspaceState key | Tag in response |
+| --- | --- | --- |
+| `TemplateSelectionSession` | `jira.session.templateSelection` | `<!-- jira:selecting-template -->` |
+| `CreationSession` | `jira.session.creating` | `<!-- jira:creating -->` |
+| `ContentSession` | `jira.session.previewing` | `<!-- jira:previewing -->` |
+| `MoreCommentsSession` | `jira.session.moreComments` | `<!-- jira:more-comments -->` |
+
+Detection order in the handler: template selection → creation → content → more-comments → intent parse.
+
 ## Ticket creation flow
 
 `handleCreateTicket` in `JiraParticipant` resolves missing mandatory fields interactively:
 
-1. **Template** — `showQuickPick` from `.jira-templates.json` in workspace root; user may choose "No template" or dismiss if the file is absent or broken
+1. **Template** — chat-native numbered list streamed from `.jira-templates.json`; user replies with number, name, or `"no template"`; unrecognised reply re-presents the list; template load errors surface as chat messages and fall through to templateless creation
 2. **Project key** — from prompt, then `jiraCopilot.defaultProject` setting, then `showInputBox`
 3. **Summary** — from prompt (LLM extraction), then `showInputBox`
 4. **Issue type** — from prompt, then `showQuickPick` populated from `GET /rest/api/3/project/{key}` (subtasks filtered out)
@@ -82,17 +95,36 @@ Example: `feature/PROJ-123-add-login` → `PROJ-123`
 If a template is chosen:
 
 - `FieldResolver.resolve(defaultFields, resolveFields)` maps any `name`-based specs to Jira field values via API lookups; `id`-based specs pass through directly; array entries produce array results
-- `descriptionSections` drives a multi-turn Q&A: the participant asks for one pending section per reply, embedding a hidden `<!-- @jira-create:{json} -->` marker in each response
-- On the next user reply the session is recovered from `ChatContext` history via `extractCreationSessionFromText`
-- When all sections are answered `finishTicketCreation` calls `TicketService.createTicket` with the assembled description and resolved fields
+- `descriptionSections` drives a multi-turn Q&A via `CreationSession` (see session state table above)
+- When all sections are answered `finishTicketCreation` assembles the description and calls `TicketService.createTicket`
 
 API endpoint: `POST /rest/api/3/issue` with `{ fields: { project: { key }, summary, issuetype: { name }, ...additionalFields } }`
 
-## Comment display
+## Comment handling
 
-`TicketService.getTicket` (and therefore `@jira show`) includes a **Comments** section in the output.
-`JiraIssue.fields.comment.comments` is fetched and formatted by `formatComments()` in `TicketService`.
-Each comment shows author display name, date (YYYY-MM-DD), and body extracted from ADF.
+`getComments` fetches up to 20 newest comments via `TicketService.getIssueComments`, then asks the LLM to synthesize them:
+
+- No query → one-sentence summary per comment
+- With query (e.g. "login bug") → finds and quotes relevant comments with author and date
+
+If the ticket has more than 20 comments the response includes a load-more offer via `MoreCommentsSession`. The user confirms ("load all") to fetch up to 100 comments and re-synthesize.
+
+`TicketService.getTicket` (and therefore `@jira show`) also includes a **Comments** section rendered by `formatComments()`. Each comment shows author display name, date (YYYY-MM-DD), and body extracted from ADF.
+
+## Content preview/refinement
+
+`addComment` with a non-literal `contentSource`, and `updateField` for the description field, trigger a chat-native preview loop via `ContentSession`:
+
+1. LLM generates the content based on the instruction (and optional conversation history for `history-recent` / `history-full`)
+2. Content is streamed to chat with a confirm/adjust prompt
+3. User confirms ("post it") → content is posted; user cancels → session cleared; user gives a refinement instruction → LLM regenerates with the previous content and instruction as context, new preview is streamed
+
+`contentSource` is resolved by the intent parser:
+
+- `"literal"` — user provided exact text; skip preview, post directly
+- `"generate"` — new content from scratch
+- `"history-recent"` — synthesise from the last 3 conversation turns
+- `"history-full"` — synthesise from the entire conversation history
 
 ## Last-ticket context
 
