@@ -7,7 +7,7 @@ import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
 import { extractTicketId } from '../utils/branchParser';
-import { type CreationSession, extractCreationSessionFromText, extractLastTicketFromText } from './sessionState';
+import { type CreationSession, extractCreationSessionFromText, extractCreatedKeyFromConfirmation, extractLastTicketFromText } from './sessionState';
 
 type Operation =
   | 'getTicket'
@@ -192,11 +192,6 @@ function streamNextSection(session: CreationSession, stream: vscode.ChatResponse
   stream.markdown(`\n\n<!-- @jira-create:${JSON.stringify(session)} -->`);
 }
 
-function extractCreatedKey(confirmation: string): string | null {
-  const m = confirmation.match(/([A-Z][A-Z0-9]+-\d+)/);
-  return m ? m[1] : null;
-}
-
 async function finishTicketCreation(
   session: CreationSession,
   ticketService: TicketService,
@@ -214,7 +209,7 @@ async function finishTicketCreation(
     additionalFields,
   );
   stream.markdown(result);
-  return extractCreatedKey(result);
+  return extractCreatedKeyFromConfirmation(result);
 }
 
 async function handleCreateTicket(
@@ -315,7 +310,7 @@ async function handleCreateTicket(
       resolvedFields.description = wrapInAdf(descriptionText);
       const result = await ticketService.createTicket(projectKey, summary, issueType, resolvedFields);
       stream.markdown(result);
-      return extractCreatedKey(result);
+      return extractCreatedKeyFromConfirmation(result);
     } else {
       const fieldNames = Object.keys(resolvedFields).filter((k) => k !== 'description').join(', ');
       stream.markdown(`_Using template **${selectedTemplate.name}**${fieldNames ? ` — defaults: ${fieldNames}` : ''}._\n\n`);
@@ -347,7 +342,7 @@ async function handleCreateTicket(
       Object.keys(resolvedFields).length > 0 ? resolvedFields : undefined,
     );
     stream.markdown(result);
-    return extractCreatedKey(result);
+    return extractCreatedKeyFromConfirmation(result);
   }
 }
 

@@ -37,15 +37,31 @@ npm run compile   # TypeScript type check
 npm run test:e2e  # @vscode/test-electron participant tests (requires VS Code)
 ```
 
+**`npm test` must be green before every commit.** Run `npm run compile` to catch TypeScript errors first.
+
+## Testing rules — read before writing any code
+
+`JiraParticipant.ts` imports `vscode` at the top level. Vitest cannot load it. **Never put pure logic directly in `JiraParticipant.ts`.**
+
+| What you're writing | Where it lives | How it's tested |
+| --- | --- | --- |
+| String extraction / parsing helper | `src/participant/sessionState.ts` | `JiraParticipant.test.ts` |
+| Business logic (API calls, formatting) | `src/services/TicketService.ts` | `TicketService.test.ts` |
+| Template loading / field resolution | `src/templates/` | `TemplateService.test.ts`, `FieldResolver.test.ts` |
+| VS Code UI + intent routing | `src/participant/JiraParticipant.ts` | e2e only |
+
+Every new user-facing feature must have unit tests that exercise the happy path and at least one failure/edge case. Write the tests first, then implement.
+
 ## Adding a new Jira operation
 
 1. Add method to `IJiraClient` interface
 2. Implement in `JiraApiClient` (real HTTP)
 3. Implement in `MockJiraClient` (fixture return)
 4. Add a fixture file to `src/test/fixtures/` matching real Jira v3 API shape
-5. Implement in `TicketService` (business logic)
-6. Write tests in `TicketService.test.ts` first, then implement
+5. Write failing tests in `TicketService.test.ts`
+6. Implement in `TicketService` (business logic) until tests pass
 7. Add intent routing in `JiraParticipant.ts`
+8. If the new operation introduces any pure extraction/transformation logic, put it in `sessionState.ts` and test it in `JiraParticipant.test.ts`
 
 ## Jira API
 

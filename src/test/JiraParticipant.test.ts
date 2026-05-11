@@ -1,5 +1,23 @@
 import { describe, it, expect } from 'vitest';
-import { extractCreationSessionFromText, extractLastTicketFromText } from '../participant/sessionState';
+import { extractCreatedKeyFromConfirmation, extractCreationSessionFromText, extractLastTicketFromText } from '../participant/sessionState';
+
+describe('extractCreatedKeyFromConfirmation', () => {
+  it('extracts key from a standard creation confirmation', () => {
+    expect(extractCreatedKeyFromConfirmation('Created PROJ-125: **Login timeout bug** (Bug in PROJ)')).toBe('PROJ-125');
+  });
+
+  it('extracts key with multi-segment project name', () => {
+    expect(extractCreatedKeyFromConfirmation('Created VSJI-42: **Add dark mode** (Story in VSJI)')).toBe('VSJI-42');
+  });
+
+  it('returns null when no ticket key is present', () => {
+    expect(extractCreatedKeyFromConfirmation('Cancelled.')).toBeNull();
+  });
+
+  it('returns null for empty string', () => {
+    expect(extractCreatedKeyFromConfirmation('')).toBeNull();
+  });
+});
 
 describe('extractLastTicketFromText', () => {
   it('extracts ticket key from marker', () => {

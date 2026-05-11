@@ -14,6 +14,11 @@ export function extractLastTicketFromText(text: string): string | null {
   return match ? match[1] : null;
 }
 
+export function extractCreatedKeyFromConfirmation(confirmation: string): string | null {
+  const m = confirmation.match(/([A-Z][A-Z0-9]+-\d+)/);
+  return m ? m[1] : null;
+}
+
 export function extractCreationSessionFromText(text: string): CreationSession | null {
   const match = text.match(/<!--\s*@jira-create:([\s\S]*?)-->/);
   if (!match) return null;
