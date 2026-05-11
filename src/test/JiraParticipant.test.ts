@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractCreatedKeyFromConfirmation, extractCreationSessionFromText, extractLastTicketFromText, serializeTurns, stripHiddenMarkers } from '../participant/sessionState';
+import { extractCreatedKeyFromConfirmation, extractCreationSessionFromText, extractContentSessionFromText, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers } from '../participant/sessionState';
 
 describe('stripHiddenMarkers', () => {
   it('removes a jira-ticket marker', () => {
@@ -114,5 +114,92 @@ describe('extractCreationSessionFromText', () => {
     const text = `**Steps to reproduce** — describe steps\n\n<!-- @jira-create:${JSON.stringify(validSession)} -->\n\nExtra text`;
     const result = extractCreationSessionFromText(text);
     expect(result?.project).toBe('BILLING');
+  });
+});
+
+describe('isConfirmation', () => {
+  it('returns true for "post it"', () => {
+    expect(isConfirmation('post it')).toBe(true);
+  });
+
+  it('returns true for "yes"', () => {
+    expect(isConfirmation('yes')).toBe(true);
+  });
+
+  it('returns true for case-insensitive match', () => {
+    expect(isConfirmation('Yes')).toBe(true);
+  });
+
+  it('returns true for "looks good"', () => {
+    expect(isConfirmation('looks good')).toBe(true);
+  });
+
+  it('returns false for a refinement instruction', () => {
+    expect(isConfirmation('make it shorter')).toBe(false);
+  });
+
+  it('returns false for "cancel"', () => {
+    expect(isConfirmation('cancel')).toBe(false);
+  });
+});
+
+describe('isCancellation', () => {
+  it('returns true for "cancel"', () => {
+    expect(isCancellation('cancel')).toBe(true);
+  });
+
+  it('returns true for "never mind"', () => {
+    expect(isCancellation('never mind')).toBe(true);
+  });
+
+  it('returns true for "nevermind"', () => {
+    expect(isCancellation('nevermind')).toBe(true);
+  });
+
+  it('returns false for "post it"', () => {
+    expect(isCancellation('post it')).toBe(false);
+  });
+
+  it('returns false for a refinement instruction', () => {
+    expect(isCancellation('make it more formal')).toBe(false);
+  });
+});
+
+describe('extractContentSessionFromText', () => {
+  const validSession = {
+    ticketKey: 'PROJ-42',
+    operation: 'addComment' as const,
+    currentContent: 'Here is a comment.',
+    historyContext: 'User: what did we find?\n\nAssistant: We found a bug.',
+  };
+
+  it('extracts session from a response containing the marker', () => {
+    const text = `Preview text\n\n<!-- @jira-content:${JSON.stringify(validSession)} -->`;
+    const result = extractContentSessionFromText(text);
+    expect(result?.ticketKey).toBe('PROJ-42');
+    expect(result?.operation).toBe('addComment');
+    expect(result?.currentContent).toBe('Here is a comment.');
+  });
+
+  it('returns null when no marker is present', () => {
+    expect(extractContentSessionFromText('some response with no marker')).toBeNull();
+  });
+
+  it('returns null for a marker with malformed JSON', () => {
+    expect(extractContentSessionFromText('<!-- @jira-content:invalid -->')).toBeNull();
+  });
+
+  it('preserves undefined historyContext', () => {
+    const session = { ...validSession, historyContext: undefined };
+    const text = `<!-- @jira-content:${JSON.stringify(session)} -->`;
+    const result = extractContentSessionFromText(text);
+    expect(result?.historyContext).toBeUndefined();
+  });
+
+  it('extracts updateDescription operation', () => {
+    const session = { ...validSession, operation: 'updateDescription' as const };
+    const text = `<!-- @jira-content:${JSON.stringify(session)} -->`;
+    const result = extractContentSessionFromText(text);
+    expect(result?.operation).toBe('updateDescription');
   });
 });

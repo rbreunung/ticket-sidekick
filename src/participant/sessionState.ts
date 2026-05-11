@@ -43,3 +43,39 @@ export function extractCreationSessionFromText(text: string): CreationSession | 
     return null;
   }
 }
+
+export interface ContentSession {
+  ticketKey: string;
+  operation: 'addComment' | 'updateDescription';
+  currentContent: string;
+  historyContext: string | undefined;
+}
+
+export function isConfirmation(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  const CONFIRMATIONS = new Set([
+    'yes', 'yep', 'ok', 'okay', 'sure', 'perfect', 'great',
+    'looks good', 'looks great', 'go ahead', 'do it', 'ship it',
+    'post it', 'confirm', 'confirmed', 'submit', 'approved', 'approve', 'fine',
+  ]);
+  return CONFIRMATIONS.has(normalized);
+}
+
+export function isCancellation(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  const CANCELLATIONS = new Set([
+    'no', 'nope', 'cancel', 'cancelled', 'stop', 'abort',
+    'never mind', 'nevermind', "don't", 'dont', 'quit', 'skip',
+  ]);
+  return CANCELLATIONS.has(normalized);
+}
+
+export function extractContentSessionFromText(text: string): ContentSession | null {
+  const match = text.match(/<!--\s*@jira-content:([\s\S]*?)-->/);
+  if (!match) return null;
+  try {
+    return JSON.parse(match[1]) as ContentSession;
+  } catch {
+    return null;
+  }
+}

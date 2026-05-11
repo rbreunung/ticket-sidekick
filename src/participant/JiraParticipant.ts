@@ -7,7 +7,7 @@ import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
 import { extractTicketId } from '../utils/branchParser';
-import { type CreationSession, extractCreationSessionFromText, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns } from './sessionState';
+import { type CreationSession, type ContentSession, extractCreationSessionFromText, extractContentSessionFromText, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation } from './sessionState';
 
 type Operation =
   | 'getTicket'
@@ -118,35 +118,56 @@ function buildHistoryContext(
   return undefined;
 }
 
-async function previewAndConfirm(
-  initial: string,
-  postLabel: string,
-  title: string,
-  historyContext: string | undefined,
+function parseContentSession(context: vscode.ChatContext): ContentSession | null {
+  for (let i = context.history.length - 1; i >= 0; i--) {
+    const turn = context.history[i];
+    if (turn instanceof vscode.ChatResponseTurn) {
+      const text = turn.response
+        .map((p) => (p instanceof vscode.ChatResponseMarkdownPart ? p.value.value : ''))
+        .join('');
+      const result = extractContentSessionFromText(text);
+      if (result) return result;
+    }
+  }
+  return null;
+}
+
+function streamContentPreview(session: ContentSession, stream: vscode.ChatResponseStream): void {
+  const actionLabel = session.operation === 'addComment' ? 'post this comment' : 'update the description';
+  stream.markdown(
+    `${session.currentContent}\n\nReply **"post it"** to ${actionLabel}, or tell me how to adjust it.\n\n<!-- @jira-content:${JSON.stringify(session)} -->`,
+  );
+}
+
+async function handleContentSession(
+  session: ContentSession,
+  prompt: string,
   model: vscode.LanguageModelChat,
   token: vscode.CancellationToken,
   stream: vscode.ChatResponseStream,
-): Promise<string | null> {
-  let content = initial;
-  for (;;) {
-    stream.markdown(`**Preview:**\n\n${content}\n\n`);
-    const choice = await vscode.window.showQuickPick([postLabel, 'Refine...', 'Cancel'], {
-      title,
-      ignoreFocusOut: true,
-    });
-    if (choice === postLabel) return content;
-    if (choice !== 'Refine...') return null;
-    const refinement = await vscode.window.showInputBox({
-      prompt: 'How would you like to refine this?',
-      placeHolder: 'e.g. make it shorter, use a more formal tone',
-      ignoreFocusOut: true,
-    });
-    if (!refinement) return null;
-    const refineContext = [historyContext, `Previously generated:\n${content}`]
-      .filter(Boolean)
-      .join('\n\n');
-    content = await generateContent(refinement, model, token, refineContext);
+  ticketService: TicketService,
+): Promise<void> {
+  if (isCancellation(prompt)) {
+    stream.markdown('_Cancelled._');
+    return;
   }
+  if (isConfirmation(prompt)) {
+    let result: string;
+    if (session.operation === 'addComment') {
+      result = await ticketService.addComment(session.ticketKey, session.currentContent);
+    } else {
+      result = await ticketService.updateField(session.ticketKey, 'description', session.currentContent);
+    }
+    stream.markdown(result);
+    stream.markdown(`\n\n<!-- @jira-ticket:${session.ticketKey} -->`);
+    return;
+  }
+  // Refinement instruction
+  const refineContext = [session.historyContext, `Previously generated:\n${session.currentContent}`]
+    .filter(Boolean)
+    .join('\n\n');
+  const refined = await generateContent(prompt, model, token, refineContext);
+  streamContentPreview({ ...session, currentContent: refined }, stream);
 }
 
 async function checkSectionCoverage(
@@ -453,16 +474,9 @@ export function createParticipant(
     });
     const ticketService = new TicketService(jiraClient);
 
-    let intent: ParsedIntent;
-    try {
-      intent = await parseIntent(request.prompt, request.model, token);
-    } catch (err) {
-      stream.markdown(`Could not understand the request: ${err instanceof Error ? err.message : String(err)}`);
-      return;
-    }
-
-    // createTicket has its own multi-turn flow — handle before the generic ticketKey logic
-    if (intent.operation === 'createTicket') {
+    // Check for in-progress creation session before parsing intent (catches mid-session user answers)
+    const creationSession = parseCreationSession(chatContext);
+    if (creationSession) {
       try {
         const createdKey = await handleCreateTicket(request, chatContext, stream, token, jiraClient, ticketService);
         if (createdKey) stream.markdown(`\n\n<!-- @jira-ticket:${createdKey} -->`);
@@ -472,9 +486,27 @@ export function createParticipant(
       return;
     }
 
-    // Also handle in-progress creation sessions (user answered a section question)
-    const session = parseCreationSession(chatContext);
-    if (session) {
+    // Check for in-progress content session (comment/description preview awaiting confirm/refine)
+    const contentSession = parseContentSession(chatContext);
+    if (contentSession) {
+      try {
+        await handleContentSession(contentSession, request.prompt, request.model, token, stream, ticketService);
+      } catch (err) {
+        stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
+
+    let intent: ParsedIntent;
+    try {
+      intent = await parseIntent(request.prompt, request.model, token);
+    } catch (err) {
+      stream.markdown(`Could not understand the request: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+
+    // createTicket has its own multi-turn flow
+    if (intent.operation === 'createTicket') {
       try {
         const createdKey = await handleCreateTicket(request, chatContext, stream, token, jiraClient, ticketService);
         if (createdKey) stream.markdown(`\n\n<!-- @jira-ticket:${createdKey} -->`);
@@ -515,20 +547,14 @@ export function createParticipant(
             stream.markdown('What comment would you like to add?');
             return;
           }
-          let commentBody: string;
           if (isLiteral) {
-            commentBody = intent.comment!;
+            result = await ticketService.addComment(ticketKey!, intent.comment!);
           } else {
             const historyContext = buildHistoryContext(intent.contentSource, chatContext);
-            const initial = await generateContent(request.prompt, request.model, token, historyContext);
-            const confirmed = await previewAndConfirm(
-              initial, 'Post comment', `Add this comment to ${ticketKey}?`,
-              historyContext, request.model, token, stream,
-            );
-            if (!confirmed) { stream.markdown('_Cancelled._'); return; }
-            commentBody = confirmed;
+            const content = await generateContent(request.prompt, request.model, token, historyContext);
+            streamContentPreview({ ticketKey: ticketKey!, operation: 'addComment', currentContent: content, historyContext }, stream);
+            return;
           }
-          result = await ticketService.addComment(ticketKey!, commentBody);
           break;
         }
         case 'updateField': {
@@ -538,19 +564,12 @@ export function createParticipant(
           }
           const results: string[] = [];
           for (const { fieldName, fieldValue } of intent.fieldUpdates) {
-            if (fieldName.toLowerCase() === 'description') {
+            const isNonLiteral = intent.contentSource !== 'literal' && intent.contentSource !== undefined;
+            if (fieldName.toLowerCase() === 'description' && isNonLiteral) {
               const historyContext = buildHistoryContext(intent.contentSource, chatContext);
-              const generated = await generateContent(fieldValue, request.model, token, historyContext);
-              if (intent.contentSource !== 'literal' && intent.contentSource !== undefined) {
-                const confirmed = await previewAndConfirm(
-                  generated, 'Update description', `Update description on ${ticketKey}?`,
-                  historyContext, request.model, token, stream,
-                );
-                if (!confirmed) { stream.markdown('_Cancelled._'); return; }
-                results.push(await ticketService.updateField(ticketKey!, fieldName, confirmed));
-              } else {
-                results.push(await ticketService.updateField(ticketKey!, fieldName, generated));
-              }
+              const content = await generateContent(fieldValue, request.model, token, historyContext);
+              streamContentPreview({ ticketKey: ticketKey!, operation: 'updateDescription', currentContent: content, historyContext }, stream);
+              return;
             } else {
               results.push(await ticketService.updateField(ticketKey!, fieldName, fieldValue));
             }
