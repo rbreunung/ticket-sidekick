@@ -9,6 +9,18 @@ export interface CreationSession {
   fields: Record<string, unknown>;
 }
 
+export interface ContentSession {
+  ticketKey: string;
+  operation: 'addComment' | 'updateDescription';
+  currentContent: string;
+  historyContext: string | undefined;
+}
+
+export interface MoreCommentsSession {
+  ticketKey: string;
+  commentQuery: string | null;
+}
+
 export function extractLastTicketFromText(text: string): string | null {
   const match = text.match(/<!--\s*@jira-ticket:([A-Z][A-Z0-9]+-\d+)\s*-->/);
   return match ? match[1] : null;
@@ -34,23 +46,6 @@ export function extractCreatedKeyFromConfirmation(confirmation: string): string 
   return m ? m[1] : null;
 }
 
-export function extractCreationSessionFromText(text: string): CreationSession | null {
-  const match = text.match(/<!--\s*@jira-create:([\s\S]*?)-->/);
-  if (!match) return null;
-  try {
-    return JSON.parse(match[1]) as CreationSession;
-  } catch {
-    return null;
-  }
-}
-
-export interface ContentSession {
-  ticketKey: string;
-  operation: 'addComment' | 'updateDescription';
-  currentContent: string;
-  historyContext: string | undefined;
-}
-
 export function isConfirmation(text: string): boolean {
   const normalized = text.trim().toLowerCase();
   const CONFIRMATIONS = new Set([
@@ -71,28 +66,3 @@ export function isCancellation(text: string): boolean {
   return CANCELLATIONS.has(normalized);
 }
 
-export interface MoreCommentsSession {
-  ticketKey: string;
-  commentQuery: string | null;
-  total: number;
-}
-
-export function extractMoreCommentsSessionFromText(text: string): MoreCommentsSession | null {
-  const match = text.match(/<!--\s*@jira-more-comments:([\s\S]*?)-->/);
-  if (!match) return null;
-  try {
-    return JSON.parse(match[1]) as MoreCommentsSession;
-  } catch {
-    return null;
-  }
-}
-
-export function extractContentSessionFromText(text: string): ContentSession | null {
-  const match = text.match(/<!--\s*@jira-content:([\s\S]*?)-->/);
-  if (!match) return null;
-  try {
-    return JSON.parse(match[1]) as ContentSession;
-  } catch {
-    return null;
-  }
-}

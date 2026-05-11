@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { extractCreatedKeyFromConfirmation, extractCreationSessionFromText, extractContentSessionFromText, extractMoreCommentsSessionFromText, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers } from '../participant/sessionState';
+import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers } from '../participant/sessionState';
 
 describe('stripHiddenMarkers', () => {
   it('removes a jira-ticket marker', () => {
     expect(stripHiddenMarkers('Done.\n\n<!-- @jira-ticket:PROJ-1 -->')).toBe('Done.');
   });
 
-  it('removes a jira-create marker', () => {
-    const text = 'Next question\n\n<!-- @jira-create:{"template":"X"} -->';
+  it('removes a jira:creating compact tag', () => {
+    const text = 'Next question\n\n<!-- jira:creating -->';
     expect(stripHiddenMarkers(text)).toBe('Next question');
   });
 
@@ -82,40 +82,6 @@ describe('extractLastTicketFromText', () => {
   });
 });
 
-describe('extractCreationSessionFromText', () => {
-  const validSession = {
-    template: 'Billing App Bug',
-    project: 'BILLING',
-    summary: 'Login bug',
-    issueType: 'Bug',
-    allSections: ['Steps to reproduce', 'Expected behavior'],
-    pending: ['Expected behavior'],
-    answers: { 'Steps to reproduce': 'Click login' },
-    fields: { priority: 'High' },
-  };
-
-  it('extracts session from a response containing the marker', () => {
-    const text = `Got it.\n\n<!-- @jira-create:${JSON.stringify(validSession)} -->`;
-    const result = extractCreationSessionFromText(text);
-    expect(result?.template).toBe('Billing App Bug');
-    expect(result?.pending).toEqual(['Expected behavior']);
-    expect(result?.answers['Steps to reproduce']).toBe('Click login');
-  });
-
-  it('returns null when no marker is present', () => {
-    expect(extractCreationSessionFromText('some response with no marker')).toBeNull();
-  });
-
-  it('returns null for a marker with malformed JSON', () => {
-    expect(extractCreationSessionFromText('<!-- @jira-create:invalid json -->')).toBeNull();
-  });
-
-  it('extracts session from text with content before and after marker', () => {
-    const text = `**Steps to reproduce** — describe steps\n\n<!-- @jira-create:${JSON.stringify(validSession)} -->\n\nExtra text`;
-    const result = extractCreationSessionFromText(text);
-    expect(result?.project).toBe('BILLING');
-  });
-});
 
 describe('isConfirmation', () => {
   it('returns true for "post it"', () => {
@@ -165,74 +131,6 @@ describe('isCancellation', () => {
   });
 });
 
-describe('extractContentSessionFromText', () => {
-  const validSession = {
-    ticketKey: 'PROJ-42',
-    operation: 'addComment' as const,
-    currentContent: 'Here is a comment.',
-    historyContext: 'User: what did we find?\n\nAssistant: We found a bug.',
-  };
-
-  it('extracts session from a response containing the marker', () => {
-    const text = `Preview text\n\n<!-- @jira-content:${JSON.stringify(validSession)} -->`;
-    const result = extractContentSessionFromText(text);
-    expect(result?.ticketKey).toBe('PROJ-42');
-    expect(result?.operation).toBe('addComment');
-    expect(result?.currentContent).toBe('Here is a comment.');
-  });
-
-  it('returns null when no marker is present', () => {
-    expect(extractContentSessionFromText('some response with no marker')).toBeNull();
-  });
-
-  it('returns null for a marker with malformed JSON', () => {
-    expect(extractContentSessionFromText('<!-- @jira-content:invalid -->')).toBeNull();
-  });
-
-  it('preserves undefined historyContext', () => {
-    const session = { ...validSession, historyContext: undefined };
-    const text = `<!-- @jira-content:${JSON.stringify(session)} -->`;
-    const result = extractContentSessionFromText(text);
-    expect(result?.historyContext).toBeUndefined();
-  });
-
-  it('extracts updateDescription operation', () => {
-    const session = { ...validSession, operation: 'updateDescription' as const };
-    const text = `<!-- @jira-content:${JSON.stringify(session)} -->`;
-    const result = extractContentSessionFromText(text);
-    expect(result?.operation).toBe('updateDescription');
-  });
-});
-
-describe('extractMoreCommentsSessionFromText', () => {
-  const validSession = {
-    ticketKey: 'PROJ-42',
-    commentQuery: 'login bug',
-    total: 25,
-  };
-
-  it('extracts session from a marker', () => {
-    const text = `5 older comments not shown.\n\n<!-- @jira-more-comments:${JSON.stringify(validSession)} -->`;
-    const result = extractMoreCommentsSessionFromText(text);
-    expect(result?.ticketKey).toBe('PROJ-42');
-    expect(result?.commentQuery).toBe('login bug');
-    expect(result?.total).toBe(25);
-  });
-
-  it('returns null when no marker present', () => {
-    expect(extractMoreCommentsSessionFromText('no marker here')).toBeNull();
-  });
-
-  it('returns null for malformed JSON', () => {
-    expect(extractMoreCommentsSessionFromText('<!-- @jira-more-comments:invalid -->')).toBeNull();
-  });
-
-  it('handles null commentQuery', () => {
-    const session = { ...validSession, commentQuery: null };
-    const result = extractMoreCommentsSessionFromText(`<!-- @jira-more-comments:${JSON.stringify(session)} -->`);
-    expect(result?.commentQuery).toBeNull();
-  });
-});
 
 describe('isConfirmation (load-more phrases)', () => {
   it('returns true for "load all"', () => {

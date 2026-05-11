@@ -3,11 +3,12 @@ import { execSync } from 'child_process';
 import { JiraApiClient } from '../jira/JiraApiClient';
 import { ConfigService } from '../services/ConfigService';
 import { TicketService, assembleDescription, wrapInAdf, extractTextFromAdf } from '../services/TicketService';
+import type { JiraComment } from '../jira/IJiraClient';
 import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
 import { extractTicketId } from '../utils/branchParser';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, extractCreationSessionFromText, extractContentSessionFromText, extractMoreCommentsSessionFromText, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation } from './sessionState';
 
 type Operation =
   | 'getTicket'
@@ -119,7 +120,7 @@ function buildHistoryContext(
   return undefined;
 }
 
-function serializeCommentsForLLM(comments: import('../jira/IJiraClient').JiraComment[]): string {
+function serializeCommentsForLLM(comments: JiraComment[]): string {
   return comments.map((c) => {
     const date = c.created.slice(0, 10);
     const body = extractTextFromAdf(c.body).trim() || '_empty_';
@@ -143,38 +144,23 @@ async function synthesizeComments(
   return text.trim();
 }
 
-function parseMoreCommentsSession(context: vscode.ChatContext): MoreCommentsSession | null {
+function getLastAssistantText(context: vscode.ChatContext): string {
   for (let i = context.history.length - 1; i >= 0; i--) {
     const turn = context.history[i];
     if (turn instanceof vscode.ChatResponseTurn) {
-      const text = turn.response
+      return turn.response
         .map((p) => (p instanceof vscode.ChatResponseMarkdownPart ? p.value.value : ''))
         .join('');
-      const result = extractMoreCommentsSessionFromText(text);
-      if (result) return result;
     }
   }
-  return null;
+  return '';
 }
 
-function parseContentSession(context: vscode.ChatContext): ContentSession | null {
-  for (let i = context.history.length - 1; i >= 0; i--) {
-    const turn = context.history[i];
-    if (turn instanceof vscode.ChatResponseTurn) {
-      const text = turn.response
-        .map((p) => (p instanceof vscode.ChatResponseMarkdownPart ? p.value.value : ''))
-        .join('');
-      const result = extractContentSessionFromText(text);
-      if (result) return result;
-    }
-  }
-  return null;
-}
-
-function streamContentPreview(session: ContentSession, stream: vscode.ChatResponseStream): void {
+async function streamContentPreview(session: ContentSession, stream: vscode.ChatResponseStream, workspaceState: vscode.Memento): Promise<void> {
+  await workspaceState.update('jira.session.previewing', session);
   const actionLabel = session.operation === 'addComment' ? 'post this comment' : 'update the description';
   stream.markdown(
-    `${session.currentContent}\n\nReply **"post it"** to ${actionLabel}, or tell me how to adjust it.\n\n<!-- @jira-content:${JSON.stringify(session)} -->`,
+    `${session.currentContent}\n\nReply **"post it"** to ${actionLabel}, or tell me how to adjust it.\n\n<!-- jira:previewing -->`,
   );
 }
 
@@ -185,12 +171,15 @@ async function handleContentSession(
   token: vscode.CancellationToken,
   stream: vscode.ChatResponseStream,
   ticketService: TicketService,
+  workspaceState: vscode.Memento,
 ): Promise<void> {
   if (isCancellation(prompt)) {
+    await workspaceState.update('jira.session.previewing', undefined);
     stream.markdown('_Cancelled._');
     return;
   }
   if (isConfirmation(prompt)) {
+    await workspaceState.update('jira.session.previewing', undefined);
     let result: string;
     if (session.operation === 'addComment') {
       result = await ticketService.addComment(session.ticketKey, session.currentContent);
@@ -206,7 +195,7 @@ async function handleContentSession(
     .filter(Boolean)
     .join('\n\n');
   const refined = await generateContent(prompt, model, token, refineContext);
-  streamContentPreview({ ...session, currentContent: refined }, stream);
+  await streamContentPreview({ ...session, currentContent: refined }, stream, workspaceState);
 }
 
 async function checkSectionCoverage(
@@ -301,28 +290,18 @@ function parseLastTicketFromContext(context: vscode.ChatContext): string | null 
   return null;
 }
 
-function parseCreationSession(context: vscode.ChatContext): CreationSession | null {
-  for (let i = context.history.length - 1; i >= 0; i--) {
-    const turn = context.history[i];
-    if (turn instanceof vscode.ChatResponseTurn) {
-      const text = turn.response
-        .map((p) => (p instanceof vscode.ChatResponseMarkdownPart ? p.value.value : ''))
-        .join('');
-      const result = extractCreationSessionFromText(text);
-      if (result) return result;
-    }
-  }
-  return null;
-}
-
-function streamNextSection(session: CreationSession, stream: vscode.ChatResponseStream): void {
+async function streamNextSection(session: CreationSession, stream: vscode.ChatResponseStream, workspaceState: vscode.Memento): Promise<void> {
+  await workspaceState.update('jira.session.creating', session);
   const next = session.pending[0];
   const answered = session.allSections.length - session.pending.length;
   const isLast = session.pending.length === 1;
   const header = isLast
     ? `Last section — **${next}**`
     : `Section ${answered + 1} of ${session.allSections.length} — **${next}**`;
-  stream.markdown(`${header}\n\nWhat would you like to include here? Reply with your content and I'll ask for the next section.\n\n<!-- @jira-create:${JSON.stringify(session)} -->`);
+  const cta = isLast
+    ? 'Reply with your content to finish the ticket.'
+    : 'Reply with your content and I\'ll ask for the next section.';
+  stream.markdown(`${header}\n\n${cta}\n\n<!-- jira:creating -->`);
 }
 
 async function finishTicketCreation(
@@ -347,26 +326,12 @@ async function finishTicketCreation(
 
 async function handleCreateTicket(
   request: vscode.ChatRequest,
-  context: vscode.ChatContext,
   stream: vscode.ChatResponseStream,
   token: vscode.CancellationToken,
   jiraClient: JiraApiClient,
   ticketService: TicketService,
+  workspaceState: vscode.Memento,
 ): Promise<string | null> {
-  // --- Continuing an in-progress session ---
-  const session = parseCreationSession(context);
-  if (session) {
-    const justAnswered = session.pending[0];
-    session.answers[justAnswered] = request.prompt;
-    session.pending = session.pending.slice(1);
-    if (session.pending.length === 0) {
-      return finishTicketCreation(session, ticketService, stream);
-    } else {
-      streamNextSection(session, stream);
-      return null;
-    }
-  }
-
   // --- Fresh start: load templates ---
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
   let templates: JiraTemplate[] = [];
@@ -460,7 +425,7 @@ async function handleCreateTicket(
         answers,
         fields: resolvedFields,
       };
-      streamNextSection(newSession, stream);
+      await streamNextSection(newSession, stream, workspaceState);
       return null;
     }
   } else {
@@ -515,47 +480,64 @@ export function createParticipant(
       token: config.token,
     });
     const ticketService = new TicketService(jiraClient);
+    const ws = context.workspaceState;
+    const lastResponse = getLastAssistantText(chatContext);
 
-    // Check for in-progress creation session before parsing intent (catches mid-session user answers)
-    const creationSession = parseCreationSession(chatContext);
-    if (creationSession) {
-      try {
-        const createdKey = await handleCreateTicket(request, chatContext, stream, token, jiraClient, ticketService);
-        if (createdKey) stream.markdown(`\n\n<!-- @jira-ticket:${createdKey} -->`);
-      } catch (err) {
-        stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+    // Creation session continuation — user answered a section prompt
+    if (lastResponse.includes('<!-- jira:creating -->')) {
+      const session = ws.get<CreationSession>('jira.session.creating');
+      if (session) {
+        try {
+          const justAnswered = session.pending[0];
+          session.answers[justAnswered] = request.prompt;
+          session.pending = session.pending.slice(1);
+          if (session.pending.length === 0) {
+            await ws.update('jira.session.creating', undefined);
+            const createdKey = await finishTicketCreation(session, ticketService, stream);
+            if (createdKey) stream.markdown(`\n\n<!-- @jira-ticket:${createdKey} -->`);
+          } else {
+            await streamNextSection(session, stream, ws);
+          }
+        } catch (err) {
+          stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+        }
+        return;
       }
-      return;
     }
 
-    // Check for in-progress content session (comment/description preview awaiting confirm/refine)
-    const contentSession = parseContentSession(chatContext);
-    if (contentSession) {
-      try {
-        await handleContentSession(contentSession, request.prompt, request.model, token, stream, ticketService);
-      } catch (err) {
-        stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+    // Content session — comment/description preview awaiting confirm/refine
+    if (lastResponse.includes('<!-- jira:previewing -->')) {
+      const session = ws.get<ContentSession>('jira.session.previewing');
+      if (session) {
+        try {
+          await handleContentSession(session, request.prompt, request.model, token, stream, ticketService, ws);
+        } catch (err) {
+          stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+        }
+        return;
       }
-      return;
     }
 
-    // Check for pending "load all comments" offer
-    const moreCommentsSession = parseMoreCommentsSession(chatContext);
-    if (moreCommentsSession && isConfirmation(request.prompt)) {
-      try {
-        const { comments } = await ticketService.getIssueComments(moreCommentsSession.ticketKey, moreCommentsSession.total);
-        const synthesis = await synthesizeComments(
-          serializeCommentsForLLM(comments),
-          moreCommentsSession.commentQuery,
-          request.model,
-          token,
-        );
-        stream.markdown(synthesis);
-        stream.markdown(`\n\n<!-- @jira-ticket:${moreCommentsSession.ticketKey} -->`);
-      } catch (err) {
-        stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+    // More-comments session — user confirmed "load all"
+    if (lastResponse.includes('<!-- jira:more-comments -->') && isConfirmation(request.prompt)) {
+      const session = ws.get<MoreCommentsSession>('jira.session.moreComments');
+      if (session) {
+        try {
+          await ws.update('jira.session.moreComments', undefined);
+          const { comments } = await ticketService.getIssueComments(session.ticketKey, 100);
+          const synthesis = await synthesizeComments(
+            serializeCommentsForLLM(comments),
+            session.commentQuery,
+            request.model,
+            token,
+          );
+          stream.markdown(synthesis);
+          stream.markdown(`\n\n<!-- @jira-ticket:${session.ticketKey} -->`);
+        } catch (err) {
+          stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+        }
+        return;
       }
-      return;
     }
 
     let intent: ParsedIntent;
@@ -569,7 +551,7 @@ export function createParticipant(
     // createTicket has its own multi-turn flow
     if (intent.operation === 'createTicket') {
       try {
-        const createdKey = await handleCreateTicket(request, chatContext, stream, token, jiraClient, ticketService);
+        const createdKey = await handleCreateTicket(request, stream, token, jiraClient, ticketService, ws);
         if (createdKey) stream.markdown(`\n\n<!-- @jira-ticket:${createdKey} -->`);
       } catch (err) {
         stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
@@ -614,8 +596,9 @@ export function createParticipant(
           );
           stream.markdown(synthesis);
           if (total > MAX_INITIAL) {
-            const session: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: intent.commentQuery, total };
-            stream.markdown(`\n\n_${total - MAX_INITIAL} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- @jira-more-comments:${JSON.stringify(session)} -->`);
+            const moreSession: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: intent.commentQuery };
+            await ws.update('jira.session.moreComments', moreSession);
+            stream.markdown(`\n\n_${total - MAX_INITIAL} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:more-comments -->`);
           } else {
             stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
           }
@@ -632,7 +615,7 @@ export function createParticipant(
           } else {
             const historyContext = buildHistoryContext(intent.contentSource, chatContext);
             const content = await generateContent(request.prompt, request.model, token, historyContext);
-            streamContentPreview({ ticketKey: ticketKey!, operation: 'addComment', currentContent: content, historyContext }, stream);
+            await streamContentPreview({ ticketKey: ticketKey!, operation: 'addComment', currentContent: content, historyContext }, stream, ws);
             return;
           }
           break;
@@ -648,7 +631,7 @@ export function createParticipant(
             if (fieldName.toLowerCase() === 'description' && isNonLiteral) {
               const historyContext = buildHistoryContext(intent.contentSource, chatContext);
               const content = await generateContent(fieldValue, request.model, token, historyContext);
-              streamContentPreview({ ticketKey: ticketKey!, operation: 'updateDescription', currentContent: content, historyContext }, stream);
+              await streamContentPreview({ ticketKey: ticketKey!, operation: 'updateDescription', currentContent: content, historyContext }, stream, ws);
               return;
             } else {
               results.push(await ticketService.updateField(ticketKey!, fieldName, fieldValue));
