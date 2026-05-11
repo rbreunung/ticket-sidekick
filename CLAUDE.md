@@ -24,6 +24,9 @@ JiraParticipant → TicketService → IJiraClient (interface)
 | `src/services/TicketService.ts` | All business logic; depends on IJiraClient |
 | `src/services/ConfigService.ts` | VS Code settings + SecretStorage |
 | `src/participant/JiraParticipant.ts` | Chat handler + intent parsing via VS Code LM API |
+| `src/participant/sessionState.ts` | VS Code-free state helpers: `CreationSession`, `extractCreationSessionFromText`, `extractLastTicketFromText` |
+| `src/templates/TemplateService.ts` | Reads `.jira-templates.json` from workspace root; returns `JiraTemplate[]` |
+| `src/templates/FieldResolver.ts` | Resolves `resolveFields` entries by name (API lookup) or id (pass-through) |
 | `src/utils/branchParser.ts` | Extracts ticket ID from git branch name |
 
 ## Running tests
@@ -50,6 +53,8 @@ npm run test:e2e  # @vscode/test-electron participant tests (requires VS Code)
 - Data Center auth: `Authorization: Bearer <PAT>`
 - Cloud auth: `Authorization: Basic base64(email:apiToken)`
 - Description fields use Atlassian Document Format (ADF) — wrap plain text with `wrapInAdf()` in TicketService
+- Agile API base path: `<baseUrl>/rest/agile/1.0/` — used for sprint resolution (`getSprintByName`)
+- Teams API base path: `<baseUrl>/rest/teams/1.0/` — used for Data Center team resolution (`getTeamByName`); Cloud does not support team lookup by name, use `id` in the template instead
 
 ## Branch ticket detection
 
@@ -58,13 +63,40 @@ Example: `feature/PROJ-123-add-login` → `PROJ-123`
 
 ## Ticket creation flow
 
-`createTicket` in `JiraParticipant` resolves missing mandatory fields interactively:
+`handleCreateTicket` in `JiraParticipant` resolves missing mandatory fields interactively:
 
-1. **Project key** — from prompt, then `jiraCopilot.defaultProject` setting, then `showInputBox`
-2. **Summary** — from prompt (LLM extraction), then `showInputBox`
-3. **Issue type** — from prompt, then `showQuickPick` populated from `GET /rest/api/3/project/{key}` (subtasks filtered out)
+1. **Template** — `showQuickPick` from `.jira-templates.json` in workspace root; user may choose "No template" or dismiss if the file is absent or broken
+2. **Project key** — from prompt, then `jiraCopilot.defaultProject` setting, then `showInputBox`
+3. **Summary** — from prompt (LLM extraction), then `showInputBox`
+4. **Issue type** — from prompt, then `showQuickPick` populated from `GET /rest/api/3/project/{key}` (subtasks filtered out)
 
-API endpoint: `POST /rest/api/3/issue` with `{ fields: { project: { key }, summary, issuetype: { name } } }`
+If a template is chosen:
+
+- `FieldResolver.resolve(defaultFields, resolveFields)` maps any `name`-based specs to Jira field values via API lookups; `id`-based specs pass through directly; array entries produce array results
+- `descriptionSections` drives a multi-turn Q&A: the participant asks for one pending section per reply, embedding a hidden `<!-- @jira-create:{json} -->` marker in each response
+- On the next user reply the session is recovered from `ChatContext` history via `extractCreationSessionFromText`
+- When all sections are answered `finishTicketCreation` calls `TicketService.createTicket` with the assembled description and resolved fields
+
+API endpoint: `POST /rest/api/3/issue` with `{ fields: { project: { key }, summary, issuetype: { name }, ...additionalFields } }`
+
+## Comment display
+
+`TicketService.getTicket` (and therefore `@jira show`) includes a **Comments** section in the output.
+`JiraIssue.fields.comment.comments` is fetched and formatted by `formatComments()` in `TicketService`.
+Each comment shows author display name, date (YYYY-MM-DD), and body extracted from ADF.
+
+## Last-ticket context
+
+After every successful ticket operation, `JiraParticipant` appends `<!-- @jira-ticket:KEY -->` to the response (invisible in rendered markdown).
+
+When a follow-up prompt arrives without an explicit ticket key, the handler scans `ChatContext.history` in reverse via `extractLastTicketFromText` and resolves to the last referenced ticket automatically.
+
+**Ticket key resolution order (highest to lowest priority):**
+
+1. Explicit key in the user's prompt
+2. Current git branch (regex `[A-Z][A-Z0-9]+-\d+`)
+3. Last ticket from `ChatContext` history (hidden marker)
+4. `showInputBox` — ask the user
 
 ## Credentials
 

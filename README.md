@@ -41,8 +41,9 @@ Open GitHub Copilot Chat and use `@jira`:
 
 | What you type | What happens |
 | --- | --- |
-| `@jira show me PROJ-123` | Displays ticket details |
+| `@jira show me PROJ-123` | Displays ticket details including comments |
 | `@jira summarise this ticket` | Shows current branch ticket |
+| `@jira does it have comments?` | Follow-up on the last ticket shown — no need to repeat the key |
 | `@jira create a bug: login times out` | Creates a new ticket (asks for project and type if missing) |
 | `@jira create Story in VSJI: add dark mode` | Creates a ticket with project and type from the prompt |
 | `@jira set priority to High` | Updates priority on current branch ticket |
@@ -53,7 +54,14 @@ Open GitHub Copilot Chat and use `@jira`:
 
 ### Ticket detection
 
-If you don't name a ticket, the plugin reads your current git branch. A branch named `feature/PROJ-123-my-work` will automatically use `PROJ-123`.
+If you don't name a ticket, the plugin resolves it in this order:
+
+1. Explicit key in your prompt (`PROJ-123`)
+2. Current git branch — `feature/PROJ-123-my-work` → `PROJ-123`
+3. Last ticket referenced earlier in the chat session
+4. Input box — the plugin asks you
+
+This means you can `@jira show PROJ-123`, then immediately follow up with `@jira add a comment: done` without repeating the key.
 
 ### Optional: default project
 
@@ -70,6 +78,46 @@ When set, the `create` command skips the project input box and uses this key aut
 ```
 
 Used by the `check required fields` command.
+
+### Optional: ticket templates
+
+Create a `.jira-templates.json` file in your workspace root to define per-application templates with default fields and guided description collection.
+
+```json
+[
+  {
+    "name": "Billing App Bug",
+    "defaultFields": {
+      "priority": { "name": "High" },
+      "labels": ["billing"]
+    },
+    "resolveFields": {
+      "customfield_10020": { "type": "sprint", "name": "Sprint 42" },
+      "customfield_10050": [{ "type": "team", "id": "billing-team-id" }]
+    },
+    "descriptionSections": [
+      "Steps to reproduce",
+      "Expected behavior",
+      "Actual behavior"
+    ]
+  }
+]
+```
+
+When you run `@jira create`, the plugin shows a quick-pick list of your templates. Choosing one:
+
+- Pre-populates custom fields from `defaultFields` and resolved `resolveFields` entries
+- Guides you through each `descriptionSections` entry with a follow-up question per turn, building the description incrementally
+- Resumes automatically if the conversation is interrupted — session state is preserved in the chat history
+
+**`resolveFields` entries** support two forms:
+
+- `{ "type": "sprint", "name": "Sprint 42" }` — resolves by name via the Jira Agile API
+- `{ "type": "team", "id": "abc123" }` — passes the id through directly (no API call)
+
+Wrap a single entry in an array when the Jira field expects an array value.
+
+You can choose **No template** to create a plain ticket without any template applied.
 
 ## Getting a free Cloud test instance
 
