@@ -10,7 +10,7 @@ const SUPPORTED_FIELDS: Record<string, string> = {
   fixversions: 'fixVersions',
 };
 
-function extractTextFromAdf(node: unknown): string {
+export function extractTextFromAdf(node: unknown): string {
   if (!node || typeof node !== 'object') return '';
   const n = node as { text?: string; content?: unknown[] };
   if (typeof n.text === 'string') return n.text;
@@ -162,17 +162,8 @@ export class TicketService {
     return project.issueTypes.filter((t) => !t.subtask);
   }
 
-  async getComments(issueKey: string): Promise<string> {
-    const issue = await this.client.getIssue(issueKey);
-    const comments = issue.fields.comment?.comments ?? [];
-    if (comments.length === 0) return `No comments on ${issueKey}.`;
-    const lines = comments.map((c) => {
-      const date = c.created.slice(0, 10);
-      const body = extractTextFromAdf(c.body).trim().replace(/\s+/g, ' ');
-      const preview = body.length > 120 ? `${body.slice(0, 120)}…` : (body || '_empty_');
-      return `- **${c.author.displayName}** (${date}): ${preview}`;
-    });
-    return [`**${comments.length} comment(s) on ${issueKey}:**`, '', ...lines].join('\n');
+  async getIssueComments(issueKey: string, maxResults = 20): Promise<{ comments: JiraComment[]; total: number }> {
+    return this.client.getIssueComments(issueKey, maxResults);
   }
 
   async createTicket(

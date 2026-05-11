@@ -1,5 +1,6 @@
 import type {
   IJiraClient,
+  JiraComment,
   JiraCreatedIssue,
   JiraIssue,
   JiraProject,
@@ -158,6 +159,14 @@ export class JiraApiClient implements IJiraClient {
     const match = result.values?.find((t) => t.displayName.toLowerCase() === name.toLowerCase());
     if (!match) throw new Error(`Could not resolve team '${name}' — use id instead`);
     return { id: match.id };
+  }
+
+  async getIssueComments(issueKey: string, maxResults: number): Promise<{ comments: JiraComment[]; total: number }> {
+    const data = await this.request<{ comments: JiraComment[]; total: number }>(
+      `/issue/${issueKey}/comment?maxResults=${maxResults}&orderBy=-created`,
+    );
+    // API returns newest-first; reverse to chronological order for context
+    return { comments: [...data.comments].reverse(), total: data.total };
   }
 
   async createIssue(

@@ -2,12 +2,12 @@ import * as vscode from 'vscode';
 import { execSync } from 'child_process';
 import { JiraApiClient } from '../jira/JiraApiClient';
 import { ConfigService } from '../services/ConfigService';
-import { TicketService, assembleDescription, wrapInAdf } from '../services/TicketService';
+import { TicketService, assembleDescription, wrapInAdf, extractTextFromAdf } from '../services/TicketService';
 import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
 import { extractTicketId } from '../utils/branchParser';
-import { type CreationSession, type ContentSession, extractCreationSessionFromText, extractContentSessionFromText, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, extractCreationSessionFromText, extractContentSessionFromText, extractMoreCommentsSessionFromText, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation } from './sessionState';
 
 type Operation =
   | 'getTicket'
@@ -31,15 +31,16 @@ interface ParsedIntent {
   issueType: string | null;
   description: string | null;
   comment: string | null;
+  commentQuery: string | null;
   contentSource: 'literal' | 'generate' | 'history-recent' | 'history-full';
   fieldUpdates: FieldUpdate[];
   jql: string | null;
 }
 
 const INTENT_PROMPT = `Parse this Jira command and respond with ONLY a JSON object. No markdown, no explanation.
-Schema: {"operation":"getTicket"|"getComments"|"addComment"|"updateField"|"searchJql"|"validateFields"|"createTicket","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"description":string|null,"comment":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"jql":string|null}
+Schema: {"operation":"getTicket"|"getComments"|"addComment"|"updateField"|"searchJql"|"validateFields"|"createTicket","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"description":string|null,"comment":string|null,"commentQuery":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"jql":string|null}
 - getTicket: show, summarise, describe, look up a specific ticket
-- getComments: ask whether a ticket has comments, how many comments, list or read comments on a ticket
+- getComments: ask whether a ticket has comments, how many comments, list or read comments, or find comments about a topic; commentQuery is the topic/filter the user mentioned (e.g. "login bug", "performance") — null if they just want a general list
 - addComment: add, post, write a comment on a ticket
 - updateField: set, change, update one or more fields; put each field change in fieldUpdates array; for description/comment content instructions put the instruction as fieldValue — do NOT generate the content
 - searchJql: find, search, list tickets; review multiple tickets against criteria; use literal JQL if provided
@@ -116,6 +117,44 @@ function buildHistoryContext(
     return serializeTurns(extractHistoryTurns(context), 'full');
   }
   return undefined;
+}
+
+function serializeCommentsForLLM(comments: import('../jira/IJiraClient').JiraComment[]): string {
+  return comments.map((c) => {
+    const date = c.created.slice(0, 10);
+    const body = extractTextFromAdf(c.body).trim() || '_empty_';
+    return `**${c.author.displayName}** (${date}):\n${body}`;
+  }).join('\n\n---\n\n');
+}
+
+async function synthesizeComments(
+  commentBlocks: string,
+  query: string | null,
+  model: vscode.LanguageModelChat,
+  token: vscode.CancellationToken,
+): Promise<string> {
+  const task = query
+    ? `Find and quote comments relevant to: "${query}". Note the author and date for each relevant comment.`
+    : 'Summarise each comment in one sentence. Format: **Author** (date): one-sentence summary.';
+  const prompt = `Comments:\n\n${commentBlocks}\n\n${task} Produce only the final content, no preamble.`;
+  const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], {}, token);
+  let text = '';
+  for await (const chunk of response.text) text += chunk;
+  return text.trim();
+}
+
+function parseMoreCommentsSession(context: vscode.ChatContext): MoreCommentsSession | null {
+  for (let i = context.history.length - 1; i >= 0; i--) {
+    const turn = context.history[i];
+    if (turn instanceof vscode.ChatResponseTurn) {
+      const text = turn.response
+        .map((p) => (p instanceof vscode.ChatResponseMarkdownPart ? p.value.value : ''))
+        .join('');
+      const result = extractMoreCommentsSessionFromText(text);
+      if (result) return result;
+    }
+  }
+  return null;
 }
 
 function parseContentSession(context: vscode.ChatContext): ContentSession | null {
@@ -497,6 +536,25 @@ export function createParticipant(
       return;
     }
 
+    // Check for pending "load all comments" offer
+    const moreCommentsSession = parseMoreCommentsSession(chatContext);
+    if (moreCommentsSession && isConfirmation(request.prompt)) {
+      try {
+        const { comments } = await ticketService.getIssueComments(moreCommentsSession.ticketKey, moreCommentsSession.total);
+        const synthesis = await synthesizeComments(
+          serializeCommentsForLLM(comments),
+          moreCommentsSession.commentQuery,
+          request.model,
+          token,
+        );
+        stream.markdown(synthesis);
+        stream.markdown(`\n\n<!-- @jira-ticket:${moreCommentsSession.ticketKey} -->`);
+      } catch (err) {
+        stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
+
     let intent: ParsedIntent;
     try {
       intent = await parseIntent(request.prompt, request.model, token);
@@ -538,9 +596,28 @@ export function createParticipant(
         case 'getTicket':
           result = await ticketService.getTicket(ticketKey!);
           break;
-        case 'getComments':
-          result = await ticketService.getComments(ticketKey!);
-          break;
+        case 'getComments': {
+          const MAX_INITIAL = 20;
+          const { comments, total } = await ticketService.getIssueComments(ticketKey!, MAX_INITIAL);
+          if (comments.length === 0) {
+            result = `No comments on ${ticketKey}.`;
+            break;
+          }
+          const synthesis = await synthesizeComments(
+            serializeCommentsForLLM(comments),
+            intent.commentQuery,
+            request.model,
+            token,
+          );
+          stream.markdown(synthesis);
+          if (total > MAX_INITIAL) {
+            const session: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: intent.commentQuery, total };
+            stream.markdown(`\n\n_${total - MAX_INITIAL} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- @jira-more-comments:${JSON.stringify(session)} -->`);
+          } else {
+            stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
+          }
+          return;
+        }
         case 'addComment': {
           const isLiteral = intent.contentSource === 'literal' || intent.contentSource === undefined;
           if (!intent.comment && isLiteral) {

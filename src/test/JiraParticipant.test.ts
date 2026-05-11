@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractCreatedKeyFromConfirmation, extractCreationSessionFromText, extractContentSessionFromText, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers } from '../participant/sessionState';
+import { extractCreatedKeyFromConfirmation, extractCreationSessionFromText, extractContentSessionFromText, extractMoreCommentsSessionFromText, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers } from '../participant/sessionState';
 
 describe('stripHiddenMarkers', () => {
   it('removes a jira-ticket marker', () => {
@@ -201,5 +201,53 @@ describe('extractContentSessionFromText', () => {
     const text = `<!-- @jira-content:${JSON.stringify(session)} -->`;
     const result = extractContentSessionFromText(text);
     expect(result?.operation).toBe('updateDescription');
+  });
+});
+
+describe('extractMoreCommentsSessionFromText', () => {
+  const validSession = {
+    ticketKey: 'PROJ-42',
+    commentQuery: 'login bug',
+    total: 25,
+  };
+
+  it('extracts session from a marker', () => {
+    const text = `5 older comments not shown.\n\n<!-- @jira-more-comments:${JSON.stringify(validSession)} -->`;
+    const result = extractMoreCommentsSessionFromText(text);
+    expect(result?.ticketKey).toBe('PROJ-42');
+    expect(result?.commentQuery).toBe('login bug');
+    expect(result?.total).toBe(25);
+  });
+
+  it('returns null when no marker present', () => {
+    expect(extractMoreCommentsSessionFromText('no marker here')).toBeNull();
+  });
+
+  it('returns null for malformed JSON', () => {
+    expect(extractMoreCommentsSessionFromText('<!-- @jira-more-comments:invalid -->')).toBeNull();
+  });
+
+  it('handles null commentQuery', () => {
+    const session = { ...validSession, commentQuery: null };
+    const result = extractMoreCommentsSessionFromText(`<!-- @jira-more-comments:${JSON.stringify(session)} -->`);
+    expect(result?.commentQuery).toBeNull();
+  });
+});
+
+describe('isConfirmation (load-more phrases)', () => {
+  it('returns true for "load all"', () => {
+    expect(isConfirmation('load all')).toBe(true);
+  });
+
+  it('returns true for "load more"', () => {
+    expect(isConfirmation('load more')).toBe(true);
+  });
+
+  it('returns true for "show all"', () => {
+    expect(isConfirmation('show all')).toBe(true);
+  });
+
+  it('returns true for "show more"', () => {
+    expect(isConfirmation('show more')).toBe(true);
   });
 });

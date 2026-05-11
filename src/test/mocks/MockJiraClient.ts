@@ -2,6 +2,7 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import type {
   IJiraClient,
+  JiraComment,
   JiraCreatedIssue,
   JiraIssue,
   JiraProject,
@@ -78,5 +79,12 @@ export class MockJiraClient implements IJiraClient {
   async createIssue(_projectKey: string, _summary: string, _issueType: string, additionalFields?: Record<string, unknown>): Promise<JiraCreatedIssue> {
     this.createIssueCalls.push({ projectKey: _projectKey, summary: _summary, issueType: _issueType, additionalFields });
     return loadFixture<JiraCreatedIssue>('created-issue.json');
+  }
+
+  async getIssueComments(issueKey: string, maxResults: number): Promise<{ comments: JiraComment[]; total: number }> {
+    const issue = await this.getIssue(issueKey);
+    const all = issue.fields.comment?.comments ?? [];
+    const total = issue.fields.comment?.total ?? 0;
+    return { comments: all.slice(-maxResults), total };
   }
 }

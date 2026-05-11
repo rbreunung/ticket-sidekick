@@ -71,4 +71,5 @@ export interface IJiraClient {
   getSprintByName(projectKey: string, sprintName: string): Promise<{ id: number }>;
   getTeamByName(name: string): Promise<{ id: string }>;
   createIssue(projectKey: string, summary: string, issueType: string, additionalFields?: Record<string, unknown>): Promise<JiraCreatedIssue>;
+  getIssueComments(issueKey: string, maxResults: number): Promise<{ comments: JiraComment[]; total: number }>;
 }

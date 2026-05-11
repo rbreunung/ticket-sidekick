@@ -156,51 +156,31 @@ describe('TicketService', () => {
     });
   });
 
-  describe('getComments', () => {
-    it('returns a summary list when comments exist', async () => {
-      const result = await service.getComments('PROJ-123');
-      expect(result).toContain('John Smith');
-      expect(result).toContain('2024-02-01');
-      expect(result).toContain('Please add unit tests');
+  describe('getIssueComments', () => {
+    it('returns comments array and total from fixture', async () => {
+      const { comments, total } = await service.getIssueComments('PROJ-123');
+      expect(comments).toHaveLength(1);
+      expect(total).toBe(1);
+      expect(comments[0].author.displayName).toBe('John Smith');
     });
 
-    it('includes comment count in the header', async () => {
-      const result = await service.getComments('PROJ-123');
-      expect(result).toMatch(/1 comment\(s\) on PROJ-123/);
+    it('includes comment body and date in returned data', async () => {
+      const { comments } = await service.getIssueComments('PROJ-123');
+      expect(comments[0].created).toContain('2024-02-01');
     });
 
-    it('returns no-comments message when ticket has no comments', async () => {
-      client.getIssue = async () => {
-        const base = await new MockJiraClient().getIssue('PROJ-123');
-        return { ...base, fields: { ...base.fields, comment: { comments: [], total: 0 } } };
-      };
-      const result = await service.getComments('PROJ-123');
-      expect(result).toBe('No comments on PROJ-123.');
+    it('returns empty array when ticket has no comments', async () => {
+      client.getIssueComments = async () => ({ comments: [], total: 0 });
+      const { comments, total } = await service.getIssueComments('PROJ-123');
+      expect(comments).toHaveLength(0);
+      expect(total).toBe(0);
     });
 
-    it('truncates comments longer than 120 characters', async () => {
-      const longText = 'x'.repeat(200);
-      client.getIssue = async () => {
-        const base = await new MockJiraClient().getIssue('PROJ-123');
-        return {
-          ...base,
-          fields: {
-            ...base.fields,
-            comment: {
-              comments: [{
-                id: '99',
-                author: { accountId: 'u1', displayName: 'Someone', emailAddress: 'a@b.com' },
-                body: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: longText }] }] },
-                created: '2024-03-01T00:00:00.000Z',
-              }],
-              total: 1,
-            },
-          },
-        };
-      };
-      const result = await service.getComments('PROJ-123');
-      expect(result).toContain('…');
-      expect(result).not.toContain('x'.repeat(200));
+    it('passes maxResults through to the client', async () => {
+      let capturedMax = 0;
+      client.getIssueComments = async (_key, max) => { capturedMax = max; return { comments: [], total: 0 }; };
+      await service.getIssueComments('PROJ-123', 5);
+      expect(capturedMax).toBe(5);
     });
   });
 

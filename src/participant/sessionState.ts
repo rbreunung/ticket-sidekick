@@ -57,6 +57,7 @@ export function isConfirmation(text: string): boolean {
     'yes', 'yep', 'ok', 'okay', 'sure', 'perfect', 'great',
     'looks good', 'looks great', 'go ahead', 'do it', 'ship it',
     'post it', 'confirm', 'confirmed', 'submit', 'approved', 'approve', 'fine',
+    'load all', 'load more', 'show all', 'show more',
   ]);
   return CONFIRMATIONS.has(normalized);
 }
@@ -68,6 +69,22 @@ export function isCancellation(text: string): boolean {
     'never mind', 'nevermind', "don't", 'dont', 'quit', 'skip',
   ]);
   return CANCELLATIONS.has(normalized);
+}
+
+export interface MoreCommentsSession {
+  ticketKey: string;
+  commentQuery: string | null;
+  total: number;
+}
+
+export function extractMoreCommentsSessionFromText(text: string): MoreCommentsSession | null {
+  const match = text.match(/<!--\s*@jira-more-comments:([\s\S]*?)-->/);
+  if (!match) return null;
+  try {
+    return JSON.parse(match[1]) as MoreCommentsSession;
+  } catch {
+    return null;
+  }
 }
 
 export function extractContentSessionFromText(text: string): ContentSession | null {
