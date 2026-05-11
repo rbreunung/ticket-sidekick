@@ -26,6 +26,21 @@
     },
     "priority": { "name": "High" },
     "labels": ["auth", "security"],
-    "fixVersions": [{ "name": "v1.0" }]
+    "fixVersions": [{ "name": "v1.0" }],
+    "comment": {
+      "comments": [
+        {
+          "id": "20001",
+          "author": { "accountId": "def456", "displayName": "John Smith", "emailAddress": "john.smith@example.com" },
+          "body": {
+            "type": "doc",
+            "version": 1,
+            "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Please add unit tests for the token refresh flow." }] }]
+          },
+          "created": "2024-02-01T09:15:00.000+0000"
+        }
+      ],
+      "total": 1
+    }
   }
 }

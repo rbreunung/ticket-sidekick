@@ -1,3 +1,10 @@
+export interface JiraComment {
+  id: string;
+  author: JiraUser;
+  body: unknown;
+  created: string;
+}
+
 export interface JiraUser {
   accountId: string;
   displayName: string;
@@ -16,6 +23,7 @@ export interface JiraIssue {
     priority: { name: string } | null;
     labels: string[];
     fixVersions: { name: string }[];
+    comment: { comments: JiraComment[]; total: number } | null;
     [key: string]: unknown;
   };
 }

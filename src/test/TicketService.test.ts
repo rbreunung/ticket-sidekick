@@ -29,6 +29,18 @@ describe('TicketService', () => {
     it('propagates not-found error for unknown ticket', async () => {
       await expect(service.getTicket('PROJ-404')).rejects.toThrow('Not found');
     });
+
+    it('includes comments section when ticket has comments', async () => {
+      const result = await service.getTicket('PROJ-123');
+      expect(result).toContain('Comments');
+      expect(result).toContain('John Smith');
+      expect(result).toContain('Please add unit tests for the token refresh flow.');
+    });
+
+    it('shows comment date', async () => {
+      const result = await service.getTicket('PROJ-123');
+      expect(result).toContain('2024-02-01');
+    });
   });
 
   describe('addComment', () => {

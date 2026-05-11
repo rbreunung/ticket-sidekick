@@ -1,4 +1,4 @@
-import type { IJiraClient, JiraIssue, JiraIssueType } from '../jira/IJiraClient';
+import type { IJiraClient, JiraComment, JiraIssue, JiraIssueType } from '../jira/IJiraClient';
 
 const SUPPORTED_FIELDS: Record<string, string> = {
   summary: 'summary',
@@ -33,6 +33,16 @@ export function assembleDescription(sections: string[], answers: Record<string, 
     .join('\n\n');
 }
 
+function formatComments(comments: JiraComment[]): string {
+  if (comments.length === 0) return '';
+  const lines = comments.map((c) => {
+    const date = c.created.slice(0, 10);
+    const body = extractTextFromAdf(c.body).trim() || '_empty_';
+    return `**${c.author.displayName}** (${date})\n${body}`;
+  });
+  return `**Comments:**\n\n${lines.join('\n\n')}`;
+}
+
 function formatIssue(issue: JiraIssue): string {
   const f = issue.fields;
   const description = f.description
@@ -44,6 +54,7 @@ function formatIssue(issue: JiraIssue): string {
   const fixVersions = f.fixVersions.length > 0
     ? f.fixVersions.map((v) => v.name).join(', ')
     : '_None_';
+  const commentSection = formatComments(f.comment?.comments ?? []);
   return [
     `## ${issue.key}: ${f.summary}`,
     `**Status:** ${f.status.name}`,
@@ -55,6 +66,7 @@ function formatIssue(issue: JiraIssue): string {
     '',
     '**Description:**',
     description,
+    ...(commentSection ? ['', commentSection] : []),
   ].join('\n');
 }
 
