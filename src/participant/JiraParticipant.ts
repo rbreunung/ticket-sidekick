@@ -11,6 +11,7 @@ import { type CreationSession, extractCreationSessionFromText, extractLastTicket
 
 type Operation =
   | 'getTicket'
+  | 'getComments'
   | 'addComment'
   | 'updateField'
   | 'searchJql'
@@ -28,19 +29,21 @@ interface ParsedIntent {
   projectKey: string | null;
   summary: string | null;
   issueType: string | null;
+  description: string | null;
   comment: string | null;
   fieldUpdates: FieldUpdate[];
   jql: string | null;
 }
 
 const INTENT_PROMPT = `Parse this Jira command and respond with ONLY a JSON object. No markdown, no explanation.
-Schema: {"operation":"getTicket"|"addComment"|"updateField"|"searchJql"|"validateFields"|"createTicket","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"comment":string|null,"fieldUpdates":[{"fieldName":string,"fieldValue":string}],"jql":string|null}
+Schema: {"operation":"getTicket"|"getComments"|"addComment"|"updateField"|"searchJql"|"validateFields"|"createTicket","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"description":string|null,"comment":string|null,"fieldUpdates":[{"fieldName":string,"fieldValue":string}],"jql":string|null}
 - getTicket: show, summarise, describe, look up a specific ticket
+- getComments: ask whether a ticket has comments, how many comments, list or read comments on a ticket
 - addComment: add, post, write a comment on a ticket
 - updateField: set, change, update one or more fields; put each field change in fieldUpdates array; for description/comment content instructions (e.g. "write a poem") put the instruction as fieldValue — do NOT generate the content
 - searchJql: find, search, list tickets; review multiple tickets against criteria; use literal JQL if provided
 - validateFields: check, validate required fields on a ticket
-- createTicket: create, open, add a new ticket/issue/bug/story/task
+- createTicket: create, open, add a new ticket/issue/bug/story/task; description is any additional body content the user provided beyond the summary (e.g. code blocks, steps to reproduce, specifications) — null if no extra content
 
 Command: `;
 
@@ -189,11 +192,16 @@ function streamNextSection(session: CreationSession, stream: vscode.ChatResponse
   stream.markdown(`\n\n<!-- @jira-create:${JSON.stringify(session)} -->`);
 }
 
+function extractCreatedKey(confirmation: string): string | null {
+  const m = confirmation.match(/([A-Z][A-Z0-9]+-\d+)/);
+  return m ? m[1] : null;
+}
+
 async function finishTicketCreation(
   session: CreationSession,
   ticketService: TicketService,
   stream: vscode.ChatResponseStream,
-): Promise<void> {
+): Promise<string | null> {
   const descriptionText = assembleDescription(session.allSections, session.answers);
   const additionalFields: Record<string, unknown> = {
     ...session.fields,
@@ -206,6 +214,7 @@ async function finishTicketCreation(
     additionalFields,
   );
   stream.markdown(result);
+  return extractCreatedKey(result);
 }
 
 async function handleCreateTicket(
@@ -215,7 +224,7 @@ async function handleCreateTicket(
   token: vscode.CancellationToken,
   jiraClient: JiraApiClient,
   ticketService: TicketService,
-): Promise<void> {
+): Promise<string | null> {
   // --- Continuing an in-progress session ---
   const session = parseCreationSession(context);
   if (session) {
@@ -223,11 +232,11 @@ async function handleCreateTicket(
     session.answers[justAnswered] = request.prompt;
     session.pending = session.pending.slice(1);
     if (session.pending.length === 0) {
-      await finishTicketCreation(session, ticketService, stream);
+      return finishTicketCreation(session, ticketService, stream);
     } else {
       streamNextSection(session, stream);
+      return null;
     }
-    return;
   }
 
   // --- Fresh start: load templates ---
@@ -241,7 +250,7 @@ async function handleCreateTicket(
         title: `Template error: ${err instanceof Error ? err.message : String(err)}`,
         ignoreFocusOut: true,
       });
-      if (pick !== 'Proceed without template') { stream.markdown('Cancelled.'); return; }
+      if (pick !== 'Proceed without template') { stream.markdown('Cancelled.'); return null; }
     }
   }
 
@@ -252,7 +261,7 @@ async function handleCreateTicket(
       title: 'Select a ticket template',
       ignoreFocusOut: true,
     });
-    if (!picked) { stream.markdown('Cancelled.'); return; }
+    if (!picked) { stream.markdown('Cancelled.'); return null; }
     if (picked !== 'Proceed without template') {
       selectedTemplate = templates.find((t) => t.name === picked) ?? null;
     }
@@ -261,16 +270,16 @@ async function handleCreateTicket(
   // Resolve project, summary, issueType
   const intent = await parseIntent(request.prompt, request.model, token);
   const projectKey = await resolveProjectKey(intent.projectKey, stream);
-  if (!projectKey) { stream.markdown('No project key provided — cancelled.'); return; }
+  if (!projectKey) { stream.markdown('No project key provided — cancelled.'); return null; }
 
   let summary = intent.summary;
   if (!summary) {
     summary = await vscode.window.showInputBox({ prompt: 'Enter a summary for the new ticket', ignoreFocusOut: true }) ?? null;
   }
-  if (!summary) { stream.markdown('No summary provided — cancelled.'); return; }
+  if (!summary) { stream.markdown('No summary provided — cancelled.'); return null; }
 
   const issueType = await resolveIssueType(intent.issueType, projectKey, ticketService, stream);
-  if (!issueType) { stream.markdown('No issue type selected — cancelled.'); return; }
+  if (!issueType) { stream.markdown('No issue type selected — cancelled.'); return null; }
 
   // Resolve template fields
   let resolvedFields: Record<string, unknown> = {};
@@ -283,7 +292,7 @@ async function handleCreateTicket(
         title: `Field resolution error: ${err instanceof Error ? err.message : String(err)}`,
         ignoreFocusOut: true,
       });
-      if (pick !== 'Proceed without template') { stream.markdown('Cancelled.'); return; }
+      if (pick !== 'Proceed without template') { stream.markdown('Cancelled.'); return null; }
       resolvedFields = {};
       selectedTemplate = null;
     }
@@ -306,6 +315,7 @@ async function handleCreateTicket(
       resolvedFields.description = wrapInAdf(descriptionText);
       const result = await ticketService.createTicket(projectKey, summary, issueType, resolvedFields);
       stream.markdown(result);
+      return extractCreatedKey(result);
     } else {
       const fieldNames = Object.keys(resolvedFields).filter((k) => k !== 'description').join(', ');
       stream.markdown(`_Using template **${selectedTemplate.name}**${fieldNames ? ` — defaults: ${fieldNames}` : ''}._\n\n`);
@@ -323,9 +333,13 @@ async function handleCreateTicket(
         fields: resolvedFields,
       };
       streamNextSection(newSession, stream);
+      return null;
     }
   } else {
     // No template or no sections — create directly
+    if (intent.description) {
+      resolvedFields.description = wrapInAdf(intent.description);
+    }
     const result = await ticketService.createTicket(
       projectKey,
       summary,
@@ -333,6 +347,7 @@ async function handleCreateTicket(
       Object.keys(resolvedFields).length > 0 ? resolvedFields : undefined,
     );
     stream.markdown(result);
+    return extractCreatedKey(result);
   }
 }
 
@@ -384,7 +399,8 @@ export function createParticipant(
     // createTicket has its own multi-turn flow — handle before the generic ticketKey logic
     if (intent.operation === 'createTicket') {
       try {
-        await handleCreateTicket(request, chatContext, stream, token, jiraClient, ticketService);
+        const createdKey = await handleCreateTicket(request, chatContext, stream, token, jiraClient, ticketService);
+        if (createdKey) stream.markdown(`\n\n<!-- @jira-ticket:${createdKey} -->`);
       } catch (err) {
         stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
       }
@@ -395,7 +411,8 @@ export function createParticipant(
     const session = parseCreationSession(chatContext);
     if (session) {
       try {
-        await handleCreateTicket(request, chatContext, stream, token, jiraClient, ticketService);
+        const createdKey = await handleCreateTicket(request, chatContext, stream, token, jiraClient, ticketService);
+        if (createdKey) stream.markdown(`\n\n<!-- @jira-ticket:${createdKey} -->`);
       } catch (err) {
         stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
       }
@@ -423,6 +440,9 @@ export function createParticipant(
       switch (intent.operation) {
         case 'getTicket':
           result = await ticketService.getTicket(ticketKey!);
+          break;
+        case 'getComments':
+          result = await ticketService.getComments(ticketKey!);
           break;
         case 'addComment':
           if (!intent.comment) {

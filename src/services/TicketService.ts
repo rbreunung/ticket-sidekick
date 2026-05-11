@@ -162,6 +162,19 @@ export class TicketService {
     return project.issueTypes.filter((t) => !t.subtask);
   }
 
+  async getComments(issueKey: string): Promise<string> {
+    const issue = await this.client.getIssue(issueKey);
+    const comments = issue.fields.comment?.comments ?? [];
+    if (comments.length === 0) return `No comments on ${issueKey}.`;
+    const lines = comments.map((c) => {
+      const date = c.created.slice(0, 10);
+      const body = extractTextFromAdf(c.body).trim().replace(/\s+/g, ' ');
+      const preview = body.length > 120 ? `${body.slice(0, 120)}…` : (body || '_empty_');
+      return `- **${c.author.displayName}** (${date}): ${preview}`;
+    });
+    return [`**${comments.length} comment(s) on ${issueKey}:**`, '', ...lines].join('\n');
+  }
+
   async createTicket(
     projectKey: string,
     summary: string,

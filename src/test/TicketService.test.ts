@@ -156,6 +156,54 @@ describe('TicketService', () => {
     });
   });
 
+  describe('getComments', () => {
+    it('returns a summary list when comments exist', async () => {
+      const result = await service.getComments('PROJ-123');
+      expect(result).toContain('John Smith');
+      expect(result).toContain('2024-02-01');
+      expect(result).toContain('Please add unit tests');
+    });
+
+    it('includes comment count in the header', async () => {
+      const result = await service.getComments('PROJ-123');
+      expect(result).toMatch(/1 comment\(s\) on PROJ-123/);
+    });
+
+    it('returns no-comments message when ticket has no comments', async () => {
+      client.getIssue = async () => {
+        const base = await new MockJiraClient().getIssue('PROJ-123');
+        return { ...base, fields: { ...base.fields, comment: { comments: [], total: 0 } } };
+      };
+      const result = await service.getComments('PROJ-123');
+      expect(result).toBe('No comments on PROJ-123.');
+    });
+
+    it('truncates comments longer than 120 characters', async () => {
+      const longText = 'x'.repeat(200);
+      client.getIssue = async () => {
+        const base = await new MockJiraClient().getIssue('PROJ-123');
+        return {
+          ...base,
+          fields: {
+            ...base.fields,
+            comment: {
+              comments: [{
+                id: '99',
+                author: { accountId: 'u1', displayName: 'Someone', emailAddress: 'a@b.com' },
+                body: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: longText }] }] },
+                created: '2024-03-01T00:00:00.000Z',
+              }],
+              total: 1,
+            },
+          },
+        };
+      };
+      const result = await service.getComments('PROJ-123');
+      expect(result).toContain('…');
+      expect(result).not.toContain('x'.repeat(200));
+    });
+  });
+
   describe('assembleDescription', () => {
     it('formats sections in template order regardless of collection order', () => {
       const result = assembleDescription(
