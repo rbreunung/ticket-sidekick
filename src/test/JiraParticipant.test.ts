@@ -1,5 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import { extractCreationSessionFromText } from '../participant/sessionState';
+import { extractCreationSessionFromText, extractLastTicketFromText } from '../participant/sessionState';
+
+describe('extractLastTicketFromText', () => {
+  it('extracts ticket key from marker', () => {
+    expect(extractLastTicketFromText('some response\n\n<!-- @jira-ticket:VSJI-2 -->')).toBe('VSJI-2');
+  });
+
+  it('returns null when no marker present', () => {
+    expect(extractLastTicketFromText('no marker here')).toBeNull();
+  });
+
+  it('handles multi-segment project keys', () => {
+    expect(extractLastTicketFromText('<!-- @jira-ticket:PROJ-123 -->')).toBe('PROJ-123');
+  });
+});
 
 describe('extractCreationSessionFromText', () => {
   const validSession = {

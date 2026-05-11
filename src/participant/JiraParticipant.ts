@@ -7,7 +7,7 @@ import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
 import { extractTicketId } from '../utils/branchParser';
-import { type CreationSession, extractCreationSessionFromText } from './sessionState';
+import { type CreationSession, extractCreationSessionFromText, extractLastTicketFromText } from './sessionState';
 
 type Operation =
   | 'getTicket'
@@ -152,6 +152,20 @@ async function resolveIssueType(
     { title: `Issue type for ${projectKey}`, ignoreFocusOut: true },
   );
   return picked ?? null;
+}
+
+function parseLastTicketFromContext(context: vscode.ChatContext): string | null {
+  for (let i = context.history.length - 1; i >= 0; i--) {
+    const turn = context.history[i];
+    if (turn instanceof vscode.ChatResponseTurn) {
+      const text = turn.response
+        .map((p) => (p instanceof vscode.ChatResponseMarkdownPart ? p.value.value : ''))
+        .join('');
+      const key = extractLastTicketFromText(text);
+      if (key) return key;
+    }
+  }
+  return null;
 }
 
 function parseCreationSession(context: vscode.ChatContext): CreationSession | null {
@@ -394,8 +408,13 @@ export function createParticipant(
       if (ticketKey) {
         stream.markdown(`_Using ticket **${ticketKey}** from current branch._\n\n`);
       } else {
-        stream.markdown('Which ticket are you referring to? (e.g. `@jira show me PROJ-123`)');
-        return;
+        ticketKey = parseLastTicketFromContext(chatContext);
+        if (ticketKey) {
+          stream.markdown(`_Using last referenced ticket **${ticketKey}**._\n\n`);
+        } else {
+          stream.markdown('Which ticket are you referring to? (e.g. `@jira show me PROJ-123`)');
+          return;
+        }
       }
     }
 
@@ -437,6 +456,7 @@ export function createParticipant(
           result = 'Unrecognised operation.';
       }
       stream.markdown(result);
+      if (ticketKey) stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
     } catch (err) {
       stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
     }
