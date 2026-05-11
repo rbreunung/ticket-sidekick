@@ -30,6 +30,7 @@ interface ParsedIntent {
   projectKey: string | null;
   summary: string | null;
   issueType: string | null;
+  assignee: string | null;
   description: string | null;
   comment: string | null;
   commentQuery: string | null;
@@ -39,14 +40,14 @@ interface ParsedIntent {
 }
 
 const INTENT_PROMPT = `Parse this Jira command and respond with ONLY a JSON object. No markdown, no explanation.
-Schema: {"operation":"getTicket"|"getComments"|"addComment"|"updateField"|"searchJql"|"validateFields"|"createTicket","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"description":string|null,"comment":string|null,"commentQuery":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"jql":string|null}
+Schema: {"operation":"getTicket"|"getComments"|"addComment"|"updateField"|"searchJql"|"validateFields"|"createTicket","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"assignee":string|null,"description":string|null,"comment":string|null,"commentQuery":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"jql":string|null}
 - getTicket: show, summarise, describe, look up a specific ticket
 - getComments: ask whether a ticket has comments, how many comments, list or read comments, or find comments about a topic; commentQuery is the topic/filter the user mentioned (e.g. "login bug", "performance") — null if they just want a general list
 - addComment: add, post, write a comment on a ticket
 - updateField: set, change, update one or more fields; put each field change in fieldUpdates array; for description/comment content instructions put the instruction as fieldValue — do NOT generate the content
 - searchJql: find, search, list tickets; review multiple tickets against criteria; use literal JQL if provided
 - validateFields: check, validate required fields on a ticket
-- createTicket: create, open, add a new ticket/issue/bug/story/task; description is any additional body content the user provided beyond the summary (e.g. code blocks, steps to reproduce, specifications) — null if no extra content
+- createTicket: create, open, add a new ticket/issue/bug/story/task; description is any additional body content the user provided beyond the summary (e.g. code blocks, steps to reproduce, specifications) — null if no extra content; assignee is the person to assign the ticket to ("me"/"myself" for the current user, or a name/email) — null if not mentioned
 - contentSource: how the comment or description content should be produced
   - "literal": user provided the exact text to post (e.g. "add comment: LGTM")
   - "generate": user gave an instruction to create new content with no reference to the conversation (e.g. "write a poem about Star Trek", "add a 12-line poem as comment")
@@ -268,6 +269,7 @@ async function continueAfterIssueType(
   jiraClient: JiraApiClient,
   ticketService: TicketService,
   workspaceState: vscode.Memento,
+  extraFields?: Record<string, unknown>,
 ): Promise<string | null> {
   let resolvedFields: Record<string, unknown> = {};
   if (selectedTemplate) {
@@ -284,6 +286,8 @@ async function continueAfterIssueType(
       selectedTemplate = null;
     }
   }
+
+  if (extraFields) Object.assign(resolvedFields, extraFields);
 
   const sections = selectedTemplate?.descriptionSections ?? [];
   if (sections.length > 0) {
@@ -436,6 +440,14 @@ async function handleCreateTicket(
   }
   if (!summary) { stream.markdown('No summary provided — cancelled.'); return null; }
 
+  // Resolve assignee if specified
+  const extraFields: Record<string, unknown> = {};
+  if (intent.assignee) {
+    const resolved = await ticketService.resolveAssignee(intent.assignee);
+    if (typeof resolved === 'string') { stream.markdown(resolved); return null; }
+    extraFields.assignee = resolved;
+  }
+
   const resolvedType = selectedTemplate?.issueType ?? intent.issueType;
   if (!resolvedType) {
     let types: { name: string }[];
@@ -448,7 +460,7 @@ async function handleCreateTicket(
       stream.markdown('_Could not fetch issue types — opening input box…_\n\n');
       const entered = await vscode.window.showInputBox({ prompt: 'Enter the issue type (e.g. Bug, Story, Task)', ignoreFocusOut: true }) ?? null;
       if (!entered) { stream.markdown('No issue type provided — cancelled.'); return null; }
-      return continueAfterIssueType(projectKey, summary, entered, intent.description, selectedTemplate, request.model, stream, token, jiraClient, ticketService, workspaceState);
+      return continueAfterIssueType(projectKey, summary, entered, intent.description, selectedTemplate, request.model, stream, token, jiraClient, ticketService, workspaceState, extraFields);
     }
     const typeSession: IssueTypeSelectionSession = {
       issueTypes: types.map((t) => t.name),
@@ -456,12 +468,13 @@ async function handleCreateTicket(
       summary,
       templateName: selectedTemplate?.name ?? null,
       description: intent.description,
+      extraFields: Object.keys(extraFields).length > 0 ? extraFields : undefined,
     };
     await streamIssueTypeSelection(typeSession, stream, workspaceState);
     return null;
   }
 
-  return continueAfterIssueType(projectKey, summary, resolvedType, intent.description, selectedTemplate, request.model, stream, token, jiraClient, ticketService, workspaceState);
+  return continueAfterIssueType(projectKey, summary, resolvedType, intent.description, selectedTemplate, request.model, stream, token, jiraClient, ticketService, workspaceState, extraFields);
 }
 
 export function createParticipant(
@@ -553,6 +566,7 @@ export function createParticipant(
           const createdKey = await continueAfterIssueType(
             typeSession.project, typeSession.summary, choice, typeSession.description,
             selectedTemplate, request.model, stream, token, jiraClient, ticketService, ws,
+            typeSession.extraFields,
           );
           if (createdKey) stream.markdown(`\n\n<!-- @jira-ticket:${createdKey} -->`);
         } catch (err) {

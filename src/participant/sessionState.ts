@@ -31,6 +31,7 @@ export interface IssueTypeSelectionSession {
   summary: string;
   templateName: string | null;
   description: string | null;
+  extraFields?: Record<string, unknown>;
 }
 
 export function parseIssueTypeSelection(reply: string, types: string[]): string | 'cancel' | 'invalid' {

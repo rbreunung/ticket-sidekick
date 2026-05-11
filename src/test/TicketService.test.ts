@@ -131,6 +131,29 @@ describe('TicketService', () => {
     });
   });
 
+  describe('resolveAssignee', () => {
+    it('resolves "me" to the current user accountId', async () => {
+      const result = await service.resolveAssignee('me');
+      expect(result).toEqual({ accountId: 'currentuser123' });
+    });
+
+    it('resolves "myself" to the current user accountId', async () => {
+      const result = await service.resolveAssignee('myself');
+      expect(result).toEqual({ accountId: 'currentuser123' });
+    });
+
+    it('resolves a name to the matching user accountId', async () => {
+      const result = await service.resolveAssignee('Jane');
+      expect(result).toEqual({ accountId: 'abc123' });
+    });
+
+    it('returns an error string when no user is found', async () => {
+      const result = await service.resolveAssignee('nobody');
+      expect(typeof result).toBe('string');
+      expect(result as string).toContain('No user found');
+    });
+  });
+
   describe('getIssueTypes', () => {
     it('returns non-subtask issue types for a project', async () => {
       const types = await service.getIssueTypes('PROJ');

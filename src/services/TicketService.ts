@@ -97,18 +97,9 @@ export class TicketService {
     if (jiraField === 'priority') {
       fieldValue = { name: value };
     } else if (jiraField === 'assignee') {
-      const ME_KEYWORDS = new Set(['me', 'myself', 'i']);
-      if (ME_KEYWORDS.has(value.toLowerCase().trim())) {
-        const currentUser = await this.client.getCurrentUser();
-        fieldValue = { accountId: currentUser.accountId };
-      } else {
-        const users = await this.client.findUser(value);
-        if (users.length === 0) return `No user found matching "${value}".`;
-        if (users.length > 1) {
-          return `Multiple users found: ${users.map((u) => u.displayName).join(', ')}. Please be more specific.`;
-        }
-        fieldValue = { accountId: users[0].accountId };
-      }
+      const resolved = await this.resolveAssignee(value);
+      if (typeof resolved === 'string') return resolved;
+      fieldValue = resolved;
     } else if (jiraField === 'description') {
       fieldValue = wrapInAdf(value);
     } else if (jiraField === 'labels') {
@@ -121,6 +112,20 @@ export class TicketService {
 
     await this.client.updateIssue(issueKey, { [jiraField]: fieldValue });
     return `Updated ${fieldName} on ${issueKey}.`;
+  }
+
+  async resolveAssignee(value: string): Promise<{ accountId: string } | string> {
+    const ME_KEYWORDS = new Set(['me', 'myself', 'i']);
+    if (ME_KEYWORDS.has(value.toLowerCase().trim())) {
+      const currentUser = await this.client.getCurrentUser();
+      return { accountId: currentUser.accountId };
+    }
+    const users = await this.client.findUser(value);
+    if (users.length === 0) return `No user found matching "${value}".`;
+    if (users.length > 1) {
+      return `Multiple users found: ${users.map((u) => u.displayName).join(', ')}. Please be more specific.`;
+    }
+    return { accountId: users[0].accountId };
   }
 
   async searchTickets(jql: string): Promise<string> {
