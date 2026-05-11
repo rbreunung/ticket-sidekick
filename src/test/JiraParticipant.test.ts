@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput } from '../participant/sessionState';
+import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection } from '../participant/sessionState';
 import type { TransitionBatchTicket } from '../participant/sessionState';
 
 describe('stripHiddenMarkers', () => {
@@ -292,5 +292,41 @@ describe('parseSkipInput', () => {
 
   it('trims whitespace', () => {
     expect(parseSkipInput('  ok  ', tickets)).toEqual({ action: 'ok' });
+  });
+});
+
+describe('parseResolutionSelection', () => {
+  const options = ['Fixed', "Won't Fix", 'Duplicate', 'Done'];
+
+  it('selects by 1-based number', () => {
+    expect(parseResolutionSelection('1', options)).toBe('Fixed');
+    expect(parseResolutionSelection('3', options)).toBe('Duplicate');
+  });
+
+  it('selects by exact name (case-insensitive)', () => {
+    expect(parseResolutionSelection('fixed', options)).toBe('Fixed');
+    expect(parseResolutionSelection('DONE', options)).toBe('Done');
+  });
+
+  it('returns null for "none"', () => {
+    expect(parseResolutionSelection('none', options)).toBeNull();
+  });
+
+  it('returns null for "skip"', () => {
+    expect(parseResolutionSelection('skip', options)).toBeNull();
+  });
+
+  it('returns invalid for out-of-range number', () => {
+    expect(parseResolutionSelection('0', options)).toBe('invalid');
+    expect(parseResolutionSelection('5', options)).toBe('invalid');
+  });
+
+  it('returns invalid for unrecognised text', () => {
+    expect(parseResolutionSelection('maybe', options)).toBe('invalid');
+  });
+
+  it('trims whitespace before matching', () => {
+    expect(parseResolutionSelection('  2  ', options)).toBe("Won't Fix");
+    expect(parseResolutionSelection('  none  ', options)).toBeNull();
   });
 });
