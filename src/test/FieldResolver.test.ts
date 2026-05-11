@@ -16,6 +16,11 @@ describe('FieldResolver', () => {
     expect(result).toEqual({ priority: 'High', labels: ['billing'] });
   });
 
+  it('works when resolveFields is omitted (template without resolveFields key)', async () => {
+    const result = await resolver.resolve({ customfield_10071: 'Jira Copilot' });
+    expect(result).toEqual({ customfield_10071: 'Jira Copilot' });
+  });
+
   it('resolves sprint id directly without API call', async () => {
     const result = await resolver.resolve({}, { customfield_10020: { type: 'sprint', id: 42 } });
     expect(result.customfield_10020).toEqual({ id: 42 });

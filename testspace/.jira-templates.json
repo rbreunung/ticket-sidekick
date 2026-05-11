@@ -1,0 +1,19 @@
+{
+    "templates": [
+        {
+            "name": "User Story for Jira Copilot",
+            "defaultFields": {
+                "priority": { "name": "High" },
+                "labels": [
+                    "generated"
+                ],
+                "customfield_10071": "Jira Copilot"
+            },
+            "descriptionSections": [
+                "User Story",
+                "Acceptance Criteria",
+                "Out of Scope"
+            ]
+        }
+    ]
+}

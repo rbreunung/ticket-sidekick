@@ -9,7 +9,7 @@ export class FieldResolver {
 
   async resolve(
     defaultFields: Record<string, unknown>,
-    resolveFields: Record<string, ResolveSpec | ResolveSpec[]>,
+    resolveFields: Record<string, ResolveSpec | ResolveSpec[]> = {},
   ): Promise<Record<string, unknown>> {
     const result: Record<string, unknown> = { ...defaultFields };
     for (const [fieldId, spec] of Object.entries(resolveFields)) {

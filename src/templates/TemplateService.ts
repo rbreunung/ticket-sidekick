@@ -10,7 +10,7 @@ export interface ResolveSpec {
 export interface JiraTemplate {
   name: string;
   defaultFields: Record<string, unknown>;
-  resolveFields: Record<string, ResolveSpec | ResolveSpec[]>;
+  resolveFields?: Record<string, ResolveSpec | ResolveSpec[]>;
   descriptionSections: string[];
 }
 
