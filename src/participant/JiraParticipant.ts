@@ -312,7 +312,7 @@ async function streamTemplateSelection(
   const session: TemplateSelectionSession = { templateNames };
   await workspaceState.update('jira.session.templateSelection', session);
   const list = templateNames.map((n, i) => `${i + 1}. ${n}`).join('\n');
-  stream.markdown(`Which template would you like to use?\n\n${list}\n\nOr say **"no template"** to skip.\n\n<!-- jira:selecting-template -->`);
+  stream.markdown(`Which template would you like to use?\n\n${list}\n\nReply with the name or number, **(n)** for no template, or **(c)** to cancel.\n\n<!-- jira:selecting-template -->`);
 }
 
 async function finishTicketCreation(
@@ -506,6 +506,10 @@ export function createParticipant(
           return;
         }
         await ws.update('jira.session.templateSelection', undefined);
+        if (choice === 'cancel') {
+          stream.markdown('_Cancelled._');
+          return;
+        }
         try {
           const createdKey = await handleCreateTicket(request, stream, token, jiraClient, ticketService, ws, choice);
           if (createdKey) stream.markdown(`\n\n<!-- @jira-ticket:${createdKey} -->`);

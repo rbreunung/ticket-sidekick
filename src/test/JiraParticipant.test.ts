@@ -147,12 +147,20 @@ describe('parseTemplateSelection', () => {
     expect(parseTemplateSelection('BUG REPORT', templates)).toBe('Bug Report');
   });
 
-  it('returns null for no-template phrases', () => {
+  it('returns null for no-template phrases including (n) shortcut', () => {
+    expect(parseTemplateSelection('n', templates)).toBeNull();
     expect(parseTemplateSelection('no template', templates)).toBeNull();
     expect(parseTemplateSelection('none', templates)).toBeNull();
     expect(parseTemplateSelection('skip', templates)).toBeNull();
     expect(parseTemplateSelection('0', templates)).toBeNull();
     expect(parseTemplateSelection('no', templates)).toBeNull();
+  });
+
+  it('returns cancel for (c) shortcut and "cancel"', () => {
+    expect(parseTemplateSelection('c', templates)).toBe('cancel');
+    expect(parseTemplateSelection('cancel', templates)).toBe('cancel');
+    expect(parseTemplateSelection('C', templates)).toBe('cancel');
+    expect(parseTemplateSelection('Cancel', templates)).toBe('cancel');
   });
 
   it('returns invalid for out-of-range number', () => {

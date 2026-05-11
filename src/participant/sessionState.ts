@@ -25,13 +25,14 @@ export interface TemplateSelectionSession {
   templateNames: string[];
 }
 
-export function parseTemplateSelection(reply: string, templateNames: string[]): string | null | 'invalid' {
+export function parseTemplateSelection(reply: string, templateNames: string[]): string | null | 'cancel' | 'invalid' {
   const normalized = reply.trim().toLowerCase();
-  const NO_TEMPLATE = new Set(['no template', 'none', 'skip', '0', 'no', 'without template']);
+  if (normalized === 'c' || normalized === 'cancel') return 'cancel';
+  const NO_TEMPLATE = new Set(['n', 'no template', 'none', 'skip', '0', 'no', 'without template']);
   if (NO_TEMPLATE.has(normalized)) return null;
   const num = parseInt(normalized, 10);
   if (!isNaN(num) && num >= 1 && num <= templateNames.length) return templateNames[num - 1];
-  const match = templateNames.find((n) => n.toLowerCase() === normalized);
+  const match = templateNames.find((name) => name.toLowerCase() === normalized);
   return match ?? 'invalid';
 }
 
