@@ -118,6 +118,37 @@ function buildHistoryContext(
   return undefined;
 }
 
+async function previewAndConfirm(
+  initial: string,
+  postLabel: string,
+  title: string,
+  historyContext: string | undefined,
+  model: vscode.LanguageModelChat,
+  token: vscode.CancellationToken,
+  stream: vscode.ChatResponseStream,
+): Promise<string | null> {
+  let content = initial;
+  for (;;) {
+    stream.markdown(`**Preview:**\n\n${content}\n\n`);
+    const choice = await vscode.window.showQuickPick([postLabel, 'Refine...', 'Cancel'], {
+      title,
+      ignoreFocusOut: true,
+    });
+    if (choice === postLabel) return content;
+    if (choice !== 'Refine...') return null;
+    const refinement = await vscode.window.showInputBox({
+      prompt: 'How would you like to refine this?',
+      placeHolder: 'e.g. make it shorter, use a more formal tone',
+      ignoreFocusOut: true,
+    });
+    if (!refinement) return null;
+    const refineContext = [historyContext, `Previously generated:\n${content}`]
+      .filter(Boolean)
+      .join('\n\n');
+    content = await generateContent(refinement, model, token, refineContext);
+  }
+}
+
 async function checkSectionCoverage(
   prompt: string,
   sections: string[],
@@ -489,13 +520,13 @@ export function createParticipant(
             commentBody = intent.comment!;
           } else {
             const historyContext = buildHistoryContext(intent.contentSource, chatContext);
-            commentBody = await generateContent(request.prompt, request.model, token, historyContext);
-            stream.markdown(`**Preview:**\n\n${commentBody}\n\n`);
-            const choice = await vscode.window.showQuickPick(['Post comment', 'Cancel'], {
-              title: `Add this comment to ${ticketKey}?`,
-              ignoreFocusOut: true,
-            });
-            if (choice !== 'Post comment') { stream.markdown('_Cancelled._'); return; }
+            const initial = await generateContent(request.prompt, request.model, token, historyContext);
+            const confirmed = await previewAndConfirm(
+              initial, 'Post comment', `Add this comment to ${ticketKey}?`,
+              historyContext, request.model, token, stream,
+            );
+            if (!confirmed) { stream.markdown('_Cancelled._'); return; }
+            commentBody = confirmed;
           }
           result = await ticketService.addComment(ticketKey!, commentBody);
           break;
@@ -511,14 +542,15 @@ export function createParticipant(
               const historyContext = buildHistoryContext(intent.contentSource, chatContext);
               const generated = await generateContent(fieldValue, request.model, token, historyContext);
               if (intent.contentSource !== 'literal' && intent.contentSource !== undefined) {
-                stream.markdown(`**Preview:**\n\n${generated}\n\n`);
-                const choice = await vscode.window.showQuickPick(['Update description', 'Cancel'], {
-                  title: `Update description on ${ticketKey}?`,
-                  ignoreFocusOut: true,
-                });
-                if (choice !== 'Update description') { stream.markdown('_Cancelled._'); return; }
+                const confirmed = await previewAndConfirm(
+                  generated, 'Update description', `Update description on ${ticketKey}?`,
+                  historyContext, request.model, token, stream,
+                );
+                if (!confirmed) { stream.markdown('_Cancelled._'); return; }
+                results.push(await ticketService.updateField(ticketKey!, fieldName, confirmed));
+              } else {
+                results.push(await ticketService.updateField(ticketKey!, fieldName, generated));
               }
-              results.push(await ticketService.updateField(ticketKey!, fieldName, generated));
             } else {
               results.push(await ticketService.updateField(ticketKey!, fieldName, fieldValue));
             }
