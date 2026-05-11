@@ -1,14 +1,14 @@
 {
     "templates": [
         {
-            "name": "User Story for Jira Copilot",
+            "name": "User Story for Ticket Sidekick",
             "issueType": "Story",
             "defaultFields": {
                 "priority": { "name": "Medium" },
                 "labels": [
                     "generated"
                 ],
-                "customfield_10071": "Jira Copilot"
+                "customfield_10071": "Ticket Sidekick"
             },
             "descriptionSections": [
                 "User Story",
@@ -17,14 +17,14 @@
             ]
         },
         {
-            "name": "Bug for Jira Copilot",
+            "name": "Bug for Ticket Sidekick",
             "issueType": "Bug",
             "defaultFields": {
                 "priority": { "name": "High" },
                 "labels": [
                     "generated"
                 ],
-                "customfield_10071": "Jira Copilot"
+                "customfield_10071": "Ticket Sidekick"
             },
             "descriptionSections": [
                 "Reproduction",

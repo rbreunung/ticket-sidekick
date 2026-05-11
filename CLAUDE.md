@@ -1,4 +1,4 @@
-# Jira Copilot — Agent Context
+# Ticket Sidekick — Agent Context
 
 ## What this is
 
@@ -92,7 +92,7 @@ Detection order in the handler: resolution selection → transition review → t
 `handleCreateTicket` in `JiraParticipant` resolves missing mandatory fields interactively:
 
 1. **Template** — chat-native numbered list streamed from `.jira-templates.json`; user replies with number, name, `(n)` / `"no template"` to skip, or `(c)` to cancel entirely; unrecognised reply re-presents the list; template load errors surface as chat messages and fall through to templateless creation
-2. **Project key** — from prompt, then `jiraCopilot.defaultProject` setting, then `showInputBox`
+2. **Project key** — from prompt, then `ticketSidekick.defaultProject` setting, then `showInputBox`
 3. **Summary** — from prompt (LLM extraction), then `showInputBox`
 4. **Issue type** — from template `issueType` field or prompt (LLM extraction); if neither is present, chat-native numbered list via `IssueTypeSelectionSession` (subtasks filtered out); `(c)` to cancel; fallback to `showInputBox` if no types can be fetched from `GET /rest/api/3/project/{key}`
 
@@ -167,4 +167,4 @@ Execution streams one line per ticket (subtasks first), then a summary. Failures
 ## Credentials
 
 Always stored in `vscode.ExtensionContext.secrets` (VS Code SecretStorage, OS-encrypted).
-Never in `settings.json`. Key: `jira-copilot.token`.
+Never in `settings.json`. Key: `ticket-sidekick.token`.

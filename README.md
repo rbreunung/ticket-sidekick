@@ -1,4 +1,4 @@
-# Jira Copilot
+# Ticket Sidekick
 
 Manage Jira tickets with GitHub Copilot Chat — without leaving VS Code.
 
@@ -15,7 +15,7 @@ Manage Jira tickets with GitHub Copilot Chat — without leaving VS Code.
 Open VS Code settings (`Ctrl+,` / `Cmd+,`) and add:
 
 ```json
-"jiraCopilot.baseUrl": "https://jira.mycompany.com"
+"ticketSidekick.baseUrl": "https://jira.mycompany.com"
 ```
 
 For Jira Cloud: `"https://your-org.atlassian.net"`
@@ -23,16 +23,16 @@ For Jira Cloud: `"https://your-org.atlassian.net"`
 ### 2. Set your auth type (Cloud only)
 
 ```json
-"jiraCopilot.authType": "cloud"
+"ticketSidekick.authType": "cloud"
 ```
 
 Omit this setting for Data Center (default).
 
 ### 3. Store your credentials
 
-**Data Center:** Open the Command Palette (`Ctrl+Shift+P`) → `Jira Copilot: Set Personal Access Token`
+**Data Center:** Open the Command Palette (`Ctrl+Shift+P`) → `Ticket Sidekick: Set Personal Access Token`
 
-**Cloud:** Open the Command Palette → `Jira Copilot: Configure Cloud Credentials`
+**Cloud:** Open the Command Palette → `Ticket Sidekick: Configure Cloud Credentials`
 (You will need your Atlassian email and an API token from id.atlassian.com)
 
 ## Usage
@@ -66,7 +66,7 @@ This means you can `@jira show PROJ-123`, then immediately follow up with `@jira
 ### Optional: default project
 
 ```json
-"jiraCopilot.defaultProject": "VSJI"
+"ticketSidekick.defaultProject": "VSJI"
 ```
 
 When set, the `create` command skips the project input box and uses this key automatically. You can still override it by including a project key in your prompt.
@@ -74,7 +74,7 @@ When set, the `create` command skips the project input box and uses this key aut
 ### Optional: required fields
 
 ```json
-"jiraCopilot.requiredFields": ["assignee", "priority", "fixVersions"]
+"ticketSidekick.requiredFields": ["assignee", "priority", "fixVersions"]
 ```
 
 Used by the `check required fields` command.
@@ -123,5 +123,5 @@ You can choose **No template** to create a plain ticket without any template app
 
 1. Create a free account at [atlassian.com](https://www.atlassian.com)
 2. Generate an API token at id.atlassian.com/manage-profile/security/api-tokens
-3. Set `jiraCopilot.baseUrl` to `https://<you>.atlassian.net` and `jiraCopilot.authType` to `"cloud"`
-4. Run `Jira Copilot: Configure Cloud Credentials`
+3. Set `ticketSidekick.baseUrl` to `https://<you>.atlassian.net` and `ticketSidekick.authType` to `"cloud"`
+4. Run `Ticket Sidekick: Configure Cloud Credentials`

@@ -146,7 +146,7 @@ export class TicketService {
 
   async validateRequiredFields(issueKey: string, requiredFields: string[]): Promise<string> {
     if (requiredFields.length === 0) {
-      return 'No required fields configured. Add field names to `jiraCopilot.requiredFields` in settings.';
+      return 'No required fields configured. Add field names to `ticketSidekick.requiredFields` in settings.';
     }
     const issue = await this.client.getIssue(issueKey);
     const missing = requiredFields.filter((field) => {

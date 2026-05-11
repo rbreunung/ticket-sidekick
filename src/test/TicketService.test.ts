@@ -127,7 +127,7 @@ describe('TicketService', () => {
 
     it('returns config guidance when no required fields configured', async () => {
       const result = await service.validateRequiredFields('PROJ-123', []);
-      expect(result).toContain('jiraCopilot.requiredFields');
+      expect(result).toContain('ticketSidekick.requiredFields');
     });
   });
 

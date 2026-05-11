@@ -243,7 +243,7 @@ async function resolveProjectKey(
 ): Promise<string | null> {
   if (fromIntent) return fromIntent;
 
-  const defaultProject = vscode.workspace.getConfiguration('jiraCopilot').get<string>('defaultProject') ?? '';
+  const defaultProject = vscode.workspace.getConfiguration('ticketSidekick').get<string>('defaultProject') ?? '';
   if (defaultProject) return defaultProject;
 
   stream.markdown('_No project key found in your message or settings — opening input box…_\n\n');
@@ -698,7 +698,7 @@ export function createParticipant(
 
     if (!config.baseUrl) {
       stream.markdown(
-        '**Jira base URL not configured.**\n\nAdd `jiraCopilot.baseUrl` to your VS Code settings (e.g. `https://jira.mycompany.com`).',
+        '**Jira base URL not configured.**\n\nAdd `ticketSidekick.baseUrl` to your VS Code settings (e.g. `https://jira.mycompany.com`).',
       );
       return;
     }
@@ -706,8 +706,8 @@ export function createParticipant(
     if (!config.token) {
       const command =
         config.authType === 'cloud'
-          ? 'Jira Copilot: Configure Cloud Credentials'
-          : 'Jira Copilot: Set Personal Access Token';
+          ? 'Ticket Sidekick: Configure Cloud Credentials'
+          : 'Ticket Sidekick: Set Personal Access Token';
       stream.markdown(
         `**Jira credentials not configured.**\n\nRun the command \`${command}\` from the Command Palette.`,
       );
@@ -1021,7 +1021,7 @@ export function createParticipant(
     }
   };
 
-  const participant = vscode.chat.createChatParticipant('jira-copilot.jira', handler);
+  const participant = vscode.chat.createChatParticipant('ticket-sidekick.jira', handler);
   context.subscriptions.push(participant);
   return participant;
 }

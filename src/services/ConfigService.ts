@@ -10,12 +10,12 @@ export interface JiraConfig {
 }
 
 export class ConfigService {
-  private static readonly TOKEN_KEY = 'jira-copilot.token';
+  private static readonly TOKEN_KEY = 'ticket-sidekick.token';
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
   async getConfig(): Promise<JiraConfig> {
-    const config = vscode.workspace.getConfiguration('jiraCopilot');
+    const config = vscode.workspace.getConfiguration('ticketSidekick');
     return {
       baseUrl: config.get<string>('baseUrl'),
       authType: config.get<AuthType>('authType') ?? 'datacenter',

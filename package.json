@@ -1,6 +1,6 @@
 {
-  "name": "jira-copilot",
-  "displayName": "Jira Copilot",
+  "name": "ticket-sidekick",
+  "displayName": "Ticket Sidekick",
   "description": "Manage Jira tickets with GitHub Copilot Chat",
   "version": "0.0.1",
   "publisher": "your-publisher-id",
@@ -11,43 +11,43 @@
   "contributes": {
     "chatParticipants": [
       {
-        "id": "jira-copilot.jira",
+        "id": "ticket-sidekick.jira",
         "name": "jira",
-        "fullName": "Jira Copilot",
+        "fullName": "Ticket Sidekick",
         "description": "Manage Jira tickets with natural language",
         "isSticky": true
       }
     ],
     "commands": [
       {
-        "command": "jira-copilot.setDataCenterToken",
-        "title": "Jira Copilot: Set Personal Access Token"
+        "command": "ticket-sidekick.setDataCenterToken",
+        "title": "Ticket Sidekick: Set Personal Access Token"
       },
       {
-        "command": "jira-copilot.configureCloud",
-        "title": "Jira Copilot: Configure Cloud Credentials"
+        "command": "ticket-sidekick.configureCloud",
+        "title": "Ticket Sidekick: Configure Cloud Credentials"
       }
     ],
     "configuration": {
-      "title": "Jira Copilot",
+      "title": "Ticket Sidekick",
       "properties": {
-        "jiraCopilot.baseUrl": {
+        "ticketSidekick.baseUrl": {
           "type": "string",
           "description": "Base URL of your Jira instance (e.g. https://jira.mycompany.com)"
         },
-        "jiraCopilot.authType": {
+        "ticketSidekick.authType": {
           "type": "string",
           "enum": ["datacenter", "cloud"],
           "default": "datacenter",
           "description": "Authentication mode: 'datacenter' uses Bearer PAT, 'cloud' uses Basic email:apiToken"
         },
-        "jiraCopilot.requiredFields": {
+        "ticketSidekick.requiredFields": {
           "type": "array",
           "items": { "type": "string" },
           "default": [],
           "description": "Field names that must be set for ticket validation (e.g. [\"assignee\", \"priority\"])"
         },
-        "jiraCopilot.defaultProject": {
+        "ticketSidekick.defaultProject": {
           "type": "string",
           "default": "",
           "description": "Default Jira project key (e.g. 'VSJI'). Used when creating tickets if no project is specified in your prompt."

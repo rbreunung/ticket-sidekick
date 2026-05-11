@@ -6,7 +6,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const configService = new ConfigService(context);
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('jira-copilot.setDataCenterToken', async () => {
+    vscode.commands.registerCommand('ticket-sidekick.setDataCenterToken', async () => {
       const token = await vscode.window.showInputBox({
         prompt: 'Enter your Jira Personal Access Token',
         password: true,
@@ -14,11 +14,11 @@ export function activate(context: vscode.ExtensionContext): void {
       });
       if (token) {
         await configService.storeToken(token);
-        vscode.window.showInformationMessage('Jira Copilot: Personal Access Token saved.');
+        vscode.window.showInformationMessage('Ticket Sidekick: Personal Access Token saved.');
       }
     }),
 
-    vscode.commands.registerCommand('jira-copilot.configureCloud', async () => {
+    vscode.commands.registerCommand('ticket-sidekick.configureCloud', async () => {
       const email = await vscode.window.showInputBox({
         prompt: 'Enter your Atlassian account email',
         ignoreFocusOut: true,
@@ -32,7 +32,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (apiToken) {
         const encoded = Buffer.from(`${email}:${apiToken}`).toString('base64');
         await configService.storeToken(encoded);
-        vscode.window.showInformationMessage('Jira Copilot: Cloud credentials saved.');
+        vscode.window.showInformationMessage('Ticket Sidekick: Cloud credentials saved.');
       }
     }),
 

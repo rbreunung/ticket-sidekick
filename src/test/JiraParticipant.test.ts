@@ -134,10 +134,10 @@ describe('isCancellation', () => {
 
 
 describe('parseTemplateSelection', () => {
-  const templates = ['User Story for Jira Copilot', 'Bug Report', 'Task'];
+  const templates = ['User Story for Ticket Sidekick', 'Bug Report', 'Task'];
 
   it('selects by 1-based number', () => {
-    expect(parseTemplateSelection('1', templates)).toBe('User Story for Jira Copilot');
+    expect(parseTemplateSelection('1', templates)).toBe('User Story for Ticket Sidekick');
     expect(parseTemplateSelection('2', templates)).toBe('Bug Report');
     expect(parseTemplateSelection('3', templates)).toBe('Task');
   });
