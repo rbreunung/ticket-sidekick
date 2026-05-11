@@ -27,6 +27,10 @@
     "priority": { "name": "High" },
     "labels": ["auth", "security"],
     "fixVersions": [{ "name": "v1.0" }],
+    "subtasks": [
+      { "key": "PROJ-124", "fields": { "summary": "Write unit tests", "status": { "name": "In Progress" } } },
+      { "key": "PROJ-125", "fields": { "summary": "Code review", "status": { "name": "Done" } } }
+    ],
     "comment": {
       "comments": [
         {

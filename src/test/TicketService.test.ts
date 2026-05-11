@@ -231,6 +231,34 @@ describe('TicketService', () => {
     });
   });
 
+  describe('getOpenSubtasks', () => {
+    it('returns only non-Done subtasks', async () => {
+      const subtasks = await service.getOpenSubtasks('PROJ-123');
+      expect(subtasks).toHaveLength(1);
+      expect(subtasks[0].key).toBe('PROJ-124');
+      expect(subtasks[0].currentStatus).toBe('In Progress');
+    });
+  });
+
+  describe('transitionAlongPath', () => {
+    it('calls executeTransition for each step', async () => {
+      const path = [
+        { id: '21', name: 'Submit for Review', to: 'In Review' },
+        { id: '41', name: 'Approve', to: 'Done' },
+      ];
+      await service.transitionAlongPath('PROJ-123', path, 'Fixed');
+      expect(client.executeTransitionCalls).toHaveLength(2);
+      expect(client.executeTransitionCalls[0].fields).toBeUndefined();
+      expect(client.executeTransitionCalls[1].fields).toEqual({ resolution: { name: 'Fixed' } });
+    });
+
+    it('works without resolution', async () => {
+      const path = [{ id: '21', name: 'Submit for Review', to: 'In Review' }];
+      await service.transitionAlongPath('PROJ-123', path);
+      expect(client.executeTransitionCalls[0].fields).toBeUndefined();
+    });
+  });
+
   describe('createTicket with additionalFields', () => {
     it('passes additionalFields to createIssue', async () => {
       await service.createTicket('PROJ', 'Login bug', 'Bug', { priority: 'High' });

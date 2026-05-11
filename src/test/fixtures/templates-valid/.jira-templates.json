@@ -19,5 +19,15 @@
       },
       "descriptionSections": ["User story", "Acceptance criteria", "Design link"]
     }
+  ],
+  "cleanupRules": [
+    {
+      "name": "Close released bugs",
+      "project": "PROJ",
+      "issueType": "Bug",
+      "targetState": "Done",
+      "resolution": "Fixed",
+      "closeSubtasks": true
+    }
   ]
 }

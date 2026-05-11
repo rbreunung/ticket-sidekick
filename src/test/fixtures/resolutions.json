@@ -1,0 +1,7 @@
+[
+  { "name": "Fixed" },
+  { "name": "Won't Fix" },
+  { "name": "Duplicate" },
+  { "name": "Done" },
+  { "name": "Cannot Reproduce" }
+]

@@ -1,3 +1,8 @@
+export interface JiraSubtask {
+  key: string;
+  fields: { summary: string; status: { name: string } };
+}
+
 export interface JiraComment {
   id: string;
   author: JiraUser;
@@ -24,6 +29,7 @@ export interface JiraIssue {
     labels: string[];
     fixVersions: { name: string }[];
     comment: { comments: JiraComment[]; total: number } | null;
+    subtasks?: JiraSubtask[];
     [key: string]: unknown;
   };
 }
@@ -66,7 +72,8 @@ export interface IJiraClient {
   findUser(query: string): Promise<JiraUser[]>;
   getCurrentUser(): Promise<JiraUser>;
   getTransitions(issueKey: string): Promise<JiraTransition[]>;
-  executeTransition(issueKey: string, transitionId: string): Promise<void>;
+  executeTransition(issueKey: string, transitionId: string, fields?: Record<string, unknown>): Promise<void>;
+  getResolutions(): Promise<Array<{ name: string }>>;
   getProject(projectKey: string): Promise<JiraProject>;
   getSprintByName(projectKey: string, sprintName: string): Promise<{ id: number }>;
   getTeamByName(name: string): Promise<{ id: string }>;

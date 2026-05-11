@@ -20,7 +20,7 @@ function loadFixture<T>(filename: string): T {
 export class MockJiraClient implements IJiraClient {
   public updateIssueCalls: Array<{ issueKey: string; fields: Record<string, unknown> }> = [];
   public addCommentCalls: Array<{ issueKey: string; body: string }> = [];
-  public executeTransitionCalls: Array<{ issueKey: string; transitionId: string }> = [];
+  public executeTransitionCalls: Array<{ issueKey: string; transitionId: string; fields?: Record<string, unknown> }> = [];
   public createIssueCalls: Array<{ projectKey: string; summary: string; issueType: string; additionalFields?: Record<string, unknown> }> = [];
 
   async getIssue(issueKey: string): Promise<JiraIssue> {
@@ -58,8 +58,12 @@ export class MockJiraClient implements IJiraClient {
     return fixture.transitions;
   }
 
-  async executeTransition(issueKey: string, transitionId: string): Promise<void> {
-    this.executeTransitionCalls.push({ issueKey, transitionId });
+  async executeTransition(issueKey: string, transitionId: string, fields?: Record<string, unknown>): Promise<void> {
+    this.executeTransitionCalls.push({ issueKey, transitionId, fields });
+  }
+
+  async getResolutions(): Promise<Array<{ name: string }>> {
+    return loadFixture<Array<{ name: string }>>('resolutions.json');
   }
 
   async getProject(_projectKey: string): Promise<JiraProject> {

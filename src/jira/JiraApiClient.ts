@@ -120,11 +120,17 @@ export class JiraApiClient implements IJiraClient {
     return result.transitions;
   }
 
-  async executeTransition(issueKey: string, transitionId: string): Promise<void> {
+  async executeTransition(issueKey: string, transitionId: string, fields?: Record<string, unknown>): Promise<void> {
+    const body: Record<string, unknown> = { transition: { id: transitionId } };
+    if (fields) body.fields = fields;
     await this.request<void>(`/issue/${issueKey}/transitions`, {
       method: 'POST',
-      body: JSON.stringify({ transition: { id: transitionId } }),
+      body: JSON.stringify(body),
     });
+  }
+
+  async getResolutions(): Promise<Array<{ name: string }>> {
+    return this.request<Array<{ name: string }>>('/resolution');
   }
 
   async getCurrentUser(): Promise<JiraUser> {

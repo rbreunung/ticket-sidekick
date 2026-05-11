@@ -1,0 +1,23 @@
+{
+  "VSJI": {
+    "Bug": {
+      "discovered": "2026-05-11",
+      "graph": {
+        "Open": [
+          { "id": "11", "name": "Start Progress", "to": "In Progress" }
+        ],
+        "In Progress": [
+          { "id": "21", "name": "Submit for Review", "to": "In Review" },
+          { "id": "31", "name": "Done", "to": "Done" }
+        ],
+        "In Review": [
+          { "id": "41", "name": "Approve", "to": "Done" },
+          { "id": "42", "name": "Send Back", "to": "In Progress" }
+        ],
+        "Blocked": [
+          { "id": "51", "name": "Unblock", "to": "In Progress" }
+        ]
+      }
+    }
+  }
+}

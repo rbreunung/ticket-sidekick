@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection } from '../participant/sessionState';
+import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput } from '../participant/sessionState';
+import type { TransitionBatchTicket } from '../participant/sessionState';
 
 describe('stripHiddenMarkers', () => {
   it('removes a jira-ticket marker', () => {
@@ -232,5 +233,64 @@ describe('isConfirmation (load-more phrases)', () => {
 
   it('returns true for "show more"', () => {
     expect(isConfirmation('show more')).toBe(true);
+  });
+});
+
+describe('parseSkipInput', () => {
+  const tickets: TransitionBatchTicket[] = [
+    {
+      key: 'PROJ-10', summary: 'Login bug', currentStatus: 'In Review',
+      transitionPath: [{ id: '41', name: 'Approve', to: 'Done' }],
+      subtasks: [
+        { key: 'PROJ-11', summary: 'Write tests', currentStatus: 'In Progress', transitionPath: [] },
+        { key: 'PROJ-12', summary: 'Code review', currentStatus: 'Open', transitionPath: [] },
+      ],
+    },
+    {
+      key: 'PROJ-14', summary: 'Dark mode', currentStatus: 'Blocked',
+      transitionPath: [], subtasks: [],
+    },
+  ];
+
+  it('returns ok for "ok"', () => {
+    expect(parseSkipInput('ok', tickets)).toEqual({ action: 'ok' });
+  });
+
+  it('returns cancel for "c" and "cancel"', () => {
+    expect(parseSkipInput('c', tickets)).toEqual({ action: 'cancel' });
+    expect(parseSkipInput('cancel', tickets)).toEqual({ action: 'cancel' });
+  });
+
+  it('skipping a subtask also skips the parent', () => {
+    const result = parseSkipInput('11', tickets);
+    expect(result).toMatchObject({ action: 'skip' });
+    expect((result as { action: 'skip'; keys: string[] }).keys).toContain('PROJ-11');
+    expect((result as { action: 'skip'; keys: string[] }).keys).toContain('PROJ-10');
+  });
+
+  it('skipping a parent also skips all its subtasks', () => {
+    const result = parseSkipInput('10', tickets);
+    expect(result).toMatchObject({ action: 'skip' });
+    const keys = (result as { action: 'skip'; keys: string[] }).keys;
+    expect(keys).toContain('PROJ-10');
+    expect(keys).toContain('PROJ-11');
+    expect(keys).toContain('PROJ-12');
+  });
+
+  it('skips multiple groups', () => {
+    const result = parseSkipInput('11 14', tickets);
+    const keys = (result as { action: 'skip'; keys: string[] }).keys;
+    expect(keys).toContain('PROJ-11');
+    expect(keys).toContain('PROJ-10');
+    expect(keys).toContain('PROJ-14');
+  });
+
+  it('returns invalid for unrecognised input', () => {
+    expect(parseSkipInput('something', tickets)).toEqual({ action: 'invalid' });
+    expect(parseSkipInput('', tickets)).toEqual({ action: 'invalid' });
+  });
+
+  it('trims whitespace', () => {
+    expect(parseSkipInput('  ok  ', tickets)).toEqual({ action: 'ok' });
   });
 });

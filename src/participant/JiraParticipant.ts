@@ -8,7 +8,9 @@ import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
 import { extractTicketId } from '../utils/branchParser';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection } from './sessionState';
+import { discoverWorkflow, loadWorkflowCache, saveWorkflowCache, findPath } from '../services/WorkflowService';
+import type { CleanupRule } from '../templates/TemplateService';
 
 type Operation =
   | 'getTicket'
@@ -17,7 +19,9 @@ type Operation =
   | 'updateField'
   | 'searchJql'
   | 'validateFields'
-  | 'createTicket';
+  | 'createTicket'
+  | 'discoverWorkflow'
+  | 'runCleanup';
 
 interface FieldUpdate {
   fieldName: string;
@@ -37,10 +41,12 @@ interface ParsedIntent {
   contentSource: 'literal' | 'generate' | 'history-recent' | 'history-full';
   fieldUpdates: FieldUpdate[];
   jql: string | null;
+  cleanupRuleName: string | null;
+  fixVersion: string | null;
 }
 
 const INTENT_PROMPT = `Parse this Jira command and respond with ONLY a JSON object. No markdown, no explanation.
-Schema: {"operation":"getTicket"|"getComments"|"addComment"|"updateField"|"searchJql"|"validateFields"|"createTicket","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"assignee":string|null,"description":string|null,"comment":string|null,"commentQuery":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"jql":string|null}
+Schema: {"operation":"getTicket"|"getComments"|"addComment"|"updateField"|"searchJql"|"validateFields"|"createTicket"|"discoverWorkflow"|"runCleanup","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"assignee":string|null,"description":string|null,"comment":string|null,"commentQuery":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"jql":string|null,"cleanupRuleName":string|null,"fixVersion":string|null}
 - getTicket: show, summarise, describe, look up a specific ticket
 - getComments: ask whether a ticket has comments, how many comments, list or read comments, or find comments about a topic; commentQuery is the topic/filter the user mentioned (e.g. "login bug", "performance") — null if they just want a general list
 - addComment: add, post, write a comment on a ticket
@@ -48,6 +54,8 @@ Schema: {"operation":"getTicket"|"getComments"|"addComment"|"updateField"|"searc
 - searchJql: find, search, list tickets; review multiple tickets against criteria; use literal JQL if provided
 - validateFields: check, validate required fields on a ticket
 - createTicket: create, open, add a new ticket/issue/bug/story/task; description is any additional body content the user provided beyond the summary (e.g. code blocks, steps to reproduce, specifications) — null if no extra content; assignee is the person to assign the ticket to ("me"/"myself" for the current user, or a name/email) — null if not mentioned
+- discoverWorkflow: discover or refresh the workflow graph for a project and issue type; projectKey and issueType are required
+- runCleanup: bulk-transition tickets using a named cleanup rule or ad-hoc criteria; cleanupRuleName is the quoted rule name if given; fixVersion is the exact fix version name if given (must be quoted in the prompt, e.g. "Fix Version 3.2")
 - contentSource: how the comment or description content should be produced
   - "literal": user provided the exact text to post (e.g. "add comment: LGTM")
   - "generate": user gave an instruction to create new content with no reference to the conversation (e.g. "write a poem about Star Trek", "add a 12-line poem as comment")
@@ -408,7 +416,7 @@ async function handleCreateTicket(
     // Returning from a template selection turn — reload the chosen template by name
     if (preselectedTemplateName !== null && workspaceRoot) {
       try {
-        const templates = new TemplateService(workspaceRoot).loadTemplates();
+        const { templates } = new TemplateService(workspaceRoot).loadTemplates();
         selectedTemplate = templates.find((t) => t.name === preselectedTemplateName) ?? null;
       } catch {
         stream.markdown('_Could not reload template — proceeding without._\n\n');
@@ -419,7 +427,7 @@ async function handleCreateTicket(
     let templates: JiraTemplate[] = [];
     if (workspaceRoot) {
       try {
-        templates = new TemplateService(workspaceRoot).loadTemplates();
+        ({ templates } = new TemplateService(workspaceRoot).loadTemplates());
       } catch (err) {
         stream.markdown(`_Template error: ${err instanceof Error ? err.message : String(err)} — proceeding without template._\n\n`);
       }
@@ -477,6 +485,198 @@ async function handleCreateTicket(
   return continueAfterIssueType(projectKey, summary, resolvedType, intent.description, selectedTemplate, request.model, stream, token, jiraClient, ticketService, workspaceState, extraFields);
 }
 
+async function handleDiscoverWorkflow(
+  intent: ParsedIntent,
+  stream: vscode.ChatResponseStream,
+  jiraClient: JiraApiClient,
+): Promise<void> {
+  const projectKey = intent.projectKey;
+  const issueType = intent.issueType;
+  if (!projectKey || !issueType) {
+    stream.markdown('Please specify a project and issue type, e.g. `@jira discover workflow VSJI Bug`.');
+    return;
+  }
+  stream.markdown(`_Discovering workflow for **${projectKey}** / **${issueType}**…_\n\n`);
+  const graph = await discoverWorkflow(jiraClient, projectKey, issueType);
+  const statuses = Object.keys(graph);
+  if (statuses.length === 0) {
+    stream.markdown(`No tickets found for ${projectKey} / ${issueType} — workflow could not be sampled.`);
+    return;
+  }
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+  const cache = loadWorkflowCache(workspaceRoot);
+  if (!cache[projectKey]) cache[projectKey] = {};
+  cache[projectKey][issueType] = { discovered: new Date().toISOString().slice(0, 10), graph };
+  saveWorkflowCache(workspaceRoot, cache);
+
+  const lines = statuses.map((s) => {
+    const targets = graph[s].map((t) => `${t.name} → **${t.to}**`).join(', ');
+    return `**${s}**: ${targets}`;
+  });
+  stream.markdown(`Workflow discovered for **${projectKey} / ${issueType}** (${statuses.length} statuses):\n\n${lines.join('\n\n')}\n\nSaved to \`.jira-workflow-cache.json\`.`);
+}
+
+async function streamReviewScreen(
+  session: TransitionBatchSession,
+  stream: vscode.ChatResponseStream,
+  workspaceState: vscode.Memento,
+  header: string,
+): Promise<void> {
+  await workspaceState.update('jira.session.transitionReview', session);
+  const lines: string[] = [header, ''];
+  for (const t of session.tickets) {
+    const finalState = t.transitionPath.at(-1)?.to ?? '?';
+    lines.push(`**${t.key}**  ${t.summary}  ·  _${t.currentStatus} → ${finalState}_`);
+    for (const s of t.subtasks) {
+      const sFinal = s.transitionPath.at(-1)?.to ?? '?';
+      lines.push(`  **${s.key}**  ${s.summary}  ·  _${s.currentStatus} → ${sFinal}_`);
+    }
+  }
+  lines.push('', 'ok · (c) · key numbers to skip (e.g. 11 14)');
+  stream.markdown(lines.join('\n') + '\n\n<!-- jira:transition-review -->');
+}
+
+async function executeCleanupBatch(
+  session: TransitionBatchSession,
+  skipKeys: Set<string>,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+): Promise<void> {
+  let transitioned = 0;
+  let failed = 0;
+  const failures: string[] = [];
+
+  for (const ticket of session.tickets) {
+    if (skipKeys.has(ticket.key)) continue;
+
+    for (const sub of ticket.subtasks) {
+      if (skipKeys.has(sub.key)) continue;
+      try {
+        await ticketService.transitionAlongPath(sub.key, sub.transitionPath, session.resolution);
+        const hops = sub.transitionPath.length;
+        stream.markdown(`✓ ${sub.key}  → ${sub.transitionPath.at(-1)?.to ?? '?'}${hops > 1 ? ` (${hops} hops)` : ''}\n`);
+        transitioned++;
+      } catch (err) {
+        stream.markdown(`✗ ${sub.key}  → failed: ${err instanceof Error ? err.message : String(err)}\n`);
+        failures.push(sub.key);
+        failed++;
+      }
+    }
+
+    try {
+      await ticketService.transitionAlongPath(ticket.key, ticket.transitionPath, session.resolution);
+      const hops = ticket.transitionPath.length;
+      stream.markdown(`✓ ${ticket.key}  → ${ticket.transitionPath.at(-1)?.to ?? '?'}${hops > 1 ? ` (${hops} hops)` : ''}\n`);
+      transitioned++;
+    } catch (err) {
+      stream.markdown(`✗ ${ticket.key}  → failed: ${err instanceof Error ? err.message : String(err)}\n`);
+      failures.push(ticket.key);
+      failed++;
+    }
+  }
+
+  const skipped = skipKeys.size;
+  const total = transitioned + failed + skipped;
+  stream.markdown(`\n${total} tickets processed — ${transitioned} transitioned, ${failed} failed, ${skipped} skipped.`);
+  if (failures.length > 0) {
+    stream.markdown(`\nFailed: ${failures.join(', ')}\nIf caused by a workflow gap, run \`@jira discover workflow\` to refresh the cache.`);
+  }
+}
+
+async function handleRunCleanup(
+  intent: ParsedIntent,
+  stream: vscode.ChatResponseStream,
+  jiraClient: JiraApiClient,
+  ticketService: TicketService,
+  workspaceState: vscode.Memento,
+): Promise<void> {
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+
+  const { cleanupRules } = new TemplateService(workspaceRoot).loadTemplates();
+  const rule: CleanupRule | null = cleanupRules.find((r) => r.name === intent.cleanupRuleName) ?? null;
+  if (!rule && !intent.projectKey) {
+    stream.markdown('No cleanup rule found. Use `@jira run cleanup "rule name"` or specify a project and issue type.');
+    return;
+  }
+  const project = rule?.project ?? intent.projectKey!;
+  const issueType = rule?.issueType ?? intent.issueType ?? 'Bug';
+  const targetState = rule?.targetState ?? 'Done';
+  const resolution = rule?.resolution;
+
+  const cache = loadWorkflowCache(workspaceRoot);
+  const graph = cache[project]?.[issueType]?.graph;
+  if (!graph) {
+    stream.markdown(`No workflow cache for **${project} / ${issueType}**. Run \`@jira discover workflow ${project} ${issueType}\` first.`);
+    return;
+  }
+
+  const fixVersion = intent.fixVersion ?? null;
+  let jql = `project = ${project} AND issuetype = "${issueType}" AND status != "${targetState}"`;
+  if (fixVersion) jql += ` AND fixVersion = "${fixVersion}"`;
+
+  stream.markdown(`_Searching for tickets…_\n\n`);
+  const result = await ticketService.searchTicketsRaw(jql, 50);
+
+  if (result.issues.length === 0) {
+    stream.markdown('No tickets found matching the criteria.');
+    return;
+  }
+  if (result.total > 50) {
+    stream.markdown(`_Found ${result.total} tickets — showing first 50. Refine your filter if needed._\n\n`);
+  }
+
+  const BATCH_LIMIT = 50;
+  const tickets: TransitionBatchTicket[] = [];
+  for (const issue of result.issues.slice(0, BATCH_LIMIT)) {
+    const path = findPath(graph, issue.fields.status.name, targetState);
+    if (path === null) {
+      stream.markdown(`_Warning: no path found from **${issue.fields.status.name}** to **${targetState}** for ${issue.key} — skipping._\n\n`);
+      continue;
+    }
+    const openSubtasks = rule?.closeSubtasks
+      ? await ticketService.getOpenSubtasks(issue.key)
+      : [];
+    const subtasks: TransitionSubtask[] = [];
+    for (const s of openSubtasks) {
+      const subPath = findPath(graph, s.currentStatus, targetState) ?? [];
+      subtasks.push({ ...s, transitionPath: subPath });
+    }
+    tickets.push({
+      key: issue.key,
+      summary: issue.fields.summary,
+      currentStatus: issue.fields.status.name,
+      transitionPath: path,
+      subtasks,
+    });
+  }
+
+  if (tickets.length === 0) {
+    stream.markdown('No tickets can be transitioned — all are either already at target state or have no valid path.');
+    return;
+  }
+
+  if (resolution === undefined) {
+    const closedStates = new Set(['done', 'resolved', 'closed', "won't fix"]);
+    if (closedStates.has(targetState.toLowerCase())) {
+      const resolutions = await jiraClient.getResolutions();
+      const resSession: ResolutionSelectionSession = {
+        tickets,
+        ruleName: rule?.name,
+        targetState,
+        resolutionOptions: resolutions.map((r) => r.name),
+      };
+      await workspaceState.update('jira.session.resolutionSelection', resSession);
+      const list = resolutions.map((r, i) => `${i + 1}. ${r.name}`).join('\n');
+      stream.markdown(`Which resolution should be set when transitioning to **${targetState}**?\n\n${list}\n\nReply with the name or number, or **none** to skip setting a resolution.\n\n<!-- jira:selecting-resolution -->`);
+      return;
+    }
+  }
+
+  const header = `**Cleanup${rule ? `: ${rule.name}` : ''}**  ·  ${project} / ${issueType}${fixVersion ? `  ·  Fix version "${fixVersion}"` : ''}`;
+  const batchSession: TransitionBatchSession = { tickets, resolution, ruleName: rule?.name };
+  await streamReviewScreen(batchSession, stream, workspaceState, header);
+}
+
 export function createParticipant(
   context: vscode.ExtensionContext,
   configService: ConfigService,
@@ -515,6 +715,53 @@ export function createParticipant(
     const ticketService = new TicketService(jiraClient);
     const ws = context.workspaceState;
     const lastResponse = getLastAssistantText(chatContext);
+
+    // Resolution selection — user replied with a resolution choice before the review screen
+    if (lastResponse.includes('<!-- jira:selecting-resolution -->')) {
+      const selSession = ws.get<ResolutionSelectionSession>('jira.session.resolutionSelection');
+      if (selSession) {
+        const choice = parseResolutionSelection(request.prompt, selSession.resolutionOptions);
+        if (choice === 'invalid') {
+          const list = selSession.resolutionOptions.map((r, i) => `${i + 1}. ${r}`).join('\n');
+          stream.markdown(`Please choose a resolution:\n\n${list}\n\nReply with name or number, or **none** to skip.\n\n<!-- jira:selecting-resolution -->`);
+          return;
+        }
+        await ws.update('jira.session.resolutionSelection', undefined);
+        const batchSession: TransitionBatchSession = {
+          tickets: selSession.tickets,
+          resolution: choice ?? undefined,
+          ruleName: selSession.ruleName,
+        };
+        const header = `**Cleanup${selSession.ruleName ? `: ${selSession.ruleName}` : ''}**`;
+        await streamReviewScreen(batchSession, stream, ws, header);
+        return;
+      }
+    }
+
+    // Transition review — user replied ok/cancel/skip keys
+    if (lastResponse.includes('<!-- jira:transition-review -->')) {
+      const session = ws.get<TransitionBatchSession>('jira.session.transitionReview');
+      if (session) {
+        const result = parseSkipInput(request.prompt, session.tickets);
+        if (result.action === 'invalid') {
+          const header = `**Cleanup${session.ruleName ? `: ${session.ruleName}` : ''}**`;
+          await streamReviewScreen(session, stream, ws, header);
+          return;
+        }
+        await ws.update('jira.session.transitionReview', undefined);
+        if (result.action === 'cancel') {
+          stream.markdown('_Cancelled — no tickets were changed._');
+          return;
+        }
+        const skipKeys = new Set<string>(result.action === 'skip' ? result.keys : []);
+        try {
+          await executeCleanupBatch(session, skipKeys, ticketService, stream);
+        } catch (err) {
+          stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+        }
+        return;
+      }
+    }
 
     // Template selection — user replied with their template choice
     if (lastResponse.includes('<!-- jira:selecting-template -->')) {
@@ -558,7 +805,7 @@ export function createParticipant(
         let selectedTemplate: JiraTemplate | null = null;
         if (typeSession.templateName && workspaceRoot) {
           try {
-            const templates = new TemplateService(workspaceRoot).loadTemplates();
+            const { templates } = new TemplateService(workspaceRoot).loadTemplates();
             selectedTemplate = templates.find((t) => t.name === typeSession.templateName) ?? null;
           } catch { /* proceed without */ }
         }
@@ -646,6 +893,24 @@ export function createParticipant(
       try {
         const createdKey = await handleCreateTicket(request, stream, token, jiraClient, ticketService, ws);
         if (createdKey) stream.markdown(`\n\n<!-- @jira-ticket:${createdKey} -->`);
+      } catch (err) {
+        stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
+
+    if (intent.operation === 'discoverWorkflow') {
+      try {
+        await handleDiscoverWorkflow(intent, stream, jiraClient);
+      } catch (err) {
+        stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
+
+    if (intent.operation === 'runCleanup') {
+      try {
+        await handleRunCleanup(intent, stream, jiraClient, ticketService, ws);
       } catch (err) {
         stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
       }

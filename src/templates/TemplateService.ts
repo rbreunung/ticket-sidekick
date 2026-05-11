@@ -15,24 +15,33 @@ export interface JiraTemplate {
   descriptionSections?: string[];
 }
 
+export interface CleanupRule {
+  name: string;
+  project: string;
+  issueType: string;
+  targetState: string;
+  resolution?: string;
+  closeSubtasks?: boolean;
+}
+
 export class TemplateService {
   constructor(private readonly workspaceRoot: string) {}
 
-  loadTemplates(): JiraTemplate[] {
+  loadTemplates(): { templates: JiraTemplate[]; cleanupRules: CleanupRule[] } {
     const filePath = join(this.workspaceRoot, '.jira-templates.json');
-    if (!existsSync(filePath)) return [];
+    if (!existsSync(filePath)) return { templates: [], cleanupRules: [] };
     let raw: string;
     try {
       raw = readFileSync(filePath, 'utf-8');
     } catch (err) {
       throw new Error(`Could not read .jira-templates.json: ${err instanceof Error ? err.message : String(err)}`);
     }
-    let parsed: { templates: JiraTemplate[] };
+    let parsed: { templates?: JiraTemplate[]; cleanupRules?: CleanupRule[] };
     try {
-      parsed = JSON.parse(raw) as { templates: JiraTemplate[] };
+      parsed = JSON.parse(raw) as { templates?: JiraTemplate[]; cleanupRules?: CleanupRule[] };
     } catch (err) {
       throw new Error(`Could not parse .jira-templates.json: ${err instanceof Error ? err.message : String(err)}`);
     }
-    return parsed.templates ?? [];
+    return { templates: parsed.templates ?? [], cleanupRules: parsed.cleanupRules ?? [] };
   }
 }

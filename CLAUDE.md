@@ -25,7 +25,8 @@ JiraParticipant → TicketService → IJiraClient (interface)
 | `src/services/ConfigService.ts` | VS Code settings + SecretStorage |
 | `src/participant/JiraParticipant.ts` | Chat handler + intent parsing via VS Code LM API |
 | `src/participant/sessionState.ts` | VS Code-free pure helpers and multi-turn session types — all unit-testable by Vitest |
-| `src/templates/TemplateService.ts` | Reads `.jira-templates.json` from workspace root; returns `JiraTemplate[]` |
+| `src/services/WorkflowService.ts` | Workflow graph cache I/O, BFS path-finding, `discoverWorkflow` sampling |
+| `src/templates/TemplateService.ts` | Reads `.jira-templates.json`; returns `{ templates, cleanupRules }` |
 | `src/templates/FieldResolver.ts` | Resolves `resolveFields` entries by name (API lookup) or id (pass-through) |
 | `src/utils/branchParser.ts` | Extracts ticket ID from git branch name |
 
@@ -76,13 +77,15 @@ Multi-turn flows store structured state in `vscode.ExtensionContext.workspaceSta
 
 | Session | workspaceState key | Tag in response |
 | --- | --- | --- |
+| `ResolutionSelectionSession` | `jira.session.resolutionSelection` | `<!-- jira:selecting-resolution -->` |
+| `TransitionBatchSession` | `jira.session.transitionReview` | `<!-- jira:transition-review -->` |
 | `TemplateSelectionSession` | `jira.session.templateSelection` | `<!-- jira:selecting-template -->` |
 | `IssueTypeSelectionSession` | `jira.session.typeSelection` | `<!-- jira:selecting-type -->` |
 | `CreationSession` | `jira.session.creating` | `<!-- jira:creating -->` |
 | `ContentSession` | `jira.session.previewing` | `<!-- jira:previewing -->` |
 | `MoreCommentsSession` | `jira.session.moreComments` | `<!-- jira:more-comments -->` |
 
-Detection order in the handler: template selection → issue type selection → creation → content → more-comments → intent parse.
+Detection order in the handler: resolution selection → transition review → template selection → issue type selection → creation → content → more-comments → intent parse.
 
 ## Ticket creation flow
 
@@ -140,6 +143,26 @@ When a follow-up prompt arrives without an explicit ticket key, the handler scan
 2. Current git branch (regex `[A-Z][A-Z0-9]+-\d+`)
 3. Last ticket from `ChatContext` history (hidden marker)
 4. `showInputBox` — ask the user
+
+## Workflow discovery
+
+`@jira discover workflow VSJI Bug` samples tickets across all statuses, calls `getTransitions` on a representative per status, and builds a directed graph. Saved to `.jira-workflow-cache.json` at the workspace root. Re-run any time the workflow changes.
+
+`WorkflowService.findPath(graph, from, to)` uses BFS to find the shortest sequence of transitions from the current status to the target state.
+
+## Bulk cleanup
+
+`cleanupRules` in `.jira-templates.json` define named rules:
+
+- `project`, `issueType`, `targetState` — required
+- `resolution` — optional; if omitted and target is a closed state, asked in chat once before the review screen
+- `closeSubtasks` — if true, open subtasks appear in the review and are transitioned before their parent
+
+Trigger: `@jira run cleanup "rule name"` or ad-hoc `@jira close VSJI bugs in "Fix Version 3.2"` (exact version match required).
+
+Review screen shows all tickets with their subtasks and proposed transitions. User replies: **ok**, **(c)** to cancel the run, or key numbers to skip (cascading: subtask skip → parent skipped; parent skip → all subtasks skipped).
+
+Execution streams one line per ticket (subtasks first), then a summary. Failures are collected and reported at the end — the batch continues on failure.
 
 ## Credentials
 

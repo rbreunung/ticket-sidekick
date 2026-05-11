@@ -1,4 +1,4 @@
-import type { IJiraClient, JiraComment, JiraIssue, JiraIssueType } from '../jira/IJiraClient';
+import type { IJiraClient, JiraComment, JiraIssue, JiraIssueType, JiraSearchResult } from '../jira/IJiraClient';
 
 const SUPPORTED_FIELDS: Record<string, string> = {
   summary: 'summary',
@@ -169,6 +169,29 @@ export class TicketService {
 
   async getIssueComments(issueKey: string, maxResults = 20): Promise<{ comments: JiraComment[]; total: number }> {
     return this.client.getIssueComments(issueKey, maxResults);
+  }
+
+  async getOpenSubtasks(issueKey: string): Promise<Array<{ key: string; summary: string; currentStatus: string }>> {
+    const issue = await this.client.getIssue(issueKey);
+    return (issue.fields.subtasks ?? [])
+      .filter((s) => s.fields.status.name !== 'Done')
+      .map((s) => ({ key: s.key, summary: s.fields.summary, currentStatus: s.fields.status.name }));
+  }
+
+  async transitionAlongPath(
+    issueKey: string,
+    path: Array<{ id: string; name: string; to: string }>,
+    resolution?: string,
+  ): Promise<void> {
+    for (const step of path) {
+      const fields: Record<string, unknown> = {};
+      if (resolution && step.to === path.at(-1)!.to) fields.resolution = { name: resolution };
+      await this.client.executeTransition(issueKey, step.id, Object.keys(fields).length > 0 ? fields : undefined);
+    }
+  }
+
+  async searchTicketsRaw(jql: string, maxResults = 50): Promise<JiraSearchResult> {
+    return this.client.searchJql(jql, maxResults);
   }
 
   async createTicket(
