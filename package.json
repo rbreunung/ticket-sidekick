@@ -58,7 +58,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "vitest run --pool=forks --reporter=verbose",
+    "test": "vitest run --reporter=verbose",
     "test:e2e": "node ./out/test/runTest.js",
     "package": "vsce package"
   },
