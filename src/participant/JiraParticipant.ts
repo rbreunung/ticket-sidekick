@@ -317,9 +317,12 @@ function parseCreationSession(context: vscode.ChatContext): CreationSession | nu
 
 function streamNextSection(session: CreationSession, stream: vscode.ChatResponseStream): void {
   const next = session.pending[0];
+  const answered = session.allSections.length - session.pending.length;
   const isLast = session.pending.length === 1;
-  stream.markdown(isLast ? `Last one:\n\n**${next}** — ` : `**${next}** — `);
-  stream.markdown(`\n\n<!-- @jira-create:${JSON.stringify(session)} -->`);
+  const header = isLast
+    ? `Last section — **${next}**`
+    : `Section ${answered + 1} of ${session.allSections.length} — **${next}**`;
+  stream.markdown(`${header}\n\nWhat would you like to include here? Reply with your content and I'll ask for the next section.\n\n<!-- @jira-create:${JSON.stringify(session)} -->`);
 }
 
 async function finishTicketCreation(
