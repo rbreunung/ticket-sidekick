@@ -19,6 +19,16 @@ describe('TemplateService', () => {
     expect(templates[0].defaultFields).toEqual({ priority: 'High', labels: ['billing'] });
   });
 
+  it('returns issueType when specified in template', () => {
+    const templates = new TemplateService(VALID_ROOT).loadTemplates();
+    expect(templates[0].issueType).toBe('Bug');
+  });
+
+  it('leaves issueType undefined when omitted from template', () => {
+    const templates = new TemplateService(VALID_ROOT).loadTemplates();
+    expect(templates[1].issueType).toBeUndefined();
+  });
+
   it('returns descriptionSections from template', () => {
     const templates = new TemplateService(VALID_ROOT).loadTemplates();
     expect(templates[0].descriptionSections).toEqual([

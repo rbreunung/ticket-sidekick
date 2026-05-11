@@ -2,6 +2,7 @@
   "templates": [
     {
       "name": "Billing App Bug",
+      "issueType": "Bug",
       "defaultFields": { "priority": "High", "labels": ["billing"] },
       "resolveFields": {
         "customfield_10020": { "type": "sprint", "name": "Sprint 5" },

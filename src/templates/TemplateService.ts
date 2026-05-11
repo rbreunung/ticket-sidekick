@@ -9,9 +9,10 @@ export interface ResolveSpec {
 
 export interface JiraTemplate {
   name: string;
+  issueType?: string;
   defaultFields: Record<string, unknown>;
   resolveFields?: Record<string, ResolveSpec | ResolveSpec[]>;
-  descriptionSections: string[];
+  descriptionSections?: string[];
 }
 
 export class TemplateService {

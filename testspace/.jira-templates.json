@@ -2,8 +2,9 @@
     "templates": [
         {
             "name": "User Story for Jira Copilot",
+            "issueType": "Story",
             "defaultFields": {
-                "priority": { "name": "High" },
+                "priority": { "name": "Medium" },
                 "labels": [
                     "generated"
                 ],
@@ -13,6 +14,23 @@
                 "User Story",
                 "Acceptance Criteria",
                 "Out of Scope"
+            ]
+        },
+        {
+            "name": "Bug for Jira Copilot",
+            "issueType": "Bug",
+            "defaultFields": {
+                "priority": { "name": "High" },
+                "labels": [
+                    "generated"
+                ],
+                "customfield_10071": "Jira Copilot"
+            },
+            "descriptionSections": [
+                "Reproduction",
+                "Observation",
+                "Expectation",
+                "Environment"
             ]
         }
     ]

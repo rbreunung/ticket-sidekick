@@ -25,6 +25,24 @@ export interface TemplateSelectionSession {
   templateNames: string[];
 }
 
+export interface IssueTypeSelectionSession {
+  issueTypes: string[];
+  project: string;
+  summary: string;
+  templateName: string | null;
+  description: string | null;
+}
+
+export function parseIssueTypeSelection(reply: string, types: string[]): string | 'cancel' | 'invalid' {
+  const normalized = reply.trim().toLowerCase();
+  if (normalized === 'c' || normalized === 'cancel') return 'cancel';
+  const num = parseInt(normalized, 10);
+  if (!isNaN(num) && num >= 1 && num <= types.length) return types[num - 1];
+  if (!isNaN(num)) return 'invalid';
+  const match = types.find((t) => t.toLowerCase() === normalized);
+  return match ?? 'invalid';
+}
+
 export function parseTemplateSelection(reply: string, templateNames: string[]): string | null | 'cancel' | 'invalid' {
   const normalized = reply.trim().toLowerCase();
   if (normalized === 'c' || normalized === 'cancel') return 'cancel';

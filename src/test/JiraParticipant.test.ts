@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection } from '../participant/sessionState';
+import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection } from '../participant/sessionState';
 
 describe('stripHiddenMarkers', () => {
   it('removes a jira-ticket marker', () => {
@@ -176,6 +176,44 @@ describe('parseTemplateSelection', () => {
   it('trims whitespace before matching', () => {
     expect(parseTemplateSelection('  2  ', templates)).toBe('Bug Report');
     expect(parseTemplateSelection('  no template  ', templates)).toBeNull();
+  });
+});
+
+describe('parseIssueTypeSelection', () => {
+  const types = ['Bug', 'Story', 'Task'];
+
+  it('selects by 1-based number', () => {
+    expect(parseIssueTypeSelection('1', types)).toBe('Bug');
+    expect(parseIssueTypeSelection('2', types)).toBe('Story');
+    expect(parseIssueTypeSelection('3', types)).toBe('Task');
+  });
+
+  it('selects by exact name (case-insensitive)', () => {
+    expect(parseIssueTypeSelection('Bug', types)).toBe('Bug');
+    expect(parseIssueTypeSelection('bug', types)).toBe('Bug');
+    expect(parseIssueTypeSelection('STORY', types)).toBe('Story');
+  });
+
+  it('returns cancel for (c) shortcut and "cancel"', () => {
+    expect(parseIssueTypeSelection('c', types)).toBe('cancel');
+    expect(parseIssueTypeSelection('cancel', types)).toBe('cancel');
+    expect(parseIssueTypeSelection('C', types)).toBe('cancel');
+    expect(parseIssueTypeSelection('Cancel', types)).toBe('cancel');
+  });
+
+  it('returns invalid for out-of-range number', () => {
+    expect(parseIssueTypeSelection('4', types)).toBe('invalid');
+    expect(parseIssueTypeSelection('0', types)).toBe('invalid');
+  });
+
+  it('returns invalid for unrecognised text', () => {
+    expect(parseIssueTypeSelection('something', types)).toBe('invalid');
+    expect(parseIssueTypeSelection('', types)).toBe('invalid');
+  });
+
+  it('trims whitespace before matching', () => {
+    expect(parseIssueTypeSelection('  2  ', types)).toBe('Story');
+    expect(parseIssueTypeSelection('  bug  ', types)).toBe('Bug');
   });
 });
 
