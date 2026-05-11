@@ -544,13 +544,17 @@ async function executeCleanupBatch(
 ): Promise<void> {
   let transitioned = 0;
   let failed = 0;
+  let skipped = 0;
   const failures: string[] = [];
 
   for (const ticket of session.tickets) {
-    if (skipKeys.has(ticket.key)) continue;
+    if (skipKeys.has(ticket.key)) {
+      skipped += 1 + ticket.subtasks.length;
+      continue;
+    }
 
     for (const sub of ticket.subtasks) {
-      if (skipKeys.has(sub.key)) continue;
+      if (skipKeys.has(sub.key)) { skipped++; continue; }
       try {
         await ticketService.transitionAlongPath(sub.key, sub.transitionPath, session.resolution);
         const hops = sub.transitionPath.length;
@@ -575,7 +579,6 @@ async function executeCleanupBatch(
     }
   }
 
-  const skipped = skipKeys.size;
   const total = transitioned + failed + skipped;
   stream.markdown(`\n${total} tickets processed — ${transitioned} transitioned, ${failed} failed, ${skipped} skipped.`);
   if (failures.length > 0) {
@@ -638,7 +641,11 @@ async function handleRunCleanup(
       : [];
     const subtasks: TransitionSubtask[] = [];
     for (const s of openSubtasks) {
-      const subPath = findPath(graph, s.currentStatus, targetState) ?? [];
+      const subPath = findPath(graph, s.currentStatus, targetState);
+      if (subPath === null) {
+        stream.markdown(`_Warning: no path found from **${s.currentStatus}** to **${targetState}** for subtask ${s.key} — skipping._\n\n`);
+        continue;
+      }
       subtasks.push({ ...s, transitionPath: subPath });
     }
     tickets.push({
