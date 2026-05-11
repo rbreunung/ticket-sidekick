@@ -14,6 +14,21 @@ export function extractLastTicketFromText(text: string): string | null {
   return match ? match[1] : null;
 }
 
+export function stripHiddenMarkers(text: string): string {
+  return text.replace(/<!--[\s\S]*?-->/g, '').replace(/\s+/g, ' ').trim();
+}
+
+export function serializeTurns(
+  turns: Array<{ role: 'user' | 'assistant'; text: string }>,
+  mode: 'recent' | 'full',
+): string {
+  const selected = mode === 'recent' ? turns.slice(-3) : turns;
+  return selected
+    .filter((t) => t.text.length > 0)
+    .map((t) => `${t.role === 'user' ? 'User' : 'Assistant'}: ${t.text}`)
+    .join('\n\n');
+}
+
 export function extractCreatedKeyFromConfirmation(confirmation: string): string | null {
   const m = confirmation.match(/([A-Z][A-Z0-9]+-\d+)/);
   return m ? m[1] : null;

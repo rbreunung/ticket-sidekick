@@ -1,5 +1,54 @@
 import { describe, it, expect } from 'vitest';
-import { extractCreatedKeyFromConfirmation, extractCreationSessionFromText, extractLastTicketFromText } from '../participant/sessionState';
+import { extractCreatedKeyFromConfirmation, extractCreationSessionFromText, extractLastTicketFromText, serializeTurns, stripHiddenMarkers } from '../participant/sessionState';
+
+describe('stripHiddenMarkers', () => {
+  it('removes a jira-ticket marker', () => {
+    expect(stripHiddenMarkers('Done.\n\n<!-- @jira-ticket:PROJ-1 -->')).toBe('Done.');
+  });
+
+  it('removes a jira-create marker', () => {
+    const text = 'Next question\n\n<!-- @jira-create:{"template":"X"} -->';
+    expect(stripHiddenMarkers(text)).toBe('Next question');
+  });
+
+  it('returns unchanged text when no markers present', () => {
+    expect(stripHiddenMarkers('No markers here')).toBe('No markers here');
+  });
+});
+
+describe('serializeTurns', () => {
+  const turns = [
+    { role: 'user' as const, text: 'Show me PROJ-1' },
+    { role: 'assistant' as const, text: 'Here is the ticket.' },
+    { role: 'user' as const, text: 'Write a poem about it' },
+    { role: 'assistant' as const, text: 'Roses are red...' },
+    { role: 'user' as const, text: 'Add that poem as a comment' },
+  ];
+
+  it('includes all turns in full mode', () => {
+    const result = serializeTurns(turns, 'full');
+    expect(result).toContain('Show me PROJ-1');
+    expect(result).toContain('Roses are red');
+  });
+
+  it('returns only the last 3 turns in recent mode', () => {
+    const result = serializeTurns(turns, 'recent');
+    expect(result).not.toContain('Show me PROJ-1');
+    expect(result).toContain('Write a poem about it');
+    expect(result).toContain('Roses are red');
+    expect(result).toContain('Add that poem as a comment');
+  });
+
+  it('labels turns with User and Assistant prefixes', () => {
+    const result = serializeTurns([{ role: 'user', text: 'hello' }, { role: 'assistant', text: 'world' }], 'full');
+    expect(result).toBe('User: hello\n\nAssistant: world');
+  });
+
+  it('filters out empty text turns', () => {
+    const result = serializeTurns([{ role: 'user', text: '' }, { role: 'assistant', text: 'hi' }], 'full');
+    expect(result).toBe('Assistant: hi');
+  });
+});
 
 describe('extractCreatedKeyFromConfirmation', () => {
   it('extracts key from a standard creation confirmation', () => {

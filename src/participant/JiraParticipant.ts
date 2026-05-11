@@ -7,7 +7,7 @@ import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
 import { extractTicketId } from '../utils/branchParser';
-import { type CreationSession, extractCreationSessionFromText, extractCreatedKeyFromConfirmation, extractLastTicketFromText } from './sessionState';
+import { type CreationSession, extractCreationSessionFromText, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns } from './sessionState';
 
 type Operation =
   | 'getTicket'
@@ -31,19 +31,26 @@ interface ParsedIntent {
   issueType: string | null;
   description: string | null;
   comment: string | null;
+  contentSource: 'literal' | 'generate' | 'history-recent' | 'history-full';
   fieldUpdates: FieldUpdate[];
   jql: string | null;
 }
 
 const INTENT_PROMPT = `Parse this Jira command and respond with ONLY a JSON object. No markdown, no explanation.
-Schema: {"operation":"getTicket"|"getComments"|"addComment"|"updateField"|"searchJql"|"validateFields"|"createTicket","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"description":string|null,"comment":string|null,"fieldUpdates":[{"fieldName":string,"fieldValue":string}],"jql":string|null}
+Schema: {"operation":"getTicket"|"getComments"|"addComment"|"updateField"|"searchJql"|"validateFields"|"createTicket","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"description":string|null,"comment":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"jql":string|null}
 - getTicket: show, summarise, describe, look up a specific ticket
 - getComments: ask whether a ticket has comments, how many comments, list or read comments on a ticket
 - addComment: add, post, write a comment on a ticket
-- updateField: set, change, update one or more fields; put each field change in fieldUpdates array; for description/comment content instructions (e.g. "write a poem") put the instruction as fieldValue — do NOT generate the content
+- updateField: set, change, update one or more fields; put each field change in fieldUpdates array; for description/comment content instructions put the instruction as fieldValue — do NOT generate the content
 - searchJql: find, search, list tickets; review multiple tickets against criteria; use literal JQL if provided
 - validateFields: check, validate required fields on a ticket
 - createTicket: create, open, add a new ticket/issue/bug/story/task; description is any additional body content the user provided beyond the summary (e.g. code blocks, steps to reproduce, specifications) — null if no extra content
+- contentSource: how the comment or description content should be produced
+  - "literal": user provided the exact text to post (e.g. "add comment: LGTM")
+  - "generate": user gave an instruction to create new content with no reference to the conversation (e.g. "write a poem about Star Trek", "add a 12-line poem as comment")
+  - "history-recent": user references a specific artifact from the last few messages (e.g. "add that poem", "post the result above", "add it as a comment")
+  - "history-full": user wants a synthesis or summary of the broader conversation (e.g. "summarize our analysis and add as comment", "document what we found")
+  - default to "literal" for operations other than addComment and updateField
 
 Command: `;
 
@@ -67,16 +74,48 @@ async function generateContent(
   instruction: string,
   model: vscode.LanguageModelChat,
   token: vscode.CancellationToken,
+  historyContext?: string,
 ): Promise<string> {
-  const message = vscode.LanguageModelChatMessage.User(
-    `Generate content for a Jira ticket field based on this instruction: "${instruction}". Respond with only the content itself, no markdown fences, no explanation.`,
-  );
-  const response = await model.sendRequest([message], {}, token);
+  const prompt = historyContext
+    ? `Conversation history:\n\n${historyContext}\n\nBased on the conversation above, ${instruction}. Produce only the final content, no preamble, no markdown code fences, no explanation.`
+    : `Generate content based on this instruction: "${instruction}". Produce only the final content, no preamble, no markdown code fences, no explanation.`;
+  const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], {}, token);
   let content = '';
   for await (const chunk of response.text) {
     content += chunk;
   }
   return content.trim();
+}
+
+function extractHistoryTurns(context: vscode.ChatContext): Array<{ role: 'user' | 'assistant'; text: string }> {
+  type Turn = { role: 'user' | 'assistant'; text: string };
+  return context.history.flatMap<Turn>((turn) => {
+    if (turn instanceof vscode.ChatRequestTurn) {
+      return [{ role: 'user', text: turn.prompt }];
+    }
+    if (turn instanceof vscode.ChatResponseTurn) {
+      const text = stripHiddenMarkers(
+        turn.response
+          .map((p) => (p instanceof vscode.ChatResponseMarkdownPart ? p.value.value : ''))
+          .join(''),
+      );
+      return text ? [{ role: 'assistant', text }] : [];
+    }
+    return [];
+  });
+}
+
+function buildHistoryContext(
+  contentSource: ParsedIntent['contentSource'],
+  context: vscode.ChatContext,
+): string | undefined {
+  if (contentSource === 'history-recent') {
+    return serializeTurns(extractHistoryTurns(context), 'recent');
+  }
+  if (contentSource === 'history-full') {
+    return serializeTurns(extractHistoryTurns(context), 'full');
+  }
+  return undefined;
 }
 
 async function checkSectionCoverage(
@@ -439,13 +478,28 @@ export function createParticipant(
         case 'getComments':
           result = await ticketService.getComments(ticketKey!);
           break;
-        case 'addComment':
-          if (!intent.comment) {
+        case 'addComment': {
+          const isLiteral = intent.contentSource === 'literal' || intent.contentSource === undefined;
+          if (!intent.comment && isLiteral) {
             stream.markdown('What comment would you like to add?');
             return;
           }
-          result = await ticketService.addComment(ticketKey!, intent.comment);
+          let commentBody: string;
+          if (isLiteral) {
+            commentBody = intent.comment!;
+          } else {
+            const historyContext = buildHistoryContext(intent.contentSource, chatContext);
+            commentBody = await generateContent(request.prompt, request.model, token, historyContext);
+            stream.markdown(`**Preview:**\n\n${commentBody}\n\n`);
+            const choice = await vscode.window.showQuickPick(['Post comment', 'Cancel'], {
+              title: `Add this comment to ${ticketKey}?`,
+              ignoreFocusOut: true,
+            });
+            if (choice !== 'Post comment') { stream.markdown('_Cancelled._'); return; }
+          }
+          result = await ticketService.addComment(ticketKey!, commentBody);
           break;
+        }
         case 'updateField': {
           if (!intent.fieldUpdates || intent.fieldUpdates.length === 0) {
             stream.markdown('Please specify a field name and value to update.');
@@ -453,10 +507,21 @@ export function createParticipant(
           }
           const results: string[] = [];
           for (const { fieldName, fieldValue } of intent.fieldUpdates) {
-            const value = fieldName.toLowerCase() === 'description'
-              ? await generateContent(fieldValue, request.model, token)
-              : fieldValue;
-            results.push(await ticketService.updateField(ticketKey!, fieldName, value));
+            if (fieldName.toLowerCase() === 'description') {
+              const historyContext = buildHistoryContext(intent.contentSource, chatContext);
+              const generated = await generateContent(fieldValue, request.model, token, historyContext);
+              if (intent.contentSource !== 'literal' && intent.contentSource !== undefined) {
+                stream.markdown(`**Preview:**\n\n${generated}\n\n`);
+                const choice = await vscode.window.showQuickPick(['Update description', 'Cancel'], {
+                  title: `Update description on ${ticketKey}?`,
+                  ignoreFocusOut: true,
+                });
+                if (choice !== 'Update description') { stream.markdown('_Cancelled._'); return; }
+              }
+              results.push(await ticketService.updateField(ticketKey!, fieldName, generated));
+            } else {
+              results.push(await ticketService.updateField(ticketKey!, fieldName, fieldValue));
+            }
           }
           result = results.join('\n');
           break;
