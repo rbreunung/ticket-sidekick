@@ -79,32 +79,45 @@ When set, the `create` command skips the project input box and uses this key aut
 
 Used by the `check required fields` command.
 
-### Optional: ticket templates
+### Optional: ticket templates and cleanup rules
 
-Create a `.jira-templates.json` file in your workspace root to define per-application templates with default fields and guided description collection.
+Create a `.jira-templates.json` file in your workspace root to define per-application templates with default fields and guided description collection, plus named cleanup rules for bulk status transitions.
 
 ```json
-[
-  {
-    "name": "Billing App Bug",
-    "defaultFields": {
-      "priority": { "name": "High" },
-      "labels": ["billing"]
-    },
-    "resolveFields": {
-      "customfield_10020": { "type": "sprint", "name": "Sprint 42" },
-      "customfield_10050": [{ "type": "team", "id": "billing-team-id" }]
-    },
-    "descriptionSections": [
-      "Steps to reproduce",
-      "Expected behavior",
-      "Actual behavior"
-    ]
-  }
-]
+{
+  "templates": [
+    {
+      "name": "Billing App Bug",
+      "issueType": "Bug",
+      "defaultFields": {
+        "priority": { "name": "High" },
+        "labels": ["billing"]
+      },
+      "resolveFields": {
+        "customfield_10020": { "type": "sprint", "name": "Sprint 42" },
+        "customfield_10050": [{ "type": "team", "id": "billing-team-id" }]
+      },
+      "descriptionSections": [
+        "Steps to reproduce",
+        "Expected behavior",
+        "Actual behavior"
+      ]
+    }
+  ],
+  "cleanupRules": [
+    {
+      "name": "Close released bugs",
+      "project": "BILLING",
+      "issueType": "Bug",
+      "targetState": "Done",
+      "resolution": "Fixed",
+      "closeSubtasks": true
+    }
+  ]
+}
 ```
 
-When you run `@jira create`, the plugin shows a quick-pick list of your templates. Choosing one:
+When you run `@jira create`, the plugin shows a numbered list of your templates. Choosing one:
 
 - Pre-populates custom fields from `defaultFields` and resolved `resolveFields` entries
 - Guides you through each `descriptionSections` entry with a follow-up question per turn, building the description incrementally
@@ -118,6 +131,48 @@ When you run `@jira create`, the plugin shows a quick-pick list of your template
 Wrap a single entry in an array when the Jira field expects an array value.
 
 You can choose **No template** to create a plain ticket without any template applied.
+
+### Workflow discovery (required for bulk transitions)
+
+Before running cleanup rules or bulk status transitions, teach the plugin your Jira workflow:
+
+```text
+@jira discover workflow BILLING Bug
+```
+
+This samples tickets across all statuses, queries their available transitions, and saves a workflow graph to `.jira-workflow-cache.json` at your workspace root. Re-run whenever your Jira workflow changes.
+
+The plugin uses this graph to find the shortest transition path from each ticket's current status to the target state.
+
+> **Tip:** Commit `.jira-workflow-cache.json` to share it with your team so everyone benefits from a single discovery run.
+
+### Bulk cleanup
+
+Run a named cleanup rule to transition a batch of tickets to a target state:
+
+```text
+@jira run cleanup "Close released bugs"
+```
+
+Or target a specific fix version ad-hoc:
+
+```text
+@jira close BILLING bugs in "Release 3.2"
+```
+
+The plugin:
+
+1. Searches for matching open tickets (and their open subtasks if `closeSubtasks` is true)
+2. Asks for a resolution once if the rule has no `resolution` configured and the target state is a closed state
+3. Shows a review screen listing every ticket and the transition path it will follow
+
+On the review screen, reply:
+
+- **`ok`** — execute all transitions
+- **`(c)`** or **`cancel`** — abort the entire run
+- **ticket number(s)** — skip those tickets (e.g. `123` or `123 456`); skipping a subtask also skips its parent; skipping a parent also skips all its subtasks
+
+Execution streams one confirmation line per ticket. Failures are reported at the end without stopping the rest of the batch.
 
 ## Getting a free Cloud test instance
 
