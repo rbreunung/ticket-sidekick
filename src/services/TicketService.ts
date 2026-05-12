@@ -18,13 +18,6 @@ export function extractTextFromAdf(node: unknown): string {
   return '';
 }
 
-export function wrapInAdf(text: string): object {
-  return {
-    type: 'doc',
-    version: 1,
-    content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
-  };
-}
 
 export function assembleDescription(sections: string[], answers: Record<string, string>): string {
   return sections
@@ -101,7 +94,7 @@ export class TicketService {
       if (typeof resolved === 'string') return resolved;
       fieldValue = resolved;
     } else if (jiraField === 'description') {
-      fieldValue = wrapInAdf(value);
+      fieldValue = value;
     } else if (jiraField === 'labels') {
       fieldValue = value.split(',').map((l) => l.trim());
     } else if (jiraField === 'fixVersions') {

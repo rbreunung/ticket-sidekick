@@ -66,6 +66,12 @@
           "type": "string",
           "default": "",
           "description": "Default Jira project key (e.g. 'VSJI'). Used when creating tickets if no project is specified in your prompt."
+        },
+        "ticketSidekick.apiVersion": {
+          "type": "number",
+          "enum": [2, 3],
+          "default": 3,
+          "description": "Jira REST API version. Set to 2 if your server does not expose /rest/api/3 (common on older Data Center instances)."
         }
       }
     }

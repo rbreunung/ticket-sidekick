@@ -5,6 +5,7 @@ type AuthType = 'datacenter' | 'cloud';
 export interface JiraConfig {
   baseUrl: string | undefined;
   authType: AuthType;
+  apiVersion: 2 | 3;
   requiredFields: string[];
   token: string | undefined;
 }
@@ -19,6 +20,7 @@ export class ConfigService {
     return {
       baseUrl: config.get<string>('baseUrl'),
       authType: config.get<AuthType>('authType') ?? 'datacenter',
+      apiVersion: config.get<2 | 3>('apiVersion') ?? 3,
       requiredFields: config.get<string[]>('requiredFields') ?? [],
       token: await this.context.secrets.get(ConfigService.TOKEN_KEY),
     };

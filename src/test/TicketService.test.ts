@@ -68,10 +68,10 @@ describe('TicketService', () => {
       expect(client.updateIssueCalls[0]?.fields).toEqual({ summary: 'New title' });
     });
 
-    it('updates description wrapped in ADF', async () => {
+    it('passes description as a plain string to the client', async () => {
       await service.updateField('PROJ-123', 'description', 'New desc');
       const fields = client.updateIssueCalls[0]?.fields;
-      expect((fields?.description as { type: string }).type).toBe('doc');
+      expect(fields?.description).toBe('New desc');
     });
 
     it('updates assignee by resolving user first', async () => {

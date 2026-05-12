@@ -74,10 +74,21 @@ describe('JiraApiClient', () => {
         expect.anything(),
       );
     });
+
+    it('uses /rest/api/2 when apiVersion is 2', async () => {
+      const mockFetch = makeFetch({ id: '1', key: 'PROJ-1', fields: {} });
+      vi.stubGlobal('fetch', mockFetch);
+      const client = new JiraApiClient({ ...BASE_CONFIG, apiVersion: 2 });
+      await client.getIssue('PROJ-1');
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://jira.example.com/rest/api/2/issue/PROJ-1',
+        expect.anything(),
+      );
+    });
   });
 
   describe('addComment', () => {
-    it('posts comment body in ADF format', async () => {
+    it('posts comment body in ADF format for v3', async () => {
       const mockFetch = makeFetch({}, 201);
       vi.stubGlobal('fetch', mockFetch);
       const client = new JiraApiClient(BASE_CONFIG);
@@ -86,6 +97,16 @@ describe('JiraApiClient', () => {
       const body = JSON.parse(options.body as string);
       expect(body.body.type).toBe('doc');
       expect(body.body.content[0].content[0].text).toBe('Looks good!');
+    });
+
+    it('posts comment body as plain string for v2', async () => {
+      const mockFetch = makeFetch({}, 201);
+      vi.stubGlobal('fetch', mockFetch);
+      const client = new JiraApiClient({ ...BASE_CONFIG, apiVersion: 2 });
+      await client.addComment('PROJ-123', 'Looks good!');
+      const [, options] = mockFetch.mock.calls[0] as [string, RequestInit];
+      const body = JSON.parse(options.body as string);
+      expect(body.body).toBe('Looks good!');
     });
   });
 
