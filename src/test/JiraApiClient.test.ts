@@ -7,12 +7,14 @@ const BASE_CONFIG = {
   token: 'my-pat-token',
 };
 
-function makeFetch(body: unknown, status = 200): ReturnType<typeof vi.fn> {
+function makeFetch(body: unknown, status = 200, contentType = 'application/json'): ReturnType<typeof vi.fn> {
   return vi.fn().mockResolvedValue({
     ok: status >= 200 && status < 300,
     status,
     statusText: status === 401 ? 'Unauthorized' : status === 404 ? 'Not Found' : 'OK',
+    headers: { get: (h: string) => h === 'content-type' ? contentType : null },
     json: () => Promise.resolve(body),
+    text: () => Promise.resolve(typeof body === 'string' ? body : JSON.stringify(body)),
   });
 }
 
@@ -98,6 +100,34 @@ describe('JiraApiClient', () => {
       expect(url).toContain('/search/jql');
       expect(url).toContain('jql=project%20%3D%20PROJ');
       expect(options.method).toBeUndefined(); // GET has no explicit method
+    });
+  });
+
+  describe('HTML response detection', () => {
+    const htmlBody = '<!DOCTYPE html><html><body><h1>Sign in</h1></body></html>';
+
+    it('throws a helpful error when main API returns HTML (wrong sub-path / proxy redirect)', async () => {
+      vi.stubGlobal('fetch', makeFetch(htmlBody, 200, 'text/html; charset=utf-8'));
+      const client = new JiraApiClient(BASE_CONFIG);
+      await expect(client.getIssue('PROJ-1')).rejects.toThrow('HTML instead of JSON');
+    });
+
+    it('error message hints at baseUrl misconfiguration', async () => {
+      vi.stubGlobal('fetch', makeFetch(htmlBody, 200, 'text/html; charset=utf-8'));
+      const client = new JiraApiClient(BASE_CONFIG);
+      await expect(client.getIssue('PROJ-1')).rejects.toThrow('ticketSidekick.baseUrl');
+    });
+
+    it('error message includes a preview of the HTML response', async () => {
+      vi.stubGlobal('fetch', makeFetch(htmlBody, 200, 'text/html; charset=utf-8'));
+      const client = new JiraApiClient(BASE_CONFIG);
+      await expect(client.getIssue('PROJ-1')).rejects.toThrow('Sign in');
+    });
+
+    it('throws helpful error when agile API returns HTML', async () => {
+      vi.stubGlobal('fetch', makeFetch(htmlBody, 200, 'text/html'));
+      const client = new JiraApiClient(BASE_CONFIG);
+      await expect(client.getSprintByName('PROJ', 'Sprint 1')).rejects.toThrow('HTML instead of JSON');
     });
   });
 });

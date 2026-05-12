@@ -11,6 +11,20 @@ import type {
 
 type AuthType = 'datacenter' | 'cloud';
 
+async function assertJsonContentType(response: Response): Promise<void> {
+  const ct = response.headers.get('content-type') ?? '';
+  if (ct.includes('text/html')) {
+    const snippet = await response.text().then(t => t.slice(0, 120)).catch(() => '');
+    throw new Error(
+      `Jira API returned HTML instead of JSON. ` +
+      `Check that 'ticketSidekick.baseUrl' points to the Jira root ` +
+      `(e.g. https://server.com/jira — not just https://server.com). ` +
+      `A proxy or redirect may also be intercepting the request.\n` +
+      `Response preview: ${snippet}`,
+    );
+  }
+}
+
 export interface JiraApiClientConfig {
   baseUrl: string;
   authType: AuthType;
@@ -48,6 +62,7 @@ export class JiraApiClient implements IJiraClient {
       throw new Error(`Jira API error: ${response.status} ${response.statusText}${body ? ` — ${body}` : ''}`);
     }
     if (response.status === 204) return undefined as T;
+    await assertJsonContentType(response);
     return response.json() as Promise<T>;
   }
 
@@ -61,6 +76,7 @@ export class JiraApiClient implements IJiraClient {
       },
     });
     if (!response.ok) throw new Error(`Jira Agile API error: ${response.status} ${response.statusText}`);
+    await assertJsonContentType(response);
     return response.json() as Promise<T>;
   }
 
@@ -74,6 +90,7 @@ export class JiraApiClient implements IJiraClient {
       },
     });
     if (!response.ok) throw new Error(`Jira Teams API error: ${response.status} ${response.statusText}`);
+    await assertJsonContentType(response);
     return response.json() as Promise<T>;
   }
 
