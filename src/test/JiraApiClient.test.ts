@@ -7,12 +7,14 @@ const BASE_CONFIG = {
   token: 'my-pat-token',
 };
 
-function makeFetch(body: unknown, status = 200): ReturnType<typeof vi.fn> {
+function makeFetch(body: unknown, status = 200, contentType = 'application/json'): ReturnType<typeof vi.fn> {
   return vi.fn().mockResolvedValue({
     ok: status >= 200 && status < 300,
     status,
     statusText: status === 401 ? 'Unauthorized' : status === 404 ? 'Not Found' : 'OK',
+    headers: { get: (h: string) => h === 'content-type' ? contentType : null },
     json: () => Promise.resolve(body),
+    text: () => Promise.resolve(typeof body === 'string' ? body : JSON.stringify(body)),
   });
 }
 
@@ -48,16 +50,16 @@ describe('JiraApiClient', () => {
   });
 
   describe('error handling', () => {
-    it('throws auth error on 401', async () => {
+    it('throws auth error on 401 and includes the URL', async () => {
       vi.stubGlobal('fetch', makeFetch({}, 401));
       const client = new JiraApiClient(BASE_CONFIG);
-      await expect(client.getIssue('PROJ-123')).rejects.toThrow('Authentication failed');
+      await expect(client.getIssue('PROJ-123')).rejects.toThrow('https://jira.example.com/rest/api/3/issue/PROJ-123');
     });
 
-    it('throws not found error on 404', async () => {
+    it('throws not found error on 404 and includes the URL', async () => {
       vi.stubGlobal('fetch', makeFetch({}, 404));
       const client = new JiraApiClient(BASE_CONFIG);
-      await expect(client.getIssue('PROJ-999')).rejects.toThrow('Not found');
+      await expect(client.getIssue('PROJ-999')).rejects.toThrow('https://jira.example.com/rest/api/3/issue/PROJ-999');
     });
   });
 
@@ -72,10 +74,21 @@ describe('JiraApiClient', () => {
         expect.anything(),
       );
     });
+
+    it('uses /rest/api/2 when apiVersion is 2', async () => {
+      const mockFetch = makeFetch({ id: '1', key: 'PROJ-1', fields: {} });
+      vi.stubGlobal('fetch', mockFetch);
+      const client = new JiraApiClient({ ...BASE_CONFIG, apiVersion: 2 });
+      await client.getIssue('PROJ-1');
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://jira.example.com/rest/api/2/issue/PROJ-1',
+        expect.anything(),
+      );
+    });
   });
 
   describe('addComment', () => {
-    it('posts comment body in ADF format', async () => {
+    it('posts comment body in ADF format for v3', async () => {
       const mockFetch = makeFetch({}, 201);
       vi.stubGlobal('fetch', mockFetch);
       const client = new JiraApiClient(BASE_CONFIG);
@@ -84,6 +97,16 @@ describe('JiraApiClient', () => {
       const body = JSON.parse(options.body as string);
       expect(body.body.type).toBe('doc');
       expect(body.body.content[0].content[0].text).toBe('Looks good!');
+    });
+
+    it('posts comment body as plain string for v2', async () => {
+      const mockFetch = makeFetch({}, 201);
+      vi.stubGlobal('fetch', mockFetch);
+      const client = new JiraApiClient({ ...BASE_CONFIG, apiVersion: 2 });
+      await client.addComment('PROJ-123', 'Looks good!');
+      const [, options] = mockFetch.mock.calls[0] as [string, RequestInit];
+      const body = JSON.parse(options.body as string);
+      expect(body.body).toBe('Looks good!');
     });
   });
 
@@ -98,6 +121,34 @@ describe('JiraApiClient', () => {
       expect(url).toContain('/search/jql');
       expect(url).toContain('jql=project%20%3D%20PROJ');
       expect(options.method).toBeUndefined(); // GET has no explicit method
+    });
+  });
+
+  describe('HTML response detection', () => {
+    const htmlBody = '<!DOCTYPE html><html><body><h1>Sign in</h1></body></html>';
+
+    it('throws a helpful error when main API returns HTML (wrong sub-path / proxy redirect)', async () => {
+      vi.stubGlobal('fetch', makeFetch(htmlBody, 200, 'text/html; charset=utf-8'));
+      const client = new JiraApiClient(BASE_CONFIG);
+      await expect(client.getIssue('PROJ-1')).rejects.toThrow('HTML instead of JSON');
+    });
+
+    it('error message hints at baseUrl misconfiguration', async () => {
+      vi.stubGlobal('fetch', makeFetch(htmlBody, 200, 'text/html; charset=utf-8'));
+      const client = new JiraApiClient(BASE_CONFIG);
+      await expect(client.getIssue('PROJ-1')).rejects.toThrow('ticketSidekick.baseUrl');
+    });
+
+    it('error message includes a preview of the HTML response', async () => {
+      vi.stubGlobal('fetch', makeFetch(htmlBody, 200, 'text/html; charset=utf-8'));
+      const client = new JiraApiClient(BASE_CONFIG);
+      await expect(client.getIssue('PROJ-1')).rejects.toThrow('Sign in');
+    });
+
+    it('throws helpful error when agile API returns HTML', async () => {
+      vi.stubGlobal('fetch', makeFetch(htmlBody, 200, 'text/html'));
+      const client = new JiraApiClient(BASE_CONFIG);
+      await expect(client.getSprintByName('PROJ', 'Sprint 1')).rejects.toThrow('HTML instead of JSON');
     });
   });
 });

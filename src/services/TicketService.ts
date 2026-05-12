@@ -11,6 +11,7 @@ const SUPPORTED_FIELDS: Record<string, string> = {
 };
 
 export function extractTextFromAdf(node: unknown): string {
+  if (typeof node === 'string') return node; // API v2 returns plain text, not ADF
   if (!node || typeof node !== 'object') return '';
   const n = node as { text?: string; content?: unknown[] };
   if (typeof n.text === 'string') return n.text;
@@ -18,13 +19,6 @@ export function extractTextFromAdf(node: unknown): string {
   return '';
 }
 
-export function wrapInAdf(text: string): object {
-  return {
-    type: 'doc',
-    version: 1,
-    content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
-  };
-}
 
 export function assembleDescription(sections: string[], answers: Record<string, string>): string {
   return sections
@@ -101,7 +95,7 @@ export class TicketService {
       if (typeof resolved === 'string') return resolved;
       fieldValue = resolved;
     } else if (jiraField === 'description') {
-      fieldValue = wrapInAdf(value);
+      fieldValue = value;
     } else if (jiraField === 'labels') {
       fieldValue = value.split(',').map((l) => l.trim());
     } else if (jiraField === 'fixVersions') {

@@ -11,27 +11,53 @@ import type {
 
 type AuthType = 'datacenter' | 'cloud';
 
+async function assertJsonContentType(response: Response): Promise<void> {
+  const ct = response.headers.get('content-type') ?? '';
+  if (ct.includes('text/html')) {
+    const snippet = await response.text().then(t => t.slice(0, 120)).catch(() => '');
+    throw new Error(
+      `Jira API returned HTML instead of JSON. ` +
+      `Check that 'ticketSidekick.baseUrl' points to the Jira root ` +
+      `(e.g. https://server.com/jira — not just https://server.com). ` +
+      `A proxy or redirect may also be intercepting the request.\n` +
+      `Response preview: ${snippet}`,
+    );
+  }
+}
+
 export interface JiraApiClientConfig {
   baseUrl: string;
   authType: AuthType;
   token: string;
+  apiVersion?: 2 | 3;
 }
 
 export class JiraApiClient implements IJiraClient {
   private readonly baseUrl: string;
   private readonly authHeader: string;
   private readonly authType: AuthType;
+  private readonly apiVersion: 2 | 3;
 
   constructor(config: JiraApiClientConfig) {
     this.baseUrl = config.baseUrl.replace(/\/$/, '');
     this.authType = config.authType;
+    this.apiVersion = config.apiVersion ?? 3;
     this.authHeader = config.authType === 'cloud'
       ? `Basic ${config.token}`
       : `Bearer ${config.token}`;
   }
 
+  private wrapDescription(text: string): unknown {
+    if (this.apiVersion === 2) return text;
+    return {
+      type: 'doc',
+      version: 1,
+      content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
+    };
+  }
+
   private async request<T>(path: string, options: RequestInit = {}): Promise<T> {
-    const url = `${this.baseUrl}/rest/api/3${path}`;
+    const url = `${this.baseUrl}/rest/api/${this.apiVersion}${path}`;
     const response = await fetch(url, {
       ...options,
       headers: {
@@ -42,12 +68,13 @@ export class JiraApiClient implements IJiraClient {
       },
     });
     if (!response.ok) {
-      if (response.status === 401) throw new Error('Authentication failed. Check your credentials.');
-      if (response.status === 404) throw new Error(`Not found: ${path}`);
+      if (response.status === 401) throw new Error(`Authentication failed at ${url}. Check your credentials.`);
+      if (response.status === 404) throw new Error(`Not found: ${url}`);
       const body = await response.text().catch(() => '');
-      throw new Error(`Jira API error: ${response.status} ${response.statusText}${body ? ` — ${body}` : ''}`);
+      throw new Error(`Jira API error ${response.status} ${response.statusText} at ${url}${body ? ` — ${body}` : ''}`);
     }
     if (response.status === 204) return undefined as T;
+    await assertJsonContentType(response);
     return response.json() as Promise<T>;
   }
 
@@ -60,7 +87,8 @@ export class JiraApiClient implements IJiraClient {
         Accept: 'application/json',
       },
     });
-    if (!response.ok) throw new Error(`Jira Agile API error: ${response.status} ${response.statusText}`);
+    if (!response.ok) throw new Error(`Jira Agile API error ${response.status} ${response.statusText} at ${url}`);
+    await assertJsonContentType(response);
     return response.json() as Promise<T>;
   }
 
@@ -73,7 +101,8 @@ export class JiraApiClient implements IJiraClient {
         Accept: 'application/json',
       },
     });
-    if (!response.ok) throw new Error(`Jira Teams API error: ${response.status} ${response.statusText}`);
+    if (!response.ok) throw new Error(`Jira Teams API error ${response.status} ${response.statusText} at ${url}`);
+    await assertJsonContentType(response);
     return response.json() as Promise<T>;
   }
 
@@ -82,22 +111,23 @@ export class JiraApiClient implements IJiraClient {
   }
 
   async updateIssue(issueKey: string, fields: Record<string, unknown>): Promise<void> {
+    const serialized = { ...fields };
+    if (typeof serialized.description === 'string') {
+      serialized.description = this.wrapDescription(serialized.description);
+    }
     await this.request<void>(`/issue/${issueKey}`, {
       method: 'PUT',
-      body: JSON.stringify({ fields }),
+      body: JSON.stringify({ fields: serialized }),
     });
   }
 
   async addComment(issueKey: string, body: string): Promise<void> {
+    const commentBody = this.apiVersion === 2
+      ? body
+      : { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: body }] }] };
     await this.request<void>(`/issue/${issueKey}/comment`, {
       method: 'POST',
-      body: JSON.stringify({
-        body: {
-          type: 'doc',
-          version: 1,
-          content: [{ type: 'paragraph', content: [{ type: 'text', text: body }] }],
-        },
-      }),
+      body: JSON.stringify({ body: commentBody }),
     });
   }
 
@@ -177,6 +207,10 @@ export class JiraApiClient implements IJiraClient {
     issueType: string,
     additionalFields?: Record<string, unknown>,
   ): Promise<JiraCreatedIssue> {
+    const extra = additionalFields ? { ...additionalFields } : undefined;
+    if (extra && typeof extra.description === 'string') {
+      extra.description = this.wrapDescription(extra.description);
+    }
     return this.request<JiraCreatedIssue>('/issue', {
       method: 'POST',
       body: JSON.stringify({
@@ -184,7 +218,7 @@ export class JiraApiClient implements IJiraClient {
           project: { key: projectKey },
           summary,
           issuetype: { name: issueType },
-          ...additionalFields,
+          ...extra,
         },
       }),
     });

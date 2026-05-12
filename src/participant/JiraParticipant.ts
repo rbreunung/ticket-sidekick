@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { execSync } from 'child_process';
 import { JiraApiClient } from '../jira/JiraApiClient';
 import { ConfigService } from '../services/ConfigService';
-import { TicketService, assembleDescription, wrapInAdf, extractTextFromAdf } from '../services/TicketService';
+import { TicketService, assembleDescription, extractTextFromAdf } from '../services/TicketService';
 import type { JiraComment } from '../jira/IJiraClient';
 import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
@@ -306,7 +306,7 @@ async function continueAfterIssueType(
 
     if (pending.length === 0) {
       const descriptionText = assembleDescription(sections, answers);
-      resolvedFields.description = wrapInAdf(descriptionText);
+      resolvedFields.description = descriptionText;
       const result = await ticketService.createTicket(projectKey, summary, issueType, resolvedFields);
       stream.markdown(result);
       return extractCreatedKeyFromConfirmation(result);
@@ -330,7 +330,7 @@ async function continueAfterIssueType(
     return null;
   }
 
-  if (description) resolvedFields.description = wrapInAdf(description);
+  if (description) resolvedFields.description = description;
   const result = await ticketService.createTicket(
     projectKey,
     summary,
@@ -388,7 +388,7 @@ async function finishTicketCreation(
   const descriptionText = assembleDescription(session.allSections, session.answers);
   const additionalFields: Record<string, unknown> = {
     ...session.fields,
-    description: wrapInAdf(descriptionText),
+    description: descriptionText,
   };
   const result = await ticketService.createTicket(
     session.project,
@@ -722,7 +722,11 @@ export function createParticipant(
       baseUrl: config.baseUrl,
       authType: config.authType,
       token: config.token,
+      apiVersion: config.apiVersion,
     });
+    if (config.showConnectionInfo) {
+      stream.markdown(`_${config.baseUrl} · API v${config.apiVersion} · ${config.authType}_\n\n`);
+    }
     const ticketService = new TicketService(jiraClient);
     const ws = context.workspaceState;
     const lastResponse = getLastAssistantText(chatContext);
@@ -889,6 +893,32 @@ export function createParticipant(
         }
         return;
       }
+    }
+
+    if (/^check(\s+(config|connection|setup))?$/i.test(request.prompt.trim())) {
+      try {
+        const user = await jiraClient.getCurrentUser();
+        stream.markdown(
+          `**Jira connection OK**\n\n` +
+          `| Setting | Value |\n` +
+          `|---|---|\n` +
+          `| Base URL | \`${config.baseUrl}\` |\n` +
+          `| API version | v${config.apiVersion} |\n` +
+          `| Auth type | ${config.authType} |\n` +
+          `| Logged in as | ${user.displayName} |\n`,
+        );
+      } catch (err) {
+        stream.markdown(
+          `**Jira connection failed**\n\n` +
+          `| Setting | Value |\n` +
+          `|---|---|\n` +
+          `| Base URL | \`${config.baseUrl}\` |\n` +
+          `| API version | v${config.apiVersion} |\n` +
+          `| Auth type | ${config.authType} |\n\n` +
+          `Error: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      return;
     }
 
     let intent: ParsedIntent;

@@ -21,7 +21,7 @@ export interface JiraIssue {
   key: string;
   fields: {
     summary: string;
-    description: unknown; // Jira v3 uses Atlassian Document Format (ADF)
+    description: unknown; // v3: Atlassian Document Format (ADF) object; v2: plain string
     status: { name: string };
     assignee: JiraUser | null;
     reporter: JiraUser | null;

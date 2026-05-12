@@ -6,7 +6,7 @@ Manage Jira tickets with GitHub Copilot Chat — without leaving VS Code.
 
 - VS Code 1.90 or later
 - GitHub Copilot extension installed and signed in
-- Jira 10 Data Center **or** any Jira Cloud instance
+- Jira Data Center (v8+) **or** any Jira Cloud instance
 
 ## Setup
 
@@ -51,6 +51,7 @@ Open GitHub Copilot Chat and use `@jira`:
 | `@jira comment that the fix is in PR #42` | Adds a comment |
 | `@jira find open bugs assigned to me` | Runs JQL search |
 | `@jira check required fields on PROJ-123` | Validates required fields |
+| `@jira check` | Tests the connection and shows active configuration |
 
 ### Ticket detection
 
@@ -78,6 +79,22 @@ When set, the `create` command skips the project input box and uses this key aut
 ```
 
 Used by the `check required fields` command.
+
+### Optional: Jira API version
+
+```json
+"ticketSidekick.apiVersion": 2
+```
+
+Default is `3`. Set to `2` if your Data Center instance does not expose `/rest/api/3` (common on Jira versions before 8.4). On API v2, descriptions and comments are sent as plain text instead of Atlassian Document Format.
+
+### Optional: connection info banner
+
+```json
+"ticketSidekick.showConnectionInfo": true
+```
+
+When enabled, every `@jira` response starts with an italic line showing the active base URL, API version, and auth type. Useful during initial setup or when switching between instances. Off by default.
 
 ### Optional: ticket templates and cleanup rules
 
