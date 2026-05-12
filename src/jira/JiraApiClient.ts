@@ -68,10 +68,10 @@ export class JiraApiClient implements IJiraClient {
       },
     });
     if (!response.ok) {
-      if (response.status === 401) throw new Error('Authentication failed. Check your credentials.');
-      if (response.status === 404) throw new Error(`Not found: ${path}`);
+      if (response.status === 401) throw new Error(`Authentication failed at ${url}. Check your credentials.`);
+      if (response.status === 404) throw new Error(`Not found: ${url}`);
       const body = await response.text().catch(() => '');
-      throw new Error(`Jira API error: ${response.status} ${response.statusText}${body ? ` — ${body}` : ''}`);
+      throw new Error(`Jira API error ${response.status} ${response.statusText} at ${url}${body ? ` — ${body}` : ''}`);
     }
     if (response.status === 204) return undefined as T;
     await assertJsonContentType(response);
@@ -87,7 +87,7 @@ export class JiraApiClient implements IJiraClient {
         Accept: 'application/json',
       },
     });
-    if (!response.ok) throw new Error(`Jira Agile API error: ${response.status} ${response.statusText}`);
+    if (!response.ok) throw new Error(`Jira Agile API error ${response.status} ${response.statusText} at ${url}`);
     await assertJsonContentType(response);
     return response.json() as Promise<T>;
   }
@@ -101,7 +101,7 @@ export class JiraApiClient implements IJiraClient {
         Accept: 'application/json',
       },
     });
-    if (!response.ok) throw new Error(`Jira Teams API error: ${response.status} ${response.statusText}`);
+    if (!response.ok) throw new Error(`Jira Teams API error ${response.status} ${response.statusText} at ${url}`);
     await assertJsonContentType(response);
     return response.json() as Promise<T>;
   }

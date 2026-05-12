@@ -72,6 +72,11 @@
           "enum": [2, 3],
           "default": 3,
           "description": "Jira REST API version. Set to 2 if your server does not expose /rest/api/3 (common on older Data Center instances)."
+        },
+        "ticketSidekick.showConnectionInfo": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, each @jira response starts with an italic line showing the active base URL, API version, and auth type."
         }
       }
     }

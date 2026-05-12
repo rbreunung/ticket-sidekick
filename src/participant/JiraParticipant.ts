@@ -724,6 +724,9 @@ export function createParticipant(
       token: config.token,
       apiVersion: config.apiVersion,
     });
+    if (config.showConnectionInfo) {
+      stream.markdown(`_${config.baseUrl} · API v${config.apiVersion} · ${config.authType}_\n\n`);
+    }
     const ticketService = new TicketService(jiraClient);
     const ws = context.workspaceState;
     const lastResponse = getLastAssistantText(chatContext);
@@ -890,6 +893,32 @@ export function createParticipant(
         }
         return;
       }
+    }
+
+    if (/^check(\s+(config|connection|setup))?$/i.test(request.prompt.trim())) {
+      try {
+        const user = await jiraClient.getCurrentUser();
+        stream.markdown(
+          `**Jira connection OK**\n\n` +
+          `| Setting | Value |\n` +
+          `|---|---|\n` +
+          `| Base URL | \`${config.baseUrl}\` |\n` +
+          `| API version | v${config.apiVersion} |\n` +
+          `| Auth type | ${config.authType} |\n` +
+          `| Logged in as | ${user.displayName} |\n`,
+        );
+      } catch (err) {
+        stream.markdown(
+          `**Jira connection failed**\n\n` +
+          `| Setting | Value |\n` +
+          `|---|---|\n` +
+          `| Base URL | \`${config.baseUrl}\` |\n` +
+          `| API version | v${config.apiVersion} |\n` +
+          `| Auth type | ${config.authType} |\n\n` +
+          `Error: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      return;
     }
 
     let intent: ParsedIntent;

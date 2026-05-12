@@ -50,16 +50,16 @@ describe('JiraApiClient', () => {
   });
 
   describe('error handling', () => {
-    it('throws auth error on 401', async () => {
+    it('throws auth error on 401 and includes the URL', async () => {
       vi.stubGlobal('fetch', makeFetch({}, 401));
       const client = new JiraApiClient(BASE_CONFIG);
-      await expect(client.getIssue('PROJ-123')).rejects.toThrow('Authentication failed');
+      await expect(client.getIssue('PROJ-123')).rejects.toThrow('https://jira.example.com/rest/api/3/issue/PROJ-123');
     });
 
-    it('throws not found error on 404', async () => {
+    it('throws not found error on 404 and includes the URL', async () => {
       vi.stubGlobal('fetch', makeFetch({}, 404));
       const client = new JiraApiClient(BASE_CONFIG);
-      await expect(client.getIssue('PROJ-999')).rejects.toThrow('Not found');
+      await expect(client.getIssue('PROJ-999')).rejects.toThrow('https://jira.example.com/rest/api/3/issue/PROJ-999');
     });
   });
 

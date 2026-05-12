@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { TicketService, assembleDescription } from '../services/TicketService';
+import { TicketService, assembleDescription, extractTextFromAdf } from '../services/TicketService';
 import { MockJiraClient } from './mocks/MockJiraClient';
 
 describe('TicketService', () => {
@@ -25,6 +25,7 @@ describe('TicketService', () => {
       const result = await service.getTicket('PROJ-123');
       expect(result).toContain('OAuth2 authentication');
     });
+
 
     it('propagates not-found error for unknown ticket', async () => {
       await expect(service.getTicket('PROJ-404')).rejects.toThrow('Not found');
@@ -292,5 +293,20 @@ describe('TicketService', () => {
       await service.createTicket('PROJ', 'Login bug', 'Bug');
       expect(client.createIssueCalls[0].additionalFields).toBeUndefined();
     });
+  });
+});
+
+describe('extractTextFromAdf', () => {
+  it('returns plain string as-is (API v2)', () => {
+    expect(extractTextFromAdf('Hello from v2')).toBe('Hello from v2');
+  });
+
+  it('extracts text from an ADF document (API v3)', () => {
+    const adf = { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Hello' }] }] };
+    expect(extractTextFromAdf(adf)).toBe('Hello');
+  });
+
+  it('returns empty string for null', () => {
+    expect(extractTextFromAdf(null)).toBe('');
   });
 });

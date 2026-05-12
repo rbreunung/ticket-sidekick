@@ -11,6 +11,7 @@ const SUPPORTED_FIELDS: Record<string, string> = {
 };
 
 export function extractTextFromAdf(node: unknown): string {
+  if (typeof node === 'string') return node; // API v2 returns plain text, not ADF
   if (!node || typeof node !== 'object') return '';
   const n = node as { text?: string; content?: unknown[] };
   if (typeof n.text === 'string') return n.text;

@@ -6,6 +6,7 @@ export interface JiraConfig {
   baseUrl: string | undefined;
   authType: AuthType;
   apiVersion: 2 | 3;
+  showConnectionInfo: boolean;
   requiredFields: string[];
   token: string | undefined;
 }
@@ -21,6 +22,7 @@ export class ConfigService {
       baseUrl: config.get<string>('baseUrl'),
       authType: config.get<AuthType>('authType') ?? 'datacenter',
       apiVersion: config.get<2 | 3>('apiVersion') ?? 3,
+      showConnectionInfo: config.get<boolean>('showConnectionInfo') ?? false,
       requiredFields: config.get<string[]>('requiredFields') ?? [],
       token: await this.context.secrets.get(ConfigService.TOKEN_KEY),
     };
