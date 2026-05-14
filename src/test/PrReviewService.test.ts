@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { parsePrUrl, parseDiff, resolveByNumber } from '../participant/reviewSessionState';
 import type { ReviewFinding } from '../participant/reviewSessionState';
+import { PrReviewService } from '../services/PrReviewService';
+import { MockBitbucketClient } from './mocks/MockBitbucketClient';
+import type { BitbucketPR } from '../bitbucket/IBitbucketClient';
 
 describe('parsePrUrl', () => {
   it('parses a Data Center URL with trailing /overview', () => {
@@ -77,5 +80,106 @@ describe('resolveByNumber', () => {
 
   it('returns null when no # reference', () => {
     expect(resolveByNumber('explain the SQL issue', findings)).toBeNull();
+  });
+});
+
+describe('PrReviewService.gatherFileContents', () => {
+  it('uses workspace reader when it returns content', async () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const localContent = 'const x = 1;\n';
+    const reader = async (_path: string) => localContent;
+
+    const result = await service.gatherFileContents('PROJ', 'myrepo', 'abc123', ['src/foo.ts'], reader);
+
+    expect(result.get('src/foo.ts')).toBe(localContent);
+    expect(client.getFileContentCalls).toHaveLength(0);
+  });
+
+  it('falls back to API when workspace reader returns null', async () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const reader = async (_path: string) => null;
+
+    const result = await service.gatherFileContents('PROJ', 'myrepo', 'abc123', ['src/foo.ts'], reader);
+
+    expect(client.getFileContentCalls).toHaveLength(1);
+    expect(client.getFileContentCalls[0]).toMatchObject({ path: 'src/foo.ts', commitHash: 'abc123' });
+    expect(result.get('src/foo.ts')).toBeDefined();
+  });
+
+  it('fetches all files in parallel', async () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const reader = async (_path: string) => null;
+    const paths = ['src/a.ts', 'src/b.ts', 'src/c.ts'];
+
+    await service.gatherFileContents('PROJ', 'myrepo', 'abc123', paths, reader);
+
+    expect(client.getFileContentCalls).toHaveLength(3);
+  });
+});
+
+describe('PrReviewService.buildPrompt', () => {
+  it('includes file path, diff, and full content sections', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const pr: BitbucketPR = {
+      id: 42, title: 'My PR', description: 'A description',
+      author: { displayName: 'Jane', emailAddress: 'j@example.com' },
+      targetBranch: 'main', fromCommitHash: 'abc123',
+    };
+    const fileDiffs = [{ path: 'src/foo.ts', diff: '@@ -1 +1 @@\n+const x = 1;' }];
+    const contents = new Map([['src/foo.ts', 'const x = 1;\n']]);
+
+    const prompt = service.buildPrompt(pr, fileDiffs, contents);
+
+    expect(prompt).toContain('src/foo.ts');
+    expect(prompt).toContain('@@ -1 +1 @@');
+    expect(prompt).toContain('const x = 1;');
+    expect(prompt).toContain('additionalFilesNeeded');
+  });
+});
+
+describe('PrReviewService.formatReview', () => {
+  it('renders header, severity counts, file sections, and numbered findings', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const pr: BitbucketPR = {
+      id: 42, title: 'Add OAuth login flow', description: '',
+      author: { displayName: 'Jane Smith', emailAddress: '' },
+      targetBranch: 'main', fromCommitHash: 'abc123',
+    };
+    const findings: ReviewFinding[] = [
+      { id: 1, file: 'src/auth/login.ts', line: 42, severity: 'critical',
+        title: 'SQL injection', description: 'Bad query', recommendation: 'Use params' },
+      { id: 2, file: 'src/auth/login.ts', severity: 'warning',
+        title: 'No error handling', description: 'Missing try/catch', recommendation: 'Add try/catch' },
+    ];
+
+    const output = service.formatReview(findings, pr, 1);
+
+    expect(output).toContain('## PR #42');
+    expect(output).toContain('Jane Smith');
+    expect(output).toContain('**#1**');
+    expect(output).toContain('**#2**');
+    expect(output).toContain('🔴');
+    expect(output).toContain('🟡');
+    expect(output).toContain('<!-- bitbucket:review-session -->');
+  });
+
+  it('renders a no-issues message when findings is empty', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const pr: BitbucketPR = {
+      id: 1, title: 'Clean PR', description: '',
+      author: { displayName: 'Bob', emailAddress: '' },
+      targetBranch: 'main', fromCommitHash: 'def456',
+    };
+
+    const output = service.formatReview([], pr, 2);
+
+    expect(output).toContain('_No issues found._');
+    expect(output).toContain('<!-- bitbucket:review-session -->');
   });
 });
