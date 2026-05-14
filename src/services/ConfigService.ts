@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import type { BitbucketAuthType, BitbucketConfig } from '../bitbucket/IBitbucketClient';
 
 type AuthType = 'datacenter' | 'cloud';
 
@@ -13,6 +14,7 @@ export interface JiraConfig {
 
 export class ConfigService {
   private static readonly TOKEN_KEY = 'ticket-sidekick.token';
+  private static readonly BITBUCKET_TOKEN_KEY = 'ticket-sidekick.bitbucket.token';
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -30,5 +32,18 @@ export class ConfigService {
 
   async storeToken(token: string): Promise<void> {
     await this.context.secrets.store(ConfigService.TOKEN_KEY, token);
+  }
+
+  async getBitbucketConfig(): Promise<BitbucketConfig> {
+    const config = vscode.workspace.getConfiguration('ticketSidekick');
+    return {
+      baseUrl: config.get<string>('bitbucket.baseUrl'),
+      authType: config.get<BitbucketAuthType>('bitbucket.authType') ?? 'datacenter',
+      token: await this.context.secrets.get(ConfigService.BITBUCKET_TOKEN_KEY),
+    };
+  }
+
+  async storeBitbucketToken(token: string): Promise<void> {
+    await this.context.secrets.store(ConfigService.BITBUCKET_TOKEN_KEY, token);
   }
 }
