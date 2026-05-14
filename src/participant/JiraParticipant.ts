@@ -688,7 +688,7 @@ async function handleRunCleanup(
   await streamReviewScreen(batchSession, stream, workspaceState, header);
 }
 
-export function createParticipant(
+export function createJiraParticipant(
   context: vscode.ExtensionContext,
   configService: ConfigService,
 ): vscode.ChatParticipant {

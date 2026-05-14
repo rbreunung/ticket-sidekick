@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { ConfigService } from './services/ConfigService';
-import { createParticipant } from './participant/JiraParticipant';
+import { createJiraParticipant } from './participant/JiraParticipant';
 import { createBitbucketParticipant } from './participant/BitbucketParticipant';
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -69,7 +69,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   );
 
-  createParticipant(context, configService);
+  createJiraParticipant(context, configService);
   createBitbucketParticipant(context, configService);
 }
 
