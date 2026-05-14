@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { ConfigService } from './services/ConfigService';
 import { createParticipant } from './participant/JiraParticipant';
+import { createBitbucketParticipant } from './participant/BitbucketParticipant';
 
 export function activate(context: vscode.ExtensionContext): void {
   const configService = new ConfigService(context);
@@ -36,9 +37,40 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
 
+    vscode.commands.registerCommand('ticket-sidekick.setBitbucketDataCenterToken', async () => {
+      const token = await vscode.window.showInputBox({
+        prompt: 'Enter your Bitbucket Personal Access Token',
+        password: true,
+        ignoreFocusOut: true,
+      });
+      if (token) {
+        await configService.storeBitbucketToken(token);
+        vscode.window.showInformationMessage('Ticket Sidekick: Bitbucket PAT saved.');
+      }
+    }),
+
+    vscode.commands.registerCommand('ticket-sidekick.configureBitbucketCloud', async () => {
+      const email = await vscode.window.showInputBox({
+        prompt: 'Enter your Atlassian account email',
+        ignoreFocusOut: true,
+      });
+      if (!email) return;
+      const apiToken = await vscode.window.showInputBox({
+        prompt: 'Enter your Atlassian API token (from id.atlassian.com)',
+        password: true,
+        ignoreFocusOut: true,
+      });
+      if (apiToken) {
+        const encoded = Buffer.from(`${email}:${apiToken}`).toString('base64');
+        await configService.storeBitbucketToken(encoded);
+        vscode.window.showInformationMessage('Ticket Sidekick: Bitbucket Cloud credentials saved.');
+      }
+    }),
+
   );
 
   createParticipant(context, configService);
+  createBitbucketParticipant(context, configService);
 }
 
 export function deactivate(): void {}

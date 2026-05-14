@@ -26,6 +26,13 @@
         "fullName": "Ticket Sidekick",
         "description": "Manage Jira tickets with natural language",
         "isSticky": true
+      },
+      {
+        "id": "ticket-sidekick.bitbucket",
+        "name": "bitbucket",
+        "fullName": "Ticket Sidekick — Bitbucket",
+        "description": "Review Bitbucket pull requests with natural language",
+        "isSticky": true
       }
     ],
     "commands": [
@@ -36,6 +43,14 @@
       {
         "command": "ticket-sidekick.configureCloud",
         "title": "Ticket Sidekick: Configure Cloud Credentials"
+      },
+      {
+        "command": "ticket-sidekick.setBitbucketDataCenterToken",
+        "title": "Ticket Sidekick: Set Bitbucket PAT"
+      },
+      {
+        "command": "ticket-sidekick.configureBitbucketCloud",
+        "title": "Ticket Sidekick: Configure Bitbucket Cloud Credentials"
       }
     ],
     "configuration": {
@@ -80,6 +95,19 @@
           "type": "boolean",
           "default": false,
           "description": "When enabled, each @jira response starts with an italic line showing the active base URL, API version, and auth type."
+        },
+        "ticketSidekick.bitbucket.baseUrl": {
+          "type": "string",
+          "description": "Base URL of your Bitbucket Data Center instance (e.g. https://bitbucket.mycompany.com). Leave empty for Bitbucket Cloud."
+        },
+        "ticketSidekick.bitbucket.authType": {
+          "type": "string",
+          "enum": [
+            "datacenter",
+            "cloud"
+          ],
+          "default": "datacenter",
+          "description": "Bitbucket authentication mode: 'datacenter' uses Bearer PAT, 'cloud' uses Basic email:Atlassian-apiToken"
         }
       }
     }
