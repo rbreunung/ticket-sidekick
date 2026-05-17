@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parsePrUrl, parseDiff, resolveByNumber } from '../participant/reviewSessionState';
+import { parsePrUrl, parseDiff, resolveByNumber, extractJsonObject } from '../participant/reviewSessionState';
 import type { ReviewFinding } from '../participant/reviewSessionState';
 import { PrReviewService } from '../services/PrReviewService';
 import { MockBitbucketClient } from './mocks/MockBitbucketClient';
@@ -97,6 +97,37 @@ describe('parseDiff', () => {
 
   it('returns empty array for empty input', () => {
     expect(parseDiff('')).toEqual([]);
+  });
+});
+
+describe('extractJsonObject', () => {
+  it('extracts a plain JSON object', () => {
+    const json = '{"findings":[],"additionalFilesNeeded":[]}';
+    expect(extractJsonObject(json)).toBe(json);
+  });
+
+  it('extracts JSON preceded by preamble text', () => {
+    const raw = 'Here is my review:\n{"findings":[],"additionalFilesNeeded":[]}';
+    expect(extractJsonObject(raw)).toBe('{"findings":[],"additionalFilesNeeded":[]}');
+  });
+
+  it('extracts JSON from a markdown ```json code fence', () => {
+    const raw = '```json\n{"findings":[],"additionalFilesNeeded":[]}\n```';
+    expect(extractJsonObject(raw)).toBe('{"findings":[],"additionalFilesNeeded":[]}');
+  });
+
+  it('extracts JSON from a plain ``` code fence', () => {
+    const raw = '```\n{"findings":[]}\n```';
+    expect(extractJsonObject(raw)).toBe('{"findings":[]}');
+  });
+
+  it('stops at the matching } and ignores trailing text with braces', () => {
+    const raw = '{"findings":[],"additionalFilesNeeded":[]}\nNote: see {details} here.';
+    expect(extractJsonObject(raw)).toBe('{"findings":[],"additionalFilesNeeded":[]}');
+  });
+
+  it('returns null when no { is present', () => {
+    expect(extractJsonObject('no json here')).toBeNull();
   });
 });
 

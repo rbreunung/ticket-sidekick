@@ -6,6 +6,7 @@ import {
   parsePrUrl,
   parseDiff,
   resolveByNumber,
+  extractJsonObject,
   type ReviewFinding,
   type ReviewSession,
 } from './reviewSessionState';
@@ -48,9 +49,23 @@ async function parseReviewResponse(raw: string): Promise<{
   findings: Array<Omit<ReviewFinding, 'id'>>;
   additionalFilesNeeded: string[];
 }> {
-  const jsonMatch = raw.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error('LLM returned no valid JSON for review. Response: ' + raw.slice(0, 200));
-  return JSON.parse(jsonMatch[0]);
+  const jsonText = extractJsonObject(raw);
+  if (!jsonText) {
+    throw new Error(
+      `LLM returned no JSON for review.\n\nRaw response (first 600 chars):\n${raw.slice(0, 600) || '(empty)'}`,
+    );
+  }
+  try {
+    const parsed = JSON.parse(jsonText);
+    return {
+      findings: Array.isArray(parsed.findings) ? parsed.findings : [],
+      additionalFilesNeeded: Array.isArray(parsed.additionalFilesNeeded) ? parsed.additionalFilesNeeded : [],
+    };
+  } catch (err) {
+    throw new Error(
+      `LLM returned malformed JSON: ${err instanceof Error ? err.message : String(err)}\n\nExtracted:\n${jsonText.slice(0, 400)}`,
+    );
+  }
 }
 
 async function handleCheck(
@@ -197,14 +212,23 @@ export function createBitbucketParticipant(
     const service = new PrReviewService(client);
 
     try {
+      const MAX_REVIEWED_FILES = 20;
+
       stream.markdown('_Fetching PR…_\n\n');
       const pr = await client.getPullRequest(parsed.project, parsed.repo, parsed.prId);
       const rawDiff = await client.getPullRequestDiff(parsed.project, parsed.repo, parsed.prId);
-      const fileDiffs = parseDiff(rawDiff);
+      const allFileDiffs = parseDiff(rawDiff);
+      // Prioritise the most-changed files; cap total to keep the prompt manageable.
+      const fileDiffs = allFileDiffs
+        .slice()
+        .sort((a, b) => b.diff.length - a.diff.length)
+        .slice(0, MAX_REVIEWED_FILES);
+      const skipped = allFileDiffs.length - fileDiffs.length;
+      const fileNote = skipped > 0 ? ` (${skipped} smaller file${skipped !== 1 ? 's' : ''} skipped)` : '';
 
       // Pass 1: send diffs only — full file content is expensive and unnecessary for the
       // initial review; the LLM requests specific files via additionalFilesNeeded if needed.
-      stream.markdown(`_Analysing ${fileDiffs.length} file${fileDiffs.length !== 1 ? 's' : ''}…_\n\n`);
+      stream.markdown(`_Analysing ${fileDiffs.length} file${fileDiffs.length !== 1 ? 's' : ''}${fileNote}…_\n\n`);
       const pass1Raw = await callLLM(service.buildPrompt(pr, fileDiffs), request.model, token);
       const pass1 = await parseReviewResponse(pass1Raw);
 
