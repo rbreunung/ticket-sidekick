@@ -38,79 +38,88 @@
     "commands": [
       {
         "command": "ticket-sidekick.setDataCenterToken",
-        "title": "Ticket Sidekick: Set Personal Access Token"
+        "title": "Ticket Sidekick: Set Jira Personal Access Token"
       },
       {
         "command": "ticket-sidekick.configureCloud",
-        "title": "Ticket Sidekick: Configure Cloud Credentials"
+        "title": "Ticket Sidekick: Configure Jira Cloud Credentials"
       },
       {
         "command": "ticket-sidekick.setBitbucketDataCenterToken",
-        "title": "Ticket Sidekick: Set Bitbucket PAT"
+        "title": "Ticket Sidekick: Set Bitbucket Personal Access Token"
       },
       {
         "command": "ticket-sidekick.configureBitbucketCloud",
         "title": "Ticket Sidekick: Configure Bitbucket Cloud Credentials"
       }
     ],
-    "configuration": {
-      "title": "Ticket Sidekick",
-      "properties": {
-        "ticketSidekick.baseUrl": {
-          "type": "string",
-          "description": "Base URL of your Jira instance (e.g. https://jira.mycompany.com)"
-        },
-        "ticketSidekick.authType": {
-          "type": "string",
-          "enum": [
-            "datacenter",
-            "cloud"
-          ],
-          "default": "datacenter",
-          "description": "Authentication mode: 'datacenter' uses Bearer PAT, 'cloud' uses Basic email:apiToken"
-        },
-        "ticketSidekick.requiredFields": {
-          "type": "array",
-          "items": {
-            "type": "string"
+    "configuration": [
+      {
+        "id": "jira",
+        "title": "Ticket Sidekick — Jira",
+        "properties": {
+          "ticketSidekick.jira.baseUrl": {
+            "type": "string",
+            "description": "Base URL of your Jira instance (e.g. https://jira.mycompany.com)"
           },
-          "default": [],
-          "description": "Field names that must be set for ticket validation (e.g. [\"assignee\", \"priority\"])"
-        },
-        "ticketSidekick.defaultProject": {
-          "type": "string",
-          "default": "",
-          "description": "Default Jira project key (e.g. 'VSJI'). Used when creating tickets if no project is specified in your prompt."
-        },
-        "ticketSidekick.apiVersion": {
-          "type": "number",
-          "enum": [
-            2,
-            3
-          ],
-          "default": 3,
-          "description": "Jira REST API version. Set to 2 if your server does not expose /rest/api/3 (common on older Data Center instances)."
-        },
-        "ticketSidekick.showConnectionInfo": {
-          "type": "boolean",
-          "default": false,
-          "description": "When enabled, each @jira response starts with an italic line showing the active base URL, API version, and auth type."
-        },
-        "ticketSidekick.bitbucket.baseUrl": {
-          "type": "string",
-          "description": "Base URL of your Bitbucket Data Center instance (e.g. https://bitbucket.mycompany.com). Leave empty for Bitbucket Cloud."
-        },
-        "ticketSidekick.bitbucket.authType": {
-          "type": "string",
-          "enum": [
-            "datacenter",
-            "cloud"
-          ],
-          "default": "datacenter",
-          "description": "Bitbucket authentication mode: 'datacenter' uses Bearer PAT, 'cloud' uses Basic email:Atlassian-apiToken"
+          "ticketSidekick.jira.authType": {
+            "type": "string",
+            "enum": [
+              "datacenter",
+              "cloud"
+            ],
+            "default": "datacenter",
+            "description": "Jira authentication mode: 'datacenter' uses Bearer PAT, 'cloud' uses Basic email:Atlassian-apiToken"
+          },
+          "ticketSidekick.jira.apiVersion": {
+            "type": "number",
+            "enum": [
+              2,
+              3
+            ],
+            "default": 3,
+            "description": "Jira REST API version. Set to 2 if your server does not expose /rest/api/3 (common on older Data Center instances)."
+          },
+          "ticketSidekick.jira.defaultProject": {
+            "type": "string",
+            "default": "",
+            "description": "Default Jira project key (e.g. 'VSJI'). Used when creating tickets if no project is specified in your prompt."
+          },
+          "ticketSidekick.jira.requiredFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": [],
+            "description": "Jira field names that must be set for ticket validation (e.g. [\"assignee\", \"priority\"])"
+          },
+          "ticketSidekick.jira.showConnectionInfo": {
+            "type": "boolean",
+            "default": false,
+            "description": "When enabled, each @jira response starts with an italic line showing the active base URL, API version, and auth type."
+          }
+        }
+      },
+      {
+        "id": "bitbucket",
+        "title": "Ticket Sidekick — Bitbucket",
+        "properties": {
+          "ticketSidekick.bitbucket.baseUrl": {
+            "type": "string",
+            "description": "Base URL of your Bitbucket Data Center instance (e.g. https://bitbucket.mycompany.com). Leave empty for Bitbucket Cloud."
+          },
+          "ticketSidekick.bitbucket.authType": {
+            "type": "string",
+            "enum": [
+              "datacenter",
+              "cloud"
+            ],
+            "default": "datacenter",
+            "description": "Bitbucket authentication mode: 'datacenter' uses Bearer PAT, 'cloud' uses Bearer API token (create at bitbucket.org → Personal settings → API tokens)"
+          }
         }
       }
-    }
+    ]
   },
   "scripts": {
     "compile": "tsc -p ./",

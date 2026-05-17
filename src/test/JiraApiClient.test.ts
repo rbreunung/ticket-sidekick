@@ -136,7 +136,7 @@ describe('JiraApiClient', () => {
     it('error message hints at baseUrl misconfiguration', async () => {
       vi.stubGlobal('fetch', makeFetch(htmlBody, 200, 'text/html; charset=utf-8'));
       const client = new JiraApiClient(BASE_CONFIG);
-      await expect(client.getIssue('PROJ-1')).rejects.toThrow('ticketSidekick.baseUrl');
+      await expect(client.getIssue('PROJ-1')).rejects.toThrow('ticketSidekick.jira.baseUrl');
     });
 
     it('error message includes a preview of the HTML response', async () => {

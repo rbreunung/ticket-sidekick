@@ -1,41 +1,49 @@
 # Ticket Sidekick
 
-Manage Jira tickets with GitHub Copilot Chat — without leaving VS Code.
+Two independent GitHub Copilot Chat participants — use one or both:
 
-## Prerequisites
+- **`@jira`** — manage Jira tickets in natural language (create, read, update, comment, bulk transitions)
+- **`@bitbucket`** — review Bitbucket pull requests with structured AI analysis and multi-turn follow-ups
 
-- VS Code 1.90 or later
-- GitHub Copilot extension installed and signed in
+Neither participant requires the other to be configured.
+
+---
+
+## Jira
+
+### Prerequisites
+
+- VS Code 1.90 or later with GitHub Copilot extension
 - Jira Data Center (v8+) **or** any Jira Cloud instance
 
-## Setup
+### Setup
 
-### 1. Set the Jira base URL
+#### 1. Set the Jira base URL
 
 Open VS Code settings (`Ctrl+,` / `Cmd+,`) and add:
 
 ```json
-"ticketSidekick.baseUrl": "https://jira.mycompany.com"
+"ticketSidekick.jira.baseUrl": "https://jira.mycompany.com"
 ```
 
 For Jira Cloud: `"https://your-org.atlassian.net"`
 
-### 2. Set your auth type (Cloud only)
+#### 2. Set your auth type (Cloud only)
 
 ```json
-"ticketSidekick.authType": "cloud"
+"ticketSidekick.jira.authType": "cloud"
 ```
 
 Omit this setting for Data Center (default).
 
-### 3. Store your credentials
+#### 3. Store your credentials
 
-**Data Center:** Open the Command Palette (`Ctrl+Shift+P`) → `Ticket Sidekick: Set Personal Access Token`
+**Data Center:** Open the Command Palette (`Ctrl+Shift+P`) → `Ticket Sidekick: Set Jira Personal Access Token`
 
-**Cloud:** Open the Command Palette → `Ticket Sidekick: Configure Cloud Credentials`
+**Cloud:** Open the Command Palette → `Ticket Sidekick: Configure Jira Cloud Credentials`
 (You will need your Atlassian email and an API token from id.atlassian.com)
 
-## Usage
+### Usage
 
 Open GitHub Copilot Chat and use `@jira`:
 
@@ -67,7 +75,7 @@ This means you can `@jira show PROJ-123`, then immediately follow up with `@jira
 ### Optional: default project
 
 ```json
-"ticketSidekick.defaultProject": "VSJI"
+"ticketSidekick.jira.defaultProject": "VSJI"
 ```
 
 When set, the `create` command skips the project input box and uses this key automatically. You can still override it by including a project key in your prompt.
@@ -75,7 +83,7 @@ When set, the `create` command skips the project input box and uses this key aut
 ### Optional: required fields
 
 ```json
-"ticketSidekick.requiredFields": ["assignee", "priority", "fixVersions"]
+"ticketSidekick.jira.requiredFields": ["assignee", "priority", "fixVersions"]
 ```
 
 Used by the `check required fields` command.
@@ -83,7 +91,7 @@ Used by the `check required fields` command.
 ### Optional: Jira API version
 
 ```json
-"ticketSidekick.apiVersion": 2
+"ticketSidekick.jira.apiVersion": 2
 ```
 
 Default is `3`. Set to `2` if your Data Center instance does not expose `/rest/api/3` (common on Jira versions before 8.4). On API v2, descriptions and comments are sent as plain text instead of Atlassian Document Format.
@@ -91,7 +99,7 @@ Default is `3`. Set to `2` if your Data Center instance does not expose `/rest/a
 ### Optional: connection info banner
 
 ```json
-"ticketSidekick.showConnectionInfo": true
+"ticketSidekick.jira.showConnectionInfo": true
 ```
 
 When enabled, every `@jira` response starts with an italic line showing the active base URL, API version, and auth type. Useful during initial setup or when switching between instances. Off by default.
@@ -191,9 +199,129 @@ On the review screen, reply:
 
 Execution streams one confirmation line per ticket. Failures are reported at the end without stopping the rest of the batch.
 
-## Getting a free Cloud test instance
+---
+
+## Bitbucket
+
+### Prerequisites
+
+- VS Code 1.90 or later with GitHub Copilot extension
+- Bitbucket Data Center **or** Bitbucket Cloud
+
+### Setup
+
+#### 1. Set the auth type
+
+Open VS Code settings and set:
+
+```json
+"ticketSidekick.bitbucket.authType": "datacenter"
+```
+
+Use `"cloud"` for Bitbucket Cloud. Default is `"datacenter"`.
+
+#### 2. Set the base URL (Data Center only)
+
+```json
+"ticketSidekick.bitbucket.baseUrl": "https://bitbucket.mycompany.com"
+```
+
+Leave this unset for Bitbucket Cloud — the plugin connects to `api.bitbucket.org` automatically.
+
+#### 3. Store your credentials
+
+**Data Center:** Command Palette → `Ticket Sidekick: Set Bitbucket Personal Access Token`
+
+**Cloud:** Command Palette → `Ticket Sidekick: Configure Bitbucket Cloud Credentials`
+
+You will be prompted for an API token. Create one at `bitbucket.org → Personal settings → API tokens` with at minimum:
+
+| Scope | Required for |
+| --- | --- |
+| Repositories: Read | Fetching file contents for review context |
+| Pull requests: Read | PR metadata and diff |
+| Account: Read | (optional) shows your username in `@bitbucket check` |
+
+> **Note:** Bitbucket Cloud API tokens are different from Atlassian API tokens. The Atlassian API token (used for Jira Cloud) will not work here. As of September 2025, Bitbucket App Passwords have been replaced by scoped API tokens.
+
+### Usage
+
+Open GitHub Copilot Chat and use `@bitbucket`:
+
+| What you type | What happens |
+| --- | --- |
+| `@bitbucket check` | Tests the connection and shows active configuration |
+| `@bitbucket <PR URL>` | Fetches the PR and delivers a full code review |
+| `@bitbucket #2` | Asks a follow-up question about finding #2 from the last review |
+| `@bitbucket explain the SQL injection issue` | Natural language follow-up — resolves to the matching finding automatically |
+| `@bitbucket can finding #3 be downgraded if X?` | Deeper explanation with conditions and concrete code suggestions |
+
+### PR review
+
+Paste any pull request URL into the chat:
+
+```text
+@bitbucket https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42
+```
+
+Trailing segments like `/overview`, `/diff`, or `/commits` are stripped automatically.
+
+The plugin:
+
+1. Fetches PR metadata and the full unified diff
+2. Reads changed files from your local workspace first; falls back to the Bitbucket API for files not present locally
+3. Sends a structured prompt to the LLM for a first-pass review
+4. If the LLM identifies files it needs for additional context, fetches up to 5 more files and re-analyses (two-pass review)
+5. Streams a structured report organised by file, with numbered findings and severity badges
+
+Example output:
+
+```
+## PR #42 — Add OAuth login flow
+_by Jane Smith → main · 3 files changed_
+
+2 🔴 critical · 1 🟡 warning · 3 🔵 suggestions
+
+---
+
+**📄 src/auth/login.ts**
+**#1** 🔴 `L42` SQL injection — user input passed directly to query string
+→ Use parameterised queries or an ORM query builder.
+
+---
+
+**📄 src/auth/tokenStore.ts**
+**#2** 🔴 `L18` Token stored in localStorage — readable by any script on the page
+→ Switch to httpOnly cookies with Secure flag.
+**#3** 🔵 `L31` No encryption at rest for persisted token
+→ Consider encrypting before writing to storage.
+
+---
+
+_Reply **#2** or describe a finding to ask a follow-up._
+```
+
+### Follow-up questions
+
+After a review, the session stays active for multi-turn follow-ups. You can reference a finding by number or describe it in natural language:
+
+```text
+@bitbucket #2 is this always a problem or only if the site has third-party scripts?
+@bitbucket can the localStorage finding be downgraded if we have a strict CSP?
+@bitbucket explain the SQL injection issue in more detail
+```
+
+The plugin resolves natural language references by asking the LLM to match your question to the most relevant finding. Each follow-up response includes a deeper explanation, conditions under which the issue could be acceptable, and concrete code change suggestions.
+
+Starting a new PR review clears the previous session automatically.
+
+---
+
+---
+
+## Getting a free Jira Cloud test instance
 
 1. Create a free account at [atlassian.com](https://www.atlassian.com)
 2. Generate an API token at id.atlassian.com/manage-profile/security/api-tokens
-3. Set `ticketSidekick.baseUrl` to `https://<you>.atlassian.net` and `ticketSidekick.authType` to `"cloud"`
-4. Run `Ticket Sidekick: Configure Cloud Credentials`
+3. Set `ticketSidekick.jira.baseUrl` to `https://<you>.atlassian.net` and `ticketSidekick.jira.authType` to `"cloud"`
+4. Run `Ticket Sidekick: Configure Jira Cloud Credentials`

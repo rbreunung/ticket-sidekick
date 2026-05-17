@@ -58,24 +58,28 @@ async function handleCheck(
   configService: ConfigService,
 ): Promise<void> {
   const config = await configService.getBitbucketConfig();
-  if (!config.baseUrl || !config.token) {
+  const isConfigured = config.authType === 'cloud'
+    ? !!config.token
+    : !!(config.baseUrl && config.token);
+  if (!isConfigured) {
     stream.markdown(
       '**Bitbucket not configured.**\n\n' +
-      'Run **Ticket Sidekick: Set Bitbucket PAT** (Data Center) or **Ticket Sidekick: Configure Bitbucket Cloud** from the Command Palette.',
+      'Run **Ticket Sidekick: Set Bitbucket Personal Access Token** (Data Center) or **Ticket Sidekick: Configure Bitbucket Cloud Credentials** from the Command Palette.',
     );
     return;
   }
+  const effectiveUrl = config.authType === 'cloud' ? 'https://api.bitbucket.org' : config.baseUrl!;
   try {
     const client = new BitbucketApiClient({
-      baseUrl: config.baseUrl,
+      baseUrl: config.baseUrl ?? '',
       authType: config.authType,
-      token: config.token,
+      token: config.token!,
     });
     const user = await client.getCurrentUser();
     stream.markdown(
       `**Bitbucket connection OK**\n\n` +
       `| Setting | Value |\n|---|---|\n` +
-      `| Base URL | \`${config.baseUrl}\` |\n` +
+      `| Base URL | \`${effectiveUrl}\` |\n` +
       `| Auth type | ${config.authType} |\n` +
       `| Logged in as | ${user.displayName} |\n`,
     );
@@ -83,7 +87,7 @@ async function handleCheck(
     stream.markdown(
       `**Bitbucket connection failed**\n\n` +
       `| Setting | Value |\n|---|---|\n` +
-      `| Base URL | \`${config.baseUrl}\` |\n` +
+      `| Base URL | \`${effectiveUrl}\` |\n` +
       `| Auth type | ${config.authType} |\n\n` +
       `Error: ${err instanceof Error ? err.message : String(err)}`,
     );
@@ -169,23 +173,26 @@ export function createBitbucketParticipant(
     }
 
     const config = await configService.getBitbucketConfig();
-    if (!config.baseUrl || !config.token) {
+    const isConfigured = config.authType === 'cloud'
+      ? !!config.token
+      : !!(config.baseUrl && config.token);
+    if (!isConfigured) {
       stream.markdown(
-        '**Bitbucket not configured.**\n\nRun **Ticket Sidekick: Set Bitbucket PAT** or **Ticket Sidekick: Configure Bitbucket Cloud** first.',
+        '**Bitbucket not configured.**\n\nRun **Ticket Sidekick: Set Bitbucket Personal Access Token** or **Ticket Sidekick: Configure Bitbucket Cloud Credentials** first.',
       );
       return;
     }
 
-    const parsed = parsePrUrl(urlMatch[0], config.baseUrl);
+    const parsed = parsePrUrl(urlMatch[0], config.baseUrl ?? '');
     if (!parsed) {
       stream.markdown(`Could not parse PR URL: \`${urlMatch[0]}\``);
       return;
     }
 
     const client = new BitbucketApiClient({
-      baseUrl: config.baseUrl,
+      baseUrl: config.baseUrl ?? '',
       authType: config.authType,
-      token: config.token,
+      token: config.token!,
     });
     const service = new PrReviewService(client);
 

@@ -243,7 +243,7 @@ async function resolveProjectKey(
 ): Promise<string | null> {
   if (fromIntent) return fromIntent;
 
-  const defaultProject = vscode.workspace.getConfiguration('ticketSidekick').get<string>('defaultProject') ?? '';
+  const defaultProject = vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.defaultProject') ?? '';
   if (defaultProject) return defaultProject;
 
   stream.markdown('_No project key found in your message or settings — opening input box…_\n\n');
@@ -702,7 +702,7 @@ export function createJiraParticipant(
 
     if (!config.baseUrl) {
       stream.markdown(
-        '**Jira base URL not configured.**\n\nAdd `ticketSidekick.baseUrl` to your VS Code settings (e.g. `https://jira.mycompany.com`).',
+        '**Jira base URL not configured.**\n\nAdd `ticketSidekick.jira.baseUrl` to your VS Code settings (e.g. `https://jira.mycompany.com`).',
       );
       return;
     }

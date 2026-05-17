@@ -21,11 +21,11 @@ export class ConfigService {
   async getConfig(): Promise<JiraConfig> {
     const config = vscode.workspace.getConfiguration('ticketSidekick');
     return {
-      baseUrl: config.get<string>('baseUrl'),
-      authType: config.get<AuthType>('authType') ?? 'datacenter',
-      apiVersion: config.get<2 | 3>('apiVersion') ?? 3,
-      showConnectionInfo: config.get<boolean>('showConnectionInfo') ?? false,
-      requiredFields: config.get<string[]>('requiredFields') ?? [],
+      baseUrl: config.get<string>('jira.baseUrl'),
+      authType: config.get<AuthType>('jira.authType') ?? 'datacenter',
+      apiVersion: config.get<2 | 3>('jira.apiVersion') ?? 3,
+      showConnectionInfo: config.get<boolean>('jira.showConnectionInfo') ?? false,
+      requiredFields: config.get<string[]>('jira.requiredFields') ?? [],
       token: await this.context.secrets.get(ConfigService.TOKEN_KEY),
     };
   }
