@@ -61,6 +61,48 @@ Open GitHub Copilot Chat and use `@jira`:
 | `@jira check required fields on PROJ-123` | Validates required fields |
 | `@jira check` | Tests the connection and shows active configuration |
 
+### Content generation and preview
+
+When you ask `@jira` to write content rather than provide it directly — for a comment or a description update — the plugin generates a draft and shows it for review before posting:
+
+```text
+@jira write a comment summarising what we agreed on
+@jira update the description based on our conversation
+@jira draft a comment from the last few messages
+```
+
+The draft is streamed to chat. You then reply:
+
+- **`post it`** (or `yes`, `looks good`) — posts the content immediately
+- **Any refinement instruction** — regenerates with your feedback applied, shows a new preview
+- **`cancel`** (or `never mind`) — discards the draft without posting
+
+If you provide explicit literal text the preview is skipped and the comment is posted directly:
+
+```text
+@jira comment: ready for QA, all tests passing
+@jira add comment "approved"
+```
+
+The plugin infers which mode to use from your phrasing — `"write"`, `"draft"`, `"summarise"`, `"based on our discussion"`, and similar phrases trigger generation. Quoted text or direct statements post literally.
+
+### Comments
+
+`@jira show` includes a comments section. If a ticket has more than 20 comments only the newest 20 are shown; the response ends with an offer to load the rest:
+
+```text
+… 5 older comment(s) not shown. Reply "load all" to include them.
+```
+
+Reply **`load all`** in the next turn to fetch up to 100 comments and re-synthesise.
+
+To search or summarise comments specifically:
+
+```text
+@jira what do the comments say about the login bug?
+@jira does anyone mention a deadline in the comments?
+```
+
 ### Ticket detection
 
 If you don't name a ticket, the plugin resolves it in this order:
@@ -212,7 +254,7 @@ Execution streams one confirmation line per ticket. Failures are reported at the
 
 #### 1. Set the auth type
 
-Open VS Code settings and set:
+Open VS Code settings (`Ctrl+,` / `Cmd+,`) and add:
 
 ```json
 "ticketSidekick.bitbucket.authType": "datacenter"
@@ -230,11 +272,13 @@ Leave this unset for Bitbucket Cloud — the plugin connects to `api.bitbucket.o
 
 #### 3. Store your credentials
 
-**Data Center:** Command Palette → `Ticket Sidekick: Set Bitbucket Personal Access Token`
+**Data Center:** Command Palette (`Ctrl+Shift+P`) → `Ticket Sidekick: Set Bitbucket Personal Access Token`
+
+Generate a Personal Access Token in Bitbucket Data Center at `Profile → Manage account → Personal access tokens`. Grant at minimum **Repositories: Read** and **Pull requests: Read**.
 
 **Cloud:** Command Palette → `Ticket Sidekick: Configure Bitbucket Cloud Credentials`
 
-You will be prompted for an API token. Create one at `bitbucket.org → Personal settings → API tokens` with at minimum:
+You will be prompted for your Bitbucket **username** and an **App Password**. Create an App Password at `bitbucket.org → Personal settings → App passwords` with at minimum:
 
 | Scope | Required for |
 | --- | --- |
@@ -242,7 +286,9 @@ You will be prompted for an API token. Create one at `bitbucket.org → Personal
 | Pull requests: Read | PR metadata and diff |
 | Account: Read | (optional) shows your username in `@bitbucket check` |
 
-> **Note:** Bitbucket Cloud API tokens are different from Atlassian API tokens. The Atlassian API token (used for Jira Cloud) will not work here. As of September 2025, Bitbucket App Passwords have been replaced by scoped API tokens.
+> **Note:** Bitbucket App Passwords use `Authorization: Basic` — they are not the same as Atlassian API tokens (used for Jira Cloud). Using an Atlassian API token here will fail with 401.
+
+Run `@bitbucket check` after setup to confirm the connection and see which account is active.
 
 ### Usage
 
@@ -252,7 +298,7 @@ Open GitHub Copilot Chat and use `@bitbucket`:
 | --- | --- |
 | `@bitbucket check` | Tests the connection and shows active configuration |
 | `@bitbucket <PR URL>` | Fetches the PR and delivers a full code review |
-| `@bitbucket #2` | Asks a follow-up question about finding #2 from the last review |
+| `@bitbucket #2` | Follow-up question about finding #2 from the last review |
 | `@bitbucket explain the SQL injection issue` | Natural language follow-up — resolves to the matching finding automatically |
 | `@bitbucket can finding #3 be downgraded if X?` | Deeper explanation with conditions and concrete code suggestions |
 
@@ -262,6 +308,7 @@ Paste any pull request URL into the chat:
 
 ```text
 @bitbucket https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42
+@bitbucket https://bitbucket.org/myworkspace/myrepo/pull-requests/7
 ```
 
 Trailing segments like `/overview`, `/diff`, or `/commits` are stripped automatically.
@@ -269,10 +316,19 @@ Trailing segments like `/overview`, `/diff`, or `/commits` are stripped automati
 The plugin:
 
 1. Fetches PR metadata and the full unified diff
-2. Reads changed files from your local workspace first; falls back to the Bitbucket API for files not present locally
-3. Sends a structured prompt to the LLM for a first-pass review
-4. If the LLM identifies files it needs for additional context, fetches up to 5 more files and re-analyses (two-pass review)
-5. Streams a structured report organised by file, with numbered findings and severity badges
+2. Splits the changed files into batches of 10 so each LLM call stays within context limits — large PRs are reviewed completely rather than truncated
+3. For each batch: sends a structured diff-only prompt and, if the LLM requests additional context files, fetches up to 5 and re-analyses (two-pass review per batch)
+4. Merges all findings across batches and streams a single structured report ordered by file, with numbered findings and severity badges
+
+The chat shows progress for large PRs:
+
+```
+Fetching PR…
+Analysing files 1–10 of 33 · batch 1/4…
+Analysing files 11–20 of 33 · batch 2/4…
+Analysing files 21–30 of 33 · batch 3/4…
+Analysing files 31–33 of 33 · batch 4/4…
+```
 
 Example output:
 
@@ -285,15 +341,15 @@ _by Jane Smith → main · 3 files changed_
 ---
 
 **📄 src/auth/login.ts**
-**#1** 🔴 `L42` SQL injection — user input passed directly to query string
-→ Use parameterised queries or an ORM query builder.
+**#1** 🔴 `L42` SQL injection — user input concatenated into query string
+→ Use parameterised queries or a query builder instead.
 
 ---
 
 **📄 src/auth/tokenStore.ts**
-**#2** 🔴 `L18` Token stored in localStorage — readable by any script on the page
-→ Switch to httpOnly cookies with Secure flag.
-**#3** 🔵 `L31` No encryption at rest for persisted token
+**#2** 🔴 `L18` Token stored in localStorage — readable by any same-origin script
+→ Switch to an httpOnly cookie with the Secure flag.
+**#3** 🔵 `L31` No encryption at rest for the persisted token
 → Consider encrypting before writing to storage.
 
 ---
@@ -303,19 +359,27 @@ _Reply **#2** or describe a finding to ask a follow-up._
 
 ### Follow-up questions
 
-After a review, the session stays active for multi-turn follow-ups. You can reference a finding by number or describe it in natural language:
+After a review, the session stays active for multi-turn follow-ups. Reference a finding by number or describe it in natural language:
 
 ```text
 @bitbucket #2 is this always a problem or only if the site has third-party scripts?
-@bitbucket can the localStorage finding be downgraded if we have a strict CSP?
-@bitbucket explain the SQL injection issue in more detail
+@bitbucket can the localStorage finding be downgraded if we enforce a strict CSP?
+@bitbucket explain the SQL injection issue and show a fixed version
 ```
 
-The plugin resolves natural language references by asking the LLM to match your question to the most relevant finding. Each follow-up response includes a deeper explanation, conditions under which the issue could be acceptable, and concrete code change suggestions.
+The plugin resolves natural language references by asking the LLM to match your question to the most relevant finding. Each follow-up response includes a deeper explanation, the conditions under which the issue could be acceptable, and concrete code change suggestions.
 
 Starting a new PR review clears the previous session automatically.
 
----
+### Using a local model
+
+The `@bitbucket` participant works with any model available in GitHub Copilot Chat, including local models via tools such as [Ollama](https://ollama.com). To get reliable results from smaller models:
+
+- Use a model with **at least 16k context** (32k+ recommended for PRs with large diffs)
+- Models quantised to Q4 or higher produce better JSON compliance than Q2/Q3
+- If a review fails with a JSON error, the error message shows the raw model output — use it to decide whether to retry or switch to a larger model
+
+The batch size is currently fixed at 10 files per LLM call. If your local model has a smaller context window and individual diffs are large, you can reduce this by changing the `CHUNK_SIZE` constant near the top of `src/participant/BitbucketParticipant.ts`.
 
 ---
 
