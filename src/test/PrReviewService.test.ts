@@ -59,6 +59,21 @@ describe('parseDiff', () => {
     expect(result[0].diff).toContain('+const y = 2;');
   });
 
+  it('handles \\r-only line endings (Bitbucket Cloud format)', () => {
+    const raw = [
+      'diff --git a/src/auth/login.ts b/src/auth/login.ts',
+      '--- a/src/auth/login.ts',
+      '+++ b/src/auth/login.ts',
+      '@@ -38,7 +38,12 @@',
+      "-const user = await db.query('SELECT * FROM users WHERE username = ' + username);",
+      '+const user = await db.query(`SELECT * FROM users WHERE username = ${username}`);',
+    ].join('\r');
+
+    const result = parseDiff(raw);
+    expect(result).toHaveLength(1);
+    expect(result[0].path).toBe('src/auth/login.ts');
+  });
+
   it('returns empty array for empty input', () => {
     expect(parseDiff('')).toEqual([]);
   });
