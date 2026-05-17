@@ -59,6 +59,27 @@ describe('parseDiff', () => {
     expect(result[0].diff).toContain('+const y = 2;');
   });
 
+  it('handles a JSON-decoded diff string (Bitbucket Cloud returns JSON-encoded diff)', () => {
+    // Cloud wraps the diff in a JSON string; after JSON.parse the newlines are real \n
+    const raw = [
+      'diff --git a/src/auth/login.ts b/src/auth/login.ts',
+      '--- a/src/auth/login.ts',
+      '+++ b/src/auth/login.ts',
+      '@@ -1 +1 @@',
+      '+const x = 1;',
+      'diff --git a/src/auth/tokenStore.ts b/src/auth/tokenStore.ts',
+      '--- a/src/auth/tokenStore.ts',
+      '+++ b/src/auth/tokenStore.ts',
+      '@@ -15,6 +15,8 @@',
+      "+ localStorage.setItem('auth_token', token);",
+    ].join('\n');
+
+    const result = parseDiff(raw);
+    expect(result).toHaveLength(2);
+    expect(result[0].path).toBe('src/auth/login.ts');
+    expect(result[1].path).toBe('src/auth/tokenStore.ts');
+  });
+
   it('handles \\r-only line endings (Bitbucket Cloud format)', () => {
     const raw = [
       'diff --git a/src/auth/login.ts b/src/auth/login.ts',

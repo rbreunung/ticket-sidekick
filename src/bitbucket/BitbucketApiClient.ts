@@ -127,7 +127,14 @@ export class BitbucketApiClient implements IBitbucketClient {
 
   async getPullRequestDiff(project: string, repo: string, prId: number): Promise<string> {
     if (this.authType === 'cloud') {
-      return this.cloudRequestText(`/repositories/${project}/${repo}/pullrequests/${prId}/diff`);
+      const raw = await this.cloudRequestText(`/repositories/${project}/${repo}/pullrequests/${prId}/diff`);
+      // Bitbucket Cloud returns the diff as a JSON-encoded string (with surrounding quotes
+      // and \n escape sequences instead of actual newlines). Decode it when that happens.
+      try {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed === 'string') return parsed;
+      } catch {}
+      return raw;
     }
     return this.dcRequestText(`/projects/${project}/repos/${repo}/pull-requests/${prId}/diff`);
   }
