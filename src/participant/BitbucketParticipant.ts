@@ -237,22 +237,22 @@ export function createBitbucketParticipant(
 
         const chunkRaw = await callLLM(service.buildPrompt(pr, chunk), request.model, token);
         const { findings, additionalFilesNeeded } = await parseReviewResponse(chunkRaw);
-        allFindings = allFindings.concat(findings);
+        let chunkFindings = findings;
 
-        // Pass 2 with extra context only makes sense for single-chunk reviews;
-        // multi-chunk reviews already split the prompt to fit the context window.
-        if (chunks.length === 1 && additionalFilesNeeded.length > 0) {
+        if (additionalFilesNeeded.length > 0) {
           const capped = additionalFilesNeeded.slice(0, 5);
-          stream.markdown(`_Fetching ${capped.length} context file${capped.length !== 1 ? 's' : ''} for deeper analysis…_\n\n`);
+          const batchSuffix = chunks.length > 1 ? ` (batch ${i + 1})` : '';
+          stream.markdown(`_Fetching ${capped.length} context file${capped.length !== 1 ? 's' : ''}${batchSuffix}…_\n\n`);
           const extraContents = await service.gatherFileContents(
             parsed.project, parsed.repo, pr.fromCommitHash,
             capped,
             makeWorkspaceReader,
           );
           const pass2Raw = await callLLM(service.buildPrompt(pr, chunk, extraContents), request.model, token);
-          const pass2 = await parseReviewResponse(pass2Raw);
-          allFindings = pass2.findings;
+          chunkFindings = (await parseReviewResponse(pass2Raw)).findings;
         }
+
+        allFindings = allFindings.concat(chunkFindings);
       }
 
       const numbered = allFindings.map((f, i) => ({ ...f, id: i + 1 }));
