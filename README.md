@@ -66,7 +66,7 @@ Open GitHub Copilot Chat and use `@jira`:
 When you ask `@jira` to write content rather than provide it directly — for a comment or a description update — the plugin generates a draft and shows it for review before posting:
 
 ```text
-@jira write a comment summarising what we agreed on
+@jira write a comment summarizing what we agreed on
 @jira update the description based on our conversation
 @jira draft a comment from the last few messages
 ```
@@ -84,7 +84,7 @@ If you provide explicit literal text the preview is skipped and the comment is p
 @jira add comment "approved"
 ```
 
-The plugin infers which mode to use from your phrasing — `"write"`, `"draft"`, `"summarise"`, `"based on our discussion"`, and similar phrases trigger generation. Quoted text or direct statements post literally.
+The plugin infers which mode to use from your phrasing — `"write"`, `"draft"`, `"summarize"`, `"based on our discussion"`, and similar phrases trigger generation. Quoted text or direct statements post literally.
 
 ### Comments
 
@@ -94,9 +94,9 @@ The plugin infers which mode to use from your phrasing — `"write"`, `"draft"`,
 … 5 older comment(s) not shown. Reply "load all" to include them.
 ```
 
-Reply **`load all`** in the next turn to fetch up to 100 comments and re-synthesise.
+Reply **`load all`** in the next turn to fetch up to 100 comments and re-synthesize.
 
-To search or summarise comments specifically:
+To search or summarize comments specifically:
 
 ```text
 @jira what do the comments say about the login bug?
