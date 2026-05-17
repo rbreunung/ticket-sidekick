@@ -198,7 +198,7 @@ export function createBitbucketParticipant(
       return;
     }
 
-    const parsed = parsePrUrl(urlMatch[0], config.baseUrl ?? '');
+    const parsed = parsePrUrl(urlMatch[0]);
     if (!parsed) {
       stream.markdown(`Could not parse PR URL: \`${urlMatch[0]}\``);
       return;

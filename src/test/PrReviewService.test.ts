@@ -9,7 +9,6 @@ describe('parsePrUrl', () => {
   it('parses a Data Center URL with trailing /overview', () => {
     const result = parsePrUrl(
       'https://bitbucket.company.com/projects/PROJ/repos/myrepo/pull-requests/42/overview',
-      'https://bitbucket.company.com',
     );
     expect(result).toEqual({ project: 'PROJ', repo: 'myrepo', prId: 42 });
   });
@@ -17,7 +16,6 @@ describe('parsePrUrl', () => {
   it('parses a Data Center URL without trailing segment', () => {
     const result = parsePrUrl(
       'https://bitbucket.company.com/projects/PROJ/repos/myrepo/pull-requests/7',
-      'https://bitbucket.company.com',
     );
     expect(result).toEqual({ project: 'PROJ', repo: 'myrepo', prId: 7 });
   });
@@ -25,13 +23,12 @@ describe('parsePrUrl', () => {
   it('parses a Bitbucket Cloud URL', () => {
     const result = parsePrUrl(
       'https://bitbucket.org/myworkspace/myrepo/pull-requests/99/diff',
-      '',
     );
     expect(result).toEqual({ project: 'myworkspace', repo: 'myrepo', prId: 99 });
   });
 
   it('returns null for an unrecognised URL', () => {
-    expect(parsePrUrl('https://github.com/user/repo/pull/1', '')).toBeNull();
+    expect(parsePrUrl('https://github.com/user/repo/pull/1')).toBeNull();
   });
 });
 

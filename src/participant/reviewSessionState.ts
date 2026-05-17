@@ -25,7 +25,7 @@ export interface ReviewSession {
   findings: ReviewFinding[];
 }
 
-export function parsePrUrl(url: string, baseUrl: string): ParsedPrUrl | null {
+export function parsePrUrl(url: string): ParsedPrUrl | null {
   try {
     const u = new URL(url);
     if (u.hostname === 'bitbucket.org') {
