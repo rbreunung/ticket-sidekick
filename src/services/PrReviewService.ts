@@ -47,15 +47,16 @@ export class PrReviewService {
     return new Map(entries);
   }
 
-  buildPrompt(pr: BitbucketPR, fileDiffs: FileDiff[], fileContents: Map<string, string>): string {
+  buildPrompt(pr: BitbucketPR, fileDiffs: FileDiff[], fileContents?: Map<string, string>): string {
     const header =
       `PR #${pr.id} — ${pr.title}\nAuthor: ${pr.author.displayName} → ${pr.targetBranch}\n` +
       (pr.description ? `Description: ${pr.description}\n` : '') +
       '\n';
     const fileSections = fileDiffs
       .map((fd) => {
-        const content = fileContents.get(fd.path) ?? '(file not available)';
-        return `### File: ${fd.path}\n**Diff:**\n${fd.diff}\n\n**Full content:**\n${content}`;
+        const section = `### File: ${fd.path}\n**Diff:**\n${fd.diff}`;
+        const content = fileContents?.get(fd.path);
+        return content ? `${section}\n\n**Full content:**\n${content}` : section;
       })
       .join('\n\n---\n\n');
     return REVIEW_PROMPT_PREFIX + header + '---\n\n' + fileSections;

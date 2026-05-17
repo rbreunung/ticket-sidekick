@@ -202,29 +202,23 @@ export function createBitbucketParticipant(
       const rawDiff = await client.getPullRequestDiff(parsed.project, parsed.repo, parsed.prId);
       const fileDiffs = parseDiff(rawDiff);
 
-      stream.markdown(`_Gathering context for ${fileDiffs.length} file${fileDiffs.length !== 1 ? 's' : ''}…_\n\n`);
-      const fileContents = await service.gatherFileContents(
-        parsed.project, parsed.repo, pr.fromCommitHash,
-        fileDiffs.map((f) => f.path),
-        makeWorkspaceReader,
-      );
-
-      stream.markdown('_Analysing…_\n\n');
-      const pass1Raw = await callLLM(service.buildPrompt(pr, fileDiffs, fileContents), request.model, token);
+      // Pass 1: send diffs only — full file content is expensive and unnecessary for the
+      // initial review; the LLM requests specific files via additionalFilesNeeded if needed.
+      stream.markdown(`_Analysing ${fileDiffs.length} file${fileDiffs.length !== 1 ? 's' : ''}…_\n\n`);
+      const pass1Raw = await callLLM(service.buildPrompt(pr, fileDiffs), request.model, token);
       const pass1 = await parseReviewResponse(pass1Raw);
 
       let findings = pass1.findings;
 
       if (pass1.additionalFilesNeeded.length > 0) {
         const capped = pass1.additionalFilesNeeded.slice(0, 5);
-        stream.markdown(`_Fetching ${capped.length} additional context file${capped.length !== 1 ? 's' : ''}…_\n\n`);
+        stream.markdown(`_Fetching ${capped.length} context file${capped.length !== 1 ? 's' : ''} for deeper analysis…_\n\n`);
         const extraContents = await service.gatherFileContents(
           parsed.project, parsed.repo, pr.fromCommitHash,
           capped,
           makeWorkspaceReader,
         );
-        const allContents = new Map([...fileContents, ...extraContents]);
-        const pass2Raw = await callLLM(service.buildPrompt(pr, fileDiffs, allContents), request.model, token);
+        const pass2Raw = await callLLM(service.buildPrompt(pr, fileDiffs, extraContents), request.model, token);
         const pass2 = await parseReviewResponse(pass2Raw);
         findings = pass2.findings;
       }

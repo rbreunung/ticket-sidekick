@@ -168,23 +168,45 @@ describe('PrReviewService.gatherFileContents', () => {
 });
 
 describe('PrReviewService.buildPrompt', () => {
-  it('includes file path, diff, and full content sections', () => {
+  const pr: BitbucketPR = {
+    id: 42, title: 'My PR', description: 'A description',
+    author: { displayName: 'Jane', emailAddress: 'j@example.com' },
+    targetBranch: 'main', fromCommitHash: 'abc123',
+  };
+  const fileDiffs = [{ path: 'src/foo.ts', diff: '@@ -1 +1 @@\n+const x = 1;' }];
+
+  it('includes file path and diff without full content when fileContents omitted', () => {
     const client = new MockBitbucketClient();
     const service = new PrReviewService(client);
-    const pr: BitbucketPR = {
-      id: 42, title: 'My PR', description: 'A description',
-      author: { displayName: 'Jane', emailAddress: 'j@example.com' },
-      targetBranch: 'main', fromCommitHash: 'abc123',
-    };
-    const fileDiffs = [{ path: 'src/foo.ts', diff: '@@ -1 +1 @@\n+const x = 1;' }];
+
+    const prompt = service.buildPrompt(pr, fileDiffs);
+
+    expect(prompt).toContain('src/foo.ts');
+    expect(prompt).toContain('@@ -1 +1 @@');
+    expect(prompt).toContain('additionalFilesNeeded');
+    expect(prompt).not.toContain('Full content');
+  });
+
+  it('includes full content for files present in the fileContents map', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
     const contents = new Map([['src/foo.ts', 'const x = 1;\n']]);
 
     const prompt = service.buildPrompt(pr, fileDiffs, contents);
 
-    expect(prompt).toContain('src/foo.ts');
-    expect(prompt).toContain('@@ -1 +1 @@');
+    expect(prompt).toContain('Full content');
     expect(prompt).toContain('const x = 1;');
-    expect(prompt).toContain('additionalFilesNeeded');
+  });
+
+  it('omits full content for files not in the fileContents map', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const contents = new Map([['src/other.ts', 'unrelated']]);
+
+    const prompt = service.buildPrompt(pr, fileDiffs, contents);
+
+    expect(prompt).toContain('src/foo.ts');
+    expect(prompt).not.toContain('Full content');
   });
 });
 
