@@ -65,7 +65,7 @@ export class BitbucketApiClient implements IBitbucketClient {
   private async cloudRequestText(path: string): Promise<string> {
     const url = `https://api.bitbucket.org/2.0${path}`;
     const response = await fetch(url, {
-      headers: { Authorization: this.authHeader },
+      headers: { Authorization: this.authHeader, Accept: 'text/plain' },
     });
     if (!response.ok) throw new Error(`Bitbucket Cloud API error ${response.status} at ${url}`);
     return response.text();

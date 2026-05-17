@@ -47,7 +47,7 @@ export function parseDiff(raw: string): FileDiff[] {
   const parts = raw.split(/(?=diff --git )/);
   for (const part of parts) {
     if (!part.trim()) continue;
-    const pathMatch = part.match(/\+\+\+ b\/(.+)/);
+    const pathMatch = part.match(/\+\+\+ b\/([^\r\n]+)/);
     if (!pathMatch) continue;
     results.push({ path: pathMatch[1].trim(), diff: part });
   }
