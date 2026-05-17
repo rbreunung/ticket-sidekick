@@ -11,7 +11,7 @@ describe('parsePrUrl', () => {
       'https://bitbucket.company.com/projects/PROJ/repos/myrepo/pull-requests/42/overview',
       'https://bitbucket.company.com',
     );
-    expect(result).toEqual({ authType: 'datacenter', project: 'PROJ', repo: 'myrepo', prId: 42 });
+    expect(result).toEqual({ project: 'PROJ', repo: 'myrepo', prId: 42 });
   });
 
   it('parses a Data Center URL without trailing segment', () => {
@@ -19,7 +19,7 @@ describe('parsePrUrl', () => {
       'https://bitbucket.company.com/projects/PROJ/repos/myrepo/pull-requests/7',
       'https://bitbucket.company.com',
     );
-    expect(result).toEqual({ authType: 'datacenter', project: 'PROJ', repo: 'myrepo', prId: 7 });
+    expect(result).toEqual({ project: 'PROJ', repo: 'myrepo', prId: 7 });
   });
 
   it('parses a Bitbucket Cloud URL', () => {
@@ -27,7 +27,7 @@ describe('parsePrUrl', () => {
       'https://bitbucket.org/myworkspace/myrepo/pull-requests/99/diff',
       '',
     );
-    expect(result).toEqual({ authType: 'cloud', project: 'myworkspace', repo: 'myrepo', prId: 99 });
+    expect(result).toEqual({ project: 'myworkspace', repo: 'myrepo', prId: 99 });
   });
 
   it('returns null for an unrecognised URL', () => {
@@ -142,6 +142,17 @@ describe('PrReviewService.gatherFileContents', () => {
     expect(client.getFileContentCalls).toHaveLength(1);
     expect(client.getFileContentCalls[0]).toMatchObject({ path: 'src/foo.ts', commitHash: 'abc123' });
     expect(result.get('src/foo.ts')).toBeDefined();
+  });
+
+  it('returns "(file not available)" when API fetch fails for a single file', async () => {
+    const client = new MockBitbucketClient();
+    client.getFileContent = async () => { throw new Error('404 Not found'); };
+    const service = new PrReviewService(client);
+    const reader = async (_path: string) => null;
+
+    const result = await service.gatherFileContents('PROJ', 'myrepo', 'abc123', ['src/missing.ts'], reader);
+
+    expect(result.get('src/missing.ts')).toBe('(file not available)');
   });
 
   it('fetches all files in parallel', async () => {

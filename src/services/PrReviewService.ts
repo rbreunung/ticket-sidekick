@@ -34,10 +34,14 @@ export class PrReviewService {
   ): Promise<Map<string, string>> {
     const entries = await Promise.all(
       paths.map(async (path) => {
-        const local = await readLocalFile(path);
-        if (local !== null) return [path, local] as const;
-        const remote = await this.client.getFileContent(project, repo, path, commitHash);
-        return [path, remote] as const;
+        try {
+          const local = await readLocalFile(path);
+          if (local !== null) return [path, local] as const;
+          const remote = await this.client.getFileContent(project, repo, path, commitHash);
+          return [path, remote] as const;
+        } catch {
+          return [path, '(file not available)'] as const;
+        }
       }),
     );
     return new Map(entries);

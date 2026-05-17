@@ -1,5 +1,4 @@
 export interface ParsedPrUrl {
-  authType: 'datacenter' | 'cloud';
   project: string;
   repo: string;
   prId: number;
@@ -32,11 +31,11 @@ export function parsePrUrl(url: string, baseUrl: string): ParsedPrUrl | null {
     if (u.hostname === 'bitbucket.org') {
       const m = u.pathname.match(/^\/([^/]+)\/([^/]+)\/pull-requests\/(\d+)/);
       if (!m) return null;
-      return { authType: 'cloud', project: m[1], repo: m[2], prId: parseInt(m[3], 10) };
+      return { project: m[1], repo: m[2], prId: parseInt(m[3], 10) };
     }
     const m = u.pathname.match(/\/projects\/([^/]+)\/repos\/([^/]+)\/pull-requests\/(\d+)/);
     if (!m) return null;
-    return { authType: 'datacenter', project: m[1], repo: m[2], prId: parseInt(m[3], 10) };
+    return { project: m[1], repo: m[2], prId: parseInt(m[3], 10) };
   } catch {
     return null;
   }

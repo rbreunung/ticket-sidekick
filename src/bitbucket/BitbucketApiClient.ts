@@ -67,7 +67,14 @@ export class BitbucketApiClient implements IBitbucketClient {
     const response = await fetch(url, {
       headers: { Authorization: this.authHeader, Accept: 'text/plain' },
     });
-    if (!response.ok) throw new Error(`Bitbucket Cloud API error ${response.status} at ${url}`);
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      if (response.status === 401) {
+        throw new Error(`Authentication failed (401). Run "Ticket Sidekick: Configure Bitbucket Cloud Credentials" and enter your Bitbucket username and an App Password (bitbucket.org → Personal settings → App passwords).`);
+      }
+      if (response.status === 404) throw new Error(`Not found: ${url}`);
+      throw new Error(`Bitbucket Cloud API error ${response.status} at ${url}${body ? ` — ${body}` : ''}`);
+    }
     return response.text();
   }
 
@@ -143,8 +150,10 @@ export class BitbucketApiClient implements IBitbucketClient {
     if (this.authType === 'cloud') {
       return this.cloudRequestText(`/repositories/${project}/${repo}/src/${commitHash}/${path}`);
     }
+    // The browse API is paginated (default limit: 25 lines). Fetch with a high limit to
+    // capture most source files in one request; very large files are truncated at 5000 lines.
     const data = await this.dcRequest<{ lines: Array<{ text: string }> }>(
-      `/projects/${project}/repos/${repo}/browse/${path}?at=${commitHash}`,
+      `/projects/${project}/repos/${repo}/browse/${path}?at=${commitHash}&limit=5000`,
     );
     return data.lines.map((l) => l.text).join('\n');
   }
