@@ -50,13 +50,19 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
 
     vscode.commands.registerCommand('ticket-sidekick.configureBitbucketCloud', async () => {
-      const apiToken = await vscode.window.showInputBox({
-        prompt: 'Enter your Bitbucket Cloud API token (bitbucket.org → Settings → API tokens)',
+      const username = await vscode.window.showInputBox({
+        prompt: 'Enter your Bitbucket Cloud username',
+        ignoreFocusOut: true,
+      });
+      if (!username) return;
+      const appPassword = await vscode.window.showInputBox({
+        prompt: 'Enter your Bitbucket App Password (bitbucket.org → Personal settings → App passwords)',
         password: true,
         ignoreFocusOut: true,
       });
-      if (apiToken) {
-        await configService.storeBitbucketToken(apiToken);
+      if (appPassword) {
+        const encoded = Buffer.from(`${username}:${appPassword}`).toString('base64');
+        await configService.storeBitbucketToken(encoded);
         vscode.window.showInformationMessage('Ticket Sidekick: Bitbucket Cloud credentials saved.');
       }
     }),

@@ -14,7 +14,9 @@ export class BitbucketApiClient implements IBitbucketClient {
   constructor(config: BitbucketApiClientConfig) {
     this.baseUrl = config.baseUrl.replace(/\/$/, '');
     this.authType = config.authType;
-    this.authHeader = `Bearer ${config.token}`;
+    this.authHeader = config.authType === 'cloud'
+      ? `Basic ${config.token}`
+      : `Bearer ${config.token}`;
   }
 
   private async dcRequest<T>(path: string): Promise<T> {
@@ -52,7 +54,7 @@ export class BitbucketApiClient implements IBitbucketClient {
       const body = await response.text().catch(() => '');
       if (response.status === 401) {
         const detail = body ? ` — ${body}` : '';
-        throw new Error(`Authentication failed (401)${detail}. Create a Bitbucket Cloud API token at bitbucket.org → Personal settings → API tokens.`);
+        throw new Error(`Authentication failed (401)${detail}. Run "Ticket Sidekick: Configure Bitbucket Cloud Credentials" and enter your Bitbucket username and an App Password (bitbucket.org → Personal settings → App passwords).`);
       }
       if (response.status === 404) throw new Error(`Not found: ${url}`);
       throw new Error(`Bitbucket Cloud API error ${response.status} at ${url}${body ? ` — ${body}` : ''}`);
@@ -76,8 +78,8 @@ export class BitbucketApiClient implements IBitbucketClient {
         return { displayName: data.display_name, emailAddress: '' };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('not supported for this endpoint')) {
-          return { displayName: '(add Account: Read scope to show your username)', emailAddress: '' };
+        if (msg.includes('403') || msg.includes('scope') || msg.includes('permission')) {
+          return { displayName: '(add Account: Read scope to your App Password to show your username)', emailAddress: '' };
         }
         throw err;
       }
