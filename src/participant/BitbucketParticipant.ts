@@ -212,42 +212,50 @@ export function createBitbucketParticipant(
     const service = new PrReviewService(client);
 
     try {
-      const MAX_REVIEWED_FILES = 20;
+      // Files are reviewed in chunks so each LLM call stays within context limits.
+      // Adjust CHUNK_SIZE down for models with small context windows (e.g. 16 k → 5).
+      const CHUNK_SIZE = 10;
 
       stream.markdown('_Fetching PR…_\n\n');
       const pr = await client.getPullRequest(parsed.project, parsed.repo, parsed.prId);
       const rawDiff = await client.getPullRequestDiff(parsed.project, parsed.repo, parsed.prId);
-      const allFileDiffs = parseDiff(rawDiff);
-      // Prioritise the most-changed files; cap total to keep the prompt manageable.
-      const fileDiffs = allFileDiffs
-        .slice()
-        .sort((a, b) => b.diff.length - a.diff.length)
-        .slice(0, MAX_REVIEWED_FILES);
-      const skipped = allFileDiffs.length - fileDiffs.length;
-      const fileNote = skipped > 0 ? ` (${skipped} smaller file${skipped !== 1 ? 's' : ''} skipped)` : '';
+      const fileDiffs = parseDiff(rawDiff);
 
-      // Pass 1: send diffs only — full file content is expensive and unnecessary for the
-      // initial review; the LLM requests specific files via additionalFilesNeeded if needed.
-      stream.markdown(`_Analysing ${fileDiffs.length} file${fileDiffs.length !== 1 ? 's' : ''}${fileNote}…_\n\n`);
-      const pass1Raw = await callLLM(service.buildPrompt(pr, fileDiffs), request.model, token);
-      const pass1 = await parseReviewResponse(pass1Raw);
-
-      let findings = pass1.findings;
-
-      if (pass1.additionalFilesNeeded.length > 0) {
-        const capped = pass1.additionalFilesNeeded.slice(0, 5);
-        stream.markdown(`_Fetching ${capped.length} context file${capped.length !== 1 ? 's' : ''} for deeper analysis…_\n\n`);
-        const extraContents = await service.gatherFileContents(
-          parsed.project, parsed.repo, pr.fromCommitHash,
-          capped,
-          makeWorkspaceReader,
-        );
-        const pass2Raw = await callLLM(service.buildPrompt(pr, fileDiffs, extraContents), request.model, token);
-        const pass2 = await parseReviewResponse(pass2Raw);
-        findings = pass2.findings;
+      const chunks: typeof fileDiffs[] = [];
+      for (let i = 0; i < fileDiffs.length; i += CHUNK_SIZE) {
+        chunks.push(fileDiffs.slice(i, i + CHUNK_SIZE));
       }
 
-      const numbered = findings.map((f, i) => ({ ...f, id: i + 1 }));
+      let allFindings: Array<Omit<ReviewFinding, 'id'>> = [];
+
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        const from = i * CHUNK_SIZE + 1;
+        const to = Math.min((i + 1) * CHUNK_SIZE, fileDiffs.length);
+        const batchLabel = chunks.length > 1 ? ` · batch ${i + 1}/${chunks.length}` : '';
+        stream.markdown(`_Analysing files ${from}–${to} of ${fileDiffs.length}${batchLabel}…_\n\n`);
+
+        const chunkRaw = await callLLM(service.buildPrompt(pr, chunk), request.model, token);
+        const { findings, additionalFilesNeeded } = await parseReviewResponse(chunkRaw);
+        allFindings = allFindings.concat(findings);
+
+        // Pass 2 with extra context only makes sense for single-chunk reviews;
+        // multi-chunk reviews already split the prompt to fit the context window.
+        if (chunks.length === 1 && additionalFilesNeeded.length > 0) {
+          const capped = additionalFilesNeeded.slice(0, 5);
+          stream.markdown(`_Fetching ${capped.length} context file${capped.length !== 1 ? 's' : ''} for deeper analysis…_\n\n`);
+          const extraContents = await service.gatherFileContents(
+            parsed.project, parsed.repo, pr.fromCommitHash,
+            capped,
+            makeWorkspaceReader,
+          );
+          const pass2Raw = await callLLM(service.buildPrompt(pr, chunk, extraContents), request.model, token);
+          const pass2 = await parseReviewResponse(pass2Raw);
+          allFindings = pass2.findings;
+        }
+      }
+
+      const numbered = allFindings.map((f, i) => ({ ...f, id: i + 1 }));
       const output = service.formatReview(numbered, pr, fileDiffs.length);
       stream.markdown(output);
 
