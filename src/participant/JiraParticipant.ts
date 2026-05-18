@@ -976,9 +976,31 @@ export function createJiraParticipant(
     try {
       let result: string;
       switch (intent.operation) {
-        case 'getTicket':
-          result = await ticketService.getTicket(ticketKey!);
+        case 'getTicket': {
+          const base = await ticketService.getTicket(ticketKey!);
+          const MAX_SHOW = 20;
+          const { comments, total } = await ticketService.getIssueComments(ticketKey!, MAX_SHOW);
+          stream.markdown(base);
+          if (comments.length > 0) {
+            const synthesis = await synthesizeComments(
+              serializeCommentsForLLM(comments),
+              null,
+              request.model,
+              token,
+            );
+            stream.markdown('\n\n**Comments:**\n\n' + synthesis);
+            if (total > MAX_SHOW) {
+              const moreSession: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: null };
+              await ws.update('jira.session.moreComments', moreSession);
+              stream.markdown(`\n\n_${total - MAX_SHOW} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:more-comments -->`);
+            } else {
+              stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
+            }
+            return;
+          }
+          result = base;
           break;
+        }
         case 'getComments': {
           const MAX_INITIAL = 20;
           const { comments, total } = await ticketService.getIssueComments(ticketKey!, MAX_INITIAL);
