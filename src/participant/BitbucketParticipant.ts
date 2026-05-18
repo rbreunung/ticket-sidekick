@@ -33,6 +33,7 @@ async function callLLM(
   prompt: string,
   model: vscode.LanguageModelChat,
   token: vscode.CancellationToken,
+  onChunk?: (totalChars: number) => void,
 ): Promise<string> {
   const response = await model.sendRequest(
     [vscode.LanguageModelChatMessage.User(prompt)],
@@ -42,8 +43,23 @@ async function callLLM(
   let text = '';
   for await (const chunk of response.text) {
     text += chunk;
+    onChunk?.(text.length);
   }
   return text.trim();
+}
+
+async function callLLMWithProgress(
+  prompt: string,
+  model: vscode.LanguageModelChat,
+  token: vscode.CancellationToken,
+  statusMessage: string,
+): Promise<string> {
+  return vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Window, title: 'Ticket Sidekick' },
+    (progress) => callLLM(prompt, model, token, (chars) => {
+      progress.report({ message: `${statusMessage} · ${chars.toLocaleString()} chars…` });
+    }),
+  );
 }
 
 async function parseReviewResponse(raw: string): Promise<{
@@ -161,7 +177,7 @@ export function createBitbucketParticipant(
             `The developer asked: "${prompt}"\n\n` +
             `Available findings:\n${session.findings.map((f) => `#${f.id}: [${f.severity}] ${f.title} (${f.file})`).join('\n')}\n\n` +
             `Reply with ONLY the finding number (e.g. "2") that best matches the question, or "none" if no match.`;
-          const matchRaw = await callLLM(matchPrompt, request.model, token);
+          const matchRaw = await callLLMWithProgress(matchPrompt, request.model, token, 'Matching finding');
           const num = parseInt(matchRaw.trim(), 10);
           finding = isNaN(num) ? undefined : session.findings.find((f) => f.id === num);
         }
@@ -180,7 +196,7 @@ export function createBitbucketParticipant(
           `Recommendation: ${finding.recommendation}\n\n` +
           `Developer's question: ${prompt}`;
 
-        const answer = await callLLM(followUpPrompt, request.model, token);
+        const answer = await callLLMWithProgress(followUpPrompt, request.model, token, 'Explaining finding');
         stream.markdown(`**Finding #${finding.id} — ${finding.title}**\n\n${answer}\n\n<!-- bitbucket:review-session -->`);
         return;
       }
@@ -244,7 +260,11 @@ export function createBitbucketParticipant(
         const batchLabel = chunks.length > 1 ? ` · batch ${i + 1}/${chunks.length}` : '';
         stream.markdown(`_Analysing files ${from}–${to} of ${fileDiffs.length}${batchLabel}…_\n\n`);
 
-        const chunkRaw = await callLLM(service.buildPrompt(pr, chunk, undefined, config.reviewInstructions), request.model, token);
+        const batchStatus = chunks.length > 1 ? `Batch ${i + 1}/${chunks.length}` : 'Analysing';
+        const chunkRaw = await callLLMWithProgress(
+          service.buildPrompt(pr, chunk, undefined, config.reviewInstructions),
+          request.model, token, batchStatus,
+        );
         const { findings, additionalFilesNeeded } = await parseReviewResponse(chunkRaw);
         let chunkFindings = findings;
 
@@ -257,11 +277,26 @@ export function createBitbucketParticipant(
             capped,
             makeWorkspaceReader,
           );
-          const pass2Raw = await callLLM(service.buildPrompt(pr, chunk, extraContents, config.reviewInstructions), request.model, token);
+          const pass2Raw = await callLLMWithProgress(
+            service.buildPrompt(pr, chunk, extraContents, config.reviewInstructions),
+            request.model, token, `${batchStatus} pass 2`,
+          );
           chunkFindings = (await parseReviewResponse(pass2Raw)).findings;
         }
 
         allFindings = allFindings.concat(chunkFindings);
+
+        if (chunks.length > 1 && i < chunks.length - 1) {
+          const crit = chunkFindings.filter((f) => f.severity === 'critical').length;
+          const warn = chunkFindings.filter((f) => f.severity === 'warning').length;
+          const sugg = chunkFindings.filter((f) => f.severity === 'suggestion').length;
+          const tally = [
+            crit ? `${crit} 🔴` : '',
+            warn ? `${warn} 🟡` : '',
+            sugg ? `${sugg} 🔵` : '',
+          ].filter(Boolean).join(' · ') || 'no issues';
+          stream.markdown(`_Batch ${i + 1}/${chunks.length} done · ${tally}_\n\n`);
+        }
       }
 
       const numbered = allFindings.map((f, i) => ({ ...f, id: i + 1 }));
