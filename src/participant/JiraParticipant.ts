@@ -243,7 +243,7 @@ async function resolveProjectKey(
 ): Promise<string | null> {
   if (fromIntent) return fromIntent;
 
-  const defaultProject = vscode.workspace.getConfiguration('ticketSidekick').get<string>('defaultProject') ?? '';
+  const defaultProject = vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.defaultProject') ?? '';
   if (defaultProject) return defaultProject;
 
   stream.markdown('_No project key found in your message or settings — opening input box…_\n\n');
@@ -688,7 +688,7 @@ async function handleRunCleanup(
   await streamReviewScreen(batchSession, stream, workspaceState, header);
 }
 
-export function createParticipant(
+export function createJiraParticipant(
   context: vscode.ExtensionContext,
   configService: ConfigService,
 ): vscode.ChatParticipant {
@@ -702,7 +702,7 @@ export function createParticipant(
 
     if (!config.baseUrl) {
       stream.markdown(
-        '**Jira base URL not configured.**\n\nAdd `ticketSidekick.baseUrl` to your VS Code settings (e.g. `https://jira.mycompany.com`).',
+        '**Jira base URL not configured.**\n\nAdd `ticketSidekick.jira.baseUrl` to your VS Code settings (e.g. `https://jira.mycompany.com`).',
       );
       return;
     }
@@ -722,10 +722,9 @@ export function createParticipant(
       baseUrl: config.baseUrl,
       authType: config.authType,
       token: config.token,
-      apiVersion: config.apiVersion,
     });
     if (config.showConnectionInfo) {
-      stream.markdown(`_${config.baseUrl} · API v${config.apiVersion} · ${config.authType}_\n\n`);
+      stream.markdown(`_${config.baseUrl} · API v2 · ${config.authType}_\n\n`);
     }
     const ticketService = new TicketService(jiraClient);
     const ws = context.workspaceState;
@@ -903,7 +902,7 @@ export function createParticipant(
           `| Setting | Value |\n` +
           `|---|---|\n` +
           `| Base URL | \`${config.baseUrl}\` |\n` +
-          `| API version | v${config.apiVersion} |\n` +
+          `| API version | v2 |\n` +
           `| Auth type | ${config.authType} |\n` +
           `| Logged in as | ${user.displayName} |\n`,
         );
@@ -913,7 +912,7 @@ export function createParticipant(
           `| Setting | Value |\n` +
           `|---|---|\n` +
           `| Base URL | \`${config.baseUrl}\` |\n` +
-          `| API version | v${config.apiVersion} |\n` +
+          `| API version | v2 |\n` +
           `| Auth type | ${config.authType} |\n\n` +
           `Error: ${err instanceof Error ? err.message : String(err)}`,
         );

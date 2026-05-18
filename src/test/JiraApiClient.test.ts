@@ -28,7 +28,7 @@ describe('JiraApiClient', () => {
       const client = new JiraApiClient(BASE_CONFIG);
       await client.getIssue('PROJ-123');
       expect(mockFetch).toHaveBeenCalledWith(
-        'https://jira.example.com/rest/api/3/issue/PROJ-123',
+        'https://jira.example.com/rest/api/2/issue/PROJ-123',
         expect.objectContaining({
           headers: expect.objectContaining({ Authorization: 'Bearer my-pat-token' }),
         }),
@@ -53,13 +53,13 @@ describe('JiraApiClient', () => {
     it('throws auth error on 401 and includes the URL', async () => {
       vi.stubGlobal('fetch', makeFetch({}, 401));
       const client = new JiraApiClient(BASE_CONFIG);
-      await expect(client.getIssue('PROJ-123')).rejects.toThrow('https://jira.example.com/rest/api/3/issue/PROJ-123');
+      await expect(client.getIssue('PROJ-123')).rejects.toThrow('https://jira.example.com/rest/api/2/issue/PROJ-123');
     });
 
     it('throws not found error on 404 and includes the URL', async () => {
       vi.stubGlobal('fetch', makeFetch({}, 404));
       const client = new JiraApiClient(BASE_CONFIG);
-      await expect(client.getIssue('PROJ-999')).rejects.toThrow('https://jira.example.com/rest/api/3/issue/PROJ-999');
+      await expect(client.getIssue('PROJ-999')).rejects.toThrow('https://jira.example.com/rest/api/2/issue/PROJ-999');
     });
   });
 
@@ -70,15 +70,15 @@ describe('JiraApiClient', () => {
       const client = new JiraApiClient({ ...BASE_CONFIG, baseUrl: 'https://jira.example.com/' });
       await client.getIssue('PROJ-1');
       expect(mockFetch).toHaveBeenCalledWith(
-        'https://jira.example.com/rest/api/3/issue/PROJ-1',
+        'https://jira.example.com/rest/api/2/issue/PROJ-1',
         expect.anything(),
       );
     });
 
-    it('uses /rest/api/2 when apiVersion is 2', async () => {
+    it('always uses /rest/api/2', async () => {
       const mockFetch = makeFetch({ id: '1', key: 'PROJ-1', fields: {} });
       vi.stubGlobal('fetch', mockFetch);
-      const client = new JiraApiClient({ ...BASE_CONFIG, apiVersion: 2 });
+      const client = new JiraApiClient(BASE_CONFIG);
       await client.getIssue('PROJ-1');
       expect(mockFetch).toHaveBeenCalledWith(
         'https://jira.example.com/rest/api/2/issue/PROJ-1',
@@ -88,21 +88,10 @@ describe('JiraApiClient', () => {
   });
 
   describe('addComment', () => {
-    it('posts comment body in ADF format for v3', async () => {
+    it('posts comment body as plain string', async () => {
       const mockFetch = makeFetch({}, 201);
       vi.stubGlobal('fetch', mockFetch);
       const client = new JiraApiClient(BASE_CONFIG);
-      await client.addComment('PROJ-123', 'Looks good!');
-      const [, options] = mockFetch.mock.calls[0] as [string, RequestInit];
-      const body = JSON.parse(options.body as string);
-      expect(body.body.type).toBe('doc');
-      expect(body.body.content[0].content[0].text).toBe('Looks good!');
-    });
-
-    it('posts comment body as plain string for v2', async () => {
-      const mockFetch = makeFetch({}, 201);
-      vi.stubGlobal('fetch', mockFetch);
-      const client = new JiraApiClient({ ...BASE_CONFIG, apiVersion: 2 });
       await client.addComment('PROJ-123', 'Looks good!');
       const [, options] = mockFetch.mock.calls[0] as [string, RequestInit];
       const body = JSON.parse(options.body as string);
@@ -118,7 +107,7 @@ describe('JiraApiClient', () => {
       const result = await client.searchJql('project = PROJ');
       expect(result.issues).toHaveLength(0);
       const [url, options] = mockFetch.mock.calls[0] as [string, RequestInit];
-      expect(url).toContain('/search/jql');
+      expect(url).toContain('/search?');
       expect(url).toContain('jql=project%20%3D%20PROJ');
       expect(options.method).toBeUndefined(); // GET has no explicit method
     });
@@ -136,7 +125,7 @@ describe('JiraApiClient', () => {
     it('error message hints at baseUrl misconfiguration', async () => {
       vi.stubGlobal('fetch', makeFetch(htmlBody, 200, 'text/html; charset=utf-8'));
       const client = new JiraApiClient(BASE_CONFIG);
-      await expect(client.getIssue('PROJ-1')).rejects.toThrow('ticketSidekick.baseUrl');
+      await expect(client.getIssue('PROJ-1')).rejects.toThrow('ticketSidekick.jira.baseUrl');
     });
 
     it('error message includes a preview of the HTML response', async () => {

@@ -1,0 +1,3 @@
+{
+  "content": "import { db } from '../db';\nimport { Request, Response } from 'express';\n\nexport async function login(req: Request, res: Response) {\n  const { username, password } = req.body;\n  const user = await db.query('SELECT * FROM users WHERE username = ' + username);\n  if (!user) return res.status(401).send('Unauthorized');\n  const token = generateToken(user);\n  res.json({ token });\n}\n"
+}

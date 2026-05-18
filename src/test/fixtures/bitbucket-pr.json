@@ -1,0 +1,11 @@
+{
+  "id": 42,
+  "title": "Add OAuth login flow",
+  "description": "Implements OAuth 2.0 login with Google. See VSJI-100 for requirements.",
+  "author": {
+    "displayName": "Jane Smith",
+    "emailAddress": "jane.smith@example.com"
+  },
+  "targetBranch": "main",
+  "fromCommitHash": "abc123def456abc123def456abc123def456abc1"
+}

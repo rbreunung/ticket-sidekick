@@ -2,7 +2,7 @@
   "name": "ticket-sidekick",
   "displayName": "Ticket Sidekick",
   "description": "Manage Jira tickets with GitHub Copilot Chat",
-  "version": "0.0.3",
+  "version": "0.0.5",
   "license": "MIT",
   "publisher": "RobertBreunung",
   "engines": {
@@ -26,68 +26,106 @@
         "fullName": "Ticket Sidekick",
         "description": "Manage Jira tickets with natural language",
         "isSticky": true
+      },
+      {
+        "id": "ticket-sidekick.bitbucket",
+        "name": "bitbucket",
+        "fullName": "Ticket Sidekick — Bitbucket",
+        "description": "Review Bitbucket pull requests with natural language",
+        "isSticky": true
       }
     ],
     "commands": [
       {
         "command": "ticket-sidekick.setDataCenterToken",
-        "title": "Ticket Sidekick: Set Personal Access Token"
+        "title": "Ticket Sidekick: Set Jira Personal Access Token"
       },
       {
         "command": "ticket-sidekick.configureCloud",
-        "title": "Ticket Sidekick: Configure Cloud Credentials"
+        "title": "Ticket Sidekick: Configure Jira Cloud Credentials"
+      },
+      {
+        "command": "ticket-sidekick.setBitbucketDataCenterToken",
+        "title": "Ticket Sidekick: Set Bitbucket Personal Access Token"
+      },
+      {
+        "command": "ticket-sidekick.configureBitbucketCloud",
+        "title": "Ticket Sidekick: Configure Bitbucket Cloud Credentials"
       }
     ],
-    "configuration": {
-      "title": "Ticket Sidekick",
-      "properties": {
-        "ticketSidekick.baseUrl": {
-          "type": "string",
-          "description": "Base URL of your Jira instance (e.g. https://jira.mycompany.com)"
-        },
-        "ticketSidekick.authType": {
-          "type": "string",
-          "enum": [
-            "datacenter",
-            "cloud"
-          ],
-          "default": "datacenter",
-          "description": "Authentication mode: 'datacenter' uses Bearer PAT, 'cloud' uses Basic email:apiToken"
-        },
-        "ticketSidekick.requiredFields": {
-          "type": "array",
-          "items": {
-            "type": "string"
+    "configuration": [
+      {
+        "id": "jira",
+        "title": "Ticket Sidekick — Jira",
+        "properties": {
+          "ticketSidekick.jira.baseUrl": {
+            "type": "string",
+            "description": "Base URL of your Jira instance (e.g. https://jira.mycompany.com)"
           },
-          "default": [],
-          "description": "Field names that must be set for ticket validation (e.g. [\"assignee\", \"priority\"])"
-        },
-        "ticketSidekick.defaultProject": {
-          "type": "string",
-          "default": "",
-          "description": "Default Jira project key (e.g. 'VSJI'). Used when creating tickets if no project is specified in your prompt."
-        },
-        "ticketSidekick.apiVersion": {
-          "type": "number",
-          "enum": [
-            2,
-            3
-          ],
-          "default": 3,
-          "description": "Jira REST API version. Set to 2 if your server does not expose /rest/api/3 (common on older Data Center instances)."
-        },
-        "ticketSidekick.showConnectionInfo": {
-          "type": "boolean",
-          "default": false,
-          "description": "When enabled, each @jira response starts with an italic line showing the active base URL, API version, and auth type."
+          "ticketSidekick.jira.authType": {
+            "type": "string",
+            "enum": [
+              "datacenter",
+              "cloud"
+            ],
+            "default": "datacenter",
+            "description": "Jira authentication mode: 'datacenter' uses Bearer PAT, 'cloud' uses Basic email:Atlassian-apiToken"
+          },
+          "ticketSidekick.jira.defaultProject": {
+            "type": "string",
+            "default": "",
+            "description": "Default Jira project key (e.g. 'PROJ'). Used when creating tickets if no project is specified in your prompt."
+          },
+          "ticketSidekick.jira.requiredFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": [],
+            "description": "Jira field names that must be set for ticket validation (e.g. [\"assignee\", \"priority\"])"
+          },
+          "ticketSidekick.jira.showConnectionInfo": {
+            "type": "boolean",
+            "default": false,
+            "description": "When enabled, each @jira response starts with an italic line showing the active base URL, API version, and auth type."
+          }
+        }
+      },
+      {
+        "id": "bitbucket",
+        "title": "Ticket Sidekick — Bitbucket",
+        "properties": {
+          "ticketSidekick.bitbucket.baseUrl": {
+            "type": "string",
+            "description": "Base URL of your Bitbucket Data Center instance (e.g. https://bitbucket.mycompany.com). Leave empty for Bitbucket Cloud."
+          },
+          "ticketSidekick.bitbucket.authType": {
+            "type": "string",
+            "enum": [
+              "datacenter",
+              "cloud"
+            ],
+            "default": "datacenter",
+            "description": "Bitbucket authentication mode: 'datacenter' uses Bearer PAT, 'cloud' uses Basic base64(username:App-password)"
+          },
+          "ticketSidekick.bitbucket.showConnectionInfo": {
+            "type": "boolean",
+            "default": false,
+            "description": "When enabled, each @bitbucket response (except check) starts with an italic line showing the active base URL, API version, and auth type."
+          },
+          "ticketSidekick.bitbucket.reviewInstructions": {
+            "type": "string",
+            "default": "",
+            "description": "Additional instructions appended to the built-in PR review prompt. Use this to add project-specific guidance, e.g. 'This project follows Google Style Guide' or 'Focus on security issues only'. The built-in grounding rules and output format are always included."
+          }
         }
       }
-    }
+    ]
   },
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "vitest run --reporter=verbose",
+    "test": "vitest run --reporter=verbose --config vitest.config.ts",
     "test:e2e": "node ./out/test/runTest.js",
     "package": "vsce package"
   },
