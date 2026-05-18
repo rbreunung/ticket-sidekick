@@ -117,7 +117,7 @@ This means you can `@jira show PROJ-123`, then immediately follow up with `@jira
 ### Optional: default project
 
 ```json
-"ticketSidekick.jira.defaultProject": "VSJI"
+"ticketSidekick.jira.defaultProject": "PROJ"
 ```
 
 When set, the `create` command skips the project input box and uses this key automatically. You can still override it by including a project key in your prompt.
@@ -130,15 +130,7 @@ When set, the `create` command skips the project input box and uses this key aut
 
 Used by the `check required fields` command.
 
-### Optional: Jira API version
-
-```json
-"ticketSidekick.jira.apiVersion": 2
-```
-
-Default is `3`. Set to `2` if your Data Center instance does not expose `/rest/api/3` (common on Jira versions before 8.4). On API v2, descriptions and comments are sent as plain text instead of Atlassian Document Format.
-
-### Optional: connection info banner
+### Optional: Jira connection info banner
 
 ```json
 "ticketSidekick.jira.showConnectionInfo": true
@@ -380,6 +372,14 @@ The `@bitbucket` participant works with any model available in GitHub Copilot Ch
 - If a review fails with a JSON error, the error message shows the raw model output — use it to decide whether to retry or switch to a larger model
 
 The batch size is currently fixed at 10 files per LLM call. If your local model has a smaller context window and individual diffs are large, you can reduce this by changing the `CHUNK_SIZE` constant near the top of `src/participant/BitbucketParticipant.ts`.
+
+### Optional: Bitbucket connection info banner
+
+```json
+"ticketSidekick.bitbucket.showConnectionInfo": true
+```
+
+When enabled, every `@bitbucket` response (except `check`) starts with an italic line showing the active base URL, API version, and auth type. Off by default.
 
 ---
 

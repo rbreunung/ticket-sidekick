@@ -71,19 +71,10 @@
             "default": "datacenter",
             "description": "Jira authentication mode: 'datacenter' uses Bearer PAT, 'cloud' uses Basic email:Atlassian-apiToken"
           },
-          "ticketSidekick.jira.apiVersion": {
-            "type": "number",
-            "enum": [
-              2,
-              3
-            ],
-            "default": 3,
-            "description": "Jira REST API version. Set to 2 if your server does not expose /rest/api/3 (common on older Data Center instances)."
-          },
           "ticketSidekick.jira.defaultProject": {
             "type": "string",
             "default": "",
-            "description": "Default Jira project key (e.g. 'VSJI'). Used when creating tickets if no project is specified in your prompt."
+            "description": "Default Jira project key (e.g. 'PROJ'). Used when creating tickets if no project is specified in your prompt."
           },
           "ticketSidekick.jira.requiredFields": {
             "type": "array",
@@ -115,7 +106,12 @@
               "cloud"
             ],
             "default": "datacenter",
-            "description": "Bitbucket authentication mode: 'datacenter' uses Bearer PAT, 'cloud' uses Bearer API token (create at bitbucket.org → Personal settings → API tokens)"
+            "description": "Bitbucket authentication mode: 'datacenter' uses Bearer PAT, 'cloud' uses Basic base64(username:App-password)"
+          },
+          "ticketSidekick.bitbucket.showConnectionInfo": {
+            "type": "boolean",
+            "default": false,
+            "description": "When enabled, each @bitbucket response (except check) starts with an italic line showing the active base URL, API version, and auth type."
           }
         }
       }

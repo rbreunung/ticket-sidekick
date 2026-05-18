@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { BitbucketApiClient } from '../bitbucket/BitbucketApiClient';
+import type { BitbucketConfig } from '../bitbucket/IBitbucketClient';
 import type { ConfigService } from '../services/ConfigService';
 import { PrReviewService } from '../services/PrReviewService';
 import {
@@ -70,9 +71,8 @@ async function parseReviewResponse(raw: string): Promise<{
 
 async function handleCheck(
   stream: vscode.ChatResponseStream,
-  configService: ConfigService,
+  config: BitbucketConfig,
 ): Promise<void> {
-  const config = await configService.getBitbucketConfig();
   const isConfigured = config.authType === 'cloud'
     ? !!config.token
     : !!(config.baseUrl && config.token);
@@ -84,6 +84,7 @@ async function handleCheck(
     return;
   }
   const effectiveUrl = config.authType === 'cloud' ? 'https://api.bitbucket.org' : config.baseUrl!;
+  const apiVersion = config.authType === 'cloud' ? 'v2.0' : 'v1.0';
   try {
     const client = new BitbucketApiClient({
       baseUrl: config.baseUrl ?? '',
@@ -95,6 +96,7 @@ async function handleCheck(
       `**Bitbucket connection OK**\n\n` +
       `| Setting | Value |\n|---|---|\n` +
       `| Base URL | \`${effectiveUrl}\` |\n` +
+      `| API version | ${apiVersion} |\n` +
       `| Auth type | ${config.authType} |\n` +
       `| Logged in as | ${user.displayName} |\n`,
     );
@@ -103,6 +105,7 @@ async function handleCheck(
       `**Bitbucket connection failed**\n\n` +
       `| Setting | Value |\n|---|---|\n` +
       `| Base URL | \`${effectiveUrl}\` |\n` +
+      `| API version | ${apiVersion} |\n` +
       `| Auth type | ${config.authType} |\n\n` +
       `Error: ${err instanceof Error ? err.message : String(err)}`,
     );
@@ -127,11 +130,18 @@ export function createBitbucketParticipant(
     token: vscode.CancellationToken,
   ): Promise<void> => {
     const prompt = request.prompt.trim();
+    const config = await configService.getBitbucketConfig();
 
     // 1. check command
     if (/^check\b/i.test(prompt)) {
-      await handleCheck(stream, configService);
+      await handleCheck(stream, config);
       return;
+    }
+
+    if (config.showConnectionInfo) {
+      const effectiveUrl = config.authType === 'cloud' ? 'https://api.bitbucket.org' : (config.baseUrl ?? '(not set)');
+      const apiVersion = config.authType === 'cloud' ? 'v2.0' : 'v1.0';
+      stream.markdown(`_${effectiveUrl} · API ${apiVersion} · ${config.authType}_\n\n`);
     }
 
     const ws = context.workspaceState;
@@ -187,7 +197,6 @@ export function createBitbucketParticipant(
       return;
     }
 
-    const config = await configService.getBitbucketConfig();
     const isConfigured = config.authType === 'cloud'
       ? !!config.token
       : !!(config.baseUrl && config.token);

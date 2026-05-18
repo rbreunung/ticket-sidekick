@@ -722,10 +722,9 @@ export function createJiraParticipant(
       baseUrl: config.baseUrl,
       authType: config.authType,
       token: config.token,
-      apiVersion: config.apiVersion,
     });
     if (config.showConnectionInfo) {
-      stream.markdown(`_${config.baseUrl} · API v${config.apiVersion} · ${config.authType}_\n\n`);
+      stream.markdown(`_${config.baseUrl} · API v2 · ${config.authType}_\n\n`);
     }
     const ticketService = new TicketService(jiraClient);
     const ws = context.workspaceState;
@@ -903,7 +902,7 @@ export function createJiraParticipant(
           `| Setting | Value |\n` +
           `|---|---|\n` +
           `| Base URL | \`${config.baseUrl}\` |\n` +
-          `| API version | v${config.apiVersion} |\n` +
+          `| API version | v2 |\n` +
           `| Auth type | ${config.authType} |\n` +
           `| Logged in as | ${user.displayName} |\n`,
         );
@@ -913,7 +912,7 @@ export function createJiraParticipant(
           `| Setting | Value |\n` +
           `|---|---|\n` +
           `| Base URL | \`${config.baseUrl}\` |\n` +
-          `| API version | v${config.apiVersion} |\n` +
+          `| API version | v2 |\n` +
           `| Auth type | ${config.authType} |\n\n` +
           `Error: ${err instanceof Error ? err.message : String(err)}`,
         );

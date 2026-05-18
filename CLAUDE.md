@@ -40,7 +40,7 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/jira/IJiraClient.ts` | All Jira types + IJiraClient interface |
 | `src/jira/JiraApiClient.ts` | Real HTTP; builds auth header from authType |
 | `src/bitbucket/IBitbucketClient.ts` | All Bitbucket types + IBitbucketClient interface |
-| `src/bitbucket/BitbucketApiClient.ts` | Real HTTP; Data Center (Bearer PAT) + Cloud (Bearer API token) |
+| `src/bitbucket/BitbucketApiClient.ts` | Real HTTP; Data Center (Bearer PAT) + Cloud (Basic base64(username:apppassword)) |
 | `src/services/TicketService.ts` | Jira business logic; depends on IJiraClient |
 | `src/services/PrReviewService.ts` | PR review logic: diff parsing, file gathering, two-pass LLM prompt building, result formatting |
 | `src/services/ConfigService.ts` | VS Code settings + SecretStorage for both Jira and Bitbucket |
@@ -92,10 +92,12 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
 
 ## Jira API
 
-- Base path: `<baseUrl>/rest/api/3/`
+- Base path: `<baseUrl>/rest/api/2/` — used for all standard operations on both Data Center and Cloud
 - Data Center auth: `Authorization: Bearer <PAT>`
 - Cloud auth: `Authorization: Basic base64(email:apiToken)`
-- Description fields use Atlassian Document Format (ADF) — wrap plain text with `wrapInAdf()` in TicketService
+- Descriptions and comments are always sent and received as **plain strings** (Jira wiki markup). ADF is not used; `wrapInAdf()` has been removed.
+- For Cloud-only fields that require the v3 API: add a `requestV3()` private method in `JiraApiClient` when the need arises. No current operations require it.
+- Reading: `extractTextFromAdf()` in `TicketService` handles both plain strings (v2 read) and ADF objects (legacy rich content), so existing tickets with ADF descriptions display correctly.
 - Agile API base path: `<baseUrl>/rest/agile/1.0/` — used for sprint resolution (`getSprintByName`)
 - Teams API base path: `<baseUrl>/rest/teams/1.0/` — used for Data Center team resolution (`getTeamByName`); Cloud does not support team lookup by name, use `id` in the template instead
 
@@ -105,7 +107,7 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
   - Auth: `Authorization: Bearer <PAT>`
   - Health probe: `GET /profile/recent/repos?limit=1` (no "current user" endpoint exists in API 1.0)
 - Cloud base: `https://api.bitbucket.org/2.0/`
-  - Auth: `Authorization: Bearer <API token>` — Bitbucket Cloud API tokens (not Atlassian API tokens)
+  - Auth: `Authorization: Basic base64(username:apppassword)` — App Passwords from bitbucket.org → Personal settings → App passwords; **not** Atlassian API tokens
   - Current user: `GET /user` (requires Account: Read scope; gracefully degrades if scope absent)
 - PR URL patterns:
   - Data Center: `<baseUrl>/projects/{KEY}/repos/{slug}/pull-requests/{id}`
@@ -120,7 +122,6 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
 | --- | --- |
 | Base URL | `ticketSidekick.jira.baseUrl` |
 | Auth type | `ticketSidekick.jira.authType` (`datacenter` \| `cloud`) |
-| API version | `ticketSidekick.jira.apiVersion` (2 \| 3) |
 | Default project | `ticketSidekick.jira.defaultProject` |
 | Required fields | `ticketSidekick.jira.requiredFields` |
 | Show connection info | `ticketSidekick.jira.showConnectionInfo` |
@@ -131,6 +132,7 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
 | --- | --- |
 | Base URL (DC only) | `ticketSidekick.bitbucket.baseUrl` |
 | Auth type | `ticketSidekick.bitbucket.authType` (`datacenter` \| `cloud`) |
+| Show connection info | `ticketSidekick.bitbucket.showConnectionInfo` |
 
 ## Credentials
 
@@ -139,7 +141,7 @@ Always stored in `vscode.ExtensionContext.secrets` (VS Code SecretStorage, OS-en
 | Secret key | Contents |
 | --- | --- |
 | `ticket-sidekick.token` | Jira: PAT (DC) or `base64(email:apiToken)` (Cloud) |
-| `ticket-sidekick.bitbucket.token` | Bitbucket: PAT (DC) or Bearer API token (Cloud) |
+| `ticket-sidekick.bitbucket.token` | Bitbucket: PAT (DC) or `base64(username:apppassword)` (Cloud) |
 
 ## Branch ticket detection
 
@@ -244,7 +246,7 @@ When a follow-up prompt arrives without an explicit ticket key, the handler scan
 
 ## Workflow discovery
 
-`@jira discover workflow VSJI Bug` samples tickets across all statuses, calls `getTransitions` on a representative per status, and builds a directed graph. Saved to `.jira-workflow-cache.json` at the workspace root. Re-run any time the workflow changes.
+`@jira discover workflow PROJ Bug` samples tickets across all statuses, calls `getTransitions` on a representative per status, and builds a directed graph. Saved to `.jira-workflow-cache.json` at the workspace root. Re-run any time the workflow changes.
 
 `WorkflowService.findPath(graph, from, to)` uses BFS to find the shortest sequence of transitions from the current status to the target state.
 
@@ -256,7 +258,7 @@ When a follow-up prompt arrives without an explicit ticket key, the handler scan
 - `resolution` — optional; if omitted and target is a closed state, asked in chat once before the review screen
 - `closeSubtasks` — if true, open subtasks appear in the review and are transitioned before their parent
 
-Trigger: `@jira run cleanup "rule name"` or ad-hoc `@jira close VSJI bugs in "Fix Version 3.2"` (exact version match required).
+Trigger: `@jira run cleanup "rule name"` or ad-hoc `@jira close PROJ bugs in "Fix Version 3.2"` (exact version match required).
 
 Review screen shows all tickets with their subtasks and proposed transitions. User replies: **ok**, **(c)** to cancel the run, or key numbers to skip (cascading: subtask skip → parent skipped; parent skip → all subtasks skipped).
 

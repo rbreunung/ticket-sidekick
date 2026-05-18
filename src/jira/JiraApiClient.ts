@@ -29,35 +29,25 @@ export interface JiraApiClientConfig {
   baseUrl: string;
   authType: AuthType;
   token: string;
-  apiVersion?: 2 | 3;
 }
 
 export class JiraApiClient implements IJiraClient {
   private readonly baseUrl: string;
   private readonly authHeader: string;
   private readonly authType: AuthType;
-  private readonly apiVersion: 2 | 3;
 
   constructor(config: JiraApiClientConfig) {
     this.baseUrl = config.baseUrl.replace(/\/$/, '');
     this.authType = config.authType;
-    this.apiVersion = config.apiVersion ?? 3;
     this.authHeader = config.authType === 'cloud'
       ? `Basic ${config.token}`
       : `Bearer ${config.token}`;
   }
 
-  private wrapDescription(text: string): unknown {
-    if (this.apiVersion === 2) return text;
-    return {
-      type: 'doc',
-      version: 1,
-      content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
-    };
-  }
-
+  // Descriptions and comments always use REST API v2 (plain text / Jira wiki markup).
+  // For Cloud-only fields that require v3 ADF, use requestV3() when needed.
   private async request<T>(path: string, options: RequestInit = {}): Promise<T> {
-    const url = `${this.baseUrl}/rest/api/${this.apiVersion}${path}`;
+    const url = `${this.baseUrl}/rest/api/2${path}`;
     const response = await fetch(url, {
       ...options,
       headers: {
@@ -111,30 +101,23 @@ export class JiraApiClient implements IJiraClient {
   }
 
   async updateIssue(issueKey: string, fields: Record<string, unknown>): Promise<void> {
-    const serialized = { ...fields };
-    if (typeof serialized.description === 'string') {
-      serialized.description = this.wrapDescription(serialized.description);
-    }
     await this.request<void>(`/issue/${issueKey}`, {
       method: 'PUT',
-      body: JSON.stringify({ fields: serialized }),
+      body: JSON.stringify({ fields }),
     });
   }
 
   async addComment(issueKey: string, body: string): Promise<void> {
-    const commentBody = this.apiVersion === 2
-      ? body
-      : { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: body }] }] };
     await this.request<void>(`/issue/${issueKey}/comment`, {
       method: 'POST',
-      body: JSON.stringify({ body: commentBody }),
+      body: JSON.stringify({ body }),
     });
   }
 
   async searchJql(jql: string, maxResults = 20): Promise<JiraSearchResult> {
     const fields = ['summary', 'status', 'assignee', 'priority', 'labels', 'fixVersions', 'reporter', 'subtasks'];
     const qs = `jql=${encodeURIComponent(jql)}&maxResults=${maxResults}&${fields.map(f => `fields=${f}`).join('&')}`;
-    return this.request<JiraSearchResult>(`/search/jql?${qs}`);
+    return this.request<JiraSearchResult>(`/search?${qs}`);
   }
 
   async findUser(query: string): Promise<JiraUser[]> {
@@ -207,10 +190,6 @@ export class JiraApiClient implements IJiraClient {
     issueType: string,
     additionalFields?: Record<string, unknown>,
   ): Promise<JiraCreatedIssue> {
-    const extra = additionalFields ? { ...additionalFields } : undefined;
-    if (extra && typeof extra.description === 'string') {
-      extra.description = this.wrapDescription(extra.description);
-    }
     return this.request<JiraCreatedIssue>('/issue', {
       method: 'POST',
       body: JSON.stringify({
@@ -218,7 +197,7 @@ export class JiraApiClient implements IJiraClient {
           project: { key: projectKey },
           summary,
           issuetype: { name: issueType },
-          ...extra,
+          ...additionalFields,
         },
       }),
     });

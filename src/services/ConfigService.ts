@@ -6,7 +6,6 @@ type AuthType = 'datacenter' | 'cloud';
 export interface JiraConfig {
   baseUrl: string | undefined;
   authType: AuthType;
-  apiVersion: 2 | 3;
   showConnectionInfo: boolean;
   requiredFields: string[];
   token: string | undefined;
@@ -23,7 +22,6 @@ export class ConfigService {
     return {
       baseUrl: config.get<string>('jira.baseUrl'),
       authType: config.get<AuthType>('jira.authType') ?? 'datacenter',
-      apiVersion: config.get<2 | 3>('jira.apiVersion') ?? 3,
       showConnectionInfo: config.get<boolean>('jira.showConnectionInfo') ?? false,
       requiredFields: config.get<string[]>('jira.requiredFields') ?? [],
       token: await this.context.secrets.get(ConfigService.TOKEN_KEY),
@@ -40,6 +38,7 @@ export class ConfigService {
       baseUrl: config.get<string>('bitbucket.baseUrl'),
       authType: config.get<BitbucketAuthType>('bitbucket.authType') ?? 'datacenter',
       token: await this.context.secrets.get(ConfigService.BITBUCKET_TOKEN_KEY),
+      showConnectionInfo: config.get<boolean>('bitbucket.showConnectionInfo') ?? false,
     };
   }
 
