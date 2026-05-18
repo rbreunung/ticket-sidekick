@@ -381,6 +381,22 @@ The batch size is currently fixed at 10 files per LLM call. If your local model 
 
 When enabled, every `@bitbucket` response (except `check`) starts with an italic line showing the active base URL, API version, and auth type. Off by default.
 
+### Optional: custom review instructions
+
+```json
+"ticketSidekick.bitbucket.reviewInstructions": "This project follows Google Style Guide. Focus on security issues and ignore minor style suggestions."
+```
+
+Additional instructions appended to the built-in PR review prompt. Use this to add project-specific guidance the model should apply on every review. The built-in grounding rules and JSON output format are always included — this setting only adds to them.
+
+Examples:
+
+```text
+"Focus on security vulnerabilities only, ignore style and naming."
+"This is a Python Django project — flag missing input validation on views."
+"Treat all SQL strings as potential injection vectors regardless of the ORM used."
+```
+
 ---
 
 ## Getting a free Jira Cloud test instance

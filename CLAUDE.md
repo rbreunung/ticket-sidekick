@@ -116,7 +116,7 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
 
 ## VS Code settings keys
 
-### Jira
+### Jira settings
 
 | Setting | Key |
 | --- | --- |
@@ -126,13 +126,14 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
 | Required fields | `ticketSidekick.jira.requiredFields` |
 | Show connection info | `ticketSidekick.jira.showConnectionInfo` |
 
-### Bitbucket
+### Bitbucket settings
 
 | Setting | Key |
 | --- | --- |
 | Base URL (DC only) | `ticketSidekick.bitbucket.baseUrl` |
 | Auth type | `ticketSidekick.bitbucket.authType` (`datacenter` \| `cloud`) |
 | Show connection info | `ticketSidekick.bitbucket.showConnectionInfo` |
+| Review instructions | `ticketSidekick.bitbucket.reviewInstructions` |
 
 ## Credentials
 

@@ -244,7 +244,7 @@ export function createBitbucketParticipant(
         const batchLabel = chunks.length > 1 ? ` · batch ${i + 1}/${chunks.length}` : '';
         stream.markdown(`_Analysing files ${from}–${to} of ${fileDiffs.length}${batchLabel}…_\n\n`);
 
-        const chunkRaw = await callLLM(service.buildPrompt(pr, chunk), request.model, token);
+        const chunkRaw = await callLLM(service.buildPrompt(pr, chunk, undefined, config.reviewInstructions), request.model, token);
         const { findings, additionalFilesNeeded } = await parseReviewResponse(chunkRaw);
         let chunkFindings = findings;
 
@@ -257,7 +257,7 @@ export function createBitbucketParticipant(
             capped,
             makeWorkspaceReader,
           );
-          const pass2Raw = await callLLM(service.buildPrompt(pr, chunk, extraContents), request.model, token);
+          const pass2Raw = await callLLM(service.buildPrompt(pr, chunk, extraContents, config.reviewInstructions), request.model, token);
           chunkFindings = (await parseReviewResponse(pass2Raw)).findings;
         }
 

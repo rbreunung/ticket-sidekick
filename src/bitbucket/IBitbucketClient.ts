@@ -19,6 +19,7 @@ export interface BitbucketConfig {
   authType: BitbucketAuthType;
   token: string | undefined;
   showConnectionInfo?: boolean;
+  reviewInstructions?: string;
 }
 
 export interface IBitbucketClient {

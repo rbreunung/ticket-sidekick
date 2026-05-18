@@ -236,6 +236,36 @@ describe('PrReviewService.buildPrompt', () => {
     expect(prompt).toContain('src/foo.ts');
     expect(prompt).not.toContain('Full content');
   });
+
+  it('includes grounding rules in every prompt', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+
+    const prompt = service.buildPrompt(pr, fileDiffs);
+
+    expect(prompt).toContain('GROUNDING RULES');
+    expect(prompt).toContain('diff --git');
+    expect(prompt).toContain('JSON fixtures');
+  });
+
+  it('appends additional instructions when provided', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+
+    const prompt = service.buildPrompt(pr, fileDiffs, undefined, 'Focus on security only.');
+
+    expect(prompt).toContain('ADDITIONAL INSTRUCTIONS');
+    expect(prompt).toContain('Focus on security only.');
+  });
+
+  it('does not add an additional instructions block when omitted', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+
+    const prompt = service.buildPrompt(pr, fileDiffs);
+
+    expect(prompt).not.toContain('ADDITIONAL INSTRUCTIONS');
+  });
 });
 
 describe('PrReviewService.formatReview', () => {

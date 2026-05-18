@@ -39,6 +39,7 @@ export class ConfigService {
       authType: config.get<BitbucketAuthType>('bitbucket.authType') ?? 'datacenter',
       token: await this.context.secrets.get(ConfigService.BITBUCKET_TOKEN_KEY),
       showConnectionInfo: config.get<boolean>('bitbucket.showConnectionInfo') ?? false,
+      reviewInstructions: config.get<string>('bitbucket.reviewInstructions') || undefined,
     };
   }
 

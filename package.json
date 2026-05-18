@@ -112,6 +112,11 @@
             "type": "boolean",
             "default": false,
             "description": "When enabled, each @bitbucket response (except check) starts with an italic line showing the active base URL, API version, and auth type."
+          },
+          "ticketSidekick.bitbucket.reviewInstructions": {
+            "type": "string",
+            "default": "",
+            "description": "Additional instructions appended to the built-in PR review prompt. Use this to add project-specific guidance, e.g. 'This project follows Google Style Guide' or 'Focus on security issues only'. The built-in grounding rules and output format are always included."
           }
         }
       }
