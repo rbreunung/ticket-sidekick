@@ -22,6 +22,7 @@ export interface ContentSession {
 export interface MoreCommentsSession {
   ticketKey: string;
   commentQuery: string | null;
+  displayMode?: 'full' | 'synthesize';
 }
 
 export interface CommentListSession {
@@ -198,6 +199,14 @@ export function buildCommentListSession(ticketKey: string, comments: JiraComment
       bodyMarkdown: formatJiraBody(c.body).trim() || '_empty_',
     })),
   };
+}
+
+export function formatCommentsInFull(comments: JiraComment[]): string {
+  return comments.map((c, i) => {
+    const date = c.created.slice(0, 10);
+    const body = formatJiraBody(c.body).trim() || '_empty_';
+    return `**${i + 1}. ${c.author.displayName}** (${date})\n\n${body}`;
+  }).join('\n\n---\n\n');
 }
 
 export function parseCommentIndex(reply: string, maxIndex: number): number | 'invalid' {

@@ -16,6 +16,12 @@ describe('wikiToMarkdown', () => {
     expect(result).toContain('System.out.println();');
   });
 
+  it('ensures newline after opening fence when content follows on the same line', () => {
+    const result = wikiToMarkdown('{code:json}"key": "value"\n{code}');
+    expect(result).toMatch(/```json\n/);
+    expect(result).not.toMatch(/```json"/);
+  });
+
   it('passes plain text through unchanged', () => {
     expect(wikiToMarkdown('plain text')).toContain('plain text');
   });

@@ -1,7 +1,10 @@
 import { to_markdown } from 'jira2md';
 
 export function wikiToMarkdown(wikiMarkup: string): string {
-  return to_markdown(wikiMarkup);
+  const md = to_markdown(wikiMarkup);
+  // jira2md omits the newline after the opening fence when Jira wiki markup
+  // has content on the same line as {code:lang} — ensure it is always present.
+  return md.replace(/(```\w*)([ \t]*[^\n])/g, '$1\n$2');
 }
 
 type AdfNode = {

@@ -49,9 +49,10 @@ Open GitHub Copilot Chat and use `@jira`:
 
 | What you type | What happens |
 | --- | --- |
-| `@jira show me PROJ-123` | Displays ticket details including comments |
-| `@jira summarise this ticket` | Shows current branch ticket |
-| `@jira does it have comments?` | Follow-up on the last ticket shown — no need to repeat the key |
+| `@jira show PROJ-123` | Full ticket: structured fields, formatted description, one-line comment summaries |
+| `@jira summarize PROJ-123` | Same structured fields as `show`, but replaces description + comments with a one-paragraph synthesis |
+| `@jira show comments` | Full formatted comment bodies numbered — use when you want to read the actual text |
+| `@jira what do the comments say about the login bug?` | LLM synthesis filtered to a topic |
 | `@jira create a bug: login times out` | Creates a new ticket (asks for project and type if missing) |
 | `@jira create Story in VSJI: add dark mode` | Creates a ticket with project and type from the prompt |
 | `@jira set priority to High` | Updates priority on current branch ticket |
@@ -86,22 +87,41 @@ If you provide explicit literal text the preview is skipped and the comment is p
 
 The plugin infers which mode to use from your phrasing — `"write"`, `"draft"`, `"summarize"`, `"based on our discussion"`, and similar phrases trigger generation. Quoted text or direct statements post literally.
 
-### Comments
+### Descriptions and comments — rich formatting
 
-`@jira show` includes a comments section. If a ticket has more than 20 comments only the newest 20 are shown; the response ends with an offer to load the rest:
+Descriptions and comments are rendered as Markdown. Jira wiki markup (bold, italic, monospace, code blocks, bullet lists) and legacy ADF content are both converted automatically — no configuration required.
+
+### Show vs summarize
+
+There are two distinct ways to read a ticket:
+
+| Command | What you get |
+| --- | --- |
+| `@jira show PROJ-123` | Structured fields + formatted description + numbered one-line comment summaries |
+| `@jira summarize PROJ-123` | Same structured fields, but description and comments replaced by a one-paragraph AI synthesis |
+
+And two ways to read comments:
+
+| Command | What you get |
+| --- | --- |
+| `@jira show comments` | Full comment bodies numbered — Markdown-rendered, separated by dividers |
+| `@jira what do comments say about X?` | AI synthesis filtered to the topic you named |
+
+After seeing numbered comments you can always ask to view one in full:
+
+```text
+3
+show comment 2
+comment 4
+```
+
+If a ticket has more than 20 comments the response ends with an offer to load the rest:
 
 ```text
 … 5 older comment(s) not shown. Reply "load all" to include them.
 ```
 
-Reply **`load all`** in the next turn to fetch up to 100 comments and re-synthesize.
-
-To search or summarize comments specifically:
-
-```text
-@jira what do the comments say about the login bug?
-@jira does anyone mention a deadline in the comments?
-```
+Reply **`load all`** to fetch up to 100 comments. For `show comments` the full bodies are rendered; for synthesized views the summary is regenerated over all comments.
 
 ### Ticket detection
 
@@ -237,12 +257,12 @@ Execution streams one confirmation line per ticket. Failures are reported at the
 
 ## Bitbucket
 
-### Prerequisites
+### Bitbucket prerequisites
 
 - VS Code 1.90 or later with GitHub Copilot extension
 - Bitbucket Data Center **or** Bitbucket Cloud
 
-### Setup
+### Bitbucket setup
 
 #### 1. Set the auth type
 
@@ -262,7 +282,7 @@ Use `"cloud"` for Bitbucket Cloud. Default is `"datacenter"`.
 
 Leave this unset for Bitbucket Cloud — the plugin connects to `api.bitbucket.org` automatically.
 
-#### 3. Store your credentials
+#### 3. Store your Bitbucket credentials
 
 **Data Center:** Command Palette (`Ctrl+Shift+P`) → `Ticket Sidekick: Set Bitbucket Personal Access Token`
 
@@ -282,7 +302,7 @@ You will be prompted for your Bitbucket **username** and an **App Password**. Cr
 
 Run `@bitbucket check` after setup to confirm the connection and see which account is active.
 
-### Usage
+### Bitbucket usage
 
 Open GitHub Copilot Chat and use `@bitbucket`:
 
@@ -314,7 +334,7 @@ The plugin:
 
 The chat shows progress for large PRs:
 
-```
+```text
 Fetching PR…
 Analysing files 1–10 of 33 · batch 1/4…
 Analysing files 11–20 of 33 · batch 2/4…
@@ -324,7 +344,7 @@ Analysing files 31–33 of 33 · batch 4/4…
 
 Example output:
 
-```
+```text
 ## PR #42 — Add OAuth login flow
 _by Jane Smith → main · 3 files changed_
 

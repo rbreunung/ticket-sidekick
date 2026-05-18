@@ -9,12 +9,14 @@ import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
 import { extractTicketId } from '../utils/branchParser';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull } from './sessionState';
 import { discoverWorkflow, loadWorkflowCache, saveWorkflowCache, findPath } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
 
 type Operation =
   | 'getTicket'
+  | 'summarizeTicket'
+  | 'showComments'
   | 'getComments'
   | 'addComment'
   | 'updateField'
@@ -47,9 +49,11 @@ interface ParsedIntent {
 }
 
 const INTENT_PROMPT = `Parse this Jira command and respond with ONLY a JSON object. No markdown, no explanation.
-Schema: {"operation":"getTicket"|"getComments"|"addComment"|"updateField"|"searchJql"|"validateFields"|"createTicket"|"discoverWorkflow"|"runCleanup","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"assignee":string|null,"description":string|null,"comment":string|null,"commentQuery":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"jql":string|null,"cleanupRuleName":string|null,"fixVersion":string|null}
-- getTicket: show, summarise, describe, look up a specific ticket
-- getComments: ask whether a ticket has comments, how many comments, list or read comments, or find comments about a topic; commentQuery is the topic/filter the user mentioned (e.g. "login bug", "performance") — null if they just want a general list
+Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|"addComment"|"updateField"|"searchJql"|"validateFields"|"createTicket"|"discoverWorkflow"|"runCleanup","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"assignee":string|null,"description":string|null,"comment":string|null,"commentQuery":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"jql":string|null,"cleanupRuleName":string|null,"fixVersion":string|null}
+- getTicket: show, display, look up a specific ticket; returns full structured view with fields, description, and one-line comment summaries
+- summarizeTicket: summarise, summarize, tl;dr, give me an overview; produces a prose paragraph covering the ticket and its comments together
+- showComments: show, list, display all comments in full; shows the actual comment bodies numbered; use when user wants to read the comment text rather than a summary
+- getComments: ask what comments say, find or filter comments by topic; synthesises or queries comments; commentQuery is the topic/filter the user mentioned (e.g. "login bug", "performance") — null if they just want a general synthesis
 - addComment: add, post, write a comment on a ticket
 - updateField: set, change, update one or more fields; put each field change in fieldUpdates array; for description/comment content instructions put the instruction as fieldValue — do NOT generate the content
 - searchJql: find, search, list tickets; review multiple tickets against criteria; use literal JQL if provided
@@ -148,6 +152,24 @@ async function synthesizeComments(
     ? `Find and quote comments relevant to: "${query}". Note the author and date for each relevant comment.`
     : 'Summarise each comment in one sentence. Number each one. Format: N. **Author** (date): one-sentence summary.';
   const prompt = `Comments:\n\n${commentBlocks}\n\n${task} Produce only the final content, no preamble.`;
+  const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], {}, token);
+  let text = '';
+  for await (const chunk of response.text) text += chunk;
+  return text.trim();
+}
+
+async function generateDescriptionAndCommentsSummary(
+  descriptionText: string,
+  commentBlocks: string | null,
+  model: vscode.LanguageModelChat,
+  token: vscode.CancellationToken,
+): Promise<string> {
+  const parts = [
+    descriptionText ? `Description:\n${descriptionText}` : null,
+    commentBlocks ? `Comments:\n\n${commentBlocks}` : null,
+  ].filter(Boolean).join('\n\n');
+  if (!parts) return '_No description or comments._';
+  const prompt = `${parts}\n\nWrite a concise prose paragraph summarising the above. No preamble, no headings, no bullet points.`;
   const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], {}, token);
   let text = '';
   for await (const chunk of response.text) text += chunk;
@@ -880,18 +902,24 @@ export function createJiraParticipant(
         try {
           await ws.update('jira.session.moreComments', undefined);
           const { comments } = await ticketService.getIssueComments(session.ticketKey, 100);
-          const synthesis = await synthesizeComments(
-            serializeCommentsForLLM(comments),
-            session.commentQuery,
-            request.model,
-            token,
-          );
-          if (!session.commentQuery) {
+          if (session.displayMode === 'full') {
             await ws.update('jira.session.commentList', buildCommentListSession(session.ticketKey, comments));
+            stream.markdown(formatCommentsInFull(comments));
+            stream.markdown(`\n\n<!-- @jira-ticket:${session.ticketKey} -->\n\n<!-- jira:comment-list -->`);
+          } else {
+            const synthesis = await synthesizeComments(
+              serializeCommentsForLLM(comments),
+              session.commentQuery,
+              request.model,
+              token,
+            );
+            if (!session.commentQuery) {
+              await ws.update('jira.session.commentList', buildCommentListSession(session.ticketKey, comments));
+            }
+            stream.markdown(synthesis);
+            const listTag = session.commentQuery ? '' : '\n\n<!-- jira:comment-list -->';
+            stream.markdown(`\n\n<!-- @jira-ticket:${session.ticketKey} -->${listTag}`);
           }
-          stream.markdown(synthesis);
-          const listTag = session.commentQuery ? '' : '\n\n<!-- jira:comment-list -->';
-          stream.markdown(`\n\n<!-- @jira-ticket:${session.ticketKey} -->${listTag}`);
         } catch (err) {
           stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
         }
@@ -1000,7 +1028,6 @@ export function createJiraParticipant(
           const base = await ticketService.getTicket(ticketKey!);
           const MAX_SHOW = 20;
           const { comments, total } = await ticketService.getIssueComments(ticketKey!, MAX_SHOW);
-          stream.markdown(base);
           if (comments.length > 0) {
             const synthesis = await synthesizeComments(
               serializeCommentsForLLM(comments),
@@ -1009,7 +1036,7 @@ export function createJiraParticipant(
               token,
             );
             await ws.update('jira.session.commentList', buildCommentListSession(ticketKey!, comments));
-            stream.markdown('\n\n**Comments:**\n\n' + synthesis);
+            stream.markdown(base + '\n\n**Comments:**\n\n' + synthesis);
             if (total > MAX_SHOW) {
               const moreSession: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: null };
               await ws.update('jira.session.moreComments', moreSession);
@@ -1021,6 +1048,37 @@ export function createJiraParticipant(
           }
           result = base;
           break;
+        }
+        case 'summarizeTicket': {
+          const fullTicket = await ticketService.getTicket(ticketKey!);
+          const DESCRIPTION_SEPARATOR = '\n\n**Description:**\n';
+          const splitIdx = fullTicket.indexOf(DESCRIPTION_SEPARATOR);
+          const fieldsHeader = splitIdx >= 0 ? fullTicket.slice(0, splitIdx) : fullTicket;
+          const descriptionText = splitIdx >= 0 ? fullTicket.slice(splitIdx + DESCRIPTION_SEPARATOR.length) : '';
+          const { comments: summaryComments } = await ticketService.getIssueComments(ticketKey!, 20);
+          const commentBlocks = summaryComments.length > 0 ? serializeCommentsForLLM(summaryComments) : null;
+          const synthesis = await generateDescriptionAndCommentsSummary(descriptionText, commentBlocks, request.model, token);
+          stream.markdown(fieldsHeader + '\n\n**Overview:**\n\n' + synthesis);
+          stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
+          return;
+        }
+        case 'showComments': {
+          const MAX_SHOW_FULL = 20;
+          const { comments: fullComments, total: fullTotal } = await ticketService.getIssueComments(ticketKey!, MAX_SHOW_FULL);
+          if (fullComments.length === 0) {
+            result = `No comments on ${ticketKey}.`;
+            break;
+          }
+          await ws.update('jira.session.commentList', buildCommentListSession(ticketKey!, fullComments));
+          stream.markdown(`## Comments (${fullTotal})\n\n` + formatCommentsInFull(fullComments));
+          if (fullTotal > MAX_SHOW_FULL) {
+            const moreSession: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: null, displayMode: 'full' };
+            await ws.update('jira.session.moreComments', moreSession);
+            stream.markdown(`\n\n_${fullTotal - MAX_SHOW_FULL} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:more-comments -->\n\n<!-- jira:comment-list -->`);
+          } else {
+            stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:comment-list -->`);
+          }
+          return;
         }
         case 'getComments': {
           const MAX_INITIAL = 20;

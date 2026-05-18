@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession } from '../participant/sessionState';
+import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull } from '../participant/sessionState';
 import type { TransitionBatchTicket } from '../participant/sessionState';
 import type { JiraComment } from '../jira/IJiraClient';
 
@@ -450,5 +450,70 @@ describe('buildCommentListSession', () => {
   it('returns empty comments array when passed no comments', () => {
     const session = buildCommentListSession('PROJ-1', []);
     expect(session.comments).toHaveLength(0);
+  });
+});
+
+describe('formatCommentsInFull', () => {
+  const makeComment = (id: string, displayName: string, body: unknown, created: string): JiraComment => ({
+    id,
+    author: { accountId: id, displayName, emailAddress: `${id}@x.com` },
+    body,
+    created,
+  });
+
+  it('numbers comments starting from 1', () => {
+    const comments = [
+      makeComment('1', 'Alice', 'First comment', '2024-01-01T00:00:00.000Z'),
+      makeComment('2', 'Bob', 'Second comment', '2024-01-02T00:00:00.000Z'),
+    ];
+    const result = formatCommentsInFull(comments);
+    expect(result).toContain('**1. Alice**');
+    expect(result).toContain('**2. Bob**');
+  });
+
+  it('includes formatted date in parentheses', () => {
+    const comments = [makeComment('1', 'Alice', 'Hi', '2024-03-15T09:30:00.000Z')];
+    const result = formatCommentsInFull(comments);
+    expect(result).toContain('(2024-03-15)');
+  });
+
+  it('includes the comment body on a new paragraph', () => {
+    const comments = [makeComment('1', 'Alice', 'Hello world', '2024-01-01T00:00:00.000Z')];
+    const result = formatCommentsInFull(comments);
+    expect(result).toContain('\n\nHello world');
+  });
+
+  it('separates multiple comments with a horizontal rule', () => {
+    const comments = [
+      makeComment('1', 'Alice', 'First', '2024-01-01T00:00:00.000Z'),
+      makeComment('2', 'Bob', 'Second', '2024-01-02T00:00:00.000Z'),
+    ];
+    const result = formatCommentsInFull(comments);
+    expect(result).toContain('\n\n---\n\n');
+  });
+
+  it('converts ADF body to Markdown', () => {
+    const comment = makeComment('1', 'Alice', {
+      type: 'doc', version: 1,
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'bold', marks: [{ type: 'strong' }] }] }],
+    }, '2024-01-01T00:00:00.000Z');
+    const result = formatCommentsInFull([comment]);
+    expect(result).toContain('**bold**');
+  });
+
+  it('converts wiki-markup string body to Markdown', () => {
+    const comment = makeComment('1', 'Alice', '*bold*', '2024-01-01T00:00:00.000Z');
+    const result = formatCommentsInFull([comment]);
+    expect(result).toContain('**bold**');
+  });
+
+  it('shows _empty_ for blank body', () => {
+    const comment = makeComment('1', 'Alice', { type: 'doc', version: 1, content: [] }, '2024-01-01T00:00:00.000Z');
+    const result = formatCommentsInFull([comment]);
+    expect(result).toContain('_empty_');
+  });
+
+  it('returns empty string for no comments', () => {
+    expect(formatCommentsInFull([])).toBe('');
   });
 });
