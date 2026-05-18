@@ -1,5 +1,38 @@
 import type { BitbucketAuthType, BitbucketPR, BitbucketUser, IBitbucketClient } from './IBitbucketClient';
 
+// Bitbucket Data Center /pull-requests/{id}/diff response shape (API 1.0)
+interface DcDiffLine { line: string; truncated?: boolean; }
+interface DcDiffSegment { type: 'ADDED' | 'REMOVED' | 'CONTEXT'; lines: DcDiffLine[]; }
+interface DcDiffHunk {
+  sourceLine: number; sourceSpan: number;
+  destinationLine: number; destinationSpan: number;
+  segments: DcDiffSegment[];
+}
+interface DcFileDiff {
+  source: { toString: string } | null;
+  destination: { toString: string } | null;
+  hunks: DcDiffHunk[];
+}
+interface DcDiffResponse { diffs: DcFileDiff[]; }
+
+export function dcDiffToUnified(response: DcDiffResponse): string {
+  return response.diffs.map((fileDiff) => {
+    const srcPath = fileDiff.source?.toString;
+    const dstPath = fileDiff.destination?.toString;
+    const aPath = srcPath ? `a/${srcPath}` : '/dev/null';
+    const bPath = dstPath ? `b/${dstPath}` : '/dev/null';
+    let out = `diff --git ${aPath} ${bPath}\n--- ${aPath}\n+++ ${bPath}\n`;
+    for (const hunk of fileDiff.hunks) {
+      out += `@@ -${hunk.sourceLine},${hunk.sourceSpan} +${hunk.destinationLine},${hunk.destinationSpan} @@\n`;
+      for (const seg of hunk.segments) {
+        const prefix = seg.type === 'ADDED' ? '+' : seg.type === 'REMOVED' ? '-' : ' ';
+        for (const ln of seg.lines) { out += `${prefix}${ln.line}\n`; }
+      }
+    }
+    return out;
+  }).join('');
+}
+
 export interface BitbucketApiClientConfig {
   baseUrl: string;
   authType: BitbucketAuthType;
@@ -31,18 +64,6 @@ export class BitbucketApiClient implements IBitbucketClient {
       throw new Error(`Bitbucket API error ${response.status} at ${url}${body ? ` — ${body}` : ''}`);
     }
     return response.json() as Promise<T>;
-  }
-
-  private async dcRequestText(path: string): Promise<string> {
-    const url = `${this.baseUrl}/rest/api/1.0${path}`;
-    const response = await fetch(url, {
-      headers: { Authorization: this.authHeader, Accept: 'text/plain' },
-    });
-    if (!response.ok) {
-      if (response.status === 401) throw new Error(`Authentication failed at ${url}. Check your Bitbucket credentials.`);
-      throw new Error(`Bitbucket API error ${response.status} at ${url}`);
-    }
-    return response.text();
   }
 
   private async cloudRequest<T>(path: string): Promise<T> {
@@ -143,7 +164,10 @@ export class BitbucketApiClient implements IBitbucketClient {
       } catch {}
       return raw;
     }
-    return this.dcRequestText(`/projects/${project}/repos/${repo}/pull-requests/${prId}/diff`);
+    const data = await this.dcRequest<DcDiffResponse>(
+      `/projects/${project}/repos/${repo}/pull-requests/${prId}/diff?withComments=false`,
+    );
+    return dcDiffToUnified(data);
   }
 
   async getFileContent(project: string, repo: string, path: string, commitHash: string): Promise<string> {

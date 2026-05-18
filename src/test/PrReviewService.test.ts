@@ -4,6 +4,7 @@ import type { ReviewFinding } from '../participant/reviewSessionState';
 import { PrReviewService } from '../services/PrReviewService';
 import { MockBitbucketClient } from './mocks/MockBitbucketClient';
 import type { BitbucketPR } from '../bitbucket/IBitbucketClient';
+import { dcDiffToUnified } from '../bitbucket/BitbucketApiClient';
 
 describe('parsePrUrl', () => {
   it('parses a Data Center URL with trailing /overview', () => {
@@ -308,5 +309,62 @@ describe('PrReviewService.formatReview', () => {
 
     expect(output).toContain('_No issues found._');
     expect(output).toContain('<!-- bitbucket:review-session -->');
+  });
+});
+
+describe('dcDiffToUnified', () => {
+  it('converts a modified file to unified diff format parseable by parseDiff', () => {
+    const response = {
+      diffs: [{
+        source: { toString: 'src/auth/login.ts' },
+        destination: { toString: 'src/auth/login.ts' },
+        hunks: [{
+          sourceLine: 10, sourceSpan: 2,
+          destinationLine: 10, destinationSpan: 3,
+          segments: [
+            { type: 'CONTEXT' as const, lines: [{ line: 'const x = 1;' }] },
+            { type: 'ADDED' as const,   lines: [{ line: 'const y = 2;' }] },
+            { type: 'REMOVED' as const, lines: [{ line: 'const z = 3;' }] },
+          ],
+        }],
+      }],
+    };
+
+    const unified = dcDiffToUnified(response);
+    expect(unified).toContain('diff --git a/src/auth/login.ts b/src/auth/login.ts');
+    expect(unified).toContain('+++ b/src/auth/login.ts');
+    expect(unified).toContain('@@ -10,2 +10,3 @@');
+    expect(unified).toContain('+const y = 2;');
+    expect(unified).toContain('-const z = 3;');
+    expect(unified).toContain(' const x = 1;');
+
+    const parsed = parseDiff(unified);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].path).toBe('src/auth/login.ts');
+  });
+
+  it('handles a new file (source is null)', () => {
+    const response = {
+      diffs: [{
+        source: null,
+        destination: { toString: 'src/new-file.ts' },
+        hunks: [{
+          sourceLine: 0, sourceSpan: 0,
+          destinationLine: 1, destinationSpan: 1,
+          segments: [{ type: 'ADDED' as const, lines: [{ line: 'export const x = 1;' }] }],
+        }],
+      }],
+    };
+
+    const unified = dcDiffToUnified(response);
+    expect(unified).toContain('+++ b/src/new-file.ts');
+    expect(unified).toContain('+export const x = 1;');
+
+    const parsed = parseDiff(unified);
+    expect(parsed[0].path).toBe('src/new-file.ts');
+  });
+
+  it('produces an empty string for an empty diff response', () => {
+    expect(dcDiffToUnified({ diffs: [] })).toBe('');
   });
 });
