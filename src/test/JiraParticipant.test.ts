@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection } from '../participant/sessionState';
+import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession } from '../participant/sessionState';
 import type { TransitionBatchTicket } from '../participant/sessionState';
+import type { JiraComment } from '../jira/IJiraClient';
 
 describe('stripHiddenMarkers', () => {
   it('removes a jira-ticket marker', () => {
@@ -328,5 +329,126 @@ describe('parseResolutionSelection', () => {
   it('trims whitespace before matching', () => {
     expect(parseResolutionSelection('  2  ', options)).toBe("Won't Fix");
     expect(parseResolutionSelection('  none  ', options)).toBeNull();
+  });
+});
+
+describe('parseCommentIndex', () => {
+  it('returns the number when reply is just a digit', () => {
+    expect(parseCommentIndex('3', 5)).toBe(3);
+  });
+
+  it('extracts number from "show comment 3"', () => {
+    expect(parseCommentIndex('show comment 3', 5)).toBe(3);
+  });
+
+  it('extracts number from "comment 2"', () => {
+    expect(parseCommentIndex('comment 2', 5)).toBe(2);
+  });
+
+  it('extracts number from "full comment 4"', () => {
+    expect(parseCommentIndex('full comment 4', 5)).toBe(4);
+  });
+
+  it('returns invalid for non-numeric input', () => {
+    expect(parseCommentIndex('first comment', 5)).toBe('invalid');
+  });
+
+  it('returns invalid when number exceeds maxIndex', () => {
+    expect(parseCommentIndex('10', 5)).toBe('invalid');
+  });
+
+  it('returns invalid for 0', () => {
+    expect(parseCommentIndex('0', 5)).toBe('invalid');
+  });
+
+  it('returns invalid when no digit present', () => {
+    expect(parseCommentIndex('show me the comments', 5)).toBe('invalid');
+  });
+
+  it('handles whitespace around the number', () => {
+    expect(parseCommentIndex('  2  ', 5)).toBe(2);
+  });
+});
+
+describe('buildCommentListSession', () => {
+  const makeComment = (id: string, displayName: string, text: string, created: string): JiraComment => ({
+    id,
+    author: { accountId: id, displayName, emailAddress: `${id}@x.com` },
+    body: {
+      type: 'doc', version: 1,
+      content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
+    },
+    created,
+  });
+
+  it('sets ticketKey on the session', () => {
+    const session = buildCommentListSession('PROJ-42', []);
+    expect(session.ticketKey).toBe('PROJ-42');
+  });
+
+  it('assigns 1-based indices', () => {
+    const comments = [
+      makeComment('1', 'Alice', 'First', '2024-01-01T00:00:00.000Z'),
+      makeComment('2', 'Bob', 'Second', '2024-01-02T00:00:00.000Z'),
+    ];
+    const session = buildCommentListSession('PROJ-1', comments);
+    expect(session.comments[0].index).toBe(1);
+    expect(session.comments[1].index).toBe(2);
+  });
+
+  it('formats dates as YYYY-MM-DD', () => {
+    const comments = [makeComment('1', 'Alice', 'Hi', '2024-03-15T09:30:00.000Z')];
+    const session = buildCommentListSession('PROJ-1', comments);
+    expect(session.comments[0].date).toBe('2024-03-15');
+  });
+
+  it('stores author display name', () => {
+    const comments = [makeComment('1', 'Jane Doe', 'Hello', '2024-01-01T00:00:00.000Z')];
+    const session = buildCommentListSession('PROJ-1', comments);
+    expect(session.comments[0].author).toBe('Jane Doe');
+  });
+
+  it('converts ADF body to Markdown', () => {
+    const comment: JiraComment = {
+      id: '1',
+      author: { accountId: 'a', displayName: 'Alice', emailAddress: 'a@x.com' },
+      body: {
+        type: 'doc', version: 1,
+        content: [{
+          type: 'paragraph',
+          content: [{ type: 'text', text: 'bold word', marks: [{ type: 'strong' }] }],
+        }],
+      },
+      created: '2024-01-01T00:00:00.000Z',
+    };
+    const session = buildCommentListSession('PROJ-1', [comment]);
+    expect(session.comments[0].bodyMarkdown).toContain('**bold word**');
+  });
+
+  it('converts wiki-markup body (v2 string) to Markdown', () => {
+    const comment: JiraComment = {
+      id: '1',
+      author: { accountId: 'a', displayName: 'Alice', emailAddress: 'a@x.com' },
+      body: '*bold*',
+      created: '2024-01-01T00:00:00.000Z',
+    };
+    const session = buildCommentListSession('PROJ-1', [comment]);
+    expect(session.comments[0].bodyMarkdown).toContain('**bold**');
+  });
+
+  it('falls back to _empty_ when body produces no text', () => {
+    const comment: JiraComment = {
+      id: '1',
+      author: { accountId: 'a', displayName: 'Alice', emailAddress: 'a@x.com' },
+      body: { type: 'doc', version: 1, content: [] },
+      created: '2024-01-01T00:00:00.000Z',
+    };
+    const session = buildCommentListSession('PROJ-1', [comment]);
+    expect(session.comments[0].bodyMarkdown).toBe('_empty_');
+  });
+
+  it('returns empty comments array when passed no comments', () => {
+    const session = buildCommentListSession('PROJ-1', []);
+    expect(session.comments).toHaveLength(0);
   });
 });

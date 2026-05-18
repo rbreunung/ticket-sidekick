@@ -52,6 +52,7 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/templates/TemplateService.ts` | Reads `.jira-templates.json`; returns `{ templates, cleanupRules }` |
 | `src/templates/FieldResolver.ts` | Resolves `resolveFields` entries by name (API lookup) or id (pass-through) |
 | `src/utils/branchParser.ts` | Extracts ticket ID from git branch name |
+| `src/utils/markdownFormatter.ts` | `formatJiraBody(node)` — converts Jira wiki markup (v2 string) or ADF object (v3/legacy) to Markdown; `wikiToMarkdown(str)` delegates to `jira2md` |
 
 ## Running tests
 
@@ -164,8 +165,9 @@ Multi-turn flows store structured state in `vscode.ExtensionContext.workspaceSta
 | `CreationSession` | `jira.session.creating` | `<!-- jira:creating -->` |
 | `ContentSession` | `jira.session.previewing` | `<!-- jira:previewing -->` |
 | `MoreCommentsSession` | `jira.session.moreComments` | `<!-- jira:more-comments -->` |
+| `CommentListSession` | `jira.session.commentList` | `<!-- jira:comment-list -->` |
 
-Detection order in the Jira handler: resolution selection → transition review → template selection → issue type selection → creation → content → more-comments → intent parse.
+Detection order in the Jira handler: resolution selection → transition review → template selection → issue type selection → creation → content → more-comments → check command → comment list → intent parse.
 
 ### Bitbucket sessions
 

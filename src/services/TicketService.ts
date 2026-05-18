@@ -1,4 +1,5 @@
 import type { IJiraClient, JiraComment, JiraIssue, JiraIssueType, JiraSearchResult } from '../jira/IJiraClient';
+import { formatJiraBody } from '../utils/markdownFormatter';
 
 const SUPPORTED_FIELDS: Record<string, string> = {
   summary: 'summary',
@@ -30,7 +31,7 @@ export function assembleDescription(sections: string[], answers: Record<string, 
 function formatIssue(issue: JiraIssue): string {
   const f = issue.fields;
   const description = f.description
-    ? extractTextFromAdf(f.description).trim() || '_No description_'
+    ? formatJiraBody(f.description).trim() || '_No description_'
     : '_No description_';
   const assignee = f.assignee ? f.assignee.displayName : '_Unassigned_';
   const priority = f.priority ? f.priority.name : '_None_';

@@ -136,5 +136,8 @@
     "@vscode/vsce": "^2.26.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"
+  },
+  "dependencies": {
+    "jira2md": "^3.0.1"
   }
 }

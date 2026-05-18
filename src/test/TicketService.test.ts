@@ -27,6 +27,29 @@ describe('TicketService', () => {
     });
 
 
+    it('preserves ADF rich formatting (list items) in description', async () => {
+      client.getIssue = async () => ({
+        id: '1', key: 'PROJ-1',
+        fields: {
+          summary: 'Test', description: {
+            type: 'doc', version: 1,
+            content: [{
+              type: 'bulletList',
+              content: [
+                { type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Item A' }] }] },
+                { type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Item B' }] }] },
+              ],
+            }],
+          },
+          status: { name: 'Open' }, assignee: null, reporter: null,
+          priority: null, labels: [], fixVersions: [], comment: null,
+        },
+      });
+      const result = await service.getTicket('PROJ-1');
+      expect(result).toContain('- Item A');
+      expect(result).toContain('- Item B');
+    });
+
     it('propagates not-found error for unknown ticket', async () => {
       await expect(service.getTicket('PROJ-404')).rejects.toThrow('Not found');
     });

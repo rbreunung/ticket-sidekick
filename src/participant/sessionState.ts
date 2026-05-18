@@ -1,3 +1,6 @@
+import type { JiraComment } from '../jira/IJiraClient';
+import { formatJiraBody } from '../utils/markdownFormatter';
+
 export interface CreationSession {
   template: string;
   project: string;
@@ -19,6 +22,16 @@ export interface ContentSession {
 export interface MoreCommentsSession {
   ticketKey: string;
   commentQuery: string | null;
+}
+
+export interface CommentListSession {
+  ticketKey: string;
+  comments: Array<{
+    index: number;
+    author: string;
+    date: string;
+    bodyMarkdown: string;
+  }>;
 }
 
 export interface TemplateSelectionSession {
@@ -173,5 +186,25 @@ export function isCancellation(text: string): boolean {
     'never mind', 'nevermind', "don't", 'dont', 'quit', 'skip',
   ]);
   return CANCELLATIONS.has(normalized);
+}
+
+export function buildCommentListSession(ticketKey: string, comments: JiraComment[]): CommentListSession {
+  return {
+    ticketKey,
+    comments: comments.map((c, i) => ({
+      index: i + 1,
+      author: c.author.displayName,
+      date: c.created.slice(0, 10),
+      bodyMarkdown: formatJiraBody(c.body).trim() || '_empty_',
+    })),
+  };
+}
+
+export function parseCommentIndex(reply: string, maxIndex: number): number | 'invalid' {
+  const match = reply.match(/\b(\d+)\b/);
+  if (!match) return 'invalid';
+  const n = parseInt(match[1], 10);
+  if (n >= 1 && n <= maxIndex) return n;
+  return 'invalid';
 }
 

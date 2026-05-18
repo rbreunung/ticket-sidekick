@@ -2,13 +2,14 @@ import * as vscode from 'vscode';
 import { execSync } from 'child_process';
 import { JiraApiClient } from '../jira/JiraApiClient';
 import { ConfigService } from '../services/ConfigService';
-import { TicketService, assembleDescription, extractTextFromAdf } from '../services/TicketService';
+import { TicketService, assembleDescription } from '../services/TicketService';
+import { formatJiraBody } from '../utils/markdownFormatter';
 import type { JiraComment } from '../jira/IJiraClient';
 import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
 import { extractTicketId } from '../utils/branchParser';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex } from './sessionState';
 import { discoverWorkflow, loadWorkflowCache, saveWorkflowCache, findPath } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
 
@@ -132,7 +133,7 @@ function buildHistoryContext(
 function serializeCommentsForLLM(comments: JiraComment[]): string {
   return comments.map((c) => {
     const date = c.created.slice(0, 10);
-    const body = extractTextFromAdf(c.body).trim() || '_empty_';
+    const body = formatJiraBody(c.body).trim() || '_empty_';
     return `**${c.author.displayName}** (${date}):\n${body}`;
   }).join('\n\n---\n\n');
 }
@@ -145,7 +146,7 @@ async function synthesizeComments(
 ): Promise<string> {
   const task = query
     ? `Find and quote comments relevant to: "${query}". Note the author and date for each relevant comment.`
-    : 'Summarise each comment in one sentence. Format: **Author** (date): one-sentence summary.';
+    : 'Summarise each comment in one sentence. Number each one. Format: N. **Author** (date): one-sentence summary.';
   const prompt = `Comments:\n\n${commentBlocks}\n\n${task} Produce only the final content, no preamble.`;
   const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], {}, token);
   let text = '';
@@ -885,8 +886,12 @@ export function createJiraParticipant(
             request.model,
             token,
           );
+          if (!session.commentQuery) {
+            await ws.update('jira.session.commentList', buildCommentListSession(session.ticketKey, comments));
+          }
           stream.markdown(synthesis);
-          stream.markdown(`\n\n<!-- @jira-ticket:${session.ticketKey} -->`);
+          const listTag = session.commentQuery ? '' : '\n\n<!-- jira:comment-list -->';
+          stream.markdown(`\n\n<!-- @jira-ticket:${session.ticketKey} -->${listTag}`);
         } catch (err) {
           stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
         }
@@ -918,6 +923,21 @@ export function createJiraParticipant(
         );
       }
       return;
+    }
+
+    // Comment list — user replied with a comment number to view in full
+    if (lastResponse.includes('<!-- jira:comment-list -->')) {
+      const commentSession = ws.get<CommentListSession>('jira.session.commentList');
+      if (commentSession) {
+        const index = parseCommentIndex(request.prompt, commentSession.comments.length);
+        if (index !== 'invalid') {
+          const entry = commentSession.comments[index - 1];
+          stream.markdown(`**Comment ${index}** — ${entry.author} (${entry.date})\n\n${entry.bodyMarkdown}`);
+          stream.markdown(`\n\n<!-- @jira-ticket:${commentSession.ticketKey} -->\n\n<!-- jira:comment-list -->`);
+          return;
+        }
+        // Not a comment index — fall through to intent parse
+      }
     }
 
     let intent: ParsedIntent;
@@ -988,13 +1008,14 @@ export function createJiraParticipant(
               request.model,
               token,
             );
+            await ws.update('jira.session.commentList', buildCommentListSession(ticketKey!, comments));
             stream.markdown('\n\n**Comments:**\n\n' + synthesis);
             if (total > MAX_SHOW) {
               const moreSession: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: null };
               await ws.update('jira.session.moreComments', moreSession);
-              stream.markdown(`\n\n_${total - MAX_SHOW} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:more-comments -->`);
+              stream.markdown(`\n\n_${total - MAX_SHOW} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:more-comments -->\n\n<!-- jira:comment-list -->`);
             } else {
-              stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
+              stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:comment-list -->`);
             }
             return;
           }
@@ -1014,13 +1035,18 @@ export function createJiraParticipant(
             request.model,
             token,
           );
+          const hasQuery = Boolean(intent.commentQuery);
+          if (!hasQuery) {
+            await ws.update('jira.session.commentList', buildCommentListSession(ticketKey!, comments));
+          }
           stream.markdown(synthesis);
+          const listTag = hasQuery ? '' : '\n\n<!-- jira:comment-list -->';
           if (total > MAX_INITIAL) {
             const moreSession: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: intent.commentQuery };
             await ws.update('jira.session.moreComments', moreSession);
-            stream.markdown(`\n\n_${total - MAX_INITIAL} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:more-comments -->`);
+            stream.markdown(`\n\n_${total - MAX_INITIAL} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:more-comments -->${listTag}`);
           } else {
-            stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
+            stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->${listTag}`);
           }
           return;
         }
