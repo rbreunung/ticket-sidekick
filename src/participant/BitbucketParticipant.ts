@@ -7,6 +7,9 @@ import {
   parsePrUrl,
   parseDiff,
   resolveByNumber,
+  resolveByNumbers,
+  isAddToReviewIntent,
+  extractUserNote,
   extractJsonObject,
   type ReviewFinding,
   type ReviewSession,
@@ -178,6 +181,54 @@ export function createBitbucketParticipant(
     if (lastResponse.includes('<!-- bitbucket:review-session -->')) {
       const session = ws.get<ReviewSession>('bitbucket.session.review');
       if (session) {
+        if (isAddToReviewIntent(prompt)) {
+          if (!session.project || !session.repo || !session.prId) {
+            stream.markdown(`_Session is from an older version — start a new review to use "add to review"._\n\n<!-- bitbucket:review-session -->`);
+            return;
+          }
+          const selectedFindings = resolveByNumbers(prompt, session.findings);
+          if (selectedFindings.length === 0) {
+            stream.markdown(`_No matching findings. Use **#N** references, e.g. **#2 #3 add to review**._\n\n<!-- bitbucket:review-session -->`);
+            return;
+          }
+          const userNote = extractUserNote(prompt) || undefined;
+          const n = selectedFindings.length;
+          stream.markdown(`_Posting ${n} comment${n !== 1 ? 's' : ''} to Bitbucket…_\n\n`);
+
+          const client = new BitbucketApiClient({
+            baseUrl: config.baseUrl ?? '',
+            authType: config.authType,
+            token: config.token!,
+          });
+          const service = new PrReviewService(client);
+          const results = await service.postFindingsAsComments(
+            session.project, session.repo, session.prId, selectedFindings, userNote,
+          );
+
+          const successLines: string[] = [];
+          const failureLines: string[] = [];
+          for (const r of results) {
+            if (r.result) {
+              const ref = r.result.commentUrl
+                ? `[comment #${r.result.commentId}](${r.result.commentUrl})`
+                : `comment #${r.result.commentId}`;
+              successLines.push(`- **#${r.finding.id}** ${r.finding.title} → posted as ${ref}`);
+            } else {
+              failureLines.push(`- **#${r.finding.id}** ${r.finding.title} → failed: ${r.error}`);
+            }
+          }
+
+          let output = '';
+          if (successLines.length > 0) {
+            output += `**Posted ${successLines.length} comment${successLines.length !== 1 ? 's' : ''}:**\n\n${successLines.join('\n')}\n\n`;
+          }
+          if (failureLines.length > 0) {
+            output += `**Failed to post ${failureLines.length} comment${failureLines.length !== 1 ? 's' : ''}:**\n\n${failureLines.join('\n')}\n\n`;
+          }
+          stream.markdown(output + `<!-- bitbucket:review-session -->`);
+          return;
+        }
+
         const exactFinding = resolveByNumber(prompt, session.findings);
         let finding: ReviewFinding | undefined;
 
@@ -317,6 +368,9 @@ export function createBitbucketParticipant(
       await ws.update('bitbucket.session.review', {
         prTitle: pr.title,
         prUrl: urlMatch[0],
+        project: parsed.project,
+        repo: parsed.repo,
+        prId: parsed.prId,
         findings: numbered,
       } satisfies ReviewSession);
     } catch (err) {

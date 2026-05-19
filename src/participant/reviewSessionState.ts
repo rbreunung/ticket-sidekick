@@ -17,11 +17,15 @@ export interface ReviewFinding {
   title: string;
   description: string;
   recommendation: string;
+  codeExample?: string;
 }
 
 export interface ReviewSession {
   prTitle: string;
   prUrl: string;
+  project: string;
+  repo: string;
+  prId: number;
   findings: ReviewFinding[];
 }
 
@@ -83,4 +87,33 @@ export function resolveByNumber(message: string, findings: ReviewFinding[]): Rev
   if (!m) return null;
   const id = parseInt(m[1], 10);
   return findings.find((f) => f.id === id) ?? null;
+}
+
+export function resolveByNumbers(message: string, findings: ReviewFinding[]): ReviewFinding[] {
+  const ids = new Set([...message.matchAll(/#(\d+)/g)].map((m) => parseInt(m[1], 10)));
+  if (ids.size === 0) return [];
+  return findings.filter((f) => ids.has(f.id));
+}
+
+export function isAddToReviewIntent(message: string): boolean {
+  return /\badd\b/i.test(message) && /\breview\b/i.test(message) && /#\d+/.test(message);
+}
+
+export function extractUserNote(message: string): string {
+  return message
+    .replace(/#\d+/g, '')
+    .replace(/\badd\b|\bto\b|\breview\b/gi, '')
+    .replace(/[,;]+/g, '')
+    .trim();
+}
+
+export function langFromPath(filePath: string): string {
+  const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
+  const map: Record<string, string> = {
+    ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
+    py: 'python', java: 'java', kt: 'kotlin', cs: 'csharp', go: 'go',
+    rs: 'rust', rb: 'ruby', php: 'php', swift: 'swift', c: 'c', cpp: 'cpp',
+    json: 'json', yaml: 'yaml', yml: 'yaml', sh: 'bash', html: 'html', css: 'css', sql: 'sql',
+  };
+  return map[ext] ?? '';
 }

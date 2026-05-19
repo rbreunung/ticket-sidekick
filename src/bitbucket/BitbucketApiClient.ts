@@ -1,4 +1,4 @@
-import type { BitbucketAuthType, BitbucketPR, BitbucketUser, IBitbucketClient } from './IBitbucketClient';
+import type { BitbucketAuthType, BitbucketCommentResult, BitbucketPR, BitbucketUser, IBitbucketClient, InlineAnchor } from './IBitbucketClient';
 
 // Bitbucket Data Center /pull-requests/{id}/diff response shape (API 1.0)
 interface DcDiffLine { line: string; truncated?: boolean; }
@@ -89,6 +89,38 @@ export class BitbucketApiClient implements IBitbucketClient {
       }
       if (response.status === 404) throw new Error(`Not found: ${url}`);
       throw new Error(`Bitbucket Cloud API error ${response.status} at ${url}${body ? ` — ${body}` : ''}`);
+    }
+    return response.json() as Promise<T>;
+  }
+
+  private async dcPost<T>(path: string, body: unknown): Promise<T> {
+    const url = `${this.baseUrl}/rest/api/1.0${path}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: this.authHeader, 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      if (response.status === 401) throw new Error(`Authentication failed at ${url}. Check your Bitbucket credentials.`);
+      if (response.status === 404) throw new Error(`Not found: ${url}`);
+      const bodyText = await response.text().catch(() => '');
+      throw new Error(`Bitbucket API error ${response.status} at ${url}${bodyText ? ` — ${bodyText}` : ''}`);
+    }
+    return response.json() as Promise<T>;
+  }
+
+  private async cloudPost<T>(path: string, body: unknown): Promise<T> {
+    const url = `https://api.bitbucket.org/2.0${path}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: this.authHeader, 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const bodyText = await response.text().catch(() => '');
+      if (response.status === 401) throw new Error(`Authentication failed (401)${bodyText ? ` — ${bodyText}` : ''}. Check your Bitbucket credentials.`);
+      if (response.status === 404) throw new Error(`Not found: ${url}`);
+      throw new Error(`Bitbucket Cloud API error ${response.status} at ${url}${bodyText ? ` — ${bodyText}` : ''}`);
     }
     return response.json() as Promise<T>;
   }
@@ -190,5 +222,34 @@ export class BitbucketApiClient implements IBitbucketClient {
       `/projects/${project}/repos/${repo}/browse/${path}?at=${commitHash}&limit=5000`,
     );
     return data.lines.map((l) => l.text).join('\n');
+  }
+
+  async addPrComment(
+    project: string,
+    repo: string,
+    prId: number,
+    text: string,
+    inline?: InlineAnchor,
+  ): Promise<BitbucketCommentResult> {
+    if (this.authType === 'cloud') {
+      const body: Record<string, unknown> = { content: { raw: text } };
+      if (inline) {
+        body['inline'] = { path: inline.filePath, to: inline.line };
+      }
+      const data = await this.cloudPost<{ id: number; links?: { html?: { href: string } } }>(
+        `/repositories/${project}/${repo}/pullrequests/${prId}/comments`,
+        body,
+      );
+      return { commentId: data.id, commentUrl: data.links?.html?.href };
+    }
+    const body: Record<string, unknown> = { text };
+    if (inline) {
+      body['anchor'] = { line: inline.line, lineType: 'ADDED', fileType: 'TO', path: inline.filePath };
+    }
+    const data = await this.dcPost<{ id: number }>(
+      `/projects/${project}/repos/${repo}/pull-requests/${prId}/comments`,
+      body,
+    );
+    return { commentId: data.id };
   }
 }

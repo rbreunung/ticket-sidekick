@@ -1,5 +1,6 @@
-import type { BitbucketPR, IBitbucketClient } from '../bitbucket/IBitbucketClient';
+import type { BitbucketCommentResult, BitbucketPR, IBitbucketClient, InlineAnchor } from '../bitbucket/IBitbucketClient';
 import type { FileDiff, ReviewFinding } from '../participant/reviewSessionState';
+import { langFromPath } from '../participant/reviewSessionState';
 
 const REVIEW_PROMPT_PREFIX = `You are a senior software engineer performing a code review.
 
@@ -22,11 +23,12 @@ For each confirmed issue identify:
 - A concise title (under 10 words)
 - A clear description of the problem
 - A concrete, actionable recommendation
+- A short code example showing the fix (3–15 lines, no fences). Omit if the fix is architectural or the snippet would exceed 15 lines.
 
 Also list any additional real source files (not in the diff) needed to complete the review. Maximum 5 files.
 
 Respond with ONLY a JSON object — no markdown fences, no explanation:
-{"findings":[{"file":"path/to/file.ts","line":42,"severity":"critical","title":"Short title","description":"What is wrong","recommendation":"What to do"}],"additionalFilesNeeded":["path/to/other.ts"]}
+{"findings":[{"file":"path/to/file.ts","line":42,"severity":"critical","title":"Short title","description":"What is wrong","recommendation":"What to do","codeExample":"optional 3-15 line fix snippet — omit if not applicable"}],"additionalFilesNeeded":["path/to/other.ts"]}
 
 `;
 
@@ -123,6 +125,57 @@ export class PrReviewService {
       })
       .join('\n\n---\n\n');
 
-    return `${header}\n\n---\n\n${fileSections}\n\n---\n\n_Reply **#1** or describe a finding to ask a follow-up._\n\n<!-- bitbucket:review-session -->`;
+    return `${header}\n\n---\n\n${fileSections}\n\n---\n\n_Reply **#1** or describe a finding to ask a follow-up. To post findings as PR comments: **#2 #3 add to review**._\n\n<!-- bitbucket:review-session -->`;
+  }
+
+  formatPrComment(finding: ReviewFinding, userNote?: string): string {
+    const icon = finding.severity === 'critical' ? '🔴' : finding.severity === 'warning' ? '🟡' : '🔵';
+    const label = finding.severity.toUpperCase();
+    const loc = finding.line ? ` · L${finding.line}` : '';
+    const lines: string[] = [
+      `**${icon} [${label}] ${finding.title}**`,
+      `\`${finding.file}${loc}\``,
+      '',
+      finding.description,
+      '',
+      `**Recommendation:** ${finding.recommendation}`,
+    ];
+
+    if (userNote) {
+      lines.push('', `📝 *${userNote}*`);
+    }
+
+    if (finding.codeExample) {
+      const lang = langFromPath(finding.file);
+      const stripped = finding.codeExample
+        .trim()
+        .replace(/^```[\w]*\r?\n?/, '')
+        .replace(/\r?\n?```$/, '');
+      lines.push('', `\`\`\`${lang}`, stripped, '```');
+    }
+
+    return lines.join('\n');
+  }
+
+  async postFindingsAsComments(
+    project: string,
+    repo: string,
+    prId: number,
+    findings: ReviewFinding[],
+    userNote?: string,
+  ): Promise<Array<{ finding: ReviewFinding; result: BitbucketCommentResult | null; error?: string }>> {
+    const results: Array<{ finding: ReviewFinding; result: BitbucketCommentResult | null; error?: string }> = [];
+    for (const finding of findings) {
+      const text = this.formatPrComment(finding, userNote);
+      const inline: InlineAnchor | undefined =
+        finding.line !== undefined ? { filePath: finding.file, line: finding.line } : undefined;
+      try {
+        const result = await this.client.addPrComment(project, repo, prId, text, inline);
+        results.push({ finding, result });
+      } catch (err) {
+        results.push({ finding, result: null, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return results;
   }
 }
