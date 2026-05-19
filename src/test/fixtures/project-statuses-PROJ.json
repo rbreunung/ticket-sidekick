@@ -1,0 +1,21 @@
+[
+  {
+    "name": "Bug",
+    "subtask": false,
+    "statuses": [
+      { "id": "1", "name": "To Do" },
+      { "id": "2", "name": "In Progress" },
+      { "id": "3", "name": "In Review" },
+      { "id": "4", "name": "Done" }
+    ]
+  },
+  {
+    "name": "Story",
+    "subtask": false,
+    "statuses": [
+      { "id": "1", "name": "To Do" },
+      { "id": "2", "name": "In Progress" },
+      { "id": "4", "name": "Done" }
+    ]
+  }
+]

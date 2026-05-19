@@ -65,17 +65,24 @@ export interface JiraCreatedIssue {
   key: string;
 }
 
+export interface JiraProjectStatus {
+  name: string;
+  subtask: boolean;
+  statuses: Array<{ id: string; name: string }>;
+}
+
 export interface IJiraClient {
   getIssue(issueKey: string): Promise<JiraIssue>;
   updateIssue(issueKey: string, fields: Record<string, unknown>): Promise<void>;
   addComment(issueKey: string, body: string): Promise<void>;
-  searchJql(jql: string, maxResults?: number): Promise<JiraSearchResult>;
+  searchJql(jql: string, maxResults?: number, startAt?: number): Promise<JiraSearchResult>;
   findUser(query: string): Promise<JiraUser[]>;
   getCurrentUser(): Promise<JiraUser>;
   getTransitions(issueKey: string): Promise<JiraTransition[]>;
   executeTransition(issueKey: string, transitionId: string, fields?: Record<string, unknown>): Promise<void>;
   getResolutions(): Promise<Array<{ name: string }>>;
   getProject(projectKey: string): Promise<JiraProject>;
+  getProjectStatuses(projectKey: string, issueType: string): Promise<string[]>;
   getSprintByName(projectKey: string, sprintName: string): Promise<{ id: number }>;
   getTeamByName(name: string): Promise<{ id: string }>;
   createIssue(projectKey: string, summary: string, issueType: string, additionalFields?: Record<string, unknown>): Promise<JiraCreatedIssue>;

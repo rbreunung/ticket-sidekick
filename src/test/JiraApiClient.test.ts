@@ -111,6 +111,57 @@ describe('JiraApiClient', () => {
       expect(url).toContain('jql=project%20%3D%20PROJ');
       expect(options.method).toBeUndefined(); // GET has no explicit method
     });
+
+    it('appends startAt to the query string when provided', async () => {
+      const mockFetch = makeFetch({ issues: [], isLast: true });
+      vi.stubGlobal('fetch', mockFetch);
+      const client = new JiraApiClient(BASE_CONFIG);
+      await client.searchJql('project = PROJ', 20, 40);
+      const [url] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(url).toContain('startAt=40');
+    });
+
+    it('omits startAt from the query string when not provided', async () => {
+      const mockFetch = makeFetch({ issues: [], isLast: true });
+      vi.stubGlobal('fetch', mockFetch);
+      const client = new JiraApiClient(BASE_CONFIG);
+      await client.searchJql('project = PROJ');
+      const [url] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(url).not.toContain('startAt');
+    });
+  });
+
+  describe('getProjectStatuses', () => {
+    const statusPayload = [
+      { name: 'Bug', subtask: false, statuses: [{ id: '1', name: 'Open' }, { id: '2', name: 'Closed' }] },
+      { name: 'Story', subtask: false, statuses: [{ id: '3', name: 'Backlog' }] },
+    ];
+
+    it('calls the correct endpoint and returns status names for the issue type', async () => {
+      const mockFetch = makeFetch(statusPayload);
+      vi.stubGlobal('fetch', mockFetch);
+      const client = new JiraApiClient(BASE_CONFIG);
+      const result = await client.getProjectStatuses('PROJ', 'Bug');
+      expect(result).toEqual(['Open', 'Closed']);
+      const [url] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://jira.example.com/rest/api/2/project/PROJ/statuses');
+    });
+
+    it('matches issue type case-insensitively', async () => {
+      const mockFetch = makeFetch(statusPayload);
+      vi.stubGlobal('fetch', mockFetch);
+      const client = new JiraApiClient(BASE_CONFIG);
+      const result = await client.getProjectStatuses('PROJ', 'bug');
+      expect(result).toEqual(['Open', 'Closed']);
+    });
+
+    it('returns empty array when issue type is not found', async () => {
+      const mockFetch = makeFetch(statusPayload);
+      vi.stubGlobal('fetch', mockFetch);
+      const client = new JiraApiClient(BASE_CONFIG);
+      const result = await client.getProjectStatuses('PROJ', 'Epic');
+      expect(result).toEqual([]);
+    });
   });
 
   describe('HTML response detection', () => {

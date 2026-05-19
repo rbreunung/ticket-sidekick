@@ -45,9 +45,50 @@ describe('loadWorkflowCache', () => {
 });
 
 describe('discoverWorkflow', () => {
-  it('builds graph from ticket samples', async () => {
+  it('discovers all statuses declared by the project schema', async () => {
     const client = new MockJiraClient();
-    const result = await discoverWorkflow(client, 'PROJ', 'Bug');
-    expect(Object.keys(result).length).toBeGreaterThan(0);
+    const { graph } = await discoverWorkflow(client, 'PROJ', 'Bug');
+    // fixture declares 4 statuses for Bug
+    expect(Object.keys(graph)).toHaveLength(4);
+    expect(Object.keys(graph)).toContain('To Do');
+    expect(Object.keys(graph)).toContain('In Progress');
+    expect(Object.keys(graph)).toContain('In Review');
+    expect(Object.keys(graph)).toContain('Done');
+  });
+
+  it('each status node has transitions with id, name, to', async () => {
+    const client = new MockJiraClient();
+    const { graph } = await discoverWorkflow(client, 'PROJ', 'Bug');
+    for (const transitions of Object.values(graph)) {
+      expect(transitions.length).toBeGreaterThan(0);
+      expect(transitions[0]).toHaveProperty('id');
+      expect(transitions[0]).toHaveProperty('name');
+      expect(transitions[0]).toHaveProperty('to');
+    }
+  });
+
+  it('reports skipped statuses that have no representative ticket', async () => {
+    const client = new MockJiraClient();
+    client.searchJql = async (jql) => {
+      if (jql.includes('"In Progress"')) {
+        return {
+          issues: [{ id: '1', key: 'PROJ-1', fields: { summary: 'x', description: null, status: { name: 'In Progress' }, assignee: null, reporter: null, priority: null, labels: [], fixVersions: [], comment: null } }],
+          total: 1,
+        };
+      }
+      return { issues: [], total: 0 };
+    };
+    const { graph, skippedStatuses } = await discoverWorkflow(client, 'PROJ', 'Bug');
+    expect(Object.keys(graph)).toEqual(['In Progress']);
+    expect(skippedStatuses).toContain('To Do');
+    expect(skippedStatuses).toContain('Done');
+  });
+
+  it('returns empty graph when no statuses found for issue type', async () => {
+    const client = new MockJiraClient();
+    client.getProjectStatuses = async () => [];
+    const { graph, skippedStatuses } = await discoverWorkflow(client, 'PROJ', 'Unknown');
+    expect(graph).toEqual({});
+    expect(skippedStatuses).toEqual([]);
   });
 });

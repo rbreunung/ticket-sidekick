@@ -55,22 +55,38 @@ export async function discoverWorkflow(
   client: IJiraClient,
   projectKey: string,
   issueType: string,
-): Promise<WorkflowGraph> {
-  const result = await client.searchJql(
-    `project = ${projectKey} AND issuetype = "${issueType}"`,
-    50,
+): Promise<{ graph: WorkflowGraph; skippedStatuses: string[] }> {
+  const statusNames = await client.getProjectStatuses(projectKey, issueType);
+
+  const searches = await Promise.all(
+    statusNames.map((status) =>
+      client.searchJql(
+        `project = ${projectKey} AND issuetype = "${issueType}" AND status = "${status}" ORDER BY updated DESC`,
+        1,
+      ),
+    ),
   );
+
   const representativeByStatus = new Map<string, string>();
-  for (const issue of result.issues) {
-    const status = issue.fields.status.name;
-    if (!representativeByStatus.has(status)) {
-      representativeByStatus.set(status, issue.key);
+  const skippedStatuses: string[] = [];
+  for (let i = 0; i < statusNames.length; i++) {
+    const issue = searches[i].issues[0];
+    if (issue) {
+      representativeByStatus.set(statusNames[i], issue.key);
+    } else {
+      skippedStatuses.push(statusNames[i]);
     }
   }
+
+  const entries = Array.from(representativeByStatus.entries());
+  const transitionResults = await Promise.all(
+    entries.map(([, issueKey]) => client.getTransitions(issueKey)),
+  );
+
   const graph: WorkflowGraph = {};
-  for (const [status, issueKey] of representativeByStatus) {
-    const transitions = await client.getTransitions(issueKey);
-    graph[status] = transitions.map((t) => ({ id: t.id, name: t.name, to: t.to.name }));
+  for (let i = 0; i < entries.length; i++) {
+    const [status] = entries[i];
+    graph[status] = transitionResults[i].map((t) => ({ id: t.id, name: t.name, to: t.to.name }));
   }
-  return graph;
+  return { graph, skippedStatuses };
 }

@@ -520,7 +520,7 @@ async function handleDiscoverWorkflow(
     return;
   }
   stream.markdown(`_Discovering workflow for **${projectKey}** / **${issueType}**…_\n\n`);
-  const graph = await discoverWorkflow(jiraClient, projectKey, issueType);
+  const { graph, skippedStatuses } = await discoverWorkflow(jiraClient, projectKey, issueType);
   const statuses = Object.keys(graph);
   if (statuses.length === 0) {
     stream.markdown(`No tickets found for ${projectKey} / ${issueType} — workflow could not be sampled.`);
@@ -536,7 +536,11 @@ async function handleDiscoverWorkflow(
     const targets = graph[s].map((t) => `${t.name} → **${t.to}**`).join(', ');
     return `**${s}**: ${targets}`;
   });
-  stream.markdown(`Workflow discovered for **${projectKey} / ${issueType}** (${statuses.length} statuses):\n\n${lines.join('\n\n')}\n\nSaved to \`.jira-workflow-cache.json\`.`);
+  let summary = `Workflow discovered for **${projectKey} / ${issueType}** (${statuses.length} statuses):\n\n${lines.join('\n\n')}\n\nSaved to \`.jira-workflow-cache.json\`.`;
+  if (skippedStatuses.length > 0) {
+    summary += `\n\n⚠️ **${skippedStatuses.length} status(es) had no open tickets and were not sampled:** ${skippedStatuses.join(', ')}. Re-run discovery once tickets exist in those states.`;
+  }
+  stream.markdown(summary);
 }
 
 async function streamReviewScreen(
