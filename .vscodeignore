@@ -1,8 +1,7 @@
 src/
 src/test/
-node_modules/*
-!node_modules/jira2md
-!node_modules/marked
+node_modules/
+esbuild.js
 .vscode-test/
 **/*.ts
 tsconfig.json
