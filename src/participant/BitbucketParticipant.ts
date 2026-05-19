@@ -11,6 +11,7 @@ import {
   type ReviewFinding,
   type ReviewSession,
 } from './reviewSessionState';
+import { redactUrls, tokenStatus } from '../utils/diagUtils';
 
 function getLastAssistantText(chatContext: vscode.ChatContext): string {
   for (let i = chatContext.history.length - 1; i >= 0; i--) {
@@ -93,14 +94,22 @@ async function handleCheck(
     ? !!config.token
     : !!(config.baseUrl && config.token);
   if (!isConfigured) {
+    const urlStatus = config.authType === 'cloud'
+      ? 'n/a (Cloud)'
+      : (config.baseUrl ? 'present' : '**absent** — add `ticketSidekick.bitbucket.baseUrl` to VS Code settings');
     stream.markdown(
       '**Bitbucket not configured.**\n\n' +
+      `| Setting | Status |\n|---|---|\n` +
+      `| Auth type | ${config.authType} |\n` +
+      `| Base URL | ${urlStatus} |\n` +
+      `| Token | ${tokenStatus(config.token)} |\n\n` +
       'Run **Ticket Sidekick: Set Bitbucket Personal Access Token** (Data Center) or **Ticket Sidekick: Configure Bitbucket Cloud Credentials** from the Command Palette.',
     );
     return;
   }
   const effectiveUrl = config.authType === 'cloud' ? 'https://api.bitbucket.org' : config.baseUrl!;
   const apiVersion = config.authType === 'cloud' ? 'v2.0' : 'v1.0';
+  const displayUrl = redactUrls(effectiveUrl);
   try {
     const client = new BitbucketApiClient({
       baseUrl: config.baseUrl ?? '',
@@ -111,19 +120,21 @@ async function handleCheck(
     stream.markdown(
       `**Bitbucket connection OK**\n\n` +
       `| Setting | Value |\n|---|---|\n` +
-      `| Base URL | \`${effectiveUrl}\` |\n` +
+      `| Base URL | \`${displayUrl}\` |\n` +
       `| API version | ${apiVersion} |\n` +
       `| Auth type | ${config.authType} |\n` +
+      `| Token | ${tokenStatus(config.token)} |\n` +
       `| Logged in as | ${user.displayName} |\n`,
     );
   } catch (err) {
     stream.markdown(
       `**Bitbucket connection failed**\n\n` +
       `| Setting | Value |\n|---|---|\n` +
-      `| Base URL | \`${effectiveUrl}\` |\n` +
+      `| Base URL | \`${displayUrl}\` |\n` +
       `| API version | ${apiVersion} |\n` +
-      `| Auth type | ${config.authType} |\n\n` +
-      `Error: ${err instanceof Error ? err.message : String(err)}`,
+      `| Auth type | ${config.authType} |\n` +
+      `| Token | ${tokenStatus(config.token)} |\n\n` +
+      `Error: ${redactUrls(err instanceof Error ? err.message : String(err))}`,
     );
   }
 }
