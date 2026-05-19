@@ -7,3 +7,11 @@ esbuild.js
 tsconfig.json
 vitest.config.ts
 .gitignore
+.claude/
+.superpowers/
+.vscode/
+docs/
+testspace/
+CLAUDE.md
+.jira-templates.json
+package-lock.json
