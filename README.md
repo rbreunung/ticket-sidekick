@@ -286,7 +286,7 @@ Leave this unset for Bitbucket Cloud — the plugin connects to `api.bitbucket.o
 
 **Data Center:** Command Palette (`Ctrl+Shift+P`) → `Ticket Sidekick: Set Bitbucket Personal Access Token`
 
-Generate a Personal Access Token in Bitbucket Data Center at `Profile → Manage account → Personal access tokens`. Grant at minimum **Repositories: Read** and **Pull requests: Read**.
+Generate a Personal Access Token in Bitbucket Data Center at `Profile → Manage account → Personal access tokens`. Grant at minimum **Repositories: Read** and **Pull requests: Read** (add **Pull requests: Write** if you want to post findings as PR comments).
 
 **Cloud:** Command Palette → `Ticket Sidekick: Configure Bitbucket Cloud Credentials`
 
@@ -296,6 +296,7 @@ You will be prompted for your Bitbucket **username** and an **App Password**. Cr
 | --- | --- |
 | Repositories: Read | Fetching file contents for review context |
 | Pull requests: Read | PR metadata and diff |
+| Pull requests: Write | Posting findings as PR comments (`add to review`) |
 | Account: Read | (optional) shows your username in `@bitbucket check` |
 
 > **Note:** Bitbucket App Passwords use `Authorization: Basic` — they are not the same as Atlassian API tokens (used for Jira Cloud). Using an Atlassian API token here will fail with 401.
@@ -313,6 +314,8 @@ Open GitHub Copilot Chat and use `@bitbucket`:
 | `@bitbucket #2` | Follow-up question about finding #2 from the last review |
 | `@bitbucket explain the SQL injection issue` | Natural language follow-up — resolves to the matching finding automatically |
 | `@bitbucket can finding #3 be downgraded if X?` | Deeper explanation with conditions and concrete code suggestions |
+| `@bitbucket #2 #3, #5 add to review` | Post selected findings as PR comments (inline on the diff line when available) |
+| `@bitbucket #1 add to review this blocks merge` | Post finding #1 as a comment; the trailing text becomes a reviewer note |
 
 ### PR review
 
@@ -366,7 +369,7 @@ _by Jane Smith → main · 3 files changed_
 
 ---
 
-_Reply **#2** or describe a finding to ask a follow-up._
+_Reply **#1** or describe a finding to ask a follow-up. To post findings as PR comments: **#2 #3 add to review**._
 ```
 
 ### Follow-up questions
@@ -380,6 +383,21 @@ After a review, the session stays active for multi-turn follow-ups. Reference a 
 ```
 
 The plugin resolves natural language references by asking the LLM to match your question to the most relevant finding. Each follow-up response includes a deeper explanation, the conditions under which the issue could be acceptable, and concrete code change suggestions.
+
+### Posting findings as PR comments
+
+After a review, you can push selected findings back to Bitbucket as PR comments:
+
+```text
+@bitbucket #2 #3, #5 add to review
+@bitbucket #1 add to review this is blocking merge
+```
+
+Any text after the `add to review` keywords becomes a brief reviewer note appended to each comment. When a finding has a line number the comment is anchored inline on that diff line; otherwise it appears in the PR activity feed. If the LLM produced a short code fix example for the finding, it is included with language-appropriate code formatting.
+
+The session remains active after posting — you can still ask follow-up questions about findings you did not post.
+
+> **Note (Bitbucket Cloud):** Posting comments requires the **Pull requests: Write** scope on your App Password in addition to the Read scope needed for reviews. See the setup section above.
 
 Starting a new PR review clears the previous session automatically.
 
