@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { parsePrUrl, parseDiff, resolveByNumber, extractJsonObject } from '../participant/reviewSessionState';
+import {
+  parsePrUrl, parseDiff, resolveByNumber, extractJsonObject,
+  resolveByNumbers, isAddToReviewIntent, extractUserNote, langFromPath,
+} from '../participant/reviewSessionState';
 import type { ReviewFinding } from '../participant/reviewSessionState';
 import { PrReviewService } from '../services/PrReviewService';
 import { MockBitbucketClient } from './mocks/MockBitbucketClient';
@@ -424,5 +427,233 @@ describe('dcDiffToUnified', () => {
     const parsed = parseDiff(dcDiffToUnified(JSON.parse(apiPayload)));
     expect(parsed).toHaveLength(1);
     expect(parsed[0].path).toBe('src/auth/login.ts');
+  });
+});
+
+describe('resolveByNumbers', () => {
+  const findings: ReviewFinding[] = [
+    { id: 1, file: 'a.ts', severity: 'critical', title: 'T1', description: 'D', recommendation: 'R' },
+    { id: 2, file: 'b.ts', severity: 'warning',  title: 'T2', description: 'D', recommendation: 'R' },
+    { id: 3, file: 'c.ts', severity: 'suggestion', title: 'T3', description: 'D', recommendation: 'R' },
+    { id: 5, file: 'd.ts', severity: 'critical', title: 'T5', description: 'D', recommendation: 'R' },
+  ];
+
+  it('returns multiple findings by #N references', () => {
+    const result = resolveByNumbers('#2 #3, #5 add to review', findings);
+    expect(result.map((f) => f.id)).toEqual([2, 3, 5]);
+  });
+
+  it('returns a single finding', () => {
+    expect(resolveByNumbers('#1 add to review', findings).map((f) => f.id)).toEqual([1]);
+  });
+
+  it('deduplicates repeated references', () => {
+    expect(resolveByNumbers('#2 #2 add to review', findings)).toHaveLength(1);
+  });
+
+  it('returns empty array when no #N references', () => {
+    expect(resolveByNumbers('add to review', findings)).toHaveLength(0);
+  });
+
+  it('silently skips unknown IDs', () => {
+    const result = resolveByNumbers('#1 #99 add to review', findings);
+    expect(result.map((f) => f.id)).toEqual([1]);
+  });
+});
+
+describe('isAddToReviewIntent', () => {
+  it('returns true for "#2 #3 add to review"', () => {
+    expect(isAddToReviewIntent('#2 #3 add to review')).toBe(true);
+  });
+
+  it('returns true for "please add #1 and #4 to review"', () => {
+    expect(isAddToReviewIntent('please add #1 and #4 to review')).toBe(true);
+  });
+
+  it('returns false when no #N reference', () => {
+    expect(isAddToReviewIntent('add to review')).toBe(false);
+  });
+
+  it('returns false when "add" is missing', () => {
+    expect(isAddToReviewIntent('#2 review')).toBe(false);
+  });
+
+  it('returns false for a plain follow-up like "#2 can this be fixed?"', () => {
+    expect(isAddToReviewIntent('#2 can this be fixed?')).toBe(false);
+  });
+});
+
+describe('extractUserNote', () => {
+  it('returns empty string for a pure command', () => {
+    expect(extractUserNote('#2 #3 add to review')).toBe('');
+  });
+
+  it('extracts trailing explanation text', () => {
+    const note = extractUserNote('#2 add to review this is blocking CI');
+    expect(note).toBe('this is blocking CI');
+  });
+
+  it('handles comma-separated refs with no extra text', () => {
+    expect(extractUserNote('#2, #3, #5 add to review')).toBe('');
+  });
+
+  it('extracts explanation after comma-separated refs', () => {
+    const note = extractUserNote('#2, #3 add to review — urgent');
+    expect(note).toContain('urgent');
+  });
+});
+
+describe('langFromPath', () => {
+  it.each([
+    ['src/app.ts',    'typescript'],
+    ['src/comp.tsx',  'typescript'],
+    ['src/app.js',    'javascript'],
+    ['src/app.jsx',   'javascript'],
+    ['app.py',        'python'],
+    ['App.java',      'java'],
+    ['style.css',     'css'],
+    ['config.json',   'json'],
+    ['deploy.sh',     'bash'],
+    ['data.yaml',     'yaml'],
+    ['data.yml',      'yaml'],
+    ['query.sql',     'sql'],
+    ['unknown.xyz',   ''],
+    ['no-extension',  ''],
+  ])('%s → %s', (path, lang) => {
+    expect(langFromPath(path)).toBe(lang);
+  });
+});
+
+describe('PrReviewService.formatPrComment', () => {
+  const service = new PrReviewService(new MockBitbucketClient());
+
+  const finding: ReviewFinding = {
+    id: 1, file: 'src/auth/login.ts', line: 42,
+    severity: 'critical', title: 'SQL injection',
+    description: 'Direct string concatenation in query.',
+    recommendation: 'Use parameterized queries.',
+  };
+
+  it('includes severity icon, label, title, file, line, description, recommendation', () => {
+    const text = service.formatPrComment(finding);
+    expect(text).toContain('🔴');
+    expect(text).toContain('[CRITICAL]');
+    expect(text).toContain('SQL injection');
+    expect(text).toContain('src/auth/login.ts');
+    expect(text).toContain('L42');
+    expect(text).toContain('Direct string concatenation in query.');
+    expect(text).toContain('Use parameterized queries.');
+  });
+
+  it('appends user note as italicised paragraph with 📝', () => {
+    const text = service.formatPrComment(finding, 'blocks the release');
+    expect(text).toContain('📝');
+    expect(text).toContain('*blocks the release*');
+  });
+
+  it('omits user note section when not provided', () => {
+    const text = service.formatPrComment(finding);
+    expect(text).not.toContain('📝');
+  });
+
+  it('omits line number when finding.line is undefined', () => {
+    const f: ReviewFinding = { ...finding, line: undefined };
+    expect(service.formatPrComment(f)).not.toContain('L42');
+  });
+
+  it('wraps codeExample in a language-tagged code fence', () => {
+    const f: ReviewFinding = { ...finding, codeExample: 'db.query(sql, [u]);' };
+    const text = service.formatPrComment(f);
+    expect(text).toContain('```typescript');
+    expect(text).toContain('db.query(sql, [u]);');
+    expect(text).toContain('```');
+  });
+
+  it('strips LLM-added fences from codeExample before wrapping', () => {
+    const f: ReviewFinding = { ...finding, codeExample: '```typescript\nconst x = 1;\n```' };
+    const text = service.formatPrComment(f);
+    expect(text).not.toMatch(/```typescript\s*```typescript/);
+    expect(text).toContain('const x = 1;');
+  });
+
+  it('omits code block when codeExample is absent', () => {
+    expect(service.formatPrComment(finding)).not.toContain('```');
+  });
+
+  it('uses correct language for a Python file', () => {
+    const f: ReviewFinding = { ...finding, file: 'app.py', codeExample: 'x = 1' };
+    expect(service.formatPrComment(f)).toContain('```python');
+  });
+});
+
+describe('PrReviewService.postFindingsAsComments', () => {
+  const baseFinding = (id: number, file: string, line?: number): ReviewFinding => ({
+    id, file, line, severity: 'critical', title: `T${id}`, description: 'D', recommendation: 'R',
+  });
+
+  it('posts one comment per finding and returns results', async () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const findings = [baseFinding(1, 'a.ts', 10), baseFinding(2, 'b.ts')];
+
+    const results = await service.postFindingsAsComments('PROJ', 'myrepo', 42, findings);
+
+    expect(client.addPrCommentCalls).toHaveLength(2);
+    expect(results).toHaveLength(2);
+    expect(results.every((r) => r.result !== null)).toBe(true);
+    expect(results.every((r) => r.error === undefined)).toBe(true);
+  });
+
+  it('passes inline anchor when finding.line is set', async () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    await service.postFindingsAsComments('PROJ', 'myrepo', 42, [baseFinding(1, 'src/auth.ts', 42)]);
+
+    expect(client.addPrCommentCalls[0].inline).toEqual({ filePath: 'src/auth.ts', line: 42 });
+  });
+
+  it('omits inline anchor when finding.line is absent', async () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    await service.postFindingsAsComments('PROJ', 'myrepo', 42, [baseFinding(1, 'a.ts')]);
+
+    expect(client.addPrCommentCalls[0].inline).toBeUndefined();
+  });
+
+  it('includes user note in comment text', async () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    await service.postFindingsAsComments('PROJ', 'myrepo', 42, [baseFinding(1, 'a.ts')], 'blocks release');
+
+    expect(client.addPrCommentCalls[0].text).toContain('blocks release');
+  });
+
+  it('continues posting after a failure and reports both', async () => {
+    const client = new MockBitbucketClient();
+    let callCount = 0;
+    client.addPrComment = async (p, r, id, text, inline) => {
+      client.addPrCommentCalls.push({ project: p, repo: r, prId: id, text, inline });
+      callCount++;
+      if (callCount === 1) throw new Error('Network error');
+      return { commentId: 999 };
+    };
+
+    const service = new PrReviewService(client);
+    const findings = [baseFinding(1, 'a.ts'), baseFinding(2, 'b.ts')];
+    const results = await service.postFindingsAsComments('PROJ', 'myrepo', 42, findings);
+
+    expect(results[0].result).toBeNull();
+    expect(results[0].error).toContain('Network error');
+    expect(results[1].result?.commentId).toBe(999);
+  });
+
+  it('includes code example in posted comment when finding has codeExample', async () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const f: ReviewFinding = { ...baseFinding(1, 'src/auth.ts', 5), codeExample: 'db.query(sql, [id])' };
+    await service.postFindingsAsComments('PROJ', 'myrepo', 42, [f]);
+
+    expect(client.addPrCommentCalls[0].text).toContain('```typescript');
+    expect(client.addPrCommentCalls[0].text).toContain('db.query(sql, [id])');
   });
 });

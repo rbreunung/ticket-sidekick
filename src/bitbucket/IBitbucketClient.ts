@@ -22,9 +22,26 @@ export interface BitbucketConfig {
   reviewInstructions?: string;
 }
 
+export interface BitbucketCommentResult {
+  commentId: number;
+  commentUrl?: string;
+}
+
+export interface InlineAnchor {
+  filePath: string;
+  line: number;
+}
+
 export interface IBitbucketClient {
   getCurrentUser(): Promise<BitbucketUser>;
   getPullRequest(project: string, repo: string, prId: number): Promise<BitbucketPR>;
   getPullRequestDiff(project: string, repo: string, prId: number): Promise<string>;
   getFileContent(project: string, repo: string, path: string, commitHash: string): Promise<string>;
+  addPrComment(
+    project: string,
+    repo: string,
+    prId: number,
+    text: string,
+    inline?: InlineAnchor,
+  ): Promise<BitbucketCommentResult>;
 }
