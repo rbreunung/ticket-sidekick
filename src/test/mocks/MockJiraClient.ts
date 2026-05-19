@@ -6,6 +6,7 @@ import type {
   JiraCreatedIssue,
   JiraIssue,
   JiraProject,
+  JiraProjectStatus,
   JiraSearchResult,
   JiraTransition,
   JiraUser,
@@ -38,7 +39,7 @@ export class MockJiraClient implements IJiraClient {
     this.addCommentCalls.push({ issueKey, body });
   }
 
-  async searchJql(_jql: string, _maxResults?: number): Promise<JiraSearchResult> {
+  async searchJql(_jql: string, _maxResults?: number, _startAt?: number): Promise<JiraSearchResult> {
     return loadFixture<JiraSearchResult>('search-results.json');
   }
 
@@ -68,6 +69,12 @@ export class MockJiraClient implements IJiraClient {
 
   async getProject(_projectKey: string): Promise<JiraProject> {
     return loadFixture<JiraProject>('project-PROJ.json');
+  }
+
+  async getProjectStatuses(_projectKey: string, issueType: string): Promise<string[]> {
+    const data = loadFixture<JiraProjectStatus[]>('project-statuses-PROJ.json');
+    const match = data.find((t) => t.name.toLowerCase() === issueType.toLowerCase());
+    return match ? match.statuses.map((s) => s.name) : [];
   }
 
   async getSprintByName(_projectKey: string, sprintName: string): Promise<{ id: number }> {

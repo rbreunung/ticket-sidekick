@@ -4,6 +4,7 @@ import type {
   JiraCreatedIssue,
   JiraIssue,
   JiraProject,
+  JiraProjectStatus,
   JiraSearchResult,
   JiraTransition,
   JiraUser,
@@ -114,9 +115,10 @@ export class JiraApiClient implements IJiraClient {
     });
   }
 
-  async searchJql(jql: string, maxResults = 20): Promise<JiraSearchResult> {
+  async searchJql(jql: string, maxResults = 20, startAt?: number): Promise<JiraSearchResult> {
     const fields = ['summary', 'status', 'assignee', 'priority', 'labels', 'fixVersions', 'reporter', 'subtasks'];
-    const qs = `jql=${encodeURIComponent(jql)}&maxResults=${maxResults}&${fields.map(f => `fields=${f}`).join('&')}`;
+    let qs = `jql=${encodeURIComponent(jql)}&maxResults=${maxResults}&${fields.map(f => `fields=${f}`).join('&')}`;
+    if (startAt !== undefined) qs += `&startAt=${startAt}`;
     return this.request<JiraSearchResult>(`/search?${qs}`);
   }
 
@@ -148,6 +150,12 @@ export class JiraApiClient implements IJiraClient {
 
   async getProject(projectKey: string): Promise<JiraProject> {
     return this.request<JiraProject>(`/project/${projectKey}`);
+  }
+
+  async getProjectStatuses(projectKey: string, issueType: string): Promise<string[]> {
+    const data = await this.request<JiraProjectStatus[]>(`/project/${projectKey}/statuses`);
+    const match = data.find((t) => t.name.toLowerCase() === issueType.toLowerCase());
+    return match ? match.statuses.map((s) => s.name) : [];
   }
 
   async getSprintByName(projectKey: string, sprintName: string): Promise<{ id: number }> {
