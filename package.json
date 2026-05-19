@@ -123,10 +123,11 @@
     ]
   },
   "scripts": {
+    "vscode:prepublish": "npm run bundle",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "bundle": "node esbuild.js",
-    "package": "npm run bundle && vsce package",
+    "package": "vsce package",
     "test": "vitest run --reporter=verbose --config vitest.config.ts",
     "test:e2e": "node ./out/test/runTest.js"
   },
