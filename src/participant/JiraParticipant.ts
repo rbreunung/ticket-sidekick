@@ -9,6 +9,7 @@ import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
 import { extractTicketId } from '../utils/branchParser';
+import { redactUrls, tokenStatus } from '../utils/diagUtils';
 import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull } from './sessionState';
 import { discoverWorkflow, loadWorkflowCache, saveWorkflowCache, findPath } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
@@ -938,9 +939,10 @@ export function createJiraParticipant(
           `**Jira connection OK**\n\n` +
           `| Setting | Value |\n` +
           `|---|---|\n` +
-          `| Base URL | \`${config.baseUrl}\` |\n` +
+          `| Base URL | \`${redactUrls(config.baseUrl ?? '')}\` |\n` +
           `| API version | v2 |\n` +
           `| Auth type | ${config.authType} |\n` +
+          `| Token | ${tokenStatus(config.token)} |\n` +
           `| Logged in as | ${user.displayName} |\n`,
         );
       } catch (err) {
@@ -948,10 +950,11 @@ export function createJiraParticipant(
           `**Jira connection failed**\n\n` +
           `| Setting | Value |\n` +
           `|---|---|\n` +
-          `| Base URL | \`${config.baseUrl}\` |\n` +
+          `| Base URL | \`${redactUrls(config.baseUrl ?? '')}\` |\n` +
           `| API version | v2 |\n` +
-          `| Auth type | ${config.authType} |\n\n` +
-          `Error: ${err instanceof Error ? err.message : String(err)}`,
+          `| Auth type | ${config.authType} |\n` +
+          `| Token | ${tokenStatus(config.token)} |\n\n` +
+          `Error: ${redactUrls(err instanceof Error ? err.message : String(err))}`,
         );
       }
       return;

@@ -17,7 +17,7 @@ async function assertJsonContentType(response: Response): Promise<void> {
   if (ct.includes('text/html')) {
     const snippet = await response.text().then(t => t.slice(0, 120)).catch(() => '');
     throw new Error(
-      `Jira API returned HTML instead of JSON. ` +
+      `Jira API returned HTML instead of JSON (HTTP ${response.status}). ` +
       `Check that 'ticketSidekick.jira.baseUrl' points to the Jira root ` +
       `(e.g. https://server.com/jira — not just https://server.com). ` +
       `A proxy or redirect may also be intercepting the request.\n` +

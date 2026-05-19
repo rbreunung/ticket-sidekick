@@ -123,17 +123,20 @@
     ]
   },
   "scripts": {
+    "vscode:prepublish": "npm run bundle",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "bundle": "node esbuild.js",
+    "package": "vsce package",
     "test": "vitest run --reporter=verbose --config vitest.config.ts",
-    "test:e2e": "node ./out/test/runTest.js",
-    "package": "vsce package"
+    "test:e2e": "node ./out/test/runTest.js"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.90.0",
     "@vscode/test-electron": "^2.4.0",
     "@vscode/vsce": "^2.26.0",
+    "esbuild": "^0.25.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"
   },

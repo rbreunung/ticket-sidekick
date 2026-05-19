@@ -63,6 +63,16 @@ export class BitbucketApiClient implements IBitbucketClient {
       const body = await response.text().catch(() => '');
       throw new Error(`Bitbucket API error ${response.status} at ${url}${body ? ` — ${body}` : ''}`);
     }
+    const ct = response.headers.get('content-type') ?? '';
+    if (ct.includes('text/html')) {
+      const snippet = await response.text().then(t => t.slice(0, 120)).catch(() => '');
+      throw new Error(
+        `Bitbucket DC API returned HTML instead of JSON (HTTP ${response.status}). ` +
+        `Check that 'ticketSidekick.bitbucket.baseUrl' points to the Bitbucket root. ` +
+        `A proxy or redirect may also be intercepting the request.\n` +
+        `Response preview: ${snippet}`,
+      );
+    }
     return response.json() as Promise<T>;
   }
 
