@@ -367,4 +367,62 @@ describe('dcDiffToUnified', () => {
   it('produces an empty string for an empty diff response', () => {
     expect(dcDiffToUnified({ diffs: [] })).toBe('');
   });
+
+  it('excludes deleted files from parseDiff results', () => {
+    const response = {
+      diffs: [{
+        source: { toString: 'src/old.ts' },
+        destination: null,
+        hunks: [{ sourceLine: 1, sourceSpan: 2, destinationLine: 0, destinationSpan: 0,
+          segments: [{ type: 'REMOVED' as const, lines: [{ line: 'const x = 1;' }] }] }],
+      }],
+    };
+    const unified = dcDiffToUnified(response);
+    const parsed = parseDiff(unified);
+    expect(parsed).toHaveLength(0);
+  });
+
+  it('includes only modified/added files when mixed with deleted files', () => {
+    const response = {
+      diffs: [
+        {
+          source: { toString: 'src/changed.ts' },
+          destination: { toString: 'src/changed.ts' },
+          hunks: [{ sourceLine: 1, sourceSpan: 1, destinationLine: 1, destinationSpan: 2,
+            segments: [
+              { type: 'CONTEXT' as const, lines: [{ line: 'const x = 1;' }] },
+              { type: 'ADDED' as const, lines: [{ line: 'const y = 2;' }] },
+            ],
+          }],
+        },
+        {
+          source: { toString: 'src/deleted.ts' },
+          destination: null,
+          hunks: [{ sourceLine: 1, sourceSpan: 1, destinationLine: 0, destinationSpan: 0,
+            segments: [{ type: 'REMOVED' as const, lines: [{ line: 'const z = 3;' }] }],
+          }],
+        },
+      ],
+    };
+    const unified = dcDiffToUnified(response);
+    const parsed = parseDiff(unified);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].path).toBe('src/changed.ts');
+  });
+
+  it('works correctly when response comes from JSON.parse (real API scenario)', () => {
+    const apiPayload = JSON.stringify({
+      diffs: [{
+        source: { toString: 'src/auth/login.ts', components: ['src', 'auth', 'login.ts'], name: 'login.ts' },
+        destination: { toString: 'src/auth/login.ts', components: ['src', 'auth', 'login.ts'], name: 'login.ts' },
+        hunks: [{
+          sourceLine: 1, sourceSpan: 1, destinationLine: 1, destinationSpan: 2,
+          segments: [{ type: 'ADDED', lines: [{ line: 'const x = 1;' }] }],
+        }],
+      }],
+    });
+    const parsed = parseDiff(dcDiffToUnified(JSON.parse(apiPayload)));
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].path).toBe('src/auth/login.ts');
+  });
 });

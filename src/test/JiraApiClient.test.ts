@@ -85,6 +85,16 @@ describe('JiraApiClient', () => {
         expect.anything(),
       );
     });
+
+    it('createIssue posts to /rest/api/2/issue', async () => {
+      const mockFetch = makeFetch({ id: '10001', key: 'PROJ-1' }, 201);
+      vi.stubGlobal('fetch', mockFetch);
+      const client = new JiraApiClient(BASE_CONFIG);
+      await client.createIssue('PROJ', 'My ticket', 'Bug');
+      const [url, options] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://jira.example.com/rest/api/2/issue');
+      expect(options.method).toBe('POST');
+    });
   });
 
   describe('addComment', () => {

@@ -184,7 +184,7 @@ Detection order in the Bitbucket handler: `check` command → review session fol
 1. **Template** — chat-native numbered list streamed from `.jira-templates.json`; user replies with number, name, `(n)` / `"no template"` to skip, or `(c)` to cancel entirely; unrecognised reply re-presents the list; template load errors surface as chat messages and fall through to templateless creation
 2. **Project key** — from prompt, then `ticketSidekick.jira.defaultProject` setting, then `showInputBox`
 3. **Summary** — from prompt (LLM extraction), then `showInputBox`
-4. **Issue type** — from template `issueType` field or prompt (LLM extraction); if neither is present, chat-native numbered list via `IssueTypeSelectionSession` (subtasks filtered out); `(c)` to cancel; fallback to `showInputBox` if no types can be fetched from `GET /rest/api/3/project/{key}`
+4. **Issue type** — from template `issueType` field or prompt (LLM extraction); if neither is present, chat-native numbered list via `IssueTypeSelectionSession` (subtasks filtered out); `(c)` to cancel; fallback to `showInputBox` if no types can be fetched from `GET /rest/api/2/project/{key}`
 
 If a template is chosen:
 
@@ -193,7 +193,7 @@ If a template is chosen:
 - When all sections are answered `finishTicketCreation` assembles the description and calls `TicketService.createTicket`
 - Field resolution + section handling are in `continueAfterIssueType`, called from both `handleCreateTicket` and the issue type session handler
 
-API endpoint: `POST /rest/api/3/issue` with `{ fields: { project: { key }, summary, issuetype: { name }, ...additionalFields } }`
+API endpoint: `POST /rest/api/2/issue` with `{ fields: { project: { key }, summary, issuetype: { name }, ...additionalFields } }`
 
 ## PR review flow (Bitbucket)
 
