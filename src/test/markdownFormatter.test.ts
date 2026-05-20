@@ -49,6 +49,48 @@ describe('wikiToMarkdown', () => {
     expect(result).toMatch(/_italic text_|\*italic text\*/);
     expect(result).toContain('not_italic');
   });
+
+  it('closing fence is on its own line when body ends with a newline', () => {
+    const result = wikiToMarkdown('{code:sql}\nSELECT 1;\n{code}');
+    expect(result).toMatch(/SELECT 1;\n```/);
+    expect(result).not.toMatch(/SELECT 1;```/);
+  });
+
+  it('closing fence is on its own line when body has no trailing newline', () => {
+    const result = wikiToMarkdown('{code:sql}SELECT 1;{code}');
+    expect(result).toMatch(/SELECT 1;\n```/);
+    expect(result).not.toMatch(/SELECT 1;```/);
+  });
+});
+
+describe('formatJiraBody — ADF codeBlock closing fence', () => {
+  it('closing fence is on its own line', () => {
+    const node = {
+      type: 'doc',
+      content: [{
+        type: 'codeBlock',
+        attrs: { language: 'sql' },
+        content: [{ type: 'text', text: 'SELECT 1;' }],
+      }],
+    };
+    const result = formatJiraBody(node);
+    expect(result).toMatch(/SELECT 1;\n```/);
+    expect(result).not.toMatch(/SELECT 1;```/);
+  });
+
+  it('closing fence is on its own line when ADF text node already has trailing newline', () => {
+    const node = {
+      type: 'doc',
+      content: [{
+        type: 'codeBlock',
+        attrs: { language: 'sql' },
+        content: [{ type: 'text', text: 'SELECT 1;\n' }],
+      }],
+    };
+    const result = formatJiraBody(node);
+    expect(result).toMatch(/SELECT 1;\n```/);
+    expect(result).not.toMatch(/SELECT 1;```/);
+  });
 });
 
 describe('formatJiraBody', () => {

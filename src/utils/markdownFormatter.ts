@@ -29,10 +29,12 @@ export function wikiToMarkdown(wikiMarkup: string): string {
     const [, codeParams, codeBody, noformatBody] = m;
     const lang = codeBody !== undefined ? parseCodeLang(codeParams ?? '') : '';
     const body = (codeBody ?? noformatBody) as string;
-    // Ensure the body starts on a new line (Jira allows content immediately
-    // after the closing brace: {code:sql}SELECT …{code}).
-    const normalized = body.startsWith('\n') ? body : `\n${body}`;
-    segments.push(`\`\`\`${lang}${normalized}\n\`\`\``);
+    // Strip trailing newlines so the closing fence is always on its own line
+    // with no blank line before it. Then ensure the body opens on a new line
+    // (Jira allows content immediately after the closing brace: {code:sql}SELECT…{code}).
+    const stripped = body.replace(/\n+$/, '');
+    const content = stripped.startsWith('\n') ? stripped : `\n${stripped}`;
+    segments.push(`\`\`\`${lang}${content}\n\`\`\``);
     last = m.index + m[0].length;
   }
 
@@ -109,7 +111,7 @@ export function formatJiraBody(node: unknown): string {
 
     case 'codeBlock': {
       const lang = (n.attrs?.language as string) ?? '';
-      const code = (n.content ?? []).map(formatJiraBody).join('');
+      const code = (n.content ?? []).map(formatJiraBody).join('').replace(/\n+$/, '');
       return `\`\`\`${lang}\n${code}\n\`\`\`\n\n`;
     }
 
