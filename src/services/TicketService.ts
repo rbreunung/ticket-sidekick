@@ -105,7 +105,9 @@ export class TicketService {
     const ME_KEYWORDS = new Set(['me', 'myself', 'i']);
     if (ME_KEYWORDS.has(value.toLowerCase().trim())) {
       const user = await this.client.getCurrentUser();
-      return user.name ? { name: user.name } : { accountId: user.accountId! };
+      if (user.name) return { name: user.name };
+      if (user.accountId) return { accountId: user.accountId };
+      return `Could not resolve user "${value}" — no accountId or name returned by Jira.`;
     }
     const users = await this.client.findUser(value);
     if (users.length === 0) return `No user found matching "${value}".`;
@@ -113,7 +115,9 @@ export class TicketService {
       return `Multiple users found: ${users.map((u) => u.displayName).join(', ')}. Please be more specific.`;
     }
     const user = users[0];
-    return user.name ? { name: user.name } : { accountId: user.accountId! };
+    if (user.name) return { name: user.name };
+    if (user.accountId) return { accountId: user.accountId };
+    return `Could not resolve user "${value}" — no accountId or name returned by Jira.`;
   }
 
   async searchTickets(jql: string): Promise<string> {

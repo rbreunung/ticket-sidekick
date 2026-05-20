@@ -187,6 +187,20 @@ describe('TicketService', () => {
       expect(typeof result).toBe('string');
       expect(result as string).toContain('No user found');
     });
+
+    it('returns an error string when found user has neither name nor accountId', async () => {
+      client.findUser = async () => [{ displayName: 'Ghost User' }];
+      const result = await service.resolveAssignee('ghost');
+      expect(typeof result).toBe('string');
+      expect(result as string).toContain('no accountId or name');
+    });
+
+    it('returns an error string when current user has neither name nor accountId', async () => {
+      client.getCurrentUser = async () => ({ displayName: 'Ghost Me' });
+      const result = await service.resolveAssignee('me');
+      expect(typeof result).toBe('string');
+      expect(result as string).toContain('no accountId or name');
+    });
   });
 
   describe('getIssueTypes', () => {
