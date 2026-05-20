@@ -4,7 +4,7 @@ import { formatJiraBody } from '../utils/markdownFormatter';
 export interface CreationSession {
   template: string;
   project: string;
-  summary: string;
+  summary: string | null;
   issueType: string;
   allSections: string[];
   pending: string[];
@@ -37,12 +37,13 @@ export interface CommentListSession {
 
 export interface TemplateSelectionSession {
   templateNames: string[];
+  originalPrompt: string;
 }
 
 export interface IssueTypeSelectionSession {
   issueTypes: string[];
   project: string;
-  summary: string;
+  summary: string | null;
   templateName: string | null;
   description: string | null;
   extraFields?: Record<string, unknown>;

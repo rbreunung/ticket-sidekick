@@ -292,7 +292,7 @@ async function streamIssueTypeSelection(
 
 async function continueAfterIssueType(
   projectKey: string,
-  summary: string,
+  summary: string | null,
   issueType: string,
   description: string | null,
   selectedTemplate: JiraTemplate | null,
@@ -323,47 +323,62 @@ async function continueAfterIssueType(
   if (extraFields) Object.assign(resolvedFields, extraFields);
 
   const sections = selectedTemplate?.descriptionSections ?? [];
-  if (sections.length > 0) {
-    const covered = await checkSectionCoverage(description ?? '', sections, model, token);
-    const answers: Record<string, string> = {};
-    for (const s of covered) answers[s] = description ?? '';
-    const pending = sections.filter((s) => !covered.includes(s));
 
-    if (pending.length === 0) {
-      const descriptionText = assembleDescription(sections, answers);
-      resolvedFields.description = descriptionText;
-      const result = await ticketService.createTicket(projectKey, summary, issueType, resolvedFields);
-      stream.markdown(result);
-      return extractCreatedKeyFromConfirmation(result);
-    }
+  // Fast path: summary known, no sections → create directly
+  if (summary !== null && sections.length === 0) {
+    if (description) resolvedFields.description = description;
+    const result = await ticketService.createTicket(
+      projectKey,
+      summary,
+      issueType,
+      Object.keys(resolvedFields).length > 0 ? resolvedFields : undefined,
+    );
+    stream.markdown(result);
+    return extractCreatedKeyFromConfirmation(result);
+  }
+
+  // Build the pending section list, checking description coverage only when summary is known
+  const covered = summary !== null && description
+    ? await checkSectionCoverage(description, sections, model, token)
+    : [];
+  const answers: Record<string, string> = {};
+  for (const s of covered) answers[s] = description ?? '';
+  const pendingRealSections = sections.filter((s) => !covered.includes(s));
+
+  // Fast path: all sections covered, summary known → create directly
+  if (summary !== null && pendingRealSections.length === 0) {
+    const descriptionText = assembleDescription(sections, answers);
+    resolvedFields.description = descriptionText;
+    const result = await ticketService.createTicket(projectKey, summary, issueType, resolvedFields);
+    stream.markdown(result);
+    return extractCreatedKeyFromConfirmation(result);
+  }
+
+  if (selectedTemplate && pendingRealSections.length > 0) {
     const fieldNames = Object.keys(resolvedFields).filter((k) => k !== 'description').join(', ');
-    stream.markdown(`_Using template **${selectedTemplate!.name}**${fieldNames ? ` — defaults: ${fieldNames}` : ''}._\n\n`);
+    stream.markdown(`_Using template **${selectedTemplate.name}**${fieldNames ? ` — defaults: ${fieldNames}` : ''}._\n\n`);
     if (covered.length > 0) {
       stream.markdown(`_Your description already covers **${covered.join(', ')}**._\n\n`);
     }
-    const newSession: CreationSession = {
-      template: selectedTemplate!.name,
-      project: projectKey,
-      summary,
-      issueType,
-      allSections: sections,
-      pending,
-      answers,
-      fields: resolvedFields,
-    };
-    await streamNextSection(newSession, stream, workspaceState);
-    return null;
   }
 
-  if (description) resolvedFields.description = description;
-  const result = await ticketService.createTicket(
-    projectKey,
+  const pending = [
+    ...(summary === null ? ['__summary__'] : []),
+    ...pendingRealSections,
+  ];
+
+  const newSession: CreationSession = {
+    template: selectedTemplate?.name ?? '',
+    project: projectKey,
     summary,
     issueType,
-    Object.keys(resolvedFields).length > 0 ? resolvedFields : undefined,
-  );
-  stream.markdown(result);
-  return extractCreatedKeyFromConfirmation(result);
+    allSections: sections,
+    pending,
+    answers,
+    fields: resolvedFields,
+  };
+  await streamNextSection(newSession, stream, workspaceState);
+  return null;
 }
 
 function parseLastTicketFromContext(context: vscode.ChatContext): string | null {
@@ -383,8 +398,15 @@ function parseLastTicketFromContext(context: vscode.ChatContext): string | null 
 async function streamNextSection(session: CreationSession, stream: vscode.ChatResponseStream, workspaceState: vscode.Memento): Promise<void> {
   await workspaceState.update('jira.session.creating', session);
   const next = session.pending[0];
-  const answered = session.allSections.length - session.pending.length;
-  const isLast = session.pending.length === 1;
+
+  if (next === '__summary__') {
+    stream.markdown(`What should the **summary** be?\n\nReply with the ticket summary to continue.\n\n<!-- jira:creating -->`);
+    return;
+  }
+
+  const pendingRealSections = session.pending.filter((s) => s !== '__summary__');
+  const answered = session.allSections.length - pendingRealSections.length;
+  const isLast = pendingRealSections.length === 1;
   const header = isLast
     ? `Last section — **${next}**`
     : `Section ${answered + 1} of ${session.allSections.length} — **${next}**`;
@@ -398,8 +420,9 @@ async function streamTemplateSelection(
   templateNames: string[],
   stream: vscode.ChatResponseStream,
   workspaceState: vscode.Memento,
+  originalPrompt: string,
 ): Promise<void> {
-  const session: TemplateSelectionSession = { templateNames };
+  const session: TemplateSelectionSession = { templateNames, originalPrompt };
   await workspaceState.update('jira.session.templateSelection', session);
   const list = templateNames.map((n, i) => `${i + 1}. ${n}`).join('\n');
   stream.markdown(`Which template would you like to use?\n\n${list}\n\nReply with the name or number, **(n)** for no template, or **(c)** to cancel.\n\n<!-- jira:selecting-template -->`);
@@ -415,9 +438,11 @@ async function finishTicketCreation(
     ...session.fields,
     description: descriptionText,
   };
+  // session.summary is guaranteed non-null here: __summary__ is always answered
+  // before pending becomes empty, so finishTicketCreation is only reached after it.
   const result = await ticketService.createTicket(
     session.project,
-    session.summary,
+    session.summary!,
     session.issueType,
     additionalFields,
   );
@@ -433,6 +458,7 @@ async function handleCreateTicket(
   ticketService: TicketService,
   workspaceState: vscode.Memento,
   preselectedTemplateName?: string | null,
+  originalPrompt?: string,
 ): Promise<string | null> {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
   let selectedTemplate: JiraTemplate | null = null;
@@ -458,20 +484,19 @@ async function handleCreateTicket(
       }
     }
     if (templates.length > 0) {
-      await streamTemplateSelection(templates.map((t) => t.name), stream, workspaceState);
+      await streamTemplateSelection(templates.map((t) => t.name), stream, workspaceState, request.prompt);
       return null;
     }
   }
 
-  const intent = await parseIntent(request.prompt, request.model, token);
+  // Use the original prompt (saved before template selection) so that intent fields
+  // like summary and assignee are extracted from what the user actually typed, not
+  // from the template-choice reply ("1", "RMW Bug", etc.).
+  const intent = await parseIntent(originalPrompt ?? request.prompt, request.model, token);
   const projectKey = await resolveProjectKey(intent.projectKey, stream);
   if (!projectKey) { stream.markdown('No project key provided — cancelled.'); return null; }
 
-  let summary = intent.summary;
-  if (!summary) {
-    summary = await vscode.window.showInputBox({ prompt: 'Enter a summary for the new ticket', ignoreFocusOut: true }) ?? null;
-  }
-  if (!summary) { stream.markdown('No summary provided — cancelled.'); return null; }
+  const summary = intent.summary;
 
   // Resolve assignee if specified
   const extraFields: Record<string, unknown> = {};
@@ -815,7 +840,7 @@ export function createJiraParticipant(
       if (selSession) {
         const choice = parseTemplateSelection(request.prompt, selSession.templateNames);
         if (choice === 'invalid') {
-          await streamTemplateSelection(selSession.templateNames, stream, ws);
+          await streamTemplateSelection(selSession.templateNames, stream, ws, selSession.originalPrompt);
           return;
         }
         await ws.update('jira.session.templateSelection', undefined);
@@ -824,7 +849,7 @@ export function createJiraParticipant(
           return;
         }
         try {
-          const createdKey = await handleCreateTicket(request, stream, token, jiraClient, ticketService, ws, choice);
+          const createdKey = await handleCreateTicket(request, stream, token, jiraClient, ticketService, ws, choice, selSession.originalPrompt);
           if (createdKey) stream.markdown(`\n\n<!-- @jira-ticket:${createdKey} -->`);
         } catch (err) {
           stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
@@ -875,7 +900,11 @@ export function createJiraParticipant(
       if (session) {
         try {
           const justAnswered = session.pending[0];
-          session.answers[justAnswered] = request.prompt;
+          if (justAnswered === '__summary__') {
+            session.summary = request.prompt;
+          } else {
+            session.answers[justAnswered] = request.prompt;
+          }
           session.pending = session.pending.slice(1);
           if (session.pending.length === 0) {
             await ws.update('jira.session.creating', undefined);
