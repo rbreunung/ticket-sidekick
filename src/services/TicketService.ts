@@ -1,4 +1,4 @@
-import type { IJiraClient, JiraComment, JiraFilter, JiraIssue, JiraIssueType, JiraSearchResult } from '../jira/IJiraClient';
+import type { IJiraClient, JiraComment, JiraEditMetaField, JiraFieldMeta, JiraFilter, JiraIssue, JiraIssueType, JiraSearchResult } from '../jira/IJiraClient';
 import { formatJiraBody } from '../utils/markdownFormatter';
 
 const SUPPORTED_FIELDS: Record<string, string> = {
@@ -201,6 +201,51 @@ export class TicketService {
 
   async searchFiltersByName(name: string): Promise<JiraFilter[]> {
     return this.client.searchFiltersByName(name);
+  }
+
+  async resolveFieldId(name: string): Promise<string> {
+    const fields = await this.client.getFields();
+    const match = fields.find(f => f.name.toLowerCase() === name.toLowerCase());
+    if (!match) throw new Error(`Unknown field "${name}" — check the field name in your Jira instance.`);
+    return match.id;
+  }
+
+  async buildFieldValue(fieldId: string, sampleKey: string, rawValue: string): Promise<unknown> {
+    const editMeta = await this.client.getEditMeta(sampleKey);
+    const field = editMeta[fieldId];
+    if (!field) throw new Error(`Field "${fieldId}" is not editable on ${sampleKey}.`);
+
+    const { schema, allowedValues = [] } = field;
+
+    if (schema.type === 'string' || schema.type === 'number') {
+      return schema.type === 'number' ? parseFloat(rawValue) : rawValue;
+    }
+
+    if (schema.type === 'array') {
+      if (allowedValues.length > 0 && 'value' in allowedValues[0]) {
+        return [{ value: rawValue }];
+      }
+      return [{ name: rawValue }];
+    }
+
+    // priority, issuetype, version, component, and other named-object fields
+    return { name: rawValue };
+  }
+
+  async bulkUpdateField(
+    ticketKeys: string[],
+    fieldId: string,
+    fieldValue: unknown,
+    onProgress: (key: string, ok: boolean, err?: string) => void,
+  ): Promise<void> {
+    for (const key of ticketKeys) {
+      try {
+        await this.client.updateIssue(key, { [fieldId]: fieldValue });
+        onProgress(key, true);
+      } catch (err) {
+        onProgress(key, false, err instanceof Error ? err.message : String(err));
+      }
+    }
   }
 
   async createTicket(

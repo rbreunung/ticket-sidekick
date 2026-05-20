@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection } from '../participant/sessionState';
+import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview } from '../participant/sessionState';
 import type { TransitionBatchTicket } from '../participant/sessionState';
 import type { JiraComment } from '../jira/IJiraClient';
 
@@ -550,5 +550,29 @@ describe('parseFilterSelection', () => {
 
   it('returns invalid for unrecognised text', () => {
     expect(parseFilterSelection('something else', filters)).toBe('invalid');
+  });
+});
+
+describe('parseBulkUpdateReview', () => {
+  it('returns ok with empty skip list for "ok"', () => {
+    expect(parseBulkUpdateReview('ok')).toEqual({ action: 'ok', skip: [] });
+    expect(parseBulkUpdateReview('yes')).toEqual({ action: 'ok', skip: [] });
+    expect(parseBulkUpdateReview('OK')).toEqual({ action: 'ok', skip: [] });
+  });
+
+  it('returns ok with skip keys when user lists keys to skip', () => {
+    expect(parseBulkUpdateReview('skip PROJ-2 PROJ-5')).toEqual({ action: 'ok', skip: ['PROJ-2', 'PROJ-5'] });
+    expect(parseBulkUpdateReview('skip PROJ-1')).toEqual({ action: 'ok', skip: ['PROJ-1'] });
+  });
+
+  it('returns cancel for c / cancel', () => {
+    expect(parseBulkUpdateReview('c')).toEqual({ action: 'cancel' });
+    expect(parseBulkUpdateReview('cancel')).toEqual({ action: 'cancel' });
+    expect(parseBulkUpdateReview('Cancel')).toEqual({ action: 'cancel' });
+  });
+
+  it('returns invalid for unrecognised input', () => {
+    expect(parseBulkUpdateReview('something else')).toEqual({ action: 'invalid' });
+    expect(parseBulkUpdateReview('')).toEqual({ action: 'invalid' });
   });
 });

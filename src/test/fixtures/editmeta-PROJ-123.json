@@ -1,0 +1,28 @@
+{
+  "summary": {
+    "schema": { "type": "string" },
+    "allowedValues": []
+  },
+  "priority": {
+    "schema": { "type": "priority" },
+    "allowedValues": [
+      { "id": "1", "name": "Highest" },
+      { "id": "2", "name": "High" },
+      { "id": "3", "name": "Medium" }
+    ]
+  },
+  "customfield_10500": {
+    "schema": { "type": "array", "items": "json" },
+    "allowedValues": [
+      { "id": "10001", "name": "ASL Cary" },
+      { "id": "10002", "name": "Platform" }
+    ]
+  },
+  "customfield_10501": {
+    "schema": { "type": "array", "items": "option" },
+    "allowedValues": [
+      { "id": "10010", "value": "Option A" },
+      { "id": "10011", "value": "Option B" }
+    ]
+  }
+}

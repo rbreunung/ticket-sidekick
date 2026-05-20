@@ -381,6 +381,56 @@ describe('TicketService filter methods', () => {
   });
 });
 
+describe('TicketService field resolution', () => {
+  let client: MockJiraClient;
+  let service: TicketService;
+
+  beforeEach(() => {
+    client = new MockJiraClient();
+    service = new TicketService(client);
+  });
+
+  describe('resolveFieldId', () => {
+    it('returns the field id for an exact name match', async () => {
+      expect(await service.resolveFieldId('Team Names')).toBe('customfield_10500');
+    });
+
+    it('matches field names case-insensitively', async () => {
+      expect(await service.resolveFieldId('team names')).toBe('customfield_10500');
+    });
+
+    it('throws a clear error for unknown field names', async () => {
+      await expect(service.resolveFieldId('nonexistent field xyz')).rejects.toThrow(/nonexistent field xyz/);
+    });
+  });
+
+  describe('buildFieldValue', () => {
+    it('returns a plain string for schema type "string"', async () => {
+      const val = await service.buildFieldValue('summary', 'PROJ-123', 'New title');
+      expect(val).toBe('New title');
+    });
+
+    it('returns array-of-name-objects for array fields whose allowedValues have a name key', async () => {
+      const val = await service.buildFieldValue('customfield_10500', 'PROJ-123', 'ASL Cary');
+      expect(val).toEqual([{ name: 'ASL Cary' }]);
+    });
+
+    it('returns array-of-value-objects for array fields whose allowedValues have a value key', async () => {
+      const val = await service.buildFieldValue('customfield_10501', 'PROJ-123', 'Option A');
+      expect(val).toEqual([{ value: 'Option A' }]);
+    });
+
+    it('returns a value-object for option fields', async () => {
+      const val = await service.buildFieldValue('priority', 'PROJ-123', 'High');
+      expect(val).toEqual({ name: 'High' });
+    });
+
+    it('throws a clear error when the field is not present in editmeta', async () => {
+      await expect(service.buildFieldValue('customfield_99999', 'PROJ-123', 'x')).rejects.toThrow(/customfield_99999/);
+    });
+  });
+});
+
 describe('extractTextFromAdf', () => {
   it('returns plain string as-is (API v2)', () => {
     expect(extractTextFromAdf('Hello from v2')).toBe('Hello from v2');

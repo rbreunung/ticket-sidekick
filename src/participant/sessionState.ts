@@ -223,6 +223,31 @@ export interface FilterSelectionSession {
   originalPrompt: string;
 }
 
+export interface SearchResultSession {
+  ticketKeys: string[];
+  jql: string;
+}
+
+export interface BulkUpdateReviewSession {
+  ticketKeys: string[];
+  fieldId: string;
+  fieldName: string;
+  fieldValue: unknown;
+}
+
+export function parseBulkUpdateReview(reply: string): { action: 'ok'; skip: string[] } | { action: 'cancel' } | { action: 'invalid' } {
+  const trimmed = reply.trim();
+  if (!trimmed) return { action: 'invalid' };
+  if (/^(c|cancel)$/i.test(trimmed)) return { action: 'cancel' };
+  if (/^(ok|yes|confirm)$/i.test(trimmed)) return { action: 'ok', skip: [] };
+  const skipMatch = trimmed.match(/^skip\s+(.*)/i);
+  if (skipMatch) {
+    const keys = skipMatch[1].trim().split(/[\s,]+/).filter(Boolean);
+    return { action: 'ok', skip: keys };
+  }
+  return { action: 'invalid' };
+}
+
 export function parseFilterSelection(reply: string, filters: JiraFilter[]): JiraFilter | 'cancel' | 'invalid' {
   const trimmed = reply.trim();
   if (/^(c|cancel)$/i.test(trimmed)) return 'cancel';

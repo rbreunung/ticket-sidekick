@@ -10,8 +10,9 @@ import type { JiraTemplate } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
 import { extractTicketId } from '../utils/branchParser';
 import { redactUrls, tokenStatus } from '../utils/diagUtils';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview } from './sessionState';
 import { discoverWorkflow, loadWorkflowCache, saveWorkflowCache, findPath } from '../services/WorkflowService';
+import type { WorkflowGraph } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
 
 type Operation =
@@ -25,7 +26,9 @@ type Operation =
   | 'validateFields'
   | 'createTicket'
   | 'discoverWorkflow'
-  | 'runCleanup';
+  | 'runCleanup'
+  | 'bulkTransition'
+  | 'bulkUpdateField';
 
 interface FieldUpdate {
   fieldName: string;
@@ -48,12 +51,15 @@ interface ParsedIntent {
   jql: string | null;
   filterId: string | null;
   filterName: string | null;
+  targetStatus: string | null;
+  bulkFieldName: string | null;
+  bulkFieldValue: string | null;
   cleanupRuleName: string | null;
   fixVersion: string | null;
 }
 
 const INTENT_PROMPT = `Parse this Jira command and respond with ONLY a JSON object. No markdown, no explanation.
-Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|"addComment"|"updateField"|"searchJql"|"validateFields"|"createTicket"|"discoverWorkflow"|"runCleanup","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"assignee":string|null,"components":string|null,"description":string|null,"comment":string|null,"commentQuery":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"jql":string|null,"filterId":string|null,"filterName":string|null,"cleanupRuleName":string|null,"fixVersion":string|null}
+Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|"addComment"|"updateField"|"searchJql"|"validateFields"|"createTicket"|"discoverWorkflow"|"runCleanup"|"bulkTransition"|"bulkUpdateField","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"assignee":string|null,"components":string|null,"description":string|null,"comment":string|null,"commentQuery":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"jql":string|null,"filterId":string|null,"filterName":string|null,"targetStatus":string|null,"bulkFieldName":string|null,"bulkFieldValue":string|null,"cleanupRuleName":string|null,"fixVersion":string|null}
 - getTicket: show, display, look up a specific ticket; returns full structured view with fields, description, and one-line comment summaries
 - summarizeTicket: summarise, summarize, tl;dr, give me an overview; produces a prose paragraph covering the ticket and its comments together
 - showComments: show, list, display all comments in full; shows the actual comment bodies numbered; use when user wants to read the comment text rather than a summary
@@ -64,6 +70,8 @@ Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|
 - validateFields: check, validate required fields on a ticket
 - createTicket: create, open, add a new ticket/issue/bug/story/task; description is any additional body content the user provided beyond the summary (e.g. code blocks, steps to reproduce, specifications) — null if no extra content; assignee is the person to assign the ticket to ("me"/"myself" for the current user, or a name/email) — null if not mentioned; components is a comma-separated string of component names if mentioned — null if not mentioned
 - discoverWorkflow: discover or refresh the workflow graph for a project and issue type; projectKey and issueType are required
+- bulkTransition: transition/move/close/resolve "them" or "these tickets" or "all of them" to a status; only valid when a prior search result is available; targetStatus is the destination state name
+- bulkUpdateField: set/update/change a field on "them" or "these tickets"; only valid when a prior search result is available; bulkFieldName is the field name the user gave, bulkFieldValue is the value string
 - runCleanup: bulk-close or bulk-transition ALL tickets of a type in a project; triggered by "close all", "run cleanup", or "close PROJECT ISSUETYPE" where PROJECT is a project key and ISSUETYPE is an issue type name (not a ticket key like PROJ-123); projectKey and issueType are extracted from the prompt; cleanupRuleName is the quoted rule name if given; fixVersion is the exact fix version string if given (must be quoted in the prompt, e.g. "Fix Version 3.2"); examples: "@jira close VSJI Bug", "@jira run cleanup 'Close released bugs'", "@jira close BILLING bugs in 'Release 3.2'"
 - contentSource: how the comment or description content should be produced
   - "literal": user provided the exact text to post (e.g. "add comment: LGTM")
@@ -852,6 +860,10 @@ export function createJiraParticipant(
           return;
         }
         try {
+          const raw = await ticketService.searchTicketsRaw(choice.jql);
+          if (raw.issues.length > 0) {
+            await ws.update('jira.session.searchResult', { ticketKeys: raw.issues.map(i => i.key), jql: choice.jql } as SearchResultSession);
+          }
           const result = await ticketService.searchTickets(choice.jql);
           stream.markdown(`_Using filter: **${choice.name}**_\n\n${result}`);
         } catch (err) {
@@ -1018,6 +1030,34 @@ export function createJiraParticipant(
         );
       }
       return;
+    }
+
+    // Bulk update review — user replied ok / skip keys / cancel
+    if (lastResponse.includes('<!-- jira:bulk-update-review -->')) {
+      const bulkSession = ws.get<BulkUpdateReviewSession>('jira.session.bulkUpdateReview');
+      if (bulkSession) {
+        const decision = parseBulkUpdateReview(request.prompt);
+        if (decision.action === 'invalid') {
+          stream.markdown(`Didn't understand that. Reply **ok** to apply, **(c)** to cancel, or \`skip KEY1 KEY2\` to skip specific tickets.\n\n<!-- jira:bulk-update-review -->`);
+          return;
+        }
+        await ws.update('jira.session.bulkUpdateReview', undefined);
+        if (decision.action === 'cancel') {
+          stream.markdown('_Cancelled — no tickets were changed._');
+          return;
+        }
+        const skipSet = new Set(decision.skip);
+        const toUpdate = bulkSession.ticketKeys.filter(k => !skipSet.has(k));
+        stream.markdown(`Updating **${bulkSession.fieldName}** on ${toUpdate.length} ticket(s)…\n\n`);
+        let passed = 0;
+        let failed = 0;
+        await ticketService.bulkUpdateField(toUpdate, bulkSession.fieldId, bulkSession.fieldValue, (key, ok, err) => {
+          if (ok) { stream.markdown(`✓ ${key}\n\n`); passed++; }
+          else { stream.markdown(`✗ ${key}: ${err}\n\n`); failed++; }
+        });
+        stream.markdown(`\n_Done — ${passed} updated${failed > 0 ? `, ${failed} failed` : ''}_`);
+        return;
+      }
     }
 
     // Comment list — user replied with a comment number to view in full
@@ -1212,15 +1252,20 @@ export function createJiraParticipant(
           break;
         }
         case 'searchJql': {
+          let resolvedJql: string;
+          let jqlLabel = '';
           if (intent.filterId) {
             const filter = await ticketService.getFilterById(intent.filterId);
-            result = `_Using filter: **${filter.name}**_\n\n` + await ticketService.searchTickets(filter.jql);
+            resolvedJql = filter.jql;
+            jqlLabel = `_Using filter: **${filter.name}**_\n\n`;
           } else if (intent.filterName) {
             const filters = await ticketService.searchFiltersByName(intent.filterName);
             if (filters.length === 0) {
               result = `No saved filters found matching "${intent.filterName}".`;
+              break;
             } else if (filters.length === 1) {
-              result = `_Using filter: **${filters[0].name}**_\n\n` + await ticketService.searchTickets(filters[0].jql);
+              resolvedJql = filters[0].jql;
+              jqlLabel = `_Using filter: **${filters[0].name}**_\n\n`;
             } else {
               const session: FilterSelectionSession = { filters, originalPrompt: request.prompt };
               await ws.update('jira.session.filterSelection', session);
@@ -1229,9 +1274,110 @@ export function createJiraParticipant(
               return;
             }
           } else {
-            result = await ticketService.searchTickets(intent.jql ?? request.prompt);
+            resolvedJql = intent.jql ?? request.prompt;
           }
+          const raw = await ticketService.searchTicketsRaw(resolvedJql);
+          if (raw.issues.length > 0) {
+            const searchSession: SearchResultSession = { ticketKeys: raw.issues.map(i => i.key), jql: resolvedJql };
+            await ws.update('jira.session.searchResult', searchSession);
+          }
+          result = jqlLabel + await ticketService.searchTickets(resolvedJql);
           break;
+        }
+        case 'bulkTransition': {
+          const searchSession = ws.get<SearchResultSession>('jira.session.searchResult');
+          if (!searchSession || searchSession.ticketKeys.length === 0) {
+            result = 'No previous search results to act on. Run a search first.';
+            break;
+          }
+          if (!intent.targetStatus) {
+            result = 'Please specify a target status (e.g. "transition them to Done").';
+            break;
+          }
+          const targetStatus = intent.targetStatus;
+          stream.markdown(`_Building transition paths…_\n\n`);
+          const tickets: TransitionBatchTicket[] = [];
+          for (const key of searchSession.ticketKeys) {
+            const issue = await jiraClient.getIssue(key);
+            const transitions = await jiraClient.getTransitions(key);
+            // Build a single-level graph from the ticket's current available transitions
+            const graph: WorkflowGraph = {
+              [issue.fields.status.name]: transitions.map(t => ({ id: t.id, name: t.name, to: t.to.name })),
+            };
+            const currentStatus = issue.fields.status.name;
+            const path = findPath(graph, currentStatus, targetStatus);
+            if (path === null) {
+              stream.markdown(`_Warning: no direct transition from **${currentStatus}** to **${targetStatus}** for ${key} — skipping. Use a workflow cache for multi-hop paths._\n\n`);
+              continue;
+            }
+            const subtasks: TransitionSubtask[] = [];
+            for (const s of (issue.fields.subtasks ?? [])) {
+              const subTransitions = await jiraClient.getTransitions(s.key);
+              const subGraph: WorkflowGraph = {
+                [s.fields.status.name]: subTransitions.map(t => ({ id: t.id, name: t.name, to: t.to.name })),
+              };
+              const subPath = findPath(subGraph, s.fields.status.name, targetStatus);
+              if (subPath) subtasks.push({ key: s.key, summary: s.fields.summary, currentStatus: s.fields.status.name, transitionPath: subPath });
+            }
+            tickets.push({ key, summary: issue.fields.summary, currentStatus, transitionPath: path, subtasks });
+          }
+          if (tickets.length === 0) {
+            result = `No tickets could be transitioned to **${targetStatus}** — all were either already there or have no direct path.`;
+            break;
+          }
+          const CLOSED_STATES = new Set(['done', 'closed', 'resolved', 'cancelled', 'canceled']);
+          if (CLOSED_STATES.has(targetStatus.toLowerCase())) {
+            const resolutions = await jiraClient.getResolutions();
+            if (resolutions.length > 0) {
+              const resSession: ResolutionSelectionSession = {
+                resolutionOptions: resolutions.map(r => r.name),
+                tickets,
+                ruleName: undefined,
+                targetState: targetStatus,
+              };
+              await ws.update('jira.session.resolutionSelection', resSession);
+              const list = resolutions.map((r, i) => `${i + 1}. ${r.name}`).join('\n');
+              stream.markdown(`Which resolution should be set when transitioning to **${targetStatus}**?\n\n${list}\n\nReply with the name or number, or **none** to skip setting a resolution.\n\n<!-- jira:selecting-resolution -->`);
+              return;
+            }
+          }
+          const batchSession: TransitionBatchSession = { tickets, resolution: undefined, ruleName: undefined };
+          await streamReviewScreen(batchSession, stream, ws, `**Bulk transition → ${targetStatus}**`);
+          return;
+        }
+        case 'bulkUpdateField': {
+          const searchSession = ws.get<SearchResultSession>('jira.session.searchResult');
+          if (!searchSession || searchSession.ticketKeys.length === 0) {
+            result = 'No previous search results to act on. Run a search first.';
+            break;
+          }
+          if (!intent.bulkFieldName || intent.bulkFieldValue === null) {
+            result = 'Please specify both a field name and a value (e.g. "set Team Names to ASL Cary").';
+            break;
+          }
+          const fieldId = await ticketService.resolveFieldId(intent.bulkFieldName);
+          const fieldValue = await ticketService.buildFieldValue(fieldId, searchSession.ticketKeys[0], intent.bulkFieldValue!);
+          const issues = await Promise.all(searchSession.ticketKeys.map(k => jiraClient.getIssue(k)));
+          const rows = issues.map(issue => {
+            const current = issue.fields[fieldId];
+            const display = current ? JSON.stringify(current) : '—';
+            return `| ${issue.key} | ${issue.fields.summary} | ${display} |`;
+          });
+          const bulkSession: BulkUpdateReviewSession = {
+            ticketKeys: searchSession.ticketKeys,
+            fieldId,
+            fieldName: intent.bulkFieldName,
+            fieldValue,
+          };
+          await ws.update('jira.session.bulkUpdateReview', bulkSession);
+          stream.markdown(
+            `**Bulk update: ${intent.bulkFieldName} → ${intent.bulkFieldValue}**\n` +
+            `(${searchSession.ticketKeys.length} tickets)\n\n` +
+            `| Key | Summary | Current value |\n| --- | --- | --- |\n` +
+            rows.join('\n') +
+            `\n\nReply **ok** to apply, **(c)** to cancel, or list keys to skip (e.g. \`skip PROJ-2\`).\n\n<!-- jira:bulk-update-review -->`
+          );
+          return;
         }
         case 'validateFields':
           result = await ticketService.validateRequiredFields(ticketKey!, config.requiredFields);

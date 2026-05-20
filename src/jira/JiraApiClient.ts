@@ -2,6 +2,8 @@ import type {
   IJiraClient,
   JiraComment,
   JiraCreatedIssue,
+  JiraEditMetaField,
+  JiraFieldMeta,
   JiraFilter,
   JiraIssue,
   JiraProject,
@@ -221,5 +223,16 @@ export class JiraApiClient implements IJiraClient {
       `/filter/search?filterName=${encodeURIComponent(name)}&expand=jql&maxResults=10`,
     );
     return data.values;
+  }
+
+  async getFields(): Promise<JiraFieldMeta[]> {
+    return this.request<JiraFieldMeta[]>('/field');
+  }
+
+  async getEditMeta(issueKey: string): Promise<Record<string, JiraEditMetaField>> {
+    const data = await this.request<{ fields: Record<string, JiraEditMetaField> }>(
+      `/issue/${encodeURIComponent(issueKey)}/editmeta`,
+    );
+    return data.fields;
   }
 }

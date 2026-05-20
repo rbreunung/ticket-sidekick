@@ -4,6 +4,8 @@ import type {
   IJiraClient,
   JiraComment,
   JiraCreatedIssue,
+  JiraEditMetaField,
+  JiraFieldMeta,
   JiraFilter,
   JiraIssue,
   JiraProject,
@@ -108,5 +110,14 @@ export class MockJiraClient implements IJiraClient {
   async searchFiltersByName(name: string): Promise<JiraFilter[]> {
     if (name === 'nonexistent-xyzzy') return [];
     return loadFixture<JiraFilter[]>('filters-by-name.json');
+  }
+
+  async getFields(): Promise<JiraFieldMeta[]> {
+    return loadFixture<JiraFieldMeta[]>('fields.json');
+  }
+
+  async getEditMeta(issueKey: string): Promise<Record<string, JiraEditMetaField>> {
+    if (issueKey === 'PROJ-404') throw new Error('Not found');
+    return loadFixture<Record<string, JiraEditMetaField>>('editmeta-PROJ-123.json');
   }
 }

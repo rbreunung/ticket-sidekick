@@ -1,0 +1,6 @@
+[
+  { "id": "summary",          "name": "Summary",    "schema": { "type": "string" } },
+  { "id": "priority",         "name": "Priority",   "schema": { "type": "priority" } },
+  { "id": "customfield_10500","name": "Team Names",  "schema": { "type": "array", "items": "json", "custom": "com.atlassian.teams:rm-teams-custom-field-team" } },
+  { "id": "customfield_10501","name": "Category",    "schema": { "type": "array", "items": "option" } }
+]

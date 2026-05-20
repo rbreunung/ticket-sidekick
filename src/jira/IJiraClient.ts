@@ -78,6 +78,17 @@ export interface JiraFilter {
   jql: string;
 }
 
+export interface JiraFieldMeta {
+  id: string;
+  name: string;
+  schema: { type: string; items?: string; custom?: string };
+}
+
+export interface JiraEditMetaField {
+  schema: { type: string; items?: string };
+  allowedValues?: Array<{ id?: string; name?: string; value?: string }>;
+}
+
 export interface IJiraClient {
   getIssue(issueKey: string): Promise<JiraIssue>;
   updateIssue(issueKey: string, fields: Record<string, unknown>): Promise<void>;
@@ -96,4 +107,6 @@ export interface IJiraClient {
   getIssueComments(issueKey: string, maxResults: number): Promise<{ comments: JiraComment[]; total: number }>;
   getFilterById(id: string): Promise<JiraFilter>;
   searchFiltersByName(name: string): Promise<JiraFilter[]>;
+  getFields(): Promise<JiraFieldMeta[]>;
+  getEditMeta(issueKey: string): Promise<Record<string, JiraEditMetaField>>;
 }
