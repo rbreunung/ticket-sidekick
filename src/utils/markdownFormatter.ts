@@ -84,6 +84,33 @@ export function formatJiraBody(node: unknown): string {
     case 'mention':
       return `@${(n.attrs?.text as string) ?? 'unknown'}`;
 
+    case 'table': {
+      const rows = (n.content ?? []) as AdfNode[];
+      if (rows.length === 0) return '';
+      const firstRow = rows[0] as AdfNode;
+      const isHeaderRow = (firstRow.content ?? []).every(
+        (cell) => (cell as AdfNode).type === 'tableHeader'
+      );
+      const renderRow = (row: AdfNode) => {
+        const cells = (row.content ?? []) as AdfNode[];
+        return '| ' + cells.map(c => formatJiraBody(c).trim()).join(' | ') + ' |';
+      };
+      const colCount = ((firstRow.content ?? []) as AdfNode[]).length;
+      const sep = '| ' + Array(colCount).fill('---').join(' | ') + ' |';
+      if (isHeaderRow) {
+        return [renderRow(firstRow), sep, ...rows.slice(1).map(renderRow)].join('\n') + '\n\n';
+      }
+      const emptyHeader = '| ' + Array(colCount).fill(' ').join(' | ') + ' |';
+      return [emptyHeader, sep, ...rows.map(renderRow)].join('\n') + '\n\n';
+    }
+
+    case 'tableRow':
+      return (n.content ?? []).map(formatJiraBody).join('');
+
+    case 'tableHeader':
+    case 'tableCell':
+      return (n.content ?? []).map(formatJiraBody).join('').trim();
+
     default:
       return (n.content ?? []).map(formatJiraBody).join('');
   }

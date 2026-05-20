@@ -444,4 +444,113 @@ describe('formatJiraBody', () => {
       expect(formatJiraBody(node)).toContain('fallback text');
     });
   });
+
+  describe('ADF table', () => {
+    it('renders a table with header and data rows', () => {
+      const node = {
+        type: 'doc',
+        content: [{
+          type: 'table',
+          content: [
+            {
+              type: 'tableRow',
+              content: [
+                { type: 'tableHeader', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Name' }] }] },
+                { type: 'tableHeader', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Value' }] }] },
+              ],
+            },
+            {
+              type: 'tableRow',
+              content: [
+                { type: 'tableCell', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'foo' }] }] },
+                { type: 'tableCell', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'bar' }] }] },
+              ],
+            },
+          ],
+        }],
+      };
+      const result = formatJiraBody(node);
+      expect(result).toContain('| Name | Value |');
+      expect(result).toContain('| --- |');
+      expect(result).toContain('| foo | bar |');
+    });
+
+    it('inserts separator row after first header row', () => {
+      const node = {
+        type: 'doc',
+        content: [{
+          type: 'table',
+          content: [
+            {
+              type: 'tableRow',
+              content: [
+                { type: 'tableHeader', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'A' }] }] },
+                { type: 'tableHeader', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'B' }] }] },
+              ],
+            },
+            {
+              type: 'tableRow',
+              content: [
+                { type: 'tableCell', content: [{ type: 'paragraph', content: [{ type: 'text', text: '1' }] }] },
+                { type: 'tableCell', content: [{ type: 'paragraph', content: [{ type: 'text', text: '2' }] }] },
+              ],
+            },
+          ],
+        }],
+      };
+      const result = formatJiraBody(node);
+      const lines = result.split('\n').filter(l => l.trim());
+      expect(lines[0]).toMatch(/\| A \| B \|/);
+      expect(lines[1]).toMatch(/\| --- \| --- \|/);
+      expect(lines[2]).toMatch(/\| 1 \| 2 \|/);
+    });
+
+    it('renders a table with no header row (data cells only)', () => {
+      const node = {
+        type: 'doc',
+        content: [{
+          type: 'table',
+          content: [
+            {
+              type: 'tableRow',
+              content: [
+                { type: 'tableCell', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'x' }] }] },
+                { type: 'tableCell', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'y' }] }] },
+              ],
+            },
+          ],
+        }],
+      };
+      const result = formatJiraBody(node);
+      expect(result).toContain('| --- |');
+      expect(result).toContain('| x | y |');
+    });
+
+    it('applies inline marks inside table cells', () => {
+      const node = {
+        type: 'doc',
+        content: [{
+          type: 'table',
+          content: [
+            {
+              type: 'tableRow',
+              content: [
+                { type: 'tableHeader', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Col' }] }] },
+              ],
+            },
+            {
+              type: 'tableRow',
+              content: [
+                {
+                  type: 'tableCell',
+                  content: [{ type: 'paragraph', content: [{ type: 'text', text: 'bold', marks: [{ type: 'strong' }] }] }],
+                },
+              ],
+            },
+          ],
+        }],
+      };
+      expect(formatJiraBody(node)).toContain('**bold**');
+    });
+  });
 });
