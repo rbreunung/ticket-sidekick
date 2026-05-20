@@ -56,14 +56,55 @@ Open GitHub Copilot Chat and use `@jira`:
 | `@jira create a bug: login times out` | Creates a new ticket (asks for project and type if missing) |
 | `@jira create Story in VSJI: add dark mode` | Creates a ticket with project and type from the prompt |
 | `@jira set priority to High` | Updates priority on current branch ticket |
-| `@jira assign this to jane.doe` | Assigns ticket (searches by name) |
+| `@jira set labels to backend, urgent` | Sets labels (comma-separated) on the current branch ticket |
+| `@jira set fix version to Release 3.2` | Sets the fix version on the current branch ticket |
+| `@jira assign this to jane.doe` | Assigns ticket (searches Jira by display name) |
 | `@jira assign to me` | Assigns ticket to the currently logged-in user |
 | `@jira set components to Backend` | Sets the Components field on the current branch ticket |
 | `@jira set components to Backend, API` | Sets multiple components (comma-separated) |
+| `@jira update the description based on our conversation` | Generates a new description from context — shows preview before posting |
 | `@jira comment that the fix is in PR #42` | Adds a comment |
 | `@jira find open bugs assigned to me` | Runs JQL search |
 | `@jira check required fields on PROJ-123` | Validates required fields |
 | `@jira check` | Tests the connection and shows active configuration |
+
+### Ticket creation
+
+Running `@jira create` starts a guided flow:
+
+1. **Template** — if `.jira-templates.json` is present, a numbered list is shown in chat. Pick by number, name, or reply **`n`** for no template. Reply **`c`** to cancel.
+2. **Summary** — extracted from your prompt if provided; otherwise the plugin asks in chat. Providing the summary upfront is usually faster.
+3. **Issue type** — taken from the template or your prompt. If neither provides one, the plugin shows a numbered list of issue types for the project.
+4. **Description sections** — if the chosen template defines `descriptionSections`, the plugin asks each question in sequence, building the description incrementally.
+
+**Examples:**
+
+```text
+@jira create a bug
+```
+→ Template list shown. After picking a template, the plugin asks "What should the **summary** be?"
+
+```text
+@jira create a bug: stale loans not returning after grace period
+```
+→ Template list shown. Summary is extracted from the prompt — no additional question.
+
+```text
+@jira create a ticket stale loans not returning - assign to me
+```
+→ Template list shown. Summary and assignee extracted from the prompt in one step.
+
+```text
+@jira create Story in VSJI: dark mode — assign to jane.doe, components Backend
+```
+→ Project key `VSJI`, issue type `Story`, summary, assignee, and components all parsed from the prompt.
+
+You can include these directly in the create prompt and the plugin will extract them without asking:
+
+| In your prompt | What it sets |
+| --- | --- |
+| `assign to me` / `assign to <name>` | Assignee (resolved via Jira user search) |
+| `components Backend, API` | Components field |
 
 ### Content generation and preview
 
