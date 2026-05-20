@@ -61,6 +61,98 @@ describe('wikiToMarkdown', () => {
     expect(result).toMatch(/SELECT 1;\n```/);
     expect(result).not.toMatch(/SELECT 1;```/);
   });
+
+  // --- headings ---
+  it('converts h1. heading', () => {
+    expect(wikiToMarkdown('h1. My Heading')).toContain('# My Heading');
+  });
+
+  it('converts h3. heading', () => {
+    expect(wikiToMarkdown('h3. Sub section')).toContain('### Sub section');
+  });
+
+  it('applies inline markup inside a heading', () => {
+    expect(wikiToMarkdown('h2. Check *this* out')).toContain('## Check **this** out');
+  });
+
+  // --- tables ---
+  it('renders a table with header row', () => {
+    const result = wikiToMarkdown('||A||B||\n|1|2|');
+    expect(result).toContain('| A | B |');
+    expect(result).toContain('| --- |');
+    expect(result).toContain('| 1 | 2 |');
+  });
+
+  it('renders a table without header row by inserting a synthetic separator', () => {
+    const result = wikiToMarkdown('|a|b|\n|c|d|');
+    expect(result).toContain('| --- |');
+    expect(result).toContain('| a | b |');
+    expect(result).toContain('| c | d |');
+  });
+
+  it('applies inline markup inside a table cell', () => {
+    const result = wikiToMarkdown('||Name||\n|*bold*|');
+    expect(result).toContain('**bold**');
+  });
+
+  // --- inline markup ---
+  it('converts strikethrough -text-', () => {
+    expect(wikiToMarkdown('-strike-')).toContain('~~strike~~');
+  });
+
+  it('converts a labelled link [text|url]', () => {
+    expect(wikiToMarkdown('[Click here|https://example.com]')).toContain('[Click here](https://example.com)');
+  });
+
+  it('converts a bare link [url]', () => {
+    expect(wikiToMarkdown('[https://example.com]')).toContain('<https://example.com>');
+  });
+
+  it('converts a mention [~username]', () => {
+    expect(wikiToMarkdown('[~jsmith]')).toContain('@jsmith');
+  });
+
+  it('strips {color} tags and keeps content', () => {
+    expect(wikiToMarkdown('{color:red}important{color}')).toContain('important');
+    expect(wikiToMarkdown('{color:red}important{color}')).not.toContain('{color');
+  });
+
+  // --- lists ---
+  it('converts bullet list items', () => {
+    const result = wikiToMarkdown('* Alpha\n* Beta');
+    expect(result).toContain('- Alpha');
+    expect(result).toContain('- Beta');
+  });
+
+  it('indents nested bullet list items', () => {
+    const result = wikiToMarkdown('* Parent\n** Child');
+    expect(result).toContain('- Parent');
+    expect(result).toContain('  - Child');
+  });
+
+  it('converts numbered list items', () => {
+    const result = wikiToMarkdown('# One\n# Two');
+    expect(result).toContain('1. One');
+    expect(result).toContain('1. Two');
+  });
+
+  // --- horizontal rule ---
+  it('converts ---- to a horizontal rule', () => {
+    expect(wikiToMarkdown('----')).toContain('---');
+  });
+
+  // --- multiple blocks ---
+  it('handles two code blocks in one string, both verbatim', () => {
+    const wiki = '{code:sql}\nSELECT a_b;\n{code}\nsome text\n{code:java}\nint a_b = 1;\n{code}';
+    const result = wikiToMarkdown(wiki);
+    expect(result).toContain('a_b');
+    expect(result).not.toContain('a*b');
+  });
+
+  // --- edge cases ---
+  it('returns empty string for empty input', () => {
+    expect(wikiToMarkdown('')).toBe('');
+  });
 });
 
 describe('formatJiraBody — ADF codeBlock closing fence', () => {
