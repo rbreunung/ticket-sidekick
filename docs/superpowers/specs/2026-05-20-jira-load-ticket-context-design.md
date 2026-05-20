@@ -46,15 +46,27 @@ any of the downloaded files independently during the session.
 
 `ticket.md` format:
 
+The metadata section of `ticket.md` is produced by `formatIssueFields` (defined
+in the field display spec) — the same function used by `@jira show`. This means
+all non-null fields are written to the file using the generalised layout rules:
+single-line fields in a table, multi-line / markup fields as `##` sections. Fields
+listed in `additionalDisplayFields` are always included even when null.
+
+Example (illustrative — actual fields depend on the ticket):
+
 ```markdown
 # PROJ-123: <summary>
 
-**Status:** In Progress
-**Assignee:** Jane Doe
-**Reporter:** John Smith
-**Priority:** High
-**Labels:** performance, backend
-**Fix Versions:** 3.2
+| Field | Value |
+|---|---|
+| Status | In Progress |
+| Assignee | Jane Doe |
+| Reporter | John Smith |
+| Priority | High |
+| Labels | performance, backend |
+| Fix Versions | 3.2 |
+| Sprint | Sprint 42 |
+| Due Date | 2026-06-01 |
 
 ## Description
 
@@ -215,7 +227,8 @@ Handler (`handleLoadTicket`):
 3. Fetch attachments via `ticketService.getAttachments(key)`
 4. Create directory `{workspace}/.jira-context/{key}/attachments/` via
    `vscode.workspace.fs.createDirectory`
-5. Write `ticket.md` — metadata + description + attachment index
+5. Write `ticket.md` — call `formatIssueFields` (same as `@jira show`) for the
+   metadata table and multi-line sections, then append the attachment index
 6. Write `comments.md` — all comments formatted
 7. For each attachment:
    - Skip if size > 5 MB (record in skipped list)
