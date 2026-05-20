@@ -1,10 +1,47 @@
 import { to_markdown } from 'jira2md';
 
+function parseCodeLang(params: string): string {
+  if (!params) return '';
+  // {code:language=sql|...} explicit key=value form
+  const kv = params.match(/\blanguage=([^|}\s]+)/i);
+  if (kv) return kv[1].toLowerCase();
+  // {code:sql} or {code:sql|linenumbers=true} — first token
+  const simple = params.match(/^([a-z][a-z0-9]*)/i);
+  return simple ? simple[1].toLowerCase() : '';
+}
+
+// Matches a complete {code}...{code} or {noformat}...{noformat} block.
+const CODE_BLOCK_RE = /\{code(?::([^}]*))?\}([\s\S]*?)\{code\}|\{noformat\}([\s\S]*?)\{noformat\}/gi;
+
 export function wikiToMarkdown(wikiMarkup: string): string {
-  const md = to_markdown(wikiMarkup);
-  // jira2md omits the newline after the opening fence when Jira wiki markup
-  // has content on the same line as {code:lang} — ensure it is always present.
-  return md.replace(/(```\w*)([ \t]*[^\n])/g, '$1\n$2');
+  // jira2md treats _ as an italic marker even inside {code}/{noformat} blocks,
+  // corrupting identifiers like id_client → id*client. Split on code blocks,
+  // run jira2md only on the non-code segments, and wrap code content verbatim.
+  const segments: string[] = [];
+  let last = 0;
+
+  for (const m of wikiMarkup.matchAll(CODE_BLOCK_RE)) {
+    // text before this block
+    if (m.index > last) {
+      segments.push(to_markdown(wikiMarkup.slice(last, m.index)));
+    }
+    // code/noformat block — verbatim inside fences
+    const [, codeParams, codeBody, noformatBody] = m;
+    const lang = codeBody !== undefined ? parseCodeLang(codeParams ?? '') : '';
+    const body = (codeBody ?? noformatBody) as string;
+    // Ensure the body starts on a new line (Jira allows content immediately
+    // after the closing brace: {code:sql}SELECT …{code}).
+    const normalized = body.startsWith('\n') ? body : `\n${body}`;
+    segments.push(`\`\`\`${lang}${normalized}\n\`\`\``);
+    last = m.index + m[0].length;
+  }
+
+  // text after the last block (or the whole string if no blocks)
+  if (last < wikiMarkup.length) {
+    segments.push(to_markdown(wikiMarkup.slice(last)));
+  }
+
+  return segments.join('');
 }
 
 type AdfNode = {

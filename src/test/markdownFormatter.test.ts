@@ -25,6 +25,30 @@ describe('wikiToMarkdown', () => {
   it('passes plain text through unchanged', () => {
     expect(wikiToMarkdown('plain text')).toContain('plain text');
   });
+
+  it('preserves underscores in SQL identifiers inside a {code} block verbatim', () => {
+    const wiki = '{code:sql}\nselect id_client, id_master_client from clients;\n{code}';
+    const result = wikiToMarkdown(wiki);
+    expect(result).toContain('id_client');
+    expect(result).toContain('id_master_client');
+    expect(result).not.toContain('id*client');
+    expect(result).not.toContain('id*master*client');
+  });
+
+  it('preserves underscores inside a {noformat} block verbatim', () => {
+    const wiki = '{noformat}\nsome_var and another_var\n{noformat}';
+    const result = wikiToMarkdown(wiki);
+    expect(result).toContain('some_var');
+    expect(result).toContain('another_var');
+    expect(result).not.toContain('some*var');
+  });
+
+  it('still converts wiki italic outside code blocks', () => {
+    const wiki = '_italic text_ and {code}\nnot_italic\n{code}';
+    const result = wikiToMarkdown(wiki);
+    expect(result).toMatch(/_italic text_|\*italic text\*/);
+    expect(result).toContain('not_italic');
+  });
 });
 
 describe('formatJiraBody', () => {
