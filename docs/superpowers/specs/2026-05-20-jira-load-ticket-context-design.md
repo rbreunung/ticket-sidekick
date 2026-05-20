@@ -148,22 +148,37 @@ currently does not handle — both pass through as literal text:
 This produces generic relative links — `![screenshot.png](screenshot.png)` —
 which are correct for the root of any directory that contains the file.
 
-**Step 2 — rewrite to `attachments/` paths in `handleLoadTicket`:**
+**Step 2 — rewrite to `attachments/` paths (or Jira URLs) in `handleLoadTicket`:**
 
 After converting description and comment bodies to Markdown, post-process the
-text to redirect links for filenames that were actually downloaded:
+text for all three cases:
+
+| Link href | Situation | Rewrite to |
+|---|---|---|
+| filename in downloaded set | file was saved locally | `attachments/filename` |
+| filename in skipped set | too large or binary | full Jira content URL (opens in browser) |
+| anything else (external URL, etc.) | not an attachment | unchanged |
 
 ```typescript
-function rewriteAttachmentLinks(md: string, downloadedFilenames: Set<string>): string {
-  return md.replace(/\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, href) =>
-    downloadedFilenames.has(href) ? `[${alt}](attachments/${href})` : match
-  );
+function rewriteAttachmentLinks(
+  md: string,
+  downloaded: Set<string>,          // filename → rewrite to attachments/filename
+  skippedUrls: Map<string, string>, // filename → full Jira content URL
+): string {
+  return md.replace(/\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, href) => {
+    if (downloaded.has(href)) return `[${alt}](attachments/${href})`;
+    const jiraUrl = skippedUrls.get(href);
+    if (jiraUrl) return `[${alt}](${jiraUrl})`;
+    return match;
+  });
 }
 ```
 
-Skipped attachments (too large or binary-only) keep their original relative
-link form and are annotated in the `## Attachments` index as skipped, so the
-reader knows the file is not present locally.
+This covers all cases:
+- Downloaded images and text files resolve to local paths
+- Skipped attachments (binary, oversized) fall back to the real Jira URL so
+  the link remains navigable in a browser
+- External images (`!https://...!`) and ordinary hyperlinks are untouched
 
 This keeps `jiraWikiToMarkdown` context-free (it does not know about local
 file structure) while ensuring `ticket.md` and `comments.md` contain correct
@@ -242,8 +257,8 @@ single line.
   add `attachment` array to `ticket-PROJ-123.json` fixture
 - `JiraParticipant.test.ts`: `loadTicket` intent parsed correctly from
   "load PROJ-123" and "fetch context for PROJ-123"; `rewriteAttachmentLinks`
-  rewrites downloaded filenames to `attachments/` paths and leaves skipped
-  filenames unchanged
+  rewrites downloaded filenames to `attachments/` paths, rewrites skipped
+  filenames to their full Jira content URL, and leaves external URLs unchanged
 - File writing and `.gitignore` management are VS Code–dependent and covered
   by the e2e suite only
 
