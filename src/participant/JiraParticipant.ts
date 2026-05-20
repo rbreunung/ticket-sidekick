@@ -75,9 +75,9 @@ Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|
 - runCleanup: bulk-close or bulk-transition ALL tickets of a type in a project; triggered by "close all", "run cleanup", or "close PROJECT ISSUETYPE" where PROJECT is a project key and ISSUETYPE is an issue type name (not a ticket key like PROJ-123); projectKey and issueType are extracted from the prompt; cleanupRuleName is the quoted rule name if given; fixVersion is the exact fix version string if given (must be quoted in the prompt, e.g. "Fix Version 3.2"); examples: "@jira close VSJI Bug", "@jira run cleanup 'Close released bugs'", "@jira close BILLING bugs in 'Release 3.2'"
 - contentSource: how the comment or description content should be produced
   - "literal": user provided the exact text to post (e.g. "add comment: LGTM")
-  - "generate": user gave an instruction to create new content with no reference to the conversation (e.g. "write a poem about Star Trek", "add a 12-line poem as comment")
-  - "history-recent": user references a specific artifact from the last few messages (e.g. "add that poem", "post the result above", "add it as a comment")
-  - "history-full": user wants a synthesis or summary of the broader conversation (e.g. "summarize our analysis and add as comment", "document what we found")
+  - "generate": user gave a self-contained instruction with no implicit reference to prior work (e.g. "write a poem about Star Trek", "add a 12-line poem as comment"); only use this when content is purely creative or standalone
+  - "history-recent": user references a specific artifact from the last few messages (e.g. "add that patch", "post the result above", "add it as a comment")
+  - "history-full": user refers to work developed in the conversation — use this whenever the instruction mentions "the analysis", "the investigation", "the findings", "what we found/discussed/developed", "the solution", "the root cause", "the reproduction steps", or any topic that implies prior investigation; when in doubt between generate and history-full, prefer history-full
   - default to "literal" for operations other than addComment and updateField
 
 Command: `;
@@ -104,10 +104,21 @@ async function generateContent(
   token: vscode.CancellationToken,
   context?: string,
 ): Promise<string> {
-  const prompt = context
-    ? `Context:\n\n${context}\n\nInstruction: ${instruction}\n\nProduce only the final content, no preamble, no markdown code fences, no explanation.`
-    : `Generate content based on this instruction: "${instruction}". Produce only the final content, no preamble, no markdown code fences, no explanation.`;
-  const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], {}, token);
+  const roleSetup = vscode.LanguageModelChatMessage.User(
+    'You are a Jira assistant. Your task is to write Jira comment and description text. ' +
+    'Content may include prose summaries, code snippets, patches, or any technical material appropriate for a Jira comment.',
+  );
+  const roleAck = vscode.LanguageModelChatMessage.Assistant(
+    'Understood. I write Jira comment and description text, including any technical content such as code or patches.',
+  );
+  const task = context
+    ? `Available context:\n\n${context}\n\nUsing the context above, write the following:\n${instruction}\n\nProduce only the final text. No preamble, no explanation.`
+    : `Write the following:\n${instruction}\n\nProduce only the final text. No preamble, no explanation.`;
+  const response = await model.sendRequest(
+    [roleSetup, roleAck, vscode.LanguageModelChatMessage.User(task)],
+    {},
+    token,
+  );
   let content = '';
   for await (const chunk of response.text) {
     content += chunk;
@@ -158,6 +169,70 @@ function buildHistoryContext(
     return serializeTurns(extractHistoryTurns(context), 'full');
   }
   return undefined;
+}
+
+const FILE_MAX_BYTES = 60_000;
+
+async function gatherFileContent(
+  currentRefs: readonly vscode.ChatPromptReference[],
+  history: ReadonlyArray<vscode.ChatRequestTurn | vscode.ChatResponseTurn>,
+): Promise<string> {
+  const seen = new Set<string>();
+  const sections: string[] = [];
+  const decoder = new TextDecoder('utf-8');
+
+  const readUri = async (uri: vscode.Uri): Promise<void> => {
+    const key = uri.toString();
+    if (seen.has(key)) return;
+    seen.add(key);
+    try {
+      const bytes = await vscode.workspace.fs.readFile(uri);
+      const name = uri.path.split('/').pop() ?? uri.fsPath;
+      const truncated = bytes.byteLength > FILE_MAX_BYTES;
+      const slice = truncated ? bytes.slice(0, FILE_MAX_BYTES) : bytes;
+      const text = decoder.decode(slice) + (truncated ? '\n\n[... truncated ...]' : '');
+      sections.push(`### ${name}\n\`\`\`\n${text}\n\`\`\``);
+    } catch { /* skip unreadable files */ }
+  };
+
+  const processRef = async (ref: vscode.ChatPromptReference): Promise<void> => {
+    if (ref.value instanceof vscode.Uri) {
+      await readUri(ref.value);
+    } else if (ref.value instanceof vscode.Location) {
+      await readUri((ref.value as vscode.Location).uri);
+    }
+  };
+
+  for (const ref of currentRefs) await processRef(ref);
+  for (const turn of history) {
+    if (turn instanceof vscode.ChatRequestTurn) {
+      for (const ref of turn.references) await processRef(ref);
+    }
+  }
+
+  return sections.join('\n\n');
+}
+
+async function buildContentContext(
+  request: vscode.ChatRequest,
+  chatContext: vscode.ChatContext,
+  ticketText: string,
+  commentBlocks: string,
+): Promise<string> {
+  const parts: string[] = [];
+
+  const fileContent = await gatherFileContent(request.references, chatContext.history);
+  if (fileContent) parts.push(`**Attached files:**\n\n${fileContent}`);
+
+  const historyText = serializeTurns(extractHistoryTurns(chatContext), 'full');
+  if (historyText) parts.push(`**Conversation history:**\n\n${historyText}`);
+
+  const ticketSection = commentBlocks
+    ? `${ticketText}\n\n**Comments:**\n\n${commentBlocks}`
+    : ticketText;
+  parts.push(`**Ticket:**\n\n${ticketSection}`);
+
+  return parts.join('\n\n---\n\n');
 }
 
 function serializeCommentsForLLM(comments: JiraComment[]): string {
@@ -1243,15 +1318,10 @@ export function createJiraParticipant(
           if (isLiteral) {
             result = await ticketService.addComment(ticketKey!, intent.comment!);
           } else {
-            let context = buildHistoryContext(intent.contentSource, chatContext);
-            if (intent.contentSource === 'generate') {
-              const ticketText = await ticketService.getTicket(ticketKey!);
-              const { comments } = await ticketService.getIssueComments(ticketKey!, 50);
-              const commentSection = comments.length > 0
-                ? '\n\n**Comments:**\n\n' + serializeCommentsForLLM(comments)
-                : '';
-              context = ticketText + commentSection;
-            }
+            const ticketText = await ticketService.getTicket(ticketKey!);
+            const { comments } = await ticketService.getIssueComments(ticketKey!, 50);
+            const commentBlocks = comments.length > 0 ? serializeCommentsForLLM(comments) : '';
+            const context = await buildContentContext(request, chatContext, ticketText, commentBlocks);
             const content = await generateContent(request.prompt, request.model, token, context);
             if (isLmRefusal(content)) {
               stream.markdown(`_Could not generate comment content — the AI model declined the request. Try rephrasing your instruction or use \`@jira add comment to ${ticketKey}\` with explicit text._`);
@@ -1271,15 +1341,10 @@ export function createJiraParticipant(
           for (const { fieldName, fieldValue } of intent.fieldUpdates) {
             const isNonLiteral = intent.contentSource !== 'literal' && intent.contentSource !== undefined;
             if (fieldName.toLowerCase() === 'description' && isNonLiteral) {
-              let context = buildHistoryContext(intent.contentSource, chatContext);
-              if (intent.contentSource === 'generate') {
-                const ticketText = await ticketService.getTicket(ticketKey!);
-                const { comments } = await ticketService.getIssueComments(ticketKey!, 20);
-                const commentSection = comments.length > 0
-                  ? '\n\n**Comments:**\n\n' + serializeCommentsForLLM(comments)
-                  : '';
-                context = ticketText + commentSection;
-              }
+              const ticketText = await ticketService.getTicket(ticketKey!);
+              const { comments } = await ticketService.getIssueComments(ticketKey!, 20);
+              const commentBlocks = comments.length > 0 ? serializeCommentsForLLM(comments) : '';
+              const context = await buildContentContext(request, chatContext, ticketText, commentBlocks);
               const content = await generateContent(fieldValue, request.model, token, context);
               if (isLmRefusal(content)) {
                 stream.markdown(`_Could not generate description content — the AI model declined the request. Try rephrasing your instruction._`);
