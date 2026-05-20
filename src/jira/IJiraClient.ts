@@ -11,7 +11,8 @@ export interface JiraComment {
 }
 
 export interface JiraUser {
-  accountId: string;
+  accountId?: string;  // Cloud only; absent on Data Center
+  name?: string;       // Data Center username; absent on Cloud
   displayName: string;
   emailAddress?: string;
 }

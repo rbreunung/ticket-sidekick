@@ -112,6 +112,18 @@ describe('TicketService', () => {
       expect(client.updateIssueCalls[0]?.fields).toEqual({ assignee: { accountId: 'currentuser123' } });
     });
 
+    it('uses name-based format when user has name but no accountId (Data Center)', async () => {
+      client.findUser = async () => [{ name: 'jsmith', displayName: 'John Smith' }];
+      await service.updateField('PROJ-123', 'assignee', 'John Smith');
+      expect(client.updateIssueCalls[0]?.fields).toEqual({ assignee: { name: 'jsmith' } });
+    });
+
+    it('uses name-based format for current user when user has name but no accountId (Data Center)', async () => {
+      client.getCurrentUser = async () => ({ name: 'jsmith', displayName: 'John Smith' });
+      await service.updateField('PROJ-123', 'assignee', 'me');
+      expect(client.updateIssueCalls[0]?.fields).toEqual({ assignee: { name: 'jsmith' } });
+    });
+
     it('updates components with a single component name as array of name objects', async () => {
       await service.updateField('PROJ-123', 'components', 'Backend');
       expect(client.updateIssueCalls[0]?.fields).toEqual({ components: [{ name: 'Backend' }] });

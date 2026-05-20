@@ -101,18 +101,19 @@ export class TicketService {
     return `Updated ${fieldName} on ${issueKey}.`;
   }
 
-  async resolveAssignee(value: string): Promise<{ accountId: string } | string> {
+  async resolveAssignee(value: string): Promise<Record<string, string> | string> {
     const ME_KEYWORDS = new Set(['me', 'myself', 'i']);
     if (ME_KEYWORDS.has(value.toLowerCase().trim())) {
-      const currentUser = await this.client.getCurrentUser();
-      return { accountId: currentUser.accountId };
+      const user = await this.client.getCurrentUser();
+      return user.name ? { name: user.name } : { accountId: user.accountId! };
     }
     const users = await this.client.findUser(value);
     if (users.length === 0) return `No user found matching "${value}".`;
     if (users.length > 1) {
       return `Multiple users found: ${users.map((u) => u.displayName).join(', ')}. Please be more specific.`;
     }
-    return { accountId: users[0].accountId };
+    const user = users[0];
+    return user.name ? { name: user.name } : { accountId: user.accountId! };
   }
 
   async searchTickets(jql: string): Promise<string> {
