@@ -185,12 +185,85 @@ Output: a table of `Field name | Field ID | Current value`.
 
 ---
 
+### 6 — Sprint field handling
+
+Sprint is a Jira custom field whose API value is an array of sprint objects
+`[{ id, name, state, … }]`. Unlike named-object fields (`priority`,
+`issuetype`, …), setting a sprint requires an integer `id` — not `{ name }`.
+
+**Display (show + load):** Already covered in §1 — active sprint name shown in
+the metadata table, falling back to the first sprint name if none is active.
+No change from the display spec.
+
+**Sprint field detection:** A field is treated as a sprint field when its
+`schema.custom` (from `/field` metadata) contains `gh-sprint`. This check is
+applied in `buildFieldValue` before the standard named-object path.
+
+**New client method — `IJiraClient` + `JiraApiClient`:**
+
+```typescript
+findSprints(
+  projectKey: string,
+  query: string,
+): Promise<Array<{ id: number; name: string; state: string }>>
+```
+
+Searches all boards for the project via the Agile API
+(`/board?projectKeyOrId=…`), returns sprints whose names
+case-insensitively contain `query`. Active and future sprints only
+(same scope as the existing `getSprintByName`).
+
+`getSprintByName` is **not changed** — `FieldResolver` continues to use it
+for template-based creation where the sprint name in config must be exact.
+Template misconfiguration throws with the candidate list in the error message.
+
+**Fuzzy resolution for update and inline create:**
+
+1. Exact match (case-insensitive) → use immediately
+2. Unique substring match → use immediately
+3. Multiple substring matches → numbered disambiguation list, same pattern as
+   field name disambiguation; stored as `SprintSelectionSession` with the
+   pending field-update context:
+
+   ```
+   Multiple sprints match "sprint 4":
+   1. Sprint 42 (active)
+   2. Sprint 43 (future)
+
+   Reply with a number to select.
+   <!-- jira:sprint-selection -->
+   ```
+
+4. No match → error: "No active or future sprint matching `<input>` found in
+   project PROJ. Use `@jira show fields on PROJ-123` to see current sprint."
+
+**Update payload:** `{ fields: { [fieldId]: { id: sprintId } } }` (integer id).
+
+**Inline create:** When the intent parser extracts a sprint name from a create
+prompt, the same `findSprints` fuzzy resolution fires before `createTicket` is
+called. If ambiguous, sprint selection completes before the creation session.
+
+**New session type:**
+
+```typescript
+export interface SprintSelectionSession {
+  candidates: Array<{ id: number; name: string; state: string }>;
+  pending: FieldUpdatePreviewSession;   // field update waiting on sprint choice
+}
+```
+
+Stored under `jira.session.sprintSelection`, tag `<!-- jira:sprint-selection -->`.
+Detection order: insert before `<!-- jira:field-update-preview -->`.
+
+---
+
 ## Architecture
 
-### `IJiraClient` — no new methods
+### `IJiraClient` — one new method
 
-All needed endpoints already exist: `getIssue` (returns all fields), `getFields`
-(field metadata), `getEditMeta` (allowed values + schema), `updateIssue`.
+`findSprints(projectKey, query)` as described in §6. All other needed endpoints
+already exist: `getIssue` (returns all fields), `getFields` (field metadata),
+`getEditMeta` (allowed values + schema), `updateIssue`.
 
 ### `TicketService` changes
 
@@ -245,6 +318,11 @@ export interface SpellCheckSession {
   corrected: string;
   pending: FieldUpdatePreviewSession;
 }
+
+export interface SprintSelectionSession {
+  candidates: Array<{ id: number; name: string; state: string }>;
+  pending: FieldUpdatePreviewSession;
+}
 ```
 
 ### `JiraParticipant` intent schema changes
@@ -265,6 +343,7 @@ preview → confirm.
 ### Session detection order additions
 
 Insert before `parseIntent`:
+- `<!-- jira:sprint-selection -->` → `SprintSelectionSession`
 - `<!-- jira:field-update-preview -->` → `FieldUpdatePreviewSession`
 - `<!-- jira:spell-check -->` → `SpellCheckSession`
 
@@ -279,6 +358,9 @@ Insert before `parseIntent`:
 - Bulk: individual ticket update failure → report per-ticket, continue (same
   as today)
 - ISO date format invalid → "Date must be in YYYY-MM-DD format."
+- Sprint not found after fuzzy matching → "No active or future sprint matching
+  `<input>` found in project PROJ. Use `@jira show fields on PROJ-123` to see
+  the current sprint."
 
 ---
 
@@ -289,10 +371,14 @@ Insert before `parseIntent`:
 - `formatIssueFields`: single-line fields → table; multi-line → section;
   null field not in always-show → omitted; null field in always-show → `_Not set_`
 - `buildArrayValue`: set, add (dedup), remove
-- `sessionState`: `FieldUpdatePreviewSession` and `SpellCheckSession` parse
-  helpers
+- `sessionState`: `FieldUpdatePreviewSession`, `SpellCheckSession`, and
+  `SprintSelectionSession` parse helpers
 - `JiraParticipant.test.ts`: `setField` intent parsed with `arrayOp` and `scope`
 - Sprint rendering: active sprint extracted from array; fallback to first
+- Sprint fuzzy resolution: exact match, unique substring, multiple candidates
+  → disambiguation list, no match → error
+- `findSprints`: returns only active and future sprints; substring match is
+  case-insensitive
 - Date rendering: ISO string → `YYYY-MM-DD` in table
 
 ---
