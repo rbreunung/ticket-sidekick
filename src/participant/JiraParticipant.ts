@@ -102,10 +102,10 @@ async function generateContent(
   instruction: string,
   model: vscode.LanguageModelChat,
   token: vscode.CancellationToken,
-  historyContext?: string,
+  context?: string,
 ): Promise<string> {
-  const prompt = historyContext
-    ? `Conversation history:\n\n${historyContext}\n\nBased on the conversation above, ${instruction}. Produce only the final content, no preamble, no markdown code fences, no explanation.`
+  const prompt = context
+    ? `Context:\n\n${context}\n\nInstruction: ${instruction}\n\nProduce only the final content, no preamble, no markdown code fences, no explanation.`
     : `Generate content based on this instruction: "${instruction}". Produce only the final content, no preamble, no markdown code fences, no explanation.`;
   const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], {}, token);
   let content = '';
@@ -113,6 +113,20 @@ async function generateContent(
     content += chunk;
   }
   return content.trim();
+}
+
+function isLmRefusal(text: string): boolean {
+  const lower = text.toLowerCase();
+  return text.length < 300 && (
+    lower.includes("can't assist") ||
+    lower.includes("cannot assist") ||
+    lower.includes("unable to assist") ||
+    lower.includes("not able to assist") ||
+    lower.includes("i'm unable to help") ||
+    lower.includes("i cannot help with") ||
+    lower.includes("can't help with that") ||
+    lower.includes("i'm not able to help")
+  );
 }
 
 function extractHistoryTurns(context: vscode.ChatContext): Array<{ role: 'user' | 'assistant'; text: string }> {
@@ -239,6 +253,11 @@ async function handleContentSession(
     .filter(Boolean)
     .join('\n\n');
   const refined = await generateContent(prompt, model, token, refineContext);
+  if (isLmRefusal(refined)) {
+    stream.markdown(`_Could not refine content — the AI model declined the request. Try rephrasing your instruction._`);
+    await streamContentPreview(session, stream, workspaceState);
+    return;
+  }
   await streamContentPreview({ ...session, currentContent: refined }, stream, workspaceState);
 }
 
@@ -797,6 +816,34 @@ export function createJiraParticipant(
     const ws = context.workspaceState;
     const lastResponse = getLastAssistantText(chatContext);
 
+    if (/^check(\s+(config|connection|setup))?$/i.test(request.prompt.trim())) {
+      try {
+        const user = await jiraClient.getCurrentUser();
+        stream.markdown(
+          `**Jira connection OK**\n\n` +
+          `| Setting | Value |\n` +
+          `|---|---|\n` +
+          `| Base URL | \`${redactUrls(config.baseUrl ?? '')}\` |\n` +
+          `| API version | v2 |\n` +
+          `| Auth type | ${config.authType} |\n` +
+          `| Token | ${tokenStatus(config.token)} |\n` +
+          `| Logged in as | ${user.displayName} |\n`,
+        );
+      } catch (err) {
+        stream.markdown(
+          `**Jira connection failed**\n\n` +
+          `| Setting | Value |\n` +
+          `|---|---|\n` +
+          `| Base URL | \`${redactUrls(config.baseUrl ?? '')}\` |\n` +
+          `| API version | v2 |\n` +
+          `| Auth type | ${config.authType} |\n` +
+          `| Token | ${tokenStatus(config.token)} |\n\n` +
+          `Error: ${redactUrls(err instanceof Error ? err.message : String(err))}`,
+        );
+      }
+      return;
+    }
+
     // Resolution selection — user replied with a resolution choice before the review screen
     if (lastResponse.includes('<!-- jira:selecting-resolution -->')) {
       const selSession = ws.get<ResolutionSelectionSession>('jira.session.resolutionSelection');
@@ -1004,34 +1051,6 @@ export function createJiraParticipant(
       }
     }
 
-    if (/^check(\s+(config|connection|setup))?$/i.test(request.prompt.trim())) {
-      try {
-        const user = await jiraClient.getCurrentUser();
-        stream.markdown(
-          `**Jira connection OK**\n\n` +
-          `| Setting | Value |\n` +
-          `|---|---|\n` +
-          `| Base URL | \`${redactUrls(config.baseUrl ?? '')}\` |\n` +
-          `| API version | v2 |\n` +
-          `| Auth type | ${config.authType} |\n` +
-          `| Token | ${tokenStatus(config.token)} |\n` +
-          `| Logged in as | ${user.displayName} |\n`,
-        );
-      } catch (err) {
-        stream.markdown(
-          `**Jira connection failed**\n\n` +
-          `| Setting | Value |\n` +
-          `|---|---|\n` +
-          `| Base URL | \`${redactUrls(config.baseUrl ?? '')}\` |\n` +
-          `| API version | v2 |\n` +
-          `| Auth type | ${config.authType} |\n` +
-          `| Token | ${tokenStatus(config.token)} |\n\n` +
-          `Error: ${redactUrls(err instanceof Error ? err.message : String(err))}`,
-        );
-      }
-      return;
-    }
-
     // Bulk update review — user replied ok / skip keys / cancel
     if (lastResponse.includes('<!-- jira:bulk-update-review -->')) {
       const bulkSession = ws.get<BulkUpdateReviewSession>('jira.session.bulkUpdateReview');
@@ -1113,7 +1132,7 @@ export function createJiraParticipant(
     }
 
     let ticketKey = intent.ticketKey;
-    if (!ticketKey && intent.operation !== 'searchJql') {
+    if (!ticketKey && intent.operation !== 'searchJql' && intent.operation !== 'bulkTransition' && intent.operation !== 'bulkUpdateField') {
       ticketKey = resolveTicketFromBranch();
       if (ticketKey) {
         stream.markdown(`_Using ticket **${ticketKey}** from current branch._\n\n`);
@@ -1224,9 +1243,21 @@ export function createJiraParticipant(
           if (isLiteral) {
             result = await ticketService.addComment(ticketKey!, intent.comment!);
           } else {
-            const historyContext = buildHistoryContext(intent.contentSource, chatContext);
-            const content = await generateContent(request.prompt, request.model, token, historyContext);
-            await streamContentPreview({ ticketKey: ticketKey!, operation: 'addComment', currentContent: content, historyContext }, stream, ws);
+            let context = buildHistoryContext(intent.contentSource, chatContext);
+            if (intent.contentSource === 'generate') {
+              const ticketText = await ticketService.getTicket(ticketKey!);
+              const { comments } = await ticketService.getIssueComments(ticketKey!, 50);
+              const commentSection = comments.length > 0
+                ? '\n\n**Comments:**\n\n' + serializeCommentsForLLM(comments)
+                : '';
+              context = ticketText + commentSection;
+            }
+            const content = await generateContent(request.prompt, request.model, token, context);
+            if (isLmRefusal(content)) {
+              stream.markdown(`_Could not generate comment content — the AI model declined the request. Try rephrasing your instruction or use \`@jira add comment to ${ticketKey}\` with explicit text._`);
+              return;
+            }
+            await streamContentPreview({ ticketKey: ticketKey!, operation: 'addComment', currentContent: content, historyContext: context }, stream, ws);
             return;
           }
           break;
@@ -1240,9 +1271,21 @@ export function createJiraParticipant(
           for (const { fieldName, fieldValue } of intent.fieldUpdates) {
             const isNonLiteral = intent.contentSource !== 'literal' && intent.contentSource !== undefined;
             if (fieldName.toLowerCase() === 'description' && isNonLiteral) {
-              const historyContext = buildHistoryContext(intent.contentSource, chatContext);
-              const content = await generateContent(fieldValue, request.model, token, historyContext);
-              await streamContentPreview({ ticketKey: ticketKey!, operation: 'updateDescription', currentContent: content, historyContext }, stream, ws);
+              let context = buildHistoryContext(intent.contentSource, chatContext);
+              if (intent.contentSource === 'generate') {
+                const ticketText = await ticketService.getTicket(ticketKey!);
+                const { comments } = await ticketService.getIssueComments(ticketKey!, 20);
+                const commentSection = comments.length > 0
+                  ? '\n\n**Comments:**\n\n' + serializeCommentsForLLM(comments)
+                  : '';
+                context = ticketText + commentSection;
+              }
+              const content = await generateContent(fieldValue, request.model, token, context);
+              if (isLmRefusal(content)) {
+                stream.markdown(`_Could not generate description content — the AI model declined the request. Try rephrasing your instruction._`);
+                return;
+              }
+              await streamContentPreview({ ticketKey: ticketKey!, operation: 'updateDescription', currentContent: content, historyContext: context }, stream, ws);
               return;
             } else {
               results.push(await ticketService.updateField(ticketKey!, fieldName, fieldValue));
