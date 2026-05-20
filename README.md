@@ -57,6 +57,9 @@ Open GitHub Copilot Chat and use `@jira`:
 | `@jira create Story in VSJI: add dark mode` | Creates a ticket with project and type from the prompt |
 | `@jira set priority to High` | Updates priority on current branch ticket |
 | `@jira assign this to jane.doe` | Assigns ticket (searches by name) |
+| `@jira assign to me` | Assigns ticket to the currently logged-in user |
+| `@jira set components to Backend` | Sets the Components field on the current branch ticket |
+| `@jira set components to Backend, API` | Sets multiple components (comma-separated) |
 | `@jira comment that the fix is in PR #42` | Adds a comment |
 | `@jira find open bugs assigned to me` | Runs JQL search |
 | `@jira check required fields on PROJ-123` | Validates required fields |
@@ -170,9 +173,12 @@ Create a `.jira-templates.json` file in your workspace root to define per-applic
       "issueType": "Bug",
       "defaultFields": {
         "priority": { "name": "High" },
-        "labels": ["billing"]
+        "labels": ["billing"],
+        "components": [{ "name": "Backend" }],
+        "versions": [{ "name": "Release 3.2" }]
       },
       "resolveFields": {
+        "assignee": { "type": "user", "name": "Jane Smith" },
         "customfield_10020": { "type": "sprint", "name": "Sprint 42" },
         "customfield_10050": [{ "type": "team", "id": "billing-team-id" }]
       },
@@ -206,8 +212,43 @@ When you run `@jira create`, the plugin shows a numbered list of your templates.
 
 - `{ "type": "sprint", "name": "Sprint 42" }` — resolves by name via the Jira Agile API
 - `{ "type": "team", "id": "abc123" }` — passes the id through directly (no API call)
+- `{ "type": "user", "name": "Jane Smith" }` — resolves to `{ accountId }` via user search
 
 Wrap a single entry in an array when the Jira field expects an array value.
+
+**Setting assignee in a template:**
+
+```json
+"resolveFields": {
+  "assignee": { "type": "user", "name": "Jane Smith" }
+}
+```
+
+Or with a known `accountId` directly in `defaultFields`:
+
+```json
+"defaultFields": {
+  "assignee": { "accountId": "5b10a2844c20165700ede21g" }
+}
+```
+
+**Setting components in a template:**
+
+```json
+"defaultFields": {
+  "components": [{ "name": "Backend" }, { "name": "API" }]
+}
+```
+
+**Setting group-picker custom fields (e.g. Team Names) in a template:**
+
+```json
+"defaultFields": {
+  "customfield_18501": [{ "name": "ASL QRF" }]
+}
+```
+
+Group-picker fields use `{ "name": "..." }` — no API lookup is needed since the group name is a known string. Put these directly in `defaultFields` rather than `resolveFields`.
 
 You can choose **No template** to create a plain ticket without any template applied.
 

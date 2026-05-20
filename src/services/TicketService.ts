@@ -7,6 +7,8 @@ const SUPPORTED_FIELDS: Record<string, string> = {
   priority: 'priority',
   assignee: 'assignee',
   labels: 'labels',
+  components: 'components',
+  component: 'components',
   'fix version': 'fixVersions',
   fixversions: 'fixVersions',
 };
@@ -70,7 +72,7 @@ export class TicketService {
     const jiraField = SUPPORTED_FIELDS[fieldName.toLowerCase()];
     if (!jiraField) {
       const supported = Object.keys(SUPPORTED_FIELDS)
-        .filter((k) => !k.includes('fix'))
+        .filter((k) => !k.includes('fix') && k !== 'component' && k !== 'fixversions')
         .concat(['fix version'])
         .join(', ');
       return `Field "${fieldName}" is not supported. Supported fields: ${supported}.`;
@@ -87,6 +89,8 @@ export class TicketService {
       fieldValue = value;
     } else if (jiraField === 'labels') {
       fieldValue = value.split(',').map((l) => l.trim());
+    } else if (jiraField === 'components') {
+      fieldValue = value.split(',').map((c) => ({ name: c.trim() }));
     } else if (jiraField === 'fixVersions') {
       fieldValue = [{ name: value }];
     } else {

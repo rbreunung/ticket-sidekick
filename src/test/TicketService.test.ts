@@ -111,6 +111,16 @@ describe('TicketService', () => {
       await service.updateField('PROJ-123', 'assignee', 'myself');
       expect(client.updateIssueCalls[0]?.fields).toEqual({ assignee: { accountId: 'currentuser123' } });
     });
+
+    it('updates components with a single component name as array of name objects', async () => {
+      await service.updateField('PROJ-123', 'components', 'Backend');
+      expect(client.updateIssueCalls[0]?.fields).toEqual({ components: [{ name: 'Backend' }] });
+    });
+
+    it('updates components with multiple comma-separated names as array of name objects', async () => {
+      await service.updateField('PROJ-123', 'components', 'Backend, API');
+      expect(client.updateIssueCalls[0]?.fields).toEqual({ components: [{ name: 'Backend' }, { name: 'API' }] });
+    });
   });
 
   describe('searchTickets', () => {
