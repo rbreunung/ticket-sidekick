@@ -128,6 +128,49 @@ downloadAttachment(url: string): Promise<Uint8Array>
 `Uint8Array`. Throws on non-200 or non-JSON content-type check is skipped —
 this endpoint returns binary, not JSON.
 
+### Attachment link rewriting in generated Markdown
+
+Jira wiki markup uses two syntaxes for attachments that `jiraWikiToMarkdown`
+currently does not handle — both pass through as literal text:
+
+- `!filename.png!` / `!filename.png|thumbnail!` — inline image
+- `[^filename.txt]` — attachment link
+
+**Step 1 — extend `applyInline` in `jiraWikiToMarkdown.ts`:**
+
+```typescript
+// !filename! and !filename|params! → ![filename](filename)
+.replace(/!([^!\s|]+?)(?:\|[^!]*)?\!/g, (_, f) => `![${f}](${f})`)
+// [^filename] attachment link → [filename](filename)
+.replace(/\[\^([^\]]+)\]/g, '[$1]($1)')
+```
+
+This produces generic relative links — `![screenshot.png](screenshot.png)` —
+which are correct for the root of any directory that contains the file.
+
+**Step 2 — rewrite to `attachments/` paths in `handleLoadTicket`:**
+
+After converting description and comment bodies to Markdown, post-process the
+text to redirect links for filenames that were actually downloaded:
+
+```typescript
+function rewriteAttachmentLinks(md: string, downloadedFilenames: Set<string>): string {
+  return md.replace(/\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, href) =>
+    downloadedFilenames.has(href) ? `[${alt}](attachments/${href})` : match
+  );
+}
+```
+
+Skipped attachments (too large or binary-only) keep their original relative
+link form and are annotated in the `## Attachments` index as skipped, so the
+reader knows the file is not present locally.
+
+This keeps `jiraWikiToMarkdown` context-free (it does not know about local
+file structure) while ensuring `ticket.md` and `comments.md` contain correct
+relative paths to downloaded files.
+
+---
+
 ### New service method — `TicketService`
 
 ```typescript
@@ -190,12 +233,17 @@ single line.
 
 ## Testing
 
+- `jiraWikiToMarkdown.test.ts`: `!filename.png!` → `![filename.png](filename.png)`;
+  `!filename.png|thumbnail!` → `![filename.png](filename.png)`;
+  `[^file.txt]` → `[file.txt](file.txt)`
 - `TicketService.test.ts`: `getAttachments` returns typed list from fixture;
   `downloadAttachment` delegates to client method
 - `MockJiraClient`: add `downloadAttachment` returning a fixture byte array;
   add `attachment` array to `ticket-PROJ-123.json` fixture
 - `JiraParticipant.test.ts`: `loadTicket` intent parsed correctly from
-  "load PROJ-123" and "fetch context for PROJ-123"
+  "load PROJ-123" and "fetch context for PROJ-123"; `rewriteAttachmentLinks`
+  rewrites downloaded filenames to `attachments/` paths and leaves skipped
+  filenames unchanged
 - File writing and `.gitignore` management are VS Code–dependent and covered
   by the e2e suite only
 
