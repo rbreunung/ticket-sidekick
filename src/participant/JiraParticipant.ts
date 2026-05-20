@@ -4,13 +4,13 @@ import { JiraApiClient } from '../jira/JiraApiClient';
 import { ConfigService } from '../services/ConfigService';
 import { TicketService, assembleDescription } from '../services/TicketService';
 import { formatJiraBody } from '../utils/markdownFormatter';
-import type { JiraComment } from '../jira/IJiraClient';
+import type { JiraComment, JiraFilter } from '../jira/IJiraClient';
 import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
 import { extractTicketId } from '../utils/branchParser';
 import { redactUrls, tokenStatus } from '../utils/diagUtils';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection } from './sessionState';
 import { discoverWorkflow, loadWorkflowCache, saveWorkflowCache, findPath } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
 
@@ -46,19 +46,21 @@ interface ParsedIntent {
   contentSource: 'literal' | 'generate' | 'history-recent' | 'history-full';
   fieldUpdates: FieldUpdate[];
   jql: string | null;
+  filterId: string | null;
+  filterName: string | null;
   cleanupRuleName: string | null;
   fixVersion: string | null;
 }
 
 const INTENT_PROMPT = `Parse this Jira command and respond with ONLY a JSON object. No markdown, no explanation.
-Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|"addComment"|"updateField"|"searchJql"|"validateFields"|"createTicket"|"discoverWorkflow"|"runCleanup","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"assignee":string|null,"components":string|null,"description":string|null,"comment":string|null,"commentQuery":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"jql":string|null,"cleanupRuleName":string|null,"fixVersion":string|null}
+Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|"addComment"|"updateField"|"searchJql"|"validateFields"|"createTicket"|"discoverWorkflow"|"runCleanup","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"assignee":string|null,"components":string|null,"description":string|null,"comment":string|null,"commentQuery":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"jql":string|null,"filterId":string|null,"filterName":string|null,"cleanupRuleName":string|null,"fixVersion":string|null}
 - getTicket: show, display, look up a specific ticket; returns full structured view with fields, description, and one-line comment summaries
 - summarizeTicket: summarise, summarize, tl;dr, give me an overview; produces a prose paragraph covering the ticket and its comments together
 - showComments: show, list, display all comments in full; shows the actual comment bodies numbered; use when user wants to read the comment text rather than a summary
 - getComments: ask what comments say, find or filter comments by topic; synthesises or queries comments; commentQuery is the topic/filter the user mentioned (e.g. "login bug", "performance") — null if they just want a general synthesis
 - addComment: add, post, write a comment on a ticket
 - updateField: set, change, update one or more fields; put each field change in fieldUpdates array; for description/comment content instructions put the instruction as fieldValue — do NOT generate the content
-- searchJql: find, search, list tickets; review multiple tickets against criteria; use literal JQL if provided
+- searchJql: find, search, list tickets; review multiple tickets against criteria; use literal JQL if provided; if user references a saved filter by numeric id (e.g. "filter 12345") set filterId to that id and jql to null; if user references a filter by name (e.g. "from filter 'My open bugs'") set filterName to that name and jql to null
 - validateFields: check, validate required fields on a ticket
 - createTicket: create, open, add a new ticket/issue/bug/story/task; description is any additional body content the user provided beyond the summary (e.g. code blocks, steps to reproduce, specifications) — null if no extra content; assignee is the person to assign the ticket to ("me"/"myself" for the current user, or a name/email) — null if not mentioned; components is a comma-separated string of component names if mentioned — null if not mentioned
 - discoverWorkflow: discover or refresh the workflow graph for a project and issue type; projectKey and issueType are required
@@ -834,6 +836,31 @@ export function createJiraParticipant(
       }
     }
 
+    // Filter selection — user replied with their filter choice
+    if (lastResponse.includes('<!-- jira:selecting-filter -->')) {
+      const selSession = ws.get<FilterSelectionSession>('jira.session.filterSelection');
+      if (selSession) {
+        const choice = parseFilterSelection(request.prompt, selSession.filters);
+        if (choice === 'invalid') {
+          const list = selSession.filters.map((f, i) => `${i + 1}. ${f.name}`).join('\n');
+          stream.markdown(`Please choose a filter:\n\n${list}\n\nReply with the number or name, or **(c)** to cancel.\n\n<!-- jira:selecting-filter -->`);
+          return;
+        }
+        await ws.update('jira.session.filterSelection', undefined);
+        if (choice === 'cancel') {
+          stream.markdown('_Cancelled._');
+          return;
+        }
+        try {
+          const result = await ticketService.searchTickets(choice.jql);
+          stream.markdown(`_Using filter: **${choice.name}**_\n\n${result}`);
+        } catch (err) {
+          stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+        }
+        return;
+      }
+    }
+
     // Template selection — user replied with their template choice
     if (lastResponse.includes('<!-- jira:selecting-template -->')) {
       const selSession = ws.get<TemplateSelectionSession>('jira.session.templateSelection');
@@ -1184,9 +1211,28 @@ export function createJiraParticipant(
           result = results.join('\n');
           break;
         }
-        case 'searchJql':
-          result = await ticketService.searchTickets(intent.jql ?? request.prompt);
+        case 'searchJql': {
+          if (intent.filterId) {
+            const filter = await ticketService.getFilterById(intent.filterId);
+            result = `_Using filter: **${filter.name}**_\n\n` + await ticketService.searchTickets(filter.jql);
+          } else if (intent.filterName) {
+            const filters = await ticketService.searchFiltersByName(intent.filterName);
+            if (filters.length === 0) {
+              result = `No saved filters found matching "${intent.filterName}".`;
+            } else if (filters.length === 1) {
+              result = `_Using filter: **${filters[0].name}**_\n\n` + await ticketService.searchTickets(filters[0].jql);
+            } else {
+              const session: FilterSelectionSession = { filters, originalPrompt: request.prompt };
+              await ws.update('jira.session.filterSelection', session);
+              const list = filters.map((f, i) => `${i + 1}. ${f.name}`).join('\n');
+              stream.markdown(`Multiple filters match "${intent.filterName}":\n\n${list}\n\nWhich one? Reply with the number or name, or **(c)** to cancel.\n\n<!-- jira:selecting-filter -->`);
+              return;
+            }
+          } else {
+            result = await ticketService.searchTickets(intent.jql ?? request.prompt);
+          }
           break;
+        }
         case 'validateFields':
           result = await ticketService.validateRequiredFields(ticketKey!, config.requiredFields);
           break;

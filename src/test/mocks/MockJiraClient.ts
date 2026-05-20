@@ -4,6 +4,7 @@ import type {
   IJiraClient,
   JiraComment,
   JiraCreatedIssue,
+  JiraFilter,
   JiraIssue,
   JiraProject,
   JiraProjectStatus,
@@ -97,5 +98,15 @@ export class MockJiraClient implements IJiraClient {
     const all = issue.fields.comment?.comments ?? [];
     const total = issue.fields.comment?.total ?? 0;
     return { comments: all.slice(-maxResults), total };
+  }
+
+  async getFilterById(id: string): Promise<JiraFilter> {
+    if (id === '99999') throw new Error(`Filter ${id} not found.`);
+    return loadFixture<JiraFilter>('filter-12345.json');
+  }
+
+  async searchFiltersByName(name: string): Promise<JiraFilter[]> {
+    if (name === 'nonexistent-xyzzy') return [];
+    return loadFixture<JiraFilter[]>('filters-by-name.json');
   }
 }

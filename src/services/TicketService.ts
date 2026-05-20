@@ -1,4 +1,4 @@
-import type { IJiraClient, JiraComment, JiraIssue, JiraIssueType, JiraSearchResult } from '../jira/IJiraClient';
+import type { IJiraClient, JiraComment, JiraFilter, JiraIssue, JiraIssueType, JiraSearchResult } from '../jira/IJiraClient';
 import { formatJiraBody } from '../utils/markdownFormatter';
 
 const SUPPORTED_FIELDS: Record<string, string> = {
@@ -193,6 +193,14 @@ export class TicketService {
 
   async searchTicketsRaw(jql: string, maxResults = 50): Promise<JiraSearchResult> {
     return this.client.searchJql(jql, maxResults);
+  }
+
+  async getFilterById(id: string): Promise<JiraFilter> {
+    return this.client.getFilterById(id);
+  }
+
+  async searchFiltersByName(name: string): Promise<JiraFilter[]> {
+    return this.client.searchFiltersByName(name);
   }
 
   async createTicket(

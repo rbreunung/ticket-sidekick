@@ -1,4 +1,4 @@
-import type { JiraComment } from '../jira/IJiraClient';
+import type { JiraComment, JiraFilter } from '../jira/IJiraClient';
 import { formatJiraBody } from '../utils/markdownFormatter';
 
 export interface CreationSession {
@@ -215,6 +215,25 @@ export function parseCommentIndex(reply: string, maxIndex: number): number | 'in
   if (!match) return 'invalid';
   const n = parseInt(match[1], 10);
   if (n >= 1 && n <= maxIndex) return n;
+  return 'invalid';
+}
+
+export interface FilterSelectionSession {
+  filters: JiraFilter[];
+  originalPrompt: string;
+}
+
+export function parseFilterSelection(reply: string, filters: JiraFilter[]): JiraFilter | 'cancel' | 'invalid' {
+  const trimmed = reply.trim();
+  if (/^(c|cancel)$/i.test(trimmed)) return 'cancel';
+  const byIndex = trimmed.match(/^(\d+)$/);
+  if (byIndex) {
+    const n = parseInt(byIndex[1], 10);
+    if (n >= 1 && n <= filters.length) return filters[n - 1];
+    return 'invalid';
+  }
+  const byName = filters.find(f => f.name.toLowerCase() === trimmed.toLowerCase());
+  if (byName) return byName;
   return 'invalid';
 }
 

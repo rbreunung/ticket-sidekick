@@ -1,0 +1,5 @@
+{
+  "id": "12345",
+  "name": "My open bugs",
+  "jql": "assignee = currentUser() AND issuetype = Bug AND status != Done ORDER BY created DESC"
+}

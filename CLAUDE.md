@@ -161,6 +161,7 @@ Multi-turn flows store structured state in `vscode.ExtensionContext.workspaceSta
 | --- | --- | --- |
 | `ResolutionSelectionSession` | `jira.session.resolutionSelection` | `<!-- jira:selecting-resolution -->` |
 | `TransitionBatchSession` | `jira.session.transitionReview` | `<!-- jira:transition-review -->` |
+| `FilterSelectionSession` | `jira.session.filterSelection` | `<!-- jira:selecting-filter -->` |
 | `TemplateSelectionSession` | `jira.session.templateSelection` | `<!-- jira:selecting-template -->` |
 | `IssueTypeSelectionSession` | `jira.session.typeSelection` | `<!-- jira:selecting-type -->` |
 | `CreationSession` | `jira.session.creating` | `<!-- jira:creating -->` |
@@ -168,7 +169,7 @@ Multi-turn flows store structured state in `vscode.ExtensionContext.workspaceSta
 | `MoreCommentsSession` | `jira.session.moreComments` | `<!-- jira:more-comments -->` |
 | `CommentListSession` | `jira.session.commentList` | `<!-- jira:comment-list -->` |
 
-Detection order in the Jira handler: resolution selection → transition review → template selection → issue type selection → creation → content → more-comments → check command → comment list → intent parse.
+Detection order in the Jira handler: resolution selection → transition review → filter selection → template selection → issue type selection → creation → content → more-comments → check command → comment list → intent parse.
 
 ### Bitbucket sessions
 

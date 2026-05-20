@@ -72,6 +72,12 @@ export interface JiraProjectStatus {
   statuses: Array<{ id: string; name: string }>;
 }
 
+export interface JiraFilter {
+  id: string;
+  name: string;
+  jql: string;
+}
+
 export interface IJiraClient {
   getIssue(issueKey: string): Promise<JiraIssue>;
   updateIssue(issueKey: string, fields: Record<string, unknown>): Promise<void>;
@@ -88,4 +94,6 @@ export interface IJiraClient {
   getTeamByName(name: string): Promise<{ id: string }>;
   createIssue(projectKey: string, summary: string, issueType: string, additionalFields?: Record<string, unknown>): Promise<JiraCreatedIssue>;
   getIssueComments(issueKey: string, maxResults: number): Promise<{ comments: JiraComment[]; total: number }>;
+  getFilterById(id: string): Promise<JiraFilter>;
+  searchFiltersByName(name: string): Promise<JiraFilter[]>;
 }

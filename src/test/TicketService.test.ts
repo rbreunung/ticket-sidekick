@@ -344,6 +344,43 @@ describe('TicketService', () => {
   });
 });
 
+describe('TicketService filter methods', () => {
+  let client: MockJiraClient;
+  let service: TicketService;
+
+  beforeEach(() => {
+    client = new MockJiraClient();
+    service = new TicketService(client);
+  });
+
+  describe('getFilterById', () => {
+    it('returns the filter name and jql for a known id', async () => {
+      const filter = await service.getFilterById('12345');
+      expect(filter.id).toBe('12345');
+      expect(filter.name).toBe('My open bugs');
+      expect(filter.jql).toContain('assignee');
+    });
+
+    it('propagates errors for unknown filter ids', async () => {
+      await expect(service.getFilterById('99999')).rejects.toThrow();
+    });
+  });
+
+  describe('searchFiltersByName', () => {
+    it('returns matching filters for a known name fragment', async () => {
+      const filters = await service.searchFiltersByName('open bugs');
+      expect(filters.length).toBeGreaterThan(0);
+      expect(filters[0].name).toMatch(/open bugs/i);
+      expect(filters[0].jql).toBeTruthy();
+    });
+
+    it('returns empty array when no filters match', async () => {
+      const filters = await service.searchFiltersByName('nonexistent-xyzzy');
+      expect(filters).toEqual([]);
+    });
+  });
+});
+
 describe('extractTextFromAdf', () => {
   it('returns plain string as-is (API v2)', () => {
     expect(extractTextFromAdf('Hello from v2')).toBe('Hello from v2');

@@ -2,6 +2,7 @@ import type {
   IJiraClient,
   JiraComment,
   JiraCreatedIssue,
+  JiraFilter,
   JiraIssue,
   JiraProject,
   JiraProjectStatus,
@@ -209,5 +210,16 @@ export class JiraApiClient implements IJiraClient {
         },
       }),
     });
+  }
+
+  async getFilterById(id: string): Promise<JiraFilter> {
+    return this.request<JiraFilter>(`/filter/${encodeURIComponent(id)}`);
+  }
+
+  async searchFiltersByName(name: string): Promise<JiraFilter[]> {
+    const data = await this.request<{ values: JiraFilter[] }>(
+      `/filter/search?filterName=${encodeURIComponent(name)}&expand=jql&maxResults=10`,
+    );
+    return data.values;
   }
 }

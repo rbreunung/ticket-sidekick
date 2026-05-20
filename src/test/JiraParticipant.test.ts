@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull } from '../participant/sessionState';
+import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection } from '../participant/sessionState';
 import type { TransitionBatchTicket } from '../participant/sessionState';
 import type { JiraComment } from '../jira/IJiraClient';
 
@@ -515,5 +515,40 @@ describe('formatCommentsInFull', () => {
 
   it('returns empty string for no comments', () => {
     expect(formatCommentsInFull([])).toBe('');
+  });
+});
+
+describe('parseFilterSelection', () => {
+  const filters = [
+    { id: '10001', name: 'My open bugs', jql: 'assignee = currentUser() AND status != Done' },
+    { id: '10002', name: 'My open tasks', jql: 'assignee = currentUser() AND issuetype = Task' },
+    { id: '10003', name: 'Team backlog', jql: 'project = PROJ AND status = Backlog' },
+  ];
+
+  it('selects by 1-based index', () => {
+    expect(parseFilterSelection('1', filters)).toEqual(filters[0]);
+    expect(parseFilterSelection('2', filters)).toEqual(filters[1]);
+    expect(parseFilterSelection('3', filters)).toEqual(filters[2]);
+  });
+
+  it('selects by exact name (case-insensitive)', () => {
+    expect(parseFilterSelection('My open bugs', filters)).toEqual(filters[0]);
+    expect(parseFilterSelection('my open bugs', filters)).toEqual(filters[0]);
+    expect(parseFilterSelection('TEAM BACKLOG', filters)).toEqual(filters[2]);
+  });
+
+  it('returns cancel for c / cancel', () => {
+    expect(parseFilterSelection('c', filters)).toBe('cancel');
+    expect(parseFilterSelection('cancel', filters)).toBe('cancel');
+    expect(parseFilterSelection('Cancel', filters)).toBe('cancel');
+  });
+
+  it('returns invalid for out-of-range index', () => {
+    expect(parseFilterSelection('0', filters)).toBe('invalid');
+    expect(parseFilterSelection('4', filters)).toBe('invalid');
+  });
+
+  it('returns invalid for unrecognised text', () => {
+    expect(parseFilterSelection('something else', filters)).toBe('invalid');
   });
 });
