@@ -10,6 +10,7 @@ import type { JiraTemplate } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
 import { extractTicketId } from '../utils/branchParser';
 import { redactUrls, tokenStatus } from '../utils/diagUtils';
+import { markdownToJiraWiki } from '../utils/markdownToJiraWiki';
 import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview } from './sessionState';
 import { discoverWorkflow, loadWorkflowCache, saveWorkflowCache, findPath } from '../services/WorkflowService';
 import type { WorkflowGraph } from '../services/WorkflowService';
@@ -314,10 +315,11 @@ async function handleContentSession(
   if (isConfirmation(prompt)) {
     await workspaceState.update('jira.session.previewing', undefined);
     let result: string;
+    const jiraText = markdownToJiraWiki(session.currentContent);
     if (session.operation === 'addComment') {
-      result = await ticketService.addComment(session.ticketKey, session.currentContent);
+      result = await ticketService.addComment(session.ticketKey, jiraText);
     } else {
-      result = await ticketService.updateField(session.ticketKey, 'description', session.currentContent);
+      result = await ticketService.updateField(session.ticketKey, 'description', jiraText);
     }
     stream.markdown(result);
     stream.markdown(`\n\n<!-- @jira-ticket:${session.ticketKey} -->`);
