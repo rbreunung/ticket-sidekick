@@ -21,20 +21,26 @@ no value disambiguation, and no typo correction.
 
 All non-null fields returned by `GET /issue/{key}` are displayed. `/field`
 metadata provides human-readable names and is used to filter out Jira-internal
-technical fields. Fields in `additionalDisplayFields` settings are always shown
-even when null.
+technical fields — include only fields where `navigable: true` in the `/field`
+response. Fields in `additionalDisplayFields` settings are always shown even
+when null.
 
 **Layout rules:**
 
 | Field class | Criterion | Rendered as |
 |---|---|---|
 | Single-line | string, number, date, user, named-object, short array | Row in metadata table |
+| Datetime | `datetime` schema type | Row in metadata table, formatted as `YYYY-MM-DD HH:mm` |
 | Multi-line | mimeType `text/*`, ADF content, description-like strings >120 chars | Own `##` heading |
 | Sprint | custom field with sprint objects | Own row: active sprint name only |
 | Attachment list | `fields.attachment[]` | Separate `## Attachments` section (links) |
 
 The metadata table appears immediately after the ticket heading. Multi-line
 sections follow after the table, in the order they appear in the response.
+
+**Excluded fields:** `comments` and `subtasks` are always excluded from the general
+field table — they have dedicated rendered sections and must not be iterated by
+`formatIssueFields`.
 
 **Null / missing values:**
 - Non-null fields not in settings: omitted
@@ -56,11 +62,15 @@ is `active`, fall back to the first sprint name if none active.
 
 | Setting | Type | Default | Purpose |
 |---|---|---|---|
-| `ticketSidekick.jira.additionalDisplayFields` | `string[]` | `[]` | Field names always shown even when null |
+| `ticketSidekick.jira.additionalDisplayFields` | `string[]` | `[]` | Field **IDs** always shown even when null; use `@jira show fields on PROJ-123` to discover IDs |
 | `ticketSidekick.jira.spellCheck` | `boolean` | `true` | Enable/disable typo correction offers |
 
 Both are per-workspace (workspace settings override user settings in the
 standard VS Code manner).
+
+**Implementation note:** Both settings must be declared in `package.json` under
+`contributes.configuration` for VS Code to surface them in the Settings UI and for
+`ConfigService` to type-check them correctly.
 
 ---
 
@@ -69,6 +79,10 @@ standard VS Code manner).
 `@jira set <field name> to <value> [on PROJ-123]`
 
 Replaces the current hardcoded-7-field `updateField` path end-to-end.
+
+**Exception:** The `description` field retains the existing `ContentSession` flow
+(LLM-generate + multi-turn refine). It is excluded from `FieldUpdatePreviewSession`;
+`setField` routes description updates through `ContentSession` as before.
 
 **Field name resolution — fuzzy matching:**
 
@@ -168,6 +182,10 @@ Reuses the existing `BulkUpdateReviewSession` + `bulkUpdateField` machinery.
 The only change is that field resolution goes through the new fuzzy matching
 path instead of the hardcoded map.
 
+**`BulkUpdateReviewSession` extension:** Add `arrayOp: 'set' | 'add' | 'remove'`
+(default `'set'`) to the existing interface in `sessionState.ts` so the
+preview/confirm step can carry the operation for `add`/`remove` bulk flows.
+
 For `add` / `remove` on bulk: fetch current values for each ticket in parallel
 (`Promise.all`), build per-ticket payloads, then execute sequentially as today.
 Flag in the preview: "Note: current values will be read per ticket before
@@ -178,10 +196,18 @@ applying."
 ### 5 — `@jira show fields`
 
 New intent: list all fields available on a given ticket with their IDs and
-current values. Useful for discovering field names to use in
+current values. Useful for discovering field IDs to use in
 `additionalDisplayFields` or in `@jira set`.
 
 Output: a table of `Field name | Field ID | Current value`.
+
+Current value rendering follows the same rules as §1: sprint → active sprint
+name; user → `displayName`; array → joined items (`, `); ADF / multi-line
+strings → truncated to 80 chars with `…`. Null values → `_Not set_`.
+
+If no ticket key is given, the plugin resolves the ticket using the standard
+order: explicit key in prompt → current git branch → last ticket in chat
+history → input box.
 
 ---
 
@@ -248,12 +274,19 @@ called. If ambiguous, sprint selection completes before the creation session.
 ```typescript
 export interface SprintSelectionSession {
   candidates: Array<{ id: number; name: string; state: string }>;
-  pending: FieldUpdatePreviewSession;   // field update waiting on sprint choice
+  // Discriminated union: covers both the field-update path and inline-create path.
+  pending:
+    | { kind: 'field-update'; session: FieldUpdatePreviewSession }
+    | { kind: 'creation'; sprintFieldId: string };
 }
 ```
 
 Stored under `jira.session.sprintSelection`, tag `<!-- jira:sprint-selection -->`.
 Detection order: insert before `<!-- jira:field-update-preview -->`.
+
+**MockJiraClient:** `findSprints` must be implemented in `MockJiraClient` with a
+corresponding fixture file in `src/test/fixtures/` (matching real Agile API shape)
+to satisfy the project's test architecture rule.
 
 ---
 
@@ -284,28 +317,54 @@ Takes the full `/field` list to resolve IDs → names. Returns:
 Callers (`getTicket`, `handleLoadTicket`) assemble the final output.
 
 **`resolveFieldIdFuzzy(name, fields)`** — new pure function (testable without
-network) that runs the four-step match against a pre-fetched field list:
+network) that runs the four-step match against a pre-fetched field list. Returns
+a discriminated union to eliminate `Array.isArray` checks at every callsite:
 
 ```typescript
+type FieldResolutionResult =
+  | { kind: 'match';      field:  JiraFieldMeta }
+  | { kind: 'candidates'; fields: JiraFieldMeta[] }
+  | { kind: 'none' }
+
 function resolveFieldIdFuzzy(
   input: string,
   fields: JiraFieldMeta[],
-): JiraFieldMeta | JiraFieldMeta[] | null
-// returns: single match, array of candidates, or null (no match)
+): FieldResolutionResult
 ```
 
 **`buildArrayValue(fieldId, sampleKey, rawValues, op, currentValue)`** — extends
 `buildFieldValue` for array operations.
 
-**`getFieldMeta()`** — convenience wrapper around `client.getFields()` that
-caches the result for the lifetime of the request (avoids repeated calls within
-one handler turn).
+**`getFieldMeta()`** — thin wrapper around `client.getFields()`. It is called
+once in `JiraParticipant` at the start of each handler turn and the result is
+passed as a parameter to `formatIssueFields`, `resolveFieldIdFuzzy`, and
+`handleSetField`. No instance-level cache is needed or used.
 
-### `sessionState.ts` — new session types
+### `sessionState.ts` — new and extended session types
 
 ```typescript
+// Extend the existing BulkUpdateReviewSession with arrayOp:
+export interface BulkUpdateReviewSession {
+  ticketKeys: string[];
+  fieldId: string;
+  fieldName: string;
+  fieldValue: unknown;
+  arrayOp: 'set' | 'add' | 'remove';  // NEW — default 'set'
+}
+
+// New: field-name disambiguation when multiple candidates match
+export interface FieldSelectionSession {
+  candidates: JiraFieldMeta[];
+  pending: {
+    fieldValue: string;
+    arrayOp: 'set' | 'add' | 'remove';
+    ticketKeys: string[];
+  };
+}
+// Stored under jira.session.fieldSelection, tag <!-- jira:selecting-field -->
+
 export interface FieldUpdatePreviewSession {
-  ticketKeys: string[];       // single or bulk
+  ticketKeys: string[];       // one entry for single-ticket, many for bulk
   fieldId: string;
   fieldName: string;
   fieldValue: unknown;
@@ -319,10 +378,7 @@ export interface SpellCheckSession {
   pending: FieldUpdatePreviewSession;
 }
 
-export interface SprintSelectionSession {
-  candidates: Array<{ id: number; name: string; state: string }>;
-  pending: FieldUpdatePreviewSession;
-}
+// SprintSelectionSession — see §6 for full definition
 ```
 
 ### `JiraParticipant` intent schema changes
@@ -342,10 +398,19 @@ preview → confirm.
 
 ### Session detection order additions
 
-Insert before `parseIntent`:
-- `<!-- jira:sprint-selection -->` → `SprintSelectionSession`
-- `<!-- jira:field-update-preview -->` → `FieldUpdatePreviewSession`
-- `<!-- jira:spell-check -->` → `SpellCheckSession`
+Insert after `content` (`ContentSession`) and before `more-comments`
+(`MoreCommentsSession`), in this order:
+
+1. `<!-- jira:sprint-selection -->` → `SprintSelectionSession`
+2. `<!-- jira:selecting-field -->` → `FieldSelectionSession`
+3. `<!-- jira:field-update-preview -->` → `FieldUpdatePreviewSession`
+4. `<!-- jira:spell-check -->` → `SpellCheckSession`
+
+Updated full detection order: resolution selection → transition review →
+filter selection → bulk-update-review → template selection → issue type
+selection → creation → content → **sprint selection → field selection →
+field-update-preview → spell-check** → more-comments → check command →
+comment list → intent parse.
 
 ---
 
@@ -378,8 +443,11 @@ Insert before `parseIntent`:
 - Sprint fuzzy resolution: exact match, unique substring, multiple candidates
   → disambiguation list, no match → error
 - `findSprints`: returns only active and future sprints; substring match is
-  case-insensitive
+  case-insensitive; `MockJiraClient` implementation backed by a fixture file
+- `@jira show fields`: output table contains all three columns (Field name |
+  Field ID | Current value); resolves ticket from branch when no key given
 - Date rendering: ISO string → `YYYY-MM-DD` in table
+- Datetime rendering: ISO datetime string → `YYYY-MM-DD HH:mm` in table
 
 ---
 

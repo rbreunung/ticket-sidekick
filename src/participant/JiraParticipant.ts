@@ -2,16 +2,16 @@ import * as vscode from 'vscode';
 import { execSync } from 'child_process';
 import { JiraApiClient } from '../jira/JiraApiClient';
 import { ConfigService } from '../services/ConfigService';
-import { TicketService, assembleDescription } from '../services/TicketService';
+import { TicketService, assembleDescription, resolveFieldIdFuzzy, formatIssueFields } from '../services/TicketService';
 import { formatJiraBody } from '../utils/markdownFormatter';
-import type { JiraComment, JiraFilter } from '../jira/IJiraClient';
+import type { JiraComment, JiraFieldMeta, JiraFilter, JiraSprintCandidate } from '../jira/IJiraClient';
 import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
 import { extractTicketId } from '../utils/branchParser';
 import { redactUrls, tokenStatus } from '../utils/diagUtils';
 import { markdownToJiraWiki } from '../utils/markdownToJiraWiki';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type FieldUpdatePreviewSession, type SpellCheckSession, type FieldSelectionSession, type SprintSelectionSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview } from './sessionState';
 import { discoverWorkflow, loadWorkflowCache, saveWorkflowCache, findPath } from '../services/WorkflowService';
 import type { WorkflowGraph } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
@@ -23,6 +23,7 @@ type Operation =
   | 'getComments'
   | 'addComment'
   | 'updateField'
+  | 'showFields'
   | 'searchJql'
   | 'validateFields'
   | 'createTicket'
@@ -49,6 +50,10 @@ interface ParsedIntent {
   commentQuery: string | null;
   contentSource: 'literal' | 'generate' | 'history-recent' | 'history-full';
   fieldUpdates: FieldUpdate[];
+  fieldName: string | null;
+  fieldValue: string | null;
+  arrayOp: 'set' | 'add' | 'remove';
+  scope: 'single' | 'bulk' | null;
   jql: string | null;
   filterId: string | null;
   filterName: string | null;
@@ -60,13 +65,14 @@ interface ParsedIntent {
 }
 
 const INTENT_PROMPT = `Parse this Jira command and respond with ONLY a JSON object. No markdown, no explanation.
-Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|"addComment"|"updateField"|"searchJql"|"validateFields"|"createTicket"|"discoverWorkflow"|"runCleanup"|"bulkTransition"|"bulkUpdateField","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"assignee":string|null,"components":string|null,"description":string|null,"comment":string|null,"commentQuery":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"jql":string|null,"filterId":string|null,"filterName":string|null,"targetStatus":string|null,"bulkFieldName":string|null,"bulkFieldValue":string|null,"cleanupRuleName":string|null,"fixVersion":string|null}
-- getTicket: show, display, look up a specific ticket; returns full structured view with fields, description, and one-line comment summaries
+Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|"addComment"|"updateField"|"showFields"|"searchJql"|"validateFields"|"createTicket"|"discoverWorkflow"|"runCleanup"|"bulkTransition"|"bulkUpdateField","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"assignee":string|null,"components":string|null,"description":string|null,"comment":string|null,"commentQuery":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"fieldName":string|null,"fieldValue":string|null,"arrayOp":"set"|"add"|"remove","scope":"single"|"bulk"|null,"jql":string|null,"filterId":string|null,"filterName":string|null,"targetStatus":string|null,"bulkFieldName":string|null,"bulkFieldValue":string|null,"cleanupRuleName":string|null,"fixVersion":string|null}
+- getTicket: show, display, look up a specific ticket; returns all non-null fields, description, and one-line comment summaries
 - summarizeTicket: summarise, summarize, tl;dr, give me an overview; produces a prose paragraph covering the ticket and its comments together
 - showComments: show, list, display all comments in full; shows the actual comment bodies numbered; use when user wants to read the comment text rather than a summary
 - getComments: ask what comments say, find or filter comments by topic; synthesises or queries comments; commentQuery is the topic/filter the user mentioned (e.g. "login bug", "performance") — null if they just want a general synthesis
 - addComment: add, post, write a comment on a ticket
-- updateField: set, change, update one or more fields; put each field change in fieldUpdates array; for description/comment content instructions put the instruction as fieldValue — do NOT generate the content
+- updateField: set, change, update a field on a ticket; use fieldName (human-readable field name or ID) and fieldValue (raw value string, comma-separated for arrays); arrayOp is "set" by default, "add" when the user says "add X to field", "remove" when the user says "remove X from field"; scope is "single" when an explicit ticket key is given, "bulk" when user says "for all of them"/"for these tickets", null to resolve from context; for description content instructions use contentSource instead
+- showFields: list all available fields with IDs and current values; "show fields", "what fields does this ticket have", "list fields on PROJ-123"
 - searchJql: find, search, list tickets; review multiple tickets against criteria; use literal JQL if provided; if user references a saved filter by numeric id (e.g. "filter 12345") set filterId to that id and jql to null; if user references a filter by name (e.g. "from filter 'My open bugs'") set filterName to that name and jql to null
 - validateFields: check, validate required fields on a ticket
 - createTicket: create, open, add a new ticket/issue/bug/story/task; description is any additional body content the user provided beyond the summary (e.g. code blocks, steps to reproduce, specifications) — null if no extra content; assignee is the person to assign the ticket to ("me"/"myself" for the current user, or a name/email) — null if not mentioned; components is a comma-separated string of component names if mentioned — null if not mentioned
@@ -851,6 +857,174 @@ async function handleRunCleanup(
   await streamReviewScreen(batchSession, stream, workspaceState, header);
 }
 
+async function spellCheckValue(
+  text: string,
+  model: vscode.LanguageModelChat,
+  token: vscode.CancellationToken,
+): Promise<string | null> {
+  const prompt = `Check this text for spelling and grammar errors:\n\n"${text}"\n\nIf there are no errors, reply with exactly: UNCHANGED\nIf there are errors, reply with ONLY the corrected text, no explanation.`;
+  const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], {}, token);
+  let raw = '';
+  for await (const chunk of response.text) raw += chunk;
+  const trimmed = raw.trim();
+  if (/^unchanged$/i.test(trimmed)) return null;
+  return trimmed || null;
+}
+
+async function streamFieldUpdatePreview(
+  session: FieldUpdatePreviewSession,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+): Promise<void> {
+  await ws.update('jira.session.fieldUpdatePreview', session);
+  const scope = session.ticketKeys.length === 1
+    ? session.ticketKeys[0]
+    : `${session.ticketKeys.length} tickets`;
+  const displayValue = typeof session.fieldValue === 'string'
+    ? session.fieldValue
+    : JSON.stringify(session.fieldValue);
+  stream.markdown(
+    `**Preview: set ${session.fieldName}**\n\n` +
+    `Setting **${session.fieldName}** (\`${session.fieldId}\`) to \`${displayValue}\` on ${scope}.\n\n` +
+    `Reply **ok** to apply, or **(c)** to cancel.\n\n<!-- jira:field-update-preview -->`,
+  );
+}
+
+async function continueSetField(
+  ticketKeys: string[],
+  field: JiraFieldMeta,
+  fieldValueRaw: string,
+  arrayOp: 'set' | 'add' | 'remove',
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  model: vscode.LanguageModelChat,
+  token: vscode.CancellationToken,
+  spellCheckEnabled: boolean,
+): Promise<void> {
+  const sampleKey = ticketKeys[0];
+  const isSprintField = Boolean(field.schema.custom?.includes('gh-sprint'));
+  const isArray = field.schema.type === 'array';
+
+  if (isSprintField) {
+    const projectKey = sampleKey.split('-')[0];
+    let candidates: JiraSprintCandidate[];
+    try {
+      candidates = await ticketService.findSprints(projectKey, fieldValueRaw);
+    } catch (err) {
+      stream.markdown(`Could not search sprints: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    if (candidates.length === 0) {
+      stream.markdown(`No active or future sprint matching "${fieldValueRaw}" in project ${projectKey}.`);
+      return;
+    }
+    if (candidates.length === 1) {
+      await streamFieldUpdatePreview({
+        ticketKeys, fieldId: field.id, fieldName: field.name,
+        fieldValue: [{ id: candidates[0].id }], isArray: true, arrayOp: 'set',
+      }, stream, ws);
+      return;
+    }
+    const previewPlaceholder: FieldUpdatePreviewSession = {
+      ticketKeys, fieldId: field.id, fieldName: field.name,
+      fieldValue: null, isArray: true, arrayOp: 'set',
+    };
+    const sprintSession: SprintSelectionSession = {
+      candidates,
+      pending: { kind: 'field-update', session: previewPlaceholder },
+    };
+    await ws.update('jira.session.sprintSelection', sprintSession);
+    const list = candidates.map((s, i) => `${i + 1}. ${s.name} (${s.state})`).join('\n');
+    stream.markdown(`Multiple sprints match "${fieldValueRaw}":\n\n${list}\n\nWhich one? Reply with a number, or **(c)** to cancel.\n\n<!-- jira:sprint-selection -->`);
+    return;
+  }
+
+  let fieldValue: unknown;
+  try {
+    if (isArray) {
+      const rawValues = fieldValueRaw.split(',').map(v => v.trim()).filter(Boolean);
+      let currentValue: unknown = null;
+      if (arrayOp !== 'set') {
+        currentValue = await ticketService.getRawField(sampleKey, field.id);
+      }
+      fieldValue = await ticketService.buildArrayValue(field.id, sampleKey, rawValues, arrayOp, currentValue);
+    } else {
+      fieldValue = await ticketService.buildFieldValue(field.id, sampleKey, fieldValueRaw);
+    }
+  } catch (err) {
+    stream.markdown(`Could not build field value: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+
+  // Spell-check string fields
+  if (spellCheckEnabled && !isArray && field.schema.type === 'string' && typeof fieldValue === 'string' && fieldValue.trim().length > 0) {
+    const corrected = await spellCheckValue(fieldValue, model, token);
+    if (corrected && corrected !== fieldValue) {
+      const basePending: FieldUpdatePreviewSession = {
+        ticketKeys, fieldId: field.id, fieldName: field.name,
+        fieldValue, isArray, arrayOp,
+      };
+      const spellSession: SpellCheckSession = {
+        original: fieldValue,
+        corrected,
+        pending: { ...basePending, fieldValue: corrected },
+      };
+      await ws.update('jira.session.spellCheck', spellSession);
+      stream.markdown(
+        `Possible spelling or grammar issue detected:\n\n` +
+        `**Original:** ${fieldValue}\n\n` +
+        `**Corrected:** ${corrected}\n\n` +
+        `Reply **ok** to use the corrected version, **keep** to use the original as-is, or **(c)** to cancel.\n\n<!-- jira:spell-check -->`,
+      );
+      return;
+    }
+  }
+
+  await streamFieldUpdatePreview({
+    ticketKeys, fieldId: field.id, fieldName: field.name,
+    fieldValue, isArray, arrayOp,
+  }, stream, ws);
+}
+
+async function handleSetField(
+  ticketKeys: string[],
+  fieldNameRaw: string,
+  fieldValueRaw: string,
+  arrayOp: 'set' | 'add' | 'remove',
+  fieldMeta: JiraFieldMeta[],
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  model: vscode.LanguageModelChat,
+  token: vscode.CancellationToken,
+  spellCheckEnabled: boolean,
+): Promise<void> {
+  const navigable = fieldMeta.filter(f => f.navigable === true);
+  const resolution = resolveFieldIdFuzzy(fieldNameRaw, navigable);
+
+  if (resolution.kind === 'none') {
+    stream.markdown(`No field matching "${fieldNameRaw}" found. Use \`@jira show fields on ${ticketKeys[0]}\` to see available fields.`);
+    return;
+  }
+
+  if (resolution.kind === 'candidates') {
+    const selSession: FieldSelectionSession = {
+      candidates: resolution.fields,
+      pending: { fieldValue: fieldValueRaw, arrayOp, ticketKeys },
+    };
+    await ws.update('jira.session.fieldSelection', selSession);
+    const list = resolution.fields.map((f, i) => `${i + 1}. ${f.name} (\`${f.id}\`)`).join('\n');
+    stream.markdown(`Multiple fields match "${fieldNameRaw}":\n\n${list}\n\nWhich one? Reply with a number, or **(c)** to cancel.\n\n<!-- jira:selecting-field -->`);
+    return;
+  }
+
+  await continueSetField(
+    ticketKeys, resolution.field, fieldValueRaw, arrayOp,
+    ticketService, stream, ws, model, token, spellCheckEnabled,
+  );
+}
+
 export function createJiraParticipant(
   context: vscode.ExtensionContext,
   configService: ConfigService,
@@ -1096,6 +1270,126 @@ export function createJiraParticipant(
       }
     }
 
+    // Sprint selection — user replied with their sprint choice
+    if (lastResponse.includes('<!-- jira:sprint-selection -->')) {
+      const sprintSession = ws.get<SprintSelectionSession>('jira.session.sprintSelection');
+      if (sprintSession) {
+        const trimmed = request.prompt.trim();
+        if (/^(c|cancel)$/i.test(trimmed)) {
+          await ws.update('jira.session.sprintSelection', undefined);
+          stream.markdown('_Cancelled._');
+          return;
+        }
+        const idx = parseInt(trimmed, 10);
+        if (isNaN(idx) || idx < 1 || idx > sprintSession.candidates.length) {
+          const list = sprintSession.candidates.map((s, i) => `${i + 1}. ${s.name} (${s.state})`).join('\n');
+          stream.markdown(`Please reply with a number (1–${sprintSession.candidates.length}):\n\n${list}\n\n<!-- jira:sprint-selection -->`);
+          return;
+        }
+        await ws.update('jira.session.sprintSelection', undefined);
+        const chosen = sprintSession.candidates[idx - 1];
+        if (sprintSession.pending.kind === 'field-update') {
+          const preview: FieldUpdatePreviewSession = {
+            ...sprintSession.pending.session,
+            fieldValue: [{ id: chosen.id }],
+          };
+          await streamFieldUpdatePreview(preview, stream, ws);
+        }
+        return;
+      }
+    }
+
+    // Field selection — user replied with their field choice
+    if (lastResponse.includes('<!-- jira:selecting-field -->')) {
+      const fieldSelSession = ws.get<FieldSelectionSession>('jira.session.fieldSelection');
+      if (fieldSelSession) {
+        const trimmed = request.prompt.trim();
+        if (/^(c|cancel)$/i.test(trimmed)) {
+          await ws.update('jira.session.fieldSelection', undefined);
+          stream.markdown('_Cancelled._');
+          return;
+        }
+        const idx = parseInt(trimmed, 10);
+        const chosen = (!isNaN(idx) && idx >= 1 && idx <= fieldSelSession.candidates.length)
+          ? fieldSelSession.candidates[idx - 1]
+          : fieldSelSession.candidates.find(f => f.name.toLowerCase() === trimmed.toLowerCase());
+        if (!chosen) {
+          const list = fieldSelSession.candidates.map((f, i) => `${i + 1}. ${f.name} (\`${f.id}\`)`).join('\n');
+          stream.markdown(`Please reply with a number:\n\n${list}\n\n<!-- jira:selecting-field -->`);
+          return;
+        }
+        await ws.update('jira.session.fieldSelection', undefined);
+        const { fieldValue, arrayOp, ticketKeys } = fieldSelSession.pending;
+        try {
+          await continueSetField(ticketKeys, chosen, fieldValue, arrayOp, ticketService, stream, ws, request.model, token, config.spellCheck);
+        } catch (err) {
+          stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+        }
+        return;
+      }
+    }
+
+    // Field update preview — user replied ok / cancel
+    if (lastResponse.includes('<!-- jira:field-update-preview -->')) {
+      const previewSession = ws.get<FieldUpdatePreviewSession>('jira.session.fieldUpdatePreview');
+      if (previewSession) {
+        if (isCancellation(request.prompt)) {
+          await ws.update('jira.session.fieldUpdatePreview', undefined);
+          stream.markdown('_Cancelled._');
+          return;
+        }
+        if (isConfirmation(request.prompt)) {
+          await ws.update('jira.session.fieldUpdatePreview', undefined);
+          const toUpdate = previewSession.ticketKeys;
+          if (toUpdate.length === 1) {
+            try {
+              await jiraClient.updateIssue(toUpdate[0], { [previewSession.fieldId]: previewSession.fieldValue });
+              stream.markdown(`Updated **${previewSession.fieldName}** on ${toUpdate[0]}.`);
+              stream.markdown(`\n\n<!-- @jira-ticket:${toUpdate[0]} -->`);
+            } catch (err) {
+              stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+            }
+          } else {
+            let passed = 0, failed = 0;
+            await ticketService.bulkUpdateField(toUpdate, previewSession.fieldId, previewSession.fieldValue, (key, ok, err) => {
+              if (ok) { stream.markdown(`✓ ${key}\n\n`); passed++; }
+              else { stream.markdown(`✗ ${key}: ${err}\n\n`); failed++; }
+            });
+            stream.markdown(`\n_Done — ${passed} updated${failed > 0 ? `, ${failed} failed` : ''}_`);
+          }
+          return;
+        }
+        // Not ok or cancel — re-present
+        stream.markdown(`Please reply **ok** to apply, or **(c)** to cancel.\n\n<!-- jira:field-update-preview -->`);
+        await ws.update('jira.session.fieldUpdatePreview', previewSession);
+        return;
+      }
+    }
+
+    // Spell-check session — user chose corrected / original / cancel
+    if (lastResponse.includes('<!-- jira:spell-check -->')) {
+      const spellSession = ws.get<SpellCheckSession>('jira.session.spellCheck');
+      if (spellSession) {
+        if (isCancellation(request.prompt)) {
+          await ws.update('jira.session.spellCheck', undefined);
+          stream.markdown('_Cancelled._');
+          return;
+        }
+        await ws.update('jira.session.spellCheck', undefined);
+        const keepNorm = request.prompt.trim().toLowerCase();
+        const keepOriginal = ['k', 'keep', 'keep original', 'original', 'no'].includes(keepNorm);
+        const preview: FieldUpdatePreviewSession = keepOriginal
+          ? { ...spellSession.pending, fieldValue: spellSession.original }
+          : spellSession.pending;
+        try {
+          await streamFieldUpdatePreview(preview, stream, ws);
+        } catch (err) {
+          stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+        }
+        return;
+      }
+    }
+
     // More-comments session — user confirmed "load all"
     if (lastResponse.includes('<!-- jira:more-comments -->') && isConfirmation(request.prompt)) {
       const session = ws.get<MoreCommentsSession>('jira.session.moreComments');
@@ -1228,7 +1522,10 @@ export function createJiraParticipant(
       let result: string;
       switch (intent.operation) {
         case 'getTicket': {
-          const base = await ticketService.getTicket(ticketKey!);
+          const fieldMeta = await ticketService.getFieldMeta();
+          const alwaysShowIds = new Set<string>(config.additionalDisplayFields);
+          const hiddenIds = new Set<string>(config.hiddenDisplayFields);
+          const base = await ticketService.getTicket(ticketKey!, fieldMeta, alwaysShowIds, hiddenIds);
           const MAX_SHOW = 20;
           const { comments, total } = await ticketService.getIssueComments(ticketKey!, MAX_SHOW);
           if (comments.length > 0) {
@@ -1239,7 +1536,7 @@ export function createJiraParticipant(
               token,
             );
             await ws.update('jira.session.commentList', buildCommentListSession(ticketKey!, comments));
-            stream.markdown(base + '\n\n**Comments:**\n\n' + synthesis);
+            stream.markdown(base + '\n\n**Comments (summarized):**\n\n' + synthesis);
             if (total > MAX_SHOW) {
               const moreSession: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: null };
               await ws.update('jira.session.moreComments', moreSession);
@@ -1253,15 +1550,18 @@ export function createJiraParticipant(
           break;
         }
         case 'summarizeTicket': {
-          const fullTicket = await ticketService.getTicket(ticketKey!);
-          const DESCRIPTION_SEPARATOR = '\n\n**Description:**\n';
-          const splitIdx = fullTicket.indexOf(DESCRIPTION_SEPARATOR);
-          const fieldsHeader = splitIdx >= 0 ? fullTicket.slice(0, splitIdx) : fullTicket;
-          const descriptionText = splitIdx >= 0 ? fullTicket.slice(splitIdx + DESCRIPTION_SEPARATOR.length) : '';
+          const summaryFieldMeta = await ticketService.getFieldMeta();
+          const summaryAlwaysShow = new Set<string>(config.additionalDisplayFields);
+          const summaryHidden = new Set<string>(config.hiddenDisplayFields);
+          const fullTicket = await ticketService.getTicket(ticketKey!, summaryFieldMeta, summaryAlwaysShow, summaryHidden);
+          // Title + table before the first ## section heading
+          const sectionStart = fullTicket.indexOf('\n\n## ');
+          const fieldsHeader = sectionStart >= 0 ? fullTicket.slice(0, sectionStart) : fullTicket;
+          const descriptionText = sectionStart >= 0 ? fullTicket.slice(sectionStart + 2) : '';
           const { comments: summaryComments } = await ticketService.getIssueComments(ticketKey!, 20);
           const commentBlocks = summaryComments.length > 0 ? serializeCommentsForLLM(summaryComments) : null;
           const synthesis = await generateDescriptionAndCommentsSummary(descriptionText, commentBlocks, request.model, token);
-          stream.markdown(fieldsHeader + '\n\n**Overview:**\n\n' + synthesis);
+          stream.markdown(fieldsHeader + '\n\n**Overview (summarized):**\n\n' + synthesis);
           stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
           return;
         }
@@ -1335,30 +1635,44 @@ export function createJiraParticipant(
           break;
         }
         case 'updateField': {
-          if (!intent.fieldUpdates || intent.fieldUpdates.length === 0) {
+          const fieldNameRaw = intent.fieldName ?? intent.fieldUpdates?.[0]?.fieldName;
+          const fieldValueRaw = intent.fieldValue ?? intent.fieldUpdates?.[0]?.fieldValue ?? '';
+          if (!fieldNameRaw) {
             stream.markdown('Please specify a field name and value to update.');
             return;
           }
-          const results: string[] = [];
-          for (const { fieldName, fieldValue } of intent.fieldUpdates) {
-            const isNonLiteral = intent.contentSource !== 'literal' && intent.contentSource !== undefined;
-            if (fieldName.toLowerCase() === 'description' && isNonLiteral) {
-              const ticketText = await ticketService.getTicket(ticketKey!);
-              const { comments } = await ticketService.getIssueComments(ticketKey!, 20);
-              const commentBlocks = comments.length > 0 ? serializeCommentsForLLM(comments) : '';
-              const context = await buildContentContext(request, chatContext, ticketText, commentBlocks);
-              const content = await generateContent(fieldValue, request.model, token, context);
-              if (isLmRefusal(content)) {
-                stream.markdown(`_Could not generate description content — the AI model declined the request. Try rephrasing your instruction._`);
-                return;
-              }
-              await streamContentPreview({ ticketKey: ticketKey!, operation: 'updateDescription', currentContent: content, historyContext: context }, stream, ws);
+          // Description with non-literal content → ContentSession
+          const isNonLiteral = intent.contentSource !== 'literal' && intent.contentSource !== undefined;
+          if (fieldNameRaw.toLowerCase() === 'description' && isNonLiteral) {
+            const descFieldMeta = await ticketService.getFieldMeta();
+            const descAlwaysShow = new Set<string>(config.additionalDisplayFields);
+            const descHidden = new Set<string>(config.hiddenDisplayFields);
+            const ticketText = await ticketService.getTicket(ticketKey!, descFieldMeta, descAlwaysShow, descHidden);
+            const { comments } = await ticketService.getIssueComments(ticketKey!, 20);
+            const commentBlocks = comments.length > 0 ? serializeCommentsForLLM(comments) : '';
+            const contentCtx = await buildContentContext(request, chatContext, ticketText, commentBlocks);
+            const content = await generateContent(fieldValueRaw, request.model, token, contentCtx);
+            if (isLmRefusal(content)) {
+              stream.markdown(`_Could not generate description content — the AI model declined the request. Try rephrasing your instruction._`);
               return;
-            } else {
-              results.push(await ticketService.updateField(ticketKey!, fieldName, fieldValue));
             }
+            await streamContentPreview({ ticketKey: ticketKey!, operation: 'updateDescription', currentContent: content, historyContext: contentCtx }, stream, ws);
+            return;
           }
-          result = results.join('\n');
+          // All other fields → fuzzy match + preview flow
+          const setFieldMeta = await ticketService.getFieldMeta();
+          const setTicketKeys = intent.scope === 'bulk'
+            ? (ws.get<SearchResultSession>('jira.session.searchResult')?.ticketKeys ?? [ticketKey!])
+            : [ticketKey!];
+          await handleSetField(
+            setTicketKeys, fieldNameRaw, fieldValueRaw, intent.arrayOp ?? 'set',
+            setFieldMeta, ticketService, stream, ws, request.model, token, config.spellCheck,
+          );
+          return;
+        }
+        case 'showFields': {
+          const showFieldMeta = await ticketService.getFieldMeta();
+          result = await ticketService.showFields(ticketKey!, showFieldMeta);
           break;
         }
         case 'searchJql': {
@@ -1478,6 +1792,7 @@ export function createJiraParticipant(
             fieldId,
             fieldName: intent.bulkFieldName,
             fieldValue,
+            arrayOp: 'set',
           };
           await ws.update('jira.session.bulkUpdateReview', bulkSession);
           stream.markdown(

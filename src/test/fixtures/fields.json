@@ -1,6 +1,15 @@
 [
-  { "id": "summary",          "name": "Summary",    "schema": { "type": "string" } },
-  { "id": "priority",         "name": "Priority",   "schema": { "type": "priority" } },
-  { "id": "customfield_10500","name": "Team Names",  "schema": { "type": "array", "items": "json", "custom": "com.atlassian.teams:rm-teams-custom-field-team" } },
-  { "id": "customfield_10501","name": "Category",    "schema": { "type": "array", "items": "option" } }
+  { "id": "summary",           "name": "Summary",      "navigable": true,  "schema": { "type": "string" } },
+  { "id": "description",       "name": "Description",  "navigable": true,  "schema": { "type": "string" } },
+  { "id": "status",            "name": "Status",       "navigable": true,  "schema": { "type": "status" } },
+  { "id": "assignee",          "name": "Assignee",     "navigable": true,  "schema": { "type": "user" } },
+  { "id": "reporter",          "name": "Reporter",     "navigable": true,  "schema": { "type": "user" } },
+  { "id": "priority",          "name": "Priority",     "navigable": true,  "schema": { "type": "priority" } },
+  { "id": "labels",            "name": "Labels",       "navigable": true,  "schema": { "type": "array", "items": "string" } },
+  { "id": "fixVersions",       "name": "Fix Versions", "navigable": true,  "schema": { "type": "array", "items": "version" } },
+  { "id": "comment",           "name": "Comment",      "navigable": false, "schema": { "type": "comments-page" } },
+  { "id": "subtasks",          "name": "Sub-Tasks",    "navigable": false, "schema": { "type": "array", "items": "issuelinks" } },
+  { "id": "customfield_10500", "name": "Team Names",   "navigable": true,  "schema": { "type": "array", "items": "json", "custom": "com.atlassian.teams:rm-teams-custom-field-team" } },
+  { "id": "customfield_10501", "name": "Category",     "navigable": true,  "schema": { "type": "array", "items": "option" } },
+  { "id": "customfield_10020", "name": "Sprint",       "navigable": true,  "schema": { "type": "array", "items": "json", "custom": "com.pyxis.greenhopper.jira:gh-sprint" } }
 ]

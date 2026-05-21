@@ -81,7 +81,14 @@ export interface JiraFilter {
 export interface JiraFieldMeta {
   id: string;
   name: string;
+  navigable?: boolean;
   schema: { type: string; items?: string; custom?: string };
+}
+
+export interface JiraSprintCandidate {
+  id: number;
+  name: string;
+  state: string;
 }
 
 export interface JiraEditMetaField {
@@ -109,4 +116,5 @@ export interface IJiraClient {
   searchFiltersByName(name: string): Promise<JiraFilter[]>;
   getFields(): Promise<JiraFieldMeta[]>;
   getEditMeta(issueKey: string): Promise<Record<string, JiraEditMetaField>>;
+  findSprints(projectKey: string, query: string): Promise<JiraSprintCandidate[]>;
 }
