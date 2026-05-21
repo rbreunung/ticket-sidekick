@@ -741,7 +741,7 @@ async function handleLoadTicket(
         ? `${(att.size / 1_048_576).toFixed(1)} MB`
         : `${Math.round(att.size / 1024)} KB`;
       if (downloaded.has(att.filename)) return `- \`attachments/${att.filename}\` — ${size} (${att.mimeType})`;
-      if (att.size > ATTACHMENT_SIZE_LIMIT) return `- \`${att.filename}\` — ${size} — skipped (over 5 MB size limit)`;
+      if (att.size > ATTACHMENT_SIZE_LIMIT) return `- \`${att.filename}\` — ${size} — skipped (over 100 MB size limit)`;
       return `- \`${att.filename}\` — ${size} — skipped (binary non-image)`;
     });
     mdParts.push('', `## Attachments\n\n${attLines.join('\n')}`);
