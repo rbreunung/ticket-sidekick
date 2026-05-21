@@ -1524,7 +1524,8 @@ export function createJiraParticipant(
         case 'getTicket': {
           const fieldMeta = await ticketService.getFieldMeta();
           const alwaysShowIds = new Set<string>(config.additionalDisplayFields);
-          const base = await ticketService.getTicket(ticketKey!, fieldMeta, alwaysShowIds);
+          const hiddenIds = new Set<string>(config.hiddenDisplayFields);
+          const base = await ticketService.getTicket(ticketKey!, fieldMeta, alwaysShowIds, hiddenIds);
           const MAX_SHOW = 20;
           const { comments, total } = await ticketService.getIssueComments(ticketKey!, MAX_SHOW);
           if (comments.length > 0) {
@@ -1551,7 +1552,8 @@ export function createJiraParticipant(
         case 'summarizeTicket': {
           const summaryFieldMeta = await ticketService.getFieldMeta();
           const summaryAlwaysShow = new Set<string>(config.additionalDisplayFields);
-          const fullTicket = await ticketService.getTicket(ticketKey!, summaryFieldMeta, summaryAlwaysShow);
+          const summaryHidden = new Set<string>(config.hiddenDisplayFields);
+          const fullTicket = await ticketService.getTicket(ticketKey!, summaryFieldMeta, summaryAlwaysShow, summaryHidden);
           // Title + table before the first ## section heading
           const sectionStart = fullTicket.indexOf('\n\n## ');
           const fieldsHeader = sectionStart >= 0 ? fullTicket.slice(0, sectionStart) : fullTicket;
@@ -1644,7 +1646,8 @@ export function createJiraParticipant(
           if (fieldNameRaw.toLowerCase() === 'description' && isNonLiteral) {
             const descFieldMeta = await ticketService.getFieldMeta();
             const descAlwaysShow = new Set<string>(config.additionalDisplayFields);
-            const ticketText = await ticketService.getTicket(ticketKey!, descFieldMeta, descAlwaysShow);
+            const descHidden = new Set<string>(config.hiddenDisplayFields);
+            const ticketText = await ticketService.getTicket(ticketKey!, descFieldMeta, descAlwaysShow, descHidden);
             const { comments } = await ticketService.getIssueComments(ticketKey!, 20);
             const commentBlocks = comments.length > 0 ? serializeCommentsForLLM(comments) : '';
             const contentCtx = await buildContentContext(request, chatContext, ticketText, commentBlocks);
@@ -1669,7 +1672,8 @@ export function createJiraParticipant(
         }
         case 'showFields': {
           const showFieldMeta = await ticketService.getFieldMeta();
-          result = await ticketService.showFields(ticketKey!, showFieldMeta);
+          const showHiddenIds = new Set<string>(config.hiddenDisplayFields);
+          result = await ticketService.showFields(ticketKey!, showFieldMeta, showHiddenIds);
           break;
         }
         case 'searchJql': {

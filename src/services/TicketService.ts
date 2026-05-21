@@ -94,6 +94,7 @@ export function formatIssueFields(
   issue: JiraIssue,
   fieldMeta: JiraFieldMeta[],
   alwaysShowIds: Set<string>,
+  hiddenIds?: Set<string>,
 ): { table: string; sections: string[] } {
   const navigable = new Map(fieldMeta.filter(f => f.navigable === true).map(f => [f.id, f]));
   const tableRows: string[] = [];
@@ -104,6 +105,7 @@ export function formatIssueFields(
     if (EXCLUDED_FROM_TABLE.has(fieldId)) continue;
     const meta = navigable.get(fieldId);
     if (!meta) continue;
+    if (hiddenIds?.has(fieldId) && !alwaysShowIds.has(fieldId)) continue;
     processedIds.add(fieldId);
 
     const isNull = value === null || value === undefined ||
@@ -180,11 +182,12 @@ export class TicketService {
     issueKey: string,
     fieldMeta?: JiraFieldMeta[],
     alwaysShowIds?: Set<string>,
+    hiddenIds?: Set<string>,
   ): Promise<string> {
     const issue = await this.client.getIssue(issueKey);
     const meta = fieldMeta ?? await this.client.getFields();
     const showIds = alwaysShowIds ?? new Set<string>();
-    const { table, sections } = formatIssueFields(issue, meta, showIds);
+    const { table, sections } = formatIssueFields(issue, meta, showIds, hiddenIds);
     const parts: string[] = [`## ${issue.key}: ${issue.fields.summary}`];
     if (table) parts.push('', table);
     if (sections.length > 0) parts.push('', ...sections.map(s => s));
@@ -429,12 +432,13 @@ export class TicketService {
     return (issue.fields as Record<string, unknown>)[fieldId];
   }
 
-  async showFields(issueKey: string, fieldMeta?: JiraFieldMeta[]): Promise<string> {
+  async showFields(issueKey: string, fieldMeta?: JiraFieldMeta[], hiddenIds?: Set<string>): Promise<string> {
     const issue = await this.client.getIssue(issueKey);
     const meta = fieldMeta ?? await this.client.getFields();
     const navigable = meta.filter(f => f.navigable === true);
     const rows: string[] = [];
     for (const f of navigable) {
+      if (hiddenIds?.has(f.id)) continue;
       const value = issue.fields[f.id];
       let display: string;
       if (value === null || value === undefined || (Array.isArray(value) && value.length === 0)) {
