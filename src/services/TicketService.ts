@@ -432,13 +432,12 @@ export class TicketService {
     return (issue.fields as Record<string, unknown>)[fieldId];
   }
 
-  async showFields(issueKey: string, fieldMeta?: JiraFieldMeta[], hiddenIds?: Set<string>): Promise<string> {
+  async showFields(issueKey: string, fieldMeta?: JiraFieldMeta[]): Promise<string> {
     const issue = await this.client.getIssue(issueKey);
     const meta = fieldMeta ?? await this.client.getFields();
     const navigable = meta.filter(f => f.navigable === true);
     const rows: string[] = [];
     for (const f of navigable) {
-      if (hiddenIds?.has(f.id)) continue;
       const value = issue.fields[f.id];
       let display: string;
       if (value === null || value === undefined || (Array.isArray(value) && value.length === 0)) {

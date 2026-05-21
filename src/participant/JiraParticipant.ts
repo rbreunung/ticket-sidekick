@@ -1672,8 +1672,7 @@ export function createJiraParticipant(
         }
         case 'showFields': {
           const showFieldMeta = await ticketService.getFieldMeta();
-          const showHiddenIds = new Set<string>(config.hiddenDisplayFields);
-          result = await ticketService.showFields(ticketKey!, showFieldMeta, showHiddenIds);
+          result = await ticketService.showFields(ticketKey!, showFieldMeta);
           break;
         }
         case 'searchJql': {
