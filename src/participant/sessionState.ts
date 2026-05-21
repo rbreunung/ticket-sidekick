@@ -294,3 +294,33 @@ export function parseFilterSelection(reply: string, filters: JiraFilter[]): Jira
   return 'invalid';
 }
 
+export interface LoadSkippedSession {
+  ticketKey: string;
+  skipped: Array<{
+    filename: string;
+    content: string;  // Jira download URL
+    size: number;
+    mimeType: string;
+    reason: string;
+  }>;
+}
+
+export function parseSkippedAttachmentSelection(reply: string, count: number): number | 'invalid' {
+  const n = parseInt(reply.trim(), 10);
+  if (!isNaN(n) && n >= 1 && n <= count) return n;
+  return 'invalid';
+}
+
+export function rewriteAttachmentLinks(
+  md: string,
+  downloaded: Set<string>,           // filename → rewrite href to attachments/filename
+  skippedUrls: Map<string, string>,   // filename → full Jira contentUrl
+): string {
+  return md.replace(/\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, href) => {
+    if (downloaded.has(href)) return `[${alt}](attachments/${href})`;
+    const jiraUrl = skippedUrls.get(href);
+    if (jiraUrl) return `[${alt}](${jiraUrl})`;
+    return match;
+  });
+}
+

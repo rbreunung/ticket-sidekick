@@ -4,14 +4,14 @@ import { JiraApiClient } from '../jira/JiraApiClient';
 import { ConfigService } from '../services/ConfigService';
 import { TicketService, assembleDescription, resolveFieldIdFuzzy, formatIssueFields } from '../services/TicketService';
 import { formatJiraBody } from '../utils/markdownFormatter';
-import type { JiraComment, JiraFieldMeta, JiraFilter, JiraSprintCandidate } from '../jira/IJiraClient';
+import type { JiraAttachment, JiraComment, JiraFieldMeta, JiraFilter, JiraSprintCandidate } from '../jira/IJiraClient';
 import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
 import { extractTicketId } from '../utils/branchParser';
 import { redactUrls, tokenStatus } from '../utils/diagUtils';
 import { markdownToJiraWiki } from '../utils/markdownToJiraWiki';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type FieldUpdatePreviewSession, type SpellCheckSession, type FieldSelectionSession, type SprintSelectionSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type FieldUpdatePreviewSession, type SpellCheckSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks } from './sessionState';
 import { discoverWorkflow, loadWorkflowCache, saveWorkflowCache, findPath } from '../services/WorkflowService';
 import type { WorkflowGraph } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
@@ -30,7 +30,8 @@ type Operation =
   | 'discoverWorkflow'
   | 'runCleanup'
   | 'bulkTransition'
-  | 'bulkUpdateField';
+  | 'bulkUpdateField'
+  | 'loadTicket';
 
 interface FieldUpdate {
   fieldName: string;
@@ -65,7 +66,7 @@ interface ParsedIntent {
 }
 
 const INTENT_PROMPT = `Parse this Jira command and respond with ONLY a JSON object. No markdown, no explanation.
-Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|"addComment"|"updateField"|"showFields"|"searchJql"|"validateFields"|"createTicket"|"discoverWorkflow"|"runCleanup"|"bulkTransition"|"bulkUpdateField","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"assignee":string|null,"components":string|null,"description":string|null,"comment":string|null,"commentQuery":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"fieldName":string|null,"fieldValue":string|null,"arrayOp":"set"|"add"|"remove","scope":"single"|"bulk"|null,"jql":string|null,"filterId":string|null,"filterName":string|null,"targetStatus":string|null,"bulkFieldName":string|null,"bulkFieldValue":string|null,"cleanupRuleName":string|null,"fixVersion":string|null}
+Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|"addComment"|"updateField"|"showFields"|"searchJql"|"validateFields"|"createTicket"|"discoverWorkflow"|"runCleanup"|"bulkTransition"|"bulkUpdateField"|"loadTicket","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"assignee":string|null,"components":string|null,"description":string|null,"comment":string|null,"commentQuery":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"fieldName":string|null,"fieldValue":string|null,"arrayOp":"set"|"add"|"remove","scope":"single"|"bulk"|null,"jql":string|null,"filterId":string|null,"filterName":string|null,"targetStatus":string|null,"bulkFieldName":string|null,"bulkFieldValue":string|null,"cleanupRuleName":string|null,"fixVersion":string|null}
 - getTicket: show, display, look up a specific ticket; returns all non-null fields, description, and one-line comment summaries
 - summarizeTicket: summarise, summarize, tl;dr, give me an overview; produces a prose paragraph covering the ticket and its comments together
 - showComments: show, list, display all comments in full; shows the actual comment bodies numbered; use when user wants to read the comment text rather than a summary
@@ -80,6 +81,7 @@ Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|
 - bulkTransition: transition/move/close/resolve "them" or "these tickets" or "all of them" to a status; only valid when a prior search result is available; targetStatus is the destination state name
 - bulkUpdateField: set/update/change a field on "them" or "these tickets"; only valid when a prior search result is available; bulkFieldName is the field name the user gave, bulkFieldValue is the value string
 - runCleanup: bulk-close or bulk-transition ALL tickets of a type in a project; triggered by "close all", "run cleanup", or "close PROJECT ISSUETYPE" where PROJECT is a project key and ISSUETYPE is an issue type name (not a ticket key like PROJ-123); projectKey and issueType are extracted from the prompt; cleanupRuleName is the quoted rule name if given; fixVersion is the exact fix version string if given (must be quoted in the prompt, e.g. "Fix Version 3.2"); examples: "@jira close VSJI Bug", "@jira run cleanup 'Close released bugs'", "@jira close BILLING bugs in 'Release 3.2'"
+- loadTicket: download the full ticket context (description, all comments, attachments) into .jira-context/{key}/ in the workspace root; triggered by "load", "fetch context", "download ticket", "load context for"
 - contentSource: how the comment or description content should be produced
   - "literal": user provided the exact text to post (e.g. "add comment: LGTM")
   - "generate": user gave a self-contained instruction with no implicit reference to prior work (e.g. "write a poem about Star Trek", "add a 12-line poem as comment"); only use this when content is purely creative or standalone
@@ -648,6 +650,175 @@ async function handleCreateTicket(
   }
 
   return continueAfterIssueType(projectKey, summary, resolvedType, intent.description, selectedTemplate, request.model, stream, token, jiraClient, ticketService, workspaceState, extraFields);
+}
+
+const DOWNLOADABLE_EXTENSIONS = new Set([
+  // text / source
+  '.log', '.txt', '.java', '.xml', '.json', '.yaml', '.yml', '.md',
+  '.properties', '.sql', '.sh', '.py', '.js', '.ts', '.html', '.css',
+  '.patch', '.diff',
+  // documents
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+  '.odt', '.ods', '.odp', '.rtf', '.csv',
+  // archives
+  '.zip', '.tar', '.gz', '.tgz', '.bz2', '.7z', '.rar', '.jar', '.war', '.ear',
+]);
+const ATTACHMENT_SIZE_LIMIT = 100 * 1024 * 1024;
+
+async function handleLoadTicket(
+  ticketKey: string,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  fieldMeta: JiraFieldMeta[],
+  alwaysShowIds: Set<string>,
+  hiddenIds: Set<string>,
+): Promise<void> {
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!workspaceFolder) {
+    stream.markdown('No workspace folder is open. Open a folder to use `@jira load`.');
+    return;
+  }
+  const wsRoot = workspaceFolder.uri;
+
+  const issue = await ticketService.getIssue(ticketKey);
+  const comments = await ticketService.getAllComments(ticketKey);
+  const attachments = ticketService.getAttachments(issue);
+
+  // Stream ticket content first (same as @jira show)
+  // Build a map of all attachment filenames → Jira content URLs for link rewriting
+  const allAttachmentUrls = new Map(attachments.map(a => [a.filename, a.content]));
+
+  // Stream ticket content first (same as @jira show), with inline attachment links
+  // rewritten to their Jira URLs so they are clickable in the chat.
+  const { table, sections } = formatIssueFields(issue, fieldMeta, alwaysShowIds, hiddenIds);
+  const showParts: string[] = [`## ${issue.key}: ${issue.fields.summary}`];
+  if (table) showParts.push('', table);
+  if (sections.length > 0) showParts.push('', ...sections);
+  stream.markdown(rewriteAttachmentLinks(showParts.join('\n'), new Set(), allAttachmentUrls));
+
+  // Classify attachments
+  const toDownload: JiraAttachment[] = [];
+  const toSkip: JiraAttachment[] = [];
+  for (const att of attachments) {
+    if (att.size > ATTACHMENT_SIZE_LIMIT) { toSkip.push(att); continue; }
+    const ext = att.filename.includes('.') ? ('.' + att.filename.split('.').pop()!.toLowerCase()) : '';
+    const eligible = att.mimeType.startsWith('text/') || att.mimeType.startsWith('image/') || DOWNLOADABLE_EXTENSIONS.has(ext);
+    (eligible ? toDownload : toSkip).push(att);
+  }
+
+  // Create directories
+  const contextDir = vscode.Uri.joinPath(wsRoot, '.jira-context', ticketKey);
+  const attachmentsDir = vscode.Uri.joinPath(contextDir, 'attachments');
+  await vscode.workspace.fs.createDirectory(attachmentsDir);
+
+  // Download attachments (max 3 concurrent)
+  const downloaded = new Set<string>();
+  const skippedUrls = new Map<string, string>();
+  const downloadErrors: string[] = [];
+  for (let i = 0; i < toDownload.length; i += 3) {
+    await Promise.all(toDownload.slice(i, i + 3).map(async (att) => {
+      try {
+        const bytes = await ticketService.downloadAttachment(att.content);
+        await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(attachmentsDir, att.filename), bytes);
+        downloaded.add(att.filename);
+      } catch (err) {
+        downloadErrors.push(`${att.filename}: ${err instanceof Error ? err.message : String(err)}`);
+        skippedUrls.set(att.filename, att.content);
+      }
+    }));
+  }
+  for (const att of toSkip) skippedUrls.set(att.filename, att.content);
+
+  // Build ticket.md — suppress built-in attachment section, append custom one
+  const hiddenWithAttachment = new Set([...hiddenIds, 'attachment']);
+  const { table: mdTable, sections: mdSections } = formatIssueFields(issue, fieldMeta, alwaysShowIds, hiddenWithAttachment);
+  const mdParts: string[] = [`# ${issue.key}: ${issue.fields.summary}`];
+  if (mdTable) mdParts.push('', mdTable);
+  if (mdSections.length > 0) mdParts.push('', ...mdSections);
+  if (attachments.length > 0) {
+    const attLines = attachments.map(att => {
+      const size = att.size >= 1_048_576
+        ? `${(att.size / 1_048_576).toFixed(1)} MB`
+        : `${Math.round(att.size / 1024)} KB`;
+      if (downloaded.has(att.filename)) return `- \`attachments/${att.filename}\` — ${size} (${att.mimeType})`;
+      if (att.size > ATTACHMENT_SIZE_LIMIT) return `- \`${att.filename}\` — ${size} — skipped (over 100 MB size limit)`;
+      return `- \`${att.filename}\` — ${size} — skipped (binary non-image)`;
+    });
+    mdParts.push('', `## Attachments\n\n${attLines.join('\n')}`);
+  }
+  const ticketMd = rewriteAttachmentLinks(mdParts.join('\n'), downloaded, skippedUrls);
+
+  // Build comments.md
+  const commentBlocks = comments.map((c, i) => {
+    const date = c.created.slice(0, 10);
+    const body = formatJiraBody(c.body).trim();
+    return `## ${i + 1}. ${c.author.displayName} (${date})\n\n${body}`;
+  });
+  const rawCommentsMd = comments.length > 0
+    ? `# Comments — ${ticketKey}\n\n${commentBlocks.join('\n\n---\n\n')}`
+    : `# Comments — ${ticketKey}\n\n_No comments._`;
+  const commentsMd = rewriteAttachmentLinks(rawCommentsMd, downloaded, skippedUrls);
+
+  // Write files
+  const writeErrors: string[] = [];
+  const enc = new TextEncoder();
+  for (const [name, content] of [['ticket.md', ticketMd], ['comments.md', commentsMd]] as const) {
+    try {
+      await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(contextDir, name), enc.encode(content));
+    } catch (err) {
+      writeErrors.push(`${name}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Update .gitignore
+  try {
+    let existing = '';
+    try {
+      const bytes = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(wsRoot, '.gitignore'));
+      existing = new TextDecoder().decode(bytes);
+    } catch { /* file absent */ }
+    if (!existing.split('\n').some(line => line.trim() === '.jira-context/')) {
+      const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
+      await vscode.workspace.fs.writeFile(
+        vscode.Uri.joinPath(wsRoot, '.gitignore'),
+        enc.encode(existing + prefix + '.jira-context/\n'),
+      );
+    }
+  } catch { /* non-fatal */ }
+
+  // Build skipped list (oversized + unknown binary + download failures)
+  const allSkipped: LoadSkippedSession['skipped'] = [
+    ...toSkip.map(a => ({
+      filename: a.filename, content: a.content, size: a.size, mimeType: a.mimeType,
+      reason: a.size > ATTACHMENT_SIZE_LIMIT ? 'over 100 MB size limit' : 'unknown binary format',
+    })),
+    ...downloadErrors.map(e => {
+      const filename = e.split(':')[0];
+      const att = toDownload.find(a => a.filename === filename);
+      return { filename, content: att?.content ?? '', size: att?.size ?? 0, mimeType: att?.mimeType ?? 'unknown', reason: 'download failed' };
+    }),
+  ];
+
+  // Stream summary
+  const summaryLines: string[] = [`\n\nLoaded **${issue.key}** into \`.jira-context/${ticketKey}/\``];
+  summaryLines.push(`- \`ticket.md\` — metadata and description`);
+  summaryLines.push(`- \`comments.md\` — ${comments.length} comment${comments.length !== 1 ? 's' : ''}`);
+  if (downloaded.size > 0) summaryLines.push(`- \`attachments/\` — ${downloaded.size} file${downloaded.size !== 1 ? 's' : ''} downloaded`);
+  if (writeErrors.length > 0) summaryLines.push(`\n_Write errors:_\n${writeErrors.map(e => `- ${e}`).join('\n')}`);
+  stream.markdown(summaryLines.join('\n'));
+
+  if (allSkipped.length > 0) {
+    const listLines = allSkipped.map((s, i) => {
+      const size = s.size >= 1_048_576 ? `${(s.size / 1_048_576).toFixed(1)} MB` : `${Math.round(s.size / 1024)} KB`;
+      return `${i + 1}. \`${s.filename}\` — ${size} (${s.mimeType}) — ${s.reason}`;
+    });
+    stream.markdown(`\n\n**Skipped attachments:**\n\n${listLines.join('\n')}\n\nReply with a number to download it anyway.`);
+    await ws.update('jira.session.loadSkipped', { ticketKey, skipped: allSkipped } satisfies LoadSkippedSession);
+    stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:load-skipped -->`);
+  } else {
+    stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
+  }
 }
 
 async function handleDiscoverWorkflow(
@@ -1422,6 +1593,47 @@ export function createJiraParticipant(
       }
     }
 
+    // Load skipped — user replied with a number to download a skipped attachment
+    if (lastResponse.includes('<!-- jira:load-skipped -->')) {
+      const loadSkippedSession = ws.get<LoadSkippedSession>('jira.session.loadSkipped');
+      if (loadSkippedSession) {
+        const idx = parseSkippedAttachmentSelection(request.prompt, loadSkippedSession.skipped.length);
+        const skippedList = (items: LoadSkippedSession['skipped']) => items.map((s, i) => {
+          const sz = s.size >= 1_048_576 ? `${(s.size / 1_048_576).toFixed(1)} MB` : `${Math.round(s.size / 1024)} KB`;
+          return `${i + 1}. \`${s.filename}\` — ${sz} (${s.mimeType}) — ${s.reason}`;
+        }).join('\n');
+        if (idx === 'invalid') {
+          stream.markdown(`Please reply with a number:\n\n${skippedList(loadSkippedSession.skipped)}\n\nReply with a number to download it anyway.\n\n<!-- jira:load-skipped -->`);
+          return;
+        }
+        const chosen = loadSkippedSession.skipped[idx - 1];
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (!workspaceFolder) {
+          await ws.update('jira.session.loadSkipped', undefined);
+          stream.markdown('No workspace folder is open.');
+          return;
+        }
+        const attachmentsDir = vscode.Uri.joinPath(workspaceFolder.uri, '.jira-context', loadSkippedSession.ticketKey, 'attachments');
+        try {
+          stream.markdown(`_Downloading \`${chosen.filename}\`…_\n\n`);
+          const bytes = await ticketService.downloadAttachment(chosen.content);
+          await vscode.workspace.fs.createDirectory(attachmentsDir);
+          await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(attachmentsDir, chosen.filename), bytes);
+          const remaining = loadSkippedSession.skipped.filter((_, i) => i !== idx - 1);
+          if (remaining.length > 0) {
+            await ws.update('jira.session.loadSkipped', { ticketKey: loadSkippedSession.ticketKey, skipped: remaining } satisfies LoadSkippedSession);
+            stream.markdown(`✓ \`${chosen.filename}\` downloaded.\n\n**Remaining skipped attachments:**\n\n${skippedList(remaining)}\n\nReply with a number to download another.\n\n<!-- @jira-ticket:${loadSkippedSession.ticketKey} -->\n\n<!-- jira:load-skipped -->`);
+          } else {
+            await ws.update('jira.session.loadSkipped', undefined);
+            stream.markdown(`✓ \`${chosen.filename}\` downloaded. All attachments saved.\n\n<!-- @jira-ticket:${loadSkippedSession.ticketKey} -->`);
+          }
+        } catch (err) {
+          stream.markdown(`Failed to download \`${chosen.filename}\`: ${err instanceof Error ? err.message : String(err)}\n\n<!-- @jira-ticket:${loadSkippedSession.ticketKey} -->\n\n<!-- jira:load-skipped -->`);
+        }
+        return;
+      }
+    }
+
     // Bulk update review — user replied ok / skip keys / cancel
     if (lastResponse.includes('<!-- jira:bulk-update-review -->')) {
       const bulkSession = ws.get<BulkUpdateReviewSession>('jira.session.bulkUpdateReview');
@@ -1802,6 +2014,13 @@ export function createJiraParticipant(
             rows.join('\n') +
             `\n\nReply **ok** to apply, **(c)** to cancel, or list keys to skip (e.g. \`skip PROJ-2\`).\n\n<!-- jira:bulk-update-review -->`
           );
+          return;
+        }
+        case 'loadTicket': {
+          const loadFieldMeta = await ticketService.getFieldMeta();
+          const loadAlwaysShow = new Set<string>(config.additionalDisplayFields);
+          const loadHidden = new Set<string>(config.hiddenDisplayFields);
+          await handleLoadTicket(ticketKey!, ticketService, stream, ws, loadFieldMeta, loadAlwaysShow, loadHidden);
           return;
         }
         case 'validateFields':

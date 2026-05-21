@@ -50,6 +50,7 @@ Open GitHub Copilot Chat and use `@jira`:
 | What you type | What happens |
 | --- | --- |
 | `@jira show PROJ-123` | Full ticket: all non-null fields in a metadata table, formatted description, one-line comment summaries |
+| `@jira load PROJ-123` | Download full ticket context into `.jira-context/PROJ-123/` — `ticket.md`, `comments.md`, and attachments — so the AI can reason over them alongside your code |
 | `@jira show fields on PROJ-123` | Table of every field: name, ID, and current value — use to discover IDs for `additionalDisplayFields` |
 | `@jira summarize PROJ-123` | Same fields as `show`, but description + comments replaced by a one-paragraph AI synthesis |
 | `@jira show comments` | Full formatted comment bodies numbered — use when you want to read the actual text |
@@ -203,6 +204,59 @@ If a ticket has more than 20 comments the response ends with an offer to load th
 ```
 
 Reply **`load all`** to fetch up to 100 comments. For `show comments` the full bodies are rendered; for synthesized views the summary is regenerated over all comments.
+
+### Loading ticket context
+
+`@jira load PROJ-123` downloads the complete ticket into `.jira-context/PROJ-123/` in your workspace root:
+
+```
+.jira-context/
+  PROJ-123/
+    ticket.md       ← all fields in the same layout as @jira show, plus an attachment index
+    comments.md     ← every comment in full, chronological order
+    attachments/
+      screenshot.png
+      error.log
+      report.pdf
+```
+
+Once loaded, your AI assistant (GitHub Copilot, Cursor, etc.) can read these files directly during coding sessions — no additional prompting required.
+
+#### What gets downloaded
+
+| File type | Criterion | Action |
+| --- | --- | --- |
+| Text / source | `text/*` MIME type or known text extension | Downloaded |
+| Images | `image/*` MIME type | Downloaded |
+| Documents | `.pdf`, `.doc`, `.docx`, `.xls`, `.xlsx`, `.ppt`, `.pptx`, `.odt`, `.ods`, `.odp`, `.rtf`, `.csv` | Downloaded |
+| Archives | `.zip`, `.tar`, `.gz`, `.tgz`, `.bz2`, `.7z`, `.rar`, `.jar`, `.war`, `.ear` | Downloaded |
+| Oversized | File larger than 100 MB | Skipped — listed in `ticket.md` with size |
+| Unknown binary | Any other MIME type not covered above | Skipped — listed in `ticket.md` with size |
+
+Up to three attachments are downloaded in parallel.
+
+#### Downloading skipped attachments on demand
+
+When a load completes with skipped attachments, the response shows a numbered list:
+
+```text
+Skipped attachments:
+
+1. `heap-dump.bin` — 120.0 MB (application/octet-stream) — over 100 MB size limit
+2. `mystery.xyz` — 4 KB (application/xyz) — unknown binary format
+
+Reply with a number to download it anyway.
+```
+
+Reply with a number (`1`, `2`, …) and the plugin downloads that file into `attachments/`. If more remain, the list is shown again with updated numbers. You can download them one at a time until all are saved.
+
+#### Inline attachment links
+
+Any attachment references in the description or comments (Jira wiki markup `!filename!` or `[^filename]`) are rewritten in the generated Markdown files to point to the local `attachments/` path for downloaded files, and to the original Jira URL for skipped ones.
+
+#### gitignore
+
+`.jira-context/` is automatically added to `.gitignore` at your workspace root the first time you run `@jira load`. The folder is local to your machine — do not commit it.
 
 ### Ticket detection
 

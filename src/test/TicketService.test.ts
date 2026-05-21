@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { TicketService, assembleDescription, extractTextFromAdf, resolveFieldIdFuzzy, formatIssueFields } from '../services/TicketService';
-import type { JiraFieldMeta } from '../jira/IJiraClient';
-import { MockJiraClient } from './mocks/MockJiraClient';
+import type { JiraAttachment, JiraFieldMeta, JiraIssue } from '../jira/IJiraClient';
+import { MockJiraClient, FIXTURE_ATTACHMENT_BYTES } from './mocks/MockJiraClient';
 
 describe('TicketService', () => {
   let client: MockJiraClient;
@@ -683,5 +683,116 @@ describe('extractTextFromAdf', () => {
 
   it('returns empty string for null', () => {
     expect(extractTextFromAdf(null)).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Attachment methods
+// ---------------------------------------------------------------------------
+
+const attachmentMeta: JiraFieldMeta[] = [
+  { id: 'attachment', name: 'Attachment', navigable: true, schema: { type: 'array', items: 'attachment' } },
+  { id: 'summary', name: 'Summary', navigable: true, schema: { type: 'string' } },
+];
+
+const sampleAttachments: JiraAttachment[] = [
+  { id: 'a1', filename: 'screenshot.png', mimeType: 'image/png', size: 239616, content: 'https://jira.example.com/att1' },
+  { id: 'a2', filename: 'error.log', mimeType: 'text/plain', size: 46080, content: 'https://jira.example.com/att2' },
+  { id: 'a3', filename: 'heap-dump.bin', mimeType: 'application/octet-stream', size: 52428800, content: 'https://jira.example.com/att3' },
+];
+
+function makeIssueWithAttachments(attachments: JiraAttachment[]): JiraIssue {
+  return {
+    id: '1', key: 'PROJ-1',
+    fields: {
+      summary: 'Test', description: null, status: { name: 'Open' },
+      assignee: null, reporter: null, priority: null,
+      labels: [], fixVersions: [], comment: null, attachment: attachments,
+    },
+  };
+}
+
+describe('TicketService.getAttachments', () => {
+  let client: MockJiraClient;
+  let service: TicketService;
+  beforeEach(() => { client = new MockJiraClient(); service = new TicketService(client); });
+
+  it('returns attachment list from issue', async () => {
+    const issue = await client.getIssue('PROJ-123');
+    const result = service.getAttachments(issue);
+    expect(result.length).toBe(3);
+    expect(result[0].filename).toBe('screenshot.png');
+    expect(result[0].content).toContain('att001');
+  });
+
+  it('returns empty array when attachment field is undefined', () => {
+    const issue = makeIssueWithAttachments([]);
+    issue.fields.attachment = undefined;
+    expect(service.getAttachments(issue)).toEqual([]);
+  });
+
+  it('returns empty array when attachment array is empty', () => {
+    expect(service.getAttachments(makeIssueWithAttachments([]))).toEqual([]);
+  });
+});
+
+describe('TicketService.downloadAttachment', () => {
+  let client: MockJiraClient;
+  let service: TicketService;
+  beforeEach(() => { client = new MockJiraClient(); service = new TicketService(client); });
+
+  it('delegates to client and returns bytes', async () => {
+    const bytes = await service.downloadAttachment('https://jira.example.com/att1');
+    expect(bytes).toEqual(FIXTURE_ATTACHMENT_BYTES);
+  });
+
+  it('propagates errors from the client', async () => {
+    client.downloadAttachment = async () => { throw new Error('Network error'); };
+    await expect(service.downloadAttachment('https://jira.example.com/att1')).rejects.toThrow('Network error');
+  });
+});
+
+describe('TicketService.getAllComments', () => {
+  let client: MockJiraClient;
+  let service: TicketService;
+  beforeEach(() => { client = new MockJiraClient(); service = new TicketService(client); });
+
+  it('returns all comments from the fixture', async () => {
+    const comments = await service.getAllComments('PROJ-123');
+    expect(comments.length).toBeGreaterThan(0);
+    expect(comments[0].author.displayName).toBeTruthy();
+  });
+
+  it('returns empty array for a ticket with no comments', async () => {
+    client.getIssue = async () => makeIssueWithAttachments([]);
+    const comments = await service.getAllComments('PROJ-123');
+    expect(comments).toEqual([]);
+  });
+});
+
+describe('formatIssueFields — attachment section', () => {
+  it('renders attachment list with size and MIME type', () => {
+    const issue = makeIssueWithAttachments(sampleAttachments);
+    const { sections } = formatIssueFields(issue, attachmentMeta, new Set());
+    const attSection = sections.find(s => s.startsWith('## Attachments'));
+    expect(attSection).toBeDefined();
+    expect(attSection).toContain('screenshot.png');
+    expect(attSection).toContain('234 KB');
+    expect(attSection).toContain('image/png');
+    expect(attSection).toContain('error.log');
+    expect(attSection).toContain('45 KB');
+    expect(attSection).toContain('50.0 MB');
+  });
+
+  it('suppresses attachment section when attachment id is in hiddenIds', () => {
+    const issue = makeIssueWithAttachments(sampleAttachments);
+    const { sections } = formatIssueFields(issue, attachmentMeta, new Set(), new Set(['attachment']));
+    expect(sections.find(s => s.startsWith('## Attachments'))).toBeUndefined();
+  });
+
+  it('does not render attachment section when field is empty', () => {
+    const issue = makeIssueWithAttachments([]);
+    const { sections } = formatIssueFields(issue, attachmentMeta, new Set());
+    expect(sections.find(s => s.startsWith('## Attachments'))).toBeUndefined();
   });
 });
