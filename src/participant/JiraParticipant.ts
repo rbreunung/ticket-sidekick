@@ -1536,7 +1536,7 @@ export function createJiraParticipant(
               token,
             );
             await ws.update('jira.session.commentList', buildCommentListSession(ticketKey!, comments));
-            stream.markdown(base + '\n\n**Comments:**\n\n' + synthesis);
+            stream.markdown(base + '\n\n**Comments (summarized):**\n\n' + synthesis);
             if (total > MAX_SHOW) {
               const moreSession: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: null };
               await ws.update('jira.session.moreComments', moreSession);
@@ -1561,7 +1561,7 @@ export function createJiraParticipant(
           const { comments: summaryComments } = await ticketService.getIssueComments(ticketKey!, 20);
           const commentBlocks = summaryComments.length > 0 ? serializeCommentsForLLM(summaryComments) : null;
           const synthesis = await generateDescriptionAndCommentsSummary(descriptionText, commentBlocks, request.model, token);
-          stream.markdown(fieldsHeader + '\n\n**Overview:**\n\n' + synthesis);
+          stream.markdown(fieldsHeader + '\n\n**Overview (summarized):**\n\n' + synthesis);
           stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
           return;
         }
