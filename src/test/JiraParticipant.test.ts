@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview } from '../participant/sessionState';
+import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks } from '../participant/sessionState';
 import type { TransitionBatchTicket } from '../participant/sessionState';
 import type { JiraComment } from '../jira/IJiraClient';
 
@@ -574,5 +574,48 @@ describe('parseBulkUpdateReview', () => {
   it('returns invalid for unrecognised input', () => {
     expect(parseBulkUpdateReview('something else')).toEqual({ action: 'invalid' });
     expect(parseBulkUpdateReview('')).toEqual({ action: 'invalid' });
+  });
+});
+
+describe('rewriteAttachmentLinks', () => {
+  const downloaded = new Set(['screenshot.png', 'error.log']);
+  const skippedUrls = new Map([['heap-dump.bin', 'https://jira.example.com/att3']]);
+
+  it('rewrites downloaded filename href to attachments/ path', () => {
+    const result = rewriteAttachmentLinks(
+      '![screenshot.png](screenshot.png)',
+      downloaded, skippedUrls,
+    );
+    expect(result).toBe('![screenshot.png](attachments/screenshot.png)');
+  });
+
+  it('rewrites skipped filename href to the Jira content URL', () => {
+    const result = rewriteAttachmentLinks(
+      '[heap-dump.bin](heap-dump.bin)',
+      downloaded, skippedUrls,
+    );
+    expect(result).toBe('[heap-dump.bin](https://jira.example.com/att3)');
+  });
+
+  it('leaves external URL hrefs unchanged', () => {
+    const md = '![img](https://example.com/image.png)';
+    expect(rewriteAttachmentLinks(md, downloaded, skippedUrls)).toBe(md);
+  });
+
+  it('leaves ordinary hyperlinks unchanged', () => {
+    const md = '[Jira](https://jira.example.com/browse/PROJ-1)';
+    expect(rewriteAttachmentLinks(md, downloaded, skippedUrls)).toBe(md);
+  });
+
+  it('rewrites multiple occurrences in a single string', () => {
+    const md = '![screenshot.png](screenshot.png) and [error.log](error.log)';
+    const result = rewriteAttachmentLinks(md, downloaded, skippedUrls);
+    expect(result).toContain('attachments/screenshot.png');
+    expect(result).toContain('attachments/error.log');
+  });
+
+  it('returns unchanged string when sets are empty', () => {
+    const md = '![file.png](file.png)';
+    expect(rewriteAttachmentLinks(md, new Set(), new Map())).toBe(md);
   });
 });

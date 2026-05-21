@@ -31,6 +31,29 @@
       { "key": "PROJ-124", "fields": { "summary": "Write unit tests", "status": { "name": "In Progress" } } },
       { "key": "PROJ-125", "fields": { "summary": "Code review", "status": { "name": "Done" } } }
     ],
+    "attachment": [
+      {
+        "id": "att001",
+        "filename": "screenshot.png",
+        "mimeType": "image/png",
+        "size": 239616,
+        "contentUrl": "https://jira.example.com/secure/attachment/att001/screenshot.png"
+      },
+      {
+        "id": "att002",
+        "filename": "error.log",
+        "mimeType": "text/plain",
+        "size": 46080,
+        "contentUrl": "https://jira.example.com/secure/attachment/att002/error.log"
+      },
+      {
+        "id": "att003",
+        "filename": "heap-dump.bin",
+        "mimeType": "application/octet-stream",
+        "size": 52428800,
+        "contentUrl": "https://jira.example.com/secure/attachment/att003/heap-dump.bin"
+      }
+    ],
     "comment": {
       "comments": [
         {

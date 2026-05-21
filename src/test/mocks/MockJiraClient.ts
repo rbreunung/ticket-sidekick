@@ -16,6 +16,8 @@ import type {
   JiraUser,
 } from '../../jira/IJiraClient';
 
+export const FIXTURE_ATTACHMENT_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+
 function loadFixture<T>(filename: string): T {
   // process.cwd() is the project root when running `npm test`
   const p = resolve(process.cwd(), 'src/test/fixtures', filename);
@@ -96,11 +98,20 @@ export class MockJiraClient implements IJiraClient {
     return loadFixture<JiraCreatedIssue>('created-issue.json');
   }
 
-  async getIssueComments(issueKey: string, maxResults: number): Promise<{ comments: JiraComment[]; total: number }> {
+  async getIssueComments(issueKey: string, maxResults: number, _startAt = 0): Promise<{ comments: JiraComment[]; total: number }> {
     const issue = await this.getIssue(issueKey);
     const all = issue.fields.comment?.comments ?? [];
-    const total = issue.fields.comment?.total ?? 0;
-    return { comments: all.slice(-maxResults), total };
+    const total = issue.fields.comment?.total ?? all.length;
+    return { comments: all.slice(0, maxResults), total };
+  }
+
+  async getAllComments(issueKey: string): Promise<JiraComment[]> {
+    const issue = await this.getIssue(issueKey);
+    return issue.fields.comment?.comments ?? [];
+  }
+
+  async downloadAttachment(_contentUrl: string): Promise<Uint8Array> {
+    return FIXTURE_ATTACHMENT_BYTES;
   }
 
   async getFilterById(id: string): Promise<JiraFilter> {

@@ -294,3 +294,16 @@ export function parseFilterSelection(reply: string, filters: JiraFilter[]): Jira
   return 'invalid';
 }
 
+export function rewriteAttachmentLinks(
+  md: string,
+  downloaded: Set<string>,           // filename → rewrite href to attachments/filename
+  skippedUrls: Map<string, string>,   // filename → full Jira contentUrl
+): string {
+  return md.replace(/\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, href) => {
+    if (downloaded.has(href)) return `[${alt}](attachments/${href})`;
+    const jiraUrl = skippedUrls.get(href);
+    if (jiraUrl) return `[${alt}](${jiraUrl})`;
+    return match;
+  });
+}
+

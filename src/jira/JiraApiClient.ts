@@ -188,12 +188,33 @@ export class JiraApiClient implements IJiraClient {
     return { id: match.id };
   }
 
-  async getIssueComments(issueKey: string, maxResults: number): Promise<{ comments: JiraComment[]; total: number }> {
+  async getIssueComments(issueKey: string, maxResults: number, startAt = 0): Promise<{ comments: JiraComment[]; total: number }> {
     const data = await this.request<{ comments: JiraComment[]; total: number }>(
-      `/issue/${issueKey}/comment?maxResults=${maxResults}&orderBy=-created`,
+      `/issue/${issueKey}/comment?maxResults=${maxResults}&startAt=${startAt}&orderBy=created`,
     );
-    // API returns newest-first; reverse to chronological order for context
-    return { comments: [...data.comments].reverse(), total: data.total };
+    return { comments: data.comments, total: data.total };
+  }
+
+  async getAllComments(issueKey: string): Promise<JiraComment[]> {
+    const all: JiraComment[] = [];
+    let startAt = 0;
+    while (true) {
+      const { comments, total } = await this.getIssueComments(issueKey, 100, startAt);
+      all.push(...comments);
+      if (all.length >= total) break;
+      startAt += comments.length;
+    }
+    return all;
+  }
+
+  async downloadAttachment(contentUrl: string): Promise<Uint8Array> {
+    const response = await fetch(contentUrl, {
+      headers: { Authorization: this.authHeader },
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to download attachment: HTTP ${response.status} ${response.statusText}`);
+    }
+    return new Uint8Array(await response.arrayBuffer());
   }
 
   async createIssue(

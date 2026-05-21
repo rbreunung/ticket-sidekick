@@ -17,6 +17,14 @@ export interface JiraUser {
   emailAddress?: string;
 }
 
+export interface JiraAttachment {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;        // bytes
+  contentUrl: string;  // full URL for authenticated download
+}
+
 export interface JiraIssue {
   id: string;
   key: string;
@@ -31,6 +39,7 @@ export interface JiraIssue {
     fixVersions: { name: string }[];
     comment: { comments: JiraComment[]; total: number } | null;
     subtasks?: JiraSubtask[];
+    attachment?: JiraAttachment[];
     [key: string]: unknown;
   };
 }
@@ -111,7 +120,9 @@ export interface IJiraClient {
   getSprintByName(projectKey: string, sprintName: string): Promise<{ id: number }>;
   getTeamByName(name: string): Promise<{ id: string }>;
   createIssue(projectKey: string, summary: string, issueType: string, additionalFields?: Record<string, unknown>): Promise<JiraCreatedIssue>;
-  getIssueComments(issueKey: string, maxResults: number): Promise<{ comments: JiraComment[]; total: number }>;
+  getIssueComments(issueKey: string, maxResults: number, startAt?: number): Promise<{ comments: JiraComment[]; total: number }>;
+  getAllComments(issueKey: string): Promise<JiraComment[]>;
+  downloadAttachment(contentUrl: string): Promise<Uint8Array>;
   getFilterById(id: string): Promise<JiraFilter>;
   searchFiltersByName(name: string): Promise<JiraFilter[]>;
   getFields(): Promise<JiraFieldMeta[]>;
