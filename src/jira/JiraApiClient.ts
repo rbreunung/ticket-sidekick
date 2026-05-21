@@ -87,6 +87,28 @@ export class JiraApiClient implements IJiraClient {
     return response.json() as Promise<T>;
   }
 
+  private async requestV3<T>(path: string, options: RequestInit = {}): Promise<T> {
+    const url = `${this.baseUrl}/rest/api/3${path}`;
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        Authorization: this.authHeader,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...(options.headers ?? {}),
+      },
+    });
+    if (!response.ok) {
+      if (response.status === 401) throw new Error(`Authentication failed at ${url}. Check your credentials.`);
+      if (response.status === 404) throw new Error(`Not found: ${url}`);
+      const body = await response.text().catch(() => '');
+      throw new Error(`Jira API error ${response.status} ${response.statusText} at ${url}${body ? ` — ${body}` : ''}`);
+    }
+    if (response.status === 204) return undefined as T;
+    await assertJsonContentType(response);
+    return response.json() as Promise<T>;
+  }
+
   private async teamsRequest<T>(path: string): Promise<T> {
     const url = `${this.baseUrl}/rest/teams/1.0${path}`;
     const response = await fetch(url, {
@@ -123,6 +145,10 @@ export class JiraApiClient implements IJiraClient {
     const fields = ['summary', 'status', 'assignee', 'priority', 'labels', 'fixVersions', 'reporter', 'subtasks'];
     let qs = `jql=${encodeURIComponent(jql)}&maxResults=${maxResults}&${fields.map(f => `fields=${f}`).join('&')}`;
     if (startAt !== undefined) qs += `&startAt=${startAt}`;
+    // Cloud removed /rest/api/2/search (410); must use /rest/api/3/search/jql
+    if (this.authType === 'cloud') {
+      return this.requestV3<JiraSearchResult>(`/search/jql?${qs}`);
+    }
     return this.request<JiraSearchResult>(`/search?${qs}`);
   }
 

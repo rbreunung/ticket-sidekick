@@ -110,16 +110,28 @@ describe('JiraApiClient', () => {
   });
 
   describe('searchJql', () => {
-    it('sends JQL as a GET query param to /search/jql', async () => {
+    it('uses /rest/api/2/search for datacenter', async () => {
       const mockFetch = makeFetch({ issues: [], isLast: true });
       vi.stubGlobal('fetch', mockFetch);
       const client = new JiraApiClient(BASE_CONFIG);
       const result = await client.searchJql('project = PROJ');
       expect(result.issues).toHaveLength(0);
       const [url, options] = mockFetch.mock.calls[0] as [string, RequestInit];
-      expect(url).toContain('/search?');
+      expect(url).toContain('/rest/api/2/search?');
       expect(url).toContain('jql=project%20%3D%20PROJ');
-      expect(options.method).toBeUndefined(); // GET has no explicit method
+      expect(options.method).toBeUndefined();
+    });
+
+    it('uses /rest/api/3/search/jql for cloud', async () => {
+      const mockFetch = makeFetch({ issues: [], isLast: true });
+      vi.stubGlobal('fetch', mockFetch);
+      const client = new JiraApiClient({ ...BASE_CONFIG, authType: 'cloud' });
+      const result = await client.searchJql('project = PROJ');
+      expect(result.issues).toHaveLength(0);
+      const [url, options] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(url).toContain('/rest/api/3/search/jql?');
+      expect(url).toContain('jql=project%20%3D%20PROJ');
+      expect(options.method).toBeUndefined();
     });
 
     it('appends startAt to the query string when provided', async () => {

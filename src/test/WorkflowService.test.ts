@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { findPath, loadWorkflowCache, discoverWorkflow } from '../services/WorkflowService';
+import { findPath, loadWorkflowCache, discoverWorkflow, preserveSkippedStatuses } from '../services/WorkflowService';
 import { MockJiraClient } from './mocks/MockJiraClient';
 
 const graph = {
@@ -90,5 +90,41 @@ describe('discoverWorkflow', () => {
     const { graph, skippedStatuses } = await discoverWorkflow(client, 'PROJ', 'Unknown');
     expect(graph).toEqual({});
     expect(skippedStatuses).toEqual([]);
+  });
+});
+
+describe('preserveSkippedStatuses', () => {
+  const oldTransitions = [{ id: '99', name: 'Close', to: 'Closed' }];
+
+  it('copies transitions from oldGraph for each skipped status', () => {
+    const newGraph = { 'Open': [{ id: '1', name: 'Start', to: 'In Progress' }] };
+    const oldGraph = { 'Closed': oldTransitions };
+    const preserved = preserveSkippedStatuses(newGraph, ['Closed'], oldGraph);
+    expect(preserved).toEqual(['Closed']);
+    expect(newGraph['Closed']).toBe(oldTransitions);
+  });
+
+  it('does not add a skipped status that has no entry in oldGraph', () => {
+    const newGraph = { 'Open': [{ id: '1', name: 'Start', to: 'In Progress' }] };
+    const preserved = preserveSkippedStatuses(newGraph, ['Ghost'], {});
+    expect(preserved).toEqual([]);
+    expect(newGraph['Ghost']).toBeUndefined();
+  });
+
+  it('returns empty array when skippedStatuses is empty', () => {
+    const newGraph = { 'Open': [{ id: '1', name: 'Start', to: 'In Progress' }] };
+    const preserved = preserveSkippedStatuses(newGraph, [], { 'Closed': oldTransitions });
+    expect(preserved).toEqual([]);
+  });
+
+  it('preserves multiple skipped statuses present in oldGraph', () => {
+    const newGraph = {};
+    const oldGraph = {
+      'Closed': oldTransitions,
+      'Cancelled': [{ id: '88', name: 'Cancel', to: 'Cancelled' }],
+    };
+    const preserved = preserveSkippedStatuses(newGraph, ['Closed', 'Cancelled', 'Ghost'], oldGraph);
+    expect(preserved).toEqual(['Closed', 'Cancelled']);
+    expect(Object.keys(newGraph)).toHaveLength(2);
   });
 });

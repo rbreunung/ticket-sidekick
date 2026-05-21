@@ -34,6 +34,21 @@ export function saveWorkflowCache(workspaceRoot: string, cache: WorkflowCache): 
   writeFileSync(path, JSON.stringify(cache, null, 2), 'utf-8');
 }
 
+export function preserveSkippedStatuses(
+  newGraph: WorkflowGraph,
+  skippedStatuses: string[],
+  oldGraph: WorkflowGraph,
+): string[] {
+  const preserved: string[] = [];
+  for (const status of skippedStatuses) {
+    if (oldGraph[status]) {
+      newGraph[status] = oldGraph[status];
+      preserved.push(status);
+    }
+  }
+  return preserved;
+}
+
 export function findPath(graph: WorkflowGraph, from: string, to: string): CachedTransition[] | null {
   if (from === to) return [];
   const queue: Array<{ state: string; path: CachedTransition[] }> = [{ state: from, path: [] }];

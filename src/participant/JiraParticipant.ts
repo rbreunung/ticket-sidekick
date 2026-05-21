@@ -12,7 +12,7 @@ import { extractTicketId } from '../utils/branchParser';
 import { redactUrls, tokenStatus } from '../utils/diagUtils';
 import { markdownToJiraWiki } from '../utils/markdownToJiraWiki';
 import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type FieldUpdatePreviewSession, type SpellCheckSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks } from './sessionState';
-import { discoverWorkflow, loadWorkflowCache, saveWorkflowCache, findPath } from '../services/WorkflowService';
+import { discoverWorkflow, loadWorkflowCache, saveWorkflowCache, findPath, preserveSkippedStatuses } from '../services/WorkflowService';
 import type { WorkflowGraph } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
 
@@ -29,6 +29,7 @@ type Operation =
   | 'createTicket'
   | 'discoverWorkflow'
   | 'runCleanup'
+  | 'transition'
   | 'bulkTransition'
   | 'bulkUpdateField'
   | 'loadTicket';
@@ -63,10 +64,11 @@ interface ParsedIntent {
   bulkFieldValue: string | null;
   cleanupRuleName: string | null;
   fixVersion: string | null;
+  resolution: string | null;
 }
 
 const INTENT_PROMPT = `Parse this Jira command and respond with ONLY a JSON object. No markdown, no explanation.
-Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|"addComment"|"updateField"|"showFields"|"searchJql"|"validateFields"|"createTicket"|"discoverWorkflow"|"runCleanup"|"bulkTransition"|"bulkUpdateField"|"loadTicket","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"assignee":string|null,"components":string|null,"description":string|null,"comment":string|null,"commentQuery":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"fieldName":string|null,"fieldValue":string|null,"arrayOp":"set"|"add"|"remove","scope":"single"|"bulk"|null,"jql":string|null,"filterId":string|null,"filterName":string|null,"targetStatus":string|null,"bulkFieldName":string|null,"bulkFieldValue":string|null,"cleanupRuleName":string|null,"fixVersion":string|null}
+Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|"addComment"|"updateField"|"showFields"|"searchJql"|"validateFields"|"createTicket"|"discoverWorkflow"|"runCleanup"|"transition"|"bulkTransition"|"bulkUpdateField"|"loadTicket","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"assignee":string|null,"components":string|null,"description":string|null,"comment":string|null,"commentQuery":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"fieldName":string|null,"fieldValue":string|null,"arrayOp":"set"|"add"|"remove","scope":"single"|"bulk"|null,"jql":string|null,"filterId":string|null,"filterName":string|null,"targetStatus":string|null,"bulkFieldName":string|null,"bulkFieldValue":string|null,"cleanupRuleName":string|null,"fixVersion":string|null,"resolution":string|null}
 - getTicket: show, display, look up a specific ticket; returns all non-null fields, description, and one-line comment summaries
 - summarizeTicket: summarise, summarize, tl;dr, give me an overview; produces a prose paragraph covering the ticket and its comments together
 - showComments: show, list, display all comments in full; shows the actual comment bodies numbered; use when user wants to read the comment text rather than a summary
@@ -78,6 +80,7 @@ Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|
 - validateFields: check, validate required fields on a ticket
 - createTicket: create, open, add a new ticket/issue/bug/story/task; description is any additional body content the user provided beyond the summary (e.g. code blocks, steps to reproduce, specifications) — null if no extra content; assignee is the person to assign the ticket to ("me"/"myself" for the current user, or a name/email) — null if not mentioned; components is a comma-separated string of component names if mentioned — null if not mentioned
 - discoverWorkflow: discover or refresh the workflow graph for a project and issue type; projectKey and issueType are required
+- transition: move/close/transition a single ticket to a target status; targetStatus is the destination state name; resolution is the resolution name if the user specifies one (e.g. "with resolution Not a Bug") — null otherwise; use when the user refers to one ticket (explicit key or resolved from context) — NOT when they say "them", "these tickets", "all of them"
 - bulkTransition: transition/move/close/resolve "them" or "these tickets" or "all of them" to a status; only valid when a prior search result is available; targetStatus is the destination state name
 - bulkUpdateField: set/update/change a field on "them" or "these tickets"; only valid when a prior search result is available; bulkFieldName is the field name the user gave, bulkFieldValue is the value string
 - runCleanup: bulk-close or bulk-transition ALL tickets of a type in a project; triggered by "close all", "run cleanup", or "close PROJECT ISSUETYPE" where PROJECT is a project key and ISSUETYPE is an issue type name (not a ticket key like PROJ-123); projectKey and issueType are extracted from the prompt; cleanupRuleName is the quoted rule name if given; fixVersion is the exact fix version string if given (must be quoted in the prompt, e.g. "Fix Version 3.2"); examples: "@jira close VSJI Bug", "@jira run cleanup 'Close released bugs'", "@jira close BILLING bugs in 'Release 3.2'"
@@ -842,16 +845,23 @@ async function handleDiscoverWorkflow(
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
   const cache = loadWorkflowCache(workspaceRoot);
   if (!cache[projectKey]) cache[projectKey] = {};
+  // Preserve previously-cached transitions for statuses that had no representative ticket this run
+  const oldGraph = cache[projectKey][issueType]?.graph ?? {};
+  const preserved = preserveSkippedStatuses(graph, skippedStatuses, oldGraph);
   cache[projectKey][issueType] = { discovered: new Date().toISOString().slice(0, 10), graph };
   saveWorkflowCache(workspaceRoot, cache);
 
-  const lines = statuses.map((s) => {
+  const lines = Object.keys(graph).map((s) => {
     const targets = graph[s].map((t) => `${t.name} → **${t.to}**`).join(', ');
     return `**${s}**: ${targets}`;
   });
-  let summary = `Workflow discovered for **${projectKey} / ${issueType}** (${statuses.length} statuses):\n\n${lines.join('\n\n')}\n\nSaved to \`.jira-workflow-cache.json\`.`;
-  if (skippedStatuses.length > 0) {
-    summary += `\n\n⚠️ **${skippedStatuses.length} status(es) had no open tickets and were not sampled:** ${skippedStatuses.join(', ')}. Re-run discovery once tickets exist in those states.`;
+  let summary = `Workflow discovered for **${projectKey} / ${issueType}** (${lines.length} statuses):\n\n${lines.join('\n\n')}\n\nSaved to \`.jira-workflow-cache.json\`.`;
+  const trulySkipped = skippedStatuses.filter(s => !preserved.includes(s));
+  if (preserved.length > 0) {
+    summary += `\n\n_${preserved.length} status(es) had no tickets and kept cached transitions: ${preserved.join(', ')}._`;
+  }
+  if (trulySkipped.length > 0) {
+    summary += `\n\n⚠️ **${trulySkipped.length} status(es) had no tickets and no cached transitions:** ${trulySkipped.join(', ')}. Re-run discovery once tickets exist in those states.`;
   }
   stream.markdown(summary);
 }
@@ -1918,6 +1928,46 @@ export function createJiraParticipant(
             await ws.update('jira.session.searchResult', searchSession);
           }
           result = jqlLabel + await ticketService.searchTickets(resolvedJql);
+          break;
+        }
+        case 'transition': {
+          if (!intent.targetStatus) {
+            result = 'Please specify a target status (e.g. "move to Done").';
+            break;
+          }
+          const targetStatus = intent.targetStatus;
+          const transIssue = await jiraClient.getIssue(ticketKey!);
+          const currentStatus = transIssue.fields.status.name;
+          if (currentStatus.toLowerCase() === targetStatus.toLowerCase()) {
+            result = `**${ticketKey}** is already in **${currentStatus}**.`;
+            break;
+          }
+          const transitionList = await jiraClient.getTransitions(ticketKey!);
+          const direct = transitionList.find(t => t.to.name.toLowerCase() === targetStatus.toLowerCase());
+          const resolution = intent.resolution ?? undefined;
+          if (direct) {
+            await ticketService.transitionAlongPath(ticketKey!, [{ id: direct.id, name: direct.name, to: direct.to.name }], resolution);
+            result = `**${ticketKey}** moved to **${direct.to.name}**.`;
+            break;
+          }
+          // Fall back to workflow cache for multi-hop paths
+          const transWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+          const transProjectKey = ticketKey!.split('-')[0];
+          const transIssueType = (transIssue.fields.issuetype as { name?: string } | undefined)?.name ?? '';
+          const transGraph = loadWorkflowCache(transWorkspaceRoot)[transProjectKey]?.[transIssueType]?.graph;
+          if (transGraph) {
+            const path = findPath(transGraph, currentStatus, targetStatus);
+            if (path && path.length > 0) {
+              await ticketService.transitionAlongPath(ticketKey!, path, resolution);
+              result = `**${ticketKey}** moved to **${targetStatus}** (${path.length} hop${path.length > 1 ? 's' : ''}).`;
+              break;
+            }
+          }
+          const available = transitionList.map(t => `**${t.to.name}**`).join(', ');
+          const cacheHint = transGraph
+            ? ''
+            : ` Run \`@jira discover workflow ${transProjectKey} ${transIssueType || '<issuetype>'}\` to enable multi-hop transitions.`;
+          result = `No transition to **${targetStatus}** available from **${currentStatus}**.${available ? ` Available: ${available}.` : ''}${cacheHint}`;
           break;
         }
         case 'bulkTransition': {

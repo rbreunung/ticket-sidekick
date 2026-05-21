@@ -1,9 +1,9 @@
 {
   "VSJI": {
     "Bug": {
-      "discovered": "2026-05-11",
+      "discovered": "2026-05-21",
       "graph": {
-        "Zu erledigen": [
+        "Erledigt": [
           {
             "id": "11",
             "name": "Zu erledigen",
@@ -30,7 +30,34 @@
             "to": "Erledigt"
           }
         ],
-        "Erledigt": [
+        "In Überprüfung": [
+          {
+            "id": "11",
+            "name": "Zu erledigen",
+            "to": "Zu erledigen"
+          },
+          {
+            "id": "21",
+            "name": "In Analyse",
+            "to": "In Analyse"
+          },
+          {
+            "id": "31",
+            "name": "In Bearbeitung",
+            "to": "In Bearbeitung"
+          },
+          {
+            "id": "41",
+            "name": "In Überprüfung",
+            "to": "In Überprüfung"
+          },
+          {
+            "id": "51",
+            "name": "Erledigt",
+            "to": "Erledigt"
+          }
+        ],
+        "Zu erledigen": [
           {
             "id": "11",
             "name": "Zu erledigen",

@@ -67,6 +67,8 @@ Open GitHub Copilot Chat and use `@jira`:
 | `@jira assign to me` | Assigns ticket to the currently logged-in user |
 | `@jira update the description based on our conversation` | Generates a new description from context — shows preview before posting |
 | `@jira comment that the fix is in PR #42` | Adds a comment |
+| `@jira move to Done` | Transitions the current ticket to a target status |
+| `@jira move to Cancelled with resolution "Not a Bug"` | Transitions and sets a resolution in one step |
 | `@jira find open bugs assigned to me` | Runs JQL search |
 | `@jira check required fields on PROJ-123` | Validates required fields |
 | `@jira check` | Tests the connection and shows active configuration |
@@ -403,6 +405,25 @@ Group-picker fields use `{ "name": "..." }` — no API lookup is needed since th
 
 You can choose **No template** to create a plain ticket without any template applied.
 
+### Transitioning a single ticket
+
+Move a ticket to a target status by name:
+
+```text
+@jira move to Done
+@jira close this
+@jira transition PROJ-123 to In Review
+@jira move to Cancelled with resolution "Not a Bug"
+```
+
+The plugin resolves the ticket from context (current prompt, git branch, or last referenced key). It then fetches the ticket's available transitions and finds the one whose destination matches the target name (case-insensitive).
+
+If the target state requires multiple hops (e.g. Open → In Review → Done), the plugin falls back to the workflow cache automatically — no extra steps needed as long as you have run `@jira discover workflow` at least once for that project and issue type.
+
+If no path is found, the response lists the directly reachable states from the current status.
+
+**Resolution** — include `with resolution "<name>"` to set the resolution field on the final transition in one command.
+
 ### Workflow discovery (required for bulk transitions)
 
 Before running cleanup rules or bulk status transitions, teach the plugin your Jira workflow:
@@ -413,7 +434,9 @@ Before running cleanup rules or bulk status transitions, teach the plugin your J
 
 This samples tickets across all statuses, queries their available transitions, and saves a workflow graph to `.jira-workflow-cache.json` at your workspace root. Re-run whenever your Jira workflow changes.
 
-The plugin uses this graph to find the shortest transition path from each ticket's current status to the target state.
+The plugin uses this graph to find the shortest transition path from each ticket's current status to the target state — for both single-ticket `move` commands and bulk cleanup runs.
+
+**Cache preservation:** if a status has no tickets at discovery time, the plugin keeps its previously cached transitions rather than dropping them. Only statuses with no tickets *and* no prior cache entry are marked as unsampled.
 
 > **Tip:** Commit `.jira-workflow-cache.json` to share it with your team so everyone benefits from a single discovery run.
 
