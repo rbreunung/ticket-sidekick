@@ -652,10 +652,16 @@ async function handleCreateTicket(
   return continueAfterIssueType(projectKey, summary, resolvedType, intent.description, selectedTemplate, request.model, stream, token, jiraClient, ticketService, workspaceState, extraFields);
 }
 
-const KNOWN_TEXT_EXTENSIONS = new Set([
+const DOWNLOADABLE_EXTENSIONS = new Set([
+  // text / source
   '.log', '.txt', '.java', '.xml', '.json', '.yaml', '.yml', '.md',
   '.properties', '.sql', '.sh', '.py', '.js', '.ts', '.html', '.css',
   '.patch', '.diff',
+  // documents
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+  '.odt', '.ods', '.odp', '.rtf', '.csv',
+  // archives
+  '.zip', '.tar', '.gz', '.tgz', '.bz2', '.7z', '.rar', '.jar', '.war',
 ]);
 const ATTACHMENT_SIZE_LIMIT = 5 * 1024 * 1024;
 
@@ -696,7 +702,7 @@ async function handleLoadTicket(
   for (const att of attachments) {
     if (att.size > ATTACHMENT_SIZE_LIMIT) { toSkip.push(att); continue; }
     const ext = att.filename.includes('.') ? ('.' + att.filename.split('.').pop()!.toLowerCase()) : '';
-    const eligible = att.mimeType.startsWith('text/') || att.mimeType.startsWith('image/') || KNOWN_TEXT_EXTENSIONS.has(ext);
+    const eligible = att.mimeType.startsWith('text/') || att.mimeType.startsWith('image/') || DOWNLOADABLE_EXTENSIONS.has(ext);
     (eligible ? toDownload : toSkip).push(att);
   }
 
