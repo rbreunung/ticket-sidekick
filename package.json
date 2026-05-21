@@ -108,6 +108,7 @@
               "watches",
               "lastViewed",
               "aggregateprogress",
+              "progress",
               "votes",
               "created",
               "updated",

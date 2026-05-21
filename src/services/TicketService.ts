@@ -435,7 +435,7 @@ export class TicketService {
   async showFields(issueKey: string, fieldMeta?: JiraFieldMeta[]): Promise<string> {
     const issue = await this.client.getIssue(issueKey);
     const meta = fieldMeta ?? await this.client.getFields();
-    const navigable = meta.filter(f => f.navigable === true);
+    const navigable = meta.filter(f => f.navigable === true).sort((a, b) => a.name.localeCompare(b.name));
     const rows: string[] = [];
     for (const f of navigable) {
       const value = issue.fields[f.id];
