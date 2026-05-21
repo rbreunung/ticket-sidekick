@@ -11,7 +11,7 @@ import { FieldResolver } from '../templates/FieldResolver';
 import { extractTicketId } from '../utils/branchParser';
 import { redactUrls, tokenStatus } from '../utils/diagUtils';
 import { markdownToJiraWiki } from '../utils/markdownToJiraWiki';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type FieldUpdatePreviewSession, type SpellCheckSession, type FieldSelectionSession, type SprintSelectionSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type FieldUpdatePreviewSession, type SpellCheckSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks } from './sessionState';
 import { discoverWorkflow, loadWorkflowCache, saveWorkflowCache, findPath } from '../services/WorkflowService';
 import type { WorkflowGraph } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
@@ -661,7 +661,7 @@ const DOWNLOADABLE_EXTENSIONS = new Set([
   '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
   '.odt', '.ods', '.odp', '.rtf', '.csv',
   // archives
-  '.zip', '.tar', '.gz', '.tgz', '.bz2', '.7z', '.rar', '.jar', '.war',
+  '.zip', '.tar', '.gz', '.tgz', '.bz2', '.7z', '.rar', '.jar', '.war', '.ear',
 ]);
 const ATTACHMENT_SIZE_LIMIT = 100 * 1024 * 1024;
 
@@ -786,20 +786,38 @@ async function handleLoadTicket(
     }
   } catch { /* non-fatal */ }
 
+  // Build skipped list (oversized + unknown binary + download failures)
+  const allSkipped: LoadSkippedSession['skipped'] = [
+    ...toSkip.map(a => ({
+      filename: a.filename, content: a.content, size: a.size, mimeType: a.mimeType,
+      reason: a.size > ATTACHMENT_SIZE_LIMIT ? 'over 100 MB size limit' : 'unknown binary format',
+    })),
+    ...downloadErrors.map(e => {
+      const filename = e.split(':')[0];
+      const att = toDownload.find(a => a.filename === filename);
+      return { filename, content: att?.content ?? '', size: att?.size ?? 0, mimeType: att?.mimeType ?? 'unknown', reason: 'download failed' };
+    }),
+  ];
+
   // Stream summary
-  const skippedTotal = toSkip.length + downloadErrors.length;
   const summaryLines: string[] = [`\n\nLoaded **${issue.key}** into \`.jira-context/${ticketKey}/\``];
   summaryLines.push(`- \`ticket.md\` — metadata and description`);
   summaryLines.push(`- \`comments.md\` — ${comments.length} comment${comments.length !== 1 ? 's' : ''}`);
   if (downloaded.size > 0) summaryLines.push(`- \`attachments/\` — ${downloaded.size} file${downloaded.size !== 1 ? 's' : ''} downloaded`);
-  if (skippedTotal > 0) {
-    const names = [...toSkip.map(a => a.filename), ...downloadErrors.map(e => e.split(':')[0])].join(', ');
-    summaryLines.push(`- ${skippedTotal} attachment${skippedTotal !== 1 ? 's' : ''} skipped: ${names}`);
-  }
-  if (downloadErrors.length > 0) summaryLines.push(`\n_Download errors:_\n${downloadErrors.map(e => `- ${e}`).join('\n')}`);
   if (writeErrors.length > 0) summaryLines.push(`\n_Write errors:_\n${writeErrors.map(e => `- ${e}`).join('\n')}`);
   stream.markdown(summaryLines.join('\n'));
-  stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
+
+  if (allSkipped.length > 0) {
+    const listLines = allSkipped.map((s, i) => {
+      const size = s.size >= 1_048_576 ? `${(s.size / 1_048_576).toFixed(1)} MB` : `${Math.round(s.size / 1024)} KB`;
+      return `${i + 1}. \`${s.filename}\` — ${size} (${s.mimeType}) — ${s.reason}`;
+    });
+    stream.markdown(`\n\n**Skipped attachments:**\n\n${listLines.join('\n')}\n\nReply with a number to download it anyway.`);
+    await ws.update('jira.session.loadSkipped', { ticketKey, skipped: allSkipped } satisfies LoadSkippedSession);
+    stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:load-skipped -->`);
+  } else {
+    stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
+  }
 }
 
 async function handleDiscoverWorkflow(
@@ -1569,6 +1587,47 @@ export function createJiraParticipant(
           }
         } catch (err) {
           stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+        }
+        return;
+      }
+    }
+
+    // Load skipped — user replied with a number to download a skipped attachment
+    if (lastResponse.includes('<!-- jira:load-skipped -->')) {
+      const loadSkippedSession = ws.get<LoadSkippedSession>('jira.session.loadSkipped');
+      if (loadSkippedSession) {
+        const idx = parseSkippedAttachmentSelection(request.prompt, loadSkippedSession.skipped.length);
+        const skippedList = (items: LoadSkippedSession['skipped']) => items.map((s, i) => {
+          const sz = s.size >= 1_048_576 ? `${(s.size / 1_048_576).toFixed(1)} MB` : `${Math.round(s.size / 1024)} KB`;
+          return `${i + 1}. \`${s.filename}\` — ${sz} (${s.mimeType}) — ${s.reason}`;
+        }).join('\n');
+        if (idx === 'invalid') {
+          stream.markdown(`Please reply with a number:\n\n${skippedList(loadSkippedSession.skipped)}\n\nReply with a number to download it anyway.\n\n<!-- jira:load-skipped -->`);
+          return;
+        }
+        const chosen = loadSkippedSession.skipped[idx - 1];
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (!workspaceFolder) {
+          await ws.update('jira.session.loadSkipped', undefined);
+          stream.markdown('No workspace folder is open.');
+          return;
+        }
+        const attachmentsDir = vscode.Uri.joinPath(workspaceFolder.uri, '.jira-context', loadSkippedSession.ticketKey, 'attachments');
+        try {
+          stream.markdown(`_Downloading \`${chosen.filename}\`…_\n\n`);
+          const bytes = await ticketService.downloadAttachment(chosen.content);
+          await vscode.workspace.fs.createDirectory(attachmentsDir);
+          await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(attachmentsDir, chosen.filename), bytes);
+          const remaining = loadSkippedSession.skipped.filter((_, i) => i !== idx - 1);
+          if (remaining.length > 0) {
+            await ws.update('jira.session.loadSkipped', { ticketKey: loadSkippedSession.ticketKey, skipped: remaining } satisfies LoadSkippedSession);
+            stream.markdown(`✓ \`${chosen.filename}\` downloaded.\n\n**Remaining skipped attachments:**\n\n${skippedList(remaining)}\n\nReply with a number to download another.\n\n<!-- @jira-ticket:${loadSkippedSession.ticketKey} -->\n\n<!-- jira:load-skipped -->`);
+          } else {
+            await ws.update('jira.session.loadSkipped', undefined);
+            stream.markdown(`✓ \`${chosen.filename}\` downloaded. All attachments saved.\n\n<!-- @jira-ticket:${loadSkippedSession.ticketKey} -->`);
+          }
+        } catch (err) {
+          stream.markdown(`Failed to download \`${chosen.filename}\`: ${err instanceof Error ? err.message : String(err)}\n\n<!-- @jira-ticket:${loadSkippedSession.ticketKey} -->\n\n<!-- jira:load-skipped -->`);
         }
         return;
       }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks } from '../participant/sessionState';
+import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection } from '../participant/sessionState';
 import type { TransitionBatchTicket } from '../participant/sessionState';
 import type { JiraComment } from '../jira/IJiraClient';
 
@@ -617,5 +617,27 @@ describe('rewriteAttachmentLinks', () => {
   it('returns unchanged string when sets are empty', () => {
     const md = '![file.png](file.png)';
     expect(rewriteAttachmentLinks(md, new Set(), new Map())).toBe(md);
+  });
+});
+
+describe('parseSkippedAttachmentSelection', () => {
+  it('returns the 1-based index for a valid number', () => {
+    expect(parseSkippedAttachmentSelection('1', 3)).toBe(1);
+    expect(parseSkippedAttachmentSelection('3', 3)).toBe(3);
+  });
+
+  it('returns invalid for a number out of range', () => {
+    expect(parseSkippedAttachmentSelection('0', 3)).toBe('invalid');
+    expect(parseSkippedAttachmentSelection('4', 3)).toBe('invalid');
+  });
+
+  it('returns invalid for non-numeric input', () => {
+    expect(parseSkippedAttachmentSelection('all', 3)).toBe('invalid');
+    expect(parseSkippedAttachmentSelection('', 3)).toBe('invalid');
+    expect(parseSkippedAttachmentSelection('abc', 3)).toBe('invalid');
+  });
+
+  it('trims whitespace before parsing', () => {
+    expect(parseSkippedAttachmentSelection('  2  ', 3)).toBe(2);
   });
 });
