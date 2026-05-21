@@ -49,24 +49,57 @@ Open GitHub Copilot Chat and use `@jira`:
 
 | What you type | What happens |
 | --- | --- |
-| `@jira show PROJ-123` | Full ticket: structured fields, formatted description, one-line comment summaries |
-| `@jira summarize PROJ-123` | Same structured fields as `show`, but replaces description + comments with a one-paragraph synthesis |
+| `@jira show PROJ-123` | Full ticket: all non-null fields in a metadata table, formatted description, one-line comment summaries |
+| `@jira show fields on PROJ-123` | Table of every field: name, ID, and current value — use to discover IDs for `additionalDisplayFields` |
+| `@jira summarize PROJ-123` | Same fields as `show`, but description + comments replaced by a one-paragraph AI synthesis |
 | `@jira show comments` | Full formatted comment bodies numbered — use when you want to read the actual text |
 | `@jira what do the comments say about the login bug?` | LLM synthesis filtered to a topic |
 | `@jira create a bug: login times out` | Creates a new ticket (asks for project and type if missing) |
 | `@jira create Story in VSJI: add dark mode` | Creates a ticket with project and type from the prompt |
-| `@jira set priority to High` | Updates priority on current branch ticket |
-| `@jira set labels to backend, urgent` | Sets labels (comma-separated) on the current branch ticket |
-| `@jira set fix version to Release 3.2` | Sets the fix version on the current branch ticket |
+| `@jira set priority to High` | Updates any field by name (exact or fuzzy-matched) on the current branch ticket |
+| `@jira set labels to backend, urgent` | Replaces entire array field (comma-separated) |
+| `@jira add frontend to labels` | Appends to an array field, deduplicates |
+| `@jira remove backend from labels` | Removes items from an array field |
+| `@jira set sprint to Sprint 4` | Sets sprint field — fuzzy-matched by name, resolved to sprint ID |
+| `@jira set customfield_10500 to ASL QRF` | Updates any custom field by ID |
 | `@jira assign this to jane.doe` | Assigns ticket (searches Jira by display name) |
 | `@jira assign to me` | Assigns ticket to the currently logged-in user |
-| `@jira set components to Backend` | Sets the Components field on the current branch ticket |
-| `@jira set components to Backend, API` | Sets multiple components (comma-separated) |
 | `@jira update the description based on our conversation` | Generates a new description from context — shows preview before posting |
 | `@jira comment that the fix is in PR #42` | Adds a comment |
 | `@jira find open bugs assigned to me` | Runs JQL search |
 | `@jira check required fields on PROJ-123` | Validates required fields |
 | `@jira check` | Tests the connection and shows active configuration |
+
+### Generalised field updates
+
+`@jira set <field> to <value>` works for **any** editable Jira field — built-in fields,
+custom fields, and sprint.
+
+**Field name matching** is fuzzy: the plugin tries an exact match first, then prefix, then
+substring. If multiple fields match, a numbered disambiguation list is shown. Use field
+IDs (e.g. `customfield_10500`) for an exact, unambiguous match.
+
+**Array operations** let you add to or remove from multi-value fields without overwriting
+existing entries:
+
+| What you type | Effect |
+| --- | --- |
+| `@jira set labels to backend, urgent` | Replace entire labels array |
+| `@jira add frontend to labels` | Append `frontend`, deduplicate |
+| `@jira remove backend from labels` | Remove `backend` from the array |
+
+**Sprint fields** are resolved by fuzzy name match against active and future sprints in the
+project. If multiple sprints match, a numbered list is shown.
+
+**Preview before writing:** every field update streams a confirm screen before writing.
+Reply **`ok`** to apply, **`(c)`** to cancel, or give an adjustment instruction.
+
+**Scope:** if your last search returned multiple tickets, the plugin asks whether to apply
+to the current ticket or all N results from the search.
+
+**Typo correction** (on by default): when setting a text field the plugin checks for
+spelling and grammar errors and offers a corrected version before the preview. Disable per
+workspace with `ticketSidekick.jira.spellCheck: false`.
 
 ### Ticket creation
 
@@ -141,8 +174,12 @@ There are two distinct ways to read a ticket:
 
 | Command | What you get |
 | --- | --- |
-| `@jira show PROJ-123` | Structured fields + formatted description + numbered one-line comment summaries |
-| `@jira summarize PROJ-123` | Same structured fields, but description and comments replaced by a one-paragraph AI synthesis |
+| `@jira show PROJ-123` | All non-null fields in a metadata table, multi-line fields (description, rich-text custom fields) in their own sections, and numbered one-line comment summaries |
+| `@jira summarize PROJ-123` | Same fields, but description and comments replaced by a one-paragraph AI synthesis |
+
+`@jira show` previously displayed seven hardcoded fields. It now renders every
+non-null field returned by Jira — custom fields, dates, sprint, attachments, and
+any other metadata the ticket carries.
 
 And two ways to read comments:
 
@@ -193,6 +230,25 @@ When set, the `create` command skips the project input box and uses this key aut
 ```
 
 Used by the `check required fields` command.
+
+### Optional: always-show fields
+
+By default `@jira show` omits fields that are null. Add field IDs to
+`additionalDisplayFields` to always show them (as `_Not set_` when empty). Run
+`@jira show fields on PROJ-123` to discover available field IDs.
+
+```json
+"ticketSidekick.jira.additionalDisplayFields": ["customfield_10020", "customfield_10500"]
+```
+
+### Optional: spell-check on field updates
+
+When you set a text field, the plugin checks for spelling and grammar errors and offers a
+corrected version before the preview confirm. Enabled by default. Disable per workspace:
+
+```json
+"ticketSidekick.jira.spellCheck": false
+```
 
 ### Optional: Jira connection info banner
 
