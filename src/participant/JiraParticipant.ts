@@ -663,7 +663,7 @@ const DOWNLOADABLE_EXTENSIONS = new Set([
   // archives
   '.zip', '.tar', '.gz', '.tgz', '.bz2', '.7z', '.rar', '.jar', '.war',
 ]);
-const ATTACHMENT_SIZE_LIMIT = 5 * 1024 * 1024;
+const ATTACHMENT_SIZE_LIMIT = 100 * 1024 * 1024;
 
 async function handleLoadTicket(
   ticketKey: string,
