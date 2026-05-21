@@ -669,6 +669,7 @@ async function handleLoadTicket(
   ticketKey: string,
   ticketService: TicketService,
   stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
   fieldMeta: JiraFieldMeta[],
   alwaysShowIds: Set<string>,
   hiddenIds: Set<string>,
@@ -2019,7 +2020,7 @@ export function createJiraParticipant(
           const loadFieldMeta = await ticketService.getFieldMeta();
           const loadAlwaysShow = new Set<string>(config.additionalDisplayFields);
           const loadHidden = new Set<string>(config.hiddenDisplayFields);
-          await handleLoadTicket(ticketKey!, ticketService, stream, loadFieldMeta, loadAlwaysShow, loadHidden);
+          await handleLoadTicket(ticketKey!, ticketService, stream, ws, loadFieldMeta, loadAlwaysShow, loadHidden);
           return;
         }
         case 'validateFields':
