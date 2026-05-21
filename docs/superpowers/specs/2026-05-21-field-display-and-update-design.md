@@ -21,8 +21,9 @@ no value disambiguation, and no typo correction.
 
 All non-null fields returned by `GET /issue/{key}` are displayed. `/field`
 metadata provides human-readable names and is used to filter out Jira-internal
-technical fields. Fields in `additionalDisplayFields` settings are always shown
-even when null.
+technical fields — include only fields where `navigable: true` in the `/field`
+response. Fields in `additionalDisplayFields` settings are always shown even
+when null.
 
 **Layout rules:**
 
@@ -199,6 +200,10 @@ current values. Useful for discovering field IDs to use in
 `additionalDisplayFields` or in `@jira set`.
 
 Output: a table of `Field name | Field ID | Current value`.
+
+Current value rendering follows the same rules as §1: sprint → active sprint
+name; user → `displayName`; array → joined items (`, `); ADF / multi-line
+strings → truncated to 80 chars with `…`. Null values → `_Not set_`.
 
 If no ticket key is given, the plugin resolves the ticket using the standard
 order: explicit key in prompt → current git branch → last ticket in chat

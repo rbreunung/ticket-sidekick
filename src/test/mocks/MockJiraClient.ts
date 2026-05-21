@@ -11,6 +11,7 @@ import type {
   JiraProject,
   JiraProjectStatus,
   JiraSearchResult,
+  JiraSprintCandidate,
   JiraTransition,
   JiraUser,
 } from '../../jira/IJiraClient';
@@ -119,5 +120,14 @@ export class MockJiraClient implements IJiraClient {
   async getEditMeta(issueKey: string): Promise<Record<string, JiraEditMetaField>> {
     if (issueKey === 'PROJ-404') throw new Error('Not found');
     return loadFixture<Record<string, JiraEditMetaField>>('editmeta-PROJ-123.json');
+  }
+
+  async findSprints(projectKey: string, query: string): Promise<JiraSprintCandidate[]> {
+    const all = loadFixture<JiraSprintCandidate[]>('sprints-PROJ.json');
+    const lowerQuery = query.toLowerCase();
+    // Return only active and future sprints whose name contains the query
+    return all.filter(
+      s => (s.state === 'active' || s.state === 'future') && s.name.toLowerCase().includes(lowerQuery),
+    );
   }
 }

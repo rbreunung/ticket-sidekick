@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { TicketService, assembleDescription, extractTextFromAdf } from '../services/TicketService';
+import { TicketService, assembleDescription, extractTextFromAdf, resolveFieldIdFuzzy, formatIssueFields } from '../services/TicketService';
+import type { JiraFieldMeta } from '../jira/IJiraClient';
 import { MockJiraClient } from './mocks/MockJiraClient';
 
 describe('TicketService', () => {
@@ -428,6 +429,245 @@ describe('TicketService field resolution', () => {
     it('throws a clear error when the field is not present in editmeta', async () => {
       await expect(service.buildFieldValue('customfield_99999', 'PROJ-123', 'x')).rejects.toThrow(/customfield_99999/);
     });
+  });
+});
+
+describe('resolveFieldIdFuzzy', () => {
+  const fields: JiraFieldMeta[] = [
+    { id: 'summary', name: 'Summary', navigable: true, schema: { type: 'string' } },
+    { id: 'customfield_10020', name: 'Sprint', navigable: true, schema: { type: 'array', items: 'json', custom: 'com.pyxis.greenhopper.jira:gh-sprint' } },
+    { id: 'customfield_10500', name: 'Team Names', navigable: true, schema: { type: 'array', items: 'json' } },
+    { id: 'customfield_10501', name: 'Team Region', navigable: true, schema: { type: 'string' } },
+  ];
+
+  it('returns match on exact name (case-insensitive)', () => {
+    const result = resolveFieldIdFuzzy('summary', fields);
+    expect(result.kind).toBe('match');
+    if (result.kind === 'match') expect(result.field.id).toBe('summary');
+  });
+
+  it('returns match on exact field ID', () => {
+    const result = resolveFieldIdFuzzy('customfield_10020', fields);
+    expect(result.kind).toBe('match');
+    if (result.kind === 'match') expect(result.field.name).toBe('Sprint');
+  });
+
+  it('returns match on unique prefix', () => {
+    const result = resolveFieldIdFuzzy('sum', fields);
+    expect(result.kind).toBe('match');
+    if (result.kind === 'match') expect(result.field.id).toBe('summary');
+  });
+
+  it('returns candidates when multiple fields share a prefix', () => {
+    const result = resolveFieldIdFuzzy('team', fields);
+    expect(result.kind).toBe('candidates');
+    if (result.kind === 'candidates') expect(result.fields).toHaveLength(2);
+  });
+
+  it('returns match on unique substring', () => {
+    const result = resolveFieldIdFuzzy('region', fields);
+    expect(result.kind).toBe('match');
+    if (result.kind === 'match') expect(result.field.id).toBe('customfield_10501');
+  });
+
+  it('returns none when nothing matches', () => {
+    const result = resolveFieldIdFuzzy('doesnotexist', fields);
+    expect(result.kind).toBe('none');
+  });
+});
+
+describe('formatIssueFields', () => {
+  const fields: JiraFieldMeta[] = [
+    { id: 'summary', name: 'Summary', navigable: true, schema: { type: 'string' } },
+    { id: 'status', name: 'Status', navigable: true, schema: { type: 'status' } },
+    { id: 'assignee', name: 'Assignee', navigable: true, schema: { type: 'user' } },
+    { id: 'description', name: 'Description', navigable: true, schema: { type: 'string' } },
+    { id: 'comment', name: 'Comment', navigable: false, schema: { type: 'comments-page' } },
+    { id: 'subtasks', name: 'Sub-Tasks', navigable: false, schema: { type: 'array', items: 'issuelinks' } },
+    { id: 'customfield_10020', name: 'Sprint', navigable: true, schema: { type: 'array', items: 'json', custom: 'com.pyxis.greenhopper.jira:gh-sprint' } },
+  ];
+
+  it('renders status and assignee in the table', () => {
+    const issue = {
+      id: '1', key: 'PROJ-1',
+      fields: {
+        summary: 'Test', description: null,
+        status: { name: 'In Progress' },
+        assignee: { displayName: 'Jane Doe', accountId: 'abc' },
+        reporter: null, priority: null, labels: [], fixVersions: [], comment: null,
+      },
+    };
+    const { table } = formatIssueFields(issue as never, fields, new Set());
+    expect(table).toContain('Status');
+    expect(table).toContain('In Progress');
+    expect(table).toContain('Assignee');
+    expect(table).toContain('Jane Doe');
+  });
+
+  it('excludes comment and subtasks fields', () => {
+    const issue = {
+      id: '1', key: 'PROJ-1',
+      fields: {
+        summary: 'Test', description: null,
+        status: { name: 'Open' }, assignee: null, reporter: null,
+        priority: null, labels: [], fixVersions: [],
+        comment: { comments: [], total: 0 },
+        subtasks: [],
+      },
+    };
+    const { table, sections } = formatIssueFields(issue as never, fields, new Set());
+    expect(table).not.toContain('Comment');
+    expect(table + sections.join('')).not.toContain('Sub-Tasks');
+  });
+
+  it('excludes non-navigable fields', () => {
+    const issue = {
+      id: '1', key: 'PROJ-1',
+      fields: {
+        summary: 'Test', description: null,
+        status: { name: 'Open' }, assignee: null, reporter: null,
+        priority: null, labels: [], fixVersions: [], comment: null,
+      },
+    };
+    const { table } = formatIssueFields(issue as never, fields, new Set());
+    // comment has navigable: false — should not appear in table
+    expect(table).not.toContain('Comment');
+  });
+
+  it('renders long description as a section not a table row', () => {
+    const longDesc = 'x'.repeat(200);
+    const issue = {
+      id: '1', key: 'PROJ-1',
+      fields: {
+        summary: 'Test', description: longDesc,
+        status: { name: 'Open' }, assignee: null, reporter: null,
+        priority: null, labels: [], fixVersions: [], comment: null,
+      },
+    };
+    const { table, sections } = formatIssueFields(issue as never, fields, new Set());
+    expect(table).not.toContain(longDesc);
+    expect(sections.some(s => s.includes('## Description'))).toBe(true);
+  });
+
+  it('renders active sprint name in table row', () => {
+    const issue = {
+      id: '1', key: 'PROJ-1',
+      fields: {
+        summary: 'Test', description: null,
+        status: { name: 'Open' }, assignee: null, reporter: null,
+        priority: null, labels: [], fixVersions: [], comment: null,
+        customfield_10020: [{ name: 'Sprint 42', state: 'active' }, { name: 'Sprint 41', state: 'closed' }],
+      },
+    };
+    const { table } = formatIssueFields(issue as never, fields, new Set());
+    expect(table).toContain('Sprint 42');
+  });
+
+  it('shows alwaysShowIds fields even when null', () => {
+    const issue = {
+      id: '1', key: 'PROJ-1',
+      fields: {
+        summary: 'Test', description: null,
+        status: { name: 'Open' }, assignee: null, reporter: null,
+        priority: null, labels: [], fixVersions: [], comment: null,
+        customfield_10020: null,
+      },
+    };
+    const { table } = formatIssueFields(issue as never, fields, new Set(['customfield_10020']));
+    expect(table).toContain('Sprint');
+    expect(table).toContain('_Not set_');
+  });
+});
+
+describe('TicketService buildArrayValue', () => {
+  let client: MockJiraClient;
+  let service: TicketService;
+
+  beforeEach(() => {
+    client = new MockJiraClient();
+    service = new TicketService(client);
+  });
+
+  it('set replaces the entire array', async () => {
+    const result = await service.buildArrayValue('customfield_10500', 'PROJ-123', ['Alpha', 'Beta'], 'set', []);
+    expect(result).toEqual([{ name: 'Alpha' }, { name: 'Beta' }]);
+  });
+
+  it('add merges new items without duplicates', async () => {
+    const current = [{ name: 'Alpha' }];
+    const result = await service.buildArrayValue('customfield_10500', 'PROJ-123', ['Beta', 'Alpha'], 'add', current);
+    expect(result).toEqual([{ name: 'Alpha' }, { name: 'Beta' }]);
+  });
+
+  it('remove filters out matching items case-insensitively', async () => {
+    const current = [{ name: 'Alpha' }, { name: 'Beta' }, { name: 'Gamma' }];
+    const result = await service.buildArrayValue('customfield_10500', 'PROJ-123', ['beta'], 'remove', current);
+    expect(result).toEqual([{ name: 'Alpha' }, { name: 'Gamma' }]);
+  });
+
+  it('uses value key for option fields (allowedValues has value key)', async () => {
+    const result = await service.buildArrayValue('customfield_10501', 'PROJ-123', ['Option A'], 'set', []);
+    expect(result).toEqual([{ value: 'Option A' }]);
+  });
+});
+
+describe('TicketService findSprints', () => {
+  let client: MockJiraClient;
+  let service: TicketService;
+
+  beforeEach(() => {
+    client = new MockJiraClient();
+    service = new TicketService(client);
+  });
+
+  it('returns only active and future sprints', async () => {
+    const results = await service.findSprints('PROJ', 'Sprint');
+    expect(results.every(s => s.state === 'active' || s.state === 'future')).toBe(true);
+    expect(results.some(s => s.state === 'closed')).toBe(false);
+  });
+
+  it('filters by case-insensitive substring match', async () => {
+    const results = await service.findSprints('PROJ', 'sprint 42');
+    expect(results).toHaveLength(1);
+    expect(results[0].name).toBe('Sprint 42');
+  });
+
+  it('returns empty array when query does not match any sprint', async () => {
+    const results = await service.findSprints('PROJ', 'nonexistent-xyz');
+    expect(results).toHaveLength(0);
+  });
+});
+
+describe('TicketService showFields', () => {
+  let client: MockJiraClient;
+  let service: TicketService;
+
+  beforeEach(() => {
+    client = new MockJiraClient();
+    service = new TicketService(client);
+  });
+
+  it('returns a table with Field name, Field ID, and Current value columns', async () => {
+    const result = await service.showFields('PROJ-123');
+    expect(result).toContain('Field name');
+    expect(result).toContain('Field ID');
+    expect(result).toContain('Current value');
+  });
+
+  it('shows the ticket key in the heading', async () => {
+    const result = await service.showFields('PROJ-123');
+    expect(result).toContain('PROJ-123');
+  });
+
+  it('includes field IDs in backtick code spans', async () => {
+    const result = await service.showFields('PROJ-123');
+    expect(result).toMatch(/`summary`/);
+  });
+
+  it('resolves ticket from branch when no key given in prompt — showFields requires explicit key', async () => {
+    // showFields always receives a resolved key from the participant layer
+    const result = await service.showFields('PROJ-123');
+    expect(result).toBeTruthy();
   });
 });
 

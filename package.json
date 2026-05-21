@@ -88,6 +88,19 @@
             "type": "boolean",
             "default": false,
             "description": "When enabled, each @jira response starts with an italic line showing the active base URL, API version, and auth type."
+          },
+          "ticketSidekick.jira.additionalDisplayFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": [],
+            "description": "Field IDs always shown in @jira show output even when their value is null. Use @jira show fields on PROJ-123 to discover field IDs (e.g. [\"customfield_10020\", \"customfield_10500\"])."
+          },
+          "ticketSidekick.jira.spellCheck": {
+            "type": "boolean",
+            "default": true,
+            "description": "When enabled, @jira set on a text field offers a spelling/grammar-corrected version before applying the update. Disable per workspace to skip the correction step."
           }
         }
       },

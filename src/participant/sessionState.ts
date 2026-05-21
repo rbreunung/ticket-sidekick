@@ -1,4 +1,4 @@
-import type { JiraComment, JiraFilter } from '../jira/IJiraClient';
+import type { JiraComment, JiraFieldMeta, JiraFilter, JiraSprintCandidate } from '../jira/IJiraClient';
 import { formatJiraBody } from '../utils/markdownFormatter';
 
 export interface CreationSession {
@@ -233,6 +233,38 @@ export interface BulkUpdateReviewSession {
   fieldId: string;
   fieldName: string;
   fieldValue: unknown;
+  arrayOp: 'set' | 'add' | 'remove';
+}
+
+export interface FieldUpdatePreviewSession {
+  ticketKeys: string[];
+  fieldId: string;
+  fieldName: string;
+  fieldValue: unknown;
+  isArray: boolean;
+  arrayOp: 'set' | 'add' | 'remove';
+}
+
+export interface SpellCheckSession {
+  original: string;
+  corrected: string;
+  pending: FieldUpdatePreviewSession;
+}
+
+export interface FieldSelectionSession {
+  candidates: JiraFieldMeta[];
+  pending: {
+    fieldValue: string;
+    arrayOp: 'set' | 'add' | 'remove';
+    ticketKeys: string[];
+  };
+}
+
+export interface SprintSelectionSession {
+  candidates: JiraSprintCandidate[];
+  pending:
+    | { kind: 'field-update'; session: FieldUpdatePreviewSession }
+    | { kind: 'creation'; sprintFieldId: string };
 }
 
 export function parseBulkUpdateReview(reply: string): { action: 'ok'; skip: string[] } | { action: 'cancel' } | { action: 'invalid' } {

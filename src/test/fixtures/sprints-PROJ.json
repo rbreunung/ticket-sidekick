@@ -1,0 +1,5 @@
+[
+  { "id": 42, "name": "Sprint 42", "state": "active" },
+  { "id": 43, "name": "Sprint 43", "state": "future" },
+  { "id": 41, "name": "Sprint 41", "state": "closed" }
+]

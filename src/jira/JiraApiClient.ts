@@ -9,6 +9,7 @@ import type {
   JiraProject,
   JiraProjectStatus,
   JiraSearchResult,
+  JiraSprintCandidate,
   JiraTransition,
   JiraUser,
 } from './IJiraClient';
@@ -234,5 +235,26 @@ export class JiraApiClient implements IJiraClient {
       `/issue/${encodeURIComponent(issueKey)}/editmeta`,
     );
     return data.fields;
+  }
+
+  async findSprints(projectKey: string, query: string): Promise<JiraSprintCandidate[]> {
+    const boards = await this.agileRequest<{ values: Array<{ id: number }> }>(
+      `/board?projectKeyOrId=${encodeURIComponent(projectKey)}`,
+    );
+    const results: JiraSprintCandidate[] = [];
+    const seen = new Set<number>();
+    const lowerQuery = query.toLowerCase();
+    for (const board of boards.values) {
+      const sprints = await this.agileRequest<{ values: Array<{ id: number; name: string; state: string }> }>(
+        `/board/${board.id}/sprint?state=active,future`,
+      );
+      for (const s of sprints.values) {
+        if (!seen.has(s.id) && s.name.toLowerCase().includes(lowerQuery)) {
+          seen.add(s.id);
+          results.push({ id: s.id, name: s.name, state: s.state });
+        }
+      }
+    }
+    return results;
   }
 }

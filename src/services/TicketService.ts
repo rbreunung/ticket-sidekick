@@ -1,5 +1,144 @@
-import type { IJiraClient, JiraComment, JiraEditMetaField, JiraFieldMeta, JiraFilter, JiraIssue, JiraIssueType, JiraSearchResult } from '../jira/IJiraClient';
+import type { IJiraClient, JiraComment, JiraEditMetaField, JiraFieldMeta, JiraFilter, JiraIssue, JiraIssueType, JiraSearchResult, JiraSprintCandidate } from '../jira/IJiraClient';
 import { formatJiraBody } from '../utils/markdownFormatter';
+
+export type FieldResolutionResult =
+  | { kind: 'match'; field: JiraFieldMeta }
+  | { kind: 'candidates'; fields: JiraFieldMeta[] }
+  | { kind: 'none' };
+
+export function resolveFieldIdFuzzy(input: string, fields: JiraFieldMeta[]): FieldResolutionResult {
+  const lower = input.toLowerCase();
+  // 1. Exact case-insensitive match
+  const exact = fields.find(f => f.name.toLowerCase() === lower);
+  if (exact) return { kind: 'match', field: exact };
+  // Also exact match on ID
+  const exactId = fields.find(f => f.id.toLowerCase() === lower);
+  if (exactId) return { kind: 'match', field: exactId };
+  // 2. Prefix match — unique
+  const prefix = fields.filter(f => f.name.toLowerCase().startsWith(lower));
+  if (prefix.length === 1) return { kind: 'match', field: prefix[0] };
+  if (prefix.length > 1) return { kind: 'candidates', fields: prefix };
+  // 3. Substring match — unique
+  const sub = fields.filter(f => f.name.toLowerCase().includes(lower));
+  if (sub.length === 1) return { kind: 'match', field: sub[0] };
+  if (sub.length > 1) return { kind: 'candidates', fields: sub };
+  return { kind: 'none' };
+}
+
+const EXCLUDED_FROM_TABLE = new Set(['summary', 'comment', 'subtasks']);
+
+function renderSingleFieldValue(value: unknown, meta: JiraFieldMeta): string {
+  if (value === null || value === undefined) return '_Not set_';
+
+  // Sprint (gh-sprint in custom)
+  if (meta.schema.custom?.includes('gh-sprint') && Array.isArray(value)) {
+    const sprints = value as Array<{ name: string; state: string }>;
+    const active = sprints.find(s => s.state === 'active') ?? sprints[0];
+    return active ? active.name : '_None_';
+  }
+
+  // User
+  if (meta.schema.type === 'user') {
+    const u = value as { displayName?: string } | null;
+    return u?.displayName ?? '_Unassigned_';
+  }
+
+  // Datetime
+  if (meta.schema.type === 'datetime' && typeof value === 'string') {
+    const d = new Date(value);
+    if (!isNaN(d.getTime())) {
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+    return value;
+  }
+
+  // Date
+  if (meta.schema.type === 'date' && typeof value === 'string') return value.slice(0, 10);
+
+  // Named objects (status, priority, issuetype, version, …)
+  if (typeof value === 'object' && value !== null && !Array.isArray(value) && 'name' in value) {
+    return (value as { name: string }).name;
+  }
+
+  // Arrays
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '_None_';
+    const items = value.map(item => {
+      if (typeof item === 'string') return item;
+      if (typeof item === 'object' && item !== null) {
+        if ('name' in item) return (item as { name: string }).name;
+        if ('value' in item) return (item as { value: string }).value;
+        if ('displayName' in item) return (item as { displayName: string }).displayName;
+      }
+      return String(item);
+    });
+    return items.length > 3
+      ? `${items.slice(0, 3).join(', ')} … (+${items.length - 3} more)`
+      : items.join(', ');
+  }
+
+  if (typeof value === 'number') return String(value);
+  if (typeof value === 'string') return value;
+  return String(value);
+}
+
+function isMultiLine(value: unknown, meta: JiraFieldMeta): boolean {
+  if (typeof value === 'object' && value !== null && !Array.isArray(value) && 'type' in value) return true;
+  if (typeof value === 'string' && value.length > 120) return true;
+  // Attachment list handled separately; all other cases single-line
+  return false;
+}
+
+export function formatIssueFields(
+  issue: JiraIssue,
+  fieldMeta: JiraFieldMeta[],
+  alwaysShowIds: Set<string>,
+): { table: string; sections: string[] } {
+  const navigable = new Map(fieldMeta.filter(f => f.navigable === true).map(f => [f.id, f]));
+  const tableRows: string[] = [];
+  const sections: string[] = [];
+  const processedIds = new Set<string>();
+
+  for (const [fieldId, value] of Object.entries(issue.fields)) {
+    if (EXCLUDED_FROM_TABLE.has(fieldId)) continue;
+    const meta = navigable.get(fieldId);
+    if (!meta) continue;
+    processedIds.add(fieldId);
+
+    const isNull = value === null || value === undefined ||
+      (Array.isArray(value) && value.length === 0);
+    if (isNull && !alwaysShowIds.has(fieldId)) continue;
+    if (isNull) { tableRows.push(`| **${meta.name}** | _Not set_ |`); continue; }
+
+    if (meta.id === 'attachment' && Array.isArray(value)) {
+      const links = (value as Array<{ filename: string; content: string }>)
+        .map(a => `[${a.filename}](${a.content})`).join(', ');
+      sections.push(`## Attachments\n\n${links}`);
+      continue;
+    }
+
+    if (isMultiLine(value, meta)) {
+      const content = formatJiraBody(value).trim() || '_No content_';
+      sections.push(`## ${meta.name}\n\n${content}`);
+    } else {
+      tableRows.push(`| **${meta.name}** | ${renderSingleFieldValue(value, meta)} |`);
+    }
+  }
+
+  // Always-show fields not present in the issue
+  for (const fieldId of alwaysShowIds) {
+    if (processedIds.has(fieldId)) continue;
+    const meta = navigable.get(fieldId);
+    if (!meta) continue;
+    tableRows.push(`| **${meta.name}** | _Not set_ |`);
+  }
+
+  const table = tableRows.length > 0
+    ? `| Field | Value |\n| --- | --- |\n${tableRows.join('\n')}`
+    : '';
+  return { table, sections };
+}
 
 const SUPPORTED_FIELDS: Record<string, string> = {
   summary: 'summary',
@@ -30,37 +169,26 @@ export function assembleDescription(sections: string[], answers: Record<string, 
     .join('\n\n');
 }
 
-function formatIssue(issue: JiraIssue): string {
-  const f = issue.fields;
-  const description = f.description
-    ? formatJiraBody(f.description).trim() || '_No description_'
-    : '_No description_';
-  const assignee = f.assignee ? f.assignee.displayName : '_Unassigned_';
-  const priority = f.priority ? f.priority.name : '_None_';
-  const labels = f.labels.length > 0 ? f.labels.join(', ') : '_None_';
-  const fixVersions = f.fixVersions.length > 0
-    ? f.fixVersions.map((v) => v.name).join(', ')
-    : '_None_';
-  return [
-    `## ${issue.key}: ${f.summary}`,
-    `**Status:** ${f.status.name}`,
-    `**Assignee:** ${assignee}`,
-    `**Reporter:** ${f.reporter ? f.reporter.displayName : '_Unknown_'}`,
-    `**Priority:** ${priority}`,
-    `**Labels:** ${labels}`,
-    `**Fix Versions:** ${fixVersions}`,
-    '',
-    '**Description:**',
-    description,
-  ].join('\n');
-}
-
 export class TicketService {
   constructor(private readonly client: IJiraClient) {}
 
-  async getTicket(issueKey: string): Promise<string> {
+  async getFieldMeta(): Promise<JiraFieldMeta[]> {
+    return this.client.getFields();
+  }
+
+  async getTicket(
+    issueKey: string,
+    fieldMeta?: JiraFieldMeta[],
+    alwaysShowIds?: Set<string>,
+  ): Promise<string> {
     const issue = await this.client.getIssue(issueKey);
-    return formatIssue(issue);
+    const meta = fieldMeta ?? await this.client.getFields();
+    const showIds = alwaysShowIds ?? new Set<string>();
+    const { table, sections } = formatIssueFields(issue, meta, showIds);
+    const parts: string[] = [`## ${issue.key}: ${issue.fields.summary}`];
+    if (table) parts.push('', table);
+    if (sections.length > 0) parts.push('', ...sections.map(s => s));
+    return parts.join('\n');
   }
 
   async addComment(issueKey: string, body: string): Promise<string> {
@@ -232,6 +360,50 @@ export class TicketService {
     return { name: rawValue };
   }
 
+  async buildArrayValue(
+    fieldId: string,
+    sampleKey: string,
+    rawValues: string[],
+    op: 'set' | 'add' | 'remove',
+    currentValue: unknown,
+  ): Promise<unknown> {
+    const editMeta = await this.client.getEditMeta(sampleKey);
+    const field = editMeta[fieldId];
+    if (!field) throw new Error(`Field "${fieldId}" is not editable on ${sampleKey}.`);
+    const { allowedValues = [] } = field;
+    const useValueKey = allowedValues.length > 0 && 'value' in allowedValues[0];
+
+    const wrap = (v: string) => useValueKey ? { value: v } : { name: v };
+    const newItems = rawValues.map(v => wrap(v.trim()));
+
+    if (op === 'set') return newItems;
+
+    const existing: unknown[] = Array.isArray(currentValue) ? currentValue : [];
+
+    if (op === 'add') {
+      const combined = [...existing];
+      for (const item of newItems) {
+        const key = useValueKey ? (item as { value: string }).value : (item as { name: string }).name;
+        const already = existing.some(e => {
+          const ek = useValueKey
+            ? (e as { value?: string }).value
+            : (e as { name?: string }).name;
+          return ek?.toLowerCase() === key.toLowerCase();
+        });
+        if (!already) combined.push(item);
+      }
+      return combined;
+    }
+
+    // remove
+    return existing.filter(e => {
+      const ek = useValueKey
+        ? (e as { value?: string }).value ?? ''
+        : (e as { name?: string }).name ?? '';
+      return !rawValues.some(v => v.trim().toLowerCase() === ek.toLowerCase());
+    });
+  }
+
   async bulkUpdateField(
     ticketKeys: string[],
     fieldId: string,
@@ -246,6 +418,50 @@ export class TicketService {
         onProgress(key, false, err instanceof Error ? err.message : String(err));
       }
     }
+  }
+
+  async findSprints(projectKey: string, query: string): Promise<JiraSprintCandidate[]> {
+    return this.client.findSprints(projectKey, query);
+  }
+
+  async getRawField(issueKey: string, fieldId: string): Promise<unknown> {
+    const issue = await this.client.getIssue(issueKey);
+    return (issue.fields as Record<string, unknown>)[fieldId];
+  }
+
+  async showFields(issueKey: string, fieldMeta?: JiraFieldMeta[]): Promise<string> {
+    const issue = await this.client.getIssue(issueKey);
+    const meta = fieldMeta ?? await this.client.getFields();
+    const navigable = meta.filter(f => f.navigable === true);
+    const rows: string[] = [];
+    for (const f of navigable) {
+      const value = issue.fields[f.id];
+      let display: string;
+      if (value === null || value === undefined || (Array.isArray(value) && value.length === 0)) {
+        display = '_Not set_';
+      } else if (f.schema.custom?.includes('gh-sprint') && Array.isArray(value)) {
+        const sprints = value as Array<{ name: string; state: string }>;
+        const active = sprints.find(s => s.state === 'active') ?? sprints[0];
+        display = active ? active.name : '_None_';
+      } else if (typeof value === 'object' && value !== null && 'type' in value) {
+        // ADF or rich content — truncate to 80 chars
+        const text = formatJiraBody(value).replace(/\s+/g, ' ').trim();
+        display = text.length > 80 ? `${text.slice(0, 80)}…` : text;
+      } else if (typeof value === 'string' && value.length > 80) {
+        display = `${value.slice(0, 80)}…`;
+      } else {
+        display = renderSingleFieldValue(value, f);
+      }
+      rows.push(`| ${f.name} | \`${f.id}\` | ${display} |`);
+    }
+    if (rows.length === 0) return `No navigable fields found for ${issueKey}.`;
+    return [
+      `## Fields on ${issueKey}`,
+      '',
+      '| Field name | Field ID | Current value |',
+      '| --- | --- | --- |',
+      ...rows,
+    ].join('\n');
   }
 
   async createTicket(
