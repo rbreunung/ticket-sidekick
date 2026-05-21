@@ -107,7 +107,7 @@
               "workratio",
               "watches",
               "lastViewed",
-              "progress",
+              "aggregateprogress",
               "votes",
               "created",
               "updated",
