@@ -207,8 +207,8 @@ export class JiraApiClient implements IJiraClient {
     return all;
   }
 
-  async downloadAttachment(contentUrl: string): Promise<Uint8Array> {
-    const response = await fetch(contentUrl, {
+  async downloadAttachment(content: string): Promise<Uint8Array> {
+    const response = await fetch(content, {
       headers: { Authorization: this.authHeader },
     });
     if (!response.ok) {

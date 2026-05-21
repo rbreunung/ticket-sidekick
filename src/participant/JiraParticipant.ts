@@ -679,11 +679,16 @@ async function handleLoadTicket(
   const attachments = ticketService.getAttachments(issue);
 
   // Stream ticket content first (same as @jira show)
+  // Build a map of all attachment filenames → Jira content URLs for link rewriting
+  const allAttachmentUrls = new Map(attachments.map(a => [a.filename, a.content]));
+
+  // Stream ticket content first (same as @jira show), with inline attachment links
+  // rewritten to their Jira URLs so they are clickable in the chat.
   const { table, sections } = formatIssueFields(issue, fieldMeta, alwaysShowIds, hiddenIds);
   const showParts: string[] = [`## ${issue.key}: ${issue.fields.summary}`];
   if (table) showParts.push('', table);
   if (sections.length > 0) showParts.push('', ...sections);
-  stream.markdown(showParts.join('\n'));
+  stream.markdown(rewriteAttachmentLinks(showParts.join('\n'), new Set(), allAttachmentUrls));
 
   // Classify attachments
   const toDownload: JiraAttachment[] = [];
@@ -707,16 +712,16 @@ async function handleLoadTicket(
   for (let i = 0; i < toDownload.length; i += 3) {
     await Promise.all(toDownload.slice(i, i + 3).map(async (att) => {
       try {
-        const bytes = await ticketService.downloadAttachment(att.contentUrl);
+        const bytes = await ticketService.downloadAttachment(att.content);
         await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(attachmentsDir, att.filename), bytes);
         downloaded.add(att.filename);
       } catch (err) {
         downloadErrors.push(`${att.filename}: ${err instanceof Error ? err.message : String(err)}`);
-        skippedUrls.set(att.filename, att.contentUrl);
+        skippedUrls.set(att.filename, att.content);
       }
     }));
   }
-  for (const att of toSkip) skippedUrls.set(att.filename, att.contentUrl);
+  for (const att of toSkip) skippedUrls.set(att.filename, att.content);
 
   // Build ticket.md — suppress built-in attachment section, append custom one
   const hiddenWithAttachment = new Set([...hiddenIds, 'attachment']);

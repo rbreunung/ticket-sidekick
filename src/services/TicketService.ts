@@ -118,7 +118,7 @@ export function formatIssueFields(
         const size = a.size >= 1_048_576
           ? `${(a.size / 1_048_576).toFixed(1)} MB`
           : `${Math.round(a.size / 1024)} KB`;
-        return `- [${a.filename}](${a.contentUrl}) — ${size} (${a.mimeType})`;
+        return `- [${a.filename}](${a.content}) — ${size} (${a.mimeType})`;
       });
       sections.push(`## Attachments\n\n${lines.join('\n')}`);
       continue;
@@ -302,8 +302,8 @@ export class TicketService {
     return issue.fields.attachment ?? [];
   }
 
-  async downloadAttachment(contentUrl: string): Promise<Uint8Array> {
-    return this.client.downloadAttachment(contentUrl);
+  async downloadAttachment(content: string): Promise<Uint8Array> {
+    return this.client.downloadAttachment(content);
   }
 
   async getAllComments(issueKey: string): Promise<JiraComment[]> {

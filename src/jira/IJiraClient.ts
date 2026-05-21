@@ -21,8 +21,8 @@ export interface JiraAttachment {
   id: string;
   filename: string;
   mimeType: string;
-  size: number;        // bytes
-  contentUrl: string;  // full URL for authenticated download
+  size: number;     // bytes
+  content: string;  // full URL for authenticated download; matches Jira API v2 field name
 }
 
 export interface JiraIssue {
@@ -122,7 +122,7 @@ export interface IJiraClient {
   createIssue(projectKey: string, summary: string, issueType: string, additionalFields?: Record<string, unknown>): Promise<JiraCreatedIssue>;
   getIssueComments(issueKey: string, maxResults: number, startAt?: number): Promise<{ comments: JiraComment[]; total: number }>;
   getAllComments(issueKey: string): Promise<JiraComment[]>;
-  downloadAttachment(contentUrl: string): Promise<Uint8Array>;
+  downloadAttachment(content: string): Promise<Uint8Array>;
   getFilterById(id: string): Promise<JiraFilter>;
   searchFiltersByName(name: string): Promise<JiraFilter[]>;
   getFields(): Promise<JiraFieldMeta[]>;

@@ -696,9 +696,9 @@ const attachmentMeta: JiraFieldMeta[] = [
 ];
 
 const sampleAttachments: JiraAttachment[] = [
-  { id: 'a1', filename: 'screenshot.png', mimeType: 'image/png', size: 239616, contentUrl: 'https://jira.example.com/att1' },
-  { id: 'a2', filename: 'error.log', mimeType: 'text/plain', size: 46080, contentUrl: 'https://jira.example.com/att2' },
-  { id: 'a3', filename: 'heap-dump.bin', mimeType: 'application/octet-stream', size: 52428800, contentUrl: 'https://jira.example.com/att3' },
+  { id: 'a1', filename: 'screenshot.png', mimeType: 'image/png', size: 239616, content: 'https://jira.example.com/att1' },
+  { id: 'a2', filename: 'error.log', mimeType: 'text/plain', size: 46080, content: 'https://jira.example.com/att2' },
+  { id: 'a3', filename: 'heap-dump.bin', mimeType: 'application/octet-stream', size: 52428800, content: 'https://jira.example.com/att3' },
 ];
 
 function makeIssueWithAttachments(attachments: JiraAttachment[]): JiraIssue {
@@ -722,7 +722,7 @@ describe('TicketService.getAttachments', () => {
     const result = service.getAttachments(issue);
     expect(result.length).toBe(3);
     expect(result[0].filename).toBe('screenshot.png');
-    expect(result[0].contentUrl).toContain('att001');
+    expect(result[0].content).toContain('att001');
   });
 
   it('returns empty array when attachment field is undefined', () => {
