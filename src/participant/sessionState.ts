@@ -83,6 +83,32 @@ export type SkipParseResult =
   | { action: 'skip'; keys: string[] }
   | { action: 'invalid' };
 
+// --- Outlook email-to-ticket sessions ---
+
+export interface FolderSelectionSession {
+  folders: Array<{ id: string; displayName: string; unreadItemCount: number }>;
+}
+
+export interface EmailSelectionSession {
+  folderId: string;
+  emails: Array<{ id: string; subject: string; receivedDateTime: string; senderName: string }>;
+}
+
+export interface EmailContentSession {
+  emailId: string;
+  subject: string;
+  markdownBody: string;
+  inlineImageMap: Record<string, string>;
+  attachments: Array<{
+    name: string; contentType: string; contentBytes: string;
+    isInline: boolean; contentId?: string;
+  }>;
+  selectedTemplateName: string | null;
+  projectKey: string;
+  issueType: string;
+  additionalFields: Record<string, unknown>;
+}
+
 export function parseSkipInput(reply: string, tickets: TransitionBatchTicket[]): SkipParseResult {
   const normalized = reply.trim().toLowerCase();
   if (normalized === 'ok') return { action: 'ok' };
