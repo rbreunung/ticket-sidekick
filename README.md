@@ -459,6 +459,32 @@ Execution streams one confirmation line per ticket. Failures are reported at the
 
 ---
 
+## Create a ticket from Outlook email
+
+```text
+@jira create from email
+```
+
+**First run — folder picker:** A numbered list of your Outlook mail folders is shown. Reply with the number to select a folder. The choice is saved to VS Code settings (`ticketSidekick.outlook.folderId`) so you don't need to pick again. Clear the setting to re-run the picker.
+
+**Email list:** A numbered list of recent emails from the configured folder. Reply with the number to select an email.
+
+**Preview:** The email subject becomes the ticket summary, the body is converted to Markdown and shown as a preview. Reply **post it** to create the ticket, or **(c)** to cancel.
+
+**Attachments and inline images:** All attachments are uploaded to the created ticket. Inline images (cid: references) are placed as thumbnails in the description.
+
+**Spell check on demand:** After importing an email, run `@jira spell check PROJ-123` to check and correct the description.
+
+**Settings:**
+| Setting | Key | Default |
+| --- | --- | --- |
+| Folder ID | `ticketSidekick.outlook.folderId` | _(empty — shows picker)_ |
+| Email list size | `ticketSidekick.outlook.emailListSize` | 10 |
+
+**Authentication:** Uses VS Code's built-in Microsoft sign-in (`vscode.authentication`). On domain-joined machines with enterprise SSO / Kerberos, authentication is transparent. Personal Microsoft accounts prompt a browser sign-in once and then persist.
+
+---
+
 ## Bitbucket
 
 ### Bitbucket prerequisites

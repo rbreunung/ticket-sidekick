@@ -22,6 +22,13 @@ JiraParticipant → TicketService → IJiraClient (interface)
 
 **Rule:** `TicketService` imports `IJiraClient` only — never `JiraApiClient` directly.
 
+```text
+OutlookService → IOutlookClient (interface)
+                      ↓
+              OutlookApiClient (Microsoft Graph HTTP, vscode.authentication)
+              MockOutlookClient (test fixture)
+```
+
 ### Bitbucket
 
 ```text
@@ -44,7 +51,16 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/services/TicketService.ts` | Jira business logic; depends on IJiraClient |
 | `src/services/PrReviewService.ts` | PR review logic: diff parsing, file gathering, two-pass LLM prompt building, result formatting |
 | `src/services/ConfigService.ts` | VS Code settings + SecretStorage for both Jira and Bitbucket |
-| `src/participant/JiraParticipant.ts` | Jira chat handler + intent parsing via VS Code LM API |
+| `src/participant/JiraParticipant.ts` | Jira chat handler + intent routing; delegates to `src/participant/jira/` handlers |
+| `src/participant/jira/llmHelpers.ts` | `Operation` type, `ParsedIntent`, `INTENT_PROMPT`, all LLM utility functions |
+| `src/participant/jira/ticketContext.ts` | Ticket key + project key resolution helpers |
+| `src/participant/jira/contentHandler.ts` | Content preview/refinement flow (`streamContentPreview`, `handleContentSession`) |
+| `src/participant/jira/createHandler.ts` | Ticket creation flow (templates, issue type selection, section Q&A) |
+| `src/participant/jira/loadHandler.ts` | Load-ticket handler (attachment download, comment pagination) |
+| `src/participant/jira/fieldHandler.ts` | Field update flow + explicit `@jira spell check` command |
+| `src/participant/jira/cleanupHandler.ts` | Bulk cleanup flow (review screen, transition batch execution) |
+| `src/participant/jira/workflowHandler.ts` | Workflow discovery handler |
+| `src/participant/jira/emailHandler.ts` | Email-to-ticket chat flow (folder picker, email selection, preview, create) |
 | `src/participant/BitbucketParticipant.ts` | Bitbucket chat handler: check, PR review, multi-turn follow-ups |
 | `src/participant/sessionState.ts` | VS Code-free pure helpers and Jira multi-turn session types |
 | `src/participant/reviewSessionState.ts` | Bitbucket session types, `parsePrUrl`, `parseDiff`, `resolveByNumber` |
@@ -54,6 +70,10 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/utils/branchParser.ts` | Extracts ticket ID from git branch name |
 | `src/utils/markdownFormatter.ts` | `formatJiraBody(node)` — converts Jira wiki markup (v2 string) or ADF object (v3/legacy) to Markdown; `wikiToMarkdown(str)` delegates to `jiraWikiToMarkdown` |
 | `src/utils/jiraWikiToMarkdown.ts` | Own Jira wiki markup → Markdown converter; handles headings, tables, lists, code/noformat blocks, quotes, panels, and all inline markup without any third-party dependency |
+| `src/outlook/IOutlookClient.ts` | All Outlook/Graph types + IOutlookClient interface |
+| `src/outlook/OutlookApiClient.ts` | Real Microsoft Graph HTTP; auth via `vscode.authentication` |
+| `src/services/OutlookService.ts` | Outlook business logic: list folders, list emails, fetch+convert email |
+| `src/utils/htmlToMarkdown.ts` | Converts HTML email body to Markdown (cid: images → `[📎 name]` placeholders) |
 
 ## Running tests
 
@@ -137,6 +157,13 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
 | Show connection info | `ticketSidekick.bitbucket.showConnectionInfo` |
 | Review instructions | `ticketSidekick.bitbucket.reviewInstructions` |
 
+### Outlook settings
+
+| Setting | Key |
+| --- | --- |
+| Folder ID | `ticketSidekick.outlook.folderId` |
+| Email list size | `ticketSidekick.outlook.emailListSize` |
+
 ## Credentials
 
 Always stored in `vscode.ExtensionContext.secrets` (VS Code SecretStorage, OS-encrypted). Never in `settings.json`.
@@ -171,8 +198,11 @@ Multi-turn flows store structured state in `vscode.ExtensionContext.workspaceSta
 | `MoreCommentsSession` | `jira.session.moreComments` | `<!-- jira:more-comments -->` |
 | `CommentListSession` | `jira.session.commentList` | `<!-- jira:comment-list -->` |
 | `LoadSkippedSession` | `jira.session.loadSkipped` | `<!-- jira:load-skipped -->` |
+| `FolderSelectionSession` | `jira.session.folderSelection` | `<!-- jira:folder-selection -->` |
+| `EmailSelectionSession` | `jira.session.emailSelection` | `<!-- jira:email-selection -->` |
+| `EmailContentSession` | `jira.session.emailContent` | `<!-- jira:email-content -->` |
 
-Detection order in the Jira handler: resolution selection → transition review → filter selection → bulk-update-review → template selection → issue type selection → creation → content → more-comments → check command → load-skipped → comment list → intent parse.
+Detection order in the Jira handler: resolution selection → transition review → filter selection → bulk-update-review → template selection → issue type selection → creation → content → more-comments → check command → load-skipped → folder selection → email selection → email content → comment list → intent parse.
 
 ### Bitbucket sessions
 
