@@ -1,5 +1,4 @@
 import * as vscode from 'vscode';
-import { execSync } from 'child_process';
 import { JiraApiClient } from '../jira/JiraApiClient';
 import { ConfigService } from '../services/ConfigService';
 import { TicketService, assembleDescription, resolveFieldIdFuzzy, formatIssueFields, extractTextFromAdf } from '../services/TicketService';
@@ -8,15 +7,15 @@ import type { JiraAttachment, JiraComment, JiraFieldMeta, JiraFilter, JiraSprint
 import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
-import { extractTicketId } from '../utils/branchParser';
 import { redactUrls, tokenStatus } from '../utils/diagUtils';
 import { markdownToJiraWiki } from '../utils/markdownToJiraWiki';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, extractCreatedKeyFromConfirmation, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks } from './sessionState';
 import { discoverWorkflow, loadWorkflowCache, saveWorkflowCache, findPath, preserveSkippedStatuses } from '../services/WorkflowService';
 import type { WorkflowGraph } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
 import type { Operation, ParsedIntent } from './jira/llmHelpers';
 import { parseIntent, generateContent, isLmRefusal, extractHistoryTurns, synthesizeComments, generateDescriptionAndCommentsSummary, spellCheckValue } from './jira/llmHelpers';
+import { getLastAssistantText, resolveTicketFromBranch, resolveProjectKey, parseLastTicketFromContext } from './jira/ticketContext';
 
 const FILE_MAX_BYTES = 60_000;
 
@@ -90,18 +89,6 @@ function serializeCommentsForLLM(comments: JiraComment[]): string {
   }).join('\n\n---\n\n');
 }
 
-function getLastAssistantText(context: vscode.ChatContext): string {
-  for (let i = context.history.length - 1; i >= 0; i--) {
-    const turn = context.history[i];
-    if (turn instanceof vscode.ChatResponseTurn) {
-      return turn.response
-        .map((p) => (p instanceof vscode.ChatResponseMarkdownPart ? p.value.value : ''))
-        .join('');
-    }
-  }
-  return '';
-}
-
 async function streamContentPreview(session: ContentSession, stream: vscode.ChatResponseStream, workspaceState: vscode.Memento): Promise<void> {
   await workspaceState.update('jira.session.previewing', session);
   const actionLabel = session.operation === 'addComment' ? 'post this comment' : 'update the description';
@@ -169,33 +156,6 @@ async function checkSectionCoverage(
   } catch {
     return [];
   }
-}
-
-function resolveTicketFromBranch(): string | null {
-  try {
-    const branch = execSync('git branch --show-current', { encoding: 'utf-8' }).trim();
-    return extractTicketId(branch);
-  } catch {
-    return null;
-  }
-}
-
-async function resolveProjectKey(
-  fromIntent: string | null,
-  stream: vscode.ChatResponseStream,
-): Promise<string | null> {
-  if (fromIntent) return fromIntent;
-
-  const defaultProject = vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.defaultProject') ?? '';
-  if (defaultProject) return defaultProject;
-
-  stream.markdown('_No project key found in your message or settings — opening input box…_\n\n');
-  const entered = await vscode.window.showInputBox({
-    prompt: 'Enter the Jira project key (e.g. VSJI)',
-    placeHolder: 'PROJECT',
-    ignoreFocusOut: true,
-  });
-  return entered ?? null;
 }
 
 async function streamIssueTypeSelection(
@@ -296,20 +256,6 @@ async function continueAfterIssueType(
     fields: resolvedFields,
   };
   await streamNextSection(newSession, stream, workspaceState);
-  return null;
-}
-
-function parseLastTicketFromContext(context: vscode.ChatContext): string | null {
-  for (let i = context.history.length - 1; i >= 0; i--) {
-    const turn = context.history[i];
-    if (turn instanceof vscode.ChatResponseTurn) {
-      const text = turn.response
-        .map((p) => (p instanceof vscode.ChatResponseMarkdownPart ? p.value.value : ''))
-        .join('');
-      const key = extractLastTicketFromText(text);
-      if (key) return key;
-    }
-  }
   return null;
 }
 
