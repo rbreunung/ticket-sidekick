@@ -100,9 +100,7 @@ Reply **`ok`** to apply, **`(c)`** to cancel, or give an adjustment instruction.
 **Scope:** if your last search returned multiple tickets, the plugin asks whether to apply
 to the current ticket or all N results from the search.
 
-**Typo correction** (on by default): when setting a text field the plugin checks for
-spelling and grammar errors and offers a corrected version before the preview. Disable per
-workspace with `ticketSidekick.jira.spellCheck: false`.
+**Spell check on demand:** run `@jira spell check PROJ-123` to check and correct spelling and grammar on a ticket's description. The corrected version is shown as a preview before applying.
 
 ### Ticket creation
 
@@ -295,15 +293,6 @@ By default `@jira show` omits fields that are null. Add field IDs to
 
 ```json
 "ticketSidekick.jira.additionalDisplayFields": ["customfield_10020", "customfield_10500"]
-```
-
-### Optional: spell-check on field updates
-
-When you set a text field, the plugin checks for spelling and grammar errors and offers a
-corrected version before the preview confirm. Enabled by default. Disable per workspace:
-
-```json
-"ticketSidekick.jira.spellCheck": false
 ```
 
 ### Optional: Jira connection info banner
