@@ -1045,7 +1045,7 @@ async function spellCheckValue(
   model: vscode.LanguageModelChat,
   token: vscode.CancellationToken,
 ): Promise<string | null> {
-  const prompt = `Check this text for spelling and grammar errors:\n\n"${text}"\n\nIf there are no errors, reply with exactly: UNCHANGED\nIf there are errors, reply with ONLY the corrected text, no explanation.`;
+  const prompt = `Check this text for spelling and grammar errors:\n\n${text}\n\nIf there are no errors, reply with exactly: UNCHANGED\nIf there are errors, reply with ONLY the corrected text, no explanation.`;
   const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], {}, token);
   let raw = '';
   for await (const chunk of response.text) raw += chunk;
