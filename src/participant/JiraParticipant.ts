@@ -8,78 +8,14 @@ import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
 import { redactUrls, tokenStatus } from '../utils/diagUtils';
-import { markdownToJiraWiki } from '../utils/markdownToJiraWiki';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, extractCreatedKeyFromConfirmation, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, extractCreatedKeyFromConfirmation, stripHiddenMarkers, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks } from './sessionState';
 import { discoverWorkflow, loadWorkflowCache, saveWorkflowCache, findPath, preserveSkippedStatuses } from '../services/WorkflowService';
 import type { WorkflowGraph } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
 import type { Operation, ParsedIntent } from './jira/llmHelpers';
-import { parseIntent, generateContent, isLmRefusal, extractHistoryTurns, synthesizeComments, generateDescriptionAndCommentsSummary, spellCheckValue } from './jira/llmHelpers';
+import { parseIntent, generateContent, isLmRefusal, synthesizeComments, generateDescriptionAndCommentsSummary, spellCheckValue } from './jira/llmHelpers';
 import { getLastAssistantText, resolveTicketFromBranch, resolveProjectKey, parseLastTicketFromContext } from './jira/ticketContext';
-
-const FILE_MAX_BYTES = 60_000;
-
-async function gatherFileContent(
-  currentRefs: readonly vscode.ChatPromptReference[],
-  history: ReadonlyArray<vscode.ChatRequestTurn | vscode.ChatResponseTurn>,
-): Promise<string> {
-  const seen = new Set<string>();
-  const sections: string[] = [];
-  const decoder = new TextDecoder('utf-8');
-
-  const readUri = async (uri: vscode.Uri): Promise<void> => {
-    const key = uri.toString();
-    if (seen.has(key)) return;
-    seen.add(key);
-    try {
-      const bytes = await vscode.workspace.fs.readFile(uri);
-      const name = uri.path.split('/').pop() ?? uri.fsPath;
-      const truncated = bytes.byteLength > FILE_MAX_BYTES;
-      const slice = truncated ? bytes.slice(0, FILE_MAX_BYTES) : bytes;
-      const text = decoder.decode(slice) + (truncated ? '\n\n[... truncated ...]' : '');
-      sections.push(`### ${name}\n\`\`\`\n${text}\n\`\`\``);
-    } catch { /* skip unreadable files */ }
-  };
-
-  const processRef = async (ref: vscode.ChatPromptReference): Promise<void> => {
-    if (ref.value instanceof vscode.Uri) {
-      await readUri(ref.value);
-    } else if (ref.value instanceof vscode.Location) {
-      await readUri((ref.value as vscode.Location).uri);
-    }
-  };
-
-  for (const ref of currentRefs) await processRef(ref);
-  for (const turn of history) {
-    if (turn instanceof vscode.ChatRequestTurn) {
-      for (const ref of turn.references) await processRef(ref);
-    }
-  }
-
-  return sections.join('\n\n');
-}
-
-async function buildContentContext(
-  request: vscode.ChatRequest,
-  chatContext: vscode.ChatContext,
-  ticketText: string,
-  commentBlocks: string,
-): Promise<string> {
-  const parts: string[] = [];
-
-  const fileContent = await gatherFileContent(request.references, chatContext.history);
-  if (fileContent) parts.push(`**Attached files:**\n\n${fileContent}`);
-
-  const historyText = serializeTurns(extractHistoryTurns(chatContext), 'full');
-  if (historyText) parts.push(`**Conversation history:**\n\n${historyText}`);
-
-  const ticketSection = commentBlocks
-    ? `${ticketText}\n\n**Comments:**\n\n${commentBlocks}`
-    : ticketText;
-  parts.push(`**Ticket:**\n\n${ticketSection}`);
-
-  return parts.join('\n\n---\n\n');
-}
+import { gatherFileContent, buildContentContext, streamContentPreview, handleContentSession } from './jira/contentHandler';
 
 function serializeCommentsForLLM(comments: JiraComment[]): string {
   return comments.map((c) => {
@@ -87,54 +23,6 @@ function serializeCommentsForLLM(comments: JiraComment[]): string {
     const body = formatJiraBody(c.body).trim() || '_empty_';
     return `**${c.author.displayName}** (${date}):\n${body}`;
   }).join('\n\n---\n\n');
-}
-
-async function streamContentPreview(session: ContentSession, stream: vscode.ChatResponseStream, workspaceState: vscode.Memento): Promise<void> {
-  await workspaceState.update('jira.session.previewing', session);
-  const actionLabel = session.operation === 'addComment' ? 'post this comment' : 'update the description';
-  stream.markdown(
-    `${session.currentContent}\n\nReply **"post it"** to ${actionLabel}, or tell me how to adjust it.\n\n<!-- jira:previewing -->`,
-  );
-}
-
-async function handleContentSession(
-  session: ContentSession,
-  prompt: string,
-  model: vscode.LanguageModelChat,
-  token: vscode.CancellationToken,
-  stream: vscode.ChatResponseStream,
-  ticketService: TicketService,
-  workspaceState: vscode.Memento,
-): Promise<void> {
-  if (isCancellation(prompt)) {
-    await workspaceState.update('jira.session.previewing', undefined);
-    stream.markdown('_Cancelled._');
-    return;
-  }
-  if (isConfirmation(prompt)) {
-    await workspaceState.update('jira.session.previewing', undefined);
-    let result: string;
-    const jiraText = markdownToJiraWiki(session.currentContent);
-    if (session.operation === 'addComment') {
-      result = await ticketService.addComment(session.ticketKey, jiraText);
-    } else {
-      result = await ticketService.updateField(session.ticketKey, 'description', jiraText);
-    }
-    stream.markdown(result);
-    stream.markdown(`\n\n<!-- @jira-ticket:${session.ticketKey} -->`);
-    return;
-  }
-  // Refinement instruction
-  const refineContext = [session.historyContext, `Previously generated:\n${session.currentContent}`]
-    .filter(Boolean)
-    .join('\n\n');
-  const refined = await generateContent(prompt, model, token, refineContext);
-  if (isLmRefusal(refined)) {
-    stream.markdown(`_Could not refine content — the AI model declined the request. Try rephrasing your instruction._`);
-    await streamContentPreview(session, stream, workspaceState);
-    return;
-  }
-  await streamContentPreview({ ...session, currentContent: refined }, stream, workspaceState);
 }
 
 async function checkSectionCoverage(
