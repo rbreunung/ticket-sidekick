@@ -46,7 +46,7 @@ export async function handleCreateFromEmail(
     stream.markdown('No emails found in the configured folder.');
     return;
   }
-  const list = await outlookService.listEmailsForDisplay(outlookConfig.folderId, outlookConfig.emailListSize);
+  const list = emails.map((e, i) => `${i + 1}. [${e.receivedDateTime.slice(0, 10)}] ${e.subject} (${e.senderName})`).join('\n');
   const session: EmailSelectionSession = { folderId: outlookConfig.folderId, emails };
   await ws.update('jira.session.emailSelection', session);
   stream.markdown(`${list}\n\nReply with a number to select an email, or **(c)** to cancel.\n\n<!-- jira:email-selection -->`);
@@ -73,7 +73,7 @@ export async function handleFolderSelection(
   const outlookConfig = await configService.getOutlookConfig();
   const outlookService = new OutlookService(new OutlookApiClient());
   const emails = await outlookService.getEmails(chosen.id, outlookConfig.emailListSize);
-  const emailList = await outlookService.listEmailsForDisplay(chosen.id, outlookConfig.emailListSize);
+  const emailList = emails.map((e, i) => `${i + 1}. [${e.receivedDateTime.slice(0, 10)}] ${e.subject} (${e.senderName})`).join('\n');
   const emailSession: EmailSelectionSession = { folderId: chosen.id, emails };
   await ws.update('jira.session.emailSelection', emailSession);
   stream.markdown(`Folder set to **${chosen.displayName}**.\n\n${emailList}\n\nReply with a number to select an email, or **(c)** to cancel.\n\n<!-- jira:email-selection -->`);
