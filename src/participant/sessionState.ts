@@ -245,12 +245,6 @@ export interface FieldUpdatePreviewSession {
   arrayOp: 'set' | 'add' | 'remove';
 }
 
-export interface SpellCheckSession {
-  original: string;
-  corrected: string;
-  pending: FieldUpdatePreviewSession;
-}
-
 export interface FieldSelectionSession {
   candidates: JiraFieldMeta[];
   pending: {

@@ -11,7 +11,7 @@ import { FieldResolver } from '../templates/FieldResolver';
 import { extractTicketId } from '../utils/branchParser';
 import { redactUrls, tokenStatus } from '../utils/diagUtils';
 import { markdownToJiraWiki } from '../utils/markdownToJiraWiki';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type FieldUpdatePreviewSession, type SpellCheckSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, extractCreatedKeyFromConfirmation, extractLastTicketFromText, stripHiddenMarkers, serializeTurns, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks } from './sessionState';
 import { discoverWorkflow, loadWorkflowCache, saveWorkflowCache, findPath, preserveSkippedStatuses } from '../services/WorkflowService';
 import type { WorkflowGraph } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
@@ -1081,7 +1081,6 @@ async function continueSetField(
   ws: vscode.Memento,
   model: vscode.LanguageModelChat,
   token: vscode.CancellationToken,
-  spellCheckEnabled: boolean,
 ): Promise<void> {
   const sampleKey = ticketKeys[0];
   const isSprintField = Boolean(field.schema.custom?.includes('gh-sprint'));
@@ -1138,30 +1137,6 @@ async function continueSetField(
     return;
   }
 
-  // Spell-check string fields
-  if (spellCheckEnabled && !isArray && field.schema.type === 'string' && typeof fieldValue === 'string' && fieldValue.trim().length > 0) {
-    const corrected = await spellCheckValue(fieldValue, model, token);
-    if (corrected && corrected !== fieldValue) {
-      const basePending: FieldUpdatePreviewSession = {
-        ticketKeys, fieldId: field.id, fieldName: field.name,
-        fieldValue, isArray, arrayOp,
-      };
-      const spellSession: SpellCheckSession = {
-        original: fieldValue,
-        corrected,
-        pending: { ...basePending, fieldValue: corrected },
-      };
-      await ws.update('jira.session.spellCheck', spellSession);
-      stream.markdown(
-        `Possible spelling or grammar issue detected:\n\n` +
-        `**Original:** ${fieldValue}\n\n` +
-        `**Corrected:** ${corrected}\n\n` +
-        `Reply **ok** to use the corrected version, **keep** to use the original as-is, or **(c)** to cancel.\n\n<!-- jira:spell-check -->`,
-      );
-      return;
-    }
-  }
-
   await streamFieldUpdatePreview({
     ticketKeys, fieldId: field.id, fieldName: field.name,
     fieldValue, isArray, arrayOp,
@@ -1179,7 +1154,6 @@ async function handleSetField(
   ws: vscode.Memento,
   model: vscode.LanguageModelChat,
   token: vscode.CancellationToken,
-  spellCheckEnabled: boolean,
 ): Promise<void> {
   const navigable = fieldMeta.filter(f => f.navigable === true);
   const resolution = resolveFieldIdFuzzy(fieldNameRaw, navigable);
@@ -1202,7 +1176,7 @@ async function handleSetField(
 
   await continueSetField(
     ticketKeys, resolution.field, fieldValueRaw, arrayOp,
-    ticketService, stream, ws, model, token, spellCheckEnabled,
+    ticketService, stream, ws, model, token,
   );
 }
 
@@ -1502,7 +1476,7 @@ export function createJiraParticipant(
         await ws.update('jira.session.fieldSelection', undefined);
         const { fieldValue, arrayOp, ticketKeys } = fieldSelSession.pending;
         try {
-          await continueSetField(ticketKeys, chosen, fieldValue, arrayOp, ticketService, stream, ws, request.model, token, config.spellCheck);
+          await continueSetField(ticketKeys, chosen, fieldValue, arrayOp, ticketService, stream, ws, request.model, token);
         } catch (err) {
           stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
         }
@@ -1543,30 +1517,6 @@ export function createJiraParticipant(
         // Not ok or cancel — re-present
         stream.markdown(`Please reply **ok** to apply, or **(c)** to cancel.\n\n<!-- jira:field-update-preview -->`);
         await ws.update('jira.session.fieldUpdatePreview', previewSession);
-        return;
-      }
-    }
-
-    // Spell-check session — user chose corrected / original / cancel
-    if (lastResponse.includes('<!-- jira:spell-check -->')) {
-      const spellSession = ws.get<SpellCheckSession>('jira.session.spellCheck');
-      if (spellSession) {
-        if (isCancellation(request.prompt)) {
-          await ws.update('jira.session.spellCheck', undefined);
-          stream.markdown('_Cancelled._');
-          return;
-        }
-        await ws.update('jira.session.spellCheck', undefined);
-        const keepNorm = request.prompt.trim().toLowerCase();
-        const keepOriginal = ['k', 'keep', 'keep original', 'original', 'no'].includes(keepNorm);
-        const preview: FieldUpdatePreviewSession = keepOriginal
-          ? { ...spellSession.pending, fieldValue: spellSession.original }
-          : spellSession.pending;
-        try {
-          await streamFieldUpdatePreview(preview, stream, ws);
-        } catch (err) {
-          stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
-        }
         return;
       }
     }
@@ -1888,7 +1838,7 @@ export function createJiraParticipant(
             : [ticketKey!];
           await handleSetField(
             setTicketKeys, fieldNameRaw, fieldValueRaw, intent.arrayOp ?? 'set',
-            setFieldMeta, ticketService, stream, ws, request.model, token, config.spellCheck,
+            setFieldMeta, ticketService, stream, ws, request.model, token,
           );
           return;
         }

@@ -115,11 +115,6 @@
               "statuscategorychangedate"
             ],
             "description": "Field IDs excluded from @jira show output. Fields in additionalDisplayFields override this list. Use @jira show fields on PROJ-123 to discover field IDs."
-          },
-          "ticketSidekick.jira.spellCheck": {
-            "type": "boolean",
-            "default": true,
-            "description": "When enabled, @jira set on a text field offers a spelling/grammar-corrected version before applying the update. Disable per workspace to skip the correction step."
           }
         }
       },
