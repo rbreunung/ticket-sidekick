@@ -50,4 +50,17 @@ export class ConfigService {
   async storeBitbucketToken(token: string): Promise<void> {
     await this.context.secrets.store(ConfigService.BITBUCKET_TOKEN_KEY, token);
   }
+
+  async getOutlookConfig(): Promise<{ folderId: string; emailListSize: number }> {
+    const config = vscode.workspace.getConfiguration('ticketSidekick');
+    return {
+      folderId: config.get<string>('outlook.folderId') ?? '',
+      emailListSize: config.get<number>('outlook.emailListSize') ?? 10,
+    };
+  }
+
+  async saveOutlookFolderId(folderId: string): Promise<void> {
+    await vscode.workspace.getConfiguration('ticketSidekick')
+      .update('outlook.folderId', folderId, vscode.ConfigurationTarget.Global);
+  }
 }

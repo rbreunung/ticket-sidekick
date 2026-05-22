@@ -146,6 +146,22 @@
             "description": "Additional instructions appended to the built-in PR review prompt. Use this to add project-specific guidance, e.g. 'This project follows Google Style Guide' or 'Focus on security issues only'. The built-in grounding rules and output format are always included."
           }
         }
+      },
+      {
+        "id": "outlook",
+        "title": "Ticket Sidekick — Outlook",
+        "properties": {
+          "ticketSidekick.outlook.folderId": {
+            "type": "string",
+            "default": "",
+            "description": "Microsoft Graph folder ID to list emails from. Leave empty to be prompted on first use. Clear to re-run the folder picker."
+          },
+          "ticketSidekick.outlook.emailListSize": {
+            "type": "number",
+            "default": 10,
+            "description": "Number of emails to show in the @jira create from email selection list."
+          }
+        }
       }
     ]
   },
