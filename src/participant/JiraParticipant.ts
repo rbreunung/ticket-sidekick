@@ -16,7 +16,7 @@ import { discoverWorkflow, loadWorkflowCache, saveWorkflowCache, findPath, prese
 import type { WorkflowGraph } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
 import type { Operation, ParsedIntent } from './jira/llmHelpers';
-import { parseIntent, generateContent, isLmRefusal, extractHistoryTurns, buildHistoryContext, synthesizeComments, generateDescriptionAndCommentsSummary, spellCheckValue, INTENT_PROMPT } from './jira/llmHelpers';
+import { parseIntent, generateContent, isLmRefusal, extractHistoryTurns, synthesizeComments, generateDescriptionAndCommentsSummary, spellCheckValue } from './jira/llmHelpers';
 
 const FILE_MAX_BYTES = 60_000;
 
