@@ -19,6 +19,10 @@ import { streamIssueTypeSelection, continueAfterIssueType, streamNextSection, st
 import { serializeCommentsForLLM, handleLoadTicket } from './jira/loadHandler';
 import { streamReviewScreen, executeCleanupBatch, handleRunCleanup } from './jira/cleanupHandler';
 import { handleDiscoverWorkflow } from './jira/workflowHandler';
+import {
+  handleCreateFromEmail, handleFolderSelection, handleEmailSelection, handleEmailContentSession,
+} from './jira/emailHandler';
+import type { FolderSelectionSession, EmailSelectionSession, EmailContentSession } from './sessionState';
 
 export function createJiraParticipant(
   context: vscode.ExtensionContext,
@@ -462,6 +466,33 @@ export function createJiraParticipant(
       }
     }
 
+    // Folder selection — user replied with their folder choice for email import
+    if (lastResponse.includes('<!-- jira:folder-selection -->')) {
+      const folderSession = ws.get<FolderSelectionSession>('jira.session.folderSelection');
+      if (folderSession) {
+        await handleFolderSelection(request.prompt, folderSession, configService, stream, ws);
+        return;
+      }
+    }
+
+    // Email selection — user replied with their email choice for ticket creation
+    if (lastResponse.includes('<!-- jira:email-selection -->')) {
+      const emailSession = ws.get<EmailSelectionSession>('jira.session.emailSelection');
+      if (emailSession) {
+        await handleEmailSelection(request.prompt, emailSession, stream, configService, ws);
+        return;
+      }
+    }
+
+    // Email content session — user is confirming/refining ticket content from email
+    if (lastResponse.includes('<!-- jira:email-content -->')) {
+      const contentSession = ws.get<EmailContentSession>('jira.session.emailContent');
+      if (contentSession) {
+        await handleEmailContentSession(request.prompt, contentSession, ticketService, stream, ws);
+        return;
+      }
+    }
+
     // Comment list — user replied with a comment number to view in full
     if (lastResponse.includes('<!-- jira:comment-list -->')) {
       const commentSession = ws.get<CommentListSession>('jira.session.commentList');
@@ -511,6 +542,11 @@ export function createJiraParticipant(
       } catch (err) {
         stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
       }
+      return;
+    }
+
+    if (intent.operation === 'createFromEmail') {
+      await handleCreateFromEmail(request, stream, token, jiraClient, ticketService, configService, ws);
       return;
     }
 
