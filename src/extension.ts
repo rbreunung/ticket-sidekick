@@ -96,7 +96,10 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
 
     vscode.commands.registerCommand('ticket-sidekick.processHandoverEmail', async (subfolder: string) => {
-      if (!subfolder) return;
+      if (!subfolder || !/^\d+$/.test(subfolder)) {
+        if (subfolder) vscode.window.showErrorMessage('Ticket Sidekick: Invalid handover folder name.');
+        return;
+      }
       const config = vscode.workspace.getConfiguration('ticketSidekick');
       const rawFolder = config.get<string>('email.handoverFolder', '').trim();
       const handoverFolder = rawFolder
@@ -138,10 +141,15 @@ export function activate(context: vscode.ExtensionContext): void {
                 `Return only the relevant content as markdown:\n\n${email.markdownBody}`,
               ),
             ];
-            const res = await models[0].sendRequest(msgs, {}, new vscode.CancellationTokenSource().token);
-            let cleaned = '';
-            for await (const chunk of res.text) cleaned += chunk;
-            email = { ...email, markdownBody: cleaned.trim() };
+            const cts = new vscode.CancellationTokenSource();
+            try {
+              const res = await models[0].sendRequest(msgs, {}, cts.token);
+              let cleaned = '';
+              for await (const chunk of res.text) cleaned += chunk;
+              email = { ...email, markdownBody: cleaned.trim() };
+            } finally {
+              cts.dispose();
+            }
           }
         } catch {
           // Footer cleanup failed — continue with original body
