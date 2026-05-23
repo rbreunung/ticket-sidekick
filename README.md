@@ -350,6 +350,56 @@ No configuration needed. On first use VS Code prompts for Microsoft account sign
 | Folder ID | `ticketSidekick.outlook.folderId` | _(empty — shows picker on first use)_ |
 | Email list size | `ticketSidekick.outlook.emailListSize` | `10` |
 
+### Create ticket from Outlook email — OWA bridge (Tampermonkey)
+
+Use this approach when the Microsoft Graph API is blocked by your corporate tenant.
+
+**How it works:** A browser userscript captures the open email in OWA (subject, body,
+inline images, attachments) and saves everything to a local handover folder. VS Code
+reads the folder and opens the ticket creation preview automatically.
+
+**One-time setup:**
+
+1. Install [Tampermonkey](https://www.tampermonkey.net/) in Microsoft Edge
+   (Edge recommended — subdirectory download support confirmed on Chromium).
+2. In VS Code settings, set:
+   - `ticketSidekick.outlook.owaUrl` — your OWA URL
+     (default: `https://outlook.office.com`; use your corporate URL if different)
+   - `ticketSidekick.email.handoverFolder` — path where VS Code reads email files
+     (default: `~/Downloads/TicketSidekick/`; must match Edge's downloads location)
+   - `ticketSidekick.jira.defaultProject` — Jira project key for new tickets
+3. Run **Command Palette → Ticket Sidekick: Export OWA Userscript for Tampermonkey**
+4. Copy the generated script into Tampermonkey (New Script → paste → Save)
+
+**Per-email workflow:**
+
+1. Open an email in OWA
+2. Click **📋 To Ticket** in the reading pane toolbar
+   (or **📋✨ To Ticket (Clean)** to strip the corporate footer/signature via AI)
+3. VS Code focuses automatically and shows a preview of the Jira ticket
+4. Reply **post it** to create — or **(c)** to cancel
+
+Inline images are uploaded as Jira attachments and embedded as thumbnails at their
+original position in the description. File attachments are uploaded to the ticket.
+The local handover files are deleted automatically after the ticket is created.
+Handover files older than 24 hours are cleaned up on the next use.
+
+**Settings reference:**
+
+| Setting | Default | Description |
+|---|---|---|
+| `ticketSidekick.outlook.owaUrl` | `https://outlook.office.com` | OWA base URL used when generating the userscript |
+| `ticketSidekick.email.handoverFolder` | `~/Downloads/TicketSidekick/` | Folder VS Code reads email files from |
+| `ticketSidekick.email.cleanupModel` | `gpt-4o-mini` | VS Code LM model family for footer removal |
+
+**Troubleshooting:**
+
+- _VS Code says "timed out waiting for email.json"_ — the handover folder path in VS Code
+  settings doesn't match where Edge saves downloads. Check `ticketSidekick.email.handoverFolder`.
+- _Button doesn't appear in OWA_ — the userscript `@match` URL may not cover your OWA
+  address. Re-export the script after correcting `ticketSidekick.outlook.owaUrl`.
+- _OWA DOM changed after a Microsoft update_ — re-export and reinstall the userscript.
+
 ### Templates and cleanup rules
 
 Create a `.jira-templates.json` file in your workspace root to define per-application templates with default fields and guided description collection, plus named cleanup rules for bulk status transitions.
