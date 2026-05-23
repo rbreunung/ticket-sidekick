@@ -62,13 +62,19 @@ export function generateOwaUserscript(config: {
   }
 
   function getReceivedDateTime() {
-    // New Outlook: data-testid="SentReceivedSavedTime", text like "Fr, 2026-05-22 15:22"
+    // New Outlook: data-testid="SentReceivedSavedTime"
+    // ISO-like format: "Fr, 2026-05-22 15:22" (corporate)
+    // EU format: "Di, 14.04.2020 08:51" (Hotmail/personal, DD.MM.YYYY)
     const dateEl = document.querySelector('[data-testid="SentReceivedSavedTime"]');
     if (dateEl) {
       const text = dateEl.textContent || '';
-      const match = text.match(/(\\d{4}-\\d{2}-\\d{2})\\s+(\\d{2}:\\d{2})/);
-      if (match) {
-        try { return new Date(match[1] + 'T' + match[2] + ':00').toISOString(); } catch (_) {}
+      const isoMatch = text.match(/(\\d{4}-\\d{2}-\\d{2})\\s+(\\d{2}:\\d{2})/);
+      if (isoMatch) {
+        try { return new Date(isoMatch[1] + 'T' + isoMatch[2] + ':00').toISOString(); } catch (_) {}
+      }
+      const euMatch = text.match(/(\\d{2})\\.(\\d{2})\\.(\\d{4})\\s+(\\d{2}:\\d{2})/);
+      if (euMatch) {
+        try { return new Date(euMatch[3] + '-' + euMatch[2] + '-' + euMatch[1] + 'T' + euMatch[4] + ':00').toISOString(); } catch (_) {}
       }
     }
     return document.querySelector('time')?.getAttribute('datetime') || new Date().toISOString();

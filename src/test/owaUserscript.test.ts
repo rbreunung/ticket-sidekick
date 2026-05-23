@@ -71,4 +71,8 @@ describe('generateOwaUserscript', () => {
     });
     expect(script).toContain('@match        https://outlook.office.com/*');
   });
+
+  it('handles EU date format DD.MM.YYYY HH:MM in getReceivedDateTime', () => {
+    expect(SCRIPT).toContain('euMatch[3] + \'-\' + euMatch[2] + \'-\' + euMatch[1]');
+  });
 });
