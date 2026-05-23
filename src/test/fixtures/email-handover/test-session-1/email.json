@@ -1,0 +1,13 @@
+{
+  "subject": "Test Email Subject",
+  "senderName": "Jane Doe",
+  "receivedDateTime": "2026-05-23T10:00:00Z",
+  "bodyFile": "email-body.html",
+  "stripFooter": false,
+  "inlineImages": [
+    { "filename": "email-image-1.png", "contentType": "image/png" }
+  ],
+  "attachments": [
+    { "filename": "report.pdf", "contentType": "application/pdf" }
+  ]
+}
