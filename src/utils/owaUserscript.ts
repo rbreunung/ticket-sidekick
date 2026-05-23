@@ -29,33 +29,56 @@ export function generateOwaUserscript(config: {
   const FOLDER_PREFIX = 'TicketSidekick/';
 
   function getReadingPane() {
-    return document.querySelector('[data-testid="reading-pane"]')
+    // New Outlook (outlook.cloud.microsoft) — persistent container
+    return document.querySelector('.wide-content-host')
+      || document.querySelector('[data-testid="reading-pane"]')
       || document.querySelector('[aria-label="Reading Pane"]')
       || document.querySelector('.ReadingPane');
   }
 
   function getSubject() {
+    // New Outlook: subject heading above the sender row
     return (
       document.querySelector('[data-testid="subject"]')?.textContent?.trim()
+      || document.querySelector('[data-testid="ConversationTopic"]')?.textContent?.trim()
       || document.querySelector('[aria-label^="Email subject"]')?.textContent?.trim()
+      || document.querySelector('[role="heading"][aria-level="2"]')?.textContent?.trim()
       || document.querySelector('h1')?.textContent?.trim()
       || '(no subject)'
     );
   }
 
   function getSenderName() {
+    // New Outlook: aria-label="Von: Name" (DE) / "From: Name" (EN)
+    const fromEl = document.querySelector('[aria-label^="Von: "], [aria-label^="From: "]');
+    if (fromEl) {
+      const label = fromEl.getAttribute('aria-label') || '';
+      return label.replace(/^(Von|From):\\s*/i, '').replace(/<[^>]+>/, '').trim() || 'Unknown';
+    }
     return (
       document.querySelector('[data-testid="sender-name"]')?.textContent?.trim()
-      || document.querySelector('[aria-label^="From"]')?.textContent?.trim()
       || 'Unknown'
     );
   }
 
   function getReceivedDateTime() {
+    // New Outlook: data-testid="SentReceivedSavedTime", text like "Fr, 2026-05-22 15:22"
+    const dateEl = document.querySelector('[data-testid="SentReceivedSavedTime"]');
+    if (dateEl) {
+      const text = dateEl.textContent || '';
+      const match = text.match(/(\\d{4}-\\d{2}-\\d{2})\\s+(\\d{2}:\\d{2})/);
+      if (match) {
+        try { return new Date(match[1] + 'T' + match[2] + ':00').toISOString(); } catch (_) {}
+      }
+    }
     return document.querySelector('time')?.getAttribute('datetime') || new Date().toISOString();
   }
 
   function getBodyElement() {
+    // New Outlook: data-test-id uses a hyphen, not camelCase
+    const newOutlook = document.querySelector('[data-test-id="mailMessageBodyContainer"] [role="document"]')
+      || document.querySelector('[data-test-id="mailMessageBodyContainer"] .allowTextSelection');
+    if (newOutlook) return newOutlook;
     const pane = getReadingPane();
     if (!pane) return null;
     for (const iframe of pane.querySelectorAll('iframe')) {
@@ -169,18 +192,21 @@ export function generateOwaUserscript(config: {
   }
 
   function injectButtons(pane) {
-    if (pane.dataset.tsInjected) return;
-    pane.dataset.tsInjected = 'true';
-
+    // New Outlook: fui-Toolbar is the main message toolbar (Reply, Forward, …)
+    // Quick-actions bar at the bottom also has role="toolbar" — skip it (has aria-label)
     const toolbar = (
-      pane.querySelector('[data-testid="reading-pane-toolbar"]')
-      || pane.querySelector('[role="toolbar"]')
+      pane.querySelector('.fui-Toolbar[role="toolbar"]')
+      || pane.querySelector('[data-testid="reading-pane-toolbar"]')
+      || pane.querySelector('[role="toolbar"]:not([aria-label])')
       || pane.firstElementChild
     );
     if (!toolbar) return;
+    // Guard: avoid double-injection when MutationObserver fires on content swap
+    if (toolbar.querySelector('[data-ts-btn]')) return;
 
     function makeBtn(label, stripFooter) {
       const btn = document.createElement('button');
+      btn.dataset.tsBtn = '1';
       btn.textContent = label;
       btn.title = stripFooter ? 'Create Jira ticket (AI footer removal)' : 'Create Jira ticket';
       btn.style.cssText = 'margin:2px 4px;padding:3px 8px;cursor:pointer;font-size:12px;'
