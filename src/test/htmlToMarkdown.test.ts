@@ -70,4 +70,22 @@ describe('htmlToMarkdown', () => {
     const result = htmlToMarkdown('<p>First</p><p>Second</p>');
     expect(result).toBe('First\n\nSecond');
   });
+
+  it('converts data-ts-filename img to markdown image at correct position', () => {
+    const html = '<p>Before</p><img data-ts-filename="email-image-1.png"><p>After</p>';
+    const result = htmlToMarkdown(html);
+    expect(result).toContain('![email-image-1.png](email-image-1.png)');
+    expect(result.indexOf('Before')).toBeLessThan(result.indexOf('![email-image-1.png]'));
+    expect(result.indexOf('![email-image-1.png]')).toBeLessThan(result.indexOf('After'));
+  });
+
+  it('data-ts-filename img is not caught by the alt-text fallback', () => {
+    const html = '<img data-ts-filename="photo.jpg" alt="photo">';
+    expect(htmlToMarkdown(html)).toBe('![photo.jpg](photo.jpg)');
+  });
+
+  it('data-ts-filename takes precedence over src attribute', () => {
+    const html = '<img src="https://example.com/img.png" data-ts-filename="email-image-2.png">';
+    expect(htmlToMarkdown(html)).toBe('![email-image-2.png](email-image-2.png)');
+  });
 });

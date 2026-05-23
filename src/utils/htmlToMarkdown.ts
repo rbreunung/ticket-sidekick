@@ -53,6 +53,10 @@ export function htmlToMarkdown(html: string, inlineImageMap: Map<string, string>
   // Links
   s = s.replace(/<a[^>]+href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)');
 
+  // Inline images: data-ts-filename (OWA Tampermonkey bridge) — must come before cid: and alt rules
+  s = s.replace(/<img[^>]+data-ts-filename="([^"]*)"[^>]*\/?>/gi, (_: string, filename: string) =>
+    `![${filename}](${filename})`
+  );
   // Inline images: cid: references
   s = s.replace(/<img[^>]+src="cid:([^"]*)"[^>]*\/?>/gi, (_: string, cid: string) => {
     const filename = inlineImageMap.get(cid.trim()) ?? cid.trim();
