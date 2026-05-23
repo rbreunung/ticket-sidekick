@@ -8,7 +8,8 @@
       "Bash(npm test *)",
       "Bash(npx vitest *)",
       "Bash(npx tsc *)",
-      "Bash(npx tsx *)"
+      "Bash(npx tsx *)",
+      "Bash(git push *)"
     ]
   }
 }
