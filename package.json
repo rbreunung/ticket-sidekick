@@ -198,13 +198,13 @@
           },
           "ticketSidekick.email.cleanupModel": {
             "type": "string",
-            "default": "gpt-4o-mini",
-            "enum": ["gpt-4o-mini", "gpt-4o", "claude-3.5-sonnet", "o1-mini"],
+            "default": "gpt-5-mini",
+            "enum": ["gpt-5-mini", "gpt-5.4-mini", "claude-haiku-4.5", "claude-sonnet-4.6"],
             "enumDescriptions": [
-              "GPT-4o Mini — fast and cheap, good for footer removal (recommended)",
-              "GPT-4o — more capable, slower",
-              "Claude 3.5 Sonnet — Anthropic model via GitHub Copilot",
-              "o1-mini — reasoning model, overkill for footer removal"
+              "GPT-5 Mini — fast and cheap, good for footer removal (recommended)",
+              "GPT-5.4 Mini — slightly more capable",
+              "Claude Haiku 4.5 — fast Anthropic model",
+              "Claude Sonnet 4.6 — more capable Anthropic model"
             ],
             "description": "VS Code LM model family used for AI email footer/signature removal when '📋✨ To Ticket (Clean)' is clicked. Must be a model family available in your VS Code instance."
           }
