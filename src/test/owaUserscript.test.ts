@@ -39,12 +39,25 @@ describe('generateOwaUserscript', () => {
     expect(SCRIPT).toContain('📋✨ To Ticket (Clean)');
   });
 
-  it('uses epoch timestamp as folder name', () => {
+  it('uses epoch timestamp as the file name', () => {
     expect(SCRIPT).toContain('Date.now()');
   });
 
-  it('uses TicketSidekick/ as the downloads prefix', () => {
-    expect(SCRIPT).toContain("'TicketSidekick/'");
+  it('saves a single TicketSidekick-{timestamp}.json file', () => {
+    expect(SCRIPT).toContain("'TicketSidekick-' + timestamp + '.json'");
+  });
+
+  it('embeds body HTML inline instead of a separate file', () => {
+    expect(SCRIPT).toContain('bodyHtml: bodyClone.innerHTML');
+  });
+
+  it('fetches images as base64 via GM_xmlhttpRequest arraybuffer', () => {
+    expect(SCRIPT).toContain("responseType: 'arraybuffer'");
+    expect(SCRIPT).toContain('arrayBufferToBase64');
+  });
+
+  it('injects buttons into all toolbars (querySelectorAll)', () => {
+    expect(SCRIPT).toContain('querySelectorAll(\'.fui-Toolbar[role="toolbar"]\')');
   });
 
   it('escapes single quotes in vscodeUriBase to prevent script injection', () => {

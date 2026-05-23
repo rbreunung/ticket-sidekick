@@ -194,7 +194,7 @@
           "ticketSidekick.email.handoverFolder": {
             "type": "string",
             "default": "",
-            "description": "Root folder where the Tampermonkey userscript saves email subfolders. Defaults to ~/Downloads/TicketSidekick/ when empty. Must match where Microsoft Edge saves downloads plus the 'TicketSidekick/' subdirectory."
+            "description": "Folder where the Tampermonkey userscript saves the handover JSON file. Defaults to ~/Downloads/ when empty. Must match your browser's configured download location."
           },
           "ticketSidekick.email.cleanupModel": {
             "type": "string",

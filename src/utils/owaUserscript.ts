@@ -14,7 +14,7 @@ export function generateOwaUserscript(config: {
   return `// ==UserScript==
 // @name         Ticket Sidekick — OWA to Jira
 // @namespace    https://ticket-sidekick
-// @version      1.0
+// @version      1.1
 // @description  Capture OWA email and send to Ticket Sidekick in VS Code
 // @author       Ticket Sidekick
 // @match        ${safeOwaUrl}/*
@@ -26,10 +26,9 @@ export function generateOwaUserscript(config: {
   'use strict';
 
   const VSCODE_URI = '${safeVscodeUri}/from-email';
-  const FOLDER_PREFIX = 'TicketSidekick/';
 
   function getReadingPane() {
-    // New Outlook (outlook.cloud.microsoft) — persistent container
+    // New Outlook (outlook.cloud.microsoft / outlook.live.com) — persistent container
     return document.querySelector('.wide-content-host')
       || document.querySelector('[data-testid="reading-pane"]')
       || document.querySelector('[aria-label="Reading Pane"]')
@@ -37,7 +36,6 @@ export function generateOwaUserscript(config: {
   }
 
   function getSubject() {
-    // New Outlook: subject heading above the sender row
     return (
       document.querySelector('[data-testid="subject"]')?.textContent?.trim()
       || document.querySelector('[data-testid="ConversationTopic"]')?.textContent?.trim()
@@ -99,42 +97,32 @@ export function generateOwaUserscript(config: {
     );
   }
 
-  function blobDownload(content, name) {
-    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    return new Promise((resolve, reject) => {
-      GM_download({
-        url,
-        name,
-        onload() { URL.revokeObjectURL(url); resolve(); },
-        onerror(e) { URL.revokeObjectURL(url); reject(e); },
-      });
-    });
+  function arrayBufferToBase64(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    const chunk = 8192;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
   }
 
-  function fetchAndDownload(src, name) {
+  function fetchAsBase64(url) {
     return new Promise((resolve, reject) => {
       GM_xmlhttpRequest({
         method: 'GET',
-        url: src,
-        responseType: 'blob',
-        onload(res) {
-          const url = URL.createObjectURL(res.response);
-          GM_download({
-            url,
-            name,
-            onload() { URL.revokeObjectURL(url); resolve(); },
-            onerror(e) { URL.revokeObjectURL(url); reject(e); },
-          });
+        url,
+        responseType: 'arraybuffer',
+        onload(res) { resolve(arrayBufferToBase64(res.response)); },
+        onerror(err) {
+          reject(new Error('fetch failed: ' + (err.statusText || err.error || JSON.stringify(err))));
         },
-        onerror: reject,
       });
     });
   }
 
   async function captureEmail(stripFooter) {
-    const folder = Date.now().toString();
-    const base = FOLDER_PREFIX + folder + '/';
+    const timestamp = Date.now().toString();
     const subject = getSubject();
     const senderName = getSenderName();
     const receivedDateTime = getReceivedDateTime();
@@ -147,8 +135,10 @@ export function generateOwaUserscript(config: {
 
     const bodyClone = bodyEl.cloneNode(true);
     const inlineImages = [];
-    const downloads = [];
+    const attachments = [];
     let imgIdx = 0;
+
+    const fetches = [];
 
     for (const img of bodyClone.querySelectorAll('img')) {
       const src = img.getAttribute('src') || img.src;
@@ -161,11 +151,11 @@ export function generateOwaUserscript(config: {
       img.setAttribute('data-ts-filename', filename);
       img.removeAttribute('src');
       img.removeAttribute('srcset');
-      inlineImages.push({ filename, contentType: 'image/' + mimeExt });
-      downloads.push(fetchAndDownload(src, base + filename));
+      const entry = { filename, contentType: 'image/' + mimeExt, dataBase64: '' };
+      inlineImages.push(entry);
+      fetches.push(fetchAsBase64(src).then(b64 => { entry.dataBase64 = b64; }).catch(() => {}));
     }
 
-    const attachments = [];
     for (const link of document.querySelectorAll('[data-testid="attachment-item"] a')) {
       const href = link.href;
       const name = (link.textContent || link.title || '').trim();
@@ -173,59 +163,73 @@ export function generateOwaUserscript(config: {
       try { parsedHref = new URL(href, location.href); } catch (_) { parsedHref = null; }
       if (parsedHref && ['http:', 'https:'].includes(parsedHref.protocol) && name) {
         const safeName = name.replace(/[/\\\\:*?"<>|]/g, '_');
-        attachments.push({ filename: safeName, contentType: 'application/octet-stream' });
-        downloads.push(fetchAndDownload(href, base + safeName));
+        const entry = { filename: safeName, contentType: 'application/octet-stream', dataBase64: '' };
+        attachments.push(entry);
+        fetches.push(fetchAsBase64(href).then(b64 => { entry.dataBase64 = b64; }).catch(() => {}));
       }
     }
 
-    await Promise.all(downloads);
-    await blobDownload(bodyClone.innerHTML, base + 'email-body.html');
-    await blobDownload(
-      JSON.stringify({
-        subject, senderName, receivedDateTime,
-        bodyFile: 'email-body.html',
-        stripFooter: !!stripFooter,
-        inlineImages, attachments,
-      }, null, 2),
-      base + 'email.json',
-    );
+    await Promise.all(fetches);
 
-    // 1.5 s soft head-start before VS Code polling begins; downloads continue uninterrupted
+    const manifest = JSON.stringify({
+      subject, senderName, receivedDateTime,
+      stripFooter: !!stripFooter,
+      bodyHtml: bodyClone.innerHTML,
+      inlineImages,
+      attachments,
+    }, null, 2);
+
+    const blob = new Blob([manifest], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    await new Promise((resolve, reject) => {
+      GM_download({
+        url,
+        name: 'TicketSidekick-' + timestamp + '.json',
+        onload() { URL.revokeObjectURL(url); resolve(); },
+        onerror(err) {
+          URL.revokeObjectURL(url);
+          reject(new Error(err.error || err.statusText || 'GM_download failed'));
+        },
+      });
+    });
+
+    // 1.5 s soft head-start before VS Code polling begins
     // (window.location.href to a vscode:// URI hands off to the OS — does not navigate away)
     setTimeout(() => {
-      window.location.href = VSCODE_URI + '?folder=' + folder;
+      window.location.href = VSCODE_URI + '?folder=' + timestamp;
     }, 1500);
+  }
+
+  function makeBtn(label, stripFooter) {
+    const btn = document.createElement('button');
+    btn.dataset.tsBtn = '1';
+    btn.textContent = label;
+    btn.title = stripFooter ? 'Create Jira ticket (AI footer removal)' : 'Create Jira ticket';
+    btn.style.cssText = 'margin:2px 4px;padding:3px 8px;cursor:pointer;font-size:12px;'
+      + 'border:1px solid #888;border-radius:3px;background:#f5f5f5;';
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      captureEmail(stripFooter).catch((err) => alert('Ticket Sidekick: Capture failed — ' + String(err)));
+    });
+    return btn;
   }
 
   function injectButtons(pane) {
     // New Outlook: fui-Toolbar is the main message toolbar (Reply, Forward, …)
+    // Use querySelectorAll to inject into every email in a conversation thread.
     // Quick-actions bar at the bottom also has role="toolbar" — skip it (has aria-label)
-    const toolbar = (
-      pane.querySelector('.fui-Toolbar[role="toolbar"]')
-      || pane.querySelector('[data-testid="reading-pane-toolbar"]')
-      || pane.querySelector('[role="toolbar"]:not([aria-label])')
-      || pane.firstElementChild
-    );
-    if (!toolbar) return;
-    // Guard: avoid double-injection when MutationObserver fires on content swap
-    if (toolbar.querySelector('[data-ts-btn]')) return;
-
-    function makeBtn(label, stripFooter) {
-      const btn = document.createElement('button');
-      btn.dataset.tsBtn = '1';
-      btn.textContent = label;
-      btn.title = stripFooter ? 'Create Jira ticket (AI footer removal)' : 'Create Jira ticket';
-      btn.style.cssText = 'margin:2px 4px;padding:3px 8px;cursor:pointer;font-size:12px;'
-        + 'border:1px solid #888;border-radius:3px;background:#f5f5f5;';
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        captureEmail(stripFooter).catch((err) => alert('Ticket Sidekick: Capture failed — ' + String(err)));
-      });
-      return btn;
+    let toolbars = Array.from(pane.querySelectorAll('.fui-Toolbar[role="toolbar"]'));
+    if (!toolbars.length) {
+      const fb = pane.querySelector('[data-testid="reading-pane-toolbar"]')
+        || pane.querySelector('[role="toolbar"]:not([aria-label])')
+        || pane.firstElementChild;
+      if (fb) toolbars = [fb];
     }
-
-    toolbar.appendChild(makeBtn('📋 To Ticket', false));
-    toolbar.appendChild(makeBtn('📋✨ To Ticket (Clean)', true));
+    for (const toolbar of toolbars) {
+      if (toolbar.querySelector('[data-ts-btn]')) continue;
+      toolbar.appendChild(makeBtn('📋 To Ticket', false));
+      toolbar.appendChild(makeBtn('📋✨ To Ticket (Clean)', true));
+    }
   }
 
   const observer = new MutationObserver(() => {

@@ -7,42 +7,24 @@ interface HandoverManifest {
   subject: string;
   senderName: string;
   receivedDateTime: string;
-  bodyFile: string;
+  bodyHtml: string;
   stripFooter: boolean;
-  inlineImages: Array<{ filename: string; contentType: string }>;
-  attachments: Array<{ filename: string; contentType: string }>;
+  inlineImages: Array<{ filename: string; contentType: string; dataBase64: string }>;
+  attachments: Array<{ filename: string; contentType: string; dataBase64: string }>;
 }
 
-function safeJoin(base: string, filename: string): string {
-  const resolved = path.join(base, filename);
-  if (!resolved.startsWith(base + path.sep)) {
-    throw new Error(`Invalid filename in manifest: ${filename}`);
-  }
-  return resolved;
-}
-
-export async function readHandoverEmail(handoverFolder: string, subfolder: string): Promise<HandoverEmail> {
-  const dir = path.join(handoverFolder, subfolder);
-  const manifestPath = path.join(dir, 'email.json');
+export async function readHandoverEmail(handoverFolder: string, timestamp: string): Promise<HandoverEmail> {
+  const filePath = path.join(handoverFolder, `TicketSidekick-${timestamp}.json`);
 
   let manifest: HandoverManifest;
-  let raw: string;
   try {
-    raw = await fs.promises.readFile(manifestPath, 'utf-8');
+    const raw = await fs.promises.readFile(filePath, 'utf-8');
     manifest = JSON.parse(raw) as HandoverManifest;
   } catch {
-    throw new Error(`Could not read handover manifest at ${manifestPath}`);
+    throw new Error(`Could not read handover manifest at ${filePath}`);
   }
 
-  const bodyPath = safeJoin(dir, manifest.bodyFile);
-  let bodyHtml: string;
-  try {
-    bodyHtml = await fs.promises.readFile(bodyPath, 'utf-8');
-  } catch {
-    throw new Error(`Could not read email body at ${bodyPath}`);
-  }
-
-  const markdownBody = htmlToMarkdown(bodyHtml);
+  const markdownBody = htmlToMarkdown(manifest.bodyHtml);
 
   return {
     subject: manifest.subject,
@@ -51,29 +33,29 @@ export async function readHandoverEmail(handoverFolder: string, subfolder: strin
     markdownBody,
     stripFooter: manifest.stripFooter,
     handoverFolder,
-    subfolder,
+    timestamp,
     attachments: [
       ...manifest.inlineImages.map(img => ({
         name: img.filename,
         contentType: img.contentType,
-        filePath: safeJoin(dir, img.filename),
+        dataBase64: img.dataBase64,
         isInline: true,
       })),
       ...manifest.attachments.map(att => ({
         name: att.filename,
         contentType: att.contentType,
-        filePath: safeJoin(dir, att.filename),
+        dataBase64: att.dataBase64,
         isInline: false,
       })),
     ],
   };
 }
 
-export async function deleteHandoverSubfolder(handoverFolder: string, subfolder: string): Promise<void> {
-  await fs.promises.rm(path.join(handoverFolder, subfolder), { recursive: true, force: true });
+export async function deleteHandoverFile(handoverFolder: string, timestamp: string): Promise<void> {
+  await fs.promises.unlink(path.join(handoverFolder, `TicketSidekick-${timestamp}.json`)).catch(() => {});
 }
 
-export async function purgeStaleSubfolders(handoverFolder: string, maxAgeMs: number = 24 * 60 * 60 * 1000): Promise<void> {
+export async function purgeStaleFiles(handoverFolder: string, maxAgeMs: number = 24 * 60 * 60 * 1000): Promise<void> {
   let entries: fs.Dirent[];
   try {
     entries = await fs.promises.readdir(handoverFolder, { withFileTypes: true });
@@ -83,12 +65,12 @@ export async function purgeStaleSubfolders(handoverFolder: string, maxAgeMs: num
 
   const now = Date.now();
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const entryPath = path.join(handoverFolder, entry.name);
+    if (!entry.isFile() || !entry.name.startsWith('TicketSidekick-') || !entry.name.endsWith('.json')) continue;
+    const filePath = path.join(handoverFolder, entry.name);
     try {
-      const stat = await fs.promises.stat(entryPath);
+      const stat = await fs.promises.stat(filePath);
       if (now - stat.mtimeMs > maxAgeMs) {
-        await fs.promises.rm(entryPath, { recursive: true, force: true });
+        await fs.promises.unlink(filePath);
       }
     } catch {
       // Already deleted (race condition) — skip

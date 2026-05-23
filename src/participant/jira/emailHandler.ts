@@ -8,8 +8,7 @@ import type { IJiraClient } from '../../jira/IJiraClient';
 import { markdownToJiraWiki } from '../../utils/markdownToJiraWiki';
 import type { FolderSelectionSession, EmailSelectionSession, EmailContentSession } from '../sessionState';
 import { isCancellation, isConfirmation } from '../sessionState';
-import * as fs from 'fs';
-import { deleteHandoverSubfolder } from '../../utils/handoverFolder';
+import { deleteHandoverFile } from '../../utils/handoverFolder';
 import type { HandoverEmail } from '../sessionState';
 
 export async function handleCreateFromEmail(
@@ -30,17 +29,9 @@ export async function handleCreateFromEmail(
       stream.markdown('**No default project configured.** Set `ticketSidekick.jira.defaultProject` in VS Code settings and try again.');
       return;
     }
-    const attachments: EmailContentSession['attachments'] = [];
-    for (const a of handover.attachments) {
-      let contentBytes: string;
-      try {
-        contentBytes = (await fs.promises.readFile(a.filePath)).toString('base64');
-      } catch (err) {
-        stream.markdown(`**Could not read attachment \`${a.name}\`:** ${err instanceof Error ? err.message : String(err)}`);
-        return;
-      }
-      attachments.push({ name: a.name, contentType: a.contentType, contentBytes, isInline: a.isInline });
-    }
+    const attachments: EmailContentSession['attachments'] = handover.attachments.map(a => ({
+      name: a.name, contentType: a.contentType, contentBytes: a.dataBase64, isInline: a.isInline,
+    }));
     const contentSession: EmailContentSession = {
       emailId: 'handover',
       subject: handover.subject,
@@ -51,7 +42,7 @@ export async function handleCreateFromEmail(
       projectKey,
       issueType: 'Story',
       additionalFields: {},
-      handoverCleanup: { folder: handover.handoverFolder, subfolder: handover.subfolder },
+      handoverCleanup: { folder: handover.handoverFolder, timestamp: handover.timestamp },
     };
     await streamEmailContentPreview(contentSession, stream, ws);
     return;
@@ -212,7 +203,7 @@ async function finishEmailTicket(session: EmailContentSession, ticketService: Ti
     stream.markdown(`\n\n<!-- @jira-ticket:${issueKey} -->`);
   }
   if (session.handoverCleanup) {
-    await deleteHandoverSubfolder(session.handoverCleanup.folder, session.handoverCleanup.subfolder).catch(() => {
+    await deleteHandoverFile(session.handoverCleanup.folder, session.handoverCleanup.timestamp).catch(() => {
       // Non-fatal — stale files are purged on the next processHandoverEmail invocation
     });
   }

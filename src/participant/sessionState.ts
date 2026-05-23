@@ -92,11 +92,11 @@ export interface HandoverEmail {
   markdownBody: string;
   stripFooter: boolean;
   handoverFolder: string;
-  subfolder: string;
+  timestamp: string;
   attachments: Array<{
     name: string;
     contentType: string;
-    filePath: string;
+    dataBase64: string;
     isInline: boolean;
   }>;
 }
@@ -123,7 +123,7 @@ export interface EmailContentSession {
   projectKey: string;
   issueType: string;
   additionalFields: Record<string, unknown>;
-  handoverCleanup?: { folder: string; subfolder: string };
+  handoverCleanup?: { folder: string; timestamp: string };
 }
 
 export function parseSkipInput(reply: string, tickets: TransitionBatchTicket[]): SkipParseResult {

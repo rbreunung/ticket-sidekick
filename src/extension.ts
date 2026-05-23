@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import { ConfigService } from './services/ConfigService';
 import { createJiraParticipant } from './participant/JiraParticipant';
 import { createBitbucketParticipant } from './participant/BitbucketParticipant';
-import { readHandoverEmail, purgeStaleSubfolders } from './utils/handoverFolder';
+import { readHandoverEmail, purgeStaleFiles } from './utils/handoverFolder';
 import { generateOwaUserscript } from './utils/owaUserscript';
 import type { HandoverEmail } from './participant/sessionState';
 
@@ -104,11 +104,11 @@ export function activate(context: vscode.ExtensionContext): void {
       const rawFolder = config.get<string>('email.handoverFolder', '').trim();
       const handoverFolder = rawFolder
         ? rawFolder.replace(/^~/, os.homedir())
-        : path.join(os.homedir(), 'Downloads', 'TicketSidekick');
+        : path.join(os.homedir(), 'Downloads');
 
-      await purgeStaleSubfolders(handoverFolder, 24 * 60 * 60 * 1000);
+      await purgeStaleFiles(handoverFolder, 24 * 60 * 60 * 1000);
 
-      const manifestPath = path.join(handoverFolder, subfolder, 'email.json');
+      const manifestPath = path.join(handoverFolder, `TicketSidekick-${subfolder}.json`);
       const deadline = Date.now() + 15_000;
       while (!fs.existsSync(manifestPath)) {
         if (Date.now() >= deadline) {

@@ -1,0 +1,13 @@
+{
+  "subject": "Test Email Subject",
+  "senderName": "Jane Doe",
+  "receivedDateTime": "2026-05-23T10:00:00Z",
+  "stripFooter": false,
+  "bodyHtml": "<p>Hello <strong>World</strong></p>\n<p>See the attached image:</p>\n<img data-ts-filename=\"email-image-1.png\">\n<p>And the report is in the attachments.</p>",
+  "inlineImages": [
+    { "filename": "email-image-1.png", "contentType": "image/png", "dataBase64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQAABjE+ibYAAAAASUVORK5CYII=" }
+  ],
+  "attachments": [
+    { "filename": "report.pdf", "contentType": "application/pdf", "dataBase64": "JVBERi0xLjAKMSAwIG9iajw8L1R5cGUvQ2F0YWxvZy9QYWdlcyAyIDAgUj4+ZW5kb2JqCjIgMCBvYmo8PC9UeXBlL1BhZ2VzL0tpZHNbMyAwIFJdL0NvdW50IDE+PmVuZG9iagozIDAgb2JqPDwvVHlwZS9QYWdlL01lZGlhQm94WzAgMCAzIDNdPj5lbmRvYmoKeHJlZgowIDQKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDA5IDAwMDAwIG4gCjAwMDAwMDAwNTggMDAwMDAgbiAKMDAwMDAwMDExNSAwMDAwMCBuIAp0cmFpbGVyPDwvU2l6ZSA0L1Jvb3QgMSAwIFI+PgpzdGFydHhyZWYKMTkwCiUlRU9G" }
+  ]
+}
