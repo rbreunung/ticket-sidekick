@@ -364,7 +364,7 @@ reads the folder and opens the ticket creation preview automatically.
    (Edge recommended — subdirectory download support confirmed on Chromium).
 2. In VS Code settings, set:
    - `ticketSidekick.outlook.owaUrl` — your OWA URL
-     (default: `https://outlook.office.com`; use your corporate URL if different)
+     (default: `https://outlook.office.com`; corporate: use your tenant URL; Hotmail/Outlook.com: use `https://outlook.live.com`)
    - `ticketSidekick.email.handoverFolder` — path where VS Code reads email files
      (default: `~/Downloads/TicketSidekick/`; must match Edge's downloads location)
    - `ticketSidekick.jira.defaultProject` — Jira project key for new tickets
