@@ -85,6 +85,22 @@ export type SkipParseResult =
 
 // --- Outlook email-to-ticket sessions ---
 
+export interface HandoverEmail {
+  subject: string;
+  senderName: string;
+  receivedDateTime: string;
+  markdownBody: string;
+  stripFooter: boolean;
+  handoverFolder: string;
+  subfolder: string;
+  attachments: Array<{
+    name: string;
+    contentType: string;
+    filePath: string;
+    isInline: boolean;
+  }>;
+}
+
 export interface FolderSelectionSession {
   folders: Array<{ id: string; displayName: string; unreadItemCount: number }>;
 }
@@ -107,6 +123,7 @@ export interface EmailContentSession {
   projectKey: string;
   issueType: string;
   additionalFields: Record<string, unknown>;
+  handoverCleanup?: { folder: string; subfolder: string };
 }
 
 export function parseSkipInput(reply: string, tickets: TransitionBatchTicket[]): SkipParseResult {
