@@ -70,8 +70,26 @@ describe('generateOwaUserscript', () => {
     expect(SCRIPT).toContain('[role="option"]');
   });
 
-  it('appends attachment names to the body for inclusion in the ticket description', () => {
+  it('tries OWA REST API to fetch attachment bytes before falling back to name-only notice', () => {
+    expect(SCRIPT).toContain('/api/v2.0/me/messages/');
+    expect(SCRIPT).toContain('ContentBytes');
+  });
+
+  it('falls back to name-only notice when REST API returns no content', () => {
     expect(SCRIPT).toContain('Attachments (attach to ticket manually)');
+  });
+
+  it('includes attachments array in the manifest JSON', () => {
+    expect(SCRIPT).toContain('attachments: attachmentItems');
+  });
+
+  it('extracts message ID from /id/{messageId} URL path segment', () => {
+    expect(SCRIPT).toContain('getMessageIdFromUrl');
+    expect(SCRIPT).toContain('/\\/id\\/([^/]+)/');
+  });
+
+  it('falls back to ItemID query param for legacy OWA URLs', () => {
+    expect(SCRIPT).toContain("get('ItemID')");
   });
 
   it('escapes single quotes in vscodeUriBase to prevent script injection', () => {

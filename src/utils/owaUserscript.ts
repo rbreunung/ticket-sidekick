@@ -14,7 +14,7 @@ export function generateOwaUserscript(config: {
   return `// ==UserScript==
 // @name         Ticket Sidekick — OWA to Jira
 // @namespace    https://ticket-sidekick
-// @version      1.2
+// @version      1.3
 // @description  Capture OWA email and send to Ticket Sidekick in VS Code
 // @author       Ticket Sidekick
 // @match        ${safeOwaUrl}/*
@@ -123,6 +123,34 @@ export function generateOwaUserscript(config: {
     });
   }
 
+  function getMessageIdFromUrl() {
+    // New Outlook URL contains /id/{messageId} path segment
+    const idMatch = window.location.pathname.match(/\\/id\\/([^/]+)/);
+    if (idMatch) return decodeURIComponent(idMatch[1]);
+    // OWA legacy: ?ItemID=...
+    const itemId = new URLSearchParams(window.location.search).get('ItemID');
+    return itemId || null;
+  }
+
+  function fetchOwaAttachments(messageId) {
+    return new Promise((resolve) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url: '/api/v2.0/me/messages/' + encodeURIComponent(messageId)
+          + '/attachments?$select=Id,Name,ContentType,ContentBytes',
+        headers: { Accept: 'application/json' },
+        onload(res) {
+          try {
+            const data = JSON.parse(res.responseText);
+            resolve(Array.isArray(data.value) ? data.value : []);
+          } catch { resolve([]); }
+        },
+        onerror() { resolve([]); },
+        ontimeout() { resolve([]); },
+      });
+    });
+  }
+
   async function captureEmail(stripFooter) {
     const timestamp = Date.now().toString();
     const subject = getSubject();
@@ -158,20 +186,36 @@ export function generateOwaUserscript(config: {
     }
 
     // OWA attachment panel: id$="_ATTACHMENTS" contains a listbox of role="option" items.
-    // There are no direct download URLs in the DOM — OWA serves files via an authenticated
-    // session API. We detect the names and append them to the body so they appear in the
-    // Jira description and the user knows what to attach manually.
+    // Try the OWA REST API first to get base64 content; fall back to a manual-attach notice
+    // if the endpoint is unreachable (e.g. on-prem OWA without REST v2.0 support).
+    const attachmentItems = [];
     const attachmentListbox = document.querySelector('[id$="_ATTACHMENTS"] [role="listbox"]');
     if (attachmentListbox) {
-      const names = [];
+      const domNames = [];
       for (const option of attachmentListbox.querySelectorAll('[role="option"]')) {
         const nameEl = option.querySelector('[title]');
         const name = nameEl?.getAttribute('title')?.trim();
-        if (name) names.push(name);
+        if (name) domNames.push(name);
       }
-      if (names.length > 0) {
-        bodyClone.innerHTML += '<p>&#128206; <strong>Attachments (attach to ticket manually):</strong> '
-          + names.map(n => '<em>' + n + '</em>').join(', ') + '</p>';
+      if (domNames.length > 0) {
+        const messageId = getMessageIdFromUrl();
+        if (messageId) {
+          const owaAtts = await fetchOwaAttachments(messageId);
+          for (const att of owaAtts) {
+            if (att.ContentBytes) {
+              attachmentItems.push({
+                filename: att.Name,
+                contentType: att.ContentType || 'application/octet-stream',
+                dataBase64: att.ContentBytes,
+              });
+            }
+          }
+        }
+        if (attachmentItems.length === 0) {
+          // REST API unavailable or returned no content — surface names as manual note
+          bodyClone.innerHTML += '<p>&#128206; <strong>Attachments (attach to ticket manually):</strong> '
+            + domNames.map(n => '<em>' + n + '</em>').join(', ') + '</p>';
+        }
       }
     }
 
@@ -183,6 +227,7 @@ export function generateOwaUserscript(config: {
       stripFooter: !!stripFooter,
       bodyHtml: bodyClone.innerHTML,
       inlineImages: inlineImages.filter(e => e.dataBase64),
+      attachments: attachmentItems,
     }, null, 2);
 
     const blob = new Blob([manifest], { type: 'application/json;charset=utf-8' });
