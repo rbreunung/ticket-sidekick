@@ -8,6 +8,9 @@ import type { IJiraClient } from '../../jira/IJiraClient';
 import { markdownToJiraWiki } from '../../utils/markdownToJiraWiki';
 import type { FolderSelectionSession, EmailSelectionSession, EmailContentSession } from '../sessionState';
 import { isCancellation, isConfirmation } from '../sessionState';
+import * as fs from 'fs';
+import { deleteHandoverSubfolder } from '../../utils/handoverFolder';
+import type { HandoverEmail } from '../sessionState';
 
 export async function handleCreateFromEmail(
   request: vscode.ChatRequest,
@@ -18,6 +21,36 @@ export async function handleCreateFromEmail(
   configService: ConfigService,
   ws: vscode.Memento,
 ): Promise<void> {
+  // Handover shortcut — populated by ticket-sidekick.processHandoverEmail command (URI handler)
+  const handover = ws.get<HandoverEmail>('jira.handover.email');
+  if (handover) {
+    await ws.update('jira.handover.email', undefined);
+    const projectKey = vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.defaultProject') ?? '';
+    if (!projectKey) {
+      stream.markdown('**No default project configured.** Set `ticketSidekick.jira.defaultProject` in VS Code settings and try again.');
+      return;
+    }
+    const contentSession: EmailContentSession = {
+      emailId: 'handover',
+      subject: handover.subject,
+      markdownBody: handover.markdownBody,
+      inlineImageMap: {},
+      attachments: handover.attachments.map(a => ({
+        name: a.name,
+        contentType: a.contentType,
+        contentBytes: fs.readFileSync(a.filePath).toString('base64'),
+        isInline: a.isInline,
+      })),
+      selectedTemplateName: null,
+      projectKey,
+      issueType: 'Story',
+      additionalFields: {},
+      handoverCleanup: { folder: handover.handoverFolder, subfolder: handover.subfolder },
+    };
+    await streamEmailContentPreview(contentSession, stream, ws);
+    return;
+  }
+
   const outlookConfig = await configService.getOutlookConfig();
   const tokenProvider = createOutlookTokenProvider(configService.getOutlookAuthProvider(), configService);
   const outlookService = new OutlookService(new OutlookApiClient(tokenProvider));
@@ -171,5 +204,10 @@ async function finishEmailTicket(session: EmailContentSession, ticketService: Ti
     stream.markdown(`\n\nUploaded ${session.attachments.length} attachment(s).\n\n<!-- @jira-ticket:${issueKey} -->`);
   } else if (issueKey) {
     stream.markdown(`\n\n<!-- @jira-ticket:${issueKey} -->`);
+  }
+  if (session.handoverCleanup) {
+    await deleteHandoverSubfolder(session.handoverCleanup.folder, session.handoverCleanup.subfolder).catch(() => {
+      // Non-fatal — stale files are purged on the next processHandoverEmail invocation
+    });
   }
 }
