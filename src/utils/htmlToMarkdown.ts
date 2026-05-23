@@ -88,6 +88,11 @@ export function htmlToMarkdown(html: string, inlineImageMap: Map<string, string>
   // Restore placeholders decoded before tag stripping
   s = s.replace(/\x00AMP\x00/g, '&').replace(/\x00LT\x00/g, '<').replace(/\x00GT\x00/g, '>');
 
+  // Trim whitespace inside bold/italic markers that leaked from stripped wrapper tags
+  // e.g. <b><span>\ntext</span></b> → **\ntext** → **text**
+  s = s.replace(/\*\*([\s\S]*?)\*\*/g, (_, c) => { const t = c.trim(); return t ? `**${t}**` : ''; });
+  s = s.replace(/_([\s\S]*?)_/g, (_, c) => { const t = c.trim(); return t ? `_${t}_` : ''; });
+
   return s.replace(/\n{3,}/g, '\n\n').trim();
 }
 

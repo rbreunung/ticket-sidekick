@@ -488,7 +488,7 @@ export function createJiraParticipant(
     if (lastResponse.includes('<!-- jira:email-content -->')) {
       const contentSession = ws.get<EmailContentSession>('jira.session.emailContent');
       if (contentSession) {
-        await handleEmailContentSession(request.prompt, contentSession, ticketService, stream, ws);
+        await handleEmailContentSession(request.prompt, contentSession, ticketService, stream, ws, jiraClient);
         return;
       }
     }

@@ -7,6 +7,7 @@ import type { ConfigService } from '../../services/ConfigService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import { markdownToJiraWiki } from '../../utils/markdownToJiraWiki';
 import { TemplateService } from '../../templates/TemplateService';
+import { FieldResolver } from '../../templates/FieldResolver';
 import type { FolderSelectionSession, EmailSelectionSession, EmailContentSession } from '../sessionState';
 import { isCancellation, isConfirmation, pickEmailOption } from '../sessionState';
 import { deleteHandoverFile } from '../../utils/handoverFolder';
@@ -194,6 +195,7 @@ export async function handleEmailContentSession(
   ticketService: TicketService,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
+  jiraClient: IJiraClient,
 ): Promise<void> {
   if (isCancellation(reply)) {
     await ws.update('jira.session.emailContent', undefined);
@@ -205,8 +207,23 @@ export async function handleEmailContentSession(
   const pick = isNaN(n) ? null : pickEmailOption(n, session.availableTemplates ?? [], session.availableIssueTypes ?? []);
   if (pick) {
     await ws.update('jira.session.emailContent', undefined);
+    let additionalFields = session.additionalFields;
+    if (pick.kind === 'template') {
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+      if (workspaceRoot) {
+        try {
+          const { templates } = new TemplateService(workspaceRoot).loadTemplates();
+          const fullTemplate = templates.find(t => t.name === pick.name);
+          if (fullTemplate) {
+            const resolver = new FieldResolver(jiraClient, session.projectKey);
+            const resolved = await resolver.resolve(fullTemplate.defaultFields, fullTemplate.resolveFields);
+            additionalFields = { ...resolved, ...session.additionalFields };
+          }
+        } catch { /* proceed without template fields */ }
+      }
+    }
     const overrides = pick.kind === 'template'
-      ? { issueType: pick.issueType, selectedTemplateName: pick.name }
+      ? { issueType: pick.issueType, selectedTemplateName: pick.name, additionalFields }
       : { issueType: pick.issueType };
     await finishEmailTicket({ ...session, ...overrides }, ticketService, stream);
     return;
@@ -248,7 +265,17 @@ async function streamEmailContentPreview(session: EmailContentSession, stream: v
 }
 
 async function finishEmailTicket(session: EmailContentSession, ticketService: TicketService, stream: vscode.ChatResponseStream): Promise<void> {
-  let jiraWiki = markdownToJiraWiki(session.markdownBody);
+  // Strip OWA attachment notice appended by userscript (can't be downloaded; surface separately)
+  const attachNoticeRegex = /\n?📄 \*\*Attachments \(attach to ticket manually\):\*\* ([^\n]+)/;
+  const attachNoticeMatch = session.markdownBody.match(attachNoticeRegex);
+  const detectedAttachmentNames = attachNoticeMatch
+    ? attachNoticeMatch[1].split(/,\s*/).map(s => s.replace(/^_|_$/g, '').trim()).filter(Boolean)
+    : [];
+  const cleanMarkdown = detectedAttachmentNames.length > 0
+    ? session.markdownBody.replace(attachNoticeRegex, '').trim()
+    : session.markdownBody;
+
+  let jiraWiki = markdownToJiraWiki(cleanMarkdown);
   jiraWiki = jiraWiki.replace(/\[📎 ([^\]]+)\]/g, '!$1|thumbnail!');
 
   const result = await ticketService.createTicket(
@@ -270,6 +297,11 @@ async function finishEmailTicket(session: EmailContentSession, ticketService: Ti
     stream.markdown(`\n\nUploaded ${session.attachments.length} attachment(s).\n\n<!-- @jira-ticket:${issueKey} -->`);
   } else if (issueKey) {
     stream.markdown(`\n\n<!-- @jira-ticket:${issueKey} -->`);
+  }
+  if (detectedAttachmentNames.length > 0) {
+    stream.markdown(
+      `\n\n_OWA attachments cannot be downloaded automatically. Please attach manually to the ticket: **${detectedAttachmentNames.join(', ')}**_`,
+    );
   }
   if (session.handoverCleanup) {
     await deleteHandoverFile(session.handoverCleanup.folder, session.handoverCleanup.timestamp).catch(() => {

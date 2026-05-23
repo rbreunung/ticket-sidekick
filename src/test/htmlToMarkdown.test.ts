@@ -88,4 +88,24 @@ describe('htmlToMarkdown', () => {
     const html = '<img src="https://example.com/img.png" data-ts-filename="email-image-2.png">';
     expect(htmlToMarkdown(html)).toBe('![email-image-2.png](email-image-2.png)');
   });
+
+  it('trims whitespace inside bold when span wrapper adds leading newline', () => {
+    // OWA pattern: <b><span ...>\ntext</span></b> — stripped span leaves **\ntext**
+    const html = '<b><span class="x_style">\nBold sentence text.\n</span></b>';
+    expect(htmlToMarkdown(html)).toBe('**Bold sentence text.**');
+  });
+
+  it('trims whitespace inside bold when nested block element creates indentation', () => {
+    const html = '<strong>\n  Important notice.\n</strong>';
+    expect(htmlToMarkdown(html)).toBe('**Important notice.**');
+  });
+
+  it('removes empty bold markers after whitespace trim', () => {
+    const html = '<b>   </b>';
+    expect(htmlToMarkdown(html)).toBe('');
+  });
+
+  it('preserves bold when no whitespace trimming is needed', () => {
+    expect(htmlToMarkdown('<b>Normal bold</b>')).toBe('**Normal bold**');
+  });
 });
