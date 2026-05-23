@@ -16,7 +16,7 @@
     "AI"
   ],
   "icon": "images/ticket-sidekick.png",
-  "activationEvents": [],
+  "activationEvents": ["onUri"],
   "main": "./out/extension.js",
   "contributes": {
     "chatParticipants": [
@@ -55,6 +55,10 @@
       {
         "command": "ticket-sidekick.setOutlookToken",
         "title": "Ticket Sidekick: Set Outlook Access Token"
+      },
+      {
+        "command": "ticket-sidekick.exportOwaUserscript",
+        "title": "Ticket Sidekick: Export OWA Userscript for Tampermonkey"
       }
     ],
     "configuration": [
@@ -175,6 +179,27 @@
               "Static bearer token stored in SecretStorage. Paste a token via Command Palette → 'Ticket Sidekick: Set Outlook Access Token'. Tokens expire in ~1 hour."
             ],
             "description": "Authentication method for @jira create from email."
+          },
+          "ticketSidekick.outlook.owaUrl": {
+            "type": "string",
+            "default": "https://outlook.office.com",
+            "description": "OWA base URL used when generating the Tampermonkey userscript. Use your corporate URL if different (e.g. https://mail.company.com)."
+          }
+        }
+      },
+      {
+        "id": "email",
+        "title": "Ticket Sidekick — Email",
+        "properties": {
+          "ticketSidekick.email.handoverFolder": {
+            "type": "string",
+            "default": "",
+            "description": "Root folder where the Tampermonkey userscript saves email subfolders. Defaults to ~/Downloads/TicketSidekick/ when empty. Must match where Microsoft Edge saves downloads plus the 'TicketSidekick/' subdirectory."
+          },
+          "ticketSidekick.email.cleanupModel": {
+            "type": "string",
+            "default": "gpt-4o-mini",
+            "description": "VS Code LM model family used for AI email footer/signature removal when '📋✨ To Ticket (Clean)' is clicked. Must be a model family available in your VS Code instance."
           }
         }
       }
