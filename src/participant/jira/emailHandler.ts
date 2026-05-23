@@ -29,9 +29,9 @@ export async function handleCreateFromEmail(
       stream.markdown('**No default project configured.** Set `ticketSidekick.jira.defaultProject` in VS Code settings and try again.');
       return;
     }
-    const attachments: EmailContentSession['attachments'] = handover.attachments.map(a => ({
-      name: a.name, contentType: a.contentType, contentBytes: a.dataBase64, isInline: a.isInline,
-    }));
+    const attachments: EmailContentSession['attachments'] = handover.attachments
+      .filter(a => a.dataBase64.length > 0)
+      .map(a => ({ name: a.name, contentType: a.contentType, contentBytes: a.dataBase64, isInline: a.isInline }));
     const contentSession: EmailContentSession = {
       emailId: 'handover',
       subject: handover.subject,

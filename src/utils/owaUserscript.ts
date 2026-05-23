@@ -175,8 +175,8 @@ export function generateOwaUserscript(config: {
       subject, senderName, receivedDateTime,
       stripFooter: !!stripFooter,
       bodyHtml: bodyClone.innerHTML,
-      inlineImages,
-      attachments,
+      inlineImages: inlineImages.filter(e => e.dataBase64),
+      attachments: attachments.filter(e => e.dataBase64),
     }, null, 2);
 
     const blob = new Blob([manifest], { type: 'application/json;charset=utf-8' });
