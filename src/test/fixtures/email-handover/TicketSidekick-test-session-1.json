@@ -1,4 +1,5 @@
 {
+  "scriptVersion": 2,
   "subject": "Test Email Subject",
   "senderName": "Jane Doe",
   "receivedDateTime": "2026-05-23T10:00:00Z",

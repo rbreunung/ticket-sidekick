@@ -14,7 +14,7 @@ export function generateOwaUserscript(config: {
   return `// ==UserScript==
 // @name         Ticket Sidekick — OWA to Jira
 // @namespace    https://ticket-sidekick
-// @version      1.1
+// @version      1.2
 // @description  Capture OWA email and send to Ticket Sidekick in VS Code
 // @author       Ticket Sidekick
 // @match        ${safeOwaUrl}/*
@@ -26,6 +26,7 @@ export function generateOwaUserscript(config: {
   'use strict';
 
   const VSCODE_URI = '${safeVscodeUri}/from-email';
+  const MANIFEST_VERSION = 2;
 
   function getReadingPane() {
     // New Outlook (outlook.cloud.microsoft / outlook.live.com) — persistent container
@@ -177,6 +178,7 @@ export function generateOwaUserscript(config: {
     await Promise.all(fetches);
 
     const manifest = JSON.stringify({
+      scriptVersion: MANIFEST_VERSION,
       subject, senderName, receivedDateTime,
       stripFooter: !!stripFooter,
       bodyHtml: bodyClone.innerHTML,

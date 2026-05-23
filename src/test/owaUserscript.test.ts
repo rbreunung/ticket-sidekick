@@ -102,4 +102,12 @@ describe('generateOwaUserscript', () => {
   it('handles EU date format DD.MM.YYYY HH:MM in getReceivedDateTime', () => {
     expect(SCRIPT).toContain('euMatch[3] + \'-\' + euMatch[2] + \'-\' + euMatch[1]');
   });
+
+  it('defines MANIFEST_VERSION constant', () => {
+    expect(SCRIPT).toContain('const MANIFEST_VERSION = 2');
+  });
+
+  it('embeds scriptVersion from MANIFEST_VERSION in the saved manifest', () => {
+    expect(SCRIPT).toContain('scriptVersion: MANIFEST_VERSION');
+  });
 });

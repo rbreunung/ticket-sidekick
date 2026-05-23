@@ -3,7 +3,10 @@ import * as path from 'path';
 import { htmlToMarkdown } from './htmlToMarkdown';
 import type { HandoverEmail } from '../participant/sessionState';
 
+const REQUIRED_MANIFEST_VERSION = 2;
+
 interface HandoverManifest {
+  scriptVersion?: number;
   subject: string;
   senderName: string;
   receivedDateTime: string;
@@ -22,6 +25,14 @@ export async function readHandoverEmail(handoverFolder: string, timestamp: strin
     manifest = JSON.parse(raw) as HandoverManifest;
   } catch {
     throw new Error(`Could not read handover manifest at ${filePath}`);
+  }
+
+  const scriptVersion = manifest.scriptVersion ?? 0;
+  if (scriptVersion < REQUIRED_MANIFEST_VERSION) {
+    throw new Error(
+      `Handover manifest version mismatch (script version: ${scriptVersion || 'missing'}, required: ≥ ${REQUIRED_MANIFEST_VERSION}). ` +
+      `Re-export the Tampermonkey script from VS Code and reinstall it.`,
+    );
   }
 
   const markdownBody = htmlToMarkdown(manifest.bodyHtml);

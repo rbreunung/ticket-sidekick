@@ -66,6 +66,25 @@ describe('readHandoverEmail', () => {
     await expect(readHandoverEmail(tmpDir, 'bad')).rejects.toThrow(/Could not read handover manifest/);
     fs.rmSync(tmpDir, { recursive: true });
   });
+
+  it('throws when scriptVersion is missing (old script)', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-ver-'));
+    fs.writeFileSync(path.join(tmpDir, 'TicketSidekick-v0.json'), JSON.stringify({
+      subject: 'x', senderName: 'x', receivedDateTime: 'x', bodyHtml: '', stripFooter: false,
+    }));
+    await expect(readHandoverEmail(tmpDir, 'v0')).rejects.toThrow(/manifest version mismatch/);
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  it('throws when scriptVersion is below required (old script)', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-ver-'));
+    fs.writeFileSync(path.join(tmpDir, 'TicketSidekick-v1.json'), JSON.stringify({
+      scriptVersion: 1,
+      subject: 'x', senderName: 'x', receivedDateTime: 'x', bodyHtml: '', stripFooter: false,
+    }));
+    await expect(readHandoverEmail(tmpDir, 'v1')).rejects.toThrow(/manifest version mismatch/);
+    fs.rmSync(tmpDir, { recursive: true });
+  });
 });
 
 describe('deleteHandoverFile', () => {
