@@ -137,8 +137,15 @@ export function activate(context: vscode.ExtensionContext): void {
           if (models.length > 0) {
             const msgs = [
               vscode.LanguageModelChatMessage.User(
-                `Remove the corporate email footer, signature, and legal disclaimer from this email body. ` +
-                `Return only the relevant content as markdown:\n\n${email.markdownBody}`,
+                `You are cleaning up an email before it becomes a Jira ticket description. ` +
+                `Remove ONLY the following types of boilerplate — do not rewrite, rephrase, or change any of the remaining text:\n` +
+                `- Corporate email footers and signatures\n` +
+                `- Legal disclaimers and confidentiality notices\n` +
+                `- Classification lines (e.g. "Classification: For internal use only", "For internal use only")\n` +
+                `- Email retention policy notices\n` +
+                `- Virus scan / security scan notices\n` +
+                `Return the cleaned email body as-is in markdown, preserving the original wording exactly.\n\n` +
+                `${email.markdownBody}`,
               ),
             ];
             const cts = new vscode.CancellationTokenSource();
