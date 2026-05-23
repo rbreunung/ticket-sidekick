@@ -40,7 +40,7 @@ function azureCliProvider(): TokenProvider {
   return async () => {
     try {
       const result = execSync(
-        'az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv',
+        'az account get-access-token --scope "https://graph.microsoft.com/Mail.Read" --query accessToken -o tsv',
         { encoding: 'utf8', timeout: 15_000 },
       ).trim();
       if (!result) throw new Error('az returned an empty token');
@@ -67,7 +67,8 @@ function staticTokenProvider(configService: ConfigService): TokenProvider {
       throw new Error(
         'No Outlook access token stored. ' +
         'Run Command Palette → "Ticket Sidekick: Set Outlook Access Token" and paste a token from ' +
-        'https://developer.microsoft.com/en-us/graph/graph-explorer (sign in, copy the Access token). ' +
+        'https://developer.microsoft.com/en-us/graph/graph-explorer — ' +
+        'sign in, click "Modify permissions", add Mail.Read, consent, then copy the Access token. ' +
         'Note: tokens expire in ~1 hour.',
       );
     }

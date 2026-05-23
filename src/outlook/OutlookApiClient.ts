@@ -13,6 +13,13 @@ export class OutlookApiClient implements IOutlookClient {
     });
     if (!response.ok) {
       const text = await response.text();
+      if (response.status === 403) {
+        throw new Error(
+          `Graph API access denied (403). The token does not have Mail.Read permission.\n\n` +
+          `• **azure-cli**: your corporate tenant may not allow this scope — ask your IT admin to grant Mail.Read to Azure CLI, or use the \`token\` provider.\n` +
+          `• **token**: in Graph Explorer click **Modify permissions**, add **Mail.Read**, consent, then copy a fresh token via Command Palette → "Ticket Sidekick: Set Outlook Access Token".`,
+        );
+      }
       throw new Error(`Graph API error ${response.status}: ${text}`);
     }
     return response.json() as Promise<T>;
