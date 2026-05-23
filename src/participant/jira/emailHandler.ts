@@ -6,16 +6,39 @@ import type { TicketService } from '../../services/TicketService';
 import type { ConfigService } from '../../services/ConfigService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import { markdownToJiraWiki } from '../../utils/markdownToJiraWiki';
+import { TemplateService } from '../../templates/TemplateService';
 import type { FolderSelectionSession, EmailSelectionSession, EmailContentSession } from '../sessionState';
 import { isCancellation, isConfirmation } from '../sessionState';
 import { deleteHandoverFile } from '../../utils/handoverFolder';
 import type { HandoverEmail } from '../sessionState';
 
+async function loadTemplatesForEmail(): Promise<Array<{ name: string; issueType: string }>> {
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+  if (!workspaceRoot) return [];
+  try {
+    const { templates } = new TemplateService(workspaceRoot).loadTemplates();
+    return templates.map(t => ({ name: t.name, issueType: t.issueType ?? 'Story' }));
+  } catch {
+    return [];
+  }
+}
+
+async function resolveIssueType(jiraClient: IJiraClient, projectKey: string): Promise<string> {
+  try {
+    const project = await jiraClient.getProject(projectKey);
+    const types = project.issueTypes.filter(t => !t.subtask).map(t => t.name);
+    if (types.length > 0) {
+      return types.find(t => t === 'Story') ?? types.find(t => t === 'Task') ?? types[0];
+    }
+  } catch { /* fall through */ }
+  return 'Story';
+}
+
 export async function handleCreateFromEmail(
   request: vscode.ChatRequest,
   stream: vscode.ChatResponseStream,
   _token: vscode.CancellationToken,
-  _jiraClient: IJiraClient,
+  jiraClient: IJiraClient,
   _ticketService: TicketService,
   configService: ConfigService,
   ws: vscode.Memento,
@@ -29,6 +52,10 @@ export async function handleCreateFromEmail(
       stream.markdown('**No default project configured.** Set `ticketSidekick.jira.defaultProject` in VS Code settings and try again.');
       return;
     }
+    const [availableTemplates, issueType] = await Promise.all([
+      loadTemplatesForEmail(),
+      resolveIssueType(jiraClient, projectKey),
+    ]);
     const attachments: EmailContentSession['attachments'] = handover.attachments
       .filter(a => a.dataBase64.length > 0)
       .map(a => ({ name: a.name, contentType: a.contentType, contentBytes: a.dataBase64, isInline: a.isInline }));
@@ -40,9 +67,10 @@ export async function handleCreateFromEmail(
       attachments,
       selectedTemplateName: null,
       projectKey,
-      issueType: 'Story',
+      issueType,
       additionalFields: {},
       handoverCleanup: { folder: handover.handoverFolder, timestamp: handover.timestamp },
+      availableTemplates: availableTemplates.length > 0 ? availableTemplates : undefined,
     };
     await streamEmailContentPreview(contentSession, stream, ws);
     return;
@@ -118,6 +146,7 @@ export async function handleEmailSelection(
   stream: vscode.ChatResponseStream,
   configService: ConfigService,
   ws: vscode.Memento,
+  jiraClient: IJiraClient,
 ): Promise<void> {
   await ws.update('jira.session.emailSelection', undefined);
   if (isCancellation(reply)) { stream.markdown('_Cancelled._'); return; }
@@ -141,9 +170,14 @@ export async function handleEmailSelection(
   const outlookService = new OutlookService(new OutlookApiClient(tokenProvider));
   const { subject, markdownBody, inlineImageMap, attachments } = await outlookService.fetchEmailForTicket(chosen.id);
 
+  const [availableTemplates, issueType] = await Promise.all([
+    loadTemplatesForEmail(),
+    resolveIssueType(jiraClient, projectKey),
+  ]);
   const contentSession: EmailContentSession = {
     emailId: chosen.id, subject, markdownBody, inlineImageMap, attachments,
-    selectedTemplateName: null, projectKey, issueType: 'Task', additionalFields: {},
+    selectedTemplateName: null, projectKey, issueType, additionalFields: {},
+    availableTemplates: availableTemplates.length > 0 ? availableTemplates : undefined,
   };
   await streamEmailContentPreview(contentSession, stream, ws);
 }
@@ -160,21 +194,43 @@ export async function handleEmailContentSession(
     stream.markdown('_Cancelled._');
     return;
   }
+
+  // Template selection by number
+  const templates = session.availableTemplates ?? [];
+  if (templates.length > 0) {
+    const n = parseInt(reply.trim(), 10);
+    if (!isNaN(n) && n >= 1 && n <= templates.length) {
+      await ws.update('jira.session.emailContent', undefined);
+      const tpl = templates[n - 1];
+      await finishEmailTicket({ ...session, issueType: tpl.issueType, selectedTemplateName: tpl.name }, ticketService, stream);
+      return;
+    }
+  }
+
   if (isConfirmation(reply)) {
     await ws.update('jira.session.emailContent', undefined);
     await finishEmailTicket(session, ticketService, stream);
     return;
   }
-  stream.markdown(`_Reply **post it** to create the ticket or **(c)** to cancel._`);
+  stream.markdown(`_Reply **post it** to create the ticket, a number to pick a template, or **(c)** to cancel._`);
   await streamEmailContentPreview(session, stream, ws);
 }
 
 async function streamEmailContentPreview(session: EmailContentSession, stream: vscode.ChatResponseStream, ws: vscode.Memento): Promise<void> {
   await ws.update('jira.session.emailContent', session);
+  const templates = session.availableTemplates ?? [];
+  let prompt: string;
+  if (templates.length > 0) {
+    const list = templates.map((t, i) => `${i + 1}. ${t.name} _(${t.issueType})_`).join('\n');
+    prompt =
+      `Apply a template, or reply **post it** to create as **${session.issueType}** without a template:\n\n${list}`;
+  } else {
+    prompt = `Reply **post it** to create the Jira ticket in **${session.projectKey}** as **${session.issueType}**, or **(c)** to cancel.`;
+  }
   stream.markdown(
     `**Subject (summary):** ${session.subject}\n\n` +
     `**Description preview:**\n\n${session.markdownBody}\n\n` +
-    `Reply **post it** to create the Jira ticket in **${session.projectKey}**, or **(c)** to cancel.\n\n<!-- jira:email-content -->`,
+    `${prompt}\n\n<!-- jira:email-content -->`,
   );
 }
 

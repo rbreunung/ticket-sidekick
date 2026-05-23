@@ -124,6 +124,7 @@ export interface EmailContentSession {
   issueType: string;
   additionalFields: Record<string, unknown>;
   handoverCleanup?: { folder: string; timestamp: string };
+  availableTemplates?: Array<{ name: string; issueType: string }>;
 }
 
 export function parseSkipInput(reply: string, tickets: TransitionBatchTicket[]): SkipParseResult {

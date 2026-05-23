@@ -479,7 +479,7 @@ export function createJiraParticipant(
     if (lastResponse.includes('<!-- jira:email-selection -->')) {
       const emailSession = ws.get<EmailSelectionSession>('jira.session.emailSelection');
       if (emailSession) {
-        await handleEmailSelection(request.prompt, emailSession, stream, configService, ws);
+        await handleEmailSelection(request.prompt, emailSession, stream, configService, ws, jiraClient);
         return;
       }
     }
