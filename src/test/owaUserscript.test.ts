@@ -46,4 +46,12 @@ describe('generateOwaUserscript', () => {
   it('uses TicketSidekick/ as the downloads prefix', () => {
     expect(SCRIPT).toContain("'TicketSidekick/'");
   });
+
+  it('escapes single quotes in vscodeUriBase to prevent script injection', () => {
+    const injected = generateOwaUserscript({
+      owaUrl: 'https://mail.example.com',
+      vscodeUriBase: "vscode://foo'; alert(1); var x='",
+    });
+    expect(injected).not.toContain("'; alert(1);");
+  });
 });

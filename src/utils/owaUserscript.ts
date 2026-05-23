@@ -3,13 +3,15 @@ export function generateOwaUserscript(config: {
   vscodeUriBase: string;
 }): string {
   const { owaUrl, vscodeUriBase } = config;
+  const safeOwaUrl = owaUrl.replace(/[\r\n]/g, '');
+  const safeVscodeUri = vscodeUriBase.replace(/[\r\n]/g, '').replace(/'/g, '%27').replace(/\\/g, '/');
   return `// ==UserScript==
 // @name         Ticket Sidekick — OWA to Jira
 // @namespace    https://ticket-sidekick
 // @version      1.0
 // @description  Capture OWA email and send to Ticket Sidekick in VS Code
 // @author       Ticket Sidekick
-// @match        ${owaUrl}/*
+// @match        ${safeOwaUrl}/*
 // @grant        GM_download
 // @grant        GM_xmlhttpRequest
 // ==/UserScript==
@@ -17,7 +19,7 @@ export function generateOwaUserscript(config: {
 (function () {
   'use strict';
 
-  const VSCODE_URI = '${vscodeUriBase}/from-email';
+  const VSCODE_URI = '${safeVscodeUri}/from-email';
   const FOLDER_PREFIX = 'TicketSidekick/';
 
   function getReadingPane() {
@@ -132,9 +134,12 @@ export function generateOwaUserscript(config: {
     for (const link of document.querySelectorAll('[data-testid="attachment-item"] a')) {
       const href = link.href;
       const name = (link.textContent || link.title || '').trim();
-      if (href && !href.startsWith('javascript') && name) {
-        attachments.push({ filename: name, contentType: 'application/octet-stream' });
-        downloads.push(fetchAndDownload(href, base + name));
+      let parsedHref;
+      try { parsedHref = new URL(href, location.href); } catch (_) { parsedHref = null; }
+      if (parsedHref && ['http:', 'https:'].includes(parsedHref.protocol) && name) {
+        const safeName = name.replace(/[/\\\\:*?"<>|]/g, '_');
+        attachments.push({ filename: safeName, contentType: 'application/octet-stream' });
+        downloads.push(fetchAndDownload(href, base + safeName));
       }
     }
 
@@ -174,7 +179,10 @@ export function generateOwaUserscript(config: {
       btn.title = stripFooter ? 'Create Jira ticket (AI footer removal)' : 'Create Jira ticket';
       btn.style.cssText = 'margin:2px 4px;padding:3px 8px;cursor:pointer;font-size:12px;'
         + 'border:1px solid #888;border-radius:3px;background:#f5f5f5;';
-      btn.addEventListener('click', (e) => { e.stopPropagation(); captureEmail(stripFooter); });
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        captureEmail(stripFooter).catch((err) => alert('Ticket Sidekick: Capture failed — ' + String(err)));
+      });
       return btn;
     }
 
