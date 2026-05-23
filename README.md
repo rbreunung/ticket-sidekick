@@ -308,7 +308,7 @@ Execution streams one confirmation line per ticket. Failures are reported at the
 
 **Email list:** A numbered list of recent emails from the configured folder. Reply with the number to select an email.
 
-**Preview:** The email subject becomes the ticket summary, the body is converted to Markdown and shown as a preview. Reply **post it** to create the ticket, or **(c)** to cancel.
+**Preview:** The email subject becomes the ticket summary, the body is converted to Markdown and shown as a preview. If templates are configured in `.jira-templates.json` or the project has multiple issue types, a numbered list is shown — reply with a number to pick a template or type, **post it** to create with the auto-selected type, or **(c)** to cancel.
 
 **Attachments and inline images:** All attachments are uploaded to the created ticket. Inline images (cid: references) are placed as thumbnails in the description.
 
@@ -366,7 +366,7 @@ reads the folder and opens the ticket creation preview automatically.
    - `ticketSidekick.outlook.owaUrl` — your OWA URL
      (default: `https://outlook.office.com`; corporate: use your tenant URL; Hotmail/Outlook.com: use `https://outlook.live.com`)
    - `ticketSidekick.email.handoverFolder` — path where VS Code reads email files
-     (default: `~/Downloads/TicketSidekick/`; must match Edge's downloads location)
+     (default: `~/Downloads/`; must match Edge's configured downloads location)
    - `ticketSidekick.jira.defaultProject` — Jira project key for new tickets
 3. Run **Command Palette → Ticket Sidekick: Export OWA Userscript for Tampermonkey**
 4. Copy the generated script into Tampermonkey (New Script → paste → Save)
@@ -377,7 +377,7 @@ reads the folder and opens the ticket creation preview automatically.
 2. Click **📋 To Ticket** in the reading pane toolbar
    (or **📋✨ To Ticket (Clean)** to strip the corporate footer/signature via AI)
 3. VS Code focuses automatically and shows a preview of the Jira ticket
-4. Reply **post it** to create — or **(c)** to cancel
+4. Pick a number to apply a template or choose an issue type, reply **post it** to create with the auto-selected type, or **(c)** to cancel
 
 Inline images are uploaded as Jira attachments and embedded as thumbnails at their
 original position in the description. File attachments are uploaded to the ticket.
@@ -389,13 +389,15 @@ Handover files older than 24 hours are cleaned up on the next use.
 | Setting | Default | Description |
 |---|---|---|
 | `ticketSidekick.outlook.owaUrl` | `https://outlook.office.com` | OWA base URL used when generating the userscript |
-| `ticketSidekick.email.handoverFolder` | `~/Downloads/TicketSidekick/` | Folder VS Code reads email files from |
-| `ticketSidekick.email.cleanupModel` | `gpt-4o-mini` | VS Code LM model family for footer removal |
+| `ticketSidekick.email.handoverFolder` | `~/Downloads/` | Folder VS Code reads email files from |
+| `ticketSidekick.email.cleanupModel` | `gpt-5-mini` | VS Code LM model family for footer removal |
 
 **Troubleshooting:**
 
 - _VS Code says "timed out waiting for email.json"_ — the handover folder path in VS Code
   settings doesn't match where Edge saves downloads. Check `ticketSidekick.email.handoverFolder`.
+- _VS Code says "Handover manifest version mismatch"_ — the installed Tampermonkey script is
+  outdated. Re-export the userscript from VS Code and reinstall it in Tampermonkey.
 - _Button doesn't appear in OWA_ — the userscript `@match` URL may not cover your OWA
   address. Re-export the script after correcting `ticketSidekick.outlook.owaUrl`.
 - _OWA DOM changed after a Microsoft update_ — re-export and reinstall the userscript.
@@ -504,6 +506,9 @@ You can choose **No template** to create a plain ticket without any template app
 | Outlook auth provider | `ticketSidekick.outlook.authProvider` | `"vscode-microsoft"` |
 | Outlook folder ID | `ticketSidekick.outlook.folderId` | _(empty)_ |
 | Outlook email list size | `ticketSidekick.outlook.emailListSize` | `10` |
+| OWA userscript URL | `ticketSidekick.outlook.owaUrl` | `"https://outlook.office.com"` |
+| OWA handover folder | `ticketSidekick.email.handoverFolder` | `~/Downloads/` |
+| OWA cleanup model | `ticketSidekick.email.cleanupModel` | `"gpt-5-mini"` |
 
 **Optional: default project**
 
