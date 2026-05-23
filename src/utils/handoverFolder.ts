@@ -13,21 +13,31 @@ interface HandoverManifest {
   attachments: Array<{ filename: string; contentType: string }>;
 }
 
+function safeJoin(base: string, filename: string): string {
+  const resolved = path.join(base, filename);
+  if (!resolved.startsWith(base + path.sep)) {
+    throw new Error(`Invalid filename in manifest: ${filename}`);
+  }
+  return resolved;
+}
+
 export async function readHandoverEmail(handoverFolder: string, subfolder: string): Promise<HandoverEmail> {
   const dir = path.join(handoverFolder, subfolder);
   const manifestPath = path.join(dir, 'email.json');
 
   let manifest: HandoverManifest;
+  let raw: string;
   try {
-    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as HandoverManifest;
+    raw = await fs.promises.readFile(manifestPath, 'utf-8');
+    manifest = JSON.parse(raw) as HandoverManifest;
   } catch {
     throw new Error(`Could not read handover manifest at ${manifestPath}`);
   }
 
-  const bodyPath = path.join(dir, manifest.bodyFile);
+  const bodyPath = safeJoin(dir, manifest.bodyFile);
   let bodyHtml: string;
   try {
-    bodyHtml = fs.readFileSync(bodyPath, 'utf-8');
+    bodyHtml = await fs.promises.readFile(bodyPath, 'utf-8');
   } catch {
     throw new Error(`Could not read email body at ${bodyPath}`);
   }
@@ -46,13 +56,13 @@ export async function readHandoverEmail(handoverFolder: string, subfolder: strin
       ...manifest.inlineImages.map(img => ({
         name: img.filename,
         contentType: img.contentType,
-        filePath: path.join(dir, img.filename),
+        filePath: safeJoin(dir, img.filename),
         isInline: true,
       })),
       ...manifest.attachments.map(att => ({
         name: att.filename,
         contentType: att.contentType,
-        filePath: path.join(dir, att.filename),
+        filePath: safeJoin(dir, att.filename),
         isInline: false,
       })),
     ],
@@ -60,13 +70,13 @@ export async function readHandoverEmail(handoverFolder: string, subfolder: strin
 }
 
 export async function deleteHandoverSubfolder(handoverFolder: string, subfolder: string): Promise<void> {
-  fs.rmSync(path.join(handoverFolder, subfolder), { recursive: true, force: true });
+  await fs.promises.rm(path.join(handoverFolder, subfolder), { recursive: true, force: true });
 }
 
 export async function purgeStaleSubfolders(handoverFolder: string, maxAgeMs: number = 24 * 60 * 60 * 1000): Promise<void> {
   let entries: fs.Dirent[];
   try {
-    entries = fs.readdirSync(handoverFolder, { withFileTypes: true });
+    entries = await fs.promises.readdir(handoverFolder, { withFileTypes: true });
   } catch {
     return;
   }
@@ -76,9 +86,9 @@ export async function purgeStaleSubfolders(handoverFolder: string, maxAgeMs: num
     if (!entry.isDirectory()) continue;
     const entryPath = path.join(handoverFolder, entry.name);
     try {
-      const stat = fs.statSync(entryPath);
+      const stat = await fs.promises.stat(entryPath);
       if (now - stat.mtimeMs > maxAgeMs) {
-        fs.rmSync(entryPath, { recursive: true, force: true });
+        await fs.promises.rm(entryPath, { recursive: true, force: true });
       }
     } catch {
       // Already deleted (race condition) — skip
