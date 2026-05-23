@@ -125,6 +125,7 @@ export interface EmailContentSession {
   additionalFields: Record<string, unknown>;
   handoverCleanup?: { folder: string; timestamp: string };
   availableTemplates?: Array<{ name: string; issueType: string }>;
+  availableIssueTypes?: string[];
 }
 
 export function parseSkipInput(reply: string, tickets: TransitionBatchTicket[]): SkipParseResult {
@@ -360,5 +361,22 @@ export function rewriteAttachmentLinks(
     if (jiraUrl) return `[${alt}](${jiraUrl})`;
     return match;
   });
+}
+
+export type EmailOptionPick =
+  | { kind: 'template'; name: string; issueType: string }
+  | { kind: 'type'; issueType: string };
+
+export function pickEmailOption(
+  n: number,
+  templates: Array<{ name: string; issueType: string }>,
+  issueTypes: string[],
+): EmailOptionPick | null {
+  if (n < 1 || n > templates.length + issueTypes.length) return null;
+  if (n <= templates.length) {
+    const t = templates[n - 1];
+    return { kind: 'template', name: t.name, issueType: t.issueType };
+  }
+  return { kind: 'type', issueType: issueTypes[n - templates.length - 1] };
 }
 

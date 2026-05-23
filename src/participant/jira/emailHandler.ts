@@ -8,7 +8,7 @@ import type { IJiraClient } from '../../jira/IJiraClient';
 import { markdownToJiraWiki } from '../../utils/markdownToJiraWiki';
 import { TemplateService } from '../../templates/TemplateService';
 import type { FolderSelectionSession, EmailSelectionSession, EmailContentSession } from '../sessionState';
-import { isCancellation, isConfirmation } from '../sessionState';
+import { isCancellation, isConfirmation, pickEmailOption } from '../sessionState';
 import { deleteHandoverFile } from '../../utils/handoverFolder';
 import type { HandoverEmail } from '../sessionState';
 
@@ -23,15 +23,17 @@ async function loadTemplatesForEmail(): Promise<Array<{ name: string; issueType:
   }
 }
 
-async function resolveIssueType(jiraClient: IJiraClient, projectKey: string): Promise<string> {
+async function resolveIssueTypes(jiraClient: IJiraClient, projectKey: string): Promise<string[]> {
   try {
     const project = await jiraClient.getProject(projectKey);
-    const types = project.issueTypes.filter(t => !t.subtask).map(t => t.name);
-    if (types.length > 0) {
-      return types.find(t => t === 'Story') ?? types.find(t => t === 'Task') ?? types[0];
-    }
-  } catch { /* fall through */ }
-  return 'Story';
+    return project.issueTypes.filter(t => !t.subtask).map(t => t.name);
+  } catch {
+    return [];
+  }
+}
+
+function pickDefaultIssueType(types: string[]): string {
+  return types.find(t => t === 'Story') ?? types.find(t => t === 'Task') ?? types[0] ?? 'Story';
 }
 
 export async function handleCreateFromEmail(
@@ -52,10 +54,11 @@ export async function handleCreateFromEmail(
       stream.markdown('**No default project configured.** Set `ticketSidekick.jira.defaultProject` in VS Code settings and try again.');
       return;
     }
-    const [availableTemplates, issueType] = await Promise.all([
+    const [availableTemplates, issueTypes] = await Promise.all([
       loadTemplatesForEmail(),
-      resolveIssueType(jiraClient, projectKey),
+      resolveIssueTypes(jiraClient, projectKey),
     ]);
+    const issueType = pickDefaultIssueType(issueTypes);
     const attachments: EmailContentSession['attachments'] = handover.attachments
       .filter(a => a.dataBase64.length > 0)
       .map(a => ({ name: a.name, contentType: a.contentType, contentBytes: a.dataBase64, isInline: a.isInline }));
@@ -71,6 +74,7 @@ export async function handleCreateFromEmail(
       additionalFields: {},
       handoverCleanup: { folder: handover.handoverFolder, timestamp: handover.timestamp },
       availableTemplates: availableTemplates.length > 0 ? availableTemplates : undefined,
+      availableIssueTypes: issueTypes.length > 1 ? issueTypes : undefined,
     };
     await streamEmailContentPreview(contentSession, stream, ws);
     return;
@@ -170,14 +174,16 @@ export async function handleEmailSelection(
   const outlookService = new OutlookService(new OutlookApiClient(tokenProvider));
   const { subject, markdownBody, inlineImageMap, attachments } = await outlookService.fetchEmailForTicket(chosen.id);
 
-  const [availableTemplates, issueType] = await Promise.all([
+  const [availableTemplates, issueTypes] = await Promise.all([
     loadTemplatesForEmail(),
-    resolveIssueType(jiraClient, projectKey),
+    resolveIssueTypes(jiraClient, projectKey),
   ]);
+  const issueType = pickDefaultIssueType(issueTypes);
   const contentSession: EmailContentSession = {
     emailId: chosen.id, subject, markdownBody, inlineImageMap, attachments,
     selectedTemplateName: null, projectKey, issueType, additionalFields: {},
     availableTemplates: availableTemplates.length > 0 ? availableTemplates : undefined,
+    availableIssueTypes: issueTypes.length > 1 ? issueTypes : undefined,
   };
   await streamEmailContentPreview(contentSession, stream, ws);
 }
@@ -195,16 +201,15 @@ export async function handleEmailContentSession(
     return;
   }
 
-  // Template selection by number
-  const templates = session.availableTemplates ?? [];
-  if (templates.length > 0) {
-    const n = parseInt(reply.trim(), 10);
-    if (!isNaN(n) && n >= 1 && n <= templates.length) {
-      await ws.update('jira.session.emailContent', undefined);
-      const tpl = templates[n - 1];
-      await finishEmailTicket({ ...session, issueType: tpl.issueType, selectedTemplateName: tpl.name }, ticketService, stream);
-      return;
-    }
+  const n = parseInt(reply.trim(), 10);
+  const pick = isNaN(n) ? null : pickEmailOption(n, session.availableTemplates ?? [], session.availableIssueTypes ?? []);
+  if (pick) {
+    await ws.update('jira.session.emailContent', undefined);
+    const overrides = pick.kind === 'template'
+      ? { issueType: pick.issueType, selectedTemplateName: pick.name }
+      : { issueType: pick.issueType };
+    await finishEmailTicket({ ...session, ...overrides }, ticketService, stream);
+    return;
   }
 
   if (isConfirmation(reply)) {
@@ -212,21 +217,29 @@ export async function handleEmailContentSession(
     await finishEmailTicket(session, ticketService, stream);
     return;
   }
-  stream.markdown(`_Reply **post it** to create the ticket, a number to pick a template, or **(c)** to cancel._`);
+  stream.markdown(`_Reply with a number, **post it** to create as **${session.issueType}**, or **(c)** to cancel._`);
   await streamEmailContentPreview(session, stream, ws);
 }
 
 async function streamEmailContentPreview(session: EmailContentSession, stream: vscode.ChatResponseStream, ws: vscode.Memento): Promise<void> {
   await ws.update('jira.session.emailContent', session);
   const templates = session.availableTemplates ?? [];
-  let prompt: string;
+  const issueTypes = session.availableIssueTypes ?? [];
+  const hasOptions = templates.length > 0 || issueTypes.length > 0;
+
+  let optionsList = '';
   if (templates.length > 0) {
-    const list = templates.map((t, i) => `${i + 1}. ${t.name} _(${t.issueType})_`).join('\n');
-    prompt =
-      `Apply a template, or reply **post it** to create as **${session.issueType}** without a template:\n\n${list}`;
-  } else {
-    prompt = `Reply **post it** to create the Jira ticket in **${session.projectKey}** as **${session.issueType}**, or **(c)** to cancel.`;
+    optionsList += `**Templates:**\n${templates.map((t, i) => `${i + 1}. ${t.name} _(${t.issueType})_`).join('\n')}\n\n`;
   }
+  if (issueTypes.length > 0) {
+    const offset = templates.length;
+    optionsList += `**Issue types (no template):**\n${issueTypes.map((t, i) => `${offset + i + 1}. ${t}`).join('\n')}\n\n`;
+  }
+
+  const prompt = hasOptions
+    ? `${optionsList}Reply with a number to select, **post it** to create as **${session.issueType}**, or **(c)** to cancel.`
+    : `Reply **post it** to create the Jira ticket in **${session.projectKey}** as **${session.issueType}**, or **(c)** to cancel.`;
+
   stream.markdown(
     `**Subject (summary):** ${session.subject}\n\n` +
     `**Description preview:**\n\n${session.markdownBody}\n\n` +
