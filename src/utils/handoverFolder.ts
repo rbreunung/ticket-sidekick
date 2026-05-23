@@ -9,8 +9,8 @@ interface HandoverManifest {
   receivedDateTime: string;
   bodyHtml: string;
   stripFooter: boolean;
-  inlineImages: Array<{ filename: string; contentType: string; dataBase64: string }>;
-  attachments: Array<{ filename: string; contentType: string; dataBase64: string }>;
+  inlineImages?: Array<{ filename: string; contentType: string; dataBase64: string }>;
+  attachments?: Array<{ filename: string; contentType: string; dataBase64: string }>;
 }
 
 export async function readHandoverEmail(handoverFolder: string, timestamp: string): Promise<HandoverEmail> {
@@ -35,13 +35,13 @@ export async function readHandoverEmail(handoverFolder: string, timestamp: strin
     handoverFolder,
     timestamp,
     attachments: [
-      ...manifest.inlineImages.map(img => ({
+      ...(manifest.inlineImages ?? []).map(img => ({
         name: img.filename,
         contentType: img.contentType,
         dataBase64: img.dataBase64,
         isInline: true,
       })),
-      ...manifest.attachments.map(att => ({
+      ...(manifest.attachments ?? []).map(att => ({
         name: att.filename,
         contentType: att.contentType,
         dataBase64: att.dataBase64,
