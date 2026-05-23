@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { OutlookApiClient } from '../../outlook/OutlookApiClient';
+import { createOutlookTokenProvider } from '../../outlook/tokenProviders';
 import { OutlookService } from '../../services/OutlookService';
 import type { TicketService } from '../../services/TicketService';
 import type { ConfigService } from '../../services/ConfigService';
@@ -18,14 +19,15 @@ export async function handleCreateFromEmail(
   ws: vscode.Memento,
 ): Promise<void> {
   const outlookConfig = await configService.getOutlookConfig();
-  const outlookService = new OutlookService(new OutlookApiClient());
+  const tokenProvider = createOutlookTokenProvider(configService.getOutlookAuthProvider(), configService);
+  const outlookService = new OutlookService(new OutlookApiClient(tokenProvider));
 
   if (!outlookConfig.folderId) {
     let folders: Array<{ id: string; displayName: string; unreadItemCount: number }>;
     try {
       folders = await outlookService.getFolders();
     } catch (err) {
-      stream.markdown(`**Could not list Outlook folders:** ${err instanceof Error ? err.message : String(err)}\n\nMake sure you are signed in to a Microsoft account in VS Code and have granted Mail.Read access.`);
+      stream.markdown(`**Could not list Outlook folders:** ${err instanceof Error ? err.message : String(err)}`);
       return;
     }
     const list = folders.map((f, i) => `${i + 1}. ${f.displayName} (${f.unreadItemCount} unread)`).join('\n');
@@ -71,7 +73,8 @@ export async function handleFolderSelection(
   const chosen = session.folders[n - 1];
   await configService.saveOutlookFolderId(chosen.id);
   const outlookConfig = await configService.getOutlookConfig();
-  const outlookService = new OutlookService(new OutlookApiClient());
+  const tokenProvider = createOutlookTokenProvider(configService.getOutlookAuthProvider(), configService);
+  const outlookService = new OutlookService(new OutlookApiClient(tokenProvider));
   const emails = await outlookService.getEmails(chosen.id, outlookConfig.emailListSize);
   const emailList = emails.map((e, i) => `${i + 1}. [${e.receivedDateTime.slice(0, 10)}] ${e.subject} (${e.senderName})`).join('\n');
   const emailSession: EmailSelectionSession = { folderId: chosen.id, emails };
@@ -104,7 +107,8 @@ export async function handleEmailSelection(
   }
 
   stream.markdown(`_Fetching email…_`);
-  const outlookService = new OutlookService(new OutlookApiClient());
+  const tokenProvider = createOutlookTokenProvider(configService.getOutlookAuthProvider(), configService);
+  const outlookService = new OutlookService(new OutlookApiClient(tokenProvider));
   const { subject, markdownBody, inlineImageMap, attachments } = await outlookService.fetchEmailForTicket(chosen.id);
 
   const contentSession: EmailContentSession = {

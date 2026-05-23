@@ -1,31 +1,10 @@
-import * as vscode from 'vscode';
 import type { IOutlookClient, FolderItem, EmailListItem, EmailMessage, EmailAttachment } from './IOutlookClient';
+import type { TokenProvider } from './tokenProviders';
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0/me';
-const SCOPES = ['https://graph.microsoft.com/Mail.Read'];
 
 export class OutlookApiClient implements IOutlookClient {
-  private async getToken(): Promise<string> {
-    // Try the cached session first — avoids invoking the native broker on repeat calls.
-    const cached = await vscode.authentication.getSession('microsoft', SCOPES, { createIfNone: false, silent: true });
-    if (cached) return cached.accessToken;
-
-    let session: vscode.AuthenticationSession;
-    try {
-      session = await vscode.authentication.getSession('microsoft', SCOPES, { createIfNone: true });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('platform_broker_error')) {
-        throw new Error(
-          'Microsoft authentication failed (platform_broker_error). This is a known issue in corporate environments.\n\n' +
-          'Fix: open VS Code **Settings**, search for **"microsoft-authentication enable platform"**, and **uncheck** ' +
-          '"Microsoft Authentication: Enable Platform Auth". Then retry `@jira create from email`.',
-        );
-      }
-      throw err;
-    }
-    return session.accessToken;
-  }
+  constructor(private readonly getToken: TokenProvider) {}
 
   private async fetch<T>(path: string): Promise<T> {
     const token = await this.getToken();

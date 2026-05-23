@@ -51,6 +51,10 @@
       {
         "command": "ticket-sidekick.configureBitbucketCloud",
         "title": "Ticket Sidekick: Configure Bitbucket Cloud Credentials"
+      },
+      {
+        "command": "ticket-sidekick.setOutlookToken",
+        "title": "Ticket Sidekick: Set Outlook Access Token"
       }
     ],
     "configuration": [
@@ -160,6 +164,17 @@
             "type": "number",
             "default": 10,
             "description": "Number of emails to show in the @jira create from email selection list."
+          },
+          "ticketSidekick.outlook.authProvider": {
+            "type": "string",
+            "default": "vscode-microsoft",
+            "enum": ["vscode-microsoft", "azure-cli", "token"],
+            "enumDescriptions": [
+              "VS Code built-in Microsoft sign-in. Works for personal Microsoft accounts and permissive tenants.",
+              "Azure CLI — shells out to 'az account get-access-token'. Use in corporate Entra ID environments where az is installed and 'az login' has been done.",
+              "Static bearer token stored in SecretStorage. Paste a token via Command Palette → 'Ticket Sidekick: Set Outlook Access Token'. Tokens expire in ~1 hour."
+            ],
+            "description": "Authentication method for @jira create from email."
           }
         }
       }

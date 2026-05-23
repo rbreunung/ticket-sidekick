@@ -67,6 +67,19 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
 
+    vscode.commands.registerCommand('ticket-sidekick.setOutlookToken', async () => {
+      const token = await vscode.window.showInputBox({
+        prompt: 'Paste your Microsoft Graph access token (get one from https://developer.microsoft.com/en-us/graph/graph-explorer)',
+        password: true,
+        ignoreFocusOut: true,
+        placeHolder: 'eyJ0eXAiOiJKV1Qi...',
+      });
+      if (token) {
+        await configService.storeOutlookToken(token);
+        vscode.window.showInformationMessage('Ticket Sidekick: Outlook access token saved. Note: tokens expire in ~1 hour.');
+      }
+    }),
+
   );
 
   createJiraParticipant(context, configService);
