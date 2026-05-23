@@ -266,7 +266,7 @@ async function streamEmailContentPreview(session: EmailContentSession, stream: v
 
 async function finishEmailTicket(session: EmailContentSession, ticketService: TicketService, stream: vscode.ChatResponseStream): Promise<void> {
   // Strip OWA attachment notice appended by userscript (can't be downloaded; surface separately)
-  const attachNoticeRegex = /\n?📄 \*\*Attachments \(attach to ticket manually\):\*\* ([^\n]+)/;
+  const attachNoticeRegex = /\n?📎 \*\*Attachments \(attach to ticket manually\):\*\* ([^\n]+)/;
   const attachNoticeMatch = session.markdownBody.match(attachNoticeRegex);
   const detectedAttachmentNames = attachNoticeMatch
     ? attachNoticeMatch[1].split(/,\s*/).map(s => s.replace(/^_|_$/g, '').trim()).filter(Boolean)
