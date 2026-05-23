@@ -54,4 +54,21 @@ describe('generateOwaUserscript', () => {
     });
     expect(injected).not.toContain("'; alert(1);");
   });
+
+  it('strips path from owaUrl so @match uses origin only', () => {
+    const script = generateOwaUserscript({
+      owaUrl: 'https://outlook.cloud.microsoft/mail/',
+      vscodeUriBase: 'vscode://RobertBreunung.ticket-sidekick',
+    });
+    expect(script).toContain('@match        https://outlook.cloud.microsoft/*');
+    expect(script).not.toContain('/mail/');
+  });
+
+  it('strips trailing slash from owaUrl', () => {
+    const script = generateOwaUserscript({
+      owaUrl: 'https://outlook.office.com/',
+      vscodeUriBase: 'vscode://RobertBreunung.ticket-sidekick',
+    });
+    expect(script).toContain('@match        https://outlook.office.com/*');
+  });
 });

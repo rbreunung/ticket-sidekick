@@ -183,7 +183,7 @@
           "ticketSidekick.outlook.owaUrl": {
             "type": "string",
             "default": "https://outlook.office.com",
-            "description": "OWA base URL used when generating the Tampermonkey userscript. Use your corporate URL if different (e.g. https://mail.company.com)."
+            "description": "OWA base URL (scheme + hostname only, no path) used when generating the Tampermonkey userscript. Examples: https://outlook.office.com (corporate), https://outlook.cloud.microsoft (new Outlook), https://outlook.live.com (Hotmail/Outlook.com). Any trailing path is stripped automatically."
           }
         }
       },

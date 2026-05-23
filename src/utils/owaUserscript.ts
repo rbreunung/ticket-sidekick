@@ -3,7 +3,13 @@ export function generateOwaUserscript(config: {
   vscodeUriBase: string;
 }): string {
   const { owaUrl, vscodeUriBase } = config;
-  const safeOwaUrl = owaUrl.replace(/[\r\n]/g, '');
+  const rawOwaUrl = owaUrl.replace(/[\r\n]/g, '');
+  let safeOwaUrl: string;
+  try {
+    safeOwaUrl = new URL(rawOwaUrl).origin;
+  } catch {
+    safeOwaUrl = rawOwaUrl.replace(/\/+$/, '');
+  }
   const safeVscodeUri = vscodeUriBase.replace(/[\r\n]/g, '').replace(/'/g, '%27').replace(/\\/g, '/');
   return `// ==UserScript==
 // @name         Ticket Sidekick — OWA to Jira
