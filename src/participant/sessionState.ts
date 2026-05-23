@@ -227,7 +227,7 @@ export function isConfirmation(text: string): boolean {
 export function isCancellation(text: string): boolean {
   const normalized = text.trim().toLowerCase();
   const CANCELLATIONS = new Set([
-    'no', 'nope', 'cancel', 'cancelled', 'stop', 'abort',
+    'c', 'no', 'nope', 'cancel', 'cancelled', 'stop', 'abort',
     'never mind', 'nevermind', "don't", 'dont', 'quit', 'skip',
   ]);
   return CANCELLATIONS.has(normalized);
