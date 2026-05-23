@@ -36,11 +36,12 @@ export function generateOwaUserscript(config: {
   }
 
   function getSubject() {
+    // New Outlook: id ends with "_SUBJECT", first span[title] holds the subject text
     return (
-      document.querySelector('[data-testid="subject"]')?.textContent?.trim()
+      document.querySelector('[id$="_SUBJECT"] span[title]')?.getAttribute('title')?.trim()
+      || document.querySelector('[data-testid="subject"]')?.textContent?.trim()
       || document.querySelector('[data-testid="ConversationTopic"]')?.textContent?.trim()
       || document.querySelector('[aria-label^="Email subject"]')?.textContent?.trim()
-      || document.querySelector('[role="heading"][aria-level="2"]')?.textContent?.trim()
       || document.querySelector('h1')?.textContent?.trim()
       || '(no subject)'
     );
@@ -135,7 +136,6 @@ export function generateOwaUserscript(config: {
 
     const bodyClone = bodyEl.cloneNode(true);
     const inlineImages = [];
-    const attachments = [];
     let imgIdx = 0;
 
     const fetches = [];
@@ -156,16 +156,21 @@ export function generateOwaUserscript(config: {
       fetches.push(fetchAsBase64(src).then(b64 => { entry.dataBase64 = b64; }).catch(() => {}));
     }
 
-    for (const link of document.querySelectorAll('[data-testid="attachment-item"] a')) {
-      const href = link.href;
-      const name = (link.textContent || link.title || '').trim();
-      let parsedHref;
-      try { parsedHref = new URL(href, location.href); } catch (_) { parsedHref = null; }
-      if (parsedHref && ['http:', 'https:'].includes(parsedHref.protocol) && name) {
-        const safeName = name.replace(/[/\\\\:*?"<>|]/g, '_');
-        const entry = { filename: safeName, contentType: 'application/octet-stream', dataBase64: '' };
-        attachments.push(entry);
-        fetches.push(fetchAsBase64(href).then(b64 => { entry.dataBase64 = b64; }).catch(() => {}));
+    // OWA attachment panel: id$="_ATTACHMENTS" contains a listbox of role="option" items.
+    // There are no direct download URLs in the DOM — OWA serves files via an authenticated
+    // session API. We detect the names and append them to the body so they appear in the
+    // Jira description and the user knows what to attach manually.
+    const attachmentListbox = document.querySelector('[id$="_ATTACHMENTS"] [role="listbox"]');
+    if (attachmentListbox) {
+      const names = [];
+      for (const option of attachmentListbox.querySelectorAll('[role="option"]')) {
+        const nameEl = option.querySelector('[title]');
+        const name = nameEl?.getAttribute('title')?.trim();
+        if (name) names.push(name);
+      }
+      if (names.length > 0) {
+        bodyClone.innerHTML += '<p>&#128206; <strong>Attachments (attach to ticket manually):</strong> '
+          + names.map(n => '<em>' + n + '</em>').join(', ') + '</p>';
       }
     }
 
@@ -176,7 +181,6 @@ export function generateOwaUserscript(config: {
       stripFooter: !!stripFooter,
       bodyHtml: bodyClone.innerHTML,
       inlineImages: inlineImages.filter(e => e.dataBase64),
-      attachments: attachments.filter(e => e.dataBase64),
     }, null, 2);
 
     const blob = new Blob([manifest], { type: 'application/json;charset=utf-8' });

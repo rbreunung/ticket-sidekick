@@ -60,6 +60,20 @@ describe('generateOwaUserscript', () => {
     expect(SCRIPT).toContain('querySelectorAll(\'.fui-Toolbar[role="toolbar"]\')');
   });
 
+  it('uses id-suffix _SUBJECT selector to avoid matching navigation pane headings', () => {
+    expect(SCRIPT).toContain('[id$="_SUBJECT"] span[title]');
+  });
+
+  it('uses id-suffix _ATTACHMENTS selector scoped to the attachment listbox', () => {
+    expect(SCRIPT).toContain('[id$="_ATTACHMENTS"]');
+    expect(SCRIPT).toContain('[role="listbox"]');
+    expect(SCRIPT).toContain('[role="option"]');
+  });
+
+  it('appends attachment names to the body for inclusion in the ticket description', () => {
+    expect(SCRIPT).toContain('Attachments (attach to ticket manually)');
+  });
+
   it('escapes single quotes in vscodeUriBase to prevent script injection', () => {
     const injected = generateOwaUserscript({
       owaUrl: 'https://mail.example.com',
