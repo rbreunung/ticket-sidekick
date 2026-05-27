@@ -178,11 +178,15 @@ export async function finishTicketCreation(
   stream: vscode.ChatResponseStream,
   workspaceState: vscode.Memento,
 ): Promise<null> {
+  if (!session.summary) {
+    stream.markdown('_Cannot create ticket: no summary was provided._');
+    return null;
+  }
   const descriptionText = assembleDescription(session.allSections, session.answers);
   const contentSession: ContentSession = {
     operation: 'createTicket',
     projectKey: session.project,
-    summary: session.summary!,
+    summary: session.summary,
     issueType: session.issueType,
     templateName: session.template || null,
     extraFields: { ...session.fields },

@@ -105,6 +105,7 @@ export async function handleContentSession(
     await workspaceState.update('jira.session.previewing', undefined);
     if (session.operation === 'createTicket') {
       const fields: Record<string, unknown> = { ...session.extraFields };
+      delete fields.description;
       if (session.currentContent) {
         fields.description = markdownToJiraWiki(session.currentContent);
       }
