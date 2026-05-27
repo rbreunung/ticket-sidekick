@@ -134,14 +134,17 @@ async function finishEmailTicket(session: EmailContentSession, ticketService: Ti
   stream.markdown(linkMsg);
 
   if (issueKey && session.attachments.length > 0) {
+    let uploaded = 0;
     await Promise.all(
       session.attachments.map(att =>
-        ticketService.uploadAttachment(issueKey, att.name, att.contentType, att.contentBytes).catch(err => {
-          stream.markdown(`_Warning: could not upload ${att.name}: ${err instanceof Error ? err.message : String(err)}_`);
-        }),
+        ticketService.uploadAttachment(issueKey, att.name, att.contentType, att.contentBytes)
+          .then(() => { uploaded++; })
+          .catch(err => {
+            stream.markdown(`_Warning: could not upload ${att.name}: ${err instanceof Error ? err.message : String(err)}_`);
+          }),
       ),
     );
-    stream.markdown(`\n\nUploaded ${session.attachments.length} attachment(s).\n\n<!-- @jira-ticket:${issueKey} -->`);
+    stream.markdown(`\n\nUploaded ${uploaded} of ${session.attachments.length} attachment(s).\n\n<!-- @jira-ticket:${issueKey} -->`);
   } else if (issueKey) {
     stream.markdown(`\n\n<!-- @jira-ticket:${issueKey} -->`);
   }
