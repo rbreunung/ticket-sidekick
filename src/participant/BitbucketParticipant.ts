@@ -325,7 +325,7 @@ export function createBitbucketParticipant(
       if (excludePatterns.length > 0) {
         const before = fileDiffs.length;
         fileDiffs = fileDiffs.filter(
-          (d) => !excludePatterns.some((p) => minimatch(d.path, p)),
+          (d) => !excludePatterns.some((p) => minimatch(d.path, p, { matchBase: true })),
         );
         excludedCount = before - fileDiffs.length;
       }
