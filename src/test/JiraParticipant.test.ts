@@ -33,10 +33,9 @@ describe('serializeTurns', () => {
     expect(result).toContain('Roses are red');
   });
 
-  it('returns only the last 3 turns in recent mode', () => {
+  it('includes all turns when total is within the 10-turn recent window', () => {
     const result = serializeTurns(turns, 'recent');
-    expect(result).not.toContain('Show me PROJ-1');
-    expect(result).toContain('Write a poem about it');
+    expect(result).toContain('Show me PROJ-1');
     expect(result).toContain('Roses are red');
     expect(result).toContain('Add that poem as a comment');
   });
@@ -49,6 +48,34 @@ describe('serializeTurns', () => {
   it('filters out empty text turns', () => {
     const result = serializeTurns([{ role: 'user', text: '' }, { role: 'assistant', text: 'hi' }], 'full');
     expect(result).toBe('Assistant: hi');
+  });
+
+  it('includes turns 5–14 (last 10) when 15 turns are provided in recent mode', () => {
+    const manyTurns = Array.from({ length: 15 }, (_, i) => ({
+      role: (i % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
+      text: `message-${i}`,
+    }));
+    const result = serializeTurns(manyTurns, 'recent');
+    expect(result).not.toContain('message-0');
+    expect(result).not.toContain('message-4');
+    expect(result).toContain('message-5');
+    expect(result).toContain('message-14');
+  });
+
+  it('truncates serialized history exceeding 30 000 chars and adds note', () => {
+    const manyTurns = Array.from({ length: 10 }, (_, i) => ({
+      role: (i % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
+      text: `turn-${i}-` + 'a'.repeat(4000),
+    }));
+    const result = serializeTurns(manyTurns, 'full');
+    expect(result).toContain('_(oldest turns omitted to fit context)_');
+    expect(result).not.toContain(manyTurns[0].text.slice(0, 50));
+    expect(result).toContain(manyTurns[9].text.slice(0, 50));
+  });
+
+  it('does not add truncation note when history is short', () => {
+    const result = serializeTurns([{ role: 'user' as const, text: 'hello' }], 'full');
+    expect(result).not.toContain('oldest turns omitted');
   });
 });
 
