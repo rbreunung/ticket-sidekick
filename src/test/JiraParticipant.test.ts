@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+vi.mock('vscode', () => ({}));
+
 import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption } from '../participant/sessionState';
+import { isPointerPrompt } from '../participant/jira/llmHelpers';
 import type { TransitionBatchTicket } from '../participant/sessionState';
 import type { JiraComment } from '../jira/IJiraClient';
 
@@ -720,5 +724,27 @@ describe('pickEmailOption', () => {
 
   it('returns null for both lists empty', () => {
     expect(pickEmailOption(1, [], [])).toBeNull();
+  });
+});
+
+describe('isPointerPrompt', () => {
+  it('matches "post it"', () => {
+    expect(isPointerPrompt('post it')).toBe(true);
+  });
+
+  it('matches "use this as a comment on PROJ-123"', () => {
+    expect(isPointerPrompt('use this as a comment on PROJ-123')).toBe(true);
+  });
+
+  it('matches "add that as a comment"', () => {
+    expect(isPointerPrompt('add that as a comment')).toBe(true);
+  });
+
+  it('does not match a standalone generation instruction', () => {
+    expect(isPointerPrompt('write a summary of the investigation findings')).toBe(false);
+  });
+
+  it('does not match a literal comment instruction', () => {
+    expect(isPointerPrompt('add comment: everything looks good')).toBe(false);
   });
 });
