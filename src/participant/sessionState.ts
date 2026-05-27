@@ -12,12 +12,22 @@ export interface CreationSession {
   fields: Record<string, unknown>;
 }
 
-export interface ContentSession {
-  ticketKey: string;
-  operation: 'addComment' | 'updateDescription';
-  currentContent: string;
-  historyContext: string | undefined;
-}
+export type ContentSession =
+  | {
+      operation: 'addComment' | 'updateDescription';
+      ticketKey: string;
+      currentContent: string;
+      historyContext: string | undefined;
+    }
+  | {
+      operation: 'createTicket';
+      projectKey: string;
+      summary: string;
+      issueType: string;
+      templateName: string | null;
+      extraFields: Record<string, unknown>;
+      currentContent: string;
+    };
 
 export interface MoreCommentsSession {
   ticketKey: string;
