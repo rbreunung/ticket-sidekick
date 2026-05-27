@@ -44,6 +44,10 @@ export class ConfigService {
       token: await this.context.secrets.get(ConfigService.BITBUCKET_TOKEN_KEY),
       showConnectionInfo: config.get<boolean>('bitbucket.showConnectionInfo') ?? false,
       reviewInstructions: config.get<string>('bitbucket.reviewInstructions') || undefined,
+      modelContextTokens: config.get<number>('bitbucket.modelContextTokens') || undefined,
+      contextBudgetRatio: config.get<number>('bitbucket.contextBudgetRatio') ?? 0.7,
+      reviewMode: config.get<'standard' | 'quick'>('bitbucket.reviewMode') ?? 'standard',
+      reviewExcludePatterns: config.get<string[]>('bitbucket.reviewExcludePatterns') ?? [],
     };
   }
 

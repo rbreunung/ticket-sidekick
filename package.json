@@ -150,6 +150,29 @@
             "type": "string",
             "default": "",
             "description": "Additional instructions appended to the built-in PR review prompt. Use this to add project-specific guidance, e.g. 'This project follows Google Style Guide' or 'Focus on security issues only'. The built-in grounding rules and output format are always included."
+          },
+          "ticketSidekick.bitbucket.modelContextTokens": {
+            "type": "number",
+            "description": "Override the model's context window size in tokens for chunk sizing. Leave unset to use the model's reported value (recommended). Set this if auto-detection is unavailable or you want a conservative cap (e.g. 60000)."
+          },
+          "ticketSidekick.bitbucket.contextBudgetRatio": {
+            "type": "number",
+            "default": 0.7,
+            "minimum": 0.1,
+            "maximum": 0.9,
+            "description": "Fraction of the model's context window to use per review chunk (0.1–0.9, default 0.7). The remaining 30% is reserved for the model's output. Lower this value if you see context-limit errors during reviews."
+          },
+          "ticketSidekick.bitbucket.reviewMode": {
+            "type": "string",
+            "enum": ["standard", "quick"],
+            "default": "standard",
+            "description": "Default review depth. 'standard' enables the two-pass review where the LLM can request additional file context. 'quick' skips the second pass (diffs only) — faster and cheaper for large PRs. Override per-review with '@bitbucket review quick <url>' or '@bitbucket review deep <url>'."
+          },
+          "ticketSidekick.bitbucket.reviewExcludePatterns": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": [],
+            "description": "Glob patterns for files to skip during PR review (e.g. [\"**/migrations/**\", \"**/*.snap\", \"**/*.generated.ts\"]). Excluded files are not sent to the LLM; the review output notes how many were skipped."
           }
         }
       },

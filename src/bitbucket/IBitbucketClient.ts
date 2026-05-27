@@ -20,6 +20,10 @@ export interface BitbucketConfig {
   token: string | undefined;
   showConnectionInfo?: boolean;
   reviewInstructions?: string;
+  modelContextTokens?: number;
+  contextBudgetRatio?: number;
+  reviewMode?: 'standard' | 'quick';
+  reviewExcludePatterns?: string[];
 }
 
 export interface BitbucketCommentResult {
