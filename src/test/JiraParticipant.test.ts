@@ -71,6 +71,17 @@ describe('serializeTurns', () => {
     expect(result).toContain('_(oldest turns omitted to fit context)_');
     expect(result).not.toContain(manyTurns[0].text.slice(0, 50));
     expect(result).toContain(manyTurns[9].text.slice(0, 50));
+    expect(result).toMatch(/omitted to fit context\)_\n\n(User|Assistant): /);
+  });
+
+  it('truncates in recent mode when the last 10 turns exceed 30 000 chars', () => {
+    const longText = 'b'.repeat(4000);
+    const manyTurns = Array.from({ length: 10 }, (_, i) => ({
+      role: (i % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
+      text: `recent-${i}-${longText}`,
+    }));
+    const result = serializeTurns(manyTurns, 'recent');
+    expect(result).toContain('_(oldest turns omitted to fit context)_');
   });
 
   it('does not add truncation note when history is short', () => {

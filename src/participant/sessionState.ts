@@ -197,8 +197,8 @@ export function serializeTurns(
     .join('\n\n');
   if (serialized.length <= MAX_HISTORY_CHARS) return serialized;
   const tail = serialized.slice(-MAX_HISTORY_CHARS);
-  const firstBreak = tail.indexOf('\n\n');
-  const clean = firstBreak >= 0 ? tail.slice(firstBreak + 2) : tail;
+  const turnBoundary = /\n\n(User|Assistant): /.exec(tail);
+  const clean = turnBoundary ? tail.slice(turnBoundary.index + 2) : tail;
   return `_(oldest turns omitted to fit context)_\n\n${clean}`;
 }
 
