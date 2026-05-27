@@ -55,7 +55,11 @@ export async function handleLoadTicket(
   // Stream ticket content first (same as @jira show), with inline attachment links
   // rewritten to their Jira URLs so they are clickable in the chat.
   const { table, sections } = formatIssueFields(issue, fieldMeta, alwaysShowIds, hiddenIds);
-  const showParts: string[] = [`## ${issue.key}: ${issue.fields.summary}`];
+  const baseUrl = vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.baseUrl') ?? '';
+  const heading = baseUrl
+    ? `## [${issue.key}](${baseUrl}/browse/${issue.key}): ${issue.fields.summary}`
+    : `## ${issue.key}: ${issue.fields.summary}`;
+  const showParts: string[] = [heading];
   if (table) showParts.push('', table);
   if (sections.length > 0) showParts.push('', ...sections);
   stream.markdown(rewriteAttachmentLinks(showParts.join('\n'), new Set(), allAttachmentUrls));
