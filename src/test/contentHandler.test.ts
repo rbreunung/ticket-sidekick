@@ -4,11 +4,11 @@ vi.mock('vscode', () => ({}));
 vi.mock('../participant/jira/llmHelpers', () => ({
   generateContent: vi.fn(),
   isLmRefusal: vi.fn(),
-  extractHistoryTurns: vi.fn(),
+  buildHistoryContext: vi.fn(),
 }));
 
-import { streamContentPreview, handleContentSession } from '../participant/jira/contentHandler';
-import { generateContent, isLmRefusal } from '../participant/jira/llmHelpers';
+import { streamContentPreview, handleContentSession, buildContentContext } from '../participant/jira/contentHandler';
+import { generateContent, isLmRefusal, buildHistoryContext } from '../participant/jira/llmHelpers';
 import type { ContentSession } from '../participant/sessionState';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService } from '../services/TicketService';
@@ -326,5 +326,37 @@ describe('handleContentSession — addComment regression', () => {
     // Ticket marker appended
     const allMarkdown = stream.markdown.mock.calls.map((c: string[]) => c[0]).join('');
     expect(allMarkdown).toContain('<!-- @jira-ticket:PROJ-123 -->');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildContentContext — contentSource routing
+// ---------------------------------------------------------------------------
+
+describe('buildContentContext — contentSource routing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(buildHistoryContext).mockReturnValue(undefined);
+  });
+
+  it('calls buildHistoryContext with "generate" when contentSource is generate', async () => {
+    const request = { references: [] } as never;
+    const chatContext = { history: [] } as never;
+    await buildContentContext(request, chatContext, 'Ticket text', '', 'generate');
+    expect(buildHistoryContext).toHaveBeenCalledWith('generate', chatContext);
+  });
+
+  it('calls buildHistoryContext with "history-recent" when contentSource is history-recent', async () => {
+    const request = { references: [] } as never;
+    const chatContext = { history: [] } as never;
+    await buildContentContext(request, chatContext, 'Ticket text', '', 'history-recent');
+    expect(buildHistoryContext).toHaveBeenCalledWith('history-recent', chatContext);
+  });
+
+  it('defaults to history-full when contentSource is omitted', async () => {
+    const request = { references: [] } as never;
+    const chatContext = { history: [] } as never;
+    await buildContentContext(request, chatContext, 'Ticket text', '');
+    expect(buildHistoryContext).toHaveBeenCalledWith('history-full', chatContext);
   });
 });

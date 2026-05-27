@@ -11,7 +11,7 @@ import { loadWorkflowCache, findPath } from '../services/WorkflowService';
 import type { WorkflowGraph } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
 import type { Operation, ParsedIntent } from './jira/llmHelpers';
-import { parseIntent, generateContent, isLmRefusal, synthesizeComments, generateDescriptionAndCommentsSummary } from './jira/llmHelpers';
+import { parseIntent, generateContent, isLmRefusal, synthesizeComments, generateDescriptionAndCommentsSummary, isPointerPrompt, extractLastAssistantText } from './jira/llmHelpers';
 import { streamFieldUpdatePreview, continueSetField, handleSetField, handleSpellCheck } from './jira/fieldHandler';
 import { getLastAssistantText, resolveTicketFromBranch, resolveProjectKey, parseLastTicketFromContext } from './jira/ticketContext';
 import { gatherFileContent, buildContentContext, streamContentPreview, handleContentSession } from './jira/contentHandler';
@@ -649,13 +649,31 @@ export function createJiraParticipant(
             const ticketText = await ticketService.getTicket(ticketKey!);
             const { comments } = await ticketService.getIssueComments(ticketKey!, 50);
             const commentBlocks = comments.length > 0 ? serializeCommentsForLLM(comments) : '';
-            const context = await buildContentContext(request, chatContext, ticketText, commentBlocks);
-            const content = await generateContent(request.prompt, request.model, token, context);
+
+            // Verbatim shortcut: when the user points at the previous response ("post it",
+            // "use that"), copy the last assistant turn directly instead of re-generating.
+            if (intent.contentSource === 'history-recent' && isPointerPrompt(request.prompt)) {
+              const lastText = extractLastAssistantText(chatContext);
+              if (lastText.length > 200) {
+                await streamContentPreview(
+                  { ticketKey: ticketKey!, operation: 'addComment', currentContent: lastText, historyContext: undefined },
+                  stream, ws,
+                );
+                return;
+              }
+            }
+
+            const nonLiteralSource = intent.contentSource as 'generate' | 'history-recent' | 'history-full';
+            const context = await buildContentContext(request, chatContext, ticketText, commentBlocks, nonLiteralSource);
+            const content = await generateContent(request.prompt, request.model, token, context, nonLiteralSource);
             if (isLmRefusal(content)) {
               stream.markdown(`_Could not generate comment content — the AI model declined the request. Try rephrasing your instruction or use \`@jira add comment to ${ticketKey}\` with explicit text._`);
               return;
             }
-            await streamContentPreview({ ticketKey: ticketKey!, operation: 'addComment', currentContent: content, historyContext: context }, stream, ws);
+            await streamContentPreview(
+              { ticketKey: ticketKey!, operation: 'addComment', currentContent: content, historyContext: context },
+              stream, ws,
+            );
             return;
           }
           break;
@@ -676,13 +694,17 @@ export function createJiraParticipant(
             const ticketText = await ticketService.getTicket(ticketKey!, descFieldMeta, descAlwaysShow, descHidden);
             const { comments } = await ticketService.getIssueComments(ticketKey!, 20);
             const commentBlocks = comments.length > 0 ? serializeCommentsForLLM(comments) : '';
-            const contentCtx = await buildContentContext(request, chatContext, ticketText, commentBlocks);
-            const content = await generateContent(fieldValueRaw, request.model, token, contentCtx);
+            const nonLiteralSource = intent.contentSource as 'generate' | 'history-recent' | 'history-full';
+            const contentCtx = await buildContentContext(request, chatContext, ticketText, commentBlocks, nonLiteralSource);
+            const content = await generateContent(fieldValueRaw, request.model, token, contentCtx, nonLiteralSource);
             if (isLmRefusal(content)) {
               stream.markdown(`_Could not generate description content — the AI model declined the request. Try rephrasing your instruction._`);
               return;
             }
-            await streamContentPreview({ ticketKey: ticketKey!, operation: 'updateDescription', currentContent: content, historyContext: contentCtx }, stream, ws);
+            await streamContentPreview(
+              { ticketKey: ticketKey!, operation: 'updateDescription', currentContent: content, historyContext: contentCtx },
+              stream, ws,
+            );
             return;
           }
           // All other fields → fuzzy match + preview flow

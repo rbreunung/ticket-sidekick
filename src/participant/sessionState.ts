@@ -184,15 +184,22 @@ export function stripHiddenMarkers(text: string): string {
   return text.replace(/<!--[\s\S]*?-->/g, '').replace(/\s+/g, ' ').trim();
 }
 
+const MAX_HISTORY_CHARS = 30_000;
+
 export function serializeTurns(
   turns: Array<{ role: 'user' | 'assistant'; text: string }>,
   mode: 'recent' | 'full',
 ): string {
-  const selected = mode === 'recent' ? turns.slice(-3) : turns;
-  return selected
+  const selected = mode === 'recent' ? turns.slice(-10) : turns;
+  const serialized = selected
     .filter((t) => t.text.length > 0)
     .map((t) => `${t.role === 'user' ? 'User' : 'Assistant'}: ${t.text}`)
     .join('\n\n');
+  if (serialized.length <= MAX_HISTORY_CHARS) return serialized;
+  const tail = serialized.slice(-MAX_HISTORY_CHARS);
+  const turnBoundary = /\n\n(User|Assistant): /.exec(tail);
+  const clean = turnBoundary ? tail.slice(turnBoundary.index + 2) : tail;
+  return `_(oldest turns omitted to fit context)_\n\n${clean}`;
 }
 
 export function extractCreatedKeyFromConfirmation(confirmation: string): string | null {

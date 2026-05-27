@@ -104,17 +104,26 @@ export async function generateContent(
   model: vscode.LanguageModelChat,
   token: vscode.CancellationToken,
   context?: string,
+  contentSource?: 'generate' | 'history-recent' | 'history-full',
 ): Promise<string> {
-  const roleSetup = vscode.LanguageModelChatMessage.User(
-    'You are a Jira assistant. Your task is to write Jira comment and description text. ' +
-    'Content may include prose summaries, code snippets, patches, or any technical material appropriate for a Jira comment.',
-  );
-  const roleAck = vscode.LanguageModelChatMessage.Assistant(
-    'Understood. I write Jira comment and description text, including any technical content such as code or patches.',
-  );
-  const task = context
-    ? `Available context:\n\n${context}\n\nUsing the context above, write the following:\n${instruction}\n\nProduce only the final text. No preamble, no explanation.`
-    : `Write the following:\n${instruction}\n\nProduce only the final text. No preamble, no explanation.`;
+  const isHistoryBased = contentSource === 'history-recent' || contentSource === 'history-full';
+  const roleText = isHistoryBased
+    ? 'You are a technical scribe for a software development team. Your task is to synthesize findings from a conversation into a concise Jira comment.'
+    : 'You are a Jira assistant. Your task is to write Jira comment and description text. Content may include prose summaries, code snippets, patches, or any technical material appropriate for a Jira comment.';
+  const roleAckText = isHistoryBased
+    ? 'Understood. I synthesize conversation findings into concise Jira comments.'
+    : 'Understood. I write Jira comment and description text, including any technical content such as code or patches.';
+  const roleSetup = vscode.LanguageModelChatMessage.User(roleText);
+  const roleAck = vscode.LanguageModelChatMessage.Assistant(roleAckText);
+  let task: string;
+  if (context) {
+    const groundingNote = isHistoryBased
+      ? '\n\nBase your summary ONLY on the conversation excerpt provided above. Do not add information not present in the source.'
+      : '';
+    task = `Available context:\n\n${context}${groundingNote}\n\nUsing the context above, write the following:\n${instruction}\n\nProduce only the final text. No preamble, no explanation.`;
+  } else {
+    task = `Write the following:\n${instruction}\n\nProduce only the final text. No preamble, no explanation.`;
+  }
   const response = await model.sendRequest(
     [roleSetup, roleAck, vscode.LanguageModelChatMessage.User(task)],
     {},
@@ -148,11 +157,12 @@ export function extractHistoryTurns(context: vscode.ChatContext): Array<{ role: 
       return [{ role: 'user', text: turn.prompt }];
     }
     if (turn instanceof vscode.ChatResponseTurn) {
-      const text = stripHiddenMarkers(
-        turn.response
-          .map((p) => (p instanceof vscode.ChatResponseMarkdownPart ? p.value.value : ''))
-          .join(''),
-      );
+      const raw = turn.response
+        .map((p) => (p instanceof vscode.ChatResponseMarkdownPart ? p.value.value : ''))
+        .join('');
+      // Skip intermediate content preview drafts — they are not accepted findings
+      if (raw.includes('<!-- jira:previewing -->')) return [];
+      const text = stripHiddenMarkers(raw);
       return text ? [{ role: 'assistant', text }] : [];
     }
     return [];
@@ -218,4 +228,21 @@ export async function spellCheckValue(
   const trimmed = raw.trim();
   if (/^unchanged$/i.test(trimmed)) return null;
   return trimmed || null;
+}
+
+export function isPointerPrompt(prompt: string): boolean {
+  const lower = prompt.toLowerCase();
+  // "post it", "copy it/this/that" — these almost exclusively mean "post the content verbatim"
+  if (/\b(post|copy)\s+(it|this|that)\b/.test(lower)) return true;
+  // "add/post/use/take it/this/that AS A COMMENT" — requires explicit "as a comment" qualifier
+  if (/\b(add|post|use|take)\s+(it|this|that)\s+as\s+(a\s+)?comment\b/.test(lower)) return true;
+  return false;
+}
+
+export function extractLastAssistantText(context: vscode.ChatContext): string {
+  const turns = extractHistoryTurns(context);
+  for (let i = turns.length - 1; i >= 0; i--) {
+    if (turns[i].role === 'assistant') return turns[i].text;
+  }
+  return '';
 }
