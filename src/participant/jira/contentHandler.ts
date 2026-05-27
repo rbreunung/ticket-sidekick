@@ -71,6 +71,16 @@ export async function buildContentContext(
 
 export async function streamContentPreview(session: ContentSession, stream: vscode.ChatResponseStream, workspaceState: vscode.Memento): Promise<void> {
   await workspaceState.update('jira.session.previewing', session);
+  if (session.operation === 'createTicket') {
+    const templateLine = session.templateName ? `  |  **Template:** ${session.templateName}` : '';
+    const descSection = session.currentContent
+      ? `\n\n**Description:**\n${session.currentContent}`
+      : '';
+    stream.markdown(
+      `**Summary:** ${session.summary}\n**Type:** ${session.issueType}  |  **Project:** ${session.projectKey}${templateLine}${descSection}\n\nReply **"create it"** to create the ticket, or tell me how to adjust the description.\n\n<!-- jira:previewing -->`,
+    );
+    return;
+  }
   const actionLabel = session.operation === 'addComment' ? 'post this comment' : 'update the description';
   stream.markdown(
     `${session.currentContent}\n\nReply **"post it"** to ${actionLabel}, or tell me how to adjust it.\n\n<!-- jira:previewing -->`,
@@ -93,6 +103,25 @@ export async function handleContentSession(
   }
   if (isConfirmation(prompt)) {
     await workspaceState.update('jira.session.previewing', undefined);
+    if (session.operation === 'createTicket') {
+      const fields: Record<string, unknown> = { ...session.extraFields };
+      delete fields.description;
+      if (session.currentContent) {
+        fields.description = markdownToJiraWiki(session.currentContent);
+      }
+      const result = await ticketService.createTicket(
+        session.projectKey,
+        session.summary,
+        session.issueType,
+        fields,
+      );
+      stream.markdown(result);
+      const keyMatch = result.match(/([A-Z][A-Z0-9]+-\d+)/);
+      if (keyMatch) {
+        stream.markdown(`\n\n<!-- @jira-ticket:${keyMatch[1]} -->`);
+      }
+      return;
+    }
     let result: string;
     const jiraText = markdownToJiraWiki(session.currentContent);
     if (session.operation === 'addComment') {
@@ -105,7 +134,8 @@ export async function handleContentSession(
     return;
   }
   // Refinement instruction
-  const refineContext = [session.historyContext, `Previously generated:\n${session.currentContent}`]
+  const historyContext = session.operation !== 'createTicket' ? session.historyContext : undefined;
+  const refineContext = [historyContext, `Previously generated:\n${session.currentContent}`]
     .filter(Boolean)
     .join('\n\n');
   const refined = await generateContent(prompt, model, token, refineContext);

@@ -185,8 +185,7 @@ export function createJiraParticipant(
           return;
         }
         try {
-          const createdKey = await handleCreateTicket(request, stream, token, jiraClient, ticketService, ws, choice, selSession.originalPrompt);
-          if (createdKey) stream.markdown(`\n\n<!-- @jira-ticket:${createdKey} -->`);
+          await handleCreateTicket(request, stream, token, jiraClient, ticketService, ws, choice, selSession.originalPrompt);
         } catch (err) {
           stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
         }
@@ -217,12 +216,11 @@ export function createJiraParticipant(
           } catch { /* proceed without */ }
         }
         try {
-          const createdKey = await continueAfterIssueType(
+          await continueAfterIssueType(
             typeSession.project, typeSession.summary, choice, typeSession.description,
             selectedTemplate, request.model, stream, token, jiraClient, ticketService, ws,
             typeSession.extraFields,
           );
-          if (createdKey) stream.markdown(`\n\n<!-- @jira-ticket:${createdKey} -->`);
         } catch (err) {
           stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
         }
@@ -244,8 +242,7 @@ export function createJiraParticipant(
           session.pending = session.pending.slice(1);
           if (session.pending.length === 0) {
             await ws.update('jira.session.creating', undefined);
-            const createdKey = await finishTicketCreation(session, ticketService, stream);
-            if (createdKey) stream.markdown(`\n\n<!-- @jira-ticket:${createdKey} -->`);
+            await finishTicketCreation(session, stream, ws);
           } else {
             await streamNextSection(session, stream, ws);
           }
@@ -501,8 +498,7 @@ export function createJiraParticipant(
     // createTicket has its own multi-turn flow
     if (intent.operation === 'createTicket') {
       try {
-        const createdKey = await handleCreateTicket(request, stream, token, jiraClient, ticketService, ws);
-        if (createdKey) stream.markdown(`\n\n<!-- @jira-ticket:${createdKey} -->`);
+        await handleCreateTicket(request, stream, token, jiraClient, ticketService, ws);
       } catch (err) {
         stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
       }

@@ -12,12 +12,22 @@ export interface CreationSession {
   fields: Record<string, unknown>;
 }
 
-export interface ContentSession {
-  ticketKey: string;
-  operation: 'addComment' | 'updateDescription';
-  currentContent: string;
-  historyContext: string | undefined;
-}
+export type ContentSession =
+  | {
+      operation: 'addComment' | 'updateDescription';
+      ticketKey: string;
+      currentContent: string;
+      historyContext: string | undefined;
+    }
+  | {
+      operation: 'createTicket';
+      projectKey: string;
+      summary: string;
+      issueType: string;
+      templateName: string | null;
+      extraFields: Record<string, unknown>;
+      currentContent: string;
+    };
 
 export interface MoreCommentsSession {
   ticketKey: string;
@@ -196,7 +206,7 @@ export function isConfirmation(text: string): boolean {
     'yes', 'yep', 'ok', 'okay', 'sure', 'perfect', 'great',
     'looks good', 'looks great', 'go ahead', 'do it', 'ship it',
     'post it', 'confirm', 'confirmed', 'submit', 'approved', 'approve', 'fine',
-    'load all', 'load more', 'show all', 'show more',
+    'load all', 'load more', 'show all', 'show more', 'create it',
   ]);
   return CONFIRMATIONS.has(normalized);
 }

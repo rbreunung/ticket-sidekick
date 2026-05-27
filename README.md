@@ -55,8 +55,8 @@ Open GitHub Copilot Chat and use `@jira`:
 | `@jira summarize PROJ-123` | Same fields as `show`, but description + comments replaced by a one-paragraph AI synthesis |
 | `@jira show comments` | Full formatted comment bodies numbered — use when you want to read the actual text |
 | `@jira what do the comments say about the login bug?` | LLM synthesis filtered to a topic |
-| `@jira create a bug: login times out` | Creates a new ticket (asks for project and type if missing) |
-| `@jira create Story in VSJI: add dark mode` | Creates a ticket with project and type from the prompt |
+| `@jira create a bug: login times out` | Resolves template and type, then shows a preview — reply **"create it"** to confirm |
+| `@jira create Story in VSJI: add dark mode` | Creates a ticket with project and type from the prompt — shows preview before creating |
 | `@jira set priority to High` | Updates any field by name (exact or fuzzy-matched) on the current branch ticket |
 | `@jira set labels to backend, urgent` | Replaces entire array field (comma-separated) |
 | `@jira add frontend to labels` | Appends to an array field, deduplicates |
@@ -163,6 +163,7 @@ Running `@jira create` starts a guided flow:
 2. **Summary** — extracted from your prompt if provided; otherwise the plugin asks in chat. Providing the summary upfront is usually faster.
 3. **Issue type** — taken from the template or your prompt. If neither provides one, the plugin shows a numbered list of issue types for the project.
 4. **Description sections** — if the chosen template defines `descriptionSections`, the plugin asks each question in sequence, building the description incrementally.
+5. **Preview** — a full ticket card is shown: summary, issue type, project, template (if any), and description. Reply **"create it"** (or `yes`, `ok`, `confirm`) to create the ticket. Reply with a refinement instruction to adjust the description and see a new preview. Reply **`c`** to cancel.
 
 **Examples:**
 
@@ -212,9 +213,10 @@ You can include these directly in the create prompt and the plugin will extract 
 
 ### Content generation and preview
 
-When you ask `@jira` to write content rather than provide it directly — for a comment or a description update — the plugin generates a draft and shows it for review before posting:
+When you ask `@jira` to write content — for a new ticket, a comment, or a description update — the plugin shows a preview before posting:
 
 ```text
+@jira create a bug: login times out after entering password
 @jira write a comment summarizing what we agreed on
 @jira update the description based on our conversation
 @jira draft a comment from the last few messages
