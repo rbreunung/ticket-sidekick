@@ -115,6 +115,10 @@ export async function handleContentSession(
         },
       );
       stream.markdown(result);
+      const keyMatch = result.match(/([A-Z][A-Z0-9]+-\d+)/);
+      if (keyMatch) {
+        stream.markdown(`\n\n<!-- @jira-ticket:${keyMatch[1]} -->`);
+      }
       return;
     }
     let result: string;
