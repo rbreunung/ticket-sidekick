@@ -30,7 +30,7 @@ function getLastAssistantText(chatContext: vscode.ChatContext): string {
   return '';
 }
 
-const FOLLOW_UP_PROMPT_PREFIX = `A developer is asking a follow-up question about a specific finding from a code review. Provide a thorough explanation that directly addresses their question. Include: whether their assumption is valid, specific conditions under which this could be acceptable or needs fixing, and any concrete code changes that would apply.
+const FOLLOW_UP_PROMPT_PREFIX = `A developer is asking a follow-up question about a specific finding from a code review. Answer their question directly and thoroughly. If they state an assumption, evaluate it. Include specific conditions under which this could be acceptable or needs fixing, and any concrete code changes where relevant.
 
 Finding:
 `;
