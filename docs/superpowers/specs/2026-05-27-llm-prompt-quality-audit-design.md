@@ -91,7 +91,7 @@ Grounding note: `"Base your summary only on the description and comments provide
 
 Role: `"You are a Jira intent parser. Your task is to analyze user commands and produce structured intent as a JSON object matching the schema below."`
 Ack: `"Understood. I parse Jira commands into structured JSON."`
-The existing schema and operation definitions remain in the User task message (INTENT_PROMPT stays as-is, just moved to the 3rd message).
+The current implementation builds one User message: `INTENT_PROMPT + JSON.stringify(prompt)`. After the change it builds three messages: `[User roleText, Assistant ackText, User(INTENT_PROMPT + JSON.stringify(prompt))]`. The `INTENT_PROMPT` constant and the command concatenation are unchanged.
 
 ### `spellCheckValue`
 
