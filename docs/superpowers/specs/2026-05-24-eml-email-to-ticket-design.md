@@ -45,8 +45,9 @@ Simpler async API, no streaming complexity, works in both Node.js and browser en
 
 ```
 npm install postal-mime
-npm install --save-dev @types/postal-mime
 ```
+
+`postal-mime` is written in TypeScript and ships its own `.d.ts` — no `@types/` package needed.
 
 ### New file: `src/utils/emlParser.ts`
 
@@ -91,8 +92,10 @@ export async function parseEml(buffer: Buffer): Promise<ParsedEml>
 
 ### New VS Code command: `ticket-sidekick.importEml`
 
-Registered in `src/extension.ts`. On activation:
+Registered in `src/extension.ts`. Two-step handoff — the command cannot call
+`streamEmailContentPreview` directly because that function requires a chat response stream.
 
+**Step 1 — VS Code command handler:**
 ```typescript
 vscode.window.showOpenDialog({
   canSelectMany: false,
@@ -101,25 +104,32 @@ vscode.window.showOpenDialog({
   title: 'Select email (.eml) to import',
 })
 ```
+Reads the selected file → calls `parseEml` → fetches templates + issue types in parallel →
+builds a complete `EmailContentSession` (including `emlFilePath`) → stores it in
+`workspaceState('jira.session.emailContent')` → opens chat via:
+```typescript
+vscode.commands.executeCommand('workbench.action.chat.open',
+  { query: '@jira create from email' })
+```
 
-Reads the selected file, calls `parseEml`, builds `EmailContentSession`, calls
-`streamEmailContentPreview`. Opens the Jira chat panel via
-`vscode.commands.executeCommand('workbench.action.chat.open', { query: '@jira create from email' })`.
+**Step 2 — Chat participant handler (`handleCreateFromEmail`):**
+Detects `jira.session.emailContent` already populated → calls `streamEmailContentPreview`
+directly (same as the existing flow). No Graph API path, no `HandoverEmail` shortcut.
+
+### Modified: `src/participant/sessionState.ts`
+
+Add `emlFilePath?: string` to `EmailContentSession` — stores the absolute path to the
+source `.eml` file so `finishEmailTicket` can delete it after upload without changing
+the function signature.
 
 ### Modified: `src/participant/jira/emailHandler.ts`
 
-Replace the old entry point (`handleCreateFromEmail` checking workspaceState for
-`HandoverEmail`) with a new `handleImportEml(emlPath: string, ...)` function that:
-
-1. Reads and parses the `.eml` file via `parseEml`
-2. Fetches templates + issue types in parallel (`Promise.all`)
-3. Builds `EmailContentSession` (same shape as before, minus `handoverCleanup`)
-4. Calls `streamEmailContentPreview`
-
-The existing `handleEmailContentSession`, `streamEmailContentPreview`, and
-`finishEmailTicket` are unchanged except:
-- `finishEmailTicket` gains a `emlFilePath?: string` parameter; if
-  `ticketSidekick.email.deleteEmlAfterImport` is `true`, deletes the file after upload
+- Remove `handleCreateFromEmail` (the old `HandoverEmail` shortcut + Graph API folder/email picker)
+- Replace with lean `handleCreateFromEmail` that reads the pre-built `EmailContentSession`
+  from `workspaceState` and calls `streamEmailContentPreview`
+- `finishEmailTicket`: read `session.emlFilePath`; if set and
+  `ticketSidekick.email.deleteEmlAfterImport` is `true`, call `fs.promises.unlink` after
+  successful attachment upload (failure is non-fatal)
 - Remove the `📎 Attachments (attach to ticket manually)` fallback regex strip — no
   longer needed (attachments come from MIME, not appended text)
 
@@ -188,8 +198,9 @@ Ticket **[PROJ-123](https://jira.company.com/browse/PROJ-123)** created.
 ## [PROJ-123](https://jira.company.com/browse/PROJ-123): Summary title
 ```
 
-`baseUrl` is read from `ticketSidekick.jira.baseUrl` via `ConfigService` (already available
-in all handlers). The link is `${baseUrl}/browse/${issueKey}`.
+`baseUrl` is read with `vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.baseUrl')`
+directly inside `finishEmailTicket` and `loadHandler` — no signature changes needed.
+The link is `${baseUrl}/browse/${issueKey}`. If `baseUrl` is unset, emit the key only.
 
 ---
 
@@ -228,32 +239,35 @@ New command:
 
 | File | Change |
 |---|---|
-| `src/utils/emlParser.ts` | NEW — RFC 2822 parser wrapping mailparser |
+| `src/utils/emlParser.ts` | NEW — RFC 2822 parser wrapping postal-mime |
 | `src/utils/owaUserscript.ts` | DELETE |
 | `src/utils/handoverFolder.ts` | DELETE |
 | `src/outlook/IOutlookClient.ts` | DELETE |
 | `src/outlook/OutlookApiClient.ts` | DELETE |
 | `src/outlook/tokenProviders.ts` | DELETE |
 | `src/services/OutlookService.ts` | DELETE |
-| `src/participant/jira/emailHandler.ts` | Replace entry point; remove OWA strip regex; add emlFilePath delete |
-| `src/participant/sessionState.ts` | Remove HandoverEmail, FolderSelectionSession, EmailSelectionSession, handoverCleanup |
-| `src/participant/JiraParticipant.ts` | Remove email session detection for folder/email selection; keep email-content |
-| `src/participant/jira/loadHandler.ts` | Add clickable link to ticket heading |
-| `src/services/TicketService.ts` | createTicket result includes link; or link constructed in handler |
-| `src/extension.ts` | Remove URI handler, 3 commands; add importEml command |
-| `package.json` | Remove outlook/handover settings; add deleteEmlAfterImport; add importEml command |
+| `src/services/ConfigService.ts` | Remove `getOutlookConfig()`, `getOutlookAuthProvider()`, `saveOutlookFolderId()` methods |
+| `src/participant/jira/emailHandler.ts` | Replace entry point; remove OWA strip regex; read `emlFilePath` from session for delete |
+| `src/participant/sessionState.ts` | Add `emlFilePath?` to `EmailContentSession`; remove `HandoverEmail`, `FolderSelectionSession`, `EmailSelectionSession`, `handoverCleanup` |
+| `src/participant/JiraParticipant.ts` | Remove folder/email-selection session detection; keep email-content detection |
+| `src/participant/jira/loadHandler.ts` | Add clickable `[KEY](baseUrl/browse/KEY)` link to ticket heading |
+| `src/services/TicketService.ts` | No change — link constructed in handler, not here |
+| `src/extension.ts` | Remove URI handler, 3 old commands; add `importEml` command |
+| `package.json` | Remove `outlook.*` + handover settings; add `deleteEmlAfterImport`; add `importEml` command |
 | `src/test/emlParser.test.ts` | NEW — unit tests using real .eml fixture files |
-| `src/test/fixtures/sample.eml` | NEW — minimal RFC 2822 fixture with HTML body + inline image + attachment |
+| `src/test/fixtures/eml/sample.eml` | NEW — minimal RFC 2822 fixture with HTML body + inline image + attachment |
 | `src/test/owaUserscript.test.ts` | DELETE |
 | `src/test/handoverFolder.test.ts` | DELETE |
 | `src/test/fixtures/email-handover/` | DELETE |
+| `CLAUDE.md` | Update key files table, session state table, Outlook settings section |
+| `README.md` | Replace OWA bridge section with EML import instructions |
 
 ---
 
 ## Verification
 
 1. `npm run compile` — no TypeScript errors
-2. `npm test` — all tests green; new `emlParser.test.ts` covers: subject/sender/date parsing, HTML body, plain-text fallback, inline image map, base64 attachment bytes, missing-field defaults
+2. `npm test` — all tests green; new `emlParser.test.ts` covers: subject/sender/date parsing, HTML body, plain-text fallback, inline image map, base64 attachment bytes, missing-field defaults; fixture at `src/test/fixtures/eml/sample.eml`
 3. Manual: OWA → More actions → Download message → `.eml` saved → Command Palette → "Ticket Sidekick: Create Jira ticket from email (.eml)" → file picker opens in Downloads → select file → chat preview appears with subject, From, Date, attachment list, body
 4. Manual: reply "post it" → ticket created → clickable link appears in chat → attachment uploaded to Jira
 5. Manual: `@jira show PROJ-123` → heading includes clickable URL
