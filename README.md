@@ -418,13 +418,9 @@ You can choose **No template** to create a plain ticket without any template app
 | Default project | `ticketSidekick.jira.defaultProject` | _(empty)_ |
 | Required fields | `ticketSidekick.jira.requiredFields` | `[]` |
 | Always-show fields | `ticketSidekick.jira.additionalDisplayFields` | `[]` |
+| Hidden fields | `ticketSidekick.jira.hiddenDisplayFields` | _(see below)_ |
 | Connection info banner | `ticketSidekick.jira.showConnectionInfo` | `false` |
-| Outlook auth provider | `ticketSidekick.outlook.authProvider` | `"vscode-microsoft"` |
-| Outlook folder ID | `ticketSidekick.outlook.folderId` | _(empty)_ |
-| Outlook email list size | `ticketSidekick.outlook.emailListSize` | `10` |
-| OWA userscript URL | `ticketSidekick.outlook.owaUrl` | `"https://outlook.office.com"` |
-| OWA handover folder | `ticketSidekick.email.handoverFolder` | `~/Downloads/` |
-| OWA cleanup model | `ticketSidekick.email.cleanupModel` | `"gpt-5-mini"` |
+| Delete .eml after import | `ticketSidekick.email.deleteEmlAfterImport` | `false` |
 
 **Optional: default project**
 
@@ -448,6 +444,14 @@ By default `@jira show` omits fields that are null. Add field IDs to `additional
 
 ```json
 "ticketSidekick.jira.additionalDisplayFields": ["customfield_10020", "customfield_10500"]
+```
+
+**Optional: hidden fields**
+
+By default `@jira show` already omits several noisy system fields (e.g. `statusCategory`, `watches`, `votes`). To suppress additional fields, add their IDs to `hiddenDisplayFields`. Fields listed in `additionalDisplayFields` always override this list.
+
+```json
+"ticketSidekick.jira.hiddenDisplayFields": ["customfield_10900", "workratio"]
 ```
 
 **Optional: Jira connection info banner**
@@ -508,6 +512,19 @@ You will be prompted for your Bitbucket **username** and an **App Password**. Cr
 
 Run `@bitbucket check` after setup to confirm the connection and see which account is active.
 
+### Core commands
+
+| What you type | What happens |
+| --- | --- |
+| `@bitbucket check` | Test connection and show active configuration |
+| `@bitbucket <pr-url>` | Full structured review of the PR |
+| `@bitbucket review quick <pr-url>` | Review using diffs only — no second-pass file fetch (fewer tokens) |
+| `@bitbucket review deep <pr-url>` | Force standard two-pass review regardless of default setting |
+| `@bitbucket #2` | Explain finding #2 in detail |
+| `@bitbucket #2 is this always a problem?` | Ask a follow-up question about a specific finding |
+| `@bitbucket #1 #3 add to review` | Post findings #1 and #3 as Bitbucket PR comments |
+| `@bitbucket #2 add to review blocking merge` | Post finding with a reviewer note appended |
+
 ### PR review
 
 Paste any pull request URL into the chat:
@@ -522,9 +539,12 @@ Trailing segments like `/overview`, `/diff`, or `/commits` are stripped automati
 The plugin:
 
 1. Fetches PR metadata and the full unified diff
-2. Splits the changed files into batches of 10 so each LLM call stays within context limits — large PRs are reviewed completely rather than truncated
-3. For each batch: sends a structured diff-only prompt and, if the LLM requests additional context files, fetches up to 5 and re-analyses (two-pass review per batch)
-4. Merges all findings across batches and streams a single structured report ordered by file, with numbered findings and severity badges
+2. Applies any configured `reviewExcludePatterns` to skip files before analysis
+3. Splits the changed files into chunks sized to fill the model's actual context window — a 140-file PR on Claude Sonnet typically needs only 2 LLM calls
+4. For each chunk: sends a structured diff-only prompt and, if the LLM requests additional context files, fetches up to 5 and re-analyses (two-pass review); the second pass is skipped in `quick` mode
+5. Merges all findings across chunks and streams a single structured report ordered by file, with numbered findings and severity badges
+
+For token-saving options (`quick` mode, file exclusion, context tuning) see [Reducing token usage on large PRs](#reducing-token-usage-on-large-prs).
 
 Example output:
 
