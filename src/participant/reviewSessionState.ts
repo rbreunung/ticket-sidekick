@@ -117,3 +117,29 @@ export function langFromPath(filePath: string): string {
   };
   return map[ext] ?? '';
 }
+
+const CHUNK_FIXED_OVERHEAD = 1500;
+const CHUNK_FILE_OVERHEAD = 50;
+
+export function buildAdaptiveChunks(diffs: FileDiff[], tokenBudget: number): FileDiff[][] {
+  if (diffs.length === 0) return [];
+  const chunks: FileDiff[][] = [];
+  let currentChunk: FileDiff[] = [];
+  let currentTokens = CHUNK_FIXED_OVERHEAD;
+
+  for (const diff of diffs) {
+    const fileTokens = CHUNK_FILE_OVERHEAD + Math.ceil(diff.diff.length / 4);
+    if (currentChunk.length > 0 && currentTokens + fileTokens > tokenBudget) {
+      chunks.push(currentChunk);
+      currentChunk = [];
+      currentTokens = CHUNK_FIXED_OVERHEAD;
+    }
+    currentChunk.push(diff);
+    currentTokens += fileTokens;
+  }
+
+  if (currentChunk.length > 0) {
+    chunks.push(currentChunk);
+  }
+  return chunks;
+}

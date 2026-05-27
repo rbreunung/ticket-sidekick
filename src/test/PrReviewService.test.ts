@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   parsePrUrl, parseDiff, resolveByNumber, extractJsonObject,
-  resolveByNumbers, isAddToReviewIntent, extractUserNote, langFromPath,
+  resolveByNumbers, isAddToReviewIntent, extractUserNote, langFromPath, buildAdaptiveChunks,
 } from '../participant/reviewSessionState';
 import type { ReviewFinding } from '../participant/reviewSessionState';
 import { PrReviewService } from '../services/PrReviewService';
@@ -583,6 +583,50 @@ describe('PrReviewService.formatPrComment', () => {
   it('uses correct language for a Python file', () => {
     const f: ReviewFinding = { ...finding, file: 'app.py', codeExample: 'x = 1' };
     expect(service.formatPrComment(f)).toContain('```python');
+  });
+});
+
+describe('buildAdaptiveChunks', () => {
+  function makeDiff(path: string, diffLength: number): { path: string; diff: string } {
+    return { path, diff: 'x'.repeat(diffLength) };
+  }
+
+  it('returns empty array for empty input', () => {
+    expect(buildAdaptiveChunks([], 10000)).toEqual([]);
+  });
+
+  it('packs all files into one chunk when budget is large', () => {
+    const diffs = [makeDiff('a.ts', 100), makeDiff('b.ts', 100), makeDiff('c.ts', 100)];
+    const chunks = buildAdaptiveChunks(diffs, 100000);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toHaveLength(3);
+  });
+
+  it('splits into multiple chunks when budget is tight', () => {
+    // Each file costs: CHUNK_FILE_OVERHEAD(50) + ceil(400/4)(100) = 150 tokens
+    // Fixed overhead per chunk: CHUNK_FIXED_OVERHEAD(1500)
+    // Budget 1700: fits 1 file (1500+150=1650 ≤ 1700), not 2 (1500+300=1800 > 1700)
+    const diffs = [makeDiff('a.ts', 400), makeDiff('b.ts', 400), makeDiff('c.ts', 400)];
+    const chunks = buildAdaptiveChunks(diffs, 1700);
+    expect(chunks).toHaveLength(3);
+    expect(chunks[0]).toHaveLength(1);
+    expect(chunks[1]).toHaveLength(1);
+    expect(chunks[2]).toHaveLength(1);
+  });
+
+  it('always includes at least one file per chunk even when it exceeds budget', () => {
+    const diffs = [makeDiff('huge.ts', 400000)];
+    const chunks = buildAdaptiveChunks(diffs, 1000);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toHaveLength(1);
+    expect(chunks[0][0].path).toBe('huge.ts');
+  });
+
+  it('packs multiple files until budget is hit, then starts new chunk', () => {
+    const diffs = Array.from({ length: 4 }, (_, i) => makeDiff(`f${i}.ts`, 400));
+    const chunks = buildAdaptiveChunks(diffs, 1700);
+    expect(chunks).toHaveLength(4);
+    expect(chunks.flatMap(c => c)).toHaveLength(4);
   });
 });
 
