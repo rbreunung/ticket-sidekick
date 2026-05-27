@@ -83,47 +83,22 @@ export type SkipParseResult =
   | { action: 'skip'; keys: string[] }
   | { action: 'invalid' };
 
-// --- Outlook email-to-ticket sessions ---
-
-export interface HandoverEmail {
-  subject: string;
-  senderName: string;
-  receivedDateTime: string;
-  markdownBody: string;
-  stripFooter: boolean;
-  handoverFolder: string;
-  timestamp: string;
-  attachments: Array<{
-    name: string;
-    contentType: string;
-    dataBase64: string;
-    isInline: boolean;
-  }>;
-}
-
-export interface FolderSelectionSession {
-  folders: Array<{ id: string; displayName: string; unreadItemCount: number }>;
-}
-
-export interface EmailSelectionSession {
-  folderId: string;
-  emails: Array<{ id: string; subject: string; receivedDateTime: string; senderName: string }>;
-}
-
 export interface EmailContentSession {
   emailId: string;
   subject: string;
+  senderName?: string;
+  receivedDateTime?: string;
   markdownBody: string;
   inlineImageMap: Record<string, string>;
   attachments: Array<{
     name: string; contentType: string; contentBytes: string;
     isInline: boolean; contentId?: string;
   }>;
+  emlFilePath?: string;
   selectedTemplateName: string | null;
   projectKey: string;
   issueType: string;
   additionalFields: Record<string, unknown>;
-  handoverCleanup?: { folder: string; timestamp: string };
   availableTemplates?: Array<{ name: string; issueType: string }>;
   availableIssueTypes?: string[];
 }

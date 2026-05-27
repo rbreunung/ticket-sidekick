@@ -20,9 +20,9 @@ import { serializeCommentsForLLM, handleLoadTicket } from './jira/loadHandler';
 import { streamReviewScreen, executeCleanupBatch, handleRunCleanup } from './jira/cleanupHandler';
 import { handleDiscoverWorkflow } from './jira/workflowHandler';
 import {
-  handleCreateFromEmail, handleFolderSelection, handleEmailSelection, handleEmailContentSession,
+  handleCreateFromEmail, handleEmailContentSession,
 } from './jira/emailHandler';
-import type { FolderSelectionSession, EmailSelectionSession, EmailContentSession } from './sessionState';
+import type { EmailContentSession } from './sessionState';
 
 export function createJiraParticipant(
   context: vscode.ExtensionContext,
@@ -462,24 +462,6 @@ export function createJiraParticipant(
           else { stream.markdown(`✗ ${key}: ${err}\n\n`); failed++; }
         });
         stream.markdown(`\n_Done — ${passed} updated${failed > 0 ? `, ${failed} failed` : ''}_`);
-        return;
-      }
-    }
-
-    // Folder selection — user replied with their folder choice for email import
-    if (lastResponse.includes('<!-- jira:folder-selection -->')) {
-      const folderSession = ws.get<FolderSelectionSession>('jira.session.folderSelection');
-      if (folderSession) {
-        await handleFolderSelection(request.prompt, folderSession, configService, stream, ws);
-        return;
-      }
-    }
-
-    // Email selection — user replied with their email choice for ticket creation
-    if (lastResponse.includes('<!-- jira:email-selection -->')) {
-      const emailSession = ws.get<EmailSelectionSession>('jira.session.emailSelection');
-      if (emailSession) {
-        await handleEmailSelection(request.prompt, emailSession, stream, configService, ws, jiraClient);
         return;
       }
     }
