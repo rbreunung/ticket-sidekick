@@ -570,6 +570,10 @@ Any text after the `add to review` keywords becomes a brief reviewer note append
 | Base URL (DC only) | `ticketSidekick.bitbucket.baseUrl` | _(empty)_ |
 | Connection info banner | `ticketSidekick.bitbucket.showConnectionInfo` | `false` |
 | Review instructions | `ticketSidekick.bitbucket.reviewInstructions` | _(empty)_ |
+| Model context tokens | `ticketSidekick.bitbucket.modelContextTokens` | |
+| Context budget ratio | `ticketSidekick.bitbucket.contextBudgetRatio` | |
+| Review mode | `ticketSidekick.bitbucket.reviewMode` | |
+| Review exclude patterns | `ticketSidekick.bitbucket.reviewExcludePatterns` | |
 
 **Optional: Bitbucket connection info banner**
 
@@ -588,6 +592,36 @@ When enabled, every `@bitbucket` response (except `check`) starts with an italic
 Additional instructions appended to the built-in PR review prompt. Use this to add project-specific guidance the model should apply on every review.
 
 **Using a local model:** `@bitbucket` works with any model available in GitHub Copilot Chat, including local models via [Ollama](https://ollama.com). Use a model with at least 16k context (32k+ recommended for large PRs).
+
+### Reducing token usage on large PRs
+
+The reviewer automatically packs as many files as possible into each LLM call based on the model's actual context window. On Claude Sonnet (200k tokens) a 140-file PR typically needs only 2 LLM calls instead of 14.
+
+**Quick mode** — skips the second LLM pass (diffs only, no additional file context):
+
+```
+@bitbucket review quick https://bitbucket.company.com/...
+```
+
+Set `ticketSidekick.bitbucket.reviewMode` to `"quick"` to make this the default. Use `@bitbucket review deep <url>` to force standard mode for a single review.
+
+**Excluding files** — skip files that don't need review (migrations, snapshots, generated code):
+
+```json
+"ticketSidekick.bitbucket.reviewExcludePatterns": [
+  "**/migrations/**",
+  "**/*.snap",
+  "**/*.generated.ts"
+]
+```
+
+Patterns use glob syntax. Both `*.snap` and `**/*.snap` work (bare filename patterns match at any depth).
+
+**Manual context override** — if the model's context size isn't auto-detected, set it explicitly:
+
+```json
+"ticketSidekick.bitbucket.modelContextTokens": 128000
+```
 
 ---
 
