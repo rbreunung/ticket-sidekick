@@ -2,7 +2,7 @@
   "name": "ticket-sidekick",
   "displayName": "Ticket Sidekick",
   "description": "Manage Jira tickets with GitHub Copilot Chat",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "license": "MIT",
   "publisher": "RobertBreunung",
   "engines": {
@@ -164,13 +164,18 @@
           },
           "ticketSidekick.bitbucket.reviewMode": {
             "type": "string",
-            "enum": ["standard", "quick"],
+            "enum": [
+              "standard",
+              "quick"
+            ],
             "default": "standard",
             "description": "Default review depth. 'standard' enables the two-pass review where the LLM can request additional file context. 'quick' skips the second pass (diffs only) — faster and cheaper for large PRs. Override per-review with '@bitbucket review quick <url>' or '@bitbucket review deep <url>'."
           },
           "ticketSidekick.bitbucket.reviewExcludePatterns": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "default": [],
             "description": "Glob patterns for files to skip during PR review (e.g. [\"**/migrations/**\", \"**/*.snap\", \"**/*.generated.ts\"]). Excluded files are not sent to the LLM; the review output notes how many were skipped."
           }
