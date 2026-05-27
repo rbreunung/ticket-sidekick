@@ -244,8 +244,7 @@ export function createJiraParticipant(
           session.pending = session.pending.slice(1);
           if (session.pending.length === 0) {
             await ws.update('jira.session.creating', undefined);
-            const createdKey = await finishTicketCreation(session, ticketService, stream);
-            if (createdKey) stream.markdown(`\n\n<!-- @jira-ticket:${createdKey} -->`);
+            await finishTicketCreation(session, stream, ws);
           } else {
             await streamNextSection(session, stream, ws);
           }

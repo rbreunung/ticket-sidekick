@@ -4,8 +4,8 @@ import { TicketService, assembleDescription } from '../../services/TicketService
 import { TemplateService } from '../../templates/TemplateService';
 import type { JiraTemplate } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
-import type { CreationSession, IssueTypeSelectionSession, TemplateSelectionSession } from '../sessionState';
-import { extractCreatedKeyFromConfirmation } from '../sessionState';
+import type { ContentSession, CreationSession, IssueTypeSelectionSession, TemplateSelectionSession } from '../sessionState';
+import { streamContentPreview } from './contentHandler';
 import { parseIntent } from './llmHelpers';
 import { resolveProjectKey } from './ticketContext';
 
@@ -74,17 +74,19 @@ export async function continueAfterIssueType(
 
   const sections = selectedTemplate?.descriptionSections ?? [];
 
-  // Fast path: summary known, no sections → create directly
+  // Fast path: summary known, no sections → show content preview
   if (summary !== null && sections.length === 0) {
-    if (description) resolvedFields.description = description;
-    const result = await ticketService.createTicket(
+    const contentSession: ContentSession = {
+      operation: 'createTicket',
       projectKey,
       summary,
       issueType,
-      Object.keys(resolvedFields).length > 0 ? resolvedFields : undefined,
-    );
-    stream.markdown(result);
-    return extractCreatedKeyFromConfirmation(result);
+      templateName: selectedTemplate?.name ?? null,
+      extraFields: resolvedFields,
+      currentContent: description ?? '',
+    };
+    await streamContentPreview(contentSession, stream, workspaceState);
+    return null;
   }
 
   // Build the pending section list, checking description coverage only when summary is known
@@ -95,13 +97,20 @@ export async function continueAfterIssueType(
   for (const s of covered) answers[s] = description ?? '';
   const pendingRealSections = sections.filter((s) => !covered.includes(s));
 
-  // Fast path: all sections covered, summary known → create directly
+  // Fast path: all sections covered, summary known → show content preview
   if (summary !== null && pendingRealSections.length === 0) {
     const descriptionText = assembleDescription(sections, answers);
-    resolvedFields.description = descriptionText;
-    const result = await ticketService.createTicket(projectKey, summary, issueType, resolvedFields);
-    stream.markdown(result);
-    return extractCreatedKeyFromConfirmation(result);
+    const contentSession: ContentSession = {
+      operation: 'createTicket',
+      projectKey,
+      summary,
+      issueType,
+      templateName: selectedTemplate?.name ?? null,
+      extraFields: resolvedFields,
+      currentContent: descriptionText,
+    };
+    await streamContentPreview(contentSession, stream, workspaceState);
+    return null;
   }
 
   if (selectedTemplate && pendingRealSections.length > 0) {
@@ -166,24 +175,21 @@ export async function streamTemplateSelection(
 
 export async function finishTicketCreation(
   session: CreationSession,
-  ticketService: TicketService,
   stream: vscode.ChatResponseStream,
-): Promise<string | null> {
+  workspaceState: vscode.Memento,
+): Promise<null> {
   const descriptionText = assembleDescription(session.allSections, session.answers);
-  const additionalFields: Record<string, unknown> = {
-    ...session.fields,
-    description: descriptionText,
+  const contentSession: ContentSession = {
+    operation: 'createTicket',
+    projectKey: session.project,
+    summary: session.summary!,
+    issueType: session.issueType,
+    templateName: session.template || null,
+    extraFields: { ...session.fields },
+    currentContent: descriptionText,
   };
-  // session.summary is guaranteed non-null here: __summary__ is always answered
-  // before pending becomes empty, so finishTicketCreation is only reached after it.
-  const result = await ticketService.createTicket(
-    session.project,
-    session.summary!,
-    session.issueType,
-    additionalFields,
-  );
-  stream.markdown(result);
-  return extractCreatedKeyFromConfirmation(result);
+  await streamContentPreview(contentSession, stream, workspaceState);
+  return null;
 }
 
 export async function handleCreateTicket(
