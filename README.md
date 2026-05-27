@@ -2,14 +2,14 @@
 
 Two independent GitHub Copilot Chat participants — use one or both:
 
-- **`@jira`** — manage Jira tickets in natural language (create, read, update, comment, bulk transitions)
+- **`@jira`** — manage Jira tickets in natural language (create, read, update, comment, bulk transitions, create from email)
 - **`@bitbucket`** — review Bitbucket pull requests with structured AI analysis and multi-turn follow-ups
 
 Neither participant requires the other to be configured.
 
 ---
 
-## Jira
+## @jira — Jira
 
 ### Prerequisites
 
@@ -43,7 +43,7 @@ Omit this setting for Data Center (default).
 **Cloud:** Open the Command Palette → `Ticket Sidekick: Configure Jira Cloud Credentials`
 (You will need your Atlassian email and an API token from id.atlassian.com)
 
-### Usage
+### Core commands
 
 Open GitHub Copilot Chat and use `@jira`:
 
@@ -72,39 +72,90 @@ Open GitHub Copilot Chat and use `@jira`:
 | `@jira find open bugs assigned to me` | Runs JQL search |
 | `@jira check required fields on PROJ-123` | Validates required fields |
 | `@jira check` | Tests the connection and shows active configuration |
+| `@jira create from email` | Create a Jira ticket from an imported `.eml` file |
 
-### Generalised field updates
+### Reading tickets
 
-`@jira set <field> to <value>` works for **any** editable Jira field — built-in fields,
-custom fields, and sprint.
+#### Show vs summarize
 
-**Field name matching** is fuzzy: the plugin tries an exact match first, then prefix, then
-substring. If multiple fields match, a numbered disambiguation list is shown. Use field
-IDs (e.g. `customfield_10500`) for an exact, unambiguous match.
+There are two distinct ways to read a ticket:
 
-**Array operations** let you add to or remove from multi-value fields without overwriting
-existing entries:
-
-| What you type | Effect |
+| Command | What you get |
 | --- | --- |
-| `@jira set labels to backend, urgent` | Replace entire labels array |
-| `@jira add frontend to labels` | Append `frontend`, deduplicate |
-| `@jira remove backend from labels` | Remove `backend` from the array |
+| `@jira show PROJ-123` | All non-null fields in a metadata table, multi-line fields (description, rich-text custom fields) in their own sections, and numbered one-line comment summaries |
+| `@jira summarize PROJ-123` | Same fields, but description and comments replaced by a one-paragraph AI synthesis |
 
-**Sprint fields** are resolved by fuzzy name match against active and future sprints in the
-project. If multiple sprints match, a numbered list is shown.
+And two ways to read comments:
 
-**Preview before writing:** every field update streams a confirm screen before writing.
-Reply **`ok`** to apply, **`(c)`** to cancel, or give an adjustment instruction.
+| Command | What you get |
+| --- | --- |
+| `@jira show comments` | Full comment bodies numbered — Markdown-rendered, separated by dividers |
+| `@jira what do comments say about X?` | AI synthesis filtered to the topic you named |
 
-**Scope:** if your last search returned multiple tickets, the plugin asks whether to apply
-to the current ticket or all N results from the search.
+After seeing numbered comments you can always ask to view one in full:
 
-**Typo correction** (on by default): when setting a text field the plugin checks for
-spelling and grammar errors and offers a corrected version before the preview. Disable per
-workspace with `ticketSidekick.jira.spellCheck: false`.
+```text
+3
+show comment 2
+comment 4
+```
 
-### Ticket creation
+If a ticket has more than 20 comments the response ends with an offer to load the rest:
+
+```text
+… 5 older comment(s) not shown. Reply "load all" to include them.
+```
+
+Reply **`load all`** to fetch up to 100 comments. For `show comments` the full bodies are rendered; for synthesised views the summary is regenerated over all comments.
+
+#### Loading ticket context
+
+`@jira load PROJ-123` downloads the complete ticket into `.jira-context/PROJ-123/` in your workspace root:
+
+```
+.jira-context/
+  PROJ-123/
+    ticket.md       ← all fields in the same layout as @jira show, plus an attachment index
+    comments.md     ← every comment in full, chronological order
+    attachments/
+      screenshot.png
+      error.log
+      report.pdf
+```
+
+Once loaded, your AI assistant (GitHub Copilot, Cursor, etc.) can read these files directly during coding sessions — no additional prompting required.
+
+| File type | Criterion | Action |
+| --- | --- | --- |
+| Text / source | `text/*` MIME type or known text extension | Downloaded |
+| Images | `image/*` MIME type | Downloaded |
+| Documents | `.pdf`, `.doc`, `.docx`, `.xls`, `.xlsx`, `.ppt`, `.pptx`, `.odt`, `.ods`, `.odp`, `.rtf`, `.csv` | Downloaded |
+| Archives | `.zip`, `.tar`, `.gz`, `.tgz`, `.bz2`, `.7z`, `.rar`, `.jar`, `.war`, `.ear` | Downloaded |
+| Oversized | File larger than 100 MB | Skipped — listed in `ticket.md` with size |
+| Unknown binary | Any other MIME type not covered above | Skipped — listed in `ticket.md` with size |
+
+Up to three attachments are downloaded in parallel.
+
+When a load completes with skipped attachments, the response shows a numbered list — reply with a number to download that file on demand.
+
+`.jira-context/` is automatically added to `.gitignore` at your workspace root the first time you run `@jira load`.
+
+#### Ticket detection
+
+If you don't name a ticket, the plugin resolves it in this order:
+
+1. Explicit key in your prompt (`PROJ-123`)
+2. Current git branch — `feature/PROJ-123-my-work` → `PROJ-123`
+3. Last ticket referenced earlier in the chat session
+4. Input box — the plugin asks you
+
+This means you can `@jira show PROJ-123`, then immediately follow up with `@jira add a comment: done` without repeating the key.
+
+#### Descriptions and comments — rich formatting
+
+Descriptions and comments are rendered as Markdown. Jira wiki markup (bold, italic, monospace, code blocks, bullet lists) and legacy ADF content are both converted automatically — no configuration required.
+
+### Creating tickets
 
 Running `@jira create` starts a guided flow:
 
@@ -126,11 +177,6 @@ Running `@jira create` starts a guided flow:
 → Template list shown. Summary is extracted from the prompt — no additional question.
 
 ```text
-@jira create a ticket stale loans not returning - assign to me
-```
-→ Template list shown. Summary and assignee extracted from the prompt in one step.
-
-```text
 @jira create Story in VSJI: dark mode — assign to jane.doe, components Backend
 ```
 → Project key `VSJI`, issue type `Story`, summary, assignee, and components all parsed from the prompt.
@@ -141,6 +187,28 @@ You can include these directly in the create prompt and the plugin will extract 
 | --- | --- |
 | `assign to me` / `assign to <name>` | Assignee (resolved via Jira user search) |
 | `components Backend, API` | Components field |
+
+### Field updates
+
+`@jira set <field> to <value>` works for **any** editable Jira field — built-in fields, custom fields, and sprint.
+
+**Field name matching** is fuzzy: the plugin tries an exact match first, then prefix, then substring. If multiple fields match, a numbered disambiguation list is shown. Use field IDs (e.g. `customfield_10500`) for an exact, unambiguous match.
+
+**Array operations** let you add to or remove from multi-value fields without overwriting existing entries:
+
+| What you type | Effect |
+| --- | --- |
+| `@jira set labels to backend, urgent` | Replace entire labels array |
+| `@jira add frontend to labels` | Append `frontend`, deduplicate |
+| `@jira remove backend from labels` | Remove `backend` from the array |
+
+**Sprint fields** are resolved by fuzzy name match against active and future sprints in the project. If multiple sprints match, a numbered list is shown.
+
+**Preview before writing:** every field update streams a confirm screen before writing. Reply **`ok`** to apply, **`(c)`** to cancel, or give an adjustment instruction.
+
+**Scope:** if your last search returned multiple tickets, the plugin asks whether to apply to the current ticket or all N results from the search.
+
+**Spell check on demand:** run `@jira spell check PROJ-123` to check and correct spelling and grammar on a ticket's description. The corrected version is shown as a preview before applying.
 
 ### Content generation and preview
 
@@ -167,154 +235,88 @@ If you provide explicit literal text the preview is skipped and the comment is p
 
 The plugin infers which mode to use from your phrasing — `"write"`, `"draft"`, `"summarize"`, `"based on our discussion"`, and similar phrases trigger generation. Quoted text or direct statements post literally.
 
-### Descriptions and comments — rich formatting
+### Transitions and bulk cleanup
 
-Descriptions and comments are rendered as Markdown. Jira wiki markup (bold, italic, monospace, code blocks, bullet lists) and legacy ADF content are both converted automatically — no configuration required.
+#### Transitioning a single ticket
 
-### Show vs summarize
-
-There are two distinct ways to read a ticket:
-
-| Command | What you get |
-| --- | --- |
-| `@jira show PROJ-123` | All non-null fields in a metadata table, multi-line fields (description, rich-text custom fields) in their own sections, and numbered one-line comment summaries |
-| `@jira summarize PROJ-123` | Same fields, but description and comments replaced by a one-paragraph AI synthesis |
-
-`@jira show` previously displayed seven hardcoded fields. It now renders every
-non-null field returned by Jira — custom fields, dates, sprint, attachments, and
-any other metadata the ticket carries.
-
-And two ways to read comments:
-
-| Command | What you get |
-| --- | --- |
-| `@jira show comments` | Full comment bodies numbered — Markdown-rendered, separated by dividers |
-| `@jira what do comments say about X?` | AI synthesis filtered to the topic you named |
-
-After seeing numbered comments you can always ask to view one in full:
+Move a ticket to a target status by name:
 
 ```text
-3
-show comment 2
-comment 4
+@jira move to Done
+@jira close this
+@jira transition PROJ-123 to In Review
+@jira move to Cancelled with resolution "Not a Bug"
 ```
 
-If a ticket has more than 20 comments the response ends with an offer to load the rest:
+The plugin resolves the ticket from context (current prompt, git branch, or last referenced key). It then fetches the ticket's available transitions and finds the one whose destination matches the target name (case-insensitive).
+
+If the target state requires multiple hops (e.g. Open → In Review → Done), the plugin falls back to the workflow cache automatically — no extra steps needed as long as you have run `@jira discover workflow` at least once for that project and issue type.
+
+If no path is found, the response lists the directly reachable states from the current status.
+
+**Resolution** — include `with resolution "<name>"` to set the resolution field on the final transition in one command.
+
+#### Workflow discovery (required for bulk transitions)
+
+Before running cleanup rules or bulk status transitions, teach the plugin your Jira workflow:
 
 ```text
-… 5 older comment(s) not shown. Reply "load all" to include them.
+@jira discover workflow BILLING Bug
 ```
 
-Reply **`load all`** to fetch up to 100 comments. For `show comments` the full bodies are rendered; for synthesized views the summary is regenerated over all comments.
+This samples tickets across all statuses, queries their available transitions, and saves a workflow graph to `.jira-workflow-cache.json` at your workspace root. Re-run whenever your Jira workflow changes.
 
-### Loading ticket context
+The plugin uses this graph to find the shortest transition path from each ticket's current status to the target state — for both single-ticket `move` commands and bulk cleanup runs.
 
-`@jira load PROJ-123` downloads the complete ticket into `.jira-context/PROJ-123/` in your workspace root:
+> **Tip:** Commit `.jira-workflow-cache.json` to share it with your team so everyone benefits from a single discovery run.
 
-```
-.jira-context/
-  PROJ-123/
-    ticket.md       ← all fields in the same layout as @jira show, plus an attachment index
-    comments.md     ← every comment in full, chronological order
-    attachments/
-      screenshot.png
-      error.log
-      report.pdf
-```
+#### Bulk cleanup
 
-Once loaded, your AI assistant (GitHub Copilot, Cursor, etc.) can read these files directly during coding sessions — no additional prompting required.
-
-#### What gets downloaded
-
-| File type | Criterion | Action |
-| --- | --- | --- |
-| Text / source | `text/*` MIME type or known text extension | Downloaded |
-| Images | `image/*` MIME type | Downloaded |
-| Documents | `.pdf`, `.doc`, `.docx`, `.xls`, `.xlsx`, `.ppt`, `.pptx`, `.odt`, `.ods`, `.odp`, `.rtf`, `.csv` | Downloaded |
-| Archives | `.zip`, `.tar`, `.gz`, `.tgz`, `.bz2`, `.7z`, `.rar`, `.jar`, `.war`, `.ear` | Downloaded |
-| Oversized | File larger than 100 MB | Skipped — listed in `ticket.md` with size |
-| Unknown binary | Any other MIME type not covered above | Skipped — listed in `ticket.md` with size |
-
-Up to three attachments are downloaded in parallel.
-
-#### Downloading skipped attachments on demand
-
-When a load completes with skipped attachments, the response shows a numbered list:
+Run a named cleanup rule to transition a batch of tickets to a target state:
 
 ```text
-Skipped attachments:
-
-1. `heap-dump.bin` — 120.0 MB (application/octet-stream) — over 100 MB size limit
-2. `mystery.xyz` — 4 KB (application/xyz) — unknown binary format
-
-Reply with a number to download it anyway.
+@jira run cleanup "Close released bugs"
 ```
 
-Reply with a number (`1`, `2`, …) and the plugin downloads that file into `attachments/`. If more remain, the list is shown again with updated numbers. You can download them one at a time until all are saved.
+Or target a specific fix version ad-hoc:
 
-#### Inline attachment links
-
-Any attachment references in the description or comments (Jira wiki markup `!filename!` or `[^filename]`) are rewritten in the generated Markdown files to point to the local `attachments/` path for downloaded files, and to the original Jira URL for skipped ones.
-
-#### gitignore
-
-`.jira-context/` is automatically added to `.gitignore` at your workspace root the first time you run `@jira load`. The folder is local to your machine — do not commit it.
-
-### Ticket detection
-
-If you don't name a ticket, the plugin resolves it in this order:
-
-1. Explicit key in your prompt (`PROJ-123`)
-2. Current git branch — `feature/PROJ-123-my-work` → `PROJ-123`
-3. Last ticket referenced earlier in the chat session
-4. Input box — the plugin asks you
-
-This means you can `@jira show PROJ-123`, then immediately follow up with `@jira add a comment: done` without repeating the key.
-
-### Optional: default project
-
-```json
-"ticketSidekick.jira.defaultProject": "PROJ"
+```text
+@jira close BILLING bugs in "Release 3.2"
 ```
 
-When set, the `create` command skips the project input box and uses this key automatically. You can still override it by including a project key in your prompt.
+The plugin:
 
-### Optional: required fields
+1. Searches for matching open tickets (and their open subtasks if `closeSubtasks` is true)
+2. Asks for a resolution once if the rule has no `resolution` configured and the target state is a closed state
+3. Shows a review screen listing every ticket and the transition path it will follow
 
-```json
-"ticketSidekick.jira.requiredFields": ["assignee", "priority", "fixVersions"]
-```
+On the review screen, reply:
 
-Used by the `check required fields` command.
+- **`ok`** — execute all transitions
+- **`(c)`** or **`cancel`** — abort the entire run
+- **ticket number(s)** — skip those tickets (e.g. `123` or `123 456`); skipping a subtask also skips its parent; skipping a parent also skips all its subtasks
 
-### Optional: always-show fields
+Execution streams one confirmation line per ticket. Failures are reported at the end without stopping the rest of the batch.
 
-By default `@jira show` omits fields that are null. Add field IDs to
-`additionalDisplayFields` to always show them (as `_Not set_` when empty). Run
-`@jira show fields on PROJ-123` to discover available field IDs.
+### Create Jira ticket from email (.eml)
 
-```json
-"ticketSidekick.jira.additionalDisplayFields": ["customfield_10020", "customfield_10500"]
-```
+Download the email from OWA using **More actions → Download message** to save a `.eml` file, then:
 
-### Optional: spell-check on field updates
+1. Run **Command Palette → Ticket Sidekick: Create Jira ticket from email (.eml)**
+2. Select the `.eml` file from your Downloads folder
+3. A preview appears in the `@jira` chat with subject, sender, date, body, and attachments
+4. Reply with a template number, an issue type number, or **post it** to create the ticket
 
-When you set a text field, the plugin checks for spelling and grammar errors and offers a
-corrected version before the preview confirm. Enabled by default. Disable per workspace:
+Inline images are uploaded as Jira attachments and embedded as thumbnails at their position in the description. File attachments are uploaded to the ticket.
 
-```json
-"ticketSidekick.jira.spellCheck": false
-```
+**Settings:**
 
-### Optional: Jira connection info banner
+| Setting | Default | Description |
+|---|---|---|
+| `ticketSidekick.email.deleteEmlAfterImport` | `false` | Delete the `.eml` file automatically after the ticket is created |
+| `ticketSidekick.jira.defaultProject` | — | Project key used when creating tickets |
 
-```json
-"ticketSidekick.jira.showConnectionInfo": true
-```
-
-When enabled, every `@jira` response starts with an italic line showing the active base URL, API version, and auth type. Useful during initial setup or when switching between instances. Off by default.
-
-### Optional: ticket templates and cleanup rules
+### Templates and cleanup rules
 
 Create a `.jira-templates.json` file in your workspace root to define per-application templates with default fields and guided description collection, plus named cleanup rules for bulk status transitions.
 
@@ -405,79 +407,65 @@ Group-picker fields use `{ "name": "..." }` — no API lookup is needed since th
 
 You can choose **No template** to create a plain ticket without any template applied.
 
-### Transitioning a single ticket
+### Settings reference
 
-Move a ticket to a target status by name:
+| Setting | Key | Default |
+| --- | --- | --- |
+| Base URL | `ticketSidekick.jira.baseUrl` | _(required)_ |
+| Auth type | `ticketSidekick.jira.authType` | `"datacenter"` |
+| Default project | `ticketSidekick.jira.defaultProject` | _(empty)_ |
+| Required fields | `ticketSidekick.jira.requiredFields` | `[]` |
+| Always-show fields | `ticketSidekick.jira.additionalDisplayFields` | `[]` |
+| Connection info banner | `ticketSidekick.jira.showConnectionInfo` | `false` |
+| Outlook auth provider | `ticketSidekick.outlook.authProvider` | `"vscode-microsoft"` |
+| Outlook folder ID | `ticketSidekick.outlook.folderId` | _(empty)_ |
+| Outlook email list size | `ticketSidekick.outlook.emailListSize` | `10` |
+| OWA userscript URL | `ticketSidekick.outlook.owaUrl` | `"https://outlook.office.com"` |
+| OWA handover folder | `ticketSidekick.email.handoverFolder` | `~/Downloads/` |
+| OWA cleanup model | `ticketSidekick.email.cleanupModel` | `"gpt-5-mini"` |
 
-```text
-@jira move to Done
-@jira close this
-@jira transition PROJ-123 to In Review
-@jira move to Cancelled with resolution "Not a Bug"
+**Optional: default project**
+
+```json
+"ticketSidekick.jira.defaultProject": "PROJ"
 ```
 
-The plugin resolves the ticket from context (current prompt, git branch, or last referenced key). It then fetches the ticket's available transitions and finds the one whose destination matches the target name (case-insensitive).
+When set, the `create` command skips the project input box and uses this key automatically. You can still override it by including a project key in your prompt.
 
-If the target state requires multiple hops (e.g. Open → In Review → Done), the plugin falls back to the workflow cache automatically — no extra steps needed as long as you have run `@jira discover workflow` at least once for that project and issue type.
+**Optional: required fields**
 
-If no path is found, the response lists the directly reachable states from the current status.
-
-**Resolution** — include `with resolution "<name>"` to set the resolution field on the final transition in one command.
-
-### Workflow discovery (required for bulk transitions)
-
-Before running cleanup rules or bulk status transitions, teach the plugin your Jira workflow:
-
-```text
-@jira discover workflow BILLING Bug
+```json
+"ticketSidekick.jira.requiredFields": ["assignee", "priority", "fixVersions"]
 ```
 
-This samples tickets across all statuses, queries their available transitions, and saves a workflow graph to `.jira-workflow-cache.json` at your workspace root. Re-run whenever your Jira workflow changes.
+Used by the `check required fields` command.
 
-The plugin uses this graph to find the shortest transition path from each ticket's current status to the target state — for both single-ticket `move` commands and bulk cleanup runs.
+**Optional: always-show fields**
 
-**Cache preservation:** if a status has no tickets at discovery time, the plugin keeps its previously cached transitions rather than dropping them. Only statuses with no tickets *and* no prior cache entry are marked as unsampled.
+By default `@jira show` omits fields that are null. Add field IDs to `additionalDisplayFields` to always show them (as `_Not set_` when empty). Run `@jira show fields on PROJ-123` to discover available field IDs.
 
-> **Tip:** Commit `.jira-workflow-cache.json` to share it with your team so everyone benefits from a single discovery run.
-
-### Bulk cleanup
-
-Run a named cleanup rule to transition a batch of tickets to a target state:
-
-```text
-@jira run cleanup "Close released bugs"
+```json
+"ticketSidekick.jira.additionalDisplayFields": ["customfield_10020", "customfield_10500"]
 ```
 
-Or target a specific fix version ad-hoc:
+**Optional: Jira connection info banner**
 
-```text
-@jira close BILLING bugs in "Release 3.2"
+```json
+"ticketSidekick.jira.showConnectionInfo": true
 ```
 
-The plugin:
-
-1. Searches for matching open tickets (and their open subtasks if `closeSubtasks` is true)
-2. Asks for a resolution once if the rule has no `resolution` configured and the target state is a closed state
-3. Shows a review screen listing every ticket and the transition path it will follow
-
-On the review screen, reply:
-
-- **`ok`** — execute all transitions
-- **`(c)`** or **`cancel`** — abort the entire run
-- **ticket number(s)** — skip those tickets (e.g. `123` or `123 456`); skipping a subtask also skips its parent; skipping a parent also skips all its subtasks
-
-Execution streams one confirmation line per ticket. Failures are reported at the end without stopping the rest of the batch.
+When enabled, every `@jira` response starts with an italic line showing the active base URL, API version, and auth type. Useful during initial setup or when switching between instances. Off by default.
 
 ---
 
-## Bitbucket
+## @bitbucket — Bitbucket PR Reviews
 
-### Bitbucket prerequisites
+### Prerequisites
 
 - VS Code 1.90 or later with GitHub Copilot extension
 - Bitbucket Data Center **or** Bitbucket Cloud
 
-### Bitbucket setup
+### Setup
 
 #### 1. Set the auth type
 
@@ -518,20 +506,6 @@ You will be prompted for your Bitbucket **username** and an **App Password**. Cr
 
 Run `@bitbucket check` after setup to confirm the connection and see which account is active.
 
-### Bitbucket usage
-
-Open GitHub Copilot Chat and use `@bitbucket`:
-
-| What you type | What happens |
-| --- | --- |
-| `@bitbucket check` | Tests the connection and shows active configuration |
-| `@bitbucket <PR URL>` | Fetches the PR and delivers a full code review |
-| `@bitbucket #2` | Follow-up question about finding #2 from the last review |
-| `@bitbucket explain the SQL injection issue` | Natural language follow-up — resolves to the matching finding automatically |
-| `@bitbucket can finding #3 be downgraded if X?` | Deeper explanation with conditions and concrete code suggestions |
-| `@bitbucket #2 #3, #5 add to review` | Post selected findings as PR comments (inline on the diff line when available) |
-| `@bitbucket #1 add to review this blocks merge` | Post finding #1 as a comment; the trailing text becomes a reviewer note |
-
 ### PR review
 
 Paste any pull request URL into the chat:
@@ -550,16 +524,6 @@ The plugin:
 3. For each batch: sends a structured diff-only prompt and, if the LLM requests additional context files, fetches up to 5 and re-analyses (two-pass review per batch)
 4. Merges all findings across batches and streams a single structured report ordered by file, with numbered findings and severity badges
 
-The chat shows progress for large PRs:
-
-```text
-Fetching PR…
-Analysing files 1–10 of 33 · batch 1/4…
-Analysing files 11–20 of 33 · batch 2/4…
-Analysing files 21–30 of 33 · batch 3/4…
-Analysing files 31–33 of 33 · batch 4/4…
-```
-
 Example output:
 
 ```text
@@ -573,21 +537,9 @@ _by Jane Smith → main · 3 files changed_
 **📄 src/auth/login.ts**
 **#1** 🔴 `L42` SQL injection — user input concatenated into query string
 → Use parameterised queries or a query builder instead.
-
----
-
-**📄 src/auth/tokenStore.ts**
-**#2** 🔴 `L18` Token stored in localStorage — readable by any same-origin script
-→ Switch to an httpOnly cookie with the Secure flag.
-**#3** 🔵 `L31` No encryption at rest for the persisted token
-→ Consider encrypting before writing to storage.
-
----
-
-_Reply **#1** or describe a finding to ask a follow-up. To post findings as PR comments: **#2 #3 add to review**._
 ```
 
-### Follow-up questions
+### Follow-ups and posting comments
 
 After a review, the session stays active for multi-turn follow-ups. Reference a finding by number or describe it in natural language:
 
@@ -597,36 +549,27 @@ After a review, the session stays active for multi-turn follow-ups. Reference a 
 @bitbucket explain the SQL injection issue and show a fixed version
 ```
 
-The plugin resolves natural language references by asking the LLM to match your question to the most relevant finding. Each follow-up response includes a deeper explanation, the conditions under which the issue could be acceptable, and concrete code change suggestions.
-
-### Posting findings as PR comments
-
-After a review, you can push selected findings back to Bitbucket as PR comments:
+Push selected findings back to Bitbucket as PR comments:
 
 ```text
 @bitbucket #2 #3, #5 add to review
 @bitbucket #1 add to review this is blocking merge
 ```
 
-Any text after the `add to review` keywords becomes a brief reviewer note appended to each comment. When a finding has a line number the comment is anchored inline on that diff line; otherwise it appears in the PR activity feed. If the LLM produced a short code fix example for the finding, it is included with language-appropriate code formatting.
+Any text after the `add to review` keywords becomes a brief reviewer note appended to each comment. When a finding has a line number the comment is anchored inline on that diff line; otherwise it appears in the PR activity feed.
 
-The session remains active after posting — you can still ask follow-up questions about findings you did not post.
+> **Note (Bitbucket Cloud):** Posting comments requires the **Pull requests: Write** scope on your App Password. See the setup section above.
 
-> **Note (Bitbucket Cloud):** Posting comments requires the **Pull requests: Write** scope on your App Password in addition to the Read scope needed for reviews. See the setup section above.
+### Settings reference
 
-Starting a new PR review clears the previous session automatically.
+| Setting | Key | Default |
+| --- | --- | --- |
+| Auth type | `ticketSidekick.bitbucket.authType` | `"datacenter"` |
+| Base URL (DC only) | `ticketSidekick.bitbucket.baseUrl` | _(empty)_ |
+| Connection info banner | `ticketSidekick.bitbucket.showConnectionInfo` | `false` |
+| Review instructions | `ticketSidekick.bitbucket.reviewInstructions` | _(empty)_ |
 
-### Using a local model
-
-The `@bitbucket` participant works with any model available in GitHub Copilot Chat, including local models via tools such as [Ollama](https://ollama.com). To get reliable results from smaller models:
-
-- Use a model with **at least 16k context** (32k+ recommended for PRs with large diffs)
-- Models quantised to Q4 or higher produce better JSON compliance than Q2/Q3
-- If a review fails with a JSON error, the error message shows the raw model output — use it to decide whether to retry or switch to a larger model
-
-The batch size is currently fixed at 10 files per LLM call. If your local model has a smaller context window and individual diffs are large, you can reduce this by changing the `CHUNK_SIZE` constant near the top of `src/participant/BitbucketParticipant.ts`.
-
-### Optional: Bitbucket connection info banner
+**Optional: Bitbucket connection info banner**
 
 ```json
 "ticketSidekick.bitbucket.showConnectionInfo": true
@@ -634,21 +577,15 @@ The batch size is currently fixed at 10 files per LLM call. If your local model 
 
 When enabled, every `@bitbucket` response (except `check`) starts with an italic line showing the active base URL, API version, and auth type. Off by default.
 
-### Optional: custom review instructions
+**Optional: custom review instructions**
 
 ```json
 "ticketSidekick.bitbucket.reviewInstructions": "This project follows Google Style Guide. Focus on security issues and ignore minor style suggestions."
 ```
 
-Additional instructions appended to the built-in PR review prompt. Use this to add project-specific guidance the model should apply on every review. The built-in grounding rules and JSON output format are always included — this setting only adds to them.
+Additional instructions appended to the built-in PR review prompt. Use this to add project-specific guidance the model should apply on every review.
 
-Examples:
-
-```text
-"Focus on security vulnerabilities only, ignore style and naming."
-"This is a Python Django project — flag missing input validation on views."
-"Treat all SQL strings as potential injection vectors regardless of the ORM used."
-```
+**Using a local model:** `@bitbucket` works with any model available in GitHub Copilot Chat, including local models via [Ollama](https://ollama.com). Use a model with at least 16k context (32k+ recommended for large PRs).
 
 ---
 

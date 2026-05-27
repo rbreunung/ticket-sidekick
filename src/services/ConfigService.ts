@@ -10,7 +10,6 @@ export interface JiraConfig {
   requiredFields: string[];
   additionalDisplayFields: string[];
   hiddenDisplayFields: string[];
-  spellCheck: boolean;
   token: string | undefined;
 }
 
@@ -29,7 +28,6 @@ export class ConfigService {
       requiredFields: config.get<string[]>('jira.requiredFields') ?? [],
       additionalDisplayFields: config.get<string[]>('jira.additionalDisplayFields') ?? [],
       hiddenDisplayFields: config.get<string[]>('jira.hiddenDisplayFields') ?? [],
-      spellCheck: config.get<boolean>('jira.spellCheck') ?? true,
       token: await this.context.secrets.get(ConfigService.TOKEN_KEY),
     };
   }

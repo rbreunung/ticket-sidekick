@@ -125,4 +125,14 @@ describe('markdownToJiraWiki', () => {
       expect(markdownToJiraWiki('para one\n\npara two')).toBe('para one\n\npara two');
     });
   });
+
+  describe('images', () => {
+    it('converts local image (no protocol) to Jira thumbnail syntax', () => {
+      expect(markdownToJiraWiki('![email-image-1.png](email-image-1.png)')).toBe('!email-image-1.png|thumbnail!');
+    });
+
+    it('converts remote image (https) to plain Jira image syntax without thumbnail', () => {
+      expect(markdownToJiraWiki('![logo](https://example.com/logo.png)')).toBe('!https://example.com/logo.png!');
+    });
+  });
 });

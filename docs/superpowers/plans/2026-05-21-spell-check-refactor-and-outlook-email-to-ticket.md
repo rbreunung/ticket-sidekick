@@ -369,16 +369,17 @@ import {
   isCancellation, isConfirmation, parseTemplateSelection,
   parseIssueTypeSelection, extractCreatedKeyFromConfirmation,
 } from '../sessionState';
-import { generateContent, isLmRefusal, checkSectionCoverage } from './llmHelpers';
+import { generateContent, isLmRefusal } from './llmHelpers';
 import { streamContentPreview } from './contentHandler';
 import { resolveProjectKey } from './ticketContext';
 
-// Move here verbatim (with export): streamIssueTypeSelection, continueAfterIssueType,
-//   checkSectionCoverage, streamNextSection, streamTemplateSelection,
+// Move here verbatim (with export): checkSectionCoverage, streamIssueTypeSelection,
+//   continueAfterIssueType, streamNextSection, streamTemplateSelection,
 //   finishTicketCreation, handleCreateTicket
+//
+// Note: checkSectionCoverage is an LLM call only used inside this file.
+// Keep it here — do NOT move it to llmHelpers.ts.
 ```
-
-Note: `checkSectionCoverage` is listed both here and in the `llmHelpers.ts` import — move it to `createHandler.ts` only and remove from `llmHelpers.ts` import line.
 
 - [ ] **Step 2: Update `JiraParticipant.ts`**
 

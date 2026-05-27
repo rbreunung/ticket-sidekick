@@ -128,4 +128,5 @@ export interface IJiraClient {
   getFields(): Promise<JiraFieldMeta[]>;
   getEditMeta(issueKey: string): Promise<Record<string, JiraEditMetaField>>;
   findSprints(projectKey: string, query: string): Promise<JiraSprintCandidate[]>;
+  uploadAttachment(issueKey: string, filename: string, contentType: string, contentBytes: string): Promise<void>;
 }

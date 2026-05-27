@@ -44,9 +44,19 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/services/TicketService.ts` | Jira business logic; depends on IJiraClient |
 | `src/services/PrReviewService.ts` | PR review logic: diff parsing, file gathering, two-pass LLM prompt building, result formatting |
 | `src/services/ConfigService.ts` | VS Code settings + SecretStorage for both Jira and Bitbucket |
-| `src/participant/JiraParticipant.ts` | Jira chat handler + intent parsing via VS Code LM API |
+| `src/participant/JiraParticipant.ts` | Jira chat handler + intent routing; delegates to `src/participant/jira/` handlers |
+| `src/participant/jira/llmHelpers.ts` | `Operation` type, `ParsedIntent`, `INTENT_PROMPT`, all LLM utility functions |
+| `src/participant/jira/ticketContext.ts` | Ticket key + project key resolution helpers |
+| `src/participant/jira/contentHandler.ts` | Content preview/refinement flow (`streamContentPreview`, `handleContentSession`) |
+| `src/participant/jira/createHandler.ts` | Ticket creation flow (templates, issue type selection, section Q&A) |
+| `src/participant/jira/loadHandler.ts` | Load-ticket handler (attachment download, comment pagination) |
+| `src/participant/jira/fieldHandler.ts` | Field update flow + explicit `@jira spell check` command |
+| `src/participant/jira/cleanupHandler.ts` | Bulk cleanup flow (review screen, transition batch execution) |
+| `src/participant/jira/workflowHandler.ts` | Workflow discovery handler |
+| `src/participant/jira/emailHandler.ts` | Email-to-ticket chat flow: reads pre-built `EmailContentSession` from workspaceState → streams preview → confirm/create |
+| `src/utils/emlParser.ts` | Parses `.eml` files via `postal-mime`; returns `ParsedEml` (subject, sender, date, htmlBody, plainBody, inlineImageMap, attachments) |
 | `src/participant/BitbucketParticipant.ts` | Bitbucket chat handler: check, PR review, multi-turn follow-ups |
-| `src/participant/sessionState.ts` | VS Code-free pure helpers and Jira multi-turn session types |
+| `src/participant/sessionState.ts` | VS Code-free pure helpers and Jira multi-turn session types; includes `pickEmailOption()` for unified template+issue-type selection |
 | `src/participant/reviewSessionState.ts` | Bitbucket session types, `parsePrUrl`, `parseDiff`, `resolveByNumber` |
 | `src/services/WorkflowService.ts` | Workflow graph cache I/O, BFS path-finding, `discoverWorkflow` sampling |
 | `src/templates/TemplateService.ts` | Reads `.jira-templates.json`; returns `{ templates, cleanupRules }` |
@@ -54,6 +64,7 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/utils/branchParser.ts` | Extracts ticket ID from git branch name |
 | `src/utils/markdownFormatter.ts` | `formatJiraBody(node)` — converts Jira wiki markup (v2 string) or ADF object (v3/legacy) to Markdown; `wikiToMarkdown(str)` delegates to `jiraWikiToMarkdown` |
 | `src/utils/jiraWikiToMarkdown.ts` | Own Jira wiki markup → Markdown converter; handles headings, tables, lists, code/noformat blocks, quotes, panels, and all inline markup without any third-party dependency |
+| `src/utils/htmlToMarkdown.ts` | Converts HTML email body to Markdown; resolves `cid:` references via optional `inlineImageMap`; strips OWA span whitespace inside bold/italic |
 
 ## Running tests
 
@@ -137,6 +148,12 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
 | Show connection info | `ticketSidekick.bitbucket.showConnectionInfo` |
 | Review instructions | `ticketSidekick.bitbucket.reviewInstructions` |
 
+### Email settings
+
+| Setting | Key |
+| --- | --- |
+| Delete .eml after import | `ticketSidekick.email.deleteEmlAfterImport` |
+
 ## Credentials
 
 Always stored in `vscode.ExtensionContext.secrets` (VS Code SecretStorage, OS-encrypted). Never in `settings.json`.
@@ -171,8 +188,9 @@ Multi-turn flows store structured state in `vscode.ExtensionContext.workspaceSta
 | `MoreCommentsSession` | `jira.session.moreComments` | `<!-- jira:more-comments -->` |
 | `CommentListSession` | `jira.session.commentList` | `<!-- jira:comment-list -->` |
 | `LoadSkippedSession` | `jira.session.loadSkipped` | `<!-- jira:load-skipped -->` |
+| `EmailContentSession` | `jira.session.emailContent` | `<!-- jira:email-content -->` |
 
-Detection order in the Jira handler: resolution selection → transition review → filter selection → bulk-update-review → template selection → issue type selection → creation → content → more-comments → check command → load-skipped → comment list → intent parse.
+Detection order in the Jira handler: resolution selection → transition review → filter selection → bulk-update-review → template selection → issue type selection → creation → content → more-comments → check command → load-skipped → email content → comment list → intent parse.
 
 ### Bitbucket sessions
 
@@ -271,3 +289,23 @@ Trigger: `@jira run cleanup "rule name"` or ad-hoc `@jira close PROJ bugs in "Fi
 Review screen shows all tickets with their subtasks and proposed transitions. User replies: **ok**, **(c)** to cancel the run, or key numbers to skip (cascading: subtask skip → parent skipped; parent skip → all subtasks skipped).
 
 Execution streams one line per ticket (subtasks first), then a summary. Failures are collected and reported at the end — the batch continues on failure.
+
+## EML email import
+
+Users download `.eml` files from OWA via **More actions → Download message** and import them via the VS Code command.
+
+### Import flow
+
+1. Command Palette → **Ticket Sidekick: Create Jira ticket from email (.eml)**
+2. File picker opens (defaults to `~/Downloads`)
+3. `parseEml(buffer)` (postal-mime) extracts subject, sender, date, HTML body, inline images, file attachments
+4. HTML body → `htmlToMarkdown(html, inlineImageMap)` → `markdownBody` with `[📎 name]` for inline images
+5. `EmailContentSession` (with `emlFilePath`, `senderName`, `receivedDateTime`) stored in `workspaceState('jira.session.emailContent')`
+6. Chat opened with `@jira create from email`
+7. `handleCreateFromEmail` reads session from workspaceState → `streamEmailContentPreview`
+8. User picks template/type or confirms → `finishEmailTicket` creates ticket + uploads attachments
+9. If `ticketSidekick.email.deleteEmlAfterImport: true` → `.eml` file deleted after successful creation (non-fatal)
+
+### `pickEmailOption` helper
+
+`pickEmailOption(n, templates, issueTypes)` in `sessionState.ts` maps a 1-based user reply index to a template or issue type pick. Templates occupy indices 1..N, issue types N+1..N+M. Returns `{ kind: 'template', name, issueType }` or `{ kind: 'type', issueType }` or `null` if out of range.

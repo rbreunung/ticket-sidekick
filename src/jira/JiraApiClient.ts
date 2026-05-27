@@ -141,6 +141,30 @@ export class JiraApiClient implements IJiraClient {
     });
   }
 
+  async uploadAttachment(issueKey: string, filename: string, contentType: string, contentBytes: string): Promise<void> {
+    const url = `${this.baseUrl}/rest/api/2/issue/${issueKey}/attachments`;
+    const buffer = Buffer.from(contentBytes, 'base64');
+    const boundary = `----boundary${Date.now()}`;
+    const body = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${contentType}\r\n\r\n`),
+      buffer,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: this.authHeader,
+        'X-Atlassian-Token': 'nocheck',
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+      },
+      body,
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Attachment upload failed (${response.status}): ${text}`);
+    }
+  }
+
   async searchJql(jql: string, maxResults = 20, startAt?: number): Promise<JiraSearchResult> {
     const fields = ['summary', 'status', 'assignee', 'priority', 'labels', 'fixVersions', 'reporter', 'subtasks'];
     let qs = `jql=${encodeURIComponent(jql)}&maxResults=${maxResults}&${fields.map(f => `fields=${f}`).join('&')}`;

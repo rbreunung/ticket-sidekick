@@ -2,7 +2,7 @@
   "name": "ticket-sidekick",
   "displayName": "Ticket Sidekick",
   "description": "Manage Jira tickets with GitHub Copilot Chat",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "license": "MIT",
   "publisher": "RobertBreunung",
   "engines": {
@@ -16,7 +16,9 @@
     "AI"
   ],
   "icon": "images/ticket-sidekick.png",
-  "activationEvents": [],
+  "activationEvents": [
+    "onUri"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "chatParticipants": [
@@ -51,6 +53,10 @@
       {
         "command": "ticket-sidekick.configureBitbucketCloud",
         "title": "Ticket Sidekick: Configure Bitbucket Cloud Credentials"
+      },
+      {
+        "command": "ticket-sidekick.importEml",
+        "title": "Ticket Sidekick: Create Jira ticket from email (.eml)"
       }
     ],
     "configuration": [
@@ -115,11 +121,6 @@
               "statuscategorychangedate"
             ],
             "description": "Field IDs excluded from @jira show output. Fields in additionalDisplayFields override this list. Use @jira show fields on PROJ-123 to discover field IDs."
-          },
-          "ticketSidekick.jira.spellCheck": {
-            "type": "boolean",
-            "default": true,
-            "description": "When enabled, @jira set on a text field offers a spelling/grammar-corrected version before applying the update. Disable per workspace to skip the correction step."
           }
         }
       },
@@ -151,6 +152,17 @@
             "description": "Additional instructions appended to the built-in PR review prompt. Use this to add project-specific guidance, e.g. 'This project follows Google Style Guide' or 'Focus on security issues only'. The built-in grounding rules and output format are always included."
           }
         }
+      },
+      {
+        "id": "email",
+        "title": "Ticket Sidekick — Email",
+        "properties": {
+          "ticketSidekick.email.deleteEmlAfterImport": {
+            "type": "boolean",
+            "default": false,
+            "description": "Delete the .eml file automatically after the Jira ticket is created."
+          }
+        }
       }
     ]
   },
@@ -171,5 +183,8 @@
     "esbuild": "^0.25.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"
+  },
+  "dependencies": {
+    "postal-mime": "^2.7.4"
   }
 }

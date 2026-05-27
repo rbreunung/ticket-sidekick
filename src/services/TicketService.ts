@@ -203,6 +203,10 @@ export class TicketService {
     return `comment added to ${issueKey}.`;
   }
 
+  async uploadAttachment(issueKey: string, filename: string, contentType: string, contentBytes: string): Promise<void> {
+    return this.client.uploadAttachment(issueKey, filename, contentType, contentBytes);
+  }
+
   async updateField(issueKey: string, fieldName: string, value: string): Promise<string> {
     const jiraField = SUPPORTED_FIELDS[fieldName.toLowerCase()];
     if (!jiraField) {

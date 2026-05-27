@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection } from '../participant/sessionState';
+import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption } from '../participant/sessionState';
 import type { TransitionBatchTicket } from '../participant/sessionState';
 import type { JiraComment } from '../jira/IJiraClient';
 
@@ -639,5 +639,48 @@ describe('parseSkippedAttachmentSelection', () => {
 
   it('trims whitespace before parsing', () => {
     expect(parseSkippedAttachmentSelection('  2  ', 3)).toBe(2);
+  });
+});
+
+describe('pickEmailOption', () => {
+  const TEMPLATES = [
+    { name: 'Bug Report', issueType: 'Bug' },
+    { name: 'Feature Request', issueType: 'Story' },
+  ];
+  const TYPES = ['Bug', 'Story', 'Task'];
+
+  it('returns template pick for n within template range', () => {
+    expect(pickEmailOption(1, TEMPLATES, TYPES)).toEqual({ kind: 'template', name: 'Bug Report', issueType: 'Bug' });
+    expect(pickEmailOption(2, TEMPLATES, TYPES)).toEqual({ kind: 'template', name: 'Feature Request', issueType: 'Story' });
+  });
+
+  it('returns type pick for n beyond template range', () => {
+    expect(pickEmailOption(3, TEMPLATES, TYPES)).toEqual({ kind: 'type', issueType: 'Bug' });
+    expect(pickEmailOption(4, TEMPLATES, TYPES)).toEqual({ kind: 'type', issueType: 'Story' });
+    expect(pickEmailOption(5, TEMPLATES, TYPES)).toEqual({ kind: 'type', issueType: 'Task' });
+  });
+
+  it('returns null for n below range', () => {
+    expect(pickEmailOption(0, TEMPLATES, TYPES)).toBeNull();
+  });
+
+  it('returns null for n above total range', () => {
+    expect(pickEmailOption(6, TEMPLATES, TYPES)).toBeNull();
+  });
+
+  it('works with templates only (no types)', () => {
+    expect(pickEmailOption(1, TEMPLATES, [])).toEqual({ kind: 'template', name: 'Bug Report', issueType: 'Bug' });
+    expect(pickEmailOption(2, TEMPLATES, [])).toEqual({ kind: 'template', name: 'Feature Request', issueType: 'Story' });
+    expect(pickEmailOption(3, TEMPLATES, [])).toBeNull();
+  });
+
+  it('works with types only (no templates)', () => {
+    expect(pickEmailOption(1, [], TYPES)).toEqual({ kind: 'type', issueType: 'Bug' });
+    expect(pickEmailOption(3, [], TYPES)).toEqual({ kind: 'type', issueType: 'Task' });
+    expect(pickEmailOption(4, [], TYPES)).toBeNull();
+  });
+
+  it('returns null for both lists empty', () => {
+    expect(pickEmailOption(1, [], [])).toBeNull();
   });
 });

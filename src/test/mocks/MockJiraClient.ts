@@ -141,4 +141,8 @@ export class MockJiraClient implements IJiraClient {
       s => (s.state === 'active' || s.state === 'future') && s.name.toLowerCase().includes(lowerQuery),
     );
   }
+
+  async uploadAttachment(_issueKey: string, _filename: string, _contentType: string, _contentBytes: string): Promise<void> {
+    // no-op in tests
+  }
 }

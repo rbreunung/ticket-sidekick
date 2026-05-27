@@ -98,7 +98,10 @@ function inline(text: string): string {
   });
 
   // Images before links so ![...](...) is handled first
-  text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '!$2!');
+  // Local URLs (no protocol) → thumbnail syntax; remote URLs → plain syntax
+  text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, _alt, url) =>
+    /^https?:\/\/|^\/\//.test(url) ? `!${url}!` : `!${url}|thumbnail!`
+  );
 
   // Links
   text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '[$1|$2]');

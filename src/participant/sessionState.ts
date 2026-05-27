@@ -83,6 +83,26 @@ export type SkipParseResult =
   | { action: 'skip'; keys: string[] }
   | { action: 'invalid' };
 
+export interface EmailContentSession {
+  emailId: string;
+  subject: string;
+  senderName?: string;
+  receivedDateTime?: string;
+  markdownBody: string;
+  inlineImageMap: Record<string, string>;
+  attachments: Array<{
+    name: string; contentType: string; contentBytes: string;
+    isInline: boolean; contentId?: string;
+  }>;
+  emlFilePath?: string;
+  selectedTemplateName: string | null;
+  projectKey: string;
+  issueType: string;
+  additionalFields: Record<string, unknown>;
+  availableTemplates?: Array<{ name: string; issueType: string }>;
+  availableIssueTypes?: string[];
+}
+
 export function parseSkipInput(reply: string, tickets: TransitionBatchTicket[]): SkipParseResult {
   const normalized = reply.trim().toLowerCase();
   if (normalized === 'ok') return { action: 'ok' };
@@ -184,7 +204,7 @@ export function isConfirmation(text: string): boolean {
 export function isCancellation(text: string): boolean {
   const normalized = text.trim().toLowerCase();
   const CANCELLATIONS = new Set([
-    'no', 'nope', 'cancel', 'cancelled', 'stop', 'abort',
+    'c', 'no', 'nope', 'cancel', 'cancelled', 'stop', 'abort',
     'never mind', 'nevermind', "don't", 'dont', 'quit', 'skip',
   ]);
   return CANCELLATIONS.has(normalized);
@@ -243,12 +263,6 @@ export interface FieldUpdatePreviewSession {
   fieldValue: unknown;
   isArray: boolean;
   arrayOp: 'set' | 'add' | 'remove';
-}
-
-export interface SpellCheckSession {
-  original: string;
-  corrected: string;
-  pending: FieldUpdatePreviewSession;
 }
 
 export interface FieldSelectionSession {
@@ -322,5 +336,22 @@ export function rewriteAttachmentLinks(
     if (jiraUrl) return `[${alt}](${jiraUrl})`;
     return match;
   });
+}
+
+export type EmailOptionPick =
+  | { kind: 'template'; name: string; issueType: string }
+  | { kind: 'type'; issueType: string };
+
+export function pickEmailOption(
+  n: number,
+  templates: Array<{ name: string; issueType: string }>,
+  issueTypes: string[],
+): EmailOptionPick | null {
+  if (n < 1 || n > templates.length + issueTypes.length) return null;
+  if (n <= templates.length) {
+    const t = templates[n - 1];
+    return { kind: 'template', name: t.name, issueType: t.issueType };
+  }
+  return { kind: 'type', issueType: issueTypes[n - templates.length - 1] };
 }
 
