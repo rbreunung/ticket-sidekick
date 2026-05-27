@@ -115,17 +115,17 @@ export function activate(context: vscode.ExtensionContext): void {
       const jiraClient = new JiraApiClient({ baseUrl: config.baseUrl, authType: config.authType, token: config.token });
       const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
-      const [availableTemplates, issueTypes] = await Promise.all([
-        Promise.resolve(workspaceRoot ? (() => {
-          try {
-            return new TemplateService(workspaceRoot).loadTemplates().templates
-              .map(t => ({ name: t.name, issueType: t.issueType ?? 'Story' }));
-          } catch { return [] as Array<{ name: string; issueType: string }>; }
-        })() : [] as Array<{ name: string; issueType: string }>),
-        jiraClient.getProject(projectKey)
-          .then(p => p.issueTypes.filter(t => !t.subtask).map(t => t.name))
-          .catch(() => [] as string[]),
-      ]);
+      const availableTemplates: Array<{ name: string; issueType: string }> = (() => {
+        if (!workspaceRoot) return [];
+        try {
+          return new TemplateService(workspaceRoot).loadTemplates().templates
+            .map(t => ({ name: t.name, issueType: t.issueType ?? 'Story' }));
+        } catch { return []; }
+      })();
+
+      const issueTypes = await jiraClient.getProject(projectKey)
+        .then(p => p.issueTypes.filter(t => !t.subtask).map(t => t.name))
+        .catch(() => [] as string[]);
       const issueType = issueTypes.find(t => t === 'Story') ?? issueTypes.find(t => t === 'Task') ?? issueTypes[0] ?? 'Story';
 
       const markdownBody = parsed.htmlBody
@@ -156,7 +156,7 @@ export function activate(context: vscode.ExtensionContext): void {
         issueType,
         additionalFields: {},
         availableTemplates: availableTemplates.length > 0 ? availableTemplates : undefined,
-        availableIssueTypes: issueTypes.length > 1 ? issueTypes : undefined,
+        availableIssueTypes: issueTypes.length > 0 ? issueTypes : undefined,
       };
 
       await context.workspaceState.update('jira.session.emailContent', session);
