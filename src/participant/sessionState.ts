@@ -206,7 +206,7 @@ export function isConfirmation(text: string): boolean {
     'yes', 'yep', 'ok', 'okay', 'sure', 'perfect', 'great',
     'looks good', 'looks great', 'go ahead', 'do it', 'ship it',
     'post it', 'confirm', 'confirmed', 'submit', 'approved', 'approve', 'fine',
-    'load all', 'load more', 'show all', 'show more',
+    'load all', 'load more', 'show all', 'show more', 'create it',
   ]);
   return CONFIRMATIONS.has(normalized);
 }

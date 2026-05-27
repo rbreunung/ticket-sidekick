@@ -104,15 +104,15 @@ export async function handleContentSession(
   if (isConfirmation(prompt)) {
     await workspaceState.update('jira.session.previewing', undefined);
     if (session.operation === 'createTicket') {
-      const jiraDescription = markdownToJiraWiki(session.currentContent);
+      const fields: Record<string, unknown> = { ...session.extraFields };
+      if (session.currentContent) {
+        fields.description = markdownToJiraWiki(session.currentContent);
+      }
       const result = await ticketService.createTicket(
         session.projectKey,
         session.summary,
         session.issueType,
-        {
-          ...(session.currentContent ? { description: jiraDescription } : {}),
-          ...session.extraFields,
-        },
+        fields,
       );
       stream.markdown(result);
       const keyMatch = result.match(/([A-Z][A-Z0-9]+-\d+)/);
