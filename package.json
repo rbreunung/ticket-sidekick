@@ -16,7 +16,9 @@
     "AI"
   ],
   "icon": "images/ticket-sidekick.png",
-  "activationEvents": ["onUri"],
+  "activationEvents": [
+    "onUri"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "chatParticipants": [
@@ -172,7 +174,11 @@
           "ticketSidekick.outlook.authProvider": {
             "type": "string",
             "default": "vscode-microsoft",
-            "enum": ["vscode-microsoft", "azure-cli", "token"],
+            "enum": [
+              "vscode-microsoft",
+              "azure-cli",
+              "token"
+            ],
             "enumDescriptions": [
               "VS Code built-in Microsoft sign-in. Works for personal Microsoft accounts and permissive tenants.",
               "Azure CLI — shells out to 'az account get-access-token'. Use in corporate Entra ID environments where az is installed and 'az login' has been done.",
@@ -199,7 +205,12 @@
           "ticketSidekick.email.cleanupModel": {
             "type": "string",
             "default": "gpt-5-mini",
-            "enum": ["gpt-5-mini", "gpt-5.4-mini", "claude-haiku-4.5", "claude-sonnet-4.6"],
+            "enum": [
+              "gpt-5-mini",
+              "gpt-5.4-mini",
+              "claude-haiku-4.5",
+              "claude-sonnet-4.6"
+            ],
             "enumDescriptions": [
               "GPT-5 Mini — fast and cheap, good for footer removal (recommended)",
               "GPT-5.4 Mini — slightly more capable",
@@ -229,5 +240,8 @@
     "esbuild": "^0.25.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"
+  },
+  "dependencies": {
+    "postal-mime": "^2.7.4"
   }
 }
