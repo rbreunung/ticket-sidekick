@@ -83,4 +83,25 @@ describe('parseEml — edge cases', () => {
     expect(result.htmlBody).toBeUndefined();
     expect(result.plainBody).toBe('Just plain text');
   });
+
+  it('treats multipart/related image without Content-Disposition as inline', async () => {
+    const eml = Buffer.from(
+      'From: t@t.com\r\n' +
+      'Subject: Img\r\n' +
+      'MIME-Version: 1.0\r\n' +
+      'Content-Type: multipart/related; boundary="rb"\r\n\r\n' +
+      '--rb\r\n' +
+      'Content-Type: text/html; charset=utf-8\r\n\r\n' +
+      '<img src="cid:x@t.com">\r\n' +
+      '--rb\r\n' +
+      'Content-Type: image/png\r\n' +
+      'Content-ID: <x@t.com>\r\n\r\n' +
+      'iVBORw0KGgo=\r\n' +
+      '--rb--\r\n',
+    );
+    const result = await parseEml(eml);
+    const img = result.attachments.find(a => a.name.startsWith('image'));
+    expect(img).toBeDefined();
+    expect(img!.isInline).toBe(true);
+  });
 });

@@ -30,7 +30,7 @@ export async function parseEml(buffer: Buffer): Promise<ParsedEml> {
   const attachments: ParsedEml['attachments'] = [];
 
   for (const att of email.attachments ?? []) {
-    const isInline = att.disposition === 'inline';
+    const isInline = att.disposition === 'inline' || att.related === true;
     const name = att.filename ?? att.mimeType.replace('/', '-');
     const raw = att.content instanceof ArrayBuffer ? new Uint8Array(att.content) : att.content;
     const contentBytes = Buffer.from(raw as Uint8Array | string).toString('base64');
