@@ -1,0 +1,38 @@
+From: Jane Doe <jane.doe@example.com>
+To: test@example.com
+Subject: Test Email Subject
+Date: Thu, 22 May 2026 15:22:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="mixed_boundary_001"
+
+--mixed_boundary_001
+Content-Type: multipart/related; boundary="related_boundary_001"
+
+--related_boundary_001
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>Hello <strong>World</strong></p><p>See: <img src="cid:image001@test.com"></p></body></html>
+
+--related_boundary_001
+Content-Type: image/png
+Content-ID: <image001@test.com>
+Content-Disposition: inline; filename="email-image-1.png"
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQAABjE+ibYAAAAASUVORK5CYII=
+
+--related_boundary_001--
+
+--mixed_boundary_001
+Content-Type: application/pdf
+Content-Disposition: attachment; filename="report.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjAKMSAwIG9iajw8L1R5cGUvQ2F0YWxvZy9QYWdlcyAyIDAgUj4+ZW5kb2JqCjIgMCBv
+YmoKPDwvVHlwZS9QYWdlcy9LaWRzWzMgMCBSXS9Db3VudCAxPj5lbmRvYmoKMyAwIG9iajw8L1R5
+cGUvUGFnZS9NZWRpYUJveFswIDAgMyAzXT4+ZW5kb2JqCnhyZWYKMCA0CjAwMDAwMDAwMDAgNjU1
+MzUgZiAKMDAwMDAwMDAwOSAwMDAwMCBuIAowMDAwMDAwMDU4IDAwMDAwIG4gCjAwMDAwMDAxMTUg
+MDAwMDAgbiAKdHJhaWxlcjw8L1NpemUgNC9Sb290IDEgMCBSPj4Kc3RhcnR4cmVmCjE5MAolJUVP
+Rg==
+
+--mixed_boundary_001--
