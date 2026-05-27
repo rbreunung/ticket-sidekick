@@ -22,13 +22,6 @@ JiraParticipant → TicketService → IJiraClient (interface)
 
 **Rule:** `TicketService` imports `IJiraClient` only — never `JiraApiClient` directly.
 
-```text
-OutlookService → IOutlookClient (interface)
-                      ↓
-              OutlookApiClient (Microsoft Graph HTTP, vscode.authentication)
-              MockOutlookClient (test fixture)
-```
-
 ### Bitbucket
 
 ```text
@@ -60,7 +53,8 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/participant/jira/fieldHandler.ts` | Field update flow + explicit `@jira spell check` command |
 | `src/participant/jira/cleanupHandler.ts` | Bulk cleanup flow (review screen, transition batch execution) |
 | `src/participant/jira/workflowHandler.ts` | Workflow discovery handler |
-| `src/participant/jira/emailHandler.ts` | Email-to-ticket chat flow: OWA handover shortcut (reads `jira.handover.email` from workspaceState) + Microsoft Graph folder picker / email selection / preview / create |
+| `src/participant/jira/emailHandler.ts` | Email-to-ticket chat flow: reads pre-built `EmailContentSession` from workspaceState → streams preview → confirm/create |
+| `src/utils/emlParser.ts` | Parses `.eml` files via `postal-mime`; returns `ParsedEml` (subject, sender, date, htmlBody, plainBody, inlineImageMap, attachments) |
 | `src/participant/BitbucketParticipant.ts` | Bitbucket chat handler: check, PR review, multi-turn follow-ups |
 | `src/participant/sessionState.ts` | VS Code-free pure helpers and Jira multi-turn session types; includes `pickEmailOption()` for unified template+issue-type selection |
 | `src/participant/reviewSessionState.ts` | Bitbucket session types, `parsePrUrl`, `parseDiff`, `resolveByNumber` |
@@ -70,12 +64,7 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/utils/branchParser.ts` | Extracts ticket ID from git branch name |
 | `src/utils/markdownFormatter.ts` | `formatJiraBody(node)` — converts Jira wiki markup (v2 string) or ADF object (v3/legacy) to Markdown; `wikiToMarkdown(str)` delegates to `jiraWikiToMarkdown` |
 | `src/utils/jiraWikiToMarkdown.ts` | Own Jira wiki markup → Markdown converter; handles headings, tables, lists, code/noformat blocks, quotes, panels, and all inline markup without any third-party dependency |
-| `src/outlook/IOutlookClient.ts` | All Outlook/Graph types + IOutlookClient interface |
-| `src/outlook/OutlookApiClient.ts` | Real Microsoft Graph HTTP; auth via `vscode.authentication` |
-| `src/services/OutlookService.ts` | Outlook business logic: list folders, list emails, fetch+convert email |
-| `src/utils/htmlToMarkdown.ts` | Converts HTML email body to Markdown; `data-ts-filename` imgs → `![name](name)`; `cid:` imgs → `[📎 name]`; strips OWA span whitespace inside bold/italic |
-| `src/utils/owaUserscript.ts` | Generates the Tampermonkey userscript string via `generateOwaUserscript()`; embeds `MANIFEST_VERSION` in every saved JSON |
-| `src/utils/handoverFolder.ts` | Reads handover folder into `HandoverEmail`; validates `scriptVersion` against `REQUIRED_MANIFEST_VERSION`; purges stale subfolders; deletes subfolder after ticket creation |
+| `src/utils/htmlToMarkdown.ts` | Converts HTML email body to Markdown; resolves `cid:` references via optional `inlineImageMap`; strips OWA span whitespace inside bold/italic |
 
 ## Running tests
 
@@ -159,15 +148,11 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
 | Show connection info | `ticketSidekick.bitbucket.showConnectionInfo` |
 | Review instructions | `ticketSidekick.bitbucket.reviewInstructions` |
 
-### Outlook settings
+### Email settings
 
 | Setting | Key |
 | --- | --- |
-| Folder ID | `ticketSidekick.outlook.folderId` |
-| Email list size | `ticketSidekick.outlook.emailListSize` |
-| OWA URL | `ticketSidekick.outlook.owaUrl` |
-| Handover folder | `ticketSidekick.email.handoverFolder` (default: `~/Downloads/`) |
-| Cleanup model | `ticketSidekick.email.cleanupModel` (AI footer removal model family) |
+| Delete .eml after import | `ticketSidekick.email.deleteEmlAfterImport` |
 
 ## Credentials
 
@@ -203,12 +188,9 @@ Multi-turn flows store structured state in `vscode.ExtensionContext.workspaceSta
 | `MoreCommentsSession` | `jira.session.moreComments` | `<!-- jira:more-comments -->` |
 | `CommentListSession` | `jira.session.commentList` | `<!-- jira:comment-list -->` |
 | `LoadSkippedSession` | `jira.session.loadSkipped` | `<!-- jira:load-skipped -->` |
-| `FolderSelectionSession` | `jira.session.folderSelection` | `<!-- jira:folder-selection -->` |
-| `EmailSelectionSession` | `jira.session.emailSelection` | `<!-- jira:email-selection -->` |
 | `EmailContentSession` | `jira.session.emailContent` | `<!-- jira:email-content -->` |
-| `HandoverEmail` (one-shot, not a session) | `jira.handover.email` | _(no marker — cleared immediately on read)_ |
 
-Detection order in the Jira handler: resolution selection → transition review → filter selection → bulk-update-review → template selection → issue type selection → creation → content → more-comments → check command → load-skipped → folder selection → email selection → email content → comment list → intent parse.
+Detection order in the Jira handler: resolution selection → transition review → filter selection → bulk-update-review → template selection → issue type selection → creation → content → more-comments → check command → load-skipped → email content → comment list → intent parse.
 
 ### Bitbucket sessions
 
@@ -308,53 +290,22 @@ Review screen shows all tickets with their subtasks and proposed transitions. Us
 
 Execution streams one line per ticket (subtasks first), then a summary. Failures are collected and reported at the end — the batch continues on failure.
 
-## OWA Tampermonkey bridge
+## EML email import
 
-When Microsoft Graph API Mail.Read is blocked by the corporate tenant, the email-to-ticket flow uses a local file bridge instead.
+Users download `.eml` files from OWA via **More actions → Download message** and import them via the VS Code command.
 
-### Handover folder contract
+### Import flow
 
-The Tampermonkey script saves all email data into a **flat JSON file** in the handover folder:
-
-```
-~/Downloads/                             ← configurable via ticketSidekick.email.handoverFolder
-  TicketSidekick-1716459123456.json      ← one file per click; timestamp is the session ID
-```
-
-VS Code polls for the file (up to 15 s), reads it, converts the email, then **deletes the file** after the ticket is created. Files older than 24 h are purged on each invocation.
-
-### Manifest JSON schema
-
-The JSON file contains subject, sender, dates, the base64-encoded HTML body, all inline images (base64-encoded), and all file attachments (base64-encoded). It also carries a `scriptVersion` integer that VS Code checks for compatibility.
-
-### MANIFEST_VERSION versioning — CRITICAL
-
-Two constants must stay in sync:
-
-| Constant | Location |
-| --- | --- |
-| `MANIFEST_VERSION` | `src/utils/owaUserscript.ts` (embedded into every saved JSON) |
-| `REQUIRED_MANIFEST_VERSION` | `src/utils/handoverFolder.ts` (minimum accepted by VS Code) |
-
-**When the manifest schema changes:** increment both constants to the same new value. VS Code will reject stale installed scripts with a clear error message directing the user to re-export and reinstall.
-
-**When the Tampermonkey script changes for any other reason:** bump the `@version` header in `owaUserscript.ts` (semver, e.g. `1.2` → `1.3`) but leave `MANIFEST_VERSION` unchanged.
-
-### Email-to-ticket flow (OWA path)
-
-1. User clicks "📋 To Ticket" in OWA reading pane → Tampermonkey saves JSON → navigates to `vscode://RobertBreunung.ticket-sidekick/from-email?ts=<timestamp>`
-2. URI handler triggers `ticket-sidekick.processHandoverEmail` command
-3. `handoverFolder.readHandoverEmail()` validates `scriptVersion`, parses JSON, calls `htmlToMarkdown()`, resolves attachment file paths
-4. If `stripFooter=true`: LLM footer removal via `ticketSidekick.email.cleanupModel`
-5. `HandoverEmail` stored in `workspaceState('jira.handover.email')`
+1. Command Palette → **Ticket Sidekick: Create Jira ticket from email (.eml)**
+2. File picker opens (defaults to `~/Downloads`)
+3. `parseEml(buffer)` (postal-mime) extracts subject, sender, date, HTML body, inline images, file attachments
+4. HTML body → `htmlToMarkdown(html, inlineImageMap)` → `markdownBody` with `[📎 name]` for inline images
+5. `EmailContentSession` (with `emlFilePath`, `senderName`, `receivedDateTime`) stored in `workspaceState('jira.session.emailContent')`
 6. Chat opened with `@jira create from email`
-7. `handleCreateFromEmail` in `emailHandler.ts` detects the workspaceState entry, skips Graph API, builds `EmailContentSession` (with templates + issue types pre-fetched via `Promise.all`)
-8. Preview streamed; user picks template/type or confirms; `finishEmailTicket` creates ticket + uploads attachments + deletes handover file
+7. `handleCreateFromEmail` reads session from workspaceState → `streamEmailContentPreview`
+8. User picks template/type or confirms → `finishEmailTicket` creates ticket + uploads attachments
+9. If `ticketSidekick.email.deleteEmlAfterImport: true` → `.eml` file deleted after successful creation (non-fatal)
 
 ### `pickEmailOption` helper
 
 `pickEmailOption(n, templates, issueTypes)` in `sessionState.ts` maps a 1-based user reply index to a template or issue type pick. Templates occupy indices 1..N, issue types N+1..N+M. Returns `{ kind: 'template', name, issueType }` or `{ kind: 'type', issueType }` or `null` if out of range.
-
-### OWA attachment limitation
-
-OWA attachment download URLs require an authenticated session — there are no stable public download URLs in the DOM. The userscript detects attachment names from the DOM and appends them to the body HTML as a `📄 Attachments (attach to ticket manually): name1.pdf, name2.docx` paragraph. `finishEmailTicket` strips this paragraph from the description (via regex) before creating the ticket, and surfaces the names as a post-creation chat note.

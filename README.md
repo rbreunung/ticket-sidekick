@@ -72,7 +72,7 @@ Open GitHub Copilot Chat and use `@jira`:
 | `@jira find open bugs assigned to me` | Runs JQL search |
 | `@jira check required fields on PROJ-123` | Validates required fields |
 | `@jira check` | Tests the connection and shows active configuration |
-| `@jira create from email` | Create a Jira ticket from an Outlook email |
+| `@jira create from email` | Create a Jira ticket from an imported `.eml` file |
 
 ### Reading tickets
 
@@ -298,109 +298,23 @@ On the review screen, reply:
 
 Execution streams one confirmation line per ticket. Failures are reported at the end without stopping the rest of the batch.
 
-### Create ticket from Outlook email
+### Create Jira ticket from email (.eml)
 
-```text
-@jira create from email
-```
+Download the email from OWA using **More actions → Download message** to save a `.eml` file, then:
 
-**First run — folder picker:** A numbered list of your Outlook mail folders is shown. Reply with the number to select a folder. The choice is saved to VS Code settings (`ticketSidekick.outlook.folderId`) so you don't need to pick again. Clear the setting to re-run the picker.
+1. Run **Command Palette → Ticket Sidekick: Create Jira ticket from email (.eml)**
+2. Select the `.eml` file from your Downloads folder
+3. A preview appears in the `@jira` chat with subject, sender, date, body, and attachments
+4. Reply with a template number, an issue type number, or **post it** to create the ticket
 
-**Email list:** A numbered list of recent emails from the configured folder. Reply with the number to select an email.
+Inline images are uploaded as Jira attachments and embedded as thumbnails at their position in the description. File attachments are uploaded to the ticket.
 
-**Preview:** The email subject becomes the ticket summary, the body is converted to Markdown and shown as a preview. If templates are configured in `.jira-templates.json` or the project has multiple issue types, a numbered list is shown — reply with a number to pick a template or type, **post it** to create with the auto-selected type, or **(c)** to cancel.
-
-**Attachments and inline images:** All attachments are uploaded to the created ticket. Inline images (cid: references) are placed as thumbnails in the description.
-
-#### Authentication
-
-`@jira create from email` connects to Microsoft Graph (Mail.Read) to read your Outlook inbox. Three authentication methods are available — choose based on your environment:
-
-| Setting value | How it works | Use when |
-| --- | --- | --- |
-| `"vscode-microsoft"` *(default)* | VS Code built-in Microsoft sign-in | Personal Microsoft accounts or permissive tenants |
-| `"azure-cli"` | Gets a token via Azure CLI (`az`) | Corporate Entra ID — `az` is installed and `az login` has been done |
-| `"token"` | You provide a static bearer token | No `az` available; token expires in ~1 hour |
-
-**Default — VS Code Microsoft sign-in:**
-No configuration needed. On first use VS Code prompts for Microsoft account sign-in. If your corporate tenant blocks this (error `AADSTS65002`), switch to `azure-cli`.
-
-**Azure CLI (recommended for corporate Entra ID):**
-
-1. Install [Azure CLI](https://aka.ms/installazurecli)
-2. Run `az login` in your terminal (one-time setup; `az` handles token refresh automatically)
-3. Set in VS Code settings:
-   ```json
-   "ticketSidekick.outlook.authProvider": "azure-cli"
-   ```
-
-**Static token (last resort):**
-
-1. Set `"ticketSidekick.outlook.authProvider": "token"` in VS Code settings
-2. Go to [Microsoft Graph Explorer](https://developer.microsoft.com/en-us/graph/graph-explorer), sign in with your work account, and copy the **Access token** from the token panel
-3. Run Command Palette (`Ctrl+Shift+P`) → `Ticket Sidekick: Set Outlook Access Token` and paste the token
-
-> **Note:** Static tokens expire in ~1 hour. You will need to repeat step 2–3 each session.
-
-#### Outlook settings
-
-| Setting | Key | Default |
-| --- | --- | --- |
-| Auth provider | `ticketSidekick.outlook.authProvider` | `"vscode-microsoft"` |
-| Folder ID | `ticketSidekick.outlook.folderId` | _(empty — shows picker on first use)_ |
-| Email list size | `ticketSidekick.outlook.emailListSize` | `10` |
-
-### Create ticket from Outlook email — OWA bridge (Tampermonkey)
-
-Use this approach when the Microsoft Graph API is blocked by your corporate tenant.
-
-**How it works:** A browser userscript captures the open email in OWA (subject, body,
-inline images, attachments) and saves everything to a local handover folder. VS Code
-reads the folder and opens the ticket creation preview automatically.
-
-**One-time setup:**
-
-1. Install [Tampermonkey](https://www.tampermonkey.net/) in Microsoft Edge
-   (Edge recommended — subdirectory download support confirmed on Chromium).
-2. In VS Code settings, set:
-   - `ticketSidekick.outlook.owaUrl` — your OWA URL
-     (default: `https://outlook.office.com`; corporate: use your tenant URL; Hotmail/Outlook.com: use `https://outlook.live.com`)
-   - `ticketSidekick.email.handoverFolder` — path where VS Code reads email files
-     (default: `~/Downloads/`; must match Edge's configured downloads location)
-   - `ticketSidekick.jira.defaultProject` — Jira project key for new tickets
-3. Run **Command Palette → Ticket Sidekick: Export OWA Userscript for Tampermonkey**
-4. Copy the generated script into Tampermonkey (New Script → paste → Save)
-
-**Per-email workflow:**
-
-1. Open an email in OWA
-2. Click **📋 To Ticket** in the reading pane toolbar
-   (or **📋✨ To Ticket (Clean)** to strip the corporate footer/signature via AI)
-3. VS Code focuses automatically and shows a preview of the Jira ticket
-4. Pick a number to apply a template or choose an issue type, reply **post it** to create with the auto-selected type, or **(c)** to cancel
-
-Inline images are uploaded as Jira attachments and embedded as thumbnails at their
-original position in the description. File attachments are uploaded to the ticket.
-The local handover files are deleted automatically after the ticket is created.
-Handover files older than 24 hours are cleaned up on the next use.
-
-**Settings reference:**
+**Settings:**
 
 | Setting | Default | Description |
 |---|---|---|
-| `ticketSidekick.outlook.owaUrl` | `https://outlook.office.com` | OWA base URL used when generating the userscript |
-| `ticketSidekick.email.handoverFolder` | `~/Downloads/` | Folder VS Code reads email files from |
-| `ticketSidekick.email.cleanupModel` | `gpt-5-mini` | VS Code LM model family for footer removal |
-
-**Troubleshooting:**
-
-- _VS Code says "timed out waiting for email.json"_ — the handover folder path in VS Code
-  settings doesn't match where Edge saves downloads. Check `ticketSidekick.email.handoverFolder`.
-- _VS Code says "Handover manifest version mismatch"_ — the installed Tampermonkey script is
-  outdated. Re-export the userscript from VS Code and reinstall it in Tampermonkey.
-- _Button doesn't appear in OWA_ — the userscript `@match` URL may not cover your OWA
-  address. Re-export the script after correcting `ticketSidekick.outlook.owaUrl`.
-- _OWA DOM changed after a Microsoft update_ — re-export and reinstall the userscript.
+| `ticketSidekick.email.deleteEmlAfterImport` | `false` | Delete the `.eml` file automatically after the ticket is created |
+| `ticketSidekick.jira.defaultProject` | — | Project key used when creating tickets |
 
 ### Templates and cleanup rules
 
