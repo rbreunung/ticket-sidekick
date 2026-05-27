@@ -4,7 +4,6 @@ vi.mock('vscode', () => ({}));
 vi.mock('../participant/jira/llmHelpers', () => ({
   generateContent: vi.fn(),
   isLmRefusal: vi.fn(),
-  extractHistoryTurns: vi.fn(),
   buildHistoryContext: vi.fn(),
 }));
 
