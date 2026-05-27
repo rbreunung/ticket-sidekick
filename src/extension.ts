@@ -125,7 +125,12 @@ export function activate(context: vscode.ExtensionContext): void {
 
       const issueTypes = await jiraClient.getProject(projectKey)
         .then(p => p.issueTypes.filter(t => !t.subtask).map(t => t.name))
-        .catch(() => [] as string[]);
+        .catch((err: unknown) => {
+          vscode.window.showWarningMessage(
+            `Ticket Sidekick: Could not fetch issue types for ${projectKey} — will default to 'Story'. ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return [] as string[];
+        });
       const issueType = issueTypes.find(t => t === 'Story') ?? issueTypes.find(t => t === 'Task') ?? issueTypes[0] ?? 'Story';
 
       const markdownBody = parsed.htmlBody
