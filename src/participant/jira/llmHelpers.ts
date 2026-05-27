@@ -232,8 +232,11 @@ export async function spellCheckValue(
 
 export function isPointerPrompt(prompt: string): boolean {
   const lower = prompt.toLowerCase();
-  return /\b(post|use|add|take|copy)\s+(it|this|that)\b/.test(lower) ||
-    /\b(add|post)\s+(it|this|that)\s+as\s+(a\s+)?comment\b/.test(lower);
+  // "post it", "copy it/this/that" — these almost exclusively mean "post the content verbatim"
+  if (/\b(post|copy)\s+(it|this|that)\b/.test(lower)) return true;
+  // "add/post/use/take it/this/that AS A COMMENT" — requires explicit "as a comment" qualifier
+  if (/\b(add|post|use|take)\s+(it|this|that)\s+as\s+(a\s+)?comment\b/.test(lower)) return true;
+  return false;
 }
 
 export function extractLastAssistantText(context: vscode.ChatContext): string {

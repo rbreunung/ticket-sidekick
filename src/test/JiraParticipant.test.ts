@@ -747,4 +747,12 @@ describe('isPointerPrompt', () => {
   it('does not match a literal comment instruction', () => {
     expect(isPointerPrompt('add comment: everything looks good')).toBe(false);
   });
+
+  it('does not match "use this approach"', () => {
+    expect(isPointerPrompt('use this approach when fixing the bug')).toBe(false);
+  });
+
+  it('does not match "take this into account"', () => {
+    expect(isPointerPrompt('take this into account')).toBe(false);
+  });
 });
