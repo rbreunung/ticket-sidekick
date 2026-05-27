@@ -570,10 +570,10 @@ Any text after the `add to review` keywords becomes a brief reviewer note append
 | Base URL (DC only) | `ticketSidekick.bitbucket.baseUrl` | _(empty)_ |
 | Connection info banner | `ticketSidekick.bitbucket.showConnectionInfo` | `false` |
 | Review instructions | `ticketSidekick.bitbucket.reviewInstructions` | _(empty)_ |
-| Model context tokens | `ticketSidekick.bitbucket.modelContextTokens` | |
-| Context budget ratio | `ticketSidekick.bitbucket.contextBudgetRatio` | |
-| Review mode | `ticketSidekick.bitbucket.reviewMode` | |
-| Review exclude patterns | `ticketSidekick.bitbucket.reviewExcludePatterns` | |
+| Model context tokens | `ticketSidekick.bitbucket.modelContextTokens` | _(auto-detected)_ |
+| Context budget ratio | `ticketSidekick.bitbucket.contextBudgetRatio` | `0.7` |
+| Review mode | `ticketSidekick.bitbucket.reviewMode` | `"standard"` |
+| Review exclude patterns | `ticketSidekick.bitbucket.reviewExcludePatterns` | `[]` |
 
 **Optional: Bitbucket connection info banner**
 
