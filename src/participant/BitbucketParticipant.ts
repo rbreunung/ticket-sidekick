@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { minimatch } from 'minimatch';
 import { BitbucketApiClient } from '../bitbucket/BitbucketApiClient';
 import type { BitbucketConfig } from '../bitbucket/IBitbucketClient';
 import type { ConfigService } from '../services/ConfigService';
@@ -11,6 +12,7 @@ import {
   isAddToReviewIntent,
   extractUserNote,
   extractJsonObject,
+  buildAdaptiveChunks,
   type ReviewFinding,
   type ReviewSession,
 } from './reviewSessionState';
@@ -299,26 +301,54 @@ export function createBitbucketParticipant(
     const service = new PrReviewService(client);
 
     try {
-      // Files are reviewed in chunks so each LLM call stays within context limits.
-      // Adjust CHUNK_SIZE down for models with small context windows (e.g. 16 k → 5).
-      const CHUNK_SIZE = 10;
+      // Detect quick/deep mode keyword from prompt (overrides setting)
+      const promptWithoutUrl = prompt.replace(/https?:\/\/\S+/g, '').toLowerCase();
+      const reviewMode = /\bquick\b/.test(promptWithoutUrl) ? 'quick'
+        : /\bdeep\b/.test(promptWithoutUrl) ? 'standard'
+        : (config.reviewMode ?? 'standard');
+
+      // Resolve token budget: user setting → model API → safe fallback
+      const resolvedContextTokens = config.modelContextTokens
+        ?? (request.model as unknown as { maxInputTokens?: number }).maxInputTokens
+        ?? 60000;
+      const budgetRatio = config.contextBudgetRatio ?? 0.7;
+      const tokenBudget = Math.floor(resolvedContextTokens * budgetRatio);
 
       stream.markdown('_Fetching PR…_\n\n');
       const pr = await client.getPullRequest(parsed.project, parsed.repo, parsed.prId);
       const rawDiff = await client.getPullRequestDiff(parsed.project, parsed.repo, parsed.prId);
-      const fileDiffs = parseDiff(rawDiff);
 
-      const chunks: typeof fileDiffs[] = [];
-      for (let i = 0; i < fileDiffs.length; i += CHUNK_SIZE) {
-        chunks.push(fileDiffs.slice(i, i + CHUNK_SIZE));
+      // Apply exclusion patterns before chunking
+      let fileDiffs = parseDiff(rawDiff);
+      const excludePatterns = config.reviewExcludePatterns ?? [];
+      let excludedCount = 0;
+      if (excludePatterns.length > 0) {
+        const before = fileDiffs.length;
+        fileDiffs = fileDiffs.filter(
+          (d) => !excludePatterns.some((p) => minimatch(d.path, p)),
+        );
+        excludedCount = before - fileDiffs.length;
       }
 
+      if (fileDiffs.length === 0) {
+        stream.markdown('_No files to review after applying exclusion patterns._\n\n');
+        return;
+      }
+
+      if (excludedCount > 0) {
+        stream.markdown(`_${excludedCount} file${excludedCount !== 1 ? 's' : ''} excluded by pattern._\n\n`);
+      }
+
+      const chunks = buildAdaptiveChunks(fileDiffs, tokenBudget);
+
       let allFindings: Array<Omit<ReviewFinding, 'id'>> = [];
+      let fileOffset = 0;
 
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
-        const from = i * CHUNK_SIZE + 1;
-        const to = Math.min((i + 1) * CHUNK_SIZE, fileDiffs.length);
+        const from = fileOffset + 1;
+        const to = fileOffset + chunk.length;
+        fileOffset += chunk.length;
         const batchLabel = chunks.length > 1 ? ` · batch ${i + 1}/${chunks.length}` : '';
         stream.markdown(`_Analysing files ${from}–${to} of ${fileDiffs.length}${batchLabel}…_\n\n`);
 
@@ -330,7 +360,7 @@ export function createBitbucketParticipant(
         const { findings, additionalFilesNeeded } = await parseReviewResponse(chunkRaw);
         let chunkFindings = findings;
 
-        if (additionalFilesNeeded.length > 0) {
+        if (reviewMode !== 'quick' && additionalFilesNeeded.length > 0) {
           const capped = additionalFilesNeeded.slice(0, 5);
           const batchSuffix = chunks.length > 1 ? ` (batch ${i + 1})` : '';
           stream.markdown(`_Fetching ${capped.length} context file${capped.length !== 1 ? 's' : ''}${batchSuffix}…_\n\n`);
@@ -361,7 +391,7 @@ export function createBitbucketParticipant(
         }
       }
 
-      const numbered = allFindings.map((f, i) => ({ ...f, id: i + 1 }));
+      const numbered = allFindings.map((f, idx) => ({ ...f, id: idx + 1 }));
       const output = service.formatReview(numbered, pr, fileDiffs.length);
       stream.markdown(output);
 
