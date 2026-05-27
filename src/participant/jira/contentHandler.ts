@@ -2,8 +2,8 @@ import * as vscode from 'vscode';
 import type { TicketService } from '../../services/TicketService';
 import { markdownToJiraWiki } from '../../utils/markdownToJiraWiki';
 import type { ContentSession } from '../sessionState';
-import { isCancellation, isConfirmation, serializeTurns } from '../sessionState';
-import { generateContent, isLmRefusal, extractHistoryTurns } from './llmHelpers';
+import { isCancellation, isConfirmation } from '../sessionState';
+import { generateContent, isLmRefusal, buildHistoryContext } from './llmHelpers';
 
 export const FILE_MAX_BYTES = 60_000;
 
@@ -52,13 +52,14 @@ export async function buildContentContext(
   chatContext: vscode.ChatContext,
   ticketText: string,
   commentBlocks: string,
+  contentSource: 'generate' | 'history-recent' | 'history-full' = 'history-full',
 ): Promise<string> {
   const parts: string[] = [];
 
   const fileContent = await gatherFileContent(request.references, chatContext.history);
   if (fileContent) parts.push(`**Attached files:**\n\n${fileContent}`);
 
-  const historyText = serializeTurns(extractHistoryTurns(chatContext), 'full');
+  const historyText = buildHistoryContext(contentSource, chatContext);
   if (historyText) parts.push(`**Conversation history:**\n\n${historyText}`);
 
   const ticketSection = commentBlocks
