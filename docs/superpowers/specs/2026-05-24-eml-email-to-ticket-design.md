@@ -38,11 +38,14 @@ functions in `emailHandler.ts` are **kept** — the confirm/preview/create flow 
 
 ## Architecture
 
-### New dependency: `mailparser`
+### New dependency: `postal-mime`
+
+`postal-mime` is the actively recommended successor to `mailparser`, from the same author.
+Simpler async API, no streaming complexity, works in both Node.js and browser environments.
 
 ```
-npm install mailparser
-npm install --save-dev @types/mailparser
+npm install postal-mime
+npm install --save-dev @types/postal-mime
 ```
 
 ### New file: `src/utils/emlParser.ts`
@@ -73,10 +76,11 @@ export async function parseEml(buffer: Buffer): Promise<ParsedEml>
 2. `plainBody` only → use plain text directly as `markdownBody`
 3. Neither → empty string
 
-**Inline image handling:** `mailparser` returns attachments with
-`contentDisposition: 'inline'` and a `contentId`. Build `inlineImageMap` mapping each
-`contentId` (stripped of angle brackets) to the attachment filename. The existing
+**Inline image handling:** `postal-mime` returns attachments with
+`disposition: 'inline'` and a `contentId`. Build `inlineImageMap` mapping each
+`contentId` (stripped of surrounding `<>`) to the attachment filename. The existing
 `htmlToMarkdown` already resolves `cid:` references via this map.
+`attachment.content` is a `Uint8Array` — convert with `Buffer.from(att.content).toString('base64')`.
 
 **Edge cases handled by `parseEml`:**
 - Plain-text-only emails (no HTML part)
