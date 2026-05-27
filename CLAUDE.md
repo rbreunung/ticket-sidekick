@@ -57,7 +57,7 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/utils/emlParser.ts` | Parses `.eml` files via `postal-mime`; returns `ParsedEml` (subject, sender, date, htmlBody, plainBody, inlineImageMap, attachments) |
 | `src/participant/BitbucketParticipant.ts` | Bitbucket chat handler: check, PR review, multi-turn follow-ups |
 | `src/participant/sessionState.ts` | VS Code-free pure helpers and Jira multi-turn session types; includes `pickEmailOption()` for unified template+issue-type selection |
-| `src/participant/reviewSessionState.ts` | Bitbucket session types, `parsePrUrl`, `parseDiff`, `resolveByNumber` |
+| `src/participant/reviewSessionState.ts` | Bitbucket session types, `parsePrUrl`, `parseDiff`, `resolveByNumber`, `buildAdaptiveChunks` |
 | `src/services/WorkflowService.ts` | Workflow graph cache I/O, BFS path-finding, `discoverWorkflow` sampling |
 | `src/templates/TemplateService.ts` | Reads `.jira-templates.json`; returns `{ templates, cleanupRules }` |
 | `src/templates/FieldResolver.ts` | Resolves `resolveFields` entries by name (API lookup) or id (pass-through) |
@@ -73,6 +73,8 @@ npm test          # Vitest unit tests (no VS Code required)
 npm run compile   # TypeScript type check
 npm run test:e2e  # @vscode/test-electron participant tests (requires VS Code)
 ```
+
+Node.js is managed by **Volta** — use `~/.volta/bin/npm` if `npm` isn't on your PATH (e.g. in scripts or terminals that don't load the shell profile).
 
 **`npm test` must be green before every commit.** Run `npm run compile` to catch TypeScript errors first.
 
@@ -138,6 +140,8 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
 | Default project | `ticketSidekick.jira.defaultProject` |
 | Required fields | `ticketSidekick.jira.requiredFields` |
 | Show connection info | `ticketSidekick.jira.showConnectionInfo` |
+| Additional display fields | `ticketSidekick.jira.additionalDisplayFields` |
+| Hidden display fields | `ticketSidekick.jira.hiddenDisplayFields` |
 
 ### Bitbucket settings
 
@@ -147,6 +151,10 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
 | Auth type | `ticketSidekick.bitbucket.authType` (`datacenter` \| `cloud`) |
 | Show connection info | `ticketSidekick.bitbucket.showConnectionInfo` |
 | Review instructions | `ticketSidekick.bitbucket.reviewInstructions` |
+| Model context tokens | `ticketSidekick.bitbucket.modelContextTokens` |
+| Context budget ratio | `ticketSidekick.bitbucket.contextBudgetRatio` (default `0.7`) |
+| Review mode | `ticketSidekick.bitbucket.reviewMode` (`standard` \| `quick`) |
+| Review exclude patterns | `ticketSidekick.bitbucket.reviewExcludePatterns` (glob array) |
 
 ### Email settings
 
@@ -224,12 +232,15 @@ API endpoint: `POST /rest/api/2/issue` with `{ fields: { project: { key }, summa
 2. `BitbucketApiClient.getPullRequest` → metadata (title, author, target branch, source commit hash)
 3. `BitbucketApiClient.getPullRequestDiff` → raw unified diff string
 4. `parseDiff(raw)` → `FileDiff[]` (one entry per changed file)
-5. `PrReviewService.gatherFileContents` — for each changed file: workspace reader first (`vscode.workspace.findFiles`), API fallback (`getFileContent`); all files fetched in parallel via `Promise.all`
-6. `PrReviewService.buildPrompt` → structured prompt with file diffs + full file contents
-7. LLM returns `{ findings: ReviewFinding[], additionalFilesNeeded: string[] }`
-8. If `additionalFilesNeeded` is non-empty: fetch up to 5 extra files (parallel), re-run prompt (pass 2)
-9. `PrReviewService.formatReview` → markdown report with numbered findings grouped by file
-10. `ReviewSession` saved to `workspaceState` for follow-up turns
+5. Apply `reviewExcludePatterns` (glob, via `minimatch` with `matchBase: true`) — filtered files reported to user; early return if all excluded
+6. Resolve token budget: `modelContextTokens` setting → `request.model.maxInputTokens` (VS Code LM API) → fallback 60 000; multiplied by `contextBudgetRatio` (default 0.7)
+7. `buildAdaptiveChunks(fileDiffs, tokenBudget)` → `FileDiff[][]`; each chunk is greedily packed using `1500 + 50×files + ceil(diff.length/4)` token estimate
+8. For each chunk — **Pass 1:** `PrReviewService.buildPrompt(pr, chunk)` → LLM returns `{ findings, additionalFilesNeeded }`
+9. **Pass 2** (skipped in `quick` mode): if `additionalFilesNeeded` non-empty, fetch up to 5 files (workspace first, API fallback), rebuild prompt with full contents, re-run LLM
+10. `PrReviewService.formatReview` → markdown report with numbered findings grouped by file
+11. `ReviewSession` saved to `workspaceState` for follow-up turns
+
+**Review mode:** `@bitbucket review quick <url>` disables Pass 2 for the run; `@bitbucket review deep <url>` forces standard. Keyword overrides the `reviewMode` setting.
 
 ## Comment handling
 
