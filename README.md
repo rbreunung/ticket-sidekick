@@ -377,6 +377,7 @@ Create a `.jira-templates.json` file in your workspace root to define per-applic
       "targetState": "Done",
       "resolution": "Fixed",
       "subtaskResolution": "Fixed",
+      "subtaskTargetState": "Closed",
       "closeSubtasks": true,
       "jql": "fixVersion in releasedVersions() AND assignee is not EMPTY"
     }
@@ -394,7 +395,8 @@ Create a `.jira-templates.json` file in your workspace root to define per-applic
 | `targetState` | yes | — | Destination Jira status name (e.g. `Done`, `Closed`) |
 | `resolution` | no | — | Resolution applied to parent ticket transitions (e.g. `Fixed`, `Won't Fix`) |
 | `subtaskResolution` | no | same as `resolution` | Resolution applied to subtask transitions — falls back to `resolution` if omitted |
-| `closeSubtasks` | no | `false` | When `true`, open subtasks are transitioned to `targetState` before their parent |
+| `subtaskTargetState` | no | same as `targetState` | Destination status for subtask transitions — falls back to `targetState` if omitted |
+| `closeSubtasks` | no | `false` | When `true`, open subtasks are transitioned before their parent |
 | `jql` | no | — | Extra JQL filter ANDed onto the base query — write only the additional conditions; `project`, `issueType`, and `status` are always included |
 
 > **Note:** `project` and `issueType` are always prepended to the effective JQL even when `jql` is set — they are never replaced. The `jql` field adds extra conditions such as `fixVersion in releasedVersions()` or `sprint in openSprints()`.

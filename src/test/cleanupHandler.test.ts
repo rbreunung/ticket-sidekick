@@ -454,4 +454,60 @@ describe('handleRunCleanup', () => {
     expect(allMarkdown).toContain('Child subtask');
     expect(allMarkdown).toContain('<!-- jira:transition-review -->');
   });
+
+  it('uses subtaskTargetState for the subtask JQL and path when set', async () => {
+    vi.mocked(TemplateService).mockImplementation(() => ({
+      loadTemplates: vi.fn().mockReturnValue({
+        templates: [],
+        cleanupRules: [
+          {
+            name: 'close-bugs',
+            project: 'PROJ',
+            issueType: 'Bug',
+            targetState: 'Done',
+            resolution: 'Fixed',
+            closeSubtasks: true,
+            subtaskTargetState: 'Closed',
+          },
+        ],
+      }),
+    }) as never);
+
+    const parentIssue = {
+      id: '1', key: 'PROJ-1',
+      fields: {
+        summary: 'Parent ticket', status: { name: 'Open' },
+        assignee: null, reporter: null, priority: null,
+        labels: [], fixVersions: [], comment: null, description: null,
+      },
+    };
+    const subtaskIssue = {
+      id: '2', key: 'PROJ-1a',
+      fields: {
+        summary: 'Child subtask', status: { name: 'Open' },
+        assignee: null, reporter: null, priority: null,
+        labels: [], fixVersions: [], comment: null, description: null,
+        parent: { key: 'PROJ-1' },
+      },
+    };
+
+    const spy = vi.spyOn(ticketService, 'searchTicketsRaw');
+    spy.mockResolvedValueOnce({ issues: [parentIssue], total: 1 });
+    spy.mockResolvedValueOnce({ issues: [subtaskIssue], total: 1 });
+
+    const stream = mockStream();
+    const ws = mockWs();
+    const intent = { ...baseIntent, cleanupRuleName: 'close-bugs', resolution: 'Fixed' };
+
+    await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
+
+    // Subtask JQL must use subtaskTargetState, not targetState
+    const subtaskCall = spy.mock.calls[1][0] as string;
+    expect(subtaskCall).toContain('status != "Closed"');
+    expect(subtaskCall).not.toContain('status != "Done"');
+
+    // Subtask should still appear in the review screen
+    const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    expect(allMarkdown).toContain('PROJ-1a');
+  });
 });

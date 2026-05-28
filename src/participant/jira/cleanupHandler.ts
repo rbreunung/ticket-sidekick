@@ -159,19 +159,20 @@ export async function handleRunCleanup(
 
   if (rule?.closeSubtasks && tickets.length > 0) {
     const subtaskResolution = rule.subtaskResolution ?? resolution;
+    const subTargetState = rule.subtaskTargetState ?? targetState;
     const parentKeys = tickets.map((t) => t.key);
     const subJql =
       `parent in (${parentKeys.map((k) => `"${k}"`).join(', ')}) ` +
-      `AND status != "${targetState}" AND resolution is EMPTY`;
+      `AND status != "${subTargetState}" AND resolution is EMPTY`;
     const subResult = await ticketService.searchTicketsRaw(subJql, 250);
     for (const s of subResult.issues) {
       const parentKey = s.fields.parent?.key;
       if (!parentKey) continue;
       const parent = tickets.find((t) => t.key === parentKey);
       if (!parent) continue;
-      const subPath = findPath(subGraph, s.fields.status.name, targetState);
+      const subPath = findPath(subGraph, s.fields.status.name, subTargetState);
       if (subPath === null) {
-        stream.markdown(`_Warning: no path from **${s.fields.status.name}** to **${targetState}** for subtask ${s.key} — skipping. Run \`@jira discover workflow ${project} Sub-task\` if missing._\n\n`);
+        stream.markdown(`_Warning: no path from **${s.fields.status.name}** to **${subTargetState}** for subtask ${s.key} — skipping. Run \`@jira discover workflow ${project} Sub-task\` if missing._\n\n`);
         continue;
       }
       parent.subtasks.push({

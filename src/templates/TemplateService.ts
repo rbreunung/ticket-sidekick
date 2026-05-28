@@ -23,6 +23,7 @@ export interface CleanupRule {
   resolution?: string;
   closeSubtasks?: boolean;
   subtaskResolution?: string;
+  subtaskTargetState?: string;
   jql?: string;
 }
 
