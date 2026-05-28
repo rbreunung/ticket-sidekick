@@ -88,8 +88,14 @@ export async function parseIntent(
   model: vscode.LanguageModelChat,
   token: vscode.CancellationToken,
 ): Promise<ParsedIntent> {
-  const message = vscode.LanguageModelChatMessage.User(INTENT_PROMPT + JSON.stringify(prompt));
-  const response = await model.sendRequest([message], {}, token);
+  const roleSetup = vscode.LanguageModelChatMessage.User(
+    'You are a Jira intent parser. Your task is to analyze user commands and produce structured intent as a JSON object matching the schema below.',
+  );
+  const roleAck = vscode.LanguageModelChatMessage.Assistant(
+    'Understood. I parse Jira commands into structured JSON.',
+  );
+  const task = vscode.LanguageModelChatMessage.User(INTENT_PROMPT + JSON.stringify(prompt));
+  const response = await model.sendRequest([roleSetup, roleAck, task], {}, token);
   let raw = '';
   for await (const chunk of response.text) {
     raw += chunk;
@@ -188,11 +194,25 @@ export async function synthesizeComments(
   model: vscode.LanguageModelChat,
   token: vscode.CancellationToken,
 ): Promise<string> {
+  const roleText = query
+    ? 'You are a Jira comment analyst. Your task is to find and quote comments relevant to the user\'s query.'
+    : 'You are a Jira comment analyst. Your task is to produce concise numbered summaries of each comment.';
+  const roleAck = query
+    ? 'Understood. I find and quote comments relevant to the user\'s query.'
+    : 'Understood. I produce concise numbered summaries of each comment.';
   const task = query
     ? `Find and quote comments relevant to: "${query}". Note the author and date for each relevant comment.`
     : 'Summarise each comment in one sentence. Number each one. Format: N. **Author** (date): one-sentence summary.';
-  const prompt = `Comments:\n\n${commentBlocks}\n\n${task} Produce only the final content, no preamble.`;
-  const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], {}, token);
+  const taskPrompt = `Comments:\n\n${commentBlocks}\n\n${task} Produce only the final content, no preamble.\n\nBase your response only on the comments provided above. Do not invent or infer information not present in the source.`;
+  const response = await model.sendRequest(
+    [
+      vscode.LanguageModelChatMessage.User(roleText),
+      vscode.LanguageModelChatMessage.Assistant(roleAck),
+      vscode.LanguageModelChatMessage.User(taskPrompt),
+    ],
+    {},
+    token,
+  );
   let text = '';
   for await (const chunk of response.text) text += chunk;
   return text.trim();
@@ -209,8 +229,18 @@ export async function generateDescriptionAndCommentsSummary(
     commentBlocks ? `Comments:\n\n${commentBlocks}` : null,
   ].filter(Boolean).join('\n\n');
   if (!parts) return '_No description or comments._';
-  const prompt = `${parts}\n\nWrite a concise prose paragraph summarising the above. No preamble, no headings, no bullet points.`;
-  const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], {}, token);
+  const roleText = 'You are a technical scribe. Your task is to write a single prose paragraph summarizing a Jira ticket\'s description and comments.';
+  const roleAck = 'Understood. I write a single prose paragraph summarizing the ticket\'s description and comments.';
+  const taskPrompt = `${parts}\n\nWrite a concise prose paragraph summarising the above. No preamble, no headings, no bullet points.\n\nBase your summary only on the description and comments provided above.`;
+  const response = await model.sendRequest(
+    [
+      vscode.LanguageModelChatMessage.User(roleText),
+      vscode.LanguageModelChatMessage.Assistant(roleAck),
+      vscode.LanguageModelChatMessage.User(taskPrompt),
+    ],
+    {},
+    token,
+  );
   let text = '';
   for await (const chunk of response.text) text += chunk;
   return text.trim();
@@ -221,8 +251,18 @@ export async function spellCheckValue(
   model: vscode.LanguageModelChat,
   token: vscode.CancellationToken,
 ): Promise<string | null> {
-  const prompt = `Check this text for spelling and grammar errors:\n\n${text}\n\nIf there are no errors, reply with exactly: UNCHANGED\nIf there are errors, reply with ONLY the corrected text, no explanation.`;
-  const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], {}, token);
+  const roleText = 'You are a copy editor. Your task is to find and correct spelling and grammar errors in text.';
+  const roleAck = 'Understood. I identify and fix spelling and grammar errors.';
+  const taskPrompt = `Check this text for spelling and grammar errors:\n\n${text}\n\nIf there are no errors, reply with exactly: UNCHANGED\nIf there are errors, reply with ONLY the corrected text, no explanation.`;
+  const response = await model.sendRequest(
+    [
+      vscode.LanguageModelChatMessage.User(roleText),
+      vscode.LanguageModelChatMessage.Assistant(roleAck),
+      vscode.LanguageModelChatMessage.User(taskPrompt),
+    ],
+    {},
+    token,
+  );
   let raw = '';
   for await (const chunk of response.text) raw += chunk;
   const trimmed = raw.trim();
