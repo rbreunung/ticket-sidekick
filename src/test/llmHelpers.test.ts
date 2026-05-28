@@ -25,7 +25,7 @@ vi.mock('vscode', () => {
 });
 
 import * as vscode from 'vscode';
-import { extractHistoryTurns, buildHistoryContext, extractLastAssistantText, generateContent } from '../participant/jira/llmHelpers';
+import { extractHistoryTurns, buildHistoryContext, extractLastAssistantText, generateContent, extractFixVersionFromPrompt } from '../participant/jira/llmHelpers';
 
 describe('extractHistoryTurns', () => {
   it('includes user turns', () => {
@@ -192,5 +192,27 @@ describe('generateContent — role selection', () => {
     await generateContent('post the patch', model as never, {} as never, undefined, 'history-recent');
     const [messages] = model.sendRequest.mock.calls[0] as [Array<{ content: string }>];
     expect(messages[0].content).toContain('technical scribe');
+  });
+});
+
+describe('extractFixVersionFromPrompt', () => {
+  it('extracts a multi-word version in double quotes', () => {
+    expect(extractFixVersionFromPrompt('@jira run cleanup "My Cleanup" in "My Version has Spaces"')).toBe('My Version has Spaces');
+  });
+
+  it('extracts a two-word version in double quotes', () => {
+    expect(extractFixVersionFromPrompt('@jira close BILLING bugs in "Release 3.2"')).toBe('Release 3.2');
+  });
+
+  it('extracts a version in single quotes', () => {
+    expect(extractFixVersionFromPrompt("@jira close PROJ bugs in 'Fix Version 3.2'")).toBe('Fix Version 3.2');
+  });
+
+  it('returns null when no "in <quoted>" pattern', () => {
+    expect(extractFixVersionFromPrompt('@jira run cleanup "Close released bugs"')).toBeNull();
+  });
+
+  it('does not match the rule name that follows "cleanup" instead of "in"', () => {
+    expect(extractFixVersionFromPrompt('@jira run cleanup "My Cleanup"')).toBeNull();
   });
 });

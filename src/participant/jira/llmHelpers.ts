@@ -70,7 +70,7 @@ Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|
 - transition: move/close/transition a single ticket to a target status; targetStatus is the destination state name; resolution is the resolution name if the user specifies one (e.g. "with resolution Not a Bug") — null otherwise; use when the user refers to one ticket (explicit key or resolved from context) — NOT when they say "them", "these tickets", "all of them"
 - bulkTransition: transition/move/close/resolve "them" or "these tickets" or "all of them" to a status; only valid when a prior search result is available; targetStatus is the destination state name
 - bulkUpdateField: set/update/change a field on "them" or "these tickets"; only valid when a prior search result is available; bulkFieldName is the field name the user gave, bulkFieldValue is the value string
-- runCleanup: bulk-close or bulk-transition ALL tickets of a type in a project; triggered by "close all", "run cleanup", or "close PROJECT ISSUETYPE" where PROJECT is a project key and ISSUETYPE is an issue type name (not a ticket key like PROJ-123); projectKey and issueType are extracted from the prompt; cleanupRuleName is the quoted rule name if given; fixVersion is the exact fix version string if given (must be quoted in the prompt, e.g. "Fix Version 3.2"); examples: "@jira close VSJI Bug", "@jira run cleanup 'Close released bugs'", "@jira close BILLING bugs in 'Release 3.2'"
+- runCleanup: bulk-close or bulk-transition ALL tickets of a type in a project; triggered by "close all", "run cleanup", or "close PROJECT ISSUETYPE" where PROJECT is a project key and ISSUETYPE is an issue type name (not a ticket key like PROJ-123); projectKey and issueType are extracted from the prompt; cleanupRuleName is the quoted rule name if given; fixVersion is the complete string between the quotes after the word "in" — capture every word inside the quotes verbatim (e.g. in "Release 3.2" → "Release 3.2"; in "My Version has Spaces" → "My Version has Spaces"); examples: "@jira close VSJI Bug", "@jira run cleanup 'Close released bugs'", "@jira close BILLING bugs in 'Release 3.2'", "@jira run cleanup 'Close bugs' in 'My Version has Spaces'"
 - loadTicket: download the full ticket context (description, all comments, attachments) into .jira-context/{key}/ in the workspace root; triggered by "load", "fetch context", "download ticket", "load context for"
 - spellCheck: check and correct spelling and grammar on a ticket's description; triggered by "spell check", "fix grammar", "check spelling", "proofread"
 - createFromEmail: create a Jira ticket from an email (.eml file); triggered by "create from email", "ticket from email", "import email", "email to ticket"
@@ -82,6 +82,11 @@ Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|
   - default to "literal" for operations other than addComment and updateField
 
 Command: `;
+
+export function extractFixVersionFromPrompt(prompt: string): string | null {
+  const m = prompt.match(/\bin\s+["']([^"']+)["']/i);
+  return m ? m[1] : null;
+}
 
 export async function parseIntent(
   prompt: string,

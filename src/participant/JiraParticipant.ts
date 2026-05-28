@@ -11,7 +11,7 @@ import { loadWorkflowCache, findPath } from '../services/WorkflowService';
 import type { WorkflowGraph } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
 import type { Operation, ParsedIntent } from './jira/llmHelpers';
-import { parseIntent, generateContent, isLmRefusal, synthesizeComments, generateDescriptionAndCommentsSummary, isPointerPrompt, extractLastAssistantText } from './jira/llmHelpers';
+import { parseIntent, extractFixVersionFromPrompt, generateContent, isLmRefusal, synthesizeComments, generateDescriptionAndCommentsSummary, isPointerPrompt, extractLastAssistantText } from './jira/llmHelpers';
 import { streamFieldUpdatePreview, continueSetField, handleSetField, handleSpellCheck } from './jira/fieldHandler';
 import { getLastAssistantText, resolveTicketFromBranch, resolveProjectKey, parseLastTicketFromContext } from './jira/ticketContext';
 import { gatherFileContent, buildContentContext, streamContentPreview, handleContentSession } from './jira/contentHandler';
@@ -501,6 +501,10 @@ export function createJiraParticipant(
     let intent: ParsedIntent;
     try {
       intent = await parseIntent(request.prompt, request.model, token);
+      if (intent.operation === 'runCleanup') {
+        const fv = extractFixVersionFromPrompt(request.prompt);
+        if (fv) intent = { ...intent, fixVersion: fv };
+      }
     } catch (err) {
       stream.markdown(`Could not understand the request: ${err instanceof Error ? err.message : String(err)}`);
       return;
