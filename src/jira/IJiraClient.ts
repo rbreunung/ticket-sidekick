@@ -3,6 +3,18 @@ export interface JiraSubtask {
   fields: { summary: string; status: { name: string } };
 }
 
+export interface JiraIssueLink {
+  id: string;
+  type: { name: string; inward: string; outward: string };
+  inwardIssue?: { key: string; fields: { summary: string; status: { name: string } } };
+  outwardIssue?: { key: string; fields: { summary: string; status: { name: string } } };
+}
+
+export interface JiraRemoteLink {
+  id: number;
+  object: { url: string; title: string };
+}
+
 export interface JiraComment {
   id: string;
   author: JiraUser;
@@ -40,6 +52,7 @@ export interface JiraIssue {
     comment: { comments: JiraComment[]; total: number } | null;
     subtasks?: JiraSubtask[];
     attachment?: JiraAttachment[];
+    issuelinks?: JiraIssueLink[];
     [key: string]: unknown;
   };
 }
@@ -129,4 +142,5 @@ export interface IJiraClient {
   getEditMeta(issueKey: string): Promise<Record<string, JiraEditMetaField>>;
   findSprints(projectKey: string, query: string): Promise<JiraSprintCandidate[]>;
   uploadAttachment(issueKey: string, filename: string, contentType: string, contentBytes: string): Promise<void>;
+  getRemoteLinks(issueKey: string): Promise<JiraRemoteLink[]>;
 }

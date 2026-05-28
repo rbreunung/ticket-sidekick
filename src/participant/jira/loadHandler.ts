@@ -54,8 +54,13 @@ export async function handleLoadTicket(
 
   // Stream ticket content first (same as @jira show), with inline attachment links
   // rewritten to their Jira URLs so they are clickable in the chat.
-  const { table, sections } = formatIssueFields(issue, fieldMeta, alwaysShowIds, hiddenIds);
   const baseUrl = vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.baseUrl') ?? '';
+  const { table, sections } = formatIssueFields(issue, fieldMeta, alwaysShowIds, hiddenIds, baseUrl);
+  const remoteLinks = await ticketService.getRemoteLinks(ticketKey);
+  if (remoteLinks.length > 0) {
+    const lines = remoteLinks.map(r => `- [${r.object.title}](${r.object.url})`);
+    sections.push(`## Web Links\n\n${lines.join('\n')}`);
+  }
   const heading = baseUrl
     ? `## [${issue.key}](${baseUrl}/browse/${issue.key}): ${issue.fields.summary}`
     : `## ${issue.key}: ${issue.fields.summary}`;
@@ -99,7 +104,11 @@ export async function handleLoadTicket(
 
   // Build ticket.md — suppress built-in attachment section, append custom one
   const hiddenWithAttachment = new Set([...hiddenIds, 'attachment']);
-  const { table: mdTable, sections: mdSections } = formatIssueFields(issue, fieldMeta, alwaysShowIds, hiddenWithAttachment);
+  const { table: mdTable, sections: mdSections } = formatIssueFields(issue, fieldMeta, alwaysShowIds, hiddenWithAttachment, baseUrl);
+  if (remoteLinks.length > 0) {
+    const lines = remoteLinks.map(r => `- [${r.object.title}](${r.object.url})`);
+    mdSections.push(`## Web Links\n\n${lines.join('\n')}`);
+  }
   const mdParts: string[] = [`# ${issue.key}: ${issue.fields.summary}`];
   if (mdTable) mdParts.push('', mdTable);
   if (mdSections.length > 0) mdParts.push('', ...mdSections);

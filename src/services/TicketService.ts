@@ -1,4 +1,4 @@
-import type { IJiraClient, JiraAttachment, JiraComment, JiraEditMetaField, JiraFieldMeta, JiraFilter, JiraIssue, JiraIssueType, JiraSearchResult, JiraSprintCandidate } from '../jira/IJiraClient';
+import type { IJiraClient, JiraAttachment, JiraComment, JiraEditMetaField, JiraFieldMeta, JiraFilter, JiraIssue, JiraIssueLink, JiraIssueType, JiraRemoteLink, JiraSearchResult, JiraSprintCandidate } from '../jira/IJiraClient';
 import { formatJiraBody } from '../utils/markdownFormatter';
 
 export type FieldResolutionResult =
@@ -25,7 +25,7 @@ export function resolveFieldIdFuzzy(input: string, fields: JiraFieldMeta[]): Fie
   return { kind: 'none' };
 }
 
-const EXCLUDED_FROM_TABLE = new Set(['summary', 'comment', 'subtasks']);
+const EXCLUDED_FROM_TABLE = new Set(['summary', 'comment', 'subtasks', 'issuelinks']);
 
 function renderSingleFieldValue(value: unknown, meta: JiraFieldMeta): string {
   if (value === null || value === undefined) return '_Not set_';
@@ -90,15 +90,31 @@ function isMultiLine(value: unknown, meta: JiraFieldMeta): boolean {
   return false;
 }
 
+export function formatIssueLinkLine(link: JiraIssueLink, baseUrl?: string): string {
+  const linked = link.outwardIssue ?? link.inwardIssue;
+  if (!linked) return '';
+  const label = link.outwardIssue ? link.type.outward : link.type.inward;
+  const keyText = baseUrl ? `[${linked.key}](${baseUrl}/browse/${linked.key})` : linked.key;
+  return `- ${label} ${keyText}: ${linked.fields.summary} — ${linked.fields.status.name}`;
+}
+
 export function formatIssueFields(
   issue: JiraIssue,
   fieldMeta: JiraFieldMeta[],
   alwaysShowIds: Set<string>,
   hiddenIds?: Set<string>,
+  baseUrl?: string,
 ): { table: string; sections: string[] } {
   const navigable = new Map(fieldMeta.filter(f => f.navigable === true).map(f => [f.id, f]));
   const tableRows: string[] = [];
   const sections: string[] = [];
+
+  if (issue.fields.issuelinks && issue.fields.issuelinks.length > 0) {
+    const lines = issue.fields.issuelinks
+      .map(l => formatIssueLinkLine(l, baseUrl))
+      .filter(Boolean);
+    if (lines.length > 0) sections.push(`## Linked Issues\n\n${lines.join('\n')}`);
+  }
   const processedIds = new Set<string>();
 
   for (const [fieldId, value] of Object.entries(issue.fields)) {
@@ -183,6 +199,10 @@ export class TicketService {
     return this.client.getFields();
   }
 
+  async getRemoteLinks(issueKey: string): Promise<JiraRemoteLink[]> {
+    return this.client.getRemoteLinks(issueKey);
+  }
+
   async getTicket(
     issueKey: string,
     fieldMeta?: JiraFieldMeta[],
@@ -193,7 +213,12 @@ export class TicketService {
     const issue = await this.client.getIssue(issueKey);
     const meta = fieldMeta ?? await this.client.getFields();
     const showIds = alwaysShowIds ?? new Set<string>();
-    const { table, sections } = formatIssueFields(issue, meta, showIds, hiddenIds);
+    const { table, sections } = formatIssueFields(issue, meta, showIds, hiddenIds, baseUrl);
+    const remoteLinks = await this.client.getRemoteLinks(issueKey);
+    if (remoteLinks.length > 0) {
+      const lines = remoteLinks.map(r => `- [${r.object.title}](${r.object.url})`);
+      sections.push(`## Web Links\n\n${lines.join('\n')}`);
+    }
     const heading = baseUrl
       ? `## [${issue.key}](${baseUrl}/browse/${issue.key}): ${issue.fields.summary}`
       : `## ${issue.key}: ${issue.fields.summary}`;

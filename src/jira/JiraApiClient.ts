@@ -8,6 +8,7 @@ import type {
   JiraIssue,
   JiraProject,
   JiraProjectStatus,
+  JiraRemoteLink,
   JiraSearchResult,
   JiraSprintCandidate,
   JiraTransition,
@@ -318,6 +319,14 @@ export class JiraApiClient implements IJiraClient {
       `/issue/${encodeURIComponent(issueKey)}/editmeta`,
     );
     return data.fields;
+  }
+
+  async getRemoteLinks(issueKey: string): Promise<JiraRemoteLink[]> {
+    try {
+      return await this.request<JiraRemoteLink[]>(`/issue/${issueKey}/remotelink`);
+    } catch {
+      return [];
+    }
   }
 
   async findSprints(projectKey: string, query: string): Promise<JiraSprintCandidate[]> {

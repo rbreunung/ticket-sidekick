@@ -68,6 +68,13 @@
         }
       ],
       "total": 1
-    }
+    },
+    "issuelinks": [
+      {
+        "id": "10001",
+        "type": { "name": "Blocks", "inward": "is blocked by", "outward": "blocks" },
+        "outwardIssue": { "key": "PROJ-45", "fields": { "summary": "Auth login page", "status": { "name": "Open" } } }
+      }
+    ]
   }
 }

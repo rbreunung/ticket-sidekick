@@ -66,6 +66,42 @@ describe('TicketService', () => {
       expect(result).not.toContain('browse');
     });
 
+    it('renders a Linked Issues section when issuelinks are present', async () => {
+      const result = await service.getTicket('PROJ-123');
+      expect(result).toContain('## Linked Issues');
+      expect(result).toContain('blocks PROJ-45');
+      expect(result).toContain('Auth login page');
+      expect(result).toContain('Open');
+    });
+
+    it('makes linked issue keys clickable when baseUrl is provided', async () => {
+      const result = await service.getTicket('PROJ-123', undefined, undefined, undefined, 'https://jira.example.com');
+      expect(result).toContain('[PROJ-45](https://jira.example.com/browse/PROJ-45)');
+    });
+
+    it('renders a Web Links section when remote links are present', async () => {
+      client.getRemoteLinks = async () => [
+        { id: 1, object: { url: 'https://confluence.example.com/design', title: 'Auth Design' } },
+      ];
+      const result = await service.getTicket('PROJ-123');
+      expect(result).toContain('## Web Links');
+      expect(result).toContain('[Auth Design](https://confluence.example.com/design)');
+    });
+
+    it('omits Linked Issues and Web Links sections when both are absent', async () => {
+      client.getIssue = async () => ({
+        id: '2', key: 'PROJ-999',
+        fields: {
+          summary: 'Plain ticket', description: null, status: { name: 'Open' },
+          assignee: null, reporter: null, priority: null, labels: [], fixVersions: [],
+          comment: null,
+        },
+      });
+      const result = await service.getTicket('PROJ-999');
+      expect(result).not.toContain('## Linked Issues');
+      expect(result).not.toContain('## Web Links');
+    });
+
   });
 
   describe('addComment', () => {

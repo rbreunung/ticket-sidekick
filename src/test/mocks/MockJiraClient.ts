@@ -10,6 +10,7 @@ import type {
   JiraIssue,
   JiraProject,
   JiraProjectStatus,
+  JiraRemoteLink,
   JiraSearchResult,
   JiraSprintCandidate,
   JiraTransition,
@@ -145,4 +146,6 @@ export class MockJiraClient implements IJiraClient {
   async uploadAttachment(_issueKey: string, _filename: string, _contentType: string, _contentBytes: string): Promise<void> {
     // no-op in tests
   }
+
+  getRemoteLinks: (_issueKey: string) => Promise<JiraRemoteLink[]> = async () => [];
 }
