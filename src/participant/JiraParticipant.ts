@@ -288,7 +288,7 @@ export function createJiraParticipant(
         if (sprintSession.pending.kind === 'field-update') {
           const preview: FieldUpdatePreviewSession = {
             ...sprintSession.pending.session,
-            fieldValue: [{ id: chosen.id }],
+            fieldValue: chosen.id,
           };
           await streamFieldUpdatePreview(preview, stream, ws);
         }
@@ -900,7 +900,7 @@ export function createJiraParticipant(
               break;
             }
             const chosen = candidates.find(s => s.state === 'active') ?? candidates[0];
-            fieldValue = [{ id: chosen.id }];
+            fieldValue = chosen.id;
           } else {
             fieldValue = await ticketService.buildFieldValue(fieldId, searchSession.ticketKeys[0], intent.bulkFieldValue!);
           }

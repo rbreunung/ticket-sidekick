@@ -698,6 +698,35 @@ describe('TicketService buildArrayValue', () => {
   });
 });
 
+describe('TicketService.bulkUpdateField', () => {
+  let client: MockJiraClient;
+  let service: TicketService;
+
+  beforeEach(() => {
+    client = new MockJiraClient();
+    service = new TicketService(client);
+  });
+
+  it('calls updateIssue with the correct field payload for each key', async () => {
+    await service.bulkUpdateField(['PROJ-1', 'PROJ-2'], 'customfield_10020', 42, () => {});
+    expect(client.updateIssueCalls).toHaveLength(2);
+    expect(client.updateIssueCalls[0].fields).toEqual({ customfield_10020: 42 });
+    expect(client.updateIssueCalls[1].fields).toEqual({ customfield_10020: 42 });
+  });
+
+  it('reports failures without stopping the batch', async () => {
+    client.updateIssue = async (key) => {
+      if (key === 'PROJ-2') throw new Error('Forbidden');
+    };
+    const results: Array<{ key: string; ok: boolean; err?: string }> = [];
+    await service.bulkUpdateField(['PROJ-1', 'PROJ-2', 'PROJ-3'], 'priority', { name: 'High' },
+      (key, ok, err) => results.push({ key, ok, err }));
+    expect(results.find(r => r.key === 'PROJ-1')?.ok).toBe(true);
+    expect(results.find(r => r.key === 'PROJ-2')?.ok).toBe(false);
+    expect(results.find(r => r.key === 'PROJ-3')?.ok).toBe(true);
+  });
+});
+
 describe('TicketService findSprints', () => {
   let client: MockJiraClient;
   let service: TicketService;

@@ -57,7 +57,7 @@ export async function continueSetField(
     if (candidates.length === 1) {
       await streamFieldUpdatePreview({
         ticketKeys, fieldId: field.id, fieldName: field.name,
-        fieldValue: [{ id: candidates[0].id }], isArray: true, arrayOp: 'set',
+        fieldValue: candidates[0].id, isArray: true, arrayOp: 'set',
       }, stream, ws);
       return;
     }
