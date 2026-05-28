@@ -15,10 +15,16 @@ async function checkSectionCoverage(
   model: vscode.LanguageModelChat,
   token: vscode.CancellationToken,
 ): Promise<string[]> {
-  const message = vscode.LanguageModelChatMessage.User(
+  const roleSetup = vscode.LanguageModelChatMessage.User(
+    'You are a content coverage analyst. Your task is to determine which template sections are addressed by the given text.',
+  );
+  const roleAck = vscode.LanguageModelChatMessage.Assistant(
+    'Understood. I identify which sections are covered.',
+  );
+  const task = vscode.LanguageModelChatMessage.User(
     `Does this text address any of these sections? Reply with ONLY a JSON array of section names that are clearly covered.\nSections: ${JSON.stringify(sections)}\nText: ${JSON.stringify(prompt)}`,
   );
-  const response = await model.sendRequest([message], {}, token);
+  const response = await model.sendRequest([roleSetup, roleAck, task], {}, token);
   let raw = '';
   for await (const chunk of response.text) raw += chunk;
   const match = raw.match(/\[[\s\S]*\]/);
