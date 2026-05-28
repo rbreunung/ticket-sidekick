@@ -82,6 +82,10 @@
             "default": "",
             "description": "Default Jira project key (e.g. 'PROJ'). Used when creating tickets if no project is specified in your prompt."
           },
+          "ticketSidekick.jira.sprintBoardId": {
+            "type": "number",
+            "description": "Jira Agile board ID to use for sprint lookups. Only needed if your project has multiple Scrum boards and the wrong one is selected automatically. Find the board ID in the board URL: .../jira/software/projects/PROJ/boards/12345."
+          },
           "ticketSidekick.jira.requiredFields": {
             "type": "array",
             "items": {

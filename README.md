@@ -416,6 +416,7 @@ You can choose **No template** to create a plain ticket without any template app
 | Base URL | `ticketSidekick.jira.baseUrl` | _(required)_ |
 | Auth type | `ticketSidekick.jira.authType` | `"datacenter"` |
 | Default project | `ticketSidekick.jira.defaultProject` | _(empty)_ |
+| Sprint board ID | `ticketSidekick.jira.sprintBoardId` | _(auto)_ |
 | Required fields | `ticketSidekick.jira.requiredFields` | `[]` |
 | Always-show fields | `ticketSidekick.jira.additionalDisplayFields` | `[]` |
 | Hidden fields | `ticketSidekick.jira.hiddenDisplayFields` | _(see below)_ |

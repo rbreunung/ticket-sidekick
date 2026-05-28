@@ -213,4 +213,61 @@ describe('JiraApiClient', () => {
       await expect(client.getSprintByName('PROJ', 'Sprint 1')).rejects.toThrow('HTML instead of JSON');
     });
   });
+
+  describe('sprint board resolution', () => {
+    const scrumBoard = { id: 10, type: 'scrum' };
+    const kanbanBoard = { id: 99, type: 'kanban' };
+    const sprint = { id: 42, name: 'Sprint Everest', state: 'active' };
+
+    it('skips Kanban boards and queries only Scrum boards', async () => {
+      const calls: string[] = [];
+      vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+        calls.push(url);
+        if (url.includes('/board?')) {
+          return Promise.resolve({ ok: true, headers: { get: () => 'application/json' }, json: () => Promise.resolve({ values: [kanbanBoard, scrumBoard] }) });
+        }
+        if (url.includes('/board/10/sprint')) {
+          return Promise.resolve({ ok: true, headers: { get: () => 'application/json' }, json: () => Promise.resolve({ values: [sprint] }) });
+        }
+        // board 99 (Kanban) should never be queried for sprints
+        return Promise.resolve({ ok: false, status: 400, statusText: 'Bad Request', headers: { get: () => 'application/json' }, json: () => Promise.resolve({}) });
+      }));
+      const client = new JiraApiClient(BASE_CONFIG);
+      const result = await client.findSprints('PROJ', 'Everest');
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe(42);
+      expect(calls.some(u => u.includes('/board/99/'))).toBe(false);
+    });
+
+    it('does not crash when a board returns 400 — continues to next board', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/board?')) {
+          return Promise.resolve({ ok: true, headers: { get: () => 'application/json' }, json: () => Promise.resolve({ values: [{ id: 1, type: 'scrum' }, { id: 2, type: 'scrum' }] }) });
+        }
+        if (url.includes('/board/1/sprint')) {
+          return Promise.resolve({ ok: false, status: 400, statusText: 'Bad Request', headers: { get: () => 'application/json' }, json: () => Promise.resolve({}) });
+        }
+        return Promise.resolve({ ok: true, headers: { get: () => 'application/json' }, json: () => Promise.resolve({ values: [sprint] }) });
+      }));
+      const client = new JiraApiClient(BASE_CONFIG);
+      const result = await client.findSprints('PROJ', 'Everest');
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe(42);
+    });
+
+    it('uses sprintBoardId directly and skips board discovery', async () => {
+      const calls: string[] = [];
+      vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+        calls.push(url);
+        if (url.includes('/board/55/sprint')) {
+          return Promise.resolve({ ok: true, headers: { get: () => 'application/json' }, json: () => Promise.resolve({ values: [sprint] }) });
+        }
+        return Promise.resolve({ ok: true, headers: { get: () => 'application/json' }, json: () => Promise.resolve({ values: [] }) });
+      }));
+      const client = new JiraApiClient({ ...BASE_CONFIG, sprintBoardId: 55 });
+      const result = await client.findSprints('PROJ', 'Everest');
+      expect(result).toHaveLength(1);
+      expect(calls.some(u => u.includes('/board?'))).toBe(false);
+    });
+  });
 });

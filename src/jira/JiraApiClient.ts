@@ -34,12 +34,14 @@ export interface JiraApiClientConfig {
   baseUrl: string;
   authType: AuthType;
   token: string;
+  sprintBoardId?: number;
 }
 
 export class JiraApiClient implements IJiraClient {
   private readonly baseUrl: string;
   private readonly authHeader: string;
   private readonly authType: AuthType;
+  private readonly sprintBoardId?: number;
 
   constructor(config: JiraApiClientConfig) {
     this.baseUrl = config.baseUrl.replace(/\/$/, '');
@@ -47,6 +49,7 @@ export class JiraApiClient implements IJiraClient {
     this.authHeader = config.authType === 'cloud'
       ? `Basic ${config.token}`
       : `Bearer ${config.token}`;
+    this.sprintBoardId = config.sprintBoardId;
   }
 
   // Descriptions and comments always use REST API v2 (plain text / Jira wiki markup).
@@ -213,17 +216,26 @@ export class JiraApiClient implements IJiraClient {
   }
 
   async getSprintByName(projectKey: string, sprintName: string): Promise<{ id: number }> {
-    const boards = await this.agileRequest<{ values: Array<{ id: number }> }>(
-      `/board?projectKeyOrId=${encodeURIComponent(projectKey)}`,
-    );
-    for (const board of boards.values) {
-      const sprints = await this.agileRequest<{ values: Array<{ id: number; name: string }> }>(
-        `/board/${board.id}/sprint?state=active,future`,
-      );
-      const match = sprints.values.find((s) => s.name === sprintName);
-      if (match) return { id: match.id };
+    const boardIds = this.sprintBoardId
+      ? [this.sprintBoardId]
+      : await this.getSprintBoardIds(projectKey);
+    for (const boardId of boardIds) {
+      try {
+        const sprints = await this.agileRequest<{ values: Array<{ id: number; name: string }> }>(
+          `/board/${boardId}/sprint?state=active,future`,
+        );
+        const match = sprints.values.find((s) => s.name === sprintName);
+        if (match) return { id: match.id };
+      } catch { /* skip boards that do not support sprints (e.g. Kanban) */ }
     }
     throw new Error(`Sprint '${sprintName}' not found in project ${projectKey}.`);
+  }
+
+  private async getSprintBoardIds(projectKey: string): Promise<number[]> {
+    const boards = await this.agileRequest<{ values: Array<{ id: number; type: string }> }>(
+      `/board?projectKeyOrId=${encodeURIComponent(projectKey)}`,
+    );
+    return boards.values.filter(b => b.type === 'scrum').map(b => b.id);
   }
 
   async getTeamByName(name: string): Promise<{ id: string }> {
@@ -309,22 +321,24 @@ export class JiraApiClient implements IJiraClient {
   }
 
   async findSprints(projectKey: string, query: string): Promise<JiraSprintCandidate[]> {
-    const boards = await this.agileRequest<{ values: Array<{ id: number }> }>(
-      `/board?projectKeyOrId=${encodeURIComponent(projectKey)}`,
-    );
+    const boardIds = this.sprintBoardId
+      ? [this.sprintBoardId]
+      : await this.getSprintBoardIds(projectKey);
     const results: JiraSprintCandidate[] = [];
     const seen = new Set<number>();
     const lowerQuery = query.toLowerCase();
-    for (const board of boards.values) {
-      const sprints = await this.agileRequest<{ values: Array<{ id: number; name: string; state: string }> }>(
-        `/board/${board.id}/sprint?state=active,future`,
-      );
-      for (const s of sprints.values) {
-        if (!seen.has(s.id) && s.name.toLowerCase().includes(lowerQuery)) {
-          seen.add(s.id);
-          results.push({ id: s.id, name: s.name, state: s.state });
+    for (const boardId of boardIds) {
+      try {
+        const sprints = await this.agileRequest<{ values: Array<{ id: number; name: string; state: string }> }>(
+          `/board/${boardId}/sprint?state=active,future`,
+        );
+        for (const s of sprints.values) {
+          if (!seen.has(s.id) && s.name.toLowerCase().includes(lowerQuery)) {
+            seen.add(s.id);
+            results.push({ id: s.id, name: s.name, state: s.state });
+          }
         }
-      }
+      } catch { /* skip boards that do not support sprints (e.g. Kanban) */ }
     }
     return results;
   }

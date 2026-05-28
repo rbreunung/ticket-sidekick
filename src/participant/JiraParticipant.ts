@@ -58,6 +58,7 @@ export function createJiraParticipant(
       baseUrl: config.baseUrl,
       authType: config.authType,
       token: config.token,
+      sprintBoardId: config.sprintBoardId,
     });
     if (config.showConnectionInfo) {
       stream.markdown(`_${config.baseUrl} · API v2 · ${config.authType}_\n\n`);
