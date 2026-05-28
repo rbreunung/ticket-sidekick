@@ -307,6 +307,7 @@ describe('handleContentSession — addComment regression', () => {
       ticketKey: 'PROJ-123',
       currentContent: 'This is a test comment.',
       historyContext: undefined,
+      contentSource: 'generate',
     };
 
     const stream = mockStream();
@@ -326,6 +327,43 @@ describe('handleContentSession — addComment regression', () => {
     // Ticket marker appended
     const allMarkdown = stream.markdown.mock.calls.map((c: string[]) => c[0]).join('');
     expect(allMarkdown).toContain('<!-- @jira-ticket:PROJ-123 -->');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleContentSession — addComment refinement preserves contentSource
+// ---------------------------------------------------------------------------
+
+describe('handleContentSession — addComment refinement preserves contentSource', () => {
+  let client: MockJiraClient;
+  let ticketService: TicketService;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    client = new MockJiraClient();
+    ticketService = new TicketService(client);
+  });
+
+  it('passes session.contentSource to generateContent on refinement', async () => {
+    vi.mocked(generateContent).mockResolvedValue('Refined comment text.');
+    vi.mocked(isLmRefusal).mockReturnValue(false);
+
+    const session: ContentSession = {
+      operation: 'addComment',
+      ticketKey: 'PROJ-123',
+      currentContent: 'Original comment.',
+      historyContext: 'Some history context.',
+      contentSource: 'history-full',
+    };
+
+    const stream = mockStream();
+    const ws = mockWs();
+
+    await handleContentSession(session, 'make it shorter', nullModel, nullToken, stream as never, ticketService, ws as never);
+
+    expect(generateContent).toHaveBeenCalledOnce();
+    const args = vi.mocked(generateContent).mock.calls[0];
+    expect(args[4]).toBe('history-full');
   });
 });
 

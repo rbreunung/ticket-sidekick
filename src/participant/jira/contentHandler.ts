@@ -139,7 +139,8 @@ export async function handleContentSession(
   const refineContext = [historyContext, `Previously generated:\n${session.currentContent}`]
     .filter(Boolean)
     .join('\n\n');
-  const refined = await generateContent(prompt, model, token, refineContext);
+  const contentSource = session.operation !== 'createTicket' ? session.contentSource : undefined;
+  const refined = await generateContent(prompt, model, token, refineContext, contentSource);
   if (isLmRefusal(refined)) {
     stream.markdown(`_Could not refine content — the AI model declined the request. Try rephrasing your instruction._`);
     await streamContentPreview(session, stream, workspaceState);

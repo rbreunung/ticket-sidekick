@@ -160,6 +160,7 @@ export async function handleSpellCheck(
     operation: 'updateDescription',
     currentContent: corrected,
     historyContext: undefined,
+    contentSource: 'generate',
   };
   await streamContentPreview(session, stream, ws);
   stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);

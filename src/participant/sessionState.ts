@@ -18,6 +18,7 @@ export type ContentSession =
       ticketKey: string;
       currentContent: string;
       historyContext: string | undefined;
+      contentSource: 'generate' | 'history-recent' | 'history-full';
     }
   | {
       operation: 'createTicket';

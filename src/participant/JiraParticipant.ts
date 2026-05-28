@@ -656,7 +656,7 @@ export function createJiraParticipant(
               const lastText = extractLastAssistantText(chatContext);
               if (lastText.length > 200) {
                 await streamContentPreview(
-                  { ticketKey: ticketKey!, operation: 'addComment', currentContent: lastText, historyContext: undefined },
+                  { ticketKey: ticketKey!, operation: 'addComment', currentContent: lastText, historyContext: undefined, contentSource: 'history-recent' },
                   stream, ws,
                 );
                 return;
@@ -671,7 +671,7 @@ export function createJiraParticipant(
               return;
             }
             await streamContentPreview(
-              { ticketKey: ticketKey!, operation: 'addComment', currentContent: content, historyContext: context },
+              { ticketKey: ticketKey!, operation: 'addComment', currentContent: content, historyContext: context, contentSource: nonLiteralSource },
               stream, ws,
             );
             return;
@@ -702,7 +702,7 @@ export function createJiraParticipant(
               return;
             }
             await streamContentPreview(
-              { ticketKey: ticketKey!, operation: 'updateDescription', currentContent: content, historyContext: contentCtx },
+              { ticketKey: ticketKey!, operation: 'updateDescription', currentContent: content, historyContext: contentCtx, contentSource: nonLiteralSource },
               stream, ws,
             );
             return;
