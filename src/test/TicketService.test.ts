@@ -423,6 +423,17 @@ describe('TicketService field resolution', () => {
       expect(await service.resolveFieldId('team names')).toBe('customfield_10500');
     });
 
+    it('resolves SUPPORTED_FIELDS aliases without hitting the API', async () => {
+      expect(await service.resolveFieldId('fixVersion')).toBe('fixVersions');
+      expect(await service.resolveFieldId('fixVersions')).toBe('fixVersions');
+      expect(await service.resolveFieldId('fix version')).toBe('fixVersions');
+    });
+
+    it('matches by field ID when the display name does not match', async () => {
+      // "customfield_10500" is the ID of "Team Names" in the mock
+      expect(await service.resolveFieldId('customfield_10500')).toBe('customfield_10500');
+    });
+
     it('throws a clear error for unknown field names', async () => {
       await expect(service.resolveFieldId('nonexistent field xyz')).rejects.toThrow(/nonexistent field xyz/);
     });

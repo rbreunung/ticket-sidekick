@@ -156,6 +156,7 @@ const SUPPORTED_FIELDS: Record<string, string> = {
   component: 'components',
   'fix version': 'fixVersions',
   fixversions: 'fixVersions',
+  fixversion: 'fixVersions',
 };
 
 export function extractTextFromAdf(node: unknown): string {
@@ -364,8 +365,15 @@ export class TicketService {
   }
 
   async resolveFieldId(name: string): Promise<string> {
+    // Check built-in aliases first (e.g. "fixversion", "fix version" → "fixVersions")
+    const mapped = SUPPORTED_FIELDS[name.toLowerCase()];
+    if (mapped) return mapped;
+    // Match by display name or by field ID (handles camelCase API names like "fixVersions")
     const fields = await this.client.getFields();
-    const match = fields.find(f => f.name.toLowerCase() === name.toLowerCase());
+    const match = fields.find(f =>
+      f.name.toLowerCase() === name.toLowerCase() ||
+      f.id.toLowerCase() === name.toLowerCase(),
+    );
     if (!match) throw new Error(`Unknown field "${name}" — check the field name in your Jira instance.`);
     return match.id;
   }
