@@ -107,10 +107,19 @@ export async function handleRunCleanup(
     stream.markdown(`No workflow cache for **${project} / ${issueType}**. Run \`@jira discover workflow ${project} ${issueType}\` first.`);
     return;
   }
+  const subGraph = cache[project]?.['Sub-task']?.graph ?? graph;
 
   const fixVersion = intent.fixVersion ?? null;
   let jql = `project = ${project} AND issuetype = "${issueType}" AND status != "${targetState}"`;
   if (fixVersion) jql += ` AND fixVersion = "${fixVersion}"`;
+  if (rule?.jql) {
+    const trimmed = rule.jql.trim();
+    if (/ORDER\s+BY/i.test(trimmed)) {
+      stream.markdown(`_Warning: \`rule.jql\` contains ORDER BY which is not allowed — extra filter ignored._\n\n`);
+    } else {
+      jql += ` AND (${trimmed})`;
+    }
+  }
 
   stream.markdown(`_Searching for tickets…_\n\n`);
   const result = await ticketService.searchTicketsRaw(jql, 50);
@@ -137,9 +146,9 @@ export async function handleRunCleanup(
       : [];
     const subtasks: TransitionSubtask[] = [];
     for (const s of openSubtasks) {
-      const subPath = findPath(graph, s.currentStatus, targetState);
+      const subPath = findPath(subGraph, s.currentStatus, targetState);
       if (subPath === null) {
-        stream.markdown(`_Warning: no path found from **${s.currentStatus}** to **${targetState}** for subtask ${s.key} — skipping._\n\n`);
+        stream.markdown(`_Warning: no path from **${s.currentStatus}** to **${targetState}** for subtask ${s.key} — skipping. Run \`@jira discover workflow ${project} Sub-task\` if missing._\n\n`);
         continue;
       }
       subtasks.push({ ...s, transitionPath: subPath });
