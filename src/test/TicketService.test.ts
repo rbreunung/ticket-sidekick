@@ -55,6 +55,17 @@ describe('TicketService', () => {
       await expect(service.getTicket('PROJ-404')).rejects.toThrow('Not found');
     });
 
+    it('includes a clickable link in the heading when baseUrl is provided', async () => {
+      const result = await service.getTicket('PROJ-123', undefined, undefined, undefined, 'https://jira.example.com');
+      expect(result).toContain('[PROJ-123](https://jira.example.com/browse/PROJ-123)');
+    });
+
+    it('omits the link in the heading when baseUrl is absent', async () => {
+      const result = await service.getTicket('PROJ-123');
+      expect(result).toMatch(/^## PROJ-123:/m);
+      expect(result).not.toContain('browse');
+    });
+
   });
 
   describe('addComment', () => {
@@ -147,6 +158,18 @@ describe('TicketService', () => {
       client.searchJql = async () => ({ issues: [], total: 0, maxResults: 20 });
       const result = await service.searchTickets('project = EMPTY');
       expect(result).toContain('No tickets found');
+    });
+
+    it('makes ticket keys clickable when baseUrl is provided', async () => {
+      const result = await service.searchTickets('project = PROJ', 'https://jira.example.com');
+      expect(result).toContain('[PROJ-123](https://jira.example.com/browse/PROJ-123)');
+      expect(result).toContain('[PROJ-124](https://jira.example.com/browse/PROJ-124)');
+    });
+
+    it('omits links when baseUrl is absent', async () => {
+      const result = await service.searchTickets('project = PROJ');
+      expect(result).toContain('PROJ-123');
+      expect(result).not.toContain('browse');
     });
   });
 

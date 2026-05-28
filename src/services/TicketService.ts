@@ -187,12 +187,16 @@ export class TicketService {
     fieldMeta?: JiraFieldMeta[],
     alwaysShowIds?: Set<string>,
     hiddenIds?: Set<string>,
+    baseUrl?: string,
   ): Promise<string> {
     const issue = await this.client.getIssue(issueKey);
     const meta = fieldMeta ?? await this.client.getFields();
     const showIds = alwaysShowIds ?? new Set<string>();
     const { table, sections } = formatIssueFields(issue, meta, showIds, hiddenIds);
-    const parts: string[] = [`## ${issue.key}: ${issue.fields.summary}`];
+    const heading = baseUrl
+      ? `## [${issue.key}](${baseUrl}/browse/${issue.key}): ${issue.fields.summary}`
+      : `## ${issue.key}: ${issue.fields.summary}`;
+    const parts: string[] = [heading];
     if (table) parts.push('', table);
     if (sections.length > 0) parts.push('', ...sections.map(s => s));
     return parts.join('\n');
@@ -259,12 +263,13 @@ export class TicketService {
     return `Could not resolve user "${value}" — no accountId or name returned by Jira.`;
   }
 
-  async searchTickets(jql: string): Promise<string> {
+  async searchTickets(jql: string, baseUrl?: string): Promise<string> {
     const result = await this.client.searchJql(jql);
     if (result.issues.length === 0) return 'No tickets found.';
     const rows = result.issues.map((issue) => {
       const assignee = issue.fields.assignee ? issue.fields.assignee.displayName : 'Unassigned';
-      return `| ${issue.key} | ${issue.fields.summary} | ${issue.fields.status.name} | ${assignee} |`;
+      const key = baseUrl ? `[${issue.key}](${baseUrl}/browse/${issue.key})` : issue.key;
+      return `| ${key} | ${issue.fields.summary} | ${issue.fields.status.name} | ${assignee} |`;
     });
     return [
       `Found ${result.total ?? result.issues.length} ticket(s):`,

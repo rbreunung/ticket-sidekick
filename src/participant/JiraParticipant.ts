@@ -561,7 +561,7 @@ export function createJiraParticipant(
           const fieldMeta = await ticketService.getFieldMeta();
           const alwaysShowIds = new Set<string>(config.additionalDisplayFields);
           const hiddenIds = new Set<string>(config.hiddenDisplayFields);
-          const base = await ticketService.getTicket(ticketKey!, fieldMeta, alwaysShowIds, hiddenIds);
+          const base = await ticketService.getTicket(ticketKey!, fieldMeta, alwaysShowIds, hiddenIds, config.baseUrl);
           const MAX_SHOW = 20;
           const { comments, total } = await ticketService.getIssueComments(ticketKey!, MAX_SHOW);
           if (comments.length > 0) {
@@ -589,7 +589,7 @@ export function createJiraParticipant(
           const summaryFieldMeta = await ticketService.getFieldMeta();
           const summaryAlwaysShow = new Set<string>(config.additionalDisplayFields);
           const summaryHidden = new Set<string>(config.hiddenDisplayFields);
-          const fullTicket = await ticketService.getTicket(ticketKey!, summaryFieldMeta, summaryAlwaysShow, summaryHidden);
+          const fullTicket = await ticketService.getTicket(ticketKey!, summaryFieldMeta, summaryAlwaysShow, summaryHidden, config.baseUrl);
           // Title + table before the first ## section heading
           const sectionStart = fullTicket.indexOf('\n\n## ');
           const fieldsHeader = sectionStart >= 0 ? fullTicket.slice(0, sectionStart) : fullTicket;
@@ -763,7 +763,7 @@ export function createJiraParticipant(
             const searchSession: SearchResultSession = { ticketKeys: raw.issues.map(i => i.key), jql: resolvedJql };
             await ws.update('jira.session.searchResult', searchSession);
           }
-          result = jqlLabel + await ticketService.searchTickets(resolvedJql);
+          result = jqlLabel + await ticketService.searchTickets(resolvedJql, config.baseUrl);
           break;
         }
         case 'transition': {
