@@ -401,4 +401,57 @@ describe('handleRunCleanup', () => {
     // The review screen should have been shown instead
     expect(allMarkdown).toContain('<!-- jira:transition-review -->');
   });
+
+  it('attaches subtasks to their parent in the review screen when closeSubtasks is true', async () => {
+    vi.mocked(TemplateService).mockImplementation(() => ({
+      loadTemplates: vi.fn().mockReturnValue({
+        templates: [],
+        cleanupRules: [
+          {
+            name: 'close-bugs',
+            project: 'PROJ',
+            issueType: 'Bug',
+            targetState: 'Done',
+            resolution: 'Fixed',
+            closeSubtasks: true,
+          },
+        ],
+      }),
+    }) as never);
+
+    const parentIssue = {
+      id: '1', key: 'PROJ-1',
+      fields: {
+        summary: 'Parent ticket', status: { name: 'Open' },
+        assignee: null, reporter: null, priority: null,
+        labels: [], fixVersions: [], comment: null, description: null,
+      },
+    };
+    const subtaskIssue = {
+      id: '2', key: 'PROJ-1a',
+      fields: {
+        summary: 'Child subtask', status: { name: 'Open' },
+        assignee: null, reporter: null, priority: null,
+        labels: [], fixVersions: [], comment: null, description: null,
+        parent: { key: 'PROJ-1' },
+      },
+    };
+
+    const spy = vi.spyOn(ticketService, 'searchTicketsRaw');
+    spy.mockResolvedValueOnce({ issues: [parentIssue], total: 1 });   // parent fetch
+    spy.mockResolvedValueOnce({ issues: [subtaskIssue], total: 1 });  // subtask fetch
+
+    const stream = mockStream();
+    const ws = mockWs();
+    const intent = { ...baseIntent, cleanupRuleName: 'close-bugs', resolution: 'Fixed' };
+
+    await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
+
+    const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    // Both parent and subtask should appear in the review screen
+    expect(allMarkdown).toContain('PROJ-1');
+    expect(allMarkdown).toContain('PROJ-1a');
+    expect(allMarkdown).toContain('Child subtask');
+    expect(allMarkdown).toContain('<!-- jira:transition-review -->');
+  });
 });
