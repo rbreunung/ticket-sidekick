@@ -663,24 +663,61 @@ describe('rewriteAttachmentLinks', () => {
 });
 
 describe('parseSkippedAttachmentSelection', () => {
-  it('returns the 1-based index for a valid number', () => {
-    expect(parseSkippedAttachmentSelection('1', 3)).toBe(1);
-    expect(parseSkippedAttachmentSelection('3', 3)).toBe(3);
-  });
-
-  it('returns invalid for a number out of range', () => {
-    expect(parseSkippedAttachmentSelection('0', 3)).toBe('invalid');
-    expect(parseSkippedAttachmentSelection('4', 3)).toBe('invalid');
-  });
-
-  it('returns invalid for non-numeric input', () => {
-    expect(parseSkippedAttachmentSelection('all', 3)).toBe('invalid');
-    expect(parseSkippedAttachmentSelection('', 3)).toBe('invalid');
-    expect(parseSkippedAttachmentSelection('abc', 3)).toBe('invalid');
+  it('returns a single-element array for a valid bare number', () => {
+    expect(parseSkippedAttachmentSelection('1', 3)).toEqual([1]);
+    expect(parseSkippedAttachmentSelection('3', 3)).toEqual([3]);
   });
 
   it('trims whitespace before parsing', () => {
-    expect(parseSkippedAttachmentSelection('  2  ', 3)).toBe(2);
+    expect(parseSkippedAttachmentSelection('  2  ', 3)).toEqual([2]);
+  });
+
+  it('returns out-of-range for a bare digit outside the list', () => {
+    expect(parseSkippedAttachmentSelection('0', 3)).toBe('out-of-range');
+    expect(parseSkippedAttachmentSelection('4', 3)).toBe('out-of-range');
+  });
+
+  it('returns not-a-selection for words without numbers', () => {
+    expect(parseSkippedAttachmentSelection('all', 3)).toBe('not-a-selection');
+    expect(parseSkippedAttachmentSelection('', 3)).toBe('not-a-selection');
+    expect(parseSkippedAttachmentSelection('abc', 3)).toBe('not-a-selection');
+  });
+
+  it('returns not-a-selection for a new command prompt', () => {
+    expect(parseSkippedAttachmentSelection('write a comment explaining the issue', 3)).toBe('not-a-selection');
+  });
+
+  it('returns not-a-selection for a ticket key (letters mixed with digits)', () => {
+    expect(parseSkippedAttachmentSelection('PROJ-123', 3)).toBe('not-a-selection');
+  });
+
+  it('accepts "download N" prefix for a single file', () => {
+    expect(parseSkippedAttachmentSelection('download 1', 3)).toEqual([1]);
+    expect(parseSkippedAttachmentSelection('Download 2', 3)).toEqual([2]);
+  });
+
+  it('accepts space-separated indices for multi-download', () => {
+    expect(parseSkippedAttachmentSelection('1 2', 3)).toEqual([1, 2]);
+    expect(parseSkippedAttachmentSelection('1 3', 3)).toEqual([1, 3]);
+  });
+
+  it('accepts comma-separated indices for multi-download', () => {
+    expect(parseSkippedAttachmentSelection('1, 2, 3', 3)).toEqual([1, 2, 3]);
+    expect(parseSkippedAttachmentSelection('1,3', 3)).toEqual([1, 3]);
+  });
+
+  it('accepts "download N M ..." for multi-download', () => {
+    expect(parseSkippedAttachmentSelection('download 1 2 3', 3)).toEqual([1, 2, 3]);
+    expect(parseSkippedAttachmentSelection('download 1, 3', 3)).toEqual([1, 3]);
+  });
+
+  it('deduplicates repeated indices', () => {
+    expect(parseSkippedAttachmentSelection('1 1 2', 3)).toEqual([1, 2]);
+  });
+
+  it('returns out-of-range when any index in a multi-selection is out of range', () => {
+    expect(parseSkippedAttachmentSelection('1 4', 3)).toBe('out-of-range');
+    expect(parseSkippedAttachmentSelection('download 2 5', 3)).toBe('out-of-range');
   });
 });
 
