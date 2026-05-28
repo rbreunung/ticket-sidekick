@@ -231,7 +231,7 @@ export async function generateDescriptionAndCommentsSummary(
   if (!parts) return '_No description or comments._';
   const roleText = 'You are a technical scribe. Your task is to write a single prose paragraph summarizing a Jira ticket\'s description and comments.';
   const roleAck = 'Understood. I write a single prose paragraph summarizing the ticket\'s description and comments.';
-  const taskPrompt = `${parts}\n\nWrite a concise prose paragraph summarising the above. No preamble, no headings, no bullet points.\n\nBase your summary only on the description and comments provided above.`;
+  const taskPrompt = `${parts}\n\nWrite a concise prose paragraph summarising the above. No preamble, no headings, no bullet points.\n\nBase your summary ONLY on the description and comments provided above. Do not add information not present in the source.`;
   const response = await model.sendRequest(
     [
       vscode.LanguageModelChatMessage.User(roleText),
