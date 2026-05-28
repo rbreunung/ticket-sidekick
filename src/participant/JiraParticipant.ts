@@ -404,10 +404,9 @@ export function createJiraParticipant(
           return `${i + 1}. \`${s.filename}\` — ${sz} (${s.mimeType}) — ${s.reason}`;
         }).join('\n');
         if (idx === 'invalid') {
-          // Re-present only for short replies that look like a mistyped number.
-          // Longer prompts are new commands — clear the session and fall through.
-          const looksLikeNewCommand = isCancellation(request.prompt) || request.prompt.trim().split(/\s+/).length > 4;
-          if (!looksLikeNewCommand) {
+          // Re-present only when the user typed a pure digit (out-of-range number).
+          // Any non-digit input is a new command — clear the session and fall through.
+          if (/^\d+$/.test(request.prompt.trim())) {
             stream.markdown(`Please reply with a number:\n\n${skippedList(loadSkippedSession.skipped)}\n\nReply with a number to download it anyway.\n\n<!-- jira:load-skipped -->`);
             return;
           }
