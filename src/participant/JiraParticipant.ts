@@ -404,34 +404,42 @@ export function createJiraParticipant(
           return `${i + 1}. \`${s.filename}\` — ${sz} (${s.mimeType}) — ${s.reason}`;
         }).join('\n');
         if (idx === 'invalid') {
-          stream.markdown(`Please reply with a number:\n\n${skippedList(loadSkippedSession.skipped)}\n\nReply with a number to download it anyway.\n\n<!-- jira:load-skipped -->`);
-          return;
-        }
-        const chosen = loadSkippedSession.skipped[idx - 1];
-        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-        if (!workspaceFolder) {
-          await ws.update('jira.session.loadSkipped', undefined);
-          stream.markdown('No workspace folder is open.');
-          return;
-        }
-        const attachmentsDir = vscode.Uri.joinPath(workspaceFolder.uri, '.jira-context', loadSkippedSession.ticketKey, 'attachments');
-        try {
-          stream.markdown(`_Downloading \`${chosen.filename}\`…_\n\n`);
-          const bytes = await ticketService.downloadAttachment(chosen.content);
-          await vscode.workspace.fs.createDirectory(attachmentsDir);
-          await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(attachmentsDir, chosen.filename), bytes);
-          const remaining = loadSkippedSession.skipped.filter((_, i) => i !== idx - 1);
-          if (remaining.length > 0) {
-            await ws.update('jira.session.loadSkipped', { ticketKey: loadSkippedSession.ticketKey, skipped: remaining } satisfies LoadSkippedSession);
-            stream.markdown(`✓ \`${chosen.filename}\` downloaded.\n\n**Remaining skipped attachments:**\n\n${skippedList(remaining)}\n\nReply with a number to download another.\n\n<!-- @jira-ticket:${loadSkippedSession.ticketKey} -->\n\n<!-- jira:load-skipped -->`);
-          } else {
-            await ws.update('jira.session.loadSkipped', undefined);
-            stream.markdown(`✓ \`${chosen.filename}\` downloaded. All attachments saved.\n\n<!-- @jira-ticket:${loadSkippedSession.ticketKey} -->`);
+          // Re-present only for short replies that look like a mistyped number.
+          // Longer prompts are new commands — clear the session and fall through.
+          const looksLikeNewCommand = isCancellation(request.prompt) || request.prompt.trim().split(/\s+/).length > 4;
+          if (!looksLikeNewCommand) {
+            stream.markdown(`Please reply with a number:\n\n${skippedList(loadSkippedSession.skipped)}\n\nReply with a number to download it anyway.\n\n<!-- jira:load-skipped -->`);
+            return;
           }
-        } catch (err) {
-          stream.markdown(`Failed to download \`${chosen.filename}\`: ${err instanceof Error ? err.message : String(err)}\n\n<!-- @jira-ticket:${loadSkippedSession.ticketKey} -->\n\n<!-- jira:load-skipped -->`);
+          await ws.update('jira.session.loadSkipped', undefined);
+          // fall through to intent parsing
+        } else {
+          const chosen = loadSkippedSession.skipped[idx - 1];
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+          if (!workspaceFolder) {
+            await ws.update('jira.session.loadSkipped', undefined);
+            stream.markdown('No workspace folder is open.');
+            return;
+          }
+          const attachmentsDir = vscode.Uri.joinPath(workspaceFolder.uri, '.jira-context', loadSkippedSession.ticketKey, 'attachments');
+          try {
+            stream.markdown(`_Downloading \`${chosen.filename}\`…_\n\n`);
+            const bytes = await ticketService.downloadAttachment(chosen.content);
+            await vscode.workspace.fs.createDirectory(attachmentsDir);
+            await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(attachmentsDir, chosen.filename), bytes);
+            const remaining = loadSkippedSession.skipped.filter((_, i) => i !== idx - 1);
+            if (remaining.length > 0) {
+              await ws.update('jira.session.loadSkipped', { ticketKey: loadSkippedSession.ticketKey, skipped: remaining } satisfies LoadSkippedSession);
+              stream.markdown(`✓ \`${chosen.filename}\` downloaded.\n\n**Remaining skipped attachments:**\n\n${skippedList(remaining)}\n\nReply with a number to download another.\n\n<!-- @jira-ticket:${loadSkippedSession.ticketKey} -->\n\n<!-- jira:load-skipped -->`);
+            } else {
+              await ws.update('jira.session.loadSkipped', undefined);
+              stream.markdown(`✓ \`${chosen.filename}\` downloaded. All attachments saved.\n\n<!-- @jira-ticket:${loadSkippedSession.ticketKey} -->`);
+            }
+          } catch (err) {
+            stream.markdown(`Failed to download \`${chosen.filename}\`: ${err instanceof Error ? err.message : String(err)}\n\n<!-- @jira-ticket:${loadSkippedSession.ticketKey} -->\n\n<!-- jira:load-skipped -->`);
+          }
+          return;
         }
-        return;
       }
     }
 
