@@ -82,8 +82,15 @@ There are two distinct ways to read a ticket:
 
 | Command | What you get |
 | --- | --- |
-| `@jira show PROJ-123` | All non-null fields in a metadata table, multi-line fields (description, rich-text custom fields) in their own sections, and numbered one-line comment summaries |
+| `@jira show PROJ-123` | All non-null fields in a metadata table, multi-line fields (description, rich-text custom fields) in their own sections, numbered one-line comment summaries, linked issues, and web links |
 | `@jira summarize PROJ-123` | Same fields, but description and comments replaced by a one-paragraph AI synthesis |
+
+The ticket key in the heading is a clickable link to the ticket in your browser. Search results (`@jira find …`) also produce clickable keys in the results table.
+
+`@jira show` appends two additional sections when data is present:
+
+- **Linked Issues** — every issue link (`blocks`, `is blocked by`, `relates to`, etc.) with linked ticket key, summary, and status
+- **Web Links** — remote links attached to the ticket (Confluence pages, external documents, etc.)
 
 And two ways to read comments:
 
@@ -115,7 +122,7 @@ Reply **`load all`** to fetch up to 100 comments. For `show comments` the full b
 ```
 .jira-context/
   PROJ-123/
-    ticket.md       ← all fields in the same layout as @jira show, plus an attachment index
+    ticket.md       ← all fields in the same layout as @jira show, plus linked issues, web links, and attachment index
     comments.md     ← every comment in full, chronological order
     attachments/
       screenshot.png
@@ -136,7 +143,14 @@ Once loaded, your AI assistant (GitHub Copilot, Cursor, etc.) can read these fil
 
 Up to three attachments are downloaded in parallel.
 
-When a load completes with skipped attachments, the response shows a numbered list — reply with a number to download that file on demand.
+When a load completes with skipped attachments, the response shows a numbered list. To download on demand:
+
+```text
+1              ← download attachment #1
+download 1     ← same
+1 2 3          ← download attachments #1, #2, and #3 in one reply
+download 1 3   ← same, with keyword prefix
+```
 
 `.jira-context/` is automatically added to `.gitignore` at your workspace root the first time you run `@jira load`.
 
@@ -431,6 +445,17 @@ You can choose **No template** to create a plain ticket without any template app
 
 When set, the `create` command skips the project input box and uses this key automatically. You can still override it by including a project key in your prompt.
 
+**Optional: sprint board ID**
+
+```json
+"ticketSidekick.jira.sprintBoardId": 12345
+```
+
+Sprint lookups automatically search all Scrum boards for the project, skipping Kanban boards. Set this only if your project has multiple Scrum boards and the wrong one is selected. Find the board ID in the URL:
+
+- Modern Jira: `.../jira/software/projects/PROJ/boards/12345`
+- Data Center RapidBoard: `.../jira/secure/RapidBoard.jspa?rapidView=12345` (use the `rapidView` value)
+
 **Optional: required fields**
 
 ```json
@@ -523,8 +548,8 @@ Run `@bitbucket check` after setup to confirm the connection and see which accou
 | `@bitbucket review deep <pr-url>` | Force standard two-pass review regardless of default setting |
 | `@bitbucket #2` | Explain finding #2 in detail |
 | `@bitbucket #2 is this always a problem?` | Ask a follow-up question about a specific finding |
-| `@bitbucket #1 #3 add to review` | Post findings #1 and #3 as Bitbucket PR comments |
-| `@bitbucket #2 add to review blocking merge` | Post finding with a reviewer note appended |
+| `@bitbucket #1 #3 add to review` | Preview findings #1 and #3 as comments — reply "post it" to confirm, "(c)" to cancel, or refine |
+| `@bitbucket #2 add to review blocking merge` | Preview with reviewer note "blocking merge" appended — confirm before posting |
 
 ### PR review
 
@@ -579,7 +604,20 @@ Push selected findings back to Bitbucket as PR comments:
 @bitbucket #1 add to review this is blocking merge
 ```
 
-Any text after the `add to review` keywords becomes a brief reviewer note appended to each comment. When a finding has a line number the comment is anchored inline on that diff line; otherwise it appears in the PR activity feed.
+Any text after the `add to review` keywords becomes a brief reviewer note appended to each comment.
+
+**Before posting, the plugin shows a preview** of each comment's exact text along with where it will land:
+
+- `📌 Inline comment on line 42 of src/auth.ts` — the comment will be anchored to that diff line
+- `⚠️ Line 42 could not be located in the diff — will fall back to activity feed comment` — the line was reported by the AI but isn't in the diff; you can cancel and investigate, or confirm to post as a general comment
+
+Reply **`"post it"`** to post, **`(c)`** to cancel, or give a refinement instruction to adjust the comment text before posting. For example:
+
+```text
+make it more concise
+focus on the security impact only
+add that this affects all authenticated endpoints
+```
 
 > **Note (Bitbucket Cloud):** Posting comments requires the **Pull requests: Write** scope on your App Password. See the setup section above.
 
