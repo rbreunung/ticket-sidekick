@@ -132,7 +132,7 @@ describe('streamReviewScreen', () => {
     const ticketLines = lines.filter((l) => l.includes('→'));
     expect(ticketLines.length).toBeGreaterThan(0);
     for (const line of ticketLines) {
-      expect(line).not.toMatch(/\(\w[\w ]*\)$/);
+      expect(line).not.toMatch(/\(.+\)$/);
     }
   });
 });
@@ -167,6 +167,10 @@ describe('executeCleanupBatch', () => {
     const subCall = spy.mock.calls.find(([key]) => key === 'PROJ-2');
     expect(subCall).toBeDefined();
     expect(subCall![2]).toBe('Cannot Reproduce');
+    // Parent always uses session.resolution unchanged
+    const parentCall = spy.mock.calls.find(([key]) => key === 'PROJ-1');
+    expect(parentCall).toBeDefined();
+    expect(parentCall![2]).toBe('Fixed');
   });
 
   it('falls back to session.resolution when sub.resolution is undefined', async () => {
@@ -184,6 +188,10 @@ describe('executeCleanupBatch', () => {
     const subCall = spy.mock.calls.find(([key]) => key === 'PROJ-2');
     expect(subCall).toBeDefined();
     expect(subCall![2]).toBe('Fixed');
+    // Parent also uses session.resolution
+    const parentCall = spy.mock.calls.find(([key]) => key === 'PROJ-1');
+    expect(parentCall).toBeDefined();
+    expect(parentCall![2]).toBe('Fixed');
   });
 });
 
