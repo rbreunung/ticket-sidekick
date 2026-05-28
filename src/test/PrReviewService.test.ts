@@ -659,12 +659,21 @@ describe('PrReviewService.postFindingsAsComments', () => {
     expect(results.every((r) => r.error === undefined)).toBe(true);
   });
 
-  it('passes inline anchor when finding.line is set', async () => {
+  it('passes inline anchor when finding has line and lineType set', async () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const finding: ReviewFinding = { ...baseFinding(1, 'src/auth.ts', 42), lineType: 'ADDED', fileType: 'TO' };
+    await service.postFindingsAsComments('PROJ', 'myrepo', 42, [finding]);
+
+    expect(client.addPrCommentCalls[0].inline).toEqual({ filePath: 'src/auth.ts', line: 42, lineType: 'ADDED', fileType: 'TO' });
+  });
+
+  it('omits inline anchor when finding has line but no lineType (line not in diff)', async () => {
     const client = new MockBitbucketClient();
     const service = new PrReviewService(client);
     await service.postFindingsAsComments('PROJ', 'myrepo', 42, [baseFinding(1, 'src/auth.ts', 42)]);
 
-    expect(client.addPrCommentCalls[0].inline).toEqual({ filePath: 'src/auth.ts', line: 42, lineType: 'ADDED', fileType: 'TO' });
+    expect(client.addPrCommentCalls[0].inline).toBeUndefined();
   });
 
   it('omits inline anchor when finding.line is absent', async () => {
@@ -710,6 +719,43 @@ describe('PrReviewService.postFindingsAsComments', () => {
 
     expect(client.addPrCommentCalls[0].text).toContain('```typescript');
     expect(client.addPrCommentCalls[0].text).toContain('db.query(sql, [id])');
+  });
+});
+
+describe('PrReviewService.postCommentItems', () => {
+  const baseFinding = (id: number, lineType?: 'ADDED' | 'CONTEXT' | 'REMOVED'): ReviewFinding => ({
+    id, file: 'src/auth.ts', line: 42, lineType, fileType: lineType ? 'TO' : undefined,
+    severity: 'critical', title: `T${id}`, description: 'D', recommendation: 'R',
+  });
+
+  it('posts each item with the provided text', async () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const items = [
+      { finding: baseFinding(1, 'ADDED'), text: 'Comment A' },
+      { finding: baseFinding(2, 'CONTEXT'), text: 'Comment B' },
+    ];
+    const results = await service.postCommentItems('PROJ', 'repo', 42, items);
+    expect(client.addPrCommentCalls).toHaveLength(2);
+    expect(client.addPrCommentCalls[0].text).toBe('Comment A');
+    expect(client.addPrCommentCalls[1].text).toBe('Comment B');
+    expect(results.every(r => r.result !== null)).toBe(true);
+  });
+
+  it('sends inline anchor when finding has lineType', async () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    await service.postCommentItems('PROJ', 'repo', 42, [{ finding: baseFinding(1, 'ADDED'), text: 'X' }]);
+    expect(client.addPrCommentCalls[0].inline).toEqual({
+      filePath: 'src/auth.ts', line: 42, lineType: 'ADDED', fileType: 'TO',
+    });
+  });
+
+  it('omits inline anchor when finding.lineType is undefined', async () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    await service.postCommentItems('PROJ', 'repo', 42, [{ finding: baseFinding(1, undefined), text: 'X' }]);
+    expect(client.addPrCommentCalls[0].inline).toBeUndefined();
   });
 });
 

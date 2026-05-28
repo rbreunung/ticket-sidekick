@@ -31,6 +31,13 @@ export interface ReviewSession {
   findings: ReviewFinding[];
 }
 
+export interface BitbucketCommentPreviewSession {
+  project: string;
+  repo: string;
+  prId: number;
+  items: Array<{ finding: ReviewFinding; text: string }>;
+}
+
 export function parsePrUrl(url: string): ParsedPrUrl | null {
   try {
     const u = new URL(url);

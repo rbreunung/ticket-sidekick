@@ -16,7 +16,10 @@ import {
   annotateWithLineTypes,
   type ReviewFinding,
   type ReviewSession,
+  type BitbucketCommentPreviewSession,
 } from './reviewSessionState';
+import { isConfirmation, isCancellation } from './sessionState';
+import { generateContent } from './jira/llmHelpers';
 import { redactUrls, tokenStatus } from '../utils/diagUtils';
 
 function getLastAssistantText(chatContext: vscode.ChatContext): string {
@@ -180,7 +183,83 @@ export function createBitbucketParticipant(
     const ws = context.workspaceState;
     const lastResponse = getLastAssistantText(chatContext);
 
-    // 2. Multi-turn follow-up on an existing review
+    // Helper: stream a comment preview and save session
+    const streamCommentPreview = async (previewSession: BitbucketCommentPreviewSession) => {
+      await ws.update('bitbucket.session.commentPreview', previewSession);
+      const n = previewSession.items.length;
+      const parts: string[] = [`**Preview: ${n} comment${n !== 1 ? 's' : ''} to post**`];
+      const allInline = previewSession.items.every(i => i.finding.lineType !== undefined);
+      for (const { finding, text } of previewSession.items) {
+        const anchorLine = finding.lineType !== undefined
+          ? `📌 _Inline comment on line ${finding.line} of \`${finding.file}\`_`
+          : finding.line !== undefined
+            ? `⚠️ _Line ${finding.line} could not be located in the diff — will fall back to activity feed comment_`
+            : `⚠️ _No line number — will be posted to activity feed_`;
+        parts.push(`---\n\n**#${finding.id}** — ${finding.title}\n${anchorLine}\n\n${text}`);
+      }
+      const postLabel = allInline ? 'post inline' : 'post to activity feed';
+      parts.push(`---\n\nReply **"post it"** to ${postLabel}, give a refinement instruction, or **(c)** to cancel.\n\n<!-- bitbucket:comment-preview -->`);
+      stream.markdown(parts.join('\n\n'));
+    };
+
+    // Helper: post results and format report
+    const postAndReport = async (previewSession: BitbucketCommentPreviewSession) => {
+      await ws.update('bitbucket.session.commentPreview', undefined);
+      stream.markdown(`_Posting ${previewSession.items.length} comment${previewSession.items.length !== 1 ? 's' : ''} to Bitbucket…_\n\n`);
+      const client = new BitbucketApiClient({
+        baseUrl: config.baseUrl ?? '',
+        authType: config.authType,
+        token: config.token!,
+      });
+      const service = new PrReviewService(client);
+      const results = await service.postCommentItems(
+        previewSession.project, previewSession.repo, previewSession.prId, previewSession.items,
+      );
+      const successLines: string[] = [];
+      const failureLines: string[] = [];
+      for (const r of results) {
+        if (r.result) {
+          const ref = r.result.commentUrl
+            ? `[comment #${r.result.commentId}](${r.result.commentUrl})`
+            : `comment #${r.result.commentId}`;
+          const anchor = r.finding.lineType !== undefined ? `inline on L${r.finding.line}` : 'activity feed';
+          successLines.push(`- **#${r.finding.id}** ${r.finding.title} → posted as ${ref} (${anchor})`);
+        } else {
+          failureLines.push(`- **#${r.finding.id}** ${r.finding.title} → failed: ${r.error}`);
+        }
+      }
+      let output = '';
+      if (successLines.length > 0) output += `**Posted ${successLines.length} comment${successLines.length !== 1 ? 's' : ''}:**\n\n${successLines.join('\n')}\n\n`;
+      if (failureLines.length > 0) output += `**Failed to post ${failureLines.length} comment${failureLines.length !== 1 ? 's' : ''}:**\n\n${failureLines.join('\n')}\n\n`;
+      stream.markdown(output + `<!-- bitbucket:review-session -->`);
+    };
+
+    // 2a. Comment preview — confirmation, cancellation, or refinement
+    if (lastResponse.includes('<!-- bitbucket:comment-preview -->')) {
+      const previewSession = ws.get<BitbucketCommentPreviewSession>('bitbucket.session.commentPreview');
+      if (previewSession) {
+        if (isCancellation(prompt)) {
+          await ws.update('bitbucket.session.commentPreview', undefined);
+          stream.markdown(`_Cancelled._\n\n<!-- bitbucket:review-session -->`);
+          return;
+        }
+        if (isConfirmation(prompt)) {
+          await postAndReport(previewSession);
+          return;
+        }
+        // Refinement — revise each comment text with the instruction, one LLM call per item
+        const revisedItems: Array<{ finding: ReviewFinding; text: string }> = [];
+        for (const item of previewSession.items) {
+          const instruction = `Revise the following Bitbucket PR comment based on this instruction: "${prompt}"\n\nOriginal comment:\n${item.text}`;
+          const revised = await generateContent(instruction, request.model, token, undefined, 'generate');
+          revisedItems.push({ finding: item.finding, text: revised || item.text });
+        }
+        await streamCommentPreview({ ...previewSession, items: revisedItems });
+        return;
+      }
+    }
+
+    // 2b. Multi-turn follow-up on an existing review
     if (lastResponse.includes('<!-- bitbucket:review-session -->')) {
       const session = ws.get<ReviewSession>('bitbucket.session.review');
       if (session) {
@@ -195,40 +274,16 @@ export function createBitbucketParticipant(
             return;
           }
           const userNote = extractUserNote(prompt) || undefined;
-          const n = selectedFindings.length;
-          stream.markdown(`_Posting ${n} comment${n !== 1 ? 's' : ''} to Bitbucket…_\n\n`);
-
-          const client = new BitbucketApiClient({
+          const service = new PrReviewService(new BitbucketApiClient({
             baseUrl: config.baseUrl ?? '',
             authType: config.authType,
             token: config.token!,
-          });
-          const service = new PrReviewService(client);
-          const results = await service.postFindingsAsComments(
-            session.project, session.repo, session.prId, selectedFindings, userNote,
-          );
-
-          const successLines: string[] = [];
-          const failureLines: string[] = [];
-          for (const r of results) {
-            if (r.result) {
-              const ref = r.result.commentUrl
-                ? `[comment #${r.result.commentId}](${r.result.commentUrl})`
-                : `comment #${r.result.commentId}`;
-              successLines.push(`- **#${r.finding.id}** ${r.finding.title} → posted as ${ref}`);
-            } else {
-              failureLines.push(`- **#${r.finding.id}** ${r.finding.title} → failed: ${r.error}`);
-            }
-          }
-
-          let output = '';
-          if (successLines.length > 0) {
-            output += `**Posted ${successLines.length} comment${successLines.length !== 1 ? 's' : ''}:**\n\n${successLines.join('\n')}\n\n`;
-          }
-          if (failureLines.length > 0) {
-            output += `**Failed to post ${failureLines.length} comment${failureLines.length !== 1 ? 's' : ''}:**\n\n${failureLines.join('\n')}\n\n`;
-          }
-          stream.markdown(output + `<!-- bitbucket:review-session -->`);
+          }));
+          const items = selectedFindings.map(f => ({ finding: f, text: service.formatPrComment(f, userNote) }));
+          const previewSession: BitbucketCommentPreviewSession = {
+            project: session.project, repo: session.repo, prId: session.prId, items,
+          };
+          await streamCommentPreview(previewSession);
           return;
         }
 

@@ -168,15 +168,26 @@ export class PrReviewService {
     findings: ReviewFinding[],
     userNote?: string,
   ): Promise<Array<{ finding: ReviewFinding; result: BitbucketCommentResult | null; error?: string }>> {
+    return this.postCommentItems(
+      project, repo, prId,
+      findings.map(f => ({ finding: f, text: this.formatPrComment(f, userNote) })),
+    );
+  }
+
+  async postCommentItems(
+    project: string,
+    repo: string,
+    prId: number,
+    items: Array<{ finding: ReviewFinding; text: string }>,
+  ): Promise<Array<{ finding: ReviewFinding; result: BitbucketCommentResult | null; error?: string }>> {
     const results: Array<{ finding: ReviewFinding; result: BitbucketCommentResult | null; error?: string }> = [];
-    for (const finding of findings) {
-      const text = this.formatPrComment(finding, userNote);
+    for (const { finding, text } of items) {
       const inline: InlineAnchor | undefined =
-        finding.line !== undefined
+        finding.line !== undefined && finding.lineType !== undefined
           ? {
               filePath: finding.file,
               line: finding.line,
-              lineType: finding.lineType ?? 'ADDED',
+              lineType: finding.lineType,
               fileType: finding.fileType ?? 'TO',
             }
           : undefined;
