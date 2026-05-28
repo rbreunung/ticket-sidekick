@@ -84,7 +84,7 @@
           },
           "ticketSidekick.jira.sprintBoardId": {
             "type": "number",
-            "description": "Jira Agile board ID to use for sprint lookups. Only needed if your project has multiple Scrum boards and the wrong one is selected automatically. Find the board ID in the board URL: .../jira/software/projects/PROJ/boards/12345."
+            "description": "Jira Agile board ID to use for sprint lookups. Only needed if your project has multiple Scrum boards and the wrong one is selected automatically. Find the board ID in the URL — modern Jira: .../jira/software/projects/PROJ/boards/12345 — Data Center RapidBoard: .../jira/secure/RapidBoard.jspa?rapidView=12345 (use the rapidView value)."
           },
           "ticketSidekick.jira.requiredFields": {
             "type": "array",

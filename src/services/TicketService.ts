@@ -27,12 +27,26 @@ export function resolveFieldIdFuzzy(input: string, fields: JiraFieldMeta[]): Fie
 
 const EXCLUDED_FROM_TABLE = new Set(['summary', 'comment', 'subtasks', 'issuelinks']);
 
+// Jira DC (older) returns sprint values as serialized Java strings rather than JSON objects.
+// Both shapes are normalised to { name, state } here.
+function parseSprintItem(item: unknown): { name: string; state: string } | null {
+  if (typeof item === 'string') {
+    const name = item.match(/\bname=([^,\]]+)/)?.[1]?.trim();
+    const state = item.match(/\bstate=([^,\]]+)/)?.[1]?.toLowerCase();
+    return name ? { name, state: state ?? '' } : null;
+  }
+  if (typeof item === 'object' && item !== null && 'name' in item) {
+    return item as { name: string; state: string };
+  }
+  return null;
+}
+
 function renderSingleFieldValue(value: unknown, meta: JiraFieldMeta): string {
   if (value === null || value === undefined) return '_Not set_';
 
   // Sprint (gh-sprint in custom)
   if (meta.schema.custom?.includes('gh-sprint') && Array.isArray(value)) {
-    const sprints = value as Array<{ name: string; state: string }>;
+    const sprints = value.map(parseSprintItem).filter(Boolean) as Array<{ name: string; state: string }>;
     const active = sprints.find(s => s.state === 'active') ?? sprints[0];
     return active ? active.name : '_None_';
   }
@@ -505,7 +519,7 @@ export class TicketService {
       if (value === null || value === undefined || (Array.isArray(value) && value.length === 0)) {
         display = '_Not set_';
       } else if (f.schema.custom?.includes('gh-sprint') && Array.isArray(value)) {
-        const sprints = value as Array<{ name: string; state: string }>;
+        const sprints = value.map(parseSprintItem).filter(Boolean) as Array<{ name: string; state: string }>;
         const active = sprints.find(s => s.state === 'active') ?? sprints[0];
         display = active ? active.name : '_None_';
       } else if (typeof value === 'object' && value !== null && 'type' in value) {

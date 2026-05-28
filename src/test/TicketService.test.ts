@@ -633,6 +633,23 @@ describe('formatIssueFields', () => {
     expect(table).toContain('Sprint 42');
   });
 
+  it('renders sprint name from Jira DC serialized string format', () => {
+    const issue = {
+      id: '1', key: 'PROJ-1',
+      fields: {
+        summary: 'Test', description: null,
+        status: { name: 'Open' }, assignee: null, reporter: null,
+        priority: null, labels: [], fixVersions: [], comment: null,
+        customfield_10020: [
+          'com.atlassian.greenhopper.service.sprint.Sprint@abc[id=42,rapidViewId=72,state=ACTIVE,name=Sprint Everest,startDate=2024-01-01T00:00:00.000Z,endDate=<null>,completeDate=<null>,sequence=42,goal=<null>]',
+        ],
+      },
+    };
+    const { table } = formatIssueFields(issue as never, fields, new Set());
+    expect(table).toContain('Sprint Everest');
+    expect(table).not.toContain('undefined');
+  });
+
   it('shows alwaysShowIds fields even when null', () => {
     const issue = {
       id: '1', key: 'PROJ-1',
