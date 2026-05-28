@@ -65,6 +65,7 @@ export interface TransitionSubtask {
   summary: string;
   currentStatus: string;
   transitionPath: Array<{ id: string; name: string; to: string }>;
+  resolution?: string;
 }
 
 export interface TransitionBatchTicket {
