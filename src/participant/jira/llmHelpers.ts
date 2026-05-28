@@ -203,7 +203,7 @@ export async function synthesizeComments(
   const task = query
     ? `Find and quote comments relevant to: "${query}". Note the author and date for each relevant comment.`
     : 'Summarise each comment in one sentence. Number each one. Format: N. **Author** (date): one-sentence summary.';
-  const taskPrompt = `Comments:\n\n${commentBlocks}\n\n${task} Produce only the final content, no preamble.\n\nBase your response only on the comments provided above. Do not invent or infer information not present in the source.`;
+  const taskPrompt = `Comments:\n\n${commentBlocks}\n\n${task} Produce only the final content, no preamble.\n\nBase your response ONLY on the comments provided above. Do not add information not present in the source.`;
   const response = await model.sendRequest(
     [
       vscode.LanguageModelChatMessage.User(roleText),

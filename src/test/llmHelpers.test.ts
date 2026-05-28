@@ -155,4 +155,11 @@ describe('generateContent — role selection', () => {
     const [messages] = model.sendRequest.mock.calls[0] as [Array<{ content: string }>];
     expect(messages[0].content).toContain('Jira assistant');
   });
+
+  it('uses scribe role for history-recent contentSource', async () => {
+    const model = makeModel();
+    await generateContent('post the patch', model as never, {} as never, undefined, 'history-recent');
+    const [messages] = model.sendRequest.mock.calls[0] as [Array<{ content: string }>];
+    expect(messages[0].content).toContain('technical scribe');
+  });
 });
