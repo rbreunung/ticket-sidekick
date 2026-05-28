@@ -53,6 +53,8 @@ export interface JiraIssue {
     subtasks?: JiraSubtask[];
     attachment?: JiraAttachment[];
     issuelinks?: JiraIssueLink[];
+    resolution?: { name: string } | null;
+    parent?: { key: string };
     [key: string]: unknown;
   };
 }

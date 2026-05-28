@@ -22,6 +22,8 @@ export interface CleanupRule {
   targetState: string;
   resolution?: string;
   closeSubtasks?: boolean;
+  subtaskResolution?: string;
+  jql?: string;
 }
 
 export class TemplateService {
