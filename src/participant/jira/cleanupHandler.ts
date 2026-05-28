@@ -18,10 +18,14 @@ export async function streamReviewScreen(
   const lines: string[] = [header, ''];
   for (const t of session.tickets) {
     const finalState = t.transitionPath.at(-1)?.to ?? '?';
-    lines.push(`**${t.key}**  ${t.summary}  ·  _${t.currentStatus} → ${finalState}_`);
+    const tRes = session.resolution ? ` (${session.resolution})` : '';
+    lines.push(`**${t.key}**  ${t.summary}  ·  _${t.currentStatus} → ${finalState}${tRes}_`);
     for (const s of t.subtasks) {
       const sFinal = s.transitionPath.at(-1)?.to ?? '?';
-      lines.push(`  **${s.key}**  ${s.summary}  ·  _${s.currentStatus} → ${sFinal}_`);
+      const sRes = s.resolution
+        ? ` (${s.resolution})`
+        : session.resolution ? ` (${session.resolution})` : '';
+      lines.push(`  **${s.key}**  ${s.summary}  ·  _${s.currentStatus} → ${sFinal}${sRes}_`);
     }
   }
   lines.push('', 'ok · (c) · key numbers to skip (e.g. 11 14)');
@@ -48,7 +52,7 @@ export async function executeCleanupBatch(
     for (const sub of ticket.subtasks) {
       if (skipKeys.has(sub.key)) { skipped++; continue; }
       try {
-        await ticketService.transitionAlongPath(sub.key, sub.transitionPath, session.resolution);
+        await ticketService.transitionAlongPath(sub.key, sub.transitionPath, sub.resolution ?? session.resolution);
         const hops = sub.transitionPath.length;
         stream.markdown(`✓ ${sub.key}  → ${sub.transitionPath.at(-1)?.to ?? '?'}${hops > 1 ? ` (${hops} hops)` : ''}\n`);
         transitioned++;
@@ -99,7 +103,8 @@ export async function handleRunCleanup(
   const project = rule?.project ?? intent.projectKey!;
   const issueType = rule?.issueType ?? intent.issueType ?? 'Bug';
   const targetState = rule?.targetState ?? 'Done';
-  const resolution = rule?.resolution;
+  const resolution = intent.resolution ?? rule?.resolution;
+  const subtaskResolution = rule?.subtaskResolution ?? resolution;
 
   const cache = loadWorkflowCache(workspaceRoot);
   const graph = cache[project]?.[issueType]?.graph;
@@ -110,7 +115,7 @@ export async function handleRunCleanup(
   const subGraph = cache[project]?.['Sub-task']?.graph ?? graph;
 
   const fixVersion = intent.fixVersion ?? null;
-  let jql = `project = ${project} AND issuetype = "${issueType}" AND status != "${targetState}"`;
+  let jql = `project = ${project} AND issuetype = "${issueType}" AND status != "${targetState}" AND resolution is EMPTY`;
   if (fixVersion) jql += ` AND fixVersion = "${fixVersion}"`;
   if (rule?.jql) {
     const trimmed = rule.jql.trim();
@@ -121,16 +126,19 @@ export async function handleRunCleanup(
     }
   }
 
-  stream.markdown(`_Searching for tickets…_\n\n`);
+  stream.markdown(`**Search scope**\n\`${jql}\`\n\n`);
   const result = await ticketService.searchTicketsRaw(jql, 50);
+  const truncated = (result.total ?? 0) > 50 || result.isLast === false;
 
   if (result.issues.length === 0) {
     stream.markdown('No tickets found matching the criteria.');
     return;
   }
-  if ((result.total ?? 0) > 50 || result.isLast === false) {
+  if (truncated) {
     const count = result.total ? `${result.total} tickets` : 'more tickets';
     stream.markdown(`_Found ${count} — showing first 50. Refine your filter if needed._\n\n`);
+  } else {
+    stream.markdown(`_Found **${result.issues.length}** ticket${result.issues.length === 1 ? '' : 's'} — building transition paths…_\n\n`);
   }
 
   const BATCH_LIMIT = 50;
@@ -141,25 +149,39 @@ export async function handleRunCleanup(
       stream.markdown(`_Warning: no path found from **${issue.fields.status.name}** to **${targetState}** for ${issue.key} — skipping._\n\n`);
       continue;
     }
-    const openSubtasks = rule?.closeSubtasks
-      ? await ticketService.getOpenSubtasks(issue.key)
-      : [];
-    const subtasks: TransitionSubtask[] = [];
-    for (const s of openSubtasks) {
-      const subPath = findPath(subGraph, s.currentStatus, targetState);
-      if (subPath === null) {
-        stream.markdown(`_Warning: no path from **${s.currentStatus}** to **${targetState}** for subtask ${s.key} — skipping. Run \`@jira discover workflow ${project} Sub-task\` if missing._\n\n`);
-        continue;
-      }
-      subtasks.push({ ...s, transitionPath: subPath });
-    }
     tickets.push({
       key: issue.key,
       summary: issue.fields.summary,
       currentStatus: issue.fields.status.name,
       transitionPath: path,
-      subtasks,
+      subtasks: [],   // filled in Phase B
     });
+  }
+
+  if (rule?.closeSubtasks && tickets.length > 0) {
+    const parentKeys = tickets.map((t) => t.key);
+    const subJql =
+      `parent in (${parentKeys.map((k) => `"${k}"`).join(', ')}) ` +
+      `AND status != "${targetState}" AND resolution is EMPTY`;
+    const subResult = await ticketService.searchTicketsRaw(subJql, 250);
+    for (const s of subResult.issues) {
+      const parentKey = (s.fields.parent as { key: string } | undefined)?.key;
+      if (!parentKey) continue;
+      const parent = tickets.find((t) => t.key === parentKey);
+      if (!parent) continue;
+      const subPath = findPath(subGraph, s.fields.status.name, targetState);
+      if (subPath === null) {
+        stream.markdown(`_Warning: no path from **${s.fields.status.name}** to **${targetState}** for subtask ${s.key} — skipping. Run \`@jira discover workflow ${project} Sub-task\` if missing._\n\n`);
+        continue;
+      }
+      parent.subtasks.push({
+        key: s.key,
+        summary: s.fields.summary,
+        currentStatus: s.fields.status.name,
+        transitionPath: subPath,
+        resolution: subtaskResolution,
+      });
+    }
   }
 
   if (tickets.length === 0) {
