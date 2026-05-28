@@ -17,11 +17,15 @@ vi.mock('vscode', () => {
     ChatRequestTurn: MockRequestTurn,
     ChatResponseTurn: MockResponseTurn,
     ChatResponseMarkdownPart: MockMarkdownPart,
+    LanguageModelChatMessage: {
+      User: (text: string) => ({ role: 'user' as const, content: text }),
+      Assistant: (text: string) => ({ role: 'assistant' as const, content: text }),
+    },
   };
 });
 
 import * as vscode from 'vscode';
-import { extractHistoryTurns } from '../participant/jira/llmHelpers';
+import { extractHistoryTurns, buildHistoryContext, extractLastAssistantText, generateContent } from '../participant/jira/llmHelpers';
 
 describe('extractHistoryTurns', () => {
   it('includes user turns', () => {
@@ -72,5 +76,83 @@ describe('extractHistoryTurns', () => {
 
   it('returns empty array for empty history', () => {
     expect(extractHistoryTurns({ history: [] } as never)).toEqual([]);
+  });
+});
+
+describe('buildHistoryContext', () => {
+  it('returns undefined for "generate" source', () => {
+    const context = { history: [] } as never;
+    expect(buildHistoryContext('generate', context)).toBeUndefined();
+  });
+
+  it('returns serialized recent turns for "history-recent" source', () => {
+    const history = [
+      new vscode.ChatRequestTurn('hello'),
+      new vscode.ChatResponseTurn([{ value: 'world' }]),
+    ];
+    const result = buildHistoryContext('history-recent', { history } as never);
+    expect(result).toContain('User: hello');
+    expect(result).toContain('Assistant: world');
+  });
+
+  it('returns serialized full turns for "history-full" source', () => {
+    const history = [
+      new vscode.ChatRequestTurn('hello'),
+      new vscode.ChatResponseTurn([{ value: 'world' }]),
+    ];
+    const result = buildHistoryContext('history-full', { history } as never);
+    expect(result).toContain('User: hello');
+    expect(result).toContain('Assistant: world');
+  });
+});
+
+describe('extractLastAssistantText', () => {
+  it('returns the last assistant turn text', () => {
+    const history = [
+      new vscode.ChatRequestTurn('first question'),
+      new vscode.ChatResponseTurn([{ value: 'first answer' }]),
+      new vscode.ChatRequestTurn('follow-up'),
+      new vscode.ChatResponseTurn([{ value: 'second answer' }]),
+    ];
+    expect(extractLastAssistantText({ history } as never)).toBe('second answer');
+  });
+
+  it('skips assistant turns containing the jira:previewing marker', () => {
+    const history = [
+      new vscode.ChatResponseTurn([{ value: 'real answer' }]),
+      new vscode.ChatResponseTurn([{ value: 'Draft.\n\n<!-- jira:previewing -->' }]),
+    ];
+    expect(extractLastAssistantText({ history } as never)).toBe('real answer');
+  });
+
+  it('returns empty string when no non-preview assistant turns exist', () => {
+    const history = [new vscode.ChatRequestTurn('hello')];
+    expect(extractLastAssistantText({ history } as never)).toBe('');
+  });
+});
+
+describe('generateContent — role selection', () => {
+  const makeModel = () => ({
+    sendRequest: vi.fn().mockImplementation(() =>
+      Promise.resolve({
+        text: (async function* () {
+          yield '';
+        })(),
+      }),
+    ),
+  });
+
+  it('uses scribe role for history-full contentSource', async () => {
+    const model = makeModel();
+    await generateContent('write a summary', model as never, {} as never, undefined, 'history-full');
+    const [messages] = model.sendRequest.mock.calls[0] as [Array<{ content: string }>];
+    expect(messages[0].content).toContain('technical scribe');
+  });
+
+  it('uses Jira assistant role for generate contentSource', async () => {
+    const model = makeModel();
+    await generateContent('write something', model as never, {} as never, undefined, 'generate');
+    const [messages] = model.sendRequest.mock.calls[0] as [Array<{ content: string }>];
+    expect(messages[0].content).toContain('Jira assistant');
   });
 });
