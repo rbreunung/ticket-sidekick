@@ -300,11 +300,20 @@ Or target a specific fix version ad-hoc:
 @jira close BILLING bugs in "Release 3.2"
 ```
 
+Additional examples with the new prompt forms:
+
+```text
+@jira close BILLING bugs with resolution Fixed
+@jira run cleanup "Close released bugs" with resolution "Won't Fix"
+```
+
 The plugin:
 
-1. Searches for matching open tickets (and their open subtasks if `closeSubtasks` is true)
-2. Asks for a resolution once if the rule has no `resolution` configured and the target state is a closed state
-3. Shows a review screen listing every ticket and the transition path it will follow
+1. Builds the effective JQL and shows it as a **scope preview** (including ticket count) before executing
+2. Searches for tickets matching the scope — tickets that already have a resolution set are automatically excluded
+3. If `closeSubtasks` is true, fetches all open subtasks in a single query (also excluding pre-resolved ones)
+4. Asks for a resolution once if neither the rule nor your prompt provides one and the target state is a closed state
+5. Shows a review screen listing every ticket and subtask, the transition path each will follow, and the resolution that will be applied
 
 On the review screen, reply:
 
@@ -367,11 +376,40 @@ Create a `.jira-templates.json` file in your workspace root to define per-applic
       "issueType": "Bug",
       "targetState": "Done",
       "resolution": "Fixed",
-      "closeSubtasks": true
+      "subtaskResolution": "Fixed",
+      "closeSubtasks": true,
+      "jql": "fixVersion in releasedVersions() AND assignee is not EMPTY"
     }
   ]
 }
 ```
+
+#### Cleanup rule fields
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `name` | yes | — | Rule identifier — used in `@jira run cleanup "name"` |
+| `project` | yes | — | Jira project key — always anchors the search query and workflow graph lookup |
+| `issueType` | yes | — | Issue type — always anchors the query; use the exact Jira name (e.g. `Bug`, `Story`) |
+| `targetState` | yes | — | Destination Jira status name (e.g. `Done`, `Closed`) |
+| `resolution` | no | — | Resolution applied to parent ticket transitions (e.g. `Fixed`, `Won't Fix`) |
+| `subtaskResolution` | no | same as `resolution` | Resolution applied to subtask transitions — falls back to `resolution` if omitted |
+| `closeSubtasks` | no | `false` | When `true`, open subtasks are transitioned to `targetState` before their parent |
+| `jql` | no | — | Extra JQL filter ANDed onto the base query — write only the additional conditions; `project`, `issueType`, and `status` are always included |
+
+> **Note:** `project` and `issueType` are always prepended to the effective JQL even when `jql` is set — they are never replaced. The `jql` field adds extra conditions such as `fixVersion in releasedVersions()` or `sprint in openSprints()`.
+
+#### Interaction model
+
+| Prompt | JQL used | Resolution |
+|---|---|---|
+| `@jira run cleanup "Name"` | base + `rule.jql` if set | `rule.resolution`, or prompted if absent |
+| `@jira run cleanup "Name" in "v1.2"` | base + fixVersion + `rule.jql` | same |
+| `@jira run cleanup "Name" with resolution "Won't Fix"` | same JQL | prompt value overrides rule |
+| `@jira close PROJ Bug` | auto-built (matches rule by project + type if available) | prompted if closing to a closed state |
+| `@jira close PROJ bugs in "v1.2" with resolution Released` | auto-built + fixVersion | prompt value — no dialog |
+
+The base query always includes `AND resolution is EMPTY` — tickets that were previously resolved (even if since reopened) are automatically excluded.
 
 When you run `@jira create`, the plugin shows a numbered list of your templates. Choosing one:
 
