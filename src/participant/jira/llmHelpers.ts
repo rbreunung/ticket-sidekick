@@ -124,7 +124,7 @@ export async function generateContent(
   let task: string;
   if (context) {
     const groundingNote = isHistoryBased
-      ? '\n\nBase your summary ONLY on the conversation excerpt provided above. Do not add information not present in the source.'
+      ? '\n\nUse the CONVERSATION HISTORY as your primary source. The ticket text is reference context only — do not simply rephrase findings already stated in the ticket or its existing comments. Do not add information not present in the provided sources.'
       : '';
     task = `Available context:\n\n${context}${groundingNote}\n\nUsing the context above, write the following:\n${instruction}\n\nProduce only the final text. No preamble, no explanation.`;
   } else {
@@ -166,8 +166,9 @@ export function extractHistoryTurns(context: vscode.ChatContext): Array<{ role: 
       const raw = turn.response
         .map((p) => (p instanceof vscode.ChatResponseMarkdownPart ? p.value.value : ''))
         .join('');
-      // Skip intermediate content preview drafts — they are not accepted findings
+      // Skip session-management responses — they are noise, not findings
       if (raw.includes('<!-- jira:previewing -->')) return [];
+      if (raw.includes('<!-- jira:load-skipped -->')) return [];
       const text = stripHiddenMarkers(raw);
       return text ? [{ role: 'assistant', text }] : [];
     }

@@ -45,6 +45,18 @@ describe('extractHistoryTurns', () => {
     expect(turns[0].text).toBe('Here is the ticket.'); // marker stripped
   });
 
+  it('excludes assistant turns containing the jira:load-skipped marker', () => {
+    const history = [
+      new vscode.ChatRequestTurn('load PROJ-1'),
+      new vscode.ChatResponseTurn([{ value: 'Ticket loaded.\n\nSkipped attachments:\n\n1. trace.trc — 120 MB\n\nReply with a number to download it anyway.\n\n<!-- jira:load-skipped -->' }]),
+      new vscode.ChatRequestTurn('write a comment about the issue'),
+    ];
+    const turns = extractHistoryTurns({ history } as never);
+    // Load response is noise — only the two user turns should appear
+    expect(turns).toHaveLength(2);
+    expect(turns.every((t) => t.role === 'user')).toBe(true);
+  });
+
   it('excludes assistant turns containing the jira:previewing marker', () => {
     const history = [
       new vscode.ChatRequestTurn('write a comment'),
