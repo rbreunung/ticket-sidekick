@@ -274,6 +274,34 @@ describe('handleRunCleanup', () => {
     expect(allMarkdown).toContain('resolution is EMPTY');
   });
 
+  it('ignores rule.jql and warns when it contains ORDER BY', async () => {
+    vi.mocked(TemplateService).mockImplementation(() => ({
+      loadTemplates: vi.fn().mockReturnValue({
+        templates: [],
+        cleanupRules: [
+          {
+            name: 'close-bugs',
+            project: 'PROJ',
+            issueType: 'Bug',
+            targetState: 'Done',
+            jql: 'priority = High ORDER BY created DESC',
+          },
+        ],
+      }),
+    }) as never);
+
+    const stream = mockStream();
+    const ws = mockWs();
+    const intent = { ...baseIntent, cleanupRuleName: 'close-bugs' };
+
+    await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
+
+    const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    expect(allMarkdown).toContain('ORDER BY');
+    expect(allMarkdown).toContain('extra filter ignored');
+    expect(allMarkdown).not.toContain('AND (priority = High');
+  });
+
   it('appends rule.jql as AND (...) to the base query', async () => {
     vi.mocked(TemplateService).mockImplementation(() => ({
       loadTemplates: vi.fn().mockReturnValue({

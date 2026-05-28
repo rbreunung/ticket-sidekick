@@ -104,7 +104,6 @@ export async function handleRunCleanup(
   const issueType = rule?.issueType ?? intent.issueType ?? 'Bug';
   const targetState = rule?.targetState ?? 'Done';
   const resolution = intent.resolution ?? rule?.resolution;
-  const subtaskResolution = rule?.subtaskResolution ?? resolution;
 
   const cache = loadWorkflowCache(workspaceRoot);
   const graph = cache[project]?.[issueType]?.graph;
@@ -159,13 +158,14 @@ export async function handleRunCleanup(
   }
 
   if (rule?.closeSubtasks && tickets.length > 0) {
+    const subtaskResolution = rule.subtaskResolution ?? resolution;
     const parentKeys = tickets.map((t) => t.key);
     const subJql =
       `parent in (${parentKeys.map((k) => `"${k}"`).join(', ')}) ` +
       `AND status != "${targetState}" AND resolution is EMPTY`;
     const subResult = await ticketService.searchTicketsRaw(subJql, 250);
     for (const s of subResult.issues) {
-      const parentKey = (s.fields.parent as { key: string } | undefined)?.key;
+      const parentKey = s.fields.parent?.key;
       if (!parentKey) continue;
       const parent = tickets.find((t) => t.key === parentKey);
       if (!parent) continue;
