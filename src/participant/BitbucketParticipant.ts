@@ -13,6 +13,7 @@ import {
   extractUserNote,
   extractJsonObject,
   buildAdaptiveChunks,
+  annotateWithLineTypes,
   type ReviewFinding,
   type ReviewSession,
 } from './reviewSessionState';
@@ -358,7 +359,7 @@ export function createBitbucketParticipant(
           request.model, token, batchStatus,
         );
         const { findings, additionalFilesNeeded } = await parseReviewResponse(chunkRaw);
-        let chunkFindings = findings;
+        let chunkFindings = annotateWithLineTypes(findings, chunk);
 
         if (reviewMode !== 'quick' && additionalFilesNeeded.length > 0) {
           const capped = additionalFilesNeeded.slice(0, 5);
@@ -373,7 +374,7 @@ export function createBitbucketParticipant(
             service.buildPrompt(pr, chunk, extraContents, config.reviewInstructions),
             request.model, token, `${batchStatus} pass 2`,
           );
-          chunkFindings = (await parseReviewResponse(pass2Raw)).findings;
+          chunkFindings = annotateWithLineTypes((await parseReviewResponse(pass2Raw)).findings, chunk);
         }
 
         allFindings = allFindings.concat(chunkFindings);

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parsePrUrl, parseDiff, resolveByNumber, extractJsonObject,
   resolveByNumbers, isAddToReviewIntent, extractUserNote, langFromPath, buildAdaptiveChunks,
+  resolveLineType, annotateWithLineTypes,
 } from '../participant/reviewSessionState';
 import type { ReviewFinding } from '../participant/reviewSessionState';
 import { PrReviewService } from '../services/PrReviewService';
@@ -663,7 +664,7 @@ describe('PrReviewService.postFindingsAsComments', () => {
     const service = new PrReviewService(client);
     await service.postFindingsAsComments('PROJ', 'myrepo', 42, [baseFinding(1, 'src/auth.ts', 42)]);
 
-    expect(client.addPrCommentCalls[0].inline).toEqual({ filePath: 'src/auth.ts', line: 42 });
+    expect(client.addPrCommentCalls[0].inline).toEqual({ filePath: 'src/auth.ts', line: 42, lineType: 'ADDED', fileType: 'TO' });
   });
 
   it('omits inline anchor when finding.line is absent', async () => {
@@ -709,5 +710,101 @@ describe('PrReviewService.postFindingsAsComments', () => {
 
     expect(client.addPrCommentCalls[0].text).toContain('```typescript');
     expect(client.addPrCommentCalls[0].text).toContain('db.query(sql, [id])');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveLineType
+// ---------------------------------------------------------------------------
+
+const SAMPLE_DIFF = `diff --git a/src/api.ts b/src/api.ts
+index abc..def 100644
+--- a/src/api.ts
++++ b/src/api.ts
+@@ -10,6 +10,7 @@
+ function connect() {
+-  const url = OLD_URL;
++  const url = NEW_URL;
++  const timeout = 5000;
+ return url;
+ }
+`;
+
+describe('resolveLineType', () => {
+  // diff layout (TO-side line numbers):
+  //  10 → context  "function connect() {"
+  //  11 → ADDED    "  const url = NEW_URL;"   (FROM-side 11 is the REMOVED line)
+  //  12 → ADDED    "  const timeout = 5000;"
+  //  13 → context  " return url;"
+  //  14 → context  " }"
+
+  it('identifies an added line', () => {
+    expect(resolveLineType(SAMPLE_DIFF, 11)).toEqual({ lineType: 'ADDED', fileType: 'TO' });
+  });
+
+  it('identifies a second added line', () => {
+    expect(resolveLineType(SAMPLE_DIFF, 12)).toEqual({ lineType: 'ADDED', fileType: 'TO' });
+  });
+
+  it('identifies a context line', () => {
+    expect(resolveLineType(SAMPLE_DIFF, 10)).toEqual({ lineType: 'CONTEXT', fileType: 'TO' });
+    expect(resolveLineType(SAMPLE_DIFF, 13)).toEqual({ lineType: 'CONTEXT', fileType: 'TO' });
+  });
+
+  it('identifies a removed line by its FROM-side line number when no TO-side line has the same number', () => {
+    // Two consecutive removed lines: FROM=5 and FROM=6 are removed, TO numbering never reaches 6.
+    // This avoids the ambiguity where the context line after a removal inherits the same TO-side number.
+    const twoRemovedDiff = `diff --git a/f.ts b/f.ts\n--- a/f.ts\n+++ b/f.ts\n@@ -5,3 +5,1 @@\n-removed line 1\n-removed line 2\n context\n`;
+    expect(resolveLineType(twoRemovedDiff, 6)).toEqual({ lineType: 'REMOVED', fileType: 'FROM' });
+  });
+
+  it('prefers TO-side (ADDED) over FROM-side (REMOVED) when both share the same line number', () => {
+    // SAMPLE_DIFF has a replace: -OLD_URL +NEW_URL both at position 11.
+    // The LLM sees the new file where line 11 is the added line, not the removed one.
+    expect(resolveLineType(SAMPLE_DIFF, 11)).toEqual({ lineType: 'ADDED', fileType: 'TO' });
+  });
+
+  it('returns null for a line number not present in the diff', () => {
+    expect(resolveLineType(SAMPLE_DIFF, 999)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// annotateWithLineTypes
+// ---------------------------------------------------------------------------
+
+describe('annotateWithLineTypes', () => {
+  const diffs = [{ path: 'src/api.ts', diff: SAMPLE_DIFF }];
+
+  it('annotates a finding whose line is an added line', () => {
+    const findings = [{ file: 'src/api.ts', line: 11, severity: 'critical' as const, title: 'T', description: 'D', recommendation: 'R' }];
+    const result = annotateWithLineTypes(findings, diffs);
+    expect(result[0].lineType).toBe('ADDED');
+    expect(result[0].fileType).toBe('TO');
+  });
+
+  it('annotates a finding whose line is a context line', () => {
+    const findings = [{ file: 'src/api.ts', line: 10, severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
+    const result = annotateWithLineTypes(findings, diffs);
+    expect(result[0].lineType).toBe('CONTEXT');
+    expect(result[0].fileType).toBe('TO');
+  });
+
+  it('leaves findings without a line number unchanged', () => {
+    const findings = [{ file: 'src/api.ts', severity: 'suggestion' as const, title: 'T', description: 'D', recommendation: 'R' }];
+    const result = annotateWithLineTypes(findings, diffs);
+    expect(result[0].lineType).toBeUndefined();
+  });
+
+  it('leaves findings whose file is not in the diff unchanged', () => {
+    const findings = [{ file: 'src/other.ts', line: 5, severity: 'critical' as const, title: 'T', description: 'D', recommendation: 'R' }];
+    const result = annotateWithLineTypes(findings, diffs);
+    expect(result[0].lineType).toBeUndefined();
+  });
+
+  it('leaves lineType undefined when the line number is not found in the diff', () => {
+    const findings = [{ file: 'src/api.ts', line: 999, severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
+    const result = annotateWithLineTypes(findings, diffs);
+    expect(result[0].lineType).toBeUndefined();
   });
 });

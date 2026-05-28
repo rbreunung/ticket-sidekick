@@ -234,7 +234,8 @@ export class BitbucketApiClient implements IBitbucketClient {
     if (this.authType === 'cloud') {
       const body: Record<string, unknown> = { content: { raw: text } };
       if (inline) {
-        body['inline'] = { path: inline.filePath, to: inline.line };
+        const side = inline.fileType === 'FROM' ? { from: inline.line } : { to: inline.line };
+        body['inline'] = { path: inline.filePath, ...side };
       }
       const data = await this.cloudPost<{ id: number; links?: { html?: { href: string } } }>(
         `/repositories/${project}/${repo}/pullrequests/${prId}/comments`,
@@ -244,7 +245,7 @@ export class BitbucketApiClient implements IBitbucketClient {
     }
     const body: Record<string, unknown> = { text };
     if (inline) {
-      body['anchor'] = { line: inline.line, lineType: 'ADDED', fileType: 'TO', path: inline.filePath };
+      body['anchor'] = { line: inline.line, lineType: inline.lineType, fileType: inline.fileType, path: inline.filePath };
     }
     const data = await this.dcPost<{ id: number }>(
       `/projects/${project}/repos/${repo}/pull-requests/${prId}/comments`,

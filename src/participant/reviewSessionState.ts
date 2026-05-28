@@ -13,6 +13,8 @@ export interface ReviewFinding {
   id: number;
   file: string;
   line?: number;
+  lineType?: 'ADDED' | 'CONTEXT' | 'REMOVED';
+  fileType?: 'TO' | 'FROM';
   severity: 'critical' | 'warning' | 'suggestion';
   title: string;
   description: string;
@@ -105,6 +107,48 @@ export function extractUserNote(message: string): string {
     .replace(/\badd\b|\bto\b|\breview\b/gi, '')
     .replace(/[,;]+/g, '')
     .trim();
+}
+
+export function resolveLineType(
+  diff: string,
+  lineNumber: number,
+): { lineType: 'ADDED' | 'CONTEXT'; fileType: 'TO' } | { lineType: 'REMOVED'; fileType: 'FROM' } | null {
+  let fromLine = 0;
+  let toLine = 0;
+  // TO-side match (ADDED/CONTEXT) takes priority over FROM-side (REMOVED) when both share
+  // the same line number (i.e. a line was replaced: -old +new at the same position).
+  let removedMatch: { lineType: 'REMOVED'; fileType: 'FROM' } | null = null;
+  for (const raw of diff.split('\n')) {
+    const hunk = raw.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (hunk) { fromLine = parseInt(hunk[1], 10); toLine = parseInt(hunk[2], 10); continue; }
+    if (raw.startsWith('diff ') || raw.startsWith('index ') || raw.startsWith('--- ') || raw.startsWith('+++ ') || raw.startsWith('\\')) continue;
+    if (fromLine === 0 && toLine === 0) continue;
+    if (raw.startsWith('+')) {
+      if (toLine === lineNumber) return { lineType: 'ADDED', fileType: 'TO' };
+      toLine++;
+    } else if (raw.startsWith('-')) {
+      if (fromLine === lineNumber) removedMatch = { lineType: 'REMOVED', fileType: 'FROM' };
+      fromLine++;
+    } else if (raw.startsWith(' ')) {
+      if (toLine === lineNumber) return { lineType: 'CONTEXT', fileType: 'TO' };
+      fromLine++;
+      toLine++;
+    }
+  }
+  return removedMatch;
+}
+
+export function annotateWithLineTypes(
+  findings: Array<Omit<ReviewFinding, 'id'>>,
+  diffs: FileDiff[],
+): Array<Omit<ReviewFinding, 'id'>> {
+  return findings.map(f => {
+    if (f.line === undefined) return f;
+    const fileDiff = diffs.find(d => d.path === f.file);
+    if (!fileDiff) return f;
+    const resolved = resolveLineType(fileDiff.diff, f.line);
+    return resolved ? { ...f, lineType: resolved.lineType, fileType: resolved.fileType } : f;
+  });
 }
 
 export function langFromPath(filePath: string): string {

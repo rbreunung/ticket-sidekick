@@ -34,6 +34,8 @@ export interface BitbucketCommentResult {
 export interface InlineAnchor {
   filePath: string;
   line: number;
+  lineType: 'ADDED' | 'CONTEXT' | 'REMOVED';
+  fileType: 'TO' | 'FROM';
 }
 
 export interface IBitbucketClient {

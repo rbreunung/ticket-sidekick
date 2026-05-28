@@ -172,7 +172,14 @@ export class PrReviewService {
     for (const finding of findings) {
       const text = this.formatPrComment(finding, userNote);
       const inline: InlineAnchor | undefined =
-        finding.line !== undefined ? { filePath: finding.file, line: finding.line } : undefined;
+        finding.line !== undefined
+          ? {
+              filePath: finding.file,
+              line: finding.line,
+              lineType: finding.lineType ?? 'ADDED',
+              fileType: finding.fileType ?? 'TO',
+            }
+          : undefined;
       try {
         const result = await this.client.addPrComment(project, repo, prId, text, inline);
         results.push({ finding, result });
