@@ -104,6 +104,25 @@ describe('buildHistoryContext', () => {
     expect(result).toContain('User: hello');
     expect(result).toContain('Assistant: world');
   });
+
+  it('"history-recent" omits old turns that "history-full" includes', () => {
+    // 12 turns total (6 pairs); serializeTurns 'recent' takes last 10, 'full' takes all 12
+    const history = Array.from({ length: 6 }, (_, i) => [
+      new vscode.ChatRequestTurn(`question ${i}`),
+      new vscode.ChatResponseTurn([{ value: `answer ${i}` }]),
+    ]).flat();
+
+    const full = buildHistoryContext('history-full', { history } as never);
+    const recent = buildHistoryContext('history-recent', { history } as never);
+
+    // First pair only appears in full
+    expect(full).toContain('question 0');
+    expect(recent).not.toContain('question 0');
+
+    // Last pair appears in both
+    expect(full).toContain('question 5');
+    expect(recent).toContain('question 5');
+  });
 });
 
 describe('extractLastAssistantText', () => {
