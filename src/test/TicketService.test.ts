@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { TicketService, assembleDescription, extractTextFromAdf, resolveFieldIdFuzzy, formatIssueFields } from '../services/TicketService';
+import { TicketService, assembleDescription, extractTextFromAdf, resolveFieldIdFuzzy, formatIssueFields, renderFieldValue } from '../services/TicketService';
 import type { JiraAttachment, JiraFieldMeta, JiraIssue } from '../jira/IJiraClient';
 import { MockJiraClient, FIXTURE_ATTACHMENT_BYTES } from './mocks/MockJiraClient';
 
@@ -881,5 +881,32 @@ describe('formatIssueFields — attachment section', () => {
     const issue = makeIssueWithAttachments([]);
     const { sections } = formatIssueFields(issue, attachmentMeta, new Set());
     expect(sections.find(s => s.startsWith('## Attachments'))).toBeUndefined();
+  });
+});
+
+describe('renderFieldValue', () => {
+  const sprintMeta: JiraFieldMeta = {
+    id: 'customfield_10020', name: 'Sprint', navigable: true,
+    schema: { type: 'array', items: 'json', custom: 'com.pyxis.greenhopper.jira:gh-sprint' },
+  };
+
+  it('renders active sprint name from object format', () => {
+    const value = [{ name: 'Sprint 42', state: 'active' }, { name: 'Sprint 41', state: 'closed' }];
+    expect(renderFieldValue(value, sprintMeta)).toBe('Sprint 42');
+  });
+
+  it('renders sprint name from Jira DC serialized string format', () => {
+    const value = ['com.atlassian.greenhopper.service.sprint.Sprint@abc[id=42,rapidViewId=72,state=ACTIVE,name=Sprint Everest,startDate=2024-01-01T00:00:00.000Z]'];
+    expect(renderFieldValue(value, sprintMeta)).toBe('Sprint Everest');
+    expect(renderFieldValue(value, sprintMeta)).not.toContain('undefined');
+  });
+
+  it('returns _None_ for empty sprint array', () => {
+    expect(renderFieldValue([], sprintMeta)).toBe('_None_');
+  });
+
+  it('renders plain string fields correctly', () => {
+    const textMeta: JiraFieldMeta = { id: 'summary', name: 'Summary', navigable: true, schema: { type: 'string' } };
+    expect(renderFieldValue('Hello world', textMeta)).toBe('Hello world');
   });
 });

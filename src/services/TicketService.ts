@@ -41,7 +41,7 @@ function parseSprintItem(item: unknown): { name: string; state: string } | null 
   return null;
 }
 
-function renderSingleFieldValue(value: unknown, meta: JiraFieldMeta): string {
+export function renderFieldValue(value: unknown, meta: JiraFieldMeta): string {
   if (value === null || value === undefined) return '_Not set_';
 
   // Sprint (gh-sprint in custom)
@@ -158,7 +158,7 @@ export function formatIssueFields(
       const content = formatJiraBody(value).trim() || '_No content_';
       sections.push(`## ${meta.name}\n\n${content}`);
     } else {
-      tableRows.push(`| **${meta.name}** | ${renderSingleFieldValue(value, meta)} |`);
+      tableRows.push(`| **${meta.name}** | ${renderFieldValue(value, meta)} |`);
     }
   }
 
@@ -529,7 +529,7 @@ export class TicketService {
       } else if (typeof value === 'string' && value.length > 80) {
         display = `${value.slice(0, 80)}…`;
       } else {
-        display = renderSingleFieldValue(value, f);
+        display = renderFieldValue(value, f);
       }
       rows.push(`| ${f.name} | \`${f.id}\` | ${display} |`);
     }

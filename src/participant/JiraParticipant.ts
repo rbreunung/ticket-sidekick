@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { JiraApiClient } from '../jira/JiraApiClient';
 import { ConfigService } from '../services/ConfigService';
-import { TicketService } from '../services/TicketService';
+import { TicketService, renderFieldValue } from '../services/TicketService';
 import type { JiraFieldMeta, JiraFilter, JiraSprintCandidate } from '../jira/IJiraClient';
 import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
@@ -881,11 +881,38 @@ export function createJiraParticipant(
             break;
           }
           const fieldId = await ticketService.resolveFieldId(intent.bulkFieldName);
-          const fieldValue = await ticketService.buildFieldValue(fieldId, searchSession.ticketKeys[0], intent.bulkFieldValue!);
+          const allFieldMeta = await ticketService.getFieldMeta();
+          const targetFieldMeta = allFieldMeta.find(f => f.id === fieldId);
+          const isSprintField = Boolean(targetFieldMeta?.schema.custom?.includes('gh-sprint'));
+
+          let fieldValue: unknown;
+          if (isSprintField) {
+            const projectKey = searchSession.ticketKeys[0].split('-')[0];
+            let candidates;
+            try {
+              candidates = await ticketService.findSprints(projectKey, intent.bulkFieldValue!);
+            } catch (err) {
+              result = `Could not search sprints: ${err instanceof Error ? err.message : String(err)}`;
+              break;
+            }
+            if (candidates.length === 0) {
+              result = `No active or future sprint matching "${intent.bulkFieldValue}" in project ${projectKey}.`;
+              break;
+            }
+            const chosen = candidates.find(s => s.state === 'active') ?? candidates[0];
+            fieldValue = [{ id: chosen.id }];
+          } else {
+            fieldValue = await ticketService.buildFieldValue(fieldId, searchSession.ticketKeys[0], intent.bulkFieldValue!);
+          }
+
           const issues = await Promise.all(searchSession.ticketKeys.map(k => jiraClient.getIssue(k)));
           const rows = issues.map(issue => {
             const current = issue.fields[fieldId];
-            const display = current ? JSON.stringify(current) : '—';
+            const display = current !== null && current !== undefined && targetFieldMeta
+              ? renderFieldValue(current, targetFieldMeta)
+              : current !== null && current !== undefined
+                ? String(current)
+                : '—';
             return `| ${issue.key} | ${issue.fields.summary} | ${display} |`;
           });
           const bulkSession: BulkUpdateReviewSession = {
