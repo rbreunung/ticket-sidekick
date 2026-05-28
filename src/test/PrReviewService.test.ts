@@ -270,6 +270,16 @@ describe('PrReviewService.buildPrompt', () => {
 
     expect(prompt).not.toContain('ADDITIONAL INSTRUCTIONS');
   });
+
+  it('includes a re-evaluation note when fileContents is provided (Pass 2)', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const contents = new Map([['src/foo.ts', 'const x = 1;\n']]);
+
+    const prompt = service.buildPrompt(pr, fileDiffs, contents);
+
+    expect(prompt).toContain('second-pass review');
+  });
 });
 
 describe('PrReviewService.formatReview', () => {

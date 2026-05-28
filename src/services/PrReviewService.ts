@@ -79,7 +79,11 @@ export class PrReviewService {
     const extra = additionalInstructions
       ? `ADDITIONAL INSTRUCTIONS:\n${additionalInstructions}\n\n`
       : '';
-    return REVIEW_PROMPT_PREFIX + extra + header + '---\n\n' + fileSections;
+    const pass2Note =
+      fileContents && fileContents.size > 0
+        ? '\nNote: This is a second-pass review. Full file contents have been provided for files you flagged as needing additional context. Use them to confirm or retract uncertain findings — if a finding was speculative due to missing context and the full file shows no issue, omit it from your response.\n\n'
+        : '';
+    return REVIEW_PROMPT_PREFIX + pass2Note + extra + header + '---\n\n' + fileSections;
   }
 
   formatReview(findings: ReviewFinding[], pr: BitbucketPR, fileCount: number): string {
