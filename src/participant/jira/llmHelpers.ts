@@ -84,8 +84,11 @@ Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|
 Command: `;
 
 export function extractFixVersionFromPrompt(prompt: string): string | null {
-  const m = prompt.match(/\bin\s+["']([^"']+)["']/i);
-  return m ? m[1] : null;
+  const quoted = prompt.match(/\bin\s+["']([^"']+)["']/i);
+  if (quoted) return quoted[1];
+  const keyword = prompt.match(/\bin\s+(released|unreleased)\b/i);
+  if (keyword) return keyword[1].toLowerCase();
+  return null;
 }
 
 export async function parseIntent(

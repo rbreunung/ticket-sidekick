@@ -521,6 +521,173 @@ describe('handleRunCleanup', () => {
 });
 
 // ---------------------------------------------------------------------------
+// handleRunCleanup — fixVersion JQL variants
+// ---------------------------------------------------------------------------
+
+describe('handleRunCleanup — fixVersion JQL variants', () => {
+  let client: MockJiraClient;
+  let ticketService: TicketService;
+
+  const baseIntent: ParsedIntent = {
+    operation: 'runCleanup',
+    ticketKey: null,
+    projectKey: 'PROJ',
+    summary: null,
+    issueType: 'Bug',
+    assignee: null,
+    components: null,
+    description: null,
+    comment: null,
+    commentQuery: null,
+    contentSource: 'literal',
+    fieldUpdates: [],
+    fieldName: null,
+    fieldValue: null,
+    arrayOp: 'set',
+    scope: null,
+    jql: null,
+    filterId: null,
+    filterName: null,
+    targetStatus: null,
+    bulkFieldName: null,
+    bulkFieldValue: null,
+    cleanupRuleName: null,
+    fixVersion: null,
+    resolution: null,
+  };
+
+  const workflowGraph = { Open: [{ id: '1', name: 'Go', to: 'Done' }], Done: [] };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    client = new MockJiraClient();
+    ticketService = new TicketService(client);
+
+    vi.mocked(TemplateService).mockImplementation(() => ({
+      loadTemplates: vi.fn().mockReturnValue({ templates: [], cleanupRules: [] }),
+    }) as never);
+
+    vi.mocked(loadWorkflowCache).mockReturnValue({
+      PROJ: { Bug: { discovered: '2024-01-01', graph: workflowGraph } },
+    });
+
+    vi.mocked(findPath).mockReturnValue(dummyPath);
+    vi.spyOn(ticketService, 'searchTicketsRaw').mockResolvedValue({ issues: [], total: 0 });
+  });
+
+  it('emits releasedVersions() when intent.fixVersion is "released"', async () => {
+    const stream = mockStream();
+    const ws = mockWs();
+    const intent = { ...baseIntent, fixVersion: 'released' };
+
+    await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
+
+    const output = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    expect(output).toContain('releasedVersions()');
+    expect(output).not.toContain('fixVersion = "released"');
+  });
+
+  it('emits unreleasedVersions() when intent.fixVersion is "unreleased"', async () => {
+    const stream = mockStream();
+    const ws = mockWs();
+    const intent = { ...baseIntent, fixVersion: 'unreleased' };
+
+    await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
+
+    const output = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    expect(output).toContain('unreleasedVersions()');
+  });
+
+  it('emits fixVersion ~ when the fixVersion string contains a wildcard', async () => {
+    const stream = mockStream();
+    const ws = mockWs();
+    const intent = { ...baseIntent, fixVersion: 'Release*' };
+
+    await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
+
+    const output = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    expect(output).toContain('fixVersion ~ "Release*"');
+    expect(output).not.toContain('fixVersion = "Release*"');
+  });
+
+  it('uses rule fixVersionFilter "released" when intent has no fixVersion', async () => {
+    vi.mocked(TemplateService).mockImplementation(() => ({
+      loadTemplates: vi.fn().mockReturnValue({
+        templates: [],
+        cleanupRules: [{
+          name: 'close-released',
+          project: 'PROJ',
+          issueType: 'Bug',
+          targetState: 'Done',
+          resolution: 'Fixed',
+          fixVersionFilter: 'released',
+        }],
+      }),
+    }) as never);
+
+    const stream = mockStream();
+    const ws = mockWs();
+    const intent = { ...baseIntent, cleanupRuleName: 'close-released', resolution: 'Fixed' };
+
+    await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
+
+    const output = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    expect(output).toContain('releasedVersions()');
+  });
+
+  it('uses rule fixVersionPattern for wildcard JQL when intent has no fixVersion', async () => {
+    vi.mocked(TemplateService).mockImplementation(() => ({
+      loadTemplates: vi.fn().mockReturnValue({
+        templates: [],
+        cleanupRules: [{
+          name: 'close-release-pattern',
+          project: 'PROJ',
+          issueType: 'Bug',
+          targetState: 'Done',
+          resolution: 'Fixed',
+          fixVersionPattern: 'Release*',
+        }],
+      }),
+    }) as never);
+
+    const stream = mockStream();
+    const ws = mockWs();
+    const intent = { ...baseIntent, cleanupRuleName: 'close-release-pattern', resolution: 'Fixed' };
+
+    await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
+
+    const output = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    expect(output).toContain('fixVersion ~ "Release*"');
+  });
+
+  it('prompt fixVersion overrides rule fixVersionFilter', async () => {
+    vi.mocked(TemplateService).mockImplementation(() => ({
+      loadTemplates: vi.fn().mockReturnValue({
+        templates: [],
+        cleanupRules: [{
+          name: 'close-released',
+          project: 'PROJ',
+          issueType: 'Bug',
+          targetState: 'Done',
+          resolution: 'Fixed',
+          fixVersionFilter: 'released',
+        }],
+      }),
+    }) as never);
+
+    const stream = mockStream();
+    const ws = mockWs();
+    const intent = { ...baseIntent, cleanupRuleName: 'close-released', fixVersion: 'v1.2', resolution: 'Fixed' };
+
+    await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
+
+    const output = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    expect(output).toContain('fixVersion = "v1.2"');
+    expect(output).not.toContain('releasedVersions()');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // buildReviewTable — pure table rendering
 // ---------------------------------------------------------------------------
 

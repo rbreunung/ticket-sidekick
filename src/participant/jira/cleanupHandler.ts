@@ -97,9 +97,18 @@ export async function handleRunCleanup(
   }
   const subGraph = cache[project]?.['Sub-task']?.graph ?? graph;
 
-  const fixVersion = intent.fixVersion ?? null;
+  const fixVersion: string | null =
+    intent.fixVersion ?? rule?.fixVersionFilter ?? rule?.fixVersionPattern ?? null;
   let jql = `project = ${project} AND issuetype = "${issueType}" AND status != "${targetState}" AND resolution is EMPTY`;
-  if (fixVersion) jql += ` AND fixVersion = "${fixVersion}"`;
+  if (fixVersion === 'released') {
+    jql += ` AND fixVersion in releasedVersions()`;
+  } else if (fixVersion === 'unreleased') {
+    jql += ` AND fixVersion in unreleasedVersions()`;
+  } else if (fixVersion?.includes('*')) {
+    jql += ` AND fixVersion ~ "${fixVersion}"`;
+  } else if (fixVersion) {
+    jql += ` AND fixVersion = "${fixVersion}"`;
+  }
 
   const buffer: string[] = [];
   buffer.push(`**Search scope**\n\`${jql}\`\n\n`);
@@ -196,7 +205,12 @@ export async function handleRunCleanup(
     }
   }
 
-  const header = `**Cleanup${rule ? `: ${rule.name}` : ''}**  ·  ${project} / ${issueType}${fixVersion ? `  ·  Fix version "${fixVersion}"` : ''}`;
+  const fvLabel =
+    fixVersion === 'released' ? 'released versions' :
+    fixVersion === 'unreleased' ? 'unreleased versions' :
+    fixVersion?.includes('*') ? `Fix version ~ "${fixVersion}"` :
+    fixVersion ? `Fix version "${fixVersion}"` : null;
+  const header = `**Cleanup${rule ? `: ${rule.name}` : ''}**  ·  ${project} / ${issueType}${fvLabel ? `  ·  ${fvLabel}` : ''}`;
   const batchSession: TransitionBatchSession = { tickets, resolution, ruleName: rule?.name, issueType };
   await workspaceState.update('jira.session.transitionReview', batchSession);
   stream.markdown(`${buffer.join('')}${header}\n\n${buildReviewTable(batchSession)}\n\n<!-- jira:transition-review -->`);

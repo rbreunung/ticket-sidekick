@@ -25,6 +25,8 @@ export interface CleanupRule {
   subtaskResolution?: string;
   subtaskTargetState?: string;
   jql?: string;
+  fixVersionFilter?: 'released' | 'unreleased';
+  fixVersionPattern?: string;
 }
 
 export class TemplateService {

@@ -398,15 +398,44 @@ Create a `.jira-templates.json` file in your workspace root to define per-applic
 | `subtaskTargetState` | no | same as `targetState` | Destination status for subtask transitions — falls back to `targetState` if omitted |
 | `closeSubtasks` | no | `false` | When `true`, open subtasks are transitioned before their parent |
 | `jql` | no | — | Extra JQL filter ANDed onto the base query — write only the additional conditions; `project`, `issueType`, and `status` are always included |
+| `fixVersionFilter` | no | — | `"released"` or `"unreleased"` — adds `fixVersion in releasedVersions()` / `fixVersion in unreleasedVersions()` to the query |
+| `fixVersionPattern` | no | — | Glob-style pattern (e.g. `"Release*"`) — adds `fixVersion ~ "pattern"` to the query (requires Jira 11+ / modern Data Center) |
 
-> **Note:** `project` and `issueType` are always prepended to the effective JQL even when `jql` is set — they are never replaced. The `jql` field adds extra conditions such as `fixVersion in releasedVersions()` or `sprint in openSprints()`.
+> **Note:** `project` and `issueType` are always prepended to the effective JQL even when `jql` is set — they are never replaced. The `jql` field adds extra conditions such as `sprint in openSprints()`.
+>
+> `fixVersionFilter` and `fixVersionPattern` are mutually exclusive in a rule — `fixVersionFilter` takes precedence if both are set. A prompt override (`in "v1.2"`, `in released`, or `in "Release*"`) always wins over the rule setting.
+
+#### Version filter examples
+
+```json
+{ "fixVersionFilter": "released" }
+```
+→ `AND fixVersion in releasedVersions()`
+
+```json
+{ "fixVersionPattern": "Release*" }
+```
+→ `AND fixVersion ~ "Release*"`
+
+You can also specify a version filter in the prompt without touching the rule:
+
+```text
+@jira run cleanup "Close released bugs" in released
+@jira run cleanup "Close released bugs" in "Release*"
+@jira run cleanup "Close released bugs" in "Release 3.2"
+@jira run cleanup "Close released bugs" in "released"
+```
+
+The last example (quoted `"released"`) targets a Jira version literally named _"released"_ — it does **not** trigger `releasedVersions()`. Only the unquoted form does.
 
 #### Interaction model
 
 | Prompt | JQL used | Resolution |
 |---|---|---|
 | `@jira run cleanup "Name"` | base + `rule.jql` if set | `rule.resolution`, or prompted if absent |
-| `@jira run cleanup "Name" in "v1.2"` | base + fixVersion + `rule.jql` | same |
+| `@jira run cleanup "Name" in "v1.2"` | base + `fixVersion = "v1.2"` + `rule.jql` | same |
+| `@jira run cleanup "Name" in released` | base + `fixVersion in releasedVersions()` | same |
+| `@jira run cleanup "Name" in "Release*"` | base + `fixVersion ~ "Release*"` | same |
 | `@jira run cleanup "Name" with resolution "Won't Fix"` | same JQL | prompt value overrides rule |
 | `@jira close PROJ Bug` | auto-built (matches rule by project + type if available) | prompted if closing to a closed state |
 | `@jira close PROJ bugs in "v1.2" with resolution Released` | auto-built + fixVersion | prompt value — no dialog |

@@ -215,4 +215,28 @@ describe('extractFixVersionFromPrompt', () => {
   it('does not match the rule name that follows "cleanup" instead of "in"', () => {
     expect(extractFixVersionFromPrompt('@jira run cleanup "My Cleanup"')).toBeNull();
   });
+
+  it('returns "released" for unquoted in released keyword', () => {
+    expect(extractFixVersionFromPrompt('@jira run cleanup "My Rule" in released')).toBe('released');
+  });
+
+  it('returns "unreleased" for unquoted in unreleased keyword', () => {
+    expect(extractFixVersionFromPrompt('@jira run cleanup "My Rule" in unreleased')).toBe('unreleased');
+  });
+
+  it('lowercases the keyword', () => {
+    expect(extractFixVersionFromPrompt('@jira run cleanup "My Rule" in Released')).toBe('released');
+  });
+
+  it('quoted "released" takes priority over unquoted keyword — returns literal string', () => {
+    expect(extractFixVersionFromPrompt('@jira run cleanup "My Rule" in "released"')).toBe('released');
+  });
+
+  it('passes through wildcard pattern from quoted string', () => {
+    expect(extractFixVersionFromPrompt('@jira run cleanup "My Rule" in "Release*"')).toBe('Release*');
+  });
+
+  it('quoted string containing "released" as a word returns full quoted value', () => {
+    expect(extractFixVersionFromPrompt('@jira run cleanup "My Rule" in "My Version has released in it"')).toBe('My Version has released in it');
+  });
 });
