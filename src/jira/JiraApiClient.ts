@@ -61,7 +61,7 @@ export class JiraApiClient implements IJiraClient {
       ...options,
       headers: {
         Authorization: this.authHeader,
-        'Content-Type': 'application/json',
+        ...(options.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
         Accept: 'application/json',
         ...(options.headers ?? {}),
       },
@@ -82,7 +82,6 @@ export class JiraApiClient implements IJiraClient {
     const response = await fetch(url, {
       headers: {
         Authorization: this.authHeader,
-        'Content-Type': 'application/json',
         Accept: 'application/json',
       },
     });
@@ -97,7 +96,7 @@ export class JiraApiClient implements IJiraClient {
       ...options,
       headers: {
         Authorization: this.authHeader,
-        'Content-Type': 'application/json',
+        ...(options.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
         Accept: 'application/json',
         ...(options.headers ?? {}),
       },
@@ -118,7 +117,6 @@ export class JiraApiClient implements IJiraClient {
     const response = await fetch(url, {
       headers: {
         Authorization: this.authHeader,
-        'Content-Type': 'application/json',
         Accept: 'application/json',
       },
     });
