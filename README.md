@@ -300,11 +300,13 @@ Or target a specific fix version ad-hoc:
 @jira close BILLING bugs in "Release 3.2"
 ```
 
-Additional examples with the new prompt forms:
+More examples:
 
 ```text
 @jira close BILLING bugs with resolution Fixed
 @jira run cleanup "Close released bugs" with resolution "Won't Fix"
+@jira run cleanup "Close released bugs" in released
+@jira run cleanup "Close released bugs" in "Release*"
 ```
 
 The plugin:
@@ -379,7 +381,8 @@ Create a `.jira-templates.json` file in your workspace root to define per-applic
       "subtaskResolution": "Fixed",
       "subtaskTargetState": "Closed",
       "closeSubtasks": true,
-      "jql": "fixVersion in releasedVersions() AND assignee is not EMPTY"
+      "fixVersionFilter": "released",
+      "jql": "assignee is not EMPTY"
     }
   ]
 }
@@ -435,6 +438,7 @@ The last example (quoted `"released"`) targets a Jira version literally named _"
 | `@jira run cleanup "Name"` | base + `rule.jql` if set | `rule.resolution`, or prompted if absent |
 | `@jira run cleanup "Name" in "v1.2"` | base + `fixVersion = "v1.2"` + `rule.jql` | same |
 | `@jira run cleanup "Name" in released` | base + `fixVersion in releasedVersions()` | same |
+| `@jira run cleanup "Name" in unreleased` | base + `fixVersion in unreleasedVersions()` | same |
 | `@jira run cleanup "Name" in "Release*"` | base + `fixVersion ~ "Release*"` | same |
 | `@jira run cleanup "Name" with resolution "Won't Fix"` | same JQL | prompt value overrides rule |
 | `@jira close PROJ Bug` | auto-built (matches rule by project + type if available) | prompted if closing to a closed state |
