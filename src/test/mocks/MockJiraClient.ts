@@ -143,8 +143,9 @@ export class MockJiraClient implements IJiraClient {
     );
   }
 
-  async uploadAttachment(_issueKey: string, _filename: string, _contentType: string, _contentBytes: string): Promise<void> {
-    // no-op in tests
+  public uploadAttachmentCalls: Array<{ issueKey: string; filename: string; contentType: string }> = [];
+  async uploadAttachment(issueKey: string, filename: string, contentType: string, _contentBytes: string): Promise<void> {
+    this.uploadAttachmentCalls.push({ issueKey, filename, contentType });
   }
 
   getRemoteLinks: (_issueKey: string) => Promise<JiraRemoteLink[]> = async () => [];

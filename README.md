@@ -334,14 +334,48 @@ Download the email from OWA using **More actions → Download message** to save 
 3. A preview appears in the `@jira` chat with subject, sender, date, body, and attachments
 4. Reply with a template number, an issue type number, or **post it** to create the ticket
 
+You can also trigger the import from the chat directly:
+
+```text
+@jira create ticket from mail
+@jira import email
+```
+
+A file picker opens, the preview appears, and you proceed as above.
+
 Inline images are uploaded as Jira attachments and embedded as thumbnails at their position in the description. File attachments are uploaded to the ticket.
+
+### Add an email as a comment to an existing ticket
+
+Log a customer follow-up, escalation, or partner communication on a ticket that already exists — without leaving VS Code.
+
+**From the chat (fastest):**
+
+```text
+@jira add email to PROJ-42
+@jira add comment from mail to PROJ-42
+```
+
+A file picker opens. Select the `.eml` file. The email is posted as a comment on `PROJ-42` with all attachments uploaded.
+
+**Via preview (to review before posting):**
+
+```text
+@jira add email
+```
+
+The email preview appears. Reply with a ticket key (e.g. `PROJ-42`) to add as a comment, or select a template / issue type to create a new ticket instead.
+
+**Via command palette:** Use **Command Palette → Ticket Sidekick: Create Jira ticket from email (.eml)**, then reply with a ticket key in the preview.
+
+The comment includes the sender name and received date as a header, followed by the full email body in Jira markup. All attachments are uploaded to the ticket.
 
 **Settings:**
 
 | Setting | Default | Description |
 |---|---|---|
 | `ticketSidekick.email.deleteEmlAfterImport` | `false` | Delete the `.eml` file automatically after the ticket is created |
-| `ticketSidekick.jira.defaultProject` | — | Project key used when creating tickets |
+| `ticketSidekick.jira.defaultProject` | — | Project key used when creating tickets (required for new ticket flow) |
 
 ### Templates and cleanup rules
 

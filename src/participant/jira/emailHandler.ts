@@ -4,6 +4,8 @@ import type { TicketService } from '../../services/TicketService';
 import type { ConfigService } from '../../services/ConfigService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import { markdownToJiraWiki } from '../../utils/markdownToJiraWiki';
+import { parseEml } from '../../utils/emlParser';
+import { htmlToMarkdown } from '../../utils/htmlToMarkdown';
 import { TemplateService } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
 import type { EmailContentSession } from '../sessionState';
@@ -21,10 +23,123 @@ export async function handleCreateFromEmail(
   const session = ws.get<EmailContentSession>('jira.session.emailContent');
   if (!session) {
     stream.markdown(
-      'No email loaded. Use **Command Palette → Ticket Sidekick: Create Jira ticket from email (.eml)** to import an email first.',
+      'No email loaded. Use **Command Palette → Ticket Sidekick: Create Jira ticket from email (.eml)** to import an email first, or say `@jira add email` to open a file picker.',
     );
     return;
   }
+  await streamEmailContentPreview(session, stream, ws);
+}
+
+export async function handleAddEmailFromChat(
+  request: vscode.ChatRequest,
+  stream: vscode.ChatResponseStream,
+  _token: vscode.CancellationToken,
+  jiraClient: IJiraClient,
+  ticketService: TicketService,
+  _configService: ConfigService,
+  ws: vscode.Memento,
+): Promise<void> {
+  // Extract ticket key from prompt if present (e.g. "add email to PROJ-42")
+  const ticketKeyMatch = request.prompt.match(/\b([A-Z][A-Z0-9]+-\d+)\b/i);
+  const promptTicketKey = ticketKeyMatch?.[1]?.toUpperCase() ?? null;
+
+  const uris = await vscode.window.showOpenDialog({
+    canSelectMany: false,
+    filters: { Email: ['eml'] },
+    title: 'Select .eml file to import',
+  });
+  if (!uris || uris.length === 0) return;
+
+  const emlPath = uris[0].fsPath;
+  let buffer: Buffer;
+  try {
+    buffer = await fs.promises.readFile(emlPath);
+  } catch (err) {
+    stream.markdown(`_Could not read file: ${err instanceof Error ? err.message : String(err)}_`);
+    return;
+  }
+
+  let parsed;
+  try {
+    parsed = await parseEml(buffer);
+  } catch (err) {
+    stream.markdown(`_Could not parse email: ${err instanceof Error ? err.message : String(err)}_`);
+    return;
+  }
+
+  const markdownBody = parsed.htmlBody
+    ? htmlToMarkdown(parsed.htmlBody, parsed.inlineImageMap)
+    : (parsed.plainBody ?? '');
+
+  const inlineImageMap: Record<string, string> = {};
+  for (const [k, v] of parsed.inlineImageMap) {
+    inlineImageMap[k] = v;
+  }
+  const attachments = parsed.attachments.map(a => ({
+    name: a.name,
+    contentType: a.contentType,
+    contentBytes: a.contentBytes,
+    isInline: a.isInline,
+  }));
+
+  // If a ticket key was in the prompt, add as comment immediately (no preview)
+  if (promptTicketKey) {
+    const quickSession: EmailContentSession = {
+      emailId: 'eml-import',
+      subject: parsed.subject,
+      senderName: parsed.senderName,
+      receivedDateTime: parsed.receivedDateTime,
+      markdownBody,
+      inlineImageMap,
+      attachments,
+      emlFilePath: emlPath,
+      selectedTemplateName: null,
+      projectKey: '',
+      issueType: 'Story',
+      additionalFields: {},
+    };
+    await addEmailAsComment(promptTicketKey, quickSession, ticketService, stream);
+    return;
+  }
+
+  // No ticket key — build full session and show preview so user can choose
+  const projectKey = vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.defaultProject') ?? '';
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+
+  const availableTemplates: Array<{ name: string; issueType: string }> = (() => {
+    if (!workspaceRoot) return [];
+    try {
+      return new TemplateService(workspaceRoot).loadTemplates().templates
+        .map(t => ({ name: t.name, issueType: t.issueType ?? 'Story' }));
+    } catch { return []; }
+  })();
+
+  let issueTypes: string[] = [];
+  let issueType = 'Story';
+  if (projectKey) {
+    try {
+      const project = await jiraClient.getProject(projectKey);
+      issueTypes = project.issueTypes.filter(t => !t.subtask).map(t => t.name);
+      issueType = issueTypes.find(t => t === 'Story') ?? issueTypes.find(t => t === 'Task') ?? issueTypes[0] ?? 'Story';
+    } catch { /* use defaults */ }
+  }
+
+  const session: EmailContentSession = {
+    emailId: 'eml-import',
+    subject: parsed.subject,
+    senderName: parsed.senderName,
+    receivedDateTime: parsed.receivedDateTime,
+    markdownBody,
+    inlineImageMap,
+    attachments,
+    emlFilePath: emlPath,
+    selectedTemplateName: null,
+    projectKey: projectKey || 'UNKNOWN',
+    issueType,
+    additionalFields: {},
+    availableTemplates: availableTemplates.length > 0 ? availableTemplates : undefined,
+    availableIssueTypes: issueTypes.length > 0 ? issueTypes : undefined,
+  };
   await streamEmailContentPreview(session, stream, ws);
 }
 
@@ -39,6 +154,14 @@ export async function handleEmailContentSession(
   if (isCancellation(reply)) {
     await ws.update('jira.session.emailContent', undefined);
     stream.markdown('_Cancelled._');
+    return;
+  }
+
+  // Ticket key reply → add email as comment to that ticket
+  const ticketKeyMatch = reply.trim().match(/^([A-Z][A-Z0-9]+-\d+)$/i);
+  if (ticketKeyMatch) {
+    await ws.update('jira.session.emailContent', undefined);
+    await addEmailAsComment(ticketKeyMatch[1].toUpperCase(), session, ticketService, stream);
     return;
   }
 
@@ -73,11 +196,55 @@ export async function handleEmailContentSession(
     await finishEmailTicket(session, ticketService, stream);
     return;
   }
-  stream.markdown(`_Reply with a number, **post it** to create as **${session.issueType}**, or **(c)** to cancel._`);
+  stream.markdown(`_Reply with a number, a ticket key (e.g. \`PROJ-42\`), **post it** to create as **${session.issueType}**, or **(c)** to cancel._`);
   await streamEmailContentPreview(session, stream, ws);
 }
 
-async function streamEmailContentPreview(session: EmailContentSession, stream: vscode.ChatResponseStream, ws: vscode.Memento): Promise<void> {
+// Pure helper — converts markdown email body to Jira Wiki markup with inline-image placeholders resolved
+export function buildEmailJiraWiki(markdownBody: string): string {
+  let jiraWiki = markdownToJiraWiki(markdownBody);
+  return jiraWiki.replace(/\[📎 ([^\]]+)\]/g, '!$1|thumbnail!');
+}
+
+// Pure helper — builds the From/Date comment header
+export function buildEmailCommentHeader(senderName?: string, receivedDateTime?: string): string {
+  const parts: string[] = [];
+  if (senderName) parts.push(`*From:* ${senderName}`);
+  if (receivedDateTime) parts.push(`*Date:* ${receivedDateTime.slice(0, 10)}`);
+  return parts.length > 0 ? parts.join('  ·  ') + '\n\n' : '';
+}
+
+export async function addEmailAsComment(
+  ticketKey: string,
+  session: EmailContentSession,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+): Promise<void> {
+  const jiraWiki = buildEmailJiraWiki(session.markdownBody);
+  const header = buildEmailCommentHeader(session.senderName, session.receivedDateTime);
+  const commentBody = `${header}${jiraWiki}`;
+
+  await ticketService.addComment(ticketKey, commentBody);
+  stream.markdown(`Added comment to **${ticketKey}**.`);
+
+  if (session.attachments.length > 0) {
+    let uploaded = 0;
+    await Promise.all(
+      session.attachments.map(att =>
+        ticketService.uploadAttachment(ticketKey, att.name, att.contentType, att.contentBytes)
+          .then(() => { uploaded++; })
+          .catch(err => {
+            stream.markdown(`_Warning: could not upload ${att.name}: ${err instanceof Error ? err.message : String(err)}_`);
+          }),
+      ),
+    );
+    stream.markdown(`Uploaded ${uploaded} of ${session.attachments.length} attachment(s).\n\n<!-- @jira-ticket:${ticketKey} -->`);
+  } else {
+    stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
+  }
+}
+
+export async function streamEmailContentPreview(session: EmailContentSession, stream: vscode.ChatResponseStream, ws: vscode.Memento): Promise<void> {
   await ws.update('jira.session.emailContent', session);
   const templates = session.availableTemplates ?? [];
   const issueTypes = session.availableIssueTypes ?? [];
@@ -92,9 +259,10 @@ async function streamEmailContentPreview(session: EmailContentSession, stream: v
     optionsList += `**Issue types (no template):**\n${issueTypes.map((t, i) => `${offset + i + 1}. ${t}`).join('\n')}\n\n`;
   }
 
+  const commentHint = '\n\nOr reply with a ticket key (e.g. `PROJ-42`) to add this email as a comment to an existing ticket.';
   const prompt = hasOptions
-    ? `${optionsList}Reply with a number to select, **post it** to create as **${session.issueType}**, or **(c)** to cancel.`
-    : `Reply **post it** to create the Jira ticket in **${session.projectKey}** as **${session.issueType}**, or **(c)** to cancel.`;
+    ? `${optionsList}Reply with a number to select, **post it** to create as **${session.issueType}**, or **(c)** to cancel.${commentHint}`
+    : `Reply **post it** to create the Jira ticket in **${session.projectKey}** as **${session.issueType}**, or **(c)** to cancel.${commentHint}`;
 
   const headerLines: string[] = [];
   if (session.senderName || session.receivedDateTime) {
@@ -116,9 +284,8 @@ async function streamEmailContentPreview(session: EmailContentSession, stream: v
   );
 }
 
-async function finishEmailTicket(session: EmailContentSession, ticketService: TicketService, stream: vscode.ChatResponseStream): Promise<void> {
-  let jiraWiki = markdownToJiraWiki(session.markdownBody);
-  jiraWiki = jiraWiki.replace(/\[📎 ([^\]]+)\]/g, '!$1|thumbnail!');
+export async function finishEmailTicket(session: EmailContentSession, ticketService: TicketService, stream: vscode.ChatResponseStream): Promise<void> {
+  const jiraWiki = buildEmailJiraWiki(session.markdownBody);
 
   const result = await ticketService.createTicket(
     session.projectKey, session.subject, session.issueType,
@@ -133,11 +300,11 @@ async function finishEmailTicket(session: EmailContentSession, ticketService: Ti
     : result;
   stream.markdown(linkMsg);
 
-  const toUpload = session.attachments.filter(a => !a.isInline);
-  if (issueKey && toUpload.length > 0) {
+  // Upload all attachments — inline images are referenced in the description and must exist as attachments
+  if (issueKey && session.attachments.length > 0) {
     let uploaded = 0;
     await Promise.all(
-      toUpload.map(att =>
+      session.attachments.map(att =>
         ticketService.uploadAttachment(issueKey, att.name, att.contentType, att.contentBytes)
           .then(() => { uploaded++; })
           .catch(err => {
@@ -145,7 +312,7 @@ async function finishEmailTicket(session: EmailContentSession, ticketService: Ti
           }),
       ),
     );
-    stream.markdown(`\n\nUploaded ${uploaded} of ${toUpload.length} attachment(s).\n\n<!-- @jira-ticket:${issueKey} -->`);
+    stream.markdown(`\n\nUploaded ${uploaded} of ${session.attachments.length} attachment(s).\n\n<!-- @jira-ticket:${issueKey} -->`);
   } else if (issueKey) {
     stream.markdown(`\n\n<!-- @jira-ticket:${issueKey} -->`);
   }

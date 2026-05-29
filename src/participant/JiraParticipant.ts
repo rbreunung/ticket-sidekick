@@ -20,7 +20,7 @@ import { serializeCommentsForLLM, handleLoadTicket } from './jira/loadHandler';
 import { streamReviewScreen, executeCleanupBatch, handleRunCleanup } from './jira/cleanupHandler';
 import { handleDiscoverWorkflow } from './jira/workflowHandler';
 import {
-  handleCreateFromEmail, handleEmailContentSession,
+  handleCreateFromEmail, handleAddEmailFromChat, handleEmailContentSession,
 } from './jira/emailHandler';
 import type { EmailContentSession } from './sessionState';
 
@@ -541,6 +541,11 @@ export function createJiraParticipant(
 
     if (intent.operation === 'createFromEmail') {
       await handleCreateFromEmail(request, stream, token, jiraClient, ticketService, configService, ws);
+      return;
+    }
+
+    if (intent.operation === 'addEmailComment') {
+      await handleAddEmailFromChat(request, stream, token, jiraClient, ticketService, configService, ws);
       return;
     }
 
