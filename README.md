@@ -347,17 +347,37 @@ Inline images are uploaded as Jira attachments and embedded as thumbnails at the
 
 Create a `.jira-templates.json` file in your workspace root to define per-application templates with default fields and guided description collection, plus named cleanup rules for bulk status transitions.
 
+#### Template examples
+
+**Minimal — pre-populated fields:**
+
 ```json
 {
   "templates": [
     {
-      "name": "Billing App Bug",
+      "name": "Billing Bug",
       "issueType": "Bug",
       "defaultFields": {
         "priority": { "name": "High" },
         "labels": ["billing"],
-        "components": [{ "name": "Backend" }],
-        "versions": [{ "name": "Release 3.2" }]
+        "components": [{ "name": "Backend" }]
+      }
+    }
+  ]
+}
+```
+
+**With resolved fields and guided description sections:**
+
+```json
+{
+  "templates": [
+    {
+      "name": "Billing Bug",
+      "issueType": "Bug",
+      "defaultFields": {
+        "priority": { "name": "High" },
+        "labels": ["billing"]
       },
       "resolveFields": {
         "assignee": { "type": "user", "name": "Jane Smith" },
@@ -370,7 +390,32 @@ Create a `.jira-templates.json` file in your workspace root to define per-applic
         "Actual behavior"
       ]
     }
-  ],
+  ]
+}
+```
+
+#### Cleanup rule examples
+
+**Basic — close a ticket type to a target state:**
+
+```json
+{
+  "cleanupRules": [
+    {
+      "name": "Close billing bugs",
+      "project": "BILLING",
+      "issueType": "Bug",
+      "targetState": "Done",
+      "resolution": "Fixed"
+    }
+  ]
+}
+```
+
+**With subtasks and version filter:**
+
+```json
+{
   "cleanupRules": [
     {
       "name": "Close released bugs",
@@ -378,10 +423,27 @@ Create a `.jira-templates.json` file in your workspace root to define per-applic
       "issueType": "Bug",
       "targetState": "Done",
       "resolution": "Fixed",
-      "subtaskResolution": "Fixed",
-      "subtaskTargetState": "Closed",
       "closeSubtasks": true,
-      "fixVersionFilter": "released",
+      "subtaskTargetState": "Closed",
+      "subtaskResolution": "Fixed",
+      "fixVersionFilter": "released"
+    }
+  ]
+}
+```
+
+**With a wildcard version pattern and extra JQL filter:**
+
+```json
+{
+  "cleanupRules": [
+    {
+      "name": "Close Release-series bugs",
+      "project": "BILLING",
+      "issueType": "Bug",
+      "targetState": "Done",
+      "resolution": "Fixed",
+      "fixVersionPattern": "Release*",
       "jql": "assignee is not EMPTY"
     }
   ]
