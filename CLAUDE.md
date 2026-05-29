@@ -57,7 +57,7 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/utils/emlParser.ts` | Parses `.eml` files via `postal-mime`; returns `ParsedEml` (subject, sender, date, htmlBody, plainBody, inlineImageMap, attachments) |
 | `src/participant/BitbucketParticipant.ts` | Bitbucket chat handler: check, PR review, multi-turn follow-ups |
 | `src/participant/sessionState.ts` | VS Code-free pure helpers and Jira multi-turn session types; includes `pickEmailOption()` for unified template+issue-type selection |
-| `src/participant/reviewSessionState.ts` | Bitbucket session types, `parsePrUrl`, `parseDiff`, `resolveByNumber`, `buildAdaptiveChunks` |
+| `src/participant/reviewSessionState.ts` | Bitbucket session types, `parsePrUrl`, `hasPrUrl`, `parseDiff`, `resolveByNumber`, `buildAdaptiveChunks` |
 | `src/services/WorkflowService.ts` | Workflow graph cache I/O, BFS path-finding, `discoverWorkflow` sampling |
 | `src/templates/TemplateService.ts` | Reads `.jira-templates.json`; returns `{ templates, cleanupRules }` |
 | `src/templates/FieldResolver.ts` | Resolves `resolveFields` entries by name (API lookup) or id (pass-through) |
@@ -208,6 +208,8 @@ Detection order in the Jira handler: resolution selection → transition review 
 
 Detection order in the Bitbucket handler: `check` command → review session follow-up → new PR review.
 
+**Important:** A PR URL anywhere in the prompt always bypasses both follow-up branches and starts a fresh review — even when a `<!-- bitbucket:review-session -->` marker is present in the last response. The `hasPrUrl()` helper in `reviewSessionState.ts` encodes this check and is unit-tested.
+
 ## Ticket creation flow
 
 `handleCreateTicket` in `JiraParticipant` resolves missing mandatory fields interactively:
@@ -293,9 +295,16 @@ When a follow-up prompt arrives without an explicit ticket key, the handler scan
 
 - `project`, `issueType`, `targetState` — required
 - `resolution` — optional; if omitted and target is a closed state, asked in chat once before the review screen
-- `closeSubtasks` — if true, open subtasks appear in the review and are transitioned before their parent
+- `subtaskResolution` — resolution for subtask transitions; falls back to `resolution` if omitted
+- `subtaskTargetState` — target status for subtasks; falls back to `targetState` if omitted
+- `closeSubtasks` — if true, open subtasks are fetched in one bulk query (`parent in (...)`) and transitioned before their parent
+- `fixVersionFilter` — `"released"` or `"unreleased"`; adds `fixVersion in releasedVersions()` / `unreleasedVersions()` to the JQL
+- `fixVersionPattern` — glob pattern (e.g. `"Release*"`); adds `fixVersion ~ "pattern"` (Jira 11+ / modern DC); mutually exclusive with `fixVersionFilter`
+- `jql` — extra JQL ANDed onto the base query; `project`, `issueType`, and `status` are always anchored regardless
 
-Trigger: `@jira run cleanup "rule name"` or ad-hoc `@jira close PROJ bugs in "Fix Version 3.2"` (exact version match required).
+Prompt overrides: `in "Version Name"` (exact), `in released` / `in unreleased` (JQL function), `in "Release*"` (wildcard) — always win over rule fields. Quoted `in "released"` targets a version literally named "released", not the JQL function.
+
+Trigger: `@jira run cleanup "rule name"` or ad-hoc `@jira close PROJ bugs in "Fix Version 3.2"`.
 
 Review screen shows all tickets with their subtasks and proposed transitions. User replies: **ok**, **(c)** to cancel the run, or key numbers to skip (cascading: subtask skip → parent skipped; parent skip → all subtasks skipped).
 
