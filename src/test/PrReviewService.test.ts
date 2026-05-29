@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parsePrUrl, parseDiff, resolveByNumber, extractJsonObject,
   resolveByNumbers, isAddToReviewIntent, extractUserNote, langFromPath, buildAdaptiveChunks,
-  resolveLineType, annotateWithLineTypes,
+  resolveLineType, annotateWithLineTypes, hasPrUrl,
 } from '../participant/reviewSessionState';
 import type { ReviewFinding } from '../participant/reviewSessionState';
 import { PrReviewService } from '../services/PrReviewService';
@@ -34,6 +34,24 @@ describe('parsePrUrl', () => {
 
   it('returns null for an unrecognised URL', () => {
     expect(parsePrUrl('https://github.com/user/repo/pull/1')).toBeNull();
+  });
+});
+
+describe('hasPrUrl', () => {
+  it('returns true for a Data Center PR URL in a plain prompt', () => {
+    expect(hasPrUrl('https://bitbucket.company.com/projects/PROJ/repos/myrepo/pull-requests/42')).toBe(true);
+  });
+  it('returns true for a Cloud PR URL embedded in surrounding text', () => {
+    expect(hasPrUrl('please review https://bitbucket.org/workspace/repo/pull-requests/7 thanks')).toBe(true);
+  });
+  it('returns false for a follow-up question with no URL', () => {
+    expect(hasPrUrl('can you explain finding #2?')).toBe(false);
+  });
+  it('returns false for a non-PR URL', () => {
+    expect(hasPrUrl('https://bitbucket.company.com/projects/PROJ/repos/myrepo/browse')).toBe(false);
+  });
+  it('returns false for an empty string', () => {
+    expect(hasPrUrl('')).toBe(false);
   });
 });
 

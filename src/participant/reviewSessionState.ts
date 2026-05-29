@@ -38,6 +38,10 @@ export interface BitbucketCommentPreviewSession {
   items: Array<{ finding: ReviewFinding; text: string }>;
 }
 
+export function hasPrUrl(prompt: string): boolean {
+  return /https?:\/\/\S+\/pull-requests\/\d+/.test(prompt);
+}
+
 export function parsePrUrl(url: string): ParsedPrUrl | null {
   try {
     const u = new URL(url);
