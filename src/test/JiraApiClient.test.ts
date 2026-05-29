@@ -21,6 +21,26 @@ function makeFetch(body: unknown, status = 200, contentType = 'application/json'
 describe('JiraApiClient', () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  describe('request headers', () => {
+    it('GET requests do not include Content-Type', async () => {
+      const mockFetch = makeFetch({ id: '1', key: 'PROJ-123', fields: {} });
+      vi.stubGlobal('fetch', mockFetch);
+      const client = new JiraApiClient(BASE_CONFIG);
+      await client.getIssue('PROJ-123');
+      const [, options] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect((options.headers as Record<string, string>)['Content-Type']).toBeUndefined();
+    });
+
+    it('POST requests include Content-Type: application/json', async () => {
+      const mockFetch = makeFetch({ id: '10001', key: 'PROJ-1' }, 201);
+      vi.stubGlobal('fetch', mockFetch);
+      const client = new JiraApiClient(BASE_CONFIG);
+      await client.addComment('PROJ-1', 'hello');
+      const [, options] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect((options.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+    });
+  });
+
   describe('auth headers', () => {
     it('sends Bearer header for datacenter auth', async () => {
       const mockFetch = makeFetch({ id: '1', key: 'PROJ-123', fields: {} });
