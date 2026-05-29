@@ -80,11 +80,38 @@ export interface TransitionBatchSession {
   tickets: TransitionBatchTicket[];
   resolution: string | undefined;
   ruleName: string | undefined;
+  issueType: string;
+}
+
+export function buildReviewTable(session: TransitionBatchSession): string {
+  const hasResolution = session.resolution !== undefined;
+  const header = hasResolution
+    ? '| Type | Key | Summary | From | → To | Resolution |\n|------|-----|---------|------|------|------------|\n'
+    : '| Type | Key | Summary | From | → To |\n|------|-----|---------|------|------|\n';
+
+  const sorted = [...session.tickets].sort((a, b) =>
+    a.currentStatus.toLowerCase().localeCompare(b.currentStatus.toLowerCase()),
+  );
+
+  const rows: string[] = [];
+  for (const t of sorted) {
+    const tTo = t.transitionPath.at(-1)?.to ?? '?';
+    const tRes = hasResolution ? ` | ${session.resolution ?? ''}` : '';
+    rows.push(`| ${session.issueType} | ${t.key} | ${t.summary} | ${t.currentStatus} | ${tTo}${tRes} |`);
+    for (const s of t.subtasks) {
+      const sTo = s.transitionPath.at(-1)?.to ?? '?';
+      const sRes = hasResolution ? ` | ${s.resolution ?? session.resolution ?? ''}` : '';
+      rows.push(`| Sub-task | ↳ ${s.key} | ${s.summary} | ${s.currentStatus} | ${sTo}${sRes} |`);
+    }
+  }
+
+  return header + rows.join('\n') + '\n\nok · (c) · key numbers to skip (e.g. 11 14)';
 }
 
 export interface ResolutionSelectionSession {
   tickets: TransitionBatchTicket[];
   ruleName: string | undefined;
+  issueType: string;
   targetState: string;
   resolutionOptions: string[];
 }

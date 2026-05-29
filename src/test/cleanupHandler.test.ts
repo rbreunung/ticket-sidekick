@@ -21,6 +21,7 @@ import { streamReviewScreen, executeCleanupBatch, handleRunCleanup } from '../pa
 import { loadWorkflowCache, findPath } from '../services/WorkflowService';
 import { TemplateService } from '../templates/TemplateService';
 import type { TransitionBatchSession, TransitionBatchTicket, TransitionSubtask } from '../participant/sessionState';
+import { buildReviewTable } from '../participant/sessionState';
 import type { ParsedIntent } from '../participant/jira/llmHelpers';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService } from '../services/TicketService';
@@ -63,12 +64,16 @@ describe('streamReviewScreen', () => {
       tickets: [makeTicket('PROJ-1')],
       resolution: 'Fixed',
       ruleName: undefined,
+      issueType: 'Bug',
     };
 
     await streamReviewScreen(session, stream as never, ws as never, '**Cleanup**');
 
     const rendered: string = stream.markdown.mock.calls[0][0];
-    expect(rendered).toContain('Open → Done (Fixed)');
+    // Table row should include the resolution in its own column
+    expect(rendered).toContain('| Fixed |');
+    // Arrow still present in the → To column area
+    expect(rendered).toContain('Done');
   });
 
   it('uses subtask-specific resolution in preference to session resolution', async () => {
@@ -79,6 +84,7 @@ describe('streamReviewScreen', () => {
       tickets: [makeTicket('PROJ-1', { subtasks: [subtask] })],
       resolution: 'Fixed',
       ruleName: undefined,
+      issueType: 'Bug',
     };
 
     await streamReviewScreen(session, stream as never, ws as never, '**Cleanup**');
@@ -103,6 +109,7 @@ describe('streamReviewScreen', () => {
       tickets: [makeTicket('PROJ-1', { subtasks: [subtask] })],
       resolution: 'Fixed',
       ruleName: undefined,
+      issueType: 'Bug',
     };
 
     await streamReviewScreen(session, stream as never, ws as never, '**Cleanup**');
@@ -111,7 +118,8 @@ describe('streamReviewScreen', () => {
     const lines = rendered.split('\n');
     const subtaskLine = lines.find((l) => l.includes('PROJ-2'));
     expect(subtaskLine).toBeDefined();
-    expect(subtaskLine).toContain('(Fixed)');
+    // Resolution column falls back to session.resolution
+    expect(subtaskLine).toContain('Fixed');
   });
 
   it('shows no resolution suffix when both session and subtask resolution are absent', async () => {
@@ -122,6 +130,7 @@ describe('streamReviewScreen', () => {
       tickets: [makeTicket('PROJ-1', { subtasks: [subtask] })],
       resolution: undefined,
       ruleName: undefined,
+      issueType: 'Bug',
     };
 
     await streamReviewScreen(session, stream as never, ws as never, '**Cleanup**');
@@ -158,6 +167,7 @@ describe('executeCleanupBatch', () => {
       tickets: [makeTicket('PROJ-1', { subtasks: [subtask] })],
       resolution: 'Fixed',
       ruleName: undefined,
+      issueType: 'Bug',
     };
     const stream = mockStream();
 
@@ -180,6 +190,7 @@ describe('executeCleanupBatch', () => {
       tickets: [makeTicket('PROJ-1', { subtasks: [subtask] })],
       resolution: 'Fixed',
       ruleName: undefined,
+      issueType: 'Bug',
     };
     const stream = mockStream();
 
@@ -328,22 +339,19 @@ describe('handleRunCleanup', () => {
     expect(allMarkdown).toContain('AND (priority = High)');
   });
 
-  it('streams scope preview before the search', async () => {
+  it('includes scope preview and no-tickets message in single markdown call', async () => {
     const stream = mockStream();
     const ws = mockWs();
 
     await handleRunCleanup(baseIntent, stream as never, client, ticketService, ws as never);
 
-    // The scope preview should be streamed (i.e. markdown called with the jql block)
-    const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
-    expect(allMarkdown).toContain('**Search scope**');
-
-    // Scope preview must come BEFORE the "no tickets" message or results message
-    const calls = stream.markdown.mock.calls.map((c: [string]) => c[0]);
-    const scopeIndex = calls.findIndex((s) => s.includes('**Search scope**'));
-    const noTicketsIndex = calls.findIndex((s) => s.includes('No tickets found'));
-    expect(scopeIndex).toBeGreaterThanOrEqual(0);
-    expect(scopeIndex).toBeLessThan(noTicketsIndex);
+    // Both scope preview and result message should appear in the same single call
+    expect(stream.markdown.mock.calls).toHaveLength(1);
+    const output: string = stream.markdown.mock.calls[0][0];
+    expect(output).toContain('**Search scope**');
+    expect(output).toContain('No tickets found');
+    // Scope preview appears before the no-tickets message
+    expect(output.indexOf('**Search scope**')).toBeLessThan(output.indexOf('No tickets found'));
   });
 
   it('skips resolution dialog when intent.resolution is set', async () => {
@@ -509,5 +517,82 @@ describe('handleRunCleanup', () => {
     // Subtask should still appear in the review screen
     const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
     expect(allMarkdown).toContain('PROJ-1a');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildReviewTable — pure table rendering
+// ---------------------------------------------------------------------------
+
+describe('buildReviewTable', () => {
+  function makeSession(overrides: Partial<TransitionBatchSession> = {}): TransitionBatchSession {
+    return {
+      tickets: [],
+      resolution: undefined,
+      ruleName: undefined,
+      issueType: 'Bug',
+      ...overrides,
+    };
+  }
+
+  it('renders a table with Type, Key, Summary, From, → To columns', () => {
+    const session = makeSession({
+      tickets: [makeTicket('PROJ-1', { currentStatus: 'Open' })],
+    });
+    const table = buildReviewTable(session);
+    expect(table).toContain('| Type |');
+    expect(table).toContain('| Key |');
+    expect(table).toContain('| Summary |');
+    expect(table).toContain('| From |');
+    expect(table).toContain('| → To |');
+    expect(table).toContain('| Bug |');
+    expect(table).toContain('| PROJ-1 |');
+    expect(table).toContain('| Open |');
+    expect(table).toContain('| Done |');
+  });
+
+  it('includes Resolution column only when session.resolution is set', () => {
+    const withRes = makeSession({ tickets: [makeTicket('PROJ-1')], resolution: 'Fixed' });
+    const withoutRes = makeSession({ tickets: [makeTicket('PROJ-1')], resolution: undefined });
+    expect(buildReviewTable(withRes)).toContain('| Resolution |');
+    expect(buildReviewTable(withoutRes)).not.toContain('| Resolution |');
+  });
+
+  it('sorts parents alphabetically by currentStatus', () => {
+    const session = makeSession({
+      tickets: [
+        makeTicket('PROJ-2', { currentStatus: 'Review' }),
+        makeTicket('PROJ-1', { currentStatus: 'Open' }),
+      ],
+    });
+    const table = buildReviewTable(session);
+    expect(table.indexOf('PROJ-1')).toBeLessThan(table.indexOf('PROJ-2'));
+  });
+
+  it('places subtasks immediately after their parent with ↳ prefix', () => {
+    const subtask = makeSubtask('PROJ-1a');
+    const session = makeSession({
+      tickets: [makeTicket('PROJ-1', { subtasks: [subtask] })],
+    });
+    const table = buildReviewTable(session);
+    const parentIdx = table.indexOf('PROJ-1');
+    const subtaskIdx = table.indexOf('↳ PROJ-1a');
+    expect(subtaskIdx).toBeGreaterThan(parentIdx);
+  });
+
+  it('shows Sub-task in Type column for subtasks', () => {
+    const subtask = makeSubtask('PROJ-1a');
+    const session = makeSession({
+      tickets: [makeTicket('PROJ-1', { subtasks: [subtask] })],
+    });
+    const table = buildReviewTable(session);
+    const lines = table.split('\n');
+    const subtaskLine = lines.find((l) => l.includes('PROJ-1a'));
+    expect(subtaskLine).toContain('Sub-task');
+  });
+
+  it('includes footer prompt line', () => {
+    const session = makeSession({ tickets: [makeTicket('PROJ-1')] });
+    expect(buildReviewTable(session)).toContain('ok · (c) · key numbers to skip');
   });
 });

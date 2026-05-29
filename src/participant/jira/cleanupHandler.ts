@@ -4,8 +4,8 @@ import type { TicketService } from '../../services/TicketService';
 import { loadWorkflowCache, findPath } from '../../services/WorkflowService';
 import { TemplateService } from '../../templates/TemplateService';
 import type { CleanupRule } from '../../templates/TemplateService';
-import type { TransitionBatchSession, TransitionBatchTicket, TransitionSubtask, ResolutionSelectionSession } from '../sessionState';
-import { parseResolutionSelection, parseSkipInput } from '../sessionState';
+import type { TransitionBatchSession, TransitionBatchTicket, ResolutionSelectionSession } from '../sessionState';
+import { buildReviewTable, parseResolutionSelection, parseSkipInput } from '../sessionState';
 import type { ParsedIntent } from './llmHelpers';
 
 export async function streamReviewScreen(
@@ -15,21 +15,7 @@ export async function streamReviewScreen(
   header: string,
 ): Promise<void> {
   await workspaceState.update('jira.session.transitionReview', session);
-  const lines: string[] = [header, ''];
-  for (const t of session.tickets) {
-    const finalState = t.transitionPath.at(-1)?.to ?? '?';
-    const tRes = session.resolution ? ` (${session.resolution})` : '';
-    lines.push(`**${t.key}**  ${t.summary}  ·  _${t.currentStatus} → ${finalState}${tRes}_`);
-    for (const s of t.subtasks) {
-      const sFinal = s.transitionPath.at(-1)?.to ?? '?';
-      const sRes = s.resolution
-        ? ` (${s.resolution})`
-        : session.resolution ? ` (${session.resolution})` : '';
-      lines.push(`  **${s.key}**  ${s.summary}  ·  _${s.currentStatus} → ${sFinal}${sRes}_`);
-    }
-  }
-  lines.push('', 'ok · (c) · key numbers to skip (e.g. 11 14)');
-  stream.markdown(lines.join('\n') + '\n\n<!-- jira:transition-review -->');
+  stream.markdown(`${header}\n\n${buildReviewTable(session)}\n\n<!-- jira:transition-review -->`);
 }
 
 export async function executeCleanupBatch(
@@ -41,7 +27,9 @@ export async function executeCleanupBatch(
   let transitioned = 0;
   let failed = 0;
   let skipped = 0;
-  const failures: string[] = [];
+  const failures: Array<{ key: string; reason: string }> = [];
+
+  stream.markdown(`_Running transitions…_\n\n`);
 
   for (const ticket of session.tickets) {
     if (skipKeys.has(ticket.key)) {
@@ -53,33 +41,29 @@ export async function executeCleanupBatch(
       if (skipKeys.has(sub.key)) { skipped++; continue; }
       try {
         await ticketService.transitionAlongPath(sub.key, sub.transitionPath, sub.resolution ?? session.resolution);
-        const hops = sub.transitionPath.length;
-        stream.markdown(`✓ ${sub.key}  → ${sub.transitionPath.at(-1)?.to ?? '?'}${hops > 1 ? ` (${hops} hops)` : ''}\n`);
         transitioned++;
       } catch (err) {
-        stream.markdown(`✗ ${sub.key}  → failed: ${err instanceof Error ? err.message : String(err)}\n`);
-        failures.push(sub.key);
+        failures.push({ key: sub.key, reason: err instanceof Error ? err.message : String(err) });
         failed++;
       }
     }
 
     try {
       await ticketService.transitionAlongPath(ticket.key, ticket.transitionPath, session.resolution);
-      const hops = ticket.transitionPath.length;
-      stream.markdown(`✓ ${ticket.key}  → ${ticket.transitionPath.at(-1)?.to ?? '?'}${hops > 1 ? ` (${hops} hops)` : ''}\n`);
       transitioned++;
     } catch (err) {
-      stream.markdown(`✗ ${ticket.key}  → failed: ${err instanceof Error ? err.message : String(err)}\n`);
-      failures.push(ticket.key);
+      failures.push({ key: ticket.key, reason: err instanceof Error ? err.message : String(err) });
       failed++;
     }
   }
 
-  const total = transitioned + failed + skipped;
-  stream.markdown(`\n${total} tickets processed — ${transitioned} transitioned, ${failed} failed, ${skipped} skipped.`);
+  const processedTotal = transitioned + failed + skipped;
+  let summary = `${processedTotal} processed — **${transitioned}** transitioned, ${failed} failed, ${skipped} skipped.`;
   if (failures.length > 0) {
-    stream.markdown(`\nFailed: ${failures.join(', ')}\nIf caused by a workflow gap, run \`@jira discover workflow\` to refresh the cache.`);
+    summary += '\n\n' + failures.map(f => `✗ ${f.key} — ${f.reason}`).join('\n');
+    summary += '\n\nIf caused by a workflow gap, run `@jira discover workflow` to refresh the cache.';
   }
+  stream.markdown(summary);
 }
 
 export async function handleRunCleanup(
@@ -116,28 +100,32 @@ export async function handleRunCleanup(
   const fixVersion = intent.fixVersion ?? null;
   let jql = `project = ${project} AND issuetype = "${issueType}" AND status != "${targetState}" AND resolution is EMPTY`;
   if (fixVersion) jql += ` AND fixVersion = "${fixVersion}"`;
+
+  const buffer: string[] = [];
+  buffer.push(`**Search scope**\n\`${jql}\`\n\n`);
+
   if (rule?.jql) {
     const trimmed = rule.jql.trim();
     if (/ORDER\s+BY/i.test(trimmed)) {
-      stream.markdown(`_Warning: \`rule.jql\` contains ORDER BY which is not allowed — extra filter ignored._\n\n`);
+      buffer.push(`_Warning: \`rule.jql\` contains ORDER BY which is not allowed — extra filter ignored._\n\n`);
     } else {
       jql += ` AND (${trimmed})`;
+      buffer[0] = `**Search scope**\n\`${jql}\`\n\n`;
     }
   }
 
-  stream.markdown(`**Search scope**\n\`${jql}\`\n\n`);
   const result = await ticketService.searchTicketsRaw(jql, 50);
   const truncated = (result.total ?? 0) > 50 || result.isLast === false;
 
   if (result.issues.length === 0) {
-    stream.markdown('No tickets found matching the criteria.');
+    stream.markdown(buffer.join('') + 'No tickets found matching the criteria.');
     return;
   }
   if (truncated) {
     const count = result.total ? `${result.total} tickets` : 'more tickets';
-    stream.markdown(`_Found ${count} — showing first 50. Refine your filter if needed._\n\n`);
+    buffer.push(`_Found ${count} — showing first 50. Refine your filter if needed._\n\n`);
   } else {
-    stream.markdown(`_Found **${result.issues.length}** ticket${result.issues.length === 1 ? '' : 's'} — building transition paths…_\n\n`);
+    buffer.push(`_Found **${result.issues.length}** ticket${result.issues.length === 1 ? '' : 's'} — building transition paths…_\n\n`);
   }
 
   const BATCH_LIMIT = 50;
@@ -145,7 +133,7 @@ export async function handleRunCleanup(
   for (const issue of result.issues.slice(0, BATCH_LIMIT)) {
     const path = findPath(graph, issue.fields.status.name, targetState);
     if (path === null) {
-      stream.markdown(`_Warning: no path found from **${issue.fields.status.name}** to **${targetState}** for ${issue.key} — skipping._\n\n`);
+      buffer.push(`_Warning: no path found from **${issue.fields.status.name}** to **${targetState}** for ${issue.key} — skipping._\n\n`);
       continue;
     }
     tickets.push({
@@ -153,7 +141,7 @@ export async function handleRunCleanup(
       summary: issue.fields.summary,
       currentStatus: issue.fields.status.name,
       transitionPath: path,
-      subtasks: [],   // filled in Phase B
+      subtasks: [],
     });
   }
 
@@ -172,7 +160,7 @@ export async function handleRunCleanup(
       if (!parent) continue;
       const subPath = findPath(subGraph, s.fields.status.name, subTargetState);
       if (subPath === null) {
-        stream.markdown(`_Warning: no path from **${s.fields.status.name}** to **${subTargetState}** for subtask ${s.key} — skipping. Run \`@jira discover workflow ${project} Sub-task\` if missing._\n\n`);
+        buffer.push(`_Warning: no path from **${s.fields.status.name}** to **${subTargetState}** for subtask ${s.key} — skipping. Run \`@jira discover workflow ${project} Sub-task\` if missing._\n\n`);
         continue;
       }
       parent.subtasks.push({
@@ -186,7 +174,7 @@ export async function handleRunCleanup(
   }
 
   if (tickets.length === 0) {
-    stream.markdown('No tickets can be transitioned — all are either already at target state or have no valid path.');
+    stream.markdown(buffer.join('') + 'No tickets can be transitioned — all are either already at target state or have no valid path.');
     return;
   }
 
@@ -197,6 +185,7 @@ export async function handleRunCleanup(
       const resSession: ResolutionSelectionSession = {
         tickets,
         ruleName: rule?.name,
+        issueType,
         targetState,
         resolutionOptions: resolutions.map((r) => r.name),
       };
@@ -208,6 +197,7 @@ export async function handleRunCleanup(
   }
 
   const header = `**Cleanup${rule ? `: ${rule.name}` : ''}**  ·  ${project} / ${issueType}${fixVersion ? `  ·  Fix version "${fixVersion}"` : ''}`;
-  const batchSession: TransitionBatchSession = { tickets, resolution, ruleName: rule?.name };
-  await streamReviewScreen(batchSession, stream, workspaceState, header);
+  const batchSession: TransitionBatchSession = { tickets, resolution, ruleName: rule?.name, issueType };
+  await workspaceState.update('jira.session.transitionReview', batchSession);
+  stream.markdown(`${buffer.join('')}${header}\n\n${buildReviewTable(batchSession)}\n\n<!-- jira:transition-review -->`);
 }

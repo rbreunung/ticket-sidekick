@@ -110,6 +110,7 @@ export function createJiraParticipant(
           tickets: selSession.tickets,
           resolution: choice ?? undefined,
           ruleName: selSession.ruleName,
+          issueType: selSession.issueType,
         };
         const header = `**Cleanup${selSession.ruleName ? `: ${selSession.ruleName}` : ''}**`;
         await streamReviewScreen(batchSession, stream, ws, header);
@@ -862,6 +863,7 @@ export function createJiraParticipant(
                 resolutionOptions: resolutions.map(r => r.name),
                 tickets,
                 ruleName: undefined,
+                issueType: intent.issueType ?? '',
                 targetState: targetStatus,
               };
               await ws.update('jira.session.resolutionSelection', resSession);
@@ -870,7 +872,7 @@ export function createJiraParticipant(
               return;
             }
           }
-          const batchSession: TransitionBatchSession = { tickets, resolution: undefined, ruleName: undefined };
+          const batchSession: TransitionBatchSession = { tickets, resolution: undefined, ruleName: undefined, issueType: intent.issueType ?? '' };
           await streamReviewScreen(batchSession, stream, ws, `**Bulk transition → ${targetStatus}**`);
           return;
         }
