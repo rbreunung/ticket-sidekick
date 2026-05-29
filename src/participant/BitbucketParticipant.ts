@@ -182,6 +182,7 @@ export function createBitbucketParticipant(
 
     const ws = context.workspaceState;
     const lastResponse = getLastAssistantText(chatContext);
+    const prUrlMatch = prompt.match(/https?:\/\/\S+\/pull-requests\/\d+\S*/);
 
     // Helper: stream a comment preview and save session
     const streamCommentPreview = async (previewSession: BitbucketCommentPreviewSession) => {
@@ -235,7 +236,7 @@ export function createBitbucketParticipant(
     };
 
     // 2a. Comment preview — confirmation, cancellation, or refinement
-    if (lastResponse.includes('<!-- bitbucket:comment-preview -->')) {
+    if (!prUrlMatch && lastResponse.includes('<!-- bitbucket:comment-preview -->')) {
       const previewSession = ws.get<BitbucketCommentPreviewSession>('bitbucket.session.commentPreview');
       if (previewSession) {
         if (isCancellation(prompt)) {
@@ -260,7 +261,7 @@ export function createBitbucketParticipant(
     }
 
     // 2b. Multi-turn follow-up on an existing review
-    if (lastResponse.includes('<!-- bitbucket:review-session -->')) {
+    if (!prUrlMatch && lastResponse.includes('<!-- bitbucket:review-session -->')) {
       const session = ws.get<ReviewSession>('bitbucket.session.review');
       if (session) {
         if (isAddToReviewIntent(prompt)) {
@@ -322,9 +323,8 @@ export function createBitbucketParticipant(
       }
     }
 
-    // 3. New review — extract URL from prompt
-    const urlMatch = prompt.match(/https?:\/\/\S+\/pull-requests\/\d+\S*/);
-    if (!urlMatch) {
+    // 3. New review
+    if (!prUrlMatch) {
       stream.markdown(
         'Point me at a PR to review:\n\n' +
         '`@bitbucket https://bitbucket.company.com/projects/PROJ/repos/myrepo/pull-requests/42`\n\n' +
@@ -343,9 +343,9 @@ export function createBitbucketParticipant(
       return;
     }
 
-    const parsed = parsePrUrl(urlMatch[0]);
+    const parsed = parsePrUrl(prUrlMatch[0]);
     if (!parsed) {
-      stream.markdown(`Could not parse PR URL: \`${urlMatch[0]}\``);
+      stream.markdown(`Could not parse PR URL: \`${prUrlMatch[0]}\``);
       return;
     }
 
@@ -453,7 +453,7 @@ export function createBitbucketParticipant(
 
       await ws.update('bitbucket.session.review', {
         prTitle: pr.title,
-        prUrl: urlMatch[0],
+        prUrl: prUrlMatch[0],
         project: parsed.project,
         repo: parsed.repo,
         prId: parsed.prId,
