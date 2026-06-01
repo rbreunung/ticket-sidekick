@@ -45,10 +45,11 @@ _No browser. No context switching. No MCP server required._
 
 ## The situation
 
-- Jira MCP access is gone — copy-pasting ticket numbers, switching browser tabs
-- PR reviews: read diff in editor, describe findings in Jira comments, repeat
-- Bulk status updates: click through tickets one by one
 - Email from a client → create a ticket → upload the attachment → forget one field
+- Jira access to read through description, comments and attachments reliably
+- Write back agentic issue analysis to Jira with correct syntax highlight
+- Bulk ticket updates: field updates or multi step status transition
+- PR reviews: read diff in editor, describe findings in Jira comments, repeat
 
 **All of this can stay inside VS Code.**
 
@@ -66,6 +67,7 @@ A VS Code extension with two **Copilot Chat participants**:
 - Natural language — type what you want, not the API call
 - Credentials in VS Code SecretStorage — never in settings.json
 - Configurable per-repo via `.jira-templates.json`
+- easily extendable - any agent knows how to write Typescript - lot of tests
 
 ---
 
