@@ -23,8 +23,13 @@ style: |
   section.section-break h2 { font-size: 2.2rem; }
   h2 { color: #0052CC; border-bottom: 2px solid #0052CC; padding-bottom: 0.2em; }
   code { background: #F4F5F7; color: #172B4D; padding: 0.1em 0.4em; border-radius: 3px; }
-  pre  { background: #172B4D; color: #F4F5F7; padding: 1em; border-radius: 6px; font-size: 1.1rem; }
+  pre  { background: #1e1e1e; color: #d4d4d4; padding: 1em; border-radius: 6px; font-size: 1.1rem; }
   pre code { background: none; color: inherit; padding: 0; }
+  /* JSON token colours that read on #1e1e1e */
+  pre .hljs-attr   { color: #9cdcfe; }
+  pre .hljs-string { color: #ce9178; }
+  pre .hljs-number { color: #b5cea8; }
+  pre .hljs-literal { color: #569cd6; }
   .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 2em; }
   strong { color: #0052CC; }
 ---
@@ -128,16 +133,10 @@ Paste the PR URL — that's it:
 
 Returns **numbered findings** grouped by severity:
 
-| | Severity | Meaning |
-|---|---|---|
-| 🔴 | **Critical** | Bug, security issue, or data risk — fix before merge |
-| 🟡 | **Warning** | Performance problem, code smell, or fragile assumption — worth addressing |
-| 🔵 | **Suggestion** | Readability, naming, or structure — low urgency, team call |
-
 ```
-🔴 #1  Missing null check — UserService.java:87
-🟡 #2  N+1 query in loop — OrderRepository.java:134
-🔵 #3  Consider extracting helper — PaymentHandler.java:201
+🔴 #1 Bug, security issue, or data risk — fix before merge
+🟡 #2 Performance problem, code smell, or fragile assumption — worth addressing
+🔵 #3 Readability, naming, or structure — low urgency, team call
 ```
 
 Then ask follow-ups:
