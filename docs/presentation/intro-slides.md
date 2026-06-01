@@ -128,6 +128,12 @@ Paste the PR URL — that's it:
 
 Returns **numbered findings** grouped by severity:
 
+| | Severity | Meaning |
+|---|---|---|
+| 🔴 | **Critical** | Bug, security issue, or data risk — fix before merge |
+| 🟡 | **Warning** | Performance problem, code smell, or fragile assumption — worth addressing |
+| 🔵 | **Suggestion** | Readability, naming, or structure — low urgency, team call |
+
 ```
 🔴 #1  Missing null check — UserService.java:87
 🟡 #2  N+1 query in loop — OrderRepository.java:134
