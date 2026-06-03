@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('vscode', () => ({}));
 
-import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption } from '../participant/sessionState';
+import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql } from '../participant/sessionState';
 import { isPointerPrompt } from '../participant/jira/llmHelpers';
 import type { TransitionBatchTicket } from '../participant/sessionState';
 import type { JiraComment } from '../jira/IJiraClient';
@@ -791,5 +791,29 @@ describe('isPointerPrompt', () => {
 
   it('does not match "take this into account"', () => {
     expect(isPointerPrompt('take this into account')).toBe(false);
+  });
+});
+
+describe('buildTeamJql', () => {
+  it('wraps team JQL and appends resolution is NULL when no extra conditions given', () => {
+    const result = buildTeamJql('project = BACKEND', null);
+    expect(result).toBe('(project = BACKEND) AND resolution is NULL');
+  });
+
+  it('ANDs extra conditions when the LLM also produced filter clauses', () => {
+    const result = buildTeamJql('project = BACKEND', 'issuetype = Bug AND resolution is NULL');
+    expect(result).toBe('(project = BACKEND) AND (issuetype = Bug AND resolution is NULL)');
+  });
+
+  it('preserves complex team JQL containing AND without double-wrapping', () => {
+    const teamJql = 'project = BACKEND AND assignee in membersOf("backend-team")';
+    const result = buildTeamJql(teamJql, null);
+    expect(result).toBe('(project = BACKEND AND assignee in membersOf("backend-team")) AND resolution is NULL');
+  });
+
+  it('uses extra JQL as-is when provided, not falling back to resolution is NULL', () => {
+    const result = buildTeamJql('project = PROJ', 'resolution is not NULL');
+    expect(result).not.toContain('resolution is NULL AND');
+    expect(result).toBe('(project = PROJ) AND (resolution is not NULL)');
   });
 });
