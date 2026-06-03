@@ -10,13 +10,14 @@ export function markdownToJiraWiki(md: string): string {
     const codeOpen = line.match(/^```(\w*)\s*$/);
     if (codeOpen) {
       const lang = codeOpen[1];
-      out.push(lang ? `{code:${lang}}` : '{code}');
+      const isNoformat = lang === 'noformat';
+      out.push(isNoformat ? '{noformat}' : lang ? `{code:${lang}}` : '{code}');
       i++;
       while (i < lines.length && !lines[i].startsWith('```')) {
         out.push(lines[i]);
         i++;
       }
-      out.push('{code}');
+      out.push(isNoformat ? '{noformat}' : '{code}');
       i++; // skip closing ```
       continue;
     }

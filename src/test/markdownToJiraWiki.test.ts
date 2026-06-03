@@ -63,6 +63,14 @@ describe('markdownToJiraWiki', () => {
       const md = '```xml\n<dependency>\n  <groupId>com.example</groupId>\n</dependency>\n```';
       expect(markdownToJiraWiki(md)).toBe('{code:xml}\n<dependency>\n  <groupId>com.example</groupId>\n</dependency>\n{code}');
     });
+    it('converts ```noformat fence to {noformat} block', () => {
+      const md = '```noformat\n2024-01-01 INFO started\n```';
+      expect(markdownToJiraWiki(md)).toBe('{noformat}\n2024-01-01 INFO started\n{noformat}');
+    });
+    it('does not produce {code:noformat} for noformat fence', () => {
+      const md = '```noformat\nlog line\n```';
+      expect(markdownToJiraWiki(md)).not.toContain('{code:noformat}');
+    });
   });
 
   describe('lists', () => {
