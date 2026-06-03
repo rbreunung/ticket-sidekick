@@ -207,6 +207,17 @@ describe('TicketService', () => {
       expect(result).toContain('PROJ-123');
       expect(result).not.toContain('browse');
     });
+
+    it('places View in Jira link above the table when baseUrl is provided', async () => {
+      const result = await service.searchTickets('project = PROJ', 'https://jira.example.com');
+      expect(result).toContain('[View in Jira](https://jira.example.com/issues/?jql=project%20%3D%20PROJ)');
+      expect(result.indexOf('[View in Jira]')).toBeLessThan(result.indexOf('| Key |'));
+    });
+
+    it('omits View in Jira link when baseUrl is absent', async () => {
+      const result = await service.searchTickets('project = PROJ');
+      expect(result).not.toContain('[View in Jira]');
+    });
   });
 
   describe('validateRequiredFields', () => {

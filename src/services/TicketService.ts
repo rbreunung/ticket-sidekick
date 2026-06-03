@@ -314,6 +314,7 @@ export class TicketService {
     return [
       `Found ${result.total ?? result.issues.length} ticket(s):`,
       '',
+      ...(baseUrl ? [`[View in Jira](${baseUrl}/issues/?jql=${encodeURIComponent(jql)})`, ''] : []),
       '| Key | Summary | Status | Assignee |',
       '| --- | --- | --- | --- |',
       ...rows,
