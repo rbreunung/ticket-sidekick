@@ -532,7 +532,7 @@ export function createJiraParticipant(
 
     if (intent.operation === 'runCleanup') {
       try {
-        await handleRunCleanup(intent, stream, jiraClient, ticketService, ws);
+        await handleRunCleanup(intent, stream, jiraClient, ticketService, ws, config.baseUrl);
       } catch (err) {
         stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
       }
@@ -946,6 +946,7 @@ export function createJiraParticipant(
           stream.markdown(
             `**Bulk update: ${intent.bulkFieldName} → ${intent.bulkFieldValue}**\n` +
             `(${searchSession.ticketKeys.length} tickets)\n\n` +
+            (config.baseUrl ? `[View in Jira](${config.baseUrl}/issues/?jql=${encodeURIComponent(searchSession.jql)})\n\n` : '') +
             `| Key | Summary | Current value |\n| --- | --- | --- |\n` +
             rows.join('\n') +
             `\n\nReply **ok** to apply, **(c)** to cancel, or list keys to skip (e.g. \`skip PROJ-2\`).\n\n<!-- jira:bulk-update-review -->`

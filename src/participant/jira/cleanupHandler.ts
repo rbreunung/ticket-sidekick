@@ -72,6 +72,7 @@ export async function handleRunCleanup(
   jiraClient: IJiraClient,
   ticketService: TicketService,
   workspaceState: vscode.Memento,
+  baseUrl?: string,
 ): Promise<void> {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
@@ -110,8 +111,13 @@ export async function handleRunCleanup(
     jql += ` AND fixVersion = "${fixVersion}"`;
   }
 
+  const scopeLine = (q: string) =>
+    baseUrl
+      ? `**Search scope** [View in Jira](${baseUrl}/issues/?jql=${encodeURIComponent(q)})\n\n`
+      : `**Search scope**\n\`${q}\`\n\n`;
+
   const buffer: string[] = [];
-  buffer.push(`**Search scope**\n\`${jql}\`\n\n`);
+  buffer.push(scopeLine(jql));
 
   if (rule?.jql) {
     const trimmed = rule.jql.trim();
@@ -119,7 +125,7 @@ export async function handleRunCleanup(
       buffer.push(`_Warning: \`rule.jql\` contains ORDER BY which is not allowed — extra filter ignored._\n\n`);
     } else {
       jql += ` AND (${trimmed})`;
-      buffer[0] = `**Search scope**\n\`${jql}\`\n\n`;
+      buffer[0] = scopeLine(jql);
     }
   }
 

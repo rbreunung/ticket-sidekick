@@ -518,6 +518,29 @@ describe('handleRunCleanup', () => {
     const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
     expect(allMarkdown).toContain('PROJ-1a');
   });
+
+  it('shows View in Jira link in Search scope when baseUrl is provided', async () => {
+    const stream = mockStream();
+    const ws = mockWs();
+
+    await handleRunCleanup(baseIntent, stream as never, client, ticketService, ws as never, 'https://jira.example.com');
+
+    const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    expect(allMarkdown).toContain('[View in Jira](https://jira.example.com/issues/?jql=');
+    expect(allMarkdown).not.toMatch(/Search scope\s*\n`/);
+  });
+
+  it('falls back to code block in Search scope when baseUrl is absent', async () => {
+    const stream = mockStream();
+    const ws = mockWs();
+
+    await handleRunCleanup(baseIntent, stream as never, client, ticketService, ws as never);
+
+    const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    expect(allMarkdown).toContain('**Search scope**');
+    expect(allMarkdown).toMatch(/`project = PROJ/);
+    expect(allMarkdown).not.toContain('[View in Jira]');
+  });
 });
 
 // ---------------------------------------------------------------------------
