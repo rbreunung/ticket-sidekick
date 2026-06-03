@@ -12,6 +12,7 @@ export interface JiraConfig {
   hiddenDisplayFields: string[];
   token: string | undefined;
   sprintBoardId?: number;
+  myTeamJql?: string;
 }
 
 export class ConfigService {
@@ -31,6 +32,7 @@ export class ConfigService {
       hiddenDisplayFields: config.get<string[]>('jira.hiddenDisplayFields') ?? [],
       token: await this.context.secrets.get(ConfigService.TOKEN_KEY),
       sprintBoardId: config.get<number>('jira.sprintBoardId') || undefined,
+      myTeamJql: config.get<string>('jira.myTeamJql') || undefined,
     };
   }
 

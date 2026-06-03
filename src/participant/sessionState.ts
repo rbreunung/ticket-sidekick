@@ -411,3 +411,8 @@ export function pickEmailOption(
   return { kind: 'type', issueType: issueTypes[n - templates.length - 1] };
 }
 
+export function buildTeamJql(teamJql: string, extraJql: string | null): string {
+  const extra = extraJql ? ` AND (${extraJql})` : ' AND resolution is NULL';
+  return `(${teamJql})${extra}`;
+}
+
