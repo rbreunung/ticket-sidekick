@@ -768,6 +768,16 @@ export function createJiraParticipant(
               stream.markdown(`Multiple filters match "${intent.filterName}":\n\n${list}\n\nWhich one? Reply with the number or name, or **(c)** to cancel.\n\n<!-- jira:selecting-filter -->`);
               return;
             }
+          } else if (intent.useMyTeamJql) {
+            const teamJql = config.myTeamJql;
+            if (!teamJql) {
+              result =
+                'No team JQL configured. Set `ticketSidekick.jira.myTeamJql` in your VS Code settings (e.g. `project = BACKEND AND assignee in membersOf("backend-team")`).';
+              break;
+            }
+            const extra = intent.jql ? ` AND (${intent.jql})` : ' AND resolution is NULL';
+            resolvedJql = `(${teamJql})${extra}`;
+            jqlLabel = `_Using team JQL_\n\n`;
           } else {
             resolvedJql = intent.jql ?? request.prompt;
           }
