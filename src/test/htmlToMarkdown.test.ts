@@ -108,4 +108,21 @@ describe('htmlToMarkdown', () => {
   it('preserves bold when no whitespace trimming is needed', () => {
     expect(htmlToMarkdown('<b>Normal bold</b>')).toBe('**Normal bold**');
   });
+
+  it('normalizes Windows CRLF so output matches LF-only input', () => {
+    const lf = htmlToMarkdown('<p>Line one</p><p>Line two</p>');
+    const crlf = htmlToMarkdown('<p>Line one</p>\r\n<p>Line two</p>');
+    expect(crlf).toBe(lf);
+  });
+
+  it('converts bare <pre> (no <code>) to ```noformat fence', () => {
+    const result = htmlToMarkdown('<pre>2024-01-01 INFO started\n2024-01-01 WARN retry</pre>');
+    expect(result).toContain('```noformat');
+  });
+
+  it('converts <pre><code> to plain ``` fence (not noformat)', () => {
+    const result = htmlToMarkdown('<pre><code>const x = 1;</code></pre>');
+    expect(result).not.toContain('noformat');
+    expect(result).toContain('```');
+  });
 });

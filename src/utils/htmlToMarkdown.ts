@@ -1,4 +1,5 @@
 export function htmlToMarkdown(html: string, inlineImageMap: Map<string, string> = new Map()): string {
+  html = html.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   let s = html
     .replace(/<style[\s\S]*?<\/style>/gi, '')
     .replace(/<script[\s\S]*?<\/script>/gi, '');
@@ -43,7 +44,7 @@ export function htmlToMarkdown(html: string, inlineImageMap: Map<string, string>
 
   // Code blocks (pre+code before inline code)
   s = s.replace(/<pre[^>]*>\s*<code[^>]*>([\s\S]*?)<\/code>\s*<\/pre>/gi, '\n```\n$1\n```\n');
-  s = s.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, '\n```\n$1\n```\n');
+  s = s.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, '\n```noformat\n$1\n```\n');
   s = s.replace(/<code[^>]*>([\s\S]*?)<\/code>/gi, '`$1`');
 
   // Bold / italic (process before stripping remaining tags)

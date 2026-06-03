@@ -140,6 +140,7 @@ export interface EmailContentSession {
   additionalFields: Record<string, unknown>;
   availableTemplates?: Array<{ name: string; issueType: string }>;
   availableIssueTypes?: string[];
+  pendingCommentTicketKey?: string;
 }
 
 export function parseSkipInput(reply: string, tickets: TransitionBatchTicket[]): SkipParseResult {

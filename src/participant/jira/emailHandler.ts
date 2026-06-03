@@ -82,7 +82,7 @@ export async function handleAddEmailFromChat(
     isInline: a.isInline,
   }));
 
-  // If a ticket key was in the prompt, add as comment immediately (no preview)
+  // If a ticket key was in the prompt, show comment preview before posting
   if (promptTicketKey) {
     const quickSession: EmailContentSession = {
       emailId: 'eml-import',
@@ -97,8 +97,9 @@ export async function handleAddEmailFromChat(
       projectKey: '',
       issueType: 'Story',
       additionalFields: {},
+      pendingCommentTicketKey: promptTicketKey,
     };
-    await addEmailAsComment(promptTicketKey, quickSession, ticketService, stream);
+    await streamEmailCommentPreview(quickSession, stream, ws);
     return;
   }
 
@@ -151,17 +152,37 @@ export async function handleEmailContentSession(
   ws: vscode.Memento,
   jiraClient: IJiraClient,
 ): Promise<void> {
+  // Pending comment confirmation flow — user is reviewing before posting
+  if (session.pendingCommentTicketKey) {
+    if (isCancellation(reply)) {
+      await ws.update('jira.session.emailContent', undefined);
+      stream.markdown('_Cancelled._');
+      return;
+    }
+    if (isConfirmation(reply)) {
+      await ws.update('jira.session.emailContent', undefined);
+      await addEmailAsComment(session.pendingCommentTicketKey, session, ticketService, stream);
+      return;
+    }
+    const pendingKeyMatch = reply.trim().match(/^([A-Z][A-Z0-9]+-\d+)$/i);
+    if (pendingKeyMatch) {
+      await streamEmailCommentPreview({ ...session, pendingCommentTicketKey: pendingKeyMatch[1].toUpperCase() }, stream, ws);
+      return;
+    }
+    await streamEmailCommentPreview(session, stream, ws);
+    return;
+  }
+
   if (isCancellation(reply)) {
     await ws.update('jira.session.emailContent', undefined);
     stream.markdown('_Cancelled._');
     return;
   }
 
-  // Ticket key reply → add email as comment to that ticket
+  // Ticket key reply → show comment preview before posting
   const ticketKeyMatch = reply.trim().match(/^([A-Z][A-Z0-9]+-\d+)$/i);
   if (ticketKeyMatch) {
-    await ws.update('jira.session.emailContent', undefined);
-    await addEmailAsComment(ticketKeyMatch[1].toUpperCase(), session, ticketService, stream);
+    await streamEmailCommentPreview({ ...session, pendingCommentTicketKey: ticketKeyMatch[1].toUpperCase() }, stream, ws);
     return;
   }
 
@@ -203,6 +224,7 @@ export async function handleEmailContentSession(
 // Pure helper — converts markdown email body to Jira Wiki markup with inline-image placeholders resolved
 export function buildEmailJiraWiki(markdownBody: string): string {
   let jiraWiki = markdownToJiraWiki(markdownBody);
+  jiraWiki = jiraWiki.replace(/\n{3,}/g, '\n\n');
   return jiraWiki.replace(/\[📎 ([^\]]+)\]/g, '!$1|thumbnail!');
 }
 
@@ -242,6 +264,30 @@ export async function addEmailAsComment(
   } else {
     stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
   }
+}
+
+export async function streamEmailCommentPreview(session: EmailContentSession, stream: vscode.ChatResponseStream, ws: vscode.Memento): Promise<void> {
+  await ws.update('jira.session.emailContent', session);
+  const key = session.pendingCommentTicketKey!;
+
+  const headerLines: string[] = [];
+  if (session.senderName || session.receivedDateTime) {
+    const fromPart = session.senderName ? `**From:** ${session.senderName}` : '';
+    const datePart = session.receivedDateTime ? `**Date:** ${session.receivedDateTime.slice(0, 10)}` : '';
+    if (fromPart && datePart) headerLines.push(`${fromPart} · ${datePart}`);
+    else headerLines.push(fromPart || datePart);
+  }
+  headerLines.push(`**Subject:** ${session.subject}`);
+  const nonInlineAttachments = session.attachments.filter(a => !a.isInline);
+  if (nonInlineAttachments.length > 0) {
+    headerLines.push(`**Attachments:** ${nonInlineAttachments.map(a => a.name).join(', ')}`);
+  }
+
+  stream.markdown(
+    `${headerLines.join('\n')}\n\n` +
+    `**Comment preview:**\n\n${session.markdownBody}\n\n` +
+    `Reply **post it** to add as comment to **${key}**, or **(c)** to cancel.\n\n<!-- jira:email-content -->`,
+  );
 }
 
 export async function streamEmailContentPreview(session: EmailContentSession, stream: vscode.ChatResponseStream, ws: vscode.Memento): Promise<void> {

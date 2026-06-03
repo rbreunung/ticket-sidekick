@@ -19,6 +19,8 @@ import {
   buildEmailCommentHeader,
   addEmailAsComment,
   finishEmailTicket,
+  streamEmailCommentPreview,
+  handleEmailContentSession,
 } from '../participant/jira/emailHandler';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService } from '../services/TicketService';
@@ -43,6 +45,16 @@ function makeSession(overrides: Partial<EmailContentSession> = {}): EmailContent
 
 const mockStream = () => ({ markdown: vi.fn() });
 
+function makeMockWs(initial: Record<string, unknown> = {}): { get: <T>(k: string, d?: T) => T | undefined; update: (k: string, v: unknown) => Promise<void>; keys: () => readonly string[]; store: Record<string, unknown> } {
+  const store: Record<string, unknown> = { ...initial };
+  return {
+    store,
+    get: <T>(key: string, defaultValue?: T) => (key in store ? store[key] as T : defaultValue),
+    update: async (key: string, value: unknown) => { store[key] = value; },
+    keys: () => Object.keys(store) as readonly string[],
+  };
+}
+
 describe('buildEmailJiraWiki', () => {
   it('converts markdown to Jira Wiki markup', () => {
     const result = buildEmailJiraWiki('Hello **world**');
@@ -59,6 +71,14 @@ describe('buildEmailJiraWiki', () => {
     const result = buildEmailJiraWiki('[📎 img1.png] and [📎 img2.jpg]');
     expect(result).toContain('!img1.png|thumbnail!');
     expect(result).toContain('!img2.jpg|thumbnail!');
+  });
+
+  it('collapses 3+ consecutive blank lines to 1 blank line', () => {
+    const input = 'paragraph one\n\n\n\nparagraph two';
+    const result = buildEmailJiraWiki(input);
+    expect(result).not.toMatch(/\n{3,}/);
+    expect(result).toContain('paragraph one');
+    expect(result).toContain('paragraph two');
   });
 });
 
@@ -232,5 +252,107 @@ describe('finishEmailTicket', () => {
     const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
     expect(calls.some(c => c.includes('Warning') && c.includes('fail.png'))).toBe(true);
     expect(calls.some(c => c.includes('1 of 2'))).toBe(true);
+  });
+});
+
+describe('streamEmailCommentPreview', () => {
+  it('renders "Comment preview:" label (not "Description preview:")', async () => {
+    const session = makeSession({ pendingCommentTicketKey: 'PROJ-42' });
+    const stream = mockStream();
+    const ws = makeMockWs();
+    await streamEmailCommentPreview(session, stream as never, ws as never);
+    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(text).toContain('Comment preview:');
+    expect(text).not.toContain('Description preview:');
+  });
+
+  it('includes the target ticket key in the prompt', async () => {
+    const session = makeSession({ pendingCommentTicketKey: 'PROJ-42' });
+    const stream = mockStream();
+    const ws = makeMockWs();
+    await streamEmailCommentPreview(session, stream as never, ws as never);
+    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(text).toContain('PROJ-42');
+  });
+
+  it('includes the From/Date/Subject header', async () => {
+    const session = makeSession({ pendingCommentTicketKey: 'PROJ-42' });
+    const stream = mockStream();
+    const ws = makeMockWs();
+    await streamEmailCommentPreview(session, stream as never, ws as never);
+    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(text).toContain('Alice');
+    expect(text).toContain('2024-05-01');
+    expect(text).toContain('Test Subject');
+  });
+
+  it('appends <!-- jira:email-content --> marker', async () => {
+    const session = makeSession({ pendingCommentTicketKey: 'PROJ-42' });
+    const stream = mockStream();
+    const ws = makeMockWs();
+    await streamEmailCommentPreview(session, stream as never, ws as never);
+    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(text).toContain('<!-- jira:email-content -->');
+  });
+
+  it('saves session to workspaceState with pendingCommentTicketKey set', async () => {
+    const session = makeSession({ pendingCommentTicketKey: 'PROJ-42' });
+    const stream = mockStream();
+    const ws = makeMockWs();
+    await streamEmailCommentPreview(session, stream as never, ws as never);
+    const stored = ws.store['jira.session.emailContent'] as typeof session;
+    expect(stored.pendingCommentTicketKey).toBe('PROJ-42');
+  });
+});
+
+describe('handleEmailContentSession — pending comment', () => {
+  let client: MockJiraClient;
+  let ticketService: TicketService;
+
+  beforeEach(() => {
+    client = new MockJiraClient();
+    ticketService = new TicketService(client);
+  });
+
+  it('confirmation posts comment to stored key and clears session', async () => {
+    const session = makeSession({ pendingCommentTicketKey: 'PROJ-42' });
+    const stream = mockStream();
+    const ws = makeMockWs();
+    await handleEmailContentSession('post it', session, ticketService, stream as never, ws as never, client);
+    expect(client.addCommentCalls).toHaveLength(1);
+    expect(client.addCommentCalls[0].issueKey).toBe('PROJ-42');
+    expect(ws.store['jira.session.emailContent']).toBeUndefined();
+  });
+
+  it('cancellation clears session without posting comment', async () => {
+    const session = makeSession({ pendingCommentTicketKey: 'PROJ-42' });
+    const stream = mockStream();
+    const ws = makeMockWs();
+    await handleEmailContentSession('c', session, ticketService, stream as never, ws as never, client);
+    expect(client.addCommentCalls).toHaveLength(0);
+    expect(ws.store['jira.session.emailContent']).toBeUndefined();
+  });
+
+  it('ticket key reply updates target key and re-shows comment preview without posting', async () => {
+    const session = makeSession({ pendingCommentTicketKey: 'PROJ-42' });
+    const stream = mockStream();
+    const ws = makeMockWs();
+    await handleEmailContentSession('OTHER-7', session, ticketService, stream as never, ws as never, client);
+    expect(client.addCommentCalls).toHaveLength(0);
+    const stored = ws.store['jira.session.emailContent'] as typeof session;
+    expect(stored.pendingCommentTicketKey).toBe('OTHER-7');
+    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
+    expect(calls.some(c => c.includes('Comment preview:'))).toBe(true);
+    expect(calls.some(c => c.includes('OTHER-7'))).toBe(true);
+  });
+
+  it('unrecognized input re-shows comment preview without posting', async () => {
+    const session = makeSession({ pendingCommentTicketKey: 'PROJ-42' });
+    const stream = mockStream();
+    const ws = makeMockWs();
+    await handleEmailContentSession('random text', session, ticketService, stream as never, ws as never, client);
+    expect(client.addCommentCalls).toHaveLength(0);
+    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
+    expect(calls.some(c => c.includes('Comment preview:'))).toBe(true);
   });
 });
