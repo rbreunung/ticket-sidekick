@@ -65,6 +65,7 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/utils/markdownFormatter.ts` | `formatJiraBody(node)` — converts Jira wiki markup (v2 string) or ADF object (v3/legacy) to Markdown; `wikiToMarkdown(str)` delegates to `jiraWikiToMarkdown` |
 | `src/utils/jiraWikiToMarkdown.ts` | Own Jira wiki markup → Markdown converter; handles headings, tables, lists, code/noformat blocks, quotes, panels, and all inline markup without any third-party dependency |
 | `src/utils/htmlToMarkdown.ts` | Converts HTML email body to Markdown; resolves `cid:` references via optional `inlineImageMap`; strips OWA span whitespace inside bold/italic |
+| `src/utils/extractJsonObject.ts` | Bracket-counting extractor for the first complete JSON object in a raw LLM response (ignores braces in strings + trailing prose). Shared by `parseIntent` (Jira) and the Bitbucket review parser; `reviewSessionState.ts` re-exports it so neither participant imports the other |
 
 ## Running tests
 

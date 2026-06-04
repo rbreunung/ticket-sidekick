@@ -25,7 +25,34 @@ vi.mock('vscode', () => {
 });
 
 import * as vscode from 'vscode';
-import { extractHistoryTurns, buildHistoryContext, extractLastAssistantText, generateContent, extractFixVersionFromPrompt } from '../participant/jira/llmHelpers';
+import { extractHistoryTurns, buildHistoryContext, extractLastAssistantText, generateContent, extractFixVersionFromPrompt, parseIntent } from '../participant/jira/llmHelpers';
+
+describe('parseIntent', () => {
+  const makeModel = (output: string) => ({
+    sendRequest: vi.fn().mockImplementation(() =>
+      Promise.resolve({
+        text: (async function* () {
+          yield output;
+        })(),
+      }),
+    ),
+  });
+
+  it('parses a clean JSON object', async () => {
+    const model = makeModel('{"operation":"getTicket","ticketKey":"PROJ-1"}');
+    const intent = await parseIntent('show PROJ-1', model as never, {} as never);
+    expect(intent.operation).toBe('getTicket');
+    expect(intent.ticketKey).toBe('PROJ-1');
+  });
+
+  it('parses when the model appends trailing prose containing braces', async () => {
+    // Previously the greedy /\{[\s\S]*\}/ swallowed the trailing brace and threw.
+    const model = makeModel('{"operation":"getTicket","ticketKey":"PROJ-1"}\n\nNote: replace {value} as needed.');
+    const intent = await parseIntent('show PROJ-1', model as never, {} as never);
+    expect(intent.operation).toBe('getTicket');
+    expect(intent.ticketKey).toBe('PROJ-1');
+  });
+});
 
 describe('extractHistoryTurns', () => {
   it('includes user turns', () => {
