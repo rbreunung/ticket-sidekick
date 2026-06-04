@@ -400,6 +400,19 @@ describe('dcDiffToUnified', () => {
     expect(dcDiffToUnified({ diffs: [] })).toBe('');
   });
 
+  it('does not throw when a file entry has no hunks (binary or mode-only change)', () => {
+    const response = {
+      diffs: [{
+        source: { toString: 'assets/logo.png' },
+        destination: { toString: 'assets/logo.png' },
+        hunks: undefined,
+      }],
+    };
+    const unified = dcDiffToUnified(response as any);
+    expect(unified).toContain('diff --git a/assets/logo.png b/assets/logo.png');
+    expect(unified).not.toContain('@@');
+  });
+
   it('excludes deleted files from parseDiff results', () => {
     const response = {
       diffs: [{

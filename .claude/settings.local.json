@@ -9,7 +9,8 @@
       "Bash(npx vitest *)",
       "Bash(npx tsc *)",
       "Bash(npx tsx *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(~/.volta/bin/npm test *)"
     ]
   }
 }
