@@ -5,7 +5,7 @@ import { TicketService, renderFieldValue } from '../services/TicketService';
 import type { JiraFieldMeta, JiraFilter, JiraSprintCandidate } from '../jira/IJiraClient';
 import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
-import { redactUrls, tokenStatus } from '../utils/diagUtils';
+import { tokenStatus } from '../utils/diagUtils';
 import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql } from './sessionState';
 import { loadWorkflowCache, findPath } from '../services/WorkflowService';
 import type { WorkflowGraph } from '../services/WorkflowService';
@@ -74,7 +74,7 @@ export function createJiraParticipant(
           `**Jira connection OK**\n\n` +
           `| Setting | Value |\n` +
           `|---|---|\n` +
-          `| Base URL | \`${redactUrls(config.baseUrl ?? '')}\` |\n` +
+          `| Base URL | \`${config.baseUrl ?? ''}\` |\n` +
           `| API version | v2 |\n` +
           `| Auth type | ${config.authType} |\n` +
           `| Token | ${tokenStatus(config.token)} |\n` +
@@ -85,11 +85,11 @@ export function createJiraParticipant(
           `**Jira connection failed**\n\n` +
           `| Setting | Value |\n` +
           `|---|---|\n` +
-          `| Base URL | \`${redactUrls(config.baseUrl ?? '')}\` |\n` +
+          `| Base URL | \`${config.baseUrl ?? ''}\` |\n` +
           `| API version | v2 |\n` +
           `| Auth type | ${config.authType} |\n` +
           `| Token | ${tokenStatus(config.token)} |\n\n` +
-          `Error: ${redactUrls(err instanceof Error ? err.message : String(err))}`,
+          `Error: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
       return;

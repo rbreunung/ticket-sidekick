@@ -20,7 +20,7 @@ import {
 } from './reviewSessionState';
 import { isConfirmation, isCancellation } from './sessionState';
 import { generateContent } from './jira/llmHelpers';
-import { redactUrls, tokenStatus } from '../utils/diagUtils';
+import { tokenStatus } from '../utils/diagUtils';
 
 function getLastAssistantText(chatContext: vscode.ChatContext): string {
   for (let i = chatContext.history.length - 1; i >= 0; i--) {
@@ -118,7 +118,7 @@ async function handleCheck(
   }
   const effectiveUrl = config.authType === 'cloud' ? 'https://api.bitbucket.org' : config.baseUrl!;
   const apiVersion = config.authType === 'cloud' ? 'v2.0' : 'v1.0';
-  const displayUrl = redactUrls(effectiveUrl);
+  const displayUrl = effectiveUrl;
   try {
     const client = new BitbucketApiClient({
       baseUrl: config.baseUrl ?? '',
@@ -143,7 +143,7 @@ async function handleCheck(
       `| API version | ${apiVersion} |\n` +
       `| Auth type | ${config.authType} |\n` +
       `| Token | ${tokenStatus(config.token)} |\n\n` +
-      `Error: ${redactUrls(err instanceof Error ? err.message : String(err))}`,
+      `Error: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 }
