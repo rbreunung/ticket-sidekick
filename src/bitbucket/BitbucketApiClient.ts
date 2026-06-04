@@ -11,7 +11,7 @@ interface DcDiffHunk {
 interface DcFileDiff {
   source: { toString: string } | null;
   destination: { toString: string } | null;
-  hunks: DcDiffHunk[];
+  hunks?: DcDiffHunk[];
 }
 interface DcDiffResponse { diffs: DcFileDiff[]; }
 
@@ -22,7 +22,7 @@ export function dcDiffToUnified(response: DcDiffResponse): string {
     const aPath = srcPath ? `a/${srcPath}` : '/dev/null';
     const bPath = dstPath ? `b/${dstPath}` : '/dev/null';
     let out = `diff --git ${aPath} ${bPath}\n--- ${aPath}\n+++ ${bPath}\n`;
-    for (const hunk of fileDiff.hunks) {
+    for (const hunk of fileDiff.hunks ?? []) {
       out += `@@ -${hunk.sourceLine},${hunk.sourceSpan} +${hunk.destinationLine},${hunk.destinationSpan} @@\n`;
       for (const seg of hunk.segments) {
         const prefix = seg.type === 'ADDED' ? '+' : seg.type === 'REMOVED' ? '-' : ' ';
