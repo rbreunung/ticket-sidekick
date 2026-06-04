@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  parsePrUrl, parseDiff, resolveByNumber, extractJsonObject,
+  parsePrUrl, parseDiff, resolveByNumber, extractJsonObject, extractPartialFindings, parseNdjsonFindings,
   resolveByNumbers, isAddToReviewIntent, extractUserNote, langFromPath, buildAdaptiveChunks,
   resolveLineType, annotateWithLineTypes, hasPrUrl,
 } from '../participant/reviewSessionState';
@@ -669,6 +669,94 @@ describe('buildAdaptiveChunks', () => {
     const chunks = buildAdaptiveChunks(diffs, 1700);
     expect(chunks).toHaveLength(4);
     expect(chunks.flatMap(c => c)).toHaveLength(4);
+  });
+});
+
+describe('extractPartialFindings', () => {
+  const finding1 = { file: 'src/a.ts', severity: 'warning', title: 'Issue A', description: 'desc a', recommendation: 'rec a' };
+  const finding2 = { file: 'src/b.ts', severity: 'critical', title: 'Issue B', description: 'desc b', recommendation: 'rec b' };
+
+  it('returns all findings from a complete response', () => {
+    const raw = JSON.stringify({ findings: [finding1, finding2], additionalFilesNeeded: [] });
+    const result = extractPartialFindings(raw);
+    expect(result).toHaveLength(2);
+    expect(result[0]).toMatchObject(finding1);
+    expect(result[1]).toMatchObject(finding2);
+  });
+
+  it('returns only complete findings when response is truncated mid-last-finding', () => {
+    const complete = JSON.stringify(finding1);
+    const truncated = JSON.stringify(finding2).slice(0, 30);
+    const raw = `{"findings":[${complete},${truncated}`;
+    const result = extractPartialFindings(raw);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject(finding1);
+  });
+
+  it('returns empty array when truncated before any complete finding', () => {
+    const raw = '{"findings":[{"file":"src/a.ts","severity":"war';
+    expect(extractPartialFindings(raw)).toEqual([]);
+  });
+
+  it('returns empty array when no findings key present', () => {
+    expect(extractPartialFindings('{"additionalFilesNeeded":[]}')).toEqual([]);
+  });
+
+  it('returns empty array for empty findings array', () => {
+    expect(extractPartialFindings('{"findings":[]}')).toEqual([]);
+  });
+});
+
+describe('parseNdjsonFindings', () => {
+  const f1 = { file: 'src/a.ts', severity: 'critical', title: 'T1', description: 'D1', recommendation: 'R1' };
+  const f2 = { file: 'src/b.ts', severity: 'warning', title: 'T2', description: 'D2', recommendation: 'R2' };
+
+  it('parses a complete NDJSON response', () => {
+    const raw = [
+      JSON.stringify(f1),
+      JSON.stringify(f2),
+      '{"additionalFilesNeeded":["src/c.ts"]}',
+    ].join('\n');
+    const result = parseNdjsonFindings(raw);
+    expect(result.findings).toHaveLength(2);
+    expect(result.findings[0]).toMatchObject(f1);
+    expect(result.findings[1]).toMatchObject(f2);
+    expect(result.additionalFilesNeeded).toEqual(['src/c.ts']);
+    expect(result.hasMetaLine).toBe(true);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('recovers findings when meta line is absent (truncated)', () => {
+    const raw = [JSON.stringify(f1), JSON.stringify(f2)].join('\n');
+    const result = parseNdjsonFindings(raw);
+    expect(result.findings).toHaveLength(2);
+    expect(result.hasMetaLine).toBe(false);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('returns empty findings and no truncation for empty raw', () => {
+    const result = parseNdjsonFindings('');
+    expect(result.findings).toHaveLength(0);
+    expect(result.hasMetaLine).toBe(false);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('does not treat old single-object JSON format as a meta line', () => {
+    const raw = JSON.stringify({ findings: [f1], additionalFilesNeeded: [] });
+    const result = parseNdjsonFindings(raw);
+    expect(result.findings).toHaveLength(0);
+    expect(result.hasMetaLine).toBe(false);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('ignores incomplete last line without throwing', () => {
+    const incomplete = JSON.stringify(f2).slice(0, 20);
+    const raw = JSON.stringify(f1) + '\n' + incomplete + '\n{"additionalFilesNeeded":[]}';
+    const result = parseNdjsonFindings(raw);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]).toMatchObject(f1);
+    expect(result.hasMetaLine).toBe(true);
+    expect(result.truncated).toBe(false);
   });
 });
 

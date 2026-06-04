@@ -12,6 +12,8 @@ import {
   isAddToReviewIntent,
   extractUserNote,
   extractJsonObject,
+  extractPartialFindings,
+  parseNdjsonFindings,
   buildAdaptiveChunks,
   annotateWithLineTypes,
   type ReviewFinding,
@@ -75,24 +77,43 @@ async function callLLMWithProgress(
 async function parseReviewResponse(raw: string): Promise<{
   findings: Array<Omit<ReviewFinding, 'id'>>;
   additionalFilesNeeded: string[];
+  truncated?: true;
 }> {
-  const jsonText = extractJsonObject(raw);
-  if (!jsonText) {
-    throw new Error(
-      `LLM returned no JSON for review.\n\nRaw response (first 600 chars):\n${raw.slice(0, 600) || '(empty)'}`,
-    );
-  }
-  try {
-    const parsed = JSON.parse(jsonText);
+  // Primary: NDJSON format
+  const ndjson = parseNdjsonFindings(raw);
+  if (ndjson.findings.length > 0 || ndjson.hasMetaLine) {
     return {
-      findings: Array.isArray(parsed.findings) ? parsed.findings : [],
-      additionalFilesNeeded: Array.isArray(parsed.additionalFilesNeeded) ? parsed.additionalFilesNeeded : [],
+      findings: ndjson.findings as Array<Omit<ReviewFinding, 'id'>>,
+      additionalFilesNeeded: ndjson.additionalFilesNeeded,
+      ...(ndjson.truncated ? { truncated: true } : {}),
     };
-  } catch (err) {
-    throw new Error(
-      `LLM returned malformed JSON: ${err instanceof Error ? err.message : String(err)}\n\nExtracted:\n${jsonText.slice(0, 400)}`,
-    );
   }
+  // Legacy fallback: single JSON object (model ignored NDJSON instruction)
+  const jsonText = extractJsonObject(raw);
+  if (jsonText) {
+    try {
+      const parsed = JSON.parse(jsonText);
+      return {
+        findings: Array.isArray(parsed.findings) ? parsed.findings : [],
+        additionalFilesNeeded: Array.isArray(parsed.additionalFilesNeeded) ? parsed.additionalFilesNeeded : [],
+      };
+    } catch (err) {
+      throw new Error(
+        `LLM returned malformed JSON: ${err instanceof Error ? err.message : String(err)}\n\nExtracted:\n${jsonText.slice(0, 400)}`,
+      );
+    }
+  }
+  // Partial recovery: bracket-counted findings from truncated JSON
+  const partial = extractPartialFindings(raw);
+  if (partial.length > 0) {
+    return { findings: partial as Array<Omit<ReviewFinding, 'id'>>, additionalFilesNeeded: [], truncated: true };
+  }
+  const looksLikeJson = raw.trimStart().startsWith('{');
+  throw new Error(
+    looksLikeJson
+      ? `LLM response was truncated before completing. Try lowering 'contextBudgetRatio' (e.g. 0.5) or use '@bitbucket review quick <url>'.\n\nRaw (first 600):\n${raw.slice(0, 600)}`
+      : `LLM returned no JSON for review.\n\nRaw (first 600):\n${raw.slice(0, 600) || '(empty)'}`,
+  );
 }
 
 async function handleCheck(
@@ -376,6 +397,13 @@ export function createBitbucketParticipant(
 
       // Apply exclusion patterns before chunking
       let fileDiffs = parseDiff(rawDiff);
+
+      const noHunkCount = fileDiffs.filter(d => !d.diff.includes('@@ ')).length;
+      if (noHunkCount > 0) {
+        fileDiffs = fileDiffs.filter(d => d.diff.includes('@@ '));
+        stream.markdown(`_${noHunkCount} binary/mode-only file${noHunkCount !== 1 ? 's' : ''} skipped (no diff content)._\n\n`);
+      }
+
       const excludePatterns = config.reviewExcludePatterns ?? [];
       let excludedCount = 0;
       if (excludePatterns.length > 0) {
@@ -413,10 +441,28 @@ export function createBitbucketParticipant(
           service.buildPrompt(pr, chunk, undefined, config.reviewInstructions),
           request.model, token, batchStatus,
         );
-        const { findings, additionalFilesNeeded } = await parseReviewResponse(chunkRaw);
+        const { findings, additionalFilesNeeded, truncated } = await parseReviewResponse(chunkRaw);
         let chunkFindings = annotateWithLineTypes(findings, chunk);
 
-        if (reviewMode !== 'quick' && additionalFilesNeeded.length > 0) {
+        if (truncated) {
+          const batchNote = chunks.length > 1 ? ` (batch ${i + 1})` : '';
+          stream.markdown(`_⚠ LLM response truncated${batchNote} — recovering partial findings._\n\n`);
+          const coveredPaths = new Set(findings.map(f => f.file));
+          const uncoveredFiles = chunk.filter(d => !coveredPaths.has(d.path));
+          if (uncoveredFiles.length > 0) {
+            stream.markdown(`_Continuing review for ${uncoveredFiles.length} uncovered file${uncoveredFiles.length !== 1 ? 's' : ''}…_\n\n`);
+            const continuationNote = 'Continuation pass — the previous response was truncated. Review ONLY the files provided below.';
+            const contInstructions = continuationNote + (config.reviewInstructions ? '\n' + config.reviewInstructions : '');
+            const contRaw = await callLLMWithProgress(
+              service.buildPrompt(pr, uncoveredFiles, undefined, contInstructions),
+              request.model, token, `${batchStatus} continuation`,
+            );
+            const cont = await parseReviewResponse(contRaw);
+            chunkFindings = annotateWithLineTypes([...findings, ...cont.findings], chunk);
+          }
+        }
+
+        if (reviewMode !== 'quick' && !truncated && additionalFilesNeeded.length > 0) {
           const capped = additionalFilesNeeded.slice(0, 5);
           const batchSuffix = chunks.length > 1 ? ` (batch ${i + 1})` : '';
           stream.markdown(`_Fetching ${capped.length} context file${capped.length !== 1 ? 's' : ''}${batchSuffix}…_\n\n`);
@@ -429,7 +475,12 @@ export function createBitbucketParticipant(
             service.buildPrompt(pr, chunk, extraContents, config.reviewInstructions),
             request.model, token, `${batchStatus} pass 2`,
           );
-          chunkFindings = annotateWithLineTypes((await parseReviewResponse(pass2Raw)).findings, chunk);
+          const pass2 = await parseReviewResponse(pass2Raw);
+          if (pass2.truncated) {
+            const batchNote = chunks.length > 1 ? ` (batch ${i + 1} pass 2)` : ' (pass 2)';
+            stream.markdown(`_⚠ LLM response truncated${batchNote} — review may be incomplete._\n\n`);
+          }
+          chunkFindings = annotateWithLineTypes(pass2.findings, chunk);
         }
 
         allFindings = allFindings.concat(chunkFindings);
