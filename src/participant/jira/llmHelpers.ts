@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { serializeTurns, stripHiddenMarkers } from '../sessionState';
+import { extractJsonObject } from '../../utils/extractJsonObject';
 
 export type Operation =
   | 'getTicket'
@@ -111,9 +112,9 @@ export async function parseIntent(
   for await (const chunk of response.text) {
     raw += chunk;
   }
-  const jsonMatch = raw.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error(`Model did not return a JSON object. Response: ${raw.slice(0, 200)}`);
-  return JSON.parse(jsonMatch[0]) as ParsedIntent;
+  const jsonText = extractJsonObject(raw);
+  if (!jsonText) throw new Error(`Model did not return a JSON object. Response: ${raw.slice(0, 200)}`);
+  return JSON.parse(jsonText) as ParsedIntent;
 }
 
 export async function generateContent(

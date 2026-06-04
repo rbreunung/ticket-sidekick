@@ -1,4 +1,5 @@
 import type { BitbucketAuthType, BitbucketCommentResult, BitbucketPR, BitbucketUser, IBitbucketClient, InlineAnchor } from './IBitbucketClient';
+import { fetchWithRetry } from '../utils/fetchWithRetry';
 
 // Bitbucket Data Center /pull-requests/{id}/diff response shape (API 1.0)
 interface DcDiffLine { line: string; truncated?: boolean; }
@@ -54,7 +55,7 @@ export class BitbucketApiClient implements IBitbucketClient {
 
   private async dcRequest<T>(path: string): Promise<T> {
     const url = `${this.baseUrl}/rest/api/1.0${path}`;
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       headers: { Authorization: this.authHeader, Accept: 'application/json' },
     });
     if (!response.ok) {
@@ -78,7 +79,7 @@ export class BitbucketApiClient implements IBitbucketClient {
 
   private async cloudRequest<T>(path: string): Promise<T> {
     const url = `https://api.bitbucket.org/2.0${path}`;
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       headers: { Authorization: this.authHeader, Accept: 'application/json' },
     });
     if (!response.ok) {
@@ -95,7 +96,7 @@ export class BitbucketApiClient implements IBitbucketClient {
 
   private async dcPost<T>(path: string, body: unknown): Promise<T> {
     const url = `${this.baseUrl}/rest/api/1.0${path}`;
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       method: 'POST',
       headers: { Authorization: this.authHeader, 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify(body),
@@ -111,7 +112,7 @@ export class BitbucketApiClient implements IBitbucketClient {
 
   private async cloudPost<T>(path: string, body: unknown): Promise<T> {
     const url = `https://api.bitbucket.org/2.0${path}`;
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       method: 'POST',
       headers: { Authorization: this.authHeader, 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify(body),
@@ -127,7 +128,7 @@ export class BitbucketApiClient implements IBitbucketClient {
 
   private async cloudRequestText(path: string): Promise<string> {
     const url = `https://api.bitbucket.org/2.0${path}`;
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       headers: { Authorization: this.authHeader, Accept: 'text/plain' },
     });
     if (!response.ok) {
@@ -213,13 +214,17 @@ export class BitbucketApiClient implements IBitbucketClient {
   }
 
   async getFileContent(project: string, repo: string, path: string, commitHash: string): Promise<string> {
+    // Encode each path segment (preserving '/' separators) and the commit hash so spaces,
+    // '#', '?', and non-ASCII characters cannot break the request or corrupt the query.
+    const encPath = path.split('/').map(encodeURIComponent).join('/');
+    const encCommit = encodeURIComponent(commitHash);
     if (this.authType === 'cloud') {
-      return this.cloudRequestText(`/repositories/${project}/${repo}/src/${commitHash}/${path}`);
+      return this.cloudRequestText(`/repositories/${project}/${repo}/src/${encCommit}/${encPath}`);
     }
     // The browse API is paginated (default limit: 25 lines). Fetch with a high limit to
     // capture most source files in one request; very large files are truncated at 5000 lines.
     const data = await this.dcRequest<{ lines: Array<{ text: string }> }>(
-      `/projects/${project}/repos/${repo}/browse/${path}?at=${commitHash}&limit=5000`,
+      `/projects/${project}/repos/${repo}/browse/${encPath}?at=${encCommit}&limit=5000`,
     );
     return data.lines.map((l) => l.text).join('\n');
   }

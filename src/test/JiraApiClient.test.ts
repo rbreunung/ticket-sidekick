@@ -1,5 +1,33 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { JiraApiClient } from '../jira/JiraApiClient';
+import { JiraApiClient, buildFileContentDisposition } from '../jira/JiraApiClient';
+
+describe('buildFileContentDisposition (attachment filename safety)', () => {
+  it('keeps a plain ASCII filename and adds an RFC 5987 filename*', () => {
+    const d = buildFileContentDisposition('report.pdf');
+    expect(d).toContain('filename="report.pdf"');
+    expect(d).toContain("filename*=UTF-8''report.pdf");
+  });
+
+  it('neutralizes a quote in the filename so the header cannot be broken', () => {
+    const d = buildFileContentDisposition('evil".pdf');
+    // The quoted fallback must not contain a raw double-quote beyond its own delimiters.
+    const fallback = d.match(/filename="([^]*?)"/)![1];
+    expect(fallback).not.toContain('"');
+  });
+
+  it('strips CR/LF so no extra headers can be injected', () => {
+    const d = buildFileContentDisposition('a\r\nContent-Type: text/html\r\n\r\n.png');
+    expect(d).not.toContain('\r');
+    expect(d).not.toContain('\n');
+  });
+
+  it('round-trips a Unicode filename via filename* (UTF-8 percent-encoded)', () => {
+    const d = buildFileContentDisposition('Übung.pdf');
+    expect(d).toContain("filename*=UTF-8''%C3%9Cbung.pdf");
+    // ASCII fallback degrades the non-ASCII char but stays valid.
+    expect(d).toMatch(/filename="[\x20-\x7e]*"/);
+  });
+});
 
 const BASE_CONFIG = {
   baseUrl: 'https://jira.example.com',
@@ -170,6 +198,77 @@ describe('JiraApiClient', () => {
       await client.searchJql('project = PROJ');
       const [url] = mockFetch.mock.calls[0] as [string, RequestInit];
       expect(url).not.toContain('startAt');
+    });
+  });
+
+  describe('getAllComments', () => {
+    const comment = (id: string) => ({ id, author: { displayName: 'A' }, body: 'x', created: '2026-01-01' });
+
+    function makePagedFetch(pages: Array<{ comments: unknown[]; total: number }>): ReturnType<typeof vi.fn> {
+      let call = 0;
+      return vi.fn().mockImplementation(() => {
+        const page = pages[Math.min(call, pages.length - 1)];
+        call++;
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: { get: (h: string) => (h === 'content-type' ? 'application/json' : null) },
+          json: () => Promise.resolve(page),
+        });
+      });
+    }
+
+    it('paginates across full pages until total is reached', async () => {
+      const mockFetch = makePagedFetch([
+        { comments: [comment('1'), comment('2')], total: 3 },
+        { comments: [comment('3')], total: 3 },
+      ]);
+      vi.stubGlobal('fetch', mockFetch);
+      const client = new JiraApiClient(BASE_CONFIG);
+      const result = await client.getAllComments('PROJ-1');
+      expect(result).toHaveLength(3);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('stops when a page returns no comments even if total is larger (no infinite loop)', async () => {
+      const mockFetch = makePagedFetch([
+        { comments: [comment('1'), comment('2')], total: 5 },
+        { comments: [], total: 5 }, // empty page while total still says 5
+      ]);
+      vi.stubGlobal('fetch', mockFetch);
+      const client = new JiraApiClient(BASE_CONFIG);
+      const result = await client.getAllComments('PROJ-1');
+      expect(result).toHaveLength(2);
+      // Without the guard this would loop forever; assert it stayed bounded.
+      expect(mockFetch.mock.calls.length).toBeLessThanOrEqual(3);
+    });
+  });
+
+  describe('getRemoteLinks error handling', () => {
+    it('returns [] when the remotelink endpoint 404s (feature absent / none)', async () => {
+      vi.stubGlobal('fetch', makeFetch({}, 404));
+      const client = new JiraApiClient(BASE_CONFIG);
+      await expect(client.getRemoteLinks('PROJ-1')).resolves.toEqual([]);
+    });
+
+    it('rethrows an auth failure instead of masking it as empty links', async () => {
+      vi.stubGlobal('fetch', makeFetch({}, 401));
+      const client = new JiraApiClient(BASE_CONFIG);
+      await expect(client.getRemoteLinks('PROJ-1')).rejects.toThrow(/Authentication failed/);
+    });
+  });
+
+  describe('sprint lookup auth handling', () => {
+    it('rethrows an auth failure during sprint fetch instead of silently skipping the board', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/board?')) {
+          return Promise.resolve({ ok: true, status: 200, headers: { get: () => 'application/json' }, json: () => Promise.resolve({ values: [{ id: 10, type: 'scrum' }] }) });
+        }
+        // sprint fetch returns 401
+        return Promise.resolve({ ok: false, status: 401, statusText: 'Unauthorized', headers: { get: () => 'application/json' }, text: () => Promise.resolve('') });
+      }));
+      const client = new JiraApiClient(BASE_CONFIG);
+      await expect(client.findSprints('PROJ', 'Everest')).rejects.toThrow(/401/);
     });
   });
 

@@ -1,5 +1,7 @@
 # Ticket Sidekick
 
+[![CI](https://github.com/rbreunung/ticket-sidekick/actions/workflows/ci.yml/badge.svg)](https://github.com/rbreunung/ticket-sidekick/actions/workflows/ci.yml)
+
 Two independent GitHub Copilot Chat participants — use one or both:
 
 - **`@jira`** — manage Jira tickets in natural language (create, read, update, comment, bulk transitions, create from email)
@@ -738,6 +740,10 @@ The plugin:
 3. Splits the changed files into chunks sized to fill the model's actual context window — a 140-file PR on Claude Sonnet typically needs only 2 LLM calls
 4. For each chunk: sends a structured diff-only prompt and, if the LLM requests additional context files, fetches up to 5 and re-analyses (two-pass review); the second pass is skipped in `quick` mode
 5. Merges all findings across chunks and streams a single structured report ordered by file, with numbered findings and severity badges
+
+> **Deleted files are reviewed** — removing a validation or error-handling block can be just as risky as adding code. Files with no textual diff (binary, pure renames, or mode-only changes) are skipped and reported in the chat.
+>
+> **Very large files** that exceed the per-call budget on their own are split along diff-hunk boundaries and reviewed across several calls, rather than failing or being truncated.
 
 For token-saving options (`quick` mode, file exclusion, context tuning) see [Reducing token usage on large PRs](#reducing-token-usage-on-large-prs).
 

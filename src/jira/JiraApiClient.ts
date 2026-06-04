@@ -14,8 +14,16 @@ import type {
   JiraTransition,
   JiraUser,
 } from './IJiraClient';
+import { fetchWithRetry } from '../utils/fetchWithRetry';
 
 type AuthType = 'datacenter' | 'cloud';
+
+// A failed authentication should never be swallowed as "no data" — surface it so the user
+// fixes their credentials instead of seeing silently empty results.
+function isAuthError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes('Authentication failed') || /\b401\b/.test(msg);
+}
 
 async function assertJsonContentType(response: Response): Promise<void> {
   const ct = response.headers.get('content-type') ?? '';
@@ -29,6 +37,25 @@ async function assertJsonContentType(response: Response): Promise<void> {
       `Response preview: ${snippet}`,
     );
   }
+}
+
+/**
+ * Build a safe multipart `Content-Disposition` value for a file part.
+ *
+ * Attachment filenames can originate from received emails (untrusted). Interpolating them
+ * raw allows a `"` to break the header or CR/LF to inject extra headers. We emit a
+ * sanitized ASCII `filename="…"` fallback (control chars and quotes/backslashes removed,
+ * non-ASCII degraded) plus an RFC 5987 `filename*=UTF-8''…` carrying the real (percent-
+ * encoded) name so Unicode filenames still round-trip.
+ */
+export function buildFileContentDisposition(filename: string): string {
+  const fallback = filename
+    .replace(/[\x00-\x1f\x7f]/g, '') // control chars incl. CR/LF
+    .replace(/["\\]/g, '')           // quote/backslash would break the quoted-string
+    .replace(/[^\x20-\x7e]/g, '_');  // degrade remaining non-ASCII
+  const encoded = encodeURIComponent(filename)
+    .replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+  return `form-data; name="file"; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
 export interface JiraApiClientConfig {
@@ -57,7 +84,7 @@ export class JiraApiClient implements IJiraClient {
   // For Cloud-only fields that require v3 ADF, use requestV3() when needed.
   private async request<T>(path: string, options: RequestInit = {}): Promise<T> {
     const url = `${this.baseUrl}/rest/api/2${path}`;
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       ...options,
       headers: {
         Authorization: this.authHeader,
@@ -79,7 +106,7 @@ export class JiraApiClient implements IJiraClient {
 
   private async agileRequest<T>(path: string): Promise<T> {
     const url = `${this.baseUrl}/rest/agile/1.0${path}`;
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       headers: {
         Authorization: this.authHeader,
         Accept: 'application/json',
@@ -92,7 +119,7 @@ export class JiraApiClient implements IJiraClient {
 
   private async requestV3<T>(path: string, options: RequestInit = {}): Promise<T> {
     const url = `${this.baseUrl}/rest/api/3${path}`;
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       ...options,
       headers: {
         Authorization: this.authHeader,
@@ -114,7 +141,7 @@ export class JiraApiClient implements IJiraClient {
 
   private async teamsRequest<T>(path: string): Promise<T> {
     const url = `${this.baseUrl}/rest/teams/1.0${path}`;
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       headers: {
         Authorization: this.authHeader,
         Accept: 'application/json',
@@ -148,11 +175,11 @@ export class JiraApiClient implements IJiraClient {
     const buffer = Buffer.from(contentBytes, 'base64');
     const boundary = `----boundary${Date.now()}`;
     const body = Buffer.concat([
-      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${contentType}\r\n\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: ${buildFileContentDisposition(filename)}\r\nContent-Type: ${contentType}\r\n\r\n`),
       buffer,
       Buffer.from(`\r\n--${boundary}--\r\n`),
     ]);
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       method: 'POST',
       headers: {
         Authorization: this.authHeader,
@@ -225,7 +252,11 @@ export class JiraApiClient implements IJiraClient {
         );
         const match = sprints.values.find((s) => s.name === sprintName);
         if (match) return { id: match.id };
-      } catch { /* skip boards that do not support sprints (e.g. Kanban) */ }
+      } catch (err) {
+        // Kanban (and other non-Scrum) boards reject sprint queries — skip them. But an
+        // auth failure must surface rather than silently yield no sprints.
+        if (isAuthError(err)) throw err;
+      }
     }
     throw new Error(`Sprint '${sprintName}' not found in project ${projectKey}.`);
   }
@@ -257,19 +288,25 @@ export class JiraApiClient implements IJiraClient {
   }
 
   async getAllComments(issueKey: string): Promise<JiraComment[]> {
+    const pageSize = 100;
     const all: JiraComment[] = [];
     let startAt = 0;
-    while (true) {
-      const { comments, total } = await this.getIssueComments(issueKey, 100, startAt);
+    // Hard cap as a backstop: an empty page should already break the loop, but this
+    // guarantees termination for any other non-advancing server response.
+    const maxIterations = 1000;
+    for (let i = 0; i < maxIterations; i++) {
+      const { comments, total } = await this.getIssueComments(issueKey, pageSize, startAt);
       all.push(...comments);
-      if (all.length >= total) break;
+      // Stop when we've collected everything, or a page came back empty (which would
+      // otherwise leave startAt unchanged and spin forever).
+      if (comments.length === 0 || all.length >= total) break;
       startAt += comments.length;
     }
     return all;
   }
 
   async downloadAttachment(content: string): Promise<Uint8Array> {
-    const response = await fetch(content, {
+    const response = await fetchWithRetry(content, {
       headers: { Authorization: this.authHeader },
     });
     if (!response.ok) {
@@ -322,8 +359,13 @@ export class JiraApiClient implements IJiraClient {
   async getRemoteLinks(issueKey: string): Promise<JiraRemoteLink[]> {
     try {
       return await this.request<JiraRemoteLink[]>(`/issue/${issueKey}/remotelink`);
-    } catch {
-      return [];
+    } catch (err) {
+      // A 404 means the issue has no remote links (or the feature is absent) — return empty.
+      // Auth/server errors must surface rather than masquerade as "no links".
+      if (isAuthError(err)) throw err;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.startsWith('Not found')) return [];
+      throw err;
     }
   }
 
@@ -345,7 +387,11 @@ export class JiraApiClient implements IJiraClient {
             results.push({ id: s.id, name: s.name, state: s.state });
           }
         }
-      } catch { /* skip boards that do not support sprints (e.g. Kanban) */ }
+      } catch (err) {
+        // Kanban (and other non-Scrum) boards reject sprint queries — skip them. But an
+        // auth failure must surface rather than silently yield no sprints.
+        if (isAuthError(err)) throw err;
+      }
     }
     return results;
   }

@@ -7,6 +7,8 @@ export interface ParsedPrUrl {
 export interface FileDiff {
   path: string;
   diff: string;
+  /** True when the file is removed in this PR (destination is /dev/null). */
+  deleted?: boolean;
 }
 
 export interface ReviewFinding {
@@ -58,42 +60,41 @@ export function parsePrUrl(url: string): ParsedPrUrl | null {
   }
 }
 
+const stripABPrefix = (p: string): string => p.replace(/^[ab]\//, '').trim();
+
 export function parseDiff(raw: string): FileDiff[] {
   const results: FileDiff[] = [];
   const parts = raw.split(/(?=diff --git )/);
   for (const part of parts) {
     if (!part.trim()) continue;
-    const pathMatch = part.match(/\+\+\+ b\/([^\r\n]+)/);
-    if (!pathMatch) continue;
-    results.push({ path: pathMatch[1].trim(), diff: part });
+    // Use the header `--- ` / `+++ ` lines (first occurrence = the file header, before any
+    // hunk content). The `+++ ` line names the new file; on a deletion it is `/dev/null`,
+    // so fall back to the `--- ` (source) path and flag the file as deleted. This keeps
+    // removed files in the review instead of silently dropping them.
+    const plus = part.match(/(?:^|[\r\n])\+\+\+ ([^\r\n]+)/)?.[1]?.trim();
+    const minus = part.match(/(?:^|[\r\n])--- ([^\r\n]+)/)?.[1]?.trim();
+    let path: string | undefined;
+    let deleted = false;
+    if (plus && plus !== '/dev/null') {
+      path = stripABPrefix(plus);
+    } else if (plus === '/dev/null' && minus && minus !== '/dev/null') {
+      path = stripABPrefix(minus);
+      deleted = true;
+    } else {
+      // No usable +++/--- lines (e.g. a pure rename or mode-only change): take the
+      // destination path from the `diff --git a/… b/…` header as a last resort.
+      const header = part.match(/(?:^|[\r\n])diff --git .+ b\/([^\r\n]+)/)?.[1];
+      if (header) path = header.trim();
+    }
+    if (!path) continue;
+    results.push(deleted ? { path, diff: part, deleted: true } : { path, diff: part });
   }
   return results;
 }
 
-export function extractJsonObject(raw: string): string | null {
-  // Strip markdown code fence when model wraps output in ```json ... ```
-  const fenced = raw.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
-  const text = fenced ? fenced[1] : raw;
-
-  // Bracket-count from the first { to its matching } — handles trailing text
-  // that contains extra braces (which the greedy /\{[\s\S]*\}/ gets wrong).
-  const start = text.indexOf('{');
-  if (start === -1) return null;
-  let depth = 0;
-  let inString = false;
-  let escape = false;
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i];
-    if (escape) { escape = false; continue; }
-    if (inString && ch === '\\') { escape = true; continue; }
-    if (ch === '"') { inString = !inString; continue; }
-    if (!inString) {
-      if (ch === '{') depth++;
-      else if (ch === '}' && --depth === 0) return text.slice(start, i + 1);
-    }
-  }
-  return null;
-}
+// Shared with the Jira intent parser; defined in src/utils so neither participant
+// depends on the other. Re-exported here to keep existing import sites unchanged.
+export { extractJsonObject } from '../utils/extractJsonObject';
 
 export function extractPartialFindings(raw: string): Array<Record<string, unknown>> {
   const arrayIdx = raw.indexOf('"findings":[');
@@ -230,14 +231,63 @@ export function langFromPath(filePath: string): string {
 const CHUNK_FIXED_OVERHEAD = 1500;
 const CHUNK_FILE_OVERHEAD = 50;
 
+const estimateFileTokens = (diff: string): number => CHUNK_FILE_OVERHEAD + Math.ceil(diff.length / 4);
+
+/**
+ * Split a single file diff that is too large to fit a chunk into smaller sub-diffs along
+ * `@@` hunk boundaries. Each sub-diff keeps the original `diff --git`/`---`/`+++` header so
+ * it parses and annotates exactly like a normal file diff; findings re-merge by path in
+ * `formatReview`. A file with zero or one hunk cannot be subdivided and is returned as-is.
+ */
+function splitFileDiff(fd: FileDiff, maxFileTokens: number): FileDiff[] {
+  if (estimateFileTokens(fd.diff) <= maxFileTokens) return [fd];
+
+  const lines = fd.diff.split('\n');
+  const hunkStarts: number[] = [];
+  lines.forEach((l, i) => { if (/^@@ /.test(l)) hunkStarts.push(i); });
+  if (hunkStarts.length <= 1) return [fd]; // nothing to subdivide
+
+  const header = lines.slice(0, hunkStarts[0]).join('\n');
+  const headerTokens = Math.ceil((header.length + 1) / 4);
+  const hunks = hunkStarts.map((start, h) => {
+    const end = h + 1 < hunkStarts.length ? hunkStarts[h + 1] : lines.length;
+    return lines.slice(start, end).join('\n');
+  });
+
+  const pieces: FileDiff[] = [];
+  let current: string[] = [];
+  let currentTokens = CHUNK_FILE_OVERHEAD + headerTokens;
+  const flush = () => {
+    if (current.length === 0) return;
+    const diff = `${header}\n${current.join('\n')}`;
+    pieces.push(fd.deleted ? { path: fd.path, diff, deleted: true } : { path: fd.path, diff });
+    current = [];
+    currentTokens = CHUNK_FILE_OVERHEAD + headerTokens;
+  };
+  for (const hunk of hunks) {
+    const t = Math.ceil((hunk.length + 1) / 4);
+    if (current.length > 0 && currentTokens + t > maxFileTokens) flush();
+    current.push(hunk);
+    currentTokens += t;
+  }
+  flush();
+  return pieces.length > 0 ? pieces : [fd];
+}
+
 export function buildAdaptiveChunks(diffs: FileDiff[], tokenBudget: number): FileDiff[][] {
   if (diffs.length === 0) return [];
+  // A file must share a chunk with the fixed overhead, so its own budget is what remains.
+  const maxFileTokens = tokenBudget - CHUNK_FIXED_OVERHEAD;
+  const expanded = maxFileTokens > 0
+    ? diffs.flatMap((d) => splitFileDiff(d, maxFileTokens))
+    : diffs;
+
   const chunks: FileDiff[][] = [];
   let currentChunk: FileDiff[] = [];
   let currentTokens = CHUNK_FIXED_OVERHEAD;
 
-  for (const diff of diffs) {
-    const fileTokens = CHUNK_FILE_OVERHEAD + Math.ceil(diff.diff.length / 4);
+  for (const diff of expanded) {
+    const fileTokens = estimateFileTokens(diff.diff);
     if (currentChunk.length > 0 && currentTokens + fileTokens > tokenBudget) {
       chunks.push(currentChunk);
       currentChunk = [];
