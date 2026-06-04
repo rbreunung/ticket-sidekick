@@ -187,24 +187,11 @@ describe('resolveByNumber', () => {
 });
 
 describe('PrReviewService.gatherFileContents', () => {
-  it('uses workspace reader when it returns content', async () => {
+  it('fetches each file from the API at the PR commit', async () => {
     const client = new MockBitbucketClient();
     const service = new PrReviewService(client);
-    const localContent = 'const x = 1;\n';
-    const reader = async (_path: string) => localContent;
 
-    const result = await service.gatherFileContents('PROJ', 'myrepo', 'abc123', ['src/foo.ts'], reader);
-
-    expect(result.get('src/foo.ts')).toBe(localContent);
-    expect(client.getFileContentCalls).toHaveLength(0);
-  });
-
-  it('falls back to API when workspace reader returns null', async () => {
-    const client = new MockBitbucketClient();
-    const service = new PrReviewService(client);
-    const reader = async (_path: string) => null;
-
-    const result = await service.gatherFileContents('PROJ', 'myrepo', 'abc123', ['src/foo.ts'], reader);
+    const result = await service.gatherFileContents('PROJ', 'myrepo', 'abc123', ['src/foo.ts']);
 
     expect(client.getFileContentCalls).toHaveLength(1);
     expect(client.getFileContentCalls[0]).toMatchObject({ path: 'src/foo.ts', commitHash: 'abc123' });
@@ -215,20 +202,28 @@ describe('PrReviewService.gatherFileContents', () => {
     const client = new MockBitbucketClient();
     client.getFileContent = async () => { throw new Error('404 Not found'); };
     const service = new PrReviewService(client);
-    const reader = async (_path: string) => null;
 
-    const result = await service.gatherFileContents('PROJ', 'myrepo', 'abc123', ['src/missing.ts'], reader);
+    const result = await service.gatherFileContents('PROJ', 'myrepo', 'abc123', ['src/missing.ts']);
 
     expect(result.get('src/missing.ts')).toBe('(file not available)');
+  });
+
+  it('rethrows an auth failure instead of masking every file as unavailable', async () => {
+    const client = new MockBitbucketClient();
+    client.getFileContent = async () => { throw new Error('Authentication failed (401)'); };
+    const service = new PrReviewService(client);
+
+    await expect(
+      service.gatherFileContents('PROJ', 'myrepo', 'abc123', ['src/a.ts']),
+    ).rejects.toThrow(/401|Authentication/);
   });
 
   it('fetches all files in parallel', async () => {
     const client = new MockBitbucketClient();
     const service = new PrReviewService(client);
-    const reader = async (_path: string) => null;
     const paths = ['src/a.ts', 'src/b.ts', 'src/c.ts'];
 
-    await service.gatherFileContents('PROJ', 'myrepo', 'abc123', paths, reader);
+    await service.gatherFileContents('PROJ', 'myrepo', 'abc123', paths);
 
     expect(client.getFileContentCalls).toHaveLength(3);
   });

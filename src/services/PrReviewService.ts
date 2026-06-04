@@ -37,26 +37,34 @@ Last line lists additional files needed (always include this line, even if empty
 
 `;
 
-export type WorkspaceFileReader = (path: string) => Promise<string | null>;
+function isAuthError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes('Authentication') || /\b401\b/.test(msg);
+}
 
 export class PrReviewService {
   constructor(private readonly client: IBitbucketClient) {}
 
+  /**
+   * Fetch full file contents for pass-2 review context, always from the API at the PR's
+   * commit hash — never from the local workspace, which may be a different repo/branch and
+   * would feed the wrong version to the reviewer. A missing file degrades to a marker so a
+   * single 404 doesn't abort the review, but an auth failure propagates so it isn't masked
+   * as "every file unavailable".
+   */
   async gatherFileContents(
     project: string,
     repo: string,
     commitHash: string,
     paths: string[],
-    readLocalFile: WorkspaceFileReader,
   ): Promise<Map<string, string>> {
     const entries = await Promise.all(
       paths.map(async (path) => {
         try {
-          const local = await readLocalFile(path);
-          if (local !== null) return [path, local] as const;
           const remote = await this.client.getFileContent(project, repo, path, commitHash);
           return [path, remote] as const;
-        } catch {
+        } catch (err) {
+          if (isAuthError(err)) throw err;
           return [path, '(file not available)'] as const;
         }
       }),

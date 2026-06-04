@@ -244,7 +244,7 @@ API endpoint: `POST /rest/api/2/issue` with `{ fields: { project: { key }, summa
 6. Resolve token budget: `modelContextTokens` setting → `request.model.maxInputTokens` (VS Code LM API) → fallback 60 000; multiplied by `contextBudgetRatio` (default 0.7)
 7. `buildAdaptiveChunks(fileDiffs, tokenBudget)` → `FileDiff[][]`; each chunk is greedily packed using `1500 + 50×files + ceil(diff.length/4)` token estimate
 8. For each chunk — **Pass 1:** `PrReviewService.buildPrompt(pr, chunk)` → LLM returns `{ findings, additionalFilesNeeded }`
-9. **Pass 2** (skipped in `quick` mode): if `additionalFilesNeeded` non-empty, fetch up to 5 files (workspace first, API fallback), rebuild prompt with full contents, re-run LLM
+9. **Pass 2** (skipped in `quick` mode): if `additionalFilesNeeded` non-empty, fetch up to 5 files via the API at the PR's `fromCommitHash` (never the local workspace, which may be a different repo/branch), rebuild prompt with full contents, re-run LLM. A missing file degrades to a marker; an auth failure propagates rather than masking all files as unavailable
 10. `PrReviewService.formatReview` → markdown report with numbered findings grouped by file
 11. `ReviewSession` saved to `workspaceState` for follow-up turns
 

@@ -169,13 +169,6 @@ async function handleCheck(
   }
 }
 
-async function makeWorkspaceReader(path: string): Promise<string | null> {
-  const files = await vscode.workspace.findFiles(`**/${path}`, '**/node_modules/**', 1);
-  if (files.length === 0) return null;
-  const bytes = await vscode.workspace.fs.readFile(files[0]);
-  return Buffer.from(bytes).toString('utf-8');
-}
-
 export function createBitbucketParticipant(
   context: vscode.ExtensionContext,
   configService: ConfigService,
@@ -471,7 +464,6 @@ export function createBitbucketParticipant(
           const extraContents = await service.gatherFileContents(
             parsed.project, parsed.repo, pr.fromCommitHash,
             capped,
-            makeWorkspaceReader,
           );
           const pass2Raw = await callLLMWithProgress(
             service.buildPrompt(pr, chunk, extraContents, config.reviewInstructions),
