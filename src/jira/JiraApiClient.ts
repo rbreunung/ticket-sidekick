@@ -257,12 +257,18 @@ export class JiraApiClient implements IJiraClient {
   }
 
   async getAllComments(issueKey: string): Promise<JiraComment[]> {
+    const pageSize = 100;
     const all: JiraComment[] = [];
     let startAt = 0;
-    while (true) {
-      const { comments, total } = await this.getIssueComments(issueKey, 100, startAt);
+    // Hard cap as a backstop: an empty page should already break the loop, but this
+    // guarantees termination for any other non-advancing server response.
+    const maxIterations = 1000;
+    for (let i = 0; i < maxIterations; i++) {
+      const { comments, total } = await this.getIssueComments(issueKey, pageSize, startAt);
       all.push(...comments);
-      if (all.length >= total) break;
+      // Stop when we've collected everything, or a page came back empty (which would
+      // otherwise leave startAt unchanged and spin forever).
+      if (comments.length === 0 || all.length >= total) break;
       startAt += comments.length;
     }
     return all;

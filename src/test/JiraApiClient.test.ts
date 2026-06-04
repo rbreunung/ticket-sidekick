@@ -173,6 +173,49 @@ describe('JiraApiClient', () => {
     });
   });
 
+  describe('getAllComments', () => {
+    const comment = (id: string) => ({ id, author: { displayName: 'A' }, body: 'x', created: '2026-01-01' });
+
+    function makePagedFetch(pages: Array<{ comments: unknown[]; total: number }>): ReturnType<typeof vi.fn> {
+      let call = 0;
+      return vi.fn().mockImplementation(() => {
+        const page = pages[Math.min(call, pages.length - 1)];
+        call++;
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: { get: (h: string) => (h === 'content-type' ? 'application/json' : null) },
+          json: () => Promise.resolve(page),
+        });
+      });
+    }
+
+    it('paginates across full pages until total is reached', async () => {
+      const mockFetch = makePagedFetch([
+        { comments: [comment('1'), comment('2')], total: 3 },
+        { comments: [comment('3')], total: 3 },
+      ]);
+      vi.stubGlobal('fetch', mockFetch);
+      const client = new JiraApiClient(BASE_CONFIG);
+      const result = await client.getAllComments('PROJ-1');
+      expect(result).toHaveLength(3);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('stops when a page returns no comments even if total is larger (no infinite loop)', async () => {
+      const mockFetch = makePagedFetch([
+        { comments: [comment('1'), comment('2')], total: 5 },
+        { comments: [], total: 5 }, // empty page while total still says 5
+      ]);
+      vi.stubGlobal('fetch', mockFetch);
+      const client = new JiraApiClient(BASE_CONFIG);
+      const result = await client.getAllComments('PROJ-1');
+      expect(result).toHaveLength(2);
+      // Without the guard this would loop forever; assert it stayed bounded.
+      expect(mockFetch.mock.calls.length).toBeLessThanOrEqual(3);
+    });
+  });
+
   describe('getProjectStatuses', () => {
     const statusPayload = [
       { name: 'Bug', subtask: false, statuses: [{ id: '1', name: 'Open' }, { id: '2', name: 'Closed' }] },
