@@ -119,6 +119,36 @@ export function extractPartialFindings(raw: string): Array<Record<string, unknow
   return results;
 }
 
+export function parseNdjsonFindings(raw: string): {
+  findings: Array<Record<string, unknown>>;
+  additionalFilesNeeded: string[];
+  hasMetaLine: boolean;
+  truncated: boolean;
+} {
+  const findings: Array<Record<string, unknown>> = [];
+  let additionalFilesNeeded: string[] = [];
+  let hasMetaLine = false;
+  for (const line of raw.split('\n')) {
+    const t = line.trim();
+    if (!t.startsWith('{')) continue;
+    try {
+      const obj = JSON.parse(t) as Record<string, unknown>;
+      if (Array.isArray(obj.additionalFilesNeeded) && Object.keys(obj).length === 1) {
+        additionalFilesNeeded = obj.additionalFilesNeeded as string[];
+        hasMetaLine = true;
+      } else if (typeof obj.file === 'string') {
+        findings.push(obj);
+      }
+    } catch { /* incomplete last line */ }
+  }
+  return {
+    findings,
+    additionalFilesNeeded,
+    hasMetaLine,
+    truncated: !hasMetaLine && (findings.length > 0 || raw.trim().length > 0),
+  };
+}
+
 export function resolveByNumber(message: string, findings: ReviewFinding[]): ReviewFinding | null {
   const m = message.match(/#(\d+)/);
   if (!m) return null;

@@ -27,8 +27,13 @@ For each confirmed issue identify:
 
 Also list any additional real source files (not in the diff) needed to complete the review. Maximum 5 files.
 
-Respond with ONLY a JSON object — no markdown fences, no explanation:
-{"findings":[{"file":"path/to/file.ts","line":42,"severity":"critical","title":"Short title","description":"What is wrong","recommendation":"What to do","codeExample":"optional 3-15 line fix snippet — omit if not applicable"}],"additionalFilesNeeded":["path/to/other.ts"]}
+Output findings ordered by severity — critical first, then warning, then suggestion.
+Keep descriptions ≤80 words and recommendations ≤60 words. Code examples ≤8 lines; omit if the fix is architectural.
+Respond with one JSON object per line (NDJSON) — no markdown fences, no wrapping array, no explanation.
+Each finding on its own line:
+{"file":"path/to/file.ts","line":42,"severity":"critical","title":"Short title","description":"What is wrong","recommendation":"What to do","codeExample":"optional fix snippet"}
+Last line lists additional files needed (always include this line, even if empty):
+{"additionalFilesNeeded":["path/to/other.ts"]}
 
 `;
 
