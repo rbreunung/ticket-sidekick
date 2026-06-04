@@ -95,6 +95,30 @@ export function extractJsonObject(raw: string): string | null {
   return null;
 }
 
+export function extractPartialFindings(raw: string): Array<Record<string, unknown>> {
+  const arrayIdx = raw.indexOf('"findings":[');
+  if (arrayIdx === -1) return [];
+  let i = raw.indexOf('[', arrayIdx) + 1;
+  const results: Array<Record<string, unknown>> = [];
+  while (i < raw.length) {
+    while (i < raw.length && /\s/.test(raw[i])) i++;
+    if (i >= raw.length || raw[i] !== '{') break;
+    let depth = 0, inStr = false, esc = false, j = i;
+    for (; j < raw.length; j++) {
+      const ch = raw[j];
+      if (esc) { esc = false; continue; }
+      if (inStr && ch === '\\') { esc = true; continue; }
+      if (ch === '"') { inStr = !inStr; continue; }
+      if (!inStr) { if (ch === '{') depth++; else if (ch === '}' && --depth === 0) break; }
+    }
+    if (depth !== 0) break;
+    try { results.push(JSON.parse(raw.slice(i, j + 1))); } catch { break; }
+    i = j + 1;
+    while (i < raw.length && (raw[i] === ',' || /\s/.test(raw[i]))) i++;
+  }
+  return results;
+}
+
 export function resolveByNumber(message: string, findings: ReviewFinding[]): ReviewFinding | null {
   const m = message.match(/#(\d+)/);
   if (!m) return null;

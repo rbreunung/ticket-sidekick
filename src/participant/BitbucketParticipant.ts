@@ -12,6 +12,7 @@ import {
   isAddToReviewIntent,
   extractUserNote,
   extractJsonObject,
+  extractPartialFindings,
   buildAdaptiveChunks,
   annotateWithLineTypes,
   type ReviewFinding,
@@ -75,11 +76,20 @@ async function callLLMWithProgress(
 async function parseReviewResponse(raw: string): Promise<{
   findings: Array<Omit<ReviewFinding, 'id'>>;
   additionalFilesNeeded: string[];
+  truncated?: true;
 }> {
   const jsonText = extractJsonObject(raw);
   if (!jsonText) {
+    const partial = extractPartialFindings(raw);
+    if (partial.length > 0) {
+      return { findings: partial as Array<Omit<ReviewFinding, 'id'>>, additionalFilesNeeded: [], truncated: true };
+    }
+    const looksLikeJson = raw.trimStart().startsWith('{');
     throw new Error(
-      `LLM returned no JSON for review.\n\nRaw response (first 600 chars):\n${raw.slice(0, 600) || '(empty)'}`,
+      looksLikeJson
+        ? `LLM response was truncated before JSON completed (output token limit reached). ` +
+          `Try lowering 'ticketSidekick.bitbucket.contextBudgetRatio' (e.g. 0.5) or use '@bitbucket review quick <url>'.\n\nRaw response (first 600 chars):\n${raw.slice(0, 600)}`
+        : `LLM returned no JSON for review.\n\nRaw response (first 600 chars):\n${raw.slice(0, 600) || '(empty)'}`,
     );
   }
   try {
@@ -413,10 +423,14 @@ export function createBitbucketParticipant(
           service.buildPrompt(pr, chunk, undefined, config.reviewInstructions),
           request.model, token, batchStatus,
         );
-        const { findings, additionalFilesNeeded } = await parseReviewResponse(chunkRaw);
+        const { findings, additionalFilesNeeded, truncated } = await parseReviewResponse(chunkRaw);
+        if (truncated) {
+          const batchNote = chunks.length > 1 ? ` (batch ${i + 1})` : '';
+          stream.markdown(`_⚠ LLM response truncated${batchNote} — review may be incomplete. Consider lowering \`contextBudgetRatio\` or using \`@bitbucket review quick\`._\n\n`);
+        }
         let chunkFindings = annotateWithLineTypes(findings, chunk);
 
-        if (reviewMode !== 'quick' && additionalFilesNeeded.length > 0) {
+        if (reviewMode !== 'quick' && !truncated && additionalFilesNeeded.length > 0) {
           const capped = additionalFilesNeeded.slice(0, 5);
           const batchSuffix = chunks.length > 1 ? ` (batch ${i + 1})` : '';
           stream.markdown(`_Fetching ${capped.length} context file${capped.length !== 1 ? 's' : ''}${batchSuffix}…_\n\n`);
@@ -429,7 +443,12 @@ export function createBitbucketParticipant(
             service.buildPrompt(pr, chunk, extraContents, config.reviewInstructions),
             request.model, token, `${batchStatus} pass 2`,
           );
-          chunkFindings = annotateWithLineTypes((await parseReviewResponse(pass2Raw)).findings, chunk);
+          const pass2 = await parseReviewResponse(pass2Raw);
+          if (pass2.truncated) {
+            const batchNote = chunks.length > 1 ? ` (batch ${i + 1} pass 2)` : ' (pass 2)';
+            stream.markdown(`_⚠ LLM response truncated${batchNote} — review may be incomplete._\n\n`);
+          }
+          chunkFindings = annotateWithLineTypes(pass2.findings, chunk);
         }
 
         allFindings = allFindings.concat(chunkFindings);
