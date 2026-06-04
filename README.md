@@ -1,5 +1,7 @@
 # Ticket Sidekick
 
+[![CI](https://github.com/rbreunung/ticket-sidekick/actions/workflows/ci.yml/badge.svg)](https://github.com/rbreunung/ticket-sidekick/actions/workflows/ci.yml)
+
 Two independent GitHub Copilot Chat participants — use one or both:
 
 - **`@jira`** — manage Jira tickets in natural language (create, read, update, comment, bulk transitions, create from email)

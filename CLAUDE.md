@@ -78,6 +78,8 @@ Node.js is managed by **Volta** — use `~/.volta/bin/npm` if `npm` isn't on you
 
 **`npm test` must be green before every commit.** Run `npm run compile` to catch TypeScript errors first.
 
+CI (`.github/workflows/ci.yml`) runs `npm ci` → `npm run compile` → `npm test` on every push and pull request against `main` (Node 20). The `test:e2e` suite is not run in CI (it needs a real VS Code instance).
+
 ## Testing
 
 Write tests for **user-facing use cases**, not internal mechanics. A test should read like a scenario: given this input, what does the user get back? Cover the happy path and the main failure case for every new feature.
