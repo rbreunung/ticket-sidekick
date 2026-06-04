@@ -1,5 +1,33 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { JiraApiClient } from '../jira/JiraApiClient';
+import { JiraApiClient, buildFileContentDisposition } from '../jira/JiraApiClient';
+
+describe('buildFileContentDisposition (attachment filename safety)', () => {
+  it('keeps a plain ASCII filename and adds an RFC 5987 filename*', () => {
+    const d = buildFileContentDisposition('report.pdf');
+    expect(d).toContain('filename="report.pdf"');
+    expect(d).toContain("filename*=UTF-8''report.pdf");
+  });
+
+  it('neutralizes a quote in the filename so the header cannot be broken', () => {
+    const d = buildFileContentDisposition('evil".pdf');
+    // The quoted fallback must not contain a raw double-quote beyond its own delimiters.
+    const fallback = d.match(/filename="([^]*?)"/)![1];
+    expect(fallback).not.toContain('"');
+  });
+
+  it('strips CR/LF so no extra headers can be injected', () => {
+    const d = buildFileContentDisposition('a\r\nContent-Type: text/html\r\n\r\n.png');
+    expect(d).not.toContain('\r');
+    expect(d).not.toContain('\n');
+  });
+
+  it('round-trips a Unicode filename via filename* (UTF-8 percent-encoded)', () => {
+    const d = buildFileContentDisposition('Übung.pdf');
+    expect(d).toContain("filename*=UTF-8''%C3%9Cbung.pdf");
+    // ASCII fallback degrades the non-ASCII char but stays valid.
+    expect(d).toMatch(/filename="[\x20-\x7e]*"/);
+  });
+});
 
 const BASE_CONFIG = {
   baseUrl: 'https://jira.example.com',

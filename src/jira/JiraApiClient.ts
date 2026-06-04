@@ -31,6 +31,25 @@ async function assertJsonContentType(response: Response): Promise<void> {
   }
 }
 
+/**
+ * Build a safe multipart `Content-Disposition` value for a file part.
+ *
+ * Attachment filenames can originate from received emails (untrusted). Interpolating them
+ * raw allows a `"` to break the header or CR/LF to inject extra headers. We emit a
+ * sanitized ASCII `filename="…"` fallback (control chars and quotes/backslashes removed,
+ * non-ASCII degraded) plus an RFC 5987 `filename*=UTF-8''…` carrying the real (percent-
+ * encoded) name so Unicode filenames still round-trip.
+ */
+export function buildFileContentDisposition(filename: string): string {
+  const fallback = filename
+    .replace(/[\x00-\x1f\x7f]/g, '') // control chars incl. CR/LF
+    .replace(/["\\]/g, '')           // quote/backslash would break the quoted-string
+    .replace(/[^\x20-\x7e]/g, '_');  // degrade remaining non-ASCII
+  const encoded = encodeURIComponent(filename)
+    .replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+  return `form-data; name="file"; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+}
+
 export interface JiraApiClientConfig {
   baseUrl: string;
   authType: AuthType;
@@ -148,7 +167,7 @@ export class JiraApiClient implements IJiraClient {
     const buffer = Buffer.from(contentBytes, 'base64');
     const boundary = `----boundary${Date.now()}`;
     const body = Buffer.concat([
-      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${contentType}\r\n\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: ${buildFileContentDisposition(filename)}\r\nContent-Type: ${contentType}\r\n\r\n`),
       buffer,
       Buffer.from(`\r\n--${boundary}--\r\n`),
     ]);

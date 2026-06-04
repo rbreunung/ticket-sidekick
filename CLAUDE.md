@@ -118,6 +118,7 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
 - Reading: `extractTextFromAdf()` in `TicketService` handles both plain strings (v2 read) and ADF objects (legacy rich content), so existing tickets with ADF descriptions display correctly.
 - Agile API base path: `<baseUrl>/rest/agile/1.0/` — used for sprint resolution (`getSprintByName`)
 - Teams API base path: `<baseUrl>/rest/teams/1.0/` — used for Data Center team resolution (`getTeamByName`); Cloud does not support team lookup by name, use `id` in the template instead
+- Attachment uploads (`uploadAttachment`) build the multipart `Content-Disposition` via `buildFileContentDisposition()`, which sanitizes the (possibly email-derived) filename and adds an RFC 5987 `filename*` so quotes/CR-LF cannot break or inject headers and Unicode names round-trip
 
 ## Bitbucket API
 
