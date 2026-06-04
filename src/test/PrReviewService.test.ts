@@ -686,6 +686,31 @@ describe('buildAdaptiveChunks', () => {
     expect(chunks).toHaveLength(4);
     expect(chunks.flatMap(c => c)).toHaveLength(4);
   });
+
+  it('splits an over-budget file at hunk boundaries, preserving the header on each piece', () => {
+    const header = 'diff --git a/big.ts b/big.ts\n--- a/big.ts\n+++ b/big.ts\n';
+    const hunk = (n: number) => `@@ -${n},1 +${n},1 @@\n+${'y'.repeat(8000)}\n`;
+    const diff = header + hunk(1) + hunk(100) + hunk(200);
+    const chunks = buildAdaptiveChunks([{ path: 'big.ts', diff }], 4000);
+    const pieces = chunks.flat().filter(d => d.path === 'big.ts');
+    expect(pieces.length).toBeGreaterThan(1);
+    for (const p of pieces) {
+      expect(p.diff).toContain('+++ b/big.ts'); // header kept on each split piece
+      expect(p.diff).toContain('@@ ');
+    }
+    // No hunk is lost across the split.
+    const combined = pieces.map(p => p.diff).join('\n');
+    expect(combined).toContain('@@ -1,1');
+    expect(combined).toContain('@@ -100,1');
+    expect(combined).toContain('@@ -200,1');
+  });
+
+  it('does not split a file that has only one hunk (cannot subdivide further)', () => {
+    const diff = 'diff --git a/one.ts b/one.ts\n--- a/one.ts\n+++ b/one.ts\n@@ -1,1 +1,1 @@\n+' + 'z'.repeat(40000) + '\n';
+    const chunks = buildAdaptiveChunks([{ path: 'one.ts', diff }], 4000);
+    const pieces = chunks.flat().filter(d => d.path === 'one.ts');
+    expect(pieces).toHaveLength(1);
+  });
 });
 
 describe('extractPartialFindings', () => {

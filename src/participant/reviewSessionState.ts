@@ -231,14 +231,63 @@ export function langFromPath(filePath: string): string {
 const CHUNK_FIXED_OVERHEAD = 1500;
 const CHUNK_FILE_OVERHEAD = 50;
 
+const estimateFileTokens = (diff: string): number => CHUNK_FILE_OVERHEAD + Math.ceil(diff.length / 4);
+
+/**
+ * Split a single file diff that is too large to fit a chunk into smaller sub-diffs along
+ * `@@` hunk boundaries. Each sub-diff keeps the original `diff --git`/`---`/`+++` header so
+ * it parses and annotates exactly like a normal file diff; findings re-merge by path in
+ * `formatReview`. A file with zero or one hunk cannot be subdivided and is returned as-is.
+ */
+function splitFileDiff(fd: FileDiff, maxFileTokens: number): FileDiff[] {
+  if (estimateFileTokens(fd.diff) <= maxFileTokens) return [fd];
+
+  const lines = fd.diff.split('\n');
+  const hunkStarts: number[] = [];
+  lines.forEach((l, i) => { if (/^@@ /.test(l)) hunkStarts.push(i); });
+  if (hunkStarts.length <= 1) return [fd]; // nothing to subdivide
+
+  const header = lines.slice(0, hunkStarts[0]).join('\n');
+  const headerTokens = Math.ceil((header.length + 1) / 4);
+  const hunks = hunkStarts.map((start, h) => {
+    const end = h + 1 < hunkStarts.length ? hunkStarts[h + 1] : lines.length;
+    return lines.slice(start, end).join('\n');
+  });
+
+  const pieces: FileDiff[] = [];
+  let current: string[] = [];
+  let currentTokens = CHUNK_FILE_OVERHEAD + headerTokens;
+  const flush = () => {
+    if (current.length === 0) return;
+    const diff = `${header}\n${current.join('\n')}`;
+    pieces.push(fd.deleted ? { path: fd.path, diff, deleted: true } : { path: fd.path, diff });
+    current = [];
+    currentTokens = CHUNK_FILE_OVERHEAD + headerTokens;
+  };
+  for (const hunk of hunks) {
+    const t = Math.ceil((hunk.length + 1) / 4);
+    if (current.length > 0 && currentTokens + t > maxFileTokens) flush();
+    current.push(hunk);
+    currentTokens += t;
+  }
+  flush();
+  return pieces.length > 0 ? pieces : [fd];
+}
+
 export function buildAdaptiveChunks(diffs: FileDiff[], tokenBudget: number): FileDiff[][] {
   if (diffs.length === 0) return [];
+  // A file must share a chunk with the fixed overhead, so its own budget is what remains.
+  const maxFileTokens = tokenBudget - CHUNK_FIXED_OVERHEAD;
+  const expanded = maxFileTokens > 0
+    ? diffs.flatMap((d) => splitFileDiff(d, maxFileTokens))
+    : diffs;
+
   const chunks: FileDiff[][] = [];
   let currentChunk: FileDiff[] = [];
   let currentTokens = CHUNK_FIXED_OVERHEAD;
 
-  for (const diff of diffs) {
-    const fileTokens = CHUNK_FILE_OVERHEAD + Math.ceil(diff.diff.length / 4);
+  for (const diff of expanded) {
+    const fileTokens = estimateFileTokens(diff.diff);
     if (currentChunk.length > 0 && currentTokens + fileTokens > tokenBudget) {
       chunks.push(currentChunk);
       currentChunk = [];

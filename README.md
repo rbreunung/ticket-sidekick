@@ -742,6 +742,8 @@ The plugin:
 5. Merges all findings across chunks and streams a single structured report ordered by file, with numbered findings and severity badges
 
 > **Deleted files are reviewed** — removing a validation or error-handling block can be just as risky as adding code. Files with no textual diff (binary, pure renames, or mode-only changes) are skipped and reported in the chat.
+>
+> **Very large files** that exceed the per-call budget on their own are split along diff-hunk boundaries and reviewed across several calls, rather than failing or being truncated.
 
 For token-saving options (`quick` mode, file exclusion, context tuning) see [Reducing token usage on large PRs](#reducing-token-usage-on-large-prs).
 
