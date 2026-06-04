@@ -741,6 +741,8 @@ The plugin:
 4. For each chunk: sends a structured diff-only prompt and, if the LLM requests additional context files, fetches up to 5 and re-analyses (two-pass review); the second pass is skipped in `quick` mode
 5. Merges all findings across chunks and streams a single structured report ordered by file, with numbered findings and severity badges
 
+> **Deleted files are reviewed** — removing a validation or error-handling block can be just as risky as adding code. Files with no textual diff (binary, pure renames, or mode-only changes) are skipped and reported in the chat.
+
 For token-saving options (`quick` mode, file exclusion, context tuning) see [Reducing token usage on large PRs](#reducing-token-usage-on-large-prs).
 
 Example output:

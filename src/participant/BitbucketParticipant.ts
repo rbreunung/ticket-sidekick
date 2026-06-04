@@ -398,10 +398,12 @@ export function createBitbucketParticipant(
       // Apply exclusion patterns before chunking
       let fileDiffs = parseDiff(rawDiff);
 
+      // Files with no hunks carry no reviewable text (binary, pure rename, or mode-only).
+      // Deletions DO have hunks (removed lines), so they pass this filter and are reviewed.
       const noHunkCount = fileDiffs.filter(d => !d.diff.includes('@@ ')).length;
       if (noHunkCount > 0) {
         fileDiffs = fileDiffs.filter(d => d.diff.includes('@@ '));
-        stream.markdown(`_${noHunkCount} binary/mode-only file${noHunkCount !== 1 ? 's' : ''} skipped (no diff content)._\n\n`);
+        stream.markdown(`_${noHunkCount} file${noHunkCount !== 1 ? 's' : ''} with no textual diff (binary, rename, or mode-only) skipped._\n\n`);
       }
 
       const excludePatterns = config.reviewExcludePatterns ?? [];

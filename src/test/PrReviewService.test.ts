@@ -115,6 +115,22 @@ describe('parseDiff', () => {
     expect(result[0].path).toBe('src/auth/login.ts');
   });
 
+  it('parses a standard git deletion (+++ /dev/null) using the source path', () => {
+    const raw = [
+      'diff --git a/src/gone.ts b/src/gone.ts',
+      'deleted file mode 100644',
+      '--- a/src/gone.ts',
+      '+++ /dev/null',
+      '@@ -1,2 +0,0 @@',
+      '-const a = 1;',
+      '-const b = 2;',
+    ].join('\n');
+    const result = parseDiff(raw);
+    expect(result).toHaveLength(1);
+    expect(result[0].path).toBe('src/gone.ts');
+    expect(result[0].deleted).toBe(true);
+  });
+
   it('returns empty array for empty input', () => {
     expect(parseDiff('')).toEqual([]);
   });
@@ -413,7 +429,7 @@ describe('dcDiffToUnified', () => {
     expect(unified).not.toContain('@@');
   });
 
-  it('excludes deleted files from parseDiff results', () => {
+  it('includes deleted files using the source path and flags them deleted', () => {
     const response = {
       diffs: [{
         source: { toString: 'src/old.ts' },
@@ -424,10 +440,13 @@ describe('dcDiffToUnified', () => {
     };
     const unified = dcDiffToUnified(response);
     const parsed = parseDiff(unified);
-    expect(parsed).toHaveLength(0);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].path).toBe('src/old.ts');
+    expect(parsed[0].deleted).toBe(true);
+    expect(parsed[0].diff).toContain('-const x = 1;');
   });
 
-  it('includes only modified/added files when mixed with deleted files', () => {
+  it('includes both modified and deleted files', () => {
     const response = {
       diffs: [
         {
@@ -451,8 +470,10 @@ describe('dcDiffToUnified', () => {
     };
     const unified = dcDiffToUnified(response);
     const parsed = parseDiff(unified);
-    expect(parsed).toHaveLength(1);
-    expect(parsed[0].path).toBe('src/changed.ts');
+    expect(parsed).toHaveLength(2);
+    expect(parsed.map(p => p.path)).toEqual(['src/changed.ts', 'src/deleted.ts']);
+    expect(parsed.find(p => p.path === 'src/deleted.ts')!.deleted).toBe(true);
+    expect(parsed.find(p => p.path === 'src/changed.ts')!.deleted).toBeUndefined();
   });
 
   it('works correctly when response comes from JSON.parse (real API scenario)', () => {

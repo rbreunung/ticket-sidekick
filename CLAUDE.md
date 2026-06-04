@@ -239,7 +239,7 @@ API endpoint: `POST /rest/api/2/issue` with `{ fields: { project: { key }, summa
 1. Parse PR URL → extract project/workspace, repo, PR id, auth type
 2. `BitbucketApiClient.getPullRequest` → metadata (title, author, target branch, source commit hash)
 3. `BitbucketApiClient.getPullRequestDiff` → raw unified diff string
-4. `parseDiff(raw)` → `FileDiff[]` (one entry per changed file)
+4. `parseDiff(raw)` → `FileDiff[]` (one entry per changed file). Paths come from the `---`/`+++` header lines (falling back to the `diff --git` header); deletions (`+++ /dev/null`) keep the source path and set `deleted: true` so removed code is still reviewed
 5. Apply `reviewExcludePatterns` (glob, via `minimatch` with `matchBase: true`) — filtered files reported to user; early return if all excluded
 6. Resolve token budget: `modelContextTokens` setting → `request.model.maxInputTokens` (VS Code LM API) → fallback 60 000; multiplied by `contextBudgetRatio` (default 0.7)
 7. `buildAdaptiveChunks(fileDiffs, tokenBudget)` → `FileDiff[][]`; each chunk is greedily packed using `1500 + 50×files + ceil(diff.length/4)` token estimate

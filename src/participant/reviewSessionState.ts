@@ -7,6 +7,8 @@ export interface ParsedPrUrl {
 export interface FileDiff {
   path: string;
   diff: string;
+  /** True when the file is removed in this PR (destination is /dev/null). */
+  deleted?: boolean;
 }
 
 export interface ReviewFinding {
@@ -58,14 +60,34 @@ export function parsePrUrl(url: string): ParsedPrUrl | null {
   }
 }
 
+const stripABPrefix = (p: string): string => p.replace(/^[ab]\//, '').trim();
+
 export function parseDiff(raw: string): FileDiff[] {
   const results: FileDiff[] = [];
   const parts = raw.split(/(?=diff --git )/);
   for (const part of parts) {
     if (!part.trim()) continue;
-    const pathMatch = part.match(/\+\+\+ b\/([^\r\n]+)/);
-    if (!pathMatch) continue;
-    results.push({ path: pathMatch[1].trim(), diff: part });
+    // Use the header `--- ` / `+++ ` lines (first occurrence = the file header, before any
+    // hunk content). The `+++ ` line names the new file; on a deletion it is `/dev/null`,
+    // so fall back to the `--- ` (source) path and flag the file as deleted. This keeps
+    // removed files in the review instead of silently dropping them.
+    const plus = part.match(/(?:^|[\r\n])\+\+\+ ([^\r\n]+)/)?.[1]?.trim();
+    const minus = part.match(/(?:^|[\r\n])--- ([^\r\n]+)/)?.[1]?.trim();
+    let path: string | undefined;
+    let deleted = false;
+    if (plus && plus !== '/dev/null') {
+      path = stripABPrefix(plus);
+    } else if (plus === '/dev/null' && minus && minus !== '/dev/null') {
+      path = stripABPrefix(minus);
+      deleted = true;
+    } else {
+      // No usable +++/--- lines (e.g. a pure rename or mode-only change): take the
+      // destination path from the `diff --git a/… b/…` header as a last resort.
+      const header = part.match(/(?:^|[\r\n])diff --git .+ b\/([^\r\n]+)/)?.[1];
+      if (header) path = header.trim();
+    }
+    if (!path) continue;
+    results.push(deleted ? { path, diff: part, deleted: true } : { path, diff: part });
   }
   return results;
 }
