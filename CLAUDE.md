@@ -119,6 +119,7 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
 - Agile API base path: `<baseUrl>/rest/agile/1.0/` — used for sprint resolution (`getSprintByName`)
 - Teams API base path: `<baseUrl>/rest/teams/1.0/` — used for Data Center team resolution (`getTeamByName`); Cloud does not support team lookup by name, use `id` in the template instead
 - Attachment uploads (`uploadAttachment`) build the multipart `Content-Disposition` via `buildFileContentDisposition()`, which sanitizes the (possibly email-derived) filename and adds an RFC 5987 `filename*` so quotes/CR-LF cannot break or inject headers and Unicode names round-trip
+- All requests go through `fetchWithRetry()` (`src/utils/fetchWithRetry.ts`): idempotent calls (GET/HEAD/PUT/DELETE) retry on 429/503 with exponential backoff (honoring `Retry-After`); POST/PATCH are never retried (no duplicate comments/transitions). Error handling is narrowed — `getRemoteLinks` returns `[]` only on 404, and sprint-board iteration skips non-Scrum boards but rethrows auth (401) errors instead of yielding silently empty results
 
 ## Bitbucket API
 
@@ -132,6 +133,7 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
   - Data Center: `<baseUrl>/projects/{KEY}/repos/{slug}/pull-requests/{id}`
   - Cloud: `bitbucket.org/{workspace}/{slug}/pull-requests/{id}`
   - Trailing segments (`/overview`, `/diff`, `/commits`) are stripped by `parsePrUrl`
+- All requests go through `fetchWithRetry()` (`src/utils/fetchWithRetry.ts`): GET requests retry on 429/503 with backoff; POST comment writes are not retried
 
 ## VS Code settings keys
 

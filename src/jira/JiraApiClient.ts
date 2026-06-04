@@ -14,8 +14,16 @@ import type {
   JiraTransition,
   JiraUser,
 } from './IJiraClient';
+import { fetchWithRetry } from '../utils/fetchWithRetry';
 
 type AuthType = 'datacenter' | 'cloud';
+
+// A failed authentication should never be swallowed as "no data" — surface it so the user
+// fixes their credentials instead of seeing silently empty results.
+function isAuthError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes('Authentication failed') || /\b401\b/.test(msg);
+}
 
 async function assertJsonContentType(response: Response): Promise<void> {
   const ct = response.headers.get('content-type') ?? '';
@@ -76,7 +84,7 @@ export class JiraApiClient implements IJiraClient {
   // For Cloud-only fields that require v3 ADF, use requestV3() when needed.
   private async request<T>(path: string, options: RequestInit = {}): Promise<T> {
     const url = `${this.baseUrl}/rest/api/2${path}`;
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       ...options,
       headers: {
         Authorization: this.authHeader,
@@ -98,7 +106,7 @@ export class JiraApiClient implements IJiraClient {
 
   private async agileRequest<T>(path: string): Promise<T> {
     const url = `${this.baseUrl}/rest/agile/1.0${path}`;
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       headers: {
         Authorization: this.authHeader,
         Accept: 'application/json',
@@ -111,7 +119,7 @@ export class JiraApiClient implements IJiraClient {
 
   private async requestV3<T>(path: string, options: RequestInit = {}): Promise<T> {
     const url = `${this.baseUrl}/rest/api/3${path}`;
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       ...options,
       headers: {
         Authorization: this.authHeader,
@@ -133,7 +141,7 @@ export class JiraApiClient implements IJiraClient {
 
   private async teamsRequest<T>(path: string): Promise<T> {
     const url = `${this.baseUrl}/rest/teams/1.0${path}`;
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       headers: {
         Authorization: this.authHeader,
         Accept: 'application/json',
@@ -171,7 +179,7 @@ export class JiraApiClient implements IJiraClient {
       buffer,
       Buffer.from(`\r\n--${boundary}--\r\n`),
     ]);
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       method: 'POST',
       headers: {
         Authorization: this.authHeader,
@@ -244,7 +252,11 @@ export class JiraApiClient implements IJiraClient {
         );
         const match = sprints.values.find((s) => s.name === sprintName);
         if (match) return { id: match.id };
-      } catch { /* skip boards that do not support sprints (e.g. Kanban) */ }
+      } catch (err) {
+        // Kanban (and other non-Scrum) boards reject sprint queries — skip them. But an
+        // auth failure must surface rather than silently yield no sprints.
+        if (isAuthError(err)) throw err;
+      }
     }
     throw new Error(`Sprint '${sprintName}' not found in project ${projectKey}.`);
   }
@@ -294,7 +306,7 @@ export class JiraApiClient implements IJiraClient {
   }
 
   async downloadAttachment(content: string): Promise<Uint8Array> {
-    const response = await fetch(content, {
+    const response = await fetchWithRetry(content, {
       headers: { Authorization: this.authHeader },
     });
     if (!response.ok) {
@@ -347,8 +359,13 @@ export class JiraApiClient implements IJiraClient {
   async getRemoteLinks(issueKey: string): Promise<JiraRemoteLink[]> {
     try {
       return await this.request<JiraRemoteLink[]>(`/issue/${issueKey}/remotelink`);
-    } catch {
-      return [];
+    } catch (err) {
+      // A 404 means the issue has no remote links (or the feature is absent) — return empty.
+      // Auth/server errors must surface rather than masquerade as "no links".
+      if (isAuthError(err)) throw err;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.startsWith('Not found')) return [];
+      throw err;
     }
   }
 
@@ -370,7 +387,11 @@ export class JiraApiClient implements IJiraClient {
             results.push({ id: s.id, name: s.name, state: s.state });
           }
         }
-      } catch { /* skip boards that do not support sprints (e.g. Kanban) */ }
+      } catch (err) {
+        // Kanban (and other non-Scrum) boards reject sprint queries — skip them. But an
+        // auth failure must surface rather than silently yield no sprints.
+        if (isAuthError(err)) throw err;
+      }
     }
     return results;
   }

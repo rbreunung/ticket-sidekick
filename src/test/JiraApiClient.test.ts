@@ -244,6 +244,34 @@ describe('JiraApiClient', () => {
     });
   });
 
+  describe('getRemoteLinks error handling', () => {
+    it('returns [] when the remotelink endpoint 404s (feature absent / none)', async () => {
+      vi.stubGlobal('fetch', makeFetch({}, 404));
+      const client = new JiraApiClient(BASE_CONFIG);
+      await expect(client.getRemoteLinks('PROJ-1')).resolves.toEqual([]);
+    });
+
+    it('rethrows an auth failure instead of masking it as empty links', async () => {
+      vi.stubGlobal('fetch', makeFetch({}, 401));
+      const client = new JiraApiClient(BASE_CONFIG);
+      await expect(client.getRemoteLinks('PROJ-1')).rejects.toThrow(/Authentication failed/);
+    });
+  });
+
+  describe('sprint lookup auth handling', () => {
+    it('rethrows an auth failure during sprint fetch instead of silently skipping the board', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/board?')) {
+          return Promise.resolve({ ok: true, status: 200, headers: { get: () => 'application/json' }, json: () => Promise.resolve({ values: [{ id: 10, type: 'scrum' }] }) });
+        }
+        // sprint fetch returns 401
+        return Promise.resolve({ ok: false, status: 401, statusText: 'Unauthorized', headers: { get: () => 'application/json' }, text: () => Promise.resolve('') });
+      }));
+      const client = new JiraApiClient(BASE_CONFIG);
+      await expect(client.findSprints('PROJ', 'Everest')).rejects.toThrow(/401/);
+    });
+  });
+
   describe('getProjectStatuses', () => {
     const statusPayload = [
       { name: 'Bug', subtask: false, statuses: [{ id: '1', name: 'Open' }, { id: '2', name: 'Closed' }] },
