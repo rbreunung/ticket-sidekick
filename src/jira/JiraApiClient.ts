@@ -15,14 +15,16 @@ import type {
   JiraUser,
 } from './IJiraClient';
 import { fetchWithRetry } from '../utils/fetchWithRetry';
+import { ApiError, JiraApiError } from '../utils/apiError';
+
+export { JiraApiError } from '../utils/apiError';
 
 type AuthType = 'datacenter' | 'cloud';
 
 // A failed authentication should never be swallowed as "no data" — surface it so the user
 // fixes their credentials instead of seeing silently empty results.
 function isAuthError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return msg.includes('Authentication failed') || /\b401\b/.test(msg);
+  return err instanceof ApiError && err.status === 401;
 }
 
 async function assertJsonContentType(response: Response): Promise<void> {
@@ -94,10 +96,10 @@ export class JiraApiClient implements IJiraClient {
       },
     });
     if (!response.ok) {
-      if (response.status === 401) throw new Error(`Authentication failed at ${url}. Check your credentials.`);
-      if (response.status === 404) throw new Error(`Not found: ${url}`);
+      if (response.status === 401) throw new JiraApiError(`Authentication failed at ${url}. Check your credentials.`, 401, url);
+      if (response.status === 404) throw new JiraApiError(`Not found: ${url}`, 404, url);
       const body = await response.text().catch(() => '');
-      throw new Error(`Jira API error ${response.status} ${response.statusText} at ${url}${body ? ` — ${body}` : ''}`);
+      throw new JiraApiError(`Jira API error ${response.status} ${response.statusText} at ${url}${body ? ` — ${body}` : ''}`, response.status, url, body);
     }
     if (response.status === 204) return undefined as T;
     await assertJsonContentType(response);
@@ -112,7 +114,7 @@ export class JiraApiClient implements IJiraClient {
         Accept: 'application/json',
       },
     });
-    if (!response.ok) throw new Error(`Jira Agile API error ${response.status} ${response.statusText} at ${url}`);
+    if (!response.ok) throw new JiraApiError(`Jira Agile API error ${response.status} ${response.statusText} at ${url}`, response.status, url);
     await assertJsonContentType(response);
     return response.json() as Promise<T>;
   }
@@ -129,10 +131,10 @@ export class JiraApiClient implements IJiraClient {
       },
     });
     if (!response.ok) {
-      if (response.status === 401) throw new Error(`Authentication failed at ${url}. Check your credentials.`);
-      if (response.status === 404) throw new Error(`Not found: ${url}`);
+      if (response.status === 401) throw new JiraApiError(`Authentication failed at ${url}. Check your credentials.`, 401, url);
+      if (response.status === 404) throw new JiraApiError(`Not found: ${url}`, 404, url);
       const body = await response.text().catch(() => '');
-      throw new Error(`Jira API error ${response.status} ${response.statusText} at ${url}${body ? ` — ${body}` : ''}`);
+      throw new JiraApiError(`Jira API error ${response.status} ${response.statusText} at ${url}${body ? ` — ${body}` : ''}`, response.status, url, body);
     }
     if (response.status === 204) return undefined as T;
     await assertJsonContentType(response);
@@ -147,7 +149,7 @@ export class JiraApiClient implements IJiraClient {
         Accept: 'application/json',
       },
     });
-    if (!response.ok) throw new Error(`Jira Teams API error ${response.status} ${response.statusText} at ${url}`);
+    if (!response.ok) throw new JiraApiError(`Jira Teams API error ${response.status} ${response.statusText} at ${url}`, response.status, url);
     await assertJsonContentType(response);
     return response.json() as Promise<T>;
   }
@@ -190,7 +192,7 @@ export class JiraApiClient implements IJiraClient {
     });
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`Attachment upload failed (${response.status}): ${text}`);
+      throw new JiraApiError(`Attachment upload failed (${response.status}): ${text}`, response.status, url, text);
     }
   }
 
@@ -362,9 +364,7 @@ export class JiraApiClient implements IJiraClient {
     } catch (err) {
       // A 404 means the issue has no remote links (or the feature is absent) — return empty.
       // Auth/server errors must surface rather than masquerade as "no links".
-      if (isAuthError(err)) throw err;
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.startsWith('Not found')) return [];
+      if (err instanceof ApiError && err.status === 404) return [];
       throw err;
     }
   }

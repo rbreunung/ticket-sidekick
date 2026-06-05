@@ -8,7 +8,7 @@ import type { ReviewFinding } from '../participant/reviewSessionState';
 import { PrReviewService } from '../services/PrReviewService';
 import { MockBitbucketClient } from './mocks/MockBitbucketClient';
 import type { BitbucketPR } from '../bitbucket/IBitbucketClient';
-import { dcDiffToUnified } from '../bitbucket/BitbucketApiClient';
+import { dcDiffToUnified, BitbucketApiError } from '../bitbucket/BitbucketApiClient';
 
 describe('parsePrUrl', () => {
   it('parses a Data Center URL with trailing /overview', () => {
@@ -210,12 +210,12 @@ describe('PrReviewService.gatherFileContents', () => {
 
   it('rethrows an auth failure instead of masking every file as unavailable', async () => {
     const client = new MockBitbucketClient();
-    client.getFileContent = async () => { throw new Error('Authentication failed (401)'); };
+    client.getFileContent = async () => { throw new BitbucketApiError('Authentication failed (401)', 401, 'url'); };
     const service = new PrReviewService(client);
 
     await expect(
       service.gatherFileContents('PROJ', 'myrepo', 'abc123', ['src/a.ts']),
-    ).rejects.toThrow(/401|Authentication/);
+    ).rejects.toBeInstanceOf(BitbucketApiError);
   });
 
   it('fetches all files in parallel', async () => {

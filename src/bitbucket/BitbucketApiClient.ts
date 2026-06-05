@@ -1,5 +1,8 @@
 import type { BitbucketAuthType, BitbucketCommentResult, BitbucketPR, BitbucketUser, IBitbucketClient, InlineAnchor } from './IBitbucketClient';
 import { fetchWithRetry } from '../utils/fetchWithRetry';
+import { BitbucketApiError } from '../utils/apiError';
+
+export { BitbucketApiError } from '../utils/apiError';
 
 // Bitbucket Data Center /pull-requests/{id}/diff response shape (API 1.0)
 interface DcDiffLine { line: string; truncated?: boolean; }
@@ -59,10 +62,10 @@ export class BitbucketApiClient implements IBitbucketClient {
       headers: { Authorization: this.authHeader, Accept: 'application/json' },
     });
     if (!response.ok) {
-      if (response.status === 401) throw new Error(`Authentication failed at ${url}. Check your Bitbucket credentials.`);
-      if (response.status === 404) throw new Error(`Not found: ${url}`);
+      if (response.status === 401) throw new BitbucketApiError(`Authentication failed at ${url}. Check your Bitbucket credentials.`, 401, url);
+      if (response.status === 404) throw new BitbucketApiError(`Not found: ${url}`, 404, url);
       const body = await response.text().catch(() => '');
-      throw new Error(`Bitbucket API error ${response.status} at ${url}${body ? ` — ${body}` : ''}`);
+      throw new BitbucketApiError(`Bitbucket API error ${response.status} at ${url}${body ? ` — ${body}` : ''}`, response.status, url, body);
     }
     const ct = response.headers.get('content-type') ?? '';
     if (ct.includes('text/html')) {
@@ -86,10 +89,10 @@ export class BitbucketApiClient implements IBitbucketClient {
       const body = await response.text().catch(() => '');
       if (response.status === 401) {
         const detail = body ? ` — ${body}` : '';
-        throw new Error(`Authentication failed (401)${detail}. Run "Ticket Sidekick: Configure Bitbucket Cloud Credentials" and enter your Bitbucket username and an App Password (bitbucket.org → Personal settings → App passwords).`);
+        throw new BitbucketApiError(`Authentication failed (401)${detail}. Run "Ticket Sidekick: Configure Bitbucket Cloud Credentials" and enter your Bitbucket username and an App Password (bitbucket.org → Personal settings → App passwords).`, 401, url, body);
       }
-      if (response.status === 404) throw new Error(`Not found: ${url}`);
-      throw new Error(`Bitbucket Cloud API error ${response.status} at ${url}${body ? ` — ${body}` : ''}`);
+      if (response.status === 404) throw new BitbucketApiError(`Not found: ${url}`, 404, url);
+      throw new BitbucketApiError(`Bitbucket Cloud API error ${response.status} at ${url}${body ? ` — ${body}` : ''}`, response.status, url, body);
     }
     return response.json() as Promise<T>;
   }
@@ -102,10 +105,10 @@ export class BitbucketApiClient implements IBitbucketClient {
       body: JSON.stringify(body),
     });
     if (!response.ok) {
-      if (response.status === 401) throw new Error(`Authentication failed at ${url}. Check your Bitbucket credentials.`);
-      if (response.status === 404) throw new Error(`Not found: ${url}`);
+      if (response.status === 401) throw new BitbucketApiError(`Authentication failed at ${url}. Check your Bitbucket credentials.`, 401, url);
+      if (response.status === 404) throw new BitbucketApiError(`Not found: ${url}`, 404, url);
       const bodyText = await response.text().catch(() => '');
-      throw new Error(`Bitbucket API error ${response.status} at ${url}${bodyText ? ` — ${bodyText}` : ''}`);
+      throw new BitbucketApiError(`Bitbucket API error ${response.status} at ${url}${bodyText ? ` — ${bodyText}` : ''}`, response.status, url, bodyText);
     }
     return response.json() as Promise<T>;
   }
@@ -119,9 +122,9 @@ export class BitbucketApiClient implements IBitbucketClient {
     });
     if (!response.ok) {
       const bodyText = await response.text().catch(() => '');
-      if (response.status === 401) throw new Error(`Authentication failed (401)${bodyText ? ` — ${bodyText}` : ''}. Check your Bitbucket credentials.`);
-      if (response.status === 404) throw new Error(`Not found: ${url}`);
-      throw new Error(`Bitbucket Cloud API error ${response.status} at ${url}${bodyText ? ` — ${bodyText}` : ''}`);
+      if (response.status === 401) throw new BitbucketApiError(`Authentication failed (401)${bodyText ? ` — ${bodyText}` : ''}. Check your Bitbucket credentials.`, 401, url, bodyText);
+      if (response.status === 404) throw new BitbucketApiError(`Not found: ${url}`, 404, url);
+      throw new BitbucketApiError(`Bitbucket Cloud API error ${response.status} at ${url}${bodyText ? ` — ${bodyText}` : ''}`, response.status, url, bodyText);
     }
     return response.json() as Promise<T>;
   }
@@ -134,10 +137,10 @@ export class BitbucketApiClient implements IBitbucketClient {
     if (!response.ok) {
       const body = await response.text().catch(() => '');
       if (response.status === 401) {
-        throw new Error(`Authentication failed (401). Run "Ticket Sidekick: Configure Bitbucket Cloud Credentials" and enter your Bitbucket username and an App Password (bitbucket.org → Personal settings → App passwords).`);
+        throw new BitbucketApiError(`Authentication failed (401). Run "Ticket Sidekick: Configure Bitbucket Cloud Credentials" and enter your Bitbucket username and an App Password (bitbucket.org → Personal settings → App passwords).`, 401, url, body);
       }
-      if (response.status === 404) throw new Error(`Not found: ${url}`);
-      throw new Error(`Bitbucket Cloud API error ${response.status} at ${url}${body ? ` — ${body}` : ''}`);
+      if (response.status === 404) throw new BitbucketApiError(`Not found: ${url}`, 404, url);
+      throw new BitbucketApiError(`Bitbucket Cloud API error ${response.status} at ${url}${body ? ` — ${body}` : ''}`, response.status, url, body);
     }
     return response.text();
   }

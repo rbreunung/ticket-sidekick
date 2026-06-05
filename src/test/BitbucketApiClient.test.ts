@@ -1,5 +1,34 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { BitbucketApiClient } from '../bitbucket/BitbucketApiClient';
+import { BitbucketApiClient, BitbucketApiError } from '../bitbucket/BitbucketApiClient';
+
+function errorFetch(status: number): ReturnType<typeof vi.fn> {
+  return vi.fn().mockResolvedValue({
+    ok: false,
+    status,
+    statusText: status === 404 ? 'Not Found' : 'Error',
+    headers: { get: () => 'application/json' },
+    text: () => Promise.resolve(''),
+  });
+}
+
+describe('BitbucketApiError typing (#9)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('throws a BitbucketApiError carrying the numeric status (DC 404)', async () => {
+    vi.stubGlobal('fetch', errorFetch(404));
+    const client = new BitbucketApiClient({ baseUrl: 'https://bb.example.com', authType: 'datacenter', token: 'pat' });
+    const err = await client.getPullRequest('PROJ', 'repo', 1).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BitbucketApiError);
+    expect((err as BitbucketApiError).status).toBe(404);
+  });
+
+  it('throws a BitbucketApiError with status 429 for rate limiting (Cloud)', async () => {
+    vi.stubGlobal('fetch', errorFetch(429));
+    const client = new BitbucketApiClient({ baseUrl: '', authType: 'cloud', token: 'basic' });
+    const err = await client.getPullRequest('ws', 'repo', 1).catch((e: unknown) => e);
+    expect((err as BitbucketApiError).status).toBe(429);
+  });
+});
 
 const DC_CONFIG = {
   baseUrl: 'https://bitbucket.example.com',
