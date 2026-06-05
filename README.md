@@ -345,7 +345,7 @@ You can also trigger the import from the chat directly:
 
 A file picker opens, the preview appears, and you proceed as above.
 
-Inline images are uploaded as Jira attachments and embedded as thumbnails at their position in the description. File attachments are uploaded to the ticket.
+Inline images are uploaded as Jira attachments and embedded as thumbnails at their position in the description. File attachments are uploaded to the ticket. Individual attachments larger than 25 MB are rejected with a clear message rather than failing mid-upload.
 
 ### Add an email as a comment to an existing ticket
 

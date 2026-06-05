@@ -1,5 +1,23 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { JiraApiClient, buildFileContentDisposition, JiraApiError } from '../jira/JiraApiClient';
+import { JiraApiClient, buildFileContentDisposition, JiraApiError, assertAttachmentWithinLimit, MAX_ATTACHMENT_BYTES } from '../jira/JiraApiClient';
+
+describe('assertAttachmentWithinLimit (#4 size guard)', () => {
+  // 'AAAA' base64 decodes to 3 bytes; build a base64 string of a known decoded size.
+  const base64OfBytes = (n: number) => 'A'.repeat(Math.ceil(n / 3) * 4);
+
+  it('throws a clear, file-named error when the attachment exceeds the limit', () => {
+    expect(() => assertAttachmentWithinLimit('huge.bin', base64OfBytes(50), 10))
+      .toThrow(/huge\.bin/);
+  });
+
+  it('does not throw when the attachment is within the limit', () => {
+    expect(() => assertAttachmentWithinLimit('small.txt', base64OfBytes(5), 100)).not.toThrow();
+  });
+
+  it('exposes a sensible default limit (25 MB)', () => {
+    expect(MAX_ATTACHMENT_BYTES).toBe(25 * 1024 * 1024);
+  });
+});
 
 describe('JiraApiError typing (#9)', () => {
   afterEach(() => vi.unstubAllGlobals());

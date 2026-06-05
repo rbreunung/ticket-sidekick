@@ -60,6 +60,30 @@ export function buildFileContentDisposition(filename: string): string {
   return `form-data; name="file"; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
+/** Maximum attachment size we will attempt to upload (the whole file is held in memory). */
+export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+
+/**
+ * Throw a clear, actionable error when a base64 attachment would exceed the size limit —
+ * computed from the base64 length (no allocation) so a huge file fails fast instead of
+ * triggering an opaque buffer-allocation error during the multipart build.
+ */
+export function assertAttachmentWithinLimit(
+  filename: string,
+  contentBytes: string,
+  maxBytes: number = MAX_ATTACHMENT_BYTES,
+): void {
+  const estimatedBytes = Math.floor((contentBytes.length * 3) / 4);
+  if (estimatedBytes > maxBytes) {
+    const mb = (n: number) => (n / (1024 * 1024)).toFixed(1);
+    throw new JiraApiError(
+      `Attachment "${filename}" is ~${mb(estimatedBytes)} MB, exceeding the ${mb(maxBytes)} MB upload limit.`,
+      413,
+      'attachment',
+    );
+  }
+}
+
 export interface JiraApiClientConfig {
   baseUrl: string;
   authType: AuthType;
@@ -173,6 +197,7 @@ export class JiraApiClient implements IJiraClient {
   }
 
   async uploadAttachment(issueKey: string, filename: string, contentType: string, contentBytes: string): Promise<void> {
+    assertAttachmentWithinLimit(filename, contentBytes);
     const url = `${this.baseUrl}/rest/api/2/issue/${issueKey}/attachments`;
     const buffer = Buffer.from(contentBytes, 'base64');
     const boundary = `----boundary${Date.now()}`;
