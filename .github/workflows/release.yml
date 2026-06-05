@@ -112,6 +112,14 @@ jobs:
             echo "::error::Version ${VERSION} already exists. Choose a different bump or version."
             exit 1
           fi
+          # Anchor --notes-start-tag to the last stable release so preview tags don't truncate
+          # the accumulated changelog. Applied to both channels for consistent behaviour.
+          # If no stable release exists yet the variable is empty and the flag is omitted.
+          LAST_STABLE="$(gh release list --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)"
+          NOTES_START_FLAG=""
+          if [ -n "$LAST_STABLE" ]; then
+            NOTES_START_FLAG="--notes-start-tag ${LAST_STABLE}"
+          fi
           # Marketplace first (the irreversible step). Only once it succeeds do we record the
           # bump in the repo and create the GitHub release + bare tag at that commit.
           npx vsce publish ${VSCE_PRERELEASE} --packagePath "${VSIX}" --pat "${VSCE_PAT}"
@@ -121,4 +129,5 @@ jobs:
             --target "$(git rev-parse HEAD)" \
             --title "${TITLE}" \
             --generate-notes \
+            ${NOTES_START_FLAG} \
             "${VSIX}"
