@@ -1,8 +1,9 @@
 name: Release
 
 # Manually-triggered release / preview. Pick the version bump (or type an explicit version)
-# in the Run-workflow form — the workflow bumps package.json itself. For a release it commits
-# the bump back to the branch; a preview bump is ephemeral (build-only, not committed).
+# in the Run-workflow form — the workflow bumps package.json itself. Both channels commit the
+# bump back to the branch so the published version line is strictly increasing and a version
+# is never reused (the Marketplace forbids re-publishing a version). Preview adds --pre-release.
 on:
   workflow_dispatch:
     inputs:
@@ -86,8 +87,7 @@ jobs:
           fi
           echo "vsix=$VSIX" >> "$GITHUB_OUTPUT"
 
-      - name: Publish release
-        if: ${{ inputs.channel == 'release' }}
+      - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
@@ -95,38 +95,30 @@ jobs:
           set -euo pipefail
           VERSION="${{ steps.ver.outputs.version }}"
           VSIX="${{ steps.pkg.outputs.vsix }}"
-          # Guard: never release a version that already shipped — pick a different bump/version.
+          # Both channels advance and commit the version so the published version line is
+          # strictly increasing — a version (and therefore a Marketplace publish) is never
+          # reused. The --pre-release / --prerelease flags distinguish a preview, not the
+          # version number.
+          VSCE_PRERELEASE=""
+          GH_PRERELEASE=""
+          TITLE="${VERSION}"
+          if [ "${{ inputs.channel }}" = "preview" ]; then
+            VSCE_PRERELEASE="--pre-release"
+            GH_PRERELEASE="--prerelease"
+            TITLE="${VERSION} (preview)"
+          fi
+          # Guard: a version is published exactly once. If its tag/release already exists, stop.
           if git rev-parse "refs/tags/${VERSION}" >/dev/null 2>&1 || gh release view "${VERSION}" >/dev/null 2>&1; then
-            echo "::error::Version ${VERSION} is already released. Choose a different bump or version."
+            echo "::error::Version ${VERSION} already exists. Choose a different bump or version."
             exit 1
           fi
           # Marketplace first (the irreversible step). Only once it succeeds do we record the
           # bump in the repo and create the GitHub release + bare tag at that commit.
-          npx vsce publish --packagePath "${VSIX}" --pat "${VSCE_PAT}"
+          npx vsce publish ${VSCE_PRERELEASE} --packagePath "${VSIX}" --pat "${VSCE_PAT}"
           git commit -am "${VERSION}"
           git push origin "HEAD:${{ github.ref_name }}"
-          gh release create "${VERSION}" \
+          gh release create "${VERSION}" ${GH_PRERELEASE} \
             --target "$(git rev-parse HEAD)" \
-            --title "${VERSION}" \
-            --generate-notes \
-            "${VSIX}"
-
-      - name: Publish preview (pre-release)
-        if: ${{ inputs.channel == 'preview' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: |
-          set -euo pipefail
-          VERSION="${{ steps.ver.outputs.version }}"
-          VSIX="${{ steps.pkg.outputs.vsix }}"
-          # Preview is ephemeral: the bump is built but NOT committed to the repo. Suffix the
-          # tag so a preview never collides with the eventual release tag.
-          TAG="${VERSION}-preview.${{ github.run_number }}"
-          npx vsce publish --pre-release --packagePath "${VSIX}" --pat "${VSCE_PAT}"
-          gh release create "${TAG}" \
-            --prerelease \
-            --target "${GITHUB_SHA}" \
-            --title "${VERSION} (preview)" \
+            --title "${TITLE}" \
             --generate-notes \
             "${VSIX}"

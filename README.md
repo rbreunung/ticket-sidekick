@@ -878,18 +878,16 @@ Releases are cut by a manually-triggered GitHub Actions workflow (`.github/workf
 - **bump** — `patch` / `minor` / `major`. The workflow runs `npm version <bump>` to compute the new version.
 - **version** — optional explicit version (e.g. `0.4.0`) that **overrides** the bump when set.
 
-What each channel does with that version:
+Both channels do the same thing with that version — they just differ by the pre-release flag:
 
-- **release** — publishes to the VS Code Marketplace, **commits the version bump back to the branch** (commit titled with the bare version, matching the existing convention), and creates the GitHub Release + bare tag `X.Y.Z` (auto-generated notes, `.vsix` attached). Fails fast if that version was already released — pick a different bump/version.
-- **preview** — builds the bumped version as a **pre-release** but does **not** commit the bump (it's a throwaway), publishing a Marketplace pre-release and a GitHub pre-release tagged `X.Y.Z-preview.<run>` for sideloading/dogfooding.
+- The workflow **commits the version bump back to the branch** (commit titled with the bare version, matching the existing convention), creates the GitHub Release + bare tag `X.Y.Z` (auto-generated notes, `.vsix` attached), and publishes to the VS Code Marketplace.
+- **release** publishes a normal release; **preview** publishes with `--pre-release` (and marks the GitHub Release as a pre-release) for sideloading/dogfooding.
 
-The workflow runs `npm ci → compile → test` first and will not publish a red build.
+Because every run advances and commits the version, the published version line is **strictly increasing** — a version is never reused, so the Marketplace's "no duplicate version" rule can never bite and you never have to bump by hand. (The Marketplace versions must be plain `x.y.z`; the `--pre-release` _flag_ — not a `-preview` suffix — is what marks a pre-release.) The workflow runs `npm ci → compile → test` first and will not publish a red build.
 
-> **Branch protection:** the `release` channel pushes the bump commit to the target branch (usually `main`) using the built-in `GITHUB_TOKEN`. If `main` is protected against direct pushes, either allow the Actions bot to bypass it or run the workflow from a release branch.
+> **Branch protection:** every run pushes the bump commit to the target branch (usually `main`) using the built-in `GITHUB_TOKEN`. If `main` is protected against direct pushes, either allow the Actions bot to bypass it or run the workflow from a release branch.
 
 **Prerequisite:** add a repository secret **`VSCE_PAT`** — an Azure DevOps Personal Access Token for the `RobertBreunung` publisher with **Marketplace → Manage** scope (Settings → Secrets and variables → Actions). Without it the Marketplace step fails; the `.vsix` is still attached to the GitHub Release.
-
-> **Note:** the Marketplace rejects publishing the same version twice. If you publish a `preview` at a version and then want a full `release`, bump the version again — the GitHub preview tag is suffixed and won't collide, but the Marketplace version must be unique.
 
 ## Getting a free Jira Cloud test instance
 
