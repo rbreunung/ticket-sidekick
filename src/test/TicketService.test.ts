@@ -1,7 +1,40 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { TicketService, assembleDescription, extractTextFromAdf, resolveFieldIdFuzzy, formatIssueFields, renderFieldValue } from '../services/TicketService';
+import { TicketService, assembleDescription, extractTextFromAdf, resolveFieldIdFuzzy, formatIssueFields, renderFieldValue, isMultiLine } from '../services/TicketService';
 import type { JiraAttachment, JiraFieldMeta, JiraIssue } from '../jira/IJiraClient';
 import { MockJiraClient, FIXTURE_ATTACHMENT_BYTES } from './mocks/MockJiraClient';
+
+describe('isMultiLine (#10 schema-driven section vs table)', () => {
+  const meta = (id: string, custom?: string): JiraFieldMeta => ({
+    id, name: id, navigable: true, schema: { type: 'string', ...(custom ? { custom } : {}) },
+  });
+  const longUrl = 'https://example.com/' + 'a'.repeat(140);
+
+  it('puts a textarea custom field in its own section regardless of length', () => {
+    expect(isMultiLine('short note', meta('customfield_1', 'com.atlassian...:textarea'))).toBe(true);
+  });
+
+  it('keeps a single-line text field inline even when the value is long', () => {
+    expect(isMultiLine(longUrl, meta('customfield_2', 'com.atlassian...:textfield'))).toBe(false);
+  });
+
+  it('keeps a URL custom field inline even when long', () => {
+    expect(isMultiLine(longUrl, meta('customfield_3', 'com.atlassian...:url'))).toBe(false);
+  });
+
+  it('treats the description and environment system fields as sections', () => {
+    expect(isMultiLine('x', meta('description'))).toBe(true);
+    expect(isMultiLine('x', meta('environment'))).toBe(true);
+  });
+
+  it('renders ADF/rich-content objects as a section', () => {
+    expect(isMultiLine({ type: 'doc', content: [] }, meta('customfield_4'))).toBe(true);
+  });
+
+  it('falls back to a length heuristic for unknown plain-text fields', () => {
+    expect(isMultiLine('a'.repeat(200), meta('customfield_5'))).toBe(true);
+    expect(isMultiLine('short', meta('customfield_5'))).toBe(false);
+  });
+});
 
 describe('TicketService', () => {
   let client: MockJiraClient;

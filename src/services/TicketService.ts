@@ -97,11 +97,21 @@ export function renderFieldValue(value: unknown, meta: JiraFieldMeta): string {
   return String(value);
 }
 
-function isMultiLine(value: unknown, meta: JiraFieldMeta): boolean {
+export function isMultiLine(value: unknown, meta: JiraFieldMeta): boolean {
+  // Rich-content object (ADF) always gets its own section.
   if (typeof value === 'object' && value !== null && !Array.isArray(value) && 'type' in value) return true;
-  if (typeof value === 'string' && value.length > 120) return true;
-  // Attachment list handled separately; all other cases single-line
-  return false;
+  if (typeof value !== 'string') return false;
+
+  // Prefer the field schema over the value length: a textarea / description / environment
+  // field is multi-line even when short, and a single-line text or URL field stays inline
+  // even when long (e.g. a long URL shouldn't be torn out of the table).
+  const custom = meta.schema.custom ?? '';
+  if (custom.includes('textarea')) return true;
+  if (meta.id === 'description' || meta.id === 'environment') return true;
+  if (custom.includes('textfield') || custom.includes('url')) return false;
+
+  // Fallback heuristic for fields without a known schema hint.
+  return value.length > 120;
 }
 
 export function formatIssueLinkLine(link: JiraIssueLink, baseUrl?: string): string {

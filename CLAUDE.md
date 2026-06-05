@@ -41,7 +41,7 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/jira/JiraApiClient.ts` | Real HTTP; builds auth header from authType |
 | `src/bitbucket/IBitbucketClient.ts` | All Bitbucket types + IBitbucketClient interface |
 | `src/bitbucket/BitbucketApiClient.ts` | Real HTTP; Data Center (Bearer PAT) + Cloud (Basic base64(username:apppassword)) |
-| `src/services/TicketService.ts` | Jira business logic; depends on IJiraClient |
+| `src/services/TicketService.ts` | Jira business logic; depends on IJiraClient. `isMultiLine()` decides table-row vs own-section by field schema (textarea / description / environment → section; single-line text & URL stay inline even when long), falling back to a length heuristic |
 | `src/services/PrReviewService.ts` | PR review logic: diff parsing, file gathering, two-pass LLM prompt building, result formatting |
 | `src/services/ConfigService.ts` | VS Code settings + SecretStorage for both Jira and Bitbucket |
 | `src/services/configValidation.ts` | Pure (vscode-free) config validators; `validateBaseUrl` rejects malformed/non-http(s) base URLs. Surfaced by `@jira check` and `@bitbucket check` (DC) before attempting a connection |
