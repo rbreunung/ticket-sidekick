@@ -1,3 +1,5 @@
+import { extractJsonObject } from '../utils/extractJsonObject';
+
 export interface ParsedPrUrl {
   project: string;
   repo: string;
@@ -14,14 +16,26 @@ export interface FileDiff {
 export interface ReviewFinding {
   id: number;
   file: string;
+  /** Verified new-file line number of the primary anchor (code-derived, never the model's claim). */
   line?: number;
   lineType?: 'ADDED' | 'CONTEXT' | 'REMOVED';
   fileType?: 'TO' | 'FROM';
+  /** Where the anchored line came from: new (added) / existing (unchanged context) / removed. */
+  provenance?: 'new' | 'existing' | 'removed';
+  /** Additional verified line numbers for multi-line findings that build up across the diff. */
+  relatedLines?: number[];
   severity: 'critical' | 'warning' | 'suggestion';
   title: string;
   description: string;
   recommendation: string;
   codeExample?: string;
+  /** Model self-rated confidence 0–1; low-confidence findings fold, never delete. */
+  confidence?: number;
+  /** Numbered diff hunk around the anchor, stored so follow-up answers see the real code. */
+  diffHunk?: string;
+  /** Transient model-output fields, consumed by resolveFindingAnchors and then dropped. */
+  anchorCode?: string;
+  relatedCode?: string[];
 }
 
 export interface ReviewSession {
@@ -217,6 +231,192 @@ export function annotateWithLineTypes(
   });
 }
 
+/**
+ * Render-only line numbering. Prefixes every ADDED (`+`) and CONTEXT (` `) line
+ * with its new-file line number (`L47 +const x`). REMOVED (`-`) lines, hunk
+ * headers, and meta lines are emitted unchanged — removed lines don't exist in
+ * the new file. The model copies the number off the gutter instead of counting.
+ *
+ * This is applied ONLY when rendering the prompt; `FileDiff.diff` stays raw, so
+ * `parseDiff` / `resolveLineType` / `locateAnchor` keep their own line-walk on
+ * unmodified text (prepending a gutter would break their `startsWith` checks).
+ */
+export function numberDiffLines(diff: string): string {
+  let toLine = 0;
+  let active = false;
+  return diff.split('\n').map((raw) => {
+    const hunk = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (hunk) { toLine = parseInt(hunk[1], 10); active = true; return raw; }
+    if (!active) return raw;
+    if (raw.startsWith('diff ') || raw.startsWith('index ') || raw.startsWith('--- ') || raw.startsWith('+++ ') || raw.startsWith('\\')) return raw;
+    if (raw.startsWith('+')) { const out = `L${toLine} ${raw}`; toLine++; return out; }
+    if (raw.startsWith(' ')) { const out = `L${toLine} ${raw}`; toLine++; return out; }
+    return raw; // REMOVED and anything else: unchanged
+  }).join('\n');
+}
+
+type LocatedAnchor =
+  | { line: number; lineType: 'ADDED' | 'CONTEXT'; fileType: 'TO' }
+  | { line: number; lineType: 'REMOVED'; fileType: 'FROM' };
+
+/**
+ * Locate a finding's quoted source line (`anchorCode`) in the diff and derive its
+ * TRUE line number from the match — the model's own number is never trusted as a
+ * source of truth. Matching is whitespace-trimmed so a line quoted from a Pass-2
+ * full file still matches the diff line.
+ *
+ * - exactly one match → that line.
+ * - multiple matches (e.g. `return null;` repeated) → the one nearest `hintLine`
+ *   (the model's advisory number, used only as a tiebreaker); with no hint, the
+ *   first non-removed match (prefer new code) else the first.
+ * - no match → null (caller drops the finding: unverifiable).
+ */
+export function locateAnchor(diff: string, anchorCode: string, hintLine?: number): LocatedAnchor | null {
+  const needle = anchorCode.trim();
+  if (!needle) return null;
+  let fromLine = 0, toLine = 0, active = false;
+  const matches: LocatedAnchor[] = [];
+  for (const raw of diff.split('\n')) {
+    const hunk = raw.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (hunk) { fromLine = parseInt(hunk[1], 10); toLine = parseInt(hunk[2], 10); active = true; continue; }
+    if (!active) continue;
+    if (raw.startsWith('diff ') || raw.startsWith('index ') || raw.startsWith('--- ') || raw.startsWith('+++ ') || raw.startsWith('\\')) continue;
+    if (raw.startsWith('+')) {
+      if (raw.slice(1).trim() === needle) matches.push({ line: toLine, lineType: 'ADDED', fileType: 'TO' });
+      toLine++;
+    } else if (raw.startsWith('-')) {
+      if (raw.slice(1).trim() === needle) matches.push({ line: fromLine, lineType: 'REMOVED', fileType: 'FROM' });
+      fromLine++;
+    } else if (raw.startsWith(' ')) {
+      if (raw.slice(1).trim() === needle) matches.push({ line: toLine, lineType: 'CONTEXT', fileType: 'TO' });
+      fromLine++; toLine++;
+    }
+  }
+  if (matches.length === 0) return null;
+  if (matches.length === 1) return matches[0];
+  if (hintLine === undefined) return matches.find((m) => m.lineType !== 'REMOVED') ?? matches[0];
+  return matches.reduce((best, m) => (Math.abs(m.line - hintLine) < Math.abs(best.line - hintLine) ? m : best));
+}
+
+const provenanceOf = (lineType: 'ADDED' | 'CONTEXT' | 'REMOVED'): 'new' | 'existing' | 'removed' =>
+  lineType === 'ADDED' ? 'new' : lineType === 'REMOVED' ? 'removed' : 'existing';
+
+/**
+ * Return the numbered diff hunk whose new-file range covers `line`, with the file
+ * header, so a follow-up answer can reason about the real surrounding code. Returns
+ * undefined when no hunk covers the line.
+ */
+export function extractHunkAround(diff: string, line: number): string | undefined {
+  const lines = diff.split('\n');
+  const headerEnd = lines.findIndex((l) => /^@@ /.test(l));
+  if (headerEnd === -1) return undefined;
+  const header = lines.slice(0, headerEnd);
+  const hunkStarts: number[] = [];
+  lines.forEach((l, i) => { if (/^@@ /.test(l)) hunkStarts.push(i); });
+  for (let h = 0; h < hunkStarts.length; h++) {
+    const start = hunkStarts[h];
+    const end = h + 1 < hunkStarts.length ? hunkStarts[h + 1] : lines.length;
+    const m = lines[start].match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+    if (!m) continue;
+    const startLine = parseInt(m[1], 10);
+    const span = m[2] !== undefined ? parseInt(m[2], 10) : 1;
+    if (line >= startLine && line < startLine + span) {
+      return numberDiffLines([...header, ...lines.slice(start, end)].join('\n'));
+    }
+  }
+  return undefined;
+}
+
+const SEVERITY_RANK: Record<ReviewFinding['severity'], number> = { critical: 3, warning: 2, suggestion: 1 };
+
+/**
+ * Collapse duplicate findings that surfaced in more than one chunk (e.g. a shared
+ * helper, or the continuation/critic passes re-emitting the same issue). Keyed by
+ * (file + verified line + normalized title); the stronger of two duplicates wins
+ * (higher severity, then higher confidence). Distinct titles on the same line are
+ * kept separate — they're genuinely different findings.
+ */
+export function dedupeFindings(
+  findings: Array<Omit<ReviewFinding, 'id'>>,
+): Array<Omit<ReviewFinding, 'id'>> {
+  const byKey = new Map<string, Omit<ReviewFinding, 'id'>>();
+  const order: string[] = [];
+  const stronger = (a: Omit<ReviewFinding, 'id'>, b: Omit<ReviewFinding, 'id'>) => {
+    if (SEVERITY_RANK[a.severity] !== SEVERITY_RANK[b.severity]) return SEVERITY_RANK[a.severity] > SEVERITY_RANK[b.severity];
+    return (a.confidence ?? 1) >= (b.confidence ?? 1);
+  };
+  for (const f of findings) {
+    const key = `${f.file}::${f.line ?? ''}::${f.title.trim().toLowerCase()}`;
+    const existing = byKey.get(key);
+    if (!existing) { byKey.set(key, f); order.push(key); continue; }
+    byKey.set(key, stronger(f, existing) ? f : existing);
+  }
+  return order.map((k) => byKey.get(k)!);
+}
+
+/**
+ * Quote-and-locate self-correction (the trust boundary for line numbers).
+ * For each finding the model returned with an `anchorCode`, locate it in the
+ * matching file diff and set the VERIFIED `line` / `lineType` / `fileType` /
+ * `provenance` from the match. Findings whose `anchorCode` can't be located are
+ * dropped (strict — the only deletion in the pipeline). Findings with no
+ * `anchorCode` are file-level observations: kept, but with no line/provenance.
+ */
+export function resolveFindingAnchors(
+  findings: Array<Omit<ReviewFinding, 'id'>>,
+  diffs: FileDiff[],
+): Array<Omit<ReviewFinding, 'id'>> {
+  const out: Array<Omit<ReviewFinding, 'id'>> = [];
+  for (const f of findings) {
+    const { anchorCode, relatedCode, ...rest } = f;
+    if (typeof anchorCode !== 'string' || anchorCode.trim() === '') {
+      out.push(rest); // file-level finding: no specific line claimed
+      continue;
+    }
+    const fileDiff = diffs.find((d) => d.path === rest.file);
+    if (!fileDiff) continue; // claims a line in a file we have no diff for → unverifiable → drop
+    const located = locateAnchor(fileDiff.diff, anchorCode, typeof rest.line === 'number' ? rest.line : undefined);
+    if (!located) continue; // strict: unlocatable → drop
+    const relatedLines: number[] = [];
+    if (Array.isArray(relatedCode)) {
+      for (const rc of relatedCode) {
+        if (typeof rc !== 'string') continue;
+        const r = locateAnchor(fileDiff.diff, rc, located.line);
+        if (r && r.line !== located.line && !relatedLines.includes(r.line)) relatedLines.push(r.line);
+      }
+    }
+    const diffHunk = extractHunkAround(fileDiff.diff, located.line);
+    out.push({
+      ...rest,
+      line: located.line,
+      lineType: located.lineType,
+      fileType: located.fileType,
+      provenance: provenanceOf(located.lineType),
+      ...(relatedLines.length ? { relatedLines } : {}),
+      ...(diffHunk ? { diffHunk } : {}),
+    });
+  }
+  return out;
+}
+
+/**
+ * Parse a critic verdict (`{"keep":[1,3]}`) into the set of 1-based finding indices
+ * to keep. Fail-open: if the response can't be parsed, keep everything — a critic
+ * parse error must never silently wipe a whole review.
+ */
+export function parseCriticKeep(raw: string, count: number): Set<number> {
+  const all = new Set<number>(Array.from({ length: count }, (_, i) => i + 1));
+  const json = extractJsonObject(raw);
+  if (!json) return all;
+  try {
+    const obj = JSON.parse(json) as { keep?: unknown };
+    if (Array.isArray(obj.keep)) {
+      return new Set(obj.keep.filter((n): n is number => Number.isInteger(n)));
+    }
+  } catch { /* fall through to fail-open */ }
+  return all;
+}
+
 export function langFromPath(filePath: string): string {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
   const map: Record<string, string> = {
@@ -272,6 +472,43 @@ function splitFileDiff(fd: FileDiff, maxFileTokens: number): FileDiff[] {
   }
   flush();
   return pieces.length > 0 ? pieces : [fd];
+}
+
+/** Estimated prompt tokens for a chunk's diffs (same heuristic as chunk packing). */
+export function estimateChunkTokens(diffs: FileDiff[]): number {
+  return CHUNK_FIXED_OVERHEAD + diffs.reduce((sum, d) => sum + estimateFileTokens(d.diff), 0);
+}
+
+/**
+ * High safety ceiling on context files pulled into a single Pass-2 prompt. Far
+ * above the old flat 5 — a large PR can pull far more across its many chunks (the
+ * cross-chunk cache means each file is fetched at most once), but no single prompt
+ * balloons past this.
+ */
+export const MAX_CONTEXT_FILES_PER_BATCH = 25;
+
+/**
+ * Choose which fetched context files to include in a Pass-2 prompt: smallest-first
+ * by estimated tokens until the remaining content budget is exhausted, capped by
+ * MAX_CONTEXT_FILES_PER_BATCH. Smallest-first means one huge file can't starve the
+ * rest. Returns the selected subset as a path→content map.
+ */
+export function selectFilesWithinBudget(
+  entries: Array<{ path: string; content: string }>,
+  contentBudgetTokens: number,
+): Map<string, string> {
+  const sized = entries
+    .map((e) => ({ ...e, tokens: Math.ceil(e.content.length / 4) }))
+    .sort((a, b) => a.tokens - b.tokens);
+  const selected = new Map<string, string>();
+  let used = 0;
+  for (const e of sized) {
+    if (selected.size >= MAX_CONTEXT_FILES_PER_BATCH) break;
+    if (selected.size > 0 && used + e.tokens > contentBudgetTokens) continue; // skip; a smaller one may still fit
+    selected.set(e.path, e.content);
+    used += e.tokens;
+  }
+  return selected;
 }
 
 export function buildAdaptiveChunks(diffs: FileDiff[], tokenBudget: number): FileDiff[][] {

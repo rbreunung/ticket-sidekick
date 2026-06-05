@@ -54,6 +54,8 @@ export class ConfigService {
       contextBudgetRatio: config.get<number>('bitbucket.contextBudgetRatio') ?? 0.7,
       reviewMode: config.get<'standard' | 'quick'>('bitbucket.reviewMode') ?? 'standard',
       reviewExcludePatterns: config.get<string[]>('bitbucket.reviewExcludePatterns') ?? [],
+      reviewContextLines: config.get<number>('bitbucket.reviewContextLines') ?? 12,
+      confidenceThreshold: config.get<number>('bitbucket.confidenceThreshold') ?? 0.7,
     };
   }
 

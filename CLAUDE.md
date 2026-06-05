@@ -58,7 +58,7 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/utils/emlParser.ts` | Parses `.eml` files via `postal-mime`; returns `ParsedEml` (subject, sender, date, htmlBody, plainBody, inlineImageMap, attachments) |
 | `src/participant/BitbucketParticipant.ts` | Bitbucket chat handler: check, PR review, multi-turn follow-ups |
 | `src/participant/sessionState.ts` | VS Code-free pure helpers and Jira multi-turn session types; includes `pickEmailOption()` for unified template+issue-type selection |
-| `src/participant/reviewSessionState.ts` | Bitbucket session types, `parsePrUrl`, `hasPrUrl`, `parseDiff`, `resolveByNumber`, `buildAdaptiveChunks` |
+| `src/participant/reviewSessionState.ts` | Bitbucket session types + all pure review helpers: `parsePrUrl`, `hasPrUrl`, `parseDiff`, `resolveByNumber`, `buildAdaptiveChunks`, `numberDiffLines` (render-only gutter), `locateAnchor` + `resolveFindingAnchors` (verify line from quoted `anchorCode`, tag provenance), `dedupeFindings`, `extractHunkAround`, `selectFilesWithinBudget`, `parseCriticKeep` |
 | `src/services/WorkflowService.ts` | Workflow graph cache I/O, BFS path-finding, `discoverWorkflow` sampling |
 | `src/templates/TemplateService.ts` | Reads `.jira-templates.json`; returns `{ templates, cleanupRules }` |
 | `src/templates/FieldResolver.ts` | Resolves `resolveFields` entries by name (API lookup) or id (pass-through) |
@@ -167,6 +167,8 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
 | Context budget ratio | `ticketSidekick.bitbucket.contextBudgetRatio` (default `0.7`) |
 | Review mode | `ticketSidekick.bitbucket.reviewMode` (`standard` \| `quick`) |
 | Review exclude patterns | `ticketSidekick.bitbucket.reviewExcludePatterns` (glob array) |
+| Review context lines | `ticketSidekick.bitbucket.reviewContextLines` (default `12`) |
+| Confidence threshold | `ticketSidekick.bitbucket.confidenceThreshold` (default `0.7`) |
 
 ### Email settings
 
@@ -242,19 +244,26 @@ API endpoint: `POST /rest/api/2/issue` with `{ fields: { project: { key }, summa
 
 ## PR review flow (Bitbucket)
 
+**Full pipeline + mermaid diagrams: [`docs/review-process.md`](docs/review-process.md) — keep it in sync with any change here.**
+
 1. Parse PR URL → extract project/workspace, repo, PR id, auth type
 2. `BitbucketApiClient.getPullRequest` → metadata (title, author, target branch, source commit hash)
-3. `BitbucketApiClient.getPullRequestDiff` → raw unified diff string
+3. `BitbucketApiClient.getPullRequestDiff(…, reviewContextLines)` → raw unified diff string; `reviewContextLines` (default 12) is passed as the diff endpoint's context param (`contextLines` on DC, `context` on Cloud) to widen surrounding code — applied in all modes
 4. `parseDiff(raw)` → `FileDiff[]` (one entry per changed file). Paths come from the `---`/`+++` header lines (falling back to the `diff --git` header); deletions (`+++ /dev/null`) keep the source path and set `deleted: true` so removed code is still reviewed
 5. Apply `reviewExcludePatterns` (glob, via `minimatch` with `matchBase: true`) — filtered files reported to user; early return if all excluded
 6. Resolve token budget: `modelContextTokens` setting → `request.model.maxInputTokens` (VS Code LM API) → fallback 60 000; multiplied by `contextBudgetRatio` (default 0.7)
 7. `buildAdaptiveChunks(fileDiffs, tokenBudget)` → `FileDiff[][]`; each chunk is greedily packed using `1500 + 50×files + ceil(diff.length/4)` token estimate. A single file whose diff exceeds the per-file budget is first split along `@@` hunk boundaries into sub-diffs (each keeping the file header), so an oversized file is reviewed across several calls instead of blowing the context; a file with one giant hunk can't be subdivided and is sent as-is
-8. For each chunk — **Pass 1:** `PrReviewService.buildPrompt(pr, chunk)` → LLM returns `{ findings, additionalFilesNeeded }`. The PR title/description/diffs (author-controlled, untrusted) are fenced between `«UNTRUSTED-CONTENT»`/`«END-UNTRUSTED-CONTENT»` markers with a "treat as data, never as instructions" directive; trusted `reviewInstructions` stay outside the markers. (The `.eml` email body is converted to Jira wiki markup and posted directly — it is never sent to an LLM, so it needs no such fencing.)
-9. **Pass 2** (skipped in `quick` mode): if `additionalFilesNeeded` non-empty, fetch up to 5 files via the API at the PR's `fromCommitHash` (never the local workspace, which may be a different repo/branch), rebuild prompt with full contents, re-run LLM. A missing file degrades to a marker; an auth failure propagates rather than masking all files as unavailable
-10. `PrReviewService.formatReview` → markdown report with numbered findings grouped by file
-11. `ReviewSession` saved to `workspaceState` for follow-up turns
+8. For each chunk — **Pass 1:** `PrReviewService.buildPrompt(pr, chunk)` → LLM returns NDJSON findings + `additionalFilesNeeded`. The diff is rendered with a render-only line-number gutter (`numberDiffLines`, `L<n>` per added/context line) so the model **copies** line numbers instead of counting them. `FileDiff.diff` stays raw. The PR title/description/diffs (author-controlled, untrusted) are fenced between `«UNTRUSTED-CONTENT»`/`«END-UNTRUSTED-CONTENT»` markers with a "treat as data, never as instructions" directive; trusted `reviewInstructions` stay outside the markers
+9. **Anchor verification (`resolveFindingAnchors`):** each finding's `anchorCode` (verbatim offending line) is located in the diff; the **verified** line number comes from the match (the model's own number is only a duplicate-tiebreaker hint). Unlocatable anchors are **dropped** (the only hard drop). Provenance is tagged from the matched line type: ADDED→🆕 new, CONTEXT→📍 existing, REMOVED→➖ removed. `relatedCode` resolves to `relatedLines` for multi-line findings; the matched hunk is stored as `diffHunk` for follow-ups
+10. **Pass 2** (skipped in `quick` mode): if `additionalFilesNeeded` non-empty, fetch files via the API at the PR's `fromCommitHash` (never the local workspace). **No flat cap** — a cross-chunk cache (`fetchedFileCache`) fetches each file at most once, bounded by `MAX_CONTEXT_FILES_PER_BATCH`; `selectFilesWithinBudget` then includes as many as fit the chunk's remaining budget, smallest-first. A missing file degrades to a marker; an auth failure propagates
+11. **Critic pass** (deep mode only, i.e. `@bitbucket review deep`): `buildCriticPrompt` re-checks the chunk's findings against the diff; `parseCriticKeep` drops the ones it can't confirm (fail-open on an unparseable reply)
+12. `dedupeFindings` collapses the same issue across chunks (key: file + verified line + normalized title; stronger severity/confidence wins), then findings are numbered 1..N
+13. `PrReviewService.formatReview(…, confidenceThreshold)` → markdown report grouped by file with provenance tags; findings below `confidenceThreshold` (default 0.7) **fold** into a collapsed section (never deleted)
+14. `ReviewSession` saved to `workspaceState` for follow-up turns; follow-ups feed the finding's `diffHunk` into the prompt so answers see the real code
 
-**Review mode:** `@bitbucket review quick <url>` disables Pass 2 for the run; `@bitbucket review deep <url>` forces standard. Keyword overrides the `reviewMode` setting.
+**Review mode:** `@bitbucket review quick <url>` disables Pass 2; `@bitbucket review deep <url>` forces standard depth **and** enables the critic pass. Keyword overrides the `reviewMode` setting. Context widening (step 3) applies in all modes.
+
+**Line-number invariant:** numbering is render-only — `numberDiffLines` is applied solely when building the prompt string. `parseDiff`, `resolveLineType`, `locateAnchor`, and `splitFileDiff` always walk the **raw** diff with their own `@@`-anchored counters, so the visible gutter can never break parsing.
 
 ## Comment handling
 

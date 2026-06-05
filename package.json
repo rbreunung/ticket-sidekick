@@ -194,6 +194,20 @@
             },
             "default": [],
             "description": "Glob patterns for files to skip during PR review (e.g. [\"**/migrations/**\", \"**/*.snap\", \"**/*.generated.ts\"]). Excluded files are not sent to the LLM; the review output notes how many were skipped."
+          },
+          "ticketSidekick.bitbucket.reviewContextLines": {
+            "type": "number",
+            "default": 12,
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Number of unchanged context lines requested around each diff hunk (default 12). Wider context usually includes the enclosing function so the reviewer reasons about real surrounding code instead of guessing — at the cost of a larger prompt. Lower it to save tokens on large PRs."
+          },
+          "ticketSidekick.bitbucket.confidenceThreshold": {
+            "type": "number",
+            "default": 0.7,
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Findings whose model-rated confidence falls below this value (0–1, default 0.7) are moved into a collapsed 'low-confidence' section rather than shown as primary findings. They are never discarded."
           }
         }
       },
