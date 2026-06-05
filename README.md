@@ -73,7 +73,7 @@ Open GitHub Copilot Chat and use `@jira`:
 | `@jira move to Cancelled with resolution "Not a Bug"` | Transitions and sets a resolution in one step |
 | `@jira find open bugs assigned to me` | Runs JQL search |
 | `@jira check required fields on PROJ-123` | Validates required fields |
-| `@jira check` | Tests the connection and shows active configuration |
+| `@jira check` | Validates the base URL, tests the connection, and shows active configuration |
 | `@jira create from email` | Create a Jira ticket from an imported `.eml` file |
 
 ### Reading tickets
