@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('vscode', () => ({}));
 
-import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql } from '../participant/sessionState';
+import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType } from '../participant/sessionState';
 import { isPointerPrompt } from '../participant/jira/llmHelpers';
 import type { TransitionBatchTicket } from '../participant/sessionState';
 import type { JiraComment } from '../jira/IJiraClient';
@@ -761,6 +761,24 @@ describe('pickEmailOption', () => {
 
   it('returns null for both lists empty', () => {
     expect(pickEmailOption(1, [], [])).toBeNull();
+  });
+});
+
+describe('selectDefaultIssueType', () => {
+  it('prefers Story when present', () => {
+    expect(selectDefaultIssueType(['Bug', 'Story', 'Task'])).toBe('Story');
+  });
+
+  it('falls back to Task when no Story', () => {
+    expect(selectDefaultIssueType(['Bug', 'Task'])).toBe('Task');
+  });
+
+  it('falls back to first type when neither Story nor Task', () => {
+    expect(selectDefaultIssueType(['Epic', 'Bug'])).toBe('Epic');
+  });
+
+  it('returns literal "Story" when list is empty', () => {
+    expect(selectDefaultIssueType([])).toBe('Story');
   });
 });
 
