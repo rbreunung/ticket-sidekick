@@ -80,7 +80,7 @@ Node.js is managed by **Volta** — use `~/.volta/bin/npm` if `npm` isn't on you
 
 **`npm test` must be green before every commit.** Run `npm run compile` to catch TypeScript errors first.
 
-CI (`.github/workflows/ci.yml`) runs `npm ci` → `npm run compile` → `npm test` on every push and pull request against `main`, across a Node 20 + 24 matrix. The `test:e2e` suite is not run in CI (it needs a real VS Code instance).
+CI (`.github/workflows/ci.yml`) runs `npm ci` → `npm run compile` → `npm test` on every push and pull request against `main` (Node 24). The `test:e2e` suite is not run in CI (it needs a real VS Code instance).
 
 Releases are manual: `.github/workflows/release.yml` is a `workflow_dispatch` with inputs `channel` (`release` | `preview`), `bump` (`patch`/`minor`/`major`), and an optional explicit `version` (overrides `bump`). It computes the version via `npm version --no-git-tag-version`, gates on compile+test, builds the `.vsix`, publishes to the Marketplace (`vsce publish`, needs the `VSCE_PAT` secret), and creates the GitHub Release + bare tag `X.Y.Z`. **Both** channels commit the bump back to the branch and push it, so the published version line is strictly increasing and a version is never reused (avoids the Marketplace "no duplicate version" rule with no manual bumping); `preview` only adds `--pre-release` + marks the GitHub release as a pre-release. See the README "Releasing" section.
 
