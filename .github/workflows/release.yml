@@ -1,0 +1,92 @@
+name: Release
+
+# Manually-triggered release / preview. The version comes from package.json — bump and
+# commit it first, then run this workflow against the commit you want to ship.
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Release channel'
+        type: choice
+        default: release
+        options:
+          - release
+          - preview
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run compile
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Read version from package.json
+        id: ver
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Package VSIX
+        id: pkg
+        run: |
+          VSIX="ticket-sidekick-${{ steps.ver.outputs.version }}.vsix"
+          npx vsce package --out "$VSIX"
+          echo "vsix=$VSIX" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        if: ${{ inputs.channel == 'release' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          VSIX="${{ steps.pkg.outputs.vsix }}"
+          # Guard: never release a version that already shipped — bump package.json first.
+          if git rev-parse "refs/tags/${VERSION}" >/dev/null 2>&1 || gh release view "${VERSION}" >/dev/null 2>&1; then
+            echo "::error::Version ${VERSION} is already released. Bump the version in package.json first."
+            exit 1
+          fi
+          # Marketplace first (the irreversible step), then record the GitHub release + tag.
+          npx vsce publish --packagePath "${VSIX}" --pat "${VSCE_PAT}"
+          gh release create "${VERSION}" \
+            --target "${GITHUB_SHA}" \
+            --title "${VERSION}" \
+            --generate-notes \
+            "${VSIX}"
+
+      - name: Publish preview (pre-release)
+        if: ${{ inputs.channel == 'preview' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          VSIX="${{ steps.pkg.outputs.vsix }}"
+          # Suffix the tag so a preview never collides with the eventual release tag.
+          TAG="${VERSION}-preview.${{ github.run_number }}"
+          npx vsce publish --pre-release --packagePath "${VSIX}" --pat "${VSCE_PAT}"
+          gh release create "${TAG}" \
+            --prerelease \
+            --target "${GITHUB_SHA}" \
+            --title "${VERSION} (preview)" \
+            --generate-notes \
+            "${VSIX}"
