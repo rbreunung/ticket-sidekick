@@ -870,6 +870,21 @@ Patterns use glob syntax. Both `*.snap` and `**/*.snap` work (bare filename patt
 
 ---
 
+## Releasing
+
+Releases are cut by a manually-triggered GitHub Actions workflow (`.github/workflows/release.yml`). The version comes from `package.json`, so the flow is:
+
+1. Bump `"version"` in `package.json` and commit it (the existing convention titles the commit with the bare version, e.g. `0.4.0`).
+2. Go to the repository's **Actions → Release → Run workflow**, pick the branch/commit, and choose a channel:
+   - **release** — publishes to the VS Code Marketplace, then creates the GitHub Release and the bare tag `X.Y.Z` (with auto-generated notes and the `.vsix` attached). Fails fast if that version was already released — bump first.
+   - **preview** — publishes a Marketplace **pre-release** and a GitHub **pre-release** tagged `X.Y.Z-preview.<run>`, so you can sideload or dogfood before a full release.
+
+The workflow runs `npm ci → compile → test` first and will not publish a red build.
+
+**Prerequisite:** add a repository secret **`VSCE_PAT`** — an Azure DevOps Personal Access Token for the `RobertBreunung` publisher with **Marketplace → Manage** scope (Settings → Secrets and variables → Actions). Without it the Marketplace step fails; the `.vsix` is still attached to the GitHub Release.
+
+> **Note:** the Marketplace rejects publishing the same version twice. If you publish a `preview` at a version and then want a full `release`, bump the version again — the GitHub preview tag is suffixed and won't collide, but the Marketplace version must be unique.
+
 ## Getting a free Jira Cloud test instance
 
 1. Create a free account at [atlassian.com](https://www.atlassian.com)
