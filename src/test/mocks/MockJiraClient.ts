@@ -46,7 +46,7 @@ export class MockJiraClient implements IJiraClient {
     this.addCommentCalls.push({ issueKey, body });
   }
 
-  async searchJql(_jql: string, _maxResults?: number, _startAt?: number): Promise<JiraSearchResult> {
+  async searchJql(_jql: string, _maxResults?: number, _startAt?: number, _extraFields?: string[]): Promise<JiraSearchResult> {
     return loadFixture<JiraSearchResult>('search-results.json');
   }
 

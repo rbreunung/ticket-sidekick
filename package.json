@@ -107,6 +107,14 @@
             "default": [],
             "description": "Field IDs always shown in @jira show output even when their value is null. Use @jira show fields on PROJ-123 to discover field IDs (e.g. [\"customfield_10020\", \"customfield_10500\"])."
           },
+          "ticketSidekick.jira.searchFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": [],
+            "description": "Field IDs to add as extra columns in @jira search results (e.g. [\"priority\", \"customfield_10020\"]). Use @jira show fields on PROJ-123 to discover field IDs."
+          },
           "ticketSidekick.jira.hiddenDisplayFields": {
             "type": "array",
             "items": {

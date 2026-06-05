@@ -23,6 +23,7 @@ import {
 import { isConfirmation, isCancellation } from './sessionState';
 import { generateContent } from './jira/llmHelpers';
 import { tokenStatus } from '../utils/diagUtils';
+import { validateBaseUrl } from '../services/configValidation';
 
 function getLastAssistantText(chatContext: vscode.ChatContext): string {
   for (let i = chatContext.history.length - 1; i >= 0; i--) {
@@ -136,6 +137,15 @@ async function handleCheck(
       'Run **Ticket Sidekick: Set Bitbucket Personal Access Token** (Data Center) or **Ticket Sidekick: Configure Bitbucket Cloud Credentials** from the Command Palette.',
     );
     return;
+  }
+  // For Data Center, a malformed baseUrl is a common misconfiguration — surface it clearly
+  // before attempting a connection. (Cloud ignores baseUrl and talks to api.bitbucket.org.)
+  if (config.authType === 'datacenter') {
+    const urlError = validateBaseUrl(config.baseUrl);
+    if (urlError) {
+      stream.markdown(`**Bitbucket configuration problem**\n\n${urlError}`);
+      return;
+    }
   }
   const effectiveUrl = config.authType === 'cloud' ? 'https://api.bitbucket.org' : config.baseUrl!;
   const apiVersion = config.authType === 'cloud' ? 'v2.0' : 'v1.0';

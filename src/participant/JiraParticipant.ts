@@ -14,6 +14,7 @@ import type { Operation, ParsedIntent } from './jira/llmHelpers';
 import { parseIntent, extractFixVersionFromPrompt, generateContent, isLmRefusal, synthesizeComments, generateDescriptionAndCommentsSummary, isPointerPrompt, extractLastAssistantText } from './jira/llmHelpers';
 import { streamFieldUpdatePreview, continueSetField, handleSetField, handleSpellCheck } from './jira/fieldHandler';
 import { getLastAssistantText, resolveTicketFromBranch, resolveProjectKey, parseLastTicketFromContext } from './jira/ticketContext';
+import { validateBaseUrl } from '../services/configValidation';
 import { gatherFileContent, buildContentContext, streamContentPreview, handleContentSession } from './jira/contentHandler';
 import { streamIssueTypeSelection, continueAfterIssueType, streamNextSection, streamTemplateSelection, finishTicketCreation, handleCreateTicket } from './jira/createHandler';
 import { serializeCommentsForLLM, handleLoadTicket } from './jira/loadHandler';
@@ -68,6 +69,11 @@ export function createJiraParticipant(
     const lastResponse = getLastAssistantText(chatContext);
 
     if (/^check(\s+(config|connection|setup))?$/i.test(request.prompt.trim())) {
+      const urlError = validateBaseUrl(config.baseUrl);
+      if (urlError) {
+        stream.markdown(`**Jira configuration problem**\n\n${urlError}`);
+        return;
+      }
       try {
         const user = await jiraClient.getCurrentUser();
         stream.markdown(
@@ -785,7 +791,8 @@ export function createJiraParticipant(
             const searchSession: SearchResultSession = { ticketKeys: raw.issues.map(i => i.key), jql: resolvedJql };
             await ws.update('jira.session.searchResult', searchSession);
           }
-          result = jqlLabel + await ticketService.searchTickets(resolvedJql, config.baseUrl);
+          const searchFieldMeta = config.searchFields.length > 0 ? await ticketService.getFieldMeta() : [];
+          result = jqlLabel + await ticketService.searchTickets(resolvedJql, config.baseUrl, config.searchFields, searchFieldMeta);
           break;
         }
         case 'transition': {

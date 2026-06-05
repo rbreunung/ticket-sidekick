@@ -1,5 +1,48 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { JiraApiClient, buildFileContentDisposition } from '../jira/JiraApiClient';
+import { JiraApiClient, buildFileContentDisposition, JiraApiError, assertAttachmentWithinLimit, MAX_ATTACHMENT_BYTES } from '../jira/JiraApiClient';
+
+describe('assertAttachmentWithinLimit (#4 size guard)', () => {
+  // 'AAAA' base64 decodes to 3 bytes; build a base64 string of a known decoded size.
+  const base64OfBytes = (n: number) => 'A'.repeat(Math.ceil(n / 3) * 4);
+
+  it('throws a clear, file-named error when the attachment exceeds the limit', () => {
+    expect(() => assertAttachmentWithinLimit('huge.bin', base64OfBytes(50), 10))
+      .toThrow(/huge\.bin/);
+  });
+
+  it('does not throw when the attachment is within the limit', () => {
+    expect(() => assertAttachmentWithinLimit('small.txt', base64OfBytes(5), 100)).not.toThrow();
+  });
+
+  it('exposes a sensible default limit (25 MB)', () => {
+    expect(MAX_ATTACHMENT_BYTES).toBe(25 * 1024 * 1024);
+  });
+});
+
+describe('JiraApiError typing (#9)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('throws a JiraApiError carrying the numeric status for a 403', async () => {
+    vi.stubGlobal('fetch', makeFetch({}, 403));
+    const client = new JiraApiClient(BASE_CONFIG);
+    await expect(client.getIssue('PROJ-1')).rejects.toBeInstanceOf(JiraApiError);
+    await client.getIssue('PROJ-1').catch((err: unknown) => {
+      expect(err).toBeInstanceOf(JiraApiError);
+      expect((err as JiraApiError).status).toBe(403);
+    });
+  });
+
+  it('sets status 401 on auth failures and 404 on not-found', async () => {
+    vi.stubGlobal('fetch', makeFetch({}, 401));
+    const client = new JiraApiClient(BASE_CONFIG);
+    const authErr = await client.getIssue('PROJ-1').catch((e: unknown) => e);
+    expect((authErr as JiraApiError).status).toBe(401);
+
+    vi.stubGlobal('fetch', makeFetch({}, 404));
+    const nfErr = await client.getIssue('PROJ-9').catch((e: unknown) => e);
+    expect((nfErr as JiraApiError).status).toBe(404);
+  });
+});
 
 describe('buildFileContentDisposition (attachment filename safety)', () => {
   it('keeps a plain ASCII filename and adds an RFC 5987 filename*', () => {

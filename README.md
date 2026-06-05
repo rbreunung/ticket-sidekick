@@ -73,7 +73,7 @@ Open GitHub Copilot Chat and use `@jira`:
 | `@jira move to Cancelled with resolution "Not a Bug"` | Transitions and sets a resolution in one step |
 | `@jira find open bugs assigned to me` | Runs JQL search |
 | `@jira check required fields on PROJ-123` | Validates required fields |
-| `@jira check` | Tests the connection and shows active configuration |
+| `@jira check` | Validates the base URL, tests the connection, and shows active configuration |
 | `@jira create from email` | Create a Jira ticket from an imported `.eml` file |
 
 ### Reading tickets
@@ -345,7 +345,7 @@ You can also trigger the import from the chat directly:
 
 A file picker opens, the preview appears, and you proceed as above.
 
-Inline images are uploaded as Jira attachments and embedded as thumbnails at their position in the description. File attachments are uploaded to the ticket.
+Inline images are uploaded as Jira attachments and embedded as thumbnails at their position in the description. File attachments are uploaded to the ticket. Individual attachments larger than 25 MB are rejected with a clear message rather than failing mid-upload.
 
 ### Add an email as a comment to an existing ticket
 
@@ -604,6 +604,7 @@ You can choose **No template** to create a plain ticket without any template app
 | Sprint board ID | `ticketSidekick.jira.sprintBoardId` | _(auto)_ |
 | Required fields | `ticketSidekick.jira.requiredFields` | `[]` |
 | Always-show fields | `ticketSidekick.jira.additionalDisplayFields` | `[]` |
+| Search result columns | `ticketSidekick.jira.searchFields` | `[]` |
 | Hidden fields | `ticketSidekick.jira.hiddenDisplayFields` | _(see below)_ |
 | Connection info banner | `ticketSidekick.jira.showConnectionInfo` | `false` |
 | Delete .eml after import | `ticketSidekick.email.deleteEmlAfterImport` | `false` |
@@ -642,6 +643,16 @@ By default `@jira show` omits fields that are null. Add field IDs to `additional
 ```json
 "ticketSidekick.jira.additionalDisplayFields": ["customfield_10020", "customfield_10500"]
 ```
+
+**Optional: search result columns**
+
+By default `@jira find …` shows Key, Summary, Status, and Assignee. Add field IDs to `searchFields` to append them as extra columns in the results table:
+
+```json
+"ticketSidekick.jira.searchFields": ["priority", "customfield_10020"]
+```
+
+Run `@jira show fields on PROJ-123` to discover field IDs. Values render the same way as in `@jira show`.
 
 **Optional: hidden fields**
 

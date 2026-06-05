@@ -97,11 +97,21 @@ export function renderFieldValue(value: unknown, meta: JiraFieldMeta): string {
   return String(value);
 }
 
-function isMultiLine(value: unknown, meta: JiraFieldMeta): boolean {
+export function isMultiLine(value: unknown, meta: JiraFieldMeta): boolean {
+  // Rich-content object (ADF) always gets its own section.
   if (typeof value === 'object' && value !== null && !Array.isArray(value) && 'type' in value) return true;
-  if (typeof value === 'string' && value.length > 120) return true;
-  // Attachment list handled separately; all other cases single-line
-  return false;
+  if (typeof value !== 'string') return false;
+
+  // Prefer the field schema over the value length: a textarea / description / environment
+  // field is multi-line even when short, and a single-line text or URL field stays inline
+  // even when long (e.g. a long URL shouldn't be torn out of the table).
+  const custom = meta.schema.custom ?? '';
+  if (custom.includes('textarea')) return true;
+  if (meta.id === 'description' || meta.id === 'environment') return true;
+  if (custom.includes('textfield') || custom.includes('url')) return false;
+
+  // Fallback heuristic for fields without a known schema hint.
+  return value.length > 120;
 }
 
 export function formatIssueLinkLine(link: JiraIssueLink, baseUrl?: string): string {
@@ -303,20 +313,41 @@ export class TicketService {
     return `Could not resolve user "${value}" — no accountId or name returned by Jira.`;
   }
 
-  async searchTickets(jql: string, baseUrl?: string): Promise<string> {
-    const result = await this.client.searchJql(jql);
+  async searchTickets(
+    jql: string,
+    baseUrl?: string,
+    extraFields: string[] = [],
+    fieldMeta: JiraFieldMeta[] = [],
+  ): Promise<string> {
+    const result = await this.client.searchJql(jql, undefined, undefined, extraFields);
     if (result.issues.length === 0) return 'No tickets found.';
+
+    // Build the configured extra columns (#3): header name from field meta, value via the
+    // shared renderFieldValue; cells escape pipes so a value can't break the table.
+    const metaById = new Map(fieldMeta.map((m) => [m.id, m]));
+    const extraCols = extraFields.map((id) => ({ id, meta: metaById.get(id), name: metaById.get(id)?.name ?? id }));
+    const extraHeader = extraCols.map((c) => ` ${c.name} |`).join('');
+    const extraSep = extraCols.map(() => ' --- |').join('');
+    const renderExtra = (issue: JiraIssue) =>
+      extraCols.map((col) => {
+        const value = (issue.fields as Record<string, unknown>)[col.id];
+        const rendered = col.meta
+          ? renderFieldValue(value, col.meta)
+          : value === null || value === undefined ? '_Not set_' : String(value);
+        return ` ${rendered.replace(/\|/g, '\\|')} |`;
+      }).join('');
+
     const rows = result.issues.map((issue) => {
       const assignee = issue.fields.assignee ? issue.fields.assignee.displayName : 'Unassigned';
       const key = baseUrl ? `[${issue.key}](${baseUrl}/browse/${issue.key})` : issue.key;
-      return `| ${key} | ${issue.fields.summary} | ${issue.fields.status.name} | ${assignee} |`;
+      return `| ${key} | ${issue.fields.summary} | ${issue.fields.status.name} | ${assignee} |${renderExtra(issue)}`;
     });
     return [
       `Found ${result.total ?? result.issues.length} ticket(s):`,
       '',
       ...(baseUrl ? [`[View in Jira](${baseUrl}/issues/?jql=${encodeURIComponent(jql)})`, ''] : []),
-      '| Key | Summary | Status | Assignee |',
-      '| --- | --- | --- | --- |',
+      `| Key | Summary | Status | Assignee |${extraHeader}`,
+      `| --- | --- | --- | --- |${extraSep}`,
       ...rows,
     ].join('\n');
   }

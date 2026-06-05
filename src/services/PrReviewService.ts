@@ -1,4 +1,5 @@
 import type { BitbucketCommentResult, BitbucketPR, IBitbucketClient, InlineAnchor } from '../bitbucket/IBitbucketClient';
+import { ApiError } from '../utils/apiError';
 import type { FileDiff, ReviewFinding } from '../participant/reviewSessionState';
 import { langFromPath } from '../participant/reviewSessionState';
 
@@ -38,8 +39,7 @@ Last line lists additional files needed (always include this line, even if empty
 `;
 
 function isAuthError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return msg.includes('Authentication') || /\b401\b/.test(msg);
+  return err instanceof ApiError && err.status === 401;
 }
 
 export class PrReviewService {

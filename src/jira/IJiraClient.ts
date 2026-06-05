@@ -124,7 +124,7 @@ export interface IJiraClient {
   getIssue(issueKey: string): Promise<JiraIssue>;
   updateIssue(issueKey: string, fields: Record<string, unknown>): Promise<void>;
   addComment(issueKey: string, body: string): Promise<void>;
-  searchJql(jql: string, maxResults?: number, startAt?: number): Promise<JiraSearchResult>;
+  searchJql(jql: string, maxResults?: number, startAt?: number, extraFields?: string[]): Promise<JiraSearchResult>;
   findUser(query: string): Promise<JiraUser[]>;
   getCurrentUser(): Promise<JiraUser>;
   getTransitions(issueKey: string): Promise<JiraTransition[]>;

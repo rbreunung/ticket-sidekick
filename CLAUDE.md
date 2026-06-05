@@ -41,9 +41,10 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/jira/JiraApiClient.ts` | Real HTTP; builds auth header from authType |
 | `src/bitbucket/IBitbucketClient.ts` | All Bitbucket types + IBitbucketClient interface |
 | `src/bitbucket/BitbucketApiClient.ts` | Real HTTP; Data Center (Bearer PAT) + Cloud (Basic base64(username:apppassword)) |
-| `src/services/TicketService.ts` | Jira business logic; depends on IJiraClient |
+| `src/services/TicketService.ts` | Jira business logic; depends on IJiraClient. `isMultiLine()` decides table-row vs own-section by field schema (textarea / description / environment → section; single-line text & URL stay inline even when long), falling back to a length heuristic |
 | `src/services/PrReviewService.ts` | PR review logic: diff parsing, file gathering, two-pass LLM prompt building, result formatting |
 | `src/services/ConfigService.ts` | VS Code settings + SecretStorage for both Jira and Bitbucket |
+| `src/services/configValidation.ts` | Pure (vscode-free) config validators; `validateBaseUrl` rejects malformed/non-http(s) base URLs. Surfaced by `@jira check` and `@bitbucket check` (DC) before attempting a connection |
 | `src/participant/JiraParticipant.ts` | Jira chat handler + intent routing; delegates to `src/participant/jira/` handlers |
 | `src/participant/jira/llmHelpers.ts` | `Operation` type, `ParsedIntent`, `INTENT_PROMPT`, all LLM utility functions |
 | `src/participant/jira/ticketContext.ts` | Ticket key + project key resolution helpers |
@@ -118,8 +119,9 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
 - Reading: `extractTextFromAdf()` in `TicketService` handles both plain strings (v2 read) and ADF objects (legacy rich content), so existing tickets with ADF descriptions display correctly.
 - Agile API base path: `<baseUrl>/rest/agile/1.0/` — used for sprint resolution (`getSprintByName`)
 - Teams API base path: `<baseUrl>/rest/teams/1.0/` — used for Data Center team resolution (`getTeamByName`); Cloud does not support team lookup by name, use `id` in the template instead
-- Attachment uploads (`uploadAttachment`) build the multipart `Content-Disposition` via `buildFileContentDisposition()`, which sanitizes the (possibly email-derived) filename and adds an RFC 5987 `filename*` so quotes/CR-LF cannot break or inject headers and Unicode names round-trip
+- Attachment uploads (`uploadAttachment`) build the multipart `Content-Disposition` via `buildFileContentDisposition()`, which sanitizes the (possibly email-derived) filename and adds an RFC 5987 `filename*` so quotes/CR-LF cannot break or inject headers and Unicode names round-trip. `assertAttachmentWithinLimit()` rejects files over `MAX_ATTACHMENT_BYTES` (25 MB) up front, before the in-memory multipart buffer is built
 - All requests go through `fetchWithRetry()` (`src/utils/fetchWithRetry.ts`): idempotent calls (GET/HEAD/PUT/DELETE) retry on 429/503 with exponential backoff (honoring `Retry-After`); POST/PATCH are never retried (no duplicate comments/transitions). Error handling is narrowed — `getRemoteLinks` returns `[]` only on 404, and sprint-board iteration skips non-Scrum boards but rethrows auth (401) errors instead of yielding silently empty results
+- Failed requests throw a typed `JiraApiError` (`src/utils/apiError.ts`, extends `ApiError`) carrying numeric `status`, `url`, and optional `body`. Classify with `err.status === 401`/`err.isAuth` etc. — never by sniffing message strings
 
 ## Bitbucket API
 
@@ -134,6 +136,7 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
   - Cloud: `bitbucket.org/{workspace}/{slug}/pull-requests/{id}`
   - Trailing segments (`/overview`, `/diff`, `/commits`) are stripped by `parsePrUrl`
 - All requests go through `fetchWithRetry()` (`src/utils/fetchWithRetry.ts`): GET requests retry on 429/503 with backoff; POST comment writes are not retried
+- Failed requests throw a typed `BitbucketApiError` (`src/utils/apiError.ts`) carrying numeric `status` — classify by `status`, not message text
 
 ## VS Code settings keys
 
@@ -147,6 +150,7 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
 | Required fields | `ticketSidekick.jira.requiredFields` |
 | Show connection info | `ticketSidekick.jira.showConnectionInfo` |
 | Additional display fields | `ticketSidekick.jira.additionalDisplayFields` |
+| Search result columns | `ticketSidekick.jira.searchFields` |
 | Hidden display fields | `ticketSidekick.jira.hiddenDisplayFields` |
 
 ### Bitbucket settings

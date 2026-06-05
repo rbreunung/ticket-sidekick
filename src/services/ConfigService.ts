@@ -10,6 +10,7 @@ export interface JiraConfig {
   requiredFields: string[];
   additionalDisplayFields: string[];
   hiddenDisplayFields: string[];
+  searchFields: string[];
   token: string | undefined;
   sprintBoardId?: number;
   myTeamJql?: string;
@@ -30,6 +31,7 @@ export class ConfigService {
       requiredFields: config.get<string[]>('jira.requiredFields') ?? [],
       additionalDisplayFields: config.get<string[]>('jira.additionalDisplayFields') ?? [],
       hiddenDisplayFields: config.get<string[]>('jira.hiddenDisplayFields') ?? [],
+      searchFields: config.get<string[]>('jira.searchFields') ?? [],
       token: await this.context.secrets.get(ConfigService.TOKEN_KEY),
       sprintBoardId: config.get<number>('jira.sprintBoardId') || undefined,
       myTeamJql: config.get<string>('jira.myTeamJql') || undefined,

@@ -15,14 +15,16 @@ import type {
   JiraUser,
 } from './IJiraClient';
 import { fetchWithRetry } from '../utils/fetchWithRetry';
+import { ApiError, JiraApiError } from '../utils/apiError';
+
+export { JiraApiError } from '../utils/apiError';
 
 type AuthType = 'datacenter' | 'cloud';
 
 // A failed authentication should never be swallowed as "no data" — surface it so the user
 // fixes their credentials instead of seeing silently empty results.
 function isAuthError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return msg.includes('Authentication failed') || /\b401\b/.test(msg);
+  return err instanceof ApiError && err.status === 401;
 }
 
 async function assertJsonContentType(response: Response): Promise<void> {
@@ -56,6 +58,30 @@ export function buildFileContentDisposition(filename: string): string {
   const encoded = encodeURIComponent(filename)
     .replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
   return `form-data; name="file"; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+}
+
+/** Maximum attachment size we will attempt to upload (the whole file is held in memory). */
+export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+
+/**
+ * Throw a clear, actionable error when a base64 attachment would exceed the size limit —
+ * computed from the base64 length (no allocation) so a huge file fails fast instead of
+ * triggering an opaque buffer-allocation error during the multipart build.
+ */
+export function assertAttachmentWithinLimit(
+  filename: string,
+  contentBytes: string,
+  maxBytes: number = MAX_ATTACHMENT_BYTES,
+): void {
+  const estimatedBytes = Math.floor((contentBytes.length * 3) / 4);
+  if (estimatedBytes > maxBytes) {
+    const mb = (n: number) => (n / (1024 * 1024)).toFixed(1);
+    throw new JiraApiError(
+      `Attachment "${filename}" is ~${mb(estimatedBytes)} MB, exceeding the ${mb(maxBytes)} MB upload limit.`,
+      413,
+      'attachment',
+    );
+  }
 }
 
 export interface JiraApiClientConfig {
@@ -94,10 +120,10 @@ export class JiraApiClient implements IJiraClient {
       },
     });
     if (!response.ok) {
-      if (response.status === 401) throw new Error(`Authentication failed at ${url}. Check your credentials.`);
-      if (response.status === 404) throw new Error(`Not found: ${url}`);
+      if (response.status === 401) throw new JiraApiError(`Authentication failed at ${url}. Check your credentials.`, 401, url);
+      if (response.status === 404) throw new JiraApiError(`Not found: ${url}`, 404, url);
       const body = await response.text().catch(() => '');
-      throw new Error(`Jira API error ${response.status} ${response.statusText} at ${url}${body ? ` — ${body}` : ''}`);
+      throw new JiraApiError(`Jira API error ${response.status} ${response.statusText} at ${url}${body ? ` — ${body}` : ''}`, response.status, url, body);
     }
     if (response.status === 204) return undefined as T;
     await assertJsonContentType(response);
@@ -112,7 +138,7 @@ export class JiraApiClient implements IJiraClient {
         Accept: 'application/json',
       },
     });
-    if (!response.ok) throw new Error(`Jira Agile API error ${response.status} ${response.statusText} at ${url}`);
+    if (!response.ok) throw new JiraApiError(`Jira Agile API error ${response.status} ${response.statusText} at ${url}`, response.status, url);
     await assertJsonContentType(response);
     return response.json() as Promise<T>;
   }
@@ -129,10 +155,10 @@ export class JiraApiClient implements IJiraClient {
       },
     });
     if (!response.ok) {
-      if (response.status === 401) throw new Error(`Authentication failed at ${url}. Check your credentials.`);
-      if (response.status === 404) throw new Error(`Not found: ${url}`);
+      if (response.status === 401) throw new JiraApiError(`Authentication failed at ${url}. Check your credentials.`, 401, url);
+      if (response.status === 404) throw new JiraApiError(`Not found: ${url}`, 404, url);
       const body = await response.text().catch(() => '');
-      throw new Error(`Jira API error ${response.status} ${response.statusText} at ${url}${body ? ` — ${body}` : ''}`);
+      throw new JiraApiError(`Jira API error ${response.status} ${response.statusText} at ${url}${body ? ` — ${body}` : ''}`, response.status, url, body);
     }
     if (response.status === 204) return undefined as T;
     await assertJsonContentType(response);
@@ -147,7 +173,7 @@ export class JiraApiClient implements IJiraClient {
         Accept: 'application/json',
       },
     });
-    if (!response.ok) throw new Error(`Jira Teams API error ${response.status} ${response.statusText} at ${url}`);
+    if (!response.ok) throw new JiraApiError(`Jira Teams API error ${response.status} ${response.statusText} at ${url}`, response.status, url);
     await assertJsonContentType(response);
     return response.json() as Promise<T>;
   }
@@ -171,6 +197,7 @@ export class JiraApiClient implements IJiraClient {
   }
 
   async uploadAttachment(issueKey: string, filename: string, contentType: string, contentBytes: string): Promise<void> {
+    assertAttachmentWithinLimit(filename, contentBytes);
     const url = `${this.baseUrl}/rest/api/2/issue/${issueKey}/attachments`;
     const buffer = Buffer.from(contentBytes, 'base64');
     const boundary = `----boundary${Date.now()}`;
@@ -190,13 +217,14 @@ export class JiraApiClient implements IJiraClient {
     });
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`Attachment upload failed (${response.status}): ${text}`);
+      throw new JiraApiError(`Attachment upload failed (${response.status}): ${text}`, response.status, url, text);
     }
   }
 
-  async searchJql(jql: string, maxResults = 20, startAt?: number): Promise<JiraSearchResult> {
-    const fields = ['summary', 'status', 'assignee', 'priority', 'labels', 'fixVersions', 'reporter', 'subtasks', 'parent'];
-    let qs = `jql=${encodeURIComponent(jql)}&maxResults=${maxResults}&${fields.map(f => `fields=${f}`).join('&')}`;
+  async searchJql(jql: string, maxResults = 20, startAt?: number, extraFields: string[] = []): Promise<JiraSearchResult> {
+    const baseFields = ['summary', 'status', 'assignee', 'priority', 'labels', 'fixVersions', 'reporter', 'subtasks', 'parent'];
+    const fields = [...baseFields, ...extraFields.filter(f => !baseFields.includes(f))];
+    let qs = `jql=${encodeURIComponent(jql)}&maxResults=${maxResults}&${fields.map(f => `fields=${encodeURIComponent(f)}`).join('&')}`;
     if (startAt !== undefined) qs += `&startAt=${startAt}`;
     // Cloud removed /rest/api/2/search (410); must use /rest/api/3/search/jql
     if (this.authType === 'cloud') {
@@ -362,9 +390,7 @@ export class JiraApiClient implements IJiraClient {
     } catch (err) {
       // A 404 means the issue has no remote links (or the feature is absent) — return empty.
       // Auth/server errors must surface rather than masquerade as "no links".
-      if (isAuthError(err)) throw err;
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.startsWith('Not found')) return [];
+      if (err instanceof ApiError && err.status === 404) return [];
       throw err;
     }
   }
