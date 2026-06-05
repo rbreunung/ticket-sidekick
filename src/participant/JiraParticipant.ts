@@ -791,7 +791,8 @@ export function createJiraParticipant(
             const searchSession: SearchResultSession = { ticketKeys: raw.issues.map(i => i.key), jql: resolvedJql };
             await ws.update('jira.session.searchResult', searchSession);
           }
-          result = jqlLabel + await ticketService.searchTickets(resolvedJql, config.baseUrl);
+          const searchFieldMeta = config.searchFields.length > 0 ? await ticketService.getFieldMeta() : [];
+          result = jqlLabel + await ticketService.searchTickets(resolvedJql, config.baseUrl, config.searchFields, searchFieldMeta);
           break;
         }
         case 'transition': {

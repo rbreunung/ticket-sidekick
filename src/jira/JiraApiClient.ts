@@ -221,9 +221,10 @@ export class JiraApiClient implements IJiraClient {
     }
   }
 
-  async searchJql(jql: string, maxResults = 20, startAt?: number): Promise<JiraSearchResult> {
-    const fields = ['summary', 'status', 'assignee', 'priority', 'labels', 'fixVersions', 'reporter', 'subtasks', 'parent'];
-    let qs = `jql=${encodeURIComponent(jql)}&maxResults=${maxResults}&${fields.map(f => `fields=${f}`).join('&')}`;
+  async searchJql(jql: string, maxResults = 20, startAt?: number, extraFields: string[] = []): Promise<JiraSearchResult> {
+    const baseFields = ['summary', 'status', 'assignee', 'priority', 'labels', 'fixVersions', 'reporter', 'subtasks', 'parent'];
+    const fields = [...baseFields, ...extraFields.filter(f => !baseFields.includes(f))];
+    let qs = `jql=${encodeURIComponent(jql)}&maxResults=${maxResults}&${fields.map(f => `fields=${encodeURIComponent(f)}`).join('&')}`;
     if (startAt !== undefined) qs += `&startAt=${startAt}`;
     // Cloud removed /rest/api/2/search (410); must use /rest/api/3/search/jql
     if (this.authType === 'cloud') {

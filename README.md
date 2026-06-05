@@ -604,6 +604,7 @@ You can choose **No template** to create a plain ticket without any template app
 | Sprint board ID | `ticketSidekick.jira.sprintBoardId` | _(auto)_ |
 | Required fields | `ticketSidekick.jira.requiredFields` | `[]` |
 | Always-show fields | `ticketSidekick.jira.additionalDisplayFields` | `[]` |
+| Search result columns | `ticketSidekick.jira.searchFields` | `[]` |
 | Hidden fields | `ticketSidekick.jira.hiddenDisplayFields` | _(see below)_ |
 | Connection info banner | `ticketSidekick.jira.showConnectionInfo` | `false` |
 | Delete .eml after import | `ticketSidekick.email.deleteEmlAfterImport` | `false` |
@@ -642,6 +643,16 @@ By default `@jira show` omits fields that are null. Add field IDs to `additional
 ```json
 "ticketSidekick.jira.additionalDisplayFields": ["customfield_10020", "customfield_10500"]
 ```
+
+**Optional: search result columns**
+
+By default `@jira find …` shows Key, Summary, Status, and Assignee. Add field IDs to `searchFields` to append them as extra columns in the results table:
+
+```json
+"ticketSidekick.jira.searchFields": ["priority", "customfield_10020"]
+```
+
+Run `@jira show fields on PROJ-123` to discover field IDs. Values render the same way as in `@jira show`.
 
 **Optional: hidden fields**
 

@@ -313,20 +313,41 @@ export class TicketService {
     return `Could not resolve user "${value}" — no accountId or name returned by Jira.`;
   }
 
-  async searchTickets(jql: string, baseUrl?: string): Promise<string> {
-    const result = await this.client.searchJql(jql);
+  async searchTickets(
+    jql: string,
+    baseUrl?: string,
+    extraFields: string[] = [],
+    fieldMeta: JiraFieldMeta[] = [],
+  ): Promise<string> {
+    const result = await this.client.searchJql(jql, undefined, undefined, extraFields);
     if (result.issues.length === 0) return 'No tickets found.';
+
+    // Build the configured extra columns (#3): header name from field meta, value via the
+    // shared renderFieldValue; cells escape pipes so a value can't break the table.
+    const metaById = new Map(fieldMeta.map((m) => [m.id, m]));
+    const extraCols = extraFields.map((id) => ({ id, meta: metaById.get(id), name: metaById.get(id)?.name ?? id }));
+    const extraHeader = extraCols.map((c) => ` ${c.name} |`).join('');
+    const extraSep = extraCols.map(() => ' --- |').join('');
+    const renderExtra = (issue: JiraIssue) =>
+      extraCols.map((col) => {
+        const value = (issue.fields as Record<string, unknown>)[col.id];
+        const rendered = col.meta
+          ? renderFieldValue(value, col.meta)
+          : value === null || value === undefined ? '_Not set_' : String(value);
+        return ` ${rendered.replace(/\|/g, '\\|')} |`;
+      }).join('');
+
     const rows = result.issues.map((issue) => {
       const assignee = issue.fields.assignee ? issue.fields.assignee.displayName : 'Unassigned';
       const key = baseUrl ? `[${issue.key}](${baseUrl}/browse/${issue.key})` : issue.key;
-      return `| ${key} | ${issue.fields.summary} | ${issue.fields.status.name} | ${assignee} |`;
+      return `| ${key} | ${issue.fields.summary} | ${issue.fields.status.name} | ${assignee} |${renderExtra(issue)}`;
     });
     return [
       `Found ${result.total ?? result.issues.length} ticket(s):`,
       '',
       ...(baseUrl ? [`[View in Jira](${baseUrl}/issues/?jql=${encodeURIComponent(jql)})`, ''] : []),
-      '| Key | Summary | Status | Assignee |',
-      '| --- | --- | --- | --- |',
+      `| Key | Summary | Status | Assignee |${extraHeader}`,
+      `| --- | --- | --- | --- |${extraSep}`,
       ...rows,
     ].join('\n');
   }

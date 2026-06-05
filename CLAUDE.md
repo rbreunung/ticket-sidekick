@@ -150,6 +150,7 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
 | Required fields | `ticketSidekick.jira.requiredFields` |
 | Show connection info | `ticketSidekick.jira.showConnectionInfo` |
 | Additional display fields | `ticketSidekick.jira.additionalDisplayFields` |
+| Search result columns | `ticketSidekick.jira.searchFields` |
 | Hidden display fields | `ticketSidekick.jira.hiddenDisplayFields` |
 
 ### Bitbucket settings

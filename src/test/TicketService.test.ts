@@ -36,6 +36,43 @@ describe('isMultiLine (#10 schema-driven section vs table)', () => {
   });
 });
 
+describe('searchTickets extra columns (#3)', () => {
+  const issues = [{
+    key: 'PROJ-1',
+    fields: {
+      summary: 'Login bug',
+      status: { name: 'Open' },
+      assignee: { displayName: 'Jane Doe' },
+      customfield_100: { name: 'High' },
+    },
+  }];
+
+  it('renders configured extra fields as additional columns with their display names', async () => {
+    const client = new MockJiraClient();
+    client.searchJql = async () => ({ issues, total: 1, isLast: true } as never);
+    const service = new TicketService(client);
+    const fieldMeta: JiraFieldMeta[] = [
+      { id: 'customfield_100', name: 'Severity', navigable: true, schema: { type: 'string' } },
+    ];
+
+    const out = await service.searchTickets('jql', undefined, ['customfield_100'], fieldMeta);
+
+    expect(out).toContain('| Key | Summary | Status | Assignee | Severity |');
+    expect(out).toContain('High'); // rendered via renderFieldValue (named object)
+  });
+
+  it('keeps the default four columns when no extra fields are configured', async () => {
+    const client = new MockJiraClient();
+    client.searchJql = async () => ({ issues, total: 1, isLast: true } as never);
+    const service = new TicketService(client);
+
+    const out = await service.searchTickets('jql');
+
+    expect(out).toContain('| Key | Summary | Status | Assignee |');
+    expect(out).not.toContain('Severity');
+  });
+});
+
 describe('TicketService', () => {
   let client: MockJiraClient;
   let service: TicketService;
