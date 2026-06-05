@@ -9,6 +9,7 @@ function loadFixture<T>(filename: string): T {
 
 export class MockBitbucketClient implements IBitbucketClient {
   public getFileContentCalls: Array<{ project: string; repo: string; path: string; commitHash: string }> = [];
+  public getPullRequestDiffCalls: Array<{ project: string; repo: string; prId: number; contextLines?: number }> = [];
   public addPrCommentCalls: Array<{ project: string; repo: string; prId: number; text: string; inline?: InlineAnchor }> = [];
   public addPrCommentError: Error | null = null;
 
@@ -20,7 +21,8 @@ export class MockBitbucketClient implements IBitbucketClient {
     return loadFixture<BitbucketPR>('bitbucket-pr.json');
   }
 
-  async getPullRequestDiff(_project: string, _repo: string, _prId: number): Promise<string> {
+  async getPullRequestDiff(project: string, repo: string, prId: number, contextLines?: number): Promise<string> {
+    this.getPullRequestDiffCalls.push({ project, repo, prId, contextLines });
     const fixture = loadFixture<{ raw: string }>('bitbucket-diff.json');
     return fixture.raw;
   }

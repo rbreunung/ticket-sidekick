@@ -199,9 +199,12 @@ export class BitbucketApiClient implements IBitbucketClient {
     };
   }
 
-  async getPullRequestDiff(project: string, repo: string, prId: number): Promise<string> {
+  async getPullRequestDiff(project: string, repo: string, prId: number, contextLines?: number): Promise<string> {
+    const ctx = typeof contextLines === 'number' && contextLines >= 0 ? Math.floor(contextLines) : undefined;
     if (this.authType === 'cloud') {
-      const raw = await this.cloudRequestText(`/repositories/${project}/${repo}/pullrequests/${prId}/diff`);
+      // Cloud diff endpoint widens surrounding context via the `context` query param.
+      const ctxQuery = ctx !== undefined ? `?context=${ctx}` : '';
+      const raw = await this.cloudRequestText(`/repositories/${project}/${repo}/pullrequests/${prId}/diff${ctxQuery}`);
       // Bitbucket Cloud returns the diff as a JSON-encoded string (with surrounding quotes
       // and \n escape sequences instead of actual newlines). Decode it when that happens.
       try {
@@ -210,8 +213,10 @@ export class BitbucketApiClient implements IBitbucketClient {
       } catch {}
       return raw;
     }
+    // Data Center diff endpoint widens surrounding context via the `contextLines` query param.
+    const ctxQuery = ctx !== undefined ? `&contextLines=${ctx}` : '';
     const data = await this.dcRequest<DcDiffResponse>(
-      `/projects/${project}/repos/${repo}/pull-requests/${prId}/diff?withComments=false`,
+      `/projects/${project}/repos/${repo}/pull-requests/${prId}/diff?withComments=false${ctxQuery}`,
     );
     return dcDiffToUnified(data);
   }

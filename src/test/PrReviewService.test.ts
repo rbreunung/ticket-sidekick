@@ -3,6 +3,9 @@ import {
   parsePrUrl, parseDiff, resolveByNumber, extractJsonObject, extractPartialFindings, parseNdjsonFindings,
   resolveByNumbers, isAddToReviewIntent, extractUserNote, langFromPath, buildAdaptiveChunks,
   resolveLineType, annotateWithLineTypes, hasPrUrl,
+  numberDiffLines, locateAnchor, resolveFindingAnchors,
+  estimateChunkTokens, selectFilesWithinBudget, MAX_CONTEXT_FILES_PER_BATCH,
+  parseCriticKeep, dedupeFindings, extractHunkAround,
 } from '../participant/reviewSessionState';
 import type { ReviewFinding } from '../participant/reviewSessionState';
 import { PrReviewService } from '../services/PrReviewService';
@@ -366,6 +369,42 @@ describe('PrReviewService.formatReview', () => {
     expect(output).toContain('🔴');
     expect(output).toContain('🟡');
     expect(output).toContain('<!-- bitbucket:review-session -->');
+  });
+
+  it('folds low-confidence findings into a collapsed section and keeps high-confidence ones primary', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const pr: BitbucketPR = {
+      id: 7, title: 'PR', description: '', author: { displayName: 'A', emailAddress: '' },
+      targetBranch: 'main', fromCommitHash: 'h',
+    };
+    const findings: ReviewFinding[] = [
+      { id: 1, file: 'a.ts', line: 5, confidence: 0.95, severity: 'critical', title: 'Solid bug', description: 'D', recommendation: 'R' },
+      { id: 2, file: 'a.ts', line: 9, confidence: 0.3, severity: 'warning', title: 'Shaky guess', description: 'D', recommendation: 'R' },
+    ];
+    const output = service.formatReview(findings, pr, 1, 0.7);
+    expect(output).toContain('Solid bug');
+    expect(output).toContain('<details>');
+    expect(output).toContain('low-confidence');
+    expect(output).toContain('Shaky guess');
+    expect(output).toContain('30%');
+  });
+
+  it('renders provenance tags and related-line references on findings', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const pr: BitbucketPR = {
+      id: 7, title: 'PR', description: '', author: { displayName: 'A', emailAddress: '' },
+      targetBranch: 'main', fromCommitHash: 'h',
+    };
+    const findings: ReviewFinding[] = [
+      { id: 1, file: 'a.ts', line: 19, provenance: 'new', relatedLines: [11, 15], severity: 'warning', title: 'Builds up', description: 'D', recommendation: 'R' },
+      { id: 2, file: 'a.ts', line: 4, provenance: 'existing', severity: 'suggestion', title: 'Pre-existing', description: 'D', recommendation: 'R' },
+    ];
+    const output = service.formatReview(findings, pr, 1);
+    expect(output).toContain('🆕');
+    expect(output).toContain('📍');
+    expect(output).toContain('also L11, L15');
   });
 
   it('renders a no-issues message when findings is empty', () => {
@@ -742,6 +781,139 @@ describe('buildAdaptiveChunks', () => {
   });
 });
 
+describe('dedupeFindings', () => {
+  const f = (file: string, line: number, title: string, severity: 'critical' | 'warning' | 'suggestion', confidence?: number) =>
+    ({ file, line, title, severity, confidence, description: 'D', recommendation: 'R' });
+
+  it('collapses the same finding reported in two chunks', () => {
+    const result = dedupeFindings([f('a.ts', 5, 'SQL injection', 'critical'), f('a.ts', 5, 'SQL injection', 'critical')]);
+    expect(result).toHaveLength(1);
+  });
+
+  it('keeps the stronger severity when duplicates disagree', () => {
+    const result = dedupeFindings([f('a.ts', 5, 'Issue', 'warning'), f('a.ts', 5, 'Issue', 'critical')]);
+    expect(result).toHaveLength(1);
+    expect(result[0].severity).toBe('critical');
+  });
+
+  it('keeps distinct titles on the same line separate', () => {
+    const result = dedupeFindings([f('a.ts', 5, 'SQL injection', 'critical'), f('a.ts', 5, 'No error handling', 'warning')]);
+    expect(result).toHaveLength(2);
+  });
+
+  it('treats different files as distinct', () => {
+    const result = dedupeFindings([f('a.ts', 5, 'Issue', 'warning'), f('b.ts', 5, 'Issue', 'warning')]);
+    expect(result).toHaveLength(2);
+  });
+
+  it('matches titles case-insensitively and ignoring surrounding whitespace', () => {
+    const result = dedupeFindings([f('a.ts', 5, 'SQL Injection', 'critical'), f('a.ts', 5, '  sql injection ', 'critical')]);
+    expect(result).toHaveLength(1);
+  });
+});
+
+describe('extractHunkAround', () => {
+  const diff = [
+    'diff --git a/f.ts b/f.ts', '--- a/f.ts', '+++ b/f.ts',
+    '@@ -1,2 +1,3 @@', ' a', '+b', ' c',
+    '@@ -50,1 +51,2 @@', ' x', '+y',
+  ].join('\n');
+
+  it('returns the numbered hunk whose new-file range covers the line', () => {
+    const hunk = extractHunkAround(diff, 2);
+    expect(hunk).toContain('@@ -1,2 +1,3 @@');
+    expect(hunk).toContain('L2 +b');
+    expect(hunk).not.toContain('@@ -50');
+  });
+
+  it('returns the second hunk for a line in its range', () => {
+    const hunk = extractHunkAround(diff, 52);
+    expect(hunk).toContain('@@ -50,1 +51,2 @@');
+    expect(hunk).toContain('L52 +y');
+  });
+
+  it('returns undefined when no hunk covers the line', () => {
+    expect(extractHunkAround(diff, 999)).toBeUndefined();
+  });
+});
+
+describe('parseCriticKeep', () => {
+  it('returns the kept indices from a verdict object', () => {
+    expect([...parseCriticKeep('{"keep":[1,3]}', 4)].sort()).toEqual([1, 3]);
+  });
+
+  it('returns an empty set when the critic keeps nothing', () => {
+    expect(parseCriticKeep('{"keep":[]}', 3).size).toBe(0);
+  });
+
+  it('fails open (keeps all) when the response is unparseable', () => {
+    expect([...parseCriticKeep('the model rambled', 3)].sort()).toEqual([1, 2, 3]);
+  });
+
+  it('extracts the verdict even with surrounding prose', () => {
+    expect([...parseCriticKeep('Here is my verdict: {"keep":[2]} done', 3)]).toEqual([2]);
+  });
+});
+
+describe('PrReviewService.buildCriticPrompt', () => {
+  const pr: BitbucketPR = {
+    id: 42, title: 'My PR', description: '', author: { displayName: 'Jane', emailAddress: '' },
+    targetBranch: 'main', fromCommitHash: 'abc',
+  };
+
+  it('numbers candidate findings and fences the diff as untrusted data', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const findings = [
+      { file: 'src/a.ts', line: 5, severity: 'critical' as const, title: 'SQLi', description: 'concat', recommendation: 'params' },
+    ];
+    const prompt = service.buildCriticPrompt(pr, [{ path: 'src/a.ts', diff: '@@ -1 +5 @@\n+const x = q(sql);' }], findings);
+    expect(prompt).toContain('[1]');
+    expect(prompt).toContain('SQLi');
+    expect(prompt).toContain('«UNTRUSTED-CONTENT»');
+    expect(prompt).toContain('"keep"');
+  });
+});
+
+describe('selectFilesWithinBudget', () => {
+  const file = (path: string, chars: number) => ({ path, content: 'x'.repeat(chars) });
+
+  it('includes all files when the budget is ample', () => {
+    const result = selectFilesWithinBudget([file('a.ts', 40), file('b.ts', 40)], 1000);
+    expect([...result.keys()].sort()).toEqual(['a.ts', 'b.ts']);
+  });
+
+  it('packs smallest-first so one huge file cannot starve the rest', () => {
+    // budget 30 tokens: huge.ts ≈ 250 tokens, small.ts ≈ 5 tokens.
+    const result = selectFilesWithinBudget([file('huge.ts', 1000), file('small.ts', 20)], 30);
+    expect(result.has('small.ts')).toBe(true);
+    expect(result.has('huge.ts')).toBe(false);
+  });
+
+  it('always includes at least one file even if it exceeds the budget', () => {
+    const result = selectFilesWithinBudget([file('only.ts', 4000)], 1);
+    expect(result.size).toBe(1);
+    expect(result.has('only.ts')).toBe(true);
+  });
+
+  it('never exceeds the per-batch safety ceiling', () => {
+    const many = Array.from({ length: MAX_CONTEXT_FILES_PER_BATCH + 10 }, (_, i) => file(`f${i}.ts`, 4));
+    const result = selectFilesWithinBudget(many, 1_000_000);
+    expect(result.size).toBe(MAX_CONTEXT_FILES_PER_BATCH);
+  });
+
+  it('returns an empty map for no entries', () => {
+    expect(selectFilesWithinBudget([], 1000).size).toBe(0);
+  });
+});
+
+describe('estimateChunkTokens', () => {
+  it('grows with the number and size of files', () => {
+    const one = estimateChunkTokens([{ path: 'a.ts', diff: 'x'.repeat(400) }]);
+    const two = estimateChunkTokens([{ path: 'a.ts', diff: 'x'.repeat(400) }, { path: 'b.ts', diff: 'x'.repeat(400) }]);
+    expect(two).toBeGreaterThan(one);
+  });
+});
+
 describe('extractPartialFindings', () => {
   const finding1 = { file: 'src/a.ts', severity: 'warning', title: 'Issue A', description: 'desc a', recommendation: 'rec a' };
   const finding2 = { file: 'src/b.ts', severity: 'critical', title: 'Issue B', description: 'desc b', recommendation: 'rec b' };
@@ -1007,6 +1179,143 @@ describe('resolveLineType', () => {
 // ---------------------------------------------------------------------------
 // annotateWithLineTypes
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// numberDiffLines
+// ---------------------------------------------------------------------------
+
+describe('numberDiffLines', () => {
+  it('prefixes added and context lines with their new-file line number', () => {
+    const numbered = numberDiffLines(SAMPLE_DIFF);
+    expect(numbered).toContain('L10  function connect() {');     // context
+    expect(numbered).toContain('L11 +  const url = NEW_URL;');   // first added
+    expect(numbered).toContain('L12 +  const timeout = 5000;');  // second added
+    expect(numbered).toContain('L13  return url;');              // context after additions
+  });
+
+  it('leaves removed lines without a number', () => {
+    const numbered = numberDiffLines(SAMPLE_DIFF);
+    expect(numbered).toContain('-  const url = OLD_URL;');
+    expect(numbered).not.toContain('L11 -  const url = OLD_URL;');
+  });
+
+  it('leaves hunk headers and meta lines unchanged', () => {
+    const numbered = numberDiffLines(SAMPLE_DIFF);
+    expect(numbered).toContain('@@ -10,6 +10,7 @@');
+    expect(numbered).toContain('--- a/src/api.ts');
+    expect(numbered).toContain('+++ b/src/api.ts');
+  });
+
+  it('numbers a multi-hunk diff from each hunk header independently', () => {
+    const diff = [
+      'diff --git a/f.ts b/f.ts', '--- a/f.ts', '+++ b/f.ts',
+      '@@ -1,1 +1,2 @@', ' first', '+second',
+      '@@ -50,1 +51,2 @@', ' fiftyfirst', '+fiftysecond',
+    ].join('\n');
+    const numbered = numberDiffLines(diff);
+    expect(numbered).toContain('L1  first');
+    expect(numbered).toContain('L2 +second');
+    expect(numbered).toContain('L51  fiftyfirst');
+    expect(numbered).toContain('L52 +fiftysecond');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// locateAnchor
+// ---------------------------------------------------------------------------
+
+describe('locateAnchor', () => {
+  it('locates an added line and derives its new-file number', () => {
+    expect(locateAnchor(SAMPLE_DIFF, 'const timeout = 5000;')).toEqual({ line: 12, lineType: 'ADDED', fileType: 'TO' });
+  });
+
+  it('locates a context line', () => {
+    expect(locateAnchor(SAMPLE_DIFF, 'function connect() {')).toEqual({ line: 10, lineType: 'CONTEXT', fileType: 'TO' });
+  });
+
+  it('locates a removed line by its FROM-side number', () => {
+    expect(locateAnchor(SAMPLE_DIFF, 'const url = OLD_URL;')).toEqual({ line: 11, lineType: 'REMOVED', fileType: 'FROM' });
+  });
+
+  it('ignores leading/trailing whitespace when matching', () => {
+    expect(locateAnchor(SAMPLE_DIFF, '   const timeout = 5000;   ')?.line).toBe(12);
+  });
+
+  it('returns null when the text is nowhere in the diff', () => {
+    expect(locateAnchor(SAMPLE_DIFF, 'totally absent line')).toBeNull();
+  });
+
+  it('uses the hint line as a tiebreaker when the text matches multiple lines', () => {
+    const dup = [
+      'diff --git a/f.ts b/f.ts', '--- a/f.ts', '+++ b/f.ts',
+      '@@ -1,0 +1,5 @@', '+return null;', '+a', '+b', '+c', '+return null;',
+    ].join('\n');
+    // 'return null;' is added at new lines 1 and 5; hint 5 → pick 5, hint 1 → pick 1.
+    expect(locateAnchor(dup, 'return null;', 5)?.line).toBe(5);
+    expect(locateAnchor(dup, 'return null;', 1)?.line).toBe(1);
+  });
+
+  it('prefers a non-removed match when there is no hint', () => {
+    const moved = [
+      'diff --git a/f.ts b/f.ts', '--- a/f.ts', '+++ b/f.ts',
+      '@@ -3,1 +3,1 @@', '-doThing();', '+doThing();',
+    ].join('\n');
+    expect(locateAnchor(moved, 'doThing();')?.lineType).toBe('ADDED');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveFindingAnchors
+// ---------------------------------------------------------------------------
+
+describe('resolveFindingAnchors', () => {
+  const diffs = [{ path: 'src/api.ts', diff: SAMPLE_DIFF }];
+
+  it('sets a verified line and provenance "new" for an added-line anchor', () => {
+    const findings = [{ file: 'src/api.ts', anchorCode: 'const timeout = 5000;', line: 99 /* wrong */,
+      severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
+    const [r] = resolveFindingAnchors(findings, diffs);
+    expect(r.line).toBe(12);          // code-derived, not the model's 99
+    expect(r.lineType).toBe('ADDED');
+    expect(r.provenance).toBe('new');
+    expect(r).not.toHaveProperty('anchorCode');
+  });
+
+  it('tags a context-line anchor as provenance "existing"', () => {
+    const findings = [{ file: 'src/api.ts', anchorCode: 'function connect() {',
+      severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
+    expect(resolveFindingAnchors(findings, diffs)[0].provenance).toBe('existing');
+  });
+
+  it('drops a finding whose anchorCode cannot be located (strict)', () => {
+    const findings = [{ file: 'src/api.ts', anchorCode: 'this line does not exist',
+      severity: 'critical' as const, title: 'T', description: 'D', recommendation: 'R' }];
+    expect(resolveFindingAnchors(findings, diffs)).toHaveLength(0);
+  });
+
+  it('keeps a file-level finding (no anchorCode) without a line or provenance', () => {
+    const findings = [{ file: 'src/api.ts',
+      severity: 'suggestion' as const, title: 'Missing header', description: 'D', recommendation: 'R' }];
+    const [r] = resolveFindingAnchors(findings, diffs);
+    expect(r.line).toBeUndefined();
+    expect(r.provenance).toBeUndefined();
+  });
+
+  it('resolves related lines for a multi-line finding', () => {
+    const findings = [{ file: 'src/api.ts', anchorCode: 'const timeout = 5000;',
+      relatedCode: ['const url = NEW_URL;'],
+      severity: 'warning' as const, title: 'builds up', description: 'D', recommendation: 'R' }];
+    const [r] = resolveFindingAnchors(findings, diffs);
+    expect(r.line).toBe(12);
+    expect(r.relatedLines).toEqual([11]);
+  });
+
+  it('drops a finding that anchors into a file with no diff present', () => {
+    const findings = [{ file: 'src/other.ts', anchorCode: 'const timeout = 5000;',
+      severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
+    expect(resolveFindingAnchors(findings, diffs)).toHaveLength(0);
+  });
+});
 
 describe('annotateWithLineTypes', () => {
   const diffs = [{ path: 'src/api.ts', diff: SAMPLE_DIFF }];
