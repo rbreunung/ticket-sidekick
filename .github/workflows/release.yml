@@ -1,7 +1,8 @@
 name: Release
 
-# Manually-triggered release / preview. The version comes from package.json — bump and
-# commit it first, then run this workflow against the commit you want to ship.
+# Manually-triggered release / preview. Pick the version bump (or type an explicit version)
+# in the Run-workflow form — the workflow bumps package.json itself. For a release it commits
+# the bump back to the branch; a preview bump is ephemeral (build-only, not committed).
 on:
   workflow_dispatch:
     inputs:
@@ -12,6 +13,18 @@ on:
         options:
           - release
           - preview
+      bump:
+        description: 'Version bump (ignored when "version" is set)'
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+      version:
+        description: 'Explicit version e.g. 0.4.0 (overrides bump)'
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -39,9 +52,25 @@ jobs:
       - name: Unit tests
         run: npm test
 
-      - name: Read version from package.json
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Resolve version
         id: ver
-        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          # Apply the bump to package.json (no commit/tag — the channel steps own that).
+          # An explicit "version" input wins over the patch/minor/major choice.
+          if [ -n "${{ inputs.version }}" ]; then
+            npm version "${{ inputs.version }}" --no-git-tag-version --allow-same-version
+          else
+            npm version "${{ inputs.bump }}" --no-git-tag-version
+          fi
+          NEW_VERSION="$(node -p "require('./package.json').version")"
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: $NEW_VERSION"
 
       - name: Package VSIX
         id: pkg
@@ -66,15 +95,18 @@ jobs:
           set -euo pipefail
           VERSION="${{ steps.ver.outputs.version }}"
           VSIX="${{ steps.pkg.outputs.vsix }}"
-          # Guard: never release a version that already shipped — bump package.json first.
+          # Guard: never release a version that already shipped — pick a different bump/version.
           if git rev-parse "refs/tags/${VERSION}" >/dev/null 2>&1 || gh release view "${VERSION}" >/dev/null 2>&1; then
-            echo "::error::Version ${VERSION} is already released. Bump the version in package.json first."
+            echo "::error::Version ${VERSION} is already released. Choose a different bump or version."
             exit 1
           fi
-          # Marketplace first (the irreversible step), then record the GitHub release + tag.
+          # Marketplace first (the irreversible step). Only once it succeeds do we record the
+          # bump in the repo and create the GitHub release + bare tag at that commit.
           npx vsce publish --packagePath "${VSIX}" --pat "${VSCE_PAT}"
+          git commit -am "${VERSION}"
+          git push origin "HEAD:${{ github.ref_name }}"
           gh release create "${VERSION}" \
-            --target "${GITHUB_SHA}" \
+            --target "$(git rev-parse HEAD)" \
             --title "${VERSION}" \
             --generate-notes \
             "${VSIX}"
@@ -88,7 +120,8 @@ jobs:
           set -euo pipefail
           VERSION="${{ steps.ver.outputs.version }}"
           VSIX="${{ steps.pkg.outputs.vsix }}"
-          # Suffix the tag so a preview never collides with the eventual release tag.
+          # Preview is ephemeral: the bump is built but NOT committed to the repo. Suffix the
+          # tag so a preview never collides with the eventual release tag.
           TAG="${VERSION}-preview.${{ github.run_number }}"
           npx vsce publish --pre-release --packagePath "${VSIX}" --pat "${VSCE_PAT}"
           gh release create "${TAG}" \

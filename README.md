@@ -872,14 +872,20 @@ Patterns use glob syntax. Both `*.snap` and `**/*.snap` work (bare filename patt
 
 ## Releasing
 
-Releases are cut by a manually-triggered GitHub Actions workflow (`.github/workflows/release.yml`). The version comes from `package.json`, so the flow is:
+Releases are cut by a manually-triggered GitHub Actions workflow (`.github/workflows/release.yml`) — you no longer hand-edit `package.json`. Go to **Actions → Release → Run workflow** and fill in the form:
 
-1. Bump `"version"` in `package.json` and commit it (the existing convention titles the commit with the bare version, e.g. `0.4.0`).
-2. Go to the repository's **Actions → Release → Run workflow**, pick the branch/commit, and choose a channel:
-   - **release** — publishes to the VS Code Marketplace, then creates the GitHub Release and the bare tag `X.Y.Z` (with auto-generated notes and the `.vsix` attached). Fails fast if that version was already released — bump first.
-   - **preview** — publishes a Marketplace **pre-release** and a GitHub **pre-release** tagged `X.Y.Z-preview.<run>`, so you can sideload or dogfood before a full release.
+- **channel** — `release` or `preview`.
+- **bump** — `patch` / `minor` / `major`. The workflow runs `npm version <bump>` to compute the new version.
+- **version** — optional explicit version (e.g. `0.4.0`) that **overrides** the bump when set.
+
+What each channel does with that version:
+
+- **release** — publishes to the VS Code Marketplace, **commits the version bump back to the branch** (commit titled with the bare version, matching the existing convention), and creates the GitHub Release + bare tag `X.Y.Z` (auto-generated notes, `.vsix` attached). Fails fast if that version was already released — pick a different bump/version.
+- **preview** — builds the bumped version as a **pre-release** but does **not** commit the bump (it's a throwaway), publishing a Marketplace pre-release and a GitHub pre-release tagged `X.Y.Z-preview.<run>` for sideloading/dogfooding.
 
 The workflow runs `npm ci → compile → test` first and will not publish a red build.
+
+> **Branch protection:** the `release` channel pushes the bump commit to the target branch (usually `main`) using the built-in `GITHUB_TOKEN`. If `main` is protected against direct pushes, either allow the Actions bot to bypass it or run the workflow from a release branch.
 
 **Prerequisite:** add a repository secret **`VSCE_PAT`** — an Azure DevOps Personal Access Token for the `RobertBreunung` publisher with **Marketplace → Manage** scope (Settings → Secrets and variables → Actions). Without it the Marketplace step fails; the `.vsix` is still attached to the GitHub Release.
 

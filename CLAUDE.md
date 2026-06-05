@@ -82,7 +82,7 @@ Node.js is managed by **Volta** — use `~/.volta/bin/npm` if `npm` isn't on you
 
 CI (`.github/workflows/ci.yml`) runs `npm ci` → `npm run compile` → `npm test` on every push and pull request against `main`, across a Node 20 + 24 matrix. The `test:e2e` suite is not run in CI (it needs a real VS Code instance).
 
-Releases are manual: `.github/workflows/release.yml` is a `workflow_dispatch` with a `channel` input (`release` | `preview`). It reads the version from `package.json`, gates on compile+test, builds the `.vsix`, publishes to the Marketplace (`vsce publish`, needs the `VSCE_PAT` secret), and creates the GitHub Release + bare tag `X.Y.Z` (preview → `--pre-release` + suffixed `X.Y.Z-preview.<run>` tag). Bump `package.json` and commit before running. See the README "Releasing" section.
+Releases are manual: `.github/workflows/release.yml` is a `workflow_dispatch` with inputs `channel` (`release` | `preview`), `bump` (`patch`/`minor`/`major`), and an optional explicit `version` (overrides `bump`). It computes the version via `npm version --no-git-tag-version`, gates on compile+test, builds the `.vsix`, publishes to the Marketplace (`vsce publish`, needs the `VSCE_PAT` secret), and creates the GitHub Release + bare tag `X.Y.Z`. **release** commits the bump back to the branch and pushes it; **preview** is ephemeral (no commit) and publishes `--pre-release` with a suffixed `X.Y.Z-preview.<run>` tag. See the README "Releasing" section.
 
 ## Testing
 
