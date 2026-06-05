@@ -220,7 +220,7 @@
     "test:e2e": "node ./out/test/runTest.js"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@types/node": "^24.0.0",
     "@types/vscode": "^1.90.0",
     "@vscode/test-electron": "^2.4.0",
     "@vscode/vsce": "^3.9.1",
