@@ -46,8 +46,15 @@ jobs:
       - name: Package VSIX
         id: pkg
         run: |
+          set -euo pipefail
           VSIX="ticket-sidekick-${{ steps.ver.outputs.version }}.vsix"
-          npx vsce package --out "$VSIX"
+          # A pre-release must be marked at PACKAGE time — vsce rejects `publish --pre-release`
+          # on a VSIX that wasn't packaged with `--pre-release`. Match the flag to the channel.
+          if [ "${{ inputs.channel }}" = "preview" ]; then
+            npx vsce package --pre-release --out "$VSIX"
+          else
+            npx vsce package --out "$VSIX"
+          fi
           echo "vsix=$VSIX" >> "$GITHUB_OUTPUT"
 
       - name: Publish release
