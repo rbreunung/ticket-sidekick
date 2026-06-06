@@ -411,6 +411,15 @@ export function pickEmailOption(
   return { kind: 'type', issueType: issueTypes[n - templates.length - 1] };
 }
 
+export function selectDefaultIssueType(issueTypes: string[]): string {
+  return (
+    issueTypes.find(t => t === 'Story') ??
+    issueTypes.find(t => t === 'Task') ??
+    issueTypes[0] ??
+    'Story'
+  );
+}
+
 export function buildTeamJql(teamJql: string, extraJql: string | null): string {
   const extra = extraJql ? ` AND (${extraJql})` : ' AND resolution is NULL';
   return `(${teamJql})${extra}`;

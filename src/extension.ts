@@ -9,6 +9,7 @@ import { parseEml, type ParsedEml } from './utils/emlParser';
 import { htmlToMarkdown } from './utils/htmlToMarkdown';
 import { JiraApiClient } from './jira/JiraApiClient';
 import { TemplateService } from './templates/TemplateService';
+import { selectDefaultIssueType } from './participant/sessionState';
 import type { EmailContentSession } from './participant/sessionState';
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -131,7 +132,7 @@ export function activate(context: vscode.ExtensionContext): void {
           );
           return [] as string[];
         });
-      const issueType = issueTypes.find(t => t === 'Story') ?? issueTypes.find(t => t === 'Task') ?? issueTypes[0] ?? 'Story';
+      const issueType = selectDefaultIssueType(issueTypes);
 
       const markdownBody = parsed.htmlBody
         ? htmlToMarkdown(parsed.htmlBody, parsed.inlineImageMap)

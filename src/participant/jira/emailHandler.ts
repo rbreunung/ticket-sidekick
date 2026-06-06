@@ -4,29 +4,43 @@ import type { TicketService } from '../../services/TicketService';
 import type { ConfigService } from '../../services/ConfigService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import { markdownToJiraWiki } from '../../utils/markdownToJiraWiki';
-import { parseEml } from '../../utils/emlParser';
+import { parseEml, type ParsedEml } from '../../utils/emlParser';
 import { htmlToMarkdown } from '../../utils/htmlToMarkdown';
 import { TemplateService } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
 import type { EmailContentSession } from '../sessionState';
-import { isCancellation, isConfirmation, pickEmailOption } from '../sessionState';
+import { isCancellation, isConfirmation, pickEmailOption, selectDefaultIssueType } from '../sessionState';
 
 export async function handleCreateFromEmail(
   _request: vscode.ChatRequest,
   stream: vscode.ChatResponseStream,
   _token: vscode.CancellationToken,
-  _jiraClient: IJiraClient,
+  jiraClient: IJiraClient,
   _ticketService: TicketService,
   _configService: ConfigService,
   ws: vscode.Memento,
 ): Promise<void> {
-  const session = ws.get<EmailContentSession>('jira.session.emailContent');
+  let session = ws.get<EmailContentSession>('jira.session.emailContent');
+
+  // No session — run inline file-picker so the flow works from chat alone
   if (!session) {
-    stream.markdown(
-      'No email loaded. Use **Command Palette → Ticket Sidekick: Create Jira ticket from email (.eml)** to import an email first, or say `@jira add email` to open a file picker.',
-    );
+    const newSession = await openEmailFilePicker(jiraClient, stream);
+    if (!newSession) return;
+    await streamEmailContentPreview(newSession, stream, ws);
     return;
   }
+
+  // Session exists but issue types missing (getProject may have failed at command time) — retry
+  if (!session.availableIssueTypes?.length && session.projectKey && session.projectKey !== 'UNKNOWN') {
+    try {
+      const project = await jiraClient.getProject(session.projectKey);
+      const issueTypes = project.issueTypes.filter(t => !t.subtask).map(t => t.name);
+      if (issueTypes.length > 0) {
+        session = { ...session, availableIssueTypes: issueTypes, issueType: selectDefaultIssueType(issueTypes) };
+      }
+    } catch { /* use session as-is; simplified prompt still functional */ }
+  }
+
   await streamEmailContentPreview(session, stream, ws);
 }
 
@@ -104,6 +118,19 @@ export async function handleAddEmailFromChat(
   }
 
   // No ticket key — build full session and show preview so user can choose
+  const session = await buildEmailCreateSession(parsed, emlPath, markdownBody, inlineImageMap, attachments, jiraClient);
+  await streamEmailContentPreview(session, stream, ws);
+}
+
+// Builds a full EmailContentSession from already-parsed email data, loading templates and issue types.
+async function buildEmailCreateSession(
+  parsed: ParsedEml,
+  emlPath: string,
+  markdownBody: string,
+  inlineImageMap: Record<string, string>,
+  attachments: EmailContentSession['attachments'],
+  jiraClient: IJiraClient,
+): Promise<EmailContentSession> {
   const projectKey = vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.defaultProject') ?? '';
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
@@ -116,16 +143,14 @@ export async function handleAddEmailFromChat(
   })();
 
   let issueTypes: string[] = [];
-  let issueType = 'Story';
   if (projectKey) {
     try {
       const project = await jiraClient.getProject(projectKey);
       issueTypes = project.issueTypes.filter(t => !t.subtask).map(t => t.name);
-      issueType = issueTypes.find(t => t === 'Story') ?? issueTypes.find(t => t === 'Task') ?? issueTypes[0] ?? 'Story';
     } catch { /* use defaults */ }
   }
 
-  const session: EmailContentSession = {
+  return {
     emailId: 'eml-import',
     subject: parsed.subject,
     senderName: parsed.senderName,
@@ -136,12 +161,59 @@ export async function handleAddEmailFromChat(
     emlFilePath: emlPath,
     selectedTemplateName: null,
     projectKey: projectKey || 'UNKNOWN',
-    issueType,
+    issueType: selectDefaultIssueType(issueTypes),
     additionalFields: {},
     availableTemplates: availableTemplates.length > 0 ? availableTemplates : undefined,
     availableIssueTypes: issueTypes.length > 0 ? issueTypes : undefined,
   };
-  await streamEmailContentPreview(session, stream, ws);
+}
+
+// Shows an .eml file picker, parses the email, and builds a full EmailContentSession.
+// Returns null if the user cancelled the file picker or if read/parse failed.
+async function openEmailFilePicker(
+  jiraClient: IJiraClient,
+  stream: vscode.ChatResponseStream,
+): Promise<EmailContentSession | null> {
+  const uris = await vscode.window.showOpenDialog({
+    canSelectMany: false,
+    filters: { Email: ['eml'] },
+    title: 'Select .eml file to import',
+  });
+  if (!uris || uris.length === 0) return null;
+
+  const emlPath = uris[0].fsPath;
+  let buffer: Buffer;
+  try {
+    buffer = await fs.promises.readFile(emlPath);
+  } catch (err) {
+    stream.markdown(`_Could not read file: ${err instanceof Error ? err.message : String(err)}_`);
+    return null;
+  }
+
+  let parsed: ParsedEml;
+  try {
+    parsed = await parseEml(buffer);
+  } catch (err) {
+    stream.markdown(`_Could not parse email: ${err instanceof Error ? err.message : String(err)}_`);
+    return null;
+  }
+
+  const markdownBody = parsed.htmlBody
+    ? htmlToMarkdown(parsed.htmlBody, parsed.inlineImageMap)
+    : (parsed.plainBody ?? '');
+
+  const inlineImageMap: Record<string, string> = {};
+  for (const [k, v] of parsed.inlineImageMap) {
+    inlineImageMap[k] = v;
+  }
+  const attachments = parsed.attachments.map(a => ({
+    name: a.name,
+    contentType: a.contentType,
+    contentBytes: a.contentBytes,
+    isInline: a.isInline,
+  }));
+
+  return buildEmailCreateSession(parsed, emlPath, markdownBody, inlineImageMap, attachments, jiraClient);
 }
 
 export async function handleEmailContentSession(
