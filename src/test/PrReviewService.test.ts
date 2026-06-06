@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
-  parsePrUrl, parseDiff, resolveByNumber, extractJsonObject, extractPartialFindings, parseNdjsonFindings,
-  resolveByNumbers, isAddToReviewIntent, extractUserNote, langFromPath, buildAdaptiveChunks,
+  parsePrUrl, parseDiff, extractJsonObject, extractPartialFindings, parseNdjsonFindings,
+  langFromPath, buildAdaptiveChunks,
   resolveLineType, annotateWithLineTypes, hasPrUrl,
   numberDiffLines, locateAnchor, resolveFindingAnchors,
   estimateChunkTokens, selectFilesWithinBudget, MAX_CONTEXT_FILES_PER_BATCH,
   parseCriticKeep, dedupeFindings, extractHunkAround,
+  parseFollowUpIntent,
 } from '../participant/reviewSessionState';
 import type { ReviewFinding } from '../participant/reviewSessionState';
 import { PrReviewService } from '../services/PrReviewService';
@@ -170,24 +171,6 @@ describe('extractJsonObject', () => {
   });
 });
 
-describe('resolveByNumber', () => {
-  const findings: ReviewFinding[] = [
-    { id: 1, file: 'a.ts', severity: 'critical', title: 'SQL injection', description: 'Bad', recommendation: 'Fix it' },
-    { id: 2, file: 'b.ts', severity: 'warning', title: 'XSS risk', description: 'Also bad', recommendation: 'Also fix' },
-  ];
-
-  it('resolves #1 to the first finding', () => {
-    expect(resolveByNumber('#1 can this be fixed?', findings)?.id).toBe(1);
-  });
-
-  it('resolves a #2 reference', () => {
-    expect(resolveByNumber('tell me more about #2', findings)?.id).toBe(2);
-  });
-
-  it('returns null when no # reference', () => {
-    expect(resolveByNumber('explain the SQL issue', findings)).toBeNull();
-  });
-});
 
 describe('PrReviewService.gatherFileContents', () => {
   it('fetches each file from the API at the PR commit', async () => {
@@ -556,76 +539,88 @@ describe('dcDiffToUnified', () => {
   });
 });
 
-describe('resolveByNumbers', () => {
-  const findings: ReviewFinding[] = [
-    { id: 1, file: 'a.ts', severity: 'critical', title: 'T1', description: 'D', recommendation: 'R' },
-    { id: 2, file: 'b.ts', severity: 'warning',  title: 'T2', description: 'D', recommendation: 'R' },
-    { id: 3, file: 'c.ts', severity: 'suggestion', title: 'T3', description: 'D', recommendation: 'R' },
-    { id: 5, file: 'd.ts', severity: 'critical', title: 'T5', description: 'D', recommendation: 'R' },
-  ];
 
-  it('returns multiple findings by #N references', () => {
-    const result = resolveByNumbers('#2 #3, #5 add to review', findings);
-    expect(result.map((f) => f.id)).toEqual([2, 3, 5]);
+describe('parseFollowUpIntent', () => {
+  describe('add intent', () => {
+    it('detects numbers placed before "to review"', () => {
+      expect(parseFollowUpIntent('add #1 #2 #3 #4 to review')).toMatchObject({ kind: 'add', targets: [1, 2, 3, 4], note: '' });
+    });
+
+    it('detects numbers placed after "add to review"', () => {
+      expect(parseFollowUpIntent('add to review #1 #2 #3 #4')).toMatchObject({ kind: 'add', targets: [1, 2, 3, 4], note: '' });
+    });
+
+    it('detects numbers before "add" keyword', () => {
+      expect(parseFollowUpIntent('#1 #2 add to review')).toMatchObject({ kind: 'add', targets: [1, 2], note: '' });
+    });
+
+    it('handles comma-separated number refs', () => {
+      expect(parseFollowUpIntent('#2 #3, #5 add to review')).toMatchObject({ kind: 'add', targets: [2, 3, 5], note: '' });
+    });
+
+    it('deduplicates repeated finding references', () => {
+      expect(parseFollowUpIntent('add #2 #2 to review')).toMatchObject({ kind: 'add', targets: [2], note: '' });
+    });
+
+    it('treats "add all to review" as targets: all', () => {
+      expect(parseFollowUpIntent('add all to review')).toMatchObject({ kind: 'add', targets: 'all', note: '' });
+    });
+
+    it('treats "add all findings to review" as targets: all', () => {
+      expect(parseFollowUpIntent('add all findings to review')).toMatchObject({ kind: 'add', targets: 'all', note: '' });
+    });
+
+    it('defaults to all when no numbers and no "all" keyword', () => {
+      expect(parseFollowUpIntent('add to review')).toMatchObject({ kind: 'add', targets: 'all', note: '' });
+    });
+
+    it('strips polite preamble from note', () => {
+      expect(parseFollowUpIntent('please add #1 and #4 to review')).toMatchObject({ kind: 'add', targets: [1, 4], note: '' });
+    });
+
+    it('extracts trailing user note after command keywords', () => {
+      expect(parseFollowUpIntent('add #2 to review blocking CI')).toMatchObject({ kind: 'add', targets: [2], note: 'blocking CI' });
+    });
+
+    it('extracts note following an em dash', () => {
+      const result = parseFollowUpIntent('#2, #3 add to review — urgent');
+      expect(result).toMatchObject({ kind: 'add', targets: [2, 3] });
+      expect((result as { note: string }).note).toContain('urgent');
+    });
   });
 
-  it('returns a single finding', () => {
-    expect(resolveByNumbers('#1 add to review', findings).map((f) => f.id)).toEqual([1]);
-  });
+  describe('explain intent', () => {
+    it('resolves "explain #3" and removes the number from the question', () => {
+      expect(parseFollowUpIntent('explain #3')).toMatchObject({ kind: 'explain', findingRef: 3, question: 'explain this finding' });
+    });
 
-  it('deduplicates repeated references', () => {
-    expect(resolveByNumbers('#2 #2 add to review', findings)).toHaveLength(1);
-  });
+    it('resolves "#4 explain" with number at start', () => {
+      expect(parseFollowUpIntent('#4 explain')).toMatchObject({ kind: 'explain', findingRef: 4 });
+    });
 
-  it('returns empty array when no #N references', () => {
-    expect(resolveByNumbers('add to review', findings)).toHaveLength(0);
-  });
+    it('replaces #N in a longer question', () => {
+      expect(parseFollowUpIntent('what does #3 have to do with auth?')).toMatchObject({
+        kind: 'explain',
+        findingRef: 3,
+        question: 'what does this finding have to do with auth?',
+      });
+    });
 
-  it('silently skips unknown IDs', () => {
-    const result = resolveByNumbers('#1 #99 add to review', findings);
-    expect(result.map((f) => f.id)).toEqual([1]);
-  });
-});
+    it('returns findingRef: null when no #N in message', () => {
+      expect(parseFollowUpIntent('how to fix the SQL issue')).toMatchObject({ kind: 'explain', findingRef: null, question: 'how to fix the SQL issue' });
+    });
 
-describe('isAddToReviewIntent', () => {
-  it('returns true for "#2 #3 add to review"', () => {
-    expect(isAddToReviewIntent('#2 #3 add to review')).toBe(true);
-  });
+    it('returns findingRef: null for a bare follow-up', () => {
+      expect(parseFollowUpIntent('tell me more')).toMatchObject({ kind: 'explain', findingRef: null, question: 'tell me more' });
+    });
 
-  it('returns true for "please add #1 and #4 to review"', () => {
-    expect(isAddToReviewIntent('please add #1 and #4 to review')).toBe(true);
-  });
+    it('does not match add intent when "add" is absent', () => {
+      expect(parseFollowUpIntent('#2 review')).toMatchObject({ kind: 'explain', findingRef: 2 });
+    });
 
-  it('returns false when no #N reference', () => {
-    expect(isAddToReviewIntent('add to review')).toBe(false);
-  });
-
-  it('returns false when "add" is missing', () => {
-    expect(isAddToReviewIntent('#2 review')).toBe(false);
-  });
-
-  it('returns false for a plain follow-up like "#2 can this be fixed?"', () => {
-    expect(isAddToReviewIntent('#2 can this be fixed?')).toBe(false);
-  });
-});
-
-describe('extractUserNote', () => {
-  it('returns empty string for a pure command', () => {
-    expect(extractUserNote('#2 #3 add to review')).toBe('');
-  });
-
-  it('extracts trailing explanation text', () => {
-    const note = extractUserNote('#2 add to review this is blocking CI');
-    expect(note).toBe('this is blocking CI');
-  });
-
-  it('handles comma-separated refs with no extra text', () => {
-    expect(extractUserNote('#2, #3, #5 add to review')).toBe('');
-  });
-
-  it('extracts explanation after comma-separated refs', () => {
-    const note = extractUserNote('#2, #3 add to review — urgent');
-    expect(note).toContain('urgent');
+    it('does not match add intent when "review" is absent', () => {
+      expect(parseFollowUpIntent('#2 can this be fixed?')).toMatchObject({ kind: 'explain', findingRef: 2, question: 'this finding can this be fixed?' });
+    });
   });
 });
 

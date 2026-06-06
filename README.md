@@ -731,6 +731,8 @@ Run `@bitbucket check` after setup to confirm the connection and see which accou
 | `@bitbucket #2` | Explain finding #2 in detail |
 | `@bitbucket #2 is this always a problem?` | Ask a follow-up question about a specific finding |
 | `@bitbucket #1 #3 add to review` | Preview findings #1 and #3 as comments — reply "post it" to confirm, "(c)" to cancel, or refine |
+| `@bitbucket add #1 #2 #3 to review` | Same — numbers can appear anywhere relative to the keywords |
+| `@bitbucket add all to review` | Preview all findings as PR comments at once |
 | `@bitbucket #2 add to review blocking merge` | Preview with reviewer note "blocking merge" appended — confirm before posting |
 
 ### PR review
@@ -787,10 +789,12 @@ Push selected findings back to Bitbucket as PR comments:
 
 ```text
 @bitbucket #2 #3, #5 add to review
+@bitbucket add #1 #2 #3 to review
+@bitbucket add all to review
 @bitbucket #1 add to review this is blocking merge
 ```
 
-Any text after the `add to review` keywords becomes a brief reviewer note appended to each comment.
+The numbers and `add to review` keywords can appear in any order. `add all to review` selects every finding at once. Any extra text (after stripping the command keywords) becomes a brief reviewer note appended to each comment.
 
 **Before posting, the plugin shows a preview** of each comment's exact text along with where it will land:
 

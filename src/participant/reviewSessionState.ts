@@ -164,29 +164,39 @@ export function parseNdjsonFindings(raw: string): {
   };
 }
 
-export function resolveByNumber(message: string, findings: ReviewFinding[]): ReviewFinding | null {
+export type FollowUpIntent =
+  | { kind: 'add'; targets: number[] | 'all'; note: string }
+  | { kind: 'explain'; findingRef: number | null; question: string };
+
+function resolveByIds(ids: number[], findings: ReviewFinding[]): ReviewFinding[] {
+  const idSet = new Set(ids);
+  return findings.filter((f) => idSet.has(f.id));
+}
+
+export function parseFollowUpIntent(message: string): FollowUpIntent {
+  const hasAdd = /\badd\b/i.test(message);
+  const hasReview = /\breview\b/i.test(message);
+
+  if (hasAdd && hasReview) {
+    const numberMatches = [...message.matchAll(/#(\d+)/g)];
+    const hasAll = /\ball\b/i.test(message);
+    const targets: number[] | 'all' =
+      numberMatches.length > 0 && !hasAll
+        ? [...new Set(numberMatches.map((m) => parseInt(m[1], 10)))]
+        : 'all';
+    const note = message
+      .replace(/#\d+/g, '')
+      .replace(/\badd\b|\band\b|\bto\b|\breview\b|\ball\b|\bfindings?\b|\bplease\b/gi, '')
+      .replace(/[,;—–]+/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return { kind: 'add', targets, note };
+  }
+
   const m = message.match(/#(\d+)/);
-  if (!m) return null;
-  const id = parseInt(m[1], 10);
-  return findings.find((f) => f.id === id) ?? null;
-}
-
-export function resolveByNumbers(message: string, findings: ReviewFinding[]): ReviewFinding[] {
-  const ids = new Set([...message.matchAll(/#(\d+)/g)].map((m) => parseInt(m[1], 10)));
-  if (ids.size === 0) return [];
-  return findings.filter((f) => ids.has(f.id));
-}
-
-export function isAddToReviewIntent(message: string): boolean {
-  return /\badd\b/i.test(message) && /\breview\b/i.test(message) && /#\d+/.test(message);
-}
-
-export function extractUserNote(message: string): string {
-  return message
-    .replace(/#\d+/g, '')
-    .replace(/\badd\b|\bto\b|\breview\b/gi, '')
-    .replace(/[,;]+/g, '')
-    .trim();
+  const findingRef = m ? parseInt(m[1], 10) : null;
+  const question = message.replace(/#(\d+)/g, 'this finding').trim();
+  return { kind: 'explain', findingRef, question };
 }
 
 export function resolveLineType(
