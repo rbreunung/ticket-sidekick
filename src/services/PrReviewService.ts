@@ -197,7 +197,7 @@ export class PrReviewService {
         : '';
 
     if (primary.length === 0) {
-      return `${header}${lowFold}\n\n<!-- bitbucket:review-session -->`;
+      return `${header}${lowFold}\n\n_Ask a question about the PR or reply **(c)** to exit._\n\n<!-- bitbucket:review-session -->`;
     }
 
     const byFile = new Map<string, ReviewFinding[]>();
@@ -221,7 +221,7 @@ export class PrReviewService {
       })
       .join('\n\n---\n\n');
 
-    return `${header}\n\n---\n\n${fileSections}${lowFold}\n\n---\n\n_Reply **#1** or describe a finding to ask a follow-up. To post findings as PR comments: **#2 #3 add to review**._\n\n<!-- bitbucket:review-session -->`;
+    return `${header}\n\n---\n\n${fileSections}${lowFold}\n\n---\n\n_Reply **#1** or describe a finding to ask a follow-up, or ask any question about the PR. To post findings as PR comments: **#2 #3 add to review**. Reply **(c)** to exit this session._\n\n<!-- bitbucket:review-session -->`;
   }
 
   formatPrComment(finding: ReviewFinding, userNote?: string): string {

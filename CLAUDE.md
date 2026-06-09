@@ -220,7 +220,7 @@ Detection order in the Jira handler: resolution selection → transition review 
 | --- | --- | --- |
 | `ReviewSession` | `bitbucket.session.review` | `<!-- bitbucket:review-session -->` |
 
-Detection order in the Bitbucket handler: `check` command → review session follow-up → new PR review.
+Detection order in the Bitbucket handler: `check` command → comment preview → review session follow-up (cancel check first, then try-catch around intent handling) → new PR review.
 
 **Important:** A PR URL anywhere in the prompt always bypasses both follow-up branches and starts a fresh review — even when a `<!-- bitbucket:review-session -->` marker is present in the last response. The `hasPrUrl()` helper in `reviewSessionState.ts` encodes this check and is unit-tested.
 
@@ -258,10 +258,19 @@ API endpoint: `POST /rest/api/2/issue` with `{ fields: { project: { key }, summa
 10. **Pass 2** (skipped in `quick` mode): if `additionalFilesNeeded` non-empty, fetch files via the API at the PR's `fromCommitHash` (never the local workspace). **No flat cap** — a cross-chunk cache (`fetchedFileCache`) fetches each file at most once, bounded by `MAX_CONTEXT_FILES_PER_BATCH`; `selectFilesWithinBudget` then includes as many as fit the chunk's remaining budget, smallest-first. A missing file degrades to a marker; an auth failure propagates
 11. **Critic pass** (deep mode only, i.e. `@bitbucket review deep`): `buildCriticPrompt` re-checks the chunk's findings against the diff; `parseCriticKeep` drops the ones it can't confirm (fail-open on an unparseable reply)
 12. `dedupeFindings` collapses the same issue across chunks (key: file + verified line + normalized title; stronger severity/confidence wins), then findings are numbered 1..N
-13. `PrReviewService.formatReview(…, confidenceThreshold)` → markdown report grouped by file with provenance tags; findings below `confidenceThreshold` (default 0.7) **fold** into a collapsed section (never deleted)
-14. `ReviewSession` saved to `workspaceState` for follow-up turns; follow-ups feed the finding's `diffHunk` into the prompt so answers see the real code
+13. `PrReviewService.formatReview(…, confidenceThreshold)` → markdown report grouped by file with provenance tags; findings below `confidenceThreshold` (default 0.7) **fold** into a collapsed section (never deleted). Footer text includes a `(c)` cancel hint and a "ask any question about the PR" prompt.
+14. A `_~N estimated tokens · budget K_` line is appended after the review output. The estimate uses `(totalInputChars + totalOutputChars) / 4` summed across all LLM calls (passes 1, continuation, 2, and critic). VS Code's LM API does not expose actual token counts; this is a ballpark consistent with the existing chunk-budget heuristic.
+15. `ReviewSession` saved to `workspaceState` for follow-up turns; follow-ups feed the finding's `diffHunk` into the prompt so answers see the real code
 
 **Review mode:** `@bitbucket review quick <url>` disables Pass 2; `@bitbucket review deep <url>` forces standard depth **and** enables the critic pass. Keyword overrides the `reviewMode` setting. Context widening (step 3) applies in all modes.
+
+**Follow-up turns** (all within the `<!-- bitbucket:review-session -->` session):
+- `#N <question>` — finding-specific explanation (uses `FOLLOW_UP_PROMPT_PREFIX` + finding details + `diffHunk`). Each LLM answer gets a `_~N estimated tokens_` footer.
+- General question with no `#N` — LLM first tries to match to a finding; if no match, falls back to a PR-level answer via `buildPrContextPrompt` (in `reviewSessionState.ts`, unit-tested), which includes PR title and all findings as context.
+- `#N` where N doesn't exist → friendly "Finding #N not found. The review has findings #1–#M." message.
+- `c` / `cancel` / etc. (`isCancellation`) — clears the session from `workspaceState` and shows "Review session ended." without the session marker (no further follow-ups until a new review).
+- Any LLM error → `**Follow-up failed: …**` with the session marker preserved so the user can retry.
+- Comment preview refinement errors → `**Refinement failed: …**` with the comment-preview marker preserved.
 
 **Line-number invariant:** numbering is render-only — `numberDiffLines` is applied solely when building the prompt string. `parseDiff`, `resolveLineType`, `locateAnchor`, and `splitFileDiff` always walk the **raw** diff with their own `@@`-anchored counters, so the visible gutter can never break parsing.
 

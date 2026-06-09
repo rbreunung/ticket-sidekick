@@ -199,6 +199,25 @@ export function parseFollowUpIntent(message: string): FollowUpIntent {
   return { kind: 'explain', findingRef, question };
 }
 
+export function buildPrContextPrompt(
+  session: Pick<ReviewSession, 'prTitle' | 'findings'>,
+  question: string,
+): string {
+  const lines = [
+    'Answer this question about a pull request. Use the PR title and review findings as context.',
+    '',
+    `PR: ${session.prTitle}`,
+    '',
+    'Findings:',
+    ...session.findings.map(
+      (f) => `#${f.id} [${f.severity}] ${f.title} (${f.file}${f.line != null ? `:${f.line}` : ''}): ${f.description}`,
+    ),
+    '',
+    `Question: ${question}`,
+  ];
+  return lines.join('\n');
+}
+
 export function resolveLineType(
   diff: string,
   lineNumber: number,
