@@ -45,6 +45,8 @@ export interface ReviewSession {
   repo: string;
   prId: number;
   findings: ReviewFinding[];
+  prDescription?: string;
+  changedFiles?: Array<{ path: string; deleted?: boolean }>;
 }
 
 export interface BitbucketCommentPreviewSession {
@@ -200,21 +202,37 @@ export function parseFollowUpIntent(message: string): FollowUpIntent {
 }
 
 export function buildPrContextPrompt(
-  session: Pick<ReviewSession, 'prTitle' | 'findings'>,
+  session: Pick<ReviewSession, 'prTitle' | 'prDescription' | 'changedFiles' | 'findings'>,
   question: string,
 ): string {
-  const lines = [
-    'Answer this question about a pull request. Use the PR title and review findings as context.',
+  const lines: string[] = [
+    'Answer this question about a pull request. Use all available context below.',
     '',
     `PR: ${session.prTitle}`,
-    '',
-    'Findings:',
-    ...session.findings.map(
-      (f) => `#${f.id} [${f.severity}] ${f.title} (${f.file}${f.line != null ? `:${f.line}` : ''}): ${f.description}`,
-    ),
-    '',
-    `Question: ${question}`,
   ];
+
+  if (session.prDescription?.trim()) {
+    lines.push('', 'Description:', session.prDescription.trim());
+  }
+
+  if (session.changedFiles?.length) {
+    lines.push('', 'Changed files:');
+    for (const f of session.changedFiles) {
+      lines.push(`- ${f.path}${f.deleted ? ' (deleted)' : ''}`);
+    }
+  }
+
+  if (session.findings.length > 0) {
+    lines.push(
+      '',
+      'Review findings:',
+      ...session.findings.map(
+        (f) => `#${f.id} [${f.severity}] ${f.title} (${f.file}${f.line != null ? `:${f.line}` : ''}): ${f.description}`,
+      ),
+    );
+  }
+
+  lines.push('', `Question: ${question}`);
   return lines.join('\n');
 }
 

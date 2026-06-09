@@ -1408,4 +1408,34 @@ describe('buildPrContextPrompt', () => {
     expect(() => buildPrContextPrompt(s, 'q')).not.toThrow();
     expect(buildPrContextPrompt(s, 'q')).not.toContain('undefined');
   });
+
+  it('includes the PR description when present', () => {
+    const s = { ...session, prDescription: 'Adds token refresh to OAuth flow.' };
+    expect(buildPrContextPrompt(s, 'q')).toContain('Adds token refresh to OAuth flow.');
+  });
+
+  it('includes changed files with paths', () => {
+    const s = { ...session, changedFiles: [
+      { path: 'src/auth.ts' },
+      { path: 'src/old.ts', deleted: true },
+    ]};
+    const p = buildPrContextPrompt(s, 'q');
+    expect(p).toContain('src/auth.ts');
+    expect(p).toContain('src/old.ts');
+    expect(p).toContain('deleted');
+  });
+
+  it('omits Description and Changed files sections when absent', () => {
+    const p = buildPrContextPrompt(session, 'q');
+    expect(p).not.toContain('Description:');
+    expect(p).not.toContain('Changed files:');
+  });
+
+  it('omits findings section when findings array is empty', () => {
+    const s = { prTitle: 'Clean PR', prDescription: 'Refactor only.', changedFiles: [{ path: 'a.ts' }], findings: [] };
+    const p = buildPrContextPrompt(s, 'safe?');
+    expect(p).toContain('Refactor only.');
+    expect(p).toContain('a.ts');
+    expect(p).not.toContain('Review findings:');
+  });
 });

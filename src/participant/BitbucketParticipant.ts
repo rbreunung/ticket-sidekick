@@ -610,6 +610,8 @@ export function createBitbucketParticipant(
         repo: parsed.repo,
         prId: parsed.prId,
         findings: numbered,
+        prDescription: pr.description,
+        changedFiles: fileDiffs.map(d => ({ path: d.path, ...(d.deleted ? { deleted: true } : {}) })),
       } satisfies ReviewSession);
     } catch (err) {
       stream.markdown(`**Review failed:** ${err instanceof Error ? err.message : String(err)}`);
