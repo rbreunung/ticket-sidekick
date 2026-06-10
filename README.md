@@ -730,10 +730,12 @@ Run `@bitbucket check` after setup to confirm the connection and see which accou
 | `@bitbucket review deep <pr-url>` | Force standard two-pass review regardless of default setting |
 | `@bitbucket #2` | Explain finding #2 in detail |
 | `@bitbucket #2 is this always a problem?` | Ask a follow-up question about a specific finding |
+| `@bitbucket is the change backwards-compatible?` | Ask any general question about the PR — no finding reference needed |
 | `@bitbucket #1 #3 add to review` | Preview findings #1 and #3 as comments — reply "post it" to confirm, "(c)" to cancel, or refine |
 | `@bitbucket add #1 #2 #3 to review` | Same — numbers can appear anywhere relative to the keywords |
 | `@bitbucket add all to review` | Preview all findings as PR comments at once |
 | `@bitbucket #2 add to review blocking merge` | Preview with reviewer note "blocking merge" appended — confirm before posting |
+| `@bitbucket c` | Exit the current review session |
 
 ### PR review
 
@@ -777,12 +779,24 @@ _by Jane Smith → main · 3 files changed_
 
 ### Follow-ups and posting comments
 
-After a review, the session stays active for multi-turn follow-ups. Reference a finding by number or describe it in natural language:
+After a review, the session stays active for multi-turn follow-ups. Reference a finding by number, describe it in natural language, or ask any general question about the PR:
 
 ```text
 @bitbucket #2 is this always a problem or only if the site has third-party scripts?
 @bitbucket can the localStorage finding be downgraded if we enforce a strict CSP?
 @bitbucket explain the SQL injection issue and show a fixed version
+@bitbucket is this change backwards-compatible with the v2 API?
+@bitbucket are there missing test cases for the new endpoints?
+```
+
+Questions without a `#N` reference automatically answer at the PR level using the title and all findings as context.
+
+Each AI response ends with a `_~N estimated tokens_` line (using a `chars/4` heuristic — VS Code's LM API does not expose exact counts).
+
+To exit the review session, reply `c` or `cancel`:
+
+```text
+c
 ```
 
 Push selected findings back to Bitbucket as PR comments:

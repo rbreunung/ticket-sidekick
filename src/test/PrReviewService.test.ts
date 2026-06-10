@@ -6,7 +6,7 @@ import {
   numberDiffLines, locateAnchor, resolveFindingAnchors,
   estimateChunkTokens, selectFilesWithinBudget, MAX_CONTEXT_FILES_PER_BATCH,
   parseCriticKeep, dedupeFindings, extractHunkAround,
-  parseFollowUpIntent,
+  parseFollowUpIntent, buildPrContextPrompt,
 } from '../participant/reviewSessionState';
 import type { ReviewFinding } from '../participant/reviewSessionState';
 import { PrReviewService } from '../services/PrReviewService';
@@ -403,6 +403,23 @@ describe('PrReviewService.formatReview', () => {
 
     expect(output).toContain('_No issues found._');
     expect(output).toContain('<!-- bitbucket:review-session -->');
+  });
+
+  it('includes a cancel hint in the reply instruction', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const pr: BitbucketPR = {
+      id: 5, title: 'PR', description: '',
+      author: { displayName: 'Alice', emailAddress: '' },
+      targetBranch: 'main', fromCommitHash: 'abc',
+    };
+    const findings: ReviewFinding[] = [
+      { id: 1, file: 'a.ts', severity: 'warning', title: 'T', description: 'D', recommendation: 'R' },
+    ];
+    const withFindings = service.formatReview(findings, pr, 1);
+    const noFindings = service.formatReview([], pr, 1);
+    expect(withFindings).toContain('(c)');
+    expect(noFindings).toContain('(c)');
   });
 });
 
@@ -1345,5 +1362,80 @@ describe('annotateWithLineTypes', () => {
     const findings = [{ file: 'src/api.ts', line: 999, severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
     const result = annotateWithLineTypes(findings, diffs);
     expect(result[0].lineType).toBeUndefined();
+  });
+});
+
+describe('buildPrContextPrompt', () => {
+  const session = {
+    prTitle: 'Add OAuth support',
+    findings: [
+      { id: 1, severity: 'critical' as const, title: 'SQL injection', file: 'db.ts', line: 42,
+        description: 'Unsanitised input.', recommendation: 'Use params' },
+      { id: 2, severity: 'warning' as const, title: 'Missing error handler', file: 'api.ts',
+        description: 'Unhandled rejection.', recommendation: 'Add catch' },
+    ],
+  };
+
+  it('includes the PR title', () => {
+    expect(buildPrContextPrompt(session, 'is this safe?')).toContain('Add OAuth support');
+  });
+
+  it('includes each finding with id, severity, title, and file', () => {
+    const p = buildPrContextPrompt(session, 'q');
+    expect(p).toContain('#1');
+    expect(p).toContain('critical');
+    expect(p).toContain('SQL injection');
+    expect(p).toContain('db.ts');
+    expect(p).toContain('#2');
+    expect(p).toContain('warning');
+    expect(p).toContain('Missing error handler');
+  });
+
+  it('includes the question at the end of the prompt', () => {
+    const p = buildPrContextPrompt(session, 'is the scope right?');
+    expect(p.trimEnd()).toMatch(/is the scope right\?$/);
+  });
+
+  it('includes line number when present', () => {
+    expect(buildPrContextPrompt(session, 'q')).toContain('42');
+  });
+
+  it('omits line number separator when line is undefined', () => {
+    const s = { prTitle: 'PR', findings: [
+      { id: 1, severity: 'warning' as const, title: 'T', file: 'a.ts',
+        description: 'D', recommendation: 'R' },
+    ]};
+    expect(() => buildPrContextPrompt(s, 'q')).not.toThrow();
+    expect(buildPrContextPrompt(s, 'q')).not.toContain('undefined');
+  });
+
+  it('includes the PR description when present', () => {
+    const s = { ...session, prDescription: 'Adds token refresh to OAuth flow.' };
+    expect(buildPrContextPrompt(s, 'q')).toContain('Adds token refresh to OAuth flow.');
+  });
+
+  it('includes changed files with paths', () => {
+    const s = { ...session, changedFiles: [
+      { path: 'src/auth.ts' },
+      { path: 'src/old.ts', deleted: true },
+    ]};
+    const p = buildPrContextPrompt(s, 'q');
+    expect(p).toContain('src/auth.ts');
+    expect(p).toContain('src/old.ts');
+    expect(p).toContain('deleted');
+  });
+
+  it('omits Description and Changed files sections when absent', () => {
+    const p = buildPrContextPrompt(session, 'q');
+    expect(p).not.toContain('Description:');
+    expect(p).not.toContain('Changed files:');
+  });
+
+  it('omits findings section when findings array is empty', () => {
+    const s = { prTitle: 'Clean PR', prDescription: 'Refactor only.', changedFiles: [{ path: 'a.ts' }], findings: [] };
+    const p = buildPrContextPrompt(s, 'safe?');
+    expect(p).toContain('Refactor only.');
+    expect(p).toContain('a.ts');
+    expect(p).not.toContain('Review findings:');
   });
 });
