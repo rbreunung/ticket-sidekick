@@ -79,11 +79,11 @@ Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|
 - createFromEmail: create a Jira ticket from an email (.eml file); triggered by "create from email", "ticket from email"; only use this when the session is already loaded via command palette
 - addEmailComment: import an email (.eml) from the chat without using the command palette — opens a file picker; if a ticket key is in the prompt (e.g. PROJ-42) adds the email as a comment, otherwise shows preview to create or comment; triggered by "add email", "add email to", "import email", "email to ticket", "add comment from mail", "create ticket from mail", "create from mail", "add email as comment"
 - contentSource: how the comment or description content should be produced
-  - "literal": user provided the exact text to post (e.g. "add comment: LGTM")
-  - "generate": user gave a self-contained instruction with no implicit reference to prior work (e.g. "write a poem about Star Trek", "add a 12-line poem as comment"); only use this when content is purely creative or standalone
-  - "history-recent": user references a specific artifact from the last few messages (e.g. "add that patch", "post the result above", "add it as a comment")
-  - "history-full": user refers to work developed in the conversation — use this whenever the instruction mentions "the analysis", "the investigation", "the findings", "what we found/discussed/developed", "the solution", "the root cause", "the reproduction steps", or any topic that implies prior investigation; when in doubt between generate and history-full, prefer history-full
-  - default to "literal" for operations other than addComment and updateField
+  - "literal": user gave the exact text to post verbatim (e.g. "add comment: LGTM")
+  - "generate": self-contained instruction with no reference to prior work — purely creative or standalone (e.g. "write a poem about Star Trek", "add a 12-line poem as comment")
+  - "history-recent": references a specific recent artifact (e.g. "add that patch", "post the result above", "add it as a comment")
+  - "history-full": references prior investigation/findings/analysis in the conversation — use whenever the instruction mentions "the analysis", "the investigation", "the findings", "what we found/discussed/developed", "the solution", "the root cause", "the reproduction steps", or any topic implying prior investigation
+  - default: "literal", except for addComment/updateField — when in doubt between generate and history-full, prefer history-full
 
 Command: `;
 
@@ -94,6 +94,19 @@ export function extractFixVersionFromPrompt(prompt: string): string | null {
   if (keyword) return keyword[1].toLowerCase();
   return null;
 }
+
+async function sendAndCollect(
+  model: vscode.LanguageModelChat,
+  messages: vscode.LanguageModelChatMessage[],
+  token: vscode.CancellationToken,
+): Promise<string> {
+  const response = await model.sendRequest(messages, {}, token);
+  let text = '';
+  for await (const chunk of response.text) text += chunk;
+  return text;
+}
+
+const RETRY_ON_BAD_JSON = 'Your last reply was not a valid JSON object. Reply again with ONLY the JSON object, no other text.';
 
 export async function parseIntent(
   prompt: string,
@@ -107,12 +120,18 @@ export async function parseIntent(
     'Understood. I parse Jira commands into structured JSON.',
   );
   const task = vscode.LanguageModelChatMessage.User(INTENT_PROMPT + JSON.stringify(prompt));
-  const response = await model.sendRequest([roleSetup, roleAck, task], {}, token);
-  let raw = '';
-  for await (const chunk of response.text) {
-    raw += chunk;
+  const messages = [roleSetup, roleAck, task];
+  let raw = await sendAndCollect(model, messages, token);
+  let jsonText = extractJsonObject(raw);
+  if (!jsonText) {
+    // One retry: feed the unparseable reply back and ask again, before giving up.
+    messages.push(
+      vscode.LanguageModelChatMessage.Assistant(raw),
+      vscode.LanguageModelChatMessage.User(RETRY_ON_BAD_JSON),
+    );
+    raw = await sendAndCollect(model, messages, token);
+    jsonText = extractJsonObject(raw);
   }
-  const jsonText = extractJsonObject(raw);
   if (!jsonText) throw new Error(`Model did not return a JSON object. Response: ${raw.slice(0, 200)}`);
   return JSON.parse(jsonText) as ParsedIntent;
 }
@@ -259,14 +278,23 @@ export async function generateDescriptionAndCommentsSummary(
   return text.trim();
 }
 
+export interface SpellCheckResult {
+  correctedText: string;
+  changeSummary: string | null;
+}
+
 export async function spellCheckValue(
   text: string,
   model: vscode.LanguageModelChat,
   token: vscode.CancellationToken,
-): Promise<string | null> {
+): Promise<SpellCheckResult | null> {
   const roleText = 'You are a copy editor. Your task is to find and correct spelling and grammar errors in text.';
   const roleAck = 'Understood. I identify and fix spelling and grammar errors.';
-  const taskPrompt = `Check this text for spelling and grammar errors:\n\n${text}\n\nIf there are no errors, reply with exactly: UNCHANGED\nIf there are errors, reply with ONLY the corrected text, no explanation.`;
+  const taskPrompt =
+    `Check this text for spelling and grammar errors:\n\n${text}\n\n` +
+    'If there are no errors, reply with exactly: UNCHANGED\n' +
+    'If there are errors, reply with the corrected text, then a line containing only "---", ' +
+    'then a short bullet list (max 5 bullets) of what you changed and why. No other explanation.';
   const response = await model.sendRequest(
     [
       vscode.LanguageModelChatMessage.User(roleText),
@@ -279,8 +307,13 @@ export async function spellCheckValue(
   let raw = '';
   for await (const chunk of response.text) raw += chunk;
   const trimmed = raw.trim();
-  if (/^unchanged$/i.test(trimmed)) return null;
-  return trimmed || null;
+  if (!trimmed || /^unchanged$/i.test(trimmed)) return null;
+  const separator = trimmed.match(/\n-{3,}\n/);
+  if (!separator) return { correctedText: trimmed, changeSummary: null };
+  const splitAt = separator.index ?? trimmed.length;
+  const correctedText = trimmed.slice(0, splitAt).trim();
+  const changeSummary = trimmed.slice(splitAt + separator[0].length).trim() || null;
+  return correctedText ? { correctedText, changeSummary } : null;
 }
 
 export function isPointerPrompt(prompt: string): boolean {

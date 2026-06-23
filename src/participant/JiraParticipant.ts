@@ -38,20 +38,28 @@ export function createJiraParticipant(
     const config = await configService.getConfig();
 
     if (!config.baseUrl) {
-      stream.markdown(
-        '**Jira base URL not configured.**\n\nAdd `ticketSidekick.jira.baseUrl` to your VS Code settings (e.g. `https://jira.mycompany.com`).',
+      const settingsLink = new vscode.MarkdownString(
+        '**Jira base URL not configured.**\n\n' +
+        'Add `ticketSidekick.jira.baseUrl` to your VS Code settings (e.g. `https://jira.mycompany.com`), ' +
+        `or [open Settings](command:workbench.action.openSettings?${encodeURIComponent(JSON.stringify('ticketSidekick.jira.baseUrl'))}) directly.`,
       );
+      settingsLink.isTrusted = { enabledCommands: ['workbench.action.openSettings'] };
+      stream.markdown(settingsLink);
       return;
     }
 
     if (!config.token) {
-      const command =
-        config.authType === 'cloud'
-          ? 'Ticket Sidekick: Configure Cloud Credentials'
-          : 'Ticket Sidekick: Set Personal Access Token';
-      stream.markdown(
-        `**Jira credentials not configured.**\n\nRun the command \`${command}\` from the Command Palette.`,
+      const setupCommand = config.authType === 'cloud'
+        ? 'ticket-sidekick.configureCloud'
+        : 'ticket-sidekick.setDataCenterToken';
+      const setupLabel = config.authType === 'cloud'
+        ? 'Ticket Sidekick: Configure Jira Cloud Credentials'
+        : 'Ticket Sidekick: Set Jira Personal Access Token';
+      const credentialsLink = new vscode.MarkdownString(
+        `**Jira credentials not configured.**\n\nRun [${setupLabel}](command:${setupCommand}) from the chat, or find it in the Command Palette.`,
       );
+      credentialsLink.isTrusted = { enabledCommands: [setupCommand] };
+      stream.markdown(credentialsLink);
       return;
     }
 

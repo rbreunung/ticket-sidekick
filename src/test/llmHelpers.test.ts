@@ -52,6 +52,26 @@ describe('parseIntent', () => {
     expect(intent.operation).toBe('getTicket');
     expect(intent.ticketKey).toBe('PROJ-1');
   });
+
+  it('retries once when the first reply is not valid JSON, then succeeds', async () => {
+    const sendRequest = vi
+      .fn()
+      .mockResolvedValueOnce({ text: (async function* () { yield 'sorry, I cannot help with that'; })() })
+      .mockResolvedValueOnce({ text: (async function* () { yield '{"operation":"getTicket","ticketKey":"PROJ-1"}'; })() });
+    const model = { sendRequest };
+    const intent = await parseIntent('show PROJ-1', model as never, {} as never);
+    expect(intent.operation).toBe('getTicket');
+    expect(sendRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it('throws after a second unparseable reply', async () => {
+    const sendRequest = vi.fn().mockResolvedValue({ text: (async function* () { yield 'still not json'; })() });
+    const model = { sendRequest };
+    await expect(parseIntent('show PROJ-1', model as never, {} as never)).rejects.toThrow(
+      'Model did not return a JSON object',
+    );
+    expect(sendRequest).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('extractHistoryTurns', () => {

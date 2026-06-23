@@ -9,6 +9,17 @@ import { streamContentPreview } from './contentHandler';
 import { parseIntent } from './llmHelpers';
 import { resolveProjectKey } from './ticketContext';
 
+async function sendAndCollect(
+  model: vscode.LanguageModelChat,
+  messages: vscode.LanguageModelChatMessage[],
+  token: vscode.CancellationToken,
+): Promise<string> {
+  const response = await model.sendRequest(messages, {}, token);
+  let text = '';
+  for await (const chunk of response.text) text += chunk;
+  return text;
+}
+
 async function checkSectionCoverage(
   prompt: string,
   sections: string[],
@@ -24,10 +35,20 @@ async function checkSectionCoverage(
   const task = vscode.LanguageModelChatMessage.User(
     `Does this text address any of these sections? Reply with ONLY a JSON array of section names that are clearly covered.\nSections: ${JSON.stringify(sections)}\nText: ${JSON.stringify(prompt)}`,
   );
-  const response = await model.sendRequest([roleSetup, roleAck, task], {}, token);
-  let raw = '';
-  for await (const chunk of response.text) raw += chunk;
-  const match = raw.match(/\[[\s\S]*\]/);
+  const messages = [roleSetup, roleAck, task];
+  let raw = await sendAndCollect(model, messages, token);
+  let match = raw.match(/\[[\s\S]*\]/);
+  if (!match) {
+    // One retry: feed the unparseable reply back and ask again, before giving up.
+    messages.push(
+      vscode.LanguageModelChatMessage.Assistant(raw),
+      vscode.LanguageModelChatMessage.User(
+        'Your last reply was not a valid JSON array. Reply again with ONLY the JSON array, no other text.',
+      ),
+    );
+    raw = await sendAndCollect(model, messages, token);
+    match = raw.match(/\[[\s\S]*\]/);
+  }
   if (!match) return [];
   try {
     return JSON.parse(match[0]) as string[];
