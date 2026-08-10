@@ -13,6 +13,14 @@ Neither participant requires the other to be configured.
 
 ## @jira — Jira
 
+### Quickstart
+
+1. Set `ticketSidekick.jira.baseUrl` in VS Code settings — Cloud: `https://your-org.atlassian.net`, Data Center: your instance URL
+2. Cloud only: also set `ticketSidekick.jira.authType` to `"cloud"` (Data Center is the default, no extra setting needed)
+3. Command Palette → `Ticket Sidekick: Set Jira Personal Access Token` (Data Center) or `Ticket Sidekick: Configure Jira Cloud Credentials` (Cloud)
+
+Then open Copilot Chat and try `@jira check` to confirm the connection, or `@jira show PROJ-123` to read a ticket. Full setup details and every command are below.
+
 ### Prerequisites
 
 - VS Code 1.90 or later with GitHub Copilot extension
@@ -674,6 +682,14 @@ When enabled, every `@jira` response starts with an italic line showing the acti
 
 ## @bitbucket — Bitbucket PR Reviews
 
+### Quickstart
+
+1. Set `ticketSidekick.bitbucket.authType` to `"datacenter"` (default) or `"cloud"`
+2. Data Center only: also set `ticketSidekick.bitbucket.baseUrl` (Cloud talks to `api.bitbucket.org` automatically — leave unset)
+3. Command Palette → `Ticket Sidekick: Set Bitbucket Personal Access Token` (Data Center) or `Ticket Sidekick: Configure Bitbucket Cloud Credentials` (Cloud)
+
+Then open Copilot Chat and run `@bitbucket check` to confirm the connection, or paste a PR URL to start a review. Full setup details and every command are below.
+
 ### Prerequisites
 
 - VS Code 1.90 or later with GitHub Copilot extension
@@ -852,7 +868,16 @@ When enabled, every `@bitbucket` response (except `check`) starts with an italic
 "ticketSidekick.bitbucket.reviewInstructions": "This project follows Google Style Guide. Focus on security issues and ignore minor style suggestions."
 ```
 
-Additional instructions appended to the built-in PR review prompt. Use this to add project-specific guidance the model should apply on every review.
+Additional instructions appended to the built-in PR review prompt. Use this to add project-specific guidance the model should apply on every review. The built-in grounding rules and output format are always included — this setting only adds extra guidance, it can't remove them.
+
+Some examples of what works well here:
+
+```text
+"This project follows the Google Style Guide."
+"Focus on security issues only, ignore style/naming."
+"This is a prototype — skip suggestions about test coverage."
+"Pay extra attention to off-by-one errors in pagination code."
+```
 
 **Using a local model:** `@bitbucket` works with any model available in GitHub Copilot Chat, including local models via [Ollama](https://ollama.com). Use a model with at least 16k context (32k+ recommended for large PRs).
 

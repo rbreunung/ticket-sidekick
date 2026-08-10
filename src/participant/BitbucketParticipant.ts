@@ -131,14 +131,22 @@ async function handleCheck(
     const urlStatus = config.authType === 'cloud'
       ? 'n/a (Cloud)'
       : (config.baseUrl ? 'present' : '**absent** — add `ticketSidekick.bitbucket.baseUrl` to VS Code settings');
-    stream.markdown(
+    const setupCommand = config.authType === 'cloud'
+      ? 'ticket-sidekick.configureBitbucketCloud'
+      : 'ticket-sidekick.setBitbucketDataCenterToken';
+    const setupLabel = config.authType === 'cloud'
+      ? 'Ticket Sidekick: Configure Bitbucket Cloud Credentials'
+      : 'Ticket Sidekick: Set Bitbucket Personal Access Token';
+    const notConfigured = new vscode.MarkdownString(
       '**Bitbucket not configured.**\n\n' +
       `| Setting | Status |\n|---|---|\n` +
       `| Auth type | ${config.authType} |\n` +
       `| Base URL | ${urlStatus} |\n` +
       `| Token | ${tokenStatus(config.token)} |\n\n` +
-      'Run **Ticket Sidekick: Set Bitbucket Personal Access Token** (Data Center) or **Ticket Sidekick: Configure Bitbucket Cloud Credentials** from the Command Palette.',
+      `Run [${setupLabel}](command:${setupCommand}) from the chat, or find it in the Command Palette.`,
     );
+    notConfigured.isTrusted = { enabledCommands: [setupCommand] };
+    stream.markdown(notConfigured);
     return;
   }
   // For Data Center, a malformed baseUrl is a common misconfiguration — surface it clearly
@@ -414,9 +422,17 @@ export function createBitbucketParticipant(
       ? !!config.token
       : !!(config.baseUrl && config.token);
     if (!isConfigured) {
-      stream.markdown(
-        '**Bitbucket not configured.**\n\nRun **Ticket Sidekick: Set Bitbucket Personal Access Token** or **Ticket Sidekick: Configure Bitbucket Cloud Credentials** first.',
+      const setupCommand = config.authType === 'cloud'
+        ? 'ticket-sidekick.configureBitbucketCloud'
+        : 'ticket-sidekick.setBitbucketDataCenterToken';
+      const setupLabel = config.authType === 'cloud'
+        ? 'Ticket Sidekick: Configure Bitbucket Cloud Credentials'
+        : 'Ticket Sidekick: Set Bitbucket Personal Access Token';
+      const notConfigured = new vscode.MarkdownString(
+        `**Bitbucket not configured.**\n\nRun [${setupLabel}](command:${setupCommand}) from the chat, or find it in the Command Palette.`,
       );
+      notConfigured.isTrusted = { enabledCommands: [setupCommand] };
+      stream.markdown(notConfigured);
       return;
     }
 

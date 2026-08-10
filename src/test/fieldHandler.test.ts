@@ -26,7 +26,10 @@ describe('handleSpellCheck', () => {
   });
 
   it('calls streamContentPreview with corrected text and emits ticket marker on happy path', async () => {
-    vi.mocked(spellCheckValue).mockResolvedValue('We need OAuth2 authentication for the mobile app.');
+    vi.mocked(spellCheckValue).mockResolvedValue({
+      correctedText: 'We need OAuth2 authentication for the mobile app.',
+      changeSummary: null,
+    });
     const stream = mockStream();
     const ws = mockWs();
 
@@ -39,6 +42,19 @@ describe('handleSpellCheck', () => {
     expect(session.operation).toBe('updateDescription');
     expect(session.currentContent).toBe('We need OAuth2 authentication for the mobile app.');
     expect(stream.markdown).toHaveBeenCalledWith('\n\n<!-- @jira-ticket:PROJ-123 -->');
+  });
+
+  it('streams the change summary before the preview when the model provides one', async () => {
+    vi.mocked(spellCheckValue).mockResolvedValue({
+      correctedText: 'We need OAuth2 authentication for the mobile app.',
+      changeSummary: '- Fixed "OAuth" capitalization',
+    });
+    const stream = mockStream();
+    const ws = mockWs();
+
+    await handleSpellCheck('PROJ-123', service, nullModel, stream as never, nullToken, ws as never);
+
+    expect(stream.markdown).toHaveBeenCalledWith('**Changes:**\n- Fixed "OAuth" capitalization\n\n');
   });
 
   it('streams a no-description message when description is empty', async () => {

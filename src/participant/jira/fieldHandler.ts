@@ -150,15 +150,18 @@ export async function handleSpellCheck(
     return;
   }
   const markdownDescription = wikiToMarkdown(rawDescription);
-  const corrected = await spellCheckValue(markdownDescription, model, token);
-  if (!corrected) {
+  const result = await spellCheckValue(markdownDescription, model, token);
+  if (!result) {
     stream.markdown(`No spelling or grammar issues found in **${ticketKey}**.`);
     return;
+  }
+  if (result.changeSummary) {
+    stream.markdown(`**Changes:**\n${result.changeSummary}\n\n`);
   }
   const session: ContentSession = {
     ticketKey,
     operation: 'updateDescription',
-    currentContent: corrected,
+    currentContent: result.correctedText,
     historyContext: undefined,
     contentSource: 'generate',
   };
