@@ -24,6 +24,10 @@ import {
   handleCreateFromEmail, handleAddEmailFromChat, handleEmailContentSession,
 } from './jira/emailHandler';
 import type { EmailContentSession } from './sessionState';
+import {
+  handleImportVeracodeReport, handleVeracodeTemplateSelection, handleVeracodeReviewReply,
+} from './jira/veracodeHandler';
+import type { VeracodeTemplateSelectionSession, VeracodeReviewSession } from './sessionState';
 
 export function createJiraParticipant(
   context: vscode.ExtensionContext,
@@ -498,6 +502,24 @@ export function createJiraParticipant(
       }
     }
 
+    // Veracode template/issue-type selection
+    if (lastResponse.includes('<!-- jira:veracode-template -->')) {
+      const templateSession = ws.get<VeracodeTemplateSelectionSession>('jira.session.veracodeTemplateSelection');
+      if (templateSession) {
+        await handleVeracodeTemplateSelection(request.prompt, templateSession, jiraClient, ticketService, stream, ws, config.baseUrl);
+        return;
+      }
+    }
+
+    // Veracode flaw review / selection screen
+    if (lastResponse.includes('<!-- jira:veracode-review -->')) {
+      const reviewSession = ws.get<VeracodeReviewSession>('jira.session.veracodeReview');
+      if (reviewSession) {
+        await handleVeracodeReviewReply(request.prompt, reviewSession, ticketService, stream, ws, config.baseUrl);
+        return;
+      }
+    }
+
     // Comment list — user replied with a comment number to view in full
     if (lastResponse.includes('<!-- jira:comment-list -->')) {
       const commentSession = ws.get<CommentListSession>('jira.session.commentList');
@@ -560,6 +582,11 @@ export function createJiraParticipant(
 
     if (intent.operation === 'addEmailComment') {
       await handleAddEmailFromChat(request, stream, token, jiraClient, ticketService, configService, ws);
+      return;
+    }
+
+    if (intent.operation === 'importVeracode') {
+      await handleImportVeracodeReport(request, stream, token, jiraClient, ticketService, ws, intent.projectKey);
       return;
     }
 
