@@ -3,6 +3,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { parseVeracodeReport, filterFlaws, assertSafeVeracodeXml } from '../utils/veracodeReport';
 import { deriveShortLabel, buildSummary, buildDescriptionWiki, buildLabels } from '../utils/veracodeReport';
+import { chunkIssueIds, buildDedupJql, extractDedupMap } from '../utils/veracodeReport';
 
 const fixture = (name: string) =>
   readFileSync(join(__dirname, 'fixtures', 'veracode', name), 'utf-8');
@@ -171,5 +172,49 @@ describe('buildLabels', () => {
     const sqlInjection = flaws.find(f => f.issueId === '10101')!;
     const merged = buildLabels(sqlInjection, ['security', 'veracode']);
     expect(merged).toEqual(['veracode', 'veracode-issue-10101', 'cwe-89', 'security']);
+  });
+});
+
+describe('chunkIssueIds', () => {
+  it('chunks into groups of 40 by default', () => {
+    const ids = Array.from({ length: 85 }, (_, i) => String(i));
+    const chunks = chunkIssueIds(ids);
+    expect(chunks).toHaveLength(3);
+    expect(chunks[0]).toHaveLength(40);
+    expect(chunks[2]).toHaveLength(5);
+  });
+
+  it('returns a single chunk when under the limit', () => {
+    expect(chunkIssueIds(['1', '2', '3'])).toEqual([['1', '2', '3']]);
+  });
+
+  it('returns an empty array for no ids', () => {
+    expect(chunkIssueIds([])).toEqual([]);
+  });
+});
+
+describe('buildDedupJql', () => {
+  it('builds a JQL clause matching veracode-issue-<id> labels for the project', () => {
+    expect(buildDedupJql('PROJ', ['10101', '10103'])).toBe(
+      'project = PROJ AND labels in (veracode-issue-10101, veracode-issue-10103)',
+    );
+  });
+});
+
+describe('extractDedupMap', () => {
+  it('maps issueId -> ticket key from returned labels, ignoring unrelated labels', () => {
+    const issues = [
+      { key: 'PROJ-501', labels: ['veracode', 'veracode-issue-10101', 'cwe-89'] },
+      { key: 'PROJ-502', labels: ['backend', 'veracode-issue-10103'] },
+      { key: 'PROJ-503', labels: ['unrelated-ticket'] },
+    ];
+    const map = extractDedupMap(issues);
+    expect(map.get('10101')).toBe('PROJ-501');
+    expect(map.get('10103')).toBe('PROJ-502');
+    expect(map.size).toBe(2);
+  });
+
+  it('returns an empty map when nothing matches', () => {
+    expect(extractDedupMap([{ key: 'PROJ-1', labels: ['random'] }]).size).toBe(0);
   });
 });

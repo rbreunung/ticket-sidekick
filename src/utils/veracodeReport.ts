@@ -183,3 +183,29 @@ export function buildLabels(flaw: VeracodeFlaw, templateLabels: string[] = []): 
   if (flaw.cweId) own.push(`cwe-${flaw.cweId}`);
   return [...new Set([...own, ...templateLabels])];
 }
+
+const DEDUP_CHUNK_SIZE = 40; // keeps generated JQL well under Jira's practical query-length limits
+
+export function chunkIssueIds(issueIds: string[], chunkSize = DEDUP_CHUNK_SIZE): string[][] {
+  const chunks: string[][] = [];
+  for (let i = 0; i < issueIds.length; i += chunkSize) {
+    chunks.push(issueIds.slice(i, i + chunkSize));
+  }
+  return chunks;
+}
+
+export function buildDedupJql(projectKey: string, issueIds: string[]): string {
+  const labels = issueIds.map(id => `veracode-issue-${id}`);
+  return `project = ${projectKey} AND labels in (${labels.join(', ')})`;
+}
+
+export function extractDedupMap(issues: Array<{ key: string; labels: string[] }>): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const issue of issues) {
+    for (const label of issue.labels) {
+      const match = label.match(/^veracode-issue-(\d+)$/);
+      if (match) map.set(match[1], issue.key);
+    }
+  }
+  return map;
+}
