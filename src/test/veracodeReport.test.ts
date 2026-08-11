@@ -4,6 +4,7 @@ import { join } from 'path';
 import { parseVeracodeReport, filterFlaws, assertSafeVeracodeXml } from '../utils/veracodeReport';
 import { deriveShortLabel, buildSummary, buildDescriptionWiki, buildLabels } from '../utils/veracodeReport';
 import { chunkIssueIds, buildDedupJql, extractDedupMap } from '../utils/veracodeReport';
+import { buildReviewRows } from '../utils/veracodeReport';
 
 const fixture = (name: string) =>
   readFileSync(join(__dirname, 'fixtures', 'veracode', name), 'utf-8');
@@ -216,5 +217,18 @@ describe('extractDedupMap', () => {
 
   it('returns an empty map when nothing matches', () => {
     expect(extractDedupMap([{ key: 'PROJ-1', labels: ['random'] }]).size).toBe(0);
+  });
+});
+
+describe('buildReviewRows', () => {
+  it('assigns sequential numeric ids to new flaws and A-prefixed ids to already-ticketed ones, in flaw order', () => {
+    const flaws = parseVeracodeReport(fixture('sample-report.xml'));
+    const dedupMap = new Map([['10102', 'PROJ-501']]); // note: 10102 is the "Fixed" flaw, filtered out upstream in practice —
+                                                        // here we test buildReviewRows in isolation with all 3 fixture flaws
+    const rows = buildReviewRows(flaws, dedupMap, ['security-review']);
+    expect(rows.find(r => r.issueId === '10102')).toMatchObject({ id: 'A1', included: false, existingTicketKey: 'PROJ-501' });
+    expect(rows.find(r => r.issueId === '10101')).toMatchObject({ id: '1', included: true, existingTicketKey: null });
+    expect(rows.find(r => r.issueId === '10103')).toMatchObject({ id: '2', included: true, existingTicketKey: null });
+    expect(rows.find(r => r.issueId === '10101')!.labels).toContain('security-review');
   });
 });

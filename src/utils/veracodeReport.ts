@@ -225,3 +225,29 @@ export interface VeracodeReviewRow {
   existingTicketKey: string | null;
   included: boolean; // whether this row will be (re)created if the batch runs
 }
+
+export function buildReviewRows(
+  flaws: VeracodeFlaw[],
+  dedupMap: Map<string, string>,
+  templateLabels: string[] = [],
+): VeracodeReviewRow[] {
+  const rows: VeracodeReviewRow[] = [];
+  let newIndex = 0;
+  let ticketedIndex = 0;
+  for (const flaw of flaws) {
+    const existingTicketKey = dedupMap.get(flaw.issueId) ?? null;
+    rows.push({
+      id: existingTicketKey ? `A${++ticketedIndex}` : `${++newIndex}`,
+      issueId: flaw.issueId,
+      severity: flaw.severity,
+      severityLabelText: severityLabel(flaw.severity),
+      cweId: flaw.cweId,
+      summary: buildSummary(flaw),
+      labels: buildLabels(flaw, templateLabels),
+      descriptionWiki: buildDescriptionWiki(flaw),
+      existingTicketKey,
+      included: existingTicketKey === null,
+    });
+  }
+  return rows;
+}
