@@ -60,6 +60,12 @@ export function parseVeracodeReport(xml: string): VeracodeFlaw[] {
     ignoreAttributes: false,
     attributeNamePrefix: '',
     isArray: (tagName: string) => ARRAY_TAGS.has(tagName),
+    // fast-xml-parser only decodes the 5 predefined XML entities (&amp; &lt; &gt; &apos; &quot;) by
+    // default — numeric character references (e.g. &#x28; / &#x29;) are left as literal text unless
+    // htmlEntities is enabled. Veracode reports encode literal parentheses in categoryname/type/
+    // description this way (e.g. "Cross-Site Scripting &#x28;XSS&#x29;"), so without this flag those
+    // strings would render un-decoded in ticket summaries and descriptions.
+    htmlEntities: true,
   });
 
   let doc: Record<string, any>;

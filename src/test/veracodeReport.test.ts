@@ -54,6 +54,36 @@ describe('parseVeracodeReport', () => {
     expect(flaws.find(f => f.issueId.startsWith('10101'))).toBeUndefined();
     expect(flaws).toHaveLength(2); // the other two well-formed flaws in the fixture are still parsed
   });
+
+  it('decodes numeric character references in attribute values (Veracode encodes literal parens in categoryname as &#x28;/&#x29;)', () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+      <detailedreport report_format_version="1.5" app_name="ExampleApp">
+        <severity level="5">
+          <category categoryid="18" categoryname="Cross-Site Scripting &#x28;XSS&#x29;">
+            <desc/>
+            <recommendations/>
+            <cwe cweid="79" cwename="Improper Neutralization of Input During Web Page Generation &#x28;&apos;Cross-site Scripting&apos;&#x29;">
+              <description/>
+              <staticflaws>
+                <flaw severity="5" categoryname="Cross-Site Scripting &#x28;XSS&#x29;" issueid="1234" module="IDPHelper.war"
+                      type="Cross-Site Scripting &#x28;XSS&#x29;"
+                      description="Reflected XSS &#x28;see CWE-79&#x29;" cweid="79" remediationeffort="3"
+                      categoryid="18" date_first_occurrence="2026-05-01T10:00:00.000-0000" remediation_status="New"
+                      sourcefile="IDPHelper.java" line="228" sourcefilepath="com/example/webapp/" mitigation_status="none"/>
+              </staticflaws>
+            </cwe>
+          </category>
+        </severity>
+      </detailedreport>`;
+    const flaws = parseVeracodeReport(xml);
+    expect(flaws).toHaveLength(1);
+    expect(flaws[0].categoryName).toBe('Cross-Site Scripting (XSS)');
+    expect(flaws[0].cweName).toBe("Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')");
+    expect(flaws[0].description).toBe('Reflected XSS (see CWE-79)');
+    // deriveShortLabel prefers the CWE's own quoted short name over categoryname (see Task 4 tests) —
+    // real MITRE CWE-79 name quotes "Cross-site Scripting", so that's what ends up in the summary.
+    expect(buildSummary(flaws[0])).toBe('1234 - IDPHelper.java:228 - Cross-site Scripting');
+  });
 });
 
 describe('assertSafeVeracodeXml', () => {
