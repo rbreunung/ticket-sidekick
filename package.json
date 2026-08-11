@@ -2,7 +2,7 @@
   "name": "ticket-sidekick",
   "displayName": "Ticket Sidekick",
   "description": "Manage Jira tickets with GitHub Copilot Chat",
-  "version": "0.3.19",
+  "version": "0.4.0",
   "license": "MIT",
   "publisher": "RobertBreunung",
   "engines": {
@@ -239,8 +239,14 @@
           },
           "ticketSidekick.veracode.includeRemediationStatuses": {
             "type": "array",
-            "items": { "type": "string" },
-            "default": ["New", "Open", "Reopened"],
+            "items": {
+              "type": "string"
+            },
+            "default": [
+              "New",
+              "Open",
+              "Reopened"
+            ],
             "description": "Veracode remediation_status values to include when importing a Detailed Report (e.g. exclude 'Fixed' or 'Mitigated'). Valid values: Cannot Reproduce, Fixed, Mitigated, New, Open, Potential False Positive, Remediated by User, Reopened, Reviewed - No Action Taken."
           }
         }
