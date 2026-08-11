@@ -57,6 +57,10 @@
       {
         "command": "ticket-sidekick.importEml",
         "title": "Ticket Sidekick: Create Jira ticket from email (.eml)"
+      },
+      {
+        "command": "ticket-sidekick.importVeracodeReport",
+        "title": "Ticket Sidekick: Create Jira tickets from Veracode report (.xml)"
       }
     ],
     "configuration": [
@@ -219,6 +223,25 @@
             "type": "boolean",
             "default": false,
             "description": "Delete the .eml file automatically after the Jira ticket is created."
+          }
+        }
+      },
+      {
+        "id": "veracode",
+        "title": "Ticket Sidekick — Veracode",
+        "properties": {
+          "ticketSidekick.veracode.minSeverity": {
+            "type": "number",
+            "default": 4,
+            "minimum": 0,
+            "maximum": 5,
+            "description": "Minimum Veracode severity (0=Informational … 5=Very High) to include when importing a Detailed Report. Flaws below this are filtered out by default (still visible in the raw XML)."
+          },
+          "ticketSidekick.veracode.includeRemediationStatuses": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": ["New", "Open", "Reopened"],
+            "description": "Veracode remediation_status values to include when importing a Detailed Report (e.g. exclude 'Fixed' or 'Mitigated'). Valid values: Cannot Reproduce, Fixed, Mitigated, New, Open, Potential False Positive, Remediated by User, Reopened, Reviewed - No Action Taken."
           }
         }
       }
