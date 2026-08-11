@@ -243,6 +243,7 @@
     "vitest": "^1.6.0"
   },
   "dependencies": {
+    "fast-xml-parser": "^5.10.1",
     "minimatch": "^9.0.9",
     "postal-mime": "^2.7.4"
   }
