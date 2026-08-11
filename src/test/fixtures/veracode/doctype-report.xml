@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE detailedreport [
+  <!ENTITY xxe SYSTEM "file:///etc/passwd">
+]>
+<detailedreport report_format_version="1.5" app_name="ExampleApp">
+  <severity level="5"/>
+</detailedreport>

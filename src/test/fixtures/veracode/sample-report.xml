@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<detailedreport xmlns="https://analysiscenter.veracode.com/schema/2.0/detailedreport"
+                 report_format_version="1.5" app_name="ExampleApp" account_id="999999"
+                 first_build_submitted_date="2026-04-01T09:00:00.000-0000"
+                 last_update_time="2026-05-01T10:00:00.000-0000">
+  <static-analysis>
+    <modules>
+      <module name="ExampleApp.war" compiler="JAVAC" os="Java" architecture="Java"/>
+    </modules>
+  </static-analysis>
+  <severity level="5">
+    <category categoryid="20" categoryname="SQL Injection" pcirelated="true">
+      <desc><para text="Untrusted input used to build a SQL statement."/></desc>
+      <recommendations>
+        <para text="Use parameterized queries or a properly configured ORM instead of building SQL from string concatenation."/>
+        <para text="Apply strict allow-list input validation to any values that must be interpolated."/>
+      </recommendations>
+      <cwe cweid="89" cwename="Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')" owasp="A03:2021-Injection">
+        <description>
+          <para text="SQL injection allows an attacker to alter the intended query."/>
+        </description>
+        <staticflaws>
+          <flaw severity="5" categoryname="SQL Injection" count="1" issueid="10101" module="ExampleApp.war"
+                type="SQL Injection"
+                description="The method buildOrderQuery() in ExampleOrderDao.java constructs a SQL query using the parameter 'searchTerm' which is derived from an HTTP request. The tainted data originated from earlier calls to javax.servlet.ServletRequest.getParameter. This call to java.sql.Statement.executeQuery() could allow an attacker to inject arbitrary SQL commands."
+                cweid="89" remediationeffort="3" exploitLevel="2" categoryid="20"
+                date_first_occurrence="2026-05-01T10:00:00.000-0000" remediation_status="New"
+                sourcefile="ExampleOrderDao.java" line="88" sourcefilepath="com/example/webapp/dao/"
+                scope="com.example.webapp.dao.ExampleOrderDao"
+                functionprototype="ResultSet buildOrderQuery(java.lang.String)"
+                functionrelativelocation="12" mitigation_status="none"/>
+        </staticflaws>
+      </cwe>
+    </category>
+  </severity>
+  <severity level="4">
+    <category categoryid="18" categoryname="Credentials Management" pcirelated="true">
+      <desc><para text="Hard-coded credentials embedded in source code."/></desc>
+      <recommendations>
+        <para text="Store credentials in a secrets manager or environment configuration, never in source code."/>
+      </recommendations>
+      <cwe cweid="798" cwename="Use of Hard-coded Credentials" owasp="A07:2021-Identification and Authentication Failures">
+        <description>
+          <para text="Hard-coded credentials are a significant risk if the source code is disclosed."/>
+        </description>
+        <staticflaws>
+          <flaw severity="4" categoryname="Credentials Management" count="1" issueid="10102" module="ExampleApp.war"
+                type="Hard-coded Password"
+                description="ExampleFtpClient.java contains a hard-coded password used to authenticate to an internal FTP host."
+                cweid="798" remediationeffort="2" exploitLevel="3" categoryid="18"
+                date_first_occurrence="2026-03-11T08:30:00.000-0000" remediation_status="Fixed"
+                sourcefile="ExampleFtpClient.java" line="41" sourcefilepath="com/example/webapp/integration/"
+                scope="com.example.webapp.integration.ExampleFtpClient"
+                functionprototype="void connect()" functionrelativelocation="4" mitigation_status="none"/>
+          <flaw severity="4" categoryname="Credentials Management" count="1" issueid="10103" module="ExampleApp.war"
+                type="Hard-coded Password"
+                description="A configuration loader embeds a hard-coded password used for an internal service account. No source file attribute was reported for this flaw by the scanner."
+                cweid="798" remediationeffort="2" exploitLevel="3" categoryid="18"
+                date_first_occurrence="2026-04-20T14:00:00.000-0000" remediation_status="Reopened"
+                mitigation_status="none"/>
+        </staticflaws>
+      </cwe>
+    </category>
+  </severity>
+</detailedreport>
