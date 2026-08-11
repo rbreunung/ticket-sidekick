@@ -11,6 +11,8 @@ import { JiraApiClient } from './jira/JiraApiClient';
 import { TemplateService } from './templates/TemplateService';
 import { selectDefaultIssueType } from './participant/sessionState';
 import type { EmailContentSession } from './participant/sessionState';
+import { parseVeracodeReport, filterFlaws } from './utils/veracodeReport';
+import type { VeracodeTemplateSelectionSession } from './participant/sessionState';
 
 export function activate(context: vscode.ExtensionContext): void {
   const configService = new ConfigService(context);
@@ -167,6 +169,102 @@ export function activate(context: vscode.ExtensionContext): void {
 
       await context.workspaceState.update('jira.session.emailContent', session);
       await vscode.commands.executeCommand('workbench.action.chat.open', { query: '@jira create from email' });
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('ticket-sidekick.importVeracodeReport', async () => {
+      const uris = await vscode.window.showOpenDialog({
+        canSelectMany: false,
+        filters: { 'Veracode report': ['xml'] },
+        defaultUri: vscode.Uri.file(path.join(os.homedir(), 'Downloads')),
+        title: 'Select Veracode Detailed Report (.xml)',
+      });
+      if (!uris || uris.length === 0) return;
+      const reportPath = uris[0].fsPath;
+
+      const MAX_REPORT_BYTES = 20 * 1024 * 1024;
+      let raw: string;
+      try {
+        const stat = await fs.promises.stat(reportPath);
+        if (stat.size > MAX_REPORT_BYTES) {
+          vscode.window.showErrorMessage(`Ticket Sidekick: Report exceeds the ${MAX_REPORT_BYTES / (1024 * 1024)} MB size limit.`);
+          return;
+        }
+        raw = await fs.promises.readFile(reportPath, 'utf-8');
+      } catch (err) {
+        vscode.window.showErrorMessage(`Ticket Sidekick: Could not read file: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+
+      const veracodeCfg = vscode.workspace.getConfiguration('ticketSidekick');
+      let flaws;
+      try {
+        const allFlaws = parseVeracodeReport(raw);
+        flaws = filterFlaws(allFlaws, {
+          minSeverity: veracodeCfg.get<number>('veracode.minSeverity') ?? 4,
+          includeStatuses: veracodeCfg.get<string[]>('veracode.includeRemediationStatuses') ?? ['New', 'Open', 'Reopened'],
+        });
+      } catch (err) {
+        vscode.window.showErrorMessage(`Ticket Sidekick: Could not parse Veracode report: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+
+      if (flaws.length === 0) {
+        vscode.window.showInformationMessage(
+          'Ticket Sidekick: No flaws in this report matched your current severity/status filters ' +
+          '(ticketSidekick.veracode.minSeverity / ticketSidekick.veracode.includeRemediationStatuses).',
+        );
+        return;
+      }
+
+      const config = await configService.getConfig();
+      if (!config.baseUrl || !config.token) {
+        vscode.window.showErrorMessage('Ticket Sidekick: Configure Jira credentials first.');
+        return;
+      }
+
+      let projectKey = veracodeCfg.get<string>('jira.defaultProject') ?? '';
+      if (!projectKey) {
+        const entered = await vscode.window.showInputBox({
+          prompt: 'Enter the Jira project key for the new tickets (e.g. PROJ)',
+          placeHolder: 'PROJECT',
+          ignoreFocusOut: true,
+        });
+        if (!entered) return;
+        projectKey = entered;
+      }
+
+      const jiraClient = new JiraApiClient({ baseUrl: config.baseUrl, authType: config.authType, token: config.token });
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+
+      const availableTemplates: Array<{ name: string; issueType: string }> = (() => {
+        if (!workspaceRoot) return [];
+        try {
+          return new TemplateService(workspaceRoot).loadTemplates().templates
+            .map(t => ({ name: t.name, issueType: t.issueType ?? 'Bug' }));
+        } catch { return []; }
+      })();
+
+      const issueTypes = await jiraClient.getProject(projectKey)
+        .then(p => p.issueTypes.filter(t => !t.subtask).map(t => t.name))
+        .catch((err: unknown) => {
+          vscode.window.showWarningMessage(
+            `Ticket Sidekick: Could not fetch issue types for ${projectKey} — will default to 'Bug'. ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return [] as string[];
+        });
+
+      const session: VeracodeTemplateSelectionSession = {
+        reportFileName: path.basename(reportPath),
+        projectKey,
+        flaws,
+        availableTemplates,
+        availableIssueTypes: issueTypes.length > 0 ? issueTypes : ['Bug'],
+      };
+
+      await context.workspaceState.update('jira.session.veracodeTemplateSelection', session);
+      await vscode.commands.executeCommand('workbench.action.chat.open', { query: '@jira import veracode report' });
     }),
   );
 
