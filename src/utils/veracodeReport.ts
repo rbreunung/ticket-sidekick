@@ -119,3 +119,67 @@ export function filterFlaws(flaws: VeracodeFlaw[], options: VeracodeFilterOption
   const statusSet = new Set(options.includeStatuses.map(s => s.toLowerCase()));
   return flaws.filter(f => f.severity >= options.minSeverity && statusSet.has(f.remediationStatus.toLowerCase()));
 }
+
+const STOPWORDS = new Set(['of', 'a', 'an', 'the', 'or', 'and', 'used', 'in', 'to', 'for', 'on', 'using', 'via']);
+
+// Prefers the CWE's own quoted short name (MITRE convention, e.g. "...('SQL Injection')"),
+// falling back to the Veracode category name. Targets ~3 words, allows up to 5 for meaningfulness.
+export function deriveShortLabel(categoryName: string, cweName: string | null): string {
+  const quoted = cweName?.match(/'([^']+)'/)?.[1];
+  const source = quoted ?? categoryName;
+  const words = source.split(/\s+/).filter(Boolean);
+  const filtered = words.filter(w => !STOPWORDS.has(w.toLowerCase()));
+  const chosen = filtered.length > 0 ? filtered : words;
+  return chosen.slice(0, 5).join(' ');
+}
+
+function fileRef(flaw: VeracodeFlaw): string {
+  if (flaw.sourceFile) return flaw.sourceFile;
+  const parts = flaw.module.split(/[\\/]/);
+  return parts[parts.length - 1];
+}
+
+export function buildSummary(flaw: VeracodeFlaw): string {
+  const ref = fileRef(flaw);
+  const lineSuffix = flaw.line != null ? `:${flaw.line}` : '';
+  const shortLabel = deriveShortLabel(flaw.categoryName, flaw.cweName);
+  return `${flaw.issueId} - ${ref}${lineSuffix} - ${shortLabel}`;
+}
+
+function fullSourcePath(flaw: VeracodeFlaw): string | null {
+  if (flaw.sourceFilePath && flaw.sourceFile) return `${flaw.sourceFilePath}${flaw.sourceFile}`;
+  return flaw.sourceFile ?? null;
+}
+
+export function buildDescriptionWiki(flaw: VeracodeFlaw): string {
+  const sections: string[] = [];
+
+  sections.push(`h3. Severity\n${severityLabel(flaw.severity)} (${flaw.severity})`);
+
+  if (flaw.cweId) {
+    const link = `[CWE-${flaw.cweId}|https://cwe.mitre.org/data/definitions/${flaw.cweId}.html]`;
+    sections.push(`h3. CWE\n${link}${flaw.cweName ? ` — ${flaw.cweName}` : ''}`);
+  }
+
+  const locationLines = [`Module: ${flaw.module}`];
+  const path = fullSourcePath(flaw);
+  if (path) locationLines.push(`File: ${path}${flaw.line != null ? `:${flaw.line}` : ''}`);
+  if (flaw.functionPrototype) locationLines.push(`Function: ${flaw.functionPrototype}`);
+  sections.push(`h3. Location\n${locationLines.join('\n')}`);
+
+  sections.push(`h3. Description\n${flaw.description}`);
+
+  if (flaw.recommendation) {
+    sections.push(`h3. Recommendation\n${flaw.recommendation}`);
+  }
+
+  sections.push(`h3. Veracode Issue ID\n${flaw.issueId}`);
+
+  return sections.join('\n\n');
+}
+
+export function buildLabels(flaw: VeracodeFlaw, templateLabels: string[] = []): string[] {
+  const own = ['veracode', `veracode-issue-${flaw.issueId}`];
+  if (flaw.cweId) own.push(`cwe-${flaw.cweId}`);
+  return [...new Set([...own, ...templateLabels])];
+}
