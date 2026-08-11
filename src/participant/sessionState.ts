@@ -1,5 +1,8 @@
 import type { JiraComment, JiraFieldMeta, JiraFilter, JiraSprintCandidate } from '../jira/IJiraClient';
 import { formatJiraBody } from '../utils/markdownFormatter';
+import type { VeracodeFlaw, VeracodeReviewRow } from '../utils/veracodeReport';
+
+export type { VeracodeReviewRow } from '../utils/veracodeReport';
 
 export interface CreationSession {
   template: string;
@@ -423,5 +426,81 @@ export function selectDefaultIssueType(issueTypes: string[]): string {
 export function buildTeamJql(teamJql: string, extraJql: string | null): string {
   const extra = extraJql ? ` AND (${extraJql})` : ' AND resolution is NULL';
   return `(${teamJql})${extra}`;
+}
+
+export interface VeracodeTemplateSelectionSession {
+  reportFileName: string;
+  projectKey: string;
+  flaws: VeracodeFlaw[]; // already filtered by minSeverity/includeRemediationStatuses
+  availableTemplates: Array<{ name: string; issueType: string }>;
+  availableIssueTypes: string[];
+}
+
+export interface VeracodeReviewSession {
+  projectKey: string;
+  issueType: string;
+  templateName: string | null;
+  additionalFields: Record<string, unknown>; // resolved template fields (labels merged in per-row already)
+  rows: VeracodeReviewRow[];
+}
+
+export function buildVeracodeReviewTable(rows: VeracodeReviewRow[], baseUrl?: string): string {
+  const ticketed = rows.filter(r => r.existingTicketKey !== null);
+  const fresh = rows.filter(r => r.existingTicketKey === null);
+  const lines: string[] = [];
+
+  if (ticketed.length > 0) {
+    lines.push('### Already ticketed');
+    lines.push('| # | Severity | CWE | Flaw | Ticket | Include? |');
+    lines.push('|---|----------|-----|------|--------|----------|');
+    for (const r of ticketed) {
+      const ticketRef = baseUrl ? `[${r.existingTicketKey}](${baseUrl}/browse/${r.existingTicketKey})` : r.existingTicketKey;
+      lines.push(`| ${r.id} | ${r.severityLabelText} (${r.severity}) | ${r.cweId ? `CWE-${r.cweId}` : '—'} | ${r.summary} | ${ticketRef} | ${r.included ? '✓ re-create' : '_excluded_'} |`);
+    }
+    lines.push('');
+  }
+
+  lines.push('### New — will create');
+  lines.push('| # | Severity | CWE | Summary | Include? |');
+  lines.push('|---|----------|-----|---------|----------|');
+  for (const r of fresh) {
+    lines.push(`| ${r.id} | ${r.severityLabelText} (${r.severity}) | ${r.cweId ? `CWE-${r.cweId}` : '—'} | ${r.summary} | ${r.included ? '✓' : '_excluded_'} |`);
+  }
+
+  const willCreate = rows.filter(r => r.included).length;
+  lines.push('');
+  lines.push(`**${willCreate}** ticket(s) will be created.`);
+  lines.push('');
+  lines.push('Reply **ok** to proceed, **(c)** to cancel, or a list of ids to toggle (e.g. `2 4` or `A1`).');
+
+  return lines.join('\n');
+}
+
+export type VeracodeReviewParseResult =
+  | { action: 'ok' }
+  | { action: 'cancel' }
+  | { action: 'toggle'; ids: string[] }
+  | { action: 'invalid' };
+
+export function parseVeracodeReviewInput(reply: string, rowIds: string[]): VeracodeReviewParseResult {
+  const normalized = reply.trim().toLowerCase();
+  if (normalized === 'ok') return { action: 'ok' };
+  if (normalized === 'c' || normalized === 'cancel') return { action: 'cancel' };
+
+  const tokens = normalized.split(/[\s,]+/).filter(Boolean);
+  const matched: string[] = [];
+  for (const token of tokens) {
+    const found = rowIds.find(id => id.toLowerCase() === token);
+    if (found) matched.push(found);
+  }
+  if (matched.length === 0) return { action: 'invalid' };
+  return { action: 'toggle', ids: matched };
+}
+
+// Pure so it's independently testable — the vscode-dependent handler just calls this and
+// re-streams the result, rather than mutating VeracodeReviewRow objects in place.
+export function applyVeracodeToggle(rows: VeracodeReviewRow[], ids: string[]): VeracodeReviewRow[] {
+  const toggleSet = new Set(ids);
+  return rows.map(r => (toggleSet.has(r.id) ? { ...r, included: !r.included } : r));
 }
 

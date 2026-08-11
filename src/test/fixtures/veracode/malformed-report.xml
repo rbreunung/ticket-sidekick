@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<detailedreport report_format_version="1.5" app_name="ExampleApp">
+  <severity level="5">
+    <category categoryid="20" categoryname="SQL Injection"
