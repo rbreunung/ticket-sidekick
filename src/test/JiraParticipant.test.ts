@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('vscode', () => ({}));
 
-import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType } from '../participant/sessionState';
+import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, buildVeracodeReviewTable, parseVeracodeReviewInput, applyVeracodeToggle, type VeracodeReviewRow } from '../participant/sessionState';
 import { isPointerPrompt } from '../participant/jira/llmHelpers';
 import type { TransitionBatchTicket } from '../participant/sessionState';
 import type { JiraComment } from '../jira/IJiraClient';
@@ -833,5 +833,102 @@ describe('buildTeamJql', () => {
     const result = buildTeamJql('project = PROJ', 'resolution is not NULL');
     expect(result).not.toContain('resolution is NULL AND');
     expect(result).toBe('(project = PROJ) AND (resolution is not NULL)');
+  });
+});
+
+const sampleRows: VeracodeReviewRow[] = [
+  {
+    id: 'A1', issueId: '10102', severity: 4, severityLabelText: 'High', cweId: '798',
+    summary: '10102 - ExampleFtpClient.java:41 - Credentials Management',
+    labels: ['veracode', 'veracode-issue-10102', 'cwe-798'], descriptionWiki: 'h3. Severity\nHigh (4)',
+    existingTicketKey: 'PROJ-501', included: false,
+  },
+  {
+    id: '1', issueId: '10101', severity: 5, severityLabelText: 'Very High', cweId: '89',
+    summary: '10101 - ExampleOrderDao.java:88 - SQL Injection',
+    labels: ['veracode', 'veracode-issue-10101', 'cwe-89'], descriptionWiki: 'h3. Severity\nVery High (5)',
+    existingTicketKey: null, included: true,
+  },
+  {
+    id: '2', issueId: '10103', severity: 4, severityLabelText: 'High', cweId: '798',
+    summary: '10103 - ExampleApp.war - Credentials Management',
+    labels: ['veracode', 'veracode-issue-10103', 'cwe-798'], descriptionWiki: 'h3. Severity\nHigh (4)',
+    existingTicketKey: null, included: true,
+  },
+];
+
+describe('buildVeracodeReviewTable', () => {
+  it('renders an "Already ticketed" section and a "New — will create" section', () => {
+    const table = buildVeracodeReviewTable(sampleRows, 'https://jira.example.com');
+    expect(table).toContain('### Already ticketed');
+    expect(table).toContain('[PROJ-501](https://jira.example.com/browse/PROJ-501)');
+    expect(table).toContain('### New — will create');
+    expect(table).toContain('10101 - ExampleOrderDao.java:88 - SQL Injection');
+    expect(table).toContain('**2** ticket(s) will be created.');
+  });
+
+  it('omits the "Already ticketed" section entirely when there are no dupes', () => {
+    const onlyNew = sampleRows.filter(r => r.existingTicketKey === null);
+    const table = buildVeracodeReviewTable(onlyNew);
+    expect(table).not.toContain('Already ticketed');
+  });
+
+  it('renders plain ticket key (no link) when baseUrl is not provided', () => {
+    const table = buildVeracodeReviewTable(sampleRows);
+    expect(table).toContain('| A1 |');
+    expect(table).toContain('PROJ-501');
+    expect(table).not.toContain('](');
+  });
+});
+
+describe('parseVeracodeReviewInput', () => {
+  const ids = ['A1', '1', '2'];
+
+  it('recognizes ok and cancel', () => {
+    expect(parseVeracodeReviewInput('ok', ids)).toEqual({ action: 'ok' });
+    expect(parseVeracodeReviewInput('c', ids)).toEqual({ action: 'cancel' });
+    expect(parseVeracodeReviewInput('cancel', ids)).toEqual({ action: 'cancel' });
+  });
+
+  it('toggles a single new-row id (excludes a default-included row)', () => {
+    expect(parseVeracodeReviewInput('2', ids)).toEqual({ action: 'toggle', ids: ['2'] });
+  });
+
+  it('toggles an already-ticketed row id (forces re-creation)', () => {
+    expect(parseVeracodeReviewInput('A1', ids)).toEqual({ action: 'toggle', ids: ['A1'] });
+  });
+
+  it('toggles multiple ids at once, case-insensitively', () => {
+    expect(parseVeracodeReviewInput('a1 2', ids)).toEqual({ action: 'toggle', ids: ['A1', '2'] });
+  });
+
+  it('returns invalid for unrecognized ids or empty input', () => {
+    expect(parseVeracodeReviewInput('99', ids)).toEqual({ action: 'invalid' });
+    expect(parseVeracodeReviewInput('', ids)).toEqual({ action: 'invalid' });
+  });
+});
+
+describe('applyVeracodeToggle', () => {
+  it('flips included for the given row ids and leaves the rest untouched', () => {
+    const toggled = applyVeracodeToggle(sampleRows, ['2']);
+    expect(toggled.find(r => r.id === '2')!.included).toBe(false);
+    expect(toggled.find(r => r.id === '1')!.included).toBe(true);
+  });
+
+  it('flips an already-ticketed row back to included (force re-create)', () => {
+    const toggled = applyVeracodeToggle(sampleRows, ['A1']);
+    expect(toggled.find(r => r.id === 'A1')!.included).toBe(true);
+  });
+
+  it('toggles multiple ids at once', () => {
+    const toggled = applyVeracodeToggle(sampleRows, ['1', '2']);
+    expect(toggled.find(r => r.id === '1')!.included).toBe(false);
+    expect(toggled.find(r => r.id === '2')!.included).toBe(false);
+  });
+
+  it('returns new row objects rather than mutating the input (pure function)', () => {
+    const toggled = applyVeracodeToggle(sampleRows, ['1']);
+    expect(toggled).not.toBe(sampleRows);
+    expect(sampleRows.find(r => r.id === '1')!.included).toBe(true); // original array/objects untouched
   });
 });

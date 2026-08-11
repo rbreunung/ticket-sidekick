@@ -209,3 +209,19 @@ export function extractDedupMap(issues: Array<{ key: string; labels: string[] }>
   }
   return map;
 }
+
+// Lives here (rather than in sessionState.ts, where the other session-related types live) so that
+// buildReviewRows() below can produce it directly without a type-only circular import between this
+// file and sessionState.ts. sessionState.ts re-exports the type for callers that expect it there.
+export interface VeracodeReviewRow {
+  id: string; // '1'..'N' new candidates, 'A1'..'Am' already-ticketed
+  issueId: string;
+  severity: number;
+  severityLabelText: string;
+  cweId: string | null;
+  summary: string;
+  labels: string[];
+  descriptionWiki: string;
+  existingTicketKey: string | null;
+  included: boolean; // whether this row will be (re)created if the batch runs
+}
