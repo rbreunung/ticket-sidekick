@@ -56,6 +56,8 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/participant/jira/workflowHandler.ts` | Workflow discovery handler |
 | `src/participant/jira/emailHandler.ts` | Email-to-ticket chat flow: reads pre-built `EmailContentSession` from workspaceState → streams preview → confirm/create |
 | `src/utils/emlParser.ts` | Parses `.eml` files via `postal-mime`; returns `ParsedEml` (subject, sender, date, htmlBody, plainBody, inlineImageMap, attachments) |
+| `src/utils/veracodeReport.ts` | Veracode Detailed Report XML parsing, filtering, short-label/summary/description/label builders, and de-dup helpers — pure, no `vscode` import |
+| `src/participant/jira/veracodeHandler.ts` | Veracode import chat flow: template selection, already-ticketed de-dup + review screen, batch ticket creation |
 | `src/participant/BitbucketParticipant.ts` | Bitbucket chat handler: check, PR review, multi-turn follow-ups |
 | `src/participant/sessionState.ts` | VS Code-free pure helpers and Jira multi-turn session types; includes `pickEmailOption()` for unified template+issue-type selection |
 | `src/participant/reviewSessionState.ts` | Bitbucket session types + all pure review helpers: `parsePrUrl`, `hasPrUrl`, `parseDiff`, `parseFollowUpIntent` (parses multi-turn follow-up messages into a typed `FollowUpIntent` — `add` with `targets: number[] \| 'all'` and extracted note, or `explain` with cleaned `question` text and optional `findingRef`), `buildAdaptiveChunks`, `numberDiffLines` (render-only gutter), `locateAnchor` + `resolveFindingAnchors` (verify line from quoted `anchorCode`, tag provenance), `dedupeFindings`, `extractHunkAround`, `selectFilesWithinBudget`, `parseCriticKeep` |
@@ -211,8 +213,10 @@ Multi-turn flows store structured state in `vscode.ExtensionContext.workspaceSta
 | `CommentListSession` | `jira.session.commentList` | `<!-- jira:comment-list -->` |
 | `LoadSkippedSession` | `jira.session.loadSkipped` | `<!-- jira:load-skipped -->` |
 | `EmailContentSession` | `jira.session.emailContent` | `<!-- jira:email-content -->` |
+| `VeracodeTemplateSelectionSession` | `jira.session.veracodeTemplateSelection` | `<!-- jira:veracode-template -->` |
+| `VeracodeReviewSession` | `jira.session.veracodeReview` | `<!-- jira:veracode-review -->` |
 
-Detection order in the Jira handler: resolution selection → transition review → filter selection → bulk-update-review → template selection → issue type selection → creation → content → more-comments → check command → load-skipped → email content → comment list → intent parse.
+Detection order in the Jira handler: resolution selection → transition review → filter selection → bulk-update-review → template selection → issue type selection → creation → content → more-comments → check command → load-skipped → email content → veracode template selection → veracode review → comment list → intent parse.
 
 ### Bitbucket sessions
 
@@ -359,3 +363,22 @@ Users download `.eml` files from OWA via **More actions → Download message** a
 ### `pickEmailOption` helper
 
 `pickEmailOption(n, templates, issueTypes)` in `sessionState.ts` maps a 1-based user reply index to a template or issue type pick. Templates occupy indices 1..N, issue types N+1..N+M. Returns `{ kind: 'template', name, issueType }` or `{ kind: 'type', issueType }` or `null` if out of range.
+
+## Veracode report import
+
+Users export a Detailed Report XML from Veracode and import it via the VS Code command or directly from chat (`@jira import veracode report`).
+
+### Import flow
+
+1. Command Palette → **Ticket Sidekick: Create Jira tickets from Veracode report (.xml)** (or trigger from chat, which opens its own file picker)
+2. `parseVeracodeReport(xml)` (own parser, `fast-xml-parser`-based) extracts all `<staticflaws>` entries; rejected up front if the file exceeds 20 MB or contains a `<!DOCTYPE`/`<!ENTITY` declaration
+3. `filterFlaws()` applies `ticketSidekick.veracode.minSeverity` and `ticketSidekick.veracode.includeRemediationStatuses`
+4. `VeracodeTemplateSelectionSession` stored in `workspaceState('jira.session.veracodeTemplateSelection')`; chat opened with `@jira import veracode report`
+5. User picks a template or issue type (`pickEmailOption()`, reused from the email flow) → `FieldResolver.resolve()` resolves the template's fields
+6. De-dup search: `TicketService.searchTicketsRaw` is called in chunks of 40 issue ids with a `labels in (veracode-issue-<id>, ...)` JQL clause; matches become the "Already ticketed" section of the review screen (excluded by default, toggleable back in)
+7. `VeracodeReviewSession` stored in `workspaceState('jira.session.veracodeReview')`; user replies **ok** / **(c)** / a list of row ids to toggle inclusion
+8. On **ok**, up to 50 tickets are created via the existing `TicketService.createTicket` — one per included flaw, each labeled `veracode`, `veracode-issue-<id>`, `cwe-<id>` (merged with any template labels) with a wiki-markup description (Severity, CWE + link, Location, Description, Recommendation, Veracode Issue ID)
+
+### Known limitation
+
+The multi-step vulnerability data-path trace shown in Veracode's web UI ("Injection Point → ... → Flaw") is **not present** in the Detailed Report XML format — confirmed by full XSD schema review and empirical inspection of a real report. Only the flaw's own `description` attribute (which sometimes names generic tainted-source APIs, but not the actual call chain) is available and is included verbatim in the ticket. Full data-path support would require a different Veracode API/export (e.g. the Findings REST API) and is out of scope for this feature.

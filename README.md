@@ -83,6 +83,7 @@ Open GitHub Copilot Chat and use `@jira`:
 | `@jira check required fields on PROJ-123` | Validates required fields |
 | `@jira check` | Validates the base URL, tests the connection, and shows active configuration |
 | `@jira create from email` | Create a Jira ticket from an imported `.eml` file |
+| `@jira import veracode report` | Create Jira tickets from a Veracode Detailed Report XML export |
 
 ### Reading tickets
 
@@ -387,6 +388,35 @@ The comment includes the sender name and received date as a header, followed by 
 | `ticketSidekick.email.deleteEmlAfterImport` | `false` | Delete the `.eml` file automatically after the ticket is created |
 | `ticketSidekick.jira.defaultProject` | — | Project key used when creating tickets (required for new ticket flow) |
 
+### Create Jira tickets from a Veracode report (.xml)
+
+Export a Detailed Report XML from Veracode, then:
+
+1. Run **Command Palette → Ticket Sidekick: Create Jira tickets from Veracode report (.xml)**
+2. Select the `.xml` file
+3. Pick a template or issue type in the `@jira` chat
+4. Review the flaw list — already-ticketed flaws are shown separately and excluded by default; reply with row numbers to toggle inclusion/exclusion, or **ok** to proceed
+5. Tickets are created one per flaw, with severity, CWE (linked to the public CWE definition), file/line location, the flaw's own description, and the category's remediation recommendation
+
+You can also trigger the import from the chat directly:
+
+```text
+@jira import veracode report
+```
+
+A file picker opens, and you proceed as above.
+
+Each ticket is labeled `veracode`, `veracode-issue-<id>`, and `cwe-<id>` (plus any labels from your chosen template), so re-running the import after a partial run — or after remediating some flaws and re-scanning — will not create duplicate tickets for flaws that already have one.
+
+**Settings:**
+
+| Setting | Default | Description |
+|---|---|---|
+| `ticketSidekick.veracode.minSeverity` | `4` | Minimum severity (0–5) included by default |
+| `ticketSidekick.veracode.includeRemediationStatuses` | `["New", "Open", "Reopened"]` | Remediation statuses included by default |
+
+Only `<staticflaws>` are imported (dynamic/manual analysis findings are out of scope). A batch creates at most 50 tickets per run — re-run the import to process the remainder of a larger report.
+
 ### Templates and cleanup rules
 
 Create a `.jira-templates.json` file in your workspace root to define per-application templates with default fields and guided description collection, plus named cleanup rules for bulk status transitions.
@@ -616,6 +646,8 @@ You can choose **No template** to create a plain ticket without any template app
 | Hidden fields | `ticketSidekick.jira.hiddenDisplayFields` | _(see below)_ |
 | Connection info banner | `ticketSidekick.jira.showConnectionInfo` | `false` |
 | Delete .eml after import | `ticketSidekick.email.deleteEmlAfterImport` | `false` |
+| Veracode min severity | `ticketSidekick.veracode.minSeverity` | `4` |
+| Veracode included statuses | `ticketSidekick.veracode.includeRemediationStatuses` | `["New", "Open", "Reopened"]` |
 
 **Optional: default project**
 
