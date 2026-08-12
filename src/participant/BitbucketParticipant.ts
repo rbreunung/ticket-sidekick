@@ -60,7 +60,7 @@ function logLmFailure(
   const code = (err as { code?: unknown })?.code;
   const cause = (err as { cause?: unknown })?.cause;
   const partialText = err instanceof PartialLmResponseError ? err.partialText : undefined;
-  logDiag('bitbucket.review', `LLM call failed — ${contextLabel} (attempt ${attempt})`, {
+  logDiag('bitbucket.review', 'error', `LLM call failed — ${contextLabel} (attempt ${attempt})`, {
     ...extra,
     error: err instanceof Error ? err.message : String(err),
     code: typeof code === 'string' ? code : undefined,
@@ -564,7 +564,7 @@ export function createBitbucketParticipant(
       }
       stream.markdown('_Fetching PR…_\n\n');
       const pr = await client.getPullRequest(parsed.project, parsed.repo, parsed.prId);
-      logDiag('bitbucket.review', 'model in use', {
+      logDiag('bitbucket.review', 'info', 'model in use', {
         vendor: request.model.vendor,
         family: request.model.family,
         id: request.model.id,
