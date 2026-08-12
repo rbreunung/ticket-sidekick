@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { logDiag } from '../../utils/diagLog';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import { discoverWorkflow, loadWorkflowCache, saveWorkflowCache, preserveSkippedStatuses } from '../../services/WorkflowService';
 import type { ParsedIntent } from './llmHelpers';
@@ -42,5 +43,8 @@ export async function handleDiscoverWorkflow(
   if (trulySkipped.length > 0) {
     summary += `\n\n⚠️ **${trulySkipped.length} status(es) had no tickets and no cached transitions:** ${trulySkipped.join(', ')}. Re-run discovery once tickets exist in those states.`;
   }
+  logDiag('jira.workflow', 'info', `Workflow discovered — ${projectKey}/${issueType}`, {
+    projectKey, issueType, statusCount: lines.length, preservedCount: preserved.length, trulySkippedCount: trulySkipped.length,
+  });
   stream.markdown(summary);
 }
