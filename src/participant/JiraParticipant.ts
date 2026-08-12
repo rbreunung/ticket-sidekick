@@ -993,7 +993,9 @@ export function createJiraParticipant(
             try {
               candidates = await ticketService.findSprints(projectKey, intent.bulkFieldValue!);
             } catch (err) {
-              result = `Could not search sprints: ${err instanceof Error ? err.message : String(err)}`;
+              const message = err instanceof Error ? err.message : String(err);
+              logDiag('jira.participant', 'error', message, {});
+              result = `Could not search sprints: ${message}`;
               break;
             }
             if (candidates.length === 0) {
