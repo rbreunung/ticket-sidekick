@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import type { LogLevel } from './diagTypes';
+import { sanitizeDetails, MAX_STRING_LENGTH } from './logRedaction';
 
 let channel: vscode.OutputChannel | undefined;
 
@@ -17,16 +19,22 @@ export function getOutputChannel(): vscode.OutputChannel {
 /**
  * Append a timestamped diagnostic line. `scope` is a short dotted tag (e.g.
  * `bitbucket.review`, `jira.create`) so entries from different features
- * stay distinguishable in the one shared channel. Any feature in either
+ * stay distinguishable in the one shared channel. `level` tags the line for
+ * skimmability (`ERROR` lines are easy to spot). `details`, if given, is
+ * redacted/truncated via `sanitizeDetails` before being written — callers
+ * never need to remember to do this themselves. Any feature in either
  * participant should log through this rather than inventing its own output
  * channel or relying on the chat transcript alone — see `CLAUDE.md` →
  * "Diagnostics".
  */
-export function logDiag(scope: string, message: string, details?: Record<string, unknown>): void {
+export function logDiag(scope: string, level: LogLevel, message: string, details?: Record<string, unknown>): void {
   const timestamp = new Date().toISOString();
   const out = getOutputChannel();
-  out.appendLine(`[${timestamp}] [${scope}] ${message}`);
-  if (details) {
-    out.appendLine(JSON.stringify(details));
+  const truncatedMessage = message.length > MAX_STRING_LENGTH
+    ? `${message.slice(0, MAX_STRING_LENGTH)}…[truncated, ${message.length} chars total]`
+    : message;
+  out.appendLine(`[${timestamp}] [${level.toUpperCase()}] [${scope}] ${truncatedMessage}`);
+  if (details && Object.keys(details).length > 0) {
+    out.appendLine(JSON.stringify(sanitizeDetails(details)));
   }
 }

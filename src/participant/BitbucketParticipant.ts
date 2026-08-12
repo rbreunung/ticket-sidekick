@@ -60,7 +60,7 @@ function logLmFailure(
   const code = (err as { code?: unknown })?.code;
   const cause = (err as { cause?: unknown })?.cause;
   const partialText = err instanceof PartialLmResponseError ? err.partialText : undefined;
-  logDiag('bitbucket.review', `LLM call failed — ${contextLabel} (attempt ${attempt})`, {
+  logDiag('bitbucket.review', 'error', `LLM call failed — ${contextLabel} (attempt ${attempt})`, {
     ...extra,
     error: err instanceof Error ? err.message : String(err),
     code: typeof code === 'string' ? code : undefined,
@@ -249,6 +249,7 @@ async function handleCheck(
       baseUrl: config.baseUrl ?? '',
       authType: config.authType,
       token: config.token!,
+      onDiag: (level, message, details) => logDiag('bitbucket.apiClient', level, message, details),
     });
     const user = await client.getCurrentUser();
     stream.markdown(
@@ -261,6 +262,8 @@ async function handleCheck(
       `| Logged in as | ${user.displayName} |\n`,
     );
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logDiag('bitbucket.review', 'error', 'Bitbucket connection check failed', { baseUrl: config.baseUrl, authType: config.authType, error: message });
     stream.markdown(
       `**Bitbucket connection failed**\n\n` +
       `| Setting | Value |\n|---|---|\n` +
@@ -268,7 +271,7 @@ async function handleCheck(
       `| API version | ${apiVersion} |\n` +
       `| Auth type | ${config.authType} |\n` +
       `| Token | ${tokenStatus(config.token)} |\n\n` +
-      `Error: ${err instanceof Error ? err.message : String(err)}`,
+      `Error: ${message}`,
     );
   }
 }
@@ -329,8 +332,12 @@ export function createBitbucketParticipant(
         baseUrl: config.baseUrl ?? '',
         authType: config.authType,
         token: config.token!,
+        onDiag: (level, message, details) => logDiag('bitbucket.apiClient', level, message, details),
       });
-      const service = new PrReviewService(client);
+      const service = new PrReviewService(
+        client,
+        (level, message, details) => logDiag('bitbucket.prReviewService', level, message, details),
+      );
       const results = await service.postCommentItems(
         previewSession.project, previewSession.repo, previewSession.prId, previewSession.items,
       );
@@ -381,6 +388,7 @@ export function createBitbucketParticipant(
           await streamCommentPreview({ ...previewSession, items: revisedItems });
           stream.markdown(`\n\n_~${Math.ceil((refInputChars + refOutputChars) / 4).toLocaleString()} estimated tokens_`);
         } catch (err) {
+          logDiag('bitbucket.followup', 'error', 'Comment refinement failed', { error: err instanceof Error ? err.message : String(err) });
           stream.markdown(
             `${friendlyLmFailureMessage('**Refinement failed:**', err)}\n\n<!-- bitbucket:comment-preview -->`,
           );
@@ -415,11 +423,15 @@ export function createBitbucketParticipant(
               return;
             }
             const userNote = intent.note || undefined;
-            const service = new PrReviewService(new BitbucketApiClient({
-              baseUrl: config.baseUrl ?? '',
-              authType: config.authType,
-              token: config.token!,
-            }));
+            const service = new PrReviewService(
+              new BitbucketApiClient({
+                baseUrl: config.baseUrl ?? '',
+                authType: config.authType,
+                token: config.token!,
+                onDiag: (level, message, details) => logDiag('bitbucket.apiClient', level, message, details),
+              }),
+              (level, message, details) => logDiag('bitbucket.prReviewService', level, message, details),
+            );
             const items = selectedFindings.map(f => ({ finding: f, text: service.formatPrComment(f, userNote) }));
             const previewSession: BitbucketCommentPreviewSession = {
               project: session.project, repo: session.repo, prId: session.prId, items,
@@ -490,6 +502,7 @@ export function createBitbucketParticipant(
           return;
 
         } catch (err) {
+          logDiag('bitbucket.followup', 'error', 'Follow-up handling failed', { error: err instanceof Error ? err.message : String(err) });
           stream.markdown(
             `${friendlyLmFailureMessage('**Follow-up failed:**', err)}\n\n<!-- bitbucket:review-session -->`,
           );
@@ -536,8 +549,12 @@ export function createBitbucketParticipant(
       baseUrl: config.baseUrl ?? '',
       authType: config.authType,
       token: config.token!,
+      onDiag: (level, message, details) => logDiag('bitbucket.apiClient', level, message, details),
     });
-    const service = new PrReviewService(client);
+    const service = new PrReviewService(
+      client,
+      (level, message, details) => logDiag('bitbucket.prReviewService', level, message, details),
+    );
 
     try {
       const upfrontQuestion = parseUpfrontQuestion(prompt);
@@ -564,7 +581,7 @@ export function createBitbucketParticipant(
       }
       stream.markdown('_Fetching PR…_\n\n');
       const pr = await client.getPullRequest(parsed.project, parsed.repo, parsed.prId);
-      logDiag('bitbucket.review', 'model in use', {
+      logDiag('bitbucket.review', 'info', 'model in use', {
         vendor: request.model.vendor,
         family: request.model.family,
         id: request.model.id,
@@ -638,6 +655,9 @@ export function createBitbucketParticipant(
 
         const batchStatus = chunks.length > 1 ? `Batch ${i + 1}/${chunks.length}` : 'Analysing';
         const pass1Label = `pass1 batch ${i + 1}/${chunks.length}`;
+        logDiag('bitbucket.review', 'info', `Batch ${i + 1}/${chunks.length} started — ${chunk.length} file(s)`, {
+          batch: i + 1, totalBatches: chunks.length, fileCount: chunk.length,
+        });
 
         const pass1Batches = await withEasierRetry(
           chunk,
@@ -686,6 +706,7 @@ export function createBitbucketParticipant(
                 batchFindings = resolveFindingAnchors([...findings, ...cont.findings], batch.items);
               } catch (err) {
                 anyBatchFailed = true;
+                logDiag('bitbucket.review', 'warn', `Continuation pass failed — batch ${i + 1}`, { batch: i + 1, error: err instanceof Error ? err.message : String(err) });
                 stream.markdown(`_⚠ Continuation pass failed (batch ${i + 1}) — keeping findings from the truncated response. ${describeFailure(err)}_\n\n`);
               }
             }
@@ -706,6 +727,9 @@ export function createBitbucketParticipant(
                   parsed.project, parsed.repo, pr.fromCommitHash, toFetch,
                 );
                 for (const [p, c] of fetched) fetchedFileCache.set(p, c);
+                logDiag('bitbucket.review', 'info', `Additional context files fetched — batch ${i + 1}`, {
+                  batch: i + 1, requestedCount: toFetch.length, fetchedCount: fetched.size,
+                });
               }
               // Include as many requested files as fit this chunk's remaining budget, smallest-first.
               const requestedEntries = additionalFilesNeeded
@@ -726,6 +750,7 @@ export function createBitbucketParticipant(
               }
             } catch (err) {
               anyBatchFailed = true;
+              logDiag('bitbucket.review', 'warn', `Pass 2 (whole-file context) failed — batch ${i + 1}`, { batch: i + 1, error: err instanceof Error ? err.message : String(err) });
               stream.markdown(`_⚠ Pass 2 (whole-file context) failed (batch ${i + 1}) — keeping findings from the diff-only pass. ${describeFailure(err)}_\n\n`);
             }
           }
@@ -773,6 +798,7 @@ export function createBitbucketParticipant(
             });
           }
           if (droppedByCritic > 0) {
+            logDiag('bitbucket.review', 'info', `Critic dropped ${droppedByCritic} unverified finding(s) — batch ${i + 1}`, { batch: i + 1, droppedByCritic });
             stream.markdown(`_Critic dropped ${droppedByCritic} unverified finding${droppedByCritic !== 1 ? 's' : ''} (batch ${i + 1})._\n\n`);
           }
           chunkFindings = verified;
@@ -797,6 +823,10 @@ export function createBitbucketParticipant(
       const deduped = dedupeFindings(allFindings);
       const numbered = deduped.map((f, idx) => ({ ...f, id: idx + 1 }));
       const output = service.formatReview(numbered, pr, fileDiffs.length, config.confidenceThreshold);
+      logDiag('bitbucket.review', 'info', `PR review completed — ${numbered.length} finding(s)`, {
+        project: parsed.project, repo: parsed.repo, prId: parsed.prId,
+        findingCount: numbered.length, fileCount: fileDiffs.length, batchCount: chunks.length, anyBatchFailed,
+      });
       if (anyBatchFailed) {
         stream.markdown(`_⚠ Some batches had failures after retrying — showing partial results. See the "Ticket Sidekick" output channel for details._\n\n`);
       }
@@ -821,6 +851,7 @@ export function createBitbucketParticipant(
         rawDiffTruncated,
       } satisfies ReviewSession);
     } catch (err) {
+      logDiag('bitbucket.review', 'error', 'PR review failed', { error: err instanceof Error ? err.message : String(err) });
       stream.markdown(friendlyLmFailureMessage('**Review failed:**', err));
     }
   };

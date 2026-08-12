@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { logDiag } from '../../utils/diagLog';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import type { TicketService } from '../../services/TicketService';
 import { loadWorkflowCache, findPath } from '../../services/WorkflowService';
@@ -43,7 +44,9 @@ export async function executeCleanupBatch(
         await ticketService.transitionAlongPath(sub.key, sub.transitionPath, sub.resolution ?? session.resolution);
         transitioned++;
       } catch (err) {
-        failures.push({ key: sub.key, reason: err instanceof Error ? err.message : String(err) });
+        const reason = err instanceof Error ? err.message : String(err);
+        logDiag('jira.cleanup', 'warn', `Transition failed — ${sub.key}`, { issueKey: sub.key, reason });
+        failures.push({ key: sub.key, reason });
         failed++;
       }
     }
@@ -52,7 +55,9 @@ export async function executeCleanupBatch(
       await ticketService.transitionAlongPath(ticket.key, ticket.transitionPath, session.resolution);
       transitioned++;
     } catch (err) {
-      failures.push({ key: ticket.key, reason: err instanceof Error ? err.message : String(err) });
+      const reason = err instanceof Error ? err.message : String(err);
+      logDiag('jira.cleanup', 'warn', `Transition failed — ${ticket.key}`, { issueKey: ticket.key, reason });
+      failures.push({ key: ticket.key, reason });
       failed++;
     }
   }
@@ -63,6 +68,9 @@ export async function executeCleanupBatch(
     summary += '\n\n' + failures.map(f => `✗ ${f.key} — ${f.reason}`).join('\n');
     summary += '\n\nIf caused by a workflow gap, run `@jira discover workflow` to refresh the cache.';
   }
+  logDiag('jira.cleanup', failed > 0 ? 'warn' : 'info', `Cleanup batch complete — ${transitioned} transitioned, ${failed} failed, ${skipped} skipped`, {
+    transitioned, failed, skipped,
+  });
   stream.markdown(summary);
 }
 

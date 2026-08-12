@@ -16,6 +16,7 @@ import type {
 } from './IJiraClient';
 import { fetchWithRetry } from '../utils/fetchWithRetry';
 import { ApiError, JiraApiError } from '../utils/apiError';
+import type { DiagLogger } from '../utils/diagTypes';
 
 export { JiraApiError } from '../utils/apiError';
 
@@ -89,6 +90,7 @@ export interface JiraApiClientConfig {
   authType: AuthType;
   token: string;
   sprintBoardId?: number;
+  onDiag?: DiagLogger;
 }
 
 export class JiraApiClient implements IJiraClient {
@@ -96,6 +98,7 @@ export class JiraApiClient implements IJiraClient {
   private readonly authHeader: string;
   private readonly authType: AuthType;
   private readonly sprintBoardId?: number;
+  private readonly onDiag?: DiagLogger;
 
   constructor(config: JiraApiClientConfig) {
     this.baseUrl = config.baseUrl.replace(/\/$/, '');
@@ -104,6 +107,7 @@ export class JiraApiClient implements IJiraClient {
       ? `Basic ${config.token}`
       : `Bearer ${config.token}`;
     this.sprintBoardId = config.sprintBoardId;
+    this.onDiag = config.onDiag;
   }
 
   // Descriptions and comments always use REST API v2 (plain text / Jira wiki markup).
@@ -284,6 +288,7 @@ export class JiraApiClient implements IJiraClient {
         // Kanban (and other non-Scrum) boards reject sprint queries — skip them. But an
         // auth failure must surface rather than silently yield no sprints.
         if (isAuthError(err)) throw err;
+        this.onDiag?.('warn', `Board ${boardId} skipped (non-Scrum) while resolving sprint "${sprintName}"`, { boardId, sprintName });
       }
     }
     throw new Error(`Sprint '${sprintName}' not found in project ${projectKey}.`);
@@ -390,7 +395,10 @@ export class JiraApiClient implements IJiraClient {
     } catch (err) {
       // A 404 means the issue has no remote links (or the feature is absent) — return empty.
       // Auth/server errors must surface rather than masquerade as "no links".
-      if (err instanceof ApiError && err.status === 404) return [];
+      if (err instanceof ApiError && err.status === 404) {
+        this.onDiag?.('warn', `No remote links — ${issueKey} (404)`, { issueKey });
+        return [];
+      }
       throw err;
     }
   }
@@ -417,6 +425,7 @@ export class JiraApiClient implements IJiraClient {
         // Kanban (and other non-Scrum) boards reject sprint queries — skip them. But an
         // auth failure must surface rather than silently yield no sprints.
         if (isAuthError(err)) throw err;
+        this.onDiag?.('warn', `Board ${boardId} skipped (non-Scrum) while searching sprints for "${query}"`, { boardId, query });
       }
     }
     return results;

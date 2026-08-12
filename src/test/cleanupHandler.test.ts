@@ -4,6 +4,7 @@ vi.mock('vscode', () => ({
   workspace: {
     workspaceFolders: [{ uri: { fsPath: '/workspace' } }],
   },
+  window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
 }));
 
 vi.mock('../services/WorkflowService', () => ({

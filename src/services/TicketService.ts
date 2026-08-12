@@ -1,4 +1,5 @@
 import type { IJiraClient, JiraAttachment, JiraComment, JiraEditMetaField, JiraFieldMeta, JiraFilter, JiraIssue, JiraIssueLink, JiraIssueType, JiraRemoteLink, JiraSearchResult, JiraSprintCandidate } from '../jira/IJiraClient';
+import type { DiagLogger } from '../utils/diagTypes';
 import { formatJiraBody } from '../utils/markdownFormatter';
 
 export type FieldResolutionResult =
@@ -217,7 +218,7 @@ export function assembleDescription(sections: string[], answers: Record<string, 
 }
 
 export class TicketService {
-  constructor(private readonly client: IJiraClient) {}
+  constructor(private readonly client: IJiraClient, private readonly onDiag?: DiagLogger) {}
 
   async getFieldMeta(): Promise<JiraFieldMeta[]> {
     return this.client.getFields();
@@ -254,6 +255,7 @@ export class TicketService {
 
   async addComment(issueKey: string, body: string): Promise<string> {
     await this.client.addComment(issueKey, body);
+    this.onDiag?.('info', `Comment added — ${issueKey}`, { issueKey });
     return `comment added to ${issueKey}.`;
   }
 
@@ -291,6 +293,7 @@ export class TicketService {
     }
 
     await this.client.updateIssue(issueKey, { [jiraField]: fieldValue });
+    this.onDiag?.('info', `Field updated — ${issueKey} (${fieldName})`, { issueKey, fieldName });
     return `Updated ${fieldName} on ${issueKey}.`;
   }
 
@@ -526,7 +529,9 @@ export class TicketService {
         await this.client.updateIssue(key, { [fieldId]: fieldValue });
         onProgress(key, true);
       } catch (err) {
-        onProgress(key, false, err instanceof Error ? err.message : String(err));
+        const message = err instanceof Error ? err.message : String(err);
+        this.onDiag?.('warn', `Bulk field update failed — ${key} (${fieldId})`, { issueKey: key, fieldId, error: message });
+        onProgress(key, false, message);
       }
     }
   }
@@ -582,6 +587,7 @@ export class TicketService {
     additionalFields?: Record<string, unknown>,
   ): Promise<string> {
     const created = await this.client.createIssue(projectKey, summary, issueType, additionalFields);
+    this.onDiag?.('info', `Ticket created — ${created.key}`, { projectKey, issueType });
     return `Created ${created.key}: **${summary}** (${issueType} in ${projectKey})`;
   }
 }

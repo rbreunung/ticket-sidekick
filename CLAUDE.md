@@ -70,7 +70,9 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/utils/htmlToMarkdown.ts` | Converts HTML email body to Markdown; resolves `cid:` references via optional `inlineImageMap`; strips OWA span whitespace inside bold/italic |
 | `src/utils/extractJsonObject.ts` | Bracket-counting extractor for the first complete JSON object in a raw LLM response (ignores braces in strings + trailing prose). Shared by `parseIntent` (Jira) and the Bitbucket review parser; `reviewSessionState.ts` re-exports it so neither participant imports the other |
 | `src/utils/lmRetry.ts` | 3-try retry for VS Code Language Model API calls: `withLmRetry` (identical-retry, for a single non-splittable prompt) and `withEasierRetry` (the 3rd try splits a batch in half instead of repeating it). `isTransientLmError` classifies which failures are worth retrying. `PartialLmResponseError` preserves any text a broken response stream had already sent |
-| `src/utils/diagLog.ts` | Shared `"Ticket Sidekick"` VS Code Output Channel singleton (`getOutputChannel()`) and `logDiag(scope, message, details?)` — the place for diagnostic detail beyond the chat transcript. Used by the Bitbucket review pipeline today; new features in either participant should log through it too |
+| `src/utils/diagTypes.ts` | `LogLevel` (`'info' \| 'warn' \| 'error'`) and `DiagLogger` types — no `vscode` import, so `TicketService`/`PrReviewService`/`JiraApiClient`/`BitbucketApiClient` can depend on them without pulling in `vscode` transitively |
+| `src/utils/logRedaction.ts` | `sanitizeDetails()` — recursively redacts values whose key looks like a secret and truncates long strings before a `logDiag` details object is written to the Output Channel. Applied automatically inside `logDiag`; no call site invokes it directly |
+| `src/utils/diagLog.ts` | Shared `"Ticket Sidekick"` VS Code Output Channel singleton (`getOutputChannel()`) and `logDiag(scope, level, message, details?)` — the place for diagnostic detail beyond the chat transcript. `level` (`'info' \| 'warn' \| 'error'`) tags each line for skimmability; `details` is redacted/truncated via `logRedaction.ts` automatically. Used throughout both `@jira` and `@bitbucket` |
 
 ## Running tests
 
@@ -192,13 +194,34 @@ Always stored in `vscode.ExtensionContext.secrets` (VS Code SecretStorage, OS-en
 ## Diagnostics
 
 A shared VS Code Output Channel named `"Ticket Sidekick"` (`View → Output`,
-via `getOutputChannel()`/`logDiag()` in `src/utils/diagLog.ts`) is the place
-for anything a user or a future debugging session needs beyond the chat
-transcript — model identity, retry attempts, raw API errors. It's used today
-by the Bitbucket review pipeline's LLM retry logic (`src/utils/lmRetry.ts`,
-wired into `BitbucketParticipant.ts`). **New features in either participant
-should log through `logDiag()` too**, rather than inventing separate
+via `getOutputChannel()`/`logDiag(scope, level, message, details?)` in
+`src/utils/diagLog.ts`) is the place for anything a user or a future
+debugging session needs beyond the chat transcript — model identity, retry
+attempts, raw API errors, and major operations (ticket created, PR review
+completed, cleanup batch run) across both `@jira` and `@bitbucket`. `level`
+is `'info' | 'warn' | 'error'`; `details`, when given, is automatically
+redacted/truncated by `src/utils/logRedaction.ts` before being written, so
+call sites never need to sanitize their own data.
+
+Files that already import `vscode` (both participant files, `extension.ts`,
+all of `src/participant/jira/*Handler.ts`) call `logDiag` directly. The four
+files that must stay `vscode`-free to remain loadable by Vitest
+(`TicketService`, `PrReviewService`, `JiraApiClient`, `BitbucketApiClient`)
+take an optional injected `onDiag?: DiagLogger` (constructor param on the
+services, config field on the API clients) instead — the caller binds it to
+a scope-tagged `logDiag` call at construction time, e.g.
+`new TicketService(client, (level, message, details) => logDiag('jira.ticketService', level, message, details))`.
+This mirrors the `onAttemptFailed` hook `src/utils/lmRetry.ts` already used
+for the same reason. **New features in either participant should log
+through `logDiag()`/`onDiag` too**, rather than inventing separate
 console/output-channel logging.
+
+## Documented Solutions
+
+`docs/solutions/` — documented solutions to past problems (bugs, best
+practices, workflow patterns), organized by category with YAML frontmatter
+(`module`, `tags`, `problem_type`). Relevant when implementing or debugging
+in documented areas.
 
 ## Branch ticket detection
 

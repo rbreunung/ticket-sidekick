@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { logDiag } from '../../utils/diagLog';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -56,7 +57,9 @@ async function openVeracodeFilePicker(
     const flaws = await readAndFilterVeracodeFile(uris[0].fsPath);
     return { flaws, fileName: uris[0].fsPath.split(/[\\/]/).pop() ?? uris[0].fsPath };
   } catch (err) {
-    stream.markdown(`_Could not import report: ${err instanceof Error ? err.message : String(err)}_`);
+    const message = err instanceof Error ? err.message : String(err);
+    logDiag('jira.veracode', 'error', `Could not import report — ${uris[0].fsPath}`, { path: uris[0].fsPath, error: message });
+    stream.markdown(`_Could not import report: ${message}_`);
     return null;
   }
 }
@@ -73,14 +76,23 @@ export async function buildVeracodeTemplateSession(
     try {
       return new TemplateService(workspaceRoot).loadTemplates().templates
         .map(t => ({ name: t.name, issueType: t.issueType ?? 'Bug' }));
-    } catch { return []; }
+    } catch (err) {
+      logDiag('jira.veracode', 'warn', 'Could not load templates — proceeding without', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return [];
+    }
   })();
 
   let issueTypes: string[] = [];
   try {
     const project = await jiraClient.getProject(projectKey);
     issueTypes = project.issueTypes.filter(t => !t.subtask).map(t => t.name);
-  } catch { /* fall through to the 'Bug' default below */ }
+  } catch (err) {
+    logDiag('jira.veracode', 'warn', `Could not fetch issue types — ${projectKey}, defaulting to 'Bug'`, {
+      projectKey, error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   return {
     reportFileName: fileName,
@@ -207,9 +219,11 @@ export async function handleVeracodeTemplateSelection(
           additionalFields = await resolver.resolve(fullTemplate.defaultFields, fullTemplate.resolveFields);
         }
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logDiag('jira.veracode', 'warn', `Could not resolve template fields — ${pick.name}`, { templateName: pick.name, error: message });
         stream.markdown(
           `_Warning: could not resolve template fields — proceeding without them: ` +
-          `${err instanceof Error ? err.message : String(err)}_\n\n`,
+          `${message}_\n\n`,
         );
       }
     }
@@ -300,7 +314,9 @@ export async function executeVeracodeBatch(
       stream.markdown(`✓ ${key ?? '?'} — ${row.summary}\n\n`);
       created++;
     } catch (err) {
-      stream.markdown(`✗ Flaw ${row.issueId} — ${err instanceof Error ? err.message : String(err)}\n\n`);
+      const message = err instanceof Error ? err.message : String(err);
+      logDiag('jira.veracode', 'error', `Ticket creation failed — flaw ${row.issueId}`, { issueId: row.issueId, error: message });
+      stream.markdown(`✗ Flaw ${row.issueId} — ${message}\n\n`);
       failed++;
     }
   }
@@ -312,5 +328,8 @@ export async function executeVeracodeBatch(
   if (session.rows.length > BATCH_LIMIT) {
     summary += `\n\n_Batch capped at ${BATCH_LIMIT} tickets per run — re-run the import to process the remainder._`;
   }
+  logDiag('jira.veracode', failed > 0 ? 'warn' : 'info', `Veracode import complete — ${created} created, ${failed} failed`, {
+    total, created, failed, excludedByUser, alreadyTicketedSkipped,
+  });
   stream.markdown(summary);
 }

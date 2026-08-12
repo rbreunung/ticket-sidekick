@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { logDiag } from '../../utils/diagLog';
 import type { TicketService } from '../../services/TicketService';
 import { markdownToJiraWiki } from '../../utils/markdownToJiraWiki';
 import type { ContentSession } from '../sessionState';
@@ -26,7 +27,11 @@ export async function gatherFileContent(
       const slice = truncated ? bytes.slice(0, FILE_MAX_BYTES) : bytes;
       const text = decoder.decode(slice) + (truncated ? '\n\n[... truncated ...]' : '');
       sections.push(`### ${name}\n\`\`\`\n${text}\n\`\`\``);
-    } catch { /* skip unreadable files */ }
+    } catch (err) {
+      logDiag('jira.content', 'warn', `Could not read referenced file — ${uri.fsPath}`, {
+        path: uri.fsPath, error: err instanceof Error ? err.message : String(err),
+      });
+    }
   };
 
   const processRef = async (ref: vscode.ChatPromptReference): Promise<void> => {

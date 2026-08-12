@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   parsePrUrl, parseDiff, extractJsonObject, extractPartialFindings, parseNdjsonFindings,
   langFromPath, buildAdaptiveChunks,
@@ -1572,5 +1572,45 @@ describe('stripUpfrontQuestion', () => {
     const stripped = stripUpfrontQuestion(prompt);
     expect(stripped).toBe('https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42');
     expect(stripped).not.toContain('concurrent writes');
+  });
+});
+
+describe('PrReviewService onDiag', () => {
+  it('logs a warn when an additional file is unavailable', async () => {
+    const client = new MockBitbucketClient();
+    client.getFileContent = async () => { throw new Error('Not found: /some/path'); };
+    const onDiag = vi.fn();
+    const service = new PrReviewService(client, onDiag);
+
+    const result = await service.gatherFileContents('PROJ', 'repo', 'abc123', ['src/foo.ts']);
+
+    expect(result.get('src/foo.ts')).toBe('(file not available)');
+    expect(onDiag).toHaveBeenCalledWith(
+      'warn', expect.stringContaining('src/foo.ts'),
+      expect.objectContaining({ path: 'src/foo.ts' }),
+    );
+  });
+
+  it('logs an info summary after posting comments', async () => {
+    const client = new MockBitbucketClient();
+    const onDiag = vi.fn();
+    const service = new PrReviewService(client, onDiag);
+    const finding: ReviewFinding = {
+      id: 1, file: 'a.ts', line: 10, severity: 'critical', title: 'T', description: 'D', recommendation: 'R',
+    };
+
+    await service.postCommentItems('PROJ', 'repo', 42, [{ finding, text: 'comment text' }]);
+
+    expect(onDiag).toHaveBeenCalledWith(
+      'info', expect.stringContaining('PR comments posted'),
+      expect.objectContaining({ project: 'PROJ', repo: 'repo', prId: 42, failedCount: 0 }),
+    );
+  });
+
+  it('works without onDiag (backward compatible)', async () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const result = await service.gatherFileContents('PROJ', 'repo', 'abc123', ['src/foo.ts']);
+    expect(result.get('src/foo.ts')).toBeDefined();
   });
 });

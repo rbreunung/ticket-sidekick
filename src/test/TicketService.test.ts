@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TicketService, assembleDescription, extractTextFromAdf, resolveFieldIdFuzzy, formatIssueFields, renderFieldValue, isMultiLine } from '../services/TicketService';
 import type { JiraAttachment, JiraFieldMeta, JiraIssue } from '../jira/IJiraClient';
 import { MockJiraClient, FIXTURE_ATTACHMENT_BYTES } from './mocks/MockJiraClient';
@@ -1018,5 +1018,69 @@ describe('renderFieldValue', () => {
   it('renders plain string fields correctly', () => {
     const textMeta: JiraFieldMeta = { id: 'summary', name: 'Summary', navigable: true, schema: { type: 'string' } };
     expect(renderFieldValue('Hello world', textMeta)).toBe('Hello world');
+  });
+});
+
+describe('TicketService onDiag', () => {
+  it('logs an info line when a ticket is created', async () => {
+    const client = new MockJiraClient();
+    const onDiag = vi.fn();
+    const service = new TicketService(client, onDiag);
+
+    await service.createTicket('PROJ', 'New ticket', 'Bug');
+
+    expect(onDiag).toHaveBeenCalledWith(
+      'info', expect.stringContaining('Ticket created'),
+      expect.objectContaining({ projectKey: 'PROJ', issueType: 'Bug' }),
+    );
+  });
+
+  it('logs an info line when a field is updated', async () => {
+    const client = new MockJiraClient();
+    const onDiag = vi.fn();
+    const service = new TicketService(client, onDiag);
+
+    await service.updateField('PROJ-123', 'summary', 'New summary');
+
+    expect(onDiag).toHaveBeenCalledWith(
+      'info', expect.stringContaining('Field updated'),
+      expect.objectContaining({ issueKey: 'PROJ-123' }),
+    );
+  });
+
+  it('logs an info line when a comment is added', async () => {
+    const client = new MockJiraClient();
+    const onDiag = vi.fn();
+    const service = new TicketService(client, onDiag);
+
+    await service.addComment('PROJ-123', 'a comment');
+
+    expect(onDiag).toHaveBeenCalledWith(
+      'info', expect.stringContaining('Comment added'),
+      expect.objectContaining({ issueKey: 'PROJ-123' }),
+    );
+  });
+
+  it('logs a warn per item when a bulk field update fails', async () => {
+    const client = new MockJiraClient();
+    client.updateIssue = async (key: string) => {
+      if (key === 'PROJ-2') throw new Error('boom');
+    };
+    const onDiag = vi.fn();
+    const service = new TicketService(client, onDiag);
+    const progress: Array<[string, boolean]> = [];
+
+    await service.bulkUpdateField(['PROJ-1', 'PROJ-2'], 'priority', 'High', (key, ok) => progress.push([key, ok]));
+
+    expect(onDiag).toHaveBeenCalledWith(
+      'warn', expect.stringContaining('PROJ-2'),
+      expect.objectContaining({ issueKey: 'PROJ-2', fieldId: 'priority' }),
+    );
+  });
+
+  it('works without onDiag (backward compatible)', async () => {
+    const client = new MockJiraClient();
+    const service = new TicketService(client);
+    await expect(service.createTicket('PROJ', 'New ticket', 'Bug')).resolves.toContain('Created');
   });
 });

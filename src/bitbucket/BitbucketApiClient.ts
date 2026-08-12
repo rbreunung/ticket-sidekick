@@ -1,6 +1,7 @@
 import type { BitbucketAuthType, BitbucketCommentResult, BitbucketPR, BitbucketUser, IBitbucketClient, InlineAnchor } from './IBitbucketClient';
 import { fetchWithRetry } from '../utils/fetchWithRetry';
 import { BitbucketApiError } from '../utils/apiError';
+import type { DiagLogger } from '../utils/diagTypes';
 
 export { BitbucketApiError } from '../utils/apiError';
 
@@ -41,12 +42,14 @@ export interface BitbucketApiClientConfig {
   baseUrl: string;
   authType: BitbucketAuthType;
   token: string;
+  onDiag?: DiagLogger;
 }
 
 export class BitbucketApiClient implements IBitbucketClient {
   private readonly baseUrl: string;
   private readonly authType: BitbucketAuthType;
   private readonly authHeader: string;
+  private readonly onDiag?: DiagLogger;
 
   constructor(config: BitbucketApiClientConfig) {
     this.baseUrl = config.baseUrl.replace(/\/$/, '');
@@ -54,6 +57,7 @@ export class BitbucketApiClient implements IBitbucketClient {
     this.authHeader = config.authType === 'cloud'
       ? `Basic ${config.token}`
       : `Bearer ${config.token}`;
+    this.onDiag = config.onDiag;
   }
 
   private async dcRequest<T>(path: string): Promise<T> {
@@ -153,6 +157,7 @@ export class BitbucketApiClient implements IBitbucketClient {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.includes('403') || msg.includes('scope') || msg.includes('permission')) {
+          this.onDiag?.('warn', 'Bitbucket Cloud user lookup missing Account: Read scope', { error: msg });
           return { displayName: '(add Account: Read scope to your App Password to show your username)', emailAddress: '' };
         }
         throw err;

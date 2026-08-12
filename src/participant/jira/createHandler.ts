@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { logDiag } from '../../utils/diagLog';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import { TicketService, assembleDescription } from '../../services/TicketService';
 import { TemplateService } from '../../templates/TemplateService';
@@ -52,7 +53,10 @@ async function checkSectionCoverage(
   if (!match) return [];
   try {
     return JSON.parse(match[0]) as string[];
-  } catch {
+  } catch (err) {
+    logDiag('jira.create', 'warn', 'Could not parse section-coverage response as JSON', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return [];
   }
 }
@@ -87,8 +91,10 @@ export async function continueAfterIssueType(
     try {
       resolvedFields = await resolver.resolve(selectedTemplate.defaultFields, selectedTemplate.resolveFields);
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logDiag('jira.create', 'error', 'Template field resolution failed', { templateName: selectedTemplate?.name, error: message });
       const pick = await vscode.window.showQuickPick(['Proceed without template', 'Cancel'], {
-        title: `Field resolution error: ${err instanceof Error ? err.message : String(err)}`,
+        title: `Field resolution error: ${message}`,
         ignoreFocusOut: true,
       });
       if (pick !== 'Proceed without template') { stream.markdown('Cancelled.'); return null; }
@@ -242,7 +248,10 @@ export async function handleCreateTicket(
       try {
         const { templates } = new TemplateService(workspaceRoot).loadTemplates();
         selectedTemplate = templates.find((t) => t.name === preselectedTemplateName) ?? null;
-      } catch {
+      } catch (err) {
+        logDiag('jira.create', 'warn', `Could not reload template — ${preselectedTemplateName}`, {
+          templateName: preselectedTemplateName, error: err instanceof Error ? err.message : String(err),
+        });
         stream.markdown('_Could not reload template — proceeding without._\n\n');
       }
     }
@@ -253,7 +262,9 @@ export async function handleCreateTicket(
       try {
         ({ templates } = new TemplateService(workspaceRoot).loadTemplates());
       } catch (err) {
-        stream.markdown(`_Template error: ${err instanceof Error ? err.message : String(err)} — proceeding without template._\n\n`);
+        const message = err instanceof Error ? err.message : String(err);
+        logDiag('jira.create', 'warn', 'Could not load templates — proceeding without template', { error: message });
+        stream.markdown(`_Template error: ${message} — proceeding without template._\n\n`);
       }
     }
     if (templates.length > 0) {
@@ -287,7 +298,10 @@ export async function handleCreateTicket(
     let types: { name: string }[];
     try {
       types = await ticketService.getIssueTypes(projectKey);
-    } catch {
+    } catch (err) {
+      logDiag('jira.create', 'warn', `Could not fetch issue types — ${projectKey}`, {
+        projectKey, error: err instanceof Error ? err.message : String(err),
+      });
       types = [];
     }
     if (types.length === 0) {

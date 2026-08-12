@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { logDiag } from '../../utils/diagLog';
 import * as fs from 'fs';
 import type { TicketService } from '../../services/TicketService';
 import type { ConfigService } from '../../services/ConfigService';
@@ -38,7 +39,12 @@ export async function handleCreateFromEmail(
       if (issueTypes.length > 0) {
         session = { ...session, availableIssueTypes: issueTypes, issueType: selectDefaultIssueType(issueTypes) };
       }
-    } catch { /* use session as-is; simplified prompt still functional */ }
+    } catch (err) {
+      logDiag('jira.email', 'warn', `Could not refresh issue types — ${session.projectKey}`, {
+        projectKey: session.projectKey, error: err instanceof Error ? err.message : String(err),
+      });
+      // use session as-is; simplified prompt still functional
+    }
   }
 
   await streamEmailContentPreview(session, stream, ws);
@@ -69,7 +75,9 @@ export async function handleAddEmailFromChat(
   try {
     buffer = await fs.promises.readFile(emlPath);
   } catch (err) {
-    stream.markdown(`_Could not read file: ${err instanceof Error ? err.message : String(err)}_`);
+    const message = err instanceof Error ? err.message : String(err);
+    logDiag('jira.email', 'error', `Could not read .eml file — ${emlPath}`, { emlPath, error: message });
+    stream.markdown(`_Could not read file: ${message}_`);
     return;
   }
 
@@ -77,7 +85,9 @@ export async function handleAddEmailFromChat(
   try {
     parsed = await parseEml(buffer);
   } catch (err) {
-    stream.markdown(`_Could not parse email: ${err instanceof Error ? err.message : String(err)}_`);
+    const message = err instanceof Error ? err.message : String(err);
+    logDiag('jira.email', 'error', `Could not parse .eml file — ${emlPath}`, { emlPath, error: message });
+    stream.markdown(`_Could not parse email: ${message}_`);
     return;
   }
 
@@ -139,7 +149,12 @@ async function buildEmailCreateSession(
     try {
       return new TemplateService(workspaceRoot).loadTemplates().templates
         .map(t => ({ name: t.name, issueType: t.issueType ?? 'Story' }));
-    } catch { return []; }
+    } catch (err) {
+      logDiag('jira.email', 'warn', 'Could not load templates — proceeding without', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return [];
+    }
   })();
 
   let issueTypes: string[] = [];
@@ -147,7 +162,11 @@ async function buildEmailCreateSession(
     try {
       const project = await jiraClient.getProject(projectKey);
       issueTypes = project.issueTypes.filter(t => !t.subtask).map(t => t.name);
-    } catch { /* use defaults */ }
+    } catch (err) {
+      logDiag('jira.email', 'warn', `Could not fetch issue types — ${projectKey}`, {
+        projectKey, error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   return {
@@ -186,7 +205,9 @@ async function openEmailFilePicker(
   try {
     buffer = await fs.promises.readFile(emlPath);
   } catch (err) {
-    stream.markdown(`_Could not read file: ${err instanceof Error ? err.message : String(err)}_`);
+    const message = err instanceof Error ? err.message : String(err);
+    logDiag('jira.email', 'error', `Could not read .eml file — ${emlPath}`, { emlPath, error: message });
+    stream.markdown(`_Could not read file: ${message}_`);
     return null;
   }
 
@@ -194,7 +215,9 @@ async function openEmailFilePicker(
   try {
     parsed = await parseEml(buffer);
   } catch (err) {
-    stream.markdown(`_Could not parse email: ${err instanceof Error ? err.message : String(err)}_`);
+    const message = err instanceof Error ? err.message : String(err);
+    logDiag('jira.email', 'error', `Could not parse .eml file — ${emlPath}`, { emlPath, error: message });
+    stream.markdown(`_Could not parse email: ${message}_`);
     return null;
   }
 
@@ -274,7 +297,12 @@ export async function handleEmailContentSession(
             const resolved = await resolver.resolve(fullTemplate.defaultFields, fullTemplate.resolveFields);
             additionalFields = { ...resolved, ...session.additionalFields };
           }
-        } catch { /* proceed without template fields */ }
+        } catch (err) {
+          logDiag('jira.email', 'warn', `Could not resolve template fields — ${pick.name}`, {
+            templateName: pick.name, error: err instanceof Error ? err.message : String(err),
+          });
+          // proceed without template fields
+        }
       }
     }
     const overrides = pick.kind === 'template'
@@ -328,7 +356,9 @@ export async function addEmailAsComment(
         ticketService.uploadAttachment(ticketKey, att.name, att.contentType, att.contentBytes)
           .then(() => { uploaded++; })
           .catch(err => {
-            stream.markdown(`_Warning: could not upload ${att.name}: ${err instanceof Error ? err.message : String(err)}_`);
+            const message = err instanceof Error ? err.message : String(err);
+            logDiag('jira.email', 'warn', `Attachment upload failed — ${att.name}`, { ticketKey, fileName: att.name, error: message });
+            stream.markdown(`_Warning: could not upload ${att.name}: ${message}_`);
           }),
       ),
     );
@@ -426,7 +456,9 @@ export async function finishEmailTicket(session: EmailContentSession, ticketServ
         ticketService.uploadAttachment(issueKey, att.name, att.contentType, att.contentBytes)
           .then(() => { uploaded++; })
           .catch(err => {
-            stream.markdown(`_Warning: could not upload ${att.name}: ${err instanceof Error ? err.message : String(err)}_`);
+            const message = err instanceof Error ? err.message : String(err);
+            logDiag('jira.email', 'warn', `Attachment upload failed — ${att.name}`, { issueKey, fileName: att.name, error: message });
+            stream.markdown(`_Warning: could not upload ${att.name}: ${message}_`);
           }),
       ),
     );
@@ -438,7 +470,11 @@ export async function finishEmailTicket(session: EmailContentSession, ticketServ
   if (issueKey && session.emlFilePath) {
     const deleteAfter = vscode.workspace.getConfiguration('ticketSidekick').get<boolean>('email.deleteEmlAfterImport', false);
     if (deleteAfter) {
-      await fs.promises.unlink(session.emlFilePath).catch(() => {});
+      await fs.promises.unlink(session.emlFilePath).catch((err: unknown) => {
+        logDiag('jira.email', 'warn', `Could not delete .eml after import — ${session.emlFilePath}`, {
+          emlFilePath: session.emlFilePath, error: err instanceof Error ? err.message : String(err),
+        });
+      });
     }
   }
 }

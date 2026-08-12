@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('vscode', () => ({}));
+vi.mock('vscode', () => ({
+  window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
+}));
 vi.mock('../participant/jira/llmHelpers', () => ({ spellCheckValue: vi.fn() }));
 vi.mock('../participant/jira/contentHandler', () => ({ streamContentPreview: vi.fn() }));
 
