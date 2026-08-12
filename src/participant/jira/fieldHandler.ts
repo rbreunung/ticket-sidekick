@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { logDiag } from '../../utils/diagLog';
 import { TicketService, resolveFieldIdFuzzy, extractTextFromAdf } from '../../services/TicketService';
 import type { JiraFieldMeta } from '../../jira/IJiraClient';
 import type { FieldUpdatePreviewSession, FieldSelectionSession, SprintSelectionSession, ContentSession } from '../sessionState';
@@ -47,7 +48,9 @@ export async function continueSetField(
     try {
       candidates = await ticketService.findSprints(projectKey, fieldValueRaw);
     } catch (err) {
-      stream.markdown(`Could not search sprints: ${err instanceof Error ? err.message : String(err)}`);
+      const message = err instanceof Error ? err.message : String(err);
+      logDiag('jira.field', 'error', `Sprint search failed — ${projectKey}`, { projectKey, query: fieldValueRaw, error: message });
+      stream.markdown(`Could not search sprints: ${message}`);
       return;
     }
     if (candidates.length === 0) {
@@ -88,7 +91,9 @@ export async function continueSetField(
       fieldValue = await ticketService.buildFieldValue(field.id, sampleKey, fieldValueRaw);
     }
   } catch (err) {
-    stream.markdown(`Could not build field value: ${err instanceof Error ? err.message : String(err)}`);
+    const message = err instanceof Error ? err.message : String(err);
+    logDiag('jira.field', 'error', 'Could not build field value', { error: message });
+    stream.markdown(`Could not build field value: ${message}`);
     return;
   }
 
