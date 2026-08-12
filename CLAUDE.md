@@ -210,7 +210,7 @@ files that must stay `vscode`-free to remain loadable by Vitest
 take an optional injected `onDiag?: DiagLogger` (constructor param on the
 services, config field on the API clients) instead — the caller binds it to
 a scope-tagged `logDiag` call at construction time, e.g.
-`new TicketService(client, (level, msg, details) => logDiag('jira.ticketService', level, msg, details))`.
+`new TicketService(client, (level, message, details) => logDiag('jira.ticketService', level, message, details))`.
 This mirrors the `onAttemptFailed` hook `src/utils/lmRetry.ts` already used
 for the same reason. **New features in either participant should log
 through `logDiag()`/`onDiag` too**, rather than inventing separate
