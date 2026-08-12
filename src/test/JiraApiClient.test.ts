@@ -315,6 +315,48 @@ describe('JiraApiClient', () => {
     });
   });
 
+  describe('onDiag logging (constructor-injected)', () => {
+    it('logs a warn when getRemoteLinks 404s', async () => {
+      vi.stubGlobal('fetch', makeFetch({}, 404));
+      const onDiag = vi.fn();
+      const client = new JiraApiClient({ ...BASE_CONFIG, onDiag });
+      await client.getRemoteLinks('PROJ-1');
+      expect(onDiag).toHaveBeenCalledWith(
+        'warn', expect.stringContaining('PROJ-1'),
+        expect.objectContaining({ issueKey: 'PROJ-1' }),
+      );
+    });
+
+    it('logs a warn when a board is skipped as non-Scrum during sprint search', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/board?')) {
+          return Promise.resolve({
+            ok: true, status: 200, headers: { get: () => 'application/json' },
+            json: () => Promise.resolve({ values: [{ id: 10, type: 'scrum' }] }),
+          });
+        }
+        return Promise.resolve({
+          ok: false, status: 400, statusText: 'Bad Request', headers: { get: () => 'application/json' },
+          text: () => Promise.resolve(''),
+        });
+      }));
+      const onDiag = vi.fn();
+      const client = new JiraApiClient({ ...BASE_CONFIG, onDiag });
+      const result = await client.findSprints('PROJ', 'Everest');
+      expect(result).toEqual([]);
+      expect(onDiag).toHaveBeenCalledWith(
+        'warn', expect.stringContaining('skipped'),
+        expect.objectContaining({ boardId: 10, query: 'Everest' }),
+      );
+    });
+
+    it('does not require onDiag (backward compatible)', async () => {
+      vi.stubGlobal('fetch', makeFetch({}, 404));
+      const client = new JiraApiClient(BASE_CONFIG);
+      await expect(client.getRemoteLinks('PROJ-1')).resolves.toEqual([]);
+    });
+  });
+
   describe('getProjectStatuses', () => {
     const statusPayload = [
       { name: 'Bug', subtask: false, statuses: [{ id: '1', name: 'Open' }, { id: '2', name: 'Closed' }] },
