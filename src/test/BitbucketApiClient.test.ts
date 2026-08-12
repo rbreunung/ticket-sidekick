@@ -41,6 +41,22 @@ const CLOUD_CONFIG = {
   token: 'basic',
 };
 
+describe('getCurrentUser onDiag logging (Cloud, missing scope)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('logs a warn and degrades gracefully when the Cloud token lacks Account: Read scope', async () => {
+    vi.stubGlobal('fetch', errorFetch(403));
+    const onDiag = vi.fn();
+    const client = new BitbucketApiClient({ ...CLOUD_CONFIG, onDiag });
+    const user = await client.getCurrentUser();
+    expect(user.displayName).toContain('Account: Read scope');
+    expect(onDiag).toHaveBeenCalledWith(
+      'warn', expect.stringContaining('scope'),
+      expect.objectContaining({ error: expect.stringContaining('403') }),
+    );
+  });
+});
+
 function jsonFetch(body: unknown): ReturnType<typeof vi.fn> {
   return vi.fn().mockResolvedValue({
     ok: true,
