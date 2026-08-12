@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { logDiag } from '../../utils/diagLog';
 import { formatJiraBody } from '../../utils/markdownFormatter';
 import type { JiraAttachment, JiraComment, JiraFieldMeta } from '../../jira/IJiraClient';
 import { formatIssueFields } from '../../services/TicketService';
@@ -95,7 +96,9 @@ export async function handleLoadTicket(
         await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(attachmentsDir, att.filename), bytes);
         downloaded.add(att.filename);
       } catch (err) {
-        downloadErrors.push(`${att.filename}: ${err instanceof Error ? err.message : String(err)}`);
+        const message = err instanceof Error ? err.message : String(err);
+        logDiag('jira.load', 'warn', `Attachment download failed — ${att.filename}`, { fileName: att.filename, error: message });
+        downloadErrors.push(`${att.filename}: ${message}`);
         skippedUrls.set(att.filename, att.content);
       }
     }));
@@ -143,7 +146,9 @@ export async function handleLoadTicket(
     try {
       await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(contextDir, name), enc.encode(content));
     } catch (err) {
-      writeErrors.push(`${name}: ${err instanceof Error ? err.message : String(err)}`);
+      const message = err instanceof Error ? err.message : String(err);
+      logDiag('jira.load', 'warn', `Could not write ${name}`, { fileName: name, error: message });
+      writeErrors.push(`${name}: ${message}`);
     }
   }
 
@@ -153,7 +158,7 @@ export async function handleLoadTicket(
     try {
       const bytes = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(wsRoot, '.gitignore'));
       existing = new TextDecoder().decode(bytes);
-    } catch { /* file absent */ }
+    } catch { /* file absent — not logged, this is the normal case for a fresh workspace */ }
     if (!existing.split('\n').some(line => line.trim() === '.jira-context/')) {
       const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
       await vscode.workspace.fs.writeFile(
@@ -161,7 +166,11 @@ export async function handleLoadTicket(
         enc.encode(existing + prefix + '.jira-context/\n'),
       );
     }
-  } catch { /* non-fatal */ }
+  } catch (err) {
+    logDiag('jira.load', 'warn', 'Could not update .gitignore', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   // Build skipped list (oversized + unknown binary + download failures)
   const allSkipped: LoadSkippedSession['skipped'] = [
