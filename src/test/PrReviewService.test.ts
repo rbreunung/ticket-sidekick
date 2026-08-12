@@ -6,7 +6,8 @@ import {
   numberDiffLines, locateAnchor, resolveFindingAnchors,
   estimateChunkTokens, selectFilesWithinBudget, MAX_CONTEXT_FILES_PER_BATCH,
   parseCriticKeep, dedupeFindings, extractHunkAround,
-  parseFollowUpIntent, buildPrContextPrompt,
+  parseFollowUpIntent, buildPrContextPrompt, buildDiffAwarePrompt,
+  parseUpfrontQuestion, stripUpfrontQuestion,
 } from '../participant/reviewSessionState';
 import type { ReviewFinding } from '../participant/reviewSessionState';
 import { PrReviewService } from '../services/PrReviewService';
@@ -884,6 +885,20 @@ describe('PrReviewService.buildCriticPrompt', () => {
     expect(prompt).toContain('«UNTRUSTED-CONTENT»');
     expect(prompt).toContain('"keep"');
   });
+
+  it('includes additionalInstructions when provided', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const findings = [
+      { file: 'src/a.ts', line: 5, severity: 'critical' as const, title: 'SQLi', description: 'concat', recommendation: 'params' },
+    ];
+    const prompt = service.buildCriticPrompt(
+      pr,
+      [{ path: 'src/a.ts', diff: '@@ -1 +5 @@\n+const x = q(sql);' }],
+      findings,
+      'Did I introduce any regression?',
+    );
+    expect(prompt).toContain('Did I introduce any regression?');
+  });
 });
 
 describe('selectFilesWithinBudget', () => {
@@ -1437,5 +1452,125 @@ describe('buildPrContextPrompt', () => {
     expect(p).toContain('Refactor only.');
     expect(p).toContain('a.ts');
     expect(p).not.toContain('Review findings:');
+  });
+});
+
+describe('buildDiffAwarePrompt', () => {
+  it('includes raw diff when present', () => {
+    const session = {
+      prTitle: 'Test',
+      prDescription: '',
+      changedFiles: [],
+      findings: [],
+      rawDiff: 'diff --git a/x b/x',
+    };
+    const out = buildDiffAwarePrompt(session as any, 'Did I regress?');
+    expect(out).toContain('«UNTRUSTED-CONTENT»');
+    expect(out).toContain('diff --git a/x b/x');
+    expect(out).toContain('Question: Did I regress?');
+  });
+
+  it('truncates the diff to maxDiffChars and notes the truncation', () => {
+    const session = {
+      prTitle: 'Test',
+      prDescription: '',
+      changedFiles: [],
+      findings: [],
+      rawDiff: 'x'.repeat(100),
+    };
+    const out = buildDiffAwarePrompt(session as any, 'Did I regress?', 20);
+    expect(out).toContain('x'.repeat(20));
+    expect(out).not.toContain('x'.repeat(21));
+    expect(out).toContain('truncated, showing 20 of 100 chars');
+  });
+
+  it('notes write-time truncation even when the stored diff itself is not re-truncated at read time', () => {
+    const session = {
+      prTitle: 'Test',
+      prDescription: '',
+      changedFiles: [],
+      findings: [],
+      rawDiff: 'diff --git a/x b/x',
+      rawDiffTruncated: true,
+    };
+    // maxDiffChars is generous — no read-time re-truncation fires — but the note must still
+    // appear because the diff was already cut down before it was ever stored.
+    const out = buildDiffAwarePrompt(session as any, 'Did I regress?', 10000);
+    expect(out).not.toContain('showing'); // no read-time truncation happened
+    expect(out).toMatch(/already truncated|truncated when the review was stored/i);
+  });
+});
+
+describe('parseUpfrontQuestion', () => {
+  it('parses -- suffix', () => {
+    expect(parseUpfrontQuestion('https://.../pull-requests/42 -- Did I introduce any regression?')).toBe('Did I introduce any regression?');
+  });
+
+  it('parses question: prefix', () => {
+    expect(parseUpfrontQuestion('https://.../pull-requests/42 question: Is this backwards compatible?')).toBe('Is this backwards compatible?');
+  });
+
+  it('returns undefined when no question', () => {
+    expect(parseUpfrontQuestion('https://.../pull-requests/42')).toBeUndefined();
+  });
+
+  it('extracts a question containing the words quick/deep without losing them', () => {
+    expect(parseUpfrontQuestion('https://.../pull-requests/42 -- Did we go deep enough on error handling?'))
+      .toBe('Did we go deep enough on error handling?');
+  });
+
+  it('does not treat a -- embedded in a URL/repo slug as the question delimiter', () => {
+    const prompt = 'https://bitbucket.org/myteam/api--service/pull-requests/42 review deep -- actual question here';
+    expect(parseUpfrontQuestion(prompt)).toBe('actual question here');
+  });
+
+  it('is not defeated by a trailing newline after the question', () => {
+    const prompt = 'https://bitbucket.org/myteam/svc/pull-requests/42 -- Did we go deep enough?\n';
+    expect(parseUpfrontQuestion(prompt)).toBe('Did we go deep enough?');
+  });
+
+  it('excludes a trailing PR URL when the question: prefix comes before it', () => {
+    const prompt = 'question: does this change handle concurrent writes safely? https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42';
+    expect(parseUpfrontQuestion(prompt)).toBe('does this change handle concurrent writes safely?');
+  });
+
+  it('excludes a trailing PR URL when the -- suffix comes before it', () => {
+    const prompt = '-- does this change handle concurrent writes safely? https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42';
+    expect(parseUpfrontQuestion(prompt)).toBe('does this change handle concurrent writes safely?');
+  });
+});
+
+describe('stripUpfrontQuestion', () => {
+  it('removes the -- question so mode-keyword detection does not see it', () => {
+    const stripped = stripUpfrontQuestion('review deep https://.../pull-requests/42 -- Did we go deep enough?');
+    expect(stripped).not.toMatch(/enough/);
+    expect(stripped).toMatch(/deep/); // the mode keyword itself, outside the question, is preserved
+  });
+
+  it('does not strip a -- embedded in a URL/repo slug, but still strips the real question', () => {
+    const prompt = 'https://bitbucket.org/myteam/api--service/pull-requests/42 review deep -- actual question here';
+    const stripped = stripUpfrontQuestion(prompt);
+    expect(stripped).toContain('review deep');
+    expect(stripped).not.toContain('actual question here');
+  });
+
+  it('strips the question even when followed by a trailing newline', () => {
+    const prompt = 'https://bitbucket.org/myteam/svc/pull-requests/42 -- Did we go deep enough?\n';
+    const stripped = stripUpfrontQuestion(prompt);
+    expect(stripped).not.toContain('deep');
+  });
+
+  it('preserves a trailing PR URL when the question: prefix comes before it', () => {
+    const prompt = 'question: does this change handle concurrent writes safely? https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42';
+    const stripped = stripUpfrontQuestion(prompt);
+    expect(stripped).toBe('https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42');
+    expect(stripped).not.toContain('concurrent writes');
+  });
+
+  it('preserves a trailing PR URL when the -- suffix comes before it', () => {
+    const prompt = '-- does this change handle concurrent writes safely? https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42';
+    const stripped = stripUpfrontQuestion(prompt);
+    expect(stripped).toBe('https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42');
+    expect(stripped).not.toContain('concurrent writes');
   });
 });

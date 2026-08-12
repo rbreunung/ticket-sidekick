@@ -8,7 +8,10 @@ import {
   parsePrUrl,
   parseDiff,
   parseFollowUpIntent,
+  parseUpfrontQuestion,
+  stripUpfrontQuestion,
   buildPrContextPrompt,
+  buildDiffAwarePrompt,
   extractJsonObject,
   extractPartialFindings,
   parseNdjsonFindings,
@@ -22,11 +25,14 @@ import {
   type ReviewFinding,
   type ReviewSession,
   type BitbucketCommentPreviewSession,
+  type FileDiff,
 } from './reviewSessionState';
 import { isConfirmation, isCancellation } from './sessionState';
 import { generateContent } from './jira/llmHelpers';
 import { tokenStatus } from '../utils/diagUtils';
 import { validateBaseUrl } from '../services/configValidation';
+import { withLmRetry, withEasierRetry, isTransientLmError, PartialLmResponseError } from '../utils/lmRetry';
+import { logDiag } from '../utils/diagLog';
 
 function getLastAssistantText(chatContext: vscode.ChatContext): string {
   for (let i = chatContext.history.length - 1; i >= 0; i--) {
@@ -45,7 +51,42 @@ const FOLLOW_UP_PROMPT_PREFIX = `A developer is asking a follow-up question abou
 Finding:
 `;
 
-async function callLLM(
+function logLmFailure(
+  contextLabel: string,
+  attempt: number,
+  err: unknown,
+  extra?: Record<string, unknown>,
+): void {
+  const code = (err as { code?: unknown })?.code;
+  const cause = (err as { cause?: unknown })?.cause;
+  const partialText = err instanceof PartialLmResponseError ? err.partialText : undefined;
+  logDiag('bitbucket.review', `LLM call failed — ${contextLabel} (attempt ${attempt})`, {
+    ...extra,
+    error: err instanceof Error ? err.message : String(err),
+    code: typeof code === 'string' ? code : undefined,
+    cause: cause instanceof Error ? cause.message : cause !== undefined ? String(cause) : undefined,
+    partialTextChars: partialText?.length,
+    partialTextPreview: partialText?.slice(0, 300),
+  });
+}
+
+function describeFailure(err: unknown): string {
+  const partial = err instanceof PartialLmResponseError ? err.partialText : undefined;
+  const base = err instanceof Error ? err.message : String(err);
+  return partial
+    ? `${base} — model's partial reply: "${partial.slice(0, 300)}${partial.length > 300 ? '…' : ''}"`
+    : base;
+}
+
+function friendlyLmFailureMessage(prefix: string, err: unknown): string {
+  if (isTransientLmError(err) && !(err instanceof PartialLmResponseError)) {
+    return `${prefix} the model returned an empty response after retrying — this is usually a transient provider hiccup, more likely in \`deep\` mode since it makes more model calls per review. Try again, or drop \`deep\` for a lighter run. _(see the "Ticket Sidekick" output channel for details)_`;
+  }
+  return `${prefix} ${describeFailure(err)}`;
+}
+
+/** Single attempt, no retry — the primitive every retry wrapper builds on. */
+async function callLLMOnce(
   prompt: string,
   model: vscode.LanguageModelChat,
   token: vscode.CancellationToken,
@@ -57,14 +98,22 @@ async function callLLM(
     token,
   );
   let text = '';
-  for await (const chunk of response.text) {
-    text += chunk;
-    onChunk?.(text.length);
+  try {
+    for await (const chunk of response.text) {
+      text += chunk;
+      onChunk?.(text.length);
+    }
+  } catch (err) {
+    // The stream broke mid-reply. If it had already sent something —
+    // possibly a clarifying question, or a partial explanation — keep it
+    // instead of throwing the raw stream error and losing it.
+    if (text.trim()) throw new PartialLmResponseError(text.trim(), err);
+    throw err;
   }
   return text.trim();
 }
 
-async function callLLMWithProgress(
+async function callLLMOnceWithProgress(
   prompt: string,
   model: vscode.LanguageModelChat,
   token: vscode.CancellationToken,
@@ -72,7 +121,41 @@ async function callLLMWithProgress(
 ): Promise<string> {
   return vscode.window.withProgress(
     { location: vscode.ProgressLocation.Window, title: 'Ticket Sidekick' },
-    (progress) => callLLM(prompt, model, token, (chars) => {
+    (progress) => callLLMOnce(prompt, model, token, (chars) => {
+      progress.report({ message: `${statusMessage} · ${chars.toLocaleString()} chars…` });
+    }),
+  );
+}
+
+/** 3 identical tries (see lmRetry.ts) — for a single, non-splittable prompt. */
+async function callLLM(
+  prompt: string,
+  model: vscode.LanguageModelChat,
+  token: vscode.CancellationToken,
+  contextLabel: string,
+  onChunk?: (totalChars: number) => void,
+): Promise<string> {
+  return withLmRetry(
+    () => callLLMOnce(prompt, model, token, onChunk),
+    {
+      onAttemptFailed: (attempt, err) => logLmFailure(contextLabel, attempt, err, {
+        promptChars: prompt.length,
+        estimatedTokens: Math.ceil(prompt.length / 4),
+      }),
+    },
+  );
+}
+
+async function callLLMWithProgress(
+  prompt: string,
+  model: vscode.LanguageModelChat,
+  token: vscode.CancellationToken,
+  statusMessage: string,
+  contextLabel: string,
+): Promise<string> {
+  return vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Window, title: 'Ticket Sidekick' },
+    (progress) => callLLM(prompt, model, token, contextLabel, (chars) => {
       progress.report({ message: `${statusMessage} · ${chars.toLocaleString()} chars…` });
     }),
   );
@@ -299,7 +382,7 @@ export function createBitbucketParticipant(
           stream.markdown(`\n\n_~${Math.ceil((refInputChars + refOutputChars) / 4).toLocaleString()} estimated tokens_`);
         } catch (err) {
           stream.markdown(
-            `**Refinement failed:** ${err instanceof Error ? err.message : String(err)}\n\n<!-- bitbucket:comment-preview -->`,
+            `${friendlyLmFailureMessage('**Refinement failed:**', err)}\n\n<!-- bitbucket:comment-preview -->`,
           );
         }
         return;
@@ -364,7 +447,7 @@ export function createBitbucketParticipant(
               `Available findings:\n${session.findings.map((f) => `#${f.id}: [${f.severity}] ${f.title} (${f.file})`).join('\n')}\n\n` +
               `Reply with ONLY the finding number (e.g. "2") that best matches the question, or "none" if no match.`;
             matchInputChars = matchPrompt.length;
-            const matchRaw = await callLLMWithProgress(matchPrompt, request.model, token, 'Matching finding');
+            const matchRaw = await callLLMWithProgress(matchPrompt, request.model, token, 'Matching finding', 'follow-up match');
             matchOutputChars = matchRaw.length;
             const num = parseInt(matchRaw.trim(), 10);
             finding = isNaN(num) ? undefined : session.findings.find((f) => f.id === num);
@@ -372,8 +455,15 @@ export function createBitbucketParticipant(
 
           if (!finding) {
             // General PR-level question — no specific finding matched
-            const prContextPrompt = buildPrContextPrompt(session, intent.question);
-            const prAnswer = await callLLMWithProgress(prContextPrompt, request.model, token, 'Answering question');
+            const resolvedContextTokens = config.modelContextTokens
+              ?? (request.model as unknown as { maxInputTokens?: number }).maxInputTokens
+              ?? 60000;
+            const budgetRatio = config.contextBudgetRatio ?? 0.7;
+            const tokenBudget = Math.floor(resolvedContextTokens * budgetRatio);
+            const prContextPrompt = session.rawDiff
+              ? buildDiffAwarePrompt(session, intent.question, tokenBudget * 4)
+              : buildPrContextPrompt(session, intent.question);
+            const prAnswer = await callLLMWithProgress(prContextPrompt, request.model, token, 'Answering question', 'follow-up pr-answer');
             const totalEst = Math.ceil((matchInputChars + matchOutputChars + prContextPrompt.length + prAnswer.length) / 4);
             stream.markdown(`${prAnswer}\n\n<!-- bitbucket:review-session -->`);
             stream.markdown(`\n\n_~${totalEst.toLocaleString()} estimated tokens_`);
@@ -393,7 +483,7 @@ export function createBitbucketParticipant(
               : '') +
             `\nDeveloper's question: ${intent.question}`;
 
-          const answer = await callLLMWithProgress(followUpPrompt, request.model, token, 'Explaining finding');
+          const answer = await callLLMWithProgress(followUpPrompt, request.model, token, 'Explaining finding', 'follow-up explain');
           const totalEst = Math.ceil((matchInputChars + matchOutputChars + followUpPrompt.length + answer.length) / 4);
           stream.markdown(`**Finding #${finding.id} — ${finding.title}**\n\n${answer}\n\n<!-- bitbucket:review-session -->`);
           stream.markdown(`\n\n_~${totalEst.toLocaleString()} estimated tokens_`);
@@ -401,7 +491,7 @@ export function createBitbucketParticipant(
 
         } catch (err) {
           stream.markdown(
-            `**Follow-up failed:** ${err instanceof Error ? err.message : String(err)}\n\n<!-- bitbucket:review-session -->`,
+            `${friendlyLmFailureMessage('**Follow-up failed:**', err)}\n\n<!-- bitbucket:review-session -->`,
           );
           return;
         }
@@ -450,14 +540,17 @@ export function createBitbucketParticipant(
     const service = new PrReviewService(client);
 
     try {
-      // Detect quick/deep mode keyword from prompt (overrides setting)
-      const promptWithoutUrl = prompt.replace(/https?:\/\/\S+/g, '').toLowerCase();
+      const upfrontQuestion = parseUpfrontQuestion(prompt);
+      // Detect quick/deep mode keyword from prompt (overrides setting). Strip the upfront
+      // question first so a question containing "deep"/"quick" can't flip the review mode.
+      const promptWithoutUrl = stripUpfrontQuestion(prompt).replace(/https?:\/\/\S+/g, '').toLowerCase();
       const deepRequested = /\bdeep\b/.test(promptWithoutUrl);
       const reviewMode = /\bquick\b/.test(promptWithoutUrl) ? 'quick'
         : deepRequested ? 'standard'
         : (config.reviewMode ?? 'standard');
       // The critic (verification) pass is opt-in via "deep" — it roughly doubles per-chunk cost.
       const criticEnabled = deepRequested;
+      const extraInstructions = [config.reviewInstructions, upfrontQuestion].filter(Boolean).join('\n\n');
 
       // Resolve token budget: user setting → model API → safe fallback
       const resolvedContextTokens = config.modelContextTokens
@@ -466,8 +559,18 @@ export function createBitbucketParticipant(
       const budgetRatio = config.contextBudgetRatio ?? 0.7;
       const tokenBudget = Math.floor(resolvedContextTokens * budgetRatio);
 
+      if (upfrontQuestion) {
+        stream.markdown(`_focus: ${upfrontQuestion}_\n\n`);
+      }
       stream.markdown('_Fetching PR…_\n\n');
       const pr = await client.getPullRequest(parsed.project, parsed.repo, parsed.prId);
+      logDiag('bitbucket.review', 'model in use', {
+        vendor: request.model.vendor,
+        family: request.model.family,
+        id: request.model.id,
+        version: request.model.version,
+        maxInputTokens: request.model.maxInputTokens,
+      });
       // Widen surrounding context (default 12) so the reviewer sees the enclosing code,
       // not just the changed lines. Applies in quick mode too — only Pass 2 is skipped there.
       const rawDiff = await client.getPullRequestDiff(parsed.project, parsed.repo, parsed.prId, config.reviewContextLines);
@@ -511,6 +614,20 @@ export function createBitbucketParticipant(
       // Session-level cache so a file requested in batch 2 isn't re-fetched in batch 5.
       const fetchedFileCache = new Map<string, string>();
 
+      const halveFiles = (items: FileDiff[]): [FileDiff[], FileDiff[]] => {
+        const mid = Math.ceil(items.length / 2);
+        return [items.slice(0, mid), items.slice(mid)];
+      };
+
+      const halveFindings = (
+        items: Array<Omit<ReviewFinding, 'id'>>,
+      ): [Array<Omit<ReviewFinding, 'id'>>, Array<Omit<ReviewFinding, 'id'>>] => {
+        const mid = Math.ceil(items.length / 2);
+        return [items.slice(0, mid), items.slice(mid)];
+      };
+
+      let anyBatchFailed = false;
+
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
         const from = fileOffset + 1;
@@ -520,80 +637,145 @@ export function createBitbucketParticipant(
         stream.markdown(`_Analysing files ${from}–${to} of ${fileDiffs.length}${batchLabel}…_\n\n`);
 
         const batchStatus = chunks.length > 1 ? `Batch ${i + 1}/${chunks.length}` : 'Analysing';
-        const pass1Prompt = service.buildPrompt(pr, chunk, undefined, config.reviewInstructions);
-        totalInputChars += pass1Prompt.length;
-        const chunkRaw = await callLLMWithProgress(pass1Prompt, request.model, token, batchStatus);
-        totalOutputChars += chunkRaw.length;
-        const { findings, additionalFilesNeeded, truncated } = await parseReviewResponse(chunkRaw);
-        let chunkFindings = resolveFindingAnchors(findings, chunk);
+        const pass1Label = `pass1 batch ${i + 1}/${chunks.length}`;
 
-        if (truncated) {
-          const batchNote = chunks.length > 1 ? ` (batch ${i + 1})` : '';
-          stream.markdown(`_⚠ LLM response truncated${batchNote} — recovering partial findings._\n\n`);
-          const coveredPaths = new Set(findings.map(f => f.file));
-          const uncoveredFiles = chunk.filter(d => !coveredPaths.has(d.path));
-          if (uncoveredFiles.length > 0) {
-            stream.markdown(`_Continuing review for ${uncoveredFiles.length} uncovered file${uncoveredFiles.length !== 1 ? 's' : ''}…_\n\n`);
-            const continuationNote = 'Continuation pass — the previous response was truncated. Review ONLY the files provided below.';
-            const contInstructions = continuationNote + (config.reviewInstructions ? '\n' + config.reviewInstructions : '');
-            const contPrompt = service.buildPrompt(pr, uncoveredFiles, undefined, contInstructions);
-            totalInputChars += contPrompt.length;
-            const contRaw = await callLLMWithProgress(contPrompt, request.model, token, `${batchStatus} continuation`);
-            totalOutputChars += contRaw.length;
-            const cont = await parseReviewResponse(contRaw);
-            chunkFindings = resolveFindingAnchors([...findings, ...cont.findings], chunk);
-          }
-        }
+        const pass1Batches = await withEasierRetry(
+          chunk,
+          async (files) => {
+            const prompt = service.buildPrompt(pr, files, undefined, extraInstructions);
+            totalInputChars += prompt.length;
+            const raw = await callLLMOnceWithProgress(prompt, request.model, token, batchStatus);
+            totalOutputChars += raw.length;
+            return raw;
+          },
+          halveFiles,
+          {
+            onAttemptFailed: (attempt, err, files) => logLmFailure(pass1Label, attempt, err, {
+              files: files.map((f) => f.path),
+            }),
+          },
+        );
 
-        if (reviewMode !== 'quick' && !truncated && additionalFilesNeeded.length > 0) {
-          // Fetch only files not already pulled in an earlier batch (cross-chunk cache),
-          // bounded by a high per-batch ceiling — no longer a flat 5. A large PR pulls
-          // many context files across its batches, each fetched at most once.
-          const toFetch = additionalFilesNeeded
-            .filter((p) => !fetchedFileCache.has(p))
-            .slice(0, MAX_CONTEXT_FILES_PER_BATCH);
-          if (toFetch.length > 0) {
-            const batchSuffix = chunks.length > 1 ? ` (batch ${i + 1})` : '';
-            stream.markdown(`_Fetching ${toFetch.length} context file${toFetch.length !== 1 ? 's' : ''}${batchSuffix}…_\n\n`);
-            const fetched = await service.gatherFileContents(
-              parsed.project, parsed.repo, pr.fromCommitHash, toFetch,
-            );
-            for (const [p, c] of fetched) fetchedFileCache.set(p, c);
+        let chunkFindings: Array<Omit<ReviewFinding, 'id'>> = [];
+
+        for (const batch of pass1Batches) {
+          if (batch.error !== undefined) {
+            anyBatchFailed = true;
+            const filePaths = batch.items.map((f) => f.path).join(', ');
+            stream.markdown(`_⚠ Batch ${i + 1} — could not review ${filePaths} after retrying: ${describeFailure(batch.error)}_\n\n`);
+            continue;
           }
-          // Include as many requested files as fit this chunk's remaining budget, smallest-first.
-          const requestedEntries = additionalFilesNeeded
-            .filter((p) => fetchedFileCache.has(p))
-            .map((p) => ({ path: p, content: fetchedFileCache.get(p)! }));
-          const contentBudget = Math.max(0, tokenBudget - estimateChunkTokens(chunk));
-          const extraContents = selectFilesWithinBudget(requestedEntries, contentBudget);
-          if (extraContents.size > 0) {
-            const pass2Prompt = service.buildPrompt(pr, chunk, extraContents, config.reviewInstructions);
-            totalInputChars += pass2Prompt.length;
-            const pass2Raw = await callLLMWithProgress(pass2Prompt, request.model, token, `${batchStatus} pass 2`);
-            totalOutputChars += pass2Raw.length;
-            const pass2 = await parseReviewResponse(pass2Raw);
-            if (pass2.truncated) {
-              const batchNote = chunks.length > 1 ? ` (batch ${i + 1} pass 2)` : ' (pass 2)';
-              stream.markdown(`_⚠ LLM response truncated${batchNote} — review may be incomplete._\n\n`);
+
+          const { findings, additionalFilesNeeded, truncated } = await parseReviewResponse(batch.result!);
+          let batchFindings = resolveFindingAnchors(findings, batch.items);
+
+          if (truncated) {
+            stream.markdown(`_⚠ LLM response truncated (batch ${i + 1}) — recovering partial findings._\n\n`);
+            const coveredPaths = new Set(findings.map(f => f.file));
+            const uncoveredFiles = batch.items.filter(d => !coveredPaths.has(d.path));
+            if (uncoveredFiles.length > 0) {
+              stream.markdown(`_Continuing review for ${uncoveredFiles.length} uncovered file${uncoveredFiles.length !== 1 ? 's' : ''}…_\n\n`);
+              try {
+                const continuationNote = 'Continuation pass — the previous response was truncated. Review ONLY the files provided below.';
+                const contInstructions = continuationNote + (extraInstructions ? '\n' + extraInstructions : '');
+                const contPrompt = service.buildPrompt(pr, uncoveredFiles, undefined, contInstructions);
+                totalInputChars += contPrompt.length;
+                const contRaw = await callLLMWithProgress(contPrompt, request.model, token, `${batchStatus} continuation`, `continuation batch ${i + 1}/${chunks.length}`);
+                totalOutputChars += contRaw.length;
+                const cont = await parseReviewResponse(contRaw);
+                batchFindings = resolveFindingAnchors([...findings, ...cont.findings], batch.items);
+              } catch (err) {
+                anyBatchFailed = true;
+                stream.markdown(`_⚠ Continuation pass failed (batch ${i + 1}) — keeping findings from the truncated response. ${describeFailure(err)}_\n\n`);
+              }
             }
-            chunkFindings = resolveFindingAnchors(pass2.findings, chunk);
           }
+
+          if (reviewMode !== 'quick' && !truncated && additionalFilesNeeded.length > 0) {
+            try {
+              // Fetch only files not already pulled in an earlier batch (cross-chunk cache),
+              // bounded by a high per-batch ceiling — no longer a flat 5. A large PR pulls
+              // many context files across its batches, each fetched at most once.
+              const toFetch = additionalFilesNeeded
+                .filter((p) => !fetchedFileCache.has(p))
+                .slice(0, MAX_CONTEXT_FILES_PER_BATCH);
+              if (toFetch.length > 0) {
+                const batchSuffix = chunks.length > 1 ? ` (batch ${i + 1})` : '';
+                stream.markdown(`_Fetching ${toFetch.length} context file${toFetch.length !== 1 ? 's' : ''}${batchSuffix}…_\n\n`);
+                const fetched = await service.gatherFileContents(
+                  parsed.project, parsed.repo, pr.fromCommitHash, toFetch,
+                );
+                for (const [p, c] of fetched) fetchedFileCache.set(p, c);
+              }
+              // Include as many requested files as fit this chunk's remaining budget, smallest-first.
+              const requestedEntries = additionalFilesNeeded
+                .filter((p) => fetchedFileCache.has(p))
+                .map((p) => ({ path: p, content: fetchedFileCache.get(p)! }));
+              const contentBudget = Math.max(0, tokenBudget - estimateChunkTokens(batch.items));
+              const extraContents = selectFilesWithinBudget(requestedEntries, contentBudget);
+              if (extraContents.size > 0) {
+                const pass2Prompt = service.buildPrompt(pr, batch.items, extraContents, extraInstructions);
+                totalInputChars += pass2Prompt.length;
+                const pass2Raw = await callLLMWithProgress(pass2Prompt, request.model, token, `${batchStatus} pass 2`, `pass2 batch ${i + 1}/${chunks.length}`);
+                totalOutputChars += pass2Raw.length;
+                const pass2 = await parseReviewResponse(pass2Raw);
+                if (pass2.truncated) {
+                  stream.markdown(`_⚠ LLM response truncated (batch ${i + 1} pass 2) — review may be incomplete._\n\n`);
+                }
+                batchFindings = resolveFindingAnchors(pass2.findings, batch.items);
+              }
+            } catch (err) {
+              anyBatchFailed = true;
+              stream.markdown(`_⚠ Pass 2 (whole-file context) failed (batch ${i + 1}) — keeping findings from the diff-only pass. ${describeFailure(err)}_\n\n`);
+            }
+          }
+
+          chunkFindings = chunkFindings.concat(batchFindings);
         }
 
         // Deep mode only: re-verify findings against the diff and drop the ones the critic can't confirm.
         if (criticEnabled && chunkFindings.length > 0) {
-          const criticPrompt = service.buildCriticPrompt(pr, chunk, chunkFindings);
-          totalInputChars += criticPrompt.length;
-          const criticRaw = await callLLMWithProgress(criticPrompt, request.model, token, `${batchStatus} verifying`);
-          totalOutputChars += criticRaw.length;
-          const keep = parseCriticKeep(criticRaw, chunkFindings.length);
-          const before = chunkFindings.length;
-          chunkFindings = chunkFindings.filter((_, idx) => keep.has(idx + 1));
-          const dropped = before - chunkFindings.length;
-          if (dropped > 0) {
-            const batchNote = chunks.length > 1 ? ` (batch ${i + 1})` : '';
-            stream.markdown(`_Critic dropped ${dropped} unverified finding${dropped !== 1 ? 's' : ''}${batchNote}._\n\n`);
+          const criticLabel = `critic batch ${i + 1}/${chunks.length}`;
+          const criticBatches = await withEasierRetry(
+            chunkFindings,
+            async (findingsSubset) => {
+              const referencedPaths = new Set(findingsSubset.map((f) => f.file));
+              const relevantDiffs = chunk.filter((d) => referencedPaths.has(d.path));
+              const prompt = service.buildCriticPrompt(pr, relevantDiffs, findingsSubset, extraInstructions);
+              totalInputChars += prompt.length;
+              const raw = await callLLMOnceWithProgress(prompt, request.model, token, `${batchStatus} verifying`);
+              totalOutputChars += raw.length;
+              return raw;
+            },
+            halveFindings,
+            {
+              onAttemptFailed: (attempt, err, findingsSubset) => logLmFailure(criticLabel, attempt, err, {
+                findingTitles: findingsSubset.map((f) => f.title),
+              }),
+            },
+          );
+
+          const verified: Array<Omit<ReviewFinding, 'id'>> = [];
+          let droppedByCritic = 0;
+          for (const batch of criticBatches) {
+            if (batch.error !== undefined) {
+              anyBatchFailed = true;
+              stream.markdown(
+                `_⚠ Critic verification for batch ${i + 1} didn't complete for ${batch.items.length} finding${batch.items.length !== 1 ? 's' : ''} — keeping ${batch.items.length !== 1 ? 'them' : 'it'} unverified. ${describeFailure(batch.error)}_\n\n`,
+              );
+              verified.push(...batch.items); // fail-soft: keep unverified rather than drop
+              continue;
+            }
+            const keep = parseCriticKeep(batch.result!, batch.items.length);
+            batch.items.forEach((f, idx) => {
+              if (keep.has(idx + 1)) verified.push(f);
+              else droppedByCritic++;
+            });
           }
+          if (droppedByCritic > 0) {
+            stream.markdown(`_Critic dropped ${droppedByCritic} unverified finding${droppedByCritic !== 1 ? 's' : ''} (batch ${i + 1})._\n\n`);
+          }
+          chunkFindings = verified;
         }
 
         allFindings = allFindings.concat(chunkFindings);
@@ -615,9 +797,15 @@ export function createBitbucketParticipant(
       const deduped = dedupeFindings(allFindings);
       const numbered = deduped.map((f, idx) => ({ ...f, id: idx + 1 }));
       const output = service.formatReview(numbered, pr, fileDiffs.length, config.confidenceThreshold);
+      if (anyBatchFailed) {
+        stream.markdown(`_⚠ Some batches had failures after retrying — showing partial results. See the "Ticket Sidekick" output channel for details._\n\n`);
+      }
       stream.markdown(output);
       const reviewTokenEst = Math.ceil((totalInputChars + totalOutputChars) / 4);
       stream.markdown(`\n\n_~${reviewTokenEst.toLocaleString()} estimated tokens · budget ${tokenBudget.toLocaleString()}_`);
+
+      const rawDiffTruncated = rawDiff.length > tokenBudget * 4;
+      const rawDiffForSession = rawDiffTruncated ? rawDiff.slice(0, tokenBudget * 4) : rawDiff;
 
       await ws.update('bitbucket.session.review', {
         prTitle: pr.title,
@@ -628,9 +816,12 @@ export function createBitbucketParticipant(
         findings: numbered,
         prDescription: pr.description,
         changedFiles: fileDiffs.map(d => ({ path: d.path, ...(d.deleted ? { deleted: true } : {}) })),
+        upfrontQuestion,
+        rawDiff: rawDiffForSession,
+        rawDiffTruncated,
       } satisfies ReviewSession);
     } catch (err) {
-      stream.markdown(`**Review failed:** ${err instanceof Error ? err.message : String(err)}`);
+      stream.markdown(friendlyLmFailureMessage('**Review failed:**', err));
     }
   };
 

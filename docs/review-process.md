@@ -85,6 +85,26 @@ recall — a review never looks empty because filters stacked up.
 Fixed order: `parse → number(render) → LLM → locate+classify (drop only if
 unlocatable) → confidence fold → [deep: critic] → merge chunks → dedup → format`.
 
+## Resilience & debugging
+
+Every LLM call in the pipeline gets exactly 3 tries: the original request,
+one identical retry (short exponential backoff), and — for the two calls
+that dominate `deep` mode's extra load, the main review call and the critic
+call — a 3rd try that's genuinely easier for the model instead of a 3rd
+identical one: the batch of files (or findings) is split in half once and
+each half gets one final attempt. This bounds every chunk to at most 4 real
+LLM calls, never an open-ended retry storm. A file or finding that still
+fails standalone after its tries is skipped and reported — it does not
+abort the rest of the review. `dedupeFindings` → `formatReview` →
+`ReviewSession` always run on whatever was collected, even after partial
+failures, so follow-ups keep working.
+
+Every failed attempt — including ones that succeed on retry — is logged to
+the shared `"Ticket Sidekick"` output channel (`View → Output`), along with
+the model identity in use (vendor/family/id/version) once per review. This
+is what makes it possible to tell a one-off provider hiccup apart from a
+specific model that consistently fails on a specific prompt shape.
+
 ## Provenance (new vs. existing code)
 
 Every located finding is tagged from the line type it anchored to:
@@ -115,12 +135,69 @@ the full line-by-line walk happens on follow-up.
 Context widening applies in **all** modes — only the expensive whole-file Pass 2
 and the critic pass are mode-gated.
 
+`deep` mode's critic pass adds one LLM call per chunk on top of the main
+review call — roughly doubling the number of sequential calls made per
+review, and proportionally increasing exposure to a transient provider
+failure (see "Resilience & debugging" above).
+
+### Upfront question
+
+An optional focus question can be attached to any review, in either syntax:
+
+```text
+@bitbucket question: does this change handle concurrent writes safely? <pr-url>
+@bitbucket <pr-url> -- does this change handle concurrent writes safely?
+```
+
+(`--` is a plain double-dash, chosen for keyboard-typability — not an em-dash.)
+`parseUpfrontQuestion`/`stripUpfrontQuestion` (`reviewSessionState.ts`) extract it
+and strip it from the prompt **before** `quick`/`deep` mode-keyword detection runs,
+so a question that happens to contain the word "deep" or "quick" can't flip the
+review mode. This makes the question orthogonal to the mode keywords — the two
+compose freely, in either order:
+
+```text
+@bitbucket review deep <url> question: Did I introduce any regression?
+```
+
+The question is composed with any configured `reviewInstructions` into a single
+trusted `ADDITIONAL INSTRUCTIONS` block, and injected into **every** LLM call in
+the pipeline: Pass 1, the truncation-continuation pass, Pass 2, and — when running
+in deep mode — the critic pass too. Reaching the critic pass matters: without it,
+a `deep` review's verification step would be checking findings against a generic
+rubric with no idea the question was the point, and could drop question-driven
+findings the critic didn't recognize as relevant.
+
+When no question is supplied, Pass 1, Pass 2, and the continuation pass behave
+exactly as before this feature — they already received `reviewInstructions` (if
+configured) pre-feature, and `ADDITIONAL INSTRUCTIONS` is only added when there's
+content to add. The one exception is the critic pass: in `deep` mode it now also
+receives `reviewInstructions` (if configured) as `ADDITIONAL INSTRUCTIONS` —
+previously `buildCriticPrompt` took no instructions parameter at all, so a user
+with `reviewInstructions` set will see a (usually minor) change to critic-pass
+behavior in deep mode even without asking a question. Behavior is unchanged
+everywhere for users without `reviewInstructions` configured.
+
+If a question was supplied, the review's first streamed line is `_focus: <question>_`,
+before `_Fetching PR…_`.
+
 ## Follow-ups
 
 After a review, `ReviewSession` is stored in `workspaceState` with the findings,
 each carrying its numbered `diffHunk`. A follow-up question (`#3`, or a free-text
 match) feeds that hunk into the follow-up prompt so the answer reasons about the
 real code instead of reconstructing it from the finding text.
+
+The session also stores `rawDiff` — the full unified diff, distinct from any
+single finding's `diffHunk` — bounded to the token budget before it's saved
+(`rawDiffTruncated` records whether that write-time cut happened). A generic
+follow-up (no `#N`, and no match against an existing finding) now draws on this
+stored diff via `buildDiffAwarePrompt`, which combines PR metadata, all findings,
+and the diff itself, re-bounded to a freshly-computed token budget at read time.
+If the diff was truncated — either when originally stored or again at follow-up
+time — a note to that effect is included in the prompt so the model knows its
+view may be incomplete. Sessions without a stored `rawDiff` (e.g. from before this
+feature) keep falling back to the old findings-only prompt.
 
 ## Settings that shape the run
 
