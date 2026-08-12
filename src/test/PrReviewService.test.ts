@@ -1528,6 +1528,16 @@ describe('parseUpfrontQuestion', () => {
     const prompt = 'https://bitbucket.org/myteam/svc/pull-requests/42 -- Did we go deep enough?\n';
     expect(parseUpfrontQuestion(prompt)).toBe('Did we go deep enough?');
   });
+
+  it('excludes a trailing PR URL when the question: prefix comes before it', () => {
+    const prompt = 'question: does this change handle concurrent writes safely? https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42';
+    expect(parseUpfrontQuestion(prompt)).toBe('does this change handle concurrent writes safely?');
+  });
+
+  it('excludes a trailing PR URL when the -- suffix comes before it', () => {
+    const prompt = '-- does this change handle concurrent writes safely? https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42';
+    expect(parseUpfrontQuestion(prompt)).toBe('does this change handle concurrent writes safely?');
+  });
 });
 
 describe('stripUpfrontQuestion', () => {
@@ -1548,5 +1558,19 @@ describe('stripUpfrontQuestion', () => {
     const prompt = 'https://bitbucket.org/myteam/svc/pull-requests/42 -- Did we go deep enough?\n';
     const stripped = stripUpfrontQuestion(prompt);
     expect(stripped).not.toContain('deep');
+  });
+
+  it('preserves a trailing PR URL when the question: prefix comes before it', () => {
+    const prompt = 'question: does this change handle concurrent writes safely? https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42';
+    const stripped = stripUpfrontQuestion(prompt);
+    expect(stripped).toBe('https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42');
+    expect(stripped).not.toContain('concurrent writes');
+  });
+
+  it('preserves a trailing PR URL when the -- suffix comes before it', () => {
+    const prompt = '-- does this change handle concurrent writes safely? https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42';
+    const stripped = stripUpfrontQuestion(prompt);
+    expect(stripped).toBe('https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42');
+    expect(stripped).not.toContain('concurrent writes');
   });
 });

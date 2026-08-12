@@ -94,7 +94,11 @@ export function parsePrUrl(url: string): ParsedPrUrl | null {
  * prompt — so a `--` embedded in a URL/slug is never mistaken for the marker.
  * Single-line assumption: the question is taken as the rest of the line after the
  * delimiter, stopping at the next newline (or end of string) — a question is not
- * expected to span multiple lines.
+ * expected to span multiple lines. The capture also stops at the start of the next
+ * PR URL (whichever comes first — newline or URL), so a `question: … <url>` prompt
+ * (question before the URL) doesn't swallow the URL into the question text; a
+ * `<url> -- …` prompt (URL before the question) is unaffected since no URL starts
+ * at or after the capture's start in that ordering.
  */
 function findUpfrontQuestionMatch(prompt: string): { question: string; start: number; end: number } | null {
   const urlSpans: Array<[number, number]> = [];
@@ -106,7 +110,9 @@ function findUpfrontQuestionMatch(prompt: string): { question: string; start: nu
 
   const captureRestOfLine = (from: number): { question: string; end: number } => {
     const nl = prompt.indexOf('\n', from);
-    const end = nl === -1 ? prompt.length : nl;
+    let end = nl === -1 ? prompt.length : nl;
+    const nextUrlStart = urlSpans.find(([s]) => s >= from)?.[0];
+    if (nextUrlStart !== undefined && nextUrlStart < end) end = nextUrlStart;
     return { question: prompt.slice(from, end).trim(), end };
   };
 
