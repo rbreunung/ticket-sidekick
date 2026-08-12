@@ -21,6 +21,7 @@ vi.mock('vscode', () => {
       User: (text: string) => ({ role: 'user' as const, content: text }),
       Assistant: (text: string) => ({ role: 'assistant' as const, content: text }),
     },
+    window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
   };
 });
 

@@ -11,7 +11,10 @@ vi.mock('vscode', () => ({
       },
     })),
   },
-  window: { showOpenDialog: vi.fn() },
+  window: {
+    showOpenDialog: vi.fn(),
+    createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })),
+  },
 }));
 
 import {

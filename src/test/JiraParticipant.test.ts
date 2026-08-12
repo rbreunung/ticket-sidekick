@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 
-vi.mock('vscode', () => ({}));
+vi.mock('vscode', () => ({
+  window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
+}));
 
 import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, buildVeracodeReviewTable, parseVeracodeReviewInput, applyVeracodeToggle, type VeracodeReviewRow } from '../participant/sessionState';
 import { isPointerPrompt } from '../participant/jira/llmHelpers';
