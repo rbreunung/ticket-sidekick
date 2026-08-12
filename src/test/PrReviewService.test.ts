@@ -6,7 +6,7 @@ import {
   numberDiffLines, locateAnchor, resolveFindingAnchors,
   estimateChunkTokens, selectFilesWithinBudget, MAX_CONTEXT_FILES_PER_BATCH,
   parseCriticKeep, dedupeFindings, extractHunkAround,
-  parseFollowUpIntent, buildPrContextPrompt,
+  parseFollowUpIntent, buildPrContextPrompt, buildDiffAwarePrompt,
   parseUpfrontQuestion, stripUpfrontQuestion,
 } from '../participant/reviewSessionState';
 import type { ReviewFinding } from '../participant/reviewSessionState';
@@ -885,6 +885,20 @@ describe('PrReviewService.buildCriticPrompt', () => {
     expect(prompt).toContain('«UNTRUSTED-CONTENT»');
     expect(prompt).toContain('"keep"');
   });
+
+  it('includes additionalInstructions when provided', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const findings = [
+      { file: 'src/a.ts', line: 5, severity: 'critical' as const, title: 'SQLi', description: 'concat', recommendation: 'params' },
+    ];
+    const prompt = service.buildCriticPrompt(
+      pr,
+      [{ path: 'src/a.ts', diff: '@@ -1 +5 @@\n+const x = q(sql);' }],
+      findings,
+      'Did I introduce any regression?',
+    );
+    expect(prompt).toContain('Did I introduce any regression?');
+  });
 });
 
 describe('selectFilesWithinBudget', () => {
@@ -1438,6 +1452,52 @@ describe('buildPrContextPrompt', () => {
     expect(p).toContain('Refactor only.');
     expect(p).toContain('a.ts');
     expect(p).not.toContain('Review findings:');
+  });
+});
+
+describe('buildDiffAwarePrompt', () => {
+  it('includes raw diff when present', () => {
+    const session = {
+      prTitle: 'Test',
+      prDescription: '',
+      changedFiles: [],
+      findings: [],
+      rawDiff: 'diff --git a/x b/x',
+    };
+    const out = buildDiffAwarePrompt(session as any, 'Did I regress?');
+    expect(out).toContain('«UNTRUSTED-CONTENT»');
+    expect(out).toContain('diff --git a/x b/x');
+    expect(out).toContain('Question: Did I regress?');
+  });
+
+  it('truncates the diff to maxDiffChars and notes the truncation', () => {
+    const session = {
+      prTitle: 'Test',
+      prDescription: '',
+      changedFiles: [],
+      findings: [],
+      rawDiff: 'x'.repeat(100),
+    };
+    const out = buildDiffAwarePrompt(session as any, 'Did I regress?', 20);
+    expect(out).toContain('x'.repeat(20));
+    expect(out).not.toContain('x'.repeat(21));
+    expect(out).toContain('truncated, showing 20 of 100 chars');
+  });
+
+  it('notes write-time truncation even when the stored diff itself is not re-truncated at read time', () => {
+    const session = {
+      prTitle: 'Test',
+      prDescription: '',
+      changedFiles: [],
+      findings: [],
+      rawDiff: 'diff --git a/x b/x',
+      rawDiffTruncated: true,
+    };
+    // maxDiffChars is generous — no read-time re-truncation fires — but the note must still
+    // appear because the diff was already cut down before it was ever stored.
+    const out = buildDiffAwarePrompt(session as any, 'Did I regress?', 10000);
+    expect(out).not.toContain('showing'); // no read-time truncation happened
+    expect(out).toMatch(/already truncated|truncated when the review was stored/i);
   });
 });
 

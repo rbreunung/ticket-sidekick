@@ -11,6 +11,7 @@ import {
   parseUpfrontQuestion,
   stripUpfrontQuestion,
   buildPrContextPrompt,
+  buildDiffAwarePrompt,
   extractJsonObject,
   extractPartialFindings,
   parseNdjsonFindings,
@@ -374,7 +375,14 @@ export function createBitbucketParticipant(
 
           if (!finding) {
             // General PR-level question — no specific finding matched
-            const prContextPrompt = buildPrContextPrompt(session, intent.question);
+            const resolvedContextTokens = config.modelContextTokens
+              ?? (request.model as unknown as { maxInputTokens?: number }).maxInputTokens
+              ?? 60000;
+            const budgetRatio = config.contextBudgetRatio ?? 0.7;
+            const tokenBudget = Math.floor(resolvedContextTokens * budgetRatio);
+            const prContextPrompt = session.rawDiff
+              ? buildDiffAwarePrompt(session, intent.question, tokenBudget * 4)
+              : buildPrContextPrompt(session, intent.question);
             const prAnswer = await callLLMWithProgress(prContextPrompt, request.model, token, 'Answering question');
             const totalEst = Math.ceil((matchInputChars + matchOutputChars + prContextPrompt.length + prAnswer.length) / 4);
             stream.markdown(`${prAnswer}\n\n<!-- bitbucket:review-session -->`);
