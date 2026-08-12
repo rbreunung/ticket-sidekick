@@ -78,6 +78,13 @@ function describeFailure(err: unknown): string {
     : base;
 }
 
+function friendlyLmFailureMessage(prefix: string, err: unknown): string {
+  if (isTransientLmError(err) && !(err instanceof PartialLmResponseError)) {
+    return `${prefix} the model returned an empty response after retrying — this is usually a transient provider hiccup, more likely in \`deep\` mode since it makes more model calls per review. Try again, or drop \`deep\` for a lighter run. _(see the "Ticket Sidekick" output channel for details)_`;
+  }
+  return `${prefix} ${describeFailure(err)}`;
+}
+
 /** Single attempt, no retry — the primitive every retry wrapper builds on. */
 async function callLLMOnce(
   prompt: string,
@@ -375,7 +382,7 @@ export function createBitbucketParticipant(
           stream.markdown(`\n\n_~${Math.ceil((refInputChars + refOutputChars) / 4).toLocaleString()} estimated tokens_`);
         } catch (err) {
           stream.markdown(
-            `**Refinement failed:** ${err instanceof Error ? err.message : String(err)}\n\n<!-- bitbucket:comment-preview -->`,
+            `${friendlyLmFailureMessage('**Refinement failed:**', err)}\n\n<!-- bitbucket:comment-preview -->`,
           );
         }
         return;
@@ -484,7 +491,7 @@ export function createBitbucketParticipant(
 
         } catch (err) {
           stream.markdown(
-            `**Follow-up failed:** ${err instanceof Error ? err.message : String(err)}\n\n<!-- bitbucket:review-session -->`,
+            `${friendlyLmFailureMessage('**Follow-up failed:**', err)}\n\n<!-- bitbucket:review-session -->`,
           );
           return;
         }
@@ -814,7 +821,7 @@ export function createBitbucketParticipant(
         rawDiffTruncated,
       } satisfies ReviewSession);
     } catch (err) {
-      stream.markdown(`**Review failed:** ${err instanceof Error ? err.message : String(err)}`);
+      stream.markdown(friendlyLmFailureMessage('**Review failed:**', err));
     }
   };
 
