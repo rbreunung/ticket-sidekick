@@ -1,4 +1,5 @@
 import type { BitbucketCommentResult, BitbucketPR, IBitbucketClient, InlineAnchor } from '../bitbucket/IBitbucketClient';
+import type { DiagLogger } from '../utils/diagTypes';
 import { ApiError } from '../utils/apiError';
 import type { FileDiff, ReviewFinding } from '../participant/reviewSessionState';
 import { langFromPath, numberDiffLines } from '../participant/reviewSessionState';
@@ -52,7 +53,7 @@ function isAuthError(err: unknown): boolean {
 }
 
 export class PrReviewService {
-  constructor(private readonly client: IBitbucketClient) {}
+  constructor(private readonly client: IBitbucketClient, private readonly onDiag?: DiagLogger) {}
 
   /**
    * Fetch full file contents for pass-2 review context, always from the API at the PR's
@@ -74,6 +75,9 @@ export class PrReviewService {
           return [path, remote] as const;
         } catch (err) {
           if (isAuthError(err)) throw err;
+          this.onDiag?.('warn', `Additional file unavailable — ${path}`, {
+            project, repo, path, error: err instanceof Error ? err.message : String(err),
+          });
           return [path, '(file not available)'] as const;
         }
       }),
@@ -292,9 +296,15 @@ export class PrReviewService {
         const result = await this.client.addPrComment(project, repo, prId, text, inline);
         results.push({ finding, result });
       } catch (err) {
-        results.push({ finding, result: null, error: err instanceof Error ? err.message : String(err) });
+        const message = err instanceof Error ? err.message : String(err);
+        this.onDiag?.('warn', `Comment post failed — ${finding.file}${finding.line !== undefined ? `:${finding.line}` : ''}`, {
+          project, repo, prId, error: message,
+        });
+        results.push({ finding, result: null, error: message });
       }
     }
+    const failedCount = results.filter((r) => r.error !== undefined).length;
+    this.onDiag?.('info', `PR comments posted — ${results.length - failedCount}/${results.length}`, { project, repo, prId, failedCount });
     return results;
   }
 }
