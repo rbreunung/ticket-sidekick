@@ -967,6 +967,20 @@ Patterns use glob syntax. Both `*.snap` and `**/*.snap` work (bare filename patt
 
 ---
 
+## Troubleshooting
+
+Both `@jira` and `@bitbucket` log diagnostic detail beyond what's shown in
+chat to a shared VS Code output channel: **View → Output → "Ticket
+Sidekick"**.
+
+For `@bitbucket` reviews specifically, this includes: the model in use
+(vendor/family/id/version) for the review, every LLM call that failed
+(including ones that succeeded on a retry), the call site and which files
+or findings were in that attempt, and the raw error. If a review or
+follow-up ever shows a failure message, check this channel first — it
+usually explains whether it was a one-off provider hiccup (worth just
+retrying) or something more persistent.
+
 ## Releasing
 
 Releases are cut by a manually-triggered GitHub Actions workflow (`.github/workflows/release.yml`) — you no longer hand-edit `package.json`. Go to **Actions → Release → Run workflow** and fill in the form:

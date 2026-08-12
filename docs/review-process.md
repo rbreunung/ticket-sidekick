@@ -85,6 +85,26 @@ recall — a review never looks empty because filters stacked up.
 Fixed order: `parse → number(render) → LLM → locate+classify (drop only if
 unlocatable) → confidence fold → [deep: critic] → merge chunks → dedup → format`.
 
+## Resilience & debugging
+
+Every LLM call in the pipeline gets exactly 3 tries: the original request,
+one identical retry (short exponential backoff), and — for the two calls
+that dominate `deep` mode's extra load, the main review call and the critic
+call — a 3rd try that's genuinely easier for the model instead of a 3rd
+identical one: the batch of files (or findings) is split in half once and
+each half gets one final attempt. This bounds every chunk to at most 4 real
+LLM calls, never an open-ended retry storm. A file or finding that still
+fails standalone after its tries is skipped and reported — it does not
+abort the rest of the review. `dedupeFindings` → `formatReview` →
+`ReviewSession` always run on whatever was collected, even after partial
+failures, so follow-ups keep working.
+
+Every failed attempt — including ones that succeed on retry — is logged to
+the shared `"Ticket Sidekick"` output channel (`View → Output`), along with
+the model identity in use (vendor/family/id/version) once per review. This
+is what makes it possible to tell a one-off provider hiccup apart from a
+specific model that consistently fails on a specific prompt shape.
+
 ## Provenance (new vs. existing code)
 
 Every located finding is tagged from the line type it anchored to:
@@ -114,6 +134,11 @@ the full line-by-line walk happens on follow-up.
 
 Context widening applies in **all** modes — only the expensive whole-file Pass 2
 and the critic pass are mode-gated.
+
+`deep` mode's critic pass adds one LLM call per chunk on top of the main
+review call — roughly doubling the number of sequential calls made per
+review, and proportionally increasing exposure to a transient provider
+failure (see "Resilience & debugging" above).
 
 ### Upfront question
 
