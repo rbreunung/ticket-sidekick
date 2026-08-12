@@ -13,6 +13,7 @@ import { selectDefaultIssueType } from './participant/sessionState';
 import type { EmailContentSession } from './participant/sessionState';
 import { parseVeracodeReport, filterFlaws } from './utils/veracodeReport';
 import type { VeracodeTemplateSelectionSession } from './participant/sessionState';
+import { logDiag } from './utils/diagLog';
 
 export function activate(context: vscode.ExtensionContext): void {
   const configService = new ConfigService(context);
@@ -92,7 +93,9 @@ export function activate(context: vscode.ExtensionContext): void {
       try {
         buffer = await fs.promises.readFile(emlPath);
       } catch (err) {
-        vscode.window.showErrorMessage(`Ticket Sidekick: Could not read file: ${err instanceof Error ? err.message : String(err)}`);
+        const message = err instanceof Error ? err.message : String(err);
+        logDiag('extension', 'error', `Could not read .eml file — ${emlPath}`, { emlPath, error: message });
+        vscode.window.showErrorMessage(`Ticket Sidekick: Could not read file: ${message}`);
         return;
       }
 
@@ -100,7 +103,9 @@ export function activate(context: vscode.ExtensionContext): void {
       try {
         parsed = await parseEml(buffer);
       } catch (err) {
-        vscode.window.showErrorMessage(`Ticket Sidekick: Could not parse email: ${err instanceof Error ? err.message : String(err)}`);
+        const message = err instanceof Error ? err.message : String(err);
+        logDiag('extension', 'error', `Could not parse .eml file — ${emlPath}`, { emlPath, error: message });
+        vscode.window.showErrorMessage(`Ticket Sidekick: Could not parse email: ${message}`);
         return;
       }
 
@@ -115,7 +120,12 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
 
-      const jiraClient = new JiraApiClient({ baseUrl: config.baseUrl, authType: config.authType, token: config.token });
+      const jiraClient = new JiraApiClient({
+        baseUrl: config.baseUrl,
+        authType: config.authType,
+        token: config.token,
+        onDiag: (level, message, details) => logDiag('jira.apiClient', level, message, details),
+      });
       const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
       const availableTemplates: Array<{ name: string; issueType: string }> = (() => {
@@ -123,14 +133,21 @@ export function activate(context: vscode.ExtensionContext): void {
         try {
           return new TemplateService(workspaceRoot).loadTemplates().templates
             .map(t => ({ name: t.name, issueType: t.issueType ?? 'Story' }));
-        } catch { return []; }
+        } catch (err) {
+          logDiag('extension', 'warn', 'Could not load templates — proceeding without', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return [];
+        }
       })();
 
       const issueTypes = await jiraClient.getProject(projectKey)
         .then(p => p.issueTypes.filter(t => !t.subtask).map(t => t.name))
         .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          logDiag('extension', 'warn', `Could not fetch issue types — ${projectKey}`, { projectKey, error: message });
           vscode.window.showWarningMessage(
-            `Ticket Sidekick: Could not fetch issue types for ${projectKey} — will default to 'Story'. ${err instanceof Error ? err.message : String(err)}`,
+            `Ticket Sidekick: Could not fetch issue types for ${projectKey} — will default to 'Story'. ${message}`,
           );
           return [] as string[];
         });
@@ -193,7 +210,9 @@ export function activate(context: vscode.ExtensionContext): void {
         }
         raw = await fs.promises.readFile(reportPath, 'utf-8');
       } catch (err) {
-        vscode.window.showErrorMessage(`Ticket Sidekick: Could not read file: ${err instanceof Error ? err.message : String(err)}`);
+        const message = err instanceof Error ? err.message : String(err);
+        logDiag('extension', 'error', `Could not read Veracode report — ${reportPath}`, { reportPath, error: message });
+        vscode.window.showErrorMessage(`Ticket Sidekick: Could not read file: ${message}`);
         return;
       }
 
@@ -206,7 +225,9 @@ export function activate(context: vscode.ExtensionContext): void {
           includeStatuses: veracodeCfg.get<string[]>('veracode.includeRemediationStatuses') ?? ['New', 'Open', 'Reopened'],
         });
       } catch (err) {
-        vscode.window.showErrorMessage(`Ticket Sidekick: Could not parse Veracode report: ${err instanceof Error ? err.message : String(err)}`);
+        const message = err instanceof Error ? err.message : String(err);
+        logDiag('extension', 'error', `Could not parse Veracode report — ${reportPath}`, { reportPath, error: message });
+        vscode.window.showErrorMessage(`Ticket Sidekick: Could not parse Veracode report: ${message}`);
         return;
       }
 
@@ -235,7 +256,12 @@ export function activate(context: vscode.ExtensionContext): void {
         projectKey = entered;
       }
 
-      const jiraClient = new JiraApiClient({ baseUrl: config.baseUrl, authType: config.authType, token: config.token });
+      const jiraClient = new JiraApiClient({
+        baseUrl: config.baseUrl,
+        authType: config.authType,
+        token: config.token,
+        onDiag: (level, message, details) => logDiag('jira.apiClient', level, message, details),
+      });
       const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
       const availableTemplates: Array<{ name: string; issueType: string }> = (() => {
@@ -243,14 +269,21 @@ export function activate(context: vscode.ExtensionContext): void {
         try {
           return new TemplateService(workspaceRoot).loadTemplates().templates
             .map(t => ({ name: t.name, issueType: t.issueType ?? 'Bug' }));
-        } catch { return []; }
+        } catch (err) {
+          logDiag('extension', 'warn', 'Could not load templates — proceeding without', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return [];
+        }
       })();
 
       const issueTypes = await jiraClient.getProject(projectKey)
         .then(p => p.issueTypes.filter(t => !t.subtask).map(t => t.name))
         .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          logDiag('extension', 'warn', `Could not fetch issue types — ${projectKey}`, { projectKey, error: message });
           vscode.window.showWarningMessage(
-            `Ticket Sidekick: Could not fetch issue types for ${projectKey} — will default to 'Bug'. ${err instanceof Error ? err.message : String(err)}`,
+            `Ticket Sidekick: Could not fetch issue types for ${projectKey} — will default to 'Bug'. ${message}`,
           );
           return [] as string[];
         });
