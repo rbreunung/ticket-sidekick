@@ -7,6 +7,7 @@ import {
   estimateChunkTokens, selectFilesWithinBudget, MAX_CONTEXT_FILES_PER_BATCH,
   parseCriticKeep, dedupeFindings, extractHunkAround,
   parseFollowUpIntent, buildPrContextPrompt,
+  parseUpfrontQuestion, stripUpfrontQuestion,
 } from '../participant/reviewSessionState';
 import type { ReviewFinding } from '../participant/reviewSessionState';
 import { PrReviewService } from '../services/PrReviewService';
@@ -1437,5 +1438,55 @@ describe('buildPrContextPrompt', () => {
     expect(p).toContain('Refactor only.');
     expect(p).toContain('a.ts');
     expect(p).not.toContain('Review findings:');
+  });
+});
+
+describe('parseUpfrontQuestion', () => {
+  it('parses -- suffix', () => {
+    expect(parseUpfrontQuestion('https://.../pull-requests/42 -- Did I introduce any regression?')).toBe('Did I introduce any regression?');
+  });
+
+  it('parses question: prefix', () => {
+    expect(parseUpfrontQuestion('https://.../pull-requests/42 question: Is this backwards compatible?')).toBe('Is this backwards compatible?');
+  });
+
+  it('returns undefined when no question', () => {
+    expect(parseUpfrontQuestion('https://.../pull-requests/42')).toBeUndefined();
+  });
+
+  it('extracts a question containing the words quick/deep without losing them', () => {
+    expect(parseUpfrontQuestion('https://.../pull-requests/42 -- Did we go deep enough on error handling?'))
+      .toBe('Did we go deep enough on error handling?');
+  });
+
+  it('does not treat a -- embedded in a URL/repo slug as the question delimiter', () => {
+    const prompt = 'https://bitbucket.org/myteam/api--service/pull-requests/42 review deep -- actual question here';
+    expect(parseUpfrontQuestion(prompt)).toBe('actual question here');
+  });
+
+  it('is not defeated by a trailing newline after the question', () => {
+    const prompt = 'https://bitbucket.org/myteam/svc/pull-requests/42 -- Did we go deep enough?\n';
+    expect(parseUpfrontQuestion(prompt)).toBe('Did we go deep enough?');
+  });
+});
+
+describe('stripUpfrontQuestion', () => {
+  it('removes the -- question so mode-keyword detection does not see it', () => {
+    const stripped = stripUpfrontQuestion('review deep https://.../pull-requests/42 -- Did we go deep enough?');
+    expect(stripped).not.toMatch(/enough/);
+    expect(stripped).toMatch(/deep/); // the mode keyword itself, outside the question, is preserved
+  });
+
+  it('does not strip a -- embedded in a URL/repo slug, but still strips the real question', () => {
+    const prompt = 'https://bitbucket.org/myteam/api--service/pull-requests/42 review deep -- actual question here';
+    const stripped = stripUpfrontQuestion(prompt);
+    expect(stripped).toContain('review deep');
+    expect(stripped).not.toContain('actual question here');
+  });
+
+  it('strips the question even when followed by a trailing newline', () => {
+    const prompt = 'https://bitbucket.org/myteam/svc/pull-requests/42 -- Did we go deep enough?\n';
+    const stripped = stripUpfrontQuestion(prompt);
+    expect(stripped).not.toContain('deep');
   });
 });
