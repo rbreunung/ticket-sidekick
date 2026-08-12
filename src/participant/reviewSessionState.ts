@@ -78,20 +78,62 @@ export function parsePrUrl(url: string): ParsedPrUrl | null {
   }
 }
 
+/**
+ * Locate the upfront-question delimiter (`question:` prefix or a standalone `--`
+ * marker) in the RAW prompt and return its span plus the extracted question text.
+ * `parseUpfrontQuestion` and `stripUpfrontQuestion` both call this so they always
+ * agree on the exact same substring as "the question" for a given input — running
+ * two independently-normalized regex passes previously let them disagree (a `--`
+ * inside a URL/repo slug like `api--service` could be picked up by one function and
+ * not the other, and a trailing newline could defeat one function's `$`-anchored
+ * match while the other's `.trim()`-then-match still succeeded).
+ *
+ * A `--` is only treated as a delimiter when it is whitespace- or
+ * start-of-string-delimited, and only when it falls outside every URL span in the
+ * prompt — so a `--` embedded in a URL/slug is never mistaken for the marker.
+ * Single-line assumption: the question is taken as the rest of the line after the
+ * delimiter, stopping at the next newline (or end of string) — a question is not
+ * expected to span multiple lines.
+ */
+function findUpfrontQuestionMatch(prompt: string): { question: string; start: number; end: number } | null {
+  const urlSpans: Array<[number, number]> = [];
+  for (const m of prompt.matchAll(/https?:\/\/\S+/g)) {
+    if (m.index === undefined) continue;
+    urlSpans.push([m.index, m.index + m[0].length]);
+  }
+  const insideUrl = (idx: number) => urlSpans.some(([s, e]) => idx >= s && idx < e);
+
+  const captureRestOfLine = (from: number): { question: string; end: number } => {
+    const nl = prompt.indexOf('\n', from);
+    const end = nl === -1 ? prompt.length : nl;
+    return { question: prompt.slice(from, end).trim(), end };
+  };
+
+  for (const m of prompt.matchAll(/question:\s*/gi)) {
+    if (m.index === undefined || insideUrl(m.index)) continue;
+    const { question, end } = captureRestOfLine(m.index + m[0].length);
+    return { question, start: m.index, end };
+  }
+
+  for (const m of prompt.matchAll(/(?:^|\s)--\s*/g)) {
+    if (m.index === undefined) continue;
+    const dashStart = m[0].startsWith('--') ? m.index : m.index + 1;
+    if (insideUrl(dashStart)) continue;
+    const { question, end } = captureRestOfLine(m.index + m[0].length);
+    return { question, start: dashStart, end };
+  }
+
+  return null;
+}
+
 export function parseUpfrontQuestion(prompt: string): string | undefined {
-  const urlRemoved = prompt.replace(/https?:\/\/\S+/g, '').trim();
-  const m1 = urlRemoved.match(/question:\s*(.+)/i);
-  if (m1) return m1[1].trim();
-  const m2 = urlRemoved.match(/--\s*(.+)$/);
-  if (m2) return m2[1].trim();
-  return undefined;
+  return findUpfrontQuestionMatch(prompt)?.question;
 }
 
 export function stripUpfrontQuestion(prompt: string): string {
-  return prompt
-    .replace(/question:\s*.+/i, '')
-    .replace(/--\s*.+$/, '')
-    .trim();
+  const match = findUpfrontQuestionMatch(prompt);
+  if (!match) return prompt.trim();
+  return (prompt.slice(0, match.start) + prompt.slice(match.end)).trim();
 }
 
 const stripABPrefix = (p: string): string => p.replace(/^[ab]\//, '').trim();
