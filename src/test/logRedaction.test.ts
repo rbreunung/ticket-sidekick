@@ -54,4 +54,18 @@ describe('sanitizeDetails', () => {
     const a = result.a as Record<string, any>;
     expect(a.b.c.d.e).toBe('[MAX_DEPTH]');
   });
+
+  it('does not redact keys that merely contain a sensitive word as a substring', () => {
+    const result = sanitizeDetails({ authType: 'cloud', maxInputTokens: 8000, author: 'Jane' });
+    expect(result.authType).toBe('cloud');
+    expect(result.maxInputTokens).toBe(8000);
+    expect(result.author).toBe('Jane');
+  });
+
+  it('still redacts compound keys ending in a sensitive word', () => {
+    const result = sanitizeDetails({ authToken: 'xyz', apiToken: 'abc', api_key: 'def' });
+    expect(result.authToken).toBe('[REDACTED]');
+    expect(result.apiToken).toBe('[REDACTED]');
+    expect(result.api_key).toBe('[REDACTED]');
+  });
 });

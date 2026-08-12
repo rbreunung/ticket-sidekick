@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { LogLevel } from './diagTypes';
-import { sanitizeDetails } from './logRedaction';
+import { sanitizeDetails, MAX_STRING_LENGTH } from './logRedaction';
 
 let channel: vscode.OutputChannel | undefined;
 
@@ -30,8 +30,11 @@ export function getOutputChannel(): vscode.OutputChannel {
 export function logDiag(scope: string, level: LogLevel, message: string, details?: Record<string, unknown>): void {
   const timestamp = new Date().toISOString();
   const out = getOutputChannel();
-  out.appendLine(`[${timestamp}] [${level.toUpperCase()}] [${scope}] ${message}`);
-  if (details) {
+  const truncatedMessage = message.length > MAX_STRING_LENGTH
+    ? `${message.slice(0, MAX_STRING_LENGTH)}…[truncated, ${message.length} chars total]`
+    : message;
+  out.appendLine(`[${timestamp}] [${level.toUpperCase()}] [${scope}] ${truncatedMessage}`);
+  if (details && Object.keys(details).length > 0) {
     out.appendLine(JSON.stringify(sanitizeDetails(details)));
   }
 }
