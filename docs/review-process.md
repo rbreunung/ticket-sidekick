@@ -115,12 +115,57 @@ the full line-by-line walk happens on follow-up.
 Context widening applies in **all** modes — only the expensive whole-file Pass 2
 and the critic pass are mode-gated.
 
+### Upfront question
+
+An optional focus question can be attached to any review, in either syntax:
+
+```text
+@bitbucket question: does this change handle concurrent writes safely? <pr-url>
+@bitbucket <pr-url> -- does this change handle concurrent writes safely?
+```
+
+(`--` is a plain double-dash, chosen for keyboard-typability — not an em-dash.)
+`parseUpfrontQuestion`/`stripUpfrontQuestion` (`reviewSessionState.ts`) extract it
+and strip it from the prompt **before** `quick`/`deep` mode-keyword detection runs,
+so a question that happens to contain the word "deep" or "quick" can't flip the
+review mode. This makes the question orthogonal to the mode keywords — the two
+compose freely, in either order:
+
+```text
+@bitbucket review deep <url> question: Did I introduce any regression?
+```
+
+The question is composed with any configured `reviewInstructions` into a single
+trusted `ADDITIONAL INSTRUCTIONS` block, and injected into **every** LLM call in
+the pipeline: Pass 1, the truncation-continuation pass, Pass 2, and — when running
+in deep mode — the critic pass too. Reaching the critic pass matters: without it,
+a `deep` review's verification step would be checking findings against a generic
+rubric with no idea the question was the point, and could drop question-driven
+findings the critic didn't recognize as relevant.
+
+When no question is supplied, the pipeline's behavior is byte-identical to before
+this feature — `ADDITIONAL INSTRUCTIONS` is only added when there's content to add.
+
+If a question was supplied, the review's first streamed line is `_focus: <question>_`,
+before `_Fetching PR…_`.
+
 ## Follow-ups
 
 After a review, `ReviewSession` is stored in `workspaceState` with the findings,
 each carrying its numbered `diffHunk`. A follow-up question (`#3`, or a free-text
 match) feeds that hunk into the follow-up prompt so the answer reasons about the
 real code instead of reconstructing it from the finding text.
+
+The session also stores `rawDiff` — the full unified diff, distinct from any
+single finding's `diffHunk` — bounded to the token budget before it's saved
+(`rawDiffTruncated` records whether that write-time cut happened). A generic
+follow-up (no `#N`, and no match against an existing finding) now draws on this
+stored diff via `buildDiffAwarePrompt`, which combines PR metadata, all findings,
+and the diff itself, re-bounded to a freshly-computed token budget at read time.
+If the diff was truncated — either when originally stored or again at follow-up
+time — a note to that effect is included in the prompt so the model knows its
+view may be incomplete. Sessions without a stored `rawDiff` (e.g. from before this
+feature) keep falling back to the old findings-only prompt.
 
 ## Settings that shape the run
 

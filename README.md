@@ -776,6 +776,7 @@ Run `@bitbucket check` after setup to confirm the connection and see which accou
 | `@bitbucket <pr-url>` | Full structured review of the PR |
 | `@bitbucket review quick <pr-url>` | Review using diffs only — no second-pass file fetch (fewer tokens) |
 | `@bitbucket review deep <pr-url>` | Force standard two-pass review regardless of default setting |
+| `@bitbucket <pr-url> question: <text>` (or `-- <text>`) | Review with an upfront focus question — nudges the model toward that concern in every pass |
 | `@bitbucket #2` | Explain finding #2 in detail |
 | `@bitbucket #2 is this always a problem?` | Ask a follow-up question about a specific finding |
 | `@bitbucket is the change backwards-compatible?` | Ask any general question about the PR — no finding reference needed |
@@ -810,6 +811,27 @@ The plugin:
 
 For token-saving options (`quick` mode, file exclusion, context tuning) see [Reducing token usage on large PRs](#reducing-token-usage-on-large-prs).
 
+#### Upfront focus question
+
+Give the reviewer something specific to look for before it starts:
+
+```text
+@bitbucket question: does this change handle concurrent writes safely? https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42
+@bitbucket https://bitbucket.org/myworkspace/myrepo/pull-requests/7 -- does this change handle concurrent writes safely?
+```
+
+It combines freely with `quick`/`deep`, in either order:
+
+```text
+@bitbucket review deep <url> question: Did I introduce any regression?
+```
+
+Mode keywords and the focus question are fully independent — set the review depth,
+the focus, both, or neither, in any order. The focus question reaches every LLM
+call in the pipeline, including the deep-mode critic pass, not just the first
+analysis pass, so it keeps shaping the review from start to finish. When a
+question is supplied, the review output starts with a `_focus: <question>_` line.
+
 Example output:
 
 ```text
@@ -837,7 +859,7 @@ After a review, the session stays active for multi-turn follow-ups. Reference a 
 @bitbucket are there missing test cases for the new endpoints?
 ```
 
-Questions without a `#N` reference automatically answer at the PR level using the title and all findings as context.
+Questions without a `#N` reference automatically answer at the PR level using the title and all findings as context. For reviews run after this feature, the underlying diff is stored alongside the session, so these general follow-ups can also draw on the actual code changes — not just the findings summary — giving more grounded answers to broad questions like "did I introduce a regression?".
 
 Each AI response ends with a `_~N estimated tokens_` line (using a `chars/4` heuristic — VS Code's LM API does not expose exact counts).
 
