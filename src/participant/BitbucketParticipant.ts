@@ -8,6 +8,8 @@ import {
   parsePrUrl,
   parseDiff,
   parseFollowUpIntent,
+  parseUpfrontQuestion,
+  stripUpfrontQuestion,
   buildPrContextPrompt,
   extractJsonObject,
   extractPartialFindings,
@@ -450,14 +452,17 @@ export function createBitbucketParticipant(
     const service = new PrReviewService(client);
 
     try {
-      // Detect quick/deep mode keyword from prompt (overrides setting)
-      const promptWithoutUrl = prompt.replace(/https?:\/\/\S+/g, '').toLowerCase();
+      const upfrontQuestion = parseUpfrontQuestion(prompt);
+      // Detect quick/deep mode keyword from prompt (overrides setting). Strip the upfront
+      // question first so a question containing "deep"/"quick" can't flip the review mode.
+      const promptWithoutUrl = stripUpfrontQuestion(prompt).replace(/https?:\/\/\S+/g, '').toLowerCase();
       const deepRequested = /\bdeep\b/.test(promptWithoutUrl);
       const reviewMode = /\bquick\b/.test(promptWithoutUrl) ? 'quick'
         : deepRequested ? 'standard'
         : (config.reviewMode ?? 'standard');
       // The critic (verification) pass is opt-in via "deep" — it roughly doubles per-chunk cost.
       const criticEnabled = deepRequested;
+      const extraInstructions = [config.reviewInstructions, upfrontQuestion].filter(Boolean).join('\n\n');
 
       // Resolve token budget: user setting → model API → safe fallback
       const resolvedContextTokens = config.modelContextTokens
@@ -466,6 +471,9 @@ export function createBitbucketParticipant(
       const budgetRatio = config.contextBudgetRatio ?? 0.7;
       const tokenBudget = Math.floor(resolvedContextTokens * budgetRatio);
 
+      if (upfrontQuestion) {
+        stream.markdown(`_focus: ${upfrontQuestion}_\n\n`);
+      }
       stream.markdown('_Fetching PR…_\n\n');
       const pr = await client.getPullRequest(parsed.project, parsed.repo, parsed.prId);
       // Widen surrounding context (default 12) so the reviewer sees the enclosing code,
@@ -520,7 +528,7 @@ export function createBitbucketParticipant(
         stream.markdown(`_Analysing files ${from}–${to} of ${fileDiffs.length}${batchLabel}…_\n\n`);
 
         const batchStatus = chunks.length > 1 ? `Batch ${i + 1}/${chunks.length}` : 'Analysing';
-        const pass1Prompt = service.buildPrompt(pr, chunk, undefined, config.reviewInstructions);
+        const pass1Prompt = service.buildPrompt(pr, chunk, undefined, extraInstructions);
         totalInputChars += pass1Prompt.length;
         const chunkRaw = await callLLMWithProgress(pass1Prompt, request.model, token, batchStatus);
         totalOutputChars += chunkRaw.length;
@@ -535,7 +543,7 @@ export function createBitbucketParticipant(
           if (uncoveredFiles.length > 0) {
             stream.markdown(`_Continuing review for ${uncoveredFiles.length} uncovered file${uncoveredFiles.length !== 1 ? 's' : ''}…_\n\n`);
             const continuationNote = 'Continuation pass — the previous response was truncated. Review ONLY the files provided below.';
-            const contInstructions = continuationNote + (config.reviewInstructions ? '\n' + config.reviewInstructions : '');
+            const contInstructions = continuationNote + (extraInstructions ? '\n' + extraInstructions : '');
             const contPrompt = service.buildPrompt(pr, uncoveredFiles, undefined, contInstructions);
             totalInputChars += contPrompt.length;
             const contRaw = await callLLMWithProgress(contPrompt, request.model, token, `${batchStatus} continuation`);
@@ -567,7 +575,7 @@ export function createBitbucketParticipant(
           const contentBudget = Math.max(0, tokenBudget - estimateChunkTokens(chunk));
           const extraContents = selectFilesWithinBudget(requestedEntries, contentBudget);
           if (extraContents.size > 0) {
-            const pass2Prompt = service.buildPrompt(pr, chunk, extraContents, config.reviewInstructions);
+            const pass2Prompt = service.buildPrompt(pr, chunk, extraContents, extraInstructions);
             totalInputChars += pass2Prompt.length;
             const pass2Raw = await callLLMWithProgress(pass2Prompt, request.model, token, `${batchStatus} pass 2`);
             totalOutputChars += pass2Raw.length;
@@ -582,7 +590,7 @@ export function createBitbucketParticipant(
 
         // Deep mode only: re-verify findings against the diff and drop the ones the critic can't confirm.
         if (criticEnabled && chunkFindings.length > 0) {
-          const criticPrompt = service.buildCriticPrompt(pr, chunk, chunkFindings);
+          const criticPrompt = service.buildCriticPrompt(pr, chunk, chunkFindings, extraInstructions);
           totalInputChars += criticPrompt.length;
           const criticRaw = await callLLMWithProgress(criticPrompt, request.model, token, `${batchStatus} verifying`);
           totalOutputChars += criticRaw.length;
@@ -619,6 +627,10 @@ export function createBitbucketParticipant(
       const reviewTokenEst = Math.ceil((totalInputChars + totalOutputChars) / 4);
       stream.markdown(`\n\n_~${reviewTokenEst.toLocaleString()} estimated tokens · budget ${tokenBudget.toLocaleString()}_`);
 
+      const rawDiffForSession = rawDiff.length > tokenBudget * 4
+        ? rawDiff.slice(0, tokenBudget * 4)
+        : rawDiff;
+
       await ws.update('bitbucket.session.review', {
         prTitle: pr.title,
         prUrl: prUrlMatch[0],
@@ -628,6 +640,8 @@ export function createBitbucketParticipant(
         findings: numbered,
         prDescription: pr.description,
         changedFiles: fileDiffs.map(d => ({ path: d.path, ...(d.deleted ? { deleted: true } : {}) })),
+        upfrontQuestion,
+        rawDiff: rawDiffForSession,
       } satisfies ReviewSession);
     } catch (err) {
       stream.markdown(`**Review failed:** ${err instanceof Error ? err.message : String(err)}`);
