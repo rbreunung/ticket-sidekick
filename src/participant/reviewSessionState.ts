@@ -49,6 +49,7 @@ export interface ReviewSession {
   changedFiles?: Array<{ path: string; deleted?: boolean }>;
   upfrontQuestion?: string;
   rawDiff?: string;
+  rawDiffTruncated?: boolean;
 }
 
 export interface BitbucketCommentPreviewSession {

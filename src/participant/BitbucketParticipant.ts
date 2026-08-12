@@ -627,9 +627,8 @@ export function createBitbucketParticipant(
       const reviewTokenEst = Math.ceil((totalInputChars + totalOutputChars) / 4);
       stream.markdown(`\n\n_~${reviewTokenEst.toLocaleString()} estimated tokens · budget ${tokenBudget.toLocaleString()}_`);
 
-      const rawDiffForSession = rawDiff.length > tokenBudget * 4
-        ? rawDiff.slice(0, tokenBudget * 4)
-        : rawDiff;
+      const rawDiffTruncated = rawDiff.length > tokenBudget * 4;
+      const rawDiffForSession = rawDiffTruncated ? rawDiff.slice(0, tokenBudget * 4) : rawDiff;
 
       await ws.update('bitbucket.session.review', {
         prTitle: pr.title,
@@ -642,6 +641,7 @@ export function createBitbucketParticipant(
         changedFiles: fileDiffs.map(d => ({ path: d.path, ...(d.deleted ? { deleted: true } : {}) })),
         upfrontQuestion,
         rawDiff: rawDiffForSession,
+        rawDiffTruncated,
       } satisfies ReviewSession);
     } catch (err) {
       stream.markdown(`**Review failed:** ${err instanceof Error ? err.message : String(err)}`);
