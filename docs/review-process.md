@@ -143,8 +143,15 @@ a `deep` review's verification step would be checking findings against a generic
 rubric with no idea the question was the point, and could drop question-driven
 findings the critic didn't recognize as relevant.
 
-When no question is supplied, the pipeline's behavior is byte-identical to before
-this feature — `ADDITIONAL INSTRUCTIONS` is only added when there's content to add.
+When no question is supplied, Pass 1, Pass 2, and the continuation pass behave
+exactly as before this feature — they already received `reviewInstructions` (if
+configured) pre-feature, and `ADDITIONAL INSTRUCTIONS` is only added when there's
+content to add. The one exception is the critic pass: in `deep` mode it now also
+receives `reviewInstructions` (if configured) as `ADDITIONAL INSTRUCTIONS` —
+previously `buildCriticPrompt` took no instructions parameter at all, so a user
+with `reviewInstructions` set will see a (usually minor) change to critic-pass
+behavior in deep mode even without asking a question. Behavior is unchanged
+everywhere for users without `reviewInstructions` configured.
 
 If a question was supplied, the review's first streamed line is `_focus: <question>_`,
 before `_Fetching PR…_`.
