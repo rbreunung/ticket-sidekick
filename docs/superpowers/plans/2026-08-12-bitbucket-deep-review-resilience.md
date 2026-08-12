@@ -75,7 +75,7 @@ skipped (with a note) rather than aborting the whole review.
 **Interfaces:**
 - Produces: `isTransientLmError(err: unknown): boolean`; `class PartialLmResponseError extends Error { readonly partialText: string; override readonly cause: unknown }`; `interface LmRetryOptions { retries?: number; baseDelayMs?: number; sleep?: (ms: number) => Promise<void>; onAttemptFailed?: (attempt: number, err: unknown) => void }`; `withLmRetry<T>(fn: () => Promise<T>, opts?: LmRetryOptions): Promise<T>`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/test/lmRetry.test.ts`:
 
@@ -172,13 +172,13 @@ describe('withLmRetry', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `~/.volta/bin/npm test -- lmRetry` (or `npm test -- lmRetry` if `npm` is
 already on PATH)
 Expected: FAIL — `Cannot find module '../utils/lmRetry'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `src/utils/lmRetry.ts`:
 
@@ -280,12 +280,12 @@ export async function withLmRetry<T>(
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `~/.volta/bin/npm test -- lmRetry`
 Expected: PASS (all `isTransientLmError` and `withLmRetry` tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/utils/lmRetry.ts src/test/lmRetry.test.ts
@@ -323,7 +323,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 `BitbucketParticipant.ts` (Task 4/5) this means passing `callLLMOnce`, not
 the retrying `callLLM`, as `call`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Update the import line at the top of `src/test/lmRetry.test.ts`:
 
@@ -417,12 +417,12 @@ describe('withEasierRetry', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `~/.volta/bin/npm test -- lmRetry`
 Expected: FAIL — `withEasierRetry is not exported`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Append to `src/utils/lmRetry.ts`:
 
@@ -506,12 +506,12 @@ async function tryOnceEasier<TItem, TResult>(
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `~/.volta/bin/npm test -- lmRetry`
 Expected: PASS (all tests in the file)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/utils/lmRetry.ts src/test/lmRetry.test.ts
@@ -534,7 +534,7 @@ This file imports `vscode` (Output Channel API) and has no unit test, matching
 the project's existing convention for vscode-glue utilities — verified by
 `npm run compile` and by exercising it manually in Task 4/5.
 
-- [ ] **Step 1: Write the implementation**
+- [x] **Step 1: Write the implementation**
 
 Create `src/utils/diagLog.ts`:
 
@@ -573,12 +573,12 @@ export function logDiag(scope: string, message: string, details?: Record<string,
 }
 ```
 
-- [ ] **Step 2: Verify it compiles**
+- [x] **Step 2: Verify it compiles**
 
 Run: `~/.volta/bin/npm run compile`
 Expected: no TypeScript errors
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/utils/diagLog.ts
@@ -616,7 +616,7 @@ No unit test — this file imports `vscode`. Verification is `npm run compile`
 plus a manual review-and-follow-up run in the Extension Development Host at
 the end of Task 5/6.
 
-- [ ] **Step 1: Add the imports**
+- [x] **Step 1: Add the imports**
 
 In `src/participant/BitbucketParticipant.ts`, add near the top (after the
 existing `reviewSessionState` import block):
@@ -626,7 +626,7 @@ import { withLmRetry, PartialLmResponseError } from '../utils/lmRetry';
 import { logDiag } from '../utils/diagLog';
 ```
 
-- [ ] **Step 2: Replace `callLLM` and `callLLMWithProgress`**
+- [x] **Step 2: Replace `callLLM` and `callLLMWithProgress`**
 
 Replace `BitbucketParticipant.ts:51-82` with:
 
@@ -727,7 +727,7 @@ async function callLLMWithProgress(
 }
 ```
 
-- [ ] **Step 3: Update the three follow-up call sites**
+- [x] **Step 3: Update the three follow-up call sites**
 
 These three calls don't change otherwise — only the added trailing
 `contextLabel` argument.
@@ -768,7 +768,7 @@ to:
 const answer = await callLLMWithProgress(followUpPrompt, request.model, token, 'Explaining finding', 'follow-up explain');
 ```
 
-- [ ] **Step 4: Verify it compiles**
+- [x] **Step 4: Verify it compiles**
 
 Run: `~/.volta/bin/npm run compile`
 Expected: TypeScript errors only at the four Pass-1/continuation/Pass-2/critic
@@ -776,7 +776,7 @@ call sites inside the review loop (`BitbucketParticipant.ts:541,557,588,603`),
 which are missing the new `contextLabel` argument — that's expected, Task 5
 rewrites that whole loop.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Commit together with Task 5 (the loop rewrite) since the review loop won't
 compile on its own until then — see Task 5's commit step.
@@ -796,7 +796,7 @@ compile on its own until then — see Task 5's commit step.
 No unit test — this is the core vscode-glue handler body. Verification is
 `npm run compile` plus a manual review run.
 
-- [ ] **Step 1: Log the model identity once per review**
+- [x] **Step 1: Log the model identity once per review**
 
 Immediately after the existing line
 `const pr = await client.getPullRequest(parsed.project, parsed.repo, parsed.prId);`
@@ -812,7 +812,7 @@ logDiag('bitbucket.review', 'model in use', {
 });
 ```
 
-- [ ] **Step 2: Add the split helpers and a failure-description helper**
+- [x] **Step 2: Add the split helpers and a failure-description helper**
 
 Immediately before the `for (let i = 0; i < chunks.length; i++) {` loop
 (`BitbucketParticipant.ts:530`), add:
@@ -844,7 +844,7 @@ function describeFailure(err: unknown): string {
 via `parseDiff`'s return type); if the `type FileDiff` name isn't already in
 the import list, add it there.
 
-- [ ] **Step 3: Replace the per-chunk loop**
+- [x] **Step 3: Replace the per-chunk loop**
 
 Replace `BitbucketParticipant.ts:530-628` (from `for (let i = 0; i < chunks.length; i++) {` through the closing `}` of that loop) with:
 
@@ -1015,7 +1015,7 @@ Note: `fetchedFileCache`, `allFindings`, `fileOffset`, `totalInputChars`,
 and are unchanged — only `anyBatchFailed` is newly declared, at the top of
 this replaced block.
 
-- [ ] **Step 4: Surface the partial-results summary before the report**
+- [x] **Step 4: Surface the partial-results summary before the report**
 
 Immediately before `stream.markdown(output);` (right after the existing
 `const output = service.formatReview(...)` line, `BitbucketParticipant.ts:633-634`),
@@ -1037,7 +1037,7 @@ if (anyBatchFailed) {
 stream.markdown(output);
 ```
 
-- [ ] **Step 5: Run compile and the full test suite**
+- [x] **Step 5: Run compile and the full test suite**
 
 Run: `~/.volta/bin/npm run compile`
 Expected: no TypeScript errors
@@ -1046,7 +1046,7 @@ Run: `~/.volta/bin/npm test`
 Expected: PASS — full existing suite plus `lmRetry.test.ts`, unaffected by
 these changes since none of the touched code is unit-tested directly
 
-- [ ] **Step 6: Commit (together with Task 4)**
+- [x] **Step 6: Commit (together with Task 4)**
 
 ```bash
 git add src/participant/BitbucketParticipant.ts
@@ -1085,7 +1085,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 No unit test — vscode-glue error message strings. Verification is
 `npm run compile` plus manual review of the rendered chat markdown.
 
-- [ ] **Step 1: Add a shared friendly-message helper**
+- [x] **Step 1: Add a shared friendly-message helper**
 
 Near `describeFailure` (added in Task 5, Step 2), add:
 
@@ -1101,7 +1101,7 @@ function friendlyLmFailureMessage(prefix: string, err: unknown): string {
 This needs `isTransientLmError` imported (add it to the Task 4 Step 1 import
 line: `import { withLmRetry, isTransientLmError, PartialLmResponseError } from '../utils/lmRetry';`).
 
-- [ ] **Step 2: Update the outer review catch**
+- [x] **Step 2: Update the outer review catch**
 
 Replace `BitbucketParticipant.ts:654-656`:
 
@@ -1119,7 +1119,7 @@ with:
     }
 ```
 
-- [ ] **Step 3: Update the follow-up catch**
+- [x] **Step 3: Update the follow-up catch**
 
 Replace `BitbucketParticipant.ts:412-417`:
 
@@ -1143,7 +1143,7 @@ with:
         }
 ```
 
-- [ ] **Step 4: Update the comment-refinement catch**
+- [x] **Step 4: Update the comment-refinement catch**
 
 Replace `BitbucketParticipant.ts:303-307`:
 
@@ -1165,12 +1165,12 @@ with:
         }
 ```
 
-- [ ] **Step 5: Run compile and the full test suite**
+- [x] **Step 5: Run compile and the full test suite**
 
 Run: `~/.volta/bin/npm run compile && ~/.volta/bin/npm test`
 Expected: both PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/participant/BitbucketParticipant.ts
@@ -1188,7 +1188,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 - Modify: `CLAUDE.md`
 - Modify: `README.md`
 
-- [ ] **Step 1: Update `docs/review-process.md`**
+- [x] **Step 1: Update `docs/review-process.md`**
 
 Add a new section after "## Filtering: only one hard drop" (before "##
 Provenance"):
@@ -1231,7 +1231,7 @@ review, and proportionally increasing exposure to a transient provider
 failure (see "Resilience & debugging" above).
 ```
 
-- [ ] **Step 2: Update `CLAUDE.md`**
+- [x] **Step 2: Update `CLAUDE.md`**
 
 Add two rows to the "Key files" table (near `src/utils/apiError.ts` /
 `src/utils/fetchWithRetry.ts` if listed):
@@ -1269,7 +1269,7 @@ sub-batch that still fails is skipped and reported rather than aborting
 the whole review — see `docs/review-process.md` → "Resilience & debugging".
 ```
 
-- [ ] **Step 3: Update `README.md`**
+- [x] **Step 3: Update `README.md`**
 
 Add a new top-level section after the `@bitbucket — Bitbucket PR Reviews`
 section's last subsection ("Reducing token usage on large PRs", ending
@@ -1291,7 +1291,7 @@ usually explains whether it was a one-off provider hiccup (worth just
 retrying) or something more persistent.
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/review-process.md CLAUDE.md README.md
