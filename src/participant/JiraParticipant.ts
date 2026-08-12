@@ -6,6 +6,7 @@ import type { JiraFieldMeta, JiraFilter, JiraSprintCandidate } from '../jira/IJi
 import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { tokenStatus } from '../utils/diagUtils';
+import { logDiag } from '../utils/diagLog';
 import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql } from './sessionState';
 import { loadWorkflowCache, findPath } from '../services/WorkflowService';
 import type { WorkflowGraph } from '../services/WorkflowService';
@@ -72,11 +73,15 @@ export function createJiraParticipant(
       authType: config.authType,
       token: config.token,
       sprintBoardId: config.sprintBoardId,
+      onDiag: (level, message, details) => logDiag('jira.apiClient', level, message, details),
     });
     if (config.showConnectionInfo) {
       stream.markdown(`_${config.baseUrl} · API v2 · ${config.authType}_\n\n`);
     }
-    const ticketService = new TicketService(jiraClient);
+    const ticketService = new TicketService(
+      jiraClient,
+      (level, message, details) => logDiag('jira.ticketService', level, message, details),
+    );
     const ws = context.workspaceState;
     const lastResponse = getLastAssistantText(chatContext);
 
@@ -99,6 +104,8 @@ export function createJiraParticipant(
           `| Logged in as | ${user.displayName} |\n`,
         );
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logDiag('jira.participant', 'error', 'Jira connection check failed', { baseUrl: config.baseUrl, authType: config.authType, error: message });
         stream.markdown(
           `**Jira connection failed**\n\n` +
           `| Setting | Value |\n` +
@@ -107,7 +114,7 @@ export function createJiraParticipant(
           `| API version | v2 |\n` +
           `| Auth type | ${config.authType} |\n` +
           `| Token | ${tokenStatus(config.token)} |\n\n` +
-          `Error: ${err instanceof Error ? err.message : String(err)}`,
+          `Error: ${message}`,
         );
       }
       return;
@@ -155,7 +162,9 @@ export function createJiraParticipant(
         try {
           await executeCleanupBatch(session, skipKeys, ticketService, stream);
         } catch (err) {
-          stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+          const message = err instanceof Error ? err.message : String(err);
+          logDiag('jira.participant', 'error', message, {});
+          stream.markdown(message);
         }
         return;
       }
@@ -184,7 +193,9 @@ export function createJiraParticipant(
           const result = await ticketService.searchTickets(choice.jql);
           stream.markdown(`_Using filter: **${choice.name}**_\n\n${result}`);
         } catch (err) {
-          stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+          const message = err instanceof Error ? err.message : String(err);
+          logDiag('jira.participant', 'error', message, {});
+          stream.markdown(message);
         }
         return;
       }
@@ -207,7 +218,9 @@ export function createJiraParticipant(
         try {
           await handleCreateTicket(request, stream, token, jiraClient, ticketService, ws, choice, selSession.originalPrompt);
         } catch (err) {
-          stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+          const message = err instanceof Error ? err.message : String(err);
+          logDiag('jira.participant', 'error', message, {});
+          stream.markdown(message);
         }
         return;
       }
@@ -233,7 +246,11 @@ export function createJiraParticipant(
           try {
             const { templates } = new TemplateService(workspaceRoot).loadTemplates();
             selectedTemplate = templates.find((t) => t.name === typeSession.templateName) ?? null;
-          } catch { /* proceed without */ }
+          } catch (err) {
+            logDiag('jira.participant', 'warn', `Could not reload template — ${typeSession.templateName}`, {
+              templateName: typeSession.templateName, error: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
         try {
           await continueAfterIssueType(
@@ -242,7 +259,9 @@ export function createJiraParticipant(
             typeSession.extraFields,
           );
         } catch (err) {
-          stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+          const message = err instanceof Error ? err.message : String(err);
+          logDiag('jira.participant', 'error', message, {});
+          stream.markdown(message);
         }
         return;
       }
@@ -267,7 +286,9 @@ export function createJiraParticipant(
             await streamNextSection(session, stream, ws);
           }
         } catch (err) {
-          stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+          const message = err instanceof Error ? err.message : String(err);
+          logDiag('jira.participant', 'error', message, {});
+          stream.markdown(message);
         }
         return;
       }
@@ -280,7 +301,9 @@ export function createJiraParticipant(
         try {
           await handleContentSession(session, request.prompt, request.model, token, stream, ticketService, ws);
         } catch (err) {
-          stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+          const message = err instanceof Error ? err.message : String(err);
+          logDiag('jira.participant', 'error', message, {});
+          stream.markdown(message);
         }
         return;
       }
@@ -339,7 +362,9 @@ export function createJiraParticipant(
         try {
           await continueSetField(ticketKeys, chosen, fieldValue, arrayOp, ticketService, stream, ws, request.model, token);
         } catch (err) {
-          stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+          const message = err instanceof Error ? err.message : String(err);
+          logDiag('jira.participant', 'error', message, {});
+          stream.markdown(message);
         }
         return;
       }
@@ -363,7 +388,9 @@ export function createJiraParticipant(
               stream.markdown(`Updated **${previewSession.fieldName}** on ${toUpdate[0]}.`);
               stream.markdown(`\n\n<!-- @jira-ticket:${toUpdate[0]} -->`);
             } catch (err) {
-              stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+              const message = err instanceof Error ? err.message : String(err);
+              logDiag('jira.participant', 'error', message, {});
+              stream.markdown(message);
             }
           } else {
             let passed = 0, failed = 0;
@@ -408,7 +435,9 @@ export function createJiraParticipant(
             stream.markdown(`\n\n<!-- @jira-ticket:${session.ticketKey} -->${listTag}`);
           }
         } catch (err) {
-          stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+          const message = err instanceof Error ? err.message : String(err);
+          logDiag('jira.participant', 'error', message, {});
+          stream.markdown(message);
         }
         return;
       }
@@ -448,8 +477,10 @@ export function createJiraParticipant(
               await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(attachmentsDir, chosen.filename), bytes);
               lines.push(`✓ \`${chosen.filename}\` downloaded.`);
             } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              logDiag('jira.participant', 'warn', `Attachment download failed — ${chosen.filename}`, { fileName: chosen.filename, error: message });
               downloadedSet.delete(i - 1);
-              lines.push(`✗ Failed to download \`${chosen.filename}\`: ${err instanceof Error ? err.message : String(err)}`);
+              lines.push(`✗ Failed to download \`${chosen.filename}\`: ${message}`);
             }
           }
           const remaining = loadSkippedSession.skipped.filter((_, i) => !downloadedSet.has(i));
@@ -543,7 +574,9 @@ export function createJiraParticipant(
         if (fv) intent = { ...intent, fixVersion: fv };
       }
     } catch (err) {
-      stream.markdown(`Could not understand the request: ${err instanceof Error ? err.message : String(err)}`);
+      const message = err instanceof Error ? err.message : String(err);
+      logDiag('jira.participant', 'error', 'Could not understand the request (intent parsing failed)', { error: message });
+      stream.markdown(`Could not understand the request: ${message}`);
       return;
     }
 
@@ -552,7 +585,9 @@ export function createJiraParticipant(
       try {
         await handleCreateTicket(request, stream, token, jiraClient, ticketService, ws);
       } catch (err) {
-        stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+        const message = err instanceof Error ? err.message : String(err);
+        logDiag('jira.participant', 'error', message, {});
+        stream.markdown(message);
       }
       return;
     }
@@ -561,7 +596,9 @@ export function createJiraParticipant(
       try {
         await handleDiscoverWorkflow(intent, stream, jiraClient);
       } catch (err) {
-        stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+        const message = err instanceof Error ? err.message : String(err);
+        logDiag('jira.participant', 'error', message, {});
+        stream.markdown(message);
       }
       return;
     }
@@ -570,7 +607,9 @@ export function createJiraParticipant(
       try {
         await handleRunCleanup(intent, stream, jiraClient, ticketService, ws, config.baseUrl);
       } catch (err) {
-        stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+        const message = err instanceof Error ? err.message : String(err);
+        logDiag('jira.participant', 'error', message, {});
+        stream.markdown(message);
       }
       return;
     }
@@ -1019,7 +1058,9 @@ export function createJiraParticipant(
       stream.markdown(result);
       if (ticketKey) stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
     } catch (err) {
-      stream.markdown(`${err instanceof Error ? err.message : String(err)}`);
+      const message = err instanceof Error ? err.message : String(err);
+      logDiag('jira.participant', 'error', message, { operation: intent.operation });
+      stream.markdown(message);
     }
   };
 
