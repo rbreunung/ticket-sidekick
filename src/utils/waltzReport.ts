@@ -2,8 +2,7 @@ import { createHash } from 'crypto';
 import { readSheet, parseSheetData, SheetNotFoundError, type Schema } from 'read-excel-file/node';
 import { markdownToJiraWiki } from './markdownToJiraWiki';
 import {
-  MAX_REPORT_BYTES as SHARED_MAX_REPORT_BYTES, BATCH_LIMIT as SHARED_BATCH_LIMIT,
-  sanitizeCellText, sanitizeStandaloneLine,
+  MAX_REPORT_BYTES as SHARED_MAX_REPORT_BYTES, sanitizeCellText, sanitizeStandaloneLine,
 } from './reportImport';
 
 export interface WaltzVulnerability {
@@ -308,12 +307,6 @@ export function buildDescriptionWiki(component: WaltzComponent): string {
 
   return markdownToJiraWiki(lines.join('\n'));
 }
-
-// Re-exported (rather than importers reaching into reportImport.ts directly for these two) so the
-// ticket-creation cap and the review-screen truncation can never drift from the shared source of
-// truth (KTD4) — values unchanged (40 / 50).
-export const DEDUP_CHUNK_SIZE = 40;
-export const BATCH_LIMIT = SHARED_BATCH_LIMIT;
 
 // Lives here (rather than in sessionState.ts, where the other session-related types live) so that
 // reportImportHandler.ts's shared buildReviewRows() can produce it directly without a type-only

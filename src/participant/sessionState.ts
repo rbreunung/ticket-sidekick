@@ -2,7 +2,7 @@ import type { JiraComment, JiraFieldMeta, JiraFilter, JiraSprintCandidate } from
 import { formatJiraBody } from '../utils/markdownFormatter';
 import type { VeracodeFlaw, VeracodeReviewRow } from '../utils/veracodeReport';
 import type { WaltzComponent, WaltzReviewRow } from '../utils/waltzReport';
-import { BATCH_LIMIT } from '../utils/waltzReport';
+import { BATCH_LIMIT } from '../utils/reportImport';
 
 export type { VeracodeReviewRow } from '../utils/veracodeReport';
 export type { WaltzReviewRow } from '../utils/waltzReport';
@@ -513,9 +513,7 @@ export const WALTZ_REVIEW_COLUMNS: ReviewTableColumn<WaltzReviewRow>[] = [
   { header: 'Rating', accessor: (r) => r.maxVulnRating },
 ];
 
-// Each importer defines its own per-run ticket-creation cap today; both currently happen to be 50
-// (see BATCH_LIMIT in waltzReport.ts and the equivalent local constant in veracodeHandler.ts). Kept
-// as a single shared constant here rather than threaded through as a extra buildImportReviewTable param.
+// Aliased locally rather than threading BATCH_LIMIT through as an extra buildImportReviewTable param.
 const REVIEW_BATCH_LIMIT = BATCH_LIMIT;
 
 export function buildImportReviewTable<TRow extends ReviewRowBase>(

@@ -14,7 +14,9 @@ import type { DiagLogger } from './diagTypes';
 export const MAX_REPORT_BYTES = 20 * 1024 * 1024; // 20 MB
 export const BATCH_LIMIT = 50;
 
-const DEFAULT_DEDUP_CHUNK_SIZE = 40; // keeps generated JQL well under Jira's practical query-length limits
+// Exported so callers that need to pass the value explicitly (e.g. findAlreadyTicketed) use this
+// single source of truth instead of an independently-declared local copy of "40".
+export const DEFAULT_DEDUP_CHUNK_SIZE = 40; // keeps generated JQL well under Jira's practical query-length limits
 
 /**
  * Splits `items` into chunks of at most `chunkSize`, preserving order. Generalized from the

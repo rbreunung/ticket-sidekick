@@ -16,8 +16,8 @@ import type { IJiraClient } from '../../jira/IJiraClient';
 import { TemplateService } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
 import {
-  MAX_REPORT_BYTES, BATCH_LIMIT, findAlreadyTicketed, capNewRows, buildReviewRows, buildDedupJql,
-  type JqlIssueLike,
+  MAX_REPORT_BYTES, BATCH_LIMIT, DEFAULT_DEDUP_CHUNK_SIZE, findAlreadyTicketed, capNewRows, buildReviewRows,
+  buildDedupJql, type JqlIssueLike,
 } from '../../utils/reportImport';
 import {
   isCancellation, pickEmailOption, buildImportReviewTable, parseReviewInput, applyReviewToggle,
@@ -25,8 +25,6 @@ import {
   type ImportTemplateSelectionSession, type ReviewSession, type ReviewTableColumn, type ReviewRowBase,
 } from '../sessionState';
 import { resolveProjectKey } from './ticketContext';
-
-const DEDUP_CHUNK_SIZE = 40; // keeps generated JQL well under Jira's practical query-length limits
 
 export interface ReportImportRow extends ReviewRowBase {
   labels: string[];
@@ -285,7 +283,7 @@ export async function handleImportTemplateSelection<TItem, TRow extends ReportIm
     const searchLabels = session.items.map(descriptor.searchLabelOf);
     dedupMap = await findAlreadyTicketed(
       searchLabels,
-      DEDUP_CHUNK_SIZE,
+      DEFAULT_DEDUP_CHUNK_SIZE,
       chunk => ticketService.searchTicketsRaw(buildDedupJql(session.projectKey, chunk), 100).then(r => r.issues as JqlIssueLike[]),
       descriptor.labelToDedupKey,
       (level, message, details) => logDiag(descriptor.scope, level, message, details),

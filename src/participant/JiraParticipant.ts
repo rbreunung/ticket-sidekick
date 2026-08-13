@@ -29,6 +29,7 @@ import {
   handleImportVeracodeReport, handleVeracodeTemplateSelection, handleVeracodeReviewReply,
 } from './jira/veracodeHandler';
 import type { VeracodeTemplateSelectionSession, VeracodeReviewSession } from './sessionState';
+import { isSessionExpired, SESSION_EXPIRED_MESSAGE } from './sessionState';
 import {
   handleImportWaltzReport, handleWaltzTemplateSelection, handleWaltzReviewReply,
 } from './jira/waltzHandler';
@@ -541,6 +542,11 @@ export function createJiraParticipant(
     if (lastResponse.includes('<!-- jira:veracode-template -->')) {
       const templateSession = ws.get<VeracodeTemplateSelectionSession>('jira.session.veracodeTemplateSelection');
       if (templateSession) {
+        if (isSessionExpired(templateSession)) {
+          await ws.update('jira.session.veracodeTemplateSelection', undefined);
+          stream.markdown(SESSION_EXPIRED_MESSAGE);
+          return;
+        }
         await handleVeracodeTemplateSelection(request.prompt, templateSession, jiraClient, ticketService, stream, ws, config.baseUrl);
         return;
       }
@@ -550,6 +556,11 @@ export function createJiraParticipant(
     if (lastResponse.includes('<!-- jira:veracode-review -->')) {
       const reviewSession = ws.get<VeracodeReviewSession>('jira.session.veracodeReview');
       if (reviewSession) {
+        if (isSessionExpired(reviewSession)) {
+          await ws.update('jira.session.veracodeReview', undefined);
+          stream.markdown(SESSION_EXPIRED_MESSAGE);
+          return;
+        }
         await handleVeracodeReviewReply(request.prompt, reviewSession, ticketService, stream, ws, config.baseUrl);
         return;
       }
@@ -559,6 +570,11 @@ export function createJiraParticipant(
     if (lastResponse.includes('<!-- jira:waltz-template -->')) {
       const templateSession = ws.get<WaltzTemplateSelectionSession>('jira.session.waltzTemplateSelection');
       if (templateSession) {
+        if (isSessionExpired(templateSession)) {
+          await ws.update('jira.session.waltzTemplateSelection', undefined);
+          stream.markdown(SESSION_EXPIRED_MESSAGE);
+          return;
+        }
         await handleWaltzTemplateSelection(request.prompt, templateSession, jiraClient, ticketService, stream, ws, config.baseUrl);
         return;
       }
@@ -568,6 +584,11 @@ export function createJiraParticipant(
     if (lastResponse.includes('<!-- jira:waltz-review -->')) {
       const reviewSession = ws.get<WaltzReviewSession>('jira.session.waltzReview');
       if (reviewSession) {
+        if (isSessionExpired(reviewSession)) {
+          await ws.update('jira.session.waltzReview', undefined);
+          stream.markdown(SESSION_EXPIRED_MESSAGE);
+          return;
+        }
         await handleWaltzReviewReply(request.prompt, reviewSession, ticketService, stream, ws, config.baseUrl);
         return;
       }
