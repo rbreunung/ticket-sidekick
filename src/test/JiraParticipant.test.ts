@@ -1016,6 +1016,14 @@ describe('parseWaltzReviewInput', () => {
     expect(parseWaltzReviewInput('A1 1', ['A1', '1'])).toEqual({ action: 'toggle', ids: ['A1', '1'] });
     expect(parseWaltzReviewInput('nonsense', ['A1', '1'])).toEqual({ action: 'invalid' });
   });
+
+  it('matches ids case-insensitively', () => {
+    expect(parseWaltzReviewInput('a1 1', ['A1', '1'])).toEqual({ action: 'toggle', ids: ['A1', '1'] });
+  });
+
+  it('returns invalid for empty input', () => {
+    expect(parseWaltzReviewInput('', ['A1', '1'])).toEqual({ action: 'invalid' });
+  });
 });
 
 describe('applyWaltzToggle', () => {
@@ -1023,5 +1031,11 @@ describe('applyWaltzToggle', () => {
     const toggled = applyWaltzToggle(sampleWaltzRows, ['1']);
     expect(toggled.find(r => r.id === '1')!.included).toBe(false);
     expect(toggled.find(r => r.id === 'A1')!.included).toBe(false); // unchanged
+  });
+
+  it('flips an already-ticketed row back to included (force re-create)', () => {
+    const toggled = applyWaltzToggle(sampleWaltzRows, ['A1']);
+    expect(toggled.find(r => r.id === 'A1')!.included).toBe(true);
+    expect(toggled.find(r => r.id === '1')!.included).toBe(true); // unchanged
   });
 });

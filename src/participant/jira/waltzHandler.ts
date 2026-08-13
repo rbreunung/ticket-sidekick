@@ -9,7 +9,7 @@ import { TemplateService } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
 import {
   parseWaltzReport, filterComponents, chunkComponentLabels, buildDedupJql, extractDedupMap, buildReviewRows,
-  sanitizeComponentLabel, BATCH_LIMIT, type WaltzComponent,
+  sanitizeComponentLabel, BATCH_LIMIT, MAX_REPORT_BYTES, type WaltzComponent,
 } from '../../utils/waltzReport';
 import type { WaltzTemplateSelectionSession, WaltzReviewSession } from '../sessionState';
 import {
@@ -17,8 +17,6 @@ import {
   extractCreatedKeyFromConfirmation,
 } from '../sessionState';
 import { resolveProjectKey } from './ticketContext';
-
-const MAX_REPORT_BYTES = 20 * 1024 * 1024; // 20 MB
 
 function getWaltzConfig(): { minVulnRating: string; includeRemediationActions: string[] } {
   const cfg = vscode.workspace.getConfiguration('ticketSidekick');
@@ -53,7 +51,7 @@ async function openWaltzFilePicker(
 
   try {
     const components = await readAndFilterWaltzFile(uris[0].fsPath);
-    return { components, fileName: uris[0].fsPath.split(/[\\/]/).pop() ?? uris[0].fsPath };
+    return { components, fileName: path.basename(uris[0].fsPath) };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logDiag('jira.waltz', 'error', `Could not import report — ${uris[0].fsPath}`, { path: uris[0].fsPath, error: message });
@@ -245,18 +243,28 @@ export async function handleWaltzTemplateSelection(
     dedupMap = new Map();
   }
 
-  const allRows = buildReviewRows(session.components, dedupMap, templateLabels);
-  const totalNewMatched = allRows.filter(r => r.existingTicketKey === null).length;
-  // Cap "new" rows at BATCH_LIMIT so the review screen never shows (or risks silently creating) more
-  // than one run's worth of tickets — already-ticketed rows are never capped. Re-running the import
-  // after this batch completes surfaces the next BATCH_LIMIT new candidates for free, since the ones
-  // just created are now dedup-matched.
+  // Cap "new" (not-yet-ticketed) components at BATCH_LIMIT *before* building full review rows —
+  // buildReviewRows()/buildDescriptionWiki() does real work per row (sorting, Markdown-table
+  // rendering, a full markdownToJiraWiki() pass), so filtering after the fact would build and then
+  // discard that work for every excess "new" component on a report larger than one run's worth.
+  // Already-ticketed rows are never capped. Re-running the import after this batch completes
+  // surfaces the next BATCH_LIMIT new candidates for free, since the ones just created are now
+  // dedup-matched.
+  const componentsToBuild: WaltzComponent[] = [];
+  let totalNewMatched = 0;
   let newSeen = 0;
-  const rows = allRows.filter(r => {
-    if (r.existingTicketKey !== null) return true;
-    newSeen++;
-    return newSeen <= BATCH_LIMIT;
-  });
+  for (const component of session.components) {
+    if (dedupMap.has(sanitizeComponentLabel(component.nameVersion))) {
+      componentsToBuild.push(component); // already-ticketed — always included, never capped
+      continue;
+    }
+    totalNewMatched++;
+    if (newSeen < BATCH_LIMIT) {
+      componentsToBuild.push(component);
+      newSeen++;
+    }
+  }
+  const rows = buildReviewRows(componentsToBuild, dedupMap, templateLabels);
 
   const reviewSession: WaltzReviewSession = {
     projectKey: session.projectKey,

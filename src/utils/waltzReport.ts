@@ -18,7 +18,9 @@ export interface WaltzComponent {
   vulnerabilities: WaltzVulnerability[];
 }
 
-const MAX_REPORT_BYTES = 20 * 1024 * 1024; // 20 MB
+// Exported (rather than a local/duplicated constant) so waltzHandler.ts and extension.ts's file-size
+// pre-check share this single source of truth instead of three independently hardcoded copies.
+export const MAX_REPORT_BYTES = 20 * 1024 * 1024; // 20 MB
 const REQUIRED_SHEET = 'ComponentRemediations';
 
 export function assertSafeWaltzReportSize(buffer: Buffer): void {
@@ -81,20 +83,25 @@ async function readOptionalNamedSheet<T extends object>(
 }
 
 const PARSE_TIMEOUT_MS = 15_000; // hard ceiling so a pathological file (e.g. a decompression-bomb-style
-// worksheet entry — see CLAUDE.md "Security notes") fails fast instead of exhausting memory or hanging
-// the extension host. Bounds wall-clock time, not memory directly, but a hung/thrashing parse is
-// exactly what this catches.
+// worksheet entry — see CLAUDE.md's "Waltz OSS report import" section) fails fast instead of exhausting
+// memory or hanging the extension host. Bounds wall-clock time, not memory directly, but a
+// hung/thrashing parse is exactly what this catches.
 
 export async function parseWaltzReport(buffer: Buffer): Promise<WaltzComponent[]> {
-  return Promise.race([
-    parseWaltzReportInner(buffer),
-    new Promise<never>((_, reject) =>
-      setTimeout(
-        () => reject(new Error(`OSS report parsing exceeded ${PARSE_TIMEOUT_MS / 1000}s — the file may be malformed or unusually large.`)),
-        PARSE_TIMEOUT_MS,
-      ),
-    ),
-  ]);
+  let timeoutHandle: ReturnType<typeof setTimeout>;
+  try {
+    return await Promise.race([
+      parseWaltzReportInner(buffer),
+      new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error(`OSS report parsing exceeded ${PARSE_TIMEOUT_MS / 1000}s — the file may be malformed or unusually large.`)),
+          PARSE_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeoutHandle!);
+  }
 }
 
 async function parseWaltzReportInner(buffer: Buffer): Promise<WaltzComponent[]> {
@@ -185,7 +192,9 @@ export function sanitizeComponentLabel(nameVersion: string): string {
     .replace(/^-|-$/g, '');
   const suffix = `-${labelHashSuffix(nameVersion)}`;
   const readableBudget = MAX_LABEL_LENGTH - 'oss-dep-'.length - suffix.length;
-  const readable = sanitized.length > readableBudget ? sanitized.slice(0, readableBudget) : sanitized;
+  // Truncating mid-string can land right after a hyphen; strip a trailing one so it doesn't collide
+  // with the suffix's own leading hyphen (e.g. "...x-" + "-abc123" would otherwise read "...x--abc123").
+  const readable = (sanitized.length > readableBudget ? sanitized.slice(0, readableBudget) : sanitized).replace(/-+$/, '');
   return `oss-dep-${readable}${suffix}`;
 }
 

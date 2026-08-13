@@ -13,8 +13,8 @@ import { selectDefaultIssueType } from './participant/sessionState';
 import type { EmailContentSession } from './participant/sessionState';
 import { parseVeracodeReport, filterFlaws } from './utils/veracodeReport';
 import type { VeracodeTemplateSelectionSession } from './participant/sessionState';
-import { parseWaltzReport, filterComponents } from './utils/waltzReport';
-import type { WaltzTemplateSelectionSession } from './participant/sessionState';
+import { parseWaltzReport, filterComponents, MAX_REPORT_BYTES } from './utils/waltzReport';
+import { buildWaltzTemplateSession } from './participant/jira/waltzHandler';
 import { logDiag } from './utils/diagLog';
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -314,7 +314,14 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!uris || uris.length === 0) return;
       const reportPath = uris[0].fsPath;
 
-      const MAX_REPORT_BYTES = 20 * 1024 * 1024;
+      // Check credentials before paying for the file read/parse — no point loading up to 20 MB and
+      // parsing it if Jira isn't even configured yet.
+      const config = await configService.getConfig();
+      if (!config.baseUrl || !config.token) {
+        vscode.window.showErrorMessage('Ticket Sidekick: Configure Jira credentials first.');
+        return;
+      }
+
       let buffer: Buffer;
       try {
         const stat = await fs.promises.stat(reportPath);
@@ -353,12 +360,6 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
 
-      const config = await configService.getConfig();
-      if (!config.baseUrl || !config.token) {
-        vscode.window.showErrorMessage('Ticket Sidekick: Configure Jira credentials first.');
-        return;
-      }
-
       let projectKey = waltzCfg.get<string>('jira.defaultProject') ?? '';
       if (!projectKey) {
         const entered = await vscode.window.showInputBox({
@@ -376,39 +377,8 @@ export function activate(context: vscode.ExtensionContext): void {
         token: config.token,
         onDiag: (level, message, details) => logDiag('jira.apiClient', level, message, details),
       });
-      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
-      const availableTemplates: Array<{ name: string; issueType: string }> = (() => {
-        if (!workspaceRoot) return [];
-        try {
-          return new TemplateService(workspaceRoot).loadTemplates().templates
-            .map(t => ({ name: t.name, issueType: t.issueType ?? 'Bug' }));
-        } catch (err) {
-          logDiag('extension', 'warn', 'Could not load templates — proceeding without', {
-            error: err instanceof Error ? err.message : String(err),
-          });
-          return [];
-        }
-      })();
-
-      const issueTypes = await jiraClient.getProject(projectKey)
-        .then(p => p.issueTypes.filter(t => !t.subtask).map(t => t.name))
-        .catch((err: unknown) => {
-          const message = err instanceof Error ? err.message : String(err);
-          logDiag('extension', 'warn', `Could not fetch issue types — ${projectKey}`, { projectKey, error: message });
-          vscode.window.showWarningMessage(
-            `Ticket Sidekick: Could not fetch issue types for ${projectKey} — will default to 'Bug'. ${message}`,
-          );
-          return [] as string[];
-        });
-
-      const session: WaltzTemplateSelectionSession = {
-        reportFileName: path.basename(reportPath),
-        projectKey,
-        components,
-        availableTemplates,
-        availableIssueTypes: issueTypes.length > 0 ? issueTypes : ['Bug'],
-      };
+      const session = await buildWaltzTemplateSession(components, path.basename(reportPath), projectKey, jiraClient);
 
       await context.workspaceState.update('jira.session.waltzTemplateSelection', session);
       await vscode.commands.executeCommand('workbench.action.chat.open', { query: '@jira import oss report' });

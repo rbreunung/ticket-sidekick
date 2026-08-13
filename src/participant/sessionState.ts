@@ -5,6 +5,7 @@ import type { WaltzComponent, WaltzReviewRow } from '../utils/waltzReport';
 import { BATCH_LIMIT } from '../utils/waltzReport';
 
 export type { VeracodeReviewRow } from '../utils/veracodeReport';
+export type { WaltzReviewRow } from '../utils/waltzReport';
 
 export interface CreationSession {
   template: string;

@@ -96,7 +96,10 @@ describe('filterComponents', () => {
       components.map(c => ({ ...c, maxVulnRating: c.maxVulnRating.toUpperCase() })),
       { minVulnRating: 'high', includeRemediationActions: ['', 'Remediate'] },
     );
-    expect(filtered.length).toBeGreaterThan(0);
+    // Same expected set as the "applies both...(defaults)" test above — only the casing differs here.
+    expect(filtered.map(c => c.nameVersion).sort()).toEqual([
+      'example-http:3.3.3', 'example-io:4.5.0', 'example-lib:1.2.3',
+    ]);
   });
 });
 
