@@ -135,6 +135,45 @@ export function capNewRows<TItem>(
   return { included, totalNewMatched, droppedOverCap: totalNewMatched - newSeen };
 }
 
+// Every value threaded through this function originates in externally-sourced report data (Waltz
+// .xlsx cells, and — from a later unit onward — Veracode XML attributes) that gets interpolated
+// into a hand-authored Markdown string ultimately converted via markdownToJiraWiki(). That
+// converter is a simple line-based/regex converter with no escape-character support at all (a
+// backslash has no special meaning to it), so neutralizing means removing or replacing the
+// characters it treats as structural, not backslash-prefixing them:
+//   - embedded newlines are flattened to a space FIRST — the converter re-parses every joined line
+//     independently, so an embedded "\n# Fake Heading" or a full "\n| injected | row |" line would
+//     otherwise inject a brand-new heading/table/list/quote/code-fence the author never wrote
+//   - a literal '|' is replaced — inside one of our own table rows it would silently split into
+//     extra cells and misalign the table (the line-based parser just does `line.split('|')`)
+//   - '*', '_', '`', '[', ']' are stripped — inline() applies bold/italic/code-span/link formatting
+//     anywhere in a line (not just at line-start), so a crafted CVE summary can't render a fake
+//     clickable link, or bold/italic text the author never wrote
+//   - '~' is stripped — inline()'s strikethrough regex (/~~(.+?)~~/g) is a mid-line transform just
+//     like bold/italic; without stripping it, a "~~injected~~" value renders struck-through
+export function sanitizeCellText(value: string): string {
+  return value
+    .replace(/\r\n|\r|\n/g, ' ')
+    .replace(/\|/g, '/')
+    .replace(/[*_`[\]~]/g, '');
+}
+
+// A value pushed as an entire standalone line (no trusted prefix character in front of it, e.g.
+// Waltz's maxVulnRating/nameVersion lines) is exposed to every line-start-anchored rule
+// markdownToJiraWiki() has: the horizontal-rule check (repeated '-'/'*'/'_'), the blockquote check
+// ('> '), the unordered-list check ('-'/'*'/'+ '), and the ordered-list check (digit(s) + '. ').
+// sanitizeCellText() alone does not close this — '-', '>', and digits/'.' are all left untouched
+// (stripping them would make CVE ids, version numbers, and legitimate prose unreadable). Instead,
+// prefixing the sanitized value with a literal ': ' pushes every character of the original value
+// out of line-start position entirely: ':' is not a trigger character for any of those rules, and
+// — unlike a whitespace prefix — it survives markdownToJiraWiki()'s leading-whitespace-consuming
+// checks (the horizontal-rule test trims the line first via `.trim()`; the list regexes have a
+// `(\s*)` capture group in front of their trigger character), so a whitespace-only prefix would not
+// have closed this gap.
+export function sanitizeStandaloneLine(value: string): string {
+  return `: ${sanitizeCellText(value)}`;
+}
+
 interface ReviewRowShape {
   id: string; // '1'..'N' new candidates, 'A1'..'Am' already-ticketed
   existingTicketKey: string | null;

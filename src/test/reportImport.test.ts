@@ -1,8 +1,52 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   chunkStrings, buildDedupJql, extractDedupMap, findAlreadyTicketed, capNewRows, buildReviewRows,
+  sanitizeCellText, sanitizeStandaloneLine,
   type JqlIssueLike,
 } from '../utils/reportImport';
+
+describe('sanitizeCellText', () => {
+  it('flattens embedded newlines to a space so a value cannot start a new line the converter re-parses as structure', () => {
+    expect(sanitizeCellText('line one\nline two\r\nline three')).toBe('line one line two line three');
+  });
+
+  it('replaces a literal pipe so a value cannot split a table cell', () => {
+    expect(sanitizeCellText('High | Critical')).toBe('High / Critical');
+  });
+
+  it('strips bold/italic/code-span/link trigger characters', () => {
+    expect(sanitizeCellText('*bold* _em_ `code` [text](url)')).toBe('bold em code text(url)');
+  });
+
+  it('strips tildes so a value cannot render as strikethrough (~~text~~)', () => {
+    expect(sanitizeCellText('~~injected~~')).toBe('injected');
+  });
+
+  it('neutralizes every trigger character in one crafted payload at once', () => {
+    const crafted = 'Injected\n# Fake Heading\n| a | b |\n[click me](http://evil.example) *bold* ~~struck~~';
+    const sanitized = sanitizeCellText(crafted);
+    expect(sanitized).not.toContain('\n');
+    expect(sanitized).not.toContain('|');
+    expect(sanitized).not.toMatch(/[*_`[\]~]/);
+  });
+});
+
+describe('sanitizeStandaloneLine', () => {
+  it('prefixes the sanitized value with ": " so it cannot occupy line-start position', () => {
+    expect(sanitizeStandaloneLine('Critical')).toBe(': Critical');
+  });
+
+  it('prefixes before sanitizing, so a crafted ordered-list/heading/blockquote/horizontal-rule trigger no longer sits at line-start', () => {
+    expect(sanitizeStandaloneLine('1. urgent')).toBe(': 1. urgent');
+    expect(sanitizeStandaloneLine('---')).toBe(': ---');
+    expect(sanitizeStandaloneLine('> quoted')).toBe(': > quoted');
+    expect(sanitizeStandaloneLine('# fake heading')).toBe(': # fake heading');
+  });
+
+  it('still strips the same trigger characters sanitizeCellText does', () => {
+    expect(sanitizeStandaloneLine('~~struck~~ *bold*')).toBe(': struck bold');
+  });
+});
 
 describe('chunkStrings', () => {
   it('splits an exact multiple of the chunk size into even chunks', () => {

@@ -5,6 +5,7 @@ import {
   MAX_REPORT_BYTES as SHARED_MAX_REPORT_BYTES, BATCH_LIMIT as SHARED_BATCH_LIMIT,
   chunkStrings, buildDedupJql as buildDedupJqlShared, extractDedupMap as extractDedupMapShared,
   buildReviewRows as buildReviewRowsShared, type JqlIssueLike,
+  sanitizeCellText, sanitizeStandaloneLine,
 } from './reportImport';
 
 export interface WaltzVulnerability {
@@ -251,24 +252,9 @@ function sortVulnerabilities(vulns: WaltzVulnerability[]): WaltzVulnerability[] 
   });
 }
 
-// Every value threaded through this function originates in spreadsheet cells the user supplied —
-// untrusted input. markdownToJiraWiki() is a simple line-based/regex converter with no
-// escape-character support at all (a backslash has no special meaning to it), so neutralizing
-// means removing or replacing the characters it treats as structural, not backslash-prefixing them:
-//   - embedded newlines are flattened to a space FIRST — the converter re-parses every joined line
-//     independently, so an embedded "\n# Fake Heading" or a full "\n| injected | row |" line would
-//     otherwise inject a brand-new heading/table/list/quote/code-fence the author never wrote
-//   - a literal '|' is replaced — inside one of our own table rows it would silently split into
-//     extra cells and misalign the table (the line-based parser just does `line.split('|')`)
-//   - '*', '_', '`', '[', ']' are stripped — inline() applies bold/italic/code-span/link formatting
-//     anywhere in a line (not just at line-start), so a crafted CVE summary can't render a fake
-//     clickable link, or bold/italic text the author never wrote
-function sanitizeCellText(value: string): string {
-  return value
-    .replace(/\r\n|\r|\n/g, ' ')
-    .replace(/\|/g, '/')
-    .replace(/[*_`[\]]/g, '');
-}
+// sanitizeCellText()/sanitizeStandaloneLine() (both untrusted-input sanitizers for values that get
+// interpolated into the Markdown built here) now live in reportImport.ts as shared primitives — see
+// the doc comments there for exactly what each one neutralizes and why.
 
 // Authored as Markdown (headings, bullets, a real pipe table) and converted once at the end via
 // markdownToJiraWiki() — avoids hand-writing Jira's ||table|| syntax; use **bold** (not Jira's
@@ -279,7 +265,7 @@ export function buildDescriptionWiki(component: WaltzComponent): string {
   const sorted = sortVulnerabilities(component.vulnerabilities);
 
   lines.push('### Max Vuln Rating');
-  lines.push(sanitizeCellText(component.maxVulnRating));
+  lines.push(sanitizeStandaloneLine(component.maxVulnRating));
   lines.push('');
 
   // Surfaces *why* this ticket exists at a glance, ahead of the full artifact/CVE lists below.
@@ -320,7 +306,7 @@ export function buildDescriptionWiki(component: WaltzComponent): string {
   }
   lines.push('');
   lines.push('### Component');
-  lines.push(sanitizeCellText(component.nameVersion));
+  lines.push(sanitizeStandaloneLine(component.nameVersion));
 
   return markdownToJiraWiki(lines.join('\n'));
 }

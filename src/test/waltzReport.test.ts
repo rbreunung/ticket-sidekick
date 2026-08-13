@@ -235,7 +235,7 @@ describe('buildDescriptionWiki', () => {
     expect(wiki).not.toContain('/app/services/svc-29/package-lock.json');
   });
 
-  it('neutralizes markdown-structural characters in untrusted cell content so a crafted CVE summary cannot inject a heading, table row, link, or bold/italic text', () => {
+  it('neutralizes markdown-structural characters in untrusted cell content so a crafted CVE summary cannot inject a heading, table row, link, bold/italic text, or strikethrough', () => {
     const malicious: WaltzComponent = {
       nameVersion: 'example-evil:1.0.0',
       maxVulnRating: 'High',
@@ -243,7 +243,7 @@ describe('buildDescriptionWiki', () => {
       instancePaths: [],
       vulnerabilities: [{
         cveId: 'CVE-2099-9999',
-        cveSummary: 'Injected\n# Fake Heading\n| a | b |\n[click me](http://evil.example) *bold*',
+        cveSummary: 'Injected\n# Fake Heading\n| a | b |\n[click me](http://evil.example) *bold* ~~struck~~',
         overallSeverity: 'High',
         cvssV3Score: 9,
         fixedVersion: null,
@@ -257,6 +257,35 @@ describe('buildDescriptionWiki', () => {
     expect(wiki).not.toContain('[click me|http://evil.example]');
     // Asterisks are stripped, so no bold/italic markup forms either.
     expect(wiki).not.toContain('*bold*');
+    // Tildes are stripped, so markdownToJiraWiki()'s strikethrough regex (/~~(.+?)~~/g) never
+    // matches and the value can't render as struck-through (Jira wiki strikethrough is `-text-`).
+    expect(wiki).not.toContain('~~struck~~');
+    expect(wiki).not.toContain('-struck-');
+  });
+
+  it('prefixes a standalone-line value (Max Vuln Rating, Component) with ": " so a crafted value cannot become an ordered-list item, a horizontal rule, a blockquote, or a heading', () => {
+    // Each value below is chosen to actually trigger the named line-start rule in
+    // markdownToJiraWiki() when it appears unprefixed at the start of a line — see
+    // docs/solutions/security-issues/waltz-oss-report-markdown-injection-in-jira-wiki-converter.md.
+    const cases: Array<{ value: string; unwantedMarkup: string }> = [
+      { value: '1. urgent', unwantedMarkup: '# urgent' }, // ordered list -> Jira '# ' marker
+      { value: '---', unwantedMarkup: '----' }, // horizontal rule -> Jira '----'
+      { value: '> quoted', unwantedMarkup: '{quote}' }, // blockquote -> Jira {quote} block
+      { value: '# fake heading', unwantedMarkup: 'h1. fake heading' }, // heading -> Jira 'hN. '
+    ];
+    for (const { value, unwantedMarkup } of cases) {
+      const component: WaltzComponent = {
+        nameVersion: value,
+        maxVulnRating: value,
+        remediationAction: null,
+        instancePaths: [],
+        vulnerabilities: [],
+      };
+      const wiki = buildDescriptionWiki(component);
+      expect(wiki).not.toContain(unwantedMarkup);
+      // The prefixed, sanitized value is still present verbatim, just not at line-start.
+      expect(wiki).toContain(`: ${value}`);
+    }
   });
 
   it('replaces a literal pipe in a table-cell value so it cannot split the Known vulnerabilities table row', () => {

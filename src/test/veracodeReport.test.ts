@@ -55,6 +55,28 @@ describe('parseVeracodeReport', () => {
     expect(flaws).toHaveLength(2); // the other two well-formed flaws in the fixture are still parsed
   });
 
+  it('keeps a well-formed numeric cweId so the CWE-database link still renders (unchanged existing behavior)', () => {
+    const flaws = parseVeracodeReport(fixture('sample-report.xml'));
+    const sqlInjection = flaws.find(f => f.issueId === '10101')!;
+    expect(sqlInjection.cweId).toBe('89');
+    const wiki = buildDescriptionWiki(sqlInjection);
+    expect(wiki).toContain('[CWE-89|https://cwe.mitre.org/data/definitions/89.html]');
+  });
+
+  it('drops a malformed (non-numeric) cweId at parse time so it cannot be interpolated into the CWE-database link URL', () => {
+    const tampered = fixture('sample-report.xml').replace(
+      '<cwe cweid="89" cwename=',
+      '<cwe cweid="89.html]notreal" cwename=',
+    );
+    const flaws = parseVeracodeReport(tampered);
+    const sqlInjection = flaws.find(f => f.issueId === '10101')!;
+    expect(sqlInjection.cweId).toBeNull();
+    // No CWE section (and therefore no link) is rendered at all when cweId is dropped.
+    const wiki = buildDescriptionWiki(sqlInjection);
+    expect(wiki).not.toContain('h3. CWE');
+    expect(wiki).not.toContain('89.html]notreal');
+  });
+
   it('decodes numeric character references in attribute values (Veracode encodes literal parens in categoryname as &#x28;/&#x29;)', () => {
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
       <detailedreport report_format_version="1.5" app_name="ExampleApp">

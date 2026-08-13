@@ -45,6 +45,17 @@ const ARRAY_TAGS = new Set(['severity', 'category', 'cwe', 'flaw', 'para']);
 // issueid must be purely numeric — see the JQL-injection defense note in parseVeracodeReport below.
 const ISSUE_ID_PATTERN = /^\d+$/;
 
+// cweid must be purely numeric too. This is a point-fix for a URL-interpolation context
+// specifically: cweId is interpolated directly into a generated CWE-database link
+// (`https://cwe.mitre.org/data/definitions/${flaw.cweId}.html]` in buildDescriptionWiki below), and
+// span-text sanitization (sanitizeCellText()/sanitizeStandaloneLine() in reportImport.ts) does not
+// make a value safe inside a URL — that's a different context with different rules (e.g. a value
+// containing `]` followed by attacker-controlled link/pipe text could break out of the `[text|url]`
+// Jira link syntax even though none of the Markdown-structural characters those sanitizers strip
+// are involved). A future field interpolated into a generated link needs its own validation, not a
+// reuse of the span-text sanitizer.
+const CWE_ID_PATTERN = /^\d+$/;
+
 function toArray<T>(value: T | T[] | undefined | null): T[] {
   if (value === undefined || value === null) return [];
   return Array.isArray(value) ? value : [value];
@@ -96,11 +107,15 @@ export function parseVeracodeReport(xml: string): VeracodeFlaw[] {
           if (!ISSUE_ID_PATTERN.test(issueId)) {
             continue;
           }
+          const rawCweId = cwe.cweid != null ? String(cwe.cweid) : null;
+          // Drop (rather than pass through) a malformed cweId instead of letting it survive into
+          // the URL it's later interpolated into — see the CWE_ID_PATTERN comment above.
+          const cweId = rawCweId != null && CWE_ID_PATTERN.test(rawCweId) ? rawCweId : null;
           flaws.push({
             issueId,
             severity: Number(flaw.severity),
             categoryName: category.categoryname,
-            cweId: cwe.cweid != null ? String(cwe.cweid) : null,
+            cweId,
             cweName: cwe.cwename ?? null,
             description: flaw.description ?? '',
             recommendation,
