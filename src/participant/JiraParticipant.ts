@@ -29,6 +29,10 @@ import {
   handleImportVeracodeReport, handleVeracodeTemplateSelection, handleVeracodeReviewReply,
 } from './jira/veracodeHandler';
 import type { VeracodeTemplateSelectionSession, VeracodeReviewSession } from './sessionState';
+import {
+  handleImportWaltzReport, handleWaltzTemplateSelection, handleWaltzReviewReply,
+} from './jira/waltzHandler';
+import type { WaltzTemplateSelectionSession, WaltzReviewSession } from './sessionState';
 
 export function createJiraParticipant(
   context: vscode.ExtensionContext,
@@ -551,6 +555,24 @@ export function createJiraParticipant(
       }
     }
 
+    // Waltz OSS report template/issue-type selection
+    if (lastResponse.includes('<!-- jira:waltz-template -->')) {
+      const templateSession = ws.get<WaltzTemplateSelectionSession>('jira.session.waltzTemplateSelection');
+      if (templateSession) {
+        await handleWaltzTemplateSelection(request.prompt, templateSession, jiraClient, ticketService, stream, ws, config.baseUrl);
+        return;
+      }
+    }
+
+    // Waltz OSS report review / selection screen
+    if (lastResponse.includes('<!-- jira:waltz-review -->')) {
+      const reviewSession = ws.get<WaltzReviewSession>('jira.session.waltzReview');
+      if (reviewSession) {
+        await handleWaltzReviewReply(request.prompt, reviewSession, ticketService, stream, ws, config.baseUrl);
+        return;
+      }
+    }
+
     // Comment list — user replied with a comment number to view in full
     if (lastResponse.includes('<!-- jira:comment-list -->')) {
       const commentSession = ws.get<CommentListSession>('jira.session.commentList');
@@ -626,6 +648,11 @@ export function createJiraParticipant(
 
     if (intent.operation === 'importVeracode') {
       await handleImportVeracodeReport(request, stream, token, jiraClient, ticketService, ws, intent.projectKey);
+      return;
+    }
+
+    if (intent.operation === 'importWaltzReport') {
+      await handleImportWaltzReport(request, stream, token, jiraClient, ticketService, ws, intent.projectKey);
       return;
     }
 
