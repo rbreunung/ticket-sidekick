@@ -3,8 +3,6 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { parseVeracodeReport, filterFlaws, assertSafeVeracodeXml } from '../utils/veracodeReport';
 import { deriveShortLabel, buildSummary, buildDescriptionWiki, buildLabels } from '../utils/veracodeReport';
-import { buildDedupJql, extractDedupMap } from '../utils/veracodeReport';
-import { buildReviewRows } from '../utils/veracodeReport';
 
 const fixture = (name: string) =>
   readFileSync(join(__dirname, 'fixtures', 'veracode', name), 'utf-8');
@@ -253,44 +251,6 @@ describe('buildLabels', () => {
   });
 });
 
-// chunkIssueIds's own chunking behavior is now a thin delegate to chunkStrings() — see
-// reportImport.test.ts for the shared chunking tests.
-
-describe('buildDedupJql', () => {
-  it('builds a JQL clause matching veracode-issue-<id> labels for the project', () => {
-    expect(buildDedupJql('PROJ', ['10101', '10103'])).toBe(
-      'project = PROJ AND labels in (veracode-issue-10101, veracode-issue-10103)',
-    );
-  });
-});
-
-describe('extractDedupMap', () => {
-  it('maps issueId -> ticket key from returned labels, ignoring unrelated labels', () => {
-    const issues = [
-      { key: 'PROJ-501', labels: ['veracode', 'veracode-issue-10101', 'cwe-89'] },
-      { key: 'PROJ-502', labels: ['backend', 'veracode-issue-10103'] },
-      { key: 'PROJ-503', labels: ['unrelated-ticket'] },
-    ];
-    const map = extractDedupMap(issues);
-    expect(map.get('10101')).toBe('PROJ-501');
-    expect(map.get('10103')).toBe('PROJ-502');
-    expect(map.size).toBe(2);
-  });
-
-  it('returns an empty map when nothing matches', () => {
-    expect(extractDedupMap([{ key: 'PROJ-1', labels: ['random'] }]).size).toBe(0);
-  });
-});
-
-describe('buildReviewRows', () => {
-  it('assigns sequential numeric ids to new flaws and A-prefixed ids to already-ticketed ones, in flaw order', () => {
-    const flaws = parseVeracodeReport(fixture('sample-report.xml'));
-    const dedupMap = new Map([['10102', 'PROJ-501']]); // note: 10102 is the "Fixed" flaw, filtered out upstream in practice —
-                                                        // here we test buildReviewRows in isolation with all 3 fixture flaws
-    const rows = buildReviewRows(flaws, dedupMap, ['security-review']);
-    expect(rows.find(r => r.issueId === '10102')).toMatchObject({ id: 'A1', included: false, existingTicketKey: 'PROJ-501' });
-    expect(rows.find(r => r.issueId === '10101')).toMatchObject({ id: '1', included: true, existingTicketKey: null });
-    expect(rows.find(r => r.issueId === '10103')).toMatchObject({ id: '2', included: true, existingTicketKey: null });
-    expect(rows.find(r => r.issueId === '10101')!.labels).toContain('security-review');
-  });
-});
+// chunkIssueIds/buildDedupJql/extractDedupMap/buildReviewRows were Veracode-local wrappers around
+// the shared primitives in reportImport.ts; they've been removed now that veracodeHandler.ts calls
+// those shared primitives directly (KTD2) — see reportImport.test.ts for their tests.

@@ -1,9 +1,6 @@
 import { XMLParser } from 'fast-xml-parser';
 import { markdownToJiraWiki } from './markdownToJiraWiki';
-import {
-  chunkStrings, buildReviewRows as buildReviewRowsShared, extractDedupMap as extractDedupMapShared,
-  sanitizeCellText, sanitizeStandaloneLine,
-} from './reportImport';
+import { sanitizeCellText, sanitizeStandaloneLine } from './reportImport';
 
 export interface VeracodeFlaw {
   issueId: string;
@@ -240,34 +237,10 @@ export function buildLabels(flaw: VeracodeFlaw, templateLabels: string[] = []): 
   return [...new Set([...own, ...templateLabels])];
 }
 
-const DEDUP_CHUNK_SIZE = 40; // keeps generated JQL well under Jira's practical query-length limits
-
-// Delegates the actual chunking to the shared primitive in reportImport.ts (see CLAUDE.md's shared
-// report-import utilities note) — behavior/signature unchanged. Veracode's own JQL-quoting and
-// dedup-key shape (below) intentionally stay on their pre-consolidation, unquoted/flat form for
-// now; adopting reportImport.ts's quoted/nested-shape versions in the handler is a later unit's job.
-export function chunkIssueIds(issueIds: string[], chunkSize = DEDUP_CHUNK_SIZE): string[][] {
-  return chunkStrings(issueIds, chunkSize);
-}
-
-export function buildDedupJql(projectKey: string, issueIds: string[]): string {
-  const labels = issueIds.map(id => `veracode-issue-${id}`);
-  return `project = ${projectKey} AND labels in (${labels.join(', ')})`;
-}
-
-export function extractDedupMap(issues: Array<{ key: string; labels: string[] }>): Map<string, string> {
-  return extractDedupMapShared(
-    issues.map(i => ({ key: i.key, fields: { labels: i.labels } })),
-    label => {
-      const match = label.match(/^veracode-issue-(\d+)$/);
-      return match ? match[1] : null;
-    },
-  );
-}
-
 // Lives here (rather than in sessionState.ts, where the other session-related types live) so that
-// buildReviewRows() below can produce it directly without a type-only circular import between this
-// file and sessionState.ts. sessionState.ts re-exports the type for callers that expect it there.
+// reportImportHandler.ts's shared buildReviewRows() can produce it directly without a type-only
+// circular import between this file and sessionState.ts. sessionState.ts re-exports the type for
+// callers that expect it there.
 export interface VeracodeReviewRow {
   id: string; // '1'..'N' new candidates, 'A1'..'Am' already-ticketed
   issueId: string;
@@ -279,25 +252,4 @@ export interface VeracodeReviewRow {
   descriptionWiki: string;
   existingTicketKey: string | null;
   included: boolean; // whether this row will be (re)created if the batch runs
-}
-
-export function buildReviewRows(
-  flaws: VeracodeFlaw[],
-  dedupMap: Map<string, string>,
-  templateLabels: string[] = [],
-): VeracodeReviewRow[] {
-  return buildReviewRowsShared<VeracodeFlaw, VeracodeReviewRow>(
-    flaws,
-    dedupMap,
-    flaw => flaw.issueId,
-    flaw => ({
-      issueId: flaw.issueId,
-      severity: flaw.severity,
-      severityLabelText: severityLabel(flaw.severity),
-      cweId: flaw.cweId,
-      summary: buildSummary(flaw),
-      labels: buildLabels(flaw, templateLabels),
-      descriptionWiki: buildDescriptionWiki(flaw),
-    }),
-  );
 }

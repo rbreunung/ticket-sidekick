@@ -3,8 +3,6 @@ import { readSheet, parseSheetData, SheetNotFoundError, type Schema } from 'read
 import { markdownToJiraWiki } from './markdownToJiraWiki';
 import {
   MAX_REPORT_BYTES as SHARED_MAX_REPORT_BYTES, BATCH_LIMIT as SHARED_BATCH_LIMIT,
-  chunkStrings, buildDedupJql as buildDedupJqlShared, extractDedupMap as extractDedupMapShared,
-  buildReviewRows as buildReviewRowsShared, type JqlIssueLike,
   sanitizeCellText, sanitizeStandaloneLine,
 } from './reportImport';
 
@@ -311,33 +309,16 @@ export function buildDescriptionWiki(component: WaltzComponent): string {
   return markdownToJiraWiki(lines.join('\n'));
 }
 
+// Re-exported (rather than importers reaching into reportImport.ts directly for these two) so the
+// ticket-creation cap and the review-screen truncation can never drift from the shared source of
+// truth (KTD4) — values unchanged (40 / 50).
 export const DEDUP_CHUNK_SIZE = 40;
-
-// Defined here (alongside the other batch-shaped constants) and imported by waltzHandler.ts, rather
-// than duplicated as a local constant there, so the ticket-creation cap and the review-screen
-// truncation applied in waltzHandler.ts can never drift apart. Traces back to reportImport.ts's
-// shared BATCH_LIMIT (KTD4) — value unchanged (50).
 export const BATCH_LIMIT = SHARED_BATCH_LIMIT;
 
-// The functions below are thin wrappers (behavior/signature unchanged) delegating to the shared
-// primitives in reportImport.ts — Waltz's own chunking/JQL-quoting/dedup-key shape already matches
-// the generalized versions exactly (see CLAUDE.md's shared report-import utilities note / KTD2).
-export function chunkComponentLabels(labels: string[]): string[][] {
-  return chunkStrings(labels, DEDUP_CHUNK_SIZE);
-}
-
-export function buildDedupJql(projectKey: string, labels: string[]): string {
-  return buildDedupJqlShared(projectKey, labels);
-}
-
-export function extractDedupMap(issues: JqlIssueLike[]): Map<string, string> {
-  return extractDedupMapShared(issues, label => (label.startsWith('oss-dep-') ? label : null));
-}
-
 // Lives here (rather than in sessionState.ts, where the other session-related types live) so that
-// buildReviewRows() below can produce it directly without a type-only circular import between this
-// file and sessionState.ts — mirrors the same layout decision made for VeracodeReviewRow.
-// sessionState.ts re-exports the type for callers that expect it there.
+// reportImportHandler.ts's shared buildReviewRows() can produce it directly without a type-only
+// circular import between this file and sessionState.ts — mirrors the same layout decision made for
+// VeracodeReviewRow. sessionState.ts re-exports the type for callers that expect it there.
 export interface WaltzReviewRow {
   id: string; // '1'..'N' new candidates, 'A1'..'Am' already-ticketed
   nameVersion: string;
@@ -347,23 +328,4 @@ export interface WaltzReviewRow {
   descriptionWiki: string;
   existingTicketKey: string | null;
   included: boolean; // whether this row will be (re)created if the batch runs
-}
-
-export function buildReviewRows(
-  components: WaltzComponent[],
-  dedupMap: Map<string, string>,
-  templateLabels: string[] = [],
-): WaltzReviewRow[] {
-  return buildReviewRowsShared<WaltzComponent, WaltzReviewRow>(
-    components,
-    dedupMap,
-    component => sanitizeComponentLabel(component.nameVersion),
-    component => ({
-      nameVersion: component.nameVersion,
-      maxVulnRating: component.maxVulnRating,
-      summary: buildSummary(component),
-      labels: buildLabels(component, templateLabels),
-      descriptionWiki: buildDescriptionWiki(component),
-    }),
-  );
 }

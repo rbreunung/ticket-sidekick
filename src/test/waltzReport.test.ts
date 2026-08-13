@@ -4,7 +4,6 @@ import { join } from 'path';
 import {
   parseWaltzReport, assertSafeWaltzReportSize, filterComponents,
   buildSummary, buildDescriptionWiki, buildLabels, sanitizeComponentLabel,
-  buildReviewRows,
   type WaltzComponent,
 } from '../utils/waltzReport';
 
@@ -307,34 +306,6 @@ describe('buildDescriptionWiki', () => {
   });
 });
 
-// chunkComponentLabels/buildDedupJql/extractDedupMap are now thin delegates to the shared
-// chunkStrings/buildDedupJql/extractDedupMap primitives in reportImport.ts — see
-// reportImport.test.ts for their tests.
-
-describe('buildReviewRows', () => {
-  it('marks components with an existing ticket as already-ticketed (id prefix A) and excluded by default', async () => {
-    const components = await parseWaltzReport(fixtureBuffer('sample-report.xlsx'));
-    const filtered = filterComponents(components, { minVulnRating: 'High', includeRemediationActions: ['', 'Remediate'] });
-    const dedupMap = new Map([[sanitizeComponentLabel('example-lib:1.2.3'), 'PROJ-1']]);
-    const rows = buildReviewRows(filtered, dedupMap);
-
-    const exampleLibRow = rows.find(r => r.nameVersion === 'example-lib:1.2.3')!;
-    expect(exampleLibRow.id).toBe('A1');
-    expect(exampleLibRow.existingTicketKey).toBe('PROJ-1');
-    expect(exampleLibRow.included).toBe(false);
-    expect(exampleLibRow.summary).toContain('example-lib:1.2.3');
-    expect(exampleLibRow.labels).toContain(sanitizeComponentLabel('example-lib:1.2.3'));
-
-    const exampleIoRow = rows.find(r => r.nameVersion === 'example-io:4.5.0')!;
-    expect(exampleIoRow.id).toBe('1'); // new candidates numbered separately from already-ticketed ones
-    expect(exampleIoRow.existingTicketKey).toBeNull();
-    expect(exampleIoRow.included).toBe(true);
-  });
-
-  it('merges template labels into each row', async () => {
-    const components = await parseWaltzReport(fixtureBuffer('sample-report.xlsx'));
-    const filtered = filterComponents(components, { minVulnRating: 'High', includeRemediationActions: ['', 'Remediate'] });
-    const rows = buildReviewRows(filtered, new Map(), ['team-payments']);
-    expect(rows.every(r => r.labels.includes('team-payments'))).toBe(true);
-  });
-});
+// chunkComponentLabels/buildDedupJql/extractDedupMap/buildReviewRows were Waltz-local wrappers
+// around the shared primitives in reportImport.ts; they've been removed now that waltzHandler.ts
+// calls those shared primitives directly — see reportImport.test.ts for their tests.
