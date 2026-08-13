@@ -137,3 +137,25 @@ async function parseWaltzReportInner(buffer: Buffer): Promise<WaltzComponent[]> 
       })),
   }));
 }
+
+export interface WaltzFilterOptions {
+  minVulnRating: string; // 'Low' | 'Medium' | 'High' | 'Critical'
+  includeRemediationActions: string[]; // '' represents a blank cell
+}
+
+const VULN_RATING_ORDER = ['None', 'Low', 'Medium', 'High', 'Critical'];
+
+function vulnRatingRank(rating: string): number {
+  const idx = VULN_RATING_ORDER.findIndex(r => r.toLowerCase() === rating.toLowerCase());
+  return idx === -1 ? 0 : idx;
+}
+
+export function filterComponents(components: WaltzComponent[], options: WaltzFilterOptions): WaltzComponent[] {
+  const floor = vulnRatingRank(options.minVulnRating);
+  const allowedActions = new Set(options.includeRemediationActions.map(a => a.trim()));
+  return components.filter(c => {
+    if (vulnRatingRank(c.maxVulnRating) < floor) return false;
+    const action = (c.remediationAction ?? '').trim();
+    return allowedActions.has(action);
+  });
+}

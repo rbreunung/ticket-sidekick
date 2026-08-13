@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { parseWaltzReport, assertSafeWaltzReportSize } from '../utils/waltzReport';
+import { parseWaltzReport, assertSafeWaltzReportSize, filterComponents } from '../utils/waltzReport';
 
 const fixturePath = (name: string) => join(__dirname, 'fixtures', 'waltz', name);
 const fixtureBuffer = (name: string) => readFileSync(fixturePath(name));
@@ -58,5 +58,38 @@ describe('assertSafeWaltzReportSize', () => {
 
   it('accepts a normal, small file', () => {
     expect(() => assertSafeWaltzReportSize(fixtureBuffer('sample-report.xlsx'))).not.toThrow();
+  });
+});
+
+describe('filterComponents', () => {
+  it('applies both the vuln-rating floor and the remediation-action allow-list (defaults)', async () => {
+    const components = await parseWaltzReport(fixtureBuffer('sample-report.xlsx'));
+    const filtered = filterComponents(components, { minVulnRating: 'High', includeRemediationActions: ['', 'Remediate'] });
+    // example-lib (Critical, blank) and example-io (High, Remediate) and example-http (High, blank) pass;
+    // example-json (Critical, "Risk capture") is excluded by action; example-cache (Medium) is excluded by rating.
+    expect(filtered.map(c => c.nameVersion).sort()).toEqual([
+      'example-http:3.3.3', 'example-io:4.5.0', 'example-lib:1.2.3',
+    ]);
+  });
+
+  it('excludes everything below the configured rating floor even if the action matches', async () => {
+    const components = await parseWaltzReport(fixtureBuffer('sample-report.xlsx'));
+    const filtered = filterComponents(components, { minVulnRating: 'Critical', includeRemediationActions: ['', 'Remediate'] });
+    expect(filtered.map(c => c.nameVersion).sort()).toEqual(['example-lib:1.2.3']);
+  });
+
+  it('treats a null/blank Remediation Action as the empty string for allow-list matching', async () => {
+    const components = await parseWaltzReport(fixtureBuffer('sample-report.xlsx'));
+    const filtered = filterComponents(components, { minVulnRating: 'Low', includeRemediationActions: [''] });
+    expect(filtered.map(c => c.nameVersion).sort()).toEqual(['example-http:3.3.3', 'example-lib:1.2.3']);
+  });
+
+  it('rating comparison is case-insensitive', async () => {
+    const components = await parseWaltzReport(fixtureBuffer('sample-report.xlsx'));
+    const filtered = filterComponents(
+      components.map(c => ({ ...c, maxVulnRating: c.maxVulnRating.toUpperCase() })),
+      { minVulnRating: 'high', includeRemediationActions: ['', 'Remediate'] },
+    );
+    expect(filtered.length).toBeGreaterThan(0);
   });
 });
