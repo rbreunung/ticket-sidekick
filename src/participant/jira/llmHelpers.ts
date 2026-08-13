@@ -22,7 +22,8 @@ export type Operation =
   | 'spellCheck'
   | 'createFromEmail'
   | 'addEmailComment'
-  | 'importVeracode';
+  | 'importVeracode'
+  | 'importWaltzReport';
 
 export interface FieldUpdate {
   fieldName: string;
@@ -59,7 +60,7 @@ export interface ParsedIntent {
 }
 
 export const INTENT_PROMPT = `Parse this Jira command and respond with ONLY a JSON object. No markdown, no explanation.
-Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|"addComment"|"updateField"|"showFields"|"searchJql"|"validateFields"|"createTicket"|"discoverWorkflow"|"runCleanup"|"transition"|"bulkTransition"|"bulkUpdateField"|"loadTicket"|"spellCheck"|"createFromEmail"|"addEmailComment"|"importVeracode","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"assignee":string|null,"components":string|null,"description":string|null,"comment":string|null,"commentQuery":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"fieldName":string|null,"fieldValue":string|null,"arrayOp":"set"|"add"|"remove","scope":"single"|"bulk"|null,"jql":string|null,"filterId":string|null,"filterName":string|null,"useMyTeamJql":boolean,"targetStatus":string|null,"bulkFieldName":string|null,"bulkFieldValue":string|null,"cleanupRuleName":string|null,"fixVersion":string|null,"resolution":string|null}
+Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|"addComment"|"updateField"|"showFields"|"searchJql"|"validateFields"|"createTicket"|"discoverWorkflow"|"runCleanup"|"transition"|"bulkTransition"|"bulkUpdateField"|"loadTicket"|"spellCheck"|"createFromEmail"|"addEmailComment"|"importVeracode"|"importWaltzReport","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"assignee":string|null,"components":string|null,"description":string|null,"comment":string|null,"commentQuery":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"fieldName":string|null,"fieldValue":string|null,"arrayOp":"set"|"add"|"remove","scope":"single"|"bulk"|null,"jql":string|null,"filterId":string|null,"filterName":string|null,"useMyTeamJql":boolean,"targetStatus":string|null,"bulkFieldName":string|null,"bulkFieldValue":string|null,"cleanupRuleName":string|null,"fixVersion":string|null,"resolution":string|null}
 - getTicket: show, display, look up a specific ticket; returns all non-null fields, description, and one-line comment summaries
 - summarizeTicket: summarise, summarize, tl;dr, give me an overview; produces a prose paragraph covering the ticket and its comments together
 - showComments: show, list, display all comments in full; shows the actual comment bodies numbered; use when user wants to read the comment text rather than a summary
@@ -80,6 +81,7 @@ Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|
 - createFromEmail: create a Jira ticket from an email (.eml file); triggered by "create from email", "ticket from email"; only use this when the session is already loaded via command palette
 - addEmailComment: import an email (.eml) from the chat without using the command palette — opens a file picker; if a ticket key is in the prompt (e.g. PROJ-42) adds the email as a comment, otherwise shows preview to create or comment; triggered by "add email", "add email to", "import email", "email to ticket", "add comment from mail", "create ticket from mail", "create from mail", "add email as comment"
 - importVeracode: import a Veracode Detailed Report XML export and create Jira tickets from its flaws; triggered by "import veracode", "import veracode report", "veracode report", "create tickets from veracode", "veracode scan"; only use this when the session is already loaded via command palette, or to trigger the chat's own file picker if no command was used; projectKey is extracted from the prompt the same as for createTicket when the user names a project (e.g. "import veracode report for PROJ"), otherwise left null so the handler falls back to the default-project setting or an input box
+- importWaltzReport: import a Waltz/SCA OSS report .xlsx export and create Jira tickets from its vulnerable components; triggered by "import oss report", "import waltz report", "oss report", "create tickets from oss report", "sca report"; only use this when the session is already loaded via command palette, or to trigger the chat's own file picker if no command was used; projectKey is extracted from the prompt the same as for createTicket when the user names a project (e.g. "import oss report for PROJ"), otherwise left null so the handler falls back to the default-project setting or an input box
 - contentSource: how the comment or description content should be produced
   - "literal": user gave the exact text to post verbatim (e.g. "add comment: LGTM")
   - "generate": self-contained instruction with no reference to prior work — purely creative or standalone (e.g. "write a poem about Star Trek", "add a 12-line poem as comment")
