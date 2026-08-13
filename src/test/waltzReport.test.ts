@@ -4,8 +4,7 @@ import { join } from 'path';
 import {
   parseWaltzReport, assertSafeWaltzReportSize, filterComponents,
   buildSummary, buildDescriptionWiki, buildLabels, sanitizeComponentLabel,
-  chunkComponentLabels, buildDedupJql, extractDedupMap, buildReviewRows,
-  DEDUP_CHUNK_SIZE,
+  buildReviewRows,
   type WaltzComponent,
 } from '../utils/waltzReport';
 
@@ -279,36 +278,9 @@ describe('buildDescriptionWiki', () => {
   });
 });
 
-describe('chunkComponentLabels', () => {
-  it('chunks into groups of DEDUP_CHUNK_SIZE', () => {
-    const labels = Array.from({ length: 85 }, (_, i) => `oss-dep-example-${i}`);
-    const chunks = chunkComponentLabels(labels);
-    expect(chunks).toHaveLength(3);
-    expect(chunks[0]).toHaveLength(DEDUP_CHUNK_SIZE);
-    expect(chunks[2]).toHaveLength(5);
-  });
-});
-
-describe('buildDedupJql', () => {
-  it('quotes each label and ANDs onto project + issuetype', () => {
-    const jql = buildDedupJql('PROJ', ['oss-dep-example-lib-1-2-3', 'oss-dep-example-io-4-5-0']);
-    expect(jql).toBe(
-      'project = PROJ AND labels in ("oss-dep-example-lib-1-2-3", "oss-dep-example-io-4-5-0")',
-    );
-  });
-});
-
-describe('extractDedupMap', () => {
-  it('maps each already-ticketed label to the ticket key from search results', () => {
-    const issues = [
-      { key: 'PROJ-1', fields: { labels: ['oss-dependency', 'oss-dep-example-lib-1-2-3'] } },
-      { key: 'PROJ-2', fields: { labels: ['oss-dependency', 'oss-dep-example-io-4-5-0'] } },
-    ];
-    const map = extractDedupMap(issues);
-    expect(map.get('oss-dep-example-lib-1-2-3')).toBe('PROJ-1');
-    expect(map.get('oss-dep-example-io-4-5-0')).toBe('PROJ-2');
-  });
-});
+// chunkComponentLabels/buildDedupJql/extractDedupMap are now thin delegates to the shared
+// chunkStrings/buildDedupJql/extractDedupMap primitives in reportImport.ts — see
+// reportImport.test.ts for their tests.
 
 describe('buildReviewRows', () => {
   it('marks components with an existing ticket as already-ticketed (id prefix A) and excluded by default', async () => {

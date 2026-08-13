@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { parseVeracodeReport, filterFlaws, assertSafeVeracodeXml } from '../utils/veracodeReport';
 import { deriveShortLabel, buildSummary, buildDescriptionWiki, buildLabels } from '../utils/veracodeReport';
-import { chunkIssueIds, buildDedupJql, extractDedupMap } from '../utils/veracodeReport';
+import { buildDedupJql, extractDedupMap } from '../utils/veracodeReport';
 import { buildReviewRows } from '../utils/veracodeReport';
 
 const fixture = (name: string) =>
@@ -206,23 +206,8 @@ describe('buildLabels', () => {
   });
 });
 
-describe('chunkIssueIds', () => {
-  it('chunks into groups of 40 by default', () => {
-    const ids = Array.from({ length: 85 }, (_, i) => String(i));
-    const chunks = chunkIssueIds(ids);
-    expect(chunks).toHaveLength(3);
-    expect(chunks[0]).toHaveLength(40);
-    expect(chunks[2]).toHaveLength(5);
-  });
-
-  it('returns a single chunk when under the limit', () => {
-    expect(chunkIssueIds(['1', '2', '3'])).toEqual([['1', '2', '3']]);
-  });
-
-  it('returns an empty array for no ids', () => {
-    expect(chunkIssueIds([])).toEqual([]);
-  });
-});
+// chunkIssueIds's own chunking behavior is now a thin delegate to chunkStrings() — see
+// reportImport.test.ts for the shared chunking tests.
 
 describe('buildDedupJql', () => {
   it('builds a JQL clause matching veracode-issue-<id> labels for the project', () => {

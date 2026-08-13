@@ -1,6 +1,11 @@
 import { createHash } from 'crypto';
 import { readSheet, parseSheetData, SheetNotFoundError, type Schema } from 'read-excel-file/node';
 import { markdownToJiraWiki } from './markdownToJiraWiki';
+import {
+  MAX_REPORT_BYTES as SHARED_MAX_REPORT_BYTES, BATCH_LIMIT as SHARED_BATCH_LIMIT,
+  chunkStrings, buildDedupJql as buildDedupJqlShared, extractDedupMap as extractDedupMapShared,
+  buildReviewRows as buildReviewRowsShared, type JqlIssueLike,
+} from './reportImport';
 
 export interface WaltzVulnerability {
   cveId: string;
@@ -20,7 +25,8 @@ export interface WaltzComponent {
 
 // Exported (rather than a local/duplicated constant) so waltzHandler.ts and extension.ts's file-size
 // pre-check share this single source of truth instead of three independently hardcoded copies.
-export const MAX_REPORT_BYTES = 20 * 1024 * 1024; // 20 MB
+// Traces back to reportImport.ts's shared MAX_REPORT_BYTES (KTD4) — value unchanged (20 MB).
+export const MAX_REPORT_BYTES = SHARED_MAX_REPORT_BYTES;
 const REQUIRED_SHEET = 'ComponentRemediations';
 
 export function assertSafeWaltzReportSize(buffer: Buffer): void {
@@ -323,36 +329,23 @@ export const DEDUP_CHUNK_SIZE = 40;
 
 // Defined here (alongside the other batch-shaped constants) and imported by waltzHandler.ts, rather
 // than duplicated as a local constant there, so the ticket-creation cap and the review-screen
-// truncation applied in waltzHandler.ts can never drift apart.
-export const BATCH_LIMIT = 50;
+// truncation applied in waltzHandler.ts can never drift apart. Traces back to reportImport.ts's
+// shared BATCH_LIMIT (KTD4) — value unchanged (50).
+export const BATCH_LIMIT = SHARED_BATCH_LIMIT;
 
+// The functions below are thin wrappers (behavior/signature unchanged) delegating to the shared
+// primitives in reportImport.ts — Waltz's own chunking/JQL-quoting/dedup-key shape already matches
+// the generalized versions exactly (see CLAUDE.md's shared report-import utilities note / KTD2).
 export function chunkComponentLabels(labels: string[]): string[][] {
-  const chunks: string[][] = [];
-  for (let i = 0; i < labels.length; i += DEDUP_CHUNK_SIZE) {
-    chunks.push(labels.slice(i, i + DEDUP_CHUNK_SIZE));
-  }
-  return chunks;
+  return chunkStrings(labels, DEDUP_CHUNK_SIZE);
 }
 
 export function buildDedupJql(projectKey: string, labels: string[]): string {
-  const quoted = labels.map(l => `"${l}"`).join(', ');
-  return `project = ${projectKey} AND labels in (${quoted})`;
-}
-
-interface JqlIssueLike {
-  key: string;
-  fields: { labels?: string[] };
+  return buildDedupJqlShared(projectKey, labels);
 }
 
 export function extractDedupMap(issues: JqlIssueLike[]): Map<string, string> {
-  const map = new Map<string, string>();
-  for (const issue of issues) {
-    for (const label of issue.fields.labels ?? []) {
-      if (!label.startsWith('oss-dep-')) continue;
-      if (!map.has(label)) map.set(label, issue.key); // first match wins if somehow duplicated
-    }
-  }
-  return map;
+  return extractDedupMapShared(issues, label => (label.startsWith('oss-dep-') ? label : null));
 }
 
 // Lives here (rather than in sessionState.ts, where the other session-related types live) so that
@@ -375,22 +368,16 @@ export function buildReviewRows(
   dedupMap: Map<string, string>,
   templateLabels: string[] = [],
 ): WaltzReviewRow[] {
-  const rows: WaltzReviewRow[] = [];
-  let newIndex = 0;
-  let ticketedIndex = 0;
-  for (const component of components) {
-    const label = sanitizeComponentLabel(component.nameVersion);
-    const existingTicketKey = dedupMap.get(label) ?? null;
-    rows.push({
-      id: existingTicketKey ? `A${++ticketedIndex}` : `${++newIndex}`,
+  return buildReviewRowsShared<WaltzComponent, WaltzReviewRow>(
+    components,
+    dedupMap,
+    component => sanitizeComponentLabel(component.nameVersion),
+    component => ({
       nameVersion: component.nameVersion,
       maxVulnRating: component.maxVulnRating,
       summary: buildSummary(component),
       labels: buildLabels(component, templateLabels),
       descriptionWiki: buildDescriptionWiki(component),
-      existingTicketKey,
-      included: existingTicketKey === null,
-    });
-  }
-  return rows;
+    }),
+  );
 }

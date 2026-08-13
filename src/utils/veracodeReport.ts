@@ -1,4 +1,7 @@
 import { XMLParser } from 'fast-xml-parser';
+import {
+  chunkStrings, buildReviewRows as buildReviewRowsShared, extractDedupMap as extractDedupMapShared,
+} from './reportImport';
 
 export interface VeracodeFlaw {
   issueId: string;
@@ -192,12 +195,12 @@ export function buildLabels(flaw: VeracodeFlaw, templateLabels: string[] = []): 
 
 const DEDUP_CHUNK_SIZE = 40; // keeps generated JQL well under Jira's practical query-length limits
 
+// Delegates the actual chunking to the shared primitive in reportImport.ts (see CLAUDE.md's shared
+// report-import utilities note) — behavior/signature unchanged. Veracode's own JQL-quoting and
+// dedup-key shape (below) intentionally stay on their pre-consolidation, unquoted/flat form for
+// now; adopting reportImport.ts's quoted/nested-shape versions in the handler is a later unit's job.
 export function chunkIssueIds(issueIds: string[], chunkSize = DEDUP_CHUNK_SIZE): string[][] {
-  const chunks: string[][] = [];
-  for (let i = 0; i < issueIds.length; i += chunkSize) {
-    chunks.push(issueIds.slice(i, i + chunkSize));
-  }
-  return chunks;
+  return chunkStrings(issueIds, chunkSize);
 }
 
 export function buildDedupJql(projectKey: string, issueIds: string[]): string {
@@ -206,14 +209,13 @@ export function buildDedupJql(projectKey: string, issueIds: string[]): string {
 }
 
 export function extractDedupMap(issues: Array<{ key: string; labels: string[] }>): Map<string, string> {
-  const map = new Map<string, string>();
-  for (const issue of issues) {
-    for (const label of issue.labels) {
+  return extractDedupMapShared(
+    issues.map(i => ({ key: i.key, fields: { labels: i.labels } })),
+    label => {
       const match = label.match(/^veracode-issue-(\d+)$/);
-      if (match) map.set(match[1], issue.key);
-    }
-  }
-  return map;
+      return match ? match[1] : null;
+    },
+  );
 }
 
 // Lives here (rather than in sessionState.ts, where the other session-related types live) so that
@@ -237,13 +239,11 @@ export function buildReviewRows(
   dedupMap: Map<string, string>,
   templateLabels: string[] = [],
 ): VeracodeReviewRow[] {
-  const rows: VeracodeReviewRow[] = [];
-  let newIndex = 0;
-  let ticketedIndex = 0;
-  for (const flaw of flaws) {
-    const existingTicketKey = dedupMap.get(flaw.issueId) ?? null;
-    rows.push({
-      id: existingTicketKey ? `A${++ticketedIndex}` : `${++newIndex}`,
+  return buildReviewRowsShared<VeracodeFlaw, VeracodeReviewRow>(
+    flaws,
+    dedupMap,
+    flaw => flaw.issueId,
+    flaw => ({
       issueId: flaw.issueId,
       severity: flaw.severity,
       severityLabelText: severityLabel(flaw.severity),
@@ -251,9 +251,6 @@ export function buildReviewRows(
       summary: buildSummary(flaw),
       labels: buildLabels(flaw, templateLabels),
       descriptionWiki: buildDescriptionWiki(flaw),
-      existingTicketKey,
-      included: existingTicketKey === null,
-    });
-  }
-  return rows;
+    }),
+  );
 }
