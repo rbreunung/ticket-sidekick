@@ -40,6 +40,13 @@ describe('parseWaltzReport', () => {
     ]);
   });
 
+  it('collapses duplicate ComponentRemediations rows for the same component into a single result', async () => {
+    const components = await parseWaltzReport(fixtureBuffer('duplicate-component-report.xlsx'));
+    const matches = components.filter(c => c.nameVersion === 'example-dup:1.0.0');
+    expect(matches).toHaveLength(1);
+    expect(matches[0].instancePaths).toEqual(['/app/services/checkout/package-lock.json']);
+  });
+
   it('degrades gracefully when a component has no rows in VersionInstances/Vulnerabilities', async () => {
     const components = await parseWaltzReport(fixtureBuffer('sample-report.xlsx'));
     const exampleHttp = components.find(c => c.nameVersion === 'example-http:3.3.3')!;
@@ -227,6 +234,48 @@ describe('buildDescriptionWiki', () => {
     expect(wiki).toContain('+5 more not shown');
     expect(wiki).toContain('/app/services/svc-0/package-lock.json');
     expect(wiki).not.toContain('/app/services/svc-29/package-lock.json');
+  });
+
+  it('neutralizes markdown-structural characters in untrusted cell content so a crafted CVE summary cannot inject a heading, table row, link, or bold/italic text', () => {
+    const malicious: WaltzComponent = {
+      nameVersion: 'example-evil:1.0.0',
+      maxVulnRating: 'High',
+      remediationAction: null,
+      instancePaths: [],
+      vulnerabilities: [{
+        cveId: 'CVE-2099-9999',
+        cveSummary: 'Injected\n# Fake Heading\n| a | b |\n[click me](http://evil.example) *bold*',
+        overallSeverity: 'High',
+        cvssV3Score: 9,
+        fixedVersion: null,
+      }],
+    };
+    const wiki = buildDescriptionWiki(malicious);
+    // The embedded newlines must not create new lines the converter re-parses as structure.
+    expect(wiki).not.toContain('h1. Fake Heading');
+    expect(wiki).not.toContain('||a||b||');
+    // Brackets are stripped, so the link syntax never forms.
+    expect(wiki).not.toContain('[click me|http://evil.example]');
+    // Asterisks are stripped, so no bold/italic markup forms either.
+    expect(wiki).not.toContain('*bold*');
+  });
+
+  it('replaces a literal pipe in a table-cell value so it cannot split the Known vulnerabilities table row', () => {
+    const withPipe: WaltzComponent = {
+      nameVersion: 'example-pipe:1.0.0',
+      maxVulnRating: 'High',
+      remediationAction: null,
+      instancePaths: [],
+      vulnerabilities: [{
+        cveId: 'CVE-2099-0001',
+        cveSummary: null,
+        overallSeverity: 'High | Critical',
+        cvssV3Score: 7,
+        fixedVersion: null,
+      }],
+    };
+    const wiki = buildDescriptionWiki(withPipe);
+    expect(wiki).toContain('|CVE-2099-0001|High / Critical|7|n/a|');
   });
 });
 

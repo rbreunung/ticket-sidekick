@@ -441,7 +441,7 @@ Users export an "OSS Report" `.xlsx` from Waltz (or a compatible SCA tool) and i
 ### Import flow
 
 1. Command Palette → **Ticket Sidekick: Create Jira tickets from OSS report (.xlsx)** (or trigger from chat, which opens its own file picker)
-2. `parseWaltzReport(buffer)` (`read-excel-file`-based) joins the required `ComponentRemediations` sheet with the optional `VersionInstances`/`Vulnerabilities` sheets on `Component name and version`; guarded by a 20 MB size cap and a `PARSE_TIMEOUT_MS` (15s) hard ceiling as defense-in-depth against a decompression-bomb-style single-entry `.xlsx`
+2. `parseWaltzReport(buffer)` (`read-excel-file`-based) joins the required `ComponentRemediations` sheet with the optional `VersionInstances`/`Vulnerabilities` sheets on `Component name and version`; guarded by a 20 MB size cap and a `PARSE_TIMEOUT_MS` (15s) hard ceiling. The timeout is a `Promise.race`, not a true cancellation — it bounds how long the user waits before seeing an error on a pathological (e.g. decompression-bomb-style single-entry) `.xlsx`, but the underlying parse keeps consuming CPU/memory in the background after it fires; it does not itself prevent resource exhaustion
 3. `filterComponents()` applies `ticketSidekick.waltz.minVulnRating` and `ticketSidekick.waltz.includeRemediationActions`
 4. `WaltzTemplateSelectionSession` stored in `workspaceState('jira.session.waltzTemplateSelection')`; chat opened with `@jira import oss report`
 5. User picks a template or issue type (`pickEmailOption()`, reused from the email flow) → `FieldResolver.resolve()` resolves the template's fields

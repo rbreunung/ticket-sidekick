@@ -47,4 +47,21 @@ await writeExcelFile([
   { data: vulnerabilitiesData, sheet: 'Vulnerabilities' },
 ]).toFile(path.join(outDir, 'missing-required-sheet-report.xlsx'));
 
-console.log('Wrote sample-report.xlsx and missing-required-sheet-report.xlsx to', outDir);
+// Duplicate-component fixture: ComponentRemediations lists the same component twice (copy-paste /
+// re-scan artifact), to test that parseWaltzReport() collapses duplicates instead of producing two
+// review rows — and thus two Jira tickets — for one component.
+const duplicateComponentRemediationsData = [
+  ['Component name and version', 'Max Vuln Rating', 'Remediation Action'],
+  ['example-dup:1.0.0', 'High', null],
+  ['example-dup:1.0.0', 'High', null],
+];
+const duplicateVersionInstancesData = [
+  ['Component name and version', 'Component Instance Path'],
+  ['example-dup:1.0.0', '/app/services/checkout/package-lock.json'],
+];
+await writeExcelFile([
+  { data: duplicateComponentRemediationsData, sheet: 'ComponentRemediations' },
+  { data: duplicateVersionInstancesData, sheet: 'VersionInstances' },
+]).toFile(path.join(outDir, 'duplicate-component-report.xlsx'));
+
+console.log('Wrote sample-report.xlsx, missing-required-sheet-report.xlsx, and duplicate-component-report.xlsx to', outDir);

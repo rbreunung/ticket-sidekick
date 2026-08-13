@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { readSheet, parseSheetData, SheetNotFoundError } from 'read-excel-file/node';
+import { readSheet, parseSheetData, SheetNotFoundError, type Schema } from 'read-excel-file/node';
 import { markdownToJiraWiki } from './markdownToJiraWiki';
 
 export interface WaltzVulnerability {
@@ -29,18 +29,38 @@ export function assertSafeWaltzReportSize(buffer: Buffer): void {
   }
 }
 
-const componentRemediationsSchema = {
+interface ComponentRemediationsRow {
+  nameVersion: string;
+  maxVulnRating: string;
+  remediationAction: string | null;
+}
+
+interface VersionInstanceRow {
+  nameVersion: string;
+  instancePath: string | null;
+}
+
+interface VulnerabilityRow {
+  nameVersion: string;
+  cveId: string;
+  cveSummary: string | null;
+  overallSeverity: string | null;
+  cvssV3Score: number | null;
+  fixedVersion: string | null;
+}
+
+const componentRemediationsSchema: Schema<ComponentRemediationsRow> = {
   nameVersion: { column: 'Component name and version', type: String, required: true },
   maxVulnRating: { column: 'Max Vuln Rating', type: String, required: true },
   remediationAction: { column: 'Remediation Action', type: String, required: false },
 };
 
-const versionInstancesSchema = {
+const versionInstancesSchema: Schema<VersionInstanceRow> = {
   nameVersion: { column: 'Component name and version', type: String, required: true },
   instancePath: { column: 'Component Instance Path', type: String, required: false },
 };
 
-const vulnerabilitiesSchema = {
+const vulnerabilitiesSchema: Schema<VulnerabilityRow> = {
   nameVersion: { column: 'Component name and version', type: String, required: true },
   cveId: { column: 'CVE Id', type: String, required: true },
   cveSummary: { column: 'CVE Summary', type: String, required: false },
@@ -51,14 +71,16 @@ const vulnerabilitiesSchema = {
 
 // Reads one sheet by name and parses it against a schema — read-excel-file's readSheet() can't
 // combine `sheet` + `schema` in a single call (verified against the installed .d.ts in Task 1),
-// so this is a deliberate two-step helper, not an oversight.
+// so this is a deliberate two-step helper, not an oversight. `schema` is typed as the library's own
+// `Schema<T>` (not a loosely-typed Record) so a schema/interface mismatch is a compile error instead
+// of a silently-accepted `as never` cast.
 async function readNamedSheet<T extends object>(
   buffer: Buffer,
   sheetName: string,
-  schema: Record<string, unknown>,
+  schema: Schema<T>,
 ): Promise<T[]> {
   const sheetData = await readSheet(buffer, sheetName);
-  const { objects, errors } = parseSheetData<T>(sheetData, schema as never);
+  const { objects, errors } = parseSheetData<T>(sheetData, schema);
   if (errors) {
     throw new Error(
       `OSS report sheet "${sheetName}" has invalid rows: ` +
@@ -72,7 +94,7 @@ async function readNamedSheet<T extends object>(
 async function readOptionalNamedSheet<T extends object>(
   buffer: Buffer,
   sheetName: string,
-  schema: Record<string, unknown>,
+  schema: Schema<T>,
 ): Promise<T[]> {
   try {
     return await readNamedSheet<T>(buffer, sheetName, schema);
@@ -107,7 +129,7 @@ export async function parseWaltzReport(buffer: Buffer): Promise<WaltzComponent[]
 async function parseWaltzReportInner(buffer: Buffer): Promise<WaltzComponent[]> {
   assertSafeWaltzReportSize(buffer);
 
-  let remediations: Array<{ nameVersion: string; maxVulnRating: string; remediationAction: string | null }>;
+  let remediations: ComponentRemediationsRow[];
   try {
     remediations = await readNamedSheet(buffer, REQUIRED_SHEET, componentRemediationsSchema);
   } catch (err) {
@@ -120,15 +142,21 @@ async function parseWaltzReportInner(buffer: Buffer): Promise<WaltzComponent[]> 
     throw new Error(`Could not read OSS report: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  const instances = await readOptionalNamedSheet<{ nameVersion: string; instancePath: string | null }>(
-    buffer, 'VersionInstances', versionInstancesSchema,
-  );
-  const vulnerabilities = await readOptionalNamedSheet<{
-    nameVersion: string; cveId: string; cveSummary: string | null;
-    overallSeverity: string | null; cvssV3Score: number | null; fixedVersion: string | null;
-  }>(buffer, 'Vulnerabilities', vulnerabilitiesSchema);
+  const instances = await readOptionalNamedSheet<VersionInstanceRow>(buffer, 'VersionInstances', versionInstancesSchema);
+  const vulnerabilities = await readOptionalNamedSheet<VulnerabilityRow>(buffer, 'Vulnerabilities', vulnerabilitiesSchema);
 
-  return remediations.map(r => ({
+  // A malformed or hand-edited report can list the same component twice in ComponentRemediations
+  // (copy-paste, a re-scanned component re-appended instead of updated in place). Without
+  // deduplication here, each duplicate row would produce its own WaltzReviewRow sharing the same
+  // dedup label, both defaulting to included — creating two Jira tickets for one component in a
+  // single batch. Keep the first occurrence; VersionInstances/Vulnerabilities are still joined by
+  // nameVersion below, so no per-row detail is lost by collapsing the duplicate remediation rows.
+  const uniqueRemediations = new Map<string, ComponentRemediationsRow>();
+  for (const r of remediations) {
+    if (!uniqueRemediations.has(r.nameVersion)) uniqueRemediations.set(r.nameVersion, r);
+  }
+
+  return [...uniqueRemediations.values()].map(r => ({
     nameVersion: r.nameVersion,
     maxVulnRating: r.maxVulnRating,
     remediationAction: r.remediationAction,
@@ -217,6 +245,25 @@ function sortVulnerabilities(vulns: WaltzVulnerability[]): WaltzVulnerability[] 
   });
 }
 
+// Every value threaded through this function originates in spreadsheet cells the user supplied —
+// untrusted input. markdownToJiraWiki() is a simple line-based/regex converter with no
+// escape-character support at all (a backslash has no special meaning to it), so neutralizing
+// means removing or replacing the characters it treats as structural, not backslash-prefixing them:
+//   - embedded newlines are flattened to a space FIRST — the converter re-parses every joined line
+//     independently, so an embedded "\n# Fake Heading" or a full "\n| injected | row |" line would
+//     otherwise inject a brand-new heading/table/list/quote/code-fence the author never wrote
+//   - a literal '|' is replaced — inside one of our own table rows it would silently split into
+//     extra cells and misalign the table (the line-based parser just does `line.split('|')`)
+//   - '*', '_', '`', '[', ']' are stripped — inline() applies bold/italic/code-span/link formatting
+//     anywhere in a line (not just at line-start), so a crafted CVE summary can't render a fake
+//     clickable link, or bold/italic text the author never wrote
+function sanitizeCellText(value: string): string {
+  return value
+    .replace(/\r\n|\r|\n/g, ' ')
+    .replace(/\|/g, '/')
+    .replace(/[*_`[\]]/g, '');
+}
+
 // Authored as Markdown (headings, bullets, a real pipe table) and converted once at the end via
 // markdownToJiraWiki() — avoids hand-writing Jira's ||table|| syntax; use **bold** (not Jira's
 // single-asterisk bold) in the Markdown source since the converter's inline() pass would otherwise
@@ -226,7 +273,7 @@ export function buildDescriptionWiki(component: WaltzComponent): string {
   const sorted = sortVulnerabilities(component.vulnerabilities);
 
   lines.push('### Max Vuln Rating');
-  lines.push(component.maxVulnRating);
+  lines.push(sanitizeCellText(component.maxVulnRating));
   lines.push('');
 
   // Surfaces *why* this ticket exists at a glance, ahead of the full artifact/CVE lists below.
@@ -235,7 +282,7 @@ export function buildDescriptionWiki(component: WaltzComponent): string {
     lines.push('No CVE-level detail was reported for this component.');
   } else {
     const top = sorted[0];
-    lines.push(`**${top.cveId}** — ${top.cveSummary ?? 'No summary reported.'}`);
+    lines.push(`**${sanitizeCellText(top.cveId)}** — ${sanitizeCellText(top.cveSummary ?? 'No summary reported.')}`);
   }
   lines.push('');
 
@@ -244,7 +291,7 @@ export function buildDescriptionWiki(component: WaltzComponent): string {
   if (artifactTotal === 0) {
     lines.push('No affected artifact paths were reported for this component.');
   } else {
-    for (const p of component.instancePaths.slice(0, MAX_ARTIFACTS_SHOWN)) lines.push(`- ${p}`);
+    for (const p of component.instancePaths.slice(0, MAX_ARTIFACTS_SHOWN)) lines.push(`- ${sanitizeCellText(p)}`);
     if (artifactTotal > MAX_ARTIFACTS_SHOWN) lines.push(`+${artifactTotal - MAX_ARTIFACTS_SHOWN} more not shown`);
   }
   lines.push('');
@@ -258,7 +305,7 @@ export function buildDescriptionWiki(component: WaltzComponent): string {
     lines.push('| --- | --- | --- | --- |');
     for (const v of sorted.slice(0, MAX_CVES_SHOWN)) {
       const score = v.cvssV3Score != null ? String(v.cvssV3Score) : 'n/a';
-      lines.push(`| ${v.cveId} | ${v.overallSeverity ?? 'Unknown'} | ${score} | ${v.fixedVersion ?? 'n/a'} |`);
+      lines.push(`| ${sanitizeCellText(v.cveId)} | ${sanitizeCellText(v.overallSeverity ?? 'Unknown')} | ${score} | ${sanitizeCellText(v.fixedVersion ?? 'n/a')} |`);
     }
     if (total > MAX_CVES_SHOWN) {
       lines.push('');
@@ -267,7 +314,7 @@ export function buildDescriptionWiki(component: WaltzComponent): string {
   }
   lines.push('');
   lines.push('### Component');
-  lines.push(component.nameVersion);
+  lines.push(sanitizeCellText(component.nameVersion));
 
   return markdownToJiraWiki(lines.join('\n'));
 }

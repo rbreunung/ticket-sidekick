@@ -170,10 +170,21 @@ async function findAlreadyTicketed(
   const map = new Map<string, string>();
   for (const chunk of chunkComponentLabels(labels)) {
     if (chunk.length === 0) continue;
-    const jql = buildDedupJql(projectKey, chunk);
-    const result = await ticketService.searchTicketsRaw(jql, 100);
-    const found = extractDedupMap(result.issues.map(i => ({ key: i.key, fields: { labels: i.fields.labels } })));
-    for (const [label, key] of found) map.set(label, key);
+    try {
+      const jql = buildDedupJql(projectKey, chunk);
+      const result = await ticketService.searchTicketsRaw(jql, 100);
+      const found = extractDedupMap(result.issues.map(i => ({ key: i.key, fields: { labels: i.fields.labels } })));
+      for (const [label, key] of found) map.set(label, key);
+    } catch (err) {
+      // One chunk failing (auth hiccup, transient network error) must not discard dedup matches
+      // already found by earlier successful chunks — a caller-level catch-and-reset here would
+      // silently re-treat those already-ticketed components as new, creating duplicate tickets.
+      // Partial dedup coverage beats none.
+      const message = err instanceof Error ? err.message : String(err);
+      logDiag('jira.waltz', 'warn', 'Dedup search chunk failed — continuing with partial results', {
+        projectKey, chunkSize: chunk.length, error: message,
+      });
+    }
   }
   return map;
 }
@@ -214,6 +225,14 @@ export async function handleWaltzTemplateSelection(
         if (fullTemplate) {
           const resolver = new FieldResolver(jiraClient, session.projectKey);
           additionalFields = await resolver.resolve(fullTemplate.defaultFields, fullTemplate.resolveFields);
+        } else {
+          // The template was renamed or removed from .jira-templates.json between the list being
+          // shown and this reply — additionalFields would otherwise silently stay {} with no signal,
+          // unlike the thrown-error path right below, which does warn.
+          logDiag('jira.waltz', 'warn', `Template no longer found — proceeding without it — ${pick.name}`, { templateName: pick.name });
+          stream.markdown(
+            `_Warning: template "${pick.name}" is no longer available — proceeding without its default fields._\n\n`,
+          );
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -327,7 +346,14 @@ export async function executeWaltzBatch(
   stream: vscode.ChatResponseStream,
   baseUrl?: string,
 ): Promise<void> {
-  const toCreate = session.rows.filter(r => r.included).slice(0, BATCH_LIMIT);
+  const includedRows = session.rows.filter(r => r.included);
+  const toCreate = includedRows.slice(0, BATCH_LIMIT);
+  // "New" rows are already pre-capped at BATCH_LIMIT before the session is built (see
+  // handleWaltzTemplateSelection), but a user can still toggle extra already-ticketed rows back to
+  // "re-create", pushing the included count past the cap at execution time — droppedOverCap reflects
+  // that real slicing outcome directly, rather than re-deriving it from a signal (rows.length or
+  // totalNewMatched) that doesn't actually track whether *this* slice dropped anything.
+  const droppedOverCap = includedRows.length - toCreate.length;
   const excludedByUser = session.rows.filter(r => !r.included && r.existingTicketKey === null).length;
   const alreadyTicketedSkipped = session.rows.filter(r => !r.included && r.existingTicketKey !== null).length;
 
@@ -360,8 +386,9 @@ export async function executeWaltzBatch(
   let summary =
     `${total} component(s) reviewed — **${created}** created, ${failed} failed, ` +
     `${excludedByUser} excluded by you, ${alreadyTicketedSkipped} already ticketed (skipped).`;
-  if (session.rows.length > BATCH_LIMIT) {
-    summary += `\n\n_Batch capped at ${BATCH_LIMIT} tickets per run — re-run the import to process the remainder._`;
+  if (droppedOverCap > 0) {
+    summary += `\n\n_${droppedOverCap} included component(s) were not created — capped at ${BATCH_LIMIT} tickets per run. ` +
+      `Re-run the import to process the remainder (already-created tickets are automatically skipped)._`;
   }
   logDiag('jira.waltz', failed > 0 ? 'warn' : 'info', `Waltz OSS import complete — ${created} created, ${failed} failed`, {
     total, created, failed, excludedByUser, alreadyTicketedSkipped,
