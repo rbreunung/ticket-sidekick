@@ -4,7 +4,8 @@ vi.mock('vscode', () => ({
   window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
 }));
 
-import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, buildVeracodeReviewTable, parseVeracodeReviewInput, applyVeracodeToggle, type VeracodeReviewRow } from '../participant/sessionState';
+import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, buildVeracodeReviewTable, parseVeracodeReviewInput, applyVeracodeToggle, type VeracodeReviewRow, buildWaltzReviewTable, parseWaltzReviewInput, applyWaltzToggle } from '../participant/sessionState';
+import type { WaltzReviewRow } from '../utils/waltzReport';
 import { isPointerPrompt } from '../participant/jira/llmHelpers';
 import type { TransitionBatchTicket } from '../participant/sessionState';
 import type { JiraComment } from '../jira/IJiraClient';
@@ -932,5 +933,95 @@ describe('applyVeracodeToggle', () => {
     const toggled = applyVeracodeToggle(sampleRows, ['1']);
     expect(toggled).not.toBe(sampleRows);
     expect(sampleRows.find(r => r.id === '1')!.included).toBe(true); // original array/objects untouched
+  });
+});
+
+const sampleWaltzRows: WaltzReviewRow[] = [
+  {
+    id: 'A1',
+    nameVersion: 'example-lib:1.2.3',
+    maxVulnRating: 'Critical',
+    summary: '[OSS] example-lib:1.2.3 — Critical',
+    labels: ['oss-dependency', 'oss-dep-example-lib-1-2-3'],
+    descriptionWiki: 'h3. Max Vuln Rating\nCritical',
+    existingTicketKey: 'PROJ-1',
+    included: false,
+  },
+  {
+    id: '1',
+    nameVersion: 'example-io:4.5.0',
+    maxVulnRating: 'High',
+    summary: '[OSS] example-io:4.5.0 — High',
+    labels: ['oss-dependency', 'oss-dep-example-io-4-5-0'],
+    descriptionWiki: 'h3. Max Vuln Rating\nHigh',
+    existingTicketKey: null,
+    included: true,
+  },
+];
+
+describe('buildWaltzReviewTable', () => {
+  it('splits already-ticketed rows from new rows into separate tables', () => {
+    const table = buildWaltzReviewTable(sampleWaltzRows);
+    expect(table).toContain('### Already ticketed');
+    expect(table).toContain('PROJ-1');
+    expect(table).toContain('### New — will create');
+    expect(table).toContain('example-io:4.5.0');
+    expect(table).toContain('**1** ticket(s) will be created.');
+  });
+
+  it('links the existing ticket key when a baseUrl is provided', () => {
+    const table = buildWaltzReviewTable(sampleWaltzRows, 'https://jira.example.com');
+    expect(table).toContain('[PROJ-1](https://jira.example.com/browse/PROJ-1)');
+  });
+
+  it('shows an explanatory line instead of an empty table when every match already has a ticket', () => {
+    const allTicketed = sampleWaltzRows.filter(r => r.existingTicketKey !== null);
+    const table = buildWaltzReviewTable(allTicketed);
+    expect(table).toContain('### New — will create');
+    expect(table).toContain('_All matching components already have a ticket._');
+    expect(table).not.toContain('| # | Component | Rating | Include? |');
+  });
+
+  it('notes when more new components matched than the BATCH_LIMIT-capped rows shown, and how to get the rest', () => {
+    const table = buildWaltzReviewTable(sampleWaltzRows, undefined, 75); // 75 matched, only 1 "new" row present in sampleWaltzRows
+    expect(table).toContain('74 more matched component(s) not shown');
+    expect(table).toContain('re-run the import after this batch completes');
+  });
+
+  it('omits the truncation note when totalNewMatched is not given or matches what is shown', () => {
+    expect(buildWaltzReviewTable(sampleWaltzRows)).not.toContain('more matched component(s) not shown');
+    expect(buildWaltzReviewTable(sampleWaltzRows, undefined, 1)).not.toContain('more matched component(s) not shown');
+  });
+
+  it('warns on the review screen itself when included rows exceed BATCH_LIMIT, not just in the completion summary', () => {
+    const manyIncluded: WaltzReviewRow[] = Array.from({ length: 51 }, (_, i) => ({
+      id: `${i + 1}`,
+      nameVersion: `example-pkg-${i}:1.0.0`,
+      maxVulnRating: 'High',
+      summary: `[OSS] example-pkg-${i}:1.0.0 — High`,
+      labels: ['oss-dependency'],
+      descriptionWiki: '',
+      existingTicketKey: null,
+      included: true,
+    }));
+    const table = buildWaltzReviewTable(manyIncluded);
+    expect(table).toContain('Only the first 50');
+  });
+});
+
+describe('parseWaltzReviewInput', () => {
+  it('recognizes ok/cancel and toggle-id lists', () => {
+    expect(parseWaltzReviewInput('ok', ['A1', '1'])).toEqual({ action: 'ok' });
+    expect(parseWaltzReviewInput('c', ['A1', '1'])).toEqual({ action: 'cancel' });
+    expect(parseWaltzReviewInput('A1 1', ['A1', '1'])).toEqual({ action: 'toggle', ids: ['A1', '1'] });
+    expect(parseWaltzReviewInput('nonsense', ['A1', '1'])).toEqual({ action: 'invalid' });
+  });
+});
+
+describe('applyWaltzToggle', () => {
+  it('flips included for the matching row ids only', () => {
+    const toggled = applyWaltzToggle(sampleWaltzRows, ['1']);
+    expect(toggled.find(r => r.id === '1')!.included).toBe(false);
+    expect(toggled.find(r => r.id === 'A1')!.included).toBe(false); // unchanged
   });
 });
