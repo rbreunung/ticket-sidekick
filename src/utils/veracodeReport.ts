@@ -1,6 +1,8 @@
 import { XMLParser } from 'fast-xml-parser';
 import { markdownToJiraWiki } from './markdownToJiraWiki';
-import { sanitizeCellText, sanitizeStandaloneLine } from './reportImport';
+import {
+  MAX_REPORT_BYTES as SHARED_MAX_REPORT_BYTES, sanitizeCellText, sanitizeStandaloneLine,
+} from './reportImport';
 
 export interface VeracodeFlaw {
   issueId: string;
@@ -25,7 +27,10 @@ export function severityLabel(severity: number): string {
   return SEVERITY_LABELS[severity] ?? `Severity ${severity}`;
 }
 
-const MAX_REPORT_BYTES = 20 * 1024 * 1024; // 20 MB
+// Exported (rather than a local/duplicated constant) so extension.ts's file-size pre-check and any
+// other caller share this single source of truth instead of independently hardcoded copies.
+// Traces back to reportImport.ts's shared MAX_REPORT_BYTES (KTD4) — value unchanged (20 MB).
+export const MAX_REPORT_BYTES = SHARED_MAX_REPORT_BYTES;
 
 // Defense-in-depth: fast-xml-parser does not resolve external entities, but we
 // reject DOCTYPE/ENTITY declarations outright so a malicious file is never even parsed.
