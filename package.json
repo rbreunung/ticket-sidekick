@@ -2,7 +2,7 @@
   "name": "ticket-sidekick",
   "displayName": "Ticket Sidekick",
   "description": "Manage Jira tickets with GitHub Copilot Chat",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "license": "MIT",
   "publisher": "RobertBreunung",
   "engines": {
@@ -261,14 +261,24 @@
         "properties": {
           "ticketSidekick.waltz.minVulnRating": {
             "type": "string",
-            "enum": ["Low", "Medium", "High", "Critical"],
+            "enum": [
+              "Low",
+              "Medium",
+              "High",
+              "Critical"
+            ],
             "default": "High",
             "description": "Minimum 'Max Vuln Rating' to include when importing an OSS report. Components rated below this are filtered out by default (still visible in the raw file)."
           },
           "ticketSidekick.waltz.includeRemediationActions": {
             "type": "array",
-            "items": { "type": "string" },
-            "default": ["", "Remediate"],
+            "items": {
+              "type": "string"
+            },
+            "default": [
+              "",
+              "Remediate"
+            ],
             "description": "Remediation Action values to include when importing an OSS report (empty string means the column was blank). Components with any other action (e.g. 'Risk capture') are excluded by default."
           }
         }
