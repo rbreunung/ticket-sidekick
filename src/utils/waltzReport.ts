@@ -262,3 +262,79 @@ export function buildDescriptionWiki(component: WaltzComponent): string {
 
   return markdownToJiraWiki(lines.join('\n'));
 }
+
+export const DEDUP_CHUNK_SIZE = 40;
+
+// Defined here (alongside the other batch-shaped constants) and imported by waltzHandler.ts, rather
+// than duplicated as a local constant there, so the ticket-creation cap and the review-screen
+// truncation applied in waltzHandler.ts can never drift apart.
+export const BATCH_LIMIT = 50;
+
+export function chunkComponentLabels(labels: string[]): string[][] {
+  const chunks: string[][] = [];
+  for (let i = 0; i < labels.length; i += DEDUP_CHUNK_SIZE) {
+    chunks.push(labels.slice(i, i + DEDUP_CHUNK_SIZE));
+  }
+  return chunks;
+}
+
+export function buildDedupJql(projectKey: string, labels: string[]): string {
+  const quoted = labels.map(l => `"${l}"`).join(', ');
+  return `project = ${projectKey} AND labels in (${quoted})`;
+}
+
+interface JqlIssueLike {
+  key: string;
+  fields: { labels?: string[] };
+}
+
+export function extractDedupMap(issues: JqlIssueLike[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const issue of issues) {
+    for (const label of issue.fields.labels ?? []) {
+      if (!label.startsWith('oss-dep-')) continue;
+      if (!map.has(label)) map.set(label, issue.key); // first match wins if somehow duplicated
+    }
+  }
+  return map;
+}
+
+// Lives here (rather than in sessionState.ts, where the other session-related types live) so that
+// buildReviewRows() below can produce it directly without a type-only circular import between this
+// file and sessionState.ts — mirrors the same layout decision made for VeracodeReviewRow.
+// sessionState.ts re-exports the type for callers that expect it there.
+export interface WaltzReviewRow {
+  id: string; // '1'..'N' new candidates, 'A1'..'Am' already-ticketed
+  nameVersion: string;
+  maxVulnRating: string;
+  summary: string;
+  labels: string[];
+  descriptionWiki: string;
+  existingTicketKey: string | null;
+  included: boolean; // whether this row will be (re)created if the batch runs
+}
+
+export function buildReviewRows(
+  components: WaltzComponent[],
+  dedupMap: Map<string, string>,
+  templateLabels: string[] = [],
+): WaltzReviewRow[] {
+  const rows: WaltzReviewRow[] = [];
+  let newIndex = 0;
+  let ticketedIndex = 0;
+  for (const component of components) {
+    const label = sanitizeComponentLabel(component.nameVersion);
+    const existingTicketKey = dedupMap.get(label) ?? null;
+    rows.push({
+      id: existingTicketKey ? `A${++ticketedIndex}` : `${++newIndex}`,
+      nameVersion: component.nameVersion,
+      maxVulnRating: component.maxVulnRating,
+      summary: buildSummary(component),
+      labels: buildLabels(component, templateLabels),
+      descriptionWiki: buildDescriptionWiki(component),
+      existingTicketKey,
+      included: existingTicketKey === null,
+    });
+  }
+  return rows;
+}
