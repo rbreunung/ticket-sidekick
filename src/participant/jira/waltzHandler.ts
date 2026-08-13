@@ -13,8 +13,8 @@ import {
 } from '../../utils/waltzReport';
 import type { WaltzTemplateSelectionSession, WaltzReviewSession } from '../sessionState';
 import {
-  isCancellation, pickEmailOption, buildWaltzReviewTable, parseWaltzReviewInput, applyWaltzToggle,
-  extractCreatedKeyFromConfirmation,
+  isCancellation, pickEmailOption, buildImportReviewTable, parseReviewInput, applyReviewToggle,
+  extractCreatedKeyFromConfirmation, WALTZ_REVIEW_COLUMNS, CURRENT_SESSION_SCHEMA_VERSION,
 } from '../sessionState';
 import { resolveProjectKey } from './ticketContext';
 
@@ -93,9 +93,10 @@ export async function buildWaltzTemplateSession(
   return {
     reportFileName: fileName,
     projectKey,
-    components,
+    items: components,
     availableTemplates,
     availableIssueTypes: issueTypes.length > 0 ? issueTypes : ['Bug'],
+    schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
   };
 }
 
@@ -115,7 +116,7 @@ export async function streamWaltzTemplateSelection(
   optionsList += `**Issue types (no template):**\n${issueTypes.map((t, i) => `${offset + i + 1}. ${t}`).join('\n')}\n\n`;
 
   stream.markdown(
-    `Found **${session.components.length}** component(s) in \`${session.reportFileName}\` matching your rating/remediation filters ` +
+    `Found **${session.items.length}** component(s) in \`${session.reportFileName}\` matching your rating/remediation filters ` +
     `for project **${session.projectKey}**.\n\n${optionsList}` +
     `Reply with a number to select a template or issue type, or **(c)** to cancel.\n\n<!-- jira:waltz-template -->`,
   );
@@ -252,7 +253,7 @@ export async function handleWaltzTemplateSelection(
   // to resume from.
   let dedupMap: Map<string, string>;
   try {
-    dedupMap = await findAlreadyTicketed(ticketService, session.projectKey, session.components);
+    dedupMap = await findAlreadyTicketed(ticketService, session.projectKey, session.items);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logDiag('jira.waltz', 'warn', 'Could not check for already-ticketed components — proceeding without dedup', {
@@ -272,7 +273,7 @@ export async function handleWaltzTemplateSelection(
   const componentsToBuild: WaltzComponent[] = [];
   let totalNewMatched = 0;
   let newSeen = 0;
-  for (const component of session.components) {
+  for (const component of session.items) {
     if (dedupMap.has(sanitizeComponentLabel(component.nameVersion))) {
       componentsToBuild.push(component); // already-ticketed — always included, never capped
       continue;
@@ -292,6 +293,7 @@ export async function handleWaltzTemplateSelection(
     additionalFields,
     rows,
     totalNewMatched,
+    schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
   };
   await streamWaltzReview(reviewSession, stream, ws, baseUrl);
 }
@@ -303,7 +305,7 @@ export async function streamWaltzReview(
   baseUrl?: string,
 ): Promise<void> {
   await ws.update('jira.session.waltzReview', session);
-  stream.markdown(`${buildWaltzReviewTable(session.rows, baseUrl, session.totalNewMatched)}\n\n<!-- jira:waltz-review -->`);
+  stream.markdown(`${buildImportReviewTable(session.rows, baseUrl, session.totalNewMatched, WALTZ_REVIEW_COLUMNS, 'component(s)')}\n\n<!-- jira:waltz-review -->`);
 }
 
 export async function handleWaltzReviewReply(
@@ -315,7 +317,7 @@ export async function handleWaltzReviewReply(
   baseUrl?: string,
 ): Promise<void> {
   const rowIds = session.rows.map(r => r.id);
-  const decision = parseWaltzReviewInput(reply, rowIds);
+  const decision = parseReviewInput(reply, rowIds);
 
   if (decision.action === 'invalid') {
     stream.markdown(
@@ -330,7 +332,7 @@ export async function handleWaltzReviewReply(
     return;
   }
   if (decision.action === 'toggle') {
-    session.rows = applyWaltzToggle(session.rows, decision.ids);
+    session.rows = applyReviewToggle(session.rows, decision.ids);
     await streamWaltzReview(session, stream, ws, baseUrl);
     return;
   }

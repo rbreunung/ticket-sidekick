@@ -13,6 +13,7 @@ import { selectDefaultIssueType } from './participant/sessionState';
 import type { EmailContentSession } from './participant/sessionState';
 import { parseVeracodeReport, filterFlaws } from './utils/veracodeReport';
 import type { VeracodeTemplateSelectionSession } from './participant/sessionState';
+import { CURRENT_SESSION_SCHEMA_VERSION } from './participant/sessionState';
 import { parseWaltzReport, filterComponents, MAX_REPORT_BYTES } from './utils/waltzReport';
 import { buildWaltzTemplateSession } from './participant/jira/waltzHandler';
 import { logDiag } from './utils/diagLog';
@@ -293,9 +294,10 @@ export function activate(context: vscode.ExtensionContext): void {
       const session: VeracodeTemplateSelectionSession = {
         reportFileName: path.basename(reportPath),
         projectKey,
-        flaws,
+        items: flaws,
         availableTemplates,
         availableIssueTypes: issueTypes.length > 0 ? issueTypes : ['Bug'],
+        schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
       };
 
       await context.workspaceState.update('jira.session.veracodeTemplateSelection', session);

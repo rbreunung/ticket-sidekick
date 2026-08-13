@@ -4,7 +4,7 @@ vi.mock('vscode', () => ({
   window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
 }));
 
-import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, buildVeracodeReviewTable, parseVeracodeReviewInput, applyVeracodeToggle, type VeracodeReviewRow, buildWaltzReviewTable, parseWaltzReviewInput, applyWaltzToggle } from '../participant/sessionState';
+import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, buildImportReviewTable, parseReviewInput, applyReviewToggle, VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION, type VeracodeReviewRow } from '../participant/sessionState';
 import type { WaltzReviewRow } from '../utils/waltzReport';
 import { isPointerPrompt } from '../participant/jira/llmHelpers';
 import type { TransitionBatchTicket } from '../participant/sessionState';
@@ -860,9 +860,9 @@ const sampleRows: VeracodeReviewRow[] = [
   },
 ];
 
-describe('buildVeracodeReviewTable', () => {
+describe('buildImportReviewTable — Veracode config', () => {
   it('renders an "Already ticketed" section and a "New — will create" section', () => {
-    const table = buildVeracodeReviewTable(sampleRows, 'https://jira.example.com');
+    const table = buildImportReviewTable(sampleRows, 'https://jira.example.com', undefined, VERACODE_REVIEW_COLUMNS, 'flaw(s)');
     expect(table).toContain('### Already ticketed');
     expect(table).toContain('[PROJ-501](https://jira.example.com/browse/PROJ-501)');
     expect(table).toContain('### New — will create');
@@ -872,65 +872,65 @@ describe('buildVeracodeReviewTable', () => {
 
   it('omits the "Already ticketed" section entirely when there are no dupes', () => {
     const onlyNew = sampleRows.filter(r => r.existingTicketKey === null);
-    const table = buildVeracodeReviewTable(onlyNew);
+    const table = buildImportReviewTable(onlyNew, undefined, undefined, VERACODE_REVIEW_COLUMNS, 'flaw(s)');
     expect(table).not.toContain('Already ticketed');
   });
 
   it('renders plain ticket key (no link) when baseUrl is not provided', () => {
-    const table = buildVeracodeReviewTable(sampleRows);
+    const table = buildImportReviewTable(sampleRows, undefined, undefined, VERACODE_REVIEW_COLUMNS, 'flaw(s)');
     expect(table).toContain('| A1 |');
     expect(table).toContain('PROJ-501');
     expect(table).not.toContain('](');
   });
 });
 
-describe('parseVeracodeReviewInput', () => {
+describe('parseReviewInput — Veracode ids', () => {
   const ids = ['A1', '1', '2'];
 
   it('recognizes ok and cancel', () => {
-    expect(parseVeracodeReviewInput('ok', ids)).toEqual({ action: 'ok' });
-    expect(parseVeracodeReviewInput('c', ids)).toEqual({ action: 'cancel' });
-    expect(parseVeracodeReviewInput('cancel', ids)).toEqual({ action: 'cancel' });
+    expect(parseReviewInput('ok', ids)).toEqual({ action: 'ok' });
+    expect(parseReviewInput('c', ids)).toEqual({ action: 'cancel' });
+    expect(parseReviewInput('cancel', ids)).toEqual({ action: 'cancel' });
   });
 
   it('toggles a single new-row id (excludes a default-included row)', () => {
-    expect(parseVeracodeReviewInput('2', ids)).toEqual({ action: 'toggle', ids: ['2'] });
+    expect(parseReviewInput('2', ids)).toEqual({ action: 'toggle', ids: ['2'] });
   });
 
   it('toggles an already-ticketed row id (forces re-creation)', () => {
-    expect(parseVeracodeReviewInput('A1', ids)).toEqual({ action: 'toggle', ids: ['A1'] });
+    expect(parseReviewInput('A1', ids)).toEqual({ action: 'toggle', ids: ['A1'] });
   });
 
   it('toggles multiple ids at once, case-insensitively', () => {
-    expect(parseVeracodeReviewInput('a1 2', ids)).toEqual({ action: 'toggle', ids: ['A1', '2'] });
+    expect(parseReviewInput('a1 2', ids)).toEqual({ action: 'toggle', ids: ['A1', '2'] });
   });
 
   it('returns invalid for unrecognized ids or empty input', () => {
-    expect(parseVeracodeReviewInput('99', ids)).toEqual({ action: 'invalid' });
-    expect(parseVeracodeReviewInput('', ids)).toEqual({ action: 'invalid' });
+    expect(parseReviewInput('99', ids)).toEqual({ action: 'invalid' });
+    expect(parseReviewInput('', ids)).toEqual({ action: 'invalid' });
   });
 });
 
-describe('applyVeracodeToggle', () => {
+describe('applyReviewToggle — Veracode rows', () => {
   it('flips included for the given row ids and leaves the rest untouched', () => {
-    const toggled = applyVeracodeToggle(sampleRows, ['2']);
+    const toggled = applyReviewToggle(sampleRows, ['2']);
     expect(toggled.find(r => r.id === '2')!.included).toBe(false);
     expect(toggled.find(r => r.id === '1')!.included).toBe(true);
   });
 
   it('flips an already-ticketed row back to included (force re-create)', () => {
-    const toggled = applyVeracodeToggle(sampleRows, ['A1']);
+    const toggled = applyReviewToggle(sampleRows, ['A1']);
     expect(toggled.find(r => r.id === 'A1')!.included).toBe(true);
   });
 
   it('toggles multiple ids at once', () => {
-    const toggled = applyVeracodeToggle(sampleRows, ['1', '2']);
+    const toggled = applyReviewToggle(sampleRows, ['1', '2']);
     expect(toggled.find(r => r.id === '1')!.included).toBe(false);
     expect(toggled.find(r => r.id === '2')!.included).toBe(false);
   });
 
   it('returns new row objects rather than mutating the input (pure function)', () => {
-    const toggled = applyVeracodeToggle(sampleRows, ['1']);
+    const toggled = applyReviewToggle(sampleRows, ['1']);
     expect(toggled).not.toBe(sampleRows);
     expect(sampleRows.find(r => r.id === '1')!.included).toBe(true); // original array/objects untouched
   });
@@ -959,9 +959,9 @@ const sampleWaltzRows: WaltzReviewRow[] = [
   },
 ];
 
-describe('buildWaltzReviewTable', () => {
+describe('buildImportReviewTable — Waltz config', () => {
   it('splits already-ticketed rows from new rows into separate tables', () => {
-    const table = buildWaltzReviewTable(sampleWaltzRows);
+    const table = buildImportReviewTable(sampleWaltzRows, undefined, undefined, WALTZ_REVIEW_COLUMNS, 'component(s)');
     expect(table).toContain('### Already ticketed');
     expect(table).toContain('PROJ-1');
     expect(table).toContain('### New — will create');
@@ -970,27 +970,30 @@ describe('buildWaltzReviewTable', () => {
   });
 
   it('links the existing ticket key when a baseUrl is provided', () => {
-    const table = buildWaltzReviewTable(sampleWaltzRows, 'https://jira.example.com');
+    const table = buildImportReviewTable(sampleWaltzRows, 'https://jira.example.com', undefined, WALTZ_REVIEW_COLUMNS, 'component(s)');
     expect(table).toContain('[PROJ-1](https://jira.example.com/browse/PROJ-1)');
   });
 
   it('shows an explanatory line instead of an empty table when every match already has a ticket', () => {
     const allTicketed = sampleWaltzRows.filter(r => r.existingTicketKey !== null);
-    const table = buildWaltzReviewTable(allTicketed);
+    const table = buildImportReviewTable(allTicketed, undefined, undefined, WALTZ_REVIEW_COLUMNS, 'component(s)');
     expect(table).toContain('### New — will create');
     expect(table).toContain('_All matching components already have a ticket._');
     expect(table).not.toContain('| # | Component | Rating | Include? |');
   });
 
   it('notes when more new components matched than the BATCH_LIMIT-capped rows shown, and how to get the rest', () => {
-    const table = buildWaltzReviewTable(sampleWaltzRows, undefined, 75); // 75 matched, only 1 "new" row present in sampleWaltzRows
+    // 75 matched, only 1 "new" row present in sampleWaltzRows
+    const table = buildImportReviewTable(sampleWaltzRows, undefined, 75, WALTZ_REVIEW_COLUMNS, 'component(s)');
     expect(table).toContain('74 more matched component(s) not shown');
     expect(table).toContain('re-run the import after this batch completes');
   });
 
   it('omits the truncation note when totalNewMatched is not given or matches what is shown', () => {
-    expect(buildWaltzReviewTable(sampleWaltzRows)).not.toContain('more matched component(s) not shown');
-    expect(buildWaltzReviewTable(sampleWaltzRows, undefined, 1)).not.toContain('more matched component(s) not shown');
+    expect(buildImportReviewTable(sampleWaltzRows, undefined, undefined, WALTZ_REVIEW_COLUMNS, 'component(s)'))
+      .not.toContain('more matched component(s) not shown');
+    expect(buildImportReviewTable(sampleWaltzRows, undefined, 1, WALTZ_REVIEW_COLUMNS, 'component(s)'))
+      .not.toContain('more matched component(s) not shown');
   });
 
   it('warns on the review screen itself when included rows exceed BATCH_LIMIT, not just in the completion summary', () => {
@@ -1004,38 +1007,61 @@ describe('buildWaltzReviewTable', () => {
       existingTicketKey: null,
       included: true,
     }));
-    const table = buildWaltzReviewTable(manyIncluded);
+    const table = buildImportReviewTable(manyIncluded, undefined, undefined, WALTZ_REVIEW_COLUMNS, 'component(s)');
     expect(table).toContain('Only the first 50');
   });
 });
 
-describe('parseWaltzReviewInput', () => {
+describe('parseReviewInput — Waltz ids', () => {
   it('recognizes ok/cancel and toggle-id lists', () => {
-    expect(parseWaltzReviewInput('ok', ['A1', '1'])).toEqual({ action: 'ok' });
-    expect(parseWaltzReviewInput('c', ['A1', '1'])).toEqual({ action: 'cancel' });
-    expect(parseWaltzReviewInput('A1 1', ['A1', '1'])).toEqual({ action: 'toggle', ids: ['A1', '1'] });
-    expect(parseWaltzReviewInput('nonsense', ['A1', '1'])).toEqual({ action: 'invalid' });
+    expect(parseReviewInput('ok', ['A1', '1'])).toEqual({ action: 'ok' });
+    expect(parseReviewInput('c', ['A1', '1'])).toEqual({ action: 'cancel' });
+    expect(parseReviewInput('A1 1', ['A1', '1'])).toEqual({ action: 'toggle', ids: ['A1', '1'] });
+    expect(parseReviewInput('nonsense', ['A1', '1'])).toEqual({ action: 'invalid' });
   });
 
   it('matches ids case-insensitively', () => {
-    expect(parseWaltzReviewInput('a1 1', ['A1', '1'])).toEqual({ action: 'toggle', ids: ['A1', '1'] });
+    expect(parseReviewInput('a1 1', ['A1', '1'])).toEqual({ action: 'toggle', ids: ['A1', '1'] });
   });
 
   it('returns invalid for empty input', () => {
-    expect(parseWaltzReviewInput('', ['A1', '1'])).toEqual({ action: 'invalid' });
+    expect(parseReviewInput('', ['A1', '1'])).toEqual({ action: 'invalid' });
   });
 });
 
-describe('applyWaltzToggle', () => {
+describe('applyReviewToggle — Waltz rows', () => {
   it('flips included for the matching row ids only', () => {
-    const toggled = applyWaltzToggle(sampleWaltzRows, ['1']);
+    const toggled = applyReviewToggle(sampleWaltzRows, ['1']);
     expect(toggled.find(r => r.id === '1')!.included).toBe(false);
     expect(toggled.find(r => r.id === 'A1')!.included).toBe(false); // unchanged
   });
 
   it('flips an already-ticketed row back to included (force re-create)', () => {
-    const toggled = applyWaltzToggle(sampleWaltzRows, ['A1']);
+    const toggled = applyReviewToggle(sampleWaltzRows, ['A1']);
     expect(toggled.find(r => r.id === 'A1')!.included).toBe(true);
     expect(toggled.find(r => r.id === '1')!.included).toBe(true); // unchanged
+  });
+});
+
+describe('isSessionExpired (schemaVersion shape guard — AE7)', () => {
+  it('treats a session with no schemaVersion (pre-consolidation) as expired', () => {
+    expect(isSessionExpired({})).toBe(true);
+  });
+
+  it('treats a session with a lower schemaVersion than current as expired', () => {
+    expect(isSessionExpired({ schemaVersion: CURRENT_SESSION_SCHEMA_VERSION - 1 })).toBe(true);
+  });
+
+  it('treats a session with the current schemaVersion as not expired', () => {
+    expect(isSessionExpired({ schemaVersion: CURRENT_SESSION_SCHEMA_VERSION })).toBe(false);
+  });
+
+  it('does not flag "no session at all" as expired — that is a different, already-handled case', () => {
+    expect(isSessionExpired(undefined)).toBe(false);
+    expect(isSessionExpired(null)).toBe(false);
+  });
+
+  it('exposes a user-facing message that tells the user to re-run the import', () => {
+    expect(SESSION_EXPIRED_MESSAGE.toLowerCase()).toContain('re-run the import');
   });
 });

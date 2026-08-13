@@ -13,8 +13,8 @@ import {
 } from '../../utils/veracodeReport';
 import type { VeracodeTemplateSelectionSession, VeracodeReviewSession } from '../sessionState';
 import {
-  isCancellation, pickEmailOption, buildVeracodeReviewTable, parseVeracodeReviewInput, applyVeracodeToggle,
-  extractCreatedKeyFromConfirmation,
+  isCancellation, pickEmailOption, buildImportReviewTable, parseReviewInput, applyReviewToggle,
+  extractCreatedKeyFromConfirmation, VERACODE_REVIEW_COLUMNS, CURRENT_SESSION_SCHEMA_VERSION,
 } from '../sessionState';
 import { resolveProjectKey } from './ticketContext';
 
@@ -97,9 +97,10 @@ export async function buildVeracodeTemplateSession(
   return {
     reportFileName: fileName,
     projectKey,
-    flaws,
+    items: flaws,
     availableTemplates,
     availableIssueTypes: issueTypes.length > 0 ? issueTypes : ['Bug'],
+    schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
   };
 }
 
@@ -119,7 +120,7 @@ export async function streamVeracodeTemplateSelection(
   optionsList += `**Issue types (no template):**\n${issueTypes.map((t, i) => `${offset + i + 1}. ${t}`).join('\n')}\n\n`;
 
   stream.markdown(
-    `Found **${session.flaws.length}** flaw(s) in \`${session.reportFileName}\` matching your severity/status filters ` +
+    `Found **${session.items.length}** flaw(s) in \`${session.reportFileName}\` matching your severity/status filters ` +
     `for project **${session.projectKey}**.\n\n${optionsList}` +
     `Reply with a number to select a template or issue type, or **(c)** to cancel.\n\n<!-- jira:veracode-template -->`,
   );
@@ -231,8 +232,8 @@ export async function handleVeracodeTemplateSelection(
 
   stream.markdown(`_Checking for already-ticketed flaws…_\n\n`);
   const templateLabels = Array.isArray(additionalFields.labels) ? additionalFields.labels as string[] : [];
-  const dedupMap = await findAlreadyTicketed(ticketService, session.projectKey, session.flaws.map(f => f.issueId));
-  const rows = buildReviewRows(session.flaws, dedupMap, templateLabels);
+  const dedupMap = await findAlreadyTicketed(ticketService, session.projectKey, session.items.map(f => f.issueId));
+  const rows = buildReviewRows(session.items, dedupMap, templateLabels);
 
   const reviewSession: VeracodeReviewSession = {
     projectKey: session.projectKey,
@@ -240,6 +241,7 @@ export async function handleVeracodeTemplateSelection(
     templateName,
     additionalFields,
     rows,
+    schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
   };
   await streamVeracodeReview(reviewSession, stream, ws, baseUrl);
 }
@@ -251,7 +253,7 @@ export async function streamVeracodeReview(
   baseUrl?: string,
 ): Promise<void> {
   await ws.update('jira.session.veracodeReview', session);
-  stream.markdown(`${buildVeracodeReviewTable(session.rows, baseUrl)}\n\n<!-- jira:veracode-review -->`);
+  stream.markdown(`${buildImportReviewTable(session.rows, baseUrl, session.totalNewMatched, VERACODE_REVIEW_COLUMNS, 'flaw(s)')}\n\n<!-- jira:veracode-review -->`);
 }
 
 export async function handleVeracodeReviewReply(
@@ -263,7 +265,7 @@ export async function handleVeracodeReviewReply(
   baseUrl?: string,
 ): Promise<void> {
   const rowIds = session.rows.map(r => r.id);
-  const decision = parseVeracodeReviewInput(reply, rowIds);
+  const decision = parseReviewInput(reply, rowIds);
 
   if (decision.action === 'invalid') {
     stream.markdown(
@@ -278,7 +280,7 @@ export async function handleVeracodeReviewReply(
     return;
   }
   if (decision.action === 'toggle') {
-    session.rows = applyVeracodeToggle(session.rows, decision.ids);
+    session.rows = applyReviewToggle(session.rows, decision.ids);
     await streamVeracodeReview(session, stream, ws, baseUrl);
     return;
   }

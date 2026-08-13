@@ -431,136 +431,140 @@ export function buildTeamJql(teamJql: string, extraJql: string | null): string {
   return `(${teamJql})${extra}`;
 }
 
-export interface VeracodeTemplateSelectionSession {
+// ---------------------------------------------------------------------------------------------
+// Shared Veracode/Waltz import session types + review-table renderer + toggle-reply parser.
+//
+// Both importers (Veracode flaws, Waltz OSS components) drive the same session flow: pick a
+// template/issue-type → dedup-search already-ticketed items → show a review table the user can
+// toggle rows on/off in → create tickets for the included rows. Only the parser, per-row
+// label/summary/description building, and config live in each importer's own file
+// (veracodeReport.ts/veracodeHandler.ts vs waltzReport.ts/waltzHandler.ts) — everything about the
+// session shape and the review screen itself is generic and lives here (R1/R10).
+// ---------------------------------------------------------------------------------------------
+
+// Bumped whenever the session shape changes in a way that would make an in-flight (already
+// persisted) session render incorrectly if fed straight to the current code. A session written by
+// a build that predates this field entirely reads as `undefined`, which isSessionExpired() also
+// treats as expired — see AE7.
+export const CURRENT_SESSION_SCHEMA_VERSION = 1;
+
+export interface ImportTemplateSelectionSession<TItem> {
   reportFileName: string;
   projectKey: string;
-  flaws: VeracodeFlaw[]; // already filtered by minSeverity/includeRemediationStatuses
+  items: TItem[]; // already filtered by the importer's own config (severity/rating, status/action, etc.)
   availableTemplates: Array<{ name: string; issueType: string }>;
   availableIssueTypes: string[];
+  schemaVersion: number;
 }
 
-export interface VeracodeReviewSession {
+export type VeracodeTemplateSelectionSession = ImportTemplateSelectionSession<VeracodeFlaw>;
+export type WaltzTemplateSelectionSession = ImportTemplateSelectionSession<WaltzComponent>;
+
+export interface ReviewRowBase {
+  id: string; // '1'..'N' new candidates, 'A1'..'Am' already-ticketed
+  existingTicketKey: string | null;
+  included: boolean; // whether this row will be (re)created if the batch runs
+}
+
+export interface ReviewSession<TRow> {
   projectKey: string;
   issueType: string;
   templateName: string | null;
   additionalFields: Record<string, unknown>; // resolved template fields (labels merged in per-row already)
-  rows: VeracodeReviewRow[];
+  rows: TRow[];
+  // Total new (not-yet-ticketed) items the report matched, before any BATCH_LIMIT cap the importer
+  // applies before building `rows`. Harmless as absent/undefined for an importer that doesn't cap —
+  // buildImportReviewTable() only renders the "more matched" note when it's given and exceeds rows shown.
+  totalNewMatched?: number;
+  schemaVersion: number;
 }
 
-export function buildVeracodeReviewTable(rows: VeracodeReviewRow[], baseUrl?: string): string {
+export type VeracodeReviewSession = ReviewSession<VeracodeReviewRow>;
+export type WaltzReviewSession = ReviewSession<WaltzReviewRow>;
+
+/**
+ * A stored session written before `schemaVersion` existed (reads back as `undefined`) — or by an
+ * older build than this one understands — may be missing fields the current renderer/handler
+ * expects. Treating it as expired here (rather than rendering `undefined` cells or running a batch
+ * against incomplete data) is what AE7 requires. "No session at all" is a different, already-handled
+ * case and is deliberately NOT reported as expired by this guard.
+ */
+export function isSessionExpired(session: { schemaVersion?: number } | null | undefined): boolean {
+  if (!session) return false;
+  return typeof session.schemaVersion !== 'number' || session.schemaVersion < CURRENT_SESSION_SCHEMA_VERSION;
+}
+
+export const SESSION_EXPIRED_MESSAGE =
+  '_This import session was started before a Ticket Sidekick update and can no longer be continued — please re-run the import._';
+
+export interface ReviewTableColumn<TRow> {
+  header: string;
+  accessor: (row: TRow) => string;
+}
+
+export const VERACODE_REVIEW_COLUMNS: ReviewTableColumn<VeracodeReviewRow>[] = [
+  { header: 'Severity', accessor: (r) => `${r.severityLabelText} (${r.severity})` },
+  { header: 'CWE', accessor: (r) => (r.cweId ? `CWE-${r.cweId}` : '—') },
+  { header: 'Summary', accessor: (r) => r.summary },
+];
+
+export const WALTZ_REVIEW_COLUMNS: ReviewTableColumn<WaltzReviewRow>[] = [
+  { header: 'Component', accessor: (r) => r.nameVersion },
+  { header: 'Rating', accessor: (r) => r.maxVulnRating },
+];
+
+// Each importer defines its own per-run ticket-creation cap today; both currently happen to be 50
+// (see BATCH_LIMIT in waltzReport.ts and the equivalent local constant in veracodeHandler.ts). Kept
+// as a single shared constant here rather than threaded through as a extra buildImportReviewTable param.
+const REVIEW_BATCH_LIMIT = BATCH_LIMIT;
+
+export function buildImportReviewTable<TRow extends ReviewRowBase>(
+  rows: TRow[],
+  baseUrl: string | undefined,
+  totalNewMatched: number | undefined,
+  columns: ReviewTableColumn<TRow>[],
+  itemNoun: string, // e.g. 'flaw(s)' or 'component(s)' — used in summary/truncation lines
+): string {
   const ticketed = rows.filter(r => r.existingTicketKey !== null);
   const fresh = rows.filter(r => r.existingTicketKey === null);
   const lines: string[] = [];
+  const headerCells = columns.map(c => c.header).join(' | ');
+  const sepCells = columns.map(() => '----------').join('|');
+  const pluralBare = itemNoun.replace('(s)', 's'); // 'component(s)' -> 'components'
 
   if (ticketed.length > 0) {
     lines.push('### Already ticketed');
-    lines.push('| # | Severity | CWE | Flaw | Ticket | Include? |');
-    lines.push('|---|----------|-----|------|--------|----------|');
+    lines.push(`| # | ${headerCells} | Ticket | Include? |`);
+    lines.push(`|---|${sepCells}|--------|----------|`);
     for (const r of ticketed) {
       const ticketRef = baseUrl ? `[${r.existingTicketKey}](${baseUrl}/browse/${r.existingTicketKey})` : r.existingTicketKey;
-      lines.push(`| ${r.id} | ${r.severityLabelText} (${r.severity}) | ${r.cweId ? `CWE-${r.cweId}` : '—'} | ${r.summary} | ${ticketRef} | ${r.included ? '✓ re-create' : '_excluded_'} |`);
-    }
-    lines.push('');
-  }
-
-  lines.push('### New — will create');
-  lines.push('| # | Severity | CWE | Summary | Include? |');
-  lines.push('|---|----------|-----|---------|----------|');
-  for (const r of fresh) {
-    lines.push(`| ${r.id} | ${r.severityLabelText} (${r.severity}) | ${r.cweId ? `CWE-${r.cweId}` : '—'} | ${r.summary} | ${r.included ? '✓' : '_excluded_'} |`);
-  }
-
-  const willCreate = rows.filter(r => r.included).length;
-  lines.push('');
-  lines.push(`**${willCreate}** ticket(s) will be created.`);
-  lines.push('');
-  lines.push('Reply **ok** to proceed, **(c)** to cancel, or a list of ids to toggle (e.g. `2 4` or `A1`).');
-
-  return lines.join('\n');
-}
-
-export type VeracodeReviewParseResult =
-  | { action: 'ok' }
-  | { action: 'cancel' }
-  | { action: 'toggle'; ids: string[] }
-  | { action: 'invalid' };
-
-export function parseVeracodeReviewInput(reply: string, rowIds: string[]): VeracodeReviewParseResult {
-  const normalized = reply.trim().toLowerCase();
-  if (normalized === 'ok') return { action: 'ok' };
-  if (normalized === 'c' || normalized === 'cancel') return { action: 'cancel' };
-
-  const tokens = normalized.split(/[\s,]+/).filter(Boolean);
-  const matched: string[] = [];
-  for (const token of tokens) {
-    const found = rowIds.find(id => id.toLowerCase() === token);
-    if (found) matched.push(found);
-  }
-  if (matched.length === 0) return { action: 'invalid' };
-  return { action: 'toggle', ids: matched };
-}
-
-// Pure so it's independently testable — the vscode-dependent handler just calls this and
-// re-streams the result, rather than mutating VeracodeReviewRow objects in place.
-export function applyVeracodeToggle(rows: VeracodeReviewRow[], ids: string[]): VeracodeReviewRow[] {
-  const toggleSet = new Set(ids);
-  return rows.map(r => (toggleSet.has(r.id) ? { ...r, included: !r.included } : r));
-}
-
-export interface WaltzTemplateSelectionSession {
-  reportFileName: string;
-  projectKey: string;
-  components: WaltzComponent[]; // already filtered by minVulnRating/includeRemediationActions
-  availableTemplates: Array<{ name: string; issueType: string }>;
-  availableIssueTypes: string[];
-}
-
-export interface WaltzReviewSession {
-  projectKey: string;
-  issueType: string;
-  templateName: string | null;
-  additionalFields: Record<string, unknown>; // resolved template fields (labels merged in per-row already)
-  rows: WaltzReviewRow[]; // "new" rows are already capped at BATCH_LIMIT by the caller (waltzHandler.ts) — see totalNewMatched
-  totalNewMatched: number; // total new (not-yet-ticketed) components the report matched, before the BATCH_LIMIT cap
-}
-
-export function buildWaltzReviewTable(rows: WaltzReviewRow[], baseUrl?: string, totalNewMatched?: number): string {
-  const ticketed = rows.filter(r => r.existingTicketKey !== null);
-  const fresh = rows.filter(r => r.existingTicketKey === null);
-  const lines: string[] = [];
-
-  if (ticketed.length > 0) {
-    lines.push('### Already ticketed');
-    lines.push('| # | Component | Rating | Ticket | Include? |');
-    lines.push('|---|-----------|--------|--------|----------|');
-    for (const r of ticketed) {
-      const ticketRef = baseUrl ? `[${r.existingTicketKey}](${baseUrl}/browse/${r.existingTicketKey})` : r.existingTicketKey;
-      lines.push(`| ${r.id} | ${r.nameVersion} | ${r.maxVulnRating} | ${ticketRef} | ${r.included ? '✓ re-create' : '_excluded_'} |`);
+      const cells = columns.map(c => c.accessor(r)).join(' | ');
+      lines.push(`| ${r.id} | ${cells} | ${ticketRef} | ${r.included ? '✓ re-create' : '_excluded_'} |`);
     }
     lines.push('');
   }
 
   lines.push('### New — will create');
   if (fresh.length === 0) {
-    lines.push('_All matching components already have a ticket._');
+    lines.push(`_All matching ${pluralBare} already have a ticket._`);
   } else {
-    lines.push('| # | Component | Rating | Include? |');
-    lines.push('|---|-----------|--------|----------|');
+    lines.push(`| # | ${headerCells} | Include? |`);
+    lines.push(`|---|${sepCells}|----------|`);
     for (const r of fresh) {
-      lines.push(`| ${r.id} | ${r.nameVersion} | ${r.maxVulnRating} | ${r.included ? '✓' : '_excluded_'} |`);
+      const cells = columns.map(c => c.accessor(r)).join(' | ');
+      lines.push(`| ${r.id} | ${cells} | ${r.included ? '✓' : '_excluded_'} |`);
     }
   }
   lines.push('');
 
-  // Row-count truncation note: waltzHandler.ts caps "new" rows at BATCH_LIMIT before they ever reach
-  // this table, so a report with more matches than BATCH_LIMIT would otherwise silently drop the
-  // remainder with no signal. Surfacing the true total here, plus how to get the rest, closes that
-  // gap — and reuses the existing dedup mechanism as the "resume" path (re-running after this batch
-  // completes surfaces the next BATCH_LIMIT new candidates, since the ones just created are now
-  // dedup-matched).
+  // Row-count truncation note: an importer that caps "new" rows before they ever reach this table
+  // (e.g. Waltz's BATCH_LIMIT) would otherwise silently drop the remainder with no signal. Surfacing
+  // the true total here, plus how to get the rest, closes that gap — and reuses the existing dedup
+  // mechanism as the "resume" path (re-running after this batch completes surfaces the next batch of
+  // new candidates, since the ones just created are now dedup-matched).
   if (totalNewMatched !== undefined && totalNewMatched > fresh.length) {
     lines.push(
-      `_${totalNewMatched - fresh.length} more matched component(s) not shown — re-run the import after ` +
+      `_${totalNewMatched - fresh.length} more matched ${itemNoun} not shown — re-run the import after ` +
       `this batch completes; already-created tickets are automatically skipped next time._`,
     );
     lines.push('');
@@ -568,11 +572,11 @@ export function buildWaltzReviewTable(rows: WaltzReviewRow[], baseUrl?: string, 
 
   const willCreate = rows.filter(r => r.included).length;
   lines.push(`**${willCreate}** ticket(s) will be created.`);
-  // Defensive backstop: "new" rows are already capped at BATCH_LIMIT above, but a user can still toggle
-  // extra "already ticketed" rows back to "re-create", so this can still fire even with the cap in place.
-  if (willCreate > BATCH_LIMIT) {
+  // Defensive backstop: "new" rows may already be capped upstream, but a user can still toggle extra
+  // "already ticketed" rows back to "re-create", so this can still fire even with an upstream cap.
+  if (willCreate > REVIEW_BATCH_LIMIT) {
     lines.push('');
-    lines.push(`_Only the first ${BATCH_LIMIT} included rows will be created this run — re-run the import afterward for the remainder._`);
+    lines.push(`_Only the first ${REVIEW_BATCH_LIMIT} included rows will be created this run — re-run the import afterward for the remainder._`);
   }
   lines.push('');
   lines.push('Reply **ok** to proceed, **(c)** to cancel, or a list of ids to toggle (e.g. `2 4` or `A1`).');
@@ -580,13 +584,13 @@ export function buildWaltzReviewTable(rows: WaltzReviewRow[], baseUrl?: string, 
   return lines.join('\n');
 }
 
-export type WaltzReviewParseResult =
+export type ReviewParseResult =
   | { action: 'ok' }
   | { action: 'cancel' }
   | { action: 'toggle'; ids: string[] }
   | { action: 'invalid' };
 
-export function parseWaltzReviewInput(reply: string, rowIds: string[]): WaltzReviewParseResult {
+export function parseReviewInput(reply: string, rowIds: string[]): ReviewParseResult {
   const normalized = reply.trim().toLowerCase();
   if (normalized === 'ok') return { action: 'ok' };
   if (normalized === 'c' || normalized === 'cancel') return { action: 'cancel' };
@@ -602,8 +606,8 @@ export function parseWaltzReviewInput(reply: string, rowIds: string[]): WaltzRev
 }
 
 // Pure so it's independently testable — the vscode-dependent handler just calls this and
-// re-streams the result, rather than mutating WaltzReviewRow objects in place.
-export function applyWaltzToggle(rows: WaltzReviewRow[], ids: string[]): WaltzReviewRow[] {
+// re-streams the result, rather than mutating row objects in place.
+export function applyReviewToggle<TRow extends { id: string; included: boolean }>(rows: TRow[], ids: string[]): TRow[] {
   const toggleSet = new Set(ids);
   return rows.map(r => (toggleSet.has(r.id) ? { ...r, included: !r.included } : r));
 }
