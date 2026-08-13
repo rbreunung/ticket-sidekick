@@ -1,6 +1,8 @@
 import { XMLParser } from 'fast-xml-parser';
+import { markdownToJiraWiki } from './markdownToJiraWiki';
 import {
   chunkStrings, buildReviewRows as buildReviewRowsShared, extractDedupMap as extractDedupMapShared,
+  sanitizeCellText, sanitizeStandaloneLine,
 } from './reportImport';
 
 export interface VeracodeFlaw {
@@ -170,36 +172,66 @@ export function buildSummary(flaw: VeracodeFlaw): string {
   return `${flaw.issueId} - ${ref}${lineSuffix} - ${shortLabel}`;
 }
 
+// Same branching as before (decide on the *original* values so a value that sanitizes down to an
+// empty string — e.g. one consisting only of stripped characters — doesn't silently flip which
+// branch runs), just with each piece sanitized before it's combined into the displayed path.
 function fullSourcePath(flaw: VeracodeFlaw): string | null {
-  if (flaw.sourceFilePath && flaw.sourceFile) return `${flaw.sourceFilePath}${flaw.sourceFile}`;
-  return flaw.sourceFile ?? null;
+  if (flaw.sourceFilePath && flaw.sourceFile) {
+    return `${sanitizeCellText(flaw.sourceFilePath)}${sanitizeCellText(flaw.sourceFile)}`;
+  }
+  return flaw.sourceFile != null ? sanitizeCellText(flaw.sourceFile) : null;
 }
 
-export function buildDescriptionWiki(flaw: VeracodeFlaw): string {
-  const sections: string[] = [];
+// sanitizeCellText()/sanitizeStandaloneLine() (both untrusted-input sanitizers for values that get
+// interpolated into the Markdown built here) live in reportImport.ts as shared primitives — see the
+// doc comments there for exactly what each one neutralizes and why.
 
-  sections.push(`h3. Severity\n${severityLabel(flaw.severity)} (${flaw.severity})`);
+// Authored as Markdown and converted once at the end via markdownToJiraWiki() — mirrors
+// waltzReport.ts's buildDescriptionWiki() pattern exactly. Every untrusted (externally-sourced,
+// unvalidated) free-text field is wrapped in sanitizeCellText() (mid-line, after a trusted label
+// like "Module: ") or sanitizeStandaloneLine() (the value is the *entire* line, nothing else on it —
+// exposed to every line-start-anchored rule the converter has). issueId/cweId/severity are left
+// unsanitized: issueId and cweId are already validated purely-numeric at parse time (ISSUE_ID_PATTERN
+// / CWE_ID_PATTERN) and severity is a locally-computed number, so none of the three can carry a
+// markdown-trigger character to begin with.
+export function buildDescriptionWiki(flaw: VeracodeFlaw): string {
+  const lines: string[] = [];
+
+  lines.push('### Severity');
+  lines.push(`${severityLabel(flaw.severity)} (${flaw.severity})`);
+  lines.push('');
 
   if (flaw.cweId) {
-    const link = `[CWE-${flaw.cweId}|https://cwe.mitre.org/data/definitions/${flaw.cweId}.html]`;
-    sections.push(`h3. CWE\n${link}${flaw.cweName ? ` — ${flaw.cweName}` : ''}`);
+    lines.push('### CWE');
+    // The link text/URL are built entirely from the already-numeric-validated cweId, so no
+    // sanitization is needed there; cweName sits after it on the same line (mid-line, not
+    // standalone), so a bare sanitizeCellText() is the correct sanitizer for it.
+    const link = `[CWE-${flaw.cweId}](https://cwe.mitre.org/data/definitions/${flaw.cweId}.html)`;
+    lines.push(`${link}${flaw.cweName ? ` — ${sanitizeCellText(flaw.cweName)}` : ''}`);
+    lines.push('');
   }
 
-  const locationLines = [`Module: ${flaw.module}`];
+  lines.push('### Location');
+  lines.push(`Module: ${sanitizeCellText(flaw.module)}`);
   const path = fullSourcePath(flaw);
-  if (path) locationLines.push(`File: ${path}${flaw.line != null ? `:${flaw.line}` : ''}`);
-  if (flaw.functionPrototype) locationLines.push(`Function: ${flaw.functionPrototype}`);
-  sections.push(`h3. Location\n${locationLines.join('\n')}`);
+  if (path) lines.push(`File: ${path}${flaw.line != null ? `:${flaw.line}` : ''}`);
+  if (flaw.functionPrototype) lines.push(`Function: ${sanitizeCellText(flaw.functionPrototype)}`);
+  lines.push('');
 
-  sections.push(`h3. Description\n${flaw.description}`);
+  lines.push('### Description');
+  lines.push(sanitizeStandaloneLine(flaw.description));
+  lines.push('');
 
   if (flaw.recommendation) {
-    sections.push(`h3. Recommendation\n${flaw.recommendation}`);
+    lines.push('### Recommendation');
+    lines.push(sanitizeStandaloneLine(flaw.recommendation));
+    lines.push('');
   }
 
-  sections.push(`h3. Veracode Issue ID\n${flaw.issueId}`);
+  lines.push('### Veracode Issue ID');
+  lines.push(flaw.issueId);
 
-  return sections.join('\n\n');
+  return markdownToJiraWiki(lines.join('\n'));
 }
 
 export function buildLabels(flaw: VeracodeFlaw, templateLabels: string[] = []): string[] {

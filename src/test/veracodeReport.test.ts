@@ -196,8 +196,11 @@ describe('buildDescriptionWiki', () => {
     expect(wiki).toContain('h3. Severity\nVery High (5)');
     expect(wiki).toContain('[CWE-89|https://cwe.mitre.org/data/definitions/89.html]');
     expect(wiki).toContain('h3. Location\nModule: ExampleApp.war\nFile: com/example/webapp/dao/ExampleOrderDao.java:88\nFunction: ResultSet buildOrderQuery(java.lang.String)');
-    expect(wiki).toContain('h3. Description\nThe method buildOrderQuery()');
-    expect(wiki).toContain('h3. Recommendation\nUse parameterized queries');
+    // Description/Recommendation are standalone-line values, so each is prefixed with ": " to keep
+    // it out of line-start position (see sanitizeStandaloneLine() in reportImport.ts) — the
+    // information itself (starting text) is unchanged, just no longer flush against the heading.
+    expect(wiki).toContain('h3. Description\n: The method buildOrderQuery()');
+    expect(wiki).toContain('h3. Recommendation\n: Use parameterized queries');
     expect(wiki).toContain('h3. Veracode Issue ID\n10101');
   });
 
@@ -210,6 +213,28 @@ describe('buildDescriptionWiki', () => {
     expect(wiki).not.toContain('Function:');
     // This flaw's CWE (798) does have a category-level recommendation in the fixture, so it IS present:
     expect(wiki).toContain('h3. Recommendation');
+  });
+
+  // AE5 — mirrors waltzReport.test.ts's crafted-payload test (same shape of payload, same shape of
+  // assertions); proves the Markdown-then-sanitize-then-convert pipeline closes the same class of gap
+  // for a Veracode-only field (description) that AE1 already proved for Waltz's cveSummary. See
+  // docs/solutions/security-issues/waltz-oss-report-markdown-injection-in-jira-wiki-converter.md.
+  it('neutralizes markdown-structural characters in untrusted flaw text so a crafted description cannot inject a heading, table row, link, bold/italic text, or strikethrough', () => {
+    const flaws = parseVeracodeReport(fixture('sample-report.xml'));
+    const malicious = {
+      ...flaws.find(f => f.issueId === '10101')!,
+      description: 'Injected\n# Fake Heading\n| a | b |\n[click me](http://evil.example) *bold* ~~strike~~\n1. urgent\n--- rule\n> quote',
+    };
+    const wiki = buildDescriptionWiki(malicious);
+    expect(wiki).not.toContain('h1. Fake Heading');
+    expect(wiki).not.toContain('||a||b||');
+    expect(wiki).not.toContain('[click me|http://evil.example]');
+    expect(wiki).not.toContain('*bold*');
+    expect(wiki).not.toContain('~~strike~~');
+    expect(wiki).not.toContain('-strike-');
+    expect(wiki).not.toContain('# urgent');
+    expect(wiki).not.toContain('----');
+    expect(wiki).not.toContain('{quote}');
   });
 });
 
