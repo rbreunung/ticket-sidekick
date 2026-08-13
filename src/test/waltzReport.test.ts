@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { parseWaltzReport, assertSafeWaltzReportSize, filterComponents } from '../utils/waltzReport';
+import {
+  parseWaltzReport, assertSafeWaltzReportSize, filterComponents,
+  buildSummary, buildDescriptionWiki, buildLabels, sanitizeComponentLabel,
+  type WaltzComponent,
+} from '../utils/waltzReport';
 
 const fixturePath = (name: string) => join(__dirname, 'fixtures', 'waltz', name);
 const fixtureBuffer = (name: string) => readFileSync(fixturePath(name));
@@ -91,5 +95,132 @@ describe('filterComponents', () => {
       { minVulnRating: 'high', includeRemediationActions: ['', 'Remediate'] },
     );
     expect(filtered.length).toBeGreaterThan(0);
+  });
+});
+
+describe('sanitizeComponentLabel', () => {
+  it('lowercases, replaces disallowed separators with hyphens (dots pass through, e.g. for version numbers), prefixes oss-dep-, and appends a disambiguating hash', () => {
+    const label = sanitizeComponentLabel('Example.Lib:1.2.3');
+    // ':' is not in the allowed [a-z0-9._-] set and becomes '-'; '.' is allowed and stays literal
+    // (keeps version numbers like "1.2.3" readable instead of turning them into "1-2-3").
+    expect(label).toMatch(/^oss-dep-example\.lib-1\.2\.3-[0-9a-f]{6}$/);
+  });
+
+  it('gives two components that sanitize to the same readable text different labels via the hash suffix', () => {
+    // Maven-style coordinates: an underscore and a hyphen both collapse to "-" once sanitized, so
+    // the readable portion alone would collide for two genuinely different components.
+    const a = sanitizeComponentLabel('org.example:my_lib:1.2.3');
+    const b = sanitizeComponentLabel('org.example:my-lib:1.2.3');
+    expect(a).not.toBe(b);
+  });
+
+  it('caps the label length as a safety margin against Jira label limits, without truncating the hash suffix', () => {
+    const long = 'a'.repeat(300) + ':1.0.0';
+    const label = sanitizeComponentLabel(long);
+    expect(label.length).toBeLessThanOrEqual(250);
+    expect(label).toMatch(/-[0-9a-f]{6}$/);
+  });
+});
+
+describe('buildSummary', () => {
+  it('formats [OSS] name:version — rating', async () => {
+    const components = await parseWaltzReport(fixtureBuffer('sample-report.xlsx'));
+    const exampleLib = components.find(c => c.nameVersion === 'example-lib:1.2.3')!;
+    expect(buildSummary(exampleLib)).toBe('[OSS] example-lib:1.2.3 — Critical');
+  });
+});
+
+describe('buildLabels', () => {
+  it('always includes oss-dependency + the sanitized component label', async () => {
+    const components = await parseWaltzReport(fixtureBuffer('sample-report.xlsx'));
+    const exampleLib = components.find(c => c.nameVersion === 'example-lib:1.2.3')!;
+    expect(buildLabels(exampleLib)).toEqual(['oss-dependency', sanitizeComponentLabel(exampleLib.nameVersion)]);
+  });
+
+  it('merges in template labels without duplicates', async () => {
+    const components = await parseWaltzReport(fixtureBuffer('sample-report.xlsx'));
+    const exampleLib = components.find(c => c.nameVersion === 'example-lib:1.2.3')!;
+    expect(buildLabels(exampleLib, ['oss-dependency', 'team-payments'])).toEqual([
+      'oss-dependency', sanitizeComponentLabel(exampleLib.nameVersion), 'team-payments',
+    ]);
+  });
+});
+
+describe('buildDescriptionWiki', () => {
+  it('includes rating, the most critical vulnerability, affected artifacts, and a Known vulnerabilities table sorted by severity/CVSS', async () => {
+    const components = await parseWaltzReport(fixtureBuffer('sample-report.xlsx'));
+    const exampleLib = components.find(c => c.nameVersion === 'example-lib:1.2.3')!;
+    const wiki = buildDescriptionWiki(exampleLib);
+    expect(wiki).toContain('h3. Max Vuln Rating');
+    expect(wiki).toContain('Critical');
+    expect(wiki).toContain('h3. Most Critical Vulnerability');
+    expect(wiki).toContain('*CVE-2099-0001* — Improper input validation may allow remote code execution via crafted deserialization payloads.');
+    expect(wiki).toContain('h3. Affected artifacts (1 total)');
+    expect(wiki).toContain('/app/services/checkout/package-lock.json');
+    expect(wiki).toContain('h3. Known vulnerabilities (2 total');
+    // Known vulnerabilities renders as a real Jira wiki table (built from a Markdown table via markdownToJiraWiki()).
+    expect(wiki).toContain('||CVE||Severity||CVSS||Fixed Version||');
+    expect(wiki).toContain('|CVE-2099-0001|Critical|9.8|1.2.4|');
+    expect(wiki).toContain('|CVE-2099-0002|High|7.5|1.2.4|');
+    expect(wiki.indexOf('CVE-2099-0001')).toBeLessThan(wiki.indexOf('CVE-2099-0002')); // higher CVSS first
+    // the highlighted "most critical" mention must come before the full known-vulnerabilities table
+    expect(wiki.indexOf('h3. Most Critical Vulnerability')).toBeLessThan(wiki.indexOf('h3. Known vulnerabilities'));
+  });
+
+  it('omits the artifacts/CVE sections gracefully when a component has none', async () => {
+    const components = await parseWaltzReport(fixtureBuffer('sample-report.xlsx'));
+    const exampleHttp = components.find(c => c.nameVersion === 'example-http:3.3.3')!;
+    const wiki = buildDescriptionWiki(exampleHttp);
+    expect(wiki).toContain('h3. Most Critical Vulnerability');
+    expect(wiki).toContain('No CVE-level detail was reported for this component.');
+    expect(wiki).toContain('No affected artifact paths were reported');
+  });
+
+  it('falls back to a placeholder when the top vulnerability has no CVE Summary cell', () => {
+    const noSummary: WaltzComponent = {
+      nameVersion: 'example-nosum:1.0.0',
+      maxVulnRating: 'High',
+      remediationAction: null,
+      instancePaths: [],
+      vulnerabilities: [{ cveId: 'CVE-2099-0099', cveSummary: null, overallSeverity: 'High', cvssV3Score: 7.2, fixedVersion: null }],
+    };
+    const wiki = buildDescriptionWiki(noSummary);
+    expect(wiki).toContain('*CVE-2099-0099* — No summary reported.');
+  });
+
+  it('caps the shown CVE table at 10 rows and adds a "+N more" note', () => {
+    const many: WaltzComponent = {
+      nameVersion: 'example-many:9.9.9',
+      maxVulnRating: 'Critical',
+      remediationAction: null,
+      instancePaths: [],
+      vulnerabilities: Array.from({ length: 14 }, (_, i) => ({
+        cveId: `CVE-2099-${String(i).padStart(4, '0')}`,
+        cveSummary: `Fictitious summary for issue ${i}.`,
+        overallSeverity: 'High',
+        cvssV3Score: 7,
+        fixedVersion: null,
+      })),
+    };
+    const wiki = buildDescriptionWiki(many);
+    expect(wiki).toContain('(14 total — showing top 10)');
+    expect(wiki).toContain('+4 more not shown');
+    expect(wiki).toContain('*CVE-2099-0000* — Fictitious summary for issue 0.'); // lowest cveId wins tie-break, is "most critical"
+    expect(wiki).toContain('|CVE-2099-0000|High|7|n/a|'); // same row also appears in the Known vulnerabilities table
+  });
+
+  it('caps the shown affected-artifacts list at 25 paths and adds a "+N more" note', () => {
+    const many: WaltzComponent = {
+      nameVersion: 'example-widepath:1.0.0',
+      maxVulnRating: 'High',
+      remediationAction: null,
+      instancePaths: Array.from({ length: 30 }, (_, i) => `/app/services/svc-${i}/package-lock.json`),
+      vulnerabilities: [],
+    };
+    const wiki = buildDescriptionWiki(many);
+    expect(wiki).toContain('h3. Affected artifacts (30 total — showing top 25)');
+    expect(wiki).toContain('+5 more not shown');
+    expect(wiki).toContain('/app/services/svc-0/package-lock.json');
+    expect(wiki).not.toContain('/app/services/svc-29/package-lock.json');
   });
 });

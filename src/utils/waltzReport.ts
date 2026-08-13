@@ -1,4 +1,6 @@
+import { createHash } from 'crypto';
 import { readSheet, parseSheetData, SheetNotFoundError } from 'read-excel-file/node';
+import { markdownToJiraWiki } from './markdownToJiraWiki';
 
 export interface WaltzVulnerability {
   cveId: string;
@@ -158,4 +160,105 @@ export function filterComponents(components: WaltzComponent[], options: WaltzFil
     const action = (c.remediationAction ?? '').trim();
     return allowedActions.has(action);
   });
+}
+
+const MAX_LABEL_LENGTH = 250; // safety margin under Jira's actual label length limit
+const MAX_CVES_SHOWN = 10;
+const MAX_ARTIFACTS_SHOWN = 25; // mirrors MAX_CVES_SHOWN's "+N more" pattern for the artifact-paths list
+const LABEL_HASH_LENGTH = 6; // hex chars appended to disambiguate labels that sanitize to the same text
+
+// sanitizeComponentLabel()'s character-collapsing is lossy (e.g. Maven "my_lib" and "my-lib" both
+// become "my-lib" once the underscore is replaced by a hyphen), so two distinct components can land
+// on the identical readable label — silently mismatching one to the other's existing ticket during
+// dedup. This 6-hex-char suffix, derived from the *raw* nameVersion, keeps the label human-readable
+// while making that collision cryptographically negligible (component labels stay literal, not fully
+// hashed, per the design point in CLAUDE.md).
+function labelHashSuffix(nameVersion: string): string {
+  return createHash('sha256').update(nameVersion).digest('hex').slice(0, LABEL_HASH_LENGTH);
+}
+
+export function sanitizeComponentLabel(nameVersion: string): string {
+  const sanitized = nameVersion
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+  const suffix = `-${labelHashSuffix(nameVersion)}`;
+  const readableBudget = MAX_LABEL_LENGTH - 'oss-dep-'.length - suffix.length;
+  const readable = sanitized.length > readableBudget ? sanitized.slice(0, readableBudget) : sanitized;
+  return `oss-dep-${readable}${suffix}`;
+}
+
+export function buildLabels(component: WaltzComponent, templateLabels: string[] = []): string[] {
+  const own = ['oss-dependency', sanitizeComponentLabel(component.nameVersion)];
+  return [...new Set([...own, ...templateLabels])];
+}
+
+export function buildSummary(component: WaltzComponent): string {
+  return `[OSS] ${component.nameVersion} — ${component.maxVulnRating}`;
+}
+
+function sortVulnerabilities(vulns: WaltzVulnerability[]): WaltzVulnerability[] {
+  return [...vulns].sort((a, b) => {
+    const ratingDiff = vulnRatingRank(b.overallSeverity ?? 'None') - vulnRatingRank(a.overallSeverity ?? 'None');
+    if (ratingDiff !== 0) return ratingDiff;
+    const scoreDiff = (b.cvssV3Score ?? -1) - (a.cvssV3Score ?? -1);
+    if (scoreDiff !== 0) return scoreDiff;
+    return a.cveId.localeCompare(b.cveId);
+  });
+}
+
+// Authored as Markdown (headings, bullets, a real pipe table) and converted once at the end via
+// markdownToJiraWiki() — avoids hand-writing Jira's ||table|| syntax; use **bold** (not Jira's
+// single-asterisk bold) in the Markdown source since the converter's inline() pass would otherwise
+// mistake a lone-asterisk span for italics.
+export function buildDescriptionWiki(component: WaltzComponent): string {
+  const lines: string[] = [];
+  const sorted = sortVulnerabilities(component.vulnerabilities);
+
+  lines.push('### Max Vuln Rating');
+  lines.push(component.maxVulnRating);
+  lines.push('');
+
+  // Surfaces *why* this ticket exists at a glance, ahead of the full artifact/CVE lists below.
+  lines.push('### Most Critical Vulnerability');
+  if (sorted.length === 0) {
+    lines.push('No CVE-level detail was reported for this component.');
+  } else {
+    const top = sorted[0];
+    lines.push(`**${top.cveId}** — ${top.cveSummary ?? 'No summary reported.'}`);
+  }
+  lines.push('');
+
+  const artifactTotal = component.instancePaths.length;
+  lines.push(`### Affected artifacts (${artifactTotal} total${artifactTotal > MAX_ARTIFACTS_SHOWN ? ` — showing top ${MAX_ARTIFACTS_SHOWN}` : ''})`);
+  if (artifactTotal === 0) {
+    lines.push('No affected artifact paths were reported for this component.');
+  } else {
+    for (const p of component.instancePaths.slice(0, MAX_ARTIFACTS_SHOWN)) lines.push(`- ${p}`);
+    if (artifactTotal > MAX_ARTIFACTS_SHOWN) lines.push(`+${artifactTotal - MAX_ARTIFACTS_SHOWN} more not shown`);
+  }
+  lines.push('');
+
+  const total = component.vulnerabilities.length;
+  lines.push(`### Known vulnerabilities (${total} total${total > MAX_CVES_SHOWN ? ` — showing top ${MAX_CVES_SHOWN}` : ''})`);
+  if (total === 0) {
+    lines.push('No CVE-level detail was reported for this component.');
+  } else {
+    lines.push('| CVE | Severity | CVSS | Fixed Version |');
+    lines.push('| --- | --- | --- | --- |');
+    for (const v of sorted.slice(0, MAX_CVES_SHOWN)) {
+      const score = v.cvssV3Score != null ? String(v.cvssV3Score) : 'n/a';
+      lines.push(`| ${v.cveId} | ${v.overallSeverity ?? 'Unknown'} | ${score} | ${v.fixedVersion ?? 'n/a'} |`);
+    }
+    if (total > MAX_CVES_SHOWN) {
+      lines.push('');
+      lines.push(`+${total - MAX_CVES_SHOWN} more not shown`);
+    }
+  }
+  lines.push('');
+  lines.push('### Component');
+  lines.push(component.nameVersion);
+
+  return markdownToJiraWiki(lines.join('\n'));
 }
