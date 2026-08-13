@@ -61,6 +61,10 @@
       {
         "command": "ticket-sidekick.importVeracodeReport",
         "title": "Ticket Sidekick: Create Jira tickets from Veracode report (.xml)"
+      },
+      {
+        "command": "ticket-sidekick.importWaltzReport",
+        "title": "Ticket Sidekick: Create Jira tickets from OSS report (.xlsx)"
       }
     ],
     "configuration": [
@@ -250,6 +254,24 @@
             "description": "Veracode remediation_status values to include when importing a Detailed Report (e.g. exclude 'Fixed' or 'Mitigated'). Valid values: Cannot Reproduce, Fixed, Mitigated, New, Open, Potential False Positive, Remediated by User, Reopened, Reviewed - No Action Taken."
           }
         }
+      },
+      {
+        "id": "waltz",
+        "title": "Ticket Sidekick — OSS Report",
+        "properties": {
+          "ticketSidekick.waltz.minVulnRating": {
+            "type": "string",
+            "enum": ["Low", "Medium", "High", "Critical"],
+            "default": "High",
+            "description": "Minimum 'Max Vuln Rating' to include when importing an OSS report. Components rated below this are filtered out by default (still visible in the raw file)."
+          },
+          "ticketSidekick.waltz.includeRemediationActions": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": ["", "Remediate"],
+            "description": "Remediation Action values to include when importing an OSS report (empty string means the column was blank). Components with any other action (e.g. 'Risk capture') are excluded by default."
+          }
+        }
       }
     ]
   },
@@ -269,11 +291,13 @@
     "@vscode/vsce": "^3.9.1",
     "esbuild": "^0.25.0",
     "typescript": "^5.4.0",
-    "vitest": "^1.6.0"
+    "vitest": "^1.6.0",
+    "write-excel-file": "^4.1.1"
   },
   "dependencies": {
     "fast-xml-parser": "^5.10.1",
     "minimatch": "^9.0.9",
-    "postal-mime": "^2.7.4"
+    "postal-mime": "^2.7.4",
+    "read-excel-file": "^9.3.10"
   }
 }

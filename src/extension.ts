@@ -13,6 +13,8 @@ import { selectDefaultIssueType } from './participant/sessionState';
 import type { EmailContentSession } from './participant/sessionState';
 import { parseVeracodeReport, filterFlaws } from './utils/veracodeReport';
 import type { VeracodeTemplateSelectionSession } from './participant/sessionState';
+import { parseWaltzReport, filterComponents, MAX_REPORT_BYTES } from './utils/waltzReport';
+import { buildWaltzTemplateSession } from './participant/jira/waltzHandler';
 import { logDiag } from './utils/diagLog';
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -298,6 +300,88 @@ export function activate(context: vscode.ExtensionContext): void {
 
       await context.workspaceState.update('jira.session.veracodeTemplateSelection', session);
       await vscode.commands.executeCommand('workbench.action.chat.open', { query: '@jira import veracode report' });
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('ticket-sidekick.importWaltzReport', async () => {
+      const uris = await vscode.window.showOpenDialog({
+        canSelectMany: false,
+        filters: { 'OSS report': ['xlsx'] },
+        defaultUri: vscode.Uri.file(path.join(os.homedir(), 'Downloads')),
+        title: 'Select OSS Report (.xlsx)',
+      });
+      if (!uris || uris.length === 0) return;
+      const reportPath = uris[0].fsPath;
+
+      // Check credentials before paying for the file read/parse — no point loading up to 20 MB and
+      // parsing it if Jira isn't even configured yet.
+      const config = await configService.getConfig();
+      if (!config.baseUrl || !config.token) {
+        vscode.window.showErrorMessage('Ticket Sidekick: Configure Jira credentials first.');
+        return;
+      }
+
+      let buffer: Buffer;
+      try {
+        const stat = await fs.promises.stat(reportPath);
+        if (stat.size > MAX_REPORT_BYTES) {
+          vscode.window.showErrorMessage(`Ticket Sidekick: Report exceeds the ${MAX_REPORT_BYTES / (1024 * 1024)} MB size limit.`);
+          return;
+        }
+        buffer = await fs.promises.readFile(reportPath);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logDiag('extension', 'error', `Could not read OSS report — ${reportPath}`, { reportPath, error: message });
+        vscode.window.showErrorMessage(`Ticket Sidekick: Could not read file: ${message}`);
+        return;
+      }
+
+      const waltzCfg = vscode.workspace.getConfiguration('ticketSidekick');
+      let components;
+      try {
+        const allComponents = await parseWaltzReport(buffer);
+        components = filterComponents(allComponents, {
+          minVulnRating: waltzCfg.get<string>('waltz.minVulnRating') ?? 'High',
+          includeRemediationActions: waltzCfg.get<string[]>('waltz.includeRemediationActions') ?? ['', 'Remediate'],
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logDiag('extension', 'error', `Could not parse OSS report — ${reportPath}`, { reportPath, error: message });
+        vscode.window.showErrorMessage(`Ticket Sidekick: Could not parse OSS report: ${message}`);
+        return;
+      }
+
+      if (components.length === 0) {
+        vscode.window.showInformationMessage(
+          'Ticket Sidekick: No components in this report matched your current rating/remediation filters ' +
+          '(ticketSidekick.waltz.minVulnRating / ticketSidekick.waltz.includeRemediationActions).',
+        );
+        return;
+      }
+
+      let projectKey = waltzCfg.get<string>('jira.defaultProject') ?? '';
+      if (!projectKey) {
+        const entered = await vscode.window.showInputBox({
+          prompt: 'Enter the Jira project key for the new tickets (e.g. PROJ)',
+          placeHolder: 'PROJECT',
+          ignoreFocusOut: true,
+        });
+        if (!entered) return;
+        projectKey = entered;
+      }
+
+      const jiraClient = new JiraApiClient({
+        baseUrl: config.baseUrl,
+        authType: config.authType,
+        token: config.token,
+        onDiag: (level, message, details) => logDiag('jira.apiClient', level, message, details),
+      });
+
+      const session = await buildWaltzTemplateSession(components, path.basename(reportPath), projectKey, jiraClient);
+
+      await context.workspaceState.update('jira.session.waltzTemplateSelection', session);
+      await vscode.commands.executeCommand('workbench.action.chat.open', { query: '@jira import oss report' });
     }),
   );
 

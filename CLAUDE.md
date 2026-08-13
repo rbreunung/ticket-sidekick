@@ -58,6 +58,8 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/utils/emlParser.ts` | Parses `.eml` files via `postal-mime`; returns `ParsedEml` (subject, sender, date, htmlBody, plainBody, inlineImageMap, attachments) |
 | `src/utils/veracodeReport.ts` | Veracode Detailed Report XML parsing, filtering, short-label/summary/description/label builders, and de-dup helpers — pure, no `vscode` import |
 | `src/participant/jira/veracodeHandler.ts` | Veracode import chat flow: template selection, already-ticketed de-dup + review screen, batch ticket creation |
+| `src/utils/waltzReport.ts` | Waltz/SCA OSS Report `.xlsx` parsing, filtering, summary/description/label builders (labels are sanitized + 6-hex-char-hash-suffixed for collision safety), and de-dup + review-row helpers — pure, no `vscode` import |
+| `src/participant/jira/waltzHandler.ts` | Waltz OSS report import chat flow: template selection, already-ticketed de-dup + review screen (rows capped at `BATCH_LIMIT`), batch ticket creation |
 | `src/participant/BitbucketParticipant.ts` | Bitbucket chat handler: check, PR review, multi-turn follow-ups |
 | `src/participant/sessionState.ts` | VS Code-free pure helpers and Jira multi-turn session types; includes `pickEmailOption()` for unified template+issue-type selection |
 | `src/participant/reviewSessionState.ts` | Bitbucket session types + all pure review helpers: `parsePrUrl`, `hasPrUrl`, `parseDiff`, `parseFollowUpIntent` (parses multi-turn follow-up messages into a typed `FollowUpIntent` — `add` with `targets: number[] \| 'all'` and extracted note, or `explain` with cleaned `question` text and optional `findingRef`), `buildAdaptiveChunks`, `numberDiffLines` (render-only gutter), `locateAnchor` + `resolveFindingAnchors` (verify line from quoted `anchorCode`, tag provenance), `dedupeFindings`, `extractHunkAround`, `selectFilesWithinBudget`, `parseCriticKeep` |
@@ -182,6 +184,13 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
 | --- | --- |
 | Delete .eml after import | `ticketSidekick.email.deleteEmlAfterImport` |
 
+### OSS report settings
+
+| Setting | Key |
+| --- | --- |
+| Minimum vuln rating | `ticketSidekick.waltz.minVulnRating` (default `High`) |
+| Included remediation actions | `ticketSidekick.waltz.includeRemediationActions` (default `["", "Remediate"]`) |
+
 ## Credentials
 
 Always stored in `vscode.ExtensionContext.secrets` (VS Code SecretStorage, OS-encrypted). Never in `settings.json`.
@@ -223,6 +232,10 @@ practices, workflow patterns), organized by category with YAML frontmatter
 (`module`, `tags`, `problem_type`). Relevant when implementing or debugging
 in documented areas.
 
+`CONCEPTS.md` — shared domain vocabulary (entities, named processes, status
+concepts) with project-specific meaning. Relevant when orienting to the
+codebase or discussing domain concepts.
+
 ## Branch ticket detection
 
 Regex: `[A-Z][A-Z0-9]+-\d+` applied to `git branch --show-current` output.
@@ -251,8 +264,10 @@ Multi-turn flows store structured state in `vscode.ExtensionContext.workspaceSta
 | `EmailContentSession` | `jira.session.emailContent` | `<!-- jira:email-content -->` |
 | `VeracodeTemplateSelectionSession` | `jira.session.veracodeTemplateSelection` | `<!-- jira:veracode-template -->` |
 | `VeracodeReviewSession` | `jira.session.veracodeReview` | `<!-- jira:veracode-review -->` |
+| `WaltzTemplateSelectionSession` | `jira.session.waltzTemplateSelection` | `<!-- jira:waltz-template -->` |
+| `WaltzReviewSession` | `jira.session.waltzReview` | `<!-- jira:waltz-review -->` |
 
-Detection order in the Jira handler: resolution selection → transition review → filter selection → bulk-update-review → template selection → issue type selection → creation → content → more-comments → check command → load-skipped → email content → veracode template selection → veracode review → comment list → intent parse.
+Detection order in the Jira handler: resolution selection → transition review → filter selection → bulk-update-review → template selection → issue type selection → creation → content → more-comments → check command → load-skipped → email content → veracode template selection → veracode review → Waltz template selection → Waltz review → comment list → intent parse.
 
 ### Bitbucket sessions
 
@@ -422,3 +437,26 @@ Users export a Detailed Report XML from Veracode and import it via the VS Code c
 ### Known limitation
 
 The multi-step vulnerability data-path trace shown in Veracode's web UI ("Injection Point → ... → Flaw") is **not present** in the Detailed Report XML format — confirmed by full XSD schema review and empirical inspection of a real report. Only the flaw's own `description` attribute (which sometimes names generic tainted-source APIs, but not the actual call chain) is available and is included verbatim in the ticket. Full data-path support would require a different Veracode API/export (e.g. the Findings REST API) and is out of scope for this feature.
+
+## Waltz OSS report import
+
+Users export an "OSS Report" `.xlsx` from Waltz (or a compatible SCA tool) and import it via the VS Code command or directly from chat (`@jira import oss report`).
+
+### Import flow
+
+1. Command Palette → **Ticket Sidekick: Create Jira tickets from OSS report (.xlsx)** (or trigger from chat, which opens its own file picker)
+2. `parseWaltzReport(buffer)` (`read-excel-file`-based) joins the required `ComponentRemediations` sheet with the optional `VersionInstances`/`Vulnerabilities` sheets on `Component name and version`; guarded by a 20 MB size cap and a `PARSE_TIMEOUT_MS` (15s) hard ceiling. The timeout is a `Promise.race`, not a true cancellation — it bounds how long the user waits before seeing an error on a pathological (e.g. decompression-bomb-style single-entry) `.xlsx`, but the underlying parse keeps consuming CPU/memory in the background after it fires; it does not itself prevent resource exhaustion
+3. `filterComponents()` applies `ticketSidekick.waltz.minVulnRating` and `ticketSidekick.waltz.includeRemediationActions`
+4. `WaltzTemplateSelectionSession` stored in `workspaceState('jira.session.waltzTemplateSelection')`; chat opened with `@jira import oss report`
+5. User picks a template or issue type (`pickEmailOption()`, reused from the email flow) → `FieldResolver.resolve()` resolves the template's fields
+6. De-dup search: `TicketService.searchTicketsRaw` is called in chunks of 40 sanitized component labels with a `labels in ("oss-dep-...", ...)` JQL clause; matches become the "Already ticketed" section of the review screen (excluded by default, toggleable back in). A dedup-search failure degrades gracefully (empty dedup map + warning) rather than aborting the import.
+7. `WaltzReviewSession` stored in `workspaceState('jira.session.waltzReview')`; "new" (not-yet-ticketed) rows are capped at `BATCH_LIMIT` (50) before the session is built — `totalNewMatched` records the true match count so the review screen can note how many more exist and that re-running the import (after this batch completes) picks up the rest via the same dedup mechanism. User replies **ok** / **(c)** / a list of row ids to toggle inclusion.
+8. On **ok**, up to `BATCH_LIMIT` tickets are created via the existing `TicketService.createTicket` — one per included component, labeled `oss-dependency` + a sanitized, hash-suffixed component label (merged with any template labels), with a Markdown-authored description (converted to Jira wiki via `markdownToJiraWiki()`) covering max vuln rating, the single most critical CVE, affected artifacts (capped at 25, "+N more"), and a "Known vulnerabilities" table (capped at 10, "+N more")
+
+### Component labels
+
+`sanitizeComponentLabel()` lowercases and hyphenates disallowed separators (dots pass through unchanged, so version numbers like `1.2.3` stay readable), then appends a 6-hex-char SHA-256-derived hash of the *raw* `nameVersion` — this keeps the label human-readable while making it collision-safe as the sole dedup key, since two distinct components (e.g. differing only in a separator character) can otherwise sanitize to the identical readable text.
+
+### Known limitation
+
+The report's real-world schema (sheet names, column headers) was validated against a single inspected `.xlsx` export; a schema drift in a different Waltz version, report template, or locale would break parsing for some users with no test coverage to catch it in advance — tracked as an open question in the plan doc, not yet validated against a second real export.

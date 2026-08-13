@@ -1,8 +1,11 @@
 import type { JiraComment, JiraFieldMeta, JiraFilter, JiraSprintCandidate } from '../jira/IJiraClient';
 import { formatJiraBody } from '../utils/markdownFormatter';
 import type { VeracodeFlaw, VeracodeReviewRow } from '../utils/veracodeReport';
+import type { WaltzComponent, WaltzReviewRow } from '../utils/waltzReport';
+import { BATCH_LIMIT } from '../utils/waltzReport';
 
 export type { VeracodeReviewRow } from '../utils/veracodeReport';
+export type { WaltzReviewRow } from '../utils/waltzReport';
 
 export interface CreationSession {
   template: string;
@@ -500,6 +503,107 @@ export function parseVeracodeReviewInput(reply: string, rowIds: string[]): Verac
 // Pure so it's independently testable — the vscode-dependent handler just calls this and
 // re-streams the result, rather than mutating VeracodeReviewRow objects in place.
 export function applyVeracodeToggle(rows: VeracodeReviewRow[], ids: string[]): VeracodeReviewRow[] {
+  const toggleSet = new Set(ids);
+  return rows.map(r => (toggleSet.has(r.id) ? { ...r, included: !r.included } : r));
+}
+
+export interface WaltzTemplateSelectionSession {
+  reportFileName: string;
+  projectKey: string;
+  components: WaltzComponent[]; // already filtered by minVulnRating/includeRemediationActions
+  availableTemplates: Array<{ name: string; issueType: string }>;
+  availableIssueTypes: string[];
+}
+
+export interface WaltzReviewSession {
+  projectKey: string;
+  issueType: string;
+  templateName: string | null;
+  additionalFields: Record<string, unknown>; // resolved template fields (labels merged in per-row already)
+  rows: WaltzReviewRow[]; // "new" rows are already capped at BATCH_LIMIT by the caller (waltzHandler.ts) — see totalNewMatched
+  totalNewMatched: number; // total new (not-yet-ticketed) components the report matched, before the BATCH_LIMIT cap
+}
+
+export function buildWaltzReviewTable(rows: WaltzReviewRow[], baseUrl?: string, totalNewMatched?: number): string {
+  const ticketed = rows.filter(r => r.existingTicketKey !== null);
+  const fresh = rows.filter(r => r.existingTicketKey === null);
+  const lines: string[] = [];
+
+  if (ticketed.length > 0) {
+    lines.push('### Already ticketed');
+    lines.push('| # | Component | Rating | Ticket | Include? |');
+    lines.push('|---|-----------|--------|--------|----------|');
+    for (const r of ticketed) {
+      const ticketRef = baseUrl ? `[${r.existingTicketKey}](${baseUrl}/browse/${r.existingTicketKey})` : r.existingTicketKey;
+      lines.push(`| ${r.id} | ${r.nameVersion} | ${r.maxVulnRating} | ${ticketRef} | ${r.included ? '✓ re-create' : '_excluded_'} |`);
+    }
+    lines.push('');
+  }
+
+  lines.push('### New — will create');
+  if (fresh.length === 0) {
+    lines.push('_All matching components already have a ticket._');
+  } else {
+    lines.push('| # | Component | Rating | Include? |');
+    lines.push('|---|-----------|--------|----------|');
+    for (const r of fresh) {
+      lines.push(`| ${r.id} | ${r.nameVersion} | ${r.maxVulnRating} | ${r.included ? '✓' : '_excluded_'} |`);
+    }
+  }
+  lines.push('');
+
+  // Row-count truncation note: waltzHandler.ts caps "new" rows at BATCH_LIMIT before they ever reach
+  // this table, so a report with more matches than BATCH_LIMIT would otherwise silently drop the
+  // remainder with no signal. Surfacing the true total here, plus how to get the rest, closes that
+  // gap — and reuses the existing dedup mechanism as the "resume" path (re-running after this batch
+  // completes surfaces the next BATCH_LIMIT new candidates, since the ones just created are now
+  // dedup-matched).
+  if (totalNewMatched !== undefined && totalNewMatched > fresh.length) {
+    lines.push(
+      `_${totalNewMatched - fresh.length} more matched component(s) not shown — re-run the import after ` +
+      `this batch completes; already-created tickets are automatically skipped next time._`,
+    );
+    lines.push('');
+  }
+
+  const willCreate = rows.filter(r => r.included).length;
+  lines.push(`**${willCreate}** ticket(s) will be created.`);
+  // Defensive backstop: "new" rows are already capped at BATCH_LIMIT above, but a user can still toggle
+  // extra "already ticketed" rows back to "re-create", so this can still fire even with the cap in place.
+  if (willCreate > BATCH_LIMIT) {
+    lines.push('');
+    lines.push(`_Only the first ${BATCH_LIMIT} included rows will be created this run — re-run the import afterward for the remainder._`);
+  }
+  lines.push('');
+  lines.push('Reply **ok** to proceed, **(c)** to cancel, or a list of ids to toggle (e.g. `2 4` or `A1`).');
+
+  return lines.join('\n');
+}
+
+export type WaltzReviewParseResult =
+  | { action: 'ok' }
+  | { action: 'cancel' }
+  | { action: 'toggle'; ids: string[] }
+  | { action: 'invalid' };
+
+export function parseWaltzReviewInput(reply: string, rowIds: string[]): WaltzReviewParseResult {
+  const normalized = reply.trim().toLowerCase();
+  if (normalized === 'ok') return { action: 'ok' };
+  if (normalized === 'c' || normalized === 'cancel') return { action: 'cancel' };
+
+  const tokens = normalized.split(/[\s,]+/).filter(Boolean);
+  const matched: string[] = [];
+  for (const token of tokens) {
+    const found = rowIds.find(id => id.toLowerCase() === token);
+    if (found) matched.push(found);
+  }
+  if (matched.length === 0) return { action: 'invalid' };
+  return { action: 'toggle', ids: matched };
+}
+
+// Pure so it's independently testable — the vscode-dependent handler just calls this and
+// re-streams the result, rather than mutating WaltzReviewRow objects in place.
+export function applyWaltzToggle(rows: WaltzReviewRow[], ids: string[]): WaltzReviewRow[] {
   const toggleSet = new Set(ids);
   return rows.map(r => (toggleSet.has(r.id) ? { ...r, included: !r.included } : r));
 }

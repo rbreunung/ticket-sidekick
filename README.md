@@ -417,6 +417,35 @@ Each ticket is labeled `veracode`, `veracode-issue-<id>`, and `cwe-<id>` (plus a
 
 Only `<staticflaws>` are imported (dynamic/manual analysis findings are out of scope). A batch creates at most 50 tickets per run — re-run the import to process the remainder of a larger report.
 
+### Create Jira tickets from an OSS report (.xlsx)
+
+Export an "OSS Report" from Waltz (or a compatible SCA tool) as `.xlsx`, then:
+
+1. Run **Command Palette → Ticket Sidekick: Create Jira tickets from OSS report (.xlsx)**
+2. Select the `.xlsx` file
+3. Pick a template or issue type in the `@jira` chat
+4. Review the component list — already-ticketed components are shown separately and excluded by default; reply with row numbers to toggle inclusion/exclusion, or **ok** to proceed
+5. Tickets are created one per component, with the max vulnerability rating, the single most critical CVE up front, affected artifact paths, and a table of known vulnerabilities
+
+You can also trigger the import from the chat directly:
+
+```text
+@jira import oss report
+```
+
+A file picker opens, and you proceed as above.
+
+Each ticket is labeled `oss-dependency` and a sanitized, collision-safe version of the component's name (plus any labels from your chosen template), so re-running the import will not create duplicate tickets for components that already have one.
+
+**Settings:**
+
+| Setting | Default | Description |
+|---|---|---|
+| `ticketSidekick.waltz.minVulnRating` | `High` | Minimum "Max Vuln Rating" (Low/Medium/High/Critical) included by default |
+| `ticketSidekick.waltz.includeRemediationActions` | `["", "Remediate"]` | Remediation Action values included by default (empty string means the column was blank) |
+
+A batch creates at most 50 tickets per run — re-run the import afterward to process the remainder of a larger report; already-created tickets are automatically skipped next time via the dedup check.
+
 ### Templates and cleanup rules
 
 Create a `.jira-templates.json` file in your workspace root to define per-application templates with default fields and guided description collection, plus named cleanup rules for bulk status transitions.
