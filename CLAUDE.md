@@ -232,6 +232,10 @@ practices, workflow patterns), organized by category with YAML frontmatter
 (`module`, `tags`, `problem_type`). Relevant when implementing or debugging
 in documented areas.
 
+`CONCEPTS.md` — shared domain vocabulary (entities, named processes, status
+concepts) with project-specific meaning. Relevant when orienting to the
+codebase or discussing domain concepts.
+
 ## Branch ticket detection
 
 Regex: `[A-Z][A-Z0-9]+-\d+` applied to `git branch --show-current` output.
