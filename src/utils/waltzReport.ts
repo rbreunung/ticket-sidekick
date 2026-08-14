@@ -1,6 +1,9 @@
 import { createHash } from 'crypto';
 import { readSheet, parseSheetData, SheetNotFoundError, type Schema } from 'read-excel-file/node';
 import { markdownToJiraWiki } from './markdownToJiraWiki';
+import {
+  MAX_REPORT_BYTES as SHARED_MAX_REPORT_BYTES, sanitizeCellText, sanitizeStandaloneLine,
+} from './reportImport';
 
 export interface WaltzVulnerability {
   cveId: string;
@@ -20,7 +23,8 @@ export interface WaltzComponent {
 
 // Exported (rather than a local/duplicated constant) so waltzHandler.ts and extension.ts's file-size
 // pre-check share this single source of truth instead of three independently hardcoded copies.
-export const MAX_REPORT_BYTES = 20 * 1024 * 1024; // 20 MB
+// Traces back to reportImport.ts's shared MAX_REPORT_BYTES (KTD4) — value unchanged (20 MB).
+export const MAX_REPORT_BYTES = SHARED_MAX_REPORT_BYTES;
 const REQUIRED_SHEET = 'ComponentRemediations';
 
 export function assertSafeWaltzReportSize(buffer: Buffer): void {
@@ -245,24 +249,9 @@ function sortVulnerabilities(vulns: WaltzVulnerability[]): WaltzVulnerability[] 
   });
 }
 
-// Every value threaded through this function originates in spreadsheet cells the user supplied —
-// untrusted input. markdownToJiraWiki() is a simple line-based/regex converter with no
-// escape-character support at all (a backslash has no special meaning to it), so neutralizing
-// means removing or replacing the characters it treats as structural, not backslash-prefixing them:
-//   - embedded newlines are flattened to a space FIRST — the converter re-parses every joined line
-//     independently, so an embedded "\n# Fake Heading" or a full "\n| injected | row |" line would
-//     otherwise inject a brand-new heading/table/list/quote/code-fence the author never wrote
-//   - a literal '|' is replaced — inside one of our own table rows it would silently split into
-//     extra cells and misalign the table (the line-based parser just does `line.split('|')`)
-//   - '*', '_', '`', '[', ']' are stripped — inline() applies bold/italic/code-span/link formatting
-//     anywhere in a line (not just at line-start), so a crafted CVE summary can't render a fake
-//     clickable link, or bold/italic text the author never wrote
-function sanitizeCellText(value: string): string {
-  return value
-    .replace(/\r\n|\r|\n/g, ' ')
-    .replace(/\|/g, '/')
-    .replace(/[*_`[\]]/g, '');
-}
+// sanitizeCellText()/sanitizeStandaloneLine() (both untrusted-input sanitizers for values that get
+// interpolated into the Markdown built here) now live in reportImport.ts as shared primitives — see
+// the doc comments there for exactly what each one neutralizes and why.
 
 // Authored as Markdown (headings, bullets, a real pipe table) and converted once at the end via
 // markdownToJiraWiki() — avoids hand-writing Jira's ||table|| syntax; use **bold** (not Jira's
@@ -273,7 +262,7 @@ export function buildDescriptionWiki(component: WaltzComponent): string {
   const sorted = sortVulnerabilities(component.vulnerabilities);
 
   lines.push('### Max Vuln Rating');
-  lines.push(sanitizeCellText(component.maxVulnRating));
+  lines.push(sanitizeStandaloneLine(component.maxVulnRating));
   lines.push('');
 
   // Surfaces *why* this ticket exists at a glance, ahead of the full artifact/CVE lists below.
@@ -314,51 +303,15 @@ export function buildDescriptionWiki(component: WaltzComponent): string {
   }
   lines.push('');
   lines.push('### Component');
-  lines.push(sanitizeCellText(component.nameVersion));
+  lines.push(sanitizeStandaloneLine(component.nameVersion));
 
   return markdownToJiraWiki(lines.join('\n'));
 }
 
-export const DEDUP_CHUNK_SIZE = 40;
-
-// Defined here (alongside the other batch-shaped constants) and imported by waltzHandler.ts, rather
-// than duplicated as a local constant there, so the ticket-creation cap and the review-screen
-// truncation applied in waltzHandler.ts can never drift apart.
-export const BATCH_LIMIT = 50;
-
-export function chunkComponentLabels(labels: string[]): string[][] {
-  const chunks: string[][] = [];
-  for (let i = 0; i < labels.length; i += DEDUP_CHUNK_SIZE) {
-    chunks.push(labels.slice(i, i + DEDUP_CHUNK_SIZE));
-  }
-  return chunks;
-}
-
-export function buildDedupJql(projectKey: string, labels: string[]): string {
-  const quoted = labels.map(l => `"${l}"`).join(', ');
-  return `project = ${projectKey} AND labels in (${quoted})`;
-}
-
-interface JqlIssueLike {
-  key: string;
-  fields: { labels?: string[] };
-}
-
-export function extractDedupMap(issues: JqlIssueLike[]): Map<string, string> {
-  const map = new Map<string, string>();
-  for (const issue of issues) {
-    for (const label of issue.fields.labels ?? []) {
-      if (!label.startsWith('oss-dep-')) continue;
-      if (!map.has(label)) map.set(label, issue.key); // first match wins if somehow duplicated
-    }
-  }
-  return map;
-}
-
 // Lives here (rather than in sessionState.ts, where the other session-related types live) so that
-// buildReviewRows() below can produce it directly without a type-only circular import between this
-// file and sessionState.ts — mirrors the same layout decision made for VeracodeReviewRow.
-// sessionState.ts re-exports the type for callers that expect it there.
+// reportImportHandler.ts's shared buildReviewRows() can produce it directly without a type-only
+// circular import between this file and sessionState.ts — mirrors the same layout decision made for
+// VeracodeReviewRow. sessionState.ts re-exports the type for callers that expect it there.
 export interface WaltzReviewRow {
   id: string; // '1'..'N' new candidates, 'A1'..'Am' already-ticketed
   nameVersion: string;
@@ -368,29 +321,4 @@ export interface WaltzReviewRow {
   descriptionWiki: string;
   existingTicketKey: string | null;
   included: boolean; // whether this row will be (re)created if the batch runs
-}
-
-export function buildReviewRows(
-  components: WaltzComponent[],
-  dedupMap: Map<string, string>,
-  templateLabels: string[] = [],
-): WaltzReviewRow[] {
-  const rows: WaltzReviewRow[] = [];
-  let newIndex = 0;
-  let ticketedIndex = 0;
-  for (const component of components) {
-    const label = sanitizeComponentLabel(component.nameVersion);
-    const existingTicketKey = dedupMap.get(label) ?? null;
-    rows.push({
-      id: existingTicketKey ? `A${++ticketedIndex}` : `${++newIndex}`,
-      nameVersion: component.nameVersion,
-      maxVulnRating: component.maxVulnRating,
-      summary: buildSummary(component),
-      labels: buildLabels(component, templateLabels),
-      descriptionWiki: buildDescriptionWiki(component),
-      existingTicketKey,
-      included: existingTicketKey === null,
-    });
-  }
-  return rows;
 }

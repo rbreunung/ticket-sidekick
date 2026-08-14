@@ -1,4 +1,8 @@
 import { XMLParser } from 'fast-xml-parser';
+import { markdownToJiraWiki } from './markdownToJiraWiki';
+import {
+  MAX_REPORT_BYTES as SHARED_MAX_REPORT_BYTES, sanitizeCellText, sanitizeStandaloneLine,
+} from './reportImport';
 
 export interface VeracodeFlaw {
   issueId: string;
@@ -23,7 +27,10 @@ export function severityLabel(severity: number): string {
   return SEVERITY_LABELS[severity] ?? `Severity ${severity}`;
 }
 
-const MAX_REPORT_BYTES = 20 * 1024 * 1024; // 20 MB
+// Exported (rather than a local/duplicated constant) so extension.ts's file-size pre-check and any
+// other caller share this single source of truth instead of independently hardcoded copies.
+// Traces back to reportImport.ts's shared MAX_REPORT_BYTES (KTD4) — value unchanged (20 MB).
+export const MAX_REPORT_BYTES = SHARED_MAX_REPORT_BYTES;
 
 // Defense-in-depth: fast-xml-parser does not resolve external entities, but we
 // reject DOCTYPE/ENTITY declarations outright so a malicious file is never even parsed.
@@ -41,6 +48,17 @@ const ARRAY_TAGS = new Set(['severity', 'category', 'cwe', 'flaw', 'para']);
 
 // issueid must be purely numeric — see the JQL-injection defense note in parseVeracodeReport below.
 const ISSUE_ID_PATTERN = /^\d+$/;
+
+// cweid must be purely numeric too. This is a point-fix for a URL-interpolation context
+// specifically: cweId is interpolated directly into a generated CWE-database link
+// (`https://cwe.mitre.org/data/definitions/${flaw.cweId}.html]` in buildDescriptionWiki below), and
+// span-text sanitization (sanitizeCellText()/sanitizeStandaloneLine() in reportImport.ts) does not
+// make a value safe inside a URL — that's a different context with different rules (e.g. a value
+// containing `]` followed by attacker-controlled link/pipe text could break out of the `[text|url]`
+// Jira link syntax even though none of the Markdown-structural characters those sanitizers strip
+// are involved). A future field interpolated into a generated link needs its own validation, not a
+// reuse of the span-text sanitizer.
+const CWE_ID_PATTERN = /^\d+$/;
 
 function toArray<T>(value: T | T[] | undefined | null): T[] {
   if (value === undefined || value === null) return [];
@@ -93,11 +111,15 @@ export function parseVeracodeReport(xml: string): VeracodeFlaw[] {
           if (!ISSUE_ID_PATTERN.test(issueId)) {
             continue;
           }
+          const rawCweId = cwe.cweid != null ? String(cwe.cweid) : null;
+          // Drop (rather than pass through) a malformed cweId instead of letting it survive into
+          // the URL it's later interpolated into — see the CWE_ID_PATTERN comment above.
+          const cweId = rawCweId != null && CWE_ID_PATTERN.test(rawCweId) ? rawCweId : null;
           flaws.push({
             issueId,
             severity: Number(flaw.severity),
             categoryName: category.categoryname,
-            cweId: cwe.cweid != null ? String(cwe.cweid) : null,
+            cweId,
             cweName: cwe.cwename ?? null,
             description: flaw.description ?? '',
             recommendation,
@@ -152,36 +174,66 @@ export function buildSummary(flaw: VeracodeFlaw): string {
   return `${flaw.issueId} - ${ref}${lineSuffix} - ${shortLabel}`;
 }
 
+// Same branching as before (decide on the *original* values so a value that sanitizes down to an
+// empty string — e.g. one consisting only of stripped characters — doesn't silently flip which
+// branch runs), just with each piece sanitized before it's combined into the displayed path.
 function fullSourcePath(flaw: VeracodeFlaw): string | null {
-  if (flaw.sourceFilePath && flaw.sourceFile) return `${flaw.sourceFilePath}${flaw.sourceFile}`;
-  return flaw.sourceFile ?? null;
+  if (flaw.sourceFilePath && flaw.sourceFile) {
+    return `${sanitizeCellText(flaw.sourceFilePath)}${sanitizeCellText(flaw.sourceFile)}`;
+  }
+  return flaw.sourceFile != null ? sanitizeCellText(flaw.sourceFile) : null;
 }
 
-export function buildDescriptionWiki(flaw: VeracodeFlaw): string {
-  const sections: string[] = [];
+// sanitizeCellText()/sanitizeStandaloneLine() (both untrusted-input sanitizers for values that get
+// interpolated into the Markdown built here) live in reportImport.ts as shared primitives — see the
+// doc comments there for exactly what each one neutralizes and why.
 
-  sections.push(`h3. Severity\n${severityLabel(flaw.severity)} (${flaw.severity})`);
+// Authored as Markdown and converted once at the end via markdownToJiraWiki() — mirrors
+// waltzReport.ts's buildDescriptionWiki() pattern exactly. Every untrusted (externally-sourced,
+// unvalidated) free-text field is wrapped in sanitizeCellText() (mid-line, after a trusted label
+// like "Module: ") or sanitizeStandaloneLine() (the value is the *entire* line, nothing else on it —
+// exposed to every line-start-anchored rule the converter has). issueId/cweId/severity are left
+// unsanitized: issueId and cweId are already validated purely-numeric at parse time (ISSUE_ID_PATTERN
+// / CWE_ID_PATTERN) and severity is a locally-computed number, so none of the three can carry a
+// markdown-trigger character to begin with.
+export function buildDescriptionWiki(flaw: VeracodeFlaw): string {
+  const lines: string[] = [];
+
+  lines.push('### Severity');
+  lines.push(`${severityLabel(flaw.severity)} (${flaw.severity})`);
+  lines.push('');
 
   if (flaw.cweId) {
-    const link = `[CWE-${flaw.cweId}|https://cwe.mitre.org/data/definitions/${flaw.cweId}.html]`;
-    sections.push(`h3. CWE\n${link}${flaw.cweName ? ` — ${flaw.cweName}` : ''}`);
+    lines.push('### CWE');
+    // The link text/URL are built entirely from the already-numeric-validated cweId, so no
+    // sanitization is needed there; cweName sits after it on the same line (mid-line, not
+    // standalone), so a bare sanitizeCellText() is the correct sanitizer for it.
+    const link = `[CWE-${flaw.cweId}](https://cwe.mitre.org/data/definitions/${flaw.cweId}.html)`;
+    lines.push(`${link}${flaw.cweName ? ` — ${sanitizeCellText(flaw.cweName)}` : ''}`);
+    lines.push('');
   }
 
-  const locationLines = [`Module: ${flaw.module}`];
+  lines.push('### Location');
+  lines.push(`Module: ${sanitizeCellText(flaw.module)}`);
   const path = fullSourcePath(flaw);
-  if (path) locationLines.push(`File: ${path}${flaw.line != null ? `:${flaw.line}` : ''}`);
-  if (flaw.functionPrototype) locationLines.push(`Function: ${flaw.functionPrototype}`);
-  sections.push(`h3. Location\n${locationLines.join('\n')}`);
+  if (path) lines.push(`File: ${path}${flaw.line != null ? `:${flaw.line}` : ''}`);
+  if (flaw.functionPrototype) lines.push(`Function: ${sanitizeCellText(flaw.functionPrototype)}`);
+  lines.push('');
 
-  sections.push(`h3. Description\n${flaw.description}`);
+  lines.push('### Description');
+  lines.push(sanitizeStandaloneLine(flaw.description));
+  lines.push('');
 
   if (flaw.recommendation) {
-    sections.push(`h3. Recommendation\n${flaw.recommendation}`);
+    lines.push('### Recommendation');
+    lines.push(sanitizeStandaloneLine(flaw.recommendation));
+    lines.push('');
   }
 
-  sections.push(`h3. Veracode Issue ID\n${flaw.issueId}`);
+  lines.push('### Veracode Issue ID');
+  lines.push(flaw.issueId);
 
-  return sections.join('\n\n');
+  return markdownToJiraWiki(lines.join('\n'));
 }
 
 export function buildLabels(flaw: VeracodeFlaw, templateLabels: string[] = []): string[] {
@@ -190,35 +242,10 @@ export function buildLabels(flaw: VeracodeFlaw, templateLabels: string[] = []): 
   return [...new Set([...own, ...templateLabels])];
 }
 
-const DEDUP_CHUNK_SIZE = 40; // keeps generated JQL well under Jira's practical query-length limits
-
-export function chunkIssueIds(issueIds: string[], chunkSize = DEDUP_CHUNK_SIZE): string[][] {
-  const chunks: string[][] = [];
-  for (let i = 0; i < issueIds.length; i += chunkSize) {
-    chunks.push(issueIds.slice(i, i + chunkSize));
-  }
-  return chunks;
-}
-
-export function buildDedupJql(projectKey: string, issueIds: string[]): string {
-  const labels = issueIds.map(id => `veracode-issue-${id}`);
-  return `project = ${projectKey} AND labels in (${labels.join(', ')})`;
-}
-
-export function extractDedupMap(issues: Array<{ key: string; labels: string[] }>): Map<string, string> {
-  const map = new Map<string, string>();
-  for (const issue of issues) {
-    for (const label of issue.labels) {
-      const match = label.match(/^veracode-issue-(\d+)$/);
-      if (match) map.set(match[1], issue.key);
-    }
-  }
-  return map;
-}
-
 // Lives here (rather than in sessionState.ts, where the other session-related types live) so that
-// buildReviewRows() below can produce it directly without a type-only circular import between this
-// file and sessionState.ts. sessionState.ts re-exports the type for callers that expect it there.
+// reportImportHandler.ts's shared buildReviewRows() can produce it directly without a type-only
+// circular import between this file and sessionState.ts. sessionState.ts re-exports the type for
+// callers that expect it there.
 export interface VeracodeReviewRow {
   id: string; // '1'..'N' new candidates, 'A1'..'Am' already-ticketed
   issueId: string;
@@ -230,30 +257,4 @@ export interface VeracodeReviewRow {
   descriptionWiki: string;
   existingTicketKey: string | null;
   included: boolean; // whether this row will be (re)created if the batch runs
-}
-
-export function buildReviewRows(
-  flaws: VeracodeFlaw[],
-  dedupMap: Map<string, string>,
-  templateLabels: string[] = [],
-): VeracodeReviewRow[] {
-  const rows: VeracodeReviewRow[] = [];
-  let newIndex = 0;
-  let ticketedIndex = 0;
-  for (const flaw of flaws) {
-    const existingTicketKey = dedupMap.get(flaw.issueId) ?? null;
-    rows.push({
-      id: existingTicketKey ? `A${++ticketedIndex}` : `${++newIndex}`,
-      issueId: flaw.issueId,
-      severity: flaw.severity,
-      severityLabelText: severityLabel(flaw.severity),
-      cweId: flaw.cweId,
-      summary: buildSummary(flaw),
-      labels: buildLabels(flaw, templateLabels),
-      descriptionWiki: buildDescriptionWiki(flaw),
-      existingTicketKey,
-      included: existingTicketKey === null,
-    });
-  }
-  return rows;
 }
