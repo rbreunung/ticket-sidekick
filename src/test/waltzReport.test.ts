@@ -6,6 +6,7 @@ import {
   buildSummary, buildDescriptionWiki, buildLabels, sanitizeComponentLabel,
   type WaltzComponent,
 } from '../utils/waltzReport';
+import { sanitizeCellText } from '../utils/reportImport';
 
 const fixturePath = (name: string) => join(__dirname, 'fixtures', 'waltz', name);
 const fixtureBuffer = (name: string) => readFileSync(fixturePath(name));
@@ -164,15 +165,18 @@ describe('buildDescriptionWiki', () => {
     expect(wiki).toContain('h3. Max Vuln Rating');
     expect(wiki).toContain('Critical');
     expect(wiki).toContain('h3. Most Critical Vulnerability');
-    expect(wiki).toContain('*CVE-2099-0001* — Improper input validation may allow remote code execution via crafted deserialization payloads.');
+    // CVE ids are untrusted, externally-sourced text and go through sanitizeCellText() like any
+    // other cell value — dashes are stripped along with the other Jira-native trigger chars
+    // (Finding #1), so ids/paths render without them.
+    expect(wiki).toContain(`*${sanitizeCellText('CVE-2099-0001')}* — Improper input validation may allow remote code execution via crafted deserialization payloads.`);
     expect(wiki).toContain('h3. Affected artifacts (1 total)');
-    expect(wiki).toContain('/app/services/checkout/package-lock.json');
+    expect(wiki).toContain(sanitizeCellText('/app/services/checkout/package-lock.json'));
     expect(wiki).toContain('h3. Known vulnerabilities (2 total');
     // Known vulnerabilities renders as a real Jira wiki table (built from a Markdown table via markdownToJiraWiki()).
     expect(wiki).toContain('||CVE||Severity||CVSS||Fixed Version||');
-    expect(wiki).toContain('|CVE-2099-0001|Critical|9.8|1.2.4|');
-    expect(wiki).toContain('|CVE-2099-0002|High|7.5|1.2.4|');
-    expect(wiki.indexOf('CVE-2099-0001')).toBeLessThan(wiki.indexOf('CVE-2099-0002')); // higher CVSS first
+    expect(wiki).toContain(`|${sanitizeCellText('CVE-2099-0001')}|Critical|9.8|1.2.4|`);
+    expect(wiki).toContain(`|${sanitizeCellText('CVE-2099-0002')}|High|7.5|1.2.4|`);
+    expect(wiki.indexOf(sanitizeCellText('CVE-2099-0001'))).toBeLessThan(wiki.indexOf(sanitizeCellText('CVE-2099-0002'))); // higher CVSS first
     // the highlighted "most critical" mention must come before the full known-vulnerabilities table
     expect(wiki.indexOf('h3. Most Critical Vulnerability')).toBeLessThan(wiki.indexOf('h3. Known vulnerabilities'));
   });
@@ -195,7 +199,7 @@ describe('buildDescriptionWiki', () => {
       vulnerabilities: [{ cveId: 'CVE-2099-0099', cveSummary: null, overallSeverity: 'High', cvssV3Score: 7.2, fixedVersion: null }],
     };
     const wiki = buildDescriptionWiki(noSummary);
-    expect(wiki).toContain('*CVE-2099-0099* — No summary reported.');
+    expect(wiki).toContain(`*${sanitizeCellText('CVE-2099-0099')}* — No summary reported.`);
   });
 
   it('caps the shown CVE table at 10 rows and adds a "+N more" note', () => {
@@ -215,8 +219,11 @@ describe('buildDescriptionWiki', () => {
     const wiki = buildDescriptionWiki(many);
     expect(wiki).toContain('(14 total — showing top 10)');
     expect(wiki).toContain('+4 more not shown');
-    expect(wiki).toContain('*CVE-2099-0000* — Fictitious summary for issue 0.'); // lowest cveId wins tie-break, is "most critical"
-    expect(wiki).toContain('|CVE-2099-0000|High|7|n/a|'); // same row also appears in the Known vulnerabilities table
+    // cveId is untrusted, externally-sourced text and goes through sanitizeCellText() like any
+    // other cell value — its dashes are stripped along with the other Jira-native trigger chars
+    // (Finding #1), so the id itself renders without them.
+    expect(wiki).toContain(`*${sanitizeCellText('CVE-2099-0000')}* — Fictitious summary for issue 0.`); // lowest cveId wins tie-break, is "most critical"
+    expect(wiki).toContain(`|${sanitizeCellText('CVE-2099-0000')}|High|7|n/a|`); // same row also appears in the Known vulnerabilities table
   });
 
   it('caps the shown affected-artifacts list at 25 paths and adds a "+N more" note', () => {
@@ -230,8 +237,10 @@ describe('buildDescriptionWiki', () => {
     const wiki = buildDescriptionWiki(many);
     expect(wiki).toContain('h3. Affected artifacts (30 total — showing top 25)');
     expect(wiki).toContain('+5 more not shown');
-    expect(wiki).toContain('/app/services/svc-0/package-lock.json');
-    expect(wiki).not.toContain('/app/services/svc-29/package-lock.json');
+    // Instance paths are untrusted and go through sanitizeCellText(), which now also strips '-'
+    // (Finding #1), so a real-world hyphenated path (e.g. "package-lock.json") loses its dashes too.
+    expect(wiki).toContain(sanitizeCellText('/app/services/svc-0/package-lock.json'));
+    expect(wiki).not.toContain(sanitizeCellText('/app/services/svc-29/package-lock.json'));
   });
 
   it('neutralizes markdown-structural characters in untrusted cell content so a crafted CVE summary cannot inject a heading, table row, link, bold/italic text, or strikethrough', () => {
@@ -242,7 +251,8 @@ describe('buildDescriptionWiki', () => {
       instancePaths: [],
       vulnerabilities: [{
         cveId: 'CVE-2099-9999',
-        cveSummary: 'Injected\n# Fake Heading\n| a | b |\n[click me](http://evil.example) *bold* ~~struck~~',
+        cveSummary: 'Injected\n# Fake Heading\n| a | b |\n[click me](http://evil.example) *bold* ~~struck~~'
+          + '\n-struck- +underline+ ^super^ ??cite?? {quote}FAKE{quote} !http://evil.example/t.gif!',
         overallSeverity: 'High',
         cvssV3Score: 9,
         fixedVersion: null,
@@ -260,6 +270,13 @@ describe('buildDescriptionWiki', () => {
     // matches and the value can't render as struck-through (Jira wiki strikethrough is `-text-`).
     expect(wiki).not.toContain('~~struck~~');
     expect(wiki).not.toContain('-struck-');
+    // Jira-native trigger characters the converter itself never touches (Finding #1) — underline,
+    // superscript, citation, macros, and the remote-image-embed tracking-pixel exploit.
+    expect(wiki).not.toContain('+underline+');
+    expect(wiki).not.toContain('^super^');
+    expect(wiki).not.toContain('??cite??');
+    expect(wiki).not.toContain('{quote}FAKE{quote}');
+    expect(wiki).not.toContain('!http://evil.example/t.gif!');
   });
 
   it('prefixes a standalone-line value (Max Vuln Rating, Component) with ": " so a crafted value cannot become an ordered-list item, a horizontal rule, a blockquote, or a heading', () => {
@@ -282,8 +299,10 @@ describe('buildDescriptionWiki', () => {
       };
       const wiki = buildDescriptionWiki(component);
       expect(wiki).not.toContain(unwantedMarkup);
-      // The prefixed, sanitized value is still present verbatim, just not at line-start.
-      expect(wiki).toContain(`: ${value}`);
+      // The prefixed value is still present, sanitized the same way sanitizeCellText() sanitizes
+      // any other cell value (e.g. '---' is now entirely consumed since '-' is a stripped
+      // Jira-native trigger character too — see Finding #1).
+      expect(wiki).toContain(`: ${sanitizeCellText(value)}`);
     }
   });
 
@@ -302,7 +321,7 @@ describe('buildDescriptionWiki', () => {
       }],
     };
     const wiki = buildDescriptionWiki(withPipe);
-    expect(wiki).toContain('|CVE-2099-0001|High / Critical|7|n/a|');
+    expect(wiki).toContain(`|${sanitizeCellText('CVE-2099-0001')}|High / Critical|7|n/a|`);
   });
 });
 

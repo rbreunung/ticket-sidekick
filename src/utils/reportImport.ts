@@ -69,6 +69,12 @@ export function extractDedupMap(
   return map;
 }
 
+export interface FindAlreadyTicketedResult {
+  map: Map<string, string>;
+  failedChunks: number;
+  totalChunks: number;
+}
+
 /**
  * Fault-tolerant, chunked dedup search (R5/AE2). `search` performs the actual Jira query for one
  * chunk of labels (built + executed by the caller, e.g. `chunk => ticketService.searchTicketsRaw(
@@ -77,6 +83,13 @@ export function extractDedupMap(
  * skipped — it must NOT discard the dedup matches already found by other, successful chunks, since
  * a caller-level catch-and-reset would silently re-treat already-ticketed items as new and create
  * duplicate tickets. Partial dedup coverage beats none.
+ *
+ * Never rejects — even when every chunk fails, this resolves with an empty `map` rather than
+ * throwing. That leaves "zero matches" and "total search failure" looking identical to a caller
+ * that only inspects `map`, so the result also carries `failedChunks`/`totalChunks`: when
+ * `failedChunks === totalChunks && totalChunks > 0`, coverage was lost entirely and the caller
+ * should tell the user dedup could not be checked, rather than silently proceeding as if the report
+ * genuinely had zero already-ticketed items.
  */
 export async function findAlreadyTicketed(
   labels: string[],
@@ -84,22 +97,24 @@ export async function findAlreadyTicketed(
   search: (chunk: string[]) => Promise<JqlIssueLike[]>,
   labelToDedupKey: (label: string) => string | null,
   onDiag?: DiagLogger,
-): Promise<Map<string, string>> {
+): Promise<FindAlreadyTicketedResult> {
   const map = new Map<string, string>();
-  for (const chunk of chunkStrings(labels, chunkSize)) {
-    if (chunk.length === 0) continue;
+  const chunks = chunkStrings(labels, chunkSize).filter(chunk => chunk.length > 0);
+  let failedChunks = 0;
+  for (const chunk of chunks) {
     try {
       const issues = await search(chunk);
       const found = extractDedupMap(issues, labelToDedupKey);
       for (const [dedupKey, ticketKey] of found) map.set(dedupKey, ticketKey);
     } catch (err) {
+      failedChunks++;
       const message = err instanceof Error ? err.message : String(err);
       onDiag?.('warn', 'Dedup search chunk failed — continuing with partial results', {
         chunkSize: chunk.length, error: message,
       });
     }
   }
-  return map;
+  return { map, failedChunks, totalChunks: chunks.length };
 }
 
 export interface CapNewRowsResult<TItem> {
@@ -153,25 +168,47 @@ export function capNewRows<TItem>(
 //     clickable link, or bold/italic text the author never wrote
 //   - '~' is stripped — inline()'s strikethrough regex (/~~(.+?)~~/g) is a mid-line transform just
 //     like bold/italic; without stripping it, a "~~injected~~" value renders struck-through
+//
+// The characters above defeat markdownToJiraWiki()'s OWN recognizer. But the string this function
+// protects doesn't stop being dangerous once it survives that converter — the *output* is sent to
+// Jira verbatim as wiki markup, and Jira's renderer recognizes its own trigger set that
+// markdownToJiraWiki() never touches and therefore never neutralizes on the way through:
+//   - '-' is stripped — Jira-native strikethrough is `-text-` (not `~~text~~`; that Markdown form
+//     is what inline() converts *into* `-text-`, but a value that already contains bare hyphens
+//     reaches Jira as literal `-text-` without ever passing through that conversion)
+//   - '+' is stripped — Jira-native underline is `+text+`
+//   - '^' is stripped — Jira-native superscript is `^text^`
+//   - '?' is stripped — Jira-native citation is `??text??`
+//   - '{' and '}' are stripped — Jira macros are `{quote}`, `{color}`, `{panel}`, `{code}`,
+//     `{noformat}`, etc.; without stripping, a crafted value can open one of these blocks early or
+//     inject a fake one
+//   - '!' is stripped — Jira-native remote image embed is `!url!`, the most concrete exploit: an
+//     attacker-controlled field containing `!https://attacker.example/t.gif!` becomes an
+//     auto-loading tracking pixel in the created ticket. (This is also defense-in-depth against
+//     Markdown's own `![alt](url)` image syntax — but '[' and ']' being already stripped above
+//     already prevents inline()'s `/!\[([^\]]*)\]\(([^)]+)\)/g` regex from matching, so stripping
+//     '!' is redundant-but-harmless for that path and purely defensive against the Jira-native
+//     `!url!` trigger, which needs no brackets at all.)
 export function sanitizeCellText(value: string): string {
   return value
     .replace(/\r\n|\r|\n/g, ' ')
     .replace(/\|/g, '/')
-    .replace(/[*_`[\]~]/g, '');
+    .replace(/[*_`[\]~\-+^?{}!]/g, '');
 }
 
 // A value pushed as an entire standalone line (no trusted prefix character in front of it, e.g.
 // Waltz's maxVulnRating/nameVersion lines) is exposed to every line-start-anchored rule
 // markdownToJiraWiki() has: the horizontal-rule check (repeated '-'/'*'/'_'), the blockquote check
 // ('> '), the unordered-list check ('-'/'*'/'+ '), and the ordered-list check (digit(s) + '. ').
-// sanitizeCellText() alone does not close this — '-', '>', and digits/'.' are all left untouched
-// (stripping them would make CVE ids, version numbers, and legitimate prose unreadable). Instead,
-// prefixing the sanitized value with a literal ': ' pushes every character of the original value
-// out of line-start position entirely: ':' is not a trigger character for any of those rules, and
-// — unlike a whitespace prefix — it survives markdownToJiraWiki()'s leading-whitespace-consuming
-// checks (the horizontal-rule test trims the line first via `.trim()`; the list regexes have a
-// `(\s*)` capture group in front of their trigger character), so a whitespace-only prefix would not
-// have closed this gap.
+// sanitizeCellText() now strips '-' and '+' (as Jira-native strikethrough/underline triggers), but
+// '>' and digits/'.' are still left untouched (stripping them would make CVE ids, version numbers,
+// and legitimate prose unreadable) — so the blockquote and ordered-list checks are still reachable
+// from line-start. Instead, prefixing the sanitized value with a literal ': ' pushes every
+// character of the original value out of line-start position entirely: ':' is not a trigger
+// character for any of those rules, and — unlike a whitespace prefix — it survives
+// markdownToJiraWiki()'s leading-whitespace-consuming checks (the horizontal-rule test trims the
+// line first via `.trim()`; the list regexes have a `(\s*)` capture group in front of their trigger
+// character), so a whitespace-only prefix would not have closed this gap.
 export function sanitizeStandaloneLine(value: string): string {
   return `: ${sanitizeCellText(value)}`;
 }

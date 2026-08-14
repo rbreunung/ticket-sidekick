@@ -22,12 +22,18 @@ describe('sanitizeCellText', () => {
     expect(sanitizeCellText('~~injected~~')).toBe('injected');
   });
 
+  it('strips Jira-native wiki-markup trigger characters (-+^?{}!)', () => {
+    expect(sanitizeCellText('-struck- +underline+ ^super^ ??cite?? {quote}FAKE{quote} !http://evil.example/t.gif!'))
+      .toBe('struck underline super cite quoteFAKEquote http://evil.example/t.gif');
+  });
+
   it('neutralizes every trigger character in one crafted payload at once', () => {
-    const crafted = 'Injected\n# Fake Heading\n| a | b |\n[click me](http://evil.example) *bold* ~~struck~~';
+    const crafted = 'Injected\n# Fake Heading\n| a | b |\n[click me](http://evil.example) *bold* ~~struck~~ '
+      + '-struck- +underline+ ^super^ ??cite?? {quote}FAKE{quote} !http://evil.example/t.gif!';
     const sanitized = sanitizeCellText(crafted);
     expect(sanitized).not.toContain('\n');
     expect(sanitized).not.toContain('|');
-    expect(sanitized).not.toMatch(/[*_`[\]~]/);
+    expect(sanitized).not.toMatch(/[*_`[\]~\-+^?{}!]/);
   });
 });
 
@@ -38,13 +44,19 @@ describe('sanitizeStandaloneLine', () => {
 
   it('prefixes before sanitizing, so a crafted ordered-list/heading/blockquote/horizontal-rule trigger no longer sits at line-start', () => {
     expect(sanitizeStandaloneLine('1. urgent')).toBe(': 1. urgent');
-    expect(sanitizeStandaloneLine('---')).toBe(': ---');
+    // '-' is now stripped by sanitizeCellText itself (Jira-native strikethrough trigger), so the
+    // horizontal-rule text disappears entirely rather than merely being pushed out of line-start.
+    expect(sanitizeStandaloneLine('---')).toBe(': ');
     expect(sanitizeStandaloneLine('> quoted')).toBe(': > quoted');
     expect(sanitizeStandaloneLine('# fake heading')).toBe(': # fake heading');
   });
 
   it('still strips the same trigger characters sanitizeCellText does', () => {
     expect(sanitizeStandaloneLine('~~struck~~ *bold*')).toBe(': struck bold');
+  });
+
+  it('still strips Jira-native trigger characters, e.g. neutralizing a standalone remote-image-embed payload', () => {
+    expect(sanitizeStandaloneLine('!http://evil.example/t.gif!')).toBe(': http://evil.example/t.gif');
   });
 });
 
@@ -126,10 +138,12 @@ describe('findAlreadyTicketed', () => {
       ]);
     const onDiag = vi.fn();
 
-    const map = await findAlreadyTicketed(labels, 40, search, (label) => label, onDiag);
+    const result = await findAlreadyTicketed(labels, 40, search, (label) => label, onDiag);
 
-    expect(map.get('label-40')).toBe('PROJ-9'); // second chunk's match survived
-    expect(map.size).toBe(1); // first (failed) chunk contributed nothing, but didn't wipe the second's result
+    expect(result.map.get('label-40')).toBe('PROJ-9'); // second chunk's match survived
+    expect(result.map.size).toBe(1); // first (failed) chunk contributed nothing, but didn't wipe the second's result
+    expect(result.failedChunks).toBe(1);
+    expect(result.totalChunks).toBe(2);
     expect(onDiag).toHaveBeenCalledTimes(1);
     expect(onDiag).toHaveBeenCalledWith(
       'warn',
@@ -143,17 +157,47 @@ describe('findAlreadyTicketed', () => {
     const search = async (chunk: string[]): Promise<JqlIssueLike[]> =>
       chunk.map((label, i) => ({ key: `PROJ-${label}`, fields: { labels: [label] } }));
 
-    const map = await findAlreadyTicketed(labels, 1, search, (label) => label);
-    expect(map.get('a')).toBe('PROJ-a');
-    expect(map.get('b')).toBe('PROJ-b');
-    expect(map.get('c')).toBe('PROJ-c');
+    const result = await findAlreadyTicketed(labels, 1, search, (label) => label);
+    expect(result.map.get('a')).toBe('PROJ-a');
+    expect(result.map.get('b')).toBe('PROJ-b');
+    expect(result.map.get('c')).toBe('PROJ-c');
+    expect(result.failedChunks).toBe(0);
+    expect(result.totalChunks).toBe(3);
   });
 
   it('returns an empty map without calling search when given no labels', async () => {
     const search = vi.fn();
-    const map = await findAlreadyTicketed([], 40, search, (label) => label);
-    expect(map.size).toBe(0);
+    const result = await findAlreadyTicketed([], 40, search, (label) => label);
+    expect(result.map.size).toBe(0);
+    expect(result.failedChunks).toBe(0);
+    expect(result.totalChunks).toBe(0);
     expect(search).not.toHaveBeenCalled();
+  });
+
+  it('signals total coverage loss (failedChunks === totalChunks) distinctly from "zero matches with full coverage" (Finding #3)', async () => {
+    const labels = Array.from({ length: 45 }, (_, i) => `label-${i}`); // 2 chunks of size 40/5
+    const search = vi.fn<(chunk: string[]) => Promise<JqlIssueLike[]>>().mockRejectedValue(new Error('search unavailable'));
+    const onDiag = vi.fn();
+
+    const result = await findAlreadyTicketed(labels, 40, search, (label) => label, onDiag);
+
+    expect(result.map.size).toBe(0);
+    expect(result.failedChunks).toBe(2);
+    expect(result.totalChunks).toBe(2);
+    // Distinct from the "every chunk succeeded, found nothing" case below — same empty map, but
+    // failedChunks/totalChunks tell the caller coverage was lost entirely rather than genuinely zero.
+    expect(result.failedChunks).toBe(result.totalChunks);
+  });
+
+  it('"all chunks succeed with zero matches" reports full coverage, unlike total failure', async () => {
+    const labels = Array.from({ length: 45 }, (_, i) => `label-${i}`);
+    const search = async (): Promise<JqlIssueLike[]> => [];
+
+    const result = await findAlreadyTicketed(labels, 40, search, (label) => label);
+
+    expect(result.map.size).toBe(0);
+    expect(result.failedChunks).toBe(0);
+    expect(result.totalChunks).toBe(2);
   });
 });
 

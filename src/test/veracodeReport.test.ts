@@ -221,7 +221,8 @@ describe('buildDescriptionWiki', () => {
     const flaws = parseVeracodeReport(fixture('sample-report.xml'));
     const malicious = {
       ...flaws.find(f => f.issueId === '10101')!,
-      description: 'Injected\n# Fake Heading\n| a | b |\n[click me](http://evil.example) *bold* ~~strike~~\n1. urgent\n--- rule\n> quote',
+      description: 'Injected\n# Fake Heading\n| a | b |\n[click me](http://evil.example) *bold* ~~strike~~\n1. urgent\n--- rule\n> quote'
+        + '\n-struck- +underline+ ^super^ ??cite?? {quote}FAKE{quote} !http://evil.example/t.gif!',
     };
     const wiki = buildDescriptionWiki(malicious);
     expect(wiki).not.toContain('h1. Fake Heading');
@@ -233,6 +234,105 @@ describe('buildDescriptionWiki', () => {
     expect(wiki).not.toContain('# urgent');
     expect(wiki).not.toContain('----');
     expect(wiki).not.toContain('{quote}');
+    // Jira-native trigger characters the converter itself never touches (Finding #1)
+    expect(wiki).not.toContain('+underline+');
+    expect(wiki).not.toContain('^super^');
+    expect(wiki).not.toContain('??cite??');
+    expect(wiki).not.toContain('!http://evil.example/t.gif!');
+    expect(wiki).not.toMatch(/[+^?{}!]/);
+  });
+
+  // Finding #6 follow-up: the test above only exercised `description`. `recommendation` goes
+  // through the identical sanitizeStandaloneLine() call site (see buildDescriptionWiki()), so it
+  // needs its own crafted-payload proof — a regression that broke only the recommendation call
+  // site would otherwise go undetected by the description-only test.
+  it('neutralizes markdown-structural characters in a crafted recommendation the same way as description', () => {
+    const flaws = parseVeracodeReport(fixture('sample-report.xml'));
+    const malicious = {
+      ...flaws.find(f => f.issueId === '10101')!,
+      recommendation: 'Injected\n# Fake Heading\n| a | b |\n[click me](http://evil.example) *bold* ~~strike~~\n1. urgent\n--- rule\n> quote'
+        + '\n-struck- +underline+ ^super^ ??cite?? {quote}FAKE{quote} !http://evil.example/t.gif!',
+    };
+    const wiki = buildDescriptionWiki(malicious);
+    expect(wiki).not.toContain('h1. Fake Heading');
+    expect(wiki).not.toContain('||a||b||');
+    expect(wiki).not.toContain('[click me|http://evil.example]');
+    expect(wiki).not.toContain('*bold*');
+    expect(wiki).not.toContain('~~strike~~');
+    expect(wiki).not.toContain('-strike-');
+    expect(wiki).not.toContain('# urgent');
+    expect(wiki).not.toContain('----');
+    expect(wiki).not.toContain('{quote}');
+    expect(wiki).not.toContain('+underline+');
+    expect(wiki).not.toContain('^super^');
+    expect(wiki).not.toContain('??cite??');
+    expect(wiki).not.toContain('!http://evil.example/t.gif!');
+    expect(wiki).not.toMatch(/[+^?{}!]/);
+  });
+
+  // Finding #6 follow-up: module, sourceFile/sourceFilePath (via fullSourcePath()), and cweName are
+  // the remaining flaw fields routed through sanitizeCellText() mid-line in buildDescriptionWiki() —
+  // none of them previously had a malicious-input assertion, only the happy-path "renders all
+  // sections" test with clean fixture data. One crafted-payload case per field proves each call
+  // site independently strips/neutralizes the same markdown-structural characters.
+  it('neutralizes markdown-structural characters in a crafted module value', () => {
+    const flaws = parseVeracodeReport(fixture('sample-report.xml'));
+    const malicious = {
+      ...flaws.find(f => f.issueId === '10101')!,
+      module: 'Evil | a | b | [click me](http://evil.example) *bold* ~~strike~~',
+    };
+    const wiki = buildDescriptionWiki(malicious);
+    expect(wiki).not.toContain('||a||b||');
+    expect(wiki).not.toContain('[click me|http://evil.example]');
+    expect(wiki).not.toContain('*bold*');
+    expect(wiki).not.toContain('~~strike~~');
+    expect(wiki).not.toContain('-strike-');
+  });
+
+  it('neutralizes markdown-structural characters in a crafted sourceFile/sourceFilePath value', () => {
+    const flaws = parseVeracodeReport(fixture('sample-report.xml'));
+    const malicious = {
+      ...flaws.find(f => f.issueId === '10101')!,
+      sourceFilePath: 'evil | a | b | [click me](http://evil.example)/',
+      sourceFile: '*bold* ~~strike~~ path.java',
+    };
+    const wiki = buildDescriptionWiki(malicious);
+    expect(wiki).not.toContain('||a||b||');
+    expect(wiki).not.toContain('[click me|http://evil.example]');
+    expect(wiki).not.toContain('*bold*');
+    expect(wiki).not.toContain('~~strike~~');
+    expect(wiki).not.toContain('-strike-');
+  });
+
+  it('neutralizes markdown-structural characters in a crafted cweName value', () => {
+    const flaws = parseVeracodeReport(fixture('sample-report.xml'));
+    const malicious = {
+      ...flaws.find(f => f.issueId === '10101')!,
+      cweName: 'Evil | a | b | [click me](http://evil.example) *bold* ~~strike~~',
+    };
+    const wiki = buildDescriptionWiki(malicious);
+    expect(wiki).not.toContain('||a||b||');
+    expect(wiki).not.toContain('[click me|http://evil.example]');
+    expect(wiki).not.toContain('*bold*');
+    expect(wiki).not.toContain('~~strike~~');
+    expect(wiki).not.toContain('-strike-');
+  });
+
+  // functionPrototype is also a sanitizeCellText() mid-line call site — kept as its own test (rather
+  // than folded into the group above) so a crafted function signature gets the same standalone
+  // proof as the other five sanitized fields.
+  it('neutralizes markdown-structural characters in a crafted functionPrototype value', () => {
+    const flaws = parseVeracodeReport(fixture('sample-report.xml'));
+    const malicious = {
+      ...flaws.find(f => f.issueId === '10101')!,
+      functionPrototype: 'Evil | a | b | [click me](http://evil.example) *bold* ~~strike~~',
+    };
+    const wiki = buildDescriptionWiki(malicious);
+    expect(wiki).not.toContain('||a||b||');
+    expect(wiki).not.toContain('[click me|http://evil.example]');
+    expect(wiki).not.toContain('*bold*');
+    expect(wiki).not.toContain('~~strike~~');
+    expect(wiki).not.toContain('-strike-');
   });
 });
 

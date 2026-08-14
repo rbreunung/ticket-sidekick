@@ -9,8 +9,8 @@ import {
 import type { WaltzTemplateSelectionSession, WaltzReviewSession } from '../sessionState';
 import { WALTZ_REVIEW_COLUMNS } from '../sessionState';
 import {
-  readAndFilterReport, buildImportTemplateSession, streamImportTemplateSelection, handleImportReport,
-  handleImportTemplateSelection, streamImportReview, handleImportReviewReply, executeImportBatch,
+  readAndFilterReport, buildImportTemplateSession, handleImportReport,
+  handleImportTemplateSelection, handleImportReviewReply,
   type ReportImportDescriptor,
 } from './reportImportHandler';
 
@@ -78,14 +78,6 @@ export async function buildWaltzTemplateSession(
   return buildImportTemplateSession(components, fileName, projectKey, jiraClient, waltzDescriptor);
 }
 
-export async function streamWaltzTemplateSelection(
-  session: WaltzTemplateSelectionSession,
-  stream: vscode.ChatResponseStream,
-  ws: vscode.Memento,
-): Promise<void> {
-  return streamImportTemplateSelection(session, stream, ws, waltzDescriptor);
-}
-
 // Entry point for the "importWaltzReport" operation. Handles both invocation paths:
 //  1. Command-triggered — a WaltzTemplateSelectionSession is already in workspaceState (built by extension.ts).
 //  2. Chat-only ("@jira import oss report" with no prior command) — opens its own file picker.
@@ -115,15 +107,6 @@ export async function handleWaltzTemplateSelection(
   return handleImportTemplateSelection(reply, session, jiraClient, ticketService, stream, ws, waltzDescriptor, baseUrl);
 }
 
-export async function streamWaltzReview(
-  session: WaltzReviewSession,
-  stream: vscode.ChatResponseStream,
-  ws: vscode.Memento,
-  baseUrl?: string,
-): Promise<void> {
-  return streamImportReview(session, stream, ws, waltzDescriptor, baseUrl);
-}
-
 export async function handleWaltzReviewReply(
   reply: string,
   session: WaltzReviewSession,
@@ -133,13 +116,4 @@ export async function handleWaltzReviewReply(
   baseUrl?: string,
 ): Promise<void> {
   return handleImportReviewReply(reply, session, ticketService, stream, ws, waltzDescriptor, baseUrl);
-}
-
-export async function executeWaltzBatch(
-  session: WaltzReviewSession,
-  ticketService: TicketService,
-  stream: vscode.ChatResponseStream,
-  baseUrl?: string,
-): Promise<void> {
-  return executeImportBatch(session, ticketService, stream, waltzDescriptor, baseUrl);
 }

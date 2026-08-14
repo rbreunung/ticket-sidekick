@@ -9,8 +9,8 @@ import {
 import type { VeracodeTemplateSelectionSession, VeracodeReviewSession } from '../sessionState';
 import { VERACODE_REVIEW_COLUMNS } from '../sessionState';
 import {
-  readAndFilterReport, buildImportTemplateSession, streamImportTemplateSelection, handleImportReport,
-  handleImportTemplateSelection, streamImportReview, handleImportReviewReply, executeImportBatch,
+  readAndFilterReport, buildImportTemplateSession, handleImportReport,
+  handleImportTemplateSelection, handleImportReviewReply,
   type ReportImportDescriptor,
 } from './reportImportHandler';
 
@@ -90,14 +90,6 @@ export async function buildVeracodeTemplateSession(
   return buildImportTemplateSession(flaws, fileName, projectKey, jiraClient, veracodeDescriptor);
 }
 
-export async function streamVeracodeTemplateSelection(
-  session: VeracodeTemplateSelectionSession,
-  stream: vscode.ChatResponseStream,
-  ws: vscode.Memento,
-): Promise<void> {
-  return streamImportTemplateSelection(session, stream, ws, veracodeDescriptor);
-}
-
 // Entry point for the "importVeracode" operation. Handles both invocation paths:
 //  1. Command-triggered — a VeracodeTemplateSelectionSession is already in workspaceState (built by extension.ts).
 //  2. Chat-only ("@jira import veracode report" with no prior command) — opens its own file picker.
@@ -127,15 +119,6 @@ export async function handleVeracodeTemplateSelection(
   return handleImportTemplateSelection(reply, session, jiraClient, ticketService, stream, ws, veracodeDescriptor, baseUrl);
 }
 
-export async function streamVeracodeReview(
-  session: VeracodeReviewSession,
-  stream: vscode.ChatResponseStream,
-  ws: vscode.Memento,
-  baseUrl?: string,
-): Promise<void> {
-  return streamImportReview(session, stream, ws, veracodeDescriptor, baseUrl);
-}
-
 export async function handleVeracodeReviewReply(
   reply: string,
   session: VeracodeReviewSession,
@@ -145,13 +128,4 @@ export async function handleVeracodeReviewReply(
   baseUrl?: string,
 ): Promise<void> {
   return handleImportReviewReply(reply, session, ticketService, stream, ws, veracodeDescriptor, baseUrl);
-}
-
-export async function executeVeracodeBatch(
-  session: VeracodeReviewSession,
-  ticketService: TicketService,
-  stream: vscode.ChatResponseStream,
-  baseUrl?: string,
-): Promise<void> {
-  return executeImportBatch(session, ticketService, stream, veracodeDescriptor, baseUrl);
 }

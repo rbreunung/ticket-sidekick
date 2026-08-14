@@ -21,7 +21,7 @@ import {
 } from '../../utils/reportImport';
 import {
   isCancellation, pickEmailOption, buildImportReviewTable, parseReviewInput, applyReviewToggle,
-  extractCreatedKeyFromConfirmation, CURRENT_SESSION_SCHEMA_VERSION,
+  extractCreatedKeyFromConfirmation, CURRENT_SESSION_SCHEMA_VERSION, isSessionExpired, SESSION_EXPIRED_MESSAGE,
   type ImportTemplateSelectionSession, type ReviewSession, type ReviewTableColumn, type ReviewRowBase,
 } from '../sessionState';
 import { resolveProjectKey } from './ticketContext';
@@ -193,6 +193,11 @@ export async function handleImportReport<TItem, TRow extends ReportImportRow>(
 ): Promise<void> {
   const existing = ws.get<ImportTemplateSelectionSession<TItem>>(descriptor.sessionKeys.templateSelection);
   if (existing) {
+    if (isSessionExpired(existing)) {
+      await ws.update(descriptor.sessionKeys.templateSelection, undefined);
+      stream.markdown(SESSION_EXPIRED_MESSAGE);
+      return;
+    }
     await streamImportTemplateSelection(existing, stream, ws, descriptor);
     return;
   }
@@ -276,18 +281,28 @@ export async function handleImportTemplateSelection<TItem, TRow extends ReportIm
 
   // The template session was already cleared above, so a failure here must degrade gracefully
   // rather than throw with nothing left to resume from. findAlreadyTicketed() is itself
-  // fault-tolerant per chunk (R5/AE2) — this catch is a defensive backstop for a failure outside the
-  // per-chunk loop.
+  // fault-tolerant per chunk (R5/AE2) and never rejects — this catch is a defensive backstop for a
+  // failure outside the per-chunk loop (e.g. an error thrown by descriptor.searchLabelOf/labelToDedupKey
+  // themselves). Total per-chunk coverage loss (every chunk failed) is a distinct, non-throwing
+  // outcome, surfaced instead via the failedChunks/totalChunks check below, which reuses this
+  // same user-facing warning for the total-coverage-loss case.
   let dedupMap: Map<string, string>;
   try {
     const searchLabels = session.items.map(descriptor.searchLabelOf);
-    dedupMap = await findAlreadyTicketed(
+    const result = await findAlreadyTicketed(
       searchLabels,
       DEFAULT_DEDUP_CHUNK_SIZE,
       chunk => ticketService.searchTicketsRaw(buildDedupJql(session.projectKey, chunk), 100).then(r => r.issues as JqlIssueLike[]),
       descriptor.labelToDedupKey,
       (level, message, details) => logDiag(descriptor.scope, level, message, details),
     );
+    dedupMap = result.map;
+    if (result.totalChunks > 0 && result.failedChunks === result.totalChunks) {
+      logDiag(descriptor.scope, 'warn', `Could not check for already-ticketed ${plural} — proceeding without dedup`, {
+        projectKey: session.projectKey, failedChunks: result.failedChunks, totalChunks: result.totalChunks,
+      });
+      stream.markdown(`_Warning: could not check for already-ticketed ${plural} — proceeding without dedup._\n\n`);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logDiag(descriptor.scope, 'warn', `Could not check for already-ticketed ${plural} — proceeding without dedup`, {
