@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { readSheet, parseSheetData, SheetNotFoundError, type Schema } from 'read-excel-file/node';
+import ExcelJS from 'exceljs';
 import { markdownToJiraWiki } from './markdownToJiraWiki';
 import {
   MAX_REPORT_BYTES as SHARED_MAX_REPORT_BYTES, sanitizeCellText, sanitizeStandaloneLine,
@@ -53,6 +53,17 @@ interface VulnerabilityRow {
   fixedVersion: string | null;
 }
 
+// Minimal re-implementation of read-excel-file's Schema<T> shape (column header -> field mapping,
+// with required/type validation) — read-excel-file itself was replaced by ExcelJS (see the comment
+// on loadWaltzWorkbook() below for why); this keeps the schema declarations unchanged.
+type ColumnType = typeof String | typeof Number;
+interface ColumnDef {
+  column: string;
+  type: ColumnType;
+  required: boolean;
+}
+type Schema<T> = { [K in keyof T]: ColumnDef };
+
 const componentRemediationsSchema: Schema<ComponentRemediationsRow> = {
   nameVersion: { column: 'Component name and version', type: String, required: true },
   maxVulnRating: { column: 'Max Vuln Rating', type: String, required: true },
@@ -73,39 +84,137 @@ const vulnerabilitiesSchema: Schema<VulnerabilityRow> = {
   fixedVersion: { column: 'Fixed Version', type: String, required: false },
 };
 
-// Reads one sheet by name and parses it against a schema — read-excel-file's readSheet() can't
-// combine `sheet` + `schema` in a single call (verified against the installed .d.ts in Task 1),
-// so this is a deliberate two-step helper, not an oversight. `schema` is typed as the library's own
-// `Schema<T>` (not a loosely-typed Record) so a schema/interface mismatch is a compile error instead
-// of a silently-accepted `as never` cast.
-async function readNamedSheet<T extends object>(
-  buffer: Buffer,
+class SheetNotFoundError extends Error {
+  constructor(sheetName: string, availableSheets: string[]) {
+    super(`Sheet "${sheetName}" not found. Available sheets: ${availableSheets.join(', ') || '(none)'}`);
+    this.name = 'SheetNotFoundError';
+  }
+}
+
+// Reads a cell as a trimmed string, resolving ExcelJS's richer value shapes (rich text runs,
+// hyperlinks, formula results, dates) down to plain text. Blank cells return null so optional
+// fields come out as `null` rather than `''`, matching the row interfaces above.
+function cellToString(cell: ExcelJS.Cell): string | null {
+  const v = cell.value;
+  if (v === null || v === undefined) return null;
+  if (v instanceof Date) return v.toISOString();
+  if (typeof v === 'object') {
+    const obj = v as { text?: unknown; richText?: Array<{ text: string }>; result?: unknown };
+    if (Array.isArray(obj.richText)) return obj.richText.map(r => r.text).join('') || null;
+    if (typeof obj.text === 'string') return obj.text || null;
+    if (obj.result !== undefined) return obj.result === null ? null : String(obj.result);
+    return null;
+  }
+  const s = String(v).trim();
+  return s === '' ? null : s;
+}
+
+function cellToNumber(cell: ExcelJS.Cell): number | null {
+  const v = cell.value;
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'number') return v;
+  if (typeof v === 'object') {
+    const result = (v as { result?: unknown }).result;
+    if (typeof result === 'number') return result;
+  }
+  const n = Number(v);
+  return Number.isNaN(n) ? null : n;
+}
+
+// Maps a worksheet's header row (row 1) to 1-based column indexes by header text.
+function headerIndex(worksheet: ExcelJS.Worksheet): Map<string, number> {
+  const index = new Map<string, number>();
+  worksheet.getRow(1).eachCell({ includeEmpty: false }, (cell, colNumber) => {
+    const text = cellToString(cell);
+    if (text) index.set(text, colNumber);
+  });
+  return index;
+}
+
+// Reads one sheet's data rows against a schema, out of an already-loaded workbook (loadWaltzWorkbook()
+// unzips the whole buffer once up front, so — unlike the old read-excel-file-based version of this
+// function — this does no I/O and can't itself throw an unzip error).
+function readNamedSheet<T extends object>(
+  workbook: ExcelJS.Workbook,
   sheetName: string,
   schema: Schema<T>,
-): Promise<T[]> {
-  const sheetData = await readSheet(buffer, sheetName);
-  const { objects, errors } = parseSheetData<T>(sheetData, schema);
-  if (errors) {
-    throw new Error(
-      `OSS report sheet "${sheetName}" has invalid rows: ` +
-        errors.map(e => `row ${e.row} column "${e.column}": ${e.error}`).join('; '),
-    );
+): T[] {
+  const worksheet = workbook.getWorksheet(sheetName);
+  if (!worksheet) {
+    throw new SheetNotFoundError(sheetName, workbook.worksheets.map(w => w.name));
   }
-  return objects ?? [];
+
+  const columns = headerIndex(worksheet);
+  const keys = Object.keys(schema) as Array<keyof T>;
+  const errors: string[] = [];
+  const objects: T[] = [];
+
+  worksheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return; // header row
+
+    const rawValues = keys.map(key => {
+      const def = schema[key];
+      const colNumber = columns.get(def.column);
+      const cell = colNumber ? row.getCell(colNumber) : undefined;
+      return cell ? (def.type === Number ? cellToNumber(cell) : cellToString(cell)) : null;
+    });
+    // A row with nothing in any schema-mapped column (e.g. a trailing formatted-but-empty row) is
+    // silently skipped rather than reported as missing every required field.
+    if (rawValues.every(v => v === null)) return;
+
+    const obj = {} as T;
+    keys.forEach((key, i) => {
+      const def = schema[key];
+      const value = rawValues[i];
+      if (value === null && def.required) {
+        errors.push(`row ${rowNumber} column "${def.column}": missing required value`);
+      }
+      (obj as Record<string, unknown>)[key as string] = value;
+    });
+    objects.push(obj);
+  });
+
+  if (errors.length > 0) {
+    throw new Error(`OSS report sheet "${sheetName}" has invalid rows: ${errors.join('; ')}`);
+  }
+  return objects;
 }
 
 // Optional sheets degrade to an empty array instead of failing the whole import.
-async function readOptionalNamedSheet<T extends object>(
-  buffer: Buffer,
+function readOptionalNamedSheet<T extends object>(
+  workbook: ExcelJS.Workbook,
   sheetName: string,
   schema: Schema<T>,
-): Promise<T[]> {
+): T[] {
   try {
-    return await readNamedSheet<T>(buffer, sheetName, schema);
+    return readNamedSheet<T>(workbook, sheetName, schema);
   } catch (err) {
     if (err instanceof SheetNotFoundError) return [];
     throw err;
   }
+}
+
+// Unzips + parses the whole workbook once. ExcelJS's `.xlsx.load()` reads the archive via `jszip`,
+// which locates entries through the ZIP's End-Of-Central-Directory record (like Excel's own OOXML
+// reader) rather than scanning local file headers sequentially. read-excel-file's Node backend used
+// `unzipper-esm`, a sequential/streaming ZIP reader that trusts each local file header's declared
+// size — real-world exports written by streaming XLSX writers (sizes deferred to a trailing data
+// descriptor, a legal ZIP variant Excel itself handles) trip that assumption and throw a ZIP parse
+// error even though the file opens fine in Excel. Central-directory-first parsing has no such
+// dependency on local-header sizes, which is why this switch fixes that class of real-world file.
+async function loadWaltzWorkbook(buffer: Buffer): Promise<ExcelJS.Workbook> {
+  const workbook = new ExcelJS.Workbook();
+  try {
+    // exceljs's index.d.ts globally re-declares `interface Buffer extends ArrayBuffer {}`, which
+    // conflicts with @types/node's modern generic `Buffer<TArrayBuffer>` and makes every `Buffer`
+    // reference in this file — including our own `buffer` parameter above — structurally mismatch
+    // itself. A real Node Buffer either way; `any` here is routing around a broken vendored .d.ts,
+    // not a runtime-unsafe cast.
+    await workbook.xlsx.load(buffer as any);
+  } catch (err) {
+    throw new Error(`Could not read OSS report: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return workbook;
 }
 
 const PARSE_TIMEOUT_MS = 15_000; // hard ceiling so a pathological file (e.g. a decompression-bomb-style
@@ -133,21 +242,22 @@ export async function parseWaltzReport(buffer: Buffer): Promise<WaltzComponent[]
 async function parseWaltzReportInner(buffer: Buffer): Promise<WaltzComponent[]> {
   assertSafeWaltzReportSize(buffer);
 
+  // Unzip once — loadWaltzWorkbook() is the only step that can throw a "Could not read OSS
+  // report" (ZIP-level) error; everything below reads from the already-parsed workbook in memory.
+  const workbook = await loadWaltzWorkbook(buffer);
+
   let remediations: ComponentRemediationsRow[];
   try {
-    remediations = await readNamedSheet(buffer, REQUIRED_SHEET, componentRemediationsSchema);
+    remediations = readNamedSheet(workbook, REQUIRED_SHEET, componentRemediationsSchema);
   } catch (err) {
     if (err instanceof SheetNotFoundError) {
-      // read-excel-file's SheetNotFoundError type only declares `sheet` (singular) publicly —
-      // `sheets` is set at runtime but not part of the .d.ts surface, so reference `err.message`
-      // (which already embeds the available sheet list) rather than `err.sheets`.
       throw new Error(`OSS report is missing the required "${REQUIRED_SHEET}" sheet. (${err.message})`);
     }
-    throw new Error(`Could not read OSS report: ${err instanceof Error ? err.message : String(err)}`);
+    throw err;
   }
 
-  const instances = await readOptionalNamedSheet<VersionInstanceRow>(buffer, 'VersionInstances', versionInstancesSchema);
-  const vulnerabilities = await readOptionalNamedSheet<VulnerabilityRow>(buffer, 'Vulnerabilities', vulnerabilitiesSchema);
+  const instances = readOptionalNamedSheet<VersionInstanceRow>(workbook, 'VersionInstances', versionInstancesSchema);
+  const vulnerabilities = readOptionalNamedSheet<VulnerabilityRow>(workbook, 'Vulnerabilities', vulnerabilitiesSchema);
 
   // A malformed or hand-edited report can list the same component twice in ComponentRemediations
   // (copy-paste, a re-scanned component re-appended instead of updated in place). Without
