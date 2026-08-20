@@ -1,0 +1,538 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideation: Open Technical Debt — Ticket Sidekick</title>
+<style>
+  :root {
+    --bg: #faf8f4;
+    --bg-raised: #ffffff;
+    --bg-sunken: #f1ede4;
+    --text: #23201a;
+    --text-muted: #6b6357;
+    --border: #e1dbcb;
+    --accent: #6b4fbb;
+    --accent-text: #4c3591;
+    --accent-soft: #efe9fb;
+    --good: #2f7a4f;
+    --good-soft: #e6f3ea;
+    --warn: #a8631a;
+    --warn-soft: #fbeddd;
+    --bad: #b3402f;
+    --bad-soft: #fbe9e5;
+    --mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+    --sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17151b;
+      --bg-raised: #211e26;
+      --bg-sunken: #2a2632;
+      --text: #ece8f0;
+      --text-muted: #a49cae;
+      --border: #3a3644;
+      --accent: #b39bef;
+      --accent-text: #cdbcf7;
+      --accent-soft: #33294f;
+      --good: #7cc99a;
+      --good-soft: #1e3327;
+      --warn: #e0a55a;
+      --warn-soft: #3a2c17;
+      --bad: #e5897a;
+      --bad-soft: #3a201c;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    padding: 2.5rem 1.25rem 5rem;
+  }
+  .page { max-width: 920px; margin-inline: auto; }
+  .prose { max-width: 72ch; }
+  h1, h2, h3, h4 { font-weight: 650; line-height: 1.25; color: var(--text); }
+  h1 { font-size: 1.9rem; margin: 0 0 0.4rem; }
+  h2 { font-size: 1.35rem; margin: 2.6rem 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1.1rem; margin: 0 0 0.6rem; }
+  p { margin: 0 0 0.9rem; }
+  a { color: var(--accent-text); text-decoration-color: var(--border); text-underline-offset: 2px; }
+  a:hover { text-decoration-color: var(--accent-text); }
+  code { font-family: var(--mono); font-size: 0.88em; background: var(--bg-sunken); padding: 0.1em 0.35em; border-radius: 4px; }
+  strong { color: inherit; }
+
+  .eyebrow {
+    display: inline-block; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.5rem;
+  }
+  header.doc-head { margin-bottom: 1rem; }
+  .meta-strip {
+    display: flex; flex-wrap: wrap; gap: 0.5rem 1.2rem; margin: 1rem 0 0;
+    font-size: 0.88rem; color: var(--text-muted);
+  }
+  .meta-strip strong { color: var(--text); font-weight: 600; }
+
+  .stats-strip {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 0.75rem; margin: 1.75rem 0;
+  }
+  .stat {
+    background: var(--bg-raised); border: 1px solid var(--border); border-radius: 10px;
+    padding: 0.85rem 1rem;
+  }
+  .stat .n { font-size: 1.5rem; font-weight: 700; display: block; }
+  .stat .l { font-size: 0.78rem; color: var(--text-muted); }
+
+  section.block { margin-bottom: 1rem; }
+
+  ul.axes { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+  ul.axes li {
+    background: var(--bg-raised); border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.65rem 0.9rem; font-size: 0.94rem;
+  }
+  ul.axes li .axis-name { font-weight: 650; color: var(--accent-text); }
+
+  nav.jump {
+    background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 10px;
+    padding: 0.9rem 1.1rem; margin: 0 0 1.75rem; font-size: 0.92rem;
+  }
+  nav.jump p { margin: 0 0 0.5rem; font-weight: 650; color: var(--text-muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; }
+  nav.jump ol { margin: 0; padding-left: 1.25rem; }
+  nav.jump li { margin-bottom: 0.25rem; }
+
+  article.idea {
+    background: var(--bg-raised); border: 1px solid var(--border); border-radius: 14px;
+    padding: 1.5rem 1.6rem; margin-bottom: 1.4rem; scroll-margin-top: 1rem;
+  }
+  .idea-head { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+  .rank-chip {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 1.9rem; height: 1.9rem; border-radius: 999px;
+    background: var(--accent-soft); color: var(--accent-text); font-weight: 700; font-size: 0.95rem;
+  }
+  .idea-head h3 { margin: 0; }
+  .chip-row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.6rem 0 1rem; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.78rem; font-weight: 600;
+    padding: 0.28rem 0.65rem; border-radius: 999px; background: var(--bg-sunken); color: var(--text-muted);
+  }
+  .chip.axis { background: var(--accent-soft); color: var(--accent-text); }
+  .chip.conf-high { background: var(--good-soft); color: var(--good); }
+  .chip.conf-med { background: var(--warn-soft); color: var(--warn); }
+  .chip.cx-low { background: var(--good-soft); color: var(--good); }
+  .chip.cx-medium { background: var(--warn-soft); color: var(--warn); }
+  .chip.cx-high { background: var(--bad-soft); color: var(--bad); }
+
+  dl.fields { margin: 1rem 0 0; display: grid; gap: 0.9rem; }
+  dl.fields dt { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.3rem; }
+  dl.fields dd { margin: 0; }
+  .basis-tag { font-family: var(--mono); font-size: 0.8em; color: var(--accent-text); }
+
+  figure.diagram {
+    margin: 1rem 0 0.25rem; padding: 1rem; background: var(--bg-sunken); border-radius: 10px;
+    border: 1px solid var(--border); overflow-x: auto;
+  }
+  figure.diagram svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  figure.diagram figcaption { font-size: 0.8rem; color: var(--text-muted); margin-top: 0.6rem; text-align: center; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+  table caption { text-align: left; font-weight: 650; margin-bottom: 0.5rem; }
+  th, td { text-align: left; padding: 0.55rem 0.7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 650; }
+  tr:last-child td { border-bottom: none; }
+  .reject-table-wrap { overflow-x: auto; }
+
+  .tension-note {
+    background: var(--warn-soft); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1rem 1.2rem; margin-top: 1.25rem; font-size: 0.93rem;
+  }
+  .tension-note .eyebrow { color: var(--warn); }
+
+  footer.composition-signal {
+    margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border);
+    font-size: 0.8rem; color: var(--text-muted);
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="doc-head">
+  <span class="eyebrow">Ideation</span>
+  <h1>Open Technical Debt in Ticket Sidekick</h1>
+  <p class="prose">Known bugs, documented "Known limitation" notes, and features/scope explicitly deferred or cut in past implementation work — what's still open, and what's worth doing about it.</p>
+  <div class="meta-strip">
+    <span><strong>Date:</strong> 2026-08-20</span>
+    <span><strong>Topic:</strong> open-technical-debt</span>
+    <span><strong>Focus:</strong> known bugs and out-of-scope items from previous implementations, this repo</span>
+    <span><strong>Mode:</strong> repo-grounded</span>
+  </div>
+</header>
+
+<div class="stats-strip">
+  <div class="stat"><span class="n">41</span><span class="l">raw ideas generated</span></div>
+  <div class="stat"><span class="n">14</span><span class="l">reached basis verification</span></div>
+  <div class="stat"><span class="n">6</span><span class="l">survived as ranked ideas</span></div>
+  <div class="stat"><span class="n">5</span><span class="l">topic axes, all covered</span></div>
+</div>
+
+<section class="block">
+<h2 id="grounding">Codebase Context</h2>
+<div class="prose">
+<p>Ticket Sidekick is a VS Code extension with two independent GitHub Copilot Chat participants (<code>@jira</code>, <code>@bitbucket</code>) sharing <code>ConfigService</code> but otherwise fully separated, in a strict three-layer architecture (Participant → Service → Client interface). It already externalizes a lot of debt-tracking signal in structured prose: <code>CLAUDE.md</code> carries explicit "Known limitation" subsections for the Veracode and Waltz report importers, <code>docs/solutions/</code> captures durable bug write-ups with YAML frontmatter, and plan docs sometimes leave an "open question" or "Scope Boundaries" note when a plan shipped narrower than originally scoped.</p>
+<p>Two implementation-ready-but-unmerged plans sit on the current branch: a <a href="https://github.com/rbreunung/ticket-sidekick/blob/main/docs/plans/2026-08-13-001-refactor-consolidate-report-importers-plan.md"><code>report-importer consolidation plan</code></a> and a <a href="https://github.com/rbreunung/ticket-sidekick/blob/main/docs/plans/2026-08-14-001-fix-jira-wiki-render-safety-plan.md"><code>Jira-wiki render-safety hardening plan</code></a>. The latter turned out to already settle two of this run's most-argued-for ideas — see the rejection summary below.</p>
+<p>Three <code>docs/solutions/</code> entries recur across almost every frame's ideas: the Waltz <code>.xlsx</code> unzip-compat bug (fixed by swapping to <code>exceljs</code>, but its root cause — a same-ecosystem fixture-generation blind spot — remains open), the Jira-wiki-markup injection bug (fixed for report importers only; email import and content preview are still exposed), and a diagnostic-log redaction false-positive (fixed, but caught only by a whole-branch review, not by tests). Each is a case where a documented "known limitation" or a narrow fix didn't generalize to the rest of the codebase — the pattern this ideation run kept converging on.</p>
+<p>External research (Radius project, Mark Heath's technical-debt-register writeup, Stepsize's backlog-grooming guide) converges on: close won't-fix items with rationale recorded at closure time; tag debt in the same tracker as features/bugs rather than a separate ledger; run short, regular revisit passes rather than one-time documentation. A written-once "out of scope" note with no revisit trigger functionally decays into silent scope creep tolerance — which maps directly onto this repo's current state.</p>
+</div>
+</section>
+
+<section class="block">
+<h2 id="axes">Topic Axes</h2>
+<ul class="axes">
+  <li><span class="axis-name">injection-sanitization-gaps</span> — unresolved Jira-wiki-markup/Markdown injection surfaces where untrusted content still reaches the renderer unsanitized.</li>
+  <li><span class="axis-name">parsing-robustness-limits</span> — documented-but-unmitigated reliability risk in report parsing: single-fixture schema validation, a timeout that doesn't truly cancel work.</li>
+  <li><span class="axis-name">importer-architecture-debt</span> — duplication and interaction-model divergence left over from (or deferred by) the Veracode/Waltz consolidation.</li>
+  <li><span class="axis-name">ai-ux-backlog</span> — proposed-but-unbuilt reliability/UX improvements, and asymmetries between the two participants.</li>
+  <li><span class="axis-name">debt-visibility-process</span> — how (or whether) known limitations and deferred scope get revisited once written down.</li>
+</ul>
+</section>
+
+<section class="block">
+<h2 id="ideas">Ranked Ideas</h2>
+
+<nav class="jump" aria-label="Jump to idea">
+  <p>Jump to</p>
+  <ol>
+    <li><a href="#idea-1">Known-limitation register with enforced revisit triggers</a></li>
+    <li><a href="#idea-2">Non-same-author sentinel fixture policy for binary-format parsers</a></li>
+    <li><a href="#idea-3">Replace the parse-timeout race with real cancellation</a></li>
+    <li><a href="#idea-4">Automate the render-safety plan's deferred manual verification</a></li>
+    <li><a href="#idea-5">Sibling-parity audit between <code>@jira</code> and <code>@bitbucket</code></a></li>
+    <li><a href="#idea-6">Unify report-importer and cleanup review-table rendering</a></li>
+  </ol>
+</nav>
+
+<article class="idea" id="idea-1">
+  <div class="idea-head">
+    <span class="rank-chip">1</span>
+    <h3>Known-limitation register with enforced revisit triggers</h3>
+  </div>
+  <div class="chip-row">
+    <span class="chip axis">debt-visibility-process</span>
+    <span class="chip conf-high">Confidence 90%</span>
+    <span class="chip cx-medium">Complexity Medium</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd><p>Every "Known limitation" note in <code>CLAUDE.md</code> and every plan's "Scope Boundaries"/"Outside this work" section currently lives as static prose with no tracker link, no TODO/FIXME pointer, no automated checklist, and no periodic review schedule. Add a lightweight, machine-checkable register — a <code>revisit-by:</code> field per known-limitation entry, checked by a CI step or the repo's existing <code>ce-compound-refresh</code> skill, or at minimum a release-checklist scan — so a documented gap gets a scheduled decision point instead of sitting indefinitely.</p></dd>
+    <dt>Basis</dt>
+    <dd><span class="basis-tag">direct:</span> spot-checked across <code>CLAUDE.md</code>, <code>docs/plans/</code>, and <code>docs/solutions/</code> — no GitHub issue links, no TODO/FIXME comments tying code to the "Known limitation" prose, no cross-reference between a <code>CLAUDE.md</code> limitation and the plan doc that originated it. The <a href="https://github.com/rbreunung/ticket-sidekick/blob/main/docs/solutions/integration-issues/waltz-oss-report-unzip-failure-on-real-world-xlsx.md"><code>Waltz unzip-compat write-up</code></a> is a concrete case of a limitation that was already known and written down, then went unaddressed until a real user hit it in production — the failure was in revisiting, not in the initial decision to defer. <span class="basis-tag">external:</span> Radius project's triage process (won't-fix rationale recorded at closure, monthly deep review of stale issues); Mark Heath's technical-debt-register practice (tag debt in the existing tracker, check it before touching that code area again); Stepsize's short regular grooming passes.</dd>
+    <dt>Rationale</dt>
+    <dd><p>This is the single highest-convergence idea across the whole run — every one of the five ideation frames independently proposed some version of it. It's also the one move that touches every current and future known-limitation entry at once, rather than closing one instance. The Waltz bug shows the concrete failure mode this closes: a correctly-documented, correctly-flagged limitation with no mechanism forcing anyone back to it.</p></dd>
+    <dt>Downsides</dt>
+    <dd><p>A register with no real enforcement repeats the exact failure it's meant to fix — the mechanism (CI check vs. <code>ce-compound-refresh</code> integration vs. release-checklist scan) has to actually run and actually block or nag, or it becomes one more artifact that goes stale. Idea 14 in the rejection summary below argues a genuinely different philosophy for a solo maintainer — worth a deliberate choice, not a default.</p></dd>
+  </dl>
+  <figure class="diagram">
+    <svg viewBox="0 0 720 220" role="img" aria-labelledby="d1-title d1-desc">
+      <title id="d1-title">Prose-only limitation vs. registered limitation with a revisit trigger</title>
+      <desc id="d1-desc">Today: a known limitation is written once and only reached again if a bug forces a re-read. Proposed: the same note carries a revisit-by field that a periodic check surfaces on its own.</desc>
+      <defs>
+        <marker id="arrow1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"></path>
+        </marker>
+      </defs>
+      <g font-family="var(--sans)" font-size="12.5" fill="var(--text)">
+        <text x="10" y="20" font-weight="700" fill="var(--bad)">TODAY</text>
+        <rect x="10" y="34" width="150" height="46" rx="8" fill="var(--bg-raised)" stroke="var(--border)"></rect>
+        <text x="85" y="53" text-anchor="middle">"Known limitation"</text>
+        <text x="85" y="68" text-anchor="middle">written in CLAUDE.md</text>
+
+        <path d="M160,57 L255,57" stroke="var(--text-muted)" stroke-width="1.5" marker-end="url(#arrow1)"></path>
+        <text x="207" y="47" text-anchor="middle" fill="var(--text-muted)" paint-order="stroke" stroke="var(--bg-sunken)" stroke-width="4">time passes</text>
+
+        <rect x="260" y="34" width="150" height="46" rx="8" fill="var(--bg-raised)" stroke="var(--border)" stroke-dasharray="4 3"></rect>
+        <text x="335" y="53" text-anchor="middle" fill="var(--text-muted)">no trigger,</text>
+        <text x="335" y="68" text-anchor="middle" fill="var(--text-muted)">no re-read</text>
+
+        <path d="M410,57 L500,57" stroke="var(--bad)" stroke-width="1.5" marker-end="url(#arrow1)"></path>
+
+        <rect x="505" y="34" width="200" height="46" rx="8" fill="var(--bad-soft)" stroke="var(--bad)"></rect>
+        <text x="605" y="53" text-anchor="middle" fill="var(--bad)">a real user hits the gap</text>
+        <text x="605" y="68" text-anchor="middle" fill="var(--bad)">(e.g. the Waltz unzip bug)</text>
+
+        <text x="10" y="120" font-weight="700" fill="var(--good)">PROPOSED</text>
+        <rect x="10" y="134" width="150" height="46" rx="8" fill="var(--bg-raised)" stroke="var(--border)"></rect>
+        <text x="85" y="153" text-anchor="middle">Known limitation +</text>
+        <text x="85" y="168" text-anchor="middle"><tspan font-family="var(--mono)">revisit-by:</tspan> date</text>
+
+        <path d="M160,157 L275,157" stroke="var(--good)" stroke-width="1.5" marker-end="url(#arrow1)"></path>
+
+        <rect x="280" y="134" width="180" height="46" rx="8" fill="var(--bg-raised)" stroke="var(--border)"></rect>
+        <text x="370" y="153" text-anchor="middle">CI / ce-compound-refresh</text>
+        <text x="370" y="168" text-anchor="middle">flags it on schedule</text>
+
+        <path d="M460,157 L575,157" stroke="var(--good)" stroke-width="1.5" marker-end="url(#arrow1)"></path>
+
+        <rect x="580" y="134" width="130" height="46" rx="8" fill="var(--good-soft)" stroke="var(--good)"></rect>
+        <text x="645" y="153" text-anchor="middle" fill="var(--good)">Maintainer</text>
+        <text x="645" y="168" text-anchor="middle" fill="var(--good)">re-confirms or fixes</text>
+
+        <path d="M645,180 C645,210 370,210 370,181" stroke="var(--good)" stroke-width="1.3" fill="none" marker-end="url(#arrow1)" stroke-dasharray="3 3"></path>
+        <text x="510" y="205" text-anchor="middle" fill="var(--text-muted)" font-size="11">loops back — the trigger recurs, it isn't a one-time check</text>
+      </g>
+    </svg>
+    <figcaption>The gap this closes: prose limitations have no path back into view. A revisit trigger gives them one, on a schedule.</figcaption>
+  </figure>
+</article>
+
+<article class="idea" id="idea-2">
+  <div class="idea-head">
+    <span class="rank-chip">2</span>
+    <h3>Non-same-author sentinel fixture policy for binary-format parsers</h3>
+  </div>
+  <div class="chip-row">
+    <span class="chip axis">parsing-robustness-limits</span>
+    <span class="chip conf-high">Confidence 88%</span>
+    <span class="chip cx-medium">Complexity Medium</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd><p>Every <code>.xlsx</code> fixture in the repo is generated by <code>write-excel-file</code> — <a href="https://github.com/rbreunung/ticket-sidekick/blob/main/scripts/fixtures/build-waltz-report-fixture.mjs#L3"><code>scripts/fixtures/build-waltz-report-fixture.mjs:3</code></a> — the sibling package, from the same author, of the exact <code>read-excel-file</code> reader that was just removed for choking on real-world files. Require at least one fixture per binary-format parser (Waltz <code>.xlsx</code> today; any future format) produced by a structurally independent writer — a different library entirely, or a captured/anonymized real export — documented as a standing testing-policy rule, not a one-off fix.</p></dd>
+    <dt>Basis</dt>
+    <dd><span class="basis-tag">direct:</span> <a href="https://github.com/rbreunung/ticket-sidekick/blob/main/docs/solutions/integration-issues/waltz-oss-report-unzip-failure-on-real-world-xlsx.md"><code>docs/solutions/integration-issues/waltz-oss-report-unzip-failure-on-real-world-xlsx.md</code></a>'s own Prevention section: "the fixture-generation blind spot is structural and remains open… a writer and reader from the same small ecosystem will always agree on ZIP layout by construction, so this class of bug cannot be caught by this repo's own fixtures no matter which parsing library is used downstream" — confirmed against the live import in the fixture script.</dd>
+    <dt>Rationale</dt>
+    <dd><p>This is the root cause of the exact bug the current branch (<code>fix/waltz-oss-report-unzip-compat</code>) exists to fix — the reader changed, the thing that let the bug hide from CI did not. Four independent ideation frames converged on this same conclusion from four different angles (pain, inversion, leverage, cross-domain analogy), which is a strong signal the gap is real and not an artifact of one frame's bias.</p></dd>
+    <dt>Downsides</dt>
+    <dd><p>Requires actually obtaining an independently-produced <code>.xlsx</code> — a different toolchain export, or a real anonymized customer file — which is acquisition effort, not code. It also doesn't close the class permanently: the next distinct producer variant (a different Waltz version, a different locale) can still surprise a two-fixture suite. It raises the bar; it doesn't make the bar unliftable.</p></dd>
+  </dl>
+  <figure class="diagram">
+    <svg viewBox="0 0 720 240" role="img" aria-labelledby="d2-title d2-desc">
+      <title id="d2-title">Same-ecosystem fixtures vs. an independent sentinel fixture</title>
+      <desc id="d2-desc">A writer and reader from the same small ecosystem agree by construction, so CI passes while a real-world producer's file still fails. An independent sentinel fixture exposes that gap before a user does.</desc>
+      <defs>
+        <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"></path>
+        </marker>
+      </defs>
+      <g font-family="var(--sans)" font-size="12.5" fill="var(--text)">
+        <text x="10" y="20" font-weight="700" fill="var(--bad)">TODAY — one ecosystem, both ends</text>
+        <rect x="10" y="34" width="150" height="42" rx="8" fill="var(--bg-raised)" stroke="var(--border)"></rect>
+        <text x="85" y="59" text-anchor="middle" font-family="var(--mono)" font-size="11.5">write-excel-file</text>
+        <path d="M160,55 L250,55" stroke="var(--text-muted)" stroke-width="1.5" marker-end="url(#arrow2)"></path>
+        <text x="205" y="45" text-anchor="middle" font-size="11" fill="var(--text-muted)">fixture</text>
+        <rect x="255" y="34" width="150" height="42" rx="8" fill="var(--bg-raised)" stroke="var(--border)"></rect>
+        <text x="330" y="59" text-anchor="middle" font-size="11.5">reader under test</text>
+        <path d="M405,55 L495,55" stroke="var(--good)" stroke-width="1.5" marker-end="url(#arrow2)"></path>
+        <rect x="500" y="34" width="90" height="42" rx="8" fill="var(--good-soft)" stroke="var(--good)"></rect>
+        <text x="545" y="59" text-anchor="middle" fill="var(--good)">CI: PASS</text>
+
+        <rect x="10" y="96" width="150" height="42" rx="8" fill="var(--bad-soft)" stroke="var(--bad)" stroke-dasharray="4 3"></rect>
+        <text x="85" y="115" text-anchor="middle" fill="var(--bad)">real-world</text>
+        <text x="85" y="128" text-anchor="middle" fill="var(--bad)">producer's export</text>
+        <path d="M160,117 L250,63" stroke="var(--bad)" stroke-width="1.5" marker-end="url(#arrow2)" stroke-dasharray="4 3"></path>
+        <text x="590" y="115" fill="var(--bad)" font-size="11.5">never runs in CI — only found in production</text>
+
+        <text x="10" y="175" font-weight="700" fill="var(--good)">PROPOSED — add an independent sentinel</text>
+        <rect x="10" y="189" width="150" height="42" rx="8" fill="var(--bg-raised)" stroke="var(--border)"></rect>
+        <text x="85" y="208" text-anchor="middle" font-size="11">independent</text>
+        <text x="85" y="221" text-anchor="middle" font-size="11">producer fixture</text>
+        <path d="M160,210 L250,210" stroke="var(--good)" stroke-width="1.5" marker-end="url(#arrow2)"></path>
+        <rect x="255" y="189" width="150" height="42" rx="8" fill="var(--bg-raised)" stroke="var(--border)"></rect>
+        <text x="330" y="214" text-anchor="middle" font-size="11.5">reader under test</text>
+        <path d="M405,210 L495,210" stroke="var(--good)" stroke-width="1.5" marker-end="url(#arrow2)"></path>
+        <rect x="500" y="189" width="150" height="42" rx="8" fill="var(--good-soft)" stroke="var(--good)"></rect>
+        <text x="575" y="208" text-anchor="middle" fill="var(--good)">CI catches</text>
+        <text x="575" y="221" text-anchor="middle" fill="var(--good)">real-world drift</text>
+      </g>
+    </svg>
+    <figcaption>Same-ecosystem fixtures agree with the reader by construction — they can't catch this bug class. An independent producer can.</figcaption>
+  </figure>
+</article>
+
+<article class="idea" id="idea-3">
+  <div class="idea-head">
+    <span class="rank-chip">3</span>
+    <h3>Replace the parse-timeout race with real cancellation</h3>
+  </div>
+  <div class="chip-row">
+    <span class="chip axis">parsing-robustness-limits</span>
+    <span class="chip conf-high">Confidence 85%</span>
+    <span class="chip cx-medium">Complexity Medium</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd><p><a href="https://github.com/rbreunung/ticket-sidekick/blob/main/src/utils/waltzReport.ts#L220"><code>src/utils/waltzReport.ts:220</code></a>'s <code>PARSE_TIMEOUT_MS</code> is a <code>Promise.race</code> against a 15s timer — it stops the caller from <em>waiting</em>, but the parse itself keeps running and consuming CPU/memory afterward. Two-stage move: (1) cheap first step — log a diagnostic line (via the existing <code>onDiag</code>/<code>logDiag</code> pattern already used throughout the codebase) at the timeout-rejection branch, so it's finally observable whether this has ever actually fired for a real user; (2) the real fix — move the parse into a Node <code>worker_thread</code> that can be genuinely <code>.terminate()</code>d on timeout.</p></dd>
+    <dt>Basis</dt>
+    <dd><span class="basis-tag">direct:</span> the code and its own comment at <code>waltzReport.ts:220-224</code>: <code>"hard ceiling so a pathological file … fails fast instead of exhausting memory or hanging the extension host. Bounds wall-clock time, not memory directly…"</code> — and <code>CLAUDE.md</code>'s matching admission: <code>"it does not itself prevent resource exhaustion."</code> The gap is self-documented, not inferred.</dd>
+    <dt>Rationale</dt>
+    <dd><p>Four frames converged on closing this gap (inversion, cross-domain analogy, constraint-flipping, pain/friction's instrumentation angle) — this is a named, security-adjacent resource-exhaustion vector on a file-import path whose own threat model explicitly names "decompression-bomb-style" files. Nobody currently knows whether it has ever fired for a real user; the diagnostic step answers that cheaply before committing to the bigger refactor.</p></dd>
+    <dt>Downsides</dt>
+    <dd><p>The <code>worker_thread</code> refactor changes the parse entry point's data marshalling — results have to cross the thread boundary via structured clone, which is a real (if contained) code change to a function that currently returns rich in-process objects. The diagnostic-logging step is nearly free; the full fix is a genuine chunk of work with its own test burden, and is worth sequencing as its own decision once the instrumentation shows whether it's needed.</p></dd>
+  </dl>
+  <figure class="diagram">
+    <svg viewBox="0 0 720 210" role="img" aria-labelledby="d3-title d3-desc">
+      <title id="d3-title">Promise.race timeout vs. worker_thread termination</title>
+      <desc id="d3-desc">Today the timeout stops the caller from waiting but the parse keeps running unseen on the main thread. A worker thread can be actually terminated, stopping the work itself.</desc>
+      <defs>
+        <marker id="arrow3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"></path>
+        </marker>
+      </defs>
+      <g font-family="var(--sans)" font-size="12.5" fill="var(--text)">
+        <text x="10" y="20" font-weight="700" fill="var(--bad)">TODAY — Promise.race</text>
+        <rect x="10" y="34" width="180" height="42" rx="8" fill="var(--bg-raised)" stroke="var(--border)"></rect>
+        <text x="100" y="59" text-anchor="middle" font-size="11.5">main thread: parsing…</text>
+        <path d="M100,76 L100,120" stroke="var(--bad)" stroke-width="1.5" stroke-dasharray="3 3" marker-end="url(#arrow3)"></path>
+        <rect x="10" y="126" width="180" height="42" rx="8" fill="var(--bad-soft)" stroke="var(--bad)" stroke-dasharray="4 3"></rect>
+        <text x="100" y="145" text-anchor="middle" fill="var(--bad)" font-size="11">still running,</text>
+        <text x="100" y="158" text-anchor="middle" fill="var(--bad)" font-size="11">still consuming CPU/memory</text>
+
+        <path d="M195,55 L330,55" stroke="var(--text-muted)" stroke-width="1.5" marker-end="url(#arrow3)"></path>
+        <text x="262" y="45" text-anchor="middle" font-size="11" fill="var(--text-muted)">15s timer fires</text>
+        <rect x="335" y="34" width="190" height="42" rx="8" fill="var(--bg-raised)" stroke="var(--border)"></rect>
+        <text x="430" y="53" text-anchor="middle" font-size="11">user sees a</text>
+        <text x="430" y="66" text-anchor="middle" font-size="11">timeout error — work continues</text>
+
+        <text x="10" y="175" font-size="10.5" fill="var(--text-muted)" font-style="italic">unbounded box = leaves the thread running with nothing watching it</text>
+      </g>
+      <g font-family="var(--sans)" font-size="12.5" fill="var(--text)" transform="translate(560,0)">
+      </g>
+    </svg>
+    <figcaption>The main-thread race can stop waiting; it cannot stop the work. A worker thread can do both.</figcaption>
+  </figure>
+</article>
+
+<article class="idea" id="idea-4">
+  <div class="idea-head">
+    <span class="rank-chip">4</span>
+    <h3>Automate the render-safety plan's deferred manual verification</h3>
+  </div>
+  <div class="chip-row">
+    <span class="chip axis">injection-sanitization-gaps</span>
+    <span class="chip conf-high">Confidence 85%</span>
+    <span class="chip cx-low">Complexity Low</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd><p>The unmerged <a href="https://github.com/rbreunung/ticket-sidekick/blob/main/docs/plans/2026-08-14-001-fix-jira-wiki-render-safety-plan.md"><code>render-safety plan</code></a> explicitly defers, as a manual, non-blocking, non-automatable check, whether Jira's own renderer re-interprets wiki-markup trigger sequences <em>inside</em> <code>{{monospace}}</code>/<code>{code}</code>/<code>{noformat}</code> macros — the exact class of injection the plan exists to close. Write a small integration script: post a probe ticket with each trigger sequence wrapped in each macro to a real or sandbox Jira instance, read it back via the API, and diff the rendered result — instead of leaving this as an indefinitely-deferred manual step.</p></dd>
+    <dt>Basis</dt>
+    <dd><span class="basis-tag">direct:</span> the plan's own text, verbatim: <code>"Assumes Jira's own renderer does not re-interpret wiki-markup trigger sequences inside its {{monospace}}/{code}/{noformat} macros. Unverified against a live instance; see KTD3 and the Verification Contract's deferred manual check"</code> and, in the Verification Contract: <code>"Deferred, non-blocking: a one-time manual confirmation… This cannot be automated from this repo and does not block merge."</code></dd>
+    <dt>Rationale</dt>
+    <dd><p>This is the load-bearing assumption behind the whole render-safety fix. If it's wrong, the macro-wrapping defense the plan's converter design relies on doesn't actually neutralize the trigger inside those macros — and under the plan's current scope, nobody would find out until someone hits it, the same failure shape as the Waltz bug above.</p></dd>
+    <dt>Downsides</dt>
+    <dd><p>Needs a real or sandbox Jira instance and credentials reachable from wherever the script runs — it can't be exercised inside this repo's own CI without one. If no such instance is easily available, a well-scheduled one-time manual check (tied to idea 1's revisit-trigger mechanism, rather than left open-ended) may be the more realistic near-term version of this idea.</p></dd>
+  </dl>
+</article>
+
+<article class="idea" id="idea-5">
+  <div class="idea-head">
+    <span class="rank-chip">5</span>
+    <h3>Sibling-parity audit between <code>@jira</code> and <code>@bitbucket</code></h3>
+  </div>
+  <div class="chip-row">
+    <span class="chip axis">ai-ux-backlog</span>
+    <span class="chip conf-high">Confidence 82%</span>
+    <span class="chip cx-medium">Complexity Medium</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd><p><code>@bitbucket</code> already resolves a token budget from <code>modelContextTokens</code> → <code>request.model.maxInputTokens</code> → a 60 000 fallback, multiplied by <code>contextBudgetRatio</code> (default 0.7) — <a href="https://github.com/rbreunung/ticket-sidekick/blob/main/src/participant/BitbucketParticipant.ts#L470"><code>BitbucketParticipant.ts:470-474</code></a> (and again at 573-577). <code>@jira</code>'s equivalent context-assembly path has no cap at all. Concretely: lift Bitbucket's existing logic into a shared <code>src/utils/tokenBudget.ts</code> both participants use. As a process rule: when a reliability/UX hardening fix lands on one participant, require an explicit "applies to the sibling, or explicitly doesn't, because X" note before the task counts as done — closing this gap and preventing the next one like it.</p></dd>
+    <dt>Basis</dt>
+    <dd><span class="basis-tag">direct:</span> <code>BitbucketParticipant.ts:470-474</code> confirmed as cited; <code>src/participant/jira/contentHandler.ts</code>'s <code>buildContentContext()</code> confirmed to have no equivalent cap. Separately, all 5 proposals in <code>docs/bitbucket-follow-up-improvements.md</code> are already delivered, while several parallel proposals in <code>docs/ai-usecases-review.md</code> for <code>@jira</code> — including token budgeting and sturdier refusal detection — remain open.</dd>
+    <dt>Rationale</dt>
+    <dd><p>The fix already exists and already works in the codebase, under a different participant — the leverage move is relocating proven logic, not designing something new. It also names a real process gap: two structurally parallel features are drifting because nothing currently checks whether a fix on one side should apply to the other.</p></dd>
+    <dt>Downsides</dt>
+    <dd><p>Extracting the shared utility touches Bitbucket's already-working, already-tested code path too — real if modest regression risk on a feature that currently works. The process half (the parity checklist) only has value if it's actually followed; a rule nobody enforces is no better than the status quo.</p></dd>
+  </dl>
+</article>
+
+<article class="idea" id="idea-6">
+  <div class="idea-head">
+    <span class="rank-chip">6</span>
+    <h3>Unify report-importer and cleanup review-table rendering</h3>
+  </div>
+  <div class="chip-row">
+    <span class="chip axis">importer-architecture-debt</span>
+    <span class="chip conf-med">Confidence 70%</span>
+    <span class="chip cx-medium">Complexity Medium</span>
+  </div>
+  <dl class="fields">
+    <dt>Description</dt>
+    <dd><p>Report importers use toggle semantics (reply with ids to flip inclusion); <code>cleanupHandler.ts</code>'s bulk-transition review uses skip semantics (default-all-included, reply with ids to exclude) — two structurally separate table implementations. The consolidation plan's own Scope Boundaries call this "a real interaction-model difference a future unification will need to reconcile, not just a wording difference" and deliberately park it. Rather than a big-bang UX merge, extract just the shared table-rendering primitives (borders, column truncation, "New"/"Already ticketed" framing) now, leaving the toggle-vs-skip parsing semantics genuinely separate.</p></dd>
+    <dt>Basis</dt>
+    <dd><span class="basis-tag">direct:</span> verified the semantics directly — cleanup's review parsing returns a one-way <code>{action:'skip', keys}</code>, report review's returns a bidirectional <code>{action:'toggle', ids}</code> with <code>included: !r.included</code> — a real, not cosmetic, difference, confirmed against the consolidation plan's own Scope Boundaries text.</dd>
+    <dt>Rationale</dt>
+    <dd><p>Every future bulk-action feature currently means writing another bespoke review-table-plus-parser instead of extending one — the render layer is genuinely duplicated (dossier cites <code>sessionState.ts:92-115</code> for cleanup and <code>519-583</code> for reports) even though the plan's own authors correctly judged the semantic merge itself as a separate, deferrable decision.</p></dd>
+    <dt>Downsides</dt>
+    <dd><p>Even the render-only slice touches two working, already-hardened flows — this exact area of the codebase has produced three of the repo's documented <code>docs/solutions/</code> bugs. The plan's authors already judged full unification deferrable; the render-only slice is a smaller, safer bite, but timing it against other priorities (especially idea 1's process fix and idea 4's security-plan gap) is a real sequencing question, not a given.</p></dd>
+  </dl>
+  <figure class="diagram">
+    <svg viewBox="0 0 720 230" role="img" aria-labelledby="d6-title d6-desc">
+      <title id="d6-title">Two separate review-table stacks vs. a shared render layer with separate semantics on top</title>
+      <desc id="d6-desc">Cleanup and report importers each own their full table-rendering-plus-parsing stack today. The proposal shares the rendering primitives while keeping the skip and toggle parsing logic separate.</desc>
+      <defs>
+        <marker id="arrow6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"></path>
+        </marker>
+      </defs>
+      <g font-family="var(--sans)" font-size="12" fill="var(--text)">
+        <text x="10" y="18" font-weight="700" fill="var(--bad)">TODAY — two full stacks</text>
+        <rect x="10" y="30" width="220" height="38" rx="7" fill="var(--bg-raised)" stroke="var(--border)"></rect>
+        <text x="120" y="53" text-anchor="middle" font-size="11">Cleanup: skip semantics + own renderer</text>
+        <rect x="250" y="30" width="220" height="38" rx="7" fill="var(--bg-raised)" stroke="var(--border)"></rect>
+        <text x="360" y="53" text-anchor="middle" font-size="11">Reports: toggle semantics + own renderer</text>
+
+        <text x="10" y="112" font-weight="700" fill="var(--good)">PROPOSED — shared rendering, separate semantics</text>
+        <rect x="10" y="124" width="220" height="38" rx="7" fill="var(--bg-raised)" stroke="var(--border)"></rect>
+        <text x="120" y="147" text-anchor="middle" font-size="11">Cleanup: skip semantics</text>
+        <rect x="250" y="124" width="220" height="38" rx="7" fill="var(--bg-raised)" stroke="var(--border)"></rect>
+        <text x="360" y="147" text-anchor="middle" font-size="11">Reports: toggle semantics</text>
+
+        <path d="M120,162 L200,195" stroke="var(--good)" stroke-width="1.4" marker-end="url(#arrow6)"></path>
+        <path d="M360,162 L280,195" stroke="var(--good)" stroke-width="1.4" marker-end="url(#arrow6)"></path>
+        <rect x="120" y="197" width="260" height="30" rx="7" fill="var(--good-soft)" stroke="var(--good)"></rect>
+        <text x="250" y="217" text-anchor="middle" fill="var(--good)" font-size="11">shared render primitives</text>
+      </g>
+    </svg>
+    <figcaption>Only the borders/truncation/section-framing layer merges here — the skip-vs-toggle decision stays deliberately separate, per the plan's own reasoning.</figcaption>
+  </figure>
+</article>
+
+</section>
+
+<section class="block">
+<h2 id="rejected">Rejection Summary</h2>
+<div class="reject-table-wrap">
+<table>
+<caption>8 candidates that reached basis verification but did not survive as ranked ideas</caption>
+<thead><tr><th>#</th><th>Idea</th><th>Reason rejected</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Hot-patch the two email-import injection gaps now, ahead of the full plan</td><td>Already decided against inside the open render-safety plan itself — it explicitly weighed and rejected a standalone out-of-band patch in favor of folding the fix into the full plan. The actionable move is landing that plan, not re-opening a settled call.</td></tr>
+<tr><td>2</td><td>Type-safe <code>Sanitized</code>-branded-string boundary + CI-lint fallback for <code>markdownToJiraWiki()</code></td><td>The plan's chokepoint-level fix (R1) already achieves this for the content-preview call sites this idea cited as evidence; it re-derives a design decision (converter-level fix vs. per-caller opt-in utility) the plan already made and documented its reasoning for.</td></tr>
+<tr><td>3</td><td>Deduplicate <code>BATCH_LIMIT</code> between <code>cleanupHandler.ts</code> and <code>reportImport.ts</code></td><td>Correct and cheap (verified real — a one-import-swap fix), but too small to clear the meeting-test floor as its own idea. Worth doing; not worth a ranked slot.</td></tr>
+<tr><td>4</td><td>Document <code>ReportImportDescriptor</code> as the standing idiom for future multi-source features</td><td>Directionally right, but a one-paragraph documentation addition with no real tradeoff to discuss — doesn't clear the ideation bar on its own.</td></tr>
+<tr><td>5</td><td>Harden <code>isLmRefusal</code> via structured LM API signal instead of a phrase list</td><td>Basis overstated: the claimed parallel to the redaction false-positive bug doesn't hold (long specific phrases vs. short ambiguous substrings are a different failure shape), and the proposed fix assumes VS Code's LM API exposes finish-reason/content-filtered metadata, which isn't established anywhere in this codebase.</td></tr>
+<tr><td>6</td><td>Close <code>checkSectionCoverage</code>'s "silent failure" gap with a shared <code>parseLlmJson</code> retry helper</td><td>Basis refuted by verification: <code>checkSectionCoverage</code> already has one-retry logic (<code>createHandler.ts:41-52</code>); the described "no retry" gap does not exist as claimed.</td></tr>
+<tr><td>7</td><td>ASRS-style periodic trend-review pass over <code>docs/solutions/</code></td><td>A real instinct, but thinner and less concrete than idea 1's register, and the two overlap heavily — idea 1 is the more directly evidenced, more actionable version of the same underlying need.</td></tr>
+<tr><td>8</td><td>Solo-maintainer "resolve-or-kill-now" norm — no open-ended deferrals</td><td>A genuine, well-reasoned alternative philosophy to idea 1 (resolve immediately vs. track-and-revisit). Not rejected on quality — it argues against idea 1 rather than adding new ground, so it's surfaced as a strategic choice below instead of a ranked idea.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="tension-note">
+  <span class="eyebrow">Worth a deliberate call</span>
+  <p>Ideas 1 (register-and-revisit) and 8 above (resolve-or-kill-now) are genuinely incompatible philosophies for a project with one committer. The verifier's read, which held up under its own check: the register is the stronger-grounded of the two, because the Waltz bug it cites as evidence was already known and written down — the failure was in <em>revisiting</em> a deferred decision, not in the act of deferring it. A resolve-or-kill-now norm wouldn't obviously have prevented that specific failure. Still, which of the two fits how this repo actually gets worked on is a call for whoever maintains it, not something this ideation run can settle from the grounding alone.</p>
+</div>
+</section>
+
+<footer class="composition-signal">
+  Composed 2026-08-20 by ce-ideate from the prompt "do we have still open ends to fix in our software like known bugs or features we took out of scope from previous implementations?", grounded against the <code>jira-copilot</code> repository at branch <code>fix/waltz-oss-report-unzip-compat</code> (head <code>9556cfa</code>).
+</footer>
+
+</div>
+</body>
+</html>
