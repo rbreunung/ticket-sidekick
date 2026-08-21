@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { JiraApiClient } from '../jira/JiraApiClient';
 import { ConfigService } from '../services/ConfigService';
-import { TicketService, renderFieldValue } from '../services/TicketService';
+import { TicketService, renderFieldValue, formatKeyLink } from '../services/TicketService';
 import type { JiraFieldMeta, JiraFilter, JiraSprintCandidate } from '../jira/IJiraClient';
 import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
@@ -304,7 +304,7 @@ export function createJiraParticipant(
       const session = ws.get<ContentSession>('jira.session.previewing');
       if (session) {
         try {
-          await handleContentSession(session, request.prompt, request.model, token, stream, ticketService, ws);
+          await handleContentSession(session, request.prompt, request.model, token, stream, ticketService, ws, config.baseUrl);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logDiag('jira.participant', 'error', message, {});
@@ -390,7 +390,7 @@ export function createJiraParticipant(
           if (toUpdate.length === 1) {
             try {
               await jiraClient.updateIssue(toUpdate[0], { [previewSession.fieldId]: previewSession.fieldValue });
-              stream.markdown(`Updated **${previewSession.fieldName}** on ${toUpdate[0]}.`);
+              stream.markdown(`Updated **${previewSession.fieldName}** on ${formatKeyLink(toUpdate[0], config.baseUrl)}.`);
               stream.markdown(`\n\n<!-- @jira-ticket:${toUpdate[0]} -->`);
             } catch (err) {
               const message = err instanceof Error ? err.message : String(err);
@@ -400,8 +400,9 @@ export function createJiraParticipant(
           } else {
             let passed = 0, failed = 0;
             await ticketService.bulkUpdateField(toUpdate, previewSession.fieldId, previewSession.fieldValue, (key, ok, err) => {
-              if (ok) { stream.markdown(`✓ ${key}\n\n`); passed++; }
-              else { stream.markdown(`✗ ${key}: ${err}\n\n`); failed++; }
+              const keyRef = formatKeyLink(key, config.baseUrl);
+              if (ok) { stream.markdown(`✓ ${keyRef}\n\n`); passed++; }
+              else { stream.markdown(`✗ ${keyRef}: ${err}\n\n`); failed++; }
             });
             stream.markdown(`\n_Done — ${passed} updated${failed > 0 ? `, ${failed} failed` : ''}_`);
           }
@@ -795,7 +796,7 @@ export function createJiraParticipant(
             return;
           }
           if (isLiteral) {
-            result = await ticketService.addComment(ticketKey!, intent.comment!);
+            result = await ticketService.addComment(ticketKey!, intent.comment!, config.baseUrl);
           } else {
             const ticketText = await ticketService.getTicket(ticketKey!);
             const { comments } = await ticketService.getIssueComments(ticketKey!, 50);
