@@ -238,11 +238,6 @@ export function serializeTurns(
   return `_(oldest turns omitted to fit context)_\n\n${clean}`;
 }
 
-export function extractCreatedKeyFromConfirmation(confirmation: string): string | null {
-  const m = confirmation.match(/([A-Z][A-Z0-9]+-\d+)/);
-  return m ? m[1] : null;
-}
-
 export function isConfirmation(text: string): boolean {
   const normalized = text.trim().toLowerCase();
   const CONFIRMATIONS = new Set([

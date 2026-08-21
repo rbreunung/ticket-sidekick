@@ -12,6 +12,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { logDiag } from '../../utils/diagLog';
 import type { TicketService } from '../../services/TicketService';
+import { formatKeyLink } from '../../services/TicketService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import { TemplateService } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
@@ -21,7 +22,7 @@ import {
 } from '../../utils/reportImport';
 import {
   isCancellation, pickEmailOption, buildImportReviewTable, parseReviewInput, applyReviewToggle,
-  extractCreatedKeyFromConfirmation, CURRENT_SESSION_SCHEMA_VERSION, isSessionExpired, SESSION_EXPIRED_MESSAGE,
+  CURRENT_SESSION_SCHEMA_VERSION, isSessionExpired, SESSION_EXPIRED_MESSAGE,
   type ImportTemplateSelectionSession, type ReviewSession, type ReviewTableColumn, type ReviewRowBase,
 } from '../sessionState';
 import { resolveProjectKey } from './ticketContext';
@@ -417,9 +418,8 @@ export async function executeImportBatch<TItem, TRow extends ReportImportRow>(
   for (const row of toCreate) {
     try {
       const fields = { ...session.additionalFields, labels: row.labels, description: row.descriptionWiki };
-      const confirmation = await ticketService.createTicket(session.projectKey, row.summary, session.issueType, fields);
-      const key = extractCreatedKeyFromConfirmation(confirmation);
-      const keyRef = key && baseUrl ? `[${key}](${baseUrl}/browse/${key})` : (key ?? '?');
+      const createdTicket = await ticketService.createTicket(session.projectKey, row.summary, session.issueType, fields, baseUrl);
+      const keyRef = formatKeyLink(createdTicket.key, baseUrl);
       stream.markdown(`✓ ${keyRef} — ${row.summary}\n\n`);
       created++;
     } catch (err) {

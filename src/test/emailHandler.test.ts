@@ -129,6 +129,15 @@ describe('addEmailAsComment', () => {
     expect(body).toContain('Body text');
   });
 
+  it('links the ticket key in the confirmation (baseUrl is configured in this file\'s vscode mock)', async () => {
+    const stream = mockStream();
+    const session = makeSession({ markdownBody: 'Body text' });
+    await addEmailAsComment('PROJ-1', session, ticketService, stream);
+
+    const allMarkdown = stream.markdown.mock.calls.map((c: string[]) => c[0]).join('');
+    expect(allMarkdown).toContain('[PROJ-1](https://jira.example.com/browse/PROJ-1)');
+  });
+
   it('converts [📎 img] placeholder in comment body', async () => {
     const stream = mockStream();
     const session = makeSession({ markdownBody: 'See [📎 screenshot.png]' });
@@ -224,6 +233,15 @@ describe('finishEmailTicket', () => {
     const names = client.uploadAttachmentCalls.map(c => c.filename);
     expect(names).toContain('inline.png');
     expect(names).toContain('report.pdf');
+  });
+
+  it('links the ticket key in the confirmation (baseUrl is configured in this file\'s vscode mock)', async () => {
+    const stream = mockStream();
+    const session = makeSession();
+    await finishEmailTicket(session, ticketService, stream);
+
+    const allMarkdown = stream.markdown.mock.calls.map((c: string[]) => c[0]).join('');
+    expect(allMarkdown).toContain('[PROJ-125](https://jira.example.com/browse/PROJ-125)');
   });
 
   it('converts [📎 img] placeholder in description', async () => {

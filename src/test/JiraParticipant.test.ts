@@ -4,7 +4,7 @@ vi.mock('vscode', () => ({
   window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
 }));
 
-import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, buildImportReviewTable, parseReviewInput, applyReviewToggle, VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION, type VeracodeReviewRow } from '../participant/sessionState';
+import { extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, buildImportReviewTable, parseReviewInput, applyReviewToggle, VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION, type VeracodeReviewRow } from '../participant/sessionState';
 import type { WaltzReviewRow } from '../utils/waltzReport';
 import { isPointerPrompt } from '../participant/jira/llmHelpers';
 import type { TransitionBatchTicket } from '../participant/sessionState';
@@ -94,24 +94,6 @@ describe('serializeTurns', () => {
   it('does not add truncation note when history is short', () => {
     const result = serializeTurns([{ role: 'user' as const, text: 'hello' }], 'full');
     expect(result).not.toContain('oldest turns omitted');
-  });
-});
-
-describe('extractCreatedKeyFromConfirmation', () => {
-  it('extracts key from a standard creation confirmation', () => {
-    expect(extractCreatedKeyFromConfirmation('Created PROJ-125: **Login timeout bug** (Bug in PROJ)')).toBe('PROJ-125');
-  });
-
-  it('extracts key with multi-segment project name', () => {
-    expect(extractCreatedKeyFromConfirmation('Created VSJI-42: **Add dark mode** (Story in VSJI)')).toBe('VSJI-42');
-  });
-
-  it('returns null when no ticket key is present', () => {
-    expect(extractCreatedKeyFromConfirmation('Cancelled.')).toBeNull();
-  });
-
-  it('returns null for empty string', () => {
-    expect(extractCreatedKeyFromConfirmation('')).toBeNull();
   });
 });
 

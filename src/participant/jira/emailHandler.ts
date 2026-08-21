@@ -345,9 +345,10 @@ export async function addEmailAsComment(
   const jiraWiki = buildEmailJiraWiki(session.markdownBody);
   const header = buildEmailCommentHeader(session.senderName, session.receivedDateTime);
   const commentBody = `${header}${jiraWiki}`;
+  const baseUrl = vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.baseUrl') ?? '';
 
-  await ticketService.addComment(ticketKey, commentBody);
-  stream.markdown(`Added comment to **${ticketKey}**.`);
+  const result = await ticketService.addComment(ticketKey, commentBody, baseUrl);
+  stream.markdown(result);
 
   if (session.attachments.length > 0) {
     let uploaded = 0;
@@ -434,19 +435,15 @@ export async function streamEmailContentPreview(session: EmailContentSession, st
 
 export async function finishEmailTicket(session: EmailContentSession, ticketService: TicketService, stream: vscode.ChatResponseStream): Promise<void> {
   const jiraWiki = buildEmailJiraWiki(session.markdownBody);
+  const baseUrl = vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.baseUrl') ?? '';
 
-  const result = await ticketService.createTicket(
+  const created = await ticketService.createTicket(
     session.projectKey, session.subject, session.issueType,
     { ...session.additionalFields, description: jiraWiki },
+    baseUrl,
   );
-
-  const keyMatch = result.match(/([A-Z][A-Z0-9]+-\d+)/);
-  const issueKey = keyMatch?.[1];
-  const baseUrl = vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.baseUrl') ?? '';
-  const linkMsg = issueKey && baseUrl
-    ? `Ticket **[${issueKey}](${baseUrl}/browse/${issueKey})** created.`
-    : result;
-  stream.markdown(linkMsg);
+  const issueKey = created.key;
+  stream.markdown(created.message);
 
   // Upload all attachments — inline images are referenced in the description and must exist as attachments
   if (issueKey && session.attachments.length > 0) {
