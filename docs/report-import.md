@@ -11,6 +11,8 @@ The code lives in:
 - [`src/participant/jira/reportImportHandler.ts`](../src/participant/jira/reportImportHandler.ts) — shared session-flow orchestration for both report importers.
 - [`src/utils/veracodeReport.ts`](../src/utils/veracodeReport.ts) / [`src/participant/jira/veracodeHandler.ts`](../src/participant/jira/veracodeHandler.ts) — Veracode-specific parsing and thin wrapper.
 - [`src/utils/waltzReport.ts`](../src/utils/waltzReport.ts) / [`src/participant/jira/waltzHandler.ts`](../src/participant/jira/waltzHandler.ts) — Waltz-specific parsing and thin wrapper.
+- [`src/services/TicketService.ts`](../src/services/TicketService.ts) — `searchTicketsRaw` (dedup search) and `createTicket` (batch creation) backing both importers.
+- [`src/participant/sessionState.ts`](../src/participant/sessionState.ts) — `pickEmailOption()`, reused by both importers for template/issue-type selection.
 
 ## EML email import
 
