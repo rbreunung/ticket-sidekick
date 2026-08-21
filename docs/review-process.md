@@ -41,6 +41,24 @@ flowchart TD
     T --> U[store ReviewSession in workspaceState]
 ```
 
+## Diff intake and chunk budgeting
+
+`parseDiff(raw)` builds `FileDiff[]` from the `---`/`+++` header lines (falling
+back to the `diff --git` header); a deletion (`+++ /dev/null`) keeps the source
+path and sets `deleted: true` so removed code is still reviewed. `reviewExcludePatterns`
+are matched via `minimatch` with `matchBase: true`, and excluded files are
+reported to the user; the review returns early if every file is excluded.
+
+The token budget resolves in order: the `modelContextTokens` setting, then
+`request.model.maxInputTokens` (VS Code LM API), then a `60 000` fallback —
+multiplied by `contextBudgetRatio` (default `0.7`). `buildAdaptiveChunks`
+packs files into chunks against that budget, estimating each file's cost as
+`1500 + 50×files + ceil(diff.length/4)` tokens. A single file whose diff
+exceeds the per-file budget is first split along `@@` hunk boundaries (each
+sub-diff keeping the file header) so an oversized file is reviewed across
+several calls instead of blowing the context; a file with one giant hunk
+can't be subdivided and is sent as-is.
+
 ## The line-number trust boundary
 
 The original failure mode: the model was handed a plain unified diff and had to
@@ -181,12 +199,33 @@ everywhere for users without `reviewInstructions` configured.
 If a question was supplied, the review's first streamed line is `_focus: <question>_`,
 before `_Fetching PR…_`.
 
+## Token estimate
+
+A `_~N estimated tokens · budget K_` line is appended after the review output
+and after every follow-up answer. The estimate is `(totalInputChars +
+totalOutputChars) / 4`, summed across all LLM calls in that response (Pass 1,
+continuation, Pass 2, and critic for a review; the single call for a
+follow-up). VS Code's LM API does not expose actual token counts; this is a
+ballpark consistent with the chunk-budget heuristic above.
+
 ## Follow-ups
 
 After a review, `ReviewSession` is stored in `workspaceState` with the findings,
 each carrying its numbered `diffHunk`. A follow-up question (`#3`, or a free-text
 match) feeds that hunk into the follow-up prompt so the answer reasons about the
-real code instead of reconstructing it from the finding text.
+real code instead of reconstructing it from the finding text. The session also
+persists the upfront `question` (see "Upfront question" above), if one was
+asked, so it keeps informing follow-up answers.
+
+`#N <question>` answers use `FOLLOW_UP_PROMPT_PREFIX` plus the finding's own
+detail and `diffHunk`. `#N` where `N` doesn't exist gets a friendly "Finding #N
+not found. The review has findings #1–#M." message. `c` / `cancel` / etc.
+(`isCancellation`) clears the session and shows "Review session ended."
+without the session marker, so no further follow-ups fire until a new review.
+Any LLM error surfaces as `**Follow-up failed: …**` with the session marker
+preserved so the user can retry; a comment-preview refinement error surfaces
+as `**Refinement failed: …**` with the comment-preview marker preserved the
+same way.
 
 The session also stores `rawDiff` — the full unified diff, distinct from any
 single finding's `diffHunk` — bounded to the token budget before it's saved
@@ -198,6 +237,15 @@ If the diff was truncated — either when originally stored or again at follow-u
 time — a note to that effect is included in the prompt so the model knows its
 view may be incomplete. Sessions without a stored `rawDiff` (e.g. from before this
 feature) keep falling back to the old findings-only prompt.
+
+`ReviewSession` is looked up under the `workspaceState` key `bitbucket.session.review`
+and expires once its response tag, `<!-- bitbucket:review-session -->`, is no
+longer the **last** assistant message. The Bitbucket handler's detection order is:
+`check` command → comment preview → review-session follow-up (cancel check first,
+then try-catch around intent handling) → new PR review. A PR URL anywhere in the
+prompt always bypasses both follow-up branches and starts a fresh review, even when
+a `<!-- bitbucket:review-session -->` marker is present in the last response —
+`hasPrUrl()` in `reviewSessionState.ts` encodes this check and is unit-tested.
 
 ## Settings that shape the run
 
