@@ -10,6 +10,7 @@ The code lives in:
 - [`src/participant/sessionState.ts`](../src/participant/sessionState.ts) — pure session-state types and helpers, including `pickEmailOption()`.
 - [`src/services/WorkflowService.ts`](../src/services/WorkflowService.ts) — workflow graph cache I/O, BFS path-finding, `discoverWorkflow` sampling.
 - [`src/services/TicketService.ts`](../src/services/TicketService.ts) — ticket business logic backing all of the flows below.
+- [`src/templates/TemplateService.ts`](../src/templates/TemplateService.ts) / [`src/templates/FieldResolver.ts`](../src/templates/FieldResolver.ts) — reads `.jira-templates.json` and resolves template field specs during ticket creation.
 
 ## Ticket creation flow
 
