@@ -193,16 +193,22 @@ export function parseResolutionSelection(reply: string, options: string[]): stri
 
 export function parseIssueTypeSelection(reply: string, types: string[]): string | 'cancel' | 'invalid' {
   const normalized = reply.trim().toLowerCase();
+  // A real issue type name wins over the generic cancellation word list — otherwise a
+  // project with a type literally named "Stop" or "Quit" could never select it by name.
+  const match = types.find((t) => t.toLowerCase() === normalized);
+  if (match) return match;
   if (isCancellation(reply)) return 'cancel';
   const num = parseInt(normalized, 10);
   if (!isNaN(num) && num >= 1 && num <= types.length) return types[num - 1];
-  if (!isNaN(num)) return 'invalid';
-  const match = types.find((t) => t.toLowerCase() === normalized);
-  return match ?? 'invalid';
+  return 'invalid';
 }
 
 export function parseTemplateSelection(reply: string, templateNames: string[]): string | null | 'cancel' | 'invalid' {
   const normalized = reply.trim().toLowerCase();
+  // A real template name wins over the generic cancellation word list, for the same reason
+  // as parseIssueTypeSelection above.
+  const match = templateNames.find((name) => name.toLowerCase() === normalized);
+  if (match) return match;
   if (isCancellation(reply)) return 'cancel';
   // `skip` and `no` are deliberately absent here — both now mean cancel (via isCancellation
   // above), not "proceed without a template". Use one of these instead.
@@ -210,8 +216,7 @@ export function parseTemplateSelection(reply: string, templateNames: string[]): 
   if (NO_TEMPLATE.has(normalized)) return null;
   const num = parseInt(normalized, 10);
   if (!isNaN(num) && num >= 1 && num <= templateNames.length) return templateNames[num - 1];
-  const match = templateNames.find((name) => name.toLowerCase() === normalized);
-  return match ?? 'invalid';
+  return 'invalid';
 }
 
 export function extractLastTicketFromText(text: string): string | null {
@@ -335,8 +340,8 @@ export interface SprintSelectionSession {
 export function parseBulkUpdateReview(reply: string): { action: 'ok'; skip: string[] } | { action: 'cancel' } | { action: 'invalid' } {
   const trimmed = reply.trim();
   if (!trimmed) return { action: 'invalid' };
-  if (isCancellation(trimmed)) return { action: 'cancel' };
-  if (isConfirmation(trimmed)) return { action: 'ok', skip: [] };
+  if (isCancellation(reply)) return { action: 'cancel' };
+  if (isConfirmation(reply)) return { action: 'ok', skip: [] };
   const skipMatch = trimmed.match(/^skip\s+(.*)/i);
   if (skipMatch) {
     const keys = skipMatch[1].trim().split(/[\s,]+/).filter(Boolean);
@@ -347,15 +352,17 @@ export function parseBulkUpdateReview(reply: string): { action: 'ok'; skip: stri
 
 export function parseFilterSelection(reply: string, filters: JiraFilter[]): JiraFilter | 'cancel' | 'invalid' {
   const trimmed = reply.trim();
-  if (isCancellation(trimmed)) return 'cancel';
+  // A real filter name wins over the generic cancellation word list, for the same reason
+  // as parseIssueTypeSelection above.
+  const byName = filters.find(f => f.name.toLowerCase() === trimmed.toLowerCase());
+  if (byName) return byName;
+  if (isCancellation(reply)) return 'cancel';
   const byIndex = trimmed.match(/^(\d+)$/);
   if (byIndex) {
     const n = parseInt(byIndex[1], 10);
     if (n >= 1 && n <= filters.length) return filters[n - 1];
     return 'invalid';
   }
-  const byName = filters.find(f => f.name.toLowerCase() === trimmed.toLowerCase());
-  if (byName) return byName;
   return 'invalid';
 }
 

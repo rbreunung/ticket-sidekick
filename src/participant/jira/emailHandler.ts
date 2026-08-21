@@ -247,6 +247,8 @@ export async function handleEmailContentSession(
   ws: vscode.Memento,
   jiraClient: IJiraClient,
 ): Promise<void> {
+  const baseUrl = vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.baseUrl') ?? '';
+
   // Pending comment confirmation flow — user is reviewing before posting
   if (session.pendingCommentTicketKey) {
     if (isCancellation(reply)) {
@@ -256,7 +258,7 @@ export async function handleEmailContentSession(
     }
     if (isConfirmation(reply)) {
       await ws.update('jira.session.emailContent', undefined);
-      await addEmailAsComment(session.pendingCommentTicketKey, session, ticketService, stream);
+      await addEmailAsComment(session.pendingCommentTicketKey, session, ticketService, stream, baseUrl);
       return;
     }
     const pendingKeyMatch = reply.trim().match(/^([A-Z][A-Z0-9]+-\d+)$/i);
@@ -308,13 +310,13 @@ export async function handleEmailContentSession(
     const overrides = pick.kind === 'template'
       ? { issueType: pick.issueType, selectedTemplateName: pick.name, additionalFields }
       : { issueType: pick.issueType };
-    await finishEmailTicket({ ...session, ...overrides }, ticketService, stream);
+    await finishEmailTicket({ ...session, ...overrides }, ticketService, stream, baseUrl);
     return;
   }
 
   if (isConfirmation(reply)) {
     await ws.update('jira.session.emailContent', undefined);
-    await finishEmailTicket(session, ticketService, stream);
+    await finishEmailTicket(session, ticketService, stream, baseUrl);
     return;
   }
   stream.markdown(`_Reply with a number, a ticket key (e.g. \`PROJ-42\`), **post it** to create as **${session.issueType}**, or **(c)** to cancel._`);
@@ -341,11 +343,11 @@ export async function addEmailAsComment(
   session: EmailContentSession,
   ticketService: TicketService,
   stream: vscode.ChatResponseStream,
+  baseUrl: string,
 ): Promise<void> {
   const jiraWiki = buildEmailJiraWiki(session.markdownBody);
   const header = buildEmailCommentHeader(session.senderName, session.receivedDateTime);
   const commentBody = `${header}${jiraWiki}`;
-  const baseUrl = vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.baseUrl') ?? '';
 
   const result = await ticketService.addComment(ticketKey, commentBody, baseUrl);
   stream.markdown(result);
@@ -433,9 +435,8 @@ export async function streamEmailContentPreview(session: EmailContentSession, st
   );
 }
 
-export async function finishEmailTicket(session: EmailContentSession, ticketService: TicketService, stream: vscode.ChatResponseStream): Promise<void> {
+export async function finishEmailTicket(session: EmailContentSession, ticketService: TicketService, stream: vscode.ChatResponseStream, baseUrl: string): Promise<void> {
   const jiraWiki = buildEmailJiraWiki(session.markdownBody);
-  const baseUrl = vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.baseUrl') ?? '';
 
   const created = await ticketService.createTicket(
     session.projectKey, session.subject, session.issueType,

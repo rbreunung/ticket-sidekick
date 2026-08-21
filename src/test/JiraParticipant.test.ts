@@ -205,6 +205,12 @@ describe('parseTemplateSelection', () => {
     expect(parseTemplateSelection('never mind', templates)).toBe('cancel');
   });
 
+  it('selects a real template by name even when it collides with a cancellation word', () => {
+    const collidingTemplates = ['Stop', 'Bug Report', 'Task'];
+    expect(parseTemplateSelection('Stop', collidingTemplates)).toBe('Stop');
+    expect(parseTemplateSelection('stop', collidingTemplates)).toBe('Stop');
+  });
+
   it('returns invalid for out-of-range number', () => {
     expect(parseTemplateSelection('4', templates)).toBe('invalid');
     expect(parseTemplateSelection('0', templates)).toBeNull();
@@ -261,6 +267,12 @@ describe('parseIssueTypeSelection', () => {
   it('also recognizes other shared cancellation words, not just c/cancel', () => {
     expect(parseIssueTypeSelection('stop', types)).toBe('cancel');
     expect(parseIssueTypeSelection('never mind', types)).toBe('cancel');
+  });
+
+  it('selects a real issue type by name even when it collides with a cancellation word', () => {
+    const collidingTypes = ['Stop', 'Bug', 'Task'];
+    expect(parseIssueTypeSelection('Stop', collidingTypes)).toBe('Stop');
+    expect(parseIssueTypeSelection('stop', collidingTypes)).toBe('Stop');
   });
 });
 
@@ -605,6 +617,15 @@ describe('parseFilterSelection', () => {
   it('also recognizes other shared cancellation words, not just c/cancel', () => {
     expect(parseFilterSelection('stop', filters)).toBe('cancel');
     expect(parseFilterSelection('never mind', filters)).toBe('cancel');
+  });
+
+  it('selects a real filter by name even when it collides with a cancellation word', () => {
+    const collidingFilters = [
+      { id: '10001', name: 'Stop', jql: 'status = Blocked' },
+      { id: '10002', name: 'My open tasks', jql: 'assignee = currentUser() AND issuetype = Task' },
+    ];
+    expect(parseFilterSelection('Stop', collidingFilters)).toEqual(collidingFilters[0]);
+    expect(parseFilterSelection('stop', collidingFilters)).toEqual(collidingFilters[0]);
   });
 });
 

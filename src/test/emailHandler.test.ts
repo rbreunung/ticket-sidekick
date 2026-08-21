@@ -120,7 +120,7 @@ describe('addEmailAsComment', () => {
   it('posts comment with From/Date header and body', async () => {
     const stream = mockStream();
     const session = makeSession({ markdownBody: 'Body text' });
-    await addEmailAsComment('PROJ-1', session, ticketService, stream);
+    await addEmailAsComment('PROJ-1', session, ticketService, stream, 'https://jira.example.com');
 
     expect(client.addCommentCalls).toHaveLength(1);
     const body = client.addCommentCalls[0].body;
@@ -129,10 +129,10 @@ describe('addEmailAsComment', () => {
     expect(body).toContain('Body text');
   });
 
-  it('links the ticket key in the confirmation (baseUrl is configured in this file\'s vscode mock)', async () => {
+  it('links the ticket key in the confirmation when a baseUrl is passed', async () => {
     const stream = mockStream();
     const session = makeSession({ markdownBody: 'Body text' });
-    await addEmailAsComment('PROJ-1', session, ticketService, stream);
+    await addEmailAsComment('PROJ-1', session, ticketService, stream, 'https://jira.example.com');
 
     const allMarkdown = stream.markdown.mock.calls.map((c: string[]) => c[0]).join('');
     expect(allMarkdown).toContain('[PROJ-1](https://jira.example.com/browse/PROJ-1)');
@@ -141,7 +141,7 @@ describe('addEmailAsComment', () => {
   it('converts [📎 img] placeholder in comment body', async () => {
     const stream = mockStream();
     const session = makeSession({ markdownBody: 'See [📎 screenshot.png]' });
-    await addEmailAsComment('PROJ-1', session, ticketService, stream);
+    await addEmailAsComment('PROJ-1', session, ticketService, stream, 'https://jira.example.com');
 
     const body = client.addCommentCalls[0].body;
     expect(body).toContain('!screenshot.png|thumbnail!');
@@ -156,7 +156,7 @@ describe('addEmailAsComment', () => {
         { name: 'report.pdf', contentType: 'application/pdf', contentBytes: 'bbb=', isInline: false },
       ],
     });
-    await addEmailAsComment('PROJ-1', session, ticketService, stream);
+    await addEmailAsComment('PROJ-1', session, ticketService, stream, 'https://jira.example.com');
 
     expect(client.uploadAttachmentCalls).toHaveLength(2);
     const names = client.uploadAttachmentCalls.map(c => c.filename);
@@ -171,7 +171,7 @@ describe('addEmailAsComment', () => {
         { name: 'img.png', contentType: 'image/png', contentBytes: 'aaa=', isInline: true },
       ],
     });
-    await addEmailAsComment('PROJ-1', session, ticketService, stream);
+    await addEmailAsComment('PROJ-1', session, ticketService, stream, 'https://jira.example.com');
 
     const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0]);
     expect(calls.some((c: unknown) => typeof c === 'string' && c.includes('1 of 1'))).toBe(true);
@@ -192,7 +192,7 @@ describe('addEmailAsComment', () => {
         { name: 'ok.pdf', contentType: 'application/pdf', contentBytes: 'bbb=', isInline: false },
       ],
     });
-    await addEmailAsComment('PROJ-1', session, ticketService, stream);
+    await addEmailAsComment('PROJ-1', session, ticketService, stream, 'https://jira.example.com');
 
     const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
     expect(calls.some(c => c.includes('Warning') && c.includes('fail.png'))).toBe(true);
@@ -203,7 +203,7 @@ describe('addEmailAsComment', () => {
   it('appends jira-ticket marker to stream', async () => {
     const stream = mockStream();
     const session = makeSession();
-    await addEmailAsComment('PROJ-99', session, ticketService, stream);
+    await addEmailAsComment('PROJ-99', session, ticketService, stream, 'https://jira.example.com');
 
     const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
     expect(calls.some(c => c.includes('<!-- @jira-ticket:PROJ-99 -->'))).toBe(true);
@@ -227,7 +227,7 @@ describe('finishEmailTicket', () => {
         { name: 'report.pdf', contentType: 'application/pdf', contentBytes: 'bbb=', isInline: false },
       ],
     });
-    await finishEmailTicket(session, ticketService, stream);
+    await finishEmailTicket(session, ticketService, stream, 'https://jira.example.com');
 
     expect(client.uploadAttachmentCalls).toHaveLength(2);
     const names = client.uploadAttachmentCalls.map(c => c.filename);
@@ -235,10 +235,10 @@ describe('finishEmailTicket', () => {
     expect(names).toContain('report.pdf');
   });
 
-  it('links the ticket key in the confirmation (baseUrl is configured in this file\'s vscode mock)', async () => {
+  it('links the ticket key in the confirmation when a baseUrl is passed', async () => {
     const stream = mockStream();
     const session = makeSession();
-    await finishEmailTicket(session, ticketService, stream);
+    await finishEmailTicket(session, ticketService, stream, 'https://jira.example.com');
 
     const allMarkdown = stream.markdown.mock.calls.map((c: string[]) => c[0]).join('');
     expect(allMarkdown).toContain('[PROJ-125](https://jira.example.com/browse/PROJ-125)');
@@ -247,7 +247,7 @@ describe('finishEmailTicket', () => {
   it('converts [📎 img] placeholder in description', async () => {
     const stream = mockStream();
     const session = makeSession({ markdownBody: 'See [📎 diagram.png]' });
-    await finishEmailTicket(session, ticketService, stream);
+    await finishEmailTicket(session, ticketService, stream, 'https://jira.example.com');
 
     expect(client.createIssueCalls).toHaveLength(1);
     const desc = client.createIssueCalls[0].additionalFields?.description as string;
@@ -270,7 +270,7 @@ describe('finishEmailTicket', () => {
         { name: 'ok.pdf', contentType: 'application/pdf', contentBytes: 'bbb=', isInline: false },
       ],
     });
-    await finishEmailTicket(session, ticketService, stream);
+    await finishEmailTicket(session, ticketService, stream, 'https://jira.example.com');
 
     const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
     expect(calls.some(c => c.includes('Warning') && c.includes('fail.png'))).toBe(true);
