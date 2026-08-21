@@ -199,6 +199,15 @@ time — a note to that effect is included in the prompt so the model knows its
 view may be incomplete. Sessions without a stored `rawDiff` (e.g. from before this
 feature) keep falling back to the old findings-only prompt.
 
+`ReviewSession` is looked up under the `workspaceState` key `bitbucket.session.review`
+and expires once its response tag, `<!-- bitbucket:review-session -->`, is no
+longer the **last** assistant message. The Bitbucket handler's detection order is:
+`check` command → comment preview → review-session follow-up (cancel check first,
+then try-catch around intent handling) → new PR review. A PR URL anywhere in the
+prompt always bypasses both follow-up branches and starts a fresh review, even when
+a `<!-- bitbucket:review-session -->` marker is present in the last response —
+`hasPrUrl()` in `reviewSessionState.ts` encodes this check and is unit-tested.
+
 ## Settings that shape the run
 
 | Setting | Default | Effect |
