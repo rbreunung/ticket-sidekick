@@ -409,7 +409,7 @@ export function createJiraParticipant(
           return;
         }
         // Not ok or cancel — re-present
-        stream.markdown(`Please reply **ok** to apply, or **(c)** to cancel.\n\n<!-- jira:field-update-preview -->`);
+        stream.markdown(`Please reply **post it** to apply, or **(c)** to cancel.\n\n<!-- jira:field-update-preview -->`);
         await ws.update('jira.session.fieldUpdatePreview', previewSession);
         return;
       }
@@ -508,7 +508,7 @@ export function createJiraParticipant(
       if (bulkSession) {
         const decision = parseBulkUpdateReview(request.prompt);
         if (decision.action === 'invalid') {
-          stream.markdown(`Didn't understand that. Reply **ok** to apply, **(c)** to cancel, or \`skip KEY1 KEY2\` to skip specific tickets.\n\n<!-- jira:bulk-update-review -->`);
+          stream.markdown(`Didn't understand that. Reply **post it** to apply, **(c)** to cancel, or \`skip KEY1 KEY2\` to skip specific tickets.\n\n<!-- jira:bulk-update-review -->`);
           return;
         }
         await ws.update('jira.session.bulkUpdateReview', undefined);
@@ -1081,7 +1081,7 @@ export function createJiraParticipant(
             (config.baseUrl ? `[View in Jira](${config.baseUrl}/issues/?jql=${encodeURIComponent(searchSession.jql)})\n\n` : '') +
             `| Key | Summary | Current value |\n| --- | --- | --- |\n` +
             rows.join('\n') +
-            `\n\nReply **ok** to apply, **(c)** to cancel, or list keys to skip (e.g. \`skip PROJ-2\`).\n\n<!-- jira:bulk-update-review -->`
+            `\n\nReply **post it** to apply, **(c)** to cancel, or list keys to skip (e.g. \`skip PROJ-2\`).\n\n<!-- jira:bulk-update-review -->`
           );
           return;
         }

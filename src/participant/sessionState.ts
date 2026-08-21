@@ -111,7 +111,7 @@ export function buildReviewTable(session: TransitionBatchSession): string {
     }
   }
 
-  return header + rows.join('\n') + '\n\nok · (c) · key numbers to skip (e.g. 11 14)';
+  return header + rows.join('\n') + '\n\npost it · (c) · key numbers to skip (e.g. 11 14)';
 }
 
 export interface ResolutionSelectionSession {
@@ -245,7 +245,7 @@ export function isConfirmation(text: string): boolean {
   const CONFIRMATIONS = new Set([
     'yes', 'yep', 'ok', 'okay', 'sure', 'perfect', 'great',
     'looks good', 'looks great', 'go ahead', 'do it', 'ship it',
-    'post it', 'confirm', 'confirmed', 'submit', 'approved', 'approve', 'fine',
+    'post it', 'post', 'confirm', 'confirmed', 'submit', 'approved', 'approve', 'fine',
     'load all', 'load more', 'show all', 'show more', 'create it',
   ]);
   return CONFIRMATIONS.has(normalized);
@@ -574,7 +574,7 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
     lines.push(`_Only the first ${REVIEW_BATCH_LIMIT} included rows will be created this run — re-run the import afterward for the remainder._`);
   }
   lines.push('');
-  lines.push('Reply **ok** to proceed, **(c)** to cancel, or a list of ids to toggle (e.g. `2 4` or `A1`).');
+  lines.push('Reply **post it** to proceed, **(c)** to cancel, or a list of ids to toggle (e.g. `2 4` or `A1`).');
 
   return lines.join('\n');
 }

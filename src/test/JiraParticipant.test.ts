@@ -129,6 +129,11 @@ describe('isConfirmation', () => {
     expect(isConfirmation('looks good')).toBe(true);
   });
 
+  it('returns true for "post" alone, not just "post it" (R5)', () => {
+    expect(isConfirmation('post')).toBe(true);
+    expect(isConfirmation('post it')).toBe(true);
+  });
+
   it('returns false for a refinement instruction', () => {
     expect(isConfirmation('make it shorter')).toBe(false);
   });

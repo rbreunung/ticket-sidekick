@@ -23,7 +23,7 @@ export async function streamFieldUpdatePreview(
   stream.markdown(
     `**Preview: set ${session.fieldName}**\n\n` +
     `Setting **${session.fieldName}** (\`${session.fieldId}\`) to \`${displayValue}\` on ${scope}.\n\n` +
-    `Reply **ok** to apply, or **(c)** to cancel.\n\n<!-- jira:field-update-preview -->`,
+    `Reply **post it** to apply, or **(c)** to cancel.\n\n<!-- jira:field-update-preview -->`,
   );
 }
 

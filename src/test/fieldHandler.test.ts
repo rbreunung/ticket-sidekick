@@ -6,7 +6,7 @@ vi.mock('vscode', () => ({
 vi.mock('../participant/jira/llmHelpers', () => ({ spellCheckValue: vi.fn() }));
 vi.mock('../participant/jira/contentHandler', () => ({ streamContentPreview: vi.fn() }));
 
-import { handleSpellCheck } from '../participant/jira/fieldHandler';
+import { handleSpellCheck, streamFieldUpdatePreview } from '../participant/jira/fieldHandler';
 import { spellCheckValue } from '../participant/jira/llmHelpers';
 import { streamContentPreview } from '../participant/jira/contentHandler';
 import { MockJiraClient } from './mocks/MockJiraClient';
@@ -16,6 +16,21 @@ const mockStream = () => ({ markdown: vi.fn() });
 const mockWs = () => ({ get: vi.fn(), update: vi.fn() });
 const nullModel = {} as never;
 const nullToken = {} as never;
+
+describe('streamFieldUpdatePreview', () => {
+  it('suggests "post it" to apply, not "ok" (R5)', async () => {
+    const stream = mockStream();
+    const ws = mockWs();
+    await streamFieldUpdatePreview(
+      { ticketKeys: ['PROJ-1'], fieldId: 'priority', fieldName: 'Priority', fieldValue: 'High', isArray: false, arrayOp: 'set' },
+      stream as never,
+      ws as never,
+    );
+    const allMarkdown = stream.markdown.mock.calls.map((c: string[]) => c[0]).join('');
+    expect(allMarkdown).toContain('Reply **post it** to apply');
+    expect(allMarkdown).not.toContain('**ok**');
+  });
+});
 
 describe('handleSpellCheck', () => {
   let client: MockJiraClient;

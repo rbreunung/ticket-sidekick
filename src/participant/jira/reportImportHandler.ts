@@ -367,7 +367,7 @@ export async function handleImportReviewReply<TItem, TRow extends ReportImportRo
 
   if (decision.action === 'invalid') {
     stream.markdown(
-      `Didn't understand that. Reply **ok** to proceed, **(c)** to cancel, ` +
+      `Didn't understand that. Reply **post it** to proceed, **(c)** to cancel, ` +
       `or a list of ids to toggle (e.g. \`2 4\` or \`A1\`).\n\n${descriptor.sessionKeys.reviewTag}`,
     );
     return;
