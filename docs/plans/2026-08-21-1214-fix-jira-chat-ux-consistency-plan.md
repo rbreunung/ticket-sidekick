@@ -109,7 +109,7 @@ U1 is a prerequisite for U2 and U3 (both depend on `TicketService`'s new signatu
 
 ### U1. TicketService: baseUrl-aware action-method confirmations
 
-**Goal:** `createTicket` and `addComment` accept an optional `baseUrl` and render a linked key when it's present; `createTicket`'s return exposes the created key directly instead of only embedding it in prose; the `baseUrl ? [key](url) : key` pattern is deduplicated into one shared formatter, reusable outside `TicketService` too.
+**Goal:** `createTicket`, `addComment`, and `updateField` accept an optional `baseUrl` and render a linked key when it's present; `createTicket`'s return exposes the created key directly instead of only embedding it in prose; the `baseUrl ? [key](url) : key` pattern is deduplicated into one shared formatter, reusable outside `TicketService` too.
 
 **Requirements:** R1, R2. Prerequisite for AE1, AE2.
 
@@ -120,18 +120,18 @@ U1 is a prerequisite for U2 and U3 (both depend on `TicketService`'s new signatu
 - `src/test/TicketService.test.ts` (modify)
 
 **Approach:**
-1. Add an optional `baseUrl?: string` parameter to `addComment` and `createTicket`. (`updateField` is used only by the description-field content-preview path, covered in U2 alongside `createTicket`/`addComment` — no separate change needed here.)
-2. Extract a small shared formatter — reused by `createTicket`, `addComment`, the three existing read-method call sites that currently each inline this pattern (`formatIssueLinkLine:122`, `getTicket:248`, `search:345`), and exported so `JiraParticipant.ts` can reuse it directly for the two call sites that bypass `TicketService` (KTD3, KTD4).
+1. Add an optional `baseUrl?: string` parameter to `addComment`, `updateField`, and `createTicket`.
+2. Extract a small shared formatter — reused by `createTicket`, `addComment`, `updateField`, the three existing read-method call sites that currently each inline this pattern (`formatIssueLinkLine:122`, `getTicket:248`, `search:345`), and exported so `JiraParticipant.ts` can reuse it directly for the two call sites that bypass `TicketService` (KTD3, KTD4).
 3. Change `createTicket`'s return type from `Promise<string>` to a small structured value carrying the created key and the formatted confirmation message (KTD2). Exact field names are an implementation detail.
-4. `addComment` keeps returning `Promise<string>`; the string itself is linked when `baseUrl` is passed, bare when it isn't (R2).
+4. `addComment`/`updateField` keep returning `Promise<string>`; the string itself is linked when `baseUrl` is passed, bare when it isn't (R2). `updateField`'s early-return "field not supported" message is unaffected — it never names the ticket key.
 
 **Test scenarios:**
 - `createTicket` with `baseUrl` set returns a message containing `[KEY](baseUrl/browse/KEY)` and exposes `KEY` as a field.
 - `createTicket` with `baseUrl` absent returns the existing bare-key message unchanged, still exposing `KEY` as a field.
-- `addComment` with `baseUrl` set returns a linked message; with `baseUrl` absent, returns the existing bare-key message unchanged.
+- `addComment`/`updateField` with `baseUrl` set return a linked message; with `baseUrl` absent, return the existing bare-key message unchanged.
 - Edge case: `baseUrl` as an empty string behaves the same as absent, matching the `config.baseUrl ?? ''` fallback pattern used elsewhere.
 
-**Verification:** `TicketService.test.ts` asserts the linked and unlinked message text and the exposed key field for `createTicket`/`addComment`.
+**Verification:** `TicketService.test.ts` asserts the linked and unlinked message text and the exposed key field for `createTicket`/`addComment`/`updateField`.
 
 ### U2. Thread baseUrl into every interactive call site
 
