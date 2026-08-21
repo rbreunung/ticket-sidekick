@@ -3,6 +3,7 @@ import { formatJiraBody } from '../utils/markdownFormatter';
 import type { VeracodeFlaw, VeracodeReviewRow } from '../utils/veracodeReport';
 import type { WaltzComponent, WaltzReviewRow } from '../utils/waltzReport';
 import { BATCH_LIMIT } from '../utils/reportImport';
+import { formatKeyLink } from '../services/TicketService';
 
 export type { VeracodeReviewRow } from '../utils/veracodeReport';
 export type { WaltzReviewRow } from '../utils/waltzReport';
@@ -151,8 +152,8 @@ export interface EmailContentSession {
 
 export function parseSkipInput(reply: string, tickets: TransitionBatchTicket[]): SkipParseResult {
   const normalized = reply.trim().toLowerCase();
-  if (isConfirmation(normalized)) return { action: 'ok' };
-  if (isCancellation(normalized)) return { action: 'cancel' };
+  if (isConfirmation(reply)) return { action: 'ok' };
+  if (isCancellation(reply)) return { action: 'cancel' };
 
   const parts = normalized.split(/\s+/).filter(Boolean);
   const allKeys = new Map<string, string>(); // numeric suffix → full key
@@ -192,7 +193,7 @@ export function parseResolutionSelection(reply: string, options: string[]): stri
 
 export function parseIssueTypeSelection(reply: string, types: string[]): string | 'cancel' | 'invalid' {
   const normalized = reply.trim().toLowerCase();
-  if (isCancellation(normalized)) return 'cancel';
+  if (isCancellation(reply)) return 'cancel';
   const num = parseInt(normalized, 10);
   if (!isNaN(num) && num >= 1 && num <= types.length) return types[num - 1];
   if (!isNaN(num)) return 'invalid';
@@ -202,7 +203,7 @@ export function parseIssueTypeSelection(reply: string, types: string[]): string 
 
 export function parseTemplateSelection(reply: string, templateNames: string[]): string | null | 'cancel' | 'invalid' {
   const normalized = reply.trim().toLowerCase();
-  if (isCancellation(normalized)) return 'cancel';
+  if (isCancellation(reply)) return 'cancel';
   // `skip` and `no` are deliberately absent here — both now mean cancel (via isCancellation
   // above), not "proceed without a template". Use one of these instead.
   const NO_TEMPLATE = new Set(['n', 'no template', 'none', '0', 'without template']);
@@ -532,7 +533,7 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
     lines.push(`| # | ${headerCells} | Ticket | Include? |`);
     lines.push(`|---|${sepCells}|--------|----------|`);
     for (const r of ticketed) {
-      const ticketRef = baseUrl ? `[${r.existingTicketKey}](${baseUrl}/browse/${r.existingTicketKey})` : r.existingTicketKey;
+      const ticketRef = formatKeyLink(r.existingTicketKey!, baseUrl);
       const cells = columns.map(c => c.accessor(r)).join(' | ');
       lines.push(`| ${r.id} | ${cells} | ${ticketRef} | ${r.included ? '✓ re-create' : '_excluded_'} |`);
     }
@@ -587,8 +588,8 @@ export type ReviewParseResult =
 
 export function parseReviewInput(reply: string, rowIds: string[]): ReviewParseResult {
   const normalized = reply.trim().toLowerCase();
-  if (isConfirmation(normalized)) return { action: 'ok' };
-  if (isCancellation(normalized)) return { action: 'cancel' };
+  if (isConfirmation(reply)) return { action: 'ok' };
+  if (isCancellation(reply)) return { action: 'cancel' };
 
   const tokens = normalized.split(/[\s,]+/).filter(Boolean);
   const matched: string[] = [];

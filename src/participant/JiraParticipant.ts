@@ -749,7 +749,7 @@ export function createJiraParticipant(
             break;
           }
           await ws.update('jira.session.commentList', buildCommentListSession(ticketKey!, fullComments));
-          const showTicketRef = config.baseUrl ? `[${ticketKey}](${config.baseUrl}/browse/${ticketKey})` : ticketKey!;
+          const showTicketRef = formatKeyLink(ticketKey!, config.baseUrl);
           stream.markdown(`## ${showTicketRef} — Comments (${fullTotal})\n\n` + formatCommentsInFull(fullComments));
           if (fullTotal > MAX_SHOW_FULL) {
             const moreSession: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: null, displayMode: 'full' };
@@ -777,7 +777,7 @@ export function createJiraParticipant(
           if (!hasQuery) {
             await ws.update('jira.session.commentList', buildCommentListSession(ticketKey!, comments));
           }
-          const getCommentsRef = config.baseUrl ? `[${ticketKey}](${config.baseUrl}/browse/${ticketKey})` : ticketKey!;
+          const getCommentsRef = formatKeyLink(ticketKey!, config.baseUrl);
           stream.markdown(`**${getCommentsRef} — Comments**\n\n` + synthesis);
           const listTag = hasQuery ? '' : '\n\n<!-- jira:comment-list -->';
           if (total > MAX_INITIAL) {

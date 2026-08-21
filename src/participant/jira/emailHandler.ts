@@ -446,7 +446,7 @@ export async function finishEmailTicket(session: EmailContentSession, ticketServ
   stream.markdown(created.message);
 
   // Upload all attachments — inline images are referenced in the description and must exist as attachments
-  if (issueKey && session.attachments.length > 0) {
+  if (session.attachments.length > 0) {
     let uploaded = 0;
     await Promise.all(
       session.attachments.map(att =>
@@ -460,11 +460,11 @@ export async function finishEmailTicket(session: EmailContentSession, ticketServ
       ),
     );
     stream.markdown(`\n\nUploaded ${uploaded} of ${session.attachments.length} attachment(s).\n\n<!-- @jira-ticket:${issueKey} -->`);
-  } else if (issueKey) {
+  } else {
     stream.markdown(`\n\n<!-- @jira-ticket:${issueKey} -->`);
   }
 
-  if (issueKey && session.emlFilePath) {
+  if (session.emlFilePath) {
     const deleteAfter = vscode.workspace.getConfiguration('ticketSidekick').get<boolean>('email.deleteEmlAfterImport', false);
     if (deleteAfter) {
       await fs.promises.unlink(session.emlFilePath).catch((err: unknown) => {
