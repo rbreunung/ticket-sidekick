@@ -7,6 +7,13 @@ export type FieldResolutionResult =
   | { kind: 'candidates'; fields: JiraFieldMeta[] }
   | { kind: 'none' };
 
+/** Result of `TicketService.createTicket` — exposes the created key directly so callers that
+ * need it (batch progress lines, the last-ticket marker) don't have to parse it back out of `message`. */
+export interface CreatedTicket {
+  key: string;
+  message: string;
+}
+
 export function resolveFieldIdFuzzy(input: string, fields: JiraFieldMeta[]): FieldResolutionResult {
   const lower = input.toLowerCase();
   // 1. Exact case-insensitive match
@@ -115,11 +122,16 @@ export function isMultiLine(value: unknown, meta: JiraFieldMeta): boolean {
   return value.length > 120;
 }
 
+/** Renders a ticket key as a clickable Jira link when `baseUrl` is configured, else the bare key. */
+export function formatKeyLink(key: string, baseUrl?: string): string {
+  return baseUrl ? `[${key}](${baseUrl}/browse/${key})` : key;
+}
+
 export function formatIssueLinkLine(link: JiraIssueLink, baseUrl?: string): string {
   const linked = link.outwardIssue ?? link.inwardIssue;
   if (!linked) return '';
   const label = link.outwardIssue ? link.type.outward : link.type.inward;
-  const keyText = baseUrl ? `[${linked.key}](${baseUrl}/browse/${linked.key})` : linked.key;
+  const keyText = formatKeyLink(linked.key, baseUrl);
   return `- ${label} ${keyText}: ${linked.fields.summary} — ${linked.fields.status.name}`;
 }
 
@@ -244,26 +256,24 @@ export class TicketService {
       const lines = remoteLinks.map(r => `- [${r.object.title}](${r.object.url})`);
       sections.push(`## Web Links\n\n${lines.join('\n')}`);
     }
-    const heading = baseUrl
-      ? `## [${issue.key}](${baseUrl}/browse/${issue.key}): ${issue.fields.summary}`
-      : `## ${issue.key}: ${issue.fields.summary}`;
+    const heading = `## ${formatKeyLink(issue.key, baseUrl)}: ${issue.fields.summary}`;
     const parts: string[] = [heading];
     if (table) parts.push('', table);
     if (sections.length > 0) parts.push('', ...sections.map(s => s));
     return parts.join('\n');
   }
 
-  async addComment(issueKey: string, body: string): Promise<string> {
+  async addComment(issueKey: string, body: string, baseUrl?: string): Promise<string> {
     await this.client.addComment(issueKey, body);
     this.onDiag?.('info', `Comment added — ${issueKey}`, { issueKey });
-    return `comment added to ${issueKey}.`;
+    return `comment added to ${formatKeyLink(issueKey, baseUrl)}.`;
   }
 
   async uploadAttachment(issueKey: string, filename: string, contentType: string, contentBytes: string): Promise<void> {
     return this.client.uploadAttachment(issueKey, filename, contentType, contentBytes);
   }
 
-  async updateField(issueKey: string, fieldName: string, value: string): Promise<string> {
+  async updateField(issueKey: string, fieldName: string, value: string, baseUrl?: string): Promise<string> {
     const jiraField = SUPPORTED_FIELDS[fieldName.toLowerCase()];
     if (!jiraField) {
       const supported = Object.keys(SUPPORTED_FIELDS)
@@ -294,7 +304,7 @@ export class TicketService {
 
     await this.client.updateIssue(issueKey, { [jiraField]: fieldValue });
     this.onDiag?.('info', `Field updated — ${issueKey} (${fieldName})`, { issueKey, fieldName });
-    return `Updated ${fieldName} on ${issueKey}.`;
+    return `Updated ${fieldName} on ${formatKeyLink(issueKey, baseUrl)}.`;
   }
 
   async resolveAssignee(value: string): Promise<Record<string, string> | string> {
@@ -342,7 +352,7 @@ export class TicketService {
 
     const rows = result.issues.map((issue) => {
       const assignee = issue.fields.assignee ? issue.fields.assignee.displayName : 'Unassigned';
-      const key = baseUrl ? `[${issue.key}](${baseUrl}/browse/${issue.key})` : issue.key;
+      const key = formatKeyLink(issue.key, baseUrl);
       return `| ${key} | ${issue.fields.summary} | ${issue.fields.status.name} | ${assignee} |${renderExtra(issue)}`;
     });
     return [
@@ -585,9 +595,13 @@ export class TicketService {
     summary: string,
     issueType: string,
     additionalFields?: Record<string, unknown>,
-  ): Promise<string> {
+    baseUrl?: string,
+  ): Promise<CreatedTicket> {
     const created = await this.client.createIssue(projectKey, summary, issueType, additionalFields);
     this.onDiag?.('info', `Ticket created — ${created.key}`, { projectKey, issueType });
-    return `Created ${created.key}: **${summary}** (${issueType} in ${projectKey})`;
+    return {
+      key: created.key,
+      message: `Created ${formatKeyLink(created.key, baseUrl)}: **${summary}** (${issueType} in ${projectKey})`,
+    };
   }
 }
