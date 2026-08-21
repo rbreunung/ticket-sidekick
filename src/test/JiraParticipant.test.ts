@@ -180,9 +180,7 @@ describe('parseTemplateSelection', () => {
     expect(parseTemplateSelection('n', templates)).toBeNull();
     expect(parseTemplateSelection('no template', templates)).toBeNull();
     expect(parseTemplateSelection('none', templates)).toBeNull();
-    expect(parseTemplateSelection('skip', templates)).toBeNull();
     expect(parseTemplateSelection('0', templates)).toBeNull();
-    expect(parseTemplateSelection('no', templates)).toBeNull();
   });
 
   it('returns cancel for (c) shortcut and "cancel"', () => {
@@ -190,6 +188,16 @@ describe('parseTemplateSelection', () => {
     expect(parseTemplateSelection('cancel', templates)).toBe('cancel');
     expect(parseTemplateSelection('C', templates)).toBe('cancel');
     expect(parseTemplateSelection('Cancel', templates)).toBe('cancel');
+  });
+
+  it('returns cancel for "skip" and "no" — both dropped as no-template aliases (R6)', () => {
+    expect(parseTemplateSelection('skip', templates)).toBe('cancel');
+    expect(parseTemplateSelection('no', templates)).toBe('cancel');
+  });
+
+  it('also recognizes other shared cancellation words, not just c/cancel', () => {
+    expect(parseTemplateSelection('stop', templates)).toBe('cancel');
+    expect(parseTemplateSelection('never mind', templates)).toBe('cancel');
   });
 
   it('returns invalid for out-of-range number', () => {
@@ -243,6 +251,11 @@ describe('parseIssueTypeSelection', () => {
   it('trims whitespace before matching', () => {
     expect(parseIssueTypeSelection('  2  ', types)).toBe('Story');
     expect(parseIssueTypeSelection('  bug  ', types)).toBe('Bug');
+  });
+
+  it('also recognizes other shared cancellation words, not just c/cancel', () => {
+    expect(parseIssueTypeSelection('stop', types)).toBe('cancel');
+    expect(parseIssueTypeSelection('never mind', types)).toBe('cancel');
   });
 });
 
@@ -320,6 +333,11 @@ describe('parseSkipInput', () => {
 
   it('trims whitespace', () => {
     expect(parseSkipInput('  ok  ', tickets)).toEqual({ action: 'ok' });
+  });
+
+  it('also recognizes other shared confirmation/cancellation words, not just ok/c/cancel', () => {
+    expect(parseSkipInput('yes', tickets)).toEqual({ action: 'ok' });
+    expect(parseSkipInput('stop', tickets)).toEqual({ action: 'cancel' });
   });
 });
 
@@ -578,6 +596,11 @@ describe('parseFilterSelection', () => {
   it('returns invalid for unrecognised text', () => {
     expect(parseFilterSelection('something else', filters)).toBe('invalid');
   });
+
+  it('also recognizes other shared cancellation words, not just c/cancel', () => {
+    expect(parseFilterSelection('stop', filters)).toBe('cancel');
+    expect(parseFilterSelection('never mind', filters)).toBe('cancel');
+  });
 });
 
 describe('parseBulkUpdateReview', () => {
@@ -601,6 +624,15 @@ describe('parseBulkUpdateReview', () => {
   it('returns invalid for unrecognised input', () => {
     expect(parseBulkUpdateReview('something else')).toEqual({ action: 'invalid' });
     expect(parseBulkUpdateReview('')).toEqual({ action: 'invalid' });
+  });
+
+  it('also recognizes other shared confirmation/cancellation words, not just ok/c/cancel', () => {
+    expect(parseBulkUpdateReview('confirm')).toEqual({ action: 'ok', skip: [] });
+    expect(parseBulkUpdateReview('stop')).toEqual({ action: 'cancel' });
+  });
+
+  it('a bare "skip" with no keys now cancels — no flow-specific exception (R6)', () => {
+    expect(parseBulkUpdateReview('skip')).toEqual({ action: 'cancel' });
   });
 });
 
@@ -890,6 +922,11 @@ describe('parseReviewInput — Veracode ids', () => {
   it('returns invalid for unrecognized ids or empty input', () => {
     expect(parseReviewInput('99', ids)).toEqual({ action: 'invalid' });
     expect(parseReviewInput('', ids)).toEqual({ action: 'invalid' });
+  });
+
+  it('also recognizes other shared confirmation/cancellation words, not just ok/c/cancel', () => {
+    expect(parseReviewInput('yes', ids)).toEqual({ action: 'ok' });
+    expect(parseReviewInput('stop', ids)).toEqual({ action: 'cancel' });
   });
 });
 

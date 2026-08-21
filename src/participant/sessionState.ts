@@ -151,8 +151,8 @@ export interface EmailContentSession {
 
 export function parseSkipInput(reply: string, tickets: TransitionBatchTicket[]): SkipParseResult {
   const normalized = reply.trim().toLowerCase();
-  if (normalized === 'ok') return { action: 'ok' };
-  if (normalized === 'c' || normalized === 'cancel') return { action: 'cancel' };
+  if (isConfirmation(normalized)) return { action: 'ok' };
+  if (isCancellation(normalized)) return { action: 'cancel' };
 
   const parts = normalized.split(/\s+/).filter(Boolean);
   const allKeys = new Map<string, string>(); // numeric suffix → full key
@@ -192,7 +192,7 @@ export function parseResolutionSelection(reply: string, options: string[]): stri
 
 export function parseIssueTypeSelection(reply: string, types: string[]): string | 'cancel' | 'invalid' {
   const normalized = reply.trim().toLowerCase();
-  if (normalized === 'c' || normalized === 'cancel') return 'cancel';
+  if (isCancellation(normalized)) return 'cancel';
   const num = parseInt(normalized, 10);
   if (!isNaN(num) && num >= 1 && num <= types.length) return types[num - 1];
   if (!isNaN(num)) return 'invalid';
@@ -202,8 +202,10 @@ export function parseIssueTypeSelection(reply: string, types: string[]): string 
 
 export function parseTemplateSelection(reply: string, templateNames: string[]): string | null | 'cancel' | 'invalid' {
   const normalized = reply.trim().toLowerCase();
-  if (normalized === 'c' || normalized === 'cancel') return 'cancel';
-  const NO_TEMPLATE = new Set(['n', 'no template', 'none', 'skip', '0', 'no', 'without template']);
+  if (isCancellation(normalized)) return 'cancel';
+  // `skip` and `no` are deliberately absent here — both now mean cancel (via isCancellation
+  // above), not "proceed without a template". Use one of these instead.
+  const NO_TEMPLATE = new Set(['n', 'no template', 'none', '0', 'without template']);
   if (NO_TEMPLATE.has(normalized)) return null;
   const num = parseInt(normalized, 10);
   if (!isNaN(num) && num >= 1 && num <= templateNames.length) return templateNames[num - 1];
@@ -332,8 +334,8 @@ export interface SprintSelectionSession {
 export function parseBulkUpdateReview(reply: string): { action: 'ok'; skip: string[] } | { action: 'cancel' } | { action: 'invalid' } {
   const trimmed = reply.trim();
   if (!trimmed) return { action: 'invalid' };
-  if (/^(c|cancel)$/i.test(trimmed)) return { action: 'cancel' };
-  if (/^(ok|yes|confirm)$/i.test(trimmed)) return { action: 'ok', skip: [] };
+  if (isCancellation(trimmed)) return { action: 'cancel' };
+  if (isConfirmation(trimmed)) return { action: 'ok', skip: [] };
   const skipMatch = trimmed.match(/^skip\s+(.*)/i);
   if (skipMatch) {
     const keys = skipMatch[1].trim().split(/[\s,]+/).filter(Boolean);
@@ -344,7 +346,7 @@ export function parseBulkUpdateReview(reply: string): { action: 'ok'; skip: stri
 
 export function parseFilterSelection(reply: string, filters: JiraFilter[]): JiraFilter | 'cancel' | 'invalid' {
   const trimmed = reply.trim();
-  if (/^(c|cancel)$/i.test(trimmed)) return 'cancel';
+  if (isCancellation(trimmed)) return 'cancel';
   const byIndex = trimmed.match(/^(\d+)$/);
   if (byIndex) {
     const n = parseInt(byIndex[1], 10);
@@ -585,8 +587,8 @@ export type ReviewParseResult =
 
 export function parseReviewInput(reply: string, rowIds: string[]): ReviewParseResult {
   const normalized = reply.trim().toLowerCase();
-  if (normalized === 'ok') return { action: 'ok' };
-  if (normalized === 'c' || normalized === 'cancel') return { action: 'cancel' };
+  if (isConfirmation(normalized)) return { action: 'ok' };
+  if (isCancellation(normalized)) return { action: 'cancel' };
 
   const tokens = normalized.split(/[\s,]+/).filter(Boolean);
   const matched: string[] = [];
