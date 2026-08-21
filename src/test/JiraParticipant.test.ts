@@ -4,7 +4,7 @@ vi.mock('vscode', () => ({
   window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
 }));
 
-import { extractCreatedKeyFromConfirmation, extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, buildImportReviewTable, parseReviewInput, applyReviewToggle, VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION, type VeracodeReviewRow } from '../participant/sessionState';
+import { extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, buildImportReviewTable, parseReviewInput, applyReviewToggle, VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION, type VeracodeReviewRow } from '../participant/sessionState';
 import type { WaltzReviewRow } from '../utils/waltzReport';
 import { isPointerPrompt } from '../participant/jira/llmHelpers';
 import type { TransitionBatchTicket } from '../participant/sessionState';
@@ -97,24 +97,6 @@ describe('serializeTurns', () => {
   });
 });
 
-describe('extractCreatedKeyFromConfirmation', () => {
-  it('extracts key from a standard creation confirmation', () => {
-    expect(extractCreatedKeyFromConfirmation('Created PROJ-125: **Login timeout bug** (Bug in PROJ)')).toBe('PROJ-125');
-  });
-
-  it('extracts key with multi-segment project name', () => {
-    expect(extractCreatedKeyFromConfirmation('Created VSJI-42: **Add dark mode** (Story in VSJI)')).toBe('VSJI-42');
-  });
-
-  it('returns null when no ticket key is present', () => {
-    expect(extractCreatedKeyFromConfirmation('Cancelled.')).toBeNull();
-  });
-
-  it('returns null for empty string', () => {
-    expect(extractCreatedKeyFromConfirmation('')).toBeNull();
-  });
-});
-
 describe('extractLastTicketFromText', () => {
   it('extracts ticket key from marker', () => {
     expect(extractLastTicketFromText('some response\n\n<!-- @jira-ticket:VSJI-2 -->')).toBe('VSJI-2');
@@ -145,6 +127,11 @@ describe('isConfirmation', () => {
 
   it('returns true for "looks good"', () => {
     expect(isConfirmation('looks good')).toBe(true);
+  });
+
+  it('returns true for "post" alone, not just "post it" (R5)', () => {
+    expect(isConfirmation('post')).toBe(true);
+    expect(isConfirmation('post it')).toBe(true);
   });
 
   it('returns false for a refinement instruction', () => {
@@ -198,9 +185,7 @@ describe('parseTemplateSelection', () => {
     expect(parseTemplateSelection('n', templates)).toBeNull();
     expect(parseTemplateSelection('no template', templates)).toBeNull();
     expect(parseTemplateSelection('none', templates)).toBeNull();
-    expect(parseTemplateSelection('skip', templates)).toBeNull();
     expect(parseTemplateSelection('0', templates)).toBeNull();
-    expect(parseTemplateSelection('no', templates)).toBeNull();
   });
 
   it('returns cancel for (c) shortcut and "cancel"', () => {
@@ -208,6 +193,22 @@ describe('parseTemplateSelection', () => {
     expect(parseTemplateSelection('cancel', templates)).toBe('cancel');
     expect(parseTemplateSelection('C', templates)).toBe('cancel');
     expect(parseTemplateSelection('Cancel', templates)).toBe('cancel');
+  });
+
+  it('returns cancel for "skip" and "no" — both dropped as no-template aliases (R6)', () => {
+    expect(parseTemplateSelection('skip', templates)).toBe('cancel');
+    expect(parseTemplateSelection('no', templates)).toBe('cancel');
+  });
+
+  it('also recognizes other shared cancellation words, not just c/cancel', () => {
+    expect(parseTemplateSelection('stop', templates)).toBe('cancel');
+    expect(parseTemplateSelection('never mind', templates)).toBe('cancel');
+  });
+
+  it('selects a real template by name even when it collides with a cancellation word', () => {
+    const collidingTemplates = ['Stop', 'Bug Report', 'Task'];
+    expect(parseTemplateSelection('Stop', collidingTemplates)).toBe('Stop');
+    expect(parseTemplateSelection('stop', collidingTemplates)).toBe('Stop');
   });
 
   it('returns invalid for out-of-range number', () => {
@@ -261,6 +262,17 @@ describe('parseIssueTypeSelection', () => {
   it('trims whitespace before matching', () => {
     expect(parseIssueTypeSelection('  2  ', types)).toBe('Story');
     expect(parseIssueTypeSelection('  bug  ', types)).toBe('Bug');
+  });
+
+  it('also recognizes other shared cancellation words, not just c/cancel', () => {
+    expect(parseIssueTypeSelection('stop', types)).toBe('cancel');
+    expect(parseIssueTypeSelection('never mind', types)).toBe('cancel');
+  });
+
+  it('selects a real issue type by name even when it collides with a cancellation word', () => {
+    const collidingTypes = ['Stop', 'Bug', 'Task'];
+    expect(parseIssueTypeSelection('Stop', collidingTypes)).toBe('Stop');
+    expect(parseIssueTypeSelection('stop', collidingTypes)).toBe('Stop');
   });
 });
 
@@ -338,6 +350,11 @@ describe('parseSkipInput', () => {
 
   it('trims whitespace', () => {
     expect(parseSkipInput('  ok  ', tickets)).toEqual({ action: 'ok' });
+  });
+
+  it('also recognizes other shared confirmation/cancellation words, not just ok/c/cancel', () => {
+    expect(parseSkipInput('yes', tickets)).toEqual({ action: 'ok' });
+    expect(parseSkipInput('stop', tickets)).toEqual({ action: 'cancel' });
   });
 });
 
@@ -596,6 +613,20 @@ describe('parseFilterSelection', () => {
   it('returns invalid for unrecognised text', () => {
     expect(parseFilterSelection('something else', filters)).toBe('invalid');
   });
+
+  it('also recognizes other shared cancellation words, not just c/cancel', () => {
+    expect(parseFilterSelection('stop', filters)).toBe('cancel');
+    expect(parseFilterSelection('never mind', filters)).toBe('cancel');
+  });
+
+  it('selects a real filter by name even when it collides with a cancellation word', () => {
+    const collidingFilters = [
+      { id: '10001', name: 'Stop', jql: 'status = Blocked' },
+      { id: '10002', name: 'My open tasks', jql: 'assignee = currentUser() AND issuetype = Task' },
+    ];
+    expect(parseFilterSelection('Stop', collidingFilters)).toEqual(collidingFilters[0]);
+    expect(parseFilterSelection('stop', collidingFilters)).toEqual(collidingFilters[0]);
+  });
 });
 
 describe('parseBulkUpdateReview', () => {
@@ -619,6 +650,15 @@ describe('parseBulkUpdateReview', () => {
   it('returns invalid for unrecognised input', () => {
     expect(parseBulkUpdateReview('something else')).toEqual({ action: 'invalid' });
     expect(parseBulkUpdateReview('')).toEqual({ action: 'invalid' });
+  });
+
+  it('also recognizes other shared confirmation/cancellation words, not just ok/c/cancel', () => {
+    expect(parseBulkUpdateReview('confirm')).toEqual({ action: 'ok', skip: [] });
+    expect(parseBulkUpdateReview('stop')).toEqual({ action: 'cancel' });
+  });
+
+  it('a bare "skip" with no keys now cancels — no flow-specific exception (R6)', () => {
+    expect(parseBulkUpdateReview('skip')).toEqual({ action: 'cancel' });
   });
 });
 
@@ -908,6 +948,11 @@ describe('parseReviewInput — Veracode ids', () => {
   it('returns invalid for unrecognized ids or empty input', () => {
     expect(parseReviewInput('99', ids)).toEqual({ action: 'invalid' });
     expect(parseReviewInput('', ids)).toEqual({ action: 'invalid' });
+  });
+
+  it('also recognizes other shared confirmation/cancellation words, not just ok/c/cancel', () => {
+    expect(parseReviewInput('yes', ids)).toEqual({ action: 'ok' });
+    expect(parseReviewInput('stop', ids)).toEqual({ action: 'cancel' });
   });
 });
 

@@ -784,6 +784,6 @@ describe('buildReviewTable', () => {
 
   it('includes footer prompt line', () => {
     const session = makeSession({ tickets: [makeTicket('PROJ-1')] });
-    expect(buildReviewTable(session)).toContain('ok · (c) · key numbers to skip');
+    expect(buildReviewTable(session)).toContain('post it · (c) · key numbers to skip');
   });
 });

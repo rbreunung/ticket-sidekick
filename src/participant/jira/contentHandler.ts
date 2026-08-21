@@ -101,6 +101,7 @@ export async function handleContentSession(
   stream: vscode.ChatResponseStream,
   ticketService: TicketService,
   workspaceState: vscode.Memento,
+  baseUrl?: string,
 ): Promise<void> {
   if (isCancellation(prompt)) {
     await workspaceState.update('jira.session.previewing', undefined);
@@ -115,25 +116,23 @@ export async function handleContentSession(
       if (session.currentContent) {
         fields.description = markdownToJiraWiki(session.currentContent);
       }
-      const result = await ticketService.createTicket(
+      const created = await ticketService.createTicket(
         session.projectKey,
         session.summary,
         session.issueType,
         fields,
+        baseUrl,
       );
-      stream.markdown(result);
-      const keyMatch = result.match(/([A-Z][A-Z0-9]+-\d+)/);
-      if (keyMatch) {
-        stream.markdown(`\n\n<!-- @jira-ticket:${keyMatch[1]} -->`);
-      }
+      stream.markdown(created.message);
+      stream.markdown(`\n\n<!-- @jira-ticket:${created.key} -->`);
       return;
     }
     let result: string;
     const jiraText = markdownToJiraWiki(session.currentContent);
     if (session.operation === 'addComment') {
-      result = await ticketService.addComment(session.ticketKey, jiraText);
+      result = await ticketService.addComment(session.ticketKey, jiraText, baseUrl);
     } else {
-      result = await ticketService.updateField(session.ticketKey, 'description', jiraText);
+      result = await ticketService.updateField(session.ticketKey, 'description', jiraText, baseUrl);
     }
     stream.markdown(result);
     stream.markdown(`\n\n<!-- @jira-ticket:${session.ticketKey} -->`);

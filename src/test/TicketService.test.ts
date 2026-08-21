@@ -186,6 +186,16 @@ describe('TicketService', () => {
       expect(result).toContain('PROJ-123');
       expect(result).toContain('comment');
     });
+
+    it('links the ticket key when baseUrl is provided', async () => {
+      const result = await service.addComment('PROJ-123', 'done', 'https://jira.example.com');
+      expect(result).toContain('[PROJ-123](https://jira.example.com/browse/PROJ-123)');
+    });
+
+    it('omits the link when baseUrl is absent', async () => {
+      const result = await service.addComment('PROJ-123', 'done');
+      expect(result).not.toContain('browse');
+    });
   });
 
   describe('updateField', () => {
@@ -250,6 +260,16 @@ describe('TicketService', () => {
     it('updates components with multiple comma-separated names as array of name objects', async () => {
       await service.updateField('PROJ-123', 'components', 'Backend, API');
       expect(client.updateIssueCalls[0]?.fields).toEqual({ components: [{ name: 'Backend' }, { name: 'API' }] });
+    });
+
+    it('links the ticket key when baseUrl is provided', async () => {
+      const result = await service.updateField('PROJ-123', 'summary', 'New title', 'https://jira.example.com');
+      expect(result).toContain('[PROJ-123](https://jira.example.com/browse/PROJ-123)');
+    });
+
+    it('omits the link when baseUrl is absent', async () => {
+      const result = await service.updateField('PROJ-123', 'summary', 'New title');
+      expect(result).not.toContain('browse');
     });
   });
 
@@ -360,12 +380,28 @@ describe('TicketService', () => {
   describe('createTicket', () => {
     it('returns confirmation with the new ticket key', async () => {
       const result = await service.createTicket('PROJ', 'Login timeout bug', 'Bug');
-      expect(result).toContain('PROJ-125');
+      expect(result.message).toContain('PROJ-125');
     });
 
     it('includes the summary in the confirmation', async () => {
       const result = await service.createTicket('PROJ', 'Login timeout bug', 'Bug');
-      expect(result).toContain('Login timeout bug');
+      expect(result.message).toContain('Login timeout bug');
+    });
+
+    it('exposes the created key as a field', async () => {
+      const result = await service.createTicket('PROJ', 'Login timeout bug', 'Bug');
+      expect(result.key).toBe('PROJ-125');
+    });
+
+    it('links the ticket key in the message when baseUrl is provided', async () => {
+      const result = await service.createTicket('PROJ', 'Login timeout bug', 'Bug', undefined, 'https://jira.example.com');
+      expect(result.message).toContain('[PROJ-125](https://jira.example.com/browse/PROJ-125)');
+      expect(result.key).toBe('PROJ-125');
+    });
+
+    it('omits the link when baseUrl is absent', async () => {
+      const result = await service.createTicket('PROJ', 'Login timeout bug', 'Bug');
+      expect(result.message).not.toContain('browse');
     });
   });
 
@@ -1081,6 +1117,7 @@ describe('TicketService onDiag', () => {
   it('works without onDiag (backward compatible)', async () => {
     const client = new MockJiraClient();
     const service = new TicketService(client);
-    await expect(service.createTicket('PROJ', 'New ticket', 'Bug')).resolves.toContain('Created');
+    const result = await service.createTicket('PROJ', 'New ticket', 'Bug');
+    expect(result.message).toContain('Created');
   });
 });

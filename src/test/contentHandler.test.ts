@@ -141,6 +141,26 @@ describe('handleContentSession — createTicket confirmation', () => {
     expect(allMarkdown).toContain('<!-- @jira-ticket:PROJ-125 -->');
   });
 
+  it('links the ticket key when baseUrl is configured, and still appends the correct marker', async () => {
+    const session: ContentSession = {
+      operation: 'createTicket',
+      projectKey: 'PROJ',
+      summary: 'Login timeout',
+      issueType: 'Bug',
+      templateName: null,
+      extraFields: {},
+      currentContent: '',
+    };
+    const stream = mockStream();
+    const ws = mockWs();
+
+    await handleContentSession(session, 'create it', nullModel, nullToken, stream as never, ticketService, ws as never, 'https://jira.example.com');
+
+    const allMarkdown = stream.markdown.mock.calls.map((c: string[]) => c[0]).join('');
+    expect(allMarkdown).toContain('[PROJ-125](https://jira.example.com/browse/PROJ-125)');
+    expect(allMarkdown).toContain('<!-- @jira-ticket:PROJ-125 -->');
+  });
+
   it('clears session on cancellation without calling createTicket', async () => {
     const createTicketSpy = vi.spyOn(ticketService, 'createTicket');
     const session: ContentSession = {
@@ -329,6 +349,23 @@ describe('handleContentSession — addComment regression', () => {
     // Ticket marker appended
     const allMarkdown = stream.markdown.mock.calls.map((c: string[]) => c[0]).join('');
     expect(allMarkdown).toContain('<!-- @jira-ticket:PROJ-123 -->');
+  });
+
+  it('links the ticket key when baseUrl is configured', async () => {
+    const session: ContentSession = {
+      operation: 'addComment',
+      ticketKey: 'PROJ-123',
+      currentContent: 'This is a test comment.',
+      historyContext: undefined,
+      contentSource: 'generate',
+    };
+    const stream = mockStream();
+    const ws = mockWs();
+
+    await handleContentSession(session, 'post it', nullModel, nullToken, stream as never, ticketService, ws as never, 'https://jira.example.com');
+
+    const allMarkdown = stream.markdown.mock.calls.map((c: string[]) => c[0]).join('');
+    expect(allMarkdown).toContain('[PROJ-123](https://jira.example.com/browse/PROJ-123)');
   });
 });
 

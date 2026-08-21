@@ -3,6 +3,7 @@ import { formatJiraBody } from '../utils/markdownFormatter';
 import type { VeracodeFlaw, VeracodeReviewRow } from '../utils/veracodeReport';
 import type { WaltzComponent, WaltzReviewRow } from '../utils/waltzReport';
 import { BATCH_LIMIT } from '../utils/reportImport';
+import { formatKeyLink } from '../services/TicketService';
 
 export type { VeracodeReviewRow } from '../utils/veracodeReport';
 export type { WaltzReviewRow } from '../utils/waltzReport';
@@ -111,7 +112,7 @@ export function buildReviewTable(session: TransitionBatchSession): string {
     }
   }
 
-  return header + rows.join('\n') + '\n\nok · (c) · key numbers to skip (e.g. 11 14)';
+  return header + rows.join('\n') + '\n\npost it · (c) · key numbers to skip (e.g. 11 14)';
 }
 
 export interface ResolutionSelectionSession {
@@ -151,8 +152,8 @@ export interface EmailContentSession {
 
 export function parseSkipInput(reply: string, tickets: TransitionBatchTicket[]): SkipParseResult {
   const normalized = reply.trim().toLowerCase();
-  if (normalized === 'ok') return { action: 'ok' };
-  if (normalized === 'c' || normalized === 'cancel') return { action: 'cancel' };
+  if (isConfirmation(reply)) return { action: 'ok' };
+  if (isCancellation(reply)) return { action: 'cancel' };
 
   const parts = normalized.split(/\s+/).filter(Boolean);
   const allKeys = new Map<string, string>(); // numeric suffix → full key
@@ -192,23 +193,30 @@ export function parseResolutionSelection(reply: string, options: string[]): stri
 
 export function parseIssueTypeSelection(reply: string, types: string[]): string | 'cancel' | 'invalid' {
   const normalized = reply.trim().toLowerCase();
-  if (normalized === 'c' || normalized === 'cancel') return 'cancel';
+  // A real issue type name wins over the generic cancellation word list — otherwise a
+  // project with a type literally named "Stop" or "Quit" could never select it by name.
+  const match = types.find((t) => t.toLowerCase() === normalized);
+  if (match) return match;
+  if (isCancellation(reply)) return 'cancel';
   const num = parseInt(normalized, 10);
   if (!isNaN(num) && num >= 1 && num <= types.length) return types[num - 1];
-  if (!isNaN(num)) return 'invalid';
-  const match = types.find((t) => t.toLowerCase() === normalized);
-  return match ?? 'invalid';
+  return 'invalid';
 }
 
 export function parseTemplateSelection(reply: string, templateNames: string[]): string | null | 'cancel' | 'invalid' {
   const normalized = reply.trim().toLowerCase();
-  if (normalized === 'c' || normalized === 'cancel') return 'cancel';
-  const NO_TEMPLATE = new Set(['n', 'no template', 'none', 'skip', '0', 'no', 'without template']);
+  // A real template name wins over the generic cancellation word list, for the same reason
+  // as parseIssueTypeSelection above.
+  const match = templateNames.find((name) => name.toLowerCase() === normalized);
+  if (match) return match;
+  if (isCancellation(reply)) return 'cancel';
+  // `skip` and `no` are deliberately absent here — both now mean cancel (via isCancellation
+  // above), not "proceed without a template". Use one of these instead.
+  const NO_TEMPLATE = new Set(['n', 'no template', 'none', '0', 'without template']);
   if (NO_TEMPLATE.has(normalized)) return null;
   const num = parseInt(normalized, 10);
   if (!isNaN(num) && num >= 1 && num <= templateNames.length) return templateNames[num - 1];
-  const match = templateNames.find((name) => name.toLowerCase() === normalized);
-  return match ?? 'invalid';
+  return 'invalid';
 }
 
 export function extractLastTicketFromText(text: string): string | null {
@@ -238,17 +246,12 @@ export function serializeTurns(
   return `_(oldest turns omitted to fit context)_\n\n${clean}`;
 }
 
-export function extractCreatedKeyFromConfirmation(confirmation: string): string | null {
-  const m = confirmation.match(/([A-Z][A-Z0-9]+-\d+)/);
-  return m ? m[1] : null;
-}
-
 export function isConfirmation(text: string): boolean {
   const normalized = text.trim().toLowerCase();
   const CONFIRMATIONS = new Set([
     'yes', 'yep', 'ok', 'okay', 'sure', 'perfect', 'great',
     'looks good', 'looks great', 'go ahead', 'do it', 'ship it',
-    'post it', 'confirm', 'confirmed', 'submit', 'approved', 'approve', 'fine',
+    'post it', 'post', 'confirm', 'confirmed', 'submit', 'approved', 'approve', 'fine',
     'load all', 'load more', 'show all', 'show more', 'create it',
   ]);
   return CONFIRMATIONS.has(normalized);
@@ -337,8 +340,8 @@ export interface SprintSelectionSession {
 export function parseBulkUpdateReview(reply: string): { action: 'ok'; skip: string[] } | { action: 'cancel' } | { action: 'invalid' } {
   const trimmed = reply.trim();
   if (!trimmed) return { action: 'invalid' };
-  if (/^(c|cancel)$/i.test(trimmed)) return { action: 'cancel' };
-  if (/^(ok|yes|confirm)$/i.test(trimmed)) return { action: 'ok', skip: [] };
+  if (isCancellation(reply)) return { action: 'cancel' };
+  if (isConfirmation(reply)) return { action: 'ok', skip: [] };
   const skipMatch = trimmed.match(/^skip\s+(.*)/i);
   if (skipMatch) {
     const keys = skipMatch[1].trim().split(/[\s,]+/).filter(Boolean);
@@ -349,15 +352,17 @@ export function parseBulkUpdateReview(reply: string): { action: 'ok'; skip: stri
 
 export function parseFilterSelection(reply: string, filters: JiraFilter[]): JiraFilter | 'cancel' | 'invalid' {
   const trimmed = reply.trim();
-  if (/^(c|cancel)$/i.test(trimmed)) return 'cancel';
+  // A real filter name wins over the generic cancellation word list, for the same reason
+  // as parseIssueTypeSelection above.
+  const byName = filters.find(f => f.name.toLowerCase() === trimmed.toLowerCase());
+  if (byName) return byName;
+  if (isCancellation(reply)) return 'cancel';
   const byIndex = trimmed.match(/^(\d+)$/);
   if (byIndex) {
     const n = parseInt(byIndex[1], 10);
     if (n >= 1 && n <= filters.length) return filters[n - 1];
     return 'invalid';
   }
-  const byName = filters.find(f => f.name.toLowerCase() === trimmed.toLowerCase());
-  if (byName) return byName;
   return 'invalid';
 }
 
@@ -535,7 +540,7 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
     lines.push(`| # | ${headerCells} | Ticket | Include? |`);
     lines.push(`|---|${sepCells}|--------|----------|`);
     for (const r of ticketed) {
-      const ticketRef = baseUrl ? `[${r.existingTicketKey}](${baseUrl}/browse/${r.existingTicketKey})` : r.existingTicketKey;
+      const ticketRef = formatKeyLink(r.existingTicketKey!, baseUrl);
       const cells = columns.map(c => c.accessor(r)).join(' | ');
       lines.push(`| ${r.id} | ${cells} | ${ticketRef} | ${r.included ? '✓ re-create' : '_excluded_'} |`);
     }
@@ -577,7 +582,7 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
     lines.push(`_Only the first ${REVIEW_BATCH_LIMIT} included rows will be created this run — re-run the import afterward for the remainder._`);
   }
   lines.push('');
-  lines.push('Reply **ok** to proceed, **(c)** to cancel, or a list of ids to toggle (e.g. `2 4` or `A1`).');
+  lines.push('Reply **post it** to proceed, **(c)** to cancel, or a list of ids to toggle (e.g. `2 4` or `A1`).');
 
   return lines.join('\n');
 }
@@ -590,8 +595,8 @@ export type ReviewParseResult =
 
 export function parseReviewInput(reply: string, rowIds: string[]): ReviewParseResult {
   const normalized = reply.trim().toLowerCase();
-  if (normalized === 'ok') return { action: 'ok' };
-  if (normalized === 'c' || normalized === 'cancel') return { action: 'cancel' };
+  if (isConfirmation(reply)) return { action: 'ok' };
+  if (isCancellation(reply)) return { action: 'cancel' };
 
   const tokens = normalized.split(/[\s,]+/).filter(Boolean);
   const matched: string[] = [];

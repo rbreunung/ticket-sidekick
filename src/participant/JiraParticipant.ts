@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { JiraApiClient } from '../jira/JiraApiClient';
 import { ConfigService } from '../services/ConfigService';
-import { TicketService, renderFieldValue } from '../services/TicketService';
+import { TicketService, renderFieldValue, formatKeyLink } from '../services/TicketService';
 import type { JiraFieldMeta, JiraFilter, JiraSprintCandidate } from '../jira/IJiraClient';
 import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
@@ -304,7 +304,7 @@ export function createJiraParticipant(
       const session = ws.get<ContentSession>('jira.session.previewing');
       if (session) {
         try {
-          await handleContentSession(session, request.prompt, request.model, token, stream, ticketService, ws);
+          await handleContentSession(session, request.prompt, request.model, token, stream, ticketService, ws, config.baseUrl);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logDiag('jira.participant', 'error', message, {});
@@ -390,7 +390,7 @@ export function createJiraParticipant(
           if (toUpdate.length === 1) {
             try {
               await jiraClient.updateIssue(toUpdate[0], { [previewSession.fieldId]: previewSession.fieldValue });
-              stream.markdown(`Updated **${previewSession.fieldName}** on ${toUpdate[0]}.`);
+              stream.markdown(`Updated **${previewSession.fieldName}** on ${formatKeyLink(toUpdate[0], config.baseUrl)}.`);
               stream.markdown(`\n\n<!-- @jira-ticket:${toUpdate[0]} -->`);
             } catch (err) {
               const message = err instanceof Error ? err.message : String(err);
@@ -400,15 +400,16 @@ export function createJiraParticipant(
           } else {
             let passed = 0, failed = 0;
             await ticketService.bulkUpdateField(toUpdate, previewSession.fieldId, previewSession.fieldValue, (key, ok, err) => {
-              if (ok) { stream.markdown(`✓ ${key}\n\n`); passed++; }
-              else { stream.markdown(`✗ ${key}: ${err}\n\n`); failed++; }
+              const keyRef = formatKeyLink(key, config.baseUrl);
+              if (ok) { stream.markdown(`✓ ${keyRef}\n\n`); passed++; }
+              else { stream.markdown(`✗ ${keyRef}: ${err}\n\n`); failed++; }
             });
             stream.markdown(`\n_Done — ${passed} updated${failed > 0 ? `, ${failed} failed` : ''}_`);
           }
           return;
         }
         // Not ok or cancel — re-present
-        stream.markdown(`Please reply **ok** to apply, or **(c)** to cancel.\n\n<!-- jira:field-update-preview -->`);
+        stream.markdown(`Please reply **post it** to apply, or **(c)** to cancel.\n\n<!-- jira:field-update-preview -->`);
         await ws.update('jira.session.fieldUpdatePreview', previewSession);
         return;
       }
@@ -507,7 +508,7 @@ export function createJiraParticipant(
       if (bulkSession) {
         const decision = parseBulkUpdateReview(request.prompt);
         if (decision.action === 'invalid') {
-          stream.markdown(`Didn't understand that. Reply **ok** to apply, **(c)** to cancel, or \`skip KEY1 KEY2\` to skip specific tickets.\n\n<!-- jira:bulk-update-review -->`);
+          stream.markdown(`Didn't understand that. Reply **post it** to apply, **(c)** to cancel, or \`skip KEY1 KEY2\` to skip specific tickets.\n\n<!-- jira:bulk-update-review -->`);
           return;
         }
         await ws.update('jira.session.bulkUpdateReview', undefined);
@@ -748,7 +749,7 @@ export function createJiraParticipant(
             break;
           }
           await ws.update('jira.session.commentList', buildCommentListSession(ticketKey!, fullComments));
-          const showTicketRef = config.baseUrl ? `[${ticketKey}](${config.baseUrl}/browse/${ticketKey})` : ticketKey!;
+          const showTicketRef = formatKeyLink(ticketKey!, config.baseUrl);
           stream.markdown(`## ${showTicketRef} — Comments (${fullTotal})\n\n` + formatCommentsInFull(fullComments));
           if (fullTotal > MAX_SHOW_FULL) {
             const moreSession: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: null, displayMode: 'full' };
@@ -776,7 +777,7 @@ export function createJiraParticipant(
           if (!hasQuery) {
             await ws.update('jira.session.commentList', buildCommentListSession(ticketKey!, comments));
           }
-          const getCommentsRef = config.baseUrl ? `[${ticketKey}](${config.baseUrl}/browse/${ticketKey})` : ticketKey!;
+          const getCommentsRef = formatKeyLink(ticketKey!, config.baseUrl);
           stream.markdown(`**${getCommentsRef} — Comments**\n\n` + synthesis);
           const listTag = hasQuery ? '' : '\n\n<!-- jira:comment-list -->';
           if (total > MAX_INITIAL) {
@@ -795,7 +796,7 @@ export function createJiraParticipant(
             return;
           }
           if (isLiteral) {
-            result = await ticketService.addComment(ticketKey!, intent.comment!);
+            result = await ticketService.addComment(ticketKey!, intent.comment!, config.baseUrl);
           } else {
             const ticketText = await ticketService.getTicket(ticketKey!);
             const { comments } = await ticketService.getIssueComments(ticketKey!, 50);
@@ -1080,7 +1081,7 @@ export function createJiraParticipant(
             (config.baseUrl ? `[View in Jira](${config.baseUrl}/issues/?jql=${encodeURIComponent(searchSession.jql)})\n\n` : '') +
             `| Key | Summary | Current value |\n| --- | --- | --- |\n` +
             rows.join('\n') +
-            `\n\nReply **ok** to apply, **(c)** to cancel, or list keys to skip (e.g. \`skip PROJ-2\`).\n\n<!-- jira:bulk-update-review -->`
+            `\n\nReply **post it** to apply, **(c)** to cancel, or list keys to skip (e.g. \`skip PROJ-2\`).\n\n<!-- jira:bulk-update-review -->`
           );
           return;
         }

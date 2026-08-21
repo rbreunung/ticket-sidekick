@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { logDiag } from '../../utils/diagLog';
 import { formatJiraBody } from '../../utils/markdownFormatter';
 import type { JiraAttachment, JiraComment, JiraFieldMeta } from '../../jira/IJiraClient';
-import { formatIssueFields } from '../../services/TicketService';
+import { formatIssueFields, formatKeyLink } from '../../services/TicketService';
 import type { TicketService } from '../../services/TicketService';
 import type { LoadSkippedSession } from '../sessionState';
 import { rewriteAttachmentLinks } from '../sessionState';
@@ -62,9 +62,7 @@ export async function handleLoadTicket(
     const lines = remoteLinks.map(r => `- [${r.object.title}](${r.object.url})`);
     sections.push(`## Web Links\n\n${lines.join('\n')}`);
   }
-  const heading = baseUrl
-    ? `## [${issue.key}](${baseUrl}/browse/${issue.key}): ${issue.fields.summary}`
-    : `## ${issue.key}: ${issue.fields.summary}`;
+  const heading = `## ${formatKeyLink(issue.key, baseUrl)}: ${issue.fields.summary}`;
   const showParts: string[] = [heading];
   if (table) showParts.push('', table);
   if (sections.length > 0) showParts.push('', ...sections);
