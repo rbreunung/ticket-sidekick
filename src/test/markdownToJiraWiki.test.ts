@@ -143,4 +143,77 @@ describe('markdownToJiraWiki', () => {
       expect(markdownToJiraWiki('![logo](https://example.com/logo.png)')).toBe('!https://example.com/logo.png!');
     });
   });
+
+  describe('render safety', () => {
+    it('neutralizes a raw, attacker-typed -struck- sequence (not produced by any Markdown construct)', () => {
+      const out = markdownToJiraWiki('see -struck- here');
+      expect(out).not.toContain('-struck-');
+    });
+
+    it('neutralizes a raw, attacker-typed +underline+ sequence', () => {
+      const out = markdownToJiraWiki('see +underline+ here');
+      expect(out).not.toContain('+underline+');
+    });
+
+    it('neutralizes a raw, attacker-typed ^super^ sequence', () => {
+      const out = markdownToJiraWiki('see ^super^ here');
+      expect(out).not.toContain('^super^');
+    });
+
+    it('neutralizes a raw, attacker-typed ??cite?? sequence', () => {
+      const out = markdownToJiraWiki('see ??cite?? here');
+      expect(out).not.toContain('??cite??');
+    });
+
+    it('neutralizes a raw !url! remote-image-embed sequence — the tracking-pixel exploit', () => {
+      const out = markdownToJiraWiki('see !http://evil.example/t.gif! here');
+      expect(out).not.toContain('!http://evil.example/t.gif!');
+    });
+
+    // Accepted, low-cost prose trade-off (KTD3): a footnote-style {1} loses its braces. This is
+    // deliberate — see the cross-line macro test below for why unconditional stripping is required.
+    it('strips a raw, unmatched single { or } in ordinary text (accepted prose trade-off)', () => {
+      expect(markdownToJiraWiki('see note {1} above')).toBe('see note 1 above');
+      expect(markdownToJiraWiki('close brace } stray')).toBe('close brace  stray');
+    });
+
+    it('does not let a {quote} macro pair split across two lines survive as a live macro in the joined output', () => {
+      const md = 'intro {quote}\nhidden malicious content\n{quote} outro';
+      const out = markdownToJiraWiki(md);
+      expect(out).not.toContain('{quote}');
+    });
+
+    it('AE5: distinguishes legitimate ~~real~~ strikethrough from a raw same-shape -fake- on the same line', () => {
+      const out = markdownToJiraWiki('legit ~~real~~ and raw -fake- here');
+      // Legitimate Markdown strikethrough still converts to a live Jira strikethrough trigger.
+      expect(out).toContain('-real-');
+      // The raw, attacker-typed sequence must NOT survive as a live Jira strikethrough trigger,
+      // even though after naive conversion the two would be byte-identical strings.
+      expect(out).not.toContain('-fake-');
+    });
+
+    it('AE6: a Jira-native trigger inside a Markdown code span survives as literal, non-live text (relies on Jira not re-interpreting wiki markup inside its own {{...}} monospace macro — not verified against a live Jira instance here)', () => {
+      const out = markdownToJiraWiki('`!http://attacker.example/t.gif!`');
+      expect(out).toBe('{{!http://attacker.example/t.gif!}}');
+    });
+
+    it('leaves a fenced code block containing a Jira-native trigger completely untouched', () => {
+      const md = '```\n!http://attacker.example/t.gif!\n```';
+      expect(markdownToJiraWiki(md)).toBe('{code}\n!http://attacker.example/t.gif!\n{code}');
+    });
+
+    it('leaves bare, unwrapped -, +, ^, ?, ! characters in ordinary prose completely unaltered', () => {
+      expect(markdownToJiraWiki('my co-worker computed x^2 today')).toBe('my co-worker computed x^2 today');
+      expect(markdownToJiraWiki('what? really great!')).toBe('what? really great!');
+    });
+
+    it('leaves multi-hyphen compound-word prose unaltered — a naive -text- shape must not match between two compound-word hyphens', () => {
+      expect(markdownToJiraWiki('a state-of-the-art solution')).toBe('a state-of-the-art solution');
+      expect(markdownToJiraWiki('a well-known-issue in the field')).toBe('a well-known-issue in the field');
+    });
+
+    it('leaves a spaced date-range hyphen unaltered — not a strikethrough wrap', () => {
+      expect(markdownToJiraWiki('open Monday - Friday hours')).toBe('open Monday - Friday hours');
+    });
+  });
 });
