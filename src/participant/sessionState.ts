@@ -90,29 +90,56 @@ export interface TransitionBatchSession {
   issueType: string;
 }
 
+interface TransitionReviewRow {
+  type: string;
+  key: string;
+  summary: string;
+  currentStatus: string;
+  to: string;
+  resolution: string;
+}
+
 export function buildReviewTable(session: TransitionBatchSession): string {
   const hasResolution = session.resolution !== undefined;
-  const header = hasResolution
-    ? '| Type | Key | Summary | From | → To | Resolution |\n|------|-----|---------|------|------|------------|\n'
-    : '| Type | Key | Summary | From | → To |\n|------|-----|---------|------|------|\n';
 
   const sorted = [...session.tickets].sort((a, b) =>
     a.currentStatus.toLowerCase().localeCompare(b.currentStatus.toLowerCase()),
   );
 
-  const rows: string[] = [];
+  const flatRows: TransitionReviewRow[] = [];
   for (const t of sorted) {
-    const tTo = t.transitionPath.at(-1)?.to ?? '?';
-    const tRes = hasResolution ? ` | ${session.resolution ?? ''}` : '';
-    rows.push(`| ${session.issueType} | ${t.key} | ${t.summary} | ${t.currentStatus} | ${tTo}${tRes} |`);
+    flatRows.push({
+      type: session.issueType,
+      key: t.key,
+      summary: t.summary,
+      currentStatus: t.currentStatus,
+      to: t.transitionPath.at(-1)?.to ?? '?',
+      resolution: session.resolution ?? '',
+    });
     for (const s of t.subtasks) {
-      const sTo = s.transitionPath.at(-1)?.to ?? '?';
-      const sRes = hasResolution ? ` | ${s.resolution ?? session.resolution ?? ''}` : '';
-      rows.push(`| Sub-task | ↳ ${s.key} | ${s.summary} | ${s.currentStatus} | ${sTo}${sRes} |`);
+      flatRows.push({
+        type: 'Sub-task',
+        key: `↳ ${s.key}`,
+        summary: s.summary,
+        currentStatus: s.currentStatus,
+        to: s.transitionPath.at(-1)?.to ?? '?',
+        resolution: s.resolution ?? session.resolution ?? '',
+      });
     }
   }
 
-  return header + rows.join('\n') + '\n\npost it · (c) · key numbers to skip (e.g. 11 14)';
+  const columns: ReviewTableColumn<TransitionReviewRow>[] = [
+    { header: 'Type', accessor: (r) => r.type },
+    { header: 'Key', accessor: (r) => r.key },
+    { header: 'Summary', accessor: (r) => r.summary },
+    { header: 'From', accessor: (r) => r.currentStatus },
+    { header: '→ To', accessor: (r) => r.to },
+    ...(hasResolution
+      ? [{ header: 'Resolution', accessor: (r: TransitionReviewRow) => r.resolution }]
+      : []),
+  ];
+
+  return renderReviewTable(columns, flatRows) + '\n\npost it · (c) · key numbers to skip (e.g. 11 14)';
 }
 
 export interface ResolutionSelectionSession {
