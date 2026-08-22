@@ -507,6 +507,24 @@ export interface ReviewTableColumn<TRow> {
   accessor: (row: TRow) => string;
 }
 
+/**
+ * Renders one markdown table — header row, a standardized dash separator row, and one data row
+ * per input row — from a column descriptor list and a flat row list.
+ *
+ * Presentation-only: it has no opinion on sanitization, truncation, row grouping/sections, skip
+ * vs. toggle reply semantics, or session expiry — those all stay caller concerns. A multi-section
+ * screen (e.g. "already ticketed" vs. "new") is composed by the caller invoking this once per
+ * section — passing that section's own column array, which may include section-specific extra
+ * columns (e.g. a "Ticket" column) — and prepending its own section heading before each call's
+ * output. Holds no state between calls.
+ */
+export function renderReviewTable<TRow>(columns: ReviewTableColumn<TRow>[], rows: TRow[]): string {
+  const headerRow = `| ${columns.map(c => c.header).join(' | ')} |`;
+  const separatorRow = `| ${columns.map(() => '---').join(' | ')} |`;
+  const dataRows = rows.map(row => `| ${columns.map(c => c.accessor(row)).join(' | ')} |`);
+  return [headerRow, separatorRow, ...dataRows].join('\n');
+}
+
 export const VERACODE_REVIEW_COLUMNS: ReviewTableColumn<VeracodeReviewRow>[] = [
   { header: 'Severity', accessor: (r) => `${r.severityLabelText} (${r.severity})` },
   { header: 'CWE', accessor: (r) => (r.cweId ? `CWE-${r.cweId}` : '—') },
