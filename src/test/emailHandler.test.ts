@@ -85,6 +85,29 @@ describe('buildEmailJiraWiki', () => {
     expect(result).toContain('paragraph one');
     expect(result).toContain('paragraph two');
   });
+
+  it('sanitizes a crafted attachment filename containing a Jira-native "!" trigger', () => {
+    // Unsanitized, the captured filename's own "!" would combine with the template's delimiters
+    // to form a second, live !url! image-embed trigger (`!evil!.gif|thumbnail!`) instead of one
+    // well-formed embed — exactly two "!" characters (the template's own delimiters) must survive.
+    const result = buildEmailJiraWiki('See [📎 evil!.gif] for details');
+    expect(result).toContain('!evil.gif|thumbnail!');
+    expect(result.match(/!/g)).toHaveLength(2);
+  });
+
+  it('sanitizes a crafted attachment filename containing a "|" (Jira image-attribute delimiter)', () => {
+    // Unsanitized, an extra "|" in the filename injects a second delimiter into the !name|thumbnail!
+    // template, letting the attacker append/alter Jira image attributes (e.g. align, border) —
+    // exactly one "|" (the template's own delimiter) must survive.
+    const result = buildEmailJiraWiki('See [📎 report|malicious.pdf] for details');
+    expect(result).toContain('!report/malicious.pdf|thumbnail!');
+    expect(result.match(/\|/g)).toHaveLength(1);
+  });
+
+  it('leaves a normal filename with no trigger characters unchanged', () => {
+    const result = buildEmailJiraWiki('See [📎 screenshot.png] for details');
+    expect(result).toContain('!screenshot.png|thumbnail!');
+  });
 });
 
 describe('buildEmailCommentHeader', () => {
@@ -105,6 +128,20 @@ describe('buildEmailCommentHeader', () => {
   it('slices date to YYYY-MM-DD', () => {
     const h = buildEmailCommentHeader(undefined, '2024-12-31T23:59:59Z');
     expect(h).toBe('*Date:* 2024-12-31\n\n');
+  });
+
+  it('sanitizes a crafted sender name containing Jira-native trigger characters', () => {
+    // Unsanitized, an attacker-controlled "From" display name like "Evil{color}HACKED{color}!"
+    // would inject live Jira macro/image-embed markup directly into the comment header.
+    const h = buildEmailCommentHeader('Evil{color}HACKED{color}!', undefined);
+    expect(h).toBe('*From:* EvilcolorHACKEDcolor\n\n');
+    expect(h).not.toContain('{');
+    expect(h).not.toContain('}');
+  });
+
+  it('sanitizes a crafted sender name containing "|" without breaking the bold delimiters', () => {
+    const h = buildEmailCommentHeader('Alice|Bob', undefined);
+    expect(h).toBe('*From:* Alice/Bob\n\n');
   });
 });
 
@@ -146,6 +183,16 @@ describe('addEmailAsComment', () => {
     const body = client.addCommentCalls[0].body;
     expect(body).toContain('!screenshot.png|thumbnail!');
     expect(body).not.toContain('[📎');
+  });
+
+  it('sanitizes a crafted sender name so it does not survive as live Jira markup in the posted comment', async () => {
+    const stream = mockStream();
+    const session = makeSession({ senderName: 'Evil{color}HACKED{color}!', markdownBody: 'Body text' });
+    await addEmailAsComment('PROJ-1', session, ticketService, stream, 'https://jira.example.com');
+
+    const body = client.addCommentCalls[0].body;
+    expect(body).toContain('*From:* EvilcolorHACKEDcolor');
+    expect(body).not.toContain('{color}');
   });
 
   it('uploads all attachments including inline ones', async () => {
