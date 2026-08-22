@@ -576,19 +576,18 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
   const ticketed = rows.filter(r => r.existingTicketKey !== null);
   const fresh = rows.filter(r => r.existingTicketKey === null);
   const lines: string[] = [];
-  const headerCells = columns.map(c => c.header).join(' | ');
-  const sepCells = columns.map(() => '----------').join('|');
+  const idColumn: ReviewTableColumn<TRow> = { header: '#', accessor: (r) => r.id };
   const pluralBare = itemNoun.replace('(s)', 's'); // 'component(s)' -> 'components'
 
   if (ticketed.length > 0) {
+    const ticketedColumns: ReviewTableColumn<TRow>[] = [
+      idColumn,
+      ...columns,
+      { header: 'Ticket', accessor: (r) => formatKeyLink(r.existingTicketKey!, baseUrl) },
+      { header: 'Include?', accessor: (r) => (r.included ? '✓ re-create' : '_excluded_') },
+    ];
     lines.push('### Already ticketed');
-    lines.push(`| # | ${headerCells} | Ticket | Include? |`);
-    lines.push(`|---|${sepCells}|--------|----------|`);
-    for (const r of ticketed) {
-      const ticketRef = formatKeyLink(r.existingTicketKey!, baseUrl);
-      const cells = columns.map(c => c.accessor(r)).join(' | ');
-      lines.push(`| ${r.id} | ${cells} | ${ticketRef} | ${r.included ? '✓ re-create' : '_excluded_'} |`);
-    }
+    lines.push(renderReviewTable(ticketedColumns, ticketed));
     lines.push('');
   }
 
@@ -596,12 +595,12 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
   if (fresh.length === 0) {
     lines.push(`_All matching ${pluralBare} already have a ticket._`);
   } else {
-    lines.push(`| # | ${headerCells} | Include? |`);
-    lines.push(`|---|${sepCells}|----------|`);
-    for (const r of fresh) {
-      const cells = columns.map(c => c.accessor(r)).join(' | ');
-      lines.push(`| ${r.id} | ${cells} | ${r.included ? '✓' : '_excluded_'} |`);
-    }
+    const freshColumns: ReviewTableColumn<TRow>[] = [
+      idColumn,
+      ...columns,
+      { header: 'Include?', accessor: (r) => (r.included ? '✓' : '_excluded_') },
+    ];
+    lines.push(renderReviewTable(freshColumns, fresh));
   }
   lines.push('');
 
