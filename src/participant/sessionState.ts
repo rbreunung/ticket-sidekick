@@ -632,6 +632,27 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
   return lines.join('\n');
 }
 
+export interface BulkUpdateReviewRow {
+  key: string;
+  summary: string;
+  currentValueDisplay: string;
+}
+
+const BULK_UPDATE_REVIEW_COLUMNS: ReviewTableColumn<BulkUpdateReviewRow>[] = [
+  { header: 'Key', accessor: (r) => r.key },
+  { header: 'Summary', accessor: (r) => r.summary },
+  { header: 'Current value', accessor: (r) => r.currentValueDisplay },
+];
+
+/**
+ * Renders the bulk field-update review table. The caller (JiraParticipant.ts) is responsible for
+ * resolving each row's "current value" display via TicketService's renderFieldValue() — this
+ * wrapper only renders already-computed, simple row data (KTD3).
+ */
+export function buildBulkUpdateReviewTable(rows: BulkUpdateReviewRow[]): string {
+  return renderReviewTable(BULK_UPDATE_REVIEW_COLUMNS, rows);
+}
+
 export type ReviewParseResult =
   | { action: 'ok' }
   | { action: 'cancel' }
