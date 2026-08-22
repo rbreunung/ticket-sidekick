@@ -407,6 +407,101 @@ describe('handleContentSession — addComment refinement preserves contentSource
 });
 
 // ---------------------------------------------------------------------------
+// handleContentSession — end-to-end Jira-native trigger neutralization (AE2)
+//
+// Exercises the REAL content-preview confirmation flow (not markdownToJiraWiki()
+// directly — that's covered by markdownToJiraWiki.test.ts) to prove a crafted
+// Jira-native-trigger payload (as an LLM might generate, or a user might type)
+// does not survive as live wiki markup in the text that actually reaches the
+// mocked Jira sink (MockJiraClient's captured call args).
+// ---------------------------------------------------------------------------
+
+describe('handleContentSession — end-to-end Jira-native trigger neutralization', () => {
+  let client: MockJiraClient;
+  let ticketService: TicketService;
+
+  const craftedPayload =
+    'Root cause analysis: -struck- the old assumption, see !http://evil.example/t.gif! for details.';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    client = new MockJiraClient();
+    ticketService = new TicketService(client);
+  });
+
+  it('neutralizes a crafted trigger payload in the createTicket description call site (contentHandler.ts ~line 117)', async () => {
+    const session: ContentSession = {
+      operation: 'createTicket',
+      projectKey: 'PROJ',
+      summary: 'Investigate root cause',
+      issueType: 'Bug',
+      templateName: null,
+      extraFields: {},
+      currentContent: craftedPayload,
+    };
+
+    const stream = mockStream();
+    const ws = mockWs();
+
+    await handleContentSession(session, 'create it', nullModel, nullToken, stream as never, ticketService, ws as never);
+
+    expect(client.createIssueCalls).toHaveLength(1);
+    const description = client.createIssueCalls[0].additionalFields?.description as string;
+    expect(description).toBeTruthy();
+    // The raw Jira-native trigger shapes must not survive intact
+    expect(description).not.toContain('-struck-');
+    expect(description).not.toContain('!http://evil.example/t.gif!');
+    // The underlying content (stripped of trigger delimiters) is still present
+    expect(description).toContain('struck');
+    expect(description).toContain('http://evil.example/t.gif');
+  });
+
+  it('neutralizes a crafted trigger payload in the addComment/updateDescription call site (contentHandler.ts ~line 131) — addComment', async () => {
+    const session: ContentSession = {
+      operation: 'addComment',
+      ticketKey: 'PROJ-123',
+      currentContent: craftedPayload,
+      historyContext: undefined,
+      contentSource: 'generate',
+    };
+
+    const stream = mockStream();
+    const ws = mockWs();
+
+    await handleContentSession(session, 'post it', nullModel, nullToken, stream as never, ticketService, ws as never);
+
+    expect(client.addCommentCalls).toHaveLength(1);
+    const body = client.addCommentCalls[0].body;
+    expect(body).not.toContain('-struck-');
+    expect(body).not.toContain('!http://evil.example/t.gif!');
+    expect(body).toContain('struck');
+    expect(body).toContain('http://evil.example/t.gif');
+  });
+
+  it('neutralizes a crafted trigger payload in the addComment/updateDescription call site (contentHandler.ts ~line 131) — updateDescription', async () => {
+    const session: ContentSession = {
+      operation: 'updateDescription',
+      ticketKey: 'PROJ-123',
+      currentContent: craftedPayload,
+      historyContext: undefined,
+      contentSource: 'generate',
+    };
+
+    const stream = mockStream();
+    const ws = mockWs();
+
+    await handleContentSession(session, 'post it', nullModel, nullToken, stream as never, ticketService, ws as never);
+
+    expect(client.updateIssueCalls).toHaveLength(1);
+    const description = client.updateIssueCalls[0].fields.description as string;
+    expect(description).not.toContain('-struck-');
+    expect(description).not.toContain('!http://evil.example/t.gif!');
+    expect(description).toContain('struck');
+    expect(description).toContain('http://evil.example/t.gif');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // buildContentContext — contentSource routing
 // ---------------------------------------------------------------------------
 
