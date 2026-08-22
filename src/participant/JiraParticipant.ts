@@ -7,7 +7,7 @@ import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { tokenStatus } from '../utils/diagUtils';
 import { logDiag } from '../utils/diagLog';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewTable } from './sessionState';
 import { loadWorkflowCache, findPath } from '../services/WorkflowService';
 import type { WorkflowGraph } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
@@ -1058,14 +1058,14 @@ export function createJiraParticipant(
           }
 
           const issues = await Promise.all(searchSession.ticketKeys.map(k => jiraClient.getIssue(k)));
-          const rows = issues.map(issue => {
+          const reviewRows: BulkUpdateReviewRow[] = issues.map(issue => {
             const current = issue.fields[fieldId];
             const display = current !== null && current !== undefined && targetFieldMeta
               ? renderFieldValue(current, targetFieldMeta)
               : current !== null && current !== undefined
                 ? String(current)
                 : '—';
-            return `| ${issue.key} | ${issue.fields.summary} | ${display} |`;
+            return { key: issue.key, summary: issue.fields.summary, currentValueDisplay: display };
           });
           const bulkSession: BulkUpdateReviewSession = {
             ticketKeys: searchSession.ticketKeys,
@@ -1079,8 +1079,7 @@ export function createJiraParticipant(
             `**Bulk update: ${intent.bulkFieldName} → ${intent.bulkFieldValue}**\n` +
             `(${searchSession.ticketKeys.length} tickets)\n\n` +
             (config.baseUrl ? `[View in Jira](${config.baseUrl}/issues/?jql=${encodeURIComponent(searchSession.jql)})\n\n` : '') +
-            `| Key | Summary | Current value |\n| --- | --- | --- |\n` +
-            rows.join('\n') +
+            buildBulkUpdateReviewTable(reviewRows) +
             `\n\nReply **post it** to apply, **(c)** to cancel, or list keys to skip (e.g. \`skip PROJ-2\`).\n\n<!-- jira:bulk-update-review -->`
           );
           return;

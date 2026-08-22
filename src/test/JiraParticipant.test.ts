@@ -4,7 +4,7 @@ vi.mock('vscode', () => ({
   window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
 }));
 
-import { extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, buildImportReviewTable, parseReviewInput, applyReviewToggle, VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION, type VeracodeReviewRow } from '../participant/sessionState';
+import { extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, buildImportReviewTable, parseReviewInput, applyReviewToggle, VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION, buildBulkUpdateReviewTable, type VeracodeReviewRow, type BulkUpdateReviewRow } from '../participant/sessionState';
 import type { WaltzReviewRow } from '../utils/waltzReport';
 import { isPointerPrompt } from '../participant/jira/llmHelpers';
 import type { TransitionBatchTicket } from '../participant/sessionState';
@@ -659,6 +659,31 @@ describe('parseBulkUpdateReview', () => {
 
   it('a bare "skip" with no keys now cancels — no flow-specific exception (R6)', () => {
     expect(parseBulkUpdateReview('skip')).toEqual({ action: 'cancel' });
+  });
+});
+
+describe('buildBulkUpdateReviewTable', () => {
+  it('renders Key / Summary / Current value columns matching the current inline output', () => {
+    const rows: BulkUpdateReviewRow[] = [
+      { key: 'PROJ-1', summary: 'Fix login bug', currentValueDisplay: 'High' },
+      { key: 'PROJ-2', summary: 'Update docs', currentValueDisplay: 'Medium' },
+      { key: 'PROJ-3', summary: 'Refactor service', currentValueDisplay: '—' },
+    ];
+    const table = buildBulkUpdateReviewTable(rows);
+    expect(table).toBe(
+      '| Key | Summary | Current value |\n' +
+      '| --- | --- | --- |\n' +
+      '| PROJ-1 | Fix login bug | High |\n' +
+      '| PROJ-2 | Update docs | Medium |\n' +
+      '| PROJ-3 | Refactor service | — |'
+    );
+  });
+
+  it('renders header + separator only when there are no rows', () => {
+    expect(buildBulkUpdateReviewTable([])).toBe(
+      '| Key | Summary | Current value |\n' +
+      '| --- | --- | --- |'
+    );
   });
 });
 

@@ -90,29 +90,56 @@ export interface TransitionBatchSession {
   issueType: string;
 }
 
+interface TransitionReviewRow {
+  type: string;
+  key: string;
+  summary: string;
+  currentStatus: string;
+  to: string;
+  resolution: string;
+}
+
 export function buildReviewTable(session: TransitionBatchSession): string {
   const hasResolution = session.resolution !== undefined;
-  const header = hasResolution
-    ? '| Type | Key | Summary | From | → To | Resolution |\n|------|-----|---------|------|------|------------|\n'
-    : '| Type | Key | Summary | From | → To |\n|------|-----|---------|------|------|\n';
 
   const sorted = [...session.tickets].sort((a, b) =>
     a.currentStatus.toLowerCase().localeCompare(b.currentStatus.toLowerCase()),
   );
 
-  const rows: string[] = [];
+  const flatRows: TransitionReviewRow[] = [];
   for (const t of sorted) {
-    const tTo = t.transitionPath.at(-1)?.to ?? '?';
-    const tRes = hasResolution ? ` | ${session.resolution ?? ''}` : '';
-    rows.push(`| ${session.issueType} | ${t.key} | ${t.summary} | ${t.currentStatus} | ${tTo}${tRes} |`);
+    flatRows.push({
+      type: session.issueType,
+      key: t.key,
+      summary: t.summary,
+      currentStatus: t.currentStatus,
+      to: t.transitionPath.at(-1)?.to ?? '?',
+      resolution: session.resolution ?? '',
+    });
     for (const s of t.subtasks) {
-      const sTo = s.transitionPath.at(-1)?.to ?? '?';
-      const sRes = hasResolution ? ` | ${s.resolution ?? session.resolution ?? ''}` : '';
-      rows.push(`| Sub-task | ↳ ${s.key} | ${s.summary} | ${s.currentStatus} | ${sTo}${sRes} |`);
+      flatRows.push({
+        type: 'Sub-task',
+        key: `↳ ${s.key}`,
+        summary: s.summary,
+        currentStatus: s.currentStatus,
+        to: s.transitionPath.at(-1)?.to ?? '?',
+        resolution: s.resolution ?? session.resolution ?? '',
+      });
     }
   }
 
-  return header + rows.join('\n') + '\n\npost it · (c) · key numbers to skip (e.g. 11 14)';
+  const columns: ReviewTableColumn<TransitionReviewRow>[] = [
+    { header: 'Type', accessor: (r) => r.type },
+    { header: 'Key', accessor: (r) => r.key },
+    { header: 'Summary', accessor: (r) => r.summary },
+    { header: 'From', accessor: (r) => r.currentStatus },
+    { header: '→ To', accessor: (r) => r.to },
+    ...(hasResolution
+      ? [{ header: 'Resolution', accessor: (r: TransitionReviewRow) => r.resolution }]
+      : []),
+  ];
+
+  return renderReviewTable(columns, flatRows) + '\n\npost it · (c) · key numbers to skip (e.g. 11 14)';
 }
 
 export interface ResolutionSelectionSession {
@@ -507,6 +534,24 @@ export interface ReviewTableColumn<TRow> {
   accessor: (row: TRow) => string;
 }
 
+/**
+ * Renders one markdown table — header row, a standardized dash separator row, and one data row
+ * per input row — from a column descriptor list and a flat row list.
+ *
+ * Presentation-only: it has no opinion on sanitization, truncation, row grouping/sections, skip
+ * vs. toggle reply semantics, or session expiry — those all stay caller concerns. A multi-section
+ * screen (e.g. "already ticketed" vs. "new") is composed by the caller invoking this once per
+ * section — passing that section's own column array, which may include section-specific extra
+ * columns (e.g. a "Ticket" column) — and prepending its own section heading before each call's
+ * output. Holds no state between calls.
+ */
+export function renderReviewTable<TRow>(columns: ReviewTableColumn<TRow>[], rows: TRow[]): string {
+  const headerRow = `| ${columns.map(c => c.header).join(' | ')} |`;
+  const separatorRow = `| ${columns.map(() => '---').join(' | ')} |`;
+  const dataRows = rows.map(row => `| ${columns.map(c => c.accessor(row)).join(' | ')} |`);
+  return [headerRow, separatorRow, ...dataRows].join('\n');
+}
+
 export const VERACODE_REVIEW_COLUMNS: ReviewTableColumn<VeracodeReviewRow>[] = [
   { header: 'Severity', accessor: (r) => `${r.severityLabelText} (${r.severity})` },
   { header: 'CWE', accessor: (r) => (r.cweId ? `CWE-${r.cweId}` : '—') },
@@ -531,19 +576,18 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
   const ticketed = rows.filter(r => r.existingTicketKey !== null);
   const fresh = rows.filter(r => r.existingTicketKey === null);
   const lines: string[] = [];
-  const headerCells = columns.map(c => c.header).join(' | ');
-  const sepCells = columns.map(() => '----------').join('|');
+  const idColumn: ReviewTableColumn<TRow> = { header: '#', accessor: (r) => r.id };
   const pluralBare = itemNoun.replace('(s)', 's'); // 'component(s)' -> 'components'
 
   if (ticketed.length > 0) {
+    const ticketedColumns: ReviewTableColumn<TRow>[] = [
+      idColumn,
+      ...columns,
+      { header: 'Ticket', accessor: (r) => formatKeyLink(r.existingTicketKey!, baseUrl) },
+      { header: 'Include?', accessor: (r) => (r.included ? '✓ re-create' : '_excluded_') },
+    ];
     lines.push('### Already ticketed');
-    lines.push(`| # | ${headerCells} | Ticket | Include? |`);
-    lines.push(`|---|${sepCells}|--------|----------|`);
-    for (const r of ticketed) {
-      const ticketRef = formatKeyLink(r.existingTicketKey!, baseUrl);
-      const cells = columns.map(c => c.accessor(r)).join(' | ');
-      lines.push(`| ${r.id} | ${cells} | ${ticketRef} | ${r.included ? '✓ re-create' : '_excluded_'} |`);
-    }
+    lines.push(renderReviewTable(ticketedColumns, ticketed));
     lines.push('');
   }
 
@@ -551,12 +595,12 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
   if (fresh.length === 0) {
     lines.push(`_All matching ${pluralBare} already have a ticket._`);
   } else {
-    lines.push(`| # | ${headerCells} | Include? |`);
-    lines.push(`|---|${sepCells}|----------|`);
-    for (const r of fresh) {
-      const cells = columns.map(c => c.accessor(r)).join(' | ');
-      lines.push(`| ${r.id} | ${cells} | ${r.included ? '✓' : '_excluded_'} |`);
-    }
+    const freshColumns: ReviewTableColumn<TRow>[] = [
+      idColumn,
+      ...columns,
+      { header: 'Include?', accessor: (r) => (r.included ? '✓' : '_excluded_') },
+    ];
+    lines.push(renderReviewTable(freshColumns, fresh));
   }
   lines.push('');
 
@@ -585,6 +629,27 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
   lines.push('Reply **post it** to proceed, **(c)** to cancel, or a list of ids to toggle (e.g. `2 4` or `A1`).');
 
   return lines.join('\n');
+}
+
+export interface BulkUpdateReviewRow {
+  key: string;
+  summary: string;
+  currentValueDisplay: string;
+}
+
+const BULK_UPDATE_REVIEW_COLUMNS: ReviewTableColumn<BulkUpdateReviewRow>[] = [
+  { header: 'Key', accessor: (r) => r.key },
+  { header: 'Summary', accessor: (r) => r.summary },
+  { header: 'Current value', accessor: (r) => r.currentValueDisplay },
+];
+
+/**
+ * Renders the bulk field-update review table. The caller (JiraParticipant.ts) is responsible for
+ * resolving each row's "current value" display via TicketService's renderFieldValue() — this
+ * wrapper only renders already-computed, simple row data (KTD3).
+ */
+export function buildBulkUpdateReviewTable(rows: BulkUpdateReviewRow[]): string {
+  return renderReviewTable(BULK_UPDATE_REVIEW_COLUMNS, rows);
 }
 
 export type ReviewParseResult =
