@@ -7,7 +7,7 @@ import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { tokenStatus } from '../utils/diagUtils';
 import { logDiag } from '../utils/diagLog';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type TemplateSelectionSession, type IssueTypeSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, isConfirmation, isCancellation, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewTable } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, isConfirmation, isCancellation, pickEmailOption, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewTable } from './sessionState';
 import { loadWorkflowCache, findPath } from '../services/WorkflowService';
 import type { WorkflowGraph } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
@@ -17,7 +17,7 @@ import { streamFieldUpdatePreview, continueSetField, handleSetField, handleSpell
 import { getLastAssistantText, resolveTicketFromBranch, resolveProjectKey, parseLastTicketFromContext } from './jira/ticketContext';
 import { validateBaseUrl } from '../services/configValidation';
 import { gatherFileContent, buildContentContext, streamContentPreview, handleContentSession } from './jira/contentHandler';
-import { streamIssueTypeSelection, continueAfterIssueType, streamNextSection, streamTemplateSelection, finishTicketCreation, handleCreateTicket } from './jira/createHandler';
+import { streamCreateSelection, continueAfterIssueType, streamNextSection, finishTicketCreation, handleCreateTicket } from './jira/createHandler';
 import { serializeCommentsForLLM, handleLoadTicket } from './jira/loadHandler';
 import { streamReviewScreen, executeCleanupBatch, handleRunCleanup } from './jira/cleanupHandler';
 import { handleDiscoverWorkflow } from './jira/workflowHandler';
@@ -206,62 +206,56 @@ export function createJiraParticipant(
       }
     }
 
-    // Template selection — user replied with their template choice
-    if (lastResponse.includes('<!-- jira:selecting-template -->')) {
-      const selSession = ws.get<TemplateSelectionSession>('jira.session.templateSelection');
+    // Combined template/issue-type selection — user replied with their pick
+    if (lastResponse.includes('<!-- jira:selecting-create-option -->')) {
+      const selSession = ws.get<CreateSelectionSession>('jira.session.creatingSelection');
       if (selSession) {
-        const choice = parseTemplateSelection(request.prompt, selSession.templateNames);
-        if (choice === 'invalid') {
-          await streamTemplateSelection(selSession.templateNames, stream, ws, selSession.originalPrompt);
-          return;
-        }
-        await ws.update('jira.session.templateSelection', undefined);
-        if (choice === 'cancel') {
+        if (isCancellation(request.prompt)) {
+          await ws.update('jira.session.creatingSelection', undefined);
           stream.markdown('_Cancelled._');
           return;
         }
-        try {
-          await handleCreateTicket(request, stream, token, jiraClient, ticketService, ws, choice, selSession.originalPrompt);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          logDiag('jira.participant', 'error', message, {});
-          stream.markdown(message);
+        const n = parseInt(request.prompt.trim(), 10);
+        const pick = isNaN(n) ? null : pickEmailOption(n, selSession.templates, selSession.issueTypes);
+        if (!pick) {
+          await streamCreateSelection(selSession, stream, ws);
+          return;
         }
-        return;
-      }
-    }
+        await ws.update('jira.session.creatingSelection', undefined);
 
-    // Issue type selection — user replied with their type choice
-    if (lastResponse.includes('<!-- jira:selecting-type -->')) {
-      const typeSession = ws.get<IssueTypeSelectionSession>('jira.session.typeSelection');
-      if (typeSession) {
-        const choice = parseIssueTypeSelection(request.prompt, typeSession.issueTypes);
-        if (choice === 'invalid') {
-          await streamIssueTypeSelection(typeSession, stream, ws);
-          return;
-        }
-        await ws.update('jira.session.typeSelection', undefined);
-        if (choice === 'cancel') {
-          stream.markdown('_Cancelled._');
-          return;
-        }
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
         let selectedTemplate: JiraTemplate | null = null;
-        if (typeSession.templateName && workspaceRoot) {
-          try {
-            const { templates } = new TemplateService(workspaceRoot).loadTemplates();
-            selectedTemplate = templates.find((t) => t.name === typeSession.templateName) ?? null;
-          } catch (err) {
-            logDiag('jira.participant', 'warn', `Could not reload template — ${typeSession.templateName}`, {
-              templateName: typeSession.templateName, error: err instanceof Error ? err.message : String(err),
-            });
+        if (pick.kind === 'template') {
+          const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+          if (workspaceRoot) {
+            try {
+              const { templates } = new TemplateService(workspaceRoot).loadTemplates();
+              selectedTemplate = templates.find((t) => t.name === pick.name) ?? null;
+              if (!selectedTemplate) {
+                stream.markdown(`_Warning: template "${pick.name}" is no longer available — proceeding without its default fields._\n\n`);
+              }
+            } catch (err) {
+              logDiag('jira.participant', 'warn', `Could not reload template — ${pick.name}`, {
+                templateName: pick.name, error: err instanceof Error ? err.message : String(err),
+              });
+              stream.markdown(`_Warning: template "${pick.name}" is no longer available — proceeding without its default fields._\n\n`);
+            }
           }
         }
+
+        // '' is the "no resolvable issue type" sentinel (see handleCreateTicket) — ask instead
+        // of silently creating the ticket with a guessed type.
+        let issueType = pick.issueType;
+        if (issueType === '') {
+          const entered = await vscode.window.showInputBox({ prompt: 'Enter the issue type (e.g. Bug, Story, Task)', ignoreFocusOut: true }) ?? null;
+          if (!entered) { stream.markdown('No issue type provided — cancelled.'); return; }
+          issueType = entered;
+        }
+
         try {
           await continueAfterIssueType(
-            typeSession.project, typeSession.summary, choice, typeSession.description,
+            selSession.projectKey, selSession.summary, issueType, selSession.description,
             selectedTemplate, request.model, stream, token, jiraClient, ticketService, ws,
-            typeSession.extraFields,
+            selSession.extraFields,
           );
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);

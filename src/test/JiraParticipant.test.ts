@@ -4,7 +4,7 @@ vi.mock('vscode', () => ({
   window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
 }));
 
-import { extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseTemplateSelection, parseIssueTypeSelection, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, buildImportReviewTable, parseReviewInput, applyReviewToggle, VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION, buildBulkUpdateReviewTable, type VeracodeReviewRow, type BulkUpdateReviewRow } from '../participant/sessionState';
+import { extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, buildImportReviewTable, parseReviewInput, applyReviewToggle, VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION, buildBulkUpdateReviewTable, type VeracodeReviewRow, type BulkUpdateReviewRow } from '../participant/sessionState';
 import type { WaltzReviewRow } from '../utils/waltzReport';
 import { isPointerPrompt } from '../participant/jira/llmHelpers';
 import type { TransitionBatchTicket } from '../participant/sessionState';
@@ -165,116 +165,6 @@ describe('isCancellation', () => {
   });
 });
 
-
-describe('parseTemplateSelection', () => {
-  const templates = ['User Story for Ticket Sidekick', 'Bug Report', 'Task'];
-
-  it('selects by 1-based number', () => {
-    expect(parseTemplateSelection('1', templates)).toBe('User Story for Ticket Sidekick');
-    expect(parseTemplateSelection('2', templates)).toBe('Bug Report');
-    expect(parseTemplateSelection('3', templates)).toBe('Task');
-  });
-
-  it('selects by exact name (case-insensitive)', () => {
-    expect(parseTemplateSelection('Bug Report', templates)).toBe('Bug Report');
-    expect(parseTemplateSelection('bug report', templates)).toBe('Bug Report');
-    expect(parseTemplateSelection('BUG REPORT', templates)).toBe('Bug Report');
-  });
-
-  it('returns null for no-template phrases including (n) shortcut', () => {
-    expect(parseTemplateSelection('n', templates)).toBeNull();
-    expect(parseTemplateSelection('no template', templates)).toBeNull();
-    expect(parseTemplateSelection('none', templates)).toBeNull();
-    expect(parseTemplateSelection('0', templates)).toBeNull();
-  });
-
-  it('returns cancel for (c) shortcut and "cancel"', () => {
-    expect(parseTemplateSelection('c', templates)).toBe('cancel');
-    expect(parseTemplateSelection('cancel', templates)).toBe('cancel');
-    expect(parseTemplateSelection('C', templates)).toBe('cancel');
-    expect(parseTemplateSelection('Cancel', templates)).toBe('cancel');
-  });
-
-  it('returns cancel for "skip" and "no" — both dropped as no-template aliases (R6)', () => {
-    expect(parseTemplateSelection('skip', templates)).toBe('cancel');
-    expect(parseTemplateSelection('no', templates)).toBe('cancel');
-  });
-
-  it('also recognizes other shared cancellation words, not just c/cancel', () => {
-    expect(parseTemplateSelection('stop', templates)).toBe('cancel');
-    expect(parseTemplateSelection('never mind', templates)).toBe('cancel');
-  });
-
-  it('selects a real template by name even when it collides with a cancellation word', () => {
-    const collidingTemplates = ['Stop', 'Bug Report', 'Task'];
-    expect(parseTemplateSelection('Stop', collidingTemplates)).toBe('Stop');
-    expect(parseTemplateSelection('stop', collidingTemplates)).toBe('Stop');
-  });
-
-  it('returns invalid for out-of-range number', () => {
-    expect(parseTemplateSelection('4', templates)).toBe('invalid');
-    expect(parseTemplateSelection('0', templates)).toBeNull();
-  });
-
-  it('returns invalid for unrecognised text', () => {
-    expect(parseTemplateSelection('something else', templates)).toBe('invalid');
-    expect(parseTemplateSelection('', templates)).toBe('invalid');
-  });
-
-  it('trims whitespace before matching', () => {
-    expect(parseTemplateSelection('  2  ', templates)).toBe('Bug Report');
-    expect(parseTemplateSelection('  no template  ', templates)).toBeNull();
-  });
-});
-
-describe('parseIssueTypeSelection', () => {
-  const types = ['Bug', 'Story', 'Task'];
-
-  it('selects by 1-based number', () => {
-    expect(parseIssueTypeSelection('1', types)).toBe('Bug');
-    expect(parseIssueTypeSelection('2', types)).toBe('Story');
-    expect(parseIssueTypeSelection('3', types)).toBe('Task');
-  });
-
-  it('selects by exact name (case-insensitive)', () => {
-    expect(parseIssueTypeSelection('Bug', types)).toBe('Bug');
-    expect(parseIssueTypeSelection('bug', types)).toBe('Bug');
-    expect(parseIssueTypeSelection('STORY', types)).toBe('Story');
-  });
-
-  it('returns cancel for (c) shortcut and "cancel"', () => {
-    expect(parseIssueTypeSelection('c', types)).toBe('cancel');
-    expect(parseIssueTypeSelection('cancel', types)).toBe('cancel');
-    expect(parseIssueTypeSelection('C', types)).toBe('cancel');
-    expect(parseIssueTypeSelection('Cancel', types)).toBe('cancel');
-  });
-
-  it('returns invalid for out-of-range number', () => {
-    expect(parseIssueTypeSelection('4', types)).toBe('invalid');
-    expect(parseIssueTypeSelection('0', types)).toBe('invalid');
-  });
-
-  it('returns invalid for unrecognised text', () => {
-    expect(parseIssueTypeSelection('something', types)).toBe('invalid');
-    expect(parseIssueTypeSelection('', types)).toBe('invalid');
-  });
-
-  it('trims whitespace before matching', () => {
-    expect(parseIssueTypeSelection('  2  ', types)).toBe('Story');
-    expect(parseIssueTypeSelection('  bug  ', types)).toBe('Bug');
-  });
-
-  it('also recognizes other shared cancellation words, not just c/cancel', () => {
-    expect(parseIssueTypeSelection('stop', types)).toBe('cancel');
-    expect(parseIssueTypeSelection('never mind', types)).toBe('cancel');
-  });
-
-  it('selects a real issue type by name even when it collides with a cancellation word', () => {
-    const collidingTypes = ['Stop', 'Bug', 'Task'];
-    expect(parseIssueTypeSelection('Stop', collidingTypes)).toBe('Stop');
-    expect(parseIssueTypeSelection('stop', collidingTypes)).toBe('Stop');
-  });
-});
 
 describe('isConfirmation (load-more phrases)', () => {
   it('returns true for "load all"', () => {
