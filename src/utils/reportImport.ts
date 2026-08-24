@@ -7,6 +7,7 @@
 // (what a "label" means, how a row's own fields are built) are injected via callbacks, not
 // duplicated. R9: only what Veracode and Waltz need today is here — no speculative generality.
 import type { DiagLogger } from './diagTypes';
+import { TRIGGER_CHARS_PATTERN } from './markdownToJiraWiki';
 
 // Single source of truth for both importers (KTD4). Both currently hardcode the identical values
 // (20 MB / 50 tickets per run) independently; consuming these from here instead of the local
@@ -193,7 +194,7 @@ export function sanitizeCellText(value: string): string {
   return value
     .replace(/\r\n|\r|\n/g, ' ')
     .replace(/\|/g, '/')
-    .replace(/[*_`[\]~\-+^?{}!]/g, '');
+    .replace(TRIGGER_CHARS_PATTERN, '');
 }
 
 // A value pushed as an entire standalone line (no trusted prefix character in front of it, e.g.

@@ -5,6 +5,7 @@ import type { TicketService } from '../../services/TicketService';
 import type { ConfigService } from '../../services/ConfigService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import { markdownToJiraWiki } from '../../utils/markdownToJiraWiki';
+import { sanitizeCellText } from '../../utils/reportImport';
 import { parseEml, type ParsedEml } from '../../utils/emlParser';
 import { htmlToMarkdown } from '../../utils/htmlToMarkdown';
 import { TemplateService } from '../../templates/TemplateService';
@@ -323,17 +324,23 @@ export async function handleEmailContentSession(
   await streamEmailContentPreview(session, stream, ws);
 }
 
-// Pure helper — converts markdown email body to Jira Wiki markup with inline-image placeholders resolved
+// Pure helper — converts markdown email body to Jira Wiki markup with inline-image placeholders resolved.
+// The captured filename is attacker-controlled (email-derived) and is interpolated directly into
+// literal Jira image-embed syntax OUTSIDE markdownToJiraWiki() — sanitize the captured value alone
+// (not the whole !name|thumbnail! template, whose own "!"/"|" delimiters must survive).
 export function buildEmailJiraWiki(markdownBody: string): string {
   let jiraWiki = markdownToJiraWiki(markdownBody);
   jiraWiki = jiraWiki.replace(/\n{3,}/g, '\n\n');
-  return jiraWiki.replace(/\[📎 ([^\]]+)\]/g, '!$1|thumbnail!');
+  return jiraWiki.replace(/\[📎 ([^\]]+)\]/g, (_match, name: string) => `!${sanitizeCellText(name)}|thumbnail!`);
 }
 
-// Pure helper — builds the From/Date comment header
+// Pure helper — builds the From/Date comment header. senderName is the email's attacker-controlled
+// "From" display name, interpolated directly into live Jira wiki markup outside markdownToJiraWiki()
+// — sanitize the value alone (not the whole "*From:* ..." string, whose intentional "*" bold markers
+// must survive).
 export function buildEmailCommentHeader(senderName?: string, receivedDateTime?: string): string {
   const parts: string[] = [];
-  if (senderName) parts.push(`*From:* ${senderName}`);
+  if (senderName) parts.push(`*From:* ${sanitizeCellText(senderName)}`);
   if (receivedDateTime) parts.push(`*Date:* ${receivedDateTime.slice(0, 10)}`);
   return parts.length > 0 ? parts.join('  ·  ') + '\n\n' : '';
 }
