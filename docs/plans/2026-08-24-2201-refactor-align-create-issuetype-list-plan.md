@@ -77,6 +77,8 @@ Today, `handleCreateTicket` shows the template list first, then resolves the iss
 - KTD2. **Retire `TemplateSelectionSession`, `IssueTypeSelectionSession`, `parseTemplateSelection`, and `parseIssueTypeSelection` entirely**, replacing them with one new session type and reusing KTD1's parser, rather than keeping the old two-step types alongside the new combined one. Nothing outside `createHandler.ts`/`JiraParticipant.ts` references them. Governs R1.
 - KTD3. **New session type `CreateSelectionSession`** carries what the combined list and its follow-up need: `templates: Array<{ name: string; issueType: string }>`, `issueTypes: string[]`, `projectKey: string`, `summary: string | null`, `description: string | null`, `extraFields?: Record<string, unknown>`, `originalPrompt: string`. Mirrors `ImportTemplateSelectionSession`'s shape (`sessionState.ts:483`) but keeps the create-flow's existing pending fields (`summary`, `description`, `extraFields`) that the report-import session doesn't carry. Governs R1, R3, R4.
 - KTD4. **Cancellation is checked before the numeric parse**, via `isCancellation(reply)`, matching the email/report-import call sites — `pickEmailOption` itself has no cancel case. Governs R2.
+- KTD5. **A template with no explicit `issueType` displays the project's first fetched issue type as its effective type**; when no issue types could be fetched either, it falls back to the literal `'Task'`. `reportImportHandler.ts:126` uses a single hardcoded literal (`'Bug'`) for this case, which fits Veracode/Waltz's flaw-report domain but not general ticket creation — using the first fetched type keeps the fallback project-appropriate instead of always suggesting a bug. Governs R1. (resolves a `ce-doc-review` P1 finding, addressed during `ce-work` per the "surface a genuine blocker, use judgment on details the plan leaves open" instruction.)
+- KTD6. **When a picked template can no longer be found** (renamed or removed from `.jira-templates.json` between the list being shown and the reply), warn the user and proceed without its default fields — matching `reportImportHandler.ts:260-268`'s existing warning, not `emailHandler.ts`'s silent fallback, since a silent type/field mismatch is a worse surprise than one extra line. Governs R1. (resolves a `ce-doc-review` finding.)
 
 ### Assumptions
 
@@ -84,7 +86,7 @@ Today, `handleCreateTicket` shows the template list first, then resolves the iss
 
 ### Sequencing
 
-U1 (session type + reused parser) is a prerequisite for U2 (`createHandler.ts` rebuild) and U3 (`JiraParticipant.ts` routing). U2 and U3 land together — U3's routing block calls into `continueAfterIssueType`, which U2 doesn't change, but U3 depends on U2's new `buildCreateSelectionSession`/`streamCreateSelection` functions existing first. U4 (tests) follows U1-U3.
+U1 (session type + reused parser) is a prerequisite for U2 (`createHandler.ts` rebuild) and U3 (`JiraParticipant.ts` routing). U2 and U3 land together — U3's routing block reads the `CreateSelectionSession` U2 builds and streams, so U2's list-building/streaming logic must exist before U3's routing block can call into it; `continueAfterIssueType` itself is unchanged by either unit. U4's actual work (test updates) only needs U1's removed/added symbols, but land it after U2/U3 too, since it also touches the `JiraParticipant.test.ts` blocks U3's routing change makes obsolete.
 
 ---
 
@@ -125,11 +127,12 @@ U1 (session type + reused parser) is a prerequisite for U2 (`createHandler.ts` r
 **Approach:**
 1. Move project-key resolution (`resolveProjectKey`) to the start of the fresh-call branch of `handleCreateTicket`, before template loading — currently it runs after template selection returns (`createHandler.ts:280`).
 2. After the project key resolves, fetch issue types via `ticketService.getIssueTypes(projectKey)` unconditionally (R3), catching a fetch failure the same way `TicketService`'s existing fallback does today (log + fall through with an empty list).
-3. Load templates via `TemplateService.loadTemplates()` as today, mapping to `{ name, issueType: t.issueType ?? '<project's first fetched type, or a neutral placeholder if none fetched>' }` pairs for the list — follow `reportImportHandler.ts:122-133`'s existing fallback pattern for a template with no `issueType` set.
+3. Load templates via `TemplateService.loadTemplates()` as today, mapping to `{ name, issueType: t.issueType ?? issueTypes[0] ?? 'Task' }` pairs for the list (KTD5).
 4. If both templates and fetched issue types are empty, fall back to the existing `showInputBox` free-type prompt (R6), matching current behavior.
 5. Otherwise build a `CreateSelectionSession` (KTD3) and stream the combined list, reusing `reportImportHandler.ts:157-178`'s two-heading rendering (`**Templates:**` / `**Issue types (no template):**`, whichever side is non-empty) adapted to the `<!-- jira:selecting-create-option -->` marker.
-6. The "returning from a template selection turn" branch (`createHandler.ts:245-257`, reloading a preselected template by name) is removed — it existed only to support the old two-step flow's second call into `handleCreateTicket`; the combined list resolves everything in one round-trip now (see U3).
+6. The "returning from a template selection turn" branch (`createHandler.ts:245-257`, reloading a preselected template by name) is removed — it existed only to support the old two-step flow's second call into `handleCreateTicket`; the combined list resolves everything in one round-trip now (see U3). Remove `handleCreateTicket`'s now-unreachable `preselectedTemplateName`/`originalPrompt` parameters along with it, and update the two remaining call sites (the fresh-call entry point) accordingly.
 7. `continueAfterIssueType` (`createHandler.ts:74-174`) is unchanged — it remains the shared continuation both the direct-resolved-type path and U3's routing call into.
+8. `streamTemplateSelection` and `streamIssueTypeSelection` (the two exported streaming functions for the old two-step lists) are removed — their only callers are the routing blocks U3 replaces. Their rendering logic is superseded by the new combined-list streaming function from step 5.
 
 **Test scenarios:**
 - Test expectation: covered indirectly — `createHandler.ts` imports `vscode` and is not Vitest-testable (matches existing project convention); its behavior is exercised through U3's routing tests where feasible, and is otherwise verified by manual/e2e check per the Verification Contract.
@@ -151,7 +154,7 @@ U1 (session type + reused parser) is a prerequisite for U2 (`createHandler.ts` r
 1. Replace the two blocks at `JiraParticipant.ts:209-273` with one block keyed on the new marker, reading `CreateSelectionSession` from `workspaceState`.
 2. Check `isCancellation(request.prompt)` first (KTD4); on cancel, clear the session and show `_Cancelled._`.
 3. Otherwise parse the number and call `pickEmailOption(n, session.templates, session.issueTypes)` (KTD1); on `null`/out-of-range, re-stream the same combined list as an invalid-reply retry (mirrors the email/report-import re-prompt pattern).
-4. On a `{ kind: 'template', ... }` pick, reload the full `JiraTemplate` from `TemplateService` by name (mirrors `emailHandler.ts:293-301` and the existing `JiraParticipant.ts:250-258` template-reload block) and call `continueAfterIssueType` with it.
+4. On a `{ kind: 'template', ... }` pick, reload the full `JiraTemplate` from `TemplateService` by name. If it can no longer be found, warn (`_Warning: template "<name>" is no longer available — proceeding without its default fields._`, matching `reportImportHandler.ts:260-268`, KTD6) and continue with `selectedTemplate: null`; otherwise call `continueAfterIssueType` with the reloaded template.
 5. On a `{ kind: 'type', ... }` pick, call `continueAfterIssueType` with `selectedTemplate: null` and the picked issue type.
 6. Both call sites reuse `continueAfterIssueType`'s existing signature unchanged (no new parameters needed).
 
@@ -201,4 +204,4 @@ U1 (session type + reused parser) is a prerequisite for U2 (`createHandler.ts` r
 - The list always requires an explicit numbered pick — no default is silently accepted.
 - `TemplateSelectionSession`, `IssueTypeSelectionSession`, `parseTemplateSelection`, `parseIssueTypeSelection` are fully removed, with no dangling references or imports.
 - `npm run compile` and `npm test` pass.
-- No leftover dead code from the removed two-step flow (the "returning from a template selection turn" branch in `createHandler.ts`, the old routing blocks in `JiraParticipant.ts`).
+- No leftover dead code from the removed two-step flow: the "returning from a template selection turn" branch and `handleCreateTicket`'s `preselectedTemplateName`/`originalPrompt` parameters in `createHandler.ts`, `streamTemplateSelection`/`streamIssueTypeSelection`, and the old routing blocks in `JiraParticipant.ts`.
