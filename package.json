@@ -2,7 +2,7 @@
   "name": "ticket-sidekick",
   "displayName": "Ticket Sidekick",
   "description": "Manage Jira tickets with GitHub Copilot Chat",
-  "version": "0.4.8",
+  "version": "0.4.9",
   "license": "MIT",
   "publisher": "RobertBreunung",
   "engines": {
