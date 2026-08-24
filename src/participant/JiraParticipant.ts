@@ -242,9 +242,18 @@ export function createJiraParticipant(
           }
         }
 
+        // '' is the "no resolvable issue type" sentinel (see handleCreateTicket) — ask instead
+        // of silently creating the ticket with a guessed type.
+        let issueType = pick.issueType;
+        if (issueType === '') {
+          const entered = await vscode.window.showInputBox({ prompt: 'Enter the issue type (e.g. Bug, Story, Task)', ignoreFocusOut: true }) ?? null;
+          if (!entered) { stream.markdown('No issue type provided — cancelled.'); return; }
+          issueType = entered;
+        }
+
         try {
           await continueAfterIssueType(
-            selSession.projectKey, selSession.summary, pick.issueType, selSession.description,
+            selSession.projectKey, selSession.summary, issueType, selSession.description,
             selectedTemplate, request.model, stream, token, jiraClient, ticketService, ws,
             selSession.extraFields,
           );

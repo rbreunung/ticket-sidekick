@@ -190,13 +190,16 @@ export async function streamCreateSelection(
   workspaceState: vscode.Memento,
 ): Promise<void> {
   await workspaceState.update('jira.session.creatingSelection', session);
+  // '' is the "no resolvable issue type" sentinel (see handleCreateTicket) — render it as a
+  // prompt to type one instead of a blank/fabricated name.
+  const label = (issueType: string) => issueType === '' ? '_you will be asked to type it_' : issueType;
   let optionsList = '';
   if (session.templates.length > 0) {
-    optionsList += `**Templates:**\n${session.templates.map((t, i) => `${i + 1}. ${t.name} _(${t.issueType})_`).join('\n')}\n\n`;
+    optionsList += `**Templates:**\n${session.templates.map((t, i) => `${i + 1}. ${t.name} _(${label(t.issueType)})_`).join('\n')}\n\n`;
   }
   if (session.issueTypes.length > 0) {
     const offset = session.templates.length;
-    optionsList += `**Issue types (no template):**\n${session.issueTypes.map((t, i) => `${offset + i + 1}. ${t}`).join('\n')}\n\n`;
+    optionsList += `**Issue types (no template):**\n${session.issueTypes.map((t, i) => `${offset + i + 1}. ${label(t)}`).join('\n')}\n\n`;
   }
   stream.markdown(`${optionsList}Reply with a number to select a template or issue type, or **(c)** to cancel.\n\n<!-- jira:selecting-create-option -->`);
 }
@@ -280,9 +283,16 @@ export async function handleCreateTicket(
     return continueAfterIssueType(projectKey, intent.summary, entered, intent.description, null, request.model, stream, token, jiraClient, ticketService, workspaceState, extraFields);
   }
 
+  // '' is a sentinel meaning "no resolvable issue type" — never a real Jira issue type name.
+  // Picking a template or entry carrying it opens the free-type input box instead of guessing
+  // (see the routing block in JiraParticipant.ts). This covers both a template with no explicit
+  // issueType when nothing was fetched to fall back to, and — when templates exist but the
+  // issue-type fetch failed entirely — a standalone "type it yourself" entry, so there's always
+  // a way to create a ticket without one of the listed templates (R6's intent extended to this
+  // partial-failure case, not just the fully-empty one above).
   const session: CreateSelectionSession = {
-    templates: templates.map((t) => ({ name: t.name, issueType: t.issueType ?? issueTypes[0] ?? 'Task' })),
-    issueTypes,
+    templates: templates.map((t) => ({ name: t.name, issueType: t.issueType ?? issueTypes[0] ?? '' })),
+    issueTypes: issueTypes.length > 0 ? issueTypes : [''],
     projectKey,
     summary: intent.summary,
     description: intent.description,
