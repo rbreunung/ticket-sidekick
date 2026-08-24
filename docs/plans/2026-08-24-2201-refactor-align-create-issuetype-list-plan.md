@@ -4,7 +4,7 @@ type: refactor
 date: 2026-08-24
 topic: align-create-issuetype-list
 artifact_contract: ce-unified-plan/v1
-artifact_readiness: requirements-only
+artifact_readiness: implementation-ready
 product_contract_source: ce-brainstorm
 execution: code
 ---
@@ -14,9 +14,11 @@ execution: code
 ## Goal Capsule
 
 - **Objective:** `@jira create` always presents one combined, predictable selection step — templates and issue types together — instead of sometimes showing only a template list and sometimes showing a template list followed by a separate issue-type list.
-- **Means:** Merge the two sequential prompts into a single numbered list (templates first, then remaining issue types), matching the list shape and selection mechanics the Veracode/Waltz report-import flow already uses.
-- **Product authority:** Repo owner, established in this brainstorm dialogue.
+- **Means:** Merge the two sequential prompts into a single numbered list (templates first, then remaining issue types), reusing the list shape and selection mechanics the Veracode/Waltz report-import flow already uses (KTD1).
+- **Product authority:** Repo owner, established in the source brainstorm dialogue.
 - **Open blockers:** None.
+
+---
 
 ## Product Contract
 
@@ -33,7 +35,7 @@ Today, `handleCreateTicket` shows the template list first, then resolves the iss
 - R1. When one or more templates exist in `.jira-templates.json`, `@jira create` shows a single list combining templates (each with its associated issue type) and the project's remaining selectable issue types (those not already the issue type of a template) — replacing the current template-list-then-conditional-issue-type-list sequence.
 - R2. The combined list always requires an explicit numbered reply to proceed — no default issue type is silently pre-accepted, and no bare-confirm shortcut is offered.
 - R3. Issue types are fetched from the target Jira project before the combined list is built, regardless of whether a template's own issue type would otherwise have made that fetch unnecessary.
-- R4. Resolving the project key (from the prompt, git branch, `ticketSidekick.jira.defaultProject`, or an input box) happens before the combined list is built, since issue types are project-scoped.
+- R4. Resolving the project key (from the prompt, the `ticketSidekick.jira.defaultProject` setting, or an input box) happens before the combined list is built, since issue types are project-scoped.
 - R5. When no templates exist, the list contains issue types only — matching current behavior for that case.
 - R6. When issue types cannot be fetched (API failure) and no templates exist either, fall back to the existing input-box prompt for a free-typed issue type — matching current failure-fallback behavior.
 - R7. Templates continue to be loaded as one shared, unfiltered list across all flows (manual creation, email import, Veracode/Waltz import) — this work does not add per-flow template scoping.
@@ -59,5 +61,144 @@ Today, `handleCreateTicket` shows the template list first, then resolves the iss
 - `src/participant/jira/createHandler.ts:232-326` (`handleCreateTicket`) — current template-list-then-conditional-issue-type-list logic; `resolvedType = selectedTemplate?.issueType ?? intent.issueType` at `:296` is the branch point that produces the inconsistency.
 - `src/participant/jira/reportImportHandler.ts:114-178` (`buildImportTemplateSession`, `streamImportTemplateSelection`) — the reference pattern: combined templates+issue-types list, issue types always fetched up front, explicit numbered pick required, no default-accept shortcut. Shared by both the Veracode and Waltz importers via `ReportImportDescriptor`.
 - `src/participant/jira/emailHandler.ts:136-190,280-330,400-423` — the alternate existing pattern (combined list plus a pre-selected default and a no-pick "post it" shortcut via `selectDefaultIssueType()`), considered and not chosen for this work.
-- `src/participant/sessionState.ts:435-451` (`pickEmailOption`, `EmailOptionPick`) — existing combined-list selection parser, reusable shape for planning to evaluate.
+- `src/participant/sessionState.ts:435-451` (`pickEmailOption`, `EmailOptionPick`) — existing combined-list selection parser, reused directly rather than duplicated (KTD1).
 - `src/templates/TemplateService.ts:10-16` (`JiraTemplate` interface) — confirms no per-flow scoping field exists on a template today.
+- `src/participant/jira/ticketContext.ts:27-40` (`resolveProjectKey`) — confirms project-key resolution is prompt → `defaultProject` setting → input box, with no git-branch fallback; corrects R4's wording from the source brainstorm doc, which mistakenly listed git branch as a source (git branch is used only for resolving an *existing* ticket key elsewhere, not a project key).
+
+**Product Contract preservation:** Restructured, no scope change — R4's wording was corrected to drop the inaccurate "git branch" source (see Sources / Research). No requirement's intent, scope, or R-ID changed.
+
+---
+
+## Planning Contract
+
+### Key Technical Decisions
+
+- KTD1. **Reuse `pickEmailOption()`/`EmailOptionPick` (`src/participant/sessionState.ts:435-451`) to parse the combined list's numbered reply, instead of writing a new parser.** It already maps a number to either `{ kind: 'template', name, issueType }` or `{ kind: 'type', issueType }` over a `templates` array plus an `issueTypes` array — exactly the shape R1 needs — and is already unit-tested. Governs R1, R2.
+- KTD2. **Retire `TemplateSelectionSession`, `IssueTypeSelectionSession`, `parseTemplateSelection`, and `parseIssueTypeSelection` entirely**, replacing them with one new session type and reusing KTD1's parser, rather than keeping the old two-step types alongside the new combined one. Nothing outside `createHandler.ts`/`JiraParticipant.ts` references them. Governs R1.
+- KTD3. **New session type `CreateSelectionSession`** carries what the combined list and its follow-up need: `templates: Array<{ name: string; issueType: string }>`, `issueTypes: string[]`, `projectKey: string`, `summary: string | null`, `description: string | null`, `extraFields?: Record<string, unknown>`, `originalPrompt: string`. Mirrors `ImportTemplateSelectionSession`'s shape (`sessionState.ts:483`) but keeps the create-flow's existing pending fields (`summary`, `description`, `extraFields`) that the report-import session doesn't carry. Governs R1, R3, R4.
+- KTD4. **Cancellation is checked before the numeric parse**, via `isCancellation(reply)`, matching the email/report-import call sites — `pickEmailOption` itself has no cancel case. Governs R2.
+
+### Assumptions
+
+- When templates exist but the project's issue-type fetch fails, the combined list renders templates-only (the issue-types section is simply empty) rather than falling back to the input box — R6 only names the fully-empty case (no templates *and* fetch failure) as the input-box fallback; this is the natural reading of R1/R5 when only one side of the list has content, not a new product decision.
+
+### Sequencing
+
+U1 (session type + reused parser) is a prerequisite for U2 (`createHandler.ts` rebuild) and U3 (`JiraParticipant.ts` routing). U2 and U3 land together — U3's routing block calls into `continueAfterIssueType`, which U2 doesn't change, but U3 depends on U2's new `buildCreateSelectionSession`/`streamCreateSelection` functions existing first. U4 (tests) follows U1-U3.
+
+---
+
+## Implementation Units
+
+### U1. Combined session type and retirement of the two-step types
+
+**Goal:** Add `CreateSelectionSession` and remove the two session types and two parsers it replaces.
+
+**Requirements:** R1, R7 (no new filtering added). Prerequisite for U2, U3.
+
+**Dependencies:** None.
+
+**Files:**
+- `src/participant/sessionState.ts` (modify)
+
+**Approach:**
+1. Add the `CreateSelectionSession` interface per KTD3, next to the existing `ImportTemplateSelectionSession` for discoverability.
+2. Remove `TemplateSelectionSession`, `IssueTypeSelectionSession`, `parseTemplateSelection`, `parseIssueTypeSelection` (KTD2).
+3. No new parser is added — `pickEmailOption` and `isCancellation` are reused as-is (KTD1, KTD4).
+
+**Test scenarios:**
+- Test expectation: none — this unit only adds a type and removes two functions; behavior coverage lives in U4's tests of the callers.
+
+**Verification:** `npm run compile` passes with no remaining references to the removed types/functions outside this unit's own removal.
+
+### U2. `createHandler.ts`: build and stream the combined list; resolve project key first
+
+**Goal:** `handleCreateTicket` resolves the project key, always fetches issue types, loads templates, and streams one combined list — replacing the current template-list-then-conditional-issue-type-list sequence.
+
+**Requirements:** R1, R2, R3, R4, R5, R6.
+
+**Dependencies:** U1.
+
+**Files:**
+- `src/participant/jira/createHandler.ts` (modify)
+
+**Approach:**
+1. Move project-key resolution (`resolveProjectKey`) to the start of the fresh-call branch of `handleCreateTicket`, before template loading — currently it runs after template selection returns (`createHandler.ts:280`).
+2. After the project key resolves, fetch issue types via `ticketService.getIssueTypes(projectKey)` unconditionally (R3), catching a fetch failure the same way `TicketService`'s existing fallback does today (log + fall through with an empty list).
+3. Load templates via `TemplateService.loadTemplates()` as today, mapping to `{ name, issueType: t.issueType ?? '<project's first fetched type, or a neutral placeholder if none fetched>' }` pairs for the list — follow `reportImportHandler.ts:122-133`'s existing fallback pattern for a template with no `issueType` set.
+4. If both templates and fetched issue types are empty, fall back to the existing `showInputBox` free-type prompt (R6), matching current behavior.
+5. Otherwise build a `CreateSelectionSession` (KTD3) and stream the combined list, reusing `reportImportHandler.ts:157-178`'s two-heading rendering (`**Templates:**` / `**Issue types (no template):**`, whichever side is non-empty) adapted to the `<!-- jira:selecting-create-option -->` marker.
+6. The "returning from a template selection turn" branch (`createHandler.ts:245-257`, reloading a preselected template by name) is removed — it existed only to support the old two-step flow's second call into `handleCreateTicket`; the combined list resolves everything in one round-trip now (see U3).
+7. `continueAfterIssueType` (`createHandler.ts:74-174`) is unchanged — it remains the shared continuation both the direct-resolved-type path and U3's routing call into.
+
+**Test scenarios:**
+- Test expectation: covered indirectly — `createHandler.ts` imports `vscode` and is not Vitest-testable (matches existing project convention); its behavior is exercised through U3's routing tests where feasible, and is otherwise verified by manual/e2e check per the Verification Contract.
+
+**Verification:** `npm run compile` passes; manual check per Verification Contract below.
+
+### U3. `JiraParticipant.ts`: single routing block for the combined selection
+
+**Goal:** Replace the two separate routing blocks (`<!-- jira:selecting-template -->` and `<!-- jira:selecting-type -->`) with one block that parses the reply against the combined session and resolves either a template pick or a bare issue-type pick.
+
+**Requirements:** R1, R2.
+
+**Dependencies:** U1, U2.
+
+**Files:**
+- `src/participant/JiraParticipant.ts` (modify)
+
+**Approach:**
+1. Replace the two blocks at `JiraParticipant.ts:209-273` with one block keyed on the new marker, reading `CreateSelectionSession` from `workspaceState`.
+2. Check `isCancellation(request.prompt)` first (KTD4); on cancel, clear the session and show `_Cancelled._`.
+3. Otherwise parse the number and call `pickEmailOption(n, session.templates, session.issueTypes)` (KTD1); on `null`/out-of-range, re-stream the same combined list as an invalid-reply retry (mirrors the email/report-import re-prompt pattern).
+4. On a `{ kind: 'template', ... }` pick, reload the full `JiraTemplate` from `TemplateService` by name (mirrors `emailHandler.ts:293-301` and the existing `JiraParticipant.ts:250-258` template-reload block) and call `continueAfterIssueType` with it.
+5. On a `{ kind: 'type', ... }` pick, call `continueAfterIssueType` with `selectedTemplate: null` and the picked issue type.
+6. Both call sites reuse `continueAfterIssueType`'s existing signature unchanged (no new parameters needed).
+
+**Test scenarios:**
+- Test expectation: none for `JiraParticipant.ts` itself — it imports `vscode` and is not Vitest-testable (matches existing project convention); routing behavior is verified per the Verification Contract.
+
+**Verification:** `npm run compile` passes; manual check per Verification Contract below.
+
+### U4. Update `sessionState.test.ts` for the removed/reused functions
+
+**Goal:** Remove test coverage for the retired `parseTemplateSelection`/`parseIssueTypeSelection`, and confirm `pickEmailOption`'s existing coverage already proves the combined-list parsing this work now depends on.
+
+**Requirements:** R1, R2, R5. Covers the KTD1/KTD2 technical choices.
+
+**Dependencies:** U1.
+
+**Files:**
+- `src/test/sessionState.test.ts` (modify)
+- `src/test/JiraParticipant.test.ts` (modify — remove any `parseTemplateSelection`/`parseIssueTypeSelection` describe blocks that live there instead)
+
+**Approach:**
+1. Remove the `describe('parseTemplateSelection', ...)` and `describe('parseIssueTypeSelection', ...)` blocks (found in `src/test/JiraParticipant.test.ts:169-230` at plan time — confirm current location before removing, since `ce-plan` doesn't move test files).
+2. Leave `pickEmailOption`'s existing test coverage (`src/test/JiraParticipant.test.ts:794-818` at plan time) as-is — it already proves the numbering behavior (`kind: 'template'` for indices within the templates array, `kind: 'type'` beyond it) that `createHandler`'s combined list now relies on; no new test is needed purely for reuse.
+3. Add one new scenario, if not already covered: `pickEmailOption` called with an empty `templates` array returns only type picks starting at index 1 — covers R5 (no-templates case).
+
+**Test scenarios:**
+- `pickEmailOption(1, [], ['Bug', 'Task'])` returns `{ kind: 'type', issueType: 'Bug' }` (R5: no-templates list still resolves correctly).
+- Regression: existing `pickEmailOption` scenarios (template pick within range, type pick beyond range, out-of-range `null`) continue to pass unchanged.
+
+**Verification:** `npm test -- sessionState JiraParticipant` passes with no reference to the removed parsers remaining anywhere in the suite.
+
+---
+
+## Verification Contract
+
+| Unit | Verification | Repo command |
+| --- | --- | --- |
+| U1 | No remaining references to removed types/functions | `npm run compile` |
+| U2 | Combined list builds correctly (templates+types, templates-only, types-only, input-box fallback) | Manual check: run `@jira create ...` in the Extension Development Host against a workspace with `.jira-templates.json`, and again without one |
+| U3 | Numbered reply resolves to the right template/type; cancel and invalid-reply paths work | Manual check: same session, reply with a template number, a type-only number, an out-of-range number, and a cancellation word |
+| U4 | Parser test coverage reflects the reused/removed functions | `npm test -- sessionState JiraParticipant` |
+| All | Full suite green, no regressions | `npm run compile && npm test` |
+
+## Definition of Done
+
+- `@jira create` shows exactly one combined numbered list (templates + remaining issue types) instead of the old two-step sequence, in every case R1/R5/R6 describe.
+- The list always requires an explicit numbered pick — no default is silently accepted.
+- `TemplateSelectionSession`, `IssueTypeSelectionSession`, `parseTemplateSelection`, `parseIssueTypeSelection` are fully removed, with no dangling references or imports.
+- `npm run compile` and `npm test` pass.
+- No leftover dead code from the removed two-step flow (the "returning from a template selection turn" branch in `createHandler.ts`, the old routing blocks in `JiraParticipant.ts`).
