@@ -16,17 +16,17 @@ The code lives in:
 
 `handleCreateTicket` in `JiraParticipant` resolves missing mandatory fields interactively:
 
-1. **Template** — chat-native numbered list streamed from `.jira-templates.json`; user replies with number, name, `(n)` / `"no template"` to skip, or `(c)` to cancel entirely; unrecognised reply re-presents the list; template load errors surface as chat messages and fall through to templateless creation
-2. **Project key** — from prompt, then `ticketSidekick.jira.defaultProject` setting, then `showInputBox`
-3. **Summary** — from prompt (LLM extraction), then `showInputBox`
-4. **Issue type** — from template `issueType` field or prompt (LLM extraction); if neither is present, chat-native numbered list via `IssueTypeSelectionSession` (subtasks filtered out); `(c)` to cancel; fallback to `showInputBox` if no types can be fetched from `GET /rest/api/2/project/{key}`
+1. **Project key** — from prompt, then `ticketSidekick.jira.defaultProject` setting, then `showInputBox`. Resolved first, since issue types are project-scoped.
+2. **Summary** — from prompt (LLM extraction), then `showInputBox`
+3. **Template + issue type** — always fetched together: templates from `.jira-templates.json` and issue types from `GET /rest/api/2/project/{key}` (subtasks filtered out). If either exists, one combined chat-native numbered list is streamed via `CreateSelectionSession` — templates first (each showing its issue type), then remaining issue types — and the user always replies with a number (or `(c)` to cancel); an out-of-range or non-numeric reply re-presents the same list. A template with no explicit `issueType` displays the project's first fetched issue type, or `'Task'` if none could be fetched. If both templates and issue types are empty, falls back to `showInputBox` for a free-typed issue type.
 
 If a template is chosen:
 
+- If the picked template can no longer be found (renamed/removed from `.jira-templates.json` since the list was shown), a warning is shown and creation proceeds without its default fields
 - `FieldResolver.resolve(defaultFields, resolveFields)` maps any `name`-based specs to Jira field values via API lookups; `id`-based specs pass through directly; array entries produce array results
 - `descriptionSections` (optional) drives a multi-turn Q&A via `CreationSession`; if absent or empty, ticket is created directly
 - When all sections are answered `finishTicketCreation` assembles the description and calls `TicketService.createTicket`
-- Field resolution + section handling are in `continueAfterIssueType`, called from both `handleCreateTicket` and the issue type session handler
+- Field resolution + section handling are in `continueAfterIssueType`, called from the combined-selection routing block
 
 API endpoint: `POST /rest/api/2/issue` with `{ fields: { project: { key }, summary, issuetype: { name }, ...additionalFields } }`
 
@@ -107,8 +107,7 @@ Each session below is looked up by its `workspaceState` key and expires once its
 | `FilterSelectionSession` | `jira.session.filterSelection` | `<!-- jira:selecting-filter -->` |
 | `BulkUpdateReviewSession` | `jira.session.bulkUpdateReview` | `<!-- jira:bulk-update-review -->` |
 | `SearchResultSession` | `jira.session.searchResult` | _(no marker — background session, overwritten on each search)_ |
-| `TemplateSelectionSession` | `jira.session.templateSelection` | `<!-- jira:selecting-template -->` |
-| `IssueTypeSelectionSession` | `jira.session.typeSelection` | `<!-- jira:selecting-type -->` |
+| `CreateSelectionSession` | `jira.session.creatingSelection` | `<!-- jira:selecting-create-option -->` |
 | `CreationSession` | `jira.session.creating` | `<!-- jira:creating -->` |
 | `ContentSession` | `jira.session.previewing` | `<!-- jira:previewing -->` |
 | `MoreCommentsSession` | `jira.session.moreComments` | `<!-- jira:more-comments -->` |
@@ -120,4 +119,4 @@ Each session below is looked up by its `workspaceState` key and expires once its
 | `WaltzTemplateSelectionSession` | `jira.session.waltzTemplateSelection` | `<!-- jira:waltz-template -->` |
 | `WaltzReviewSession` | `jira.session.waltzReview` | `<!-- jira:waltz-review -->` |
 
-Detection order in the Jira handler: resolution selection → transition review → filter selection → bulk-update-review → template selection → issue type selection → creation → content → more-comments → check command → load-skipped → email content → veracode template selection → veracode review → Waltz template selection → Waltz review → comment list → intent parse.
+Detection order in the Jira handler: resolution selection → transition review → filter selection → bulk-update-review → combined template/issue-type selection → creation → content → more-comments → check command → load-skipped → email content → veracode template selection → veracode review → Waltz template selection → Waltz review → comment list → intent parse.

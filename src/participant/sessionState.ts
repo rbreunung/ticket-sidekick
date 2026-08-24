@@ -53,18 +53,14 @@ export interface CommentListSession {
   }>;
 }
 
-export interface TemplateSelectionSession {
-  templateNames: string[];
-  originalPrompt: string;
-}
-
-export interface IssueTypeSelectionSession {
+export interface CreateSelectionSession {
+  templates: Array<{ name: string; issueType: string }>;
   issueTypes: string[];
-  project: string;
+  projectKey: string;
   summary: string | null;
-  templateName: string | null;
   description: string | null;
   extraFields?: Record<string, unknown>;
+  originalPrompt: string;
 }
 
 export interface TransitionSubtask {
@@ -218,34 +214,6 @@ export function parseResolutionSelection(reply: string, options: string[]): stri
   return match ?? 'invalid';
 }
 
-export function parseIssueTypeSelection(reply: string, types: string[]): string | 'cancel' | 'invalid' {
-  const normalized = reply.trim().toLowerCase();
-  // A real issue type name wins over the generic cancellation word list — otherwise a
-  // project with a type literally named "Stop" or "Quit" could never select it by name.
-  const match = types.find((t) => t.toLowerCase() === normalized);
-  if (match) return match;
-  if (isCancellation(reply)) return 'cancel';
-  const num = parseInt(normalized, 10);
-  if (!isNaN(num) && num >= 1 && num <= types.length) return types[num - 1];
-  return 'invalid';
-}
-
-export function parseTemplateSelection(reply: string, templateNames: string[]): string | null | 'cancel' | 'invalid' {
-  const normalized = reply.trim().toLowerCase();
-  // A real template name wins over the generic cancellation word list, for the same reason
-  // as parseIssueTypeSelection above.
-  const match = templateNames.find((name) => name.toLowerCase() === normalized);
-  if (match) return match;
-  if (isCancellation(reply)) return 'cancel';
-  // `skip` and `no` are deliberately absent here — both now mean cancel (via isCancellation
-  // above), not "proceed without a template". Use one of these instead.
-  const NO_TEMPLATE = new Set(['n', 'no template', 'none', '0', 'without template']);
-  if (NO_TEMPLATE.has(normalized)) return null;
-  const num = parseInt(normalized, 10);
-  if (!isNaN(num) && num >= 1 && num <= templateNames.length) return templateNames[num - 1];
-  return 'invalid';
-}
-
 export function extractLastTicketFromText(text: string): string | null {
   const match = text.match(/<!--\s*@jira-ticket:([A-Z][A-Z0-9]+-\d+)\s*-->/);
   return match ? match[1] : null;
@@ -379,8 +347,8 @@ export function parseBulkUpdateReview(reply: string): { action: 'ok'; skip: stri
 
 export function parseFilterSelection(reply: string, filters: JiraFilter[]): JiraFilter | 'cancel' | 'invalid' {
   const trimmed = reply.trim();
-  // A real filter name wins over the generic cancellation word list, for the same reason
-  // as parseIssueTypeSelection above.
+  // A real filter name wins over the generic cancellation word list — otherwise a filter
+  // literally named "Stop" or "Cancel" could never be selected by name.
   const byName = filters.find(f => f.name.toLowerCase() === trimmed.toLowerCase());
   if (byName) return byName;
   if (isCancellation(reply)) return 'cancel';

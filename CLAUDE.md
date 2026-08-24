@@ -219,7 +219,7 @@ Example: `feature/PROJ-123-add-login` → `PROJ-123`
 
 Multi-turn flows store structured state in `vscode.ExtensionContext.workspaceState` and embed a compact HTML tag in the response as an expiry signal. On the next turn, the handler checks whether the tag appears in the **last** assistant response; if it does, it reads from `workspaceState`. If the user moved on (different response is last), the tag is absent and the session is silently ignored.
 
-Jira's seventeen session types plus their `workspaceState` keys and response tags live in [`docs/jira-flows.md`](docs/jira-flows.md#jira-sessions). Bitbucket's single `ReviewSession` — key, tag, detection order, and the PR-URL-bypass rule — lives in [`docs/review-process.md`](docs/review-process.md#follow-ups).
+Jira's sixteen session types plus their `workspaceState` keys and response tags live in [`docs/jira-flows.md`](docs/jira-flows.md#jira-sessions). Bitbucket's single `ReviewSession` — key, tag, detection order, and the PR-URL-bypass rule — lives in [`docs/review-process.md`](docs/review-process.md#follow-ups).
 
 ## Jira flows
 
