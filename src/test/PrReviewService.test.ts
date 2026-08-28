@@ -10,6 +10,7 @@ import {
   parseUpfrontQuestion, stripUpfrontQuestion,
   formatCallLine, formatFindingsFunnel, buildRunTag,
   buildTruncationEvent, formatRecoveryDecision, formatStructuredRunRecord,
+  formatContinuationMessage,
 } from '../participant/reviewSessionState';
 import type { ReviewFinding } from '../participant/reviewSessionState';
 import { PrReviewService } from '../services/PrReviewService';
@@ -1240,6 +1241,21 @@ describe('formatStructuredRunRecord', () => {
       runTag: 'pr=PROJ/repo#1', configLine: 'model=gpt-4', lines: [], funnel: 'Findings funnel — raw 0\n-> final: 0',
     });
     expect(block).toContain('(none)');
+  });
+});
+
+describe('formatContinuationMessage', () => {
+  it('states what the count means instead of reading as a sequential resume', () => {
+    const message = formatContinuationMessage(3);
+    expect(message).not.toContain('resum');
+    expect(message).toContain('3 files had no findings in the truncated response');
+    expect(message).toContain('reviewing them now');
+  });
+
+  it('uses singular wording for a single uncovered file', () => {
+    const message = formatContinuationMessage(1);
+    expect(message).toContain('1 file had no findings in the truncated response');
+    expect(message).toContain('reviewing it now');
   });
 });
 

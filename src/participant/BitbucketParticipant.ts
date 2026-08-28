@@ -28,6 +28,7 @@ import {
   formatRecoveryDecision,
   formatFindingsFunnel,
   formatStructuredRunRecord,
+  formatContinuationMessage,
   type ReviewFinding,
   type ReviewSession,
   type BitbucketCommentPreviewSession,
@@ -603,6 +604,11 @@ export function createBitbucketParticipant(
       (level, message, details) => logDiag('bitbucket.prReviewService', level, message, details),
     );
 
+    // KTD9: last stage reached before the run ended, so an aborted/thrown-out-of run
+    // is distinguishable in the output channel from a channel-write failure — the
+    // funnel's absence alone is ambiguous otherwise. Declared outside `try` so the
+    // catch block below can still read it.
+    let lastStage = 'setup';
     try {
       const upfrontQuestion = parseUpfrontQuestion(prompt);
       // Detect quick/deep mode keyword from prompt (overrides setting). Strip the upfront
@@ -671,6 +677,7 @@ export function createBitbucketParticipant(
       if (upfrontQuestion) {
         stream.markdown(`_focus: ${upfrontQuestion}_\n\n`);
       }
+      lastStage = 'fetching PR';
       stream.markdown('_Fetching PR…_\n\n');
       const pr = await client.getPullRequest(parsed.project, parsed.repo, parsed.prId);
       logReview('info', 'model in use', {
@@ -747,6 +754,7 @@ export function createBitbucketParticipant(
 
         const batchStatus = chunks.length > 1 ? `Batch ${i + 1}/${chunks.length}` : 'Analysing';
         const pass1Label = `pass1 batch ${i + 1}/${chunks.length}`;
+        lastStage = `batch ${i + 1}/${chunks.length} pass1`;
         logReview('info', `Batch ${i + 1}/${chunks.length} started — ${chunk.length} file(s)`, {
           batch: i + 1, totalBatches: chunks.length, fileCount: chunk.length,
         });
@@ -845,7 +853,7 @@ export function createBitbucketParticipant(
               logReview('info', formatRecoveryDecision(runTag, {
                 kind: 'continuation', batch: i + 1, totalBatches: chunks.length, fileCount: uncoveredFiles.length,
               }));
-              stream.markdown(`_Continuing review for ${uncoveredFiles.length} uncovered file${uncoveredFiles.length !== 1 ? 's' : ''}…_\n\n`);
+              stream.markdown(formatContinuationMessage(uncoveredFiles.length));
               try {
                 const continuationNote = 'Continuation pass — the previous response was truncated. Review ONLY the files provided below.';
                 const contInstructions = continuationNote + (extraInstructions ? '\n' + extraInstructions : '');
@@ -942,6 +950,7 @@ export function createBitbucketParticipant(
 
         // Deep mode only: re-verify findings against the diff and drop the ones the critic can't confirm.
         if (criticEnabled && chunkFindings.length > 0) {
+          lastStage = `batch ${i + 1}/${chunks.length} critic`;
           const criticLabel = `critic batch ${i + 1}/${chunks.length}`;
           // Same per-item-subset attempt tracking as pass1 (KTD8) — see comment there.
           let criticAttempt = 0;
@@ -1022,6 +1031,7 @@ export function createBitbucketParticipant(
         }
 
         allFindings = allFindings.concat(chunkFindings);
+        lastStage = `batch ${i + 1}/${chunks.length} done`;
 
         if (chunks.length > 1 && i < chunks.length - 1) {
           const crit = chunkFindings.filter((f) => f.severity === 'critical').length;
@@ -1090,7 +1100,12 @@ export function createBitbucketParticipant(
         rawDiffTruncated,
       } satisfies ReviewSession);
     } catch (err) {
-      logDiag('bitbucket.review', 'error', 'PR review failed', { error: err instanceof Error ? err.message : String(err) });
+      // KTD9: name the last stage reached, so this is distinguishable from a run that
+      // silently never got here (e.g. a channel-write failure) — the funnel's absence
+      // alone can't tell those apart.
+      logDiag('bitbucket.review', 'error', `Review aborted — [${runTag}] last stage: ${lastStage}`, {
+        runTag, lastStage, error: err instanceof Error ? err.message : String(err),
+      });
       stream.markdown(friendlyLmFailureMessage('**Review failed:**', err));
     }
   };

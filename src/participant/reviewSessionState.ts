@@ -858,6 +858,19 @@ export function formatStructuredRunRecord(params: {
   return '```\n' + body + '\n```';
 }
 
+/**
+ * R8: the truncation-continuation chat message, reworded to state what the
+ * count means — files that had no findings in the truncated response, now
+ * being reviewed — instead of reading as a sequential resume (the "13-vs-14"
+ * confusion this plan's Problem Frame documents).
+ */
+export function formatContinuationMessage(uncoveredFileCount: number): string {
+  return (
+    `_${uncoveredFileCount} file${uncoveredFileCount !== 1 ? 's' : ''} had no findings in the truncated ` +
+    `response — reviewing ${uncoveredFileCount !== 1 ? 'them' : 'it'} now…_\n\n`
+  );
+}
+
 export function buildAdaptiveChunks(diffs: FileDiff[], tokenBudget: number): FileDiff[][] {
   if (diffs.length === 0) return [];
   // A file must share a chunk with the fixed overhead, so its own budget is what remains.
