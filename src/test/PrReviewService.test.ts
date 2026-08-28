@@ -9,6 +9,7 @@ import {
   parseFollowUpIntent, buildPrContextPrompt, buildDiffAwarePrompt,
   parseUpfrontQuestion, stripUpfrontQuestion,
   formatCallLine, formatFindingsFunnel, buildRunTag,
+  buildTruncationEvent, formatRecoveryDecision,
 } from '../participant/reviewSessionState';
 import type { ReviewFinding } from '../participant/reviewSessionState';
 import { PrReviewService } from '../services/PrReviewService';
@@ -1128,6 +1129,62 @@ describe('formatCallLine', () => {
   it('omits the batch fragment for a single-batch review', () => {
     const line = formatCallLine({ ...base, totalBatches: 1, status: 'ok' });
     expect(line).not.toContain('batch');
+  });
+});
+
+describe('buildTruncationEvent', () => {
+  it('produces a truncation event with all required fields and a bounded preview', () => {
+    const raw = 'x'.repeat(400) + '{"file":"src/b.ts","sever';
+    const { message, details } = buildTruncationEvent({
+      runTag: 'pr=PROJ/repo#42',
+      batch: 1,
+      totalBatches: 2,
+      raw,
+      parsedFindingsCount: 1,
+      hasMetaLine: false,
+      danglingTail: '{"file":"src/b.ts","sever',
+      coveredFiles: ['src/a.ts'],
+      uncoveredFiles: ['src/b.ts'],
+    });
+    expect(message).toContain('pr=PROJ/repo#42');
+    expect(message).toContain('batch 1/2');
+    expect(details.responseChars).toBe(raw.length);
+    expect(details.completeLines).toBe(1);
+    expect(details.hasMetaLine).toBe(false);
+    expect(details.coveredFiles).toEqual(['src/a.ts']);
+    expect(details.uncoveredFiles).toEqual(['src/b.ts']);
+    expect(typeof details.rawPreview).toBe('string');
+    expect((details.rawPreview as string).length).toBeLessThanOrEqual(300);
+  });
+
+  it('falls back to the tail of the raw response when there is no dangling tail', () => {
+    const raw = 'a'.repeat(500);
+    const { details } = buildTruncationEvent({
+      runTag: 'pr=PROJ/repo#1', batch: 1, totalBatches: 1, raw,
+      parsedFindingsCount: 0, hasMetaLine: false, coveredFiles: [], uncoveredFiles: ['src/a.ts'],
+    });
+    expect((details.rawPreview as string).length).toBe(300);
+  });
+});
+
+describe('formatRecoveryDecision', () => {
+  it('renders the retry-in-flight decision', () => {
+    const line = formatRecoveryDecision('pr=PROJ/repo#42', { kind: 'retry', pass: 'pass1', batch: 1, totalBatches: 1, attempt: 2 });
+    expect(line).toContain('pr=PROJ/repo#42');
+    expect(line).toContain('retry');
+    expect(line).toContain('attempt 2');
+  });
+
+  it('renders the batch-split-in-half decision', () => {
+    const line = formatRecoveryDecision('pr=PROJ/repo#42', { kind: 'split', pass: 'pass1', batch: 1, totalBatches: 1, leftCount: 2, rightCount: 3 });
+    expect(line).toContain('splitting');
+    expect(line).toContain('2 and 3');
+  });
+
+  it('renders the continuation-starting-with-N-files decision', () => {
+    const line = formatRecoveryDecision('pr=PROJ/repo#42', { kind: 'continuation', batch: 1, totalBatches: 2, fileCount: 5 });
+    expect(line).toContain('continuation starting with 5 file(s)');
+    expect(line).toContain('batch 1/2');
   });
 });
 

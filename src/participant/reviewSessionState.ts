@@ -702,6 +702,70 @@ export function buildRunTag(project: string, repo: string, prId: number): string
   return `pr=${project}/${repo}#${prId}`;
 }
 
+/** Bound on rawPreview (R4/KTD2) — matches the existing partial-text-preview bound
+ * (`partialTextPreview: partialText?.slice(0, 300)` in `logLmFailure`). */
+const RAW_PREVIEW_CHARS = 300;
+
+/**
+ * Builds R4's truncation-event diagnostic (message + details) for a pass-1 (or
+ * continuation/pass-2) response that came back cut off before its final meta
+ * line — the one event in the pipeline that previously threw nothing and
+ * logged nothing. `danglingTail` (from `parseNdjsonFindings`) is preferred for
+ * the raw preview when present, since it's the actual cut-off text rather than
+ * the whole response; either way the preview takes the LAST `RAW_PREVIEW_CHARS`
+ * characters — the point where the model stopped is what's diagnostic, not the
+ * start of the response. Raw previews stay truncated-only, bounded length, with
+ * only the existing key-based redaction — no content-pattern scrubbing (KTD2).
+ */
+export function buildTruncationEvent(params: {
+  runTag: string;
+  batch: number;
+  totalBatches: number;
+  raw: string;
+  parsedFindingsCount: number;
+  hasMetaLine: boolean;
+  danglingTail?: string;
+  coveredFiles: string[];
+  uncoveredFiles: string[];
+}): { message: string; details: Record<string, unknown> } {
+  const preview = (params.danglingTail ?? params.raw).slice(-RAW_PREVIEW_CHARS);
+  return {
+    message: `Truncated response — [${params.runTag}] batch ${params.batch}/${params.totalBatches}`,
+    details: {
+      runTag: params.runTag,
+      batch: params.batch,
+      totalBatches: params.totalBatches,
+      responseChars: params.raw.length,
+      completeLines: params.parsedFindingsCount,
+      hasMetaLine: params.hasMetaLine,
+      coveredFileCount: params.coveredFiles.length,
+      uncoveredFileCount: params.uncoveredFiles.length,
+      coveredFiles: params.coveredFiles,
+      uncoveredFiles: params.uncoveredFiles,
+      rawPreview: preview,
+    },
+  };
+}
+
+/** R5's three recovery-decision shapes — logged so a reader can follow what happened
+ * without knowing the retry/split algorithm. */
+export type RecoveryDecision =
+  | { kind: 'retry'; pass: string; batch: number; totalBatches: number; attempt: number }
+  | { kind: 'split'; pass: string; batch: number; totalBatches: number; leftCount: number; rightCount: number }
+  | { kind: 'continuation'; batch: number; totalBatches: number; fileCount: number };
+
+export function formatRecoveryDecision(runTag: string, decision: RecoveryDecision): string {
+  const batchTag = `batch ${decision.batch}/${decision.totalBatches}`;
+  switch (decision.kind) {
+    case 'retry':
+      return `[${runTag}] ${decision.pass} ${batchTag} — identical retry in flight (attempt ${decision.attempt})`;
+    case 'split':
+      return `[${runTag}] ${decision.pass} ${batchTag} — splitting into halves of ${decision.leftCount} and ${decision.rightCount} after repeated failure`;
+    case 'continuation':
+      return `[${runTag}] ${batchTag} — continuation starting with ${decision.fileCount} file(s)`;
+  }
+}
+
 /** One per-call diagnostic line (R1/R2): identifies the call and carries size/duration/outcome. */
 export interface CallLineInfo {
   runTag: string;

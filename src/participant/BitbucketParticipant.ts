@@ -24,6 +24,8 @@ import {
   dedupeFindings,
   buildRunTag,
   formatCallLine,
+  buildTruncationEvent,
+  formatRecoveryDecision,
   type ReviewFinding,
   type ReviewSession,
   type BitbucketCommentPreviewSession,
@@ -756,6 +758,21 @@ export function createBitbucketParticipant(
                 itemCount: files.length, promptChars: pass1PromptChars, durationMs: Date.now() - pass1AttemptStart,
                 status: 'error', errorCode: errorCodeOf(err),
               }));
+              // R5: log what happens next, so a reader can follow along without knowing
+              // withEasierRetry's algorithm (see lmRetry.ts for the exact 3-tries budget).
+              if (isTransientLmError(err)) {
+                if (pass1Attempt === 1) {
+                  logDiag('bitbucket.review', 'info', formatRecoveryDecision(runTag, {
+                    kind: 'retry', pass: 'pass1', batch: i + 1, totalBatches: chunks.length, attempt: pass1Attempt + 1,
+                  }));
+                } else if (pass1Attempt === 2 && files.length > 1) {
+                  const [left, right] = halveFiles(files);
+                  logDiag('bitbucket.review', 'info', formatRecoveryDecision(runTag, {
+                    kind: 'split', pass: 'pass1', batch: i + 1, totalBatches: chunks.length,
+                    leftCount: left.length, rightCount: right.length,
+                  }));
+                }
+              }
             },
           },
         );
@@ -774,10 +791,24 @@ export function createBitbucketParticipant(
           let batchFindings = resolveFindingAnchors(findings, batch.items);
 
           if (truncated) {
-            stream.markdown(`_⚠ LLM response truncated (batch ${i + 1}) — recovering partial findings._\n\n`);
+            // R4: the one event in the pipeline that previously threw nothing and
+            // logged nothing — record what came back before recovering.
+            const ndjson = parseNdjsonFindings(batch.result!);
             const coveredPaths = new Set(findings.map(f => f.file));
             const uncoveredFiles = batch.items.filter(d => !coveredPaths.has(d.path));
+            const truncationEvent = buildTruncationEvent({
+              runTag, batch: i + 1, totalBatches: chunks.length, raw: batch.result!,
+              parsedFindingsCount: ndjson.findings.length, hasMetaLine: ndjson.hasMetaLine,
+              danglingTail: ndjson.danglingTail,
+              coveredFiles: [...coveredPaths], uncoveredFiles: uncoveredFiles.map((d) => d.path),
+            });
+            logDiag('bitbucket.review', 'warn', truncationEvent.message, truncationEvent.details);
+
+            stream.markdown(`_⚠ LLM response truncated (batch ${i + 1}) — recovering partial findings._\n\n`);
             if (uncoveredFiles.length > 0) {
+              logDiag('bitbucket.review', 'info', formatRecoveryDecision(runTag, {
+                kind: 'continuation', batch: i + 1, totalBatches: chunks.length, fileCount: uncoveredFiles.length,
+              }));
               stream.markdown(`_Continuing review for ${uncoveredFiles.length} uncovered file${uncoveredFiles.length !== 1 ? 's' : ''}…_\n\n`);
               try {
                 const continuationNote = 'Continuation pass — the previous response was truncated. Review ONLY the files provided below.';
@@ -907,6 +938,19 @@ export function createBitbucketParticipant(
                   itemCount: findingsSubset.length, promptChars: criticPromptChars,
                   durationMs: Date.now() - criticAttemptStart, status: 'error', errorCode: errorCodeOf(err),
                 }));
+                if (isTransientLmError(err)) {
+                  if (criticAttempt === 1) {
+                    logDiag('bitbucket.review', 'info', formatRecoveryDecision(runTag, {
+                      kind: 'retry', pass: 'critic', batch: i + 1, totalBatches: chunks.length, attempt: criticAttempt + 1,
+                    }));
+                  } else if (criticAttempt === 2 && findingsSubset.length > 1) {
+                    const [left, right] = halveFindings(findingsSubset);
+                    logDiag('bitbucket.review', 'info', formatRecoveryDecision(runTag, {
+                      kind: 'split', pass: 'critic', batch: i + 1, totalBatches: chunks.length,
+                      leftCount: left.length, rightCount: right.length,
+                    }));
+                  }
+                }
               },
             },
           );
