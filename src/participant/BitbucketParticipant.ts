@@ -30,6 +30,7 @@ import {
   formatStructuredRunRecord,
   formatContinuationMessage,
   RAW_PREVIEW_CHARS,
+  createAttemptTracker,
   type ReviewFinding,
   type ReviewSession,
   type BitbucketCommentPreviewSession,
@@ -41,6 +42,7 @@ import { tokenStatus } from '../utils/diagUtils';
 import { validateBaseUrl } from '../services/configValidation';
 import { withLmRetry, withEasierRetry, isTransientLmError, PartialLmResponseError } from '../utils/lmRetry';
 import { logDiag } from '../utils/diagLog';
+import { sanitizeDetails } from '../utils/logRedaction';
 
 function getLastAssistantText(chatContext: vscode.ChatContext): string {
   for (let i = chatContext.history.length - 1; i >= 0; i--) {
@@ -81,7 +83,7 @@ function describeFailure(err: unknown): string {
   const partial = err instanceof PartialLmResponseError ? err.partialText : undefined;
   const base = err instanceof Error ? err.message : String(err);
   return partial
-    ? `${base} — model's partial reply: "${partial.slice(0, 300)}${partial.length > 300 ? '…' : ''}"`
+    ? `${base} — model's partial reply: "${partial.slice(0, RAW_PREVIEW_CHARS)}${partial.length > RAW_PREVIEW_CHARS ? '…' : ''}"`
     : base;
 }
 
@@ -160,33 +162,6 @@ interface CallDiagHooks {
 function errorCodeOf(err: unknown): string | undefined {
   const code = (err as { code?: unknown })?.code;
   return typeof code === 'string' ? code : undefined;
-}
-
-/**
- * Closure-local attempt counter, scoped per item-subset (KTD8) — shared by pass1 and
- * critic, the two `withEasierRetry` call sites. The outer retry can split a batch in
- * half on its 3rd try, and each half then gets its own single attempt: resetting the
- * count whenever `start()` sees a new items reference keeps that half's line reading
- * "attempt 1" (its own only try) instead of continuing the full batch's count, and
- * keeps a call's success and failure lines using the same attempt number — which the
- * library's own `onAttemptFailed(attempt, ...)` can't do, since it reports 3 for every
- * post-split try regardless of which half.
- */
-function createAttemptTracker<T>() {
-  let attempt = 0;
-  let lastItems: T[] | null = null;
-  let startedAt = 0;
-  return {
-    /** Call at the start of every attempt; returns this attempt's number. */
-    start(items: T[]): number {
-      if (items !== lastItems) { lastItems = items; attempt = 0; }
-      attempt += 1;
-      startedAt = Date.now();
-      return attempt;
-    },
-    elapsedMs: (): number => Date.now() - startedAt,
-    get attempt(): number { return attempt; },
-  };
 }
 
 /** 3 identical tries (see lmRetry.ts) — for a single, non-splittable prompt. */
@@ -680,13 +655,19 @@ export function createBitbucketParticipant(
       // path adds no measurable overhead.
       const detailedDiagnostics = config.detailedDiagnostics ?? false;
       const recordedLines: string[] = [];
-      const record = (line: string): void => { if (detailedDiagnostics) recordedLines.push(line); };
+      // `details` is rendered through the same sanitizeDetails() redaction/truncation
+      // logDiag applies, so the structured record never carries anything the always-on
+      // channel line wouldn't have shown.
+      const record = (line: string, details?: Record<string, unknown>): void => {
+        if (!detailedDiagnostics) return;
+        recordedLines.push(details ? `${line} ${JSON.stringify(sanitizeDetails(details))}` : line);
+      };
       // Every review-pipeline diagnostic line goes through this instead of logDiag
       // directly, so it's always both written to the output channel and (when the
       // opt-in setting is on) captured into the end-of-run structured record.
       const logReview = (level: 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>): void => {
         logDiag('bitbucket.review', level, message, details);
-        record(message);
+        record(message, details);
       };
       record(configLine);
 
@@ -706,24 +687,15 @@ export function createBitbucketParticipant(
         reviewContextLines: config.reviewContextLines ?? 12,
       });
 
-      // R6: findings-funnel counters, accumulated across every batch/pass as the review
-      // runs (see the dedup-stage/anchor-verification comments at their accumulation sites
-      // for why these are per-call deltas rather than one end-of-run diff).
+      // R6: findings-funnel counters. Tallied exactly once per per-file batch, on
+      // whichever raw/resolved pair actually settles after the truncation/pass-2
+      // branches run (see the `batchRawCount` comment at its declaration below) — an
+      // earlier version tallied at every resolveFindingAnchors call instead, which
+      // double-counted a batch's original findings whenever continuation or pass2
+      // superseded them.
       let rawFindingsTotal = 0;
       let anchorDroppedTotal = 0;
       let criticDroppedTotal = 0;
-      // Anchor-verifies one raw findings batch and tallies the funnel counters in the
-      // same step — called at each of pass1/continuation/pass2's resolveFindingAnchors
-      // points (per-call delta, not an end-of-batch diff — see comment above).
-      const resolveAndTallyAnchors = (
-        rawFindings: Array<Omit<ReviewFinding, 'id'>>,
-        diffs: FileDiff[],
-      ): Array<Omit<ReviewFinding, 'id'>> => {
-        const resolved = resolveFindingAnchors(rawFindings, diffs);
-        rawFindingsTotal += rawFindings.length;
-        anchorDroppedTotal += rawFindings.length - resolved.length;
-        return resolved;
-      };
 
       if (upfrontQuestion) {
         stream.markdown(`_focus: ${upfrontQuestion}_\n\n`);
@@ -842,12 +814,24 @@ export function createBitbucketParticipant(
               }));
               // R5: log what happens next, so a reader can follow along without knowing
               // withEasierRetry's algorithm (see lmRetry.ts for the exact 3-tries budget).
-              if (isTransientLmError(err)) {
-                if (pass1Tracker.attempt === 1) {
+              // Gated on `files === chunk` — a post-split half is a distinct array
+              // reference and tryOnceEasier never retries it, so without this check a
+              // split half's one-and-only (terminal) failure would falsely log "retry
+              // in flight" using the tracker's per-subset attempt count of 1.
+              if (isTransientLmError(err) && files === chunk) {
+                if (chunk.length <= 1) {
+                  // Single-item chunk can't split further — it gets the plain 3-identical-
+                  // tries budget (withLmRetry's default retries: 2), not the split path.
+                  if (pass1Tracker.attempt < 3) {
+                    logReview('info', formatRecoveryDecision(runTag, {
+                      kind: 'retry', pass: 'pass1', batch: i + 1, totalBatches: chunks.length, attempt: pass1Tracker.attempt + 1,
+                    }));
+                  }
+                } else if (pass1Tracker.attempt === 1) {
                   logReview('info', formatRecoveryDecision(runTag, {
                     kind: 'retry', pass: 'pass1', batch: i + 1, totalBatches: chunks.length, attempt: pass1Tracker.attempt + 1,
                   }));
-                } else if (pass1Tracker.attempt === 2 && files.length > 1) {
+                } else if (pass1Tracker.attempt === 2) {
                   const [left, right] = halveFiles(files);
                   logReview('info', formatRecoveryDecision(runTag, {
                     kind: 'split', pass: 'pass1', batch: i + 1, totalBatches: chunks.length,
@@ -871,7 +855,14 @@ export function createBitbucketParticipant(
 
           const { findings, additionalFilesNeeded, truncated, hasMetaLine, danglingTail } =
             await parseReviewResponse(batch.result!);
-          let batchFindings = resolveAndTallyAnchors(findings, batch.items);
+          // R6: `batchRawCount` tracks whichever raw findings set is CURRENTLY the one
+          // that will feed this batch's final result — reassigned, not accumulated, as
+          // continuation/pass2 supersede the earlier attempt. Tallying at every
+          // resolveFindingAnchors call (instead of once, below, on the settled result)
+          // would count raw findings a later pass fully discards, inflating the funnel's
+          // "raw" total past what any downstream stage could ever have seen.
+          let batchRawCount = findings.length;
+          let batchFindings = resolveFindingAnchors(findings, batch.items);
 
           if (truncated) {
             // R4: the one event in the pipeline that previously threw nothing and
@@ -918,7 +909,9 @@ export function createBitbucketParticipant(
                   itemCount: uncoveredFiles.length, promptChars: contPrompt.length, responseChars: contRaw.length,
                   durationMs: contAttempt.durationMs, status: cont.truncated ? 'truncated' : 'ok',
                 }));
-                batchFindings = resolveAndTallyAnchors([...findings, ...cont.findings], batch.items);
+                const contCombined = [...findings, ...cont.findings];
+                batchRawCount = contCombined.length;
+                batchFindings = resolveFindingAnchors(contCombined, batch.items);
               } catch (err) {
                 anyBatchFailed = true;
                 logReview('warn', `Continuation pass failed — batch ${i + 1}`, { batch: i + 1, error: err instanceof Error ? err.message : String(err) });
@@ -977,7 +970,8 @@ export function createBitbucketParticipant(
                 if (pass2.truncated) {
                   stream.markdown(`_⚠ LLM response truncated (batch ${i + 1} pass 2) — review may be incomplete._\n\n`);
                 }
-                batchFindings = resolveAndTallyAnchors(pass2.findings, batch.items);
+                batchRawCount = pass2.findings.length;
+                batchFindings = resolveFindingAnchors(pass2.findings, batch.items);
               }
             } catch (err) {
               anyBatchFailed = true;
@@ -986,6 +980,9 @@ export function createBitbucketParticipant(
             }
           }
 
+          // Tally once, on whichever raw/resolved pair actually settled above.
+          rawFindingsTotal += batchRawCount;
+          anchorDroppedTotal += batchRawCount - batchFindings.length;
           chunkFindings = chunkFindings.concat(batchFindings);
         }
 
@@ -1024,12 +1021,20 @@ export function createBitbucketParticipant(
                   itemCount: findingsSubset.length, promptChars: criticPromptChars,
                   durationMs: criticTracker.elapsedMs(), status: 'error', errorCode: errorCodeOf(err),
                 }));
-                if (isTransientLmError(err)) {
-                  if (criticTracker.attempt === 1) {
+                // Gated on identity against the original (unsplit) chunkFindings — see the
+                // matching pass1 comment above for why the split-half case must be excluded.
+                if (isTransientLmError(err) && findingsSubset === chunkFindings) {
+                  if (chunkFindings.length <= 1) {
+                    if (criticTracker.attempt < 3) {
+                      logReview('info', formatRecoveryDecision(runTag, {
+                        kind: 'retry', pass: 'critic', batch: i + 1, totalBatches: chunks.length, attempt: criticTracker.attempt + 1,
+                      }));
+                    }
+                  } else if (criticTracker.attempt === 1) {
                     logReview('info', formatRecoveryDecision(runTag, {
                       kind: 'retry', pass: 'critic', batch: i + 1, totalBatches: chunks.length, attempt: criticTracker.attempt + 1,
                     }));
-                  } else if (criticTracker.attempt === 2 && findingsSubset.length > 1) {
+                  } else if (criticTracker.attempt === 2) {
                     const [left, right] = halveFindings(findingsSubset);
                     logReview('info', formatRecoveryDecision(runTag, {
                       kind: 'split', pass: 'critic', batch: i + 1, totalBatches: chunks.length,
@@ -1106,11 +1111,17 @@ export function createBitbucketParticipant(
       const funnelSummary = formatFindingsFunnel(funnelCounts);
       logReview('info', funnelSummary);
 
-      // R7 (opt-in): one fenced structured record for the whole run.
+      // R7 (opt-in): one fenced structured record for the whole run. logDiag truncates
+      // any single `message` at MAX_STRING_LENGTH (500 chars) — fine for every other
+      // call in this file, but this record is explicitly uncapped and scales with call
+      // count (Scope Boundaries), so it's logged one already-short line at a time
+      // instead of as one long message that would silently truncate mid-record.
       if (detailedDiagnostics) {
-        logDiag('bitbucket.review', 'info', formatStructuredRunRecord({
+        for (const line of formatStructuredRunRecord({
           runTag, configLine, lines: recordedLines, funnel: funnelSummary,
-        }));
+        }).split('\n')) {
+          logDiag('bitbucket.review', 'info', line);
+        }
       }
       if (anyBatchFailed) {
         stream.markdown(`_⚠ Some batches had failures after retrying — showing partial results. See the "Ticket Sidekick" output channel for details._\n\n`);

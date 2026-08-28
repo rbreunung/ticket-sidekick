@@ -769,6 +769,33 @@ export function formatRecoveryDecision(runTag: string, decision: RecoveryDecisio
   }
 }
 
+/**
+ * Closure-local attempt counter, scoped per item-subset (KTD8) — shared by pass1 and
+ * critic, the two `withEasierRetry` call sites in `BitbucketParticipant.ts`. The outer
+ * retry can split a batch in half on its 3rd try, and each half then gets its own
+ * single attempt: resetting the count whenever `start()` sees a new items reference
+ * keeps that half's line reading "attempt 1" (its own only try) instead of continuing
+ * the full batch's count, and keeps a call's success and failure lines using the same
+ * attempt number — which the library's own `onAttemptFailed(attempt, ...)` can't do,
+ * since it reports 3 for every post-split try regardless of which half.
+ */
+export function createAttemptTracker<T>() {
+  let attempt = 0;
+  let lastItems: T[] | null = null;
+  let startedAt = 0;
+  return {
+    /** Call at the start of every attempt; returns this attempt's number. */
+    start(items: T[]): number {
+      if (items !== lastItems) { lastItems = items; attempt = 0; }
+      attempt += 1;
+      startedAt = Date.now();
+      return attempt;
+    },
+    elapsedMs: (): number => Date.now() - startedAt,
+    get attempt(): number { return attempt; },
+  };
+}
+
 /** One per-call diagnostic line (R1/R2): identifies the call and carries size/duration/outcome. */
 export interface CallLineInfo {
   runTag: string;

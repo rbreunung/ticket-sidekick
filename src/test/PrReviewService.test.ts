@@ -10,7 +10,7 @@ import {
   parseUpfrontQuestion, stripUpfrontQuestion,
   formatCallLine, formatFindingsFunnel, buildRunTag,
   buildTruncationEvent, formatRecoveryDecision, formatStructuredRunRecord,
-  formatContinuationMessage,
+  formatContinuationMessage, createAttemptTracker,
 } from '../participant/reviewSessionState';
 import type { ReviewFinding } from '../participant/reviewSessionState';
 import { PrReviewService } from '../services/PrReviewService';
@@ -1078,6 +1078,39 @@ describe('parseNdjsonFindings', () => {
     expect(result.truncated).toBe(false);
     // A meta line completed the response, so the mid-stream garbage is not a truncation tail.
     expect(result.danglingTail).toBeUndefined();
+  });
+});
+
+describe('createAttemptTracker', () => {
+  it('increments the attempt number on repeated calls with the same items reference', () => {
+    const tracker = createAttemptTracker<number>();
+    const items = [1, 2, 3];
+    expect(tracker.start(items)).toBe(1);
+    expect(tracker.start(items)).toBe(2);
+    expect(tracker.attempt).toBe(2);
+  });
+
+  it('resets to attempt 1 when the items reference changes (the post-split case)', () => {
+    const tracker = createAttemptTracker<number>();
+    const full = [1, 2, 3, 4];
+    expect(tracker.start(full)).toBe(1);
+    expect(tracker.start(full)).toBe(2);
+    const left = full.slice(0, 2);
+    expect(tracker.start(left)).toBe(1);
+    expect(tracker.attempt).toBe(1);
+    const right = full.slice(2);
+    expect(tracker.start(right)).toBe(1);
+    expect(tracker.attempt).toBe(1);
+  });
+
+  it('resets for a different array instance with identical contents (reference identity, not deep equality)', () => {
+    const tracker = createAttemptTracker<number>();
+    const items = [1, 2];
+    tracker.start(items);
+    tracker.start(items);
+    expect(tracker.attempt).toBe(2);
+    tracker.start([...items]); // same contents, new reference — resets
+    expect(tracker.attempt).toBe(1);
   });
 });
 
