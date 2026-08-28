@@ -830,6 +830,34 @@ export function formatFindingsFunnel(counts: FindingsFunnelCounts): string {
   return lines.join('\n');
 }
 
+/**
+ * Assembles R7's opt-in structured run record: configuration, every buffered
+ * per-call/event line, and the findings funnel, as one fenced block —
+ * copy-pasteable for comparing runs or filing a provider bug report. Pure
+ * string assembly; the caller decides what to buffer and when to call this
+ * (once, at end of run).
+ */
+export function formatStructuredRunRecord(params: {
+  runTag: string;
+  configLine: string;
+  lines: string[];
+  funnel: string;
+}): string {
+  const body = [
+    `Run: ${params.runTag}`,
+    '',
+    'Configuration:',
+    params.configLine,
+    '',
+    'Calls & events:',
+    ...(params.lines.length ? params.lines : ['(none)']),
+    '',
+    'Findings funnel:',
+    params.funnel,
+  ].join('\n');
+  return '```\n' + body + '\n```';
+}
+
 export function buildAdaptiveChunks(diffs: FileDiff[], tokenBudget: number): FileDiff[][] {
   if (diffs.length === 0) return [];
   // A file must share a chunk with the fixed overhead, so its own budget is what remains.

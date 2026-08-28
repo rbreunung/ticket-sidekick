@@ -216,6 +216,11 @@
             "minimum": 0,
             "maximum": 1,
             "description": "Findings whose model-rated confidence falls below this value (0–1, default 0.7) are moved into a collapsed 'low-confidence' section rather than shown as primary findings. They are never discarded."
+          },
+          "ticketSidekick.bitbucket.detailedDiagnostics": {
+            "type": "boolean",
+            "default": false,
+            "description": "When enabled, each review additionally emits a single fenced structured run record to the \"Ticket Sidekick\" output channel — run configuration, per-call records, and the findings funnel with drop reasons — copy-pasteable as one block for comparing runs or filing a provider bug report."
           }
         }
       },

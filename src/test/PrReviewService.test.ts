@@ -9,7 +9,7 @@ import {
   parseFollowUpIntent, buildPrContextPrompt, buildDiffAwarePrompt,
   parseUpfrontQuestion, stripUpfrontQuestion,
   formatCallLine, formatFindingsFunnel, buildRunTag,
-  buildTruncationEvent, formatRecoveryDecision,
+  buildTruncationEvent, formatRecoveryDecision, formatStructuredRunRecord,
 } from '../participant/reviewSessionState';
 import type { ReviewFinding } from '../participant/reviewSessionState';
 import { PrReviewService } from '../services/PrReviewService';
@@ -1216,6 +1216,30 @@ describe('formatFindingsFunnel', () => {
       raw: 10, dedupedCrossBatch: 1, droppedByAnchor: 2, foldedByConfidence: 3, final: 4,
     });
     expect(summary).not.toContain('critic');
+  });
+});
+
+describe('formatStructuredRunRecord', () => {
+  it('renders one fenced block containing configuration, at least one call record, and the funnel', () => {
+    const block = formatStructuredRunRecord({
+      runTag: 'pr=PROJ/repo#42',
+      configLine: 'model=gpt-4 tokenBudget=42000 reviewMode=standard criticEnabled=false',
+      lines: ['[pr=PROJ/repo#42] pass1 attempt 1 — 3 item(s), ok'],
+      funnel: 'Findings funnel — raw 5\n-> final: 3',
+    });
+    expect(block.startsWith('```\n')).toBe(true);
+    expect(block.endsWith('\n```')).toBe(true);
+    expect(block).toContain('pr=PROJ/repo#42');
+    expect(block).toContain('model=gpt-4');
+    expect(block).toContain('pass1 attempt 1');
+    expect(block).toContain('Findings funnel — raw 5');
+  });
+
+  it('renders a placeholder when no per-call lines were buffered', () => {
+    const block = formatStructuredRunRecord({
+      runTag: 'pr=PROJ/repo#1', configLine: 'model=gpt-4', lines: [], funnel: 'Findings funnel — raw 0\n-> final: 0',
+    });
+    expect(block).toContain('(none)');
   });
 });
 

@@ -28,6 +28,8 @@ export interface BitbucketConfig {
   reviewContextLines?: number;
   /** Model self-rated confidence below this folds into a low-confidence section (0–1). */
   confidenceThreshold?: number;
+  /** When true, emit one fenced structured diagnostic record per review (R7). Default false. */
+  detailedDiagnostics?: boolean;
 }
 
 export interface BitbucketCommentResult {

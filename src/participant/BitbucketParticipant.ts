@@ -26,6 +26,8 @@ import {
   formatCallLine,
   buildTruncationEvent,
   formatRecoveryDecision,
+  formatFindingsFunnel,
+  formatStructuredRunRecord,
   type ReviewFinding,
   type ReviewSession,
   type BitbucketCommentPreviewSession,
@@ -623,25 +625,55 @@ export function createBitbucketParticipant(
 
       // R3: one opening line recording the effective run configuration, so a
       // misconfigured token budget/ratio is visible without re-running the review.
-      logDiag('bitbucket.review', 'info', `Review started — ${runTag}`, {
+      const configLine =
+        `${runTag} model=${request.model.vendor}/${request.model.family} tokenBudget=${tokenBudget} ` +
+        `(resolved=${resolvedContextTokens} ratio=${budgetRatio}) reviewMode=${reviewMode} ` +
+        `criticEnabled=${criticEnabled} contextLines=${config.reviewContextLines ?? 12}`;
+
+      // R7 (opt-in): buffer every diagnostic line so one fenced structured record can be
+      // assembled at end of run. Off by default — skip buffering entirely so the default
+      // path adds no measurable overhead.
+      const detailedDiagnostics = config.detailedDiagnostics ?? false;
+      const recordedLines: string[] = [];
+      const record = (line: string): void => { if (detailedDiagnostics) recordedLines.push(line); };
+      // Every review-pipeline diagnostic line goes through this instead of logDiag
+      // directly, so it's always both written to the output channel and (when the
+      // opt-in setting is on) captured into the end-of-run structured record.
+      const logReview = (level: 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>): void => {
+        logDiag('bitbucket.review', level, message, details);
+        record(message);
+      };
+      record(configLine);
+
+      logReview('info', `Review started — ${runTag}`, {
         runTag,
         vendor: request.model.vendor,
         family: request.model.family,
         id: request.model.id,
         resolvedContextTokens,
         contextBudgetRatio: budgetRatio,
-        tokenBudget,
+        // Named budgetTokens, not tokenBudget — isSensitiveKey redacts the standalone
+        // word "token" (singular), and "tokens" (plural, as in resolvedContextTokens)
+        // reads the same to an operator without tripping it.
+        budgetTokens: tokenBudget,
         reviewMode,
         criticEnabled,
         reviewContextLines: config.reviewContextLines ?? 12,
       });
+
+      // R6: findings-funnel counters, accumulated across every batch/pass as the review
+      // runs (see the dedup-stage/anchor-verification comments at their accumulation sites
+      // for why these are per-call deltas rather than one end-of-run diff).
+      let rawFindingsTotal = 0;
+      let anchorDroppedTotal = 0;
+      let criticDroppedTotal = 0;
 
       if (upfrontQuestion) {
         stream.markdown(`_focus: ${upfrontQuestion}_\n\n`);
       }
       stream.markdown('_Fetching PR…_\n\n');
       const pr = await client.getPullRequest(parsed.project, parsed.repo, parsed.prId);
-      logDiag('bitbucket.review', 'info', 'model in use', {
+      logReview('info', 'model in use', {
         vendor: request.model.vendor,
         family: request.model.family,
         id: request.model.id,
@@ -715,7 +747,7 @@ export function createBitbucketParticipant(
 
         const batchStatus = chunks.length > 1 ? `Batch ${i + 1}/${chunks.length}` : 'Analysing';
         const pass1Label = `pass1 batch ${i + 1}/${chunks.length}`;
-        logDiag('bitbucket.review', 'info', `Batch ${i + 1}/${chunks.length} started — ${chunk.length} file(s)`, {
+        logReview('info', `Batch ${i + 1}/${chunks.length} started — ${chunk.length} file(s)`, {
           batch: i + 1, totalBatches: chunks.length, fileCount: chunk.length,
         });
 
@@ -740,7 +772,7 @@ export function createBitbucketParticipant(
             const raw = await callLLMOnceWithProgress(prompt, request.model, token, batchStatus);
             totalOutputChars += raw.length;
             const status = parseNdjsonFindings(raw).truncated ? 'truncated' : 'ok';
-            logDiag('bitbucket.review', 'info', formatCallLine({
+            logReview('info', formatCallLine({
               runTag, pass: 'pass1', batch: i + 1, totalBatches: chunks.length, attempt: pass1Attempt,
               itemCount: files.length, promptChars: prompt.length, responseChars: raw.length,
               durationMs: Date.now() - pass1AttemptStart, status,
@@ -753,7 +785,7 @@ export function createBitbucketParticipant(
               logLmFailure(pass1Label, attempt, err, {
                 files: files.map((f) => f.path),
               });
-              logDiag('bitbucket.review', 'error', formatCallLine({
+              logReview('error', formatCallLine({
                 runTag, pass: 'pass1', batch: i + 1, totalBatches: chunks.length, attempt: pass1Attempt,
                 itemCount: files.length, promptChars: pass1PromptChars, durationMs: Date.now() - pass1AttemptStart,
                 status: 'error', errorCode: errorCodeOf(err),
@@ -762,12 +794,12 @@ export function createBitbucketParticipant(
               // withEasierRetry's algorithm (see lmRetry.ts for the exact 3-tries budget).
               if (isTransientLmError(err)) {
                 if (pass1Attempt === 1) {
-                  logDiag('bitbucket.review', 'info', formatRecoveryDecision(runTag, {
+                  logReview('info', formatRecoveryDecision(runTag, {
                     kind: 'retry', pass: 'pass1', batch: i + 1, totalBatches: chunks.length, attempt: pass1Attempt + 1,
                   }));
                 } else if (pass1Attempt === 2 && files.length > 1) {
                   const [left, right] = halveFiles(files);
-                  logDiag('bitbucket.review', 'info', formatRecoveryDecision(runTag, {
+                  logReview('info', formatRecoveryDecision(runTag, {
                     kind: 'split', pass: 'pass1', batch: i + 1, totalBatches: chunks.length,
                     leftCount: left.length, rightCount: right.length,
                   }));
@@ -789,6 +821,10 @@ export function createBitbucketParticipant(
 
           const { findings, additionalFilesNeeded, truncated } = await parseReviewResponse(batch.result!);
           let batchFindings = resolveFindingAnchors(findings, batch.items);
+          // R6: per-call delta accumulation (see counter declaration comment) — this
+          // resolveFindingAnchors call's own input/output, not an end-of-batch diff.
+          rawFindingsTotal += findings.length;
+          anchorDroppedTotal += findings.length - batchFindings.length;
 
           if (truncated) {
             // R4: the one event in the pipeline that previously threw nothing and
@@ -802,11 +838,11 @@ export function createBitbucketParticipant(
               danglingTail: ndjson.danglingTail,
               coveredFiles: [...coveredPaths], uncoveredFiles: uncoveredFiles.map((d) => d.path),
             });
-            logDiag('bitbucket.review', 'warn', truncationEvent.message, truncationEvent.details);
+            logReview('warn', truncationEvent.message, truncationEvent.details);
 
             stream.markdown(`_⚠ LLM response truncated (batch ${i + 1}) — recovering partial findings._\n\n`);
             if (uncoveredFiles.length > 0) {
-              logDiag('bitbucket.review', 'info', formatRecoveryDecision(runTag, {
+              logReview('info', formatRecoveryDecision(runTag, {
                 kind: 'continuation', batch: i + 1, totalBatches: chunks.length, fileCount: uncoveredFiles.length,
               }));
               stream.markdown(`_Continuing review for ${uncoveredFiles.length} uncovered file${uncoveredFiles.length !== 1 ? 's' : ''}…_\n\n`);
@@ -819,22 +855,25 @@ export function createBitbucketParticipant(
                 const contRaw = await callLLMWithProgress(
                   contPrompt, request.model, token, `${batchStatus} continuation`,
                   `continuation batch ${i + 1}/${chunks.length}`, contAttempt,
-                  (attempt, durationMs, errorCode) => logDiag('bitbucket.review', 'error', formatCallLine({
+                  (attempt, durationMs, errorCode) => logReview('error', formatCallLine({
                     runTag, pass: 'continuation', batch: i + 1, totalBatches: chunks.length, attempt,
                     itemCount: uncoveredFiles.length, promptChars: contPrompt.length, durationMs, status: 'error', errorCode,
                   })),
                 );
                 totalOutputChars += contRaw.length;
                 const cont = await parseReviewResponse(contRaw);
-                logDiag('bitbucket.review', 'info', formatCallLine({
+                logReview('info', formatCallLine({
                   runTag, pass: 'continuation', batch: i + 1, totalBatches: chunks.length, attempt: contAttempt.attempt,
                   itemCount: uncoveredFiles.length, promptChars: contPrompt.length, responseChars: contRaw.length,
                   durationMs: contAttempt.durationMs, status: cont.truncated ? 'truncated' : 'ok',
                 }));
-                batchFindings = resolveFindingAnchors([...findings, ...cont.findings], batch.items);
+                const contCombined = [...findings, ...cont.findings];
+                batchFindings = resolveFindingAnchors(contCombined, batch.items);
+                rawFindingsTotal += contCombined.length;
+                anchorDroppedTotal += contCombined.length - batchFindings.length;
               } catch (err) {
                 anyBatchFailed = true;
-                logDiag('bitbucket.review', 'warn', `Continuation pass failed — batch ${i + 1}`, { batch: i + 1, error: err instanceof Error ? err.message : String(err) });
+                logReview('warn', `Continuation pass failed — batch ${i + 1}`, { batch: i + 1, error: err instanceof Error ? err.message : String(err) });
                 stream.markdown(`_⚠ Continuation pass failed (batch ${i + 1}) — keeping findings from the truncated response. ${describeFailure(err)}_\n\n`);
               }
             }
@@ -855,7 +894,7 @@ export function createBitbucketParticipant(
                   parsed.project, parsed.repo, pr.fromCommitHash, toFetch,
                 );
                 for (const [p, c] of fetched) fetchedFileCache.set(p, c);
-                logDiag('bitbucket.review', 'info', `Additional context files fetched — batch ${i + 1}`, {
+                logReview('info', `Additional context files fetched — batch ${i + 1}`, {
                   batch: i + 1, requestedCount: toFetch.length, fetchedCount: fetched.size,
                 });
               }
@@ -872,14 +911,14 @@ export function createBitbucketParticipant(
                 const pass2Raw = await callLLMWithProgress(
                   pass2Prompt, request.model, token, `${batchStatus} pass 2`,
                   `pass2 batch ${i + 1}/${chunks.length}`, pass2Attempt,
-                  (attempt, durationMs, errorCode) => logDiag('bitbucket.review', 'error', formatCallLine({
+                  (attempt, durationMs, errorCode) => logReview('error', formatCallLine({
                     runTag, pass: 'pass2', batch: i + 1, totalBatches: chunks.length, attempt,
                     itemCount: batch.items.length, promptChars: pass2Prompt.length, durationMs, status: 'error', errorCode,
                   })),
                 );
                 totalOutputChars += pass2Raw.length;
                 const pass2 = await parseReviewResponse(pass2Raw);
-                logDiag('bitbucket.review', 'info', formatCallLine({
+                logReview('info', formatCallLine({
                   runTag, pass: 'pass2', batch: i + 1, totalBatches: chunks.length, attempt: pass2Attempt.attempt,
                   itemCount: batch.items.length, promptChars: pass2Prompt.length, responseChars: pass2Raw.length,
                   durationMs: pass2Attempt.durationMs, status: pass2.truncated ? 'truncated' : 'ok',
@@ -888,10 +927,12 @@ export function createBitbucketParticipant(
                   stream.markdown(`_⚠ LLM response truncated (batch ${i + 1} pass 2) — review may be incomplete._\n\n`);
                 }
                 batchFindings = resolveFindingAnchors(pass2.findings, batch.items);
+                rawFindingsTotal += pass2.findings.length;
+                anchorDroppedTotal += pass2.findings.length - batchFindings.length;
               }
             } catch (err) {
               anyBatchFailed = true;
-              logDiag('bitbucket.review', 'warn', `Pass 2 (whole-file context) failed — batch ${i + 1}`, { batch: i + 1, error: err instanceof Error ? err.message : String(err) });
+              logReview('warn', `Pass 2 (whole-file context) failed — batch ${i + 1}`, { batch: i + 1, error: err instanceof Error ? err.message : String(err) });
               stream.markdown(`_⚠ Pass 2 (whole-file context) failed (batch ${i + 1}) — keeping findings from the diff-only pass. ${describeFailure(err)}_\n\n`);
             }
           }
@@ -920,7 +961,7 @@ export function createBitbucketParticipant(
               totalInputChars += prompt.length;
               const raw = await callLLMOnceWithProgress(prompt, request.model, token, `${batchStatus} verifying`);
               totalOutputChars += raw.length;
-              logDiag('bitbucket.review', 'info', formatCallLine({
+              logReview('info', formatCallLine({
                 runTag, pass: 'critic', batch: i + 1, totalBatches: chunks.length, attempt: criticAttempt,
                 itemCount: findingsSubset.length, promptChars: prompt.length, responseChars: raw.length,
                 durationMs: Date.now() - criticAttemptStart, status: 'ok',
@@ -933,19 +974,19 @@ export function createBitbucketParticipant(
                 logLmFailure(criticLabel, attempt, err, {
                   findingTitles: findingsSubset.map((f) => f.title),
                 });
-                logDiag('bitbucket.review', 'error', formatCallLine({
+                logReview('error', formatCallLine({
                   runTag, pass: 'critic', batch: i + 1, totalBatches: chunks.length, attempt: criticAttempt,
                   itemCount: findingsSubset.length, promptChars: criticPromptChars,
                   durationMs: Date.now() - criticAttemptStart, status: 'error', errorCode: errorCodeOf(err),
                 }));
                 if (isTransientLmError(err)) {
                   if (criticAttempt === 1) {
-                    logDiag('bitbucket.review', 'info', formatRecoveryDecision(runTag, {
+                    logReview('info', formatRecoveryDecision(runTag, {
                       kind: 'retry', pass: 'critic', batch: i + 1, totalBatches: chunks.length, attempt: criticAttempt + 1,
                     }));
                   } else if (criticAttempt === 2 && findingsSubset.length > 1) {
                     const [left, right] = halveFindings(findingsSubset);
-                    logDiag('bitbucket.review', 'info', formatRecoveryDecision(runTag, {
+                    logReview('info', formatRecoveryDecision(runTag, {
                       kind: 'split', pass: 'critic', batch: i + 1, totalBatches: chunks.length,
                       leftCount: left.length, rightCount: right.length,
                     }));
@@ -972,8 +1013,9 @@ export function createBitbucketParticipant(
               else droppedByCritic++;
             });
           }
+          criticDroppedTotal += droppedByCritic;
           if (droppedByCritic > 0) {
-            logDiag('bitbucket.review', 'info', `Critic dropped ${droppedByCritic} unverified finding(s) — batch ${i + 1}`, { batch: i + 1, droppedByCritic });
+            logReview('info', `Critic dropped ${droppedByCritic} unverified finding(s) — batch ${i + 1}`, { batch: i + 1, droppedByCritic });
             stream.markdown(`_Critic dropped ${droppedByCritic} unverified finding${droppedByCritic !== 1 ? 's' : ''} (batch ${i + 1})._\n\n`);
           }
           chunkFindings = verified;
@@ -996,14 +1038,34 @@ export function createBitbucketParticipant(
 
       // Collapse the same issue surfacing in multiple batches before numbering.
       const deduped = dedupeFindings(allFindings);
+      const dedupedCrossBatch = allFindings.length - deduped.length;
       const numbered = deduped.map((f, idx) => ({ ...f, id: idx + 1 }));
       const { markdown: output, primaryCount, lowCount } = service.formatReview(
         numbered, pr, fileDiffs.length, config.confidenceThreshold,
       );
-      logDiag('bitbucket.review', 'info', `PR review completed — ${numbered.length} finding(s)`, {
+      logReview('info', `PR review completed — ${numbered.length} finding(s)`, {
         project: parsed.project, repo: parsed.repo, prId: parsed.prId,
         findingCount: numbered.length, fileCount: fileDiffs.length, batchCount: chunks.length, anyBatchFailed,
       });
+
+      // R6: findings funnel — where findings dropped and by which stage.
+      const funnelCounts = {
+        raw: rawFindingsTotal,
+        dedupedCrossBatch,
+        droppedByAnchor: anchorDroppedTotal,
+        foldedByConfidence: lowCount,
+        ...(criticEnabled ? { droppedByCritic: criticDroppedTotal } : {}),
+        final: primaryCount,
+      };
+      const funnelSummary = formatFindingsFunnel(funnelCounts);
+      logReview('info', funnelSummary);
+
+      // R7 (opt-in): one fenced structured record for the whole run.
+      if (detailedDiagnostics) {
+        logDiag('bitbucket.review', 'info', formatStructuredRunRecord({
+          runTag, configLine, lines: recordedLines, funnel: funnelSummary,
+        }));
+      }
       if (anyBatchFailed) {
         stream.markdown(`_⚠ Some batches had failures after retrying — showing partial results. See the "Ticket Sidekick" output channel for details._\n\n`);
       }
