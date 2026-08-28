@@ -704,7 +704,7 @@ export function buildRunTag(project: string, repo: string, prId: number): string
 
 /** Bound on rawPreview (R4/KTD2) — matches the existing partial-text-preview bound
  * (`partialTextPreview: partialText?.slice(0, 300)` in `logLmFailure`). */
-const RAW_PREVIEW_CHARS = 300;
+export const RAW_PREVIEW_CHARS = 300;
 
 /**
  * Builds R4's truncation-event diagnostic (message + details) for a pass-1 (or
@@ -747,11 +747,14 @@ export function buildTruncationEvent(params: {
   };
 }
 
+/** The four LLM calls in the review pipeline that emit diagnostic lines (R1). */
+export type ReviewPass = 'pass1' | 'continuation' | 'pass2' | 'critic';
+
 /** R5's three recovery-decision shapes — logged so a reader can follow what happened
  * without knowing the retry/split algorithm. */
 export type RecoveryDecision =
-  | { kind: 'retry'; pass: string; batch: number; totalBatches: number; attempt: number }
-  | { kind: 'split'; pass: string; batch: number; totalBatches: number; leftCount: number; rightCount: number }
+  | { kind: 'retry'; pass: ReviewPass; batch: number; totalBatches: number; attempt: number }
+  | { kind: 'split'; pass: ReviewPass; batch: number; totalBatches: number; leftCount: number; rightCount: number }
   | { kind: 'continuation'; batch: number; totalBatches: number; fileCount: number };
 
 export function formatRecoveryDecision(runTag: string, decision: RecoveryDecision): string {
@@ -769,8 +772,7 @@ export function formatRecoveryDecision(runTag: string, decision: RecoveryDecisio
 /** One per-call diagnostic line (R1/R2): identifies the call and carries size/duration/outcome. */
 export interface CallLineInfo {
   runTag: string;
-  /** e.g. 'pass1', 'continuation', 'pass2', 'critic'. */
-  pass: string;
+  pass: ReviewPass;
   batch: number;
   totalBatches: number;
   attempt: number;
