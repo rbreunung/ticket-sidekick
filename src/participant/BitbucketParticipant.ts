@@ -22,6 +22,7 @@ import {
   MAX_CONTEXT_FILES_PER_BATCH,
   parseCriticKeep,
   dedupeFindings,
+  buildRunTag,
   type ReviewFinding,
   type ReviewSession,
   type BitbucketCommentPreviewSession,
@@ -544,6 +545,9 @@ export function createBitbucketParticipant(
       stream.markdown(`Could not parse PR URL: \`${prUrlMatch[0]}\``);
       return;
     }
+    // Two @bitbucket reviews can run concurrently in one VS Code window, sharing one
+    // output channel — every diagnostic line for this run carries this tag (KTD1).
+    const runTag = buildRunTag(parsed.project, parsed.repo, parsed.prId);
 
     const client = new BitbucketApiClient({
       baseUrl: config.baseUrl ?? '',
@@ -575,6 +579,21 @@ export function createBitbucketParticipant(
         ?? 60000;
       const budgetRatio = config.contextBudgetRatio ?? 0.7;
       const tokenBudget = Math.floor(resolvedContextTokens * budgetRatio);
+
+      // R3: one opening line recording the effective run configuration, so a
+      // misconfigured token budget/ratio is visible without re-running the review.
+      logDiag('bitbucket.review', 'info', `Review started — ${runTag}`, {
+        runTag,
+        vendor: request.model.vendor,
+        family: request.model.family,
+        id: request.model.id,
+        resolvedContextTokens,
+        contextBudgetRatio: budgetRatio,
+        tokenBudget,
+        reviewMode,
+        criticEnabled,
+        reviewContextLines: config.reviewContextLines ?? 12,
+      });
 
       if (upfrontQuestion) {
         stream.markdown(`_focus: ${upfrontQuestion}_\n\n`);

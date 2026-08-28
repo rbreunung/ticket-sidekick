@@ -8,7 +8,7 @@ import {
   parseCriticKeep, dedupeFindings, extractHunkAround,
   parseFollowUpIntent, buildPrContextPrompt, buildDiffAwarePrompt,
   parseUpfrontQuestion, stripUpfrontQuestion,
-  formatCallLine, formatFindingsFunnel,
+  formatCallLine, formatFindingsFunnel, buildRunTag,
 } from '../participant/reviewSessionState';
 import type { ReviewFinding } from '../participant/reviewSessionState';
 import { PrReviewService } from '../services/PrReviewService';
@@ -1076,6 +1076,16 @@ describe('parseNdjsonFindings', () => {
     expect(result.truncated).toBe(false);
     // A meta line completed the response, so the mid-stream garbage is not a truncation tail.
     expect(result.danglingTail).toBeUndefined();
+  });
+});
+
+describe('buildRunTag', () => {
+  it('produces a stable, readable tag from a Data Center project/repo identity', () => {
+    expect(buildRunTag('PROJ', 'myrepo', 42)).toBe('pr=PROJ/myrepo#42');
+  });
+
+  it('produces a stable, readable tag from a Cloud workspace/slug identity', () => {
+    expect(buildRunTag('myworkspace', 'myrepo', 99)).toBe('pr=myworkspace/myrepo#99');
   });
 });
 

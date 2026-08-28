@@ -689,6 +689,19 @@ export function selectFilesWithinBudget(
   return selected;
 }
 
+/**
+ * Short, stable tag identifying a review run in the shared output channel
+ * (KTD1) — two `@bitbucket` reviews can already run concurrently in one VS
+ * Code window, sharing one global session slot and one output channel, so
+ * every diagnostic line needs a way to attribute it to its own review.
+ * Works identically for a Data Center `project/repo` identity and a Cloud
+ * `workspace/slug` identity — `parsePrUrl` already normalizes both into the
+ * same `{ project, repo, prId }` shape.
+ */
+export function buildRunTag(project: string, repo: string, prId: number): string {
+  return `pr=${project}/${repo}#${prId}`;
+}
+
 /** One per-call diagnostic line (R1/R2): identifies the call and carries size/duration/outcome. */
 export interface CallLineInfo {
   runTag: string;
