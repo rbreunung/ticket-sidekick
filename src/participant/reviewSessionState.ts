@@ -208,28 +208,38 @@ export function parseNdjsonFindings(raw: string): {
   additionalFilesNeeded: string[];
   hasMetaLine: boolean;
   truncated: boolean;
+  /** The un-parsed text of the last line, when the response was cut off mid-line
+   * (that line starts with `{` but fails to parse) and no later line parsed
+   * successfully. Undefined when the response ends cleanly on a line boundary,
+   * or when a mid-stream parse failure is followed by a line that does parse. */
+  danglingTail?: string;
 } {
   const findings: Array<Record<string, unknown>> = [];
   let additionalFilesNeeded: string[] = [];
   let hasMetaLine = false;
+  let danglingTail: string | undefined;
   for (const line of raw.split('\n')) {
     const t = line.trim();
     if (!t.startsWith('{')) continue;
     try {
       const obj = JSON.parse(t) as Record<string, unknown>;
+      danglingTail = undefined; // this line parsed — any earlier failure was not the tail
       if (Array.isArray(obj.additionalFilesNeeded) && Object.keys(obj).length === 1) {
         additionalFilesNeeded = obj.additionalFilesNeeded as string[];
         hasMetaLine = true;
       } else if (typeof obj.file === 'string') {
         findings.push(obj);
       }
-    } catch { /* incomplete last line */ }
+    } catch {
+      danglingTail = t; // incomplete last line — kept only if nothing later parses
+    }
   }
   return {
     findings,
     additionalFilesNeeded,
     hasMetaLine,
     truncated: !hasMetaLine && (findings.length > 0 || raw.trim().length > 0),
+    ...(danglingTail !== undefined ? { danglingTail } : {}),
   };
 }
 
@@ -677,6 +687,217 @@ export function selectFilesWithinBudget(
     used += e.tokens;
   }
   return selected;
+}
+
+/**
+ * Short, stable tag identifying a review run in the shared output channel
+ * (KTD1) — two `@bitbucket` reviews can already run concurrently in one VS
+ * Code window, sharing one global session slot and one output channel, so
+ * every diagnostic line needs a way to attribute it to its own review.
+ * Works identically for a Data Center `project/repo` identity and a Cloud
+ * `workspace/slug` identity — `parsePrUrl` already normalizes both into the
+ * same `{ project, repo, prId }` shape.
+ */
+export function buildRunTag(project: string, repo: string, prId: number): string {
+  return `pr=${project}/${repo}#${prId}`;
+}
+
+/** Bound on rawPreview (R4/KTD2) — matches the existing partial-text-preview bound
+ * (`partialTextPreview: partialText?.slice(0, 300)` in `logLmFailure`). */
+export const RAW_PREVIEW_CHARS = 300;
+
+/**
+ * Builds R4's truncation-event diagnostic (message + details) for a pass-1 (or
+ * continuation/pass-2) response that came back cut off before its final meta
+ * line — the one event in the pipeline that previously threw nothing and
+ * logged nothing. `danglingTail` (from `parseNdjsonFindings`) is preferred for
+ * the raw preview when present, since it's the actual cut-off text rather than
+ * the whole response; either way the preview takes the LAST `RAW_PREVIEW_CHARS`
+ * characters — the point where the model stopped is what's diagnostic, not the
+ * start of the response. Raw previews stay truncated-only, bounded length, with
+ * only the existing key-based redaction — no content-pattern scrubbing (KTD2).
+ */
+export function buildTruncationEvent(params: {
+  runTag: string;
+  batch: number;
+  totalBatches: number;
+  raw: string;
+  parsedFindingsCount: number;
+  hasMetaLine: boolean;
+  danglingTail?: string;
+  coveredFiles: string[];
+  uncoveredFiles: string[];
+}): { message: string; details: Record<string, unknown> } {
+  const preview = (params.danglingTail ?? params.raw).slice(-RAW_PREVIEW_CHARS);
+  return {
+    message: `Truncated response — [${params.runTag}] batch ${params.batch}/${params.totalBatches}`,
+    details: {
+      runTag: params.runTag,
+      batch: params.batch,
+      totalBatches: params.totalBatches,
+      responseChars: params.raw.length,
+      completeLines: params.parsedFindingsCount,
+      hasMetaLine: params.hasMetaLine,
+      coveredFileCount: params.coveredFiles.length,
+      uncoveredFileCount: params.uncoveredFiles.length,
+      coveredFiles: params.coveredFiles,
+      uncoveredFiles: params.uncoveredFiles,
+      rawPreview: preview,
+    },
+  };
+}
+
+/** The four LLM calls in the review pipeline that emit diagnostic lines (R1). */
+export type ReviewPass = 'pass1' | 'continuation' | 'pass2' | 'critic';
+
+/** R5's three recovery-decision shapes — logged so a reader can follow what happened
+ * without knowing the retry/split algorithm. */
+export type RecoveryDecision =
+  | { kind: 'retry'; pass: ReviewPass; batch: number; totalBatches: number; attempt: number }
+  | { kind: 'split'; pass: ReviewPass; batch: number; totalBatches: number; leftCount: number; rightCount: number }
+  | { kind: 'continuation'; batch: number; totalBatches: number; fileCount: number };
+
+export function formatRecoveryDecision(runTag: string, decision: RecoveryDecision): string {
+  const batchTag = `batch ${decision.batch}/${decision.totalBatches}`;
+  switch (decision.kind) {
+    case 'retry':
+      return `[${runTag}] ${decision.pass} ${batchTag} — identical retry in flight (attempt ${decision.attempt})`;
+    case 'split':
+      return `[${runTag}] ${decision.pass} ${batchTag} — splitting into halves of ${decision.leftCount} and ${decision.rightCount} after repeated failure`;
+    case 'continuation':
+      return `[${runTag}] ${batchTag} — continuation starting with ${decision.fileCount} file(s)`;
+  }
+}
+
+/**
+ * Closure-local attempt counter, scoped per item-subset (KTD8) — shared by pass1 and
+ * critic, the two `withEasierRetry` call sites in `BitbucketParticipant.ts`. The outer
+ * retry can split a batch in half on its 3rd try, and each half then gets its own
+ * single attempt: resetting the count whenever `start()` sees a new items reference
+ * keeps that half's line reading "attempt 1" (its own only try) instead of continuing
+ * the full batch's count, and keeps a call's success and failure lines using the same
+ * attempt number — which the library's own `onAttemptFailed(attempt, ...)` can't do,
+ * since it reports 3 for every post-split try regardless of which half.
+ */
+export function createAttemptTracker<T>() {
+  let attempt = 0;
+  let lastItems: T[] | null = null;
+  let startedAt = 0;
+  return {
+    /** Call at the start of every attempt; returns this attempt's number. */
+    start(items: T[]): number {
+      if (items !== lastItems) { lastItems = items; attempt = 0; }
+      attempt += 1;
+      startedAt = Date.now();
+      return attempt;
+    },
+    elapsedMs: (): number => Date.now() - startedAt,
+    get attempt(): number { return attempt; },
+  };
+}
+
+/** One per-call diagnostic line (R1/R2): identifies the call and carries size/duration/outcome. */
+export interface CallLineInfo {
+  runTag: string;
+  pass: ReviewPass;
+  batch: number;
+  totalBatches: number;
+  attempt: number;
+  itemCount: number;
+  promptChars: number;
+  responseChars?: number;
+  durationMs: number;
+  status: 'ok' | 'truncated' | 'error';
+  errorCode?: string;
+}
+
+/** Renders R1/R2's one compact per-call diagnostic line. Pure so it stays Vitest-covered. */
+export function formatCallLine(info: CallLineInfo): string {
+  const estimatedTokens = Math.ceil(info.promptChars / 4);
+  const batchPart = info.totalBatches > 1 ? ` batch ${info.batch}/${info.totalBatches}` : '';
+  const responsePart = info.responseChars !== undefined ? `, response ${info.responseChars}c` : '';
+  const statusLabel =
+    info.status === 'error' ? `error${info.errorCode ? ` (${info.errorCode})` : ''}` : info.status;
+  return (
+    `[${info.runTag}] ${info.pass}${batchPart} attempt ${info.attempt} — ` +
+    `${info.itemCount} item(s), prompt ${info.promptChars}c (~${estimatedTokens} tok)${responsePart}, ` +
+    `${info.durationMs}ms, ${statusLabel}`
+  );
+}
+
+/**
+ * Findings funnel counts (R6). Stage counts, not remainders — `dedupedCrossBatch` is
+ * how many were removed as a cross-batch duplicate, `droppedByAnchor` how many an
+ * unlocatable `anchorCode` dropped, `foldedByConfidence` how many folded into the
+ * collapsed low-confidence section (still shown, just not primary), `droppedByCritic`
+ * (deep mode only) how many the critic pass rejected, and `final` the primary
+ * (high-confidence, critic-confirmed) count actually listed in the review body.
+ * They reconcile as: raw = dedupedCrossBatch + droppedByAnchor + foldedByConfidence
+ * + (droppedByCritic ?? 0) + final.
+ */
+export interface FindingsFunnelCounts {
+  raw: number;
+  dedupedCrossBatch: number;
+  droppedByAnchor: number;
+  foldedByConfidence: number;
+  droppedByCritic?: number;
+  final: number;
+}
+
+/** Renders R6's end-of-review findings funnel summary. Pure so it stays Vitest-covered. */
+export function formatFindingsFunnel(counts: FindingsFunnelCounts): string {
+  const lines = [
+    `Findings funnel — raw ${counts.raw}`,
+    `-> deduped as cross-batch duplicate: ${counts.dedupedCrossBatch}`,
+    `-> dropped by anchor verification: ${counts.droppedByAnchor}`,
+    `-> folded by confidence threshold: ${counts.foldedByConfidence}`,
+  ];
+  if (counts.droppedByCritic !== undefined) {
+    lines.push(`-> dropped by critic: ${counts.droppedByCritic}`);
+  }
+  lines.push(`-> final: ${counts.final}`);
+  return lines.join('\n');
+}
+
+/**
+ * Assembles R7's opt-in structured run record: configuration, every buffered
+ * per-call/event line, and the findings funnel, as one fenced block —
+ * copy-pasteable for comparing runs or filing a provider bug report. Pure
+ * string assembly; the caller decides what to buffer and when to call this
+ * (once, at end of run).
+ */
+export function formatStructuredRunRecord(params: {
+  runTag: string;
+  configLine: string;
+  lines: string[];
+  funnel: string;
+}): string {
+  const body = [
+    `Run: ${params.runTag}`,
+    '',
+    'Configuration:',
+    params.configLine,
+    '',
+    'Calls & events:',
+    ...(params.lines.length ? params.lines : ['(none)']),
+    '',
+    'Findings funnel:',
+    params.funnel,
+  ].join('\n');
+  return '```\n' + body + '\n```';
+}
+
+/**
+ * R8: the truncation-continuation chat message, reworded to state what the
+ * count means — files that had no findings in the truncated response, now
+ * being reviewed — instead of reading as a sequential resume (the "13-vs-14"
+ * confusion this plan's Problem Frame documents).
+ */
+export function formatContinuationMessage(uncoveredFileCount: number): string {
+  return (
+    `_${uncoveredFileCount} file${uncoveredFileCount !== 1 ? 's' : ''} had no findings in the truncated ` +
+    `response — reviewing ${uncoveredFileCount !== 1 ? 'them' : 'it'} now…_\n\n`
+  );
 }
 
 export function buildAdaptiveChunks(diffs: FileDiff[], tokenBudget: number): FileDiff[][] {

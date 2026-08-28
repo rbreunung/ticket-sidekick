@@ -8,6 +8,9 @@ import {
   parseCriticKeep, dedupeFindings, extractHunkAround,
   parseFollowUpIntent, buildPrContextPrompt, buildDiffAwarePrompt,
   parseUpfrontQuestion, stripUpfrontQuestion,
+  formatCallLine, formatFindingsFunnel, buildRunTag,
+  buildTruncationEvent, formatRecoveryDecision, formatStructuredRunRecord,
+  formatContinuationMessage, createAttemptTracker,
 } from '../participant/reviewSessionState';
 import type { ReviewFinding } from '../participant/reviewSessionState';
 import { PrReviewService } from '../services/PrReviewService';
@@ -344,15 +347,17 @@ describe('PrReviewService.formatReview', () => {
         title: 'No error handling', description: 'Missing try/catch', recommendation: 'Add try/catch' },
     ];
 
-    const output = service.formatReview(findings, pr, 1);
+    const { markdown, primaryCount, lowCount } = service.formatReview(findings, pr, 1);
 
-    expect(output).toContain('## PR #42');
-    expect(output).toContain('Jane Smith');
-    expect(output).toContain('**#1**');
-    expect(output).toContain('**#2**');
-    expect(output).toContain('🔴');
-    expect(output).toContain('🟡');
-    expect(output).toContain('<!-- bitbucket:review-session -->');
+    expect(markdown).toContain('## PR #42');
+    expect(markdown).toContain('Jane Smith');
+    expect(markdown).toContain('**#1**');
+    expect(markdown).toContain('**#2**');
+    expect(markdown).toContain('🔴');
+    expect(markdown).toContain('🟡');
+    expect(markdown).toContain('<!-- bitbucket:review-session -->');
+    expect(primaryCount).toBe(2);
+    expect(lowCount).toBe(0);
   });
 
   it('folds low-confidence findings into a collapsed section and keeps high-confidence ones primary', () => {
@@ -366,12 +371,36 @@ describe('PrReviewService.formatReview', () => {
       { id: 1, file: 'a.ts', line: 5, confidence: 0.95, severity: 'critical', title: 'Solid bug', description: 'D', recommendation: 'R' },
       { id: 2, file: 'a.ts', line: 9, confidence: 0.3, severity: 'warning', title: 'Shaky guess', description: 'D', recommendation: 'R' },
     ];
-    const output = service.formatReview(findings, pr, 1, 0.7);
-    expect(output).toContain('Solid bug');
-    expect(output).toContain('<details>');
-    expect(output).toContain('low-confidence');
-    expect(output).toContain('Shaky guess');
-    expect(output).toContain('30%');
+    const { markdown, primaryCount, lowCount } = service.formatReview(findings, pr, 1, 0.7);
+    expect(markdown).toContain('Solid bug');
+    expect(markdown).toContain('<details>');
+    expect(markdown).toContain('low-confidence');
+    expect(markdown).toContain('Shaky guess');
+    expect(markdown).toContain('30%');
+    expect(primaryCount).toBe(1);
+    expect(lowCount).toBe(1);
+  });
+
+  it('reports zero primary and the full low count when every finding is below threshold', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const pr: BitbucketPR = {
+      id: 7, title: 'PR', description: '', author: { displayName: 'A', emailAddress: '' },
+      targetBranch: 'main', fromCommitHash: 'h',
+    };
+    const findings: ReviewFinding[] = [
+      { id: 1, file: 'a.ts', line: 5, confidence: 0.4, severity: 'warning', title: 'Shaky one', description: 'D', recommendation: 'R' },
+      { id: 2, file: 'a.ts', line: 9, confidence: 0.2, severity: 'suggestion', title: 'Shaky two', description: 'D', recommendation: 'R' },
+    ];
+
+    const { markdown, primaryCount, lowCount } = service.formatReview(findings, pr, 1, 0.7);
+
+    expect(primaryCount).toBe(0);
+    expect(lowCount).toBe(2);
+    expect(markdown).toContain('_No high-confidence issues._');
+    expect(markdown).toContain('<details>');
+    expect(markdown).toContain('Shaky one');
+    expect(markdown).toContain('Shaky two');
   });
 
   it('renders provenance tags and related-line references on findings', () => {
@@ -385,10 +414,12 @@ describe('PrReviewService.formatReview', () => {
       { id: 1, file: 'a.ts', line: 19, provenance: 'new', relatedLines: [11, 15], severity: 'warning', title: 'Builds up', description: 'D', recommendation: 'R' },
       { id: 2, file: 'a.ts', line: 4, provenance: 'existing', severity: 'suggestion', title: 'Pre-existing', description: 'D', recommendation: 'R' },
     ];
-    const output = service.formatReview(findings, pr, 1);
-    expect(output).toContain('🆕');
-    expect(output).toContain('📍');
-    expect(output).toContain('also L11, L15');
+    const { markdown, primaryCount, lowCount } = service.formatReview(findings, pr, 1);
+    expect(markdown).toContain('🆕');
+    expect(markdown).toContain('📍');
+    expect(markdown).toContain('also L11, L15');
+    expect(primaryCount).toBe(2);
+    expect(lowCount).toBe(0);
   });
 
   it('renders a no-issues message when findings is empty', () => {
@@ -400,10 +431,12 @@ describe('PrReviewService.formatReview', () => {
       targetBranch: 'main', fromCommitHash: 'def456',
     };
 
-    const output = service.formatReview([], pr, 2);
+    const { markdown, primaryCount, lowCount } = service.formatReview([], pr, 2);
 
-    expect(output).toContain('_No issues found._');
-    expect(output).toContain('<!-- bitbucket:review-session -->');
+    expect(markdown).toContain('_No issues found._');
+    expect(markdown).toContain('<!-- bitbucket:review-session -->');
+    expect(primaryCount).toBe(0);
+    expect(lowCount).toBe(0);
   });
 
   it('includes a cancel hint in the reply instruction', () => {
@@ -419,8 +452,8 @@ describe('PrReviewService.formatReview', () => {
     ];
     const withFindings = service.formatReview(findings, pr, 1);
     const noFindings = service.formatReview([], pr, 1);
-    expect(withFindings).toContain('(c)');
-    expect(noFindings).toContain('(c)');
+    expect(withFindings.markdown).toContain('(c)');
+    expect(noFindings.markdown).toContain('(c)');
   });
 });
 
@@ -993,6 +1026,7 @@ describe('parseNdjsonFindings', () => {
     expect(result.additionalFilesNeeded).toEqual(['src/c.ts']);
     expect(result.hasMetaLine).toBe(true);
     expect(result.truncated).toBe(false);
+    expect(result.danglingTail).toBeUndefined();
   });
 
   it('recovers findings when meta line is absent (truncated)', () => {
@@ -1001,6 +1035,19 @@ describe('parseNdjsonFindings', () => {
     expect(result.findings).toHaveLength(2);
     expect(result.hasMetaLine).toBe(false);
     expect(result.truncated).toBe(true);
+    // Cut on a line boundary: nothing was lost mid-line, so there is no tail.
+    expect(result.danglingTail).toBeUndefined();
+  });
+
+  it('returns the un-parsed dangling tail when the response is cut mid-line', () => {
+    const incomplete = JSON.stringify(f2).slice(0, 30);
+    const raw = JSON.stringify(f1) + '\n' + incomplete;
+    const result = parseNdjsonFindings(raw);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]).toMatchObject(f1);
+    expect(result.hasMetaLine).toBe(false);
+    expect(result.truncated).toBe(true);
+    expect(result.danglingTail).toBe(incomplete);
   });
 
   it('returns empty findings and no truncation for empty raw', () => {
@@ -1008,6 +1055,7 @@ describe('parseNdjsonFindings', () => {
     expect(result.findings).toHaveLength(0);
     expect(result.hasMetaLine).toBe(false);
     expect(result.truncated).toBe(false);
+    expect(result.danglingTail).toBeUndefined();
   });
 
   it('does not treat old single-object JSON format as a meta line', () => {
@@ -1016,6 +1064,8 @@ describe('parseNdjsonFindings', () => {
     expect(result.findings).toHaveLength(0);
     expect(result.hasMetaLine).toBe(false);
     expect(result.truncated).toBe(true);
+    // The line parsed fine (it is just not a finding) — it is not a cut-off tail.
+    expect(result.danglingTail).toBeUndefined();
   });
 
   it('ignores incomplete last line without throwing', () => {
@@ -1026,6 +1076,219 @@ describe('parseNdjsonFindings', () => {
     expect(result.findings[0]).toMatchObject(f1);
     expect(result.hasMetaLine).toBe(true);
     expect(result.truncated).toBe(false);
+    // A meta line completed the response, so the mid-stream garbage is not a truncation tail.
+    expect(result.danglingTail).toBeUndefined();
+  });
+});
+
+describe('createAttemptTracker', () => {
+  it('increments the attempt number on repeated calls with the same items reference', () => {
+    const tracker = createAttemptTracker<number>();
+    const items = [1, 2, 3];
+    expect(tracker.start(items)).toBe(1);
+    expect(tracker.start(items)).toBe(2);
+    expect(tracker.attempt).toBe(2);
+  });
+
+  it('resets to attempt 1 when the items reference changes (the post-split case)', () => {
+    const tracker = createAttemptTracker<number>();
+    const full = [1, 2, 3, 4];
+    expect(tracker.start(full)).toBe(1);
+    expect(tracker.start(full)).toBe(2);
+    const left = full.slice(0, 2);
+    expect(tracker.start(left)).toBe(1);
+    expect(tracker.attempt).toBe(1);
+    const right = full.slice(2);
+    expect(tracker.start(right)).toBe(1);
+    expect(tracker.attempt).toBe(1);
+  });
+
+  it('resets for a different array instance with identical contents (reference identity, not deep equality)', () => {
+    const tracker = createAttemptTracker<number>();
+    const items = [1, 2];
+    tracker.start(items);
+    tracker.start(items);
+    expect(tracker.attempt).toBe(2);
+    tracker.start([...items]); // same contents, new reference — resets
+    expect(tracker.attempt).toBe(1);
+  });
+});
+
+describe('buildRunTag', () => {
+  it('produces a stable, readable tag from a Data Center project/repo identity', () => {
+    expect(buildRunTag('PROJ', 'myrepo', 42)).toBe('pr=PROJ/myrepo#42');
+  });
+
+  it('produces a stable, readable tag from a Cloud workspace/slug identity', () => {
+    expect(buildRunTag('myworkspace', 'myrepo', 99)).toBe('pr=myworkspace/myrepo#99');
+  });
+});
+
+describe('formatCallLine', () => {
+  const base = {
+    runTag: 'pr=PROJ/repo#42',
+    pass: 'pass1',
+    batch: 1,
+    totalBatches: 2,
+    attempt: 1,
+    itemCount: 3,
+    promptChars: 4000,
+    durationMs: 1234,
+  } as const;
+
+  it('renders an ok outcome with run tag, batch, sizes, tokens, and duration', () => {
+    const line = formatCallLine({ ...base, responseChars: 500, status: 'ok' });
+    expect(line).toContain('pr=PROJ/repo#42');
+    expect(line).toContain('pass1');
+    expect(line).toContain('batch 1/2');
+    expect(line).toContain('attempt 1');
+    expect(line).toContain('3 item(s)');
+    expect(line).toContain('4000c');
+    expect(line).toContain('~1000 tok');
+    expect(line).toContain('response 500c');
+    expect(line).toContain('1234ms');
+    expect(line).toContain('ok');
+  });
+
+  it('renders a truncated outcome', () => {
+    const line = formatCallLine({ ...base, responseChars: 200, status: 'truncated' });
+    expect(line).toContain('truncated');
+  });
+
+  it('renders an error outcome with its code', () => {
+    const line = formatCallLine({ ...base, status: 'error', errorCode: 'Unknown' });
+    expect(line).toContain('error (Unknown)');
+  });
+
+  it('omits the batch fragment for a single-batch review', () => {
+    const line = formatCallLine({ ...base, totalBatches: 1, status: 'ok' });
+    expect(line).not.toContain('batch');
+  });
+});
+
+describe('buildTruncationEvent', () => {
+  it('produces a truncation event with all required fields and a bounded preview', () => {
+    const raw = 'x'.repeat(400) + '{"file":"src/b.ts","sever';
+    const { message, details } = buildTruncationEvent({
+      runTag: 'pr=PROJ/repo#42',
+      batch: 1,
+      totalBatches: 2,
+      raw,
+      parsedFindingsCount: 1,
+      hasMetaLine: false,
+      danglingTail: '{"file":"src/b.ts","sever',
+      coveredFiles: ['src/a.ts'],
+      uncoveredFiles: ['src/b.ts'],
+    });
+    expect(message).toContain('pr=PROJ/repo#42');
+    expect(message).toContain('batch 1/2');
+    expect(details.responseChars).toBe(raw.length);
+    expect(details.completeLines).toBe(1);
+    expect(details.hasMetaLine).toBe(false);
+    expect(details.coveredFiles).toEqual(['src/a.ts']);
+    expect(details.uncoveredFiles).toEqual(['src/b.ts']);
+    expect(typeof details.rawPreview).toBe('string');
+    expect((details.rawPreview as string).length).toBeLessThanOrEqual(300);
+  });
+
+  it('falls back to the tail of the raw response when there is no dangling tail', () => {
+    const raw = 'a'.repeat(500);
+    const { details } = buildTruncationEvent({
+      runTag: 'pr=PROJ/repo#1', batch: 1, totalBatches: 1, raw,
+      parsedFindingsCount: 0, hasMetaLine: false, coveredFiles: [], uncoveredFiles: ['src/a.ts'],
+    });
+    expect((details.rawPreview as string).length).toBe(300);
+  });
+});
+
+describe('formatRecoveryDecision', () => {
+  it('renders the retry-in-flight decision', () => {
+    const line = formatRecoveryDecision('pr=PROJ/repo#42', { kind: 'retry', pass: 'pass1', batch: 1, totalBatches: 1, attempt: 2 });
+    expect(line).toContain('pr=PROJ/repo#42');
+    expect(line).toContain('retry');
+    expect(line).toContain('attempt 2');
+  });
+
+  it('renders the batch-split-in-half decision', () => {
+    const line = formatRecoveryDecision('pr=PROJ/repo#42', { kind: 'split', pass: 'pass1', batch: 1, totalBatches: 1, leftCount: 2, rightCount: 3 });
+    expect(line).toContain('splitting');
+    expect(line).toContain('2 and 3');
+  });
+
+  it('renders the continuation-starting-with-N-files decision', () => {
+    const line = formatRecoveryDecision('pr=PROJ/repo#42', { kind: 'continuation', batch: 1, totalBatches: 2, fileCount: 5 });
+    expect(line).toContain('continuation starting with 5 file(s)');
+    expect(line).toContain('batch 1/2');
+  });
+});
+
+describe('formatFindingsFunnel', () => {
+  it('reconciles raw against the sum of every stage plus final (including cross-batch dedup)', () => {
+    const counts = {
+      raw: 20,
+      dedupedCrossBatch: 3,
+      droppedByAnchor: 4,
+      foldedByConfidence: 5,
+      droppedByCritic: 2,
+      final: 6,
+    };
+    expect(
+      counts.dedupedCrossBatch + counts.droppedByAnchor + counts.foldedByConfidence + counts.droppedByCritic + counts.final,
+    ).toBe(counts.raw);
+
+    const summary = formatFindingsFunnel(counts);
+    expect(summary).toContain('raw 20');
+    expect(summary).toContain('deduped as cross-batch duplicate: 3');
+    expect(summary).toContain('dropped by anchor verification: 4');
+    expect(summary).toContain('folded by confidence threshold: 5');
+    expect(summary).toContain('dropped by critic: 2');
+    expect(summary).toContain('final: 6');
+  });
+
+  it('omits the critic line outside deep mode', () => {
+    const summary = formatFindingsFunnel({
+      raw: 10, dedupedCrossBatch: 1, droppedByAnchor: 2, foldedByConfidence: 3, final: 4,
+    });
+    expect(summary).not.toContain('critic');
+  });
+});
+
+describe('formatStructuredRunRecord', () => {
+  it('renders one fenced block containing configuration, at least one call record, and the funnel', () => {
+    const block = formatStructuredRunRecord({
+      runTag: 'pr=PROJ/repo#42',
+      configLine: 'model=gpt-4 tokenBudget=42000 reviewMode=standard criticEnabled=false',
+      lines: ['[pr=PROJ/repo#42] pass1 attempt 1 — 3 item(s), ok'],
+      funnel: 'Findings funnel — raw 5\n-> final: 3',
+    });
+    expect(block.startsWith('```\n')).toBe(true);
+    expect(block.endsWith('\n```')).toBe(true);
+    expect(block).toContain('pr=PROJ/repo#42');
+    expect(block).toContain('model=gpt-4');
+    expect(block).toContain('pass1 attempt 1');
+    expect(block).toContain('Findings funnel — raw 5');
+  });
+
+  it('renders a placeholder when no per-call lines were buffered', () => {
+    const block = formatStructuredRunRecord({
+      runTag: 'pr=PROJ/repo#1', configLine: 'model=gpt-4', lines: [], funnel: 'Findings funnel — raw 0\n-> final: 0',
+    });
+    expect(block).toContain('(none)');
+  });
+});
+
+describe('formatContinuationMessage', () => {
+  it('states what the count means instead of reading as a sequential resume', () => {
+    const message = formatContinuationMessage(3);
+    expect(message).not.toContain('resum');
+    expect(message).toContain('3 files had no findings in the truncated response');
+    expect(message).toContain('reviewing them now');
+  });
+
+  it('uses singular wording for a single uncovered file', () => {
+    const message = formatContinuationMessage(1);
+    expect(message).toContain('1 file had no findings in the truncated response');
+    expect(message).toContain('reviewing it now');
   });
 });
 

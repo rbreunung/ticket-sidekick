@@ -68,4 +68,41 @@ describe('sanitizeDetails', () => {
     expect(result.apiToken).toBe('[REDACTED]');
     expect(result.api_key).toBe('[REDACTED]');
   });
+
+  it('passes the Bitbucket review diagnostics field names through unredacted, while still redacting a credential-shaped field alongside them', () => {
+    const result = sanitizeDetails({
+      runTag: 'pr=PROJ/repo#42',
+      estimatedTokens: 1234,
+      durationMs: 567,
+      promptChars: 4000,
+      responseChars: 500,
+      resolvedContextTokens: 60000,
+      contextBudgetRatio: 0.7,
+      budgetTokens: 42000,
+      reviewMode: 'standard',
+      criticEnabled: true,
+      reviewContextLines: 12,
+      dedupedCrossBatch: 3,
+      droppedByAnchor: 4,
+      foldedByConfidence: 5,
+      droppedByCritic: 2,
+      bearerToken: 'should-be-redacted',
+    });
+    expect(result.runTag).toBe('pr=PROJ/repo#42');
+    expect(result.estimatedTokens).toBe(1234);
+    expect(result.durationMs).toBe(567);
+    expect(result.promptChars).toBe(4000);
+    expect(result.responseChars).toBe(500);
+    expect(result.resolvedContextTokens).toBe(60000);
+    expect(result.contextBudgetRatio).toBe(0.7);
+    expect(result.budgetTokens).toBe(42000);
+    expect(result.reviewMode).toBe('standard');
+    expect(result.criticEnabled).toBe(true);
+    expect(result.reviewContextLines).toBe(12);
+    expect(result.dedupedCrossBatch).toBe(3);
+    expect(result.droppedByAnchor).toBe(4);
+    expect(result.foldedByConfidence).toBe(5);
+    expect(result.droppedByCritic).toBe(2);
+    expect(result.bearerToken).toBe('[REDACTED]');
+  });
 });

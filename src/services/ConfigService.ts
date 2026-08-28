@@ -56,6 +56,7 @@ export class ConfigService {
       reviewExcludePatterns: config.get<string[]>('bitbucket.reviewExcludePatterns') ?? [],
       reviewContextLines: config.get<number>('bitbucket.reviewContextLines') ?? 12,
       confidenceThreshold: config.get<number>('bitbucket.confidenceThreshold') ?? 0.7,
+      detailedDiagnostics: config.get<boolean>('bitbucket.detailedDiagnostics') ?? false,
     };
   }
 

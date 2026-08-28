@@ -89,19 +89,24 @@ math — `parseDiff`, `resolveLineType`, `locateAnchor`, `splitFileDiff` — wal
 raw diff with its own `@@`-anchored counters, so the visible gutter cannot break
 parsing.
 
-## Filtering: only one hard drop
+## Filtering: only two hard drops
 
-Three steps can remove a finding; only the first deletes outright. This protects
+Four steps can remove a finding; only two delete outright. This protects
 recall — a review never looks empty because filters stacked up.
 
 | Step | When | Effect |
 | --- | --- | --- |
+| Cross-batch dedup (`dedupeFindings`) | always | **drop** the weaker of two findings keyed by file + verified line + normalized title (the stronger by severity, then confidence, survives) |
 | Anchor locate (`resolveFindingAnchors`) | always | **drop** if `anchorCode` is unlocatable in the diff (unverifiable) |
 | Confidence (`formatReview`, `confidenceThreshold`) | always | **fold** into a collapsed section if `confidence < threshold` — never deleted |
 | Critic (`buildCriticPrompt` + `parseCriticKeep`) | deep mode only | **drop** findings the verification pass can't confirm; fail-open if its reply is unparseable |
 
 Fixed order: `parse → number(render) → LLM → locate+classify (drop only if
 unlocatable) → confidence fold → [deep: critic] → merge chunks → dedup → format`.
+The end-of-review findings funnel (below) reports these same stages — cross-batch
+dedup, anchor, confidence, critic — in that conceptual order regardless of the
+pipeline's actual per-chunk execution order, since it's a summary of where
+findings went, not a step-by-step trace.
 
 ## Resilience & debugging
 
@@ -117,11 +122,56 @@ abort the rest of the review. `dedupeFindings` → `formatReview` →
 `ReviewSession` always run on whatever was collected, even after partial
 failures, so follow-ups keep working.
 
+### Always-on diagnostic timeline
+
+Every review opens with one line in the shared `"Ticket Sidekick"` output
+channel (`View → Output`) recording its effective configuration: model
+identity, resolved token budget, context budget ratio, review mode,
+critic-enabled, and context lines — enough to see a misconfiguration (e.g. an
+unusually small `contextBudgetRatio`) without re-running the review.
+
+Every LLM call in the pipeline — pass 1, a truncation continuation, pass 2,
+and the critic pass — then logs one compact per-call line: pass, batch,
+attempt, a short run tag (`pr=PROJ/repo#42`, so two reviews running
+concurrently in one VS Code window stay attributable to their own lines),
+prompt size with estimated tokens, response size, duration, and outcome
+status (`ok`, `truncated`, or `error` with its code). A truncated response —
+previously the one event in the pipeline that threw nothing and logged
+nothing — gets its own event: response size, complete-vs-cut-off line
+counts, whether the final meta line was present, which files were covered
+versus left uncovered, and a short raw preview of what came back (bounded
+length, same key-based redaction as everywhere else — not scanned for
+secret-shaped content). Recovery decisions — an identical retry in flight, a
+batch split into halves, a continuation starting with N files — are logged
+as their own lines too, so a reader can follow what happened without knowing
+the retry/split algorithm.
+
+At the end of every review, one findings-funnel summary line reports counts
+at each stage from the table above — raw findings from LLM responses,
+deduped as cross-batch duplicate, dropped by anchor verification, folded by
+confidence threshold, and (deep mode) dropped by critic — down to the final
+count shown. If a review is cancelled or throws before reaching this line,
+the outer catch logs a closing line naming the last batch/stage reached, so
+that's distinguishable from a channel-write failure (the funnel's absence
+alone can't tell those apart).
+
 Every failed attempt — including ones that succeed on retry — is logged to
-the shared `"Ticket Sidekick"` output channel (`View → Output`), along with
-the model identity in use (vendor/family/id/version) once per review. This
-is what makes it possible to tell a one-off provider hiccup apart from a
-specific model that consistently fails on a specific prompt shape.
+the output channel this way, along with the model identity in use
+(vendor/family/id/version) once per review. This is what makes it possible
+to tell a one-off provider hiccup apart from a specific model that
+consistently fails on a specific prompt shape, or the model's output from
+an operator-side misconfiguration.
+
+### Detailed diagnostics (opt-in)
+
+`ticketSidekick.bitbucket.detailedDiagnostics` (boolean, default `false`)
+additionally buffers every line above during the run and, when the review
+completes, emits a single fenced structured record to the output channel —
+configuration, every per-call/event line, and the findings funnel — as one
+copy-pasteable block for comparing two runs or filing a provider bug report.
+It adds no file persistence and no size cap; a large or deep-mode review
+produces a proportionally larger block. Off by default, it adds no
+measurable overhead to the normal always-on timeline.
 
 ## Provenance (new vs. existing code)
 
