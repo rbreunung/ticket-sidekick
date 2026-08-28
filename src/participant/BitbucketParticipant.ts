@@ -43,6 +43,10 @@ import { validateBaseUrl } from '../services/configValidation';
 import { withLmRetry, withEasierRetry, isTransientLmError, PartialLmResponseError } from '../utils/lmRetry';
 import { logDiag } from '../utils/diagLog';
 import { sanitizeDetails } from '../utils/logRedaction';
+import {
+  errorCodeOf, handleAttemptFailure,
+  type CallAttemptOut, type CallDiagHooks,
+} from './bitbucket/reviewDiagnostics';
 
 function getLastAssistantText(chatContext: vscode.ChatContext): string {
   for (let i = chatContext.history.length - 1; i >= 0; i--) {
@@ -134,34 +138,6 @@ async function callLLMOnceWithProgress(
       progress.report({ message: `${statusMessage} · ${chars.toLocaleString()} chars…` });
     }),
   );
-}
-
-/**
- * Written into by `callLLM` on completion, so a review-pipeline call site can
- * log its own R1/R2 per-call line (with the real per-attempt duration) after
- * inspecting the response for truncation — something `callLLM` itself can't
- * know, since NDJSON parsing is the caller's concern.
- */
-interface CallAttemptOut {
-  attempt: number;
-  durationMs: number;
-}
-
-/** Called once per failed attempt (in addition to the existing `logLmFailure`), so a
- * review-pipeline call site can also emit R1/R2's per-call line shape for the failure. */
-type OnCallAttemptError = (attempt: number, durationMs: number, errorCode?: string) => void;
-
-/** Optional diagnostics hooks for `callLLM`/`callLLMWithProgress` — used only by the
- * review-pipeline call sites (continuation, pass2) that need R1/R2's per-call line;
- * every other caller omits this and gets the unchanged plain-string behavior. */
-interface CallDiagHooks {
-  attemptOut?: CallAttemptOut;
-  onAttemptError?: OnCallAttemptError;
-}
-
-function errorCodeOf(err: unknown): string | undefined {
-  const code = (err as { code?: unknown })?.code;
-  return typeof code === 'string' ? code : undefined;
 }
 
 /** 3 identical tries (see lmRetry.ts) — for a single, non-splittable prompt. */
@@ -803,43 +779,13 @@ export function createBitbucketParticipant(
           },
           halveFiles,
           {
-            onAttemptFailed: (attempt, err, files) => {
-              logLmFailure(pass1Label, attempt, err, {
-                files: files.map((f) => f.path),
-              });
-              logReview('error', formatCallLine({
-                runTag, pass: 'pass1', batch: i + 1, totalBatches: chunks.length, attempt: pass1Tracker.attempt,
-                itemCount: files.length, promptChars: pass1PromptChars, durationMs: pass1Tracker.elapsedMs(),
-                status: 'error', errorCode: errorCodeOf(err),
-              }));
-              // R5: log what happens next, so a reader can follow along without knowing
-              // withEasierRetry's algorithm (see lmRetry.ts for the exact 3-tries budget).
-              // Gated on `files === chunk` — a post-split half is a distinct array
-              // reference and tryOnceEasier never retries it, so without this check a
-              // split half's one-and-only (terminal) failure would falsely log "retry
-              // in flight" using the tracker's per-subset attempt count of 1.
-              if (isTransientLmError(err) && files === chunk) {
-                if (chunk.length <= 1) {
-                  // Single-item chunk can't split further — it gets the plain 3-identical-
-                  // tries budget (withLmRetry's default retries: 2), not the split path.
-                  if (pass1Tracker.attempt < 3) {
-                    logReview('info', formatRecoveryDecision(runTag, {
-                      kind: 'retry', pass: 'pass1', batch: i + 1, totalBatches: chunks.length, attempt: pass1Tracker.attempt + 1,
-                    }));
-                  }
-                } else if (pass1Tracker.attempt === 1) {
-                  logReview('info', formatRecoveryDecision(runTag, {
-                    kind: 'retry', pass: 'pass1', batch: i + 1, totalBatches: chunks.length, attempt: pass1Tracker.attempt + 1,
-                  }));
-                } else if (pass1Tracker.attempt === 2) {
-                  const [left, right] = halveFiles(files);
-                  logReview('info', formatRecoveryDecision(runTag, {
-                    kind: 'split', pass: 'pass1', batch: i + 1, totalBatches: chunks.length,
-                    leftCount: left.length, rightCount: right.length,
-                  }));
-                }
-              }
-            },
+            onAttemptFailed: (attempt, err, files) => handleAttemptFailure({
+              runTag, pass: 'pass1', batch: i + 1, totalBatches: chunks.length,
+              libraryAttempt: attempt, err, items: files, originalItems: chunk,
+              tracker: pass1Tracker, promptChars: pass1PromptChars, split: halveFiles,
+              logFailure: (a, e) => logLmFailure(pass1Label, a, e, { files: files.map((f) => f.path) }),
+              logReview,
+            }),
           },
         );
 
@@ -1012,37 +958,13 @@ export function createBitbucketParticipant(
             },
             halveFindings,
             {
-              onAttemptFailed: (attempt, err, findingsSubset) => {
-                logLmFailure(criticLabel, attempt, err, {
-                  findingTitles: findingsSubset.map((f) => f.title),
-                });
-                logReview('error', formatCallLine({
-                  runTag, pass: 'critic', batch: i + 1, totalBatches: chunks.length, attempt: criticTracker.attempt,
-                  itemCount: findingsSubset.length, promptChars: criticPromptChars,
-                  durationMs: criticTracker.elapsedMs(), status: 'error', errorCode: errorCodeOf(err),
-                }));
-                // Gated on identity against the original (unsplit) chunkFindings — see the
-                // matching pass1 comment above for why the split-half case must be excluded.
-                if (isTransientLmError(err) && findingsSubset === chunkFindings) {
-                  if (chunkFindings.length <= 1) {
-                    if (criticTracker.attempt < 3) {
-                      logReview('info', formatRecoveryDecision(runTag, {
-                        kind: 'retry', pass: 'critic', batch: i + 1, totalBatches: chunks.length, attempt: criticTracker.attempt + 1,
-                      }));
-                    }
-                  } else if (criticTracker.attempt === 1) {
-                    logReview('info', formatRecoveryDecision(runTag, {
-                      kind: 'retry', pass: 'critic', batch: i + 1, totalBatches: chunks.length, attempt: criticTracker.attempt + 1,
-                    }));
-                  } else if (criticTracker.attempt === 2) {
-                    const [left, right] = halveFindings(findingsSubset);
-                    logReview('info', formatRecoveryDecision(runTag, {
-                      kind: 'split', pass: 'critic', batch: i + 1, totalBatches: chunks.length,
-                      leftCount: left.length, rightCount: right.length,
-                    }));
-                  }
-                }
-              },
+              onAttemptFailed: (attempt, err, findingsSubset) => handleAttemptFailure({
+                runTag, pass: 'critic', batch: i + 1, totalBatches: chunks.length,
+                libraryAttempt: attempt, err, items: findingsSubset, originalItems: chunkFindings,
+                tracker: criticTracker, promptChars: criticPromptChars, split: halveFindings,
+                logFailure: (a, e) => logLmFailure(criticLabel, a, e, { findingTitles: findingsSubset.map((f) => f.title) }),
+                logReview,
+              }),
             },
           );
 
