@@ -822,7 +822,9 @@ export function createBitbucketParticipant(
       // Collapse the same issue surfacing in multiple batches before numbering.
       const deduped = dedupeFindings(allFindings);
       const numbered = deduped.map((f, idx) => ({ ...f, id: idx + 1 }));
-      const output = service.formatReview(numbered, pr, fileDiffs.length, config.confidenceThreshold);
+      const { markdown: output, primaryCount, lowCount } = service.formatReview(
+        numbered, pr, fileDiffs.length, config.confidenceThreshold,
+      );
       logDiag('bitbucket.review', 'info', `PR review completed — ${numbered.length} finding(s)`, {
         project: parsed.project, repo: parsed.repo, prId: parsed.prId,
         findingCount: numbered.length, fileCount: fileDiffs.length, batchCount: chunks.length, anyBatchFailed,

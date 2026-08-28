@@ -208,28 +208,38 @@ export function parseNdjsonFindings(raw: string): {
   additionalFilesNeeded: string[];
   hasMetaLine: boolean;
   truncated: boolean;
+  /** The un-parsed text of the last line, when the response was cut off mid-line
+   * (that line starts with `{` but fails to parse) and no later line parsed
+   * successfully. Undefined when the response ends cleanly on a line boundary,
+   * or when a mid-stream parse failure is followed by a line that does parse. */
+  danglingTail?: string;
 } {
   const findings: Array<Record<string, unknown>> = [];
   let additionalFilesNeeded: string[] = [];
   let hasMetaLine = false;
+  let danglingTail: string | undefined;
   for (const line of raw.split('\n')) {
     const t = line.trim();
     if (!t.startsWith('{')) continue;
     try {
       const obj = JSON.parse(t) as Record<string, unknown>;
+      danglingTail = undefined; // this line parsed — any earlier failure was not the tail
       if (Array.isArray(obj.additionalFilesNeeded) && Object.keys(obj).length === 1) {
         additionalFilesNeeded = obj.additionalFilesNeeded as string[];
         hasMetaLine = true;
       } else if (typeof obj.file === 'string') {
         findings.push(obj);
       }
-    } catch { /* incomplete last line */ }
+    } catch {
+      danglingTail = t; // incomplete last line — kept only if nothing later parses
+    }
   }
   return {
     findings,
     additionalFilesNeeded,
     hasMetaLine,
     truncated: !hasMetaLine && (findings.length > 0 || raw.trim().length > 0),
+    ...(danglingTail !== undefined ? { danglingTail } : {}),
   };
 }
 
@@ -677,6 +687,70 @@ export function selectFilesWithinBudget(
     used += e.tokens;
   }
   return selected;
+}
+
+/** One per-call diagnostic line (R1/R2): identifies the call and carries size/duration/outcome. */
+export interface CallLineInfo {
+  runTag: string;
+  /** e.g. 'pass1', 'continuation', 'pass2', 'critic'. */
+  pass: string;
+  batch: number;
+  totalBatches: number;
+  attempt: number;
+  itemCount: number;
+  promptChars: number;
+  responseChars?: number;
+  durationMs: number;
+  status: 'ok' | 'truncated' | 'error';
+  errorCode?: string;
+}
+
+/** Renders R1/R2's one compact per-call diagnostic line. Pure so it stays Vitest-covered. */
+export function formatCallLine(info: CallLineInfo): string {
+  const estimatedTokens = Math.ceil(info.promptChars / 4);
+  const batchPart = info.totalBatches > 1 ? ` batch ${info.batch}/${info.totalBatches}` : '';
+  const responsePart = info.responseChars !== undefined ? `, response ${info.responseChars}c` : '';
+  const statusLabel =
+    info.status === 'error' ? `error${info.errorCode ? ` (${info.errorCode})` : ''}` : info.status;
+  return (
+    `[${info.runTag}] ${info.pass}${batchPart} attempt ${info.attempt} — ` +
+    `${info.itemCount} item(s), prompt ${info.promptChars}c (~${estimatedTokens} tok)${responsePart}, ` +
+    `${info.durationMs}ms, ${statusLabel}`
+  );
+}
+
+/**
+ * Findings funnel counts (R6). Stage counts, not remainders — `dedupedCrossBatch` is
+ * how many were removed as a cross-batch duplicate, `droppedByAnchor` how many an
+ * unlocatable `anchorCode` dropped, `foldedByConfidence` how many folded into the
+ * collapsed low-confidence section (still shown, just not primary), `droppedByCritic`
+ * (deep mode only) how many the critic pass rejected, and `final` the primary
+ * (high-confidence, critic-confirmed) count actually listed in the review body.
+ * They reconcile as: raw = dedupedCrossBatch + droppedByAnchor + foldedByConfidence
+ * + (droppedByCritic ?? 0) + final.
+ */
+export interface FindingsFunnelCounts {
+  raw: number;
+  dedupedCrossBatch: number;
+  droppedByAnchor: number;
+  foldedByConfidence: number;
+  droppedByCritic?: number;
+  final: number;
+}
+
+/** Renders R6's end-of-review findings funnel summary. Pure so it stays Vitest-covered. */
+export function formatFindingsFunnel(counts: FindingsFunnelCounts): string {
+  const lines = [
+    `Findings funnel — raw ${counts.raw}`,
+    `-> deduped as cross-batch duplicate: ${counts.dedupedCrossBatch}`,
+    `-> dropped by anchor verification: ${counts.droppedByAnchor}`,
+    `-> folded by confidence threshold: ${counts.foldedByConfidence}`,
+  ];
+  if (counts.droppedByCritic !== undefined) {
+    lines.push(`-> dropped by critic: ${counts.droppedByCritic}`);
+  }
+  lines.push(`-> final: ${counts.final}`);
+  return lines.join('\n');
 }
 
 export function buildAdaptiveChunks(diffs: FileDiff[], tokenBudget: number): FileDiff[][] {

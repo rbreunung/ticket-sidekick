@@ -8,6 +8,7 @@ import {
   parseCriticKeep, dedupeFindings, extractHunkAround,
   parseFollowUpIntent, buildPrContextPrompt, buildDiffAwarePrompt,
   parseUpfrontQuestion, stripUpfrontQuestion,
+  formatCallLine, formatFindingsFunnel,
 } from '../participant/reviewSessionState';
 import type { ReviewFinding } from '../participant/reviewSessionState';
 import { PrReviewService } from '../services/PrReviewService';
@@ -344,15 +345,17 @@ describe('PrReviewService.formatReview', () => {
         title: 'No error handling', description: 'Missing try/catch', recommendation: 'Add try/catch' },
     ];
 
-    const output = service.formatReview(findings, pr, 1);
+    const { markdown, primaryCount, lowCount } = service.formatReview(findings, pr, 1);
 
-    expect(output).toContain('## PR #42');
-    expect(output).toContain('Jane Smith');
-    expect(output).toContain('**#1**');
-    expect(output).toContain('**#2**');
-    expect(output).toContain('🔴');
-    expect(output).toContain('🟡');
-    expect(output).toContain('<!-- bitbucket:review-session -->');
+    expect(markdown).toContain('## PR #42');
+    expect(markdown).toContain('Jane Smith');
+    expect(markdown).toContain('**#1**');
+    expect(markdown).toContain('**#2**');
+    expect(markdown).toContain('🔴');
+    expect(markdown).toContain('🟡');
+    expect(markdown).toContain('<!-- bitbucket:review-session -->');
+    expect(primaryCount).toBe(2);
+    expect(lowCount).toBe(0);
   });
 
   it('folds low-confidence findings into a collapsed section and keeps high-confidence ones primary', () => {
@@ -366,12 +369,36 @@ describe('PrReviewService.formatReview', () => {
       { id: 1, file: 'a.ts', line: 5, confidence: 0.95, severity: 'critical', title: 'Solid bug', description: 'D', recommendation: 'R' },
       { id: 2, file: 'a.ts', line: 9, confidence: 0.3, severity: 'warning', title: 'Shaky guess', description: 'D', recommendation: 'R' },
     ];
-    const output = service.formatReview(findings, pr, 1, 0.7);
-    expect(output).toContain('Solid bug');
-    expect(output).toContain('<details>');
-    expect(output).toContain('low-confidence');
-    expect(output).toContain('Shaky guess');
-    expect(output).toContain('30%');
+    const { markdown, primaryCount, lowCount } = service.formatReview(findings, pr, 1, 0.7);
+    expect(markdown).toContain('Solid bug');
+    expect(markdown).toContain('<details>');
+    expect(markdown).toContain('low-confidence');
+    expect(markdown).toContain('Shaky guess');
+    expect(markdown).toContain('30%');
+    expect(primaryCount).toBe(1);
+    expect(lowCount).toBe(1);
+  });
+
+  it('reports zero primary and the full low count when every finding is below threshold', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const pr: BitbucketPR = {
+      id: 7, title: 'PR', description: '', author: { displayName: 'A', emailAddress: '' },
+      targetBranch: 'main', fromCommitHash: 'h',
+    };
+    const findings: ReviewFinding[] = [
+      { id: 1, file: 'a.ts', line: 5, confidence: 0.4, severity: 'warning', title: 'Shaky one', description: 'D', recommendation: 'R' },
+      { id: 2, file: 'a.ts', line: 9, confidence: 0.2, severity: 'suggestion', title: 'Shaky two', description: 'D', recommendation: 'R' },
+    ];
+
+    const { markdown, primaryCount, lowCount } = service.formatReview(findings, pr, 1, 0.7);
+
+    expect(primaryCount).toBe(0);
+    expect(lowCount).toBe(2);
+    expect(markdown).toContain('_No high-confidence issues._');
+    expect(markdown).toContain('<details>');
+    expect(markdown).toContain('Shaky one');
+    expect(markdown).toContain('Shaky two');
   });
 
   it('renders provenance tags and related-line references on findings', () => {
@@ -385,10 +412,12 @@ describe('PrReviewService.formatReview', () => {
       { id: 1, file: 'a.ts', line: 19, provenance: 'new', relatedLines: [11, 15], severity: 'warning', title: 'Builds up', description: 'D', recommendation: 'R' },
       { id: 2, file: 'a.ts', line: 4, provenance: 'existing', severity: 'suggestion', title: 'Pre-existing', description: 'D', recommendation: 'R' },
     ];
-    const output = service.formatReview(findings, pr, 1);
-    expect(output).toContain('🆕');
-    expect(output).toContain('📍');
-    expect(output).toContain('also L11, L15');
+    const { markdown, primaryCount, lowCount } = service.formatReview(findings, pr, 1);
+    expect(markdown).toContain('🆕');
+    expect(markdown).toContain('📍');
+    expect(markdown).toContain('also L11, L15');
+    expect(primaryCount).toBe(2);
+    expect(lowCount).toBe(0);
   });
 
   it('renders a no-issues message when findings is empty', () => {
@@ -400,10 +429,12 @@ describe('PrReviewService.formatReview', () => {
       targetBranch: 'main', fromCommitHash: 'def456',
     };
 
-    const output = service.formatReview([], pr, 2);
+    const { markdown, primaryCount, lowCount } = service.formatReview([], pr, 2);
 
-    expect(output).toContain('_No issues found._');
-    expect(output).toContain('<!-- bitbucket:review-session -->');
+    expect(markdown).toContain('_No issues found._');
+    expect(markdown).toContain('<!-- bitbucket:review-session -->');
+    expect(primaryCount).toBe(0);
+    expect(lowCount).toBe(0);
   });
 
   it('includes a cancel hint in the reply instruction', () => {
@@ -419,8 +450,8 @@ describe('PrReviewService.formatReview', () => {
     ];
     const withFindings = service.formatReview(findings, pr, 1);
     const noFindings = service.formatReview([], pr, 1);
-    expect(withFindings).toContain('(c)');
-    expect(noFindings).toContain('(c)');
+    expect(withFindings.markdown).toContain('(c)');
+    expect(noFindings.markdown).toContain('(c)');
   });
 });
 
@@ -993,6 +1024,7 @@ describe('parseNdjsonFindings', () => {
     expect(result.additionalFilesNeeded).toEqual(['src/c.ts']);
     expect(result.hasMetaLine).toBe(true);
     expect(result.truncated).toBe(false);
+    expect(result.danglingTail).toBeUndefined();
   });
 
   it('recovers findings when meta line is absent (truncated)', () => {
@@ -1001,6 +1033,19 @@ describe('parseNdjsonFindings', () => {
     expect(result.findings).toHaveLength(2);
     expect(result.hasMetaLine).toBe(false);
     expect(result.truncated).toBe(true);
+    // Cut on a line boundary: nothing was lost mid-line, so there is no tail.
+    expect(result.danglingTail).toBeUndefined();
+  });
+
+  it('returns the un-parsed dangling tail when the response is cut mid-line', () => {
+    const incomplete = JSON.stringify(f2).slice(0, 30);
+    const raw = JSON.stringify(f1) + '\n' + incomplete;
+    const result = parseNdjsonFindings(raw);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]).toMatchObject(f1);
+    expect(result.hasMetaLine).toBe(false);
+    expect(result.truncated).toBe(true);
+    expect(result.danglingTail).toBe(incomplete);
   });
 
   it('returns empty findings and no truncation for empty raw', () => {
@@ -1008,6 +1053,7 @@ describe('parseNdjsonFindings', () => {
     expect(result.findings).toHaveLength(0);
     expect(result.hasMetaLine).toBe(false);
     expect(result.truncated).toBe(false);
+    expect(result.danglingTail).toBeUndefined();
   });
 
   it('does not treat old single-object JSON format as a meta line', () => {
@@ -1016,6 +1062,8 @@ describe('parseNdjsonFindings', () => {
     expect(result.findings).toHaveLength(0);
     expect(result.hasMetaLine).toBe(false);
     expect(result.truncated).toBe(true);
+    // The line parsed fine (it is just not a finding) — it is not a cut-off tail.
+    expect(result.danglingTail).toBeUndefined();
   });
 
   it('ignores incomplete last line without throwing', () => {
@@ -1026,6 +1074,81 @@ describe('parseNdjsonFindings', () => {
     expect(result.findings[0]).toMatchObject(f1);
     expect(result.hasMetaLine).toBe(true);
     expect(result.truncated).toBe(false);
+    // A meta line completed the response, so the mid-stream garbage is not a truncation tail.
+    expect(result.danglingTail).toBeUndefined();
+  });
+});
+
+describe('formatCallLine', () => {
+  const base = {
+    runTag: 'pr=PROJ/repo#42',
+    pass: 'pass1',
+    batch: 1,
+    totalBatches: 2,
+    attempt: 1,
+    itemCount: 3,
+    promptChars: 4000,
+    durationMs: 1234,
+  } as const;
+
+  it('renders an ok outcome with run tag, batch, sizes, tokens, and duration', () => {
+    const line = formatCallLine({ ...base, responseChars: 500, status: 'ok' });
+    expect(line).toContain('pr=PROJ/repo#42');
+    expect(line).toContain('pass1');
+    expect(line).toContain('batch 1/2');
+    expect(line).toContain('attempt 1');
+    expect(line).toContain('3 item(s)');
+    expect(line).toContain('4000c');
+    expect(line).toContain('~1000 tok');
+    expect(line).toContain('response 500c');
+    expect(line).toContain('1234ms');
+    expect(line).toContain('ok');
+  });
+
+  it('renders a truncated outcome', () => {
+    const line = formatCallLine({ ...base, responseChars: 200, status: 'truncated' });
+    expect(line).toContain('truncated');
+  });
+
+  it('renders an error outcome with its code', () => {
+    const line = formatCallLine({ ...base, status: 'error', errorCode: 'Unknown' });
+    expect(line).toContain('error (Unknown)');
+  });
+
+  it('omits the batch fragment for a single-batch review', () => {
+    const line = formatCallLine({ ...base, totalBatches: 1, status: 'ok' });
+    expect(line).not.toContain('batch');
+  });
+});
+
+describe('formatFindingsFunnel', () => {
+  it('reconciles raw against the sum of every stage plus final (including cross-batch dedup)', () => {
+    const counts = {
+      raw: 20,
+      dedupedCrossBatch: 3,
+      droppedByAnchor: 4,
+      foldedByConfidence: 5,
+      droppedByCritic: 2,
+      final: 6,
+    };
+    expect(
+      counts.dedupedCrossBatch + counts.droppedByAnchor + counts.foldedByConfidence + counts.droppedByCritic + counts.final,
+    ).toBe(counts.raw);
+
+    const summary = formatFindingsFunnel(counts);
+    expect(summary).toContain('raw 20');
+    expect(summary).toContain('deduped as cross-batch duplicate: 3');
+    expect(summary).toContain('dropped by anchor verification: 4');
+    expect(summary).toContain('folded by confidence threshold: 5');
+    expect(summary).toContain('dropped by critic: 2');
+    expect(summary).toContain('final: 6');
+  });
+
+  it('omits the critic line outside deep mode', () => {
+    const summary = formatFindingsFunnel({
+      raw: 10, dedupedCrossBatch: 1, droppedByAnchor: 2, foldedByConfidence: 3, final: 4,
+    });
+    expect(summary).not.toContain('critic');
   });
 });
 

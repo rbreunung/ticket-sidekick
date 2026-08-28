@@ -160,7 +160,12 @@ export class PrReviewService {
     );
   }
 
-  formatReview(findings: ReviewFinding[], pr: BitbucketPR, fileCount: number, confidenceThreshold?: number): string {
+  formatReview(
+    findings: ReviewFinding[],
+    pr: BitbucketPR,
+    fileCount: number,
+    confidenceThreshold?: number,
+  ): { markdown: string; primaryCount: number; lowCount: number } {
     const severityIcon = (s: ReviewFinding['severity']) =>
       s === 'critical' ? '🔴' : s === 'warning' ? '🟡' : '🔵';
     const provenanceIcon = (p: ReviewFinding['provenance']) =>
@@ -206,7 +211,11 @@ export class PrReviewService {
         : '';
 
     if (primary.length === 0) {
-      return `${header}${lowFold}\n\n_Ask a question about the PR or reply **(c)** to exit._\n\n<!-- bitbucket:review-session -->`;
+      return {
+        markdown: `${header}${lowFold}\n\n_Ask a question about the PR or reply **(c)** to exit._\n\n<!-- bitbucket:review-session -->`,
+        primaryCount: primary.length,
+        lowCount: low.length,
+      };
     }
 
     const byFile = new Map<string, ReviewFinding[]>();
@@ -230,7 +239,11 @@ export class PrReviewService {
       })
       .join('\n\n---\n\n');
 
-    return `${header}\n\n---\n\n${fileSections}${lowFold}\n\n---\n\n_Reply **#1** or describe a finding to ask a follow-up, or ask any question about the PR. To post findings as PR comments: **#2 #3 add to review**. Reply **(c)** to exit this session._\n\n<!-- bitbucket:review-session -->`;
+    return {
+      markdown: `${header}\n\n---\n\n${fileSections}${lowFold}\n\n---\n\n_Reply **#1** or describe a finding to ask a follow-up, or ask any question about the PR. To post findings as PR comments: **#2 #3 add to review**. Reply **(c)** to exit this session._\n\n<!-- bitbucket:review-session -->`,
+      primaryCount: primary.length,
+      lowCount: low.length,
+    };
   }
 
   formatPrComment(finding: ReviewFinding, userNote?: string): string {
