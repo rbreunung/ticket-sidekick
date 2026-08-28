@@ -23,6 +23,7 @@ import {
   parseCriticKeep,
   dedupeFindings,
   buildRunTag,
+  formatCallLine,
   type ReviewFinding,
   type ReviewSession,
   type BitbucketCommentPreviewSession,
@@ -128,6 +129,26 @@ async function callLLMOnceWithProgress(
   );
 }
 
+/**
+ * Written into by `callLLM` on completion, so a review-pipeline call site can
+ * log its own R1/R2 per-call line (with the real per-attempt duration) after
+ * inspecting the response for truncation — something `callLLM` itself can't
+ * know, since NDJSON parsing is the caller's concern.
+ */
+interface CallAttemptOut {
+  attempt: number;
+  durationMs: number;
+}
+
+/** Called once per failed attempt (in addition to the existing `logLmFailure`), so a
+ * review-pipeline call site can also emit R1/R2's per-call line shape for the failure. */
+type OnCallAttemptError = (attempt: number, durationMs: number, errorCode?: string) => void;
+
+function errorCodeOf(err: unknown): string | undefined {
+  const code = (err as { code?: unknown })?.code;
+  return typeof code === 'string' ? code : undefined;
+}
+
 /** 3 identical tries (see lmRetry.ts) — for a single, non-splittable prompt. */
 async function callLLM(
   prompt: string,
@@ -135,16 +156,32 @@ async function callLLM(
   token: vscode.CancellationToken,
   contextLabel: string,
   onChunk?: (totalChars: number) => void,
+  attemptOut?: CallAttemptOut,
+  onAttemptError?: OnCallAttemptError,
 ): Promise<string> {
-  return withLmRetry(
-    () => callLLMOnce(prompt, model, token, onChunk),
+  let attempt = 0;
+  let attemptStart = 0;
+  const raw = await withLmRetry(
+    () => {
+      attempt++;
+      attemptStart = Date.now();
+      return callLLMOnce(prompt, model, token, onChunk);
+    },
     {
-      onAttemptFailed: (attempt, err) => logLmFailure(contextLabel, attempt, err, {
-        promptChars: prompt.length,
-        estimatedTokens: Math.ceil(prompt.length / 4),
-      }),
+      onAttemptFailed: (a, err) => {
+        logLmFailure(contextLabel, a, err, {
+          promptChars: prompt.length,
+          estimatedTokens: Math.ceil(prompt.length / 4),
+        });
+        onAttemptError?.(a, Date.now() - attemptStart, errorCodeOf(err));
+      },
     },
   );
+  if (attemptOut) {
+    attemptOut.attempt = attempt;
+    attemptOut.durationMs = Date.now() - attemptStart;
+  }
+  return raw;
 }
 
 async function callLLMWithProgress(
@@ -153,12 +190,14 @@ async function callLLMWithProgress(
   token: vscode.CancellationToken,
   statusMessage: string,
   contextLabel: string,
+  attemptOut?: CallAttemptOut,
+  onAttemptError?: OnCallAttemptError,
 ): Promise<string> {
   return vscode.window.withProgress(
     { location: vscode.ProgressLocation.Window, title: 'Ticket Sidekick' },
     (progress) => callLLM(prompt, model, token, contextLabel, (chars) => {
       progress.report({ message: `${statusMessage} · ${chars.toLocaleString()} chars…` });
-    }),
+    }, attemptOut, onAttemptError),
   );
 }
 
@@ -678,20 +717,46 @@ export function createBitbucketParticipant(
           batch: i + 1, totalBatches: chunks.length, fileCount: chunk.length,
         });
 
+        // Closure-local attempt counter, scoped per item-subset (KTD8): the outer
+        // withEasierRetry can split `chunk` in half on its 3rd try, and each half then
+        // gets its own single attempt — resetting on a new items reference keeps that
+        // half's line reading "attempt 1" (its own only try) instead of continuing the
+        // full batch's count, and keeps success/failure lines using the same number.
+        let pass1Attempt = 0;
+        let pass1LastItems: FileDiff[] | null = null;
+        let pass1AttemptStart = 0;
+        let pass1PromptChars = 0;
         const pass1Batches = await withEasierRetry(
           chunk,
           async (files) => {
+            if (files !== pass1LastItems) { pass1LastItems = files; pass1Attempt = 0; }
+            pass1Attempt += 1;
+            pass1AttemptStart = Date.now();
             const prompt = service.buildPrompt(pr, files, undefined, extraInstructions);
+            pass1PromptChars = prompt.length;
             totalInputChars += prompt.length;
             const raw = await callLLMOnceWithProgress(prompt, request.model, token, batchStatus);
             totalOutputChars += raw.length;
+            const status = parseNdjsonFindings(raw).truncated ? 'truncated' : 'ok';
+            logDiag('bitbucket.review', 'info', formatCallLine({
+              runTag, pass: 'pass1', batch: i + 1, totalBatches: chunks.length, attempt: pass1Attempt,
+              itemCount: files.length, promptChars: prompt.length, responseChars: raw.length,
+              durationMs: Date.now() - pass1AttemptStart, status,
+            }));
             return raw;
           },
           halveFiles,
           {
-            onAttemptFailed: (attempt, err, files) => logLmFailure(pass1Label, attempt, err, {
-              files: files.map((f) => f.path),
-            }),
+            onAttemptFailed: (attempt, err, files) => {
+              logLmFailure(pass1Label, attempt, err, {
+                files: files.map((f) => f.path),
+              });
+              logDiag('bitbucket.review', 'error', formatCallLine({
+                runTag, pass: 'pass1', batch: i + 1, totalBatches: chunks.length, attempt: pass1Attempt,
+                itemCount: files.length, promptChars: pass1PromptChars, durationMs: Date.now() - pass1AttemptStart,
+                status: 'error', errorCode: errorCodeOf(err),
+              }));
+            },
           },
         );
 
@@ -719,9 +784,22 @@ export function createBitbucketParticipant(
                 const contInstructions = continuationNote + (extraInstructions ? '\n' + extraInstructions : '');
                 const contPrompt = service.buildPrompt(pr, uncoveredFiles, undefined, contInstructions);
                 totalInputChars += contPrompt.length;
-                const contRaw = await callLLMWithProgress(contPrompt, request.model, token, `${batchStatus} continuation`, `continuation batch ${i + 1}/${chunks.length}`);
+                const contAttempt: CallAttemptOut = { attempt: 0, durationMs: 0 };
+                const contRaw = await callLLMWithProgress(
+                  contPrompt, request.model, token, `${batchStatus} continuation`,
+                  `continuation batch ${i + 1}/${chunks.length}`, contAttempt,
+                  (attempt, durationMs, errorCode) => logDiag('bitbucket.review', 'error', formatCallLine({
+                    runTag, pass: 'continuation', batch: i + 1, totalBatches: chunks.length, attempt,
+                    itemCount: uncoveredFiles.length, promptChars: contPrompt.length, durationMs, status: 'error', errorCode,
+                  })),
+                );
                 totalOutputChars += contRaw.length;
                 const cont = await parseReviewResponse(contRaw);
+                logDiag('bitbucket.review', 'info', formatCallLine({
+                  runTag, pass: 'continuation', batch: i + 1, totalBatches: chunks.length, attempt: contAttempt.attempt,
+                  itemCount: uncoveredFiles.length, promptChars: contPrompt.length, responseChars: contRaw.length,
+                  durationMs: contAttempt.durationMs, status: cont.truncated ? 'truncated' : 'ok',
+                }));
                 batchFindings = resolveFindingAnchors([...findings, ...cont.findings], batch.items);
               } catch (err) {
                 anyBatchFailed = true;
@@ -759,9 +837,22 @@ export function createBitbucketParticipant(
               if (extraContents.size > 0) {
                 const pass2Prompt = service.buildPrompt(pr, batch.items, extraContents, extraInstructions);
                 totalInputChars += pass2Prompt.length;
-                const pass2Raw = await callLLMWithProgress(pass2Prompt, request.model, token, `${batchStatus} pass 2`, `pass2 batch ${i + 1}/${chunks.length}`);
+                const pass2Attempt: CallAttemptOut = { attempt: 0, durationMs: 0 };
+                const pass2Raw = await callLLMWithProgress(
+                  pass2Prompt, request.model, token, `${batchStatus} pass 2`,
+                  `pass2 batch ${i + 1}/${chunks.length}`, pass2Attempt,
+                  (attempt, durationMs, errorCode) => logDiag('bitbucket.review', 'error', formatCallLine({
+                    runTag, pass: 'pass2', batch: i + 1, totalBatches: chunks.length, attempt,
+                    itemCount: batch.items.length, promptChars: pass2Prompt.length, durationMs, status: 'error', errorCode,
+                  })),
+                );
                 totalOutputChars += pass2Raw.length;
                 const pass2 = await parseReviewResponse(pass2Raw);
+                logDiag('bitbucket.review', 'info', formatCallLine({
+                  runTag, pass: 'pass2', batch: i + 1, totalBatches: chunks.length, attempt: pass2Attempt.attempt,
+                  itemCount: batch.items.length, promptChars: pass2Prompt.length, responseChars: pass2Raw.length,
+                  durationMs: pass2Attempt.durationMs, status: pass2.truncated ? 'truncated' : 'ok',
+                }));
                 if (pass2.truncated) {
                   stream.markdown(`_⚠ LLM response truncated (batch ${i + 1} pass 2) — review may be incomplete._\n\n`);
                 }
@@ -780,22 +871,43 @@ export function createBitbucketParticipant(
         // Deep mode only: re-verify findings against the diff and drop the ones the critic can't confirm.
         if (criticEnabled && chunkFindings.length > 0) {
           const criticLabel = `critic batch ${i + 1}/${chunks.length}`;
+          // Same per-item-subset attempt tracking as pass1 (KTD8) — see comment there.
+          let criticAttempt = 0;
+          let criticLastItems: Array<Omit<ReviewFinding, 'id'>> | null = null;
+          let criticAttemptStart = 0;
+          let criticPromptChars = 0;
           const criticBatches = await withEasierRetry(
             chunkFindings,
             async (findingsSubset) => {
+              if (findingsSubset !== criticLastItems) { criticLastItems = findingsSubset; criticAttempt = 0; }
+              criticAttempt += 1;
+              criticAttemptStart = Date.now();
               const referencedPaths = new Set(findingsSubset.map((f) => f.file));
               const relevantDiffs = chunk.filter((d) => referencedPaths.has(d.path));
               const prompt = service.buildCriticPrompt(pr, relevantDiffs, findingsSubset, extraInstructions);
+              criticPromptChars = prompt.length;
               totalInputChars += prompt.length;
               const raw = await callLLMOnceWithProgress(prompt, request.model, token, `${batchStatus} verifying`);
               totalOutputChars += raw.length;
+              logDiag('bitbucket.review', 'info', formatCallLine({
+                runTag, pass: 'critic', batch: i + 1, totalBatches: chunks.length, attempt: criticAttempt,
+                itemCount: findingsSubset.length, promptChars: prompt.length, responseChars: raw.length,
+                durationMs: Date.now() - criticAttemptStart, status: 'ok',
+              }));
               return raw;
             },
             halveFindings,
             {
-              onAttemptFailed: (attempt, err, findingsSubset) => logLmFailure(criticLabel, attempt, err, {
-                findingTitles: findingsSubset.map((f) => f.title),
-              }),
+              onAttemptFailed: (attempt, err, findingsSubset) => {
+                logLmFailure(criticLabel, attempt, err, {
+                  findingTitles: findingsSubset.map((f) => f.title),
+                });
+                logDiag('bitbucket.review', 'error', formatCallLine({
+                  runTag, pass: 'critic', batch: i + 1, totalBatches: chunks.length, attempt: criticAttempt,
+                  itemCount: findingsSubset.length, promptChars: criticPromptChars,
+                  durationMs: Date.now() - criticAttemptStart, status: 'error', errorCode: errorCodeOf(err),
+                }));
+              },
             },
           );
 
