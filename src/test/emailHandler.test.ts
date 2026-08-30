@@ -535,6 +535,20 @@ describe('streamEmailContentPreview', () => {
     expect(client.createIssueCalls[0].issueType).toBe('Task');
   });
 
+  it('list-less path with session.issueType === "" still shows the email preview before detouring to the input box', async () => {
+    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockResolvedValueOnce('Task');
+    const session = makeSession({ issueType: '', availableTemplates: undefined, availableIssueTypes: undefined });
+    const stream = mockStream();
+    const ws = makeMockWs();
+    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
+
+    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
+    // The subject/date/body preview is shown even though there's no list and nothing resolved —
+    // only the misleading "post it to create as <type>" sentence is skipped, not the whole preview.
+    expect(calls.some(c => c.includes('Test Subject'))).toBe(true);
+    expect(calls.some(c => c.includes('Hello **world**'))).toBe(true);
+  });
+
   it('list-less path with session.issueType === "" and a cancelled input box never creates a ticket', async () => {
     (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined);
     const session = makeSession({ issueType: '', availableTemplates: undefined, availableIssueTypes: undefined });

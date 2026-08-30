@@ -442,9 +442,26 @@ export async function streamEmailContentPreview(
   const issueTypes = session.availableIssueTypes ?? [];
   const hasOptions = templates.length > 0 || issueTypes.length > 0;
 
-  // No list to show and nothing resolved — there's no meaningful preview to render. Go straight to
-  // the free-type input box instead of ever stating a fabricated type as fact (R3).
+  const headerLines: string[] = [];
+  if (session.senderName || session.receivedDateTime) {
+    const fromPart = session.senderName ? `**From:** ${session.senderName}` : '';
+    const datePart = session.receivedDateTime ? `**Date:** ${session.receivedDateTime.slice(0, 10)}` : '';
+    if (fromPart && datePart) headerLines.push(`${fromPart} · ${datePart}`);
+    else headerLines.push(fromPart || datePart);
+  }
+  headerLines.push(`**Subject:** ${session.subject}`);
+  const nonInlineAttachments = session.attachments.filter(a => !a.isInline);
+  if (nonInlineAttachments.length > 0) {
+    headerLines.push(`**Attachments:** ${nonInlineAttachments.map(a => a.name).join(', ')}`);
+  }
+  const preview = `${headerLines.join('\n')}\n\n**Description preview:**\n\n${session.markdownBody}\n\n`;
+
+  // No list to show and nothing resolved — there's no meaningful choice to present, so after
+  // showing the same email preview as every other path, go straight to the free-type input box
+  // instead of ever stating a fabricated type as fact (R3). The preview stays visible either way —
+  // only the misleading "as <type>" sentence is skipped.
   if (!hasOptions && session.issueType === '') {
+    stream.markdown(preview);
     await ws.update('jira.session.emailContent', undefined);
     const resolvedIssueType = await resolveIssueTypeOrPrompt(session.issueType, stream);
     if (resolvedIssueType === null) return;
@@ -469,24 +486,7 @@ export async function streamEmailContentPreview(
     ? `${optionsList}Reply with a number to select, **post it** to create as ${issueTypeInlinePhrase(session.issueType)}, or **(c)** to cancel.${commentHint}`
     : `Reply **post it** to create the Jira ticket in **${session.projectKey}** as **${session.issueType}**, or **(c)** to cancel.${commentHint}`;
 
-  const headerLines: string[] = [];
-  if (session.senderName || session.receivedDateTime) {
-    const fromPart = session.senderName ? `**From:** ${session.senderName}` : '';
-    const datePart = session.receivedDateTime ? `**Date:** ${session.receivedDateTime.slice(0, 10)}` : '';
-    if (fromPart && datePart) headerLines.push(`${fromPart} · ${datePart}`);
-    else headerLines.push(fromPart || datePart);
-  }
-  headerLines.push(`**Subject:** ${session.subject}`);
-  const nonInlineAttachments = session.attachments.filter(a => !a.isInline);
-  if (nonInlineAttachments.length > 0) {
-    headerLines.push(`**Attachments:** ${nonInlineAttachments.map(a => a.name).join(', ')}`);
-  }
-
-  stream.markdown(
-    `${headerLines.join('\n')}\n\n` +
-    `**Description preview:**\n\n${session.markdownBody}\n\n` +
-    `${prompt}\n\n<!-- jira:email-content -->`,
-  );
+  stream.markdown(`${preview}${prompt}\n\n<!-- jira:email-content -->`);
 }
 
 export async function finishEmailTicket(session: EmailContentSession, ticketService: TicketService, stream: vscode.ChatResponseStream, baseUrl: string): Promise<void> {
