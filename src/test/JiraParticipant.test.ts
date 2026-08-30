@@ -739,8 +739,8 @@ describe('selectDefaultIssueType', () => {
     expect(selectDefaultIssueType(['Epic', 'Bug'])).toBe('Epic');
   });
 
-  it('returns literal "Story" when list is empty', () => {
-    expect(selectDefaultIssueType([])).toBe('Story');
+  it('returns the never-guess sentinel when list is empty', () => {
+    expect(selectDefaultIssueType([])).toBe('');
   });
 });
 

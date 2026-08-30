@@ -431,7 +431,7 @@ export function selectDefaultIssueType(issueTypes: string[]): string {
     issueTypes.find(t => t === 'Story') ??
     issueTypes.find(t => t === 'Task') ??
     issueTypes[0] ??
-    'Story'
+    ''
   );
 }
 

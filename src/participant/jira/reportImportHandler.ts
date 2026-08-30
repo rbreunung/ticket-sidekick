@@ -119,11 +119,24 @@ export async function buildImportTemplateSession<TItem, TRow extends ReportImpor
   descriptor: ReportImportDescriptor<TItem, TRow>,
 ): Promise<ImportTemplateSelectionSession<TItem>> {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+
+  let issueTypes: string[] = [];
+  try {
+    const project = await jiraClient.getProject(projectKey);
+    issueTypes = project.issueTypes.filter(t => !t.subtask).map(t => t.name);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logDiag(descriptor.scope, 'warn', `Could not fetch issue types — ${projectKey}, you'll be asked to type it`, {
+      projectKey, error: message,
+    });
+    descriptor.onIssueTypeFetchFailed?.(message, projectKey);
+  }
+
   const availableTemplates: Array<{ name: string; issueType: string }> = (() => {
     if (!workspaceRoot) return [];
     try {
       return new TemplateService(workspaceRoot).loadTemplates().templates
-        .map(t => ({ name: t.name, issueType: t.issueType ?? 'Bug' }));
+        .map(t => ({ name: t.name, issueType: t.issueType ?? issueTypes[0] ?? '' }));
     } catch (err) {
       logDiag(descriptor.scope, 'warn', 'Could not load templates — proceeding without', {
         error: err instanceof Error ? err.message : String(err),
@@ -132,24 +145,12 @@ export async function buildImportTemplateSession<TItem, TRow extends ReportImpor
     }
   })();
 
-  let issueTypes: string[] = [];
-  try {
-    const project = await jiraClient.getProject(projectKey);
-    issueTypes = project.issueTypes.filter(t => !t.subtask).map(t => t.name);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    logDiag(descriptor.scope, 'warn', `Could not fetch issue types — ${projectKey}, defaulting to 'Bug'`, {
-      projectKey, error: message,
-    });
-    descriptor.onIssueTypeFetchFailed?.(message, projectKey);
-  }
-
   return {
     reportFileName: fileName,
     projectKey,
     items,
     availableTemplates,
-    availableIssueTypes: issueTypes.length > 0 ? issueTypes : ['Bug'],
+    availableIssueTypes: issueTypes.length > 0 ? issueTypes : [''],
     schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
   };
 }

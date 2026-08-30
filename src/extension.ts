@@ -253,11 +253,22 @@ export function activate(context: vscode.ExtensionContext): void {
       });
       const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
+      const issueTypes = await jiraClient.getProject(projectKey)
+        .then(p => p.issueTypes.filter(t => !t.subtask).map(t => t.name))
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          logDiag('extension', 'warn', `Could not fetch issue types — ${projectKey}`, { projectKey, error: message });
+          vscode.window.showWarningMessage(
+            `Ticket Sidekick: Could not fetch issue types for ${projectKey} — you'll be asked to type it. ${message}`,
+          );
+          return [] as string[];
+        });
+
       const availableTemplates: Array<{ name: string; issueType: string }> = (() => {
         if (!workspaceRoot) return [];
         try {
           return new TemplateService(workspaceRoot).loadTemplates().templates
-            .map(t => ({ name: t.name, issueType: t.issueType ?? 'Story' }));
+            .map(t => ({ name: t.name, issueType: t.issueType ?? issueTypes[0] ?? '' }));
         } catch (err) {
           logDiag('extension', 'warn', 'Could not load templates — proceeding without', {
             error: err instanceof Error ? err.message : String(err),
@@ -266,16 +277,6 @@ export function activate(context: vscode.ExtensionContext): void {
         }
       })();
 
-      const issueTypes = await jiraClient.getProject(projectKey)
-        .then(p => p.issueTypes.filter(t => !t.subtask).map(t => t.name))
-        .catch((err: unknown) => {
-          const message = err instanceof Error ? err.message : String(err);
-          logDiag('extension', 'warn', `Could not fetch issue types — ${projectKey}`, { projectKey, error: message });
-          vscode.window.showWarningMessage(
-            `Ticket Sidekick: Could not fetch issue types for ${projectKey} — will default to 'Story'. ${message}`,
-          );
-          return [] as string[];
-        });
       const issueType = selectDefaultIssueType(issueTypes);
 
       const markdownBody = parsed.htmlBody

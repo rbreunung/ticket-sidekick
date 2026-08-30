@@ -145,19 +145,6 @@ async function buildEmailCreateSession(
   const projectKey = vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.defaultProject') ?? '';
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
-  const availableTemplates: Array<{ name: string; issueType: string }> = (() => {
-    if (!workspaceRoot) return [];
-    try {
-      return new TemplateService(workspaceRoot).loadTemplates().templates
-        .map(t => ({ name: t.name, issueType: t.issueType ?? 'Story' }));
-    } catch (err) {
-      logDiag('jira.email', 'warn', 'Could not load templates — proceeding without', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return [];
-    }
-  })();
-
   let issueTypes: string[] = [];
   if (projectKey) {
     try {
@@ -169,6 +156,19 @@ async function buildEmailCreateSession(
       });
     }
   }
+
+  const availableTemplates: Array<{ name: string; issueType: string }> = (() => {
+    if (!workspaceRoot) return [];
+    try {
+      return new TemplateService(workspaceRoot).loadTemplates().templates
+        .map(t => ({ name: t.name, issueType: t.issueType ?? issueTypes[0] ?? '' }));
+    } catch (err) {
+      logDiag('jira.email', 'warn', 'Could not load templates — proceeding without', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return [];
+    }
+  })();
 
   return {
     emailId: 'eml-import',
