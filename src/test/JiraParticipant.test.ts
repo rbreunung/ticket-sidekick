@@ -278,6 +278,10 @@ describe('parseResolutionSelection', () => {
     expect(parseResolutionSelection('maybe', options)).toBe('invalid');
   });
 
+  it('returns invalid for a partially-numeric string rather than truncating to a match', () => {
+    expect(parseResolutionSelection('1abc', options)).toBe('invalid');
+  });
+
   it('trims whitespace before matching', () => {
     expect(parseResolutionSelection('  2  ', options)).toBe("Won't Fix");
     expect(parseResolutionSelection('  none  ', options)).toBeNull();

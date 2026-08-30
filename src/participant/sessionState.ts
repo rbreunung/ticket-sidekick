@@ -206,13 +206,21 @@ export function parseSkipInput(reply: string, tickets: TransitionBatchTicket[]):
   return { action: 'skip', keys: [...expanded] };
 }
 
+// Shared by parseResolutionSelection and parseIssueTypePick: resolves a reply to one list item
+// by 1-based number or by exact case-insensitive name. The `String(n) === trimmed` guard rejects
+// a partially-numeric string like "1abc" rather than letting parseInt silently truncate it into
+// a match. Returns undefined when neither form matches.
+function pickByNumberOrName(reply: string, options: string[]): string | undefined {
+  const trimmed = reply.trim();
+  const n = parseInt(trimmed, 10);
+  if (!isNaN(n) && String(n) === trimmed && n >= 1 && n <= options.length) return options[n - 1];
+  return options.find(o => o.toLowerCase() === trimmed.toLowerCase());
+}
+
 export function parseResolutionSelection(reply: string, options: string[]): string | null | 'invalid' {
   const normalized = reply.trim().toLowerCase();
   if (normalized === 'none' || normalized === 'skip') return null;
-  const num = parseInt(normalized, 10);
-  if (!isNaN(num) && num >= 1 && num <= options.length) return options[num - 1];
-  const match = options.find((o) => o.toLowerCase() === normalized);
-  return match ?? 'invalid';
+  return pickByNumberOrName(reply, options) ?? 'invalid';
 }
 
 export function extractLastTicketFromText(text: string): string | null {
@@ -805,11 +813,7 @@ export function extractProjectKeyFromTicketKey(ticketKey: string): string | null
  * number or by exact (case-insensitive) name. */
 export function parseIssueTypePick(reply: string, issueTypes: string[]): string | 'cancel' | 'invalid' {
   if (isCancellation(reply)) return 'cancel';
-  const trimmed = reply.trim();
-  const n = parseInt(trimmed, 10);
-  if (!isNaN(n) && String(n) === trimmed && n >= 1 && n <= issueTypes.length) return issueTypes[n - 1];
-  const byName = issueTypes.find(t => t.toLowerCase() === trimmed.toLowerCase());
-  return byName ?? 'invalid';
+  return pickByNumberOrName(reply, issueTypes) ?? 'invalid';
 }
 
 export type TemplateCollisionReply =
