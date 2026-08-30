@@ -15,7 +15,11 @@ import {
   isCancellation, isConfirmation, pickEmailOption, selectDefaultIssueType, resolveTemplateIssueType,
   formatIssueTypeOptionLabel, formatIssueTypeInlinePhrase,
 } from '../sessionState';
-import { resolveIssueTypeOrPrompt } from './ticketContext';
+import { resolveIssueTypeOrPrompt, sessionWasSuperseded } from './ticketContext';
+
+// Shared by every resolveIssueTypeOrPrompt call site below (see sessionWasSuperseded's doc comment
+// in ticketContext.ts for why this check exists).
+const STALE_EMAIL_SESSION_MESSAGE = '_A newer email import was started while this one was waiting for the issue type — cancelled to avoid creating a stale ticket._';
 
 export async function handleCreateFromEmail(
   _request: vscode.ChatRequest,
@@ -296,6 +300,10 @@ export async function handleEmailContentSession(
     // calls) — a cancelled input box must not have paid for or waited on work it then discards.
     const resolvedIssueType = await resolveIssueTypeOrPrompt(pick.issueType, stream);
     if (resolvedIssueType === null) return;
+    if (sessionWasSuperseded(ws, 'jira.session.emailContent')) {
+      stream.markdown(STALE_EMAIL_SESSION_MESSAGE);
+      return;
+    }
     let additionalFields = session.additionalFields;
     if (pick.kind === 'template') {
       const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
@@ -327,6 +335,10 @@ export async function handleEmailContentSession(
     await ws.update('jira.session.emailContent', undefined);
     const resolvedIssueType = await resolveIssueTypeOrPrompt(session.issueType, stream);
     if (resolvedIssueType === null) return;
+    if (sessionWasSuperseded(ws, 'jira.session.emailContent')) {
+      stream.markdown(STALE_EMAIL_SESSION_MESSAGE);
+      return;
+    }
     await finishEmailTicket({ ...session, issueType: resolvedIssueType }, ticketService, stream, baseUrl);
     return;
   }
@@ -445,6 +457,10 @@ export async function streamEmailContentPreview(
     await ws.update('jira.session.emailContent', undefined);
     const resolvedIssueType = await resolveIssueTypeOrPrompt(session.issueType, stream);
     if (resolvedIssueType === null) return;
+    if (sessionWasSuperseded(ws, 'jira.session.emailContent')) {
+      stream.markdown(STALE_EMAIL_SESSION_MESSAGE);
+      return;
+    }
     const baseUrl = vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.baseUrl') ?? '';
     await finishEmailTicket({ ...session, issueType: resolvedIssueType }, ticketService, stream, baseUrl);
     return;

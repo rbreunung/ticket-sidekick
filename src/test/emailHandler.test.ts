@@ -561,6 +561,22 @@ describe('streamEmailContentPreview', () => {
     expect(calls.some(c => c.includes('No issue type provided'))).toBe(true);
   });
 
+  it('list-less path aborts instead of creating a ticket when a newer session was written while the input box was open', async () => {
+    const ws = makeMockWs();
+    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
+      ws.store['jira.session.emailContent'] = makeSession({ subject: 'A different email' });
+      return 'Task';
+    });
+    const session = makeSession({ issueType: '', availableTemplates: undefined, availableIssueTypes: undefined });
+    const stream = mockStream();
+    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
+
+    expect(client.createIssueCalls).toHaveLength(0);
+    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
+    expect(calls.some(c => c.includes('newer email import was started'))).toBe(true);
+    expect(ws.store['jira.session.emailContent']).toBeDefined();
+  });
+
   it('a real configured issueType (never "") is unaffected — no input box, no extra prompt', async () => {
     const session = makeSession({
       issueType: 'Bug',
@@ -750,5 +766,26 @@ describe('handleEmailContentSession — ticket creation', () => {
     expect(vscode.window.showInputBox).not.toHaveBeenCalled();
     expect(client.createIssueCalls).toHaveLength(1);
     expect(client.createIssueCalls[0].issueType).toBe('Story');
+  });
+
+  // --- Session-freshness guard against an abandoned input box ---
+
+  it('a session written while the sentinel input box was open aborts the resume instead of creating a stale ticket', async () => {
+    const ws = makeMockWs();
+    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
+      // Simulate a second, independent email import starting and claiming the session key while
+      // this flow's native input box was still open.
+      ws.store['jira.session.emailContent'] = makeSession({ subject: 'A different email' });
+      return 'Spike';
+    });
+    const session = makeSession({ issueType: 'Bug', availableIssueTypes: [''] });
+    const stream = mockStream();
+    await handleEmailContentSession('1', session, ticketService, stream as never, ws as never, client);
+
+    expect(client.createIssueCalls).toHaveLength(0);
+    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
+    expect(calls.some(c => c.includes('newer email import was started'))).toBe(true);
+    // The second flow's session must survive untouched — this abort must not clear it.
+    expect(ws.store['jira.session.emailContent']).toBeDefined();
   });
 });

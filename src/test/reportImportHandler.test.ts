@@ -178,6 +178,28 @@ describe('handleImportTemplateSelection (never-guess sentinel detour, U3)', () =
     expect(reviewSession.issueType).toBe('Bug');
   });
 
+  it('aborts instead of creating a batch when a newer import session was written while the input box was open', async () => {
+    const ws = makeMockWs();
+    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
+      // Simulate a second, independent import starting and claiming the session key while this
+      // flow's native input box was still open.
+      ws.store[descriptor.sessionKeys.templateSelection] = makeSession({ reportFileName: 'other-report.test' });
+      return 'Spike';
+    });
+    const searchSpy = vi.spyOn(client, 'searchJql');
+    const session = makeSession({ availableIssueTypes: [''] });
+    const stream = mockStream();
+
+    await handleImportTemplateSelection('1', session, client, ticketService, stream as never, ws as never, descriptor);
+
+    expect(searchSpy).not.toHaveBeenCalled();
+    expect(ws.store[descriptor.sessionKeys.review]).toBeUndefined();
+    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
+    expect(calls.some(c => c.includes('newer import was started'))).toBe(true);
+    // The second flow's session must survive untouched — this abort must not clear it.
+    expect(ws.store[descriptor.sessionKeys.templateSelection]).toBeDefined();
+  });
+
   it('the resolved (typed) issue type flows all the way into created tickets, never the sentinel', async () => {
     (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockResolvedValueOnce('Spike');
     const session = makeSession({ availableIssueTypes: [''] });

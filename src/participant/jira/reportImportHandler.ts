@@ -26,7 +26,7 @@ import {
   NO_ISSUE_TYPE, resolveTemplateIssueType, formatIssueTypeOptionLabel,
   type ImportTemplateSelectionSession, type ReviewSession, type ReviewTableColumn, type ReviewRowBase,
 } from '../sessionState';
-import { resolveProjectKey, resolveIssueTypeOrPrompt } from './ticketContext';
+import { resolveProjectKey, resolveIssueTypeOrPrompt, sessionWasSuperseded } from './ticketContext';
 
 export interface ReportImportRow extends ReviewRowBase {
   labels: string[];
@@ -252,6 +252,10 @@ export async function handleImportTemplateSelection<TItem, TRow extends ReportIm
   // create-ticket detour).
   const issueType = await resolveIssueTypeOrPrompt(pick.issueType, stream);
   if (issueType === null) return;
+  if (sessionWasSuperseded(ws, descriptor.sessionKeys.templateSelection)) {
+    stream.markdown('_A newer import was started while this one was waiting for the issue type — cancelled to avoid creating a stale batch._');
+    return;
+  }
 
   let additionalFields: Record<string, unknown> = {};
   let templateName: string | null = null;
