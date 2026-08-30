@@ -2,7 +2,6 @@ import type {
   IJiraClient,
   JiraComment,
   JiraCreatedIssue,
-  JiraCreateMetaField,
   JiraEditMetaField,
   JiraFieldMeta,
   JiraFilter,
@@ -390,7 +389,7 @@ export class JiraApiClient implements IJiraClient {
     return data.fields;
   }
 
-  async getRequiredFields(projectKey: string, issueType: string): Promise<JiraCreateMetaField[]> {
+  async getRequiredFields(projectKey: string, issueType: string): Promise<JiraFieldMeta[]> {
     type CreateMetaField = { required: boolean; name: string; schema: { type: string; items?: string; custom?: string } };
     type CreateMetaResponse = {
       projects: Array<{

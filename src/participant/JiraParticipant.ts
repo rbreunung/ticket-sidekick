@@ -36,8 +36,8 @@ import {
 import type { WaltzTemplateSelectionSession, WaltzReviewSession } from './sessionState';
 import {
   TEMPLATE_GEN_SESSION_KEYS, TEMPLATE_GEN_TAGS,
-  handleGenerateTemplate, handleTypePickReply, handleReviewReply as handleTemplateGenReviewReply,
-  handleCollisionReply as handleTemplateGenCollisionReply, handleOfferCreateReply, handleAwaitSummaryReply,
+  handleGenerateTemplate, handleTypePickReply, handleTemplateGenReviewReply,
+  handleTemplateGenCollisionReply, handleOfferCreateReply, handleAwaitSummaryReply,
 } from './jira/templateGenerationHandler';
 import type {
   TemplateGenerationTypePickSession, TemplateGenerationReviewSession, TemplateGenerationCollisionSession,

@@ -4,7 +4,6 @@ import type {
   IJiraClient,
   JiraComment,
   JiraCreatedIssue,
-  JiraCreateMetaField,
   JiraEditMetaField,
   JiraFieldMeta,
   JiraFilter,
@@ -135,8 +134,8 @@ export class MockJiraClient implements IJiraClient {
     return loadFixture<Record<string, JiraEditMetaField>>('editmeta-PROJ-123.json');
   }
 
-  async getRequiredFields(_projectKey: string, _issueType: string): Promise<JiraCreateMetaField[]> {
-    return loadFixture<JiraCreateMetaField[]>('createmeta-PROJ.json');
+  async getRequiredFields(_projectKey: string, _issueType: string): Promise<JiraFieldMeta[]> {
+    return loadFixture<JiraFieldMeta[]>('createmeta-PROJ.json');
   }
 
   async findSprints(projectKey: string, query: string): Promise<JiraSprintCandidate[]> {

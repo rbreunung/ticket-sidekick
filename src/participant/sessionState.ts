@@ -634,7 +634,7 @@ export function parseReviewInput(reply: string, rowIds: string[]): ReviewParseRe
   if (isConfirmation(reply)) return { action: 'ok' };
   if (isCancellation(reply)) return { action: 'cancel' };
 
-  // KTD5: a single `<row-id>=<value>` reply sets that row's value without toggling it (used by
+  // A single `<row-id>=<value>` reply sets that row's value without toggling it (used by
   // the template-generation review list to fill in a no-reference field with nothing to copy).
   // Checked against the ORIGINAL casing/spacing (not `normalized`) so the value half survives
   // exactly as typed — a Jira display value like "High" must not become "high". Splitting only
@@ -672,16 +672,16 @@ export function applyReviewToggle<TRow extends { id: string; included: boolean }
 }
 
 // Pure so it's independently testable alongside applyReviewToggle — sets one row's value without
-// touching `included` (KTD5's `<id>=<value>` reply is a value-set, not a toggle).
+// touching `included` (the `<id>=<value>` reply is a value-set, not a toggle).
 export function applyReviewSetValue<TRow extends { id: string; value: unknown }>(rows: TRow[], id: string, value: unknown): TRow[] {
   return rows.map(r => (r.id === id ? { ...r, value } : r));
 }
 
 // ---------------------------------------------------------------------------------------------
-// Template generation (U4) — the multi-turn flow that turns a reference ticket's template-shaped
+// Template generation — the multi-turn flow that turns a reference ticket's template-shaped
 // fields, or (with no reference) a project's required-fields create-metadata, into a reviewed,
 // saved `.jira-templates.json` template. Reuses the shared renderReviewTable/parseReviewInput
-// primitives above (R3) plus the KTD5 `<row-id>=<value>` reply form for filling in a
+// primitives above plus the `<row-id>=<value>` reply form for filling in a
 // no-reference row's still-empty value inline, without a separate multi-turn detour. All
 // `vscode`-coupled orchestration (streaming, workspaceState, calling TicketService/TemplateService)
 // lives in `templateGenerationHandler.ts`; only pure session shapes/helpers live here so they stay
@@ -689,8 +689,8 @@ export function applyReviewSetValue<TRow extends { id: string; value: unknown }>
 // ---------------------------------------------------------------------------------------------
 
 // Jira's required-fields create-metadata (the no-reference path's source, TicketService's
-// getTemplateCandidatesFromRequiredFields) is not filtered by TicketService's KTD1 allowlist the
-// way the reference-ticket path is — it returns every field the issue type's create screen
+// getTemplateCandidatesFromRequiredFields) is not filtered by TicketService's template-shaped-field
+// allowlist the way the reference-ticket path is — it returns every field the issue type's create screen
 // requires, which routinely includes fields that are never template data: summary/description are
 // per-ticket content, and project/issuetype/reporter are already resolved elsewhere in this flow.
 // Filtered out here (not in TicketService) since it's specific to how this handler presents the
@@ -705,7 +705,7 @@ export function filterOutPerTicketFields(candidates: TemplateFieldCandidate[]): 
  * matching the existing review-row convention (Veracode/Waltz's `id` is likewise a display index,
  * not the underlying identity) — `fieldId` carries the real Jira field id that gets written into
  * `defaultFields`. `value` is `undefined` when there's nothing to show yet (a no-reference row
- * before the user fills it in via `<id>=<value>`, per KTD5). */
+ * before the user fills it in via `<id>=<value>`). */
 export interface TemplateFieldReviewRow {
   id: string;
   fieldId: string;
@@ -765,7 +765,7 @@ export function findUnsetIncludedRows(rows: TemplateFieldReviewRow[]): TemplateF
   return rows.filter(r => r.included && r.value === undefined);
 }
 
-/** Builds the literal `defaultFields` map (KTD2 — never `resolveFields`) from the reviewed rows.
+/** Builds the literal `defaultFields` map (never `resolveFields`) from the reviewed rows.
  * Only included rows with a resolved value contribute; call findUnsetIncludedRows() first so an
  * included-but-still-unset row never reaches here silently. */
 export function buildDefaultFieldsFromRows(rows: TemplateFieldReviewRow[]): Record<string, unknown> {
@@ -793,7 +793,7 @@ export function extractProjectKeyFromTicketKey(ticketKey: string): string | null
   return match ? match[1] : null;
 }
 
-/** Parses a reply to the KTD6 "pick an issue type" list (no-reference path, no type named) — by
+/** Parses a reply to the "pick an issue type" list (no-reference path, no type named) — by
  * number or by exact (case-insensitive) name. */
 export function parseIssueTypePick(reply: string, issueTypes: string[]): string | 'cancel' | 'invalid' {
   if (isCancellation(reply)) return 'cancel';
@@ -810,7 +810,7 @@ export type TemplateCollisionReply =
   | { action: 'rename'; name: string }
   | { action: 'invalid' };
 
-/** Parses the R6 name-collision reply: cancel the whole flow, explicitly confirm overwriting the
+/** Parses the name-collision reply: cancel the whole flow, explicitly confirm overwriting the
  * existing template, or give a different name to retry the save under (the reviewed field set is
  * preserved by the caller across this reply — see TemplateGenerationCollisionSession). */
 export function parseTemplateCollisionReply(reply: string): TemplateCollisionReply {
@@ -826,7 +826,7 @@ export type OfferCreateReply =
   | { action: 'needSummary' }
   | { action: 'create'; summary: string };
 
-/** Parses the R7 "create a first ticket?" reply. A bare confirmation word ("yes") has no summary
+/** Parses the "create a first ticket?" reply. A bare confirmation word ("yes") has no summary
  * in it yet, so it's distinguished from a reply that supplies the summary directly in one turn —
  * both are accepted so the flow doesn't force an extra round-trip when the user just answers with
  * the summary up front. */
@@ -857,21 +857,17 @@ export interface TemplateGenerationReviewSession {
   schemaVersion: number;
 }
 
-export interface TemplateGenerationCollisionSession {
-  template: JiraTemplate; // fully-built, pending save — `template.name` is the attempted/colliding name
-  projectKey: string;
-  schemaVersion: number;
-}
-
-export interface TemplateGenerationOfferCreateSession {
-  template: JiraTemplate; // just-saved template
-  projectKey: string;
-  schemaVersion: number;
-}
-
-export interface TemplateGenerationAwaitSummarySession {
+/** Shared shape for the three later template-generation stages, which all carry only a template
+ * plus project key — the stage (collision pending resolution, just-saved awaiting the
+ * create-first-ticket offer, or awaiting a typed-in summary) is distinguished by which
+ * workspaceState key/response tag holds the session, not by its shape. `template.name` on a
+ * collision session is the attempted/colliding name; on the other two it's the already-saved name. */
+export interface TemplateGenerationTemplateStageSession {
   template: JiraTemplate;
   projectKey: string;
   schemaVersion: number;
 }
+export type TemplateGenerationCollisionSession = TemplateGenerationTemplateStageSession;
+export type TemplateGenerationOfferCreateSession = TemplateGenerationTemplateStageSession;
+export type TemplateGenerationAwaitSummarySession = TemplateGenerationTemplateStageSession;
 

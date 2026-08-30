@@ -1,9 +1,8 @@
-// Shared, vscode-dependent session-flow orchestration for the template-generation chat flow (F1/F2
-// in docs/plans/2026-08-30-1135-feat-template-generation-from-ticket-plan.md). Mirrors
-// reportImportHandler.ts's overall shape (build session -> stream review -> confirm -> act),
-// adapted from "reviewing report rows" to "reviewing candidate template fields": build candidates
-// (U2) -> review list (toggle/set-value, KTD5) -> save (U3, with R6 collision handling) -> offer to
-// create a first ticket (R7). All pure logic (session shapes, the parseReviewInput setValue
+// Shared, vscode-dependent session-flow orchestration for the template-generation chat flow.
+// Mirrors reportImportHandler.ts's overall shape (build session -> stream review -> confirm -> act),
+// adapted from "reviewing report rows" to "reviewing candidate template fields": build candidates ->
+// review list (toggle/set-value) -> save (with name-collision handling) -> offer to
+// create a first ticket. All pure logic (session shapes, the parseReviewInput setValue
 // extension, table rendering, reply parsing) lives in sessionState.ts so it stays Vitest-loadable
 // per CLAUDE.md's testing rule — this file is the vscode-coupled glue only.
 //
@@ -11,7 +10,7 @@
 // it's accepted directly by the two entry points that can reach it (handleOfferCreateReply,
 // handleAwaitSummaryReply) rather than threaded through every earlier session-building/review
 // function that never uses it, matching how each of this flow's reply-handling entry points
-// already receives its own fresh parameters from the caller (U5) rather than pulling them back out
+// already receives its own fresh parameters from the caller rather than pulling them back out
 // of session state.
 import * as vscode from 'vscode';
 import { logDiag } from '../../utils/diagLog';
@@ -32,7 +31,7 @@ import { resolveProjectKey } from './ticketContext';
 const SCOPE = 'jira.templateGeneration';
 
 // workspaceState keys + response tags for this flow's five session states (CLAUDE.md's multi-turn
-// session convention). Exported so the routing unit (U5, JiraParticipant.ts) can detect the tag in
+// session convention). Exported so the routing layer in JiraParticipant.ts can detect the tag in
 // the last assistant response and load the matching session without hardcoding these literals
 // separately from this file.
 export const TEMPLATE_GEN_SESSION_KEYS = {
@@ -51,10 +50,10 @@ export const TEMPLATE_GEN_TAGS = {
   awaitSummary: '<!-- jira:template-gen-await-summary -->',
 } as const;
 
-// What U5's parsed intent supplies. templateName/issueTypeHint may be null — this flow resolves
-// both interactively (a showInputBox for the name, KTD6's pick-list for the issue type) rather than
-// requiring the LLM intent parser to have extracted them. sourceTicketKey null means the
-// no-reference path (F2); non-null means the reference-ticket path (F1).
+// What the routing layer's parsed intent supplies. templateName/issueTypeHint may be null — this
+// flow resolves both interactively (a showInputBox for the name, a pick-list for the issue type)
+// rather than requiring the LLM intent parser to have extracted them. sourceTicketKey null means
+// the no-reference path; non-null means the reference-ticket path.
 export interface TemplateGenerationRequest {
   templateName: string | null;
   projectKeyHint: string | null;
@@ -63,10 +62,10 @@ export interface TemplateGenerationRequest {
 }
 
 /**
- * Entry point for the "generate a template" operation (KTD4's routing target). Resolves whatever
+ * Entry point for the "generate a template" operation. Resolves whatever
  * the parsed intent didn't supply (template name via input box; project key via the shared
- * resolveProjectKey helper on the no-reference path; issue type via KTD6's pick-list when the
- * no-reference path didn't name one), then fetches candidates (U2) and streams the review list.
+ * resolveProjectKey helper on the no-reference path; issue type via a pick-list when the
+ * no-reference path didn't name one), then fetches candidates and streams the review list.
  */
 export async function handleGenerateTemplate(
   stream: vscode.ChatResponseStream,
@@ -100,8 +99,8 @@ export async function handleGenerateTemplate(
     return;
   }
 
-  // KTD6: the no-reference path's request didn't name an issue type — ask the user to pick one
-  // from the project's available types before fetching required-fields metadata. U2's
+  // The no-reference path's request didn't name an issue type — ask the user to pick one
+  // from the project's available types before fetching required-fields metadata.
   // getTemplateCandidatesFromRequiredFields takes issue type as a mandatory, already-resolved
   // input and does no prompting itself; this is the one vscode-coupled layer allowed to prompt.
   let issueTypes: string[] = [];
@@ -139,11 +138,12 @@ async function startFromReferenceTicket(
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
 ): Promise<void> {
-  // U2's candidate extraction fetches the issue itself but returns only template-shaped fields —
-  // issuetype is never in that allowlist (KTD1), so it's read here from the raw issue instead of
-  // asking U2 for it. This does mean the reference ticket is fetched twice (once here, once inside
-  // getTemplateCandidatesFromTicket) — accepted since U2's interface has no way to pass an
-  // already-fetched issue in, and this flow only runs once per template generation, not in a loop.
+  // getTemplateCandidatesFromTicket's candidate extraction fetches the issue itself but returns
+  // only template-shaped fields — issuetype is never in that allowlist, so it's read here from
+  // the raw issue instead of asking that method for it. This does mean the reference ticket is
+  // fetched twice (once here, once inside getTemplateCandidatesFromTicket) — accepted since its
+  // interface has no way to pass an already-fetched issue in, and this flow only runs once per
+  // template generation, not in a loop.
   let issueType: string;
   let projectKey: string;
   try {
@@ -205,7 +205,7 @@ async function startFromRequiredFields(
   await streamReview(reviewSession, stream, ws);
 }
 
-// --- KTD6 issue-type pick list (no-reference path, no type named) ---
+// --- Issue-type pick list (no-reference path, no type named) ---
 
 export async function streamTypePick(
   session: TemplateGenerationTypePickSession,
@@ -248,7 +248,7 @@ export async function handleTypePickReply(
   await startFromRequiredFields(session.templateName, session.projectKey, pick, ticketService, stream, ws);
 }
 
-// --- Review list (toggle / setValue / confirm — R3, KTD5) ---
+// --- Review list (toggle / setValue / confirm) ---
 
 export async function streamReview(
   session: TemplateGenerationReviewSession,
@@ -262,7 +262,7 @@ export async function streamReview(
   stream.markdown(`${sourceLine}\n\n${buildTemplateFieldReviewTable(session.rows)}\n\n${TEMPLATE_GEN_TAGS.review}`);
 }
 
-export async function handleReviewReply(
+export async function handleTemplateGenReviewReply(
   reply: string,
   session: TemplateGenerationReviewSession,
   workspaceRoot: string,
@@ -302,7 +302,7 @@ export async function handleReviewReply(
   }
 
   // decision.action === 'ok' — a required field with no value to copy is filled inline in this
-  // same review step (KTD5), so a confirm with an included-but-still-unset row re-prompts instead
+  // same review step, so a confirm with an included-but-still-unset row re-prompts instead
   // of silently saving it blank or silently dropping it from the template.
   const unset = findUnsetIncludedRows(session.rows);
   if (unset.length > 0) {
@@ -319,7 +319,7 @@ export async function handleReviewReply(
   await attemptSave(template, session.projectKey, workspaceRoot, stream, ws, false);
 }
 
-// --- Save + R6 name-collision handling ---
+// --- Save + name-collision handling ---
 
 async function attemptSave(
   template: JiraTemplate,
@@ -345,7 +345,7 @@ async function attemptSave(
   }
 
   if (result.status === 'collision') {
-    // R6: never silently overwrite — the reviewed field set is preserved on `template` itself
+    // Never silently overwrite — the reviewed field set is preserved on `template` itself
     // (already fully built) while the user picks a different name or explicitly confirms.
     const collisionSession: TemplateGenerationCollisionSession = {
       template, projectKey, schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
@@ -373,7 +373,7 @@ export async function streamCollision(
   );
 }
 
-export async function handleCollisionReply(
+export async function handleTemplateGenCollisionReply(
   reply: string,
   session: TemplateGenerationCollisionSession,
   workspaceRoot: string,
@@ -408,7 +408,7 @@ export async function handleCollisionReply(
   await attemptSave(renamed, session.projectKey, workspaceRoot, stream, ws, false);
 }
 
-// --- Offer to create a first ticket (R7) ---
+// --- Offer to create a first ticket ---
 
 export async function streamOfferCreate(
   session: TemplateGenerationOfferCreateSession,
