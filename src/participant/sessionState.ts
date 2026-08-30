@@ -3,7 +3,7 @@ import { formatJiraBody } from '../utils/markdownFormatter';
 import type { VeracodeFlaw, VeracodeReviewRow } from '../utils/veracodeReport';
 import type { WaltzComponent, WaltzReviewRow } from '../utils/waltzReport';
 import { BATCH_LIMIT, sanitizeCellText } from '../utils/reportImport';
-import { formatKeyLink, type TemplateFieldCandidate } from '../services/TicketService';
+import { formatKeyLink, coerceTypedFieldValue, type TemplateFieldCandidate } from '../services/TicketService';
 import type { JiraTemplate } from '../templates/TemplateService';
 
 export type { VeracodeReviewRow } from '../utils/veracodeReport';
@@ -712,6 +712,7 @@ export interface TemplateFieldReviewRow {
   name: string;
   value: unknown;
   included: boolean;
+  schema?: TemplateFieldCandidate['schema'];
 }
 
 export function buildTemplateFieldReviewRows(candidates: TemplateFieldCandidate[]): TemplateFieldReviewRow[] {
@@ -721,6 +722,7 @@ export function buildTemplateFieldReviewRows(candidates: TemplateFieldCandidate[
     name: c.name,
     value: c.value,
     included: true,
+    schema: c.schema,
   }));
 }
 
@@ -772,7 +774,13 @@ export function buildDefaultFieldsFromRows(rows: TemplateFieldReviewRow[]): Reco
   const fields: Record<string, unknown> = {};
   for (const row of rows) {
     if (!row.included || row.value === undefined) continue;
-    fields[row.fieldId] = row.value;
+    // A value copied from a reference ticket already has its real Jira shape (object/array).
+    // Only a hand-typed `<id>=<value>` reply is ever a bare string here, and that needs
+    // coercing into a writable shape before it becomes a defaultFields entry — a raw string
+    // where Jira expects e.g. `{ name }` (priority) or `string[]` (labels) gets rejected.
+    fields[row.fieldId] = typeof row.value === 'string'
+      ? coerceTypedFieldValue(row.value, row.schema)
+      : row.value;
   }
   return fields;
 }

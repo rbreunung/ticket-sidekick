@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { TicketService, assembleDescription, extractTextFromAdf, resolveFieldIdFuzzy, formatIssueFields, renderFieldValue, isMultiLine } from '../services/TicketService';
+import { TicketService, assembleDescription, extractTextFromAdf, resolveFieldIdFuzzy, formatIssueFields, renderFieldValue, isMultiLine, coerceTypedFieldValue } from '../services/TicketService';
 import type { JiraAttachment, JiraFieldMeta, JiraIssue } from '../jira/IJiraClient';
 import { MockJiraClient, FIXTURE_ATTACHMENT_BYTES } from './mocks/MockJiraClient';
 
@@ -1269,10 +1269,14 @@ describe('getTemplateCandidatesFromRequiredFields (template generation, no-refer
 
     const candidates = await service.getTemplateCandidatesFromRequiredFields('PROJ', 'Bug');
 
-    // From the createmeta-PROJ.json fixture: summary + customfield_10500 ("Team")
+    // From the createmeta-PROJ.json fixture: summary + customfield_10500 ("Team"). Each carries
+    // its schema (used to coerce a hand-typed review value into a Jira-writable shape later).
     expect(candidates).toEqual([
-      { id: 'summary', name: 'Summary' },
-      { id: 'customfield_10500', name: 'Team' },
+      { id: 'summary', name: 'Summary', schema: { type: 'string' } },
+      {
+        id: 'customfield_10500', name: 'Team',
+        schema: { type: 'array', items: 'option', custom: 'com.atlassian.jira.plugin.system.customfieldtypes:multiselect' },
+      },
     ]);
   });
 
@@ -1284,5 +1288,29 @@ describe('getTemplateCandidatesFromRequiredFields (template generation, no-refer
     const candidates = await service.getTemplateCandidatesFromRequiredFields('PROJ', 'Bug');
 
     expect(candidates).toEqual([]);
+  });
+});
+
+describe('coerceTypedFieldValue', () => {
+  it('wraps a named-object scalar schema (priority) as { name }', () => {
+    expect(coerceTypedFieldValue('High', { type: 'priority' })).toEqual({ name: 'High' });
+  });
+
+  it('splits a string-array schema (labels) into a plain string array', () => {
+    expect(coerceTypedFieldValue('billing, urgent', { type: 'array', items: 'string' })).toEqual(['billing', 'urgent']);
+  });
+
+  it('splits an object-array schema (components) into an array of { name }', () => {
+    expect(coerceTypedFieldValue('Backend, Frontend', { type: 'array', items: 'component' })).toEqual([
+      { name: 'Backend' }, { name: 'Frontend' },
+    ]);
+  });
+
+  it('passes a string/number schema value through unchanged', () => {
+    expect(coerceTypedFieldValue('plain text', { type: 'string' })).toBe('plain text');
+  });
+
+  it('passes the raw string through unchanged when no schema is known', () => {
+    expect(coerceTypedFieldValue('raw', undefined)).toBe('raw');
   });
 });

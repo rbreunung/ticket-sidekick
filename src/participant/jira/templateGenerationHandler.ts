@@ -94,15 +94,11 @@ export async function handleGenerateTemplate(
   const projectKey = await resolveProjectKey(request.projectKeyHint, stream);
   if (!projectKey) { stream.markdown('_No project key provided — cancelled._'); return; }
 
-  if (request.issueTypeHint) {
-    await startFromRequiredFields(templateName, projectKey, request.issueTypeHint, ticketService, stream, ws);
-    return;
-  }
-
-  // The no-reference path's request didn't name an issue type — ask the user to pick one
-  // from the project's available types before fetching required-fields metadata.
-  // getTemplateCandidatesFromRequiredFields takes issue type as a mandatory, already-resolved
-  // input and does no prompting itself; this is the one vscode-coupled layer allowed to prompt.
+  // Fetch the project's real issue types up front, whether or not the request named one — an
+  // unnamed type needs the pick-list below, and a named one still needs validating against this
+  // same list: an unmatched name (LLM extraction drift, a typo, "Bug" vs "Software Bug") must not
+  // be trusted as-is, since getRequiredFields silently returns no fields for an unknown type,
+  // which would otherwise produce an empty, un-flagged review list ready to save.
   let issueTypes: string[] = [];
   try {
     issueTypes = (await ticketService.getIssueTypes(projectKey)).map(t => t.name);
@@ -111,6 +107,20 @@ export async function handleGenerateTemplate(
     logDiag(SCOPE, 'warn', `Could not fetch issue types — ${projectKey}`, { projectKey, error: message });
   }
 
+  if (request.issueTypeHint) {
+    const matched = issueTypes.find(t => t.toLowerCase() === request.issueTypeHint!.toLowerCase());
+    if (matched) {
+      await startFromRequiredFields(templateName, projectKey, matched, ticketService, stream, ws);
+      return;
+    }
+    stream.markdown(`_"${request.issueTypeHint}" isn't one of **${projectKey}**'s issue types — pick from the list instead._\n\n`);
+    // Falls through to the pick-list (or input-box) flow below, same as no hint at all.
+  }
+
+  // The no-reference path has no resolvable issue type yet — ask the user to pick one from the
+  // project's available types before fetching required-fields metadata.
+  // getTemplateCandidatesFromRequiredFields takes issue type as a mandatory, already-resolved
+  // input and does no prompting itself; this is the one vscode-coupled layer allowed to prompt.
   if (issueTypes.length === 0) {
     // No resolvable issue type from any real source — an input box, never a guessed default
     // (see docs/solutions/logic-errors/combined-create-list-silently-guesses-issue-type…).

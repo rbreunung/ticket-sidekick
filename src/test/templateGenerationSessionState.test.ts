@@ -137,7 +137,7 @@ describe('buildDefaultFieldsFromRows / buildGeneratedTemplate', () => {
     expect(buildDefaultFieldsFromRows(allSet)).toEqual({ priority: { name: 'High' }, labels: ['billing'] });
   });
 
-  it('builds a JiraTemplate with a literal defaultFields map and no resolveFields (KTD2)', () => {
+  it('builds a JiraTemplate with a literal defaultFields map and no resolveFields', () => {
     const template = buildGeneratedTemplate('Billing Bug', 'Bug', rows);
     expect(template).toEqual({
       name: 'Billing Bug',
@@ -145,6 +145,34 @@ describe('buildDefaultFieldsFromRows / buildGeneratedTemplate', () => {
       defaultFields: { priority: { name: 'High' } },
     });
     expect(template.resolveFields).toBeUndefined();
+  });
+
+  it('coerces a hand-typed value into its schema-appropriate shape rather than saving a bare string', () => {
+    const typedRows: TemplateFieldReviewRow[] = [
+      { id: '1', fieldId: 'priority', name: 'Priority', value: 'High', included: true, schema: { type: 'priority' } },
+      { id: '2', fieldId: 'labels', name: 'Labels', value: 'billing, urgent', included: true, schema: { type: 'array', items: 'string' } },
+      { id: '3', fieldId: 'components', name: 'Components', value: 'Backend', included: true, schema: { type: 'array', items: 'component' } },
+      { id: '4', fieldId: 'summary', name: 'Summary', value: 'plain text', included: true, schema: { type: 'string' } },
+      { id: '5', fieldId: 'custom_9', name: 'No schema known', value: 'raw', included: true },
+    ];
+    expect(buildDefaultFieldsFromRows(typedRows)).toEqual({
+      priority: { name: 'High' },
+      labels: ['billing', 'urgent'],
+      components: [{ name: 'Backend' }],
+      summary: 'plain text',
+      custom_9: 'raw',
+    });
+  });
+
+  it('never coerces a value already in its real shape (a reference-ticket-sourced value, not hand-typed)', () => {
+    const alreadyShapedRows: TemplateFieldReviewRow[] = [
+      { id: '1', fieldId: 'labels', name: 'Labels', value: ['billing'], included: true, schema: { type: 'array', items: 'string' } },
+      { id: '2', fieldId: 'customfield_10020', name: 'Sprint', value: { id: 42 }, included: true, schema: { type: 'array', custom: 'gh-sprint' } },
+    ];
+    expect(buildDefaultFieldsFromRows(alreadyShapedRows)).toEqual({
+      labels: ['billing'],
+      customfield_10020: { id: 42 },
+    });
   });
 });
 
