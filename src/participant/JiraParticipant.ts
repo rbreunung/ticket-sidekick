@@ -34,6 +34,15 @@ import {
   handleImportWaltzReport, handleWaltzTemplateSelection, handleWaltzReviewReply,
 } from './jira/waltzHandler';
 import type { WaltzTemplateSelectionSession, WaltzReviewSession } from './sessionState';
+import {
+  TEMPLATE_GEN_SESSION_KEYS, TEMPLATE_GEN_TAGS,
+  handleGenerateTemplate, handleTypePickReply, handleTemplateGenReviewReply,
+  handleTemplateGenCollisionReply, handleOfferCreateReply, handleAwaitSummaryReply,
+} from './jira/templateGenerationHandler';
+import type {
+  TemplateGenerationTypePickSession, TemplateGenerationReviewSession, TemplateGenerationCollisionSession,
+  TemplateGenerationOfferCreateSession, TemplateGenerationAwaitSummarySession,
+} from './sessionState';
 
 export function createJiraParticipant(
   context: vscode.ExtensionContext,
@@ -589,6 +598,53 @@ export function createJiraParticipant(
       }
     }
 
+    // Template generation — issue-type pick list (no-reference path, no type named)
+    if (lastResponse.includes(TEMPLATE_GEN_TAGS.typePick)) {
+      const session = ws.get<TemplateGenerationTypePickSession>(TEMPLATE_GEN_SESSION_KEYS.typePick);
+      if (session) {
+        await handleTypePickReply(request.prompt, session, ticketService, stream, ws);
+        return;
+      }
+    }
+
+    // Template generation — review list (toggle / setValue / confirm)
+    if (lastResponse.includes(TEMPLATE_GEN_TAGS.review)) {
+      const session = ws.get<TemplateGenerationReviewSession>(TEMPLATE_GEN_SESSION_KEYS.review);
+      if (session) {
+        const templateGenWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+        await handleTemplateGenReviewReply(request.prompt, session, templateGenWorkspaceRoot, stream, ws);
+        return;
+      }
+    }
+
+    // Template generation — name-collision handling
+    if (lastResponse.includes(TEMPLATE_GEN_TAGS.collision)) {
+      const session = ws.get<TemplateGenerationCollisionSession>(TEMPLATE_GEN_SESSION_KEYS.collision);
+      if (session) {
+        const templateGenWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+        await handleTemplateGenCollisionReply(request.prompt, session, templateGenWorkspaceRoot, stream, ws);
+        return;
+      }
+    }
+
+    // Template generation — offer to create a first ticket from the saved template
+    if (lastResponse.includes(TEMPLATE_GEN_TAGS.offerCreate)) {
+      const session = ws.get<TemplateGenerationOfferCreateSession>(TEMPLATE_GEN_SESSION_KEYS.offerCreate);
+      if (session) {
+        await handleOfferCreateReply(request.prompt, session, ticketService, stream, ws, config.baseUrl);
+        return;
+      }
+    }
+
+    // Template generation — awaiting the summary for the first ticket
+    if (lastResponse.includes(TEMPLATE_GEN_TAGS.awaitSummary)) {
+      const session = ws.get<TemplateGenerationAwaitSummarySession>(TEMPLATE_GEN_SESSION_KEYS.awaitSummary);
+      if (session) {
+        await handleAwaitSummaryReply(request.prompt, session, ticketService, stream, ws, config.baseUrl);
+        return;
+      }
+    }
+
     // Comment list — user replied with a comment number to view in full
     if (lastResponse.includes('<!-- jira:comment-list -->')) {
       const commentSession = ws.get<CommentListSession>('jira.session.commentList');
@@ -669,6 +725,23 @@ export function createJiraParticipant(
 
     if (intent.operation === 'importWaltzReport') {
       await handleImportWaltzReport(request, stream, token, jiraClient, ticketService, ws, intent.projectKey);
+      return;
+    }
+
+    if (intent.operation === 'generateTemplate') {
+      const templateGenWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+      try {
+        await handleGenerateTemplate(stream, ws, ticketService, templateGenWorkspaceRoot, config.hiddenDisplayFields, {
+          templateName: intent.templateName,
+          sourceTicketKey: intent.ticketKey,
+          projectKeyHint: intent.projectKey,
+          issueTypeHint: intent.issueType,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logDiag('jira.participant', 'error', message, {});
+        stream.markdown(message);
+      }
       return;
     }
 

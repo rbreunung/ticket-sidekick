@@ -19,6 +19,11 @@ The state of a Component for which a prior import already created a matching Jir
 ### Findings funnel
 The ordered stages a raw LLM finding passes through before appearing in final review output — cross-batch dedup (a finding surfaced in more than one chunk collapsed to one), anchor verification (unlocatable quotes dropped), confidence folding (below-threshold findings folded into the collapsed section, not removed), and, in deep mode, critic confirmation. "Funnel" refers to this sequence of stages and the per-stage counts it produces, not to any single filter. Logged as one summary line at the end of every review (see `docs/review-process.md`).
 
+## Template Generation
+
+### Template-shaped field
+A ticket field whose value is usually the same across many tickets of a kind — priority, labels, components, and team/sprint-type custom fields — as opposed to a field that is always specific to one ticket (summary, description, comments, status, reporter, dates, the ticket key). Only template-shaped fields are proposed as candidates when generating a `.jira-templates.json` template from an existing reference ticket.
+
 ## Flagged ambiguities
 
 - "Component" is used exclusively for an OSS-dependency entry from a scanned report, never for Jira's own issue-level "Components" categorization field — these are unrelated concepts that happen to share a name.

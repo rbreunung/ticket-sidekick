@@ -1,0 +1,8 @@
+[
+  { "id": "summary", "name": "Summary", "schema": { "type": "string" } },
+  {
+    "id": "customfield_10500",
+    "name": "Team",
+    "schema": { "type": "array", "items": "option", "custom": "com.atlassian.jira.plugin.system.customfieldtypes:multiselect" }
+  }
+]

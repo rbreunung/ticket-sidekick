@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { JiraApiClient, buildFileContentDisposition, JiraApiError, assertAttachmentWithinLimit, MAX_ATTACHMENT_BYTES } from '../jira/JiraApiClient';
+import { MockJiraClient } from './mocks/MockJiraClient';
 
 describe('assertAttachmentWithinLimit (#4 size guard)', () => {
   // 'AAAA' base64 decodes to 3 bytes; build a base64 string of a known decoded size.
@@ -387,6 +388,99 @@ describe('JiraApiClient', () => {
       const client = new JiraApiClient(BASE_CONFIG);
       const result = await client.getProjectStatuses('PROJ', 'Epic');
       expect(result).toEqual([]);
+    });
+  });
+
+  describe('getRequiredFields (create-metadata)', () => {
+    const createMetaPayload = (fields: Record<string, unknown>) => ({
+      projects: [
+        {
+          id: '10000',
+          key: 'PROJ',
+          issuetypes: [
+            { id: '1', name: 'Bug', fields },
+          ],
+        },
+      ],
+    });
+
+    it('calls the createmeta endpoint with project key and issue type', async () => {
+      const mockFetch = makeFetch(createMetaPayload({
+        summary: { required: true, name: 'Summary', schema: { type: 'string' } },
+      }));
+      vi.stubGlobal('fetch', mockFetch);
+      const client = new JiraApiClient(BASE_CONFIG);
+      await client.getRequiredFields('PROJ', 'Bug');
+      const [url, options] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(url).toContain('/rest/api/2/issue/createmeta?');
+      expect(url).toContain('projectKeys=PROJ');
+      expect(url).toContain('issuetypeNames=Bug');
+      expect(options.method).toBeUndefined();
+    });
+
+    it('returns only the required fields for the requested issue type', async () => {
+      vi.stubGlobal('fetch', makeFetch(createMetaPayload({
+        summary: { required: true, name: 'Summary', schema: { type: 'string' } },
+        description: { required: false, name: 'Description', schema: { type: 'string' } },
+        customfield_10500: {
+          required: true,
+          name: 'Team',
+          schema: { type: 'array', items: 'option', custom: 'com.atlassian.jira.plugin.system.customfieldtypes:multiselect' },
+        },
+      })));
+      const client = new JiraApiClient(BASE_CONFIG);
+      const result = await client.getRequiredFields('PROJ', 'Bug');
+      expect(result).toEqual([
+        { id: 'summary', name: 'Summary', schema: { type: 'string' } },
+        {
+          id: 'customfield_10500',
+          name: 'Team',
+          schema: { type: 'array', items: 'option', custom: 'com.atlassian.jira.plugin.system.customfieldtypes:multiselect' },
+        },
+      ]);
+    });
+
+    it('returns an empty array when the issue type has no required fields', async () => {
+      vi.stubGlobal('fetch', makeFetch(createMetaPayload({
+        description: { required: false, name: 'Description', schema: { type: 'string' } },
+      })));
+      const client = new JiraApiClient(BASE_CONFIG);
+      const result = await client.getRequiredFields('PROJ', 'Bug');
+      expect(result).toEqual([]);
+    });
+
+    it('returns an empty array when the project/issue type is absent from the response', async () => {
+      vi.stubGlobal('fetch', makeFetch({ projects: [] }));
+      const client = new JiraApiClient(BASE_CONFIG);
+      const result = await client.getRequiredFields('PROJ', 'Bug');
+      expect(result).toEqual([]);
+    });
+
+    it('throws a typed JiraApiError on 404', async () => {
+      vi.stubGlobal('fetch', makeFetch({}, 404));
+      const client = new JiraApiClient(BASE_CONFIG);
+      await expect(client.getRequiredFields('PROJ', 'Bug')).rejects.toBeInstanceOf(JiraApiError);
+    });
+
+    it('throws a typed JiraApiError carrying status 401 on auth failure', async () => {
+      vi.stubGlobal('fetch', makeFetch({}, 401));
+      const client = new JiraApiClient(BASE_CONFIG);
+      const err = await client.getRequiredFields('PROJ', 'Bug').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(JiraApiError);
+      expect((err as JiraApiError).status).toBe(401);
+    });
+  });
+
+  describe('MockJiraClient.getRequiredFields', () => {
+    it('returns the fixture-backed required fields', async () => {
+      const mock = new MockJiraClient();
+      const result = await mock.getRequiredFields('PROJ', 'Bug');
+      expect(result.length).toBeGreaterThan(0);
+      for (const field of result) {
+        expect(field).toHaveProperty('id');
+        expect(field).toHaveProperty('name');
+        expect(field).toHaveProperty('schema');
+      }
     });
   });
 

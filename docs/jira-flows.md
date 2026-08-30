@@ -96,6 +96,10 @@ Review screen shows all tickets with their subtasks and proposed transitions. Us
 
 Execution streams one line per ticket (subtasks first), then a summary. Failures are collected and reported at the end — the batch continues on failure.
 
+## Template generation
+
+`@jira` can generate a reusable `.jira-templates.json` template from a reference ticket's template-shaped fields, or from a project's required-fields metadata when no reference ticket is given, reviewed as an include/exclude list and saved on confirmation with an offer to create a first ticket from it — see [`docs/plans/2026-08-30-1135-feat-template-generation-from-ticket-plan.md`](plans/2026-08-30-1135-feat-template-generation-from-ticket-plan.md) and [`src/participant/jira/templateGenerationHandler.ts`](../src/participant/jira/templateGenerationHandler.ts).
+
 ## Jira sessions
 
 Each session below is looked up by its `workspaceState` key and expires once its response tag is no longer the **last** assistant message — see `CLAUDE.md`'s "Multi-turn session state" for the tag/workspaceState mechanism itself.
@@ -118,5 +122,10 @@ Each session below is looked up by its `workspaceState` key and expires once its
 | `VeracodeReviewSession` | `jira.session.veracodeReview` | `<!-- jira:veracode-review -->` |
 | `WaltzTemplateSelectionSession` | `jira.session.waltzTemplateSelection` | `<!-- jira:waltz-template -->` |
 | `WaltzReviewSession` | `jira.session.waltzReview` | `<!-- jira:waltz-review -->` |
+| `TemplateGenerationTypePickSession` | `jira.session.templateGenTypePick` | `<!-- jira:template-gen-type-pick -->` |
+| `TemplateGenerationReviewSession` | `jira.session.templateGenReview` | `<!-- jira:template-gen-review -->` |
+| `TemplateGenerationCollisionSession` | `jira.session.templateGenCollision` | `<!-- jira:template-gen-collision -->` |
+| `TemplateGenerationOfferCreateSession` | `jira.session.templateGenOfferCreate` | `<!-- jira:template-gen-offer-create -->` |
+| `TemplateGenerationAwaitSummarySession` | `jira.session.templateGenAwaitSummary` | `<!-- jira:template-gen-await-summary -->` |
 
-Detection order in the Jira handler: resolution selection → transition review → filter selection → bulk-update-review → combined template/issue-type selection → creation → content → more-comments → check command → load-skipped → email content → veracode template selection → veracode review → Waltz template selection → Waltz review → comment list → intent parse.
+Detection order in the Jira handler: resolution selection → transition review → filter selection → bulk-update-review → combined template/issue-type selection → creation → content → more-comments → check command → load-skipped → email content → veracode template selection → veracode review → Waltz template selection → Waltz review → template-gen type pick → template-gen review → template-gen collision → template-gen offer-create → template-gen await-summary → comment list → intent parse.

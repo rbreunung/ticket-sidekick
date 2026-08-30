@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { TicketService, assembleDescription, extractTextFromAdf, resolveFieldIdFuzzy, formatIssueFields, renderFieldValue, isMultiLine } from '../services/TicketService';
+import { TicketService, assembleDescription, extractTextFromAdf, resolveFieldIdFuzzy, formatIssueFields, renderFieldValue, isMultiLine, coerceTypedFieldValue } from '../services/TicketService';
 import type { JiraAttachment, JiraFieldMeta, JiraIssue } from '../jira/IJiraClient';
 import { MockJiraClient, FIXTURE_ATTACHMENT_BYTES } from './mocks/MockJiraClient';
 
@@ -1119,5 +1119,198 @@ describe('TicketService onDiag', () => {
     const service = new TicketService(client);
     const result = await service.createTicket('PROJ', 'New ticket', 'Bug');
     expect(result.message).toContain('Created');
+  });
+});
+
+describe('getTemplateCandidatesFromTicket (template generation, reference-ticket path)', () => {
+  const fieldMeta: JiraFieldMeta[] = [
+    { id: 'summary', name: 'Summary', navigable: true, schema: { type: 'string' } },
+    { id: 'description', name: 'Description', navigable: true, schema: { type: 'string' } },
+    { id: 'status', name: 'Status', navigable: true, schema: { type: 'status' } },
+    { id: 'assignee', name: 'Assignee', navigable: true, schema: { type: 'user' } },
+    { id: 'reporter', name: 'Reporter', navigable: true, schema: { type: 'user' } },
+    { id: 'priority', name: 'Priority', navigable: true, schema: { type: 'priority' } },
+    { id: 'labels', name: 'Labels', navigable: true, schema: { type: 'array', items: 'string' } },
+    { id: 'components', name: 'Components', navigable: true, schema: { type: 'array', items: 'component' } },
+    {
+      id: 'customfield_10020', name: 'Sprint', navigable: true,
+      schema: { type: 'array', items: 'json', custom: 'com.pyxis.greenhopper.jira:gh-sprint' },
+    },
+    {
+      id: 'customfield_10500', name: 'Team Names', navigable: true,
+      schema: { type: 'array', items: 'json', custom: 'com.atlassian.teams:rm-teams-custom-field-team' },
+    },
+  ];
+
+  function issue(fields: Record<string, unknown>): JiraIssue {
+    return { id: '1', key: 'PROJ-1', fields: fields as JiraIssue['fields'] };
+  }
+
+  it('proposes only template-shaped fields — never summary, description, assignee, status, reporter', async () => {
+    const client = new MockJiraClient();
+    client.getIssue = async () => issue({
+      summary: 'Do the thing',
+      description: 'Some description',
+      status: { name: 'Open' },
+      assignee: { displayName: 'Jane Doe' },
+      reporter: { displayName: 'John Smith' },
+      priority: { name: 'High' },
+      labels: ['auth', 'security'],
+    });
+    const service = new TicketService(client);
+
+    const candidates = await service.getTemplateCandidatesFromTicket('PROJ-1', fieldMeta);
+
+    expect(candidates.map(c => c.id).sort()).toEqual(['labels', 'priority']);
+    expect(candidates.find(c => c.id === 'priority')?.value).toEqual({ name: 'High' });
+    expect(candidates.find(c => c.id === 'labels')?.value).toEqual(['auth', 'security']);
+  });
+
+  it('excludes a template-shaped field already in hiddenDisplayFields', async () => {
+    const client = new MockJiraClient();
+    client.getIssue = async () => issue({
+      priority: { name: 'High' },
+      labels: ['auth'],
+    });
+    const service = new TicketService(client);
+
+    const candidates = await service.getTemplateCandidatesFromTicket('PROJ-1', fieldMeta, new Set(['priority']));
+
+    expect(candidates.map(c => c.id)).toEqual(['labels']);
+  });
+
+  it('returns an empty, valid candidate list when every template-shaped field is hidden', async () => {
+    const client = new MockJiraClient();
+    client.getIssue = async () => issue({
+      priority: { name: 'High' },
+      labels: ['auth'],
+    });
+    const service = new TicketService(client);
+
+    const candidates = await service.getTemplateCandidatesFromTicket(
+      'PROJ-1', fieldMeta, new Set(['priority', 'labels']),
+    );
+
+    expect(candidates).toEqual([]);
+  });
+
+  it('parses a Jira DC serialized-string sprint value down to a writable { id } literal', async () => {
+    const client = new MockJiraClient();
+    client.getIssue = async () => issue({
+      priority: { name: 'High' },
+      customfield_10020: [
+        'com.atlassian.greenhopper.service.sprint.Sprint@1a2b3c[id=123,rapidViewId=1,state=ACTIVE,name=Sprint 4,startDate=2024-01-01]',
+      ],
+    });
+    const service = new TicketService(client);
+
+    const candidates = await service.getTemplateCandidatesFromTicket('PROJ-1', fieldMeta);
+
+    expect(candidates.find(c => c.id === 'customfield_10020')?.value).toEqual({ id: 123 });
+  });
+
+  it('parses a Cloud plain-object sprint value down to a writable { id } literal', async () => {
+    const client = new MockJiraClient();
+    client.getIssue = async () => issue({
+      priority: { name: 'High' },
+      customfield_10020: [{ id: 456, name: 'Sprint 4', state: 'active' }],
+    });
+    const service = new TicketService(client);
+
+    const candidates = await service.getTemplateCandidatesFromTicket('PROJ-1', fieldMeta);
+
+    expect(candidates.find(c => c.id === 'customfield_10020')?.value).toEqual({ id: 456 });
+  });
+
+  it('excludes an unparseable sprint field rather than writing a garbage value', async () => {
+    const client = new MockJiraClient();
+    client.getIssue = async () => issue({
+      priority: { name: 'High' },
+      customfield_10020: ['not a recognizable sprint string at all'],
+    });
+    const service = new TicketService(client);
+
+    const candidates = await service.getTemplateCandidatesFromTicket('PROJ-1', fieldMeta);
+
+    expect(candidates.map(c => c.id)).toEqual(['priority']);
+  });
+
+  it('keeps a team-typed custom field candidate with its raw value as the literal snapshot', async () => {
+    const client = new MockJiraClient();
+    client.getIssue = async () => issue({
+      priority: { name: 'High' },
+      customfield_10500: [{ id: '5', name: 'Backend' }],
+    });
+    const service = new TicketService(client);
+
+    const candidates = await service.getTemplateCandidatesFromTicket('PROJ-1', fieldMeta);
+
+    expect(candidates.find(c => c.id === 'customfield_10500')?.value).toEqual([{ id: '5', name: 'Backend' }]);
+  });
+
+  it('excludes an unset template-shaped field rather than proposing a valueless candidate', async () => {
+    const client = new MockJiraClient();
+    client.getIssue = async () => issue({
+      priority: { name: 'High' },
+      labels: [],
+    });
+    const service = new TicketService(client);
+
+    const candidates = await service.getTemplateCandidatesFromTicket('PROJ-1', fieldMeta);
+
+    expect(candidates.map(c => c.id)).toEqual(['priority']);
+  });
+});
+
+describe('getTemplateCandidatesFromRequiredFields (template generation, no-reference path)', () => {
+  it('returns each required field from create-metadata as a valueless candidate', async () => {
+    const client = new MockJiraClient();
+    const service = new TicketService(client);
+
+    const candidates = await service.getTemplateCandidatesFromRequiredFields('PROJ', 'Bug');
+
+    // From the createmeta-PROJ.json fixture: summary + customfield_10500 ("Team"). Each carries
+    // its schema (used to coerce a hand-typed review value into a Jira-writable shape later).
+    expect(candidates).toEqual([
+      { id: 'summary', name: 'Summary', schema: { type: 'string' } },
+      {
+        id: 'customfield_10500', name: 'Team',
+        schema: { type: 'array', items: 'option', custom: 'com.atlassian.jira.plugin.system.customfieldtypes:multiselect' },
+      },
+    ]);
+  });
+
+  it('returns an empty array when the issue type has no required fields', async () => {
+    const client = new MockJiraClient();
+    client.getRequiredFields = async () => [];
+    const service = new TicketService(client);
+
+    const candidates = await service.getTemplateCandidatesFromRequiredFields('PROJ', 'Bug');
+
+    expect(candidates).toEqual([]);
+  });
+});
+
+describe('coerceTypedFieldValue', () => {
+  it('wraps a named-object scalar schema (priority) as { name }', () => {
+    expect(coerceTypedFieldValue('High', { type: 'priority' })).toEqual({ name: 'High' });
+  });
+
+  it('splits a string-array schema (labels) into a plain string array', () => {
+    expect(coerceTypedFieldValue('billing, urgent', { type: 'array', items: 'string' })).toEqual(['billing', 'urgent']);
+  });
+
+  it('splits an object-array schema (components) into an array of { name }', () => {
+    expect(coerceTypedFieldValue('Backend, Frontend', { type: 'array', items: 'component' })).toEqual([
+      { name: 'Backend' }, { name: 'Frontend' },
+    ]);
+  });
+
+  it('passes a string/number schema value through unchanged', () => {
+    expect(coerceTypedFieldValue('plain text', { type: 'string' })).toBe('plain text');
+  });
+
+  it('passes the raw string through unchanged when no schema is known', () => {
+    expect(coerceTypedFieldValue('raw', undefined)).toBe('raw');
   });
 });

@@ -382,6 +382,16 @@ export async function handleImportReviewReply<TItem, TRow extends ReportImportRo
     await streamImportReview(session, stream, ws, descriptor, baseUrl);
     return;
   }
+  if (decision.action === 'setValue') {
+    // This review has no per-row value to set — parseReviewInput's `<id>=<value>` form exists
+    // for the template-generation flow, not this one. Treat it the same as an unrecognized
+    // reply rather than falling through to 'ok', which would silently confirm the batch.
+    stream.markdown(
+      `Didn't understand that. Reply **post it** to proceed, **(c)** to cancel, ` +
+      `or a list of ids to toggle (e.g. \`2 4\` or \`A1\`).\n\n${descriptor.sessionKeys.reviewTag}`,
+    );
+    return;
+  }
 
   // decision.action === 'ok'
   await ws.update(descriptor.sessionKeys.review, undefined);
