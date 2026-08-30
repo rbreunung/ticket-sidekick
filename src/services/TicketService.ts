@@ -14,6 +14,15 @@ export interface CreatedTicket {
   message: string;
 }
 
+/** One field proposed for a generated template's review list. `value` is a literal snapshot
+ * (KTD2) taken from a reference ticket; it's absent for a no-reference candidate pulled from
+ * required-fields create-metadata, where a later unit fills the value in during review. */
+export interface TemplateFieldCandidate {
+  id: string;
+  name: string;
+  value?: unknown;
+}
+
 export function resolveFieldIdFuzzy(input: string, fields: JiraFieldMeta[]): FieldResolutionResult {
   const lower = input.toLowerCase();
   // 1. Exact case-insensitive match
@@ -47,6 +56,53 @@ function parseSprintItem(item: unknown): { name: string; state: string } | null 
     return item as { name: string; state: string };
   }
   return null;
+}
+
+// Sibling to parseSprintItem: extracts a sprint item's numeric id (for a writable { id }
+// literal) instead of its display name. Same dual-shape handling — Jira DC's serialized-Java
+// string vs Cloud's plain object — but a different field of interest, so kept separate rather
+// than overloading parseSprintItem's { name, state } shape.
+function parseSprintId(item: unknown): number | null {
+  if (typeof item === 'string') {
+    const idStr = item.match(/\bid=([^,\]]+)/)?.[1]?.trim();
+    if (idStr === undefined) return null;
+    const id = Number(idStr);
+    return Number.isFinite(id) ? id : null;
+  }
+  if (typeof item === 'object' && item !== null && 'id' in item) {
+    const id = Number((item as { id: unknown }).id);
+    return Number.isFinite(id) ? id : null;
+  }
+  return null;
+}
+
+// Picks the writable { id } for a sprint field's raw fetched value (KTD2's exception — a
+// sprint's raw value is never itself a writable literal). Mirrors renderFieldValue's active-else-
+// first sprint selection so the template snapshot matches what the user sees displayed. Returns
+// null if no id can be parsed, so the caller can drop the field rather than write garbage.
+function extractSprintIdCandidate(value: unknown): number | null {
+  if (!Array.isArray(value)) return null;
+  const items = value
+    .map(item => {
+      const display = parseSprintItem(item);
+      const id = parseSprintId(item);
+      return display && id !== null ? { id, state: display.state } : null;
+    })
+    .filter((v): v is { id: number; state: string } => v !== null);
+  const active = items.find(s => s.state === 'active') ?? items[0];
+  return active ? active.id : null;
+}
+
+// KTD1: template-shaped fields are a fixed, named allowlist — priority, labels, components, and
+// sprint/team-typed custom fields (recognized via schema.custom the same way renderFieldValue's
+// gh-sprint check does) — never inferred from schema metadata alone. Mirrors isMultiLine's
+// fixed-list precedent for a different field-shape decision.
+export function isTemplateShapedField(meta: JiraFieldMeta): boolean {
+  if (meta.id === 'priority' || meta.id === 'labels' || meta.id === 'components') return true;
+  const custom = meta.schema.custom ?? '';
+  if (custom.includes('gh-sprint')) return true;
+  if (custom.includes('rm-teams')) return true;
+  return false;
 }
 
 export function renderFieldValue(value: unknown, meta: JiraFieldMeta): string {
@@ -588,6 +644,64 @@ export class TicketService {
       '| --- | --- | --- |',
       ...rows,
     ].join('\n');
+  }
+
+  /**
+   * Template generation, reference-ticket path (R1, R2). Fetches `issueKey`'s fields and
+   * proposes only the template-shaped ones (KTD1 allowlist) as review-list candidates, each
+   * carrying a literal value snapshot (KTD2) — never `resolveFields`. A field already in the
+   * caller's `hiddenIds` (the user's configured `hiddenDisplayFields`, resolved by the
+   * vscode-coupled caller — TicketService itself reads no config) is excluded before the
+   * candidate list is built. A template-shaped field that's unset on the reference ticket is
+   * excluded too — there's nothing to snapshot. A sprint field's raw value is parsed down to a
+   * writable `{ id }` (KTD2's exception); if it can't be parsed, the field is dropped rather
+   * than written with a guessed value.
+   */
+  async getTemplateCandidatesFromTicket(
+    issueKey: string,
+    fieldMeta?: JiraFieldMeta[],
+    hiddenIds?: Set<string>,
+  ): Promise<TemplateFieldCandidate[]> {
+    const issue = await this.client.getIssue(issueKey);
+    const meta = fieldMeta ?? await this.client.getFields();
+    const metaById = new Map(meta.map(m => [m.id, m]));
+    const hidden = hiddenIds ?? new Set<string>();
+    const candidates: TemplateFieldCandidate[] = [];
+
+    for (const [fieldId, rawValue] of Object.entries(issue.fields)) {
+      if (hidden.has(fieldId)) continue;
+      const fm = metaById.get(fieldId);
+      if (!fm || !isTemplateShapedField(fm)) continue;
+
+      const isEmpty = rawValue === null || rawValue === undefined ||
+        (Array.isArray(rawValue) && rawValue.length === 0);
+      if (isEmpty) continue;
+
+      if (fm.schema.custom?.includes('gh-sprint')) {
+        const id = extractSprintIdCandidate(rawValue);
+        if (id === null) continue; // unparseable — never write an unverified value
+        candidates.push({ id: fieldId, name: fm.name, value: { id } });
+        continue;
+      }
+
+      candidates.push({ id: fieldId, name: fm.name, value: rawValue });
+    }
+
+    return candidates;
+  }
+
+  /**
+   * Template generation, no-reference path (R4). `issueType` is an already-resolved input —
+   * this method never prompts or guesses one itself (that belongs to the vscode-coupled chat
+   * handler). Candidates come from Jira's own required-fields create-metadata, each with no
+   * value; a later unit fills values in during review.
+   */
+  async getTemplateCandidatesFromRequiredFields(
+    projectKey: string,
+    issueType: string,
+  ): Promise<TemplateFieldCandidate[]> {
+    const required = await this.client.getRequiredFields(projectKey, issueType);
+    return required.map(f => ({ id: f.id, name: f.name }));
   }
 
   async createTicket(
