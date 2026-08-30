@@ -120,6 +120,12 @@ export interface JiraEditMetaField {
   allowedValues?: Array<{ id?: string; name?: string; value?: string }>;
 }
 
+export interface JiraCreateMetaField {
+  id: string;
+  name: string;
+  schema: { type: string; items?: string; custom?: string };
+}
+
 export interface IJiraClient {
   getIssue(issueKey: string): Promise<JiraIssue>;
   updateIssue(issueKey: string, fields: Record<string, unknown>): Promise<void>;
@@ -142,6 +148,7 @@ export interface IJiraClient {
   searchFiltersByName(name: string): Promise<JiraFilter[]>;
   getFields(): Promise<JiraFieldMeta[]>;
   getEditMeta(issueKey: string): Promise<Record<string, JiraEditMetaField>>;
+  getRequiredFields(projectKey: string, issueType: string): Promise<JiraCreateMetaField[]>;
   findSprints(projectKey: string, query: string): Promise<JiraSprintCandidate[]>;
   uploadAttachment(issueKey: string, filename: string, contentType: string, contentBytes: string): Promise<void>;
   getRemoteLinks(issueKey: string): Promise<JiraRemoteLink[]>;

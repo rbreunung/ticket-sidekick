@@ -2,6 +2,7 @@ import type {
   IJiraClient,
   JiraComment,
   JiraCreatedIssue,
+  JiraCreateMetaField,
   JiraEditMetaField,
   JiraFieldMeta,
   JiraFilter,
@@ -387,6 +388,24 @@ export class JiraApiClient implements IJiraClient {
       `/issue/${encodeURIComponent(issueKey)}/editmeta`,
     );
     return data.fields;
+  }
+
+  async getRequiredFields(projectKey: string, issueType: string): Promise<JiraCreateMetaField[]> {
+    type CreateMetaField = { required: boolean; name: string; schema: { type: string; items?: string; custom?: string } };
+    type CreateMetaResponse = {
+      projects: Array<{
+        key: string;
+        issuetypes: Array<{ name: string; fields: Record<string, CreateMetaField> }>;
+      }>;
+    };
+    const qs = `projectKeys=${encodeURIComponent(projectKey)}&issuetypeNames=${encodeURIComponent(issueType)}&expand=projects.issuetypes.fields`;
+    const data = await this.request<CreateMetaResponse>(`/issue/createmeta?${qs}`);
+    const project = data.projects.find((p) => p.key === projectKey);
+    const issueTypeMeta = project?.issuetypes.find((it) => it.name.toLowerCase() === issueType.toLowerCase());
+    if (!issueTypeMeta) return [];
+    return Object.entries(issueTypeMeta.fields)
+      .filter(([, field]) => field.required)
+      .map(([id, field]) => ({ id, name: field.name, schema: field.schema }));
   }
 
   async getRemoteLinks(issueKey: string): Promise<JiraRemoteLink[]> {
