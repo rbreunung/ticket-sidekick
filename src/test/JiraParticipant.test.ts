@@ -871,6 +871,54 @@ describe('parseReviewInput — Veracode ids', () => {
   });
 });
 
+// KTD5 — the template-generation review list's `<row-id>=<value>` reply form. Added to
+// parseReviewInput() itself (not a separate parser) so both callers (report-import toggle-only
+// review and the new template-generation review) share one reply-parsing implementation.
+describe('parseReviewInput — setValue (KTD5)', () => {
+  const ids = ['1', '2', '3'];
+
+  it('sets a row value from a bare `<id>=<value>` reply', () => {
+    expect(parseReviewInput('3=High', ids)).toEqual({ action: 'setValue', id: '3', value: 'High' });
+  });
+
+  it('preserves the value\'s original casing even though id matching is case-insensitive', () => {
+    expect(parseReviewInput('3=High', ids)).toEqual({ action: 'setValue', id: '3', value: 'High' });
+    expect(parseReviewInput('3=high priority', ids)).toEqual({ action: 'setValue', id: '3', value: 'high priority' });
+  });
+
+  it('keeps a multi-word value intact instead of splitting on whitespace', () => {
+    expect(parseReviewInput('3=Needs review', ids)).toEqual({ action: 'setValue', id: '3', value: 'Needs review' });
+  });
+
+  it('matches the row id case-insensitively, same as toggle matching', () => {
+    const withLetterIds = ['A1', '2'];
+    expect(parseReviewInput('a1=Backend', withLetterIds)).toEqual({ action: 'setValue', id: 'A1', value: 'Backend' });
+  });
+
+  it('falls through to toggle/invalid parsing when the id half does not match a known row', () => {
+    // '=' present, but '99' isn't a row id — must not be treated as a new failure mode, just the
+    // existing invalid-input outcome.
+    expect(parseReviewInput('99=High', ids)).toEqual({ action: 'invalid' });
+  });
+
+  it('does not match a reply with an empty value half', () => {
+    expect(parseReviewInput('3=', ids)).toEqual({ action: 'invalid' });
+  });
+
+  it('does not treat a leading "=" as a setValue reply', () => {
+    expect(parseReviewInput('=High', ids)).toEqual({ action: 'invalid' });
+  });
+
+  it('is purely additive: every existing no-"=" input still parses exactly as before', () => {
+    expect(parseReviewInput('ok', ids)).toEqual({ action: 'ok' });
+    expect(parseReviewInput('c', ids)).toEqual({ action: 'cancel' });
+    expect(parseReviewInput('2', ids)).toEqual({ action: 'toggle', ids: ['2'] });
+    expect(parseReviewInput('1 2', ids)).toEqual({ action: 'toggle', ids: ['1', '2'] });
+    expect(parseReviewInput('nonsense', ids)).toEqual({ action: 'invalid' });
+    expect(parseReviewInput('', ids)).toEqual({ action: 'invalid' });
+  });
+});
+
 describe('applyReviewToggle — Veracode rows', () => {
   it('flips included for the given row ids and leaves the rest untouched', () => {
     const toggled = applyReviewToggle(sampleRows, ['2']);
