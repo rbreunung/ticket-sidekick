@@ -84,6 +84,7 @@ Open GitHub Copilot Chat and use `@jira`:
 | `@jira check` | Validates the base URL, tests the connection, and shows active configuration |
 | `@jira create from email` | Create a Jira ticket from an imported `.eml` file |
 | `@jira import veracode report` | Create Jira tickets from a Veracode Detailed Report XML export |
+| `@jira generate a template from PROJ-123 called "Billing Bug"` | Generate a reusable `.jira-templates.json` template from a reference ticket's fields — reviewed and confirmed before saving |
 
 ### Reading tickets
 
@@ -449,6 +450,41 @@ A batch creates at most 50 tickets per run — re-run the import afterward to pr
 ### Templates and cleanup rules
 
 Create a `.jira-templates.json` file in your workspace root to define per-application templates with default fields and guided description collection, plus named cleanup rules for bulk status transitions.
+
+#### Generating a template from a ticket
+
+You don't have to hand-write `.jira-templates.json` from scratch — `@jira` can generate a template for you, either grounded in a real ticket's fields or, when there's nothing to copy from, in the target project's own required fields.
+
+**From a reference ticket:**
+
+```text
+@jira generate a template from PROJ-123 called "Billing Bug"
+```
+
+`@jira` fetches PROJ-123, proposes only the fields that are template-shaped (priority, labels, components, and similar — never summary, description, status, reporter, or other per-ticket fields), and shows them as an include/exclude review list:
+
+```text
+_Generating from PROJ-123._
+
+| # | Field | Value | Include? |
+| --- | --- | --- | --- |
+| 1 | Priority | High | ✓ |
+| 2 | Labels | billing | ✓ |
+
+Reply post it to save, (c) to cancel, row numbers to toggle in/out (e.g. 2 4), or <number>=<value> to set a value (e.g. 3=High).
+```
+
+Reply with row numbers to toggle a field in or out, `<number>=<value>` to fill in a value, or **post it** to save. Once saved, `@jira` offers to create a first ticket from the new template right away.
+
+**With no reference ticket:**
+
+```text
+@jira generate a template for VSJI called "Feature Request"
+```
+
+If the prompt didn't name an issue type, `@jira` first asks you to pick one from VSJI's available types, then builds the review list from that issue type's required fields instead — each starts with no value, filled in the same review step via `<number>=<value>`.
+
+**Name collisions:** if a template with the same name already exists, `@jira` never overwrites it silently — it asks you to reply with a different name, or **yes** to explicitly overwrite the existing one.
 
 #### Template examples
 

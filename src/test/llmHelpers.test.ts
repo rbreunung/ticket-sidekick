@@ -73,6 +73,24 @@ describe('parseIntent', () => {
     );
     expect(sendRequest).toHaveBeenCalledTimes(2);
   });
+
+  it('parses a generateTemplate operation with a reference ticket key and template name', async () => {
+    const model = makeModel('{"operation":"generateTemplate","ticketKey":"PROJ-123","templateName":"Billing Bug"}');
+    const intent = await parseIntent('generate a template from PROJ-123 called "Billing Bug"', model as never, {} as never);
+    expect(intent.operation).toBe('generateTemplate');
+    expect(intent.ticketKey).toBe('PROJ-123');
+    expect(intent.templateName).toBe('Billing Bug');
+  });
+
+  it('parses a generateTemplate operation for a project with no reference ticket and no issue type', async () => {
+    const model = makeModel('{"operation":"generateTemplate","projectKey":"VSJI","templateName":"Feature Request","ticketKey":null,"issueType":null}');
+    const intent = await parseIntent('generate a template for VSJI called "Feature Request"', model as never, {} as never);
+    expect(intent.operation).toBe('generateTemplate');
+    expect(intent.projectKey).toBe('VSJI');
+    expect(intent.templateName).toBe('Feature Request');
+    expect(intent.ticketKey).toBeNull();
+    expect(intent.issueType).toBeNull();
+  });
 });
 
 describe('extractHistoryTurns', () => {
