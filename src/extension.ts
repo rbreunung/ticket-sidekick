@@ -9,7 +9,7 @@ import { parseEml, type ParsedEml } from './utils/emlParser';
 import { htmlToMarkdown } from './utils/htmlToMarkdown';
 import { JiraApiClient } from './jira/JiraApiClient';
 import { TemplateService } from './templates/TemplateService';
-import { selectDefaultIssueType } from './participant/sessionState';
+import { selectDefaultIssueType, resolveTemplateIssueType } from './participant/sessionState';
 import type { EmailContentSession } from './participant/sessionState';
 import { parseVeracodeReport, filterFlaws } from './utils/veracodeReport';
 import { buildVeracodeTemplateSession } from './participant/jira/veracodeHandler';
@@ -268,7 +268,7 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!workspaceRoot) return [];
         try {
           return new TemplateService(workspaceRoot).loadTemplates().templates
-            .map(t => ({ name: t.name, issueType: t.issueType ?? issueTypes[0] ?? '' }));
+            .map(t => ({ name: t.name, issueType: resolveTemplateIssueType(t.issueType, issueTypes) }));
         } catch (err) {
           logDiag('extension', 'warn', 'Could not load templates — proceeding without', {
             error: err instanceof Error ? err.message : String(err),
