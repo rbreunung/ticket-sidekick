@@ -164,12 +164,15 @@ export async function streamImportTemplateSelection<TItem, TRow extends ReportIm
   await ws.update(descriptor.sessionKeys.templateSelection, session);
   const { availableTemplates: templates, availableIssueTypes: issueTypes } = session;
 
+  // '' is the "no resolvable issue type" sentinel (see buildImportTemplateSession) — render it as a
+  // prompt to type one instead of a blank/fabricated name. Mirrors createHandler.ts's streamCreateSelection.
+  const label = (issueType: string) => issueType === '' ? '_you will be asked to type it_' : issueType;
   let optionsList = '';
   if (templates.length > 0) {
-    optionsList += `**Templates:**\n${templates.map((t, i) => `${i + 1}. ${t.name} _(${t.issueType})_`).join('\n')}\n\n`;
+    optionsList += `**Templates:**\n${templates.map((t, i) => `${i + 1}. ${t.name} _(${label(t.issueType)})_`).join('\n')}\n\n`;
   }
   const offset = templates.length;
-  optionsList += `**Issue types (no template):**\n${issueTypes.map((t, i) => `${offset + i + 1}. ${t}`).join('\n')}\n\n`;
+  optionsList += `**Issue types (no template):**\n${issueTypes.map((t, i) => `${offset + i + 1}. ${label(t)}`).join('\n')}\n\n`;
 
   stream.markdown(
     `Found **${session.items.length}** ${descriptor.itemNoun} in \`${session.reportFileName}\` matching your ${descriptor.filterKindLabel} filters ` +
@@ -245,6 +248,17 @@ export async function handleImportTemplateSelection<TItem, TRow extends ReportIm
     return;
   }
   await ws.update(descriptor.sessionKeys.templateSelection, undefined);
+
+  // '' is the "no resolvable issue type" sentinel (see buildImportTemplateSession) — ask instead
+  // of silently creating the whole batch with a guessed type. The whole batch shares this one
+  // resolved type, so this single detour — before dedup search or review-table work starts —
+  // covers every row in the import (mirrors JiraParticipant.ts's create-ticket detour).
+  let issueType = pick.issueType;
+  if (issueType === '') {
+    const entered = await vscode.window.showInputBox({ prompt: 'Enter the issue type (e.g. Bug, Story, Task)', ignoreFocusOut: true }) ?? null;
+    if (!entered) { stream.markdown('No issue type provided — cancelled.'); return; }
+    issueType = entered;
+  }
 
   let additionalFields: Record<string, unknown> = {};
   let templateName: string | null = null;
@@ -331,7 +345,7 @@ export async function handleImportTemplateSelection<TItem, TRow extends ReportIm
 
   const reviewSession: ReviewSession<TRow> = {
     projectKey: session.projectKey,
-    issueType: pick.issueType,
+    issueType,
     templateName,
     additionalFields,
     rows,
