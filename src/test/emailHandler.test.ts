@@ -13,10 +13,12 @@ vi.mock('vscode', () => ({
   },
   window: {
     showOpenDialog: vi.fn(),
+    showInputBox: vi.fn(),
     createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })),
   },
 }));
 
+import * as vscode from 'vscode';
 import {
   buildEmailJiraWiki,
   buildEmailCommentHeader,
@@ -428,6 +430,15 @@ describe('handleEmailContentSession — pending comment', () => {
 });
 
 describe('streamEmailContentPreview', () => {
+  let client: MockJiraClient;
+  let ticketService: TicketService;
+
+  beforeEach(() => {
+    client = new MockJiraClient();
+    ticketService = new TicketService(client);
+    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockReset();
+  });
+
   it('shows numbered template and issue-type list when both available', async () => {
     const session = makeSession({
       availableTemplates: [{ name: 'Bug Report', issueType: 'Bug' }],
@@ -435,7 +446,7 @@ describe('streamEmailContentPreview', () => {
     });
     const stream = mockStream();
     const ws = makeMockWs();
-    await streamEmailContentPreview(session, stream as never, ws as never);
+    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
     const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
     expect(text).toContain('1. Bug Report');
     expect(text).toContain('2. Story');
@@ -446,7 +457,7 @@ describe('streamEmailContentPreview', () => {
     const session = makeSession({ availableTemplates: undefined, availableIssueTypes: undefined });
     const stream = mockStream();
     const ws = makeMockWs();
-    await streamEmailContentPreview(session, stream as never, ws as never);
+    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
     const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
     expect(text).toContain('post it');
     expect(text).not.toMatch(/^\d+\./m);
@@ -456,7 +467,7 @@ describe('streamEmailContentPreview', () => {
     const session = makeSession();
     const stream = mockStream();
     const ws = makeMockWs();
-    await streamEmailContentPreview(session, stream as never, ws as never);
+    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
     expect(ws.store['jira.session.emailContent']).toBeDefined();
   });
 
@@ -464,7 +475,7 @@ describe('streamEmailContentPreview', () => {
     const session = makeSession();
     const stream = mockStream();
     const ws = makeMockWs();
-    await streamEmailContentPreview(session, stream as never, ws as never);
+    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
     const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
     expect(text).toContain('<!-- jira:email-content -->');
   });
@@ -473,11 +484,83 @@ describe('streamEmailContentPreview', () => {
     const session = makeSession();
     const stream = mockStream();
     const ws = makeMockWs();
-    await streamEmailContentPreview(session, stream as never, ws as never);
+    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
     const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
     expect(text).toContain('Alice');
     expect(text).toContain('2024-05-01');
     expect(text).toContain('Test Subject');
+  });
+
+  // --- Never-guess sentinel rendering (U2) ---
+
+  it('renders a sentinel ("" issueType) list entry as "you will be asked to type it", not blank or a guessed name', async () => {
+    const session = makeSession({
+      availableTemplates: [{ name: 'Incident Template', issueType: '' }],
+      availableIssueTypes: undefined,
+    });
+    const stream = mockStream();
+    const ws = makeMockWs();
+    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
+    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(text).toContain('1. Incident Template _(_you will be asked to type it_)_');
+    expect(text).not.toMatch(/Incident Template _\(\)_/);
+  });
+
+  it('shows "you will be asked to type it" wording (not a blank interpolation) in the prompt when a list is present but session.issueType is the sentinel', async () => {
+    const session = makeSession({
+      issueType: '',
+      availableTemplates: [{ name: 'Bug Report', issueType: 'Bug' }],
+      availableIssueTypes: undefined,
+    });
+    const stream = mockStream();
+    const ws = makeMockWs();
+    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
+    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(text).toContain('create as _you will be asked to type it_');
+    expect(text).not.toContain('create as ****');
+  });
+
+  it('list-less path with session.issueType === "" detours to the input box instead of stating a fake type', async () => {
+    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockResolvedValueOnce('Task');
+    const session = makeSession({ issueType: '', availableTemplates: undefined, availableIssueTypes: undefined });
+    const stream = mockStream();
+    const ws = makeMockWs();
+    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
+
+    expect(vscode.window.showInputBox).toHaveBeenCalledTimes(1);
+    // No "post it to create as <fake type>" message is ever streamed before showInputBox resolves.
+    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
+    expect(calls.some(c => c.includes('post it'))).toBe(false);
+    expect(client.createIssueCalls).toHaveLength(1);
+    expect(client.createIssueCalls[0].issueType).toBe('Task');
+  });
+
+  it('list-less path with session.issueType === "" and a cancelled input box never creates a ticket', async () => {
+    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined);
+    const session = makeSession({ issueType: '', availableTemplates: undefined, availableIssueTypes: undefined });
+    const stream = mockStream();
+    const ws = makeMockWs();
+    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
+
+    expect(client.createIssueCalls).toHaveLength(0);
+    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
+    expect(calls.some(c => c.includes('No issue type provided'))).toBe(true);
+  });
+
+  it('a real configured issueType (never "") is unaffected — no input box, no extra prompt', async () => {
+    const session = makeSession({
+      issueType: 'Bug',
+      availableTemplates: [{ name: 'Bug Report', issueType: 'Bug' }],
+      availableIssueTypes: undefined,
+    });
+    const stream = mockStream();
+    const ws = makeMockWs();
+    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
+
+    expect(vscode.window.showInputBox).not.toHaveBeenCalled();
+    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(text).toContain('create as **Bug**');
+    expect(text).not.toContain('you will be asked to type it');
   });
 });
 
@@ -540,6 +623,7 @@ describe('handleEmailContentSession — ticket creation', () => {
   beforeEach(() => {
     client = new MockJiraClient();
     ticketService = new TicketService(client);
+    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockReset();
   });
 
   it('type number selection → creates ticket with that issue type', async () => {
@@ -601,5 +685,56 @@ describe('handleEmailContentSession — ticket creation', () => {
     expect(client.createIssueCalls).toHaveLength(0);
     const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
     expect(calls.some(c => c.includes('<!-- jira:email-content -->'))).toBe(true);
+  });
+
+  // --- Never-guess sentinel detour (U2) ---
+
+  it('picking the sentinel ("type it") list entry opens the input box; a typed value flows through to ticket creation unchanged', async () => {
+    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockResolvedValueOnce('Spike');
+    // '' sentinel as the only "issue type" entry (index 1) — mirrors handleCreateTicket's
+    // fully-empty-issueTypes fallback (issueTypes: ['']).
+    const session = makeSession({ issueType: 'Bug', availableIssueTypes: [''] });
+    const stream = mockStream();
+    const ws = makeMockWs();
+    await handleEmailContentSession('1', session, ticketService, stream as never, ws as never, client);
+
+    expect(vscode.window.showInputBox).toHaveBeenCalledTimes(1);
+    expect(client.createIssueCalls).toHaveLength(1);
+    expect(client.createIssueCalls[0].issueType).toBe('Spike');
+  });
+
+  it('picking the sentinel list entry with an empty/cancelled input box cancels — never falls back to a guess', async () => {
+    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined);
+    const session = makeSession({ issueType: 'Bug', availableIssueTypes: [''] });
+    const stream = mockStream();
+    const ws = makeMockWs();
+    await handleEmailContentSession('1', session, ticketService, stream as never, ws as never, client);
+
+    expect(client.createIssueCalls).toHaveLength(0);
+    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
+    expect(calls.some(c => c.includes('No issue type provided'))).toBe(true);
+  });
+
+  it('a bare "post it" confirm when session.issueType === "" also detours to the input box, not straight to ticket creation', async () => {
+    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockResolvedValueOnce('Bug');
+    const session = makeSession({ issueType: '', availableIssueTypes: ['Bug', 'Story'] });
+    const stream = mockStream();
+    const ws = makeMockWs();
+    await handleEmailContentSession('post it', session, ticketService, stream as never, ws as never, client);
+
+    expect(vscode.window.showInputBox).toHaveBeenCalledTimes(1);
+    expect(client.createIssueCalls).toHaveLength(1);
+    expect(client.createIssueCalls[0].issueType).toBe('Bug');
+  });
+
+  it('a real configured issueType picked from the list is entirely unaffected — no input box appears', async () => {
+    const session = makeSession({ issueType: 'Bug', availableIssueTypes: ['Bug', 'Story', 'Task'] });
+    const stream = mockStream();
+    const ws = makeMockWs();
+    await handleEmailContentSession('2', session, ticketService, stream as never, ws as never, client);
+
+    expect(vscode.window.showInputBox).not.toHaveBeenCalled();
+    expect(client.createIssueCalls).toHaveLength(1);
+    expect(client.createIssueCalls[0].issueType).toBe('Story');
   });
 });

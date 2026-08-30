@@ -18,7 +18,7 @@ export async function handleCreateFromEmail(
   stream: vscode.ChatResponseStream,
   _token: vscode.CancellationToken,
   jiraClient: IJiraClient,
-  _ticketService: TicketService,
+  ticketService: TicketService,
   _configService: ConfigService,
   ws: vscode.Memento,
 ): Promise<void> {
@@ -28,7 +28,7 @@ export async function handleCreateFromEmail(
   if (!session) {
     const newSession = await openEmailFilePicker(jiraClient, stream);
     if (!newSession) return;
-    await streamEmailContentPreview(newSession, stream, ws);
+    await streamEmailContentPreview(newSession, stream, ws, ticketService);
     return;
   }
 
@@ -48,7 +48,7 @@ export async function handleCreateFromEmail(
     }
   }
 
-  await streamEmailContentPreview(session, stream, ws);
+  await streamEmailContentPreview(session, stream, ws, ticketService);
 }
 
 export async function handleAddEmailFromChat(
@@ -130,7 +130,7 @@ export async function handleAddEmailFromChat(
 
   // No ticket key — build full session and show preview so user can choose
   const session = await buildEmailCreateSession(parsed, emlPath, markdownBody, inlineImageMap, attachments, jiraClient);
-  await streamEmailContentPreview(session, stream, ws);
+  await streamEmailContentPreview(session, stream, ws, ticketService);
 }
 
 // Builds a full EmailContentSession from already-parsed email data, loading templates and issue types.
@@ -311,17 +311,21 @@ export async function handleEmailContentSession(
     const overrides = pick.kind === 'template'
       ? { issueType: pick.issueType, selectedTemplateName: pick.name, additionalFields }
       : { issueType: pick.issueType };
-    await finishEmailTicket({ ...session, ...overrides }, ticketService, stream, baseUrl);
+    const resolvedIssueType = await resolveIssueTypeOrPrompt(pick.issueType, stream);
+    if (resolvedIssueType === null) return;
+    await finishEmailTicket({ ...session, ...overrides, issueType: resolvedIssueType }, ticketService, stream, baseUrl);
     return;
   }
 
   if (isConfirmation(reply)) {
     await ws.update('jira.session.emailContent', undefined);
-    await finishEmailTicket(session, ticketService, stream, baseUrl);
+    const resolvedIssueType = await resolveIssueTypeOrPrompt(session.issueType, stream);
+    if (resolvedIssueType === null) return;
+    await finishEmailTicket({ ...session, issueType: resolvedIssueType }, ticketService, stream, baseUrl);
     return;
   }
-  stream.markdown(`_Reply with a number, a ticket key (e.g. \`PROJ-42\`), **post it** to create as **${session.issueType}**, or **(c)** to cancel._`);
-  await streamEmailContentPreview(session, stream, ws);
+  stream.markdown(`_Reply with a number, a ticket key (e.g. \`PROJ-42\`), **post it** to create as ${issueTypeInlinePhrase(session.issueType)}, or **(c)** to cancel._`);
+  await streamEmailContentPreview(session, stream, ws, ticketService);
 }
 
 // Pure helper — converts markdown email body to Jira Wiki markup with inline-image placeholders resolved.
@@ -402,24 +406,67 @@ export async function streamEmailCommentPreview(session: EmailContentSession, st
   );
 }
 
-export async function streamEmailContentPreview(session: EmailContentSession, stream: vscode.ChatResponseStream, ws: vscode.Memento): Promise<void> {
-  await ws.update('jira.session.emailContent', session);
+// '' is the "no resolvable issue type" sentinel (see selectDefaultIssueType in sessionState.ts) —
+// never a real Jira issue type name. Rendered as a prompt to type one instead of a blank or
+// fabricated-looking name — mirrors createHandler.ts's streamCreateSelection `label()`.
+function issueTypeListLabel(issueType: string): string {
+  return issueType === '' ? '_you will be asked to type it_' : issueType;
+}
+
+// Same sentinel, for the inline "as **Bug**" phrasing used outside numbered lists.
+function issueTypeInlinePhrase(issueType: string): string {
+  return issueType === '' ? issueTypeListLabel(issueType) : `**${issueType}**`;
+}
+
+// '' is the never-guess sentinel — detour to a free-type input box instead of ever creating a
+// ticket with a guessed type (R3/R5). Mirrors the mechanism already shipped in JiraParticipant.ts's
+// create-ticket flow. Returns the resolved type, or null if the user cancelled (caller must not
+// proceed to ticket creation on null).
+async function resolveIssueTypeOrPrompt(issueType: string, stream: vscode.ChatResponseStream): Promise<string | null> {
+  if (issueType !== '') return issueType;
+  const entered = await vscode.window.showInputBox({ prompt: 'Enter the issue type (e.g. Bug, Story, Task)', ignoreFocusOut: true }) ?? null;
+  if (!entered) {
+    stream.markdown('No issue type provided — cancelled.');
+    return null;
+  }
+  return entered;
+}
+
+export async function streamEmailContentPreview(
+  session: EmailContentSession,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  ticketService: TicketService,
+): Promise<void> {
   const templates = session.availableTemplates ?? [];
   const issueTypes = session.availableIssueTypes ?? [];
   const hasOptions = templates.length > 0 || issueTypes.length > 0;
 
+  // No list to show and nothing resolved — there's no meaningful preview to render. Go straight to
+  // the free-type input box instead of ever stating a fabricated type as fact (R3).
+  if (!hasOptions && session.issueType === '') {
+    await ws.update('jira.session.emailContent', undefined);
+    const resolvedIssueType = await resolveIssueTypeOrPrompt(session.issueType, stream);
+    if (resolvedIssueType === null) return;
+    const baseUrl = vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.baseUrl') ?? '';
+    await finishEmailTicket({ ...session, issueType: resolvedIssueType }, ticketService, stream, baseUrl);
+    return;
+  }
+
+  await ws.update('jira.session.emailContent', session);
+
   let optionsList = '';
   if (templates.length > 0) {
-    optionsList += `**Templates:**\n${templates.map((t, i) => `${i + 1}. ${t.name} _(${t.issueType})_`).join('\n')}\n\n`;
+    optionsList += `**Templates:**\n${templates.map((t, i) => `${i + 1}. ${t.name} _(${issueTypeListLabel(t.issueType)})_`).join('\n')}\n\n`;
   }
   if (issueTypes.length > 0) {
     const offset = templates.length;
-    optionsList += `**Issue types (no template):**\n${issueTypes.map((t, i) => `${offset + i + 1}. ${t}`).join('\n')}\n\n`;
+    optionsList += `**Issue types (no template):**\n${issueTypes.map((t, i) => `${offset + i + 1}. ${issueTypeListLabel(t)}`).join('\n')}\n\n`;
   }
 
   const commentHint = '\n\nOr reply with a ticket key (e.g. `PROJ-42`) to add this email as a comment to an existing ticket.';
   const prompt = hasOptions
-    ? `${optionsList}Reply with a number to select, **post it** to create as **${session.issueType}**, or **(c)** to cancel.${commentHint}`
+    ? `${optionsList}Reply with a number to select, **post it** to create as ${issueTypeInlinePhrase(session.issueType)}, or **(c)** to cancel.${commentHint}`
     : `Reply **post it** to create the Jira ticket in **${session.projectKey}** as **${session.issueType}**, or **(c)** to cancel.${commentHint}`;
 
   const headerLines: string[] = [];
