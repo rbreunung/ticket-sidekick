@@ -43,9 +43,8 @@ export async function resolveProjectKey(
 }
 
 // '' is the never-guess sentinel (see NO_ISSUE_TYPE in sessionState.ts) — detour to a free-type
-// input box instead of ever creating a ticket with a guessed type. Shared by the email-import and
-// report-import flows; the create flow (createHandler.ts/JiraParticipant.ts) predates this helper
-// and still carries its own inline copy of the same check.
+// input box instead of ever creating a ticket with a guessed type. Shared by every flow that
+// resolves an issue type before creating a ticket (create, email import, report import).
 // Returns the resolved type, or null if the user cancelled (caller must not proceed on null).
 export async function resolveIssueTypeOrPrompt(
   issueType: string,
