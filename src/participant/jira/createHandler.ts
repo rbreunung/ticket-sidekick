@@ -6,9 +6,10 @@ import { TemplateService } from '../../templates/TemplateService';
 import type { JiraTemplate } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
 import type { ContentSession, CreationSession, CreateSelectionSession } from '../sessionState';
+import { NO_ISSUE_TYPE, resolveTemplateIssueType, formatIssueTypeOptionLabel } from '../sessionState';
 import { streamContentPreview } from './contentHandler';
 import { parseIntent } from './llmHelpers';
-import { resolveProjectKey } from './ticketContext';
+import { resolveProjectKey, resolveIssueTypeOrPrompt } from './ticketContext';
 
 async function sendAndCollect(
   model: vscode.LanguageModelChat,
@@ -190,16 +191,13 @@ export async function streamCreateSelection(
   workspaceState: vscode.Memento,
 ): Promise<void> {
   await workspaceState.update('jira.session.creatingSelection', session);
-  // '' is the "no resolvable issue type" sentinel (see handleCreateTicket) — render it as a
-  // prompt to type one instead of a blank/fabricated name.
-  const label = (issueType: string) => issueType === '' ? '_you will be asked to type it_' : issueType;
   let optionsList = '';
   if (session.templates.length > 0) {
-    optionsList += `**Templates:**\n${session.templates.map((t, i) => `${i + 1}. ${t.name} _(${label(t.issueType)})_`).join('\n')}\n\n`;
+    optionsList += `**Templates:**\n${session.templates.map((t, i) => `${i + 1}. ${t.name} _(${formatIssueTypeOptionLabel(t.issueType)})_`).join('\n')}\n\n`;
   }
   if (session.issueTypes.length > 0) {
     const offset = session.templates.length;
-    optionsList += `**Issue types (no template):**\n${session.issueTypes.map((t, i) => `${offset + i + 1}. ${label(t)}`).join('\n')}\n\n`;
+    optionsList += `**Issue types (no template):**\n${session.issueTypes.map((t, i) => `${offset + i + 1}. ${formatIssueTypeOptionLabel(t)}`).join('\n')}\n\n`;
   }
   stream.markdown(`${optionsList}Reply with a number to select a template or issue type, or **(c)** to cancel.\n\n<!-- jira:selecting-create-option -->`);
 }
@@ -278,8 +276,8 @@ export async function handleCreateTicket(
   if (templates.length === 0 && issueTypes.length === 0) {
     // Nothing to list — fall back to the free-type input box (R6).
     stream.markdown('_Could not fetch issue types — opening input box…_\n\n');
-    const entered = await vscode.window.showInputBox({ prompt: 'Enter the issue type (e.g. Bug, Story, Task)', ignoreFocusOut: true }) ?? null;
-    if (!entered) { stream.markdown('No issue type provided — cancelled.'); return null; }
+    const entered = await resolveIssueTypeOrPrompt(NO_ISSUE_TYPE, stream);
+    if (entered === null) return null;
     return continueAfterIssueType(projectKey, intent.summary, entered, intent.description, null, request.model, stream, token, jiraClient, ticketService, workspaceState, extraFields);
   }
 
@@ -291,8 +289,8 @@ export async function handleCreateTicket(
   // a way to create a ticket without one of the listed templates (R6's intent extended to this
   // partial-failure case, not just the fully-empty one above).
   const session: CreateSelectionSession = {
-    templates: templates.map((t) => ({ name: t.name, issueType: t.issueType ?? issueTypes[0] ?? '' })),
-    issueTypes: issueTypes.length > 0 ? issueTypes : [''],
+    templates: templates.map((t) => ({ name: t.name, issueType: resolveTemplateIssueType(t.issueType, issueTypes) })),
+    issueTypes: issueTypes.length > 0 ? issueTypes : [NO_ISSUE_TYPE],
     projectKey,
     summary: intent.summary,
     description: intent.description,

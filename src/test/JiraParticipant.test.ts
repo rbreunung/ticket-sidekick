@@ -4,7 +4,7 @@ vi.mock('vscode', () => ({
   window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
 }));
 
-import { extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, buildImportReviewTable, parseReviewInput, applyReviewToggle, VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION, buildBulkUpdateReviewTable, type VeracodeReviewRow, type BulkUpdateReviewRow } from '../participant/sessionState';
+import { extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, resolveTemplateIssueType, formatIssueTypeOptionLabel, formatIssueTypeInlinePhrase, NO_ISSUE_TYPE, buildImportReviewTable, parseReviewInput, applyReviewToggle, VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION, buildBulkUpdateReviewTable, type VeracodeReviewRow, type BulkUpdateReviewRow } from '../participant/sessionState';
 import type { WaltzReviewRow } from '../utils/waltzReport';
 import { isPointerPrompt } from '../participant/jira/llmHelpers';
 import type { TransitionBatchTicket } from '../participant/sessionState';
@@ -739,8 +739,40 @@ describe('selectDefaultIssueType', () => {
     expect(selectDefaultIssueType(['Epic', 'Bug'])).toBe('Epic');
   });
 
-  it('returns literal "Story" when list is empty', () => {
-    expect(selectDefaultIssueType([])).toBe('Story');
+  it('returns the never-guess sentinel when list is empty', () => {
+    expect(selectDefaultIssueType([])).toBe('');
+  });
+});
+
+describe('resolveTemplateIssueType', () => {
+  it('returns the explicit issue type when the template configures one', () => {
+    expect(resolveTemplateIssueType('Bug', ['Story', 'Task'])).toBe('Bug');
+  });
+
+  it('falls back to the first fetched issue type when the template configures none', () => {
+    expect(resolveTemplateIssueType(undefined, ['Story', 'Task'])).toBe('Story');
+  });
+
+  it('falls back to the never-guess sentinel when neither is available', () => {
+    expect(resolveTemplateIssueType(undefined, [])).toBe(NO_ISSUE_TYPE);
+  });
+});
+
+describe('formatIssueTypeOptionLabel / formatIssueTypeInlinePhrase', () => {
+  it('renders a real issue type unchanged as a list label', () => {
+    expect(formatIssueTypeOptionLabel('Bug')).toBe('Bug');
+  });
+
+  it('renders the sentinel as the "you will be asked to type it" list label', () => {
+    expect(formatIssueTypeOptionLabel(NO_ISSUE_TYPE)).toBe('_you will be asked to type it_');
+  });
+
+  it('renders a real issue type bolded as an inline phrase', () => {
+    expect(formatIssueTypeInlinePhrase('Bug')).toBe('**Bug**');
+  });
+
+  it('renders the sentinel as the unbolded list label when used inline', () => {
+    expect(formatIssueTypeInlinePhrase(NO_ISSUE_TYPE)).toBe('_you will be asked to type it_');
   });
 });
 

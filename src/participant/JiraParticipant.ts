@@ -14,7 +14,7 @@ import type { CleanupRule } from '../templates/TemplateService';
 import type { Operation, ParsedIntent } from './jira/llmHelpers';
 import { parseIntent, extractFixVersionFromPrompt, generateContent, isLmRefusal, synthesizeComments, generateDescriptionAndCommentsSummary, isPointerPrompt, extractLastAssistantText } from './jira/llmHelpers';
 import { streamFieldUpdatePreview, continueSetField, handleSetField, handleSpellCheck } from './jira/fieldHandler';
-import { getLastAssistantText, resolveTicketFromBranch, resolveProjectKey, parseLastTicketFromContext } from './jira/ticketContext';
+import { getLastAssistantText, resolveTicketFromBranch, resolveProjectKey, resolveIssueTypeOrPrompt, parseLastTicketFromContext } from './jira/ticketContext';
 import { validateBaseUrl } from '../services/configValidation';
 import { gatherFileContent, buildContentContext, streamContentPreview, handleContentSession } from './jira/contentHandler';
 import { streamCreateSelection, continueAfterIssueType, streamNextSection, finishTicketCreation, handleCreateTicket } from './jira/createHandler';
@@ -253,12 +253,8 @@ export function createJiraParticipant(
 
         // '' is the "no resolvable issue type" sentinel (see handleCreateTicket) — ask instead
         // of silently creating the ticket with a guessed type.
-        let issueType = pick.issueType;
-        if (issueType === '') {
-          const entered = await vscode.window.showInputBox({ prompt: 'Enter the issue type (e.g. Bug, Story, Task)', ignoreFocusOut: true }) ?? null;
-          if (!entered) { stream.markdown('No issue type provided — cancelled.'); return; }
-          issueType = entered;
-        }
+        const issueType = await resolveIssueTypeOrPrompt(pick.issueType, stream);
+        if (issueType === null) return;
 
         try {
           await continueAfterIssueType(

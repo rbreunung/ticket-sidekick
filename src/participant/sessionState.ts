@@ -426,13 +426,34 @@ export function pickEmailOption(
   return { kind: 'type', issueType: issueTypes[n - templates.length - 1] };
 }
 
+// The "no resolvable issue type" sentinel — never a real Jira issue type name. Signals that
+// nothing was fetched or configured, so the caller must ask the user rather than guess.
+export const NO_ISSUE_TYPE = '';
+
 export function selectDefaultIssueType(issueTypes: string[]): string {
   return (
     issueTypes.find(t => t === 'Story') ??
     issueTypes.find(t => t === 'Task') ??
     issueTypes[0] ??
-    'Story'
+    NO_ISSUE_TYPE
   );
+}
+
+// Resolves a template's own configured issue type, falling back to the first fetched project
+// issue type, or the never-guess sentinel when neither is available.
+export function resolveTemplateIssueType(explicit: string | undefined, issueTypes: string[]): string {
+  return explicit ?? issueTypes[0] ?? NO_ISSUE_TYPE;
+}
+
+// Renders a template/type-list entry, replacing the never-guess sentinel with an explicit
+// "you'll be asked to type it" indicator instead of a blank or fabricated-looking value.
+export function formatIssueTypeOptionLabel(issueType: string): string {
+  return issueType === NO_ISSUE_TYPE ? '_you will be asked to type it_' : issueType;
+}
+
+// Same sentinel, for the inline "as **Bug**" phrasing used outside numbered lists.
+export function formatIssueTypeInlinePhrase(issueType: string): string {
+  return issueType === NO_ISSUE_TYPE ? formatIssueTypeOptionLabel(issueType) : `**${issueType}**`;
 }
 
 export function buildTeamJql(teamJql: string, extraJql: string | null): string {

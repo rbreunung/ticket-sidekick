@@ -72,7 +72,7 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw, VeracodeReviewRow
   // chat-only entry points once extension.ts is switched onto this shared session builder.
   onIssueTypeFetchFailed: (message, projectKey) => {
     vscode.window.showWarningMessage(
-      `Ticket Sidekick: Could not fetch issue types for ${projectKey} — will default to 'Bug'. ${message}`,
+      `Ticket Sidekick: Could not fetch issue types for ${projectKey} — you'll be asked to type it. ${message}`,
     );
   },
 };

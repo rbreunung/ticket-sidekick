@@ -23,9 +23,10 @@ import {
 import {
   isCancellation, pickEmailOption, buildImportReviewTable, parseReviewInput, applyReviewToggle,
   CURRENT_SESSION_SCHEMA_VERSION, isSessionExpired, SESSION_EXPIRED_MESSAGE,
+  NO_ISSUE_TYPE, resolveTemplateIssueType, formatIssueTypeOptionLabel,
   type ImportTemplateSelectionSession, type ReviewSession, type ReviewTableColumn, type ReviewRowBase,
 } from '../sessionState';
-import { resolveProjectKey } from './ticketContext';
+import { resolveProjectKey, resolveIssueTypeOrPrompt, sessionWasSuperseded } from './ticketContext';
 
 export interface ReportImportRow extends ReviewRowBase {
   labels: string[];
@@ -119,11 +120,24 @@ export async function buildImportTemplateSession<TItem, TRow extends ReportImpor
   descriptor: ReportImportDescriptor<TItem, TRow>,
 ): Promise<ImportTemplateSelectionSession<TItem>> {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+
+  let issueTypes: string[] = [];
+  try {
+    const project = await jiraClient.getProject(projectKey);
+    issueTypes = project.issueTypes.filter(t => !t.subtask).map(t => t.name);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logDiag(descriptor.scope, 'warn', `Could not fetch issue types — ${projectKey}, you'll be asked to type it`, {
+      projectKey, error: message,
+    });
+    descriptor.onIssueTypeFetchFailed?.(message, projectKey);
+  }
+
   const availableTemplates: Array<{ name: string; issueType: string }> = (() => {
     if (!workspaceRoot) return [];
     try {
       return new TemplateService(workspaceRoot).loadTemplates().templates
-        .map(t => ({ name: t.name, issueType: t.issueType ?? 'Bug' }));
+        .map(t => ({ name: t.name, issueType: resolveTemplateIssueType(t.issueType, issueTypes) }));
     } catch (err) {
       logDiag(descriptor.scope, 'warn', 'Could not load templates — proceeding without', {
         error: err instanceof Error ? err.message : String(err),
@@ -132,24 +146,12 @@ export async function buildImportTemplateSession<TItem, TRow extends ReportImpor
     }
   })();
 
-  let issueTypes: string[] = [];
-  try {
-    const project = await jiraClient.getProject(projectKey);
-    issueTypes = project.issueTypes.filter(t => !t.subtask).map(t => t.name);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    logDiag(descriptor.scope, 'warn', `Could not fetch issue types — ${projectKey}, defaulting to 'Bug'`, {
-      projectKey, error: message,
-    });
-    descriptor.onIssueTypeFetchFailed?.(message, projectKey);
-  }
-
   return {
     reportFileName: fileName,
     projectKey,
     items,
     availableTemplates,
-    availableIssueTypes: issueTypes.length > 0 ? issueTypes : ['Bug'],
+    availableIssueTypes: issueTypes.length > 0 ? issueTypes : [NO_ISSUE_TYPE],
     schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
   };
 }
@@ -165,10 +167,10 @@ export async function streamImportTemplateSelection<TItem, TRow extends ReportIm
 
   let optionsList = '';
   if (templates.length > 0) {
-    optionsList += `**Templates:**\n${templates.map((t, i) => `${i + 1}. ${t.name} _(${t.issueType})_`).join('\n')}\n\n`;
+    optionsList += `**Templates:**\n${templates.map((t, i) => `${i + 1}. ${t.name} _(${formatIssueTypeOptionLabel(t.issueType)})_`).join('\n')}\n\n`;
   }
   const offset = templates.length;
-  optionsList += `**Issue types (no template):**\n${issueTypes.map((t, i) => `${offset + i + 1}. ${t}`).join('\n')}\n\n`;
+  optionsList += `**Issue types (no template):**\n${issueTypes.map((t, i) => `${offset + i + 1}. ${formatIssueTypeOptionLabel(t)}`).join('\n')}\n\n`;
 
   stream.markdown(
     `Found **${session.items.length}** ${descriptor.itemNoun} in \`${session.reportFileName}\` matching your ${descriptor.filterKindLabel} filters ` +
@@ -244,6 +246,16 @@ export async function handleImportTemplateSelection<TItem, TRow extends ReportIm
     return;
   }
   await ws.update(descriptor.sessionKeys.templateSelection, undefined);
+
+  // The whole batch shares this one resolved type, so this single detour — before dedup search or
+  // review-table work starts — covers every row in the import (mirrors JiraParticipant.ts's
+  // create-ticket detour).
+  const issueType = await resolveIssueTypeOrPrompt(pick.issueType, stream);
+  if (issueType === null) return;
+  if (sessionWasSuperseded(ws, descriptor.sessionKeys.templateSelection)) {
+    stream.markdown('_A newer import was started while this one was waiting for the issue type — cancelled to avoid creating a stale batch._');
+    return;
+  }
 
   let additionalFields: Record<string, unknown> = {};
   let templateName: string | null = null;
@@ -330,7 +342,7 @@ export async function handleImportTemplateSelection<TItem, TRow extends ReportIm
 
   const reviewSession: ReviewSession<TRow> = {
     projectKey: session.projectKey,
-    issueType: pick.issueType,
+    issueType,
     templateName,
     additionalFields,
     rows,
