@@ -3,6 +3,7 @@ import { logDiag } from '../../utils/diagLog';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import { discoverWorkflow, loadWorkflowCache, saveWorkflowCache, preserveSkippedStatuses } from '../../services/WorkflowService';
 import type { ParsedIntent } from './llmHelpers';
+import { formatWorkflowDiscoveryMessage } from '../sessionState';
 
 export async function handleDiscoverWorkflow(
   intent: ParsedIntent,
@@ -34,20 +35,12 @@ export async function handleDiscoverWorkflow(
   // the "no tickets found" bail-out above already returned before reaching here.
   await vscode.commands.executeCommand('setContext', 'ticketSidekick.workflowViewed', true);
 
-  const lines = Object.keys(graph).map((s) => {
-    const targets = graph[s].map((t) => `${t.name} → **${t.to}**`).join(', ');
-    return `**${s}**: ${targets}`;
-  });
-  let summary = `Workflow discovered for **${projectKey} / ${issueType}** (${lines.length} statuses):\n\n${lines.join('\n\n')}\n\nSaved to \`.jira-workflow-cache.json\`.`;
-  const trulySkipped = skippedStatuses.filter(s => !preserved.includes(s));
-  if (preserved.length > 0) {
-    summary += `\n\n_${preserved.length} status(es) had no tickets and kept cached transitions: ${preserved.join(', ')}._`;
-  }
-  if (trulySkipped.length > 0) {
-    summary += `\n\n⚠️ **${trulySkipped.length} status(es) had no tickets and no cached transitions:** ${trulySkipped.join(', ')}. Re-run discovery once tickets exist in those states.`;
-  }
+  // Same pure formatter jira_discoverWorkflow's tool result uses (src/tools/jiraTools.ts), so
+  // the chat flow and the Language Model tool never drift apart on this wording (R3).
+  const summary = formatWorkflowDiscoveryMessage(projectKey, issueType, graph, skippedStatuses, preserved);
+  const trulySkippedCount = skippedStatuses.filter(s => !preserved.includes(s)).length;
   logDiag('jira.workflow', 'info', `Workflow discovered — ${projectKey}/${issueType}`, {
-    projectKey, issueType, statusCount: lines.length, preservedCount: preserved.length, trulySkippedCount: trulySkipped.length,
+    projectKey, issueType, statusCount: statuses.length, preservedCount: preserved.length, trulySkippedCount,
   });
   stream.markdown(summary);
 }

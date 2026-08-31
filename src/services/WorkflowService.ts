@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { IJiraClient } from '../jira/IJiraClient';
+import type { TicketService } from './TicketService';
 
 export interface CachedTransition {
   id: string;
@@ -104,4 +105,62 @@ export async function discoverWorkflow(
     graph[status] = transitionResults[i].map((t) => ({ id: t.id, name: t.name, to: t.to.name }));
   }
   return { graph, skippedStatuses };
+}
+
+/** Outcome of `resolveAndApplyTransition` — a discriminated result so each caller (chat markdown
+ * vs. a Language Model tool's plain text) can format its own message without duplicating the
+ * resolution algorithm itself (R3: one implementation, reused everywhere). */
+export type TransitionResolution =
+  | { kind: 'alreadyThere'; currentStatus: string }
+  | { kind: 'direct'; toStatus: string }
+  | { kind: 'multiHop'; toStatus: string; hops: number }
+  | { kind: 'unavailable'; currentStatus: string; available: string[]; projectKey: string; issueType: string; hasCache: boolean };
+
+/**
+ * Resolves and applies a Jira ticket transition to `targetStatus`: already-there short-circuit,
+ * then a direct transition if one exists, then a cached multi-hop workflow path
+ * (`loadWorkflowCache`/`findPath`) as a fallback. Shared by `@jira`'s chat `'transition'`
+ * operation and the `jira_transitionTicket` Language Model tool — previously each reimplemented
+ * this same lookup independently.
+ */
+export async function resolveAndApplyTransition(
+  jiraClient: IJiraClient,
+  ticketService: TicketService,
+  workspaceRoot: string,
+  ticketKey: string,
+  targetStatus: string,
+  resolution?: string,
+): Promise<TransitionResolution> {
+  const issue = await jiraClient.getIssue(ticketKey);
+  const currentStatus = issue.fields.status.name;
+  if (currentStatus.toLowerCase() === targetStatus.toLowerCase()) {
+    return { kind: 'alreadyThere', currentStatus };
+  }
+
+  const transitions = await jiraClient.getTransitions(ticketKey);
+  const direct = transitions.find((t) => t.to.name.toLowerCase() === targetStatus.toLowerCase());
+  if (direct) {
+    await ticketService.transitionAlongPath(ticketKey, [{ id: direct.id, name: direct.name, to: direct.to.name }], resolution);
+    return { kind: 'direct', toStatus: direct.to.name };
+  }
+
+  const projectKey = ticketKey.split('-')[0];
+  const issueType = (issue.fields.issuetype as { name?: string } | undefined)?.name ?? '';
+  const graph = loadWorkflowCache(workspaceRoot)[projectKey]?.[issueType]?.graph;
+  if (graph) {
+    const path = findPath(graph, currentStatus, targetStatus);
+    if (path && path.length > 0) {
+      await ticketService.transitionAlongPath(ticketKey, path, resolution);
+      return { kind: 'multiHop', toStatus: targetStatus, hops: path.length };
+    }
+  }
+
+  return {
+    kind: 'unavailable',
+    currentStatus,
+    available: transitions.map((t) => t.to.name),
+    projectKey,
+    issueType,
+    hasCache: !!graph,
+  };
 }

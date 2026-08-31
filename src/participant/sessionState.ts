@@ -9,6 +9,10 @@ import type { JiraTemplate } from '../templates/TemplateService';
 // this (vscode-free, Vitest-loadable) module is ever loaded at runtime.
 import type { JiraConfig } from '../services/ConfigService';
 import type { WorkflowGraph } from '../services/WorkflowService';
+// Type-only — llmHelpers.ts imports from this file too, but a type-only import is erased
+// before either module is ever loaded at runtime, so this stays safe (no runtime cycle).
+import type { Operation } from './jira/llmHelpers';
+import type { ToolConfirmation } from '../tools/toolConfirmation';
 
 export type { VeracodeReviewRow } from '../utils/veracodeReport';
 export type { WaltzReviewRow } from '../utils/waltzReport';
@@ -936,13 +940,6 @@ export type TemplateGenerationAwaitSummarySession = TemplateGenerationTemplateSt
 // WorkflowService/TemplateService and hands it to these functions to render.
 // ---------------------------------------------------------------------------------------------
 
-/** A tool's `prepareInvocation()` confirmation — `title`/`message` map directly onto
- * `vscode.LanguageModelToolConfirmationMessages`. */
-export interface ToolConfirmation {
-  title: string;
-  message: string;
-}
-
 /** Renders a "current → new" change, e.g. `Critical → High` (KTD3). Shared by every builder
  * below that shows a before/after value. */
 export function formatFieldChangeDisplay(currentValue: string, newValue: string): string {
@@ -1084,7 +1081,10 @@ export function isGreetingOrEmpty(prompt: string): boolean {
 export type JiraFollowupState =
   | { kind: 'greeting' }
   | { kind: 'fallback' }
-  | { kind: 'loadedTicket'; ticketKey: string }
+  // `justDid`, when set, names the operation that just ran on `ticketKey` — omitted for a plain
+  // ticket view, present for a write (e.g. `addComment`, `transition`) so the chip set below can
+  // leave out a suggestion that would just repeat the action the user already took.
+  | { kind: 'loadedTicket'; ticketKey: string; justDid?: Operation }
   | { kind: 'none' };
 
 const JIRA_MAX_FOLLOWUPS = 3;
@@ -1109,11 +1109,18 @@ export function computeJiraFollowups(state: JiraFollowupState): FollowupSuggesti
         { prompt: 'add a comment to PROJ-123', label: 'Add a comment' },
         { prompt: 'search my open tickets', label: 'Search tickets' },
       ].slice(0, JIRA_MAX_FOLLOWUPS);
-    case 'loadedTicket':
-      return [
-        { prompt: `add a comment to ${state.ticketKey}`, label: 'Add a comment' },
-        { prompt: `transition ${state.ticketKey}`, label: 'Transition it' },
-      ];
+    case 'loadedTicket': {
+      // Leave out a suggestion that would just repeat the write the user already performed
+      // (e.g. don't offer "add a comment" right after `addComment` succeeded).
+      const chips: FollowupSuggestion[] = [];
+      if (state.justDid !== 'addComment') {
+        chips.push({ prompt: `add a comment to ${state.ticketKey}`, label: 'Add a comment' });
+      }
+      if (state.justDid !== 'transition') {
+        chips.push({ prompt: `transition ${state.ticketKey}`, label: 'Transition it' });
+      }
+      return chips;
+    }
     case 'none':
       return [];
   }

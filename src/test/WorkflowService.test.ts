@@ -1,6 +1,10 @@
-import { describe, it, expect } from 'vitest';
-import { findPath, loadWorkflowCache, discoverWorkflow, preserveSkippedStatuses } from '../services/WorkflowService';
+import { describe, it, expect, afterEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { findPath, loadWorkflowCache, discoverWorkflow, preserveSkippedStatuses, resolveAndApplyTransition, saveWorkflowCache } from '../services/WorkflowService';
 import { MockJiraClient } from './mocks/MockJiraClient';
+import { TicketService } from '../services/TicketService';
 
 const graph = {
   'Open':        [{ id: '11', name: 'Start Progress', to: 'In Progress' }],
@@ -126,5 +130,78 @@ describe('preserveSkippedStatuses', () => {
     const preserved = preserveSkippedStatuses(newGraph, ['Closed', 'Cancelled', 'Ghost'], oldGraph);
     expect(preserved).toEqual(['Closed', 'Cancelled']);
     expect(Object.keys(newGraph)).toHaveLength(2);
+  });
+});
+
+describe('resolveAndApplyTransition', () => {
+  // Fixture ticket PROJ-123 is "In Progress" with direct transitions to To Do/In Progress/In
+  // Review/Done (transitions-PROJ-123.json) and no issuetype field (issueType resolves to '').
+  let tmpDir: string | undefined;
+
+  afterEach(() => {
+    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    tmpDir = undefined;
+  });
+
+  it('reports already-there without calling getTransitions or applying anything', async () => {
+    const client = new MockJiraClient();
+    const service = new TicketService(client);
+
+    const result = await resolveAndApplyTransition(client, service, '/nonexistent', 'PROJ-123', 'In Progress');
+
+    expect(result).toEqual({ kind: 'alreadyThere', currentStatus: 'In Progress' });
+    expect(client.executeTransitionCalls).toEqual([]);
+  });
+
+  it('applies a direct transition and reports the resolved status', async () => {
+    const client = new MockJiraClient();
+    const service = new TicketService(client);
+
+    const result = await resolveAndApplyTransition(client, service, '/nonexistent', 'PROJ-123', 'done');
+
+    expect(result).toEqual({ kind: 'direct', toStatus: 'Done' });
+    expect(client.executeTransitionCalls).toEqual([{ issueKey: 'PROJ-123', transitionId: '41', fields: undefined }]);
+  });
+
+  it('falls back to a cached multi-hop path when no direct transition exists', async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'ticket-sidekick-workflow-'));
+    saveWorkflowCache(tmpDir, {
+      PROJ: {
+        '': {
+          discovered: '2020-01-01',
+          graph: {
+            'In Progress': [{ id: '31', name: 'Review', to: 'In Review' }],
+            'In Review': [{ id: '99', name: 'Close', to: 'Closed' }],
+          },
+        },
+      },
+    });
+    const client = new MockJiraClient();
+    const service = new TicketService(client);
+
+    const result = await resolveAndApplyTransition(client, service, tmpDir, 'PROJ-123', 'Closed');
+
+    expect(result).toEqual({ kind: 'multiHop', toStatus: 'Closed', hops: 2 });
+    expect(client.executeTransitionCalls).toEqual([
+      { issueKey: 'PROJ-123', transitionId: '31', fields: undefined },
+      { issueKey: 'PROJ-123', transitionId: '99', fields: undefined },
+    ]);
+  });
+
+  it('reports unavailable with the real transition list when no direct or cached path exists', async () => {
+    const client = new MockJiraClient();
+    const service = new TicketService(client);
+
+    const result = await resolveAndApplyTransition(client, service, '/nonexistent', 'PROJ-123', 'Nonexistent Status');
+
+    expect(result).toEqual({
+      kind: 'unavailable',
+      currentStatus: 'In Progress',
+      available: ['To Do', 'In Progress', 'In Review', 'Done'],
+      projectKey: 'PROJ',
+      issueType: '',
+      hasCache: false,
+    });
+    expect(client.executeTransitionCalls).toEqual([]);
   });
 });

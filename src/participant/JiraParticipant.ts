@@ -8,7 +8,7 @@ import type { JiraTemplate } from '../templates/TemplateService';
 import { tokenStatus } from '../utils/diagUtils';
 import { logDiag } from '../utils/diagLog';
 import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, type JiraFollowupState, isConfirmation, isCancellation, isGreetingOrEmpty, computeJiraFollowups, pickEmailOption, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewTable } from './sessionState';
-import { loadWorkflowCache, findPath } from '../services/WorkflowService';
+import { findPath, resolveAndApplyTransition } from '../services/WorkflowService';
 import type { WorkflowGraph } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
 import type { Operation, ParsedIntent } from './jira/llmHelpers';
@@ -1021,38 +1021,31 @@ export function createJiraParticipant(
             break;
           }
           const targetStatus = intent.targetStatus;
-          const transIssue = await jiraClient.getIssue(ticketKey!);
-          const currentStatus = transIssue.fields.status.name;
-          if (currentStatus.toLowerCase() === targetStatus.toLowerCase()) {
-            result = `**${ticketKey}** is already in **${currentStatus}**.`;
-            break;
-          }
-          const transitionList = await jiraClient.getTransitions(ticketKey!);
-          const direct = transitionList.find(t => t.to.name.toLowerCase() === targetStatus.toLowerCase());
-          const resolution = intent.resolution ?? undefined;
-          if (direct) {
-            await ticketService.transitionAlongPath(ticketKey!, [{ id: direct.id, name: direct.name, to: direct.to.name }], resolution);
-            result = `**${ticketKey}** moved to **${direct.to.name}**.`;
-            break;
-          }
-          // Fall back to workflow cache for multi-hop paths
           const transWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-          const transProjectKey = ticketKey!.split('-')[0];
-          const transIssueType = (transIssue.fields.issuetype as { name?: string } | undefined)?.name ?? '';
-          const transGraph = loadWorkflowCache(transWorkspaceRoot)[transProjectKey]?.[transIssueType]?.graph;
-          if (transGraph) {
-            const path = findPath(transGraph, currentStatus, targetStatus);
-            if (path && path.length > 0) {
-              await ticketService.transitionAlongPath(ticketKey!, path, resolution);
-              result = `**${ticketKey}** moved to **${targetStatus}** (${path.length} hop${path.length > 1 ? 's' : ''}).`;
+          // Same resolution algorithm `jira_transitionTicket` uses (src/services/WorkflowService.ts) —
+          // R3: one implementation, reused by both the chat flow and the Language Model tool.
+          const transResult = await resolveAndApplyTransition(
+            jiraClient, ticketService, transWorkspaceRoot, ticketKey!, targetStatus, intent.resolution ?? undefined,
+          );
+          switch (transResult.kind) {
+            case 'alreadyThere':
+              result = `**${ticketKey}** is already in **${transResult.currentStatus}**.`;
+              break;
+            case 'direct':
+              result = `**${ticketKey}** moved to **${transResult.toStatus}**.`;
+              break;
+            case 'multiHop':
+              result = `**${ticketKey}** moved to **${transResult.toStatus}** (${transResult.hops} hop${transResult.hops > 1 ? 's' : ''}).`;
+              break;
+            case 'unavailable': {
+              const available = transResult.available.map(name => `**${name}**`).join(', ');
+              const cacheHint = transResult.hasCache
+                ? ''
+                : ` Run \`@jira discover workflow ${transResult.projectKey} ${transResult.issueType || '<issuetype>'}\` to enable multi-hop transitions.`;
+              result = `No transition to **${targetStatus}** available from **${transResult.currentStatus}**.${available ? ` Available: ${available}.` : ''}${cacheHint}`;
               break;
             }
           }
-          const available = transitionList.map(t => `**${t.to.name}**`).join(', ');
-          const cacheHint = transGraph
-            ? ''
-            : ` Run \`@jira discover workflow ${transProjectKey} ${transIssueType || '<issuetype>'}\` to enable multi-hop transitions.`;
-          result = `No transition to **${targetStatus}** available from **${currentStatus}**.${available ? ` Available: ${available}.` : ''}${cacheHint}`;
           break;
         }
         case 'bulkTransition': {
@@ -1217,7 +1210,10 @@ export function createJiraParticipant(
       stream.markdown(result);
       if (ticketKey) stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
       if (ticketKey) {
-        const viewedState: JiraFollowupState = { kind: 'loadedTicket', ticketKey };
+        // `justDid` lets computeJiraFollowups leave out a chip that would just repeat the
+        // action this operation itself performed (e.g. no "add a comment" chip right after
+        // addComment succeeded).
+        const viewedState: JiraFollowupState = { kind: 'loadedTicket', ticketKey, justDid: intent.operation };
         return { metadata: { jiraFollowup: viewedState } };
       }
     } catch (err) {

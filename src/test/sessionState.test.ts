@@ -176,6 +176,24 @@ describe('computeJiraFollowups', () => {
     expect(chips.every((c) => c.prompt.includes('PROJ-123'))).toBe(true);
   });
 
+  it('omits the "add a comment" chip right after addComment succeeded', () => {
+    const state: JiraFollowupState = { kind: 'loadedTicket', ticketKey: 'PROJ-123', justDid: 'addComment' };
+
+    const chips = computeJiraFollowups(state);
+
+    expect(chips.some((c) => /add a comment/i.test(c.prompt))).toBe(false);
+    expect(chips.some((c) => /transition/i.test(c.prompt))).toBe(true);
+  });
+
+  it('omits the "transition it" chip right after transition succeeded', () => {
+    const state: JiraFollowupState = { kind: 'loadedTicket', ticketKey: 'PROJ-123', justDid: 'transition' };
+
+    const chips = computeJiraFollowups(state);
+
+    expect(chips.some((c) => /transition/i.test(c.prompt))).toBe(false);
+    expect(chips.some((c) => /add a comment/i.test(c.prompt))).toBe(true);
+  });
+
   it('returns no chips when there is no prior operation state', () => {
     expect(computeJiraFollowups({ kind: 'none' })).toEqual([]);
   });

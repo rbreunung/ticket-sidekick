@@ -4,7 +4,7 @@ import { ConfigService, type JiraConfig } from '../services/ConfigService';
 import { TicketService, renderFieldValue } from '../services/TicketService';
 import { TemplateService } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
-import { discoverWorkflow, loadWorkflowCache, saveWorkflowCache, preserveSkippedStatuses, findPath } from '../services/WorkflowService';
+import { discoverWorkflow, loadWorkflowCache, saveWorkflowCache, preserveSkippedStatuses, resolveAndApplyTransition } from '../services/WorkflowService';
 import { logDiag } from '../utils/diagLog';
 import {
   buildJiraNotConfiguredMessage,
@@ -344,8 +344,10 @@ class UpdateFieldTool implements vscode.LanguageModelTool<UpdateFieldInput> {
         const ctx = await tryGetConfiguredContext(this.configService);
         if (!isNotConfiguredResult(ctx)) {
           const { ticketService } = ctx;
-          const fieldId = await ticketService.resolveFieldId(fieldName);
+          // Fetch field metadata once and hand it to resolveFieldId — it otherwise re-fetches
+          // the same `GET /field` list itself for any non-aliased field name.
           const fieldMeta = await ticketService.getFieldMeta();
+          const fieldId = await ticketService.resolveFieldId(fieldName, fieldMeta);
           const meta = fieldMeta.find(f => f.id === fieldId);
           const raw = await ticketService.getRawField(ticketKey, fieldId);
           currentDisplay = meta ? renderFieldValue(raw, meta) : (raw === null || raw === undefined ? '_Not set_' : String(raw));
@@ -384,6 +386,49 @@ class UpdateFieldTool implements vscode.LanguageModelTool<UpdateFieldInput> {
       logDiag('jira.tools', 'error', `jira_updateField failed — ${ticketKey}`, { ticketKey, fieldName, error: message });
       return textResult(`Could not update ${fieldName} on ${ticketKey}: ${message}`);
     }
+  }
+}
+
+/** Outcome of resolving `templateName` against `.jira-templates.json` for `CreateTicketTool`.
+ * `'skip'` covers every reason to fall through to plain issue-type resolution without a template
+ * (no workspace open, no templates file, template name not found) — none of those are errors,
+ * they just mean "proceed as if templateName weren't given." `'error'` is the one case that must
+ * stop ticket creation outright: the template matched but its fields couldn't be resolved. */
+type TemplateResolution =
+  | { kind: 'resolved'; issueType?: string; fields: Record<string, unknown> }
+  | { kind: 'skip' }
+  | { kind: 'error'; message: string };
+
+async function resolveTemplateFields(
+  jiraClient: JiraApiClient,
+  workspaceRoot: string,
+  projectKey: string,
+  templateName: string,
+): Promise<TemplateResolution> {
+  if (!workspaceRoot) return { kind: 'skip' };
+
+  let templates;
+  try {
+    ({ templates } = new TemplateService(workspaceRoot).loadTemplates());
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logDiag('jira.tools', 'warn', 'Could not load templates — proceeding without template', { error: message });
+    return { kind: 'skip' };
+  }
+
+  const template = templates.find(t => t.name === templateName);
+  if (!template) {
+    logDiag('jira.tools', 'warn', `Template not found — ${templateName}`, { templateName });
+    return { kind: 'skip' };
+  }
+
+  try {
+    const fields = await new FieldResolver(jiraClient, projectKey).resolve(template.defaultFields, template.resolveFields);
+    return { kind: 'resolved', issueType: template.issueType, fields };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logDiag('jira.tools', 'warn', `Template field resolution failed — ${templateName}`, { templateName, error: message });
+    return { kind: 'error', message: `Could not resolve template "${templateName}"'s fields: ${message}. No ticket was created.` };
   }
 }
 
@@ -432,28 +477,14 @@ class CreateTicketTool implements vscode.LanguageModelTool<CreateTicketInput> {
     let resolvedFields: Record<string, unknown> = {};
 
     if (templateName) {
-      const workspaceRoot = currentWorkspaceRoot();
-      if (workspaceRoot) {
-        try {
-          const { templates } = new TemplateService(workspaceRoot).loadTemplates();
-          const template = templates.find(t => t.name === templateName);
-          if (template) {
-            if (!issueType) issueType = template.issueType;
-            try {
-              resolvedFields = await new FieldResolver(jiraClient, projectKey).resolve(template.defaultFields, template.resolveFields);
-            } catch (err) {
-              const message = err instanceof Error ? err.message : String(err);
-              logDiag('jira.tools', 'warn', `Template field resolution failed — ${templateName}`, { templateName, error: message });
-              return textResult(`Could not resolve template "${templateName}"'s fields: ${message}. No ticket was created.`);
-            }
-          } else {
-            logDiag('jira.tools', 'warn', `Template not found — ${templateName}`, { templateName });
-          }
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          logDiag('jira.tools', 'warn', 'Could not load templates — proceeding without template', { error: message });
-        }
+      const templateResult = await resolveTemplateFields(jiraClient, currentWorkspaceRoot(), projectKey, templateName);
+      if (templateResult.kind === 'error') return textResult(templateResult.message);
+      if (templateResult.kind === 'resolved') {
+        if (!issueType) issueType = templateResult.issueType;
+        resolvedFields = templateResult.fields;
       }
+      // 'skip' falls through to plain issue-type resolution below, same as templateName not
+      // having been given at all.
     }
 
     if (!issueType) {
@@ -527,44 +558,31 @@ class TransitionTicketTool implements vscode.LanguageModelTool<TransitionTicketI
     const { jiraClient, ticketService } = ctx;
 
     try {
-      const issue = await jiraClient.getIssue(ticketKey);
-      const currentStatus = issue.fields.status.name;
-      if (currentStatus.toLowerCase() === targetStatus.toLowerCase()) {
-        return textResult(`${ticketKey} is already in ${currentStatus}.`);
-      }
-
-      const transitions = await jiraClient.getTransitions(ticketKey);
-      const direct = transitions.find(t => t.to.name.toLowerCase() === targetStatus.toLowerCase());
-      if (direct) {
-        await ticketService.transitionAlongPath(ticketKey, [{ id: direct.id, name: direct.name, to: direct.to.name }], resolution);
-        logDiag('jira.tools', 'info', `Transitioned — ${ticketKey} to ${direct.to.name}`, { ticketKey, targetStatus: direct.to.name });
-        return textResult(`${ticketKey} moved to ${direct.to.name}.`);
-      }
-
-      // Fall back to the workflow cache for multi-hop paths — same lookup the chat participant's
-      // 'transition' operation uses.
+      // Same resolution algorithm the chat participant's 'transition' operation uses
+      // (src/services/WorkflowService.ts) — R3: one implementation, reused everywhere.
       const workspaceRoot = currentWorkspaceRoot();
-      const projectKey = ticketKey.split('-')[0];
-      const issueType = (issue.fields.issuetype as { name?: string } | undefined)?.name ?? '';
-      const graph = loadWorkflowCache(workspaceRoot)[projectKey]?.[issueType]?.graph;
-      if (graph) {
-        const path = findPath(graph, currentStatus, targetStatus);
-        if (path && path.length > 0) {
-          await ticketService.transitionAlongPath(ticketKey, path, resolution);
-          logDiag('jira.tools', 'info', `Transitioned — ${ticketKey} to ${targetStatus} (${path.length} hop(s))`, {
-            ticketKey, targetStatus, hops: path.length,
+      const transResult = await resolveAndApplyTransition(jiraClient, ticketService, workspaceRoot, ticketKey, targetStatus, resolution);
+      switch (transResult.kind) {
+        case 'alreadyThere':
+          return textResult(`${ticketKey} is already in ${transResult.currentStatus}.`);
+        case 'direct':
+          logDiag('jira.tools', 'info', `Transitioned — ${ticketKey} to ${transResult.toStatus}`, { ticketKey, targetStatus: transResult.toStatus });
+          return textResult(`${ticketKey} moved to ${transResult.toStatus}.`);
+        case 'multiHop':
+          logDiag('jira.tools', 'info', `Transitioned — ${ticketKey} to ${targetStatus} (${transResult.hops} hop(s))`, {
+            ticketKey, targetStatus, hops: transResult.hops,
           });
-          return textResult(`${ticketKey} moved to ${targetStatus} (${path.length} hop${path.length > 1 ? 's' : ''}).`);
+          return textResult(`${ticketKey} moved to ${targetStatus} (${transResult.hops} hop${transResult.hops > 1 ? 's' : ''}).`);
+        case 'unavailable': {
+          const available = transResult.available.join(', ');
+          const cacheHint = transResult.hasCache
+            ? ''
+            : ` Call jira_discoverWorkflow for ${transResult.projectKey} / ${transResult.issueType || '<issuetype>'} to enable multi-hop transitions.`;
+          return textResult(
+            `No transition to ${targetStatus} available from ${transResult.currentStatus}.${available ? ` Available: ${available}.` : ''}${cacheHint}`,
+          );
         }
       }
-
-      const available = transitions.map(t => t.to.name).join(', ');
-      const cacheHint = graph
-        ? ''
-        : ` Call jira_discoverWorkflow for ${projectKey} / ${issueType || '<issuetype>'} to enable multi-hop transitions.`;
-      return textResult(
-        `No transition to ${targetStatus} available from ${currentStatus}.${available ? ` Available: ${available}.` : ''}${cacheHint}`,
-      );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logDiag('jira.tools', 'error', `jira_transitionTicket failed — ${ticketKey}`, { ticketKey, targetStatus, error: message });

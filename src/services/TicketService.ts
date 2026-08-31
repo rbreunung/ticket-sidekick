@@ -536,12 +536,14 @@ export class TicketService {
     return this.client.searchFiltersByName(name);
   }
 
-  async resolveFieldId(name: string): Promise<string> {
+  /** `knownFields`, when the caller already fetched `getFieldMeta()` for another reason, avoids
+   * an extra `GET /field` round-trip for a non-aliased field name. Omit it to fetch fresh. */
+  async resolveFieldId(name: string, knownFields?: JiraFieldMeta[]): Promise<string> {
     // Check built-in aliases first (e.g. "fixversion", "fix version" → "fixVersions")
     const mapped = SUPPORTED_FIELDS[name.toLowerCase()];
     if (mapped) return mapped;
     // Match by display name or by field ID (handles camelCase API names like "fixVersions")
-    const fields = await this.client.getFields();
+    const fields = knownFields ?? await this.client.getFields();
     const match = fields.find(f =>
       f.name.toLowerCase() === name.toLowerCase() ||
       f.id.toLowerCase() === name.toLowerCase(),

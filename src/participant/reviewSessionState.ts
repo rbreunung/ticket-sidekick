@@ -2,12 +2,10 @@ import { extractJsonObject } from '../utils/extractJsonObject';
 // Type-only — IBitbucketClient.ts has no imports of its own (vscode included), so this
 // stays safe for a vscode-free, Vitest-loadable module.
 import type { BitbucketConfig, BitbucketPR } from '../bitbucket/IBitbucketClient';
-// Type-only re-import of the confirmation shape U2's Jira tools already defined — a
-// `prepareInvocation()` confirmation always maps onto the same
-// `vscode.LanguageModelToolConfirmationMessages` shape regardless of which participant's
-// tool is asking, so `bitbucketTools.ts`'s single write tool reuses it rather than
-// declaring an equivalent local interface.
-import type { ToolConfirmation } from './sessionState';
+// Type-only — shared with sessionState.ts's Jira tool builders via a neutral module (neither
+// participant's pure-logic file depends on the other's) so `bitbucketTools.ts`'s single write
+// tool can reuse the same confirmation shape rather than declaring an equivalent local interface.
+import type { ToolConfirmation } from '../tools/toolConfirmation';
 
 export interface ParsedPrUrl {
   project: string;
