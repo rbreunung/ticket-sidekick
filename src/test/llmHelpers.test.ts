@@ -26,7 +26,7 @@ vi.mock('vscode', () => {
 });
 
 import * as vscode from 'vscode';
-import { extractHistoryTurns, buildHistoryContext, extractLastAssistantText, generateContent, extractFixVersionFromPrompt, parseIntent } from '../participant/jira/llmHelpers';
+import { extractHistoryTurns, buildHistoryContext, extractLastAssistantText, generateContent, extractFixVersionFromPrompt, parseIntent, mapCommandToOperation } from '../participant/jira/llmHelpers';
 
 describe('parseIntent', () => {
   const makeModel = (output: string) => ({
@@ -304,5 +304,28 @@ describe('extractFixVersionFromPrompt', () => {
 
   it('quoted string containing "released" as a word returns full quoted value', () => {
     expect(extractFixVersionFromPrompt('@jira run cleanup "My Rule" in "My Version has released in it"')).toBe('My Version has released in it');
+  });
+});
+
+describe('mapCommandToOperation', () => {
+  it('maps each U4 slash command to its forced operation', () => {
+    expect(mapCommandToOperation('create')).toBe('createTicket');
+    expect(mapCommandToOperation('view')).toBe('getTicket');
+    expect(mapCommandToOperation('comment')).toBe('addComment');
+    expect(mapCommandToOperation('field')).toBe('updateField');
+    expect(mapCommandToOperation('move')).toBe('transition');
+    expect(mapCommandToOperation('search')).toBe('searchJql');
+  });
+
+  it('returns undefined for "check" — it bypasses parseIntent entirely, not this map', () => {
+    expect(mapCommandToOperation('check')).toBeUndefined();
+  });
+
+  it('returns undefined for an unknown command', () => {
+    expect(mapCommandToOperation('notARealCommand')).toBeUndefined();
+  });
+
+  it('returns undefined when no command was given (plain-text prompt)', () => {
+    expect(mapCommandToOperation(undefined)).toBeUndefined();
   });
 });

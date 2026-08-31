@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { IJiraClient } from '../jira/IJiraClient';
+import type { TicketService } from './TicketService';
+import { PartialTransitionError } from './TicketService';
 
 export interface CachedTransition {
   id: string;
@@ -104,4 +106,122 @@ export async function discoverWorkflow(
     graph[status] = transitionResults[i].map((t) => ({ id: t.id, name: t.name, to: t.to.name }));
   }
   return { graph, skippedStatuses };
+}
+
+/** Outcome of `resolveAndApplyTransition` — a discriminated result so each caller (chat markdown
+ * vs. a Language Model tool's plain text) can format its own message without duplicating the
+ * resolution algorithm itself (R3: one implementation, reused everywhere). */
+export type TransitionResolution =
+  | { kind: 'alreadyThere'; currentStatus: string }
+  | { kind: 'direct'; toStatus: string }
+  | { kind: 'multiHop'; toStatus: string; hops: number }
+  // A multi-hop transition failed partway — the ticket already moved through `completedHops` of
+  // `totalHops` real Jira writes before the failure, so it's now sitting at `landedStatus`, not
+  // its original status. Only surfaced when at least one hop actually completed; a failure on the
+  // very first hop leaves no partial state and is reported as an ordinary thrown error instead.
+  | { kind: 'partialFailure'; completedHops: number; totalHops: number; landedStatus: string; targetStatus: string; error: string }
+  | { kind: 'unavailable'; currentStatus: string; available: string[]; projectKey: string; issueType: string; hasCache: boolean };
+
+/**
+ * Resolves and applies a Jira ticket transition to `targetStatus`: already-there short-circuit,
+ * then a direct transition if one exists, then a cached multi-hop workflow path
+ * (`loadWorkflowCache`/`findPath`) as a fallback. Shared by `@jira`'s chat `'transition'`
+ * operation and the `jira_transitionTicket` Language Model tool — previously each reimplemented
+ * this same lookup independently.
+ */
+export async function resolveAndApplyTransition(
+  jiraClient: IJiraClient,
+  ticketService: TicketService,
+  workspaceRoot: string,
+  ticketKey: string,
+  targetStatus: string,
+  resolution?: string,
+): Promise<TransitionResolution> {
+  const issue = await jiraClient.getIssue(ticketKey);
+  const currentStatus = issue.fields.status.name;
+  if (currentStatus.toLowerCase() === targetStatus.toLowerCase()) {
+    return { kind: 'alreadyThere', currentStatus };
+  }
+
+  const transitions = await jiraClient.getTransitions(ticketKey);
+  const direct = transitions.find((t) => t.to.name.toLowerCase() === targetStatus.toLowerCase());
+  if (direct) {
+    await ticketService.transitionAlongPath(ticketKey, [{ id: direct.id, name: direct.name, to: direct.to.name }], resolution);
+    return { kind: 'direct', toStatus: direct.to.name };
+  }
+
+  const projectKey = ticketKey.split('-')[0];
+  const issueType = (issue.fields.issuetype as { name?: string } | undefined)?.name ?? '';
+  const graph = loadWorkflowCache(workspaceRoot)[projectKey]?.[issueType]?.graph;
+  if (graph) {
+    const path = findPath(graph, currentStatus, targetStatus);
+    if (path && path.length > 0) {
+      try {
+        await ticketService.transitionAlongPath(ticketKey, path, resolution);
+        return { kind: 'multiHop', toStatus: targetStatus, hops: path.length };
+      } catch (err) {
+        // Only a genuinely partial failure (at least one hop actually landed) gets its own
+        // result kind — a failure on the very first hop left no partial state, so it's no
+        // different from any other transition failure and falls through to the ordinary throw.
+        if (err instanceof PartialTransitionError && err.completedHops > 0) {
+          return {
+            kind: 'partialFailure',
+            completedHops: err.completedHops,
+            totalHops: err.totalHops,
+            landedStatus: path[err.completedHops - 1].to,
+            targetStatus,
+            error: err.message,
+          };
+        }
+        throw err;
+      }
+    }
+  }
+
+  return {
+    kind: 'unavailable',
+    currentStatus,
+    available: transitions.map((t) => t.to.name),
+    projectKey,
+    issueType,
+    hasCache: !!graph,
+  };
+}
+
+export interface WorkflowDiscoveryResult {
+  graph: WorkflowGraph;
+  skippedStatuses: string[];
+  /** Statuses with no representative ticket this run whose transitions were carried over from
+   * a prior cache entry (see `preserveSkippedStatuses`). Empty when nothing was cached yet, or
+   * when discovery found no tickets at all (the cache is left untouched in that case). */
+  preserved: string[];
+}
+
+/**
+ * Samples a project/issue type's workflow (`discoverWorkflow`) and — when at least one status
+ * was found — merges it into `.jira-workflow-cache.json`, preserving prior transitions for any
+ * status this run didn't sample. Shared by `@jira`'s chat `'discoverWorkflow'` operation
+ * (`src/participant/jira/workflowHandler.ts`) and the `jira_discoverWorkflow` Language Model
+ * tool (`src/tools/jiraTools.ts`) — previously each reimplemented this same cache read/merge/
+ * write sequence independently (R3).
+ */
+export async function discoverAndCacheWorkflow(
+  jiraClient: IJiraClient,
+  workspaceRoot: string,
+  projectKey: string,
+  issueType: string,
+): Promise<WorkflowDiscoveryResult> {
+  const { graph, skippedStatuses } = await discoverWorkflow(jiraClient, projectKey, issueType);
+  if (Object.keys(graph).length === 0) {
+    return { graph, skippedStatuses, preserved: [] };
+  }
+
+  const cache = loadWorkflowCache(workspaceRoot);
+  if (!cache[projectKey]) cache[projectKey] = {};
+  const oldGraph = cache[projectKey][issueType]?.graph ?? {};
+  const preserved = preserveSkippedStatuses(graph, skippedStatuses, oldGraph);
+  cache[projectKey][issueType] = { discovered: new Date().toISOString().slice(0, 10), graph };
+  saveWorkflowCache(workspaceRoot, cache);
+
+  return { graph, skippedStatuses, preserved };
 }

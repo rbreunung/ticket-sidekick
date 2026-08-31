@@ -590,6 +590,15 @@ describe('TicketService field resolution', () => {
     it('throws a clear error for unknown field names', async () => {
       await expect(service.resolveFieldId('nonexistent field xyz')).rejects.toThrow(/nonexistent field xyz/);
     });
+
+    it('resolves from an already-fetched field list without calling the API again', async () => {
+      const getFieldsSpy = vi.spyOn(client, 'getFields');
+      const knownFields = await client.getFields();
+      getFieldsSpy.mockClear();
+
+      expect(await service.resolveFieldId('Team Names', knownFields)).toBe('customfield_10500');
+      expect(getFieldsSpy).not.toHaveBeenCalled();
+    });
   });
 
   describe('buildFieldValue', () => {

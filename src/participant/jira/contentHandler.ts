@@ -123,6 +123,9 @@ export async function handleContentSession(
         fields,
         baseUrl,
       );
+      // Real success point (KTD9): createTicket resolved without throwing — a walkthrough step
+      // watching this must never fire on an attempted-but-failed create.
+      await vscode.commands.executeCommand('setContext', 'ticketSidekick.firstTicketCreated', true);
       stream.markdown(created.message);
       stream.markdown(`\n\n<!-- @jira-ticket:${created.key} -->`);
       return;

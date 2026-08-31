@@ -5,6 +5,14 @@ import type { WaltzComponent, WaltzReviewRow } from '../utils/waltzReport';
 import { BATCH_LIMIT, sanitizeCellText } from '../utils/reportImport';
 import { formatKeyLink, coerceTypedFieldValue, type TemplateFieldCandidate } from '../services/TicketService';
 import type { JiraTemplate } from '../templates/TemplateService';
+// Type-only — ConfigService.ts imports `vscode`, but a type-only import is erased before
+// this (vscode-free, Vitest-loadable) module is ever loaded at runtime.
+import type { JiraConfig } from '../services/ConfigService';
+import type { WorkflowGraph } from '../services/WorkflowService';
+// Type-only — llmHelpers.ts imports from this file too, but a type-only import is erased
+// before either module is ever loaded at runtime, so this stays safe (no runtime cycle).
+import type { Operation } from './jira/llmHelpers';
+import type { ToolConfirmation } from '../tools/toolConfirmation';
 
 export type { VeracodeReviewRow } from '../utils/veracodeReport';
 export type { WaltzReviewRow } from '../utils/waltzReport';
@@ -461,6 +469,25 @@ export function buildTeamJql(teamJql: string, extraJql: string | null): string {
   return `(${teamJql})${extra}`;
 }
 
+/**
+ * Plain-text "Jira isn't configured" message naming the specific missing setting or setup
+ * command — the same information @jira's chat handler's own not-configured messages give,
+ * but without a trusted `MarkdownString` command link (a `LanguageModelToolResult`, unlike a
+ * chat stream, can't carry one), so this doubles as both a tool result and plain chat text.
+ */
+export function buildJiraNotConfiguredMessage(config: Pick<JiraConfig, 'baseUrl' | 'token' | 'authType'>): string {
+  if (!config.baseUrl) {
+    return (
+      'Jira base URL not configured. Add `ticketSidekick.jira.baseUrl` in VS Code settings ' +
+      '(e.g. `https://jira.mycompany.com`), then set your credentials.'
+    );
+  }
+  const setupLabel = config.authType === 'cloud'
+    ? 'Ticket Sidekick: Configure Jira Cloud Credentials'
+    : 'Ticket Sidekick: Set Jira Personal Access Token';
+  return `Jira credentials not configured. Run "${setupLabel}" from the Command Palette.`;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Shared Veracode/Waltz import session types + review-table renderer + toggle-reply parser.
 //
@@ -903,4 +930,252 @@ export interface TemplateGenerationTemplateStageSession {
 export type TemplateGenerationCollisionSession = TemplateGenerationTemplateStageSession;
 export type TemplateGenerationOfferCreateSession = TemplateGenerationTemplateStageSession;
 export type TemplateGenerationAwaitSummarySession = TemplateGenerationTemplateStageSession;
+
+// ---------------------------------------------------------------------------------------------
+// Language Model tools (Agent Mode) — pure confirmation-text and result-message builders shared
+// by every `jira_*` tool in `src/tools/jiraTools.ts`. Kept here (rather than in jiraTools.ts,
+// which imports `vscode` and is not Vitest-loadable) so this wording is unit-tested the same way
+// every other user-facing message in this file is. `jiraTools.ts` stays thin glue: it resolves
+// live data (current field values, project issue types, workflow graphs) via TicketService/
+// WorkflowService/TemplateService and hands it to these functions to render.
+// ---------------------------------------------------------------------------------------------
+
+/** Renders a "current → new" change, e.g. `Critical → High` (KTD3). Shared by every builder
+ * below that shows a before/after value. */
+export function formatFieldChangeDisplay(currentValue: string, newValue: string): string {
+  return `${currentValue} → ${newValue}`;
+}
+
+/** Confirmation for `jira_updateField` — always shows current → new (KTD3), even when the
+ * current value could not be fetched (the caller passes a placeholder string in that case; the
+ * confirmation still renders, it just can't show a real "before"). */
+export function buildUpdateFieldConfirmation(
+  ticketKey: string,
+  fieldName: string,
+  currentValue: string,
+  newValue: string,
+): ToolConfirmation {
+  return {
+    title: `Update ${fieldName} on ${ticketKey}`,
+    message: `Set **${fieldName}** on **${ticketKey}**: ${formatFieldChangeDisplay(currentValue, newValue)}`,
+  };
+}
+
+/** Confirmation for `jira_addComment` — names the ticket and shows the literal comment text. */
+export function buildAddCommentConfirmation(ticketKey: string, comment: string): ToolConfirmation {
+  return {
+    title: `Add comment to ${ticketKey}`,
+    message: `Post this comment on **${ticketKey}**:\n\n${comment}`,
+  };
+}
+
+/** Confirmation for `jira_createTicket` — names project/type/summary (KTD4). `issueType` is
+ * `null` when it hasn't been resolved yet at confirmation time (e.g. it depends on a template);
+ * `invoke()` itself still enforces the never-guess fallback (KTD4) regardless of what this
+ * confirmation showed. */
+export function buildCreateTicketConfirmation(
+  projectKey: string,
+  issueType: string | null,
+  summary: string,
+  templateName: string | null,
+  resolvedFields?: Record<string, unknown> | null,
+): ToolConfirmation {
+  const typeLabel = issueType ? `a **${issueType}**` : 'a ticket (issue type to be resolved)';
+  const templateNote = templateName ? ` using template **${templateName}**` : '';
+  return {
+    title: `Create ticket in ${projectKey}`,
+    message: `Create ${typeLabel} in **${projectKey}**${templateNote}: "${summary}"${formatResolvedFieldsNote(resolvedFields)}`,
+  };
+}
+
+/** Lists the template's own default field values below the main confirmation line, so approving
+ * a template-driven create isn't blind to what the template silently sets beyond project/type/
+ * summary. `description` is left out — it's already shown separately by the caller when given. */
+function formatResolvedFieldsNote(resolvedFields?: Record<string, unknown> | null): string {
+  if (!resolvedFields) return '';
+  const entries = Object.entries(resolvedFields).filter(([key]) => key !== 'description');
+  if (entries.length === 0) return '';
+  const lines = entries.map(([key, value]) => `- **${key}**: ${formatResolvedFieldValue(value)}`);
+  return `\n\nTemplate will also set:\n${lines.join('\n')}`;
+}
+
+function formatResolvedFieldValue(value: unknown): string {
+  if (value === null || value === undefined) return '_(not set)_';
+  if (Array.isArray(value)) return value.map((v) => formatResolvedFieldValue(v)).join(', ');
+  if (typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    if (typeof obj.name === 'string') return obj.name;
+    if (typeof obj.value === 'string') return obj.value;
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+/** Confirmation for `jira_transitionTicket` — names the ticket and the target status.
+ * `currentStatus` is `null` when it couldn't be fetched at confirmation time. */
+export function buildTransitionConfirmation(
+  ticketKey: string,
+  currentStatus: string | null,
+  targetStatus: string,
+  resolution?: string,
+): ToolConfirmation {
+  const fromLabel = currentStatus ? `**${currentStatus}**` : 'its current status';
+  const resNote = resolution ? ` (resolution: ${resolution})` : '';
+  return {
+    title: `Move ${ticketKey} to ${targetStatus}`,
+    message: `Transition **${ticketKey}** from ${fromLabel} to **${targetStatus}**${resNote}.`,
+  };
+}
+
+/** The never-guess fallback text for `jira_createTicket` (KTD4): when neither `issueType` nor a
+ * resolvable `templateName` was given, nothing is created and this lists the project's valid
+ * issue types (from `TicketService.getIssueTypes`) as the actionable next step — mirrors the
+ * chat create flow's own never-guess sentinel handling
+ * (docs/solutions/logic-errors/combined-create-list-silently-guesses-issue-type-and-drops-no-template-fallback.md)
+ * adapted from a `showInputBox` prompt to a returned list, since Agent Mode has no interactive
+ * input box to fall back to. */
+export function formatIssueTypeOptionsMessage(projectKey: string, issueTypes: string[]): string {
+  if (issueTypes.length === 0) {
+    return (
+      `No ticket was created: no issue type or resolvable template was given for project ${projectKey}, ` +
+      `and its issue types could not be fetched from Jira. Call jira_createTicket again with an explicit "issueType".`
+    );
+  }
+  const list = issueTypes.map(t => `- ${t}`).join('\n');
+  return (
+    `No ticket was created: no issue type or resolvable template was given. Valid issue types for **${projectKey}**:\n\n${list}\n\n` +
+    `Call jira_createTicket again with one of these as "issueType", or with a "templateName" from jira_listTemplates.`
+  );
+}
+
+/** Result text for `jira_listTemplates` — a missing/empty `.jira-templates.json` is a normal,
+ * error-free outcome (an empty list), not a failure. */
+export function formatTemplateListMessage(templates: Array<{ name: string; issueType?: string }>): string {
+  if (templates.length === 0) {
+    return 'No templates found. Create a `.jira-templates.json` file in the workspace root to define reusable ticket templates.';
+  }
+  const list = templates
+    .map(t => `- **${t.name}**${t.issueType ? ` (${t.issueType})` : ' (issue type not set on the template)'}`)
+    .join('\n');
+  return `Available templates:\n\n${list}`;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Follow-up suggestion chips + greeting/empty-prompt detection (onboarding, U5) — pure logic so
+// it stays Vitest-covered (KTD15). The vscode-coupled `participant.followupProvider` wiring and
+// the pre-`parseIntent` greeting/empty check live in `JiraParticipant.ts`; both consume the
+// exports below rather than re-deriving this logic.
+// ---------------------------------------------------------------------------------------------
+
+/** A `vscode.ChatFollowup`-shaped suggestion, without the `vscode` dependency — the participant
+ * maps this 1:1 onto a real `vscode.ChatFollowup` in its `followupProvider`. */
+export interface FollowupSuggestion {
+  prompt: string;
+  label?: string;
+}
+
+/**
+ * Exact-match (not substring/word-list) detection of an empty invocation or an obvious
+ * greeting/help-shaped prompt — mirrors `isConfirmation()`/`isCancellation()`'s own
+ * whole-normalized-string `Set` membership above, for the same reason: a substring or
+ * per-word test on "hi" would misfire on legitimate operation text like "update HI-1
+ * status", but an exact-string `Set` membership check never can, since the normalized whole
+ * prompt "update hi-1 status" is never equal to "hi". See the specific-before-generic ordering
+ * principle in
+ * docs/solutions/logic-errors/confirm-cancel-word-list-broadening-swallows-domain-name-collisions.md
+ * — this function sidesteps that hazard entirely by never doing substring matching in the first
+ * place, rather than needing a live-domain-value check ordered ahead of it.
+ */
+const GREETING_OR_HELP_PHRASES = new Set<string>([
+  '', 'hi', 'hello', 'hey', 'hiya', 'yo', 'howdy',
+  'help', 'help me', '?', "what's up", 'whats up',
+  'what can you do', 'what do you do', 'what can you help with', 'what can you help me with',
+  'how does this work', 'how do i use this', 'how do i use you',
+  'getting started', 'get started', 'what is this', 'who are you',
+]);
+
+export function isGreetingOrEmpty(prompt: string): boolean {
+  const normalized = prompt.trim().toLowerCase().replace(/[!?.]+$/g, '').replace(/\s+/g, ' ').trim();
+  return GREETING_OR_HELP_PHRASES.has(normalized);
+}
+
+/** Discriminated "what just happened" shape `JiraParticipant.ts` round-trips through
+ * `vscode.ChatResult.metadata` so its `followupProvider` can compute the right suggestion chips
+ * for the response that was just streamed, without re-deriving state from response text. */
+export type JiraFollowupState =
+  | { kind: 'greeting' }
+  | { kind: 'fallback' }
+  // `justDid`, when set, names the operation that just ran on `ticketKey` — omitted for a plain
+  // ticket view, present for a write (e.g. `addComment`, `transition`) so the chip set below can
+  // leave out a suggestion that would just repeat the action the user already took.
+  | { kind: 'loadedTicket'; ticketKey: string; justDid?: Operation }
+  | { kind: 'none' };
+
+const JIRA_MAX_FOLLOWUPS = 3;
+
+/**
+ * R6/KTD14: 2-3 example prompts, phrased as literal next messages a user could send, for a
+ * major `@jira` response — including R8's unclassifiable-prompt fallback and R9's
+ * greeting/empty-prompt response, which deliver their examples ONLY as these chips rather than
+ * as separate inline prose guidance.
+ */
+export function computeJiraFollowups(state: JiraFollowupState): FollowupSuggestion[] {
+  switch (state.kind) {
+    case 'greeting':
+      return [
+        { prompt: 'create a ticket', label: 'Create a ticket' },
+        { prompt: 'show me PROJ-123', label: 'View a ticket' },
+        { prompt: 'search my open tickets', label: 'Search tickets' },
+      ].slice(0, JIRA_MAX_FOLLOWUPS);
+    case 'fallback':
+      return [
+        { prompt: 'show me PROJ-123', label: 'View a ticket' },
+        { prompt: 'add a comment to PROJ-123', label: 'Add a comment' },
+        { prompt: 'search my open tickets', label: 'Search tickets' },
+      ].slice(0, JIRA_MAX_FOLLOWUPS);
+    case 'loadedTicket': {
+      // Leave out a suggestion that would just repeat the write the user already performed
+      // (e.g. don't offer "add a comment" right after `addComment` succeeded).
+      const chips: FollowupSuggestion[] = [];
+      if (state.justDid !== 'addComment') {
+        chips.push({ prompt: `add a comment to ${state.ticketKey}`, label: 'Add a comment' });
+      }
+      if (state.justDid !== 'transition') {
+        chips.push({ prompt: `transition ${state.ticketKey}`, label: 'Transition it' });
+      }
+      return chips;
+    }
+    case 'none':
+      return [];
+  }
+}
+
+/** Result text for `jira_discoverWorkflow` — mirrors `handleDiscoverWorkflow`'s chat summary
+ * (`src/participant/jira/workflowHandler.ts`) in plain returned text rather than a streamed
+ * response, since a tool result is a single returned string, not a live chat stream. */
+export function formatWorkflowDiscoveryMessage(
+  projectKey: string,
+  issueType: string,
+  graph: WorkflowGraph,
+  skippedStatuses: string[],
+  preserved: string[],
+): string {
+  const statuses = Object.keys(graph);
+  if (statuses.length === 0) {
+    return `No tickets found for ${projectKey} / ${issueType} — workflow could not be sampled.`;
+  }
+  const lines = statuses.map((s) => {
+    const targets = graph[s].map((t) => `${t.name} → ${t.to}`).join(', ');
+    return `**${s}**: ${targets}`;
+  });
+  let summary = `Workflow discovered for **${projectKey} / ${issueType}** (${lines.length} statuses):\n\n${lines.join('\n\n')}\n\nSaved to \`.jira-workflow-cache.json\`.`;
+  const trulySkipped = skippedStatuses.filter(s => !preserved.includes(s));
+  if (preserved.length > 0) {
+    summary += `\n\n_${preserved.length} status(es) had no tickets and kept cached transitions: ${preserved.join(', ')}._`;
+  }
+  if (trulySkipped.length > 0) {
+    summary += `\n\n_${trulySkipped.length} status(es) had no tickets and no cached transitions: ${trulySkipped.join(', ')} — re-run jira_discoverWorkflow once tickets exist in those states._`;
+  }
+  return summary;
+}
 

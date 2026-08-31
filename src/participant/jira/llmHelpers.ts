@@ -94,6 +94,25 @@ Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|
 
 Command: `;
 
+// U4/R5: slash-command → forced-operation map. Each command still routes through the
+// existing NL-intent-parsed pipeline (parseIntent still extracts ticketKey, fieldName,
+// targetStatus, jql, comment text, …) — only the operation itself is pre-decided here,
+// removing the LLM's classification step as the one source of routing ambiguity a
+// deliberate `/command` shouldn't be subject to. `check` isn't in this map: it bypasses
+// parseIntent entirely via its own regex special-case in JiraParticipant.ts.
+export const COMMAND_OPERATIONS: Partial<Record<string, Operation>> = {
+  create: 'createTicket',
+  view: 'getTicket',
+  comment: 'addComment',
+  field: 'updateField',
+  move: 'transition',
+  search: 'searchJql',
+};
+
+export function mapCommandToOperation(command: string | undefined): Operation | undefined {
+  return command ? COMMAND_OPERATIONS[command] : undefined;
+}
+
 export function extractFixVersionFromPrompt(prompt: string): string | null {
   const quoted = prompt.match(/\bin\s+["']([^"']+)["']/i);
   if (quoted) return quoted[1];

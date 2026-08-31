@@ -7,12 +7,12 @@ import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { tokenStatus } from '../utils/diagUtils';
 import { logDiag } from '../utils/diagLog';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, isConfirmation, isCancellation, pickEmailOption, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewTable } from './sessionState';
-import { loadWorkflowCache, findPath } from '../services/WorkflowService';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, type JiraFollowupState, isConfirmation, isCancellation, isGreetingOrEmpty, computeJiraFollowups, pickEmailOption, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewTable } from './sessionState';
+import { findPath, resolveAndApplyTransition } from '../services/WorkflowService';
 import type { WorkflowGraph } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
 import type { Operation, ParsedIntent } from './jira/llmHelpers';
-import { parseIntent, extractFixVersionFromPrompt, generateContent, isLmRefusal, synthesizeComments, generateDescriptionAndCommentsSummary, isPointerPrompt, extractLastAssistantText } from './jira/llmHelpers';
+import { parseIntent, extractFixVersionFromPrompt, generateContent, isLmRefusal, synthesizeComments, generateDescriptionAndCommentsSummary, isPointerPrompt, extractLastAssistantText, mapCommandToOperation } from './jira/llmHelpers';
 import { streamFieldUpdatePreview, continueSetField, handleSetField, handleSpellCheck } from './jira/fieldHandler';
 import { getLastAssistantText, resolveTicketFromBranch, resolveProjectKey, resolveIssueTypeOrPrompt, parseLastTicketFromContext } from './jira/ticketContext';
 import { validateBaseUrl } from '../services/configValidation';
@@ -48,26 +48,32 @@ export function createJiraParticipant(
   context: vscode.ExtensionContext,
   configService: ConfigService,
 ): vscode.ChatParticipant {
+  // U5/R6: the handler returns `{ metadata: { jiraFollowup } }` from a major response so
+  // `participant.followupProvider` below can compute the right suggestion chips for it without
+  // re-deriving state from response text — `vscode.ChatResult.metadata` is the VS Code-native
+  // channel a chat handler uses to hand its own `followupProvider` this kind of state. A bare
+  // `return;` (still valid — `void` stays in the union) means "no chip-worthy state", e.g. a
+  // multi-turn session reply whose own response tag already carries the next-step guidance.
   const handler: vscode.ChatRequestHandler = async (
     request: vscode.ChatRequest,
     chatContext: vscode.ChatContext,
     stream: vscode.ChatResponseStream,
     token: vscode.CancellationToken,
-  ): Promise<void> => {
+  ): Promise<vscode.ChatResult | void> => {
     const config = await configService.getConfig();
 
-    if (!config.baseUrl) {
-      const settingsLink = new vscode.MarkdownString(
-        '**Jira base URL not configured.**\n\n' +
-        'Add `ticketSidekick.jira.baseUrl` to your VS Code settings (e.g. `https://jira.mycompany.com`), ' +
-        `or [open Settings](command:workbench.action.openSettings?${encodeURIComponent(JSON.stringify('ticketSidekick.jira.baseUrl'))}) directly.`,
-      );
-      settingsLink.isTrusted = { enabledCommands: ['workbench.action.openSettings'] };
-      stream.markdown(settingsLink);
-      return;
-    }
+    if (!configService.isConfigured(config)) {
+      if (!config.baseUrl) {
+        const settingsLink = new vscode.MarkdownString(
+          '**Jira base URL not configured.**\n\n' +
+          'Add `ticketSidekick.jira.baseUrl` to your VS Code settings (e.g. `https://jira.mycompany.com`), ' +
+          `or [open Settings](command:workbench.action.openSettings?${encodeURIComponent(JSON.stringify('ticketSidekick.jira.baseUrl'))}) directly.`,
+        );
+        settingsLink.isTrusted = { enabledCommands: ['workbench.action.openSettings'] };
+        stream.markdown(settingsLink);
+        return;
+      }
 
-    if (!config.token) {
       const setupCommand = config.authType === 'cloud'
         ? 'ticket-sidekick.configureCloud'
         : 'ticket-sidekick.setDataCenterToken';
@@ -99,7 +105,10 @@ export function createJiraParticipant(
     const ws = context.workspaceState;
     const lastResponse = getLastAssistantText(chatContext);
 
-    if (/^check(\s+(config|connection|setup))?$/i.test(request.prompt.trim())) {
+    // U4/R5: `/check` is the slash-command shortcut for this same check — checked
+    // before the multi-turn session-tag scan below, exactly like the plain-text
+    // "check" phrase already was (KTD12).
+    if (request.command === 'check' || /^check(\s+(config|connection|setup))?$/i.test(request.prompt.trim())) {
       const urlError = validateBaseUrl(config.baseUrl);
       if (urlError) {
         stream.markdown(`**Jira configuration problem**\n\n${urlError}`);
@@ -501,8 +510,13 @@ export function createJiraParticipant(
       }
     }
 
-    // Bulk update review — user replied ok / skip keys / cancel
-    if (lastResponse.includes('<!-- jira:bulk-update-review -->')) {
+    // Bulk update review — user replied ok / skip keys / cancel. Only when no explicit slash
+    // command was typed this turn: an ordinary reply like "skip PROJ-1 PROJ-2" is meant for this
+    // session, but a real `/comment`/`/field`/etc. command whose leftover prompt text happens to
+    // start with a generic word this parser recognizes (e.g. "skip") is an unambiguous signal
+    // the user meant a new operation, not a continuation reply — the session itself is left
+    // untouched, so it's still there to resume on the next ordinary-text turn.
+    if (!request.command && lastResponse.includes('<!-- jira:bulk-update-review -->')) {
       const bulkSession = ws.get<BulkUpdateReviewSession>('jira.session.bulkUpdateReview');
       if (bulkSession) {
         const decision = parseBulkUpdateReview(request.prompt);
@@ -656,9 +670,34 @@ export function createJiraParticipant(
       }
     }
 
+    // U5/R9: an empty invocation or an obvious greeting/help-shaped prompt is detected before
+    // it's ever handed to the LLM intent parser — but only after every multi-turn session-tag
+    // branch above has already had its chance to claim the turn (same ordering rule U4's
+    // command override follows: a session in flight always wins), and only when no `/command`
+    // was used (an explicit slash command is never ambiguous, so it skips this check entirely).
+    if (!request.command && isGreetingOrEmpty(request.prompt)) {
+      stream.markdown(
+        '**@jira** manages Jira tickets in natural language — create, view, comment, update ' +
+        'fields, transition, and search. Tell me what you need, or try one of the suggestions ' +
+        'below.',
+      );
+      const greetingState: JiraFollowupState = { kind: 'greeting' };
+      return { metadata: { jiraFollowup: greetingState } };
+    }
+
     let intent: ParsedIntent;
     try {
       intent = await parseIntent(request.prompt, request.model, token);
+      // U4/R5: every other slash command (create/view/comment/field/move/search) routes
+      // through this same NL-intent-parsed pipeline, just with its operation pre-decided
+      // instead of left to the LLM's classification — parseIntent above still supplies
+      // every other field from the prompt text after the command. Every session-tag
+      // branch above already returned by this point, so an in-flight multi-turn session
+      // always claims the turn before a stray slash command ever could (KTD12).
+      const commandOperation = mapCommandToOperation(request.command);
+      if (commandOperation) {
+        intent = { ...intent, operation: commandOperation };
+      }
       if (intent.operation === 'runCleanup') {
         const fv = extractFixVersionFromPrompt(request.prompt);
         if (fv) intent = { ...intent, fixVersion: fv };
@@ -987,38 +1026,36 @@ export function createJiraParticipant(
             break;
           }
           const targetStatus = intent.targetStatus;
-          const transIssue = await jiraClient.getIssue(ticketKey!);
-          const currentStatus = transIssue.fields.status.name;
-          if (currentStatus.toLowerCase() === targetStatus.toLowerCase()) {
-            result = `**${ticketKey}** is already in **${currentStatus}**.`;
-            break;
-          }
-          const transitionList = await jiraClient.getTransitions(ticketKey!);
-          const direct = transitionList.find(t => t.to.name.toLowerCase() === targetStatus.toLowerCase());
-          const resolution = intent.resolution ?? undefined;
-          if (direct) {
-            await ticketService.transitionAlongPath(ticketKey!, [{ id: direct.id, name: direct.name, to: direct.to.name }], resolution);
-            result = `**${ticketKey}** moved to **${direct.to.name}**.`;
-            break;
-          }
-          // Fall back to workflow cache for multi-hop paths
           const transWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-          const transProjectKey = ticketKey!.split('-')[0];
-          const transIssueType = (transIssue.fields.issuetype as { name?: string } | undefined)?.name ?? '';
-          const transGraph = loadWorkflowCache(transWorkspaceRoot)[transProjectKey]?.[transIssueType]?.graph;
-          if (transGraph) {
-            const path = findPath(transGraph, currentStatus, targetStatus);
-            if (path && path.length > 0) {
-              await ticketService.transitionAlongPath(ticketKey!, path, resolution);
-              result = `**${ticketKey}** moved to **${targetStatus}** (${path.length} hop${path.length > 1 ? 's' : ''}).`;
+          // Same resolution algorithm `jira_transitionTicket` uses (src/services/WorkflowService.ts) —
+          // R3: one implementation, reused by both the chat flow and the Language Model tool.
+          const transResult = await resolveAndApplyTransition(
+            jiraClient, ticketService, transWorkspaceRoot, ticketKey!, targetStatus, intent.resolution ?? undefined,
+          );
+          switch (transResult.kind) {
+            case 'alreadyThere':
+              result = `**${ticketKey}** is already in **${transResult.currentStatus}**.`;
+              break;
+            case 'direct':
+              result = `**${ticketKey}** moved to **${transResult.toStatus}**.`;
+              break;
+            case 'multiHop':
+              result = `**${ticketKey}** moved to **${transResult.toStatus}** (${transResult.hops} hop${transResult.hops > 1 ? 's' : ''}).`;
+              break;
+            case 'partialFailure':
+              result = `⚠️ **${ticketKey}** moved partway to **${transResult.landedStatus}** ` +
+                `(${transResult.completedHops} of ${transResult.totalHops} hops) but the next step to **${transResult.targetStatus}** failed: ${transResult.error} ` +
+                `The ticket is now in **${transResult.landedStatus}**, not its original status — check its current state before retrying.`;
+              break;
+            case 'unavailable': {
+              const available = transResult.available.map(name => `**${name}**`).join(', ');
+              const cacheHint = transResult.hasCache
+                ? ''
+                : ` Run \`@jira discover workflow ${transResult.projectKey} ${transResult.issueType || '<issuetype>'}\` to enable multi-hop transitions.`;
+              result = `No transition to **${targetStatus}** available from **${transResult.currentStatus}**.${available ? ` Available: ${available}.` : ''}${cacheHint}`;
               break;
             }
           }
-          const available = transitionList.map(t => `**${t.to.name}**`).join(', ');
-          const cacheHint = transGraph
-            ? ''
-            : ` Run \`@jira discover workflow ${transProjectKey} ${transIssueType || '<issuetype>'}\` to enable multi-hop transitions.`;
-          result = `No transition to **${targetStatus}** available from **${currentStatus}**.${available ? ` Available: ${available}.` : ''}${cacheHint}`;
           break;
         }
         case 'bulkTransition': {
@@ -1152,7 +1189,10 @@ export function createJiraParticipant(
           const loadAlwaysShow = new Set<string>(config.additionalDisplayFields);
           const loadHidden = new Set<string>(config.hiddenDisplayFields);
           await handleLoadTicket(ticketKey!, ticketService, stream, ws, loadFieldMeta, loadAlwaysShow, loadHidden);
-          return;
+          // R6: "after loading a ticket: add a comment, transition it" — the flagship example
+          // the plan names for follow-up chips.
+          const loadedState: JiraFollowupState = { kind: 'loadedTicket', ticketKey: ticketKey! };
+          return { metadata: { jiraFollowup: loadedState } };
         }
         case 'validateFields':
           result = await ticketService.validateRequiredFields(ticketKey!, config.requiredFields);
@@ -1165,11 +1205,27 @@ export function createJiraParticipant(
           await handleSpellCheck(ticketKey, ticketService, request.model, stream, token, ws);
           return;
         }
-        default:
-          result = 'Unrecognised operation.';
+        default: {
+          // R8: replaces the bare "Unrecognised operation." message — an example-driven
+          // response mirroring @bitbucket's existing no-PR-URL guidance, with the examples
+          // delivered as follow-up chips (KTD14) rather than repeated as inline prose.
+          stream.markdown(
+            "I couldn't tell what you'd like to do. Try being more specific — name a ticket " +
+            'and an action — or try one of the suggestions below.',
+          );
+          const fallbackState: JiraFollowupState = { kind: 'fallback' };
+          return { metadata: { jiraFollowup: fallbackState } };
+        }
       }
       stream.markdown(result);
       if (ticketKey) stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
+      if (ticketKey) {
+        // `justDid` lets computeJiraFollowups leave out a chip that would just repeat the
+        // action this operation itself performed (e.g. no "add a comment" chip right after
+        // addComment succeeded).
+        const viewedState: JiraFollowupState = { kind: 'loadedTicket', ticketKey, justDid: intent.operation };
+        return { metadata: { jiraFollowup: viewedState } };
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logDiag('jira.participant', 'error', message, { operation: intent.operation });
@@ -1178,6 +1234,17 @@ export function createJiraParticipant(
   };
 
   const participant = vscode.chat.createChatParticipant('ticket-sidekick.jira', handler);
+  // U5/R6: follow-up suggestion chips for the response `result` was just returned from —
+  // `result.metadata.jiraFollowup` is set above wherever the handler has chip-worthy state;
+  // no metadata (a bare `return;`) means no chips, e.g. a multi-turn session reply whose own
+  // response tag already carries the next-step guidance.
+  participant.followupProvider = {
+    provideFollowups(result: vscode.ChatResult): vscode.ChatFollowup[] {
+      const state = (result.metadata as { jiraFollowup?: JiraFollowupState } | undefined)?.jiraFollowup;
+      if (!state) return [];
+      return computeJiraFollowups(state).map((s) => ({ prompt: s.prompt, label: s.label }));
+    },
+  };
   context.subscriptions.push(participant);
   return participant;
 }

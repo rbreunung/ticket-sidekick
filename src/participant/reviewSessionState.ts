@@ -1,4 +1,11 @@
 import { extractJsonObject } from '../utils/extractJsonObject';
+// Type-only — IBitbucketClient.ts has no imports of its own (vscode included), so this
+// stays safe for a vscode-free, Vitest-loadable module.
+import type { BitbucketConfig, BitbucketPR } from '../bitbucket/IBitbucketClient';
+// Type-only — shared with sessionState.ts's Jira tool builders via a neutral module (neither
+// participant's pure-logic file depends on the other's) so `bitbucketTools.ts`'s single write
+// tool can reuse the same confirmation shape rather than declaring an equivalent local interface.
+import type { ToolConfirmation } from '../tools/toolConfirmation';
 
 export interface ParsedPrUrl {
   project: string;
@@ -61,6 +68,53 @@ export interface BitbucketCommentPreviewSession {
 
 export function hasPrUrl(prompt: string): boolean {
   return /https?:\/\/\S+\/pull-requests\/\d+/.test(prompt);
+}
+
+/**
+ * Plain-text "Bitbucket isn't configured" message naming the specific missing setting or
+ * setup command — the Bitbucket equivalent of `buildJiraNotConfiguredMessage` (sessionState.ts).
+ * No trusted `MarkdownString` command link (a `LanguageModelToolResult` can't carry one), so
+ * this doubles as both a tool result and plain chat text.
+ */
+export function buildBitbucketNotConfiguredMessage(config: Pick<BitbucketConfig, 'authType' | 'baseUrl' | 'token'>): string {
+  const setupLabel = config.authType === 'cloud'
+    ? 'Ticket Sidekick: Configure Bitbucket Cloud Credentials'
+    : 'Ticket Sidekick: Set Bitbucket Personal Access Token';
+  if (config.authType === 'datacenter' && !config.baseUrl) {
+    return (
+      'Bitbucket base URL not configured. Add `ticketSidekick.bitbucket.baseUrl` in VS Code settings, ' +
+      `then run "${setupLabel}" from the Command Palette.`
+    );
+  }
+  return `Bitbucket credentials not configured. Run "${setupLabel}" from the Command Palette.`;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Pure helpers for `bitbucket_*` Language Model tools (`src/tools/bitbucketTools.ts`, U3) —
+// result formatting and confirmation-text building kept here so they stay Vitest-loadable,
+// mirroring U2's `jira_*` tool builders in `sessionState.ts`.
+// ---------------------------------------------------------------------------------------------
+
+/** Result text for `bitbucket_getPullRequest` — the same PR fields the chat review's header
+ * surfaces (title, author, target branch), formatted as a standalone summary rather than a
+ * review-in-progress header. */
+export function formatPullRequestSummary(pr: BitbucketPR): string {
+  return (
+    `## PR #${pr.id} — ${pr.title}\n` +
+    `Author: ${pr.author.displayName} → ${pr.targetBranch}\n` +
+    `Source commit: ${pr.fromCommitHash}\n\n` +
+    (pr.description?.trim() ? pr.description.trim() : '_No description._')
+  );
+}
+
+/** Confirmation for `bitbucket_postComment` — names the PR (project/repo/id, which for Cloud
+ * is workspace/slug/id — `parsePrUrl` already normalizes both into this same shape) and shows
+ * the literal comment text, mirroring `buildAddCommentConfirmation`'s Jira equivalent. */
+export function buildPostCommentConfirmation(project: string, repo: string, prId: number, comment: string): ToolConfirmation {
+  return {
+    title: `Post comment on ${project}/${repo}#${prId}`,
+    message: `Post this comment on **${project}/${repo}#${prId}**:\n\n${comment}`,
+  };
 }
 
 export function parsePrUrl(url: string): ParsedPrUrl | null {
@@ -898,6 +952,58 @@ export function formatContinuationMessage(uncoveredFileCount: number): string {
     `_${uncoveredFileCount} file${uncoveredFileCount !== 1 ? 's' : ''} had no findings in the truncated ` +
     `response — reviewing ${uncoveredFileCount !== 1 ? 'them' : 'it'} now…_\n\n`
   );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Follow-up suggestion chips (onboarding, U5) — pure logic so it stays Vitest-covered (KTD15).
+// The vscode-coupled `participant.followupProvider` wiring lives in `BitbucketParticipant.ts`.
+// Empty/greeting-prompt detection itself (`isGreetingOrEmpty`) is shared with `@jira` and lives
+// in `sessionState.ts` — `BitbucketParticipant.ts` already imports directly from there, so it
+// is not duplicated or re-exported here.
+// ---------------------------------------------------------------------------------------------
+
+/** A `vscode.ChatFollowup`-shaped suggestion, without the `vscode` dependency — the participant
+ * maps this 1:1 onto a real `vscode.ChatFollowup` in its `followupProvider`. */
+export interface BitbucketFollowupSuggestion {
+  prompt: string;
+  label?: string;
+}
+
+/** Discriminated "what just happened" shape `BitbucketParticipant.ts` round-trips through
+ * `vscode.ChatResult.metadata` so its `followupProvider` can compute the right suggestion chips
+ * for the response that was just streamed, without re-deriving state from response text. */
+export type BitbucketFollowupState =
+  | { kind: 'greeting' }
+  | { kind: 'reviewCompleted'; findingCount: number }
+  | { kind: 'none' };
+
+const BITBUCKET_MAX_FOLLOWUPS = 3;
+
+/**
+ * R6/KTD14: 2-3 example prompts, phrased as literal next messages a user could send, for a
+ * major `@bitbucket` response. There is no separate R8-equivalent "unrecognized operation"
+ * fallback for `@bitbucket` to reroute — unlike `@jira`, it has no LLM intent classifier to
+ * bypass, only a PR-URL match, and its existing "Point me at a PR to review" guidance already
+ * covers a non-greeting, non-URL prompt; R9's greeting/empty-prompt case is the one this
+ * function's `'greeting'` state covers.
+ */
+export function computeBitbucketFollowups(state: BitbucketFollowupState): BitbucketFollowupSuggestion[] {
+  switch (state.kind) {
+    case 'greeting':
+      return [
+        { prompt: 'check', label: 'Check my connection' },
+      ];
+    case 'reviewCompleted':
+      if (state.findingCount === 0) {
+        return [{ prompt: 'ask a question about this PR', label: 'Ask a question' }];
+      }
+      return [
+        { prompt: 'add all findings to review', label: 'Add findings to review' },
+        { prompt: 'explain finding #1', label: 'Explain finding #1' },
+      ].slice(0, BITBUCKET_MAX_FOLLOWUPS);
+    case 'none':
+      return [];
+  }
 }
 
 export function buildAdaptiveChunks(diffs: FileDiff[], tokenBudget: number): FileDiff[][] {

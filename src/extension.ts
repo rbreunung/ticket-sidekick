@@ -19,6 +19,8 @@ import { MAX_REPORT_BYTES } from './utils/reportImport';
 import { readAndFilterReport } from './participant/jira/reportImportHandler';
 import { logDiag } from './utils/diagLog';
 import type { IJiraClient } from './jira/IJiraClient';
+import { registerJiraTools } from './tools/jiraTools';
+import { registerBitbucketTools } from './tools/bitbucketTools';
 
 // Shared shape for the two nearly-identical report-import commands (Veracode .xml, Waltz OSS .xlsx):
 // pick a file -> check credentials -> stat+size-cap+read+parse+filter -> empty-result message ->
@@ -142,6 +144,30 @@ function registerReportImportCommand<TRaw, TItem>(
 
 export function activate(context: vscode.ExtensionContext): void {
   const configService = new ConfigService(context);
+
+  // Keeps `ticketSidekick.jiraCredentialsSet` / `ticketSidekick.bitbucketCredentialsSet` in
+  // sync with the actual configured state — `when` clauses (later units: Getting-Started
+  // walkthrough steps, tool availability) gate on these instead of re-deriving the check
+  // themselves. Fires once at activation (so the very first window already has the right
+  // value) and again on every secrets change (token set/cleared).
+  const updateJiraContextKey = async (): Promise<void> => {
+    const config = await configService.getConfig();
+    await vscode.commands.executeCommand('setContext', 'ticketSidekick.jiraCredentialsSet', configService.isConfigured(config));
+  };
+  const updateBitbucketContextKey = async (): Promise<void> => {
+    const config = await configService.getBitbucketConfig();
+    await vscode.commands.executeCommand('setContext', 'ticketSidekick.bitbucketCredentialsSet', configService.isBitbucketConfigured(config));
+  };
+  context.subscriptions.push(
+    context.secrets.onDidChange(async (e) => {
+      if (e.key === 'ticket-sidekick.token') await updateJiraContextKey();
+    }),
+    context.secrets.onDidChange(async (e) => {
+      if (e.key === 'ticket-sidekick.bitbucket.token') await updateBitbucketContextKey();
+    }),
+  );
+  void updateJiraContextKey();
+  void updateBitbucketContextKey();
 
   context.subscriptions.push(
     vscode.commands.registerCommand('ticket-sidekick.setDataCenterToken', async () => {
@@ -365,6 +391,21 @@ export function activate(context: vscode.ExtensionContext): void {
 
   createJiraParticipant(context, configService);
   createBitbucketParticipant(context, configService);
+  registerJiraTools(context, configService);
+  registerBitbucketTools(context, configService);
+
+  // KTD11: auto-open the Jira Getting-Started walkthrough once — on first install/first
+  // activation only — guarded by a globalState "seen" flag so it never reopens on later VS Code
+  // starts. Only the Jira walkthrough auto-opens (KTD10); the Bitbucket one (U7) is opt-in only.
+  const JIRA_WALKTHROUGH_SEEN_KEY = 'ticketSidekick.jiraWalkthroughSeen';
+  if (!context.globalState.get<boolean>(JIRA_WALKTHROUGH_SEEN_KEY)) {
+    void context.globalState.update(JIRA_WALKTHROUGH_SEEN_KEY, true);
+    void vscode.commands.executeCommand(
+      'workbench.action.openWalkthrough',
+      `${context.extension.id}#ticket-sidekick.jiraGettingStarted`,
+      false,
+    );
+  }
 }
 
 export function deactivate(): void {}

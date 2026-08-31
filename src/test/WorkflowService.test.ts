@@ -1,6 +1,10 @@
-import { describe, it, expect } from 'vitest';
-import { findPath, loadWorkflowCache, discoverWorkflow, preserveSkippedStatuses } from '../services/WorkflowService';
+import { describe, it, expect, afterEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { findPath, loadWorkflowCache, discoverWorkflow, preserveSkippedStatuses, resolveAndApplyTransition, discoverAndCacheWorkflow, saveWorkflowCache } from '../services/WorkflowService';
 import { MockJiraClient } from './mocks/MockJiraClient';
+import { TicketService, PartialTransitionError } from '../services/TicketService';
 
 const graph = {
   'Open':        [{ id: '11', name: 'Start Progress', to: 'In Progress' }],
@@ -126,5 +130,189 @@ describe('preserveSkippedStatuses', () => {
     const preserved = preserveSkippedStatuses(newGraph, ['Closed', 'Cancelled', 'Ghost'], oldGraph);
     expect(preserved).toEqual(['Closed', 'Cancelled']);
     expect(Object.keys(newGraph)).toHaveLength(2);
+  });
+});
+
+describe('resolveAndApplyTransition', () => {
+  // Fixture ticket PROJ-123 is "In Progress" with direct transitions to To Do/In Progress/In
+  // Review/Done (transitions-PROJ-123.json) and no issuetype field (issueType resolves to '').
+  let tmpDir: string | undefined;
+
+  afterEach(() => {
+    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    tmpDir = undefined;
+  });
+
+  it('reports already-there without calling getTransitions or applying anything', async () => {
+    const client = new MockJiraClient();
+    const service = new TicketService(client);
+
+    const result = await resolveAndApplyTransition(client, service, '/nonexistent', 'PROJ-123', 'In Progress');
+
+    expect(result).toEqual({ kind: 'alreadyThere', currentStatus: 'In Progress' });
+    expect(client.executeTransitionCalls).toEqual([]);
+  });
+
+  it('applies a direct transition and reports the resolved status', async () => {
+    const client = new MockJiraClient();
+    const service = new TicketService(client);
+
+    const result = await resolveAndApplyTransition(client, service, '/nonexistent', 'PROJ-123', 'done');
+
+    expect(result).toEqual({ kind: 'direct', toStatus: 'Done' });
+    expect(client.executeTransitionCalls).toEqual([{ issueKey: 'PROJ-123', transitionId: '41', fields: undefined }]);
+  });
+
+  it('falls back to a cached multi-hop path when no direct transition exists', async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'ticket-sidekick-workflow-'));
+    saveWorkflowCache(tmpDir, {
+      PROJ: {
+        '': {
+          discovered: '2020-01-01',
+          graph: {
+            'In Progress': [{ id: '31', name: 'Review', to: 'In Review' }],
+            'In Review': [{ id: '99', name: 'Close', to: 'Closed' }],
+          },
+        },
+      },
+    });
+    const client = new MockJiraClient();
+    const service = new TicketService(client);
+
+    const result = await resolveAndApplyTransition(client, service, tmpDir, 'PROJ-123', 'Closed');
+
+    expect(result).toEqual({ kind: 'multiHop', toStatus: 'Closed', hops: 2 });
+    expect(client.executeTransitionCalls).toEqual([
+      { issueKey: 'PROJ-123', transitionId: '31', fields: undefined },
+      { issueKey: 'PROJ-123', transitionId: '99', fields: undefined },
+    ]);
+  });
+
+  it('reports a partial failure — with how far it got — when a multi-hop transition fails after the first hop', async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'ticket-sidekick-workflow-'));
+    saveWorkflowCache(tmpDir, {
+      PROJ: {
+        '': {
+          discovered: '2020-01-01',
+          graph: {
+            'In Progress': [{ id: '31', name: 'Review', to: 'In Review' }],
+            'In Review': [{ id: '99', name: 'Close', to: 'Closed' }],
+          },
+        },
+      },
+    });
+    const client = new MockJiraClient();
+    let calls = 0;
+    client.executeTransition = async (issueKey, transitionId) => {
+      calls++;
+      client.executeTransitionCalls.push({ issueKey, transitionId });
+      if (calls === 2) throw new Error('Jira 500: internal error');
+    };
+    const service = new TicketService(client);
+
+    const result = await resolveAndApplyTransition(client, service, tmpDir, 'PROJ-123', 'Closed');
+
+    expect(result).toEqual({
+      kind: 'partialFailure',
+      completedHops: 1,
+      totalHops: 2,
+      landedStatus: 'In Review',
+      targetStatus: 'Closed',
+      error: expect.stringContaining('Jira 500: internal error'),
+    });
+    // Both hops were attempted (the second failed) — the ticket really did move to "In Review".
+    expect(client.executeTransitionCalls).toHaveLength(2);
+  });
+
+  it('does not report a partial failure when the very first hop fails — nothing changed, so it throws normally', async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'ticket-sidekick-workflow-'));
+    saveWorkflowCache(tmpDir, {
+      PROJ: {
+        '': {
+          discovered: '2020-01-01',
+          graph: {
+            'In Progress': [{ id: '31', name: 'Review', to: 'In Review' }],
+            'In Review': [{ id: '99', name: 'Close', to: 'Closed' }],
+          },
+        },
+      },
+    });
+    const client = new MockJiraClient();
+    client.executeTransition = async () => { throw new Error('Jira 403: forbidden'); };
+    const service = new TicketService(client);
+
+    await expect(resolveAndApplyTransition(client, service, tmpDir, 'PROJ-123', 'Closed'))
+      .rejects.toThrow(PartialTransitionError);
+  });
+
+  it('reports unavailable with the real transition list when no direct or cached path exists', async () => {
+    const client = new MockJiraClient();
+    const service = new TicketService(client);
+
+    const result = await resolveAndApplyTransition(client, service, '/nonexistent', 'PROJ-123', 'Nonexistent Status');
+
+    expect(result).toEqual({
+      kind: 'unavailable',
+      currentStatus: 'In Progress',
+      available: ['To Do', 'In Progress', 'In Review', 'Done'],
+      projectKey: 'PROJ',
+      issueType: '',
+      hasCache: false,
+    });
+    expect(client.executeTransitionCalls).toEqual([]);
+  });
+});
+
+describe('discoverAndCacheWorkflow', () => {
+  let tmpDir: string | undefined;
+
+  afterEach(() => {
+    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    tmpDir = undefined;
+  });
+
+  it('does not touch the cache when discovery finds no statuses', async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'ticket-sidekick-workflow-'));
+    const client = new MockJiraClient();
+    client.getProjectStatuses = async () => [];
+
+    const result = await discoverAndCacheWorkflow(client, tmpDir, 'PROJ', 'Unknown');
+
+    expect(result).toEqual({ graph: {}, skippedStatuses: [], preserved: [] });
+    expect(loadWorkflowCache(tmpDir)).toEqual({});
+  });
+
+  it('caches a freshly discovered graph and reports no preserved statuses on first discovery', async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'ticket-sidekick-workflow-'));
+    const client = new MockJiraClient();
+
+    const result = await discoverAndCacheWorkflow(client, tmpDir, 'PROJ', 'Bug');
+
+    expect(Object.keys(result.graph)).toHaveLength(4);
+    expect(result.preserved).toEqual([]);
+    expect(loadWorkflowCache(tmpDir).PROJ.Bug.graph).toEqual(result.graph);
+  });
+
+  it('preserves a prior cache entry for a status this run could not sample', async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'ticket-sidekick-workflow-'));
+    const staleTransitions = [{ id: '9', name: 'Reopen', to: 'In Progress' }];
+    saveWorkflowCache(tmpDir, { PROJ: { Bug: { discovered: '2020-01-01', graph: { 'Done': staleTransitions } } } });
+    const client = new MockJiraClient();
+    client.searchJql = async (jql) => {
+      if (jql.includes('"In Progress"')) {
+        return {
+          issues: [{ id: '1', key: 'PROJ-1', fields: { summary: 'x', description: null, status: { name: 'In Progress' }, assignee: null, reporter: null, priority: null, labels: [], fixVersions: [], comment: null } }],
+          total: 1,
+        };
+      }
+      return { issues: [], total: 0 };
+    };
+
+    const result = await discoverAndCacheWorkflow(client, tmpDir, 'PROJ', 'Bug');
+
+    expect(result.skippedStatuses).toContain('Done');
+    expect(result.preserved).toEqual(['Done']);
+    expect(result.graph['Done']).toEqual(staleTransitions);
+    expect(loadWorkflowCache(tmpDir).PROJ.Bug.graph['Done']).toEqual(staleTransitions);
   });
 });

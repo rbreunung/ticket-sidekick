@@ -31,12 +31,14 @@ import {
   formatContinuationMessage,
   RAW_PREVIEW_CHARS,
   createAttemptTracker,
+  computeBitbucketFollowups,
   type ReviewFinding,
   type ReviewSession,
   type BitbucketCommentPreviewSession,
+  type BitbucketFollowupState,
   type FileDiff,
 } from './reviewSessionState';
-import { isConfirmation, isCancellation } from './sessionState';
+import { isConfirmation, isCancellation, isGreetingOrEmpty } from './sessionState';
 import { generateContent } from './jira/llmHelpers';
 import { tokenStatus } from '../utils/diagUtils';
 import { validateBaseUrl } from '../services/configValidation';
@@ -241,11 +243,9 @@ async function parseReviewResponse(raw: string): Promise<{
 async function handleCheck(
   stream: vscode.ChatResponseStream,
   config: BitbucketConfig,
+  configService: ConfigService,
 ): Promise<void> {
-  const isConfigured = config.authType === 'cloud'
-    ? !!config.token
-    : !!(config.baseUrl && config.token);
-  if (!isConfigured) {
+  if (!configService.isBitbucketConfigured(config)) {
     const urlStatus = config.authType === 'cloud'
       ? 'n/a (Cloud)'
       : (config.baseUrl ? 'present' : '**absent** — add `ticketSidekick.bitbucket.baseUrl` to VS Code settings');
@@ -315,20 +315,34 @@ export function createBitbucketParticipant(
   context: vscode.ExtensionContext,
   configService: ConfigService,
 ): vscode.ChatParticipant {
+  // U5/R6: the handler returns `{ metadata: { bitbucketFollowup } }` from a major response so
+  // `participant.followupProvider` below can compute the right suggestion chips for it — mirrors
+  // `JiraParticipant.ts`'s own use of `vscode.ChatResult.metadata` for the same purpose. A bare
+  // `return;` (still valid — `void` stays in the union) means "no chip-worthy state", e.g. a
+  // multi-turn follow-up reply whose own response tag already carries the next-step guidance.
   const handler: vscode.ChatRequestHandler = async (
     request: vscode.ChatRequest,
     chatContext: vscode.ChatContext,
     stream: vscode.ChatResponseStream,
     token: vscode.CancellationToken,
-  ): Promise<void> => {
+  ): Promise<vscode.ChatResult | void> => {
     const prompt = request.prompt.trim();
     const config = await configService.getBitbucketConfig();
 
-    // 1. check command
-    if (/^check\b/i.test(prompt)) {
-      await handleCheck(stream, config);
+    // 1. check command — `/check` is the slash-command shortcut for this same check
+    // (KTD12); `request.prompt` never includes the command name itself (confirmed
+    // against vscode.ChatRequest's typings), so the regex below still only matches
+    // plain-text "check".
+    if (request.command === 'check' || /^check\b/i.test(prompt)) {
+      await handleCheck(stream, config, configService);
       return;
     }
+
+    // U4/R5: `/review` needs no dispatch of its own — VS Code strips the command name
+    // out of `request.prompt`, so `/review <url>` leaves `prompt` as exactly the PR URL
+    // (or, with no URL, the same empty prompt a bare `@bitbucket` message would have),
+    // which the existing prUrlMatch-driven flow below already handles unchanged —
+    // including the "Point me at a PR to review" guidance when no URL is given.
 
     if (config.showConnectionInfo) {
       const effectiveUrl = config.authType === 'cloud' ? 'https://api.bitbucket.org' : (config.baseUrl ?? '(not set)');
@@ -548,6 +562,22 @@ export function createBitbucketParticipant(
 
     // 3. New review
     if (!prUrlMatch) {
+      // U5/R9: an empty invocation or an obvious greeting/help-shaped prompt gets a friendlier
+      // orientation message, with its example next step delivered as a follow-up chip (KTD14)
+      // rather than repeated as inline prose — checked here, after both multi-turn session-tag
+      // branches above, so a session already in flight always wins (same ordering rule @jira's
+      // greeting check follows). A prompt that isn't a greeting still falls through to the
+      // existing "Point me at a PR" guidance unchanged — @bitbucket has no LLM intent classifier
+      // for an R8-equivalent "unrecognized operation" fallback to reroute (see reviewSessionState.ts).
+      if (isGreetingOrEmpty(prompt)) {
+        stream.markdown(
+          '**@bitbucket** reviews Bitbucket pull requests — paste a PR URL to get started ' +
+          '(`@bitbucket https://bitbucket.company.com/projects/PROJ/repos/myrepo/pull-requests/42`), ' +
+          'or try the suggestion below.',
+        );
+        const greetingState: BitbucketFollowupState = { kind: 'greeting' };
+        return { metadata: { bitbucketFollowup: greetingState } };
+      }
       stream.markdown(
         'Point me at a PR to review:\n\n' +
         '`@bitbucket https://bitbucket.company.com/projects/PROJ/repos/myrepo/pull-requests/42`\n\n' +
@@ -556,10 +586,7 @@ export function createBitbucketParticipant(
       return;
     }
 
-    const isConfigured = config.authType === 'cloud'
-      ? !!config.token
-      : !!(config.baseUrl && config.token);
-    if (!isConfigured) {
+    if (!configService.isBitbucketConfigured(config)) {
       const setupCommand = config.authType === 'cloud'
         ? 'ticket-sidekick.configureBitbucketCloud'
         : 'ticket-sidekick.setBitbucketDataCenterToken';
@@ -1068,6 +1095,15 @@ export function createBitbucketParticipant(
         rawDiff: rawDiffForSession,
         rawDiffTruncated,
       } satisfies ReviewSession);
+      // U7/KTD9: the Bitbucket Getting-Started walkthrough's "first PR review" step completes
+      // on this context key — set only here, at the real review-completion success path (never
+      // on an aborted/failed run, which throws out to the catch block below before reaching
+      // this line), colocated with U5's own real-success marker (`reviewState`) right below.
+      await vscode.commands.executeCommand('setContext', 'ticketSidekick.firstReviewCompleted', true);
+      // R6: "after a PR review: add findings to review, ask about a finding" — the flagship
+      // example the plan names for follow-up chips.
+      const reviewState: BitbucketFollowupState = { kind: 'reviewCompleted', findingCount: numbered.length };
+      return { metadata: { bitbucketFollowup: reviewState } };
     } catch (err) {
       // KTD9: name the last stage reached, so this is distinguishable from a run that
       // silently never got here (e.g. a channel-write failure) — the funnel's absence
@@ -1080,6 +1116,17 @@ export function createBitbucketParticipant(
   };
 
   const participant = vscode.chat.createChatParticipant('ticket-sidekick.bitbucket', handler);
+  // U5/R6: follow-up suggestion chips for the response `result` was just returned from —
+  // `result.metadata.bitbucketFollowup` is set above wherever the handler has chip-worthy
+  // state; no metadata (a bare `return;`) means no chips, e.g. a multi-turn follow-up reply
+  // whose own response tag already carries the next-step guidance.
+  participant.followupProvider = {
+    provideFollowups(result: vscode.ChatResult): vscode.ChatFollowup[] {
+      const state = (result.metadata as { bitbucketFollowup?: BitbucketFollowupState } | undefined)?.bitbucketFollowup;
+      if (!state) return [];
+      return computeBitbucketFollowups(state).map((s) => ({ prompt: s.prompt, label: s.label }));
+    },
+  };
   context.subscriptions.push(participant);
   return participant;
 }

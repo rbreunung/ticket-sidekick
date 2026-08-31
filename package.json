@@ -6,7 +6,7 @@
   "license": "MIT",
   "publisher": "RobertBreunung",
   "engines": {
-    "vscode": "^1.90.0"
+    "vscode": "^1.95.0"
   },
   "repository": {
     "type": "GitHub",
@@ -27,14 +27,90 @@
         "name": "jira",
         "fullName": "Ticket Sidekick",
         "description": "Manage Jira tickets with natural language",
-        "isSticky": true
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "check",
+            "description": "Verify your Jira connection and credentials",
+            "sampleRequest": "check"
+          },
+          {
+            "name": "create",
+            "description": "Create a new Jira ticket",
+            "sampleRequest": "create a bug in PROJ: login fails after password reset"
+          },
+          {
+            "name": "view",
+            "description": "View a ticket's fields, description, and comments",
+            "sampleRequest": "view PROJ-123"
+          },
+          {
+            "name": "comment",
+            "description": "Add a comment to a ticket",
+            "sampleRequest": "PROJ-123 thanks, looks good to merge"
+          },
+          {
+            "name": "field",
+            "description": "Update a field on a ticket",
+            "sampleRequest": "PROJ-123 set priority to High"
+          },
+          {
+            "name": "move",
+            "description": "Transition a ticket to a new status",
+            "sampleRequest": "PROJ-123 to In Progress"
+          },
+          {
+            "name": "search",
+            "description": "Search tickets with JQL or natural language",
+            "sampleRequest": "my open bugs in PROJ"
+          }
+        ],
+        "disambiguation": [
+          {
+            "category": "jira_ticket_management",
+            "description": "The user wants to create, view, update, comment on, transition, or search for Jira tickets, or manage Jira ticket templates, bulk cleanup, or workflow discovery.",
+            "examples": [
+              "Create a bug ticket in PROJ for the login page crashing on Safari",
+              "Show me PROJ-123",
+              "Add a comment to PROJ-456 saying the fix is deployed",
+              "Move PROJ-789 to Done",
+              "Find all my open tickets in PROJ",
+              "Set the priority on PROJ-42 to High"
+            ]
+          }
+        ]
       },
       {
         "id": "ticket-sidekick.bitbucket",
         "name": "bitbucket",
         "fullName": "Ticket Sidekick — Bitbucket",
         "description": "Review Bitbucket pull requests with natural language",
-        "isSticky": true
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "check",
+            "description": "Verify your Bitbucket connection and credentials",
+            "sampleRequest": "check"
+          },
+          {
+            "name": "review",
+            "description": "Review a Bitbucket pull request",
+            "sampleRequest": "https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42"
+          }
+        ],
+        "disambiguation": [
+          {
+            "category": "bitbucket_pr_review",
+            "description": "The user wants an AI code review of a Bitbucket pull request, wants to ask a follow-up question about a finding from a review already run, or wants to verify their Bitbucket connection.",
+            "examples": [
+              "Review https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42",
+              "Do a deep review of https://bitbucket.org/myteam/myrepo/pull-requests/17",
+              "Explain finding #3",
+              "Add finding #2 as a comment on the PR",
+              "Check my Bitbucket connection"
+            ]
+          }
+        ]
       }
     ],
     "commands": [
@@ -65,6 +141,330 @@
       {
         "command": "ticket-sidekick.importWaltzReport",
         "title": "Ticket Sidekick: Create Jira tickets from OSS report (.xlsx)"
+      }
+    ],
+    "languageModelTools": [
+      {
+        "name": "jira_getTicket",
+        "displayName": "Get Jira Ticket",
+        "modelDescription": "Fetches a Jira ticket's fields and description by key. Use to look up ticket details before answering a question or deciding what to change.",
+        "userDescription": "View a Jira ticket's fields and description.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraGetTicket",
+        "icon": "$(preview)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": ["jira"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "Jira ticket key, e.g. PROJ-123"
+            }
+          },
+          "required": ["ticketKey"]
+        }
+      },
+      {
+        "name": "jira_searchTickets",
+        "displayName": "Search Jira Tickets",
+        "modelDescription": "Searches Jira tickets using JQL (Jira Query Language) and returns a table of matching tickets.",
+        "userDescription": "Search Jira tickets with a JQL query.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraSearchTickets",
+        "icon": "$(search)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": ["jira"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "jql": {
+              "type": "string",
+              "description": "JQL query, e.g. 'project = PROJ AND status = \"In Progress\"'"
+            }
+          },
+          "required": ["jql"]
+        }
+      },
+      {
+        "name": "jira_getComments",
+        "displayName": "Get Jira Comments",
+        "modelDescription": "Fetches the comments on a Jira ticket, most recent first.",
+        "userDescription": "View comments on a Jira ticket.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraGetComments",
+        "icon": "$(comment)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": ["jira"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "Jira ticket key, e.g. PROJ-123"
+            },
+            "maxResults": {
+              "type": "number",
+              "description": "Maximum number of comments to return (default 20)."
+            }
+          },
+          "required": ["ticketKey"]
+        }
+      },
+      {
+        "name": "jira_listTemplates",
+        "displayName": "List Jira Templates",
+        "modelDescription": "Lists the ticket templates defined in this workspace's .jira-templates.json, each with its name and issue type. Call this before jira_createTicket to see whether a suitable template exists — a template carries default field values a bare issue type does not. Returns an empty list, not an error, when no templates file exists.",
+        "userDescription": "List the Jira ticket templates configured for this workspace.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraListTemplates",
+        "icon": "$(list-unordered)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": ["jira"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "jira_discoverWorkflow",
+        "displayName": "Discover Jira Workflow",
+        "modelDescription": "Discovers and caches the Jira status-transition graph for a project/issue type by sampling real tickets in each status. Run this when jira_transitionTicket reports no direct transition to the target status, then retry the transition — it enables multi-hop transitions.",
+        "userDescription": "Sample a project's Jira workflow and cache its status transitions.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraDiscoverWorkflow",
+        "icon": "$(type-hierarchy)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": ["jira"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "projectKey": {
+              "type": "string",
+              "description": "Jira project key, e.g. PROJ"
+            },
+            "issueType": {
+              "type": "string",
+              "description": "Issue type name, e.g. Bug, Story, Task"
+            }
+          },
+          "required": ["projectKey", "issueType"]
+        }
+      },
+      {
+        "name": "jira_addComment",
+        "displayName": "Add Jira Comment",
+        "modelDescription": "Adds a comment to a Jira ticket. This writes to Jira — the user is asked to confirm the exact comment text before it is posted.",
+        "userDescription": "Add a comment to a Jira ticket.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraAddComment",
+        "icon": "$(comment-add)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": ["jira"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "Jira ticket key, e.g. PROJ-123"
+            },
+            "comment": {
+              "type": "string",
+              "description": "The comment text to post, in Jira wiki markup or plain text."
+            }
+          },
+          "required": ["ticketKey", "comment"]
+        }
+      },
+      {
+        "name": "jira_updateField",
+        "displayName": "Update Jira Field",
+        "modelDescription": "Updates a single field on one Jira ticket. Supported field names: summary, description, priority, assignee, labels, components, fix version. This writes to Jira — the user is shown the current and new value and asked to confirm before it is written.",
+        "userDescription": "Update one field on a Jira ticket.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraUpdateField",
+        "icon": "$(edit)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": ["jira"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "Jira ticket key, e.g. PROJ-123"
+            },
+            "fieldName": {
+              "type": "string",
+              "description": "Field to update: summary, description, priority, assignee, labels, components, or fix version."
+            },
+            "value": {
+              "type": "string",
+              "description": "New value. For labels/components, a comma-separated list."
+            }
+          },
+          "required": ["ticketKey", "fieldName", "value"]
+        }
+      },
+      {
+        "name": "jira_createTicket",
+        "displayName": "Create Jira Ticket",
+        "modelDescription": "Creates one new Jira ticket. Call jira_listTemplates first and prefer passing templateName over a bare issueType, since a template carries the process's default field values. If neither issueType nor a resolvable templateName is given, no ticket is created — the tool instead returns the project's valid issue types to choose from. This writes to Jira — the user is asked to confirm the project, issue type, and summary before the ticket is created.",
+        "userDescription": "Create a new Jira ticket, optionally from a template.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraCreateTicket",
+        "icon": "$(add)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": ["jira"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "projectKey": {
+              "type": "string",
+              "description": "Jira project key, e.g. PROJ"
+            },
+            "summary": {
+              "type": "string",
+              "description": "Ticket summary/title"
+            },
+            "issueType": {
+              "type": "string",
+              "description": "Issue type name, e.g. Bug, Story, Task. Prefer templateName when a suitable template exists — omit this when passing templateName and letting the template supply it."
+            },
+            "templateName": {
+              "type": "string",
+              "description": "Name of a template returned by jira_listTemplates. Preferred over a bare issueType."
+            },
+            "description": {
+              "type": "string",
+              "description": "Ticket description text"
+            }
+          },
+          "required": ["projectKey", "summary"]
+        }
+      },
+      {
+        "name": "jira_transitionTicket",
+        "displayName": "Transition Jira Ticket",
+        "modelDescription": "Moves a Jira ticket to a target status, via a direct transition or a cached multi-hop workflow path (see jira_discoverWorkflow). This writes to Jira — the user is asked to confirm the ticket and target status before it is transitioned.",
+        "userDescription": "Move a Jira ticket to a new status.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraTransitionTicket",
+        "icon": "$(arrow-right)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": ["jira"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "Jira ticket key, e.g. PROJ-123"
+            },
+            "targetStatus": {
+              "type": "string",
+              "description": "Target status name, e.g. Done, In Progress"
+            },
+            "resolution": {
+              "type": "string",
+              "description": "Resolution to set when transitioning to a closed state, e.g. Fixed, Won't Do"
+            }
+          },
+          "required": ["ticketKey", "targetStatus"]
+        }
+      },
+      {
+        "name": "bitbucket_getPullRequest",
+        "displayName": "Get Bitbucket Pull Request",
+        "modelDescription": "Fetches a Bitbucket pull request's title, description, author, target branch, and source commit hash.",
+        "userDescription": "View a Bitbucket pull request's details.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "bitbucketGetPullRequest",
+        "icon": "$(preview)",
+        "when": "ticketSidekick.bitbucketCredentialsSet",
+        "tags": ["bitbucket"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string",
+              "description": "Bitbucket project key (Data Center) or workspace (Cloud), e.g. PROJ or myworkspace"
+            },
+            "repo": {
+              "type": "string",
+              "description": "Repository slug, e.g. myrepo"
+            },
+            "prId": {
+              "type": "number",
+              "description": "Pull request id, e.g. 42"
+            }
+          },
+          "required": ["project", "repo", "prId"]
+        }
+      },
+      {
+        "name": "bitbucket_getPullRequestDiff",
+        "displayName": "Get Bitbucket Pull Request Diff",
+        "modelDescription": "Fetches the unified diff for a Bitbucket pull request.",
+        "userDescription": "View a Bitbucket pull request's diff.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "bitbucketGetPullRequestDiff",
+        "icon": "$(diff)",
+        "when": "ticketSidekick.bitbucketCredentialsSet",
+        "tags": ["bitbucket"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string",
+              "description": "Bitbucket project key (Data Center) or workspace (Cloud), e.g. PROJ or myworkspace"
+            },
+            "repo": {
+              "type": "string",
+              "description": "Repository slug, e.g. myrepo"
+            },
+            "prId": {
+              "type": "number",
+              "description": "Pull request id, e.g. 42"
+            },
+            "contextLines": {
+              "type": "number",
+              "description": "Diff context lines to request around each hunk (default: the configured ticketSidekick.bitbucket.reviewContextLines, 12)."
+            }
+          },
+          "required": ["project", "repo", "prId"]
+        }
+      },
+      {
+        "name": "bitbucket_postComment",
+        "displayName": "Post Bitbucket Comment",
+        "modelDescription": "Posts a comment to a Bitbucket pull request's activity feed. This writes to Bitbucket — the user is asked to confirm the exact comment text before it is posted.",
+        "userDescription": "Post a comment on a Bitbucket pull request.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "bitbucketPostComment",
+        "icon": "$(comment-add)",
+        "when": "ticketSidekick.bitbucketCredentialsSet",
+        "tags": ["bitbucket"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string",
+              "description": "Bitbucket project key (Data Center) or workspace (Cloud), e.g. PROJ or myworkspace"
+            },
+            "repo": {
+              "type": "string",
+              "description": "Repository slug, e.g. myrepo"
+            },
+            "prId": {
+              "type": "number",
+              "description": "Pull request id, e.g. 42"
+            },
+            "comment": {
+              "type": "string",
+              "description": "The comment text to post to the pull request's activity feed."
+            }
+          },
+          "required": ["project", "repo", "prId", "comment"]
+        }
       }
     ],
     "configuration": [
@@ -287,6 +687,110 @@
             "description": "Remediation Action values to include when importing an OSS report (empty string means the column was blank). Components with any other action (e.g. 'Risk capture') are excluded by default."
           }
         }
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "ticket-sidekick.jiraGettingStarted",
+        "title": "Ticket Sidekick: Jira",
+        "description": "Set up @jira and create your first ticket.",
+        "steps": [
+          {
+            "id": "jiraBaseUrl",
+            "title": "Set your Jira base URL",
+            "description": "Point Ticket Sidekick at your Jira instance.\n[Open setting](command:workbench.action.openSettings?%22ticketSidekick.jira.baseUrl%22)",
+            "media": {
+              "markdown": "walkthroughs/jira/base-url.md"
+            },
+            "completionEvents": [
+              "onSettingChanged:ticketSidekick.jira.baseUrl"
+            ]
+          },
+          {
+            "id": "jiraCredentials",
+            "title": "Add your Jira credentials",
+            "description": "Store a Data Center Personal Access Token or Cloud email + API token in VS Code's encrypted Secret Storage.\n[Set Data Center Token](command:ticket-sidekick.setDataCenterToken)\n[Configure Cloud Credentials](command:ticket-sidekick.configureCloud)",
+            "media": {
+              "markdown": "walkthroughs/jira/credentials.md"
+            },
+            "completionEvents": [
+              "onContext:ticketSidekick.jiraCredentialsSet"
+            ]
+          },
+          {
+            "id": "jiraDefaultProject",
+            "title": "Set a default project",
+            "description": "So `@jira create` and the report importers don't need a project key in every prompt.\n[Open setting](command:workbench.action.openSettings?%22ticketSidekick.jira.defaultProject%22)",
+            "media": {
+              "markdown": "walkthroughs/jira/default-project.md"
+            },
+            "completionEvents": [
+              "onSettingChanged:ticketSidekick.jira.defaultProject"
+            ]
+          },
+          {
+            "id": "jiraWorkflow",
+            "title": "Discover your ticket types & workflow",
+            "description": "Sample your project's real tickets to learn its issue types and status-transition graph.\n[Ask @jira](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40jira%20discover%20workflow%20%22%7D%5D)",
+            "media": {
+              "markdown": "walkthroughs/jira/workflow.md"
+            },
+            "completionEvents": [
+              "onContext:ticketSidekick.workflowViewed"
+            ]
+          },
+          {
+            "id": "jiraFirstTicket",
+            "title": "Create your first ticket",
+            "description": "Generate a template from real project data, then create a ticket from it — or create one directly.\n[Ask @jira](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40jira%20generate%20a%20template%22%7D%5D)",
+            "media": {
+              "markdown": "walkthroughs/jira/first-ticket.md"
+            },
+            "completionEvents": [
+              "onContext:ticketSidekick.firstTicketCreated"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "ticket-sidekick.bitbucketGettingStarted",
+        "title": "Ticket Sidekick: Bitbucket",
+        "description": "Set up @bitbucket and review your first pull request.",
+        "steps": [
+          {
+            "id": "bitbucketBaseUrl",
+            "title": "Set your Bitbucket base URL (Data Center only)",
+            "description": "Point Ticket Sidekick at your Bitbucket Data Center instance. Skip this on Bitbucket Cloud — Cloud always talks to the fixed api.bitbucket.org host.\n[Open setting](command:workbench.action.openSettings?%22ticketSidekick.bitbucket.baseUrl%22)",
+            "media": {
+              "markdown": "walkthroughs/bitbucket/base-url.md"
+            },
+            "completionEvents": [
+              "onContext:ticketSidekick.bitbucketCredentialsSet"
+            ]
+          },
+          {
+            "id": "bitbucketCredentials",
+            "title": "Add your Bitbucket credentials",
+            "description": "Store a Data Center Personal Access Token or Cloud username + App Password in VS Code's encrypted Secret Storage.\n[Set Data Center Token](command:ticket-sidekick.setBitbucketDataCenterToken)\n[Configure Cloud Credentials](command:ticket-sidekick.configureBitbucketCloud)",
+            "media": {
+              "markdown": "walkthroughs/bitbucket/credentials.md"
+            },
+            "completionEvents": [
+              "onContext:ticketSidekick.bitbucketCredentialsSet"
+            ]
+          },
+          {
+            "id": "bitbucketFirstReview",
+            "title": "Review your first pull request",
+            "description": "Paste a real Bitbucket PR URL to @bitbucket and get a structured, line-accurate review.\n[Ask @bitbucket](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40bitbucket%20check%22%7D%5D)",
+            "media": {
+              "markdown": "walkthroughs/bitbucket/first-review.md"
+            },
+            "completionEvents": [
+              "onContext:ticketSidekick.firstReviewCompleted"
+            ]
+          }
+        ]
       }
     ]
   },
