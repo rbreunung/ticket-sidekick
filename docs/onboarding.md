@@ -326,3 +326,40 @@ Each step's button opens Copilot Chat pre-filled with the relevant `@jira`
 query via `workbench.action.chat.open` (the same command
 `extension.ts`'s `.eml`/Veracode/Waltz import commands already use to open
 chat with a fixed query), or runs the credential-setup command directly.
+
+## Getting-Started walkthrough: Bitbucket
+
+`contributes.walkthroughs` in `package.json` also declares a second, separate
+"Ticket Sidekick: Bitbucket" walkthrough (id
+`ticket-sidekick.bitbucketGettingStarted`) — a sibling entry to the Jira one
+above, not merged into it (KTD10). It takes a new user from zero Bitbucket
+config to a real first PR review, with the same rule as Jira's: every step
+completes on real extension state via VS Code's native `completionEvents`,
+never a static checklist (R12). Step markdown bodies live in
+`walkthroughs/bitbucket/*.md`; each links (or runs) the real setting/command
+it describes.
+
+| # | Step id | What it asks for | Completion signal |
+| --- | --- | --- | --- |
+| 1 | `bitbucketBaseUrl` | `ticketSidekick.bitbucket.baseUrl` setting (Data Center only) | `onContext:ticketSidekick.bitbucketCredentialsSet` |
+| 2 | `bitbucketCredentials` | A Data Center PAT or Cloud username+App Password, via `ticket-sidekick.setBitbucketDataCenterToken` / `ticket-sidekick.configureBitbucketCloud` | `onContext:ticketSidekick.bitbucketCredentialsSet` (U1's context key, kept in sync in `extension.ts`) |
+| 3 | `bitbucketFirstReview` | Reviewing a real PR (`@bitbucket <pr-url>`) | `onContext:ticketSidekick.firstReviewCompleted` — set in `BitbucketParticipant.ts` right at the real review-completion success point (colocated with the `reviewState` follow-up-chip metadata U5 already sets there), never on an aborted or failed run |
+
+**Base URL step's completion signal (KTD9).** Data Center needs
+`ticketSidekick.bitbucket.baseUrl` set; Cloud needs no base URL at all — it
+always talks to the fixed `api.bitbucket.org` host. Rather than add a new
+context-key listener to distinguish the two, this step reuses the existing
+`ticketSidekick.bitbucketCredentialsSet` signal: `ConfigService.isBitbucketConfigured()`
+(U1's gate, already backing that key) already requires `baseUrl` **and**
+`token` for Data Center but only `token` for Cloud, so the moment that key
+goes true, a Data Center user's base URL is genuinely set and a Cloud user's
+(inapplicable) base-URL step correctly completes alongside credentials —
+with no separate signal to invent or keep in sync.
+
+**Never auto-opened (KTD11).** Unlike the Jira walkthrough, this one has no
+`globalState`-guarded auto-open block in `extension.ts` — it's reachable only
+from VS Code's Get Started page, by design.
+
+Each step's button opens Copilot Chat pre-filled with the relevant
+`@bitbucket` query via `workbench.action.chat.open`, or runs the
+credential-setup command directly — same mechanism as the Jira walkthrough.

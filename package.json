@@ -751,6 +751,46 @@
             ]
           }
         ]
+      },
+      {
+        "id": "ticket-sidekick.bitbucketGettingStarted",
+        "title": "Ticket Sidekick: Bitbucket",
+        "description": "Set up @bitbucket and review your first pull request.",
+        "steps": [
+          {
+            "id": "bitbucketBaseUrl",
+            "title": "Set your Bitbucket base URL (Data Center only)",
+            "description": "Point Ticket Sidekick at your Bitbucket Data Center instance. Skip this on Bitbucket Cloud — Cloud always talks to the fixed api.bitbucket.org host.\n[Open setting](command:workbench.action.openSettings?%22ticketSidekick.bitbucket.baseUrl%22)",
+            "media": {
+              "markdown": "walkthroughs/bitbucket/base-url.md"
+            },
+            "completionEvents": [
+              "onContext:ticketSidekick.bitbucketCredentialsSet"
+            ]
+          },
+          {
+            "id": "bitbucketCredentials",
+            "title": "Add your Bitbucket credentials",
+            "description": "Store a Data Center Personal Access Token or Cloud username + App Password in VS Code's encrypted Secret Storage.\n[Set Data Center Token](command:ticket-sidekick.setBitbucketDataCenterToken)\n[Configure Cloud Credentials](command:ticket-sidekick.configureBitbucketCloud)",
+            "media": {
+              "markdown": "walkthroughs/bitbucket/credentials.md"
+            },
+            "completionEvents": [
+              "onContext:ticketSidekick.bitbucketCredentialsSet"
+            ]
+          },
+          {
+            "id": "bitbucketFirstReview",
+            "title": "Review your first pull request",
+            "description": "Paste a real Bitbucket PR URL to @bitbucket and get a structured, line-accurate review.\n[Ask @bitbucket](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40bitbucket%20check%22%7D%5D)",
+            "media": {
+              "markdown": "walkthroughs/bitbucket/first-review.md"
+            },
+            "completionEvents": [
+              "onContext:ticketSidekick.firstReviewCompleted"
+            ]
+          }
+        ]
       }
     ]
   },

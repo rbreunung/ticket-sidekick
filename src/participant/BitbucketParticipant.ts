@@ -1095,6 +1095,11 @@ export function createBitbucketParticipant(
         rawDiff: rawDiffForSession,
         rawDiffTruncated,
       } satisfies ReviewSession);
+      // U7/KTD9: the Bitbucket Getting-Started walkthrough's "first PR review" step completes
+      // on this context key — set only here, at the real review-completion success path (never
+      // on an aborted/failed run, which throws out to the catch block below before reaching
+      // this line), colocated with U5's own real-success marker (`reviewState`) right below.
+      await vscode.commands.executeCommand('setContext', 'ticketSidekick.firstReviewCompleted', true);
       // R6: "after a PR review: add findings to review, ask about a finding" — the flagship
       // example the plan names for follow-up chips.
       const reviewState: BitbucketFollowupState = { kind: 'reviewCompleted', findingCount: numbered.length };
