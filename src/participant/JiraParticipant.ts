@@ -12,7 +12,7 @@ import { loadWorkflowCache, findPath } from '../services/WorkflowService';
 import type { WorkflowGraph } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
 import type { Operation, ParsedIntent } from './jira/llmHelpers';
-import { parseIntent, extractFixVersionFromPrompt, generateContent, isLmRefusal, synthesizeComments, generateDescriptionAndCommentsSummary, isPointerPrompt, extractLastAssistantText } from './jira/llmHelpers';
+import { parseIntent, extractFixVersionFromPrompt, generateContent, isLmRefusal, synthesizeComments, generateDescriptionAndCommentsSummary, isPointerPrompt, extractLastAssistantText, mapCommandToOperation } from './jira/llmHelpers';
 import { streamFieldUpdatePreview, continueSetField, handleSetField, handleSpellCheck } from './jira/fieldHandler';
 import { getLastAssistantText, resolveTicketFromBranch, resolveProjectKey, resolveIssueTypeOrPrompt, parseLastTicketFromContext } from './jira/ticketContext';
 import { validateBaseUrl } from '../services/configValidation';
@@ -99,7 +99,10 @@ export function createJiraParticipant(
     const ws = context.workspaceState;
     const lastResponse = getLastAssistantText(chatContext);
 
-    if (/^check(\s+(config|connection|setup))?$/i.test(request.prompt.trim())) {
+    // U4/R5: `/check` is the slash-command shortcut for this same check — checked
+    // before the multi-turn session-tag scan below, exactly like the plain-text
+    // "check" phrase already was (KTD12).
+    if (request.command === 'check' || /^check(\s+(config|connection|setup))?$/i.test(request.prompt.trim())) {
       const urlError = validateBaseUrl(config.baseUrl);
       if (urlError) {
         stream.markdown(`**Jira configuration problem**\n\n${urlError}`);
@@ -659,6 +662,16 @@ export function createJiraParticipant(
     let intent: ParsedIntent;
     try {
       intent = await parseIntent(request.prompt, request.model, token);
+      // U4/R5: every other slash command (create/view/comment/field/move/search) routes
+      // through this same NL-intent-parsed pipeline, just with its operation pre-decided
+      // instead of left to the LLM's classification — parseIntent above still supplies
+      // every other field from the prompt text after the command. Every session-tag
+      // branch above already returned by this point, so an in-flight multi-turn session
+      // always claims the turn before a stray slash command ever could (KTD12).
+      const commandOperation = mapCommandToOperation(request.command);
+      if (commandOperation) {
+        intent = { ...intent, operation: commandOperation };
+      }
       if (intent.operation === 'runCleanup') {
         const fv = extractFixVersionFromPrompt(request.prompt);
         if (fv) intent = { ...intent, fixVersion: fv };

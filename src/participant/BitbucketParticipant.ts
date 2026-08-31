@@ -322,11 +322,20 @@ export function createBitbucketParticipant(
     const prompt = request.prompt.trim();
     const config = await configService.getBitbucketConfig();
 
-    // 1. check command
-    if (/^check\b/i.test(prompt)) {
+    // 1. check command — `/check` is the slash-command shortcut for this same check
+    // (KTD12); `request.prompt` never includes the command name itself (confirmed
+    // against vscode.ChatRequest's typings), so the regex below still only matches
+    // plain-text "check".
+    if (request.command === 'check' || /^check\b/i.test(prompt)) {
       await handleCheck(stream, config, configService);
       return;
     }
+
+    // U4/R5: `/review` needs no dispatch of its own — VS Code strips the command name
+    // out of `request.prompt`, so `/review <url>` leaves `prompt` as exactly the PR URL
+    // (or, with no URL, the same empty prompt a bare `@bitbucket` message would have),
+    // which the existing prUrlMatch-driven flow below already handles unchanged —
+    // including the "Point me at a PR to review" guidance when no URL is given.
 
     if (config.showConnectionInfo) {
       const effectiveUrl = config.authType === 'cloud' ? 'https://api.bitbucket.org' : (config.baseUrl ?? '(not set)');

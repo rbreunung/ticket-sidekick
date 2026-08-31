@@ -183,3 +183,59 @@ calls (KTD6) — every call takes fully-specified parameters (`project`,
 `repo`, `prId`, …), with no last-PR or in-progress-review context to fall
 back on, unlike `@bitbucket` chat's single `ReviewSession` (see
 [`docs/review-process.md`](review-process.md#follow-ups)).
+
+## Slash commands
+
+Both chat participants also expose a `/command` per major capability, shown
+in their own autocomplete when typing `@jira ` or `@bitbucket ` in Copilot
+Chat. Every command is a discoverability shortcut into the same
+natural-language-routed flow described elsewhere in this doc set — never a
+separate mechanism a user has to learn (R5). `contributes.chatParticipants`
+in `package.json` declares each command's `name`, `description`, and
+`sampleRequest` (the text shown as an autocomplete preview); both
+participants also declare `disambiguation` metadata (category, description,
+example prompts) there so Copilot can route an ambiguous prompt to the right
+participant without the user typing `@jira`/`@bitbucket` explicitly.
+
+### `@jira`
+
+`request.command` is dispatched right after `parseIntent()` runs — every
+other field the flow needs (ticket key, field name/value, target status,
+JQL, comment text, …) still comes from the LLM's parse of the remaining
+prompt text; the command only pre-decides *which* operation to route to,
+removing the one ambiguity a deliberate `/command` shouldn't be subject to.
+This is checked after the full multi-turn session-tag scan, so a session
+already in flight always finishes claiming the turn before a slash command
+can (KTD12). `/check` is the one exception — it's merged directly into the
+existing plain-text `check` regex special-case, which runs (unchanged)
+before the session-tag scan, same as it always did.
+
+| Command | Target flow | `sampleRequest` |
+| --- | --- | --- |
+| `/check` | Connection check (`config`/`connection` special-case) | `check` |
+| `/create` | `createTicket` — multi-turn ticket creation | `create a bug in PROJ: login fails after password reset` |
+| `/view` | `getTicket` — show a ticket's fields, description, comments | `view PROJ-123` |
+| `/comment` | `addComment` | `PROJ-123 thanks, looks good to merge` |
+| `/field` | `updateField` | `PROJ-123 set priority to High` |
+| `/move` | `transition` | `PROJ-123 to In Progress` |
+| `/search` | `searchJql` | `my open bugs in PROJ` |
+
+The pure `mapCommandToOperation()` (`src/participant/jira/llmHelpers.ts`)
+holds the command-name → `Operation` mapping and is unit-tested in
+`src/test/llmHelpers.test.ts`; the dispatch itself lives in
+`src/participant/JiraParticipant.ts`.
+
+### `@bitbucket`
+
+| Command | Target flow | `sampleRequest` |
+| --- | --- | --- |
+| `/check` | Connection check | `check` |
+| `/review` | PR review — the remaining prompt text is the PR URL | `https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42` |
+
+`/check` is merged into the existing plain-text `check` regex special-case
+the same way `@jira`'s is. `/review` needs no dispatch code of its own: VS
+Code's Chat API never includes the participant name or command name in
+`request.prompt`, so `/review <url>` leaves `request.prompt` as exactly the
+PR URL — which the existing `prUrlMatch`-driven flow in
+`BitbucketParticipant.ts` already handles unchanged, including its "Point me
+at a PR to review" guidance when `/review` is used with no URL.

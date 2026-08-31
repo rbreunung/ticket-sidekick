@@ -27,14 +27,90 @@
         "name": "jira",
         "fullName": "Ticket Sidekick",
         "description": "Manage Jira tickets with natural language",
-        "isSticky": true
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "check",
+            "description": "Verify your Jira connection and credentials",
+            "sampleRequest": "check"
+          },
+          {
+            "name": "create",
+            "description": "Create a new Jira ticket",
+            "sampleRequest": "create a bug in PROJ: login fails after password reset"
+          },
+          {
+            "name": "view",
+            "description": "View a ticket's fields, description, and comments",
+            "sampleRequest": "view PROJ-123"
+          },
+          {
+            "name": "comment",
+            "description": "Add a comment to a ticket",
+            "sampleRequest": "PROJ-123 thanks, looks good to merge"
+          },
+          {
+            "name": "field",
+            "description": "Update a field on a ticket",
+            "sampleRequest": "PROJ-123 set priority to High"
+          },
+          {
+            "name": "move",
+            "description": "Transition a ticket to a new status",
+            "sampleRequest": "PROJ-123 to In Progress"
+          },
+          {
+            "name": "search",
+            "description": "Search tickets with JQL or natural language",
+            "sampleRequest": "my open bugs in PROJ"
+          }
+        ],
+        "disambiguation": [
+          {
+            "category": "jira_ticket_management",
+            "description": "The user wants to create, view, update, comment on, transition, or search for Jira tickets, or manage Jira ticket templates, bulk cleanup, or workflow discovery.",
+            "examples": [
+              "Create a bug ticket in PROJ for the login page crashing on Safari",
+              "Show me PROJ-123",
+              "Add a comment to PROJ-456 saying the fix is deployed",
+              "Move PROJ-789 to Done",
+              "Find all my open tickets in PROJ",
+              "Set the priority on PROJ-42 to High"
+            ]
+          }
+        ]
       },
       {
         "id": "ticket-sidekick.bitbucket",
         "name": "bitbucket",
         "fullName": "Ticket Sidekick — Bitbucket",
         "description": "Review Bitbucket pull requests with natural language",
-        "isSticky": true
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "check",
+            "description": "Verify your Bitbucket connection and credentials",
+            "sampleRequest": "check"
+          },
+          {
+            "name": "review",
+            "description": "Review a Bitbucket pull request",
+            "sampleRequest": "https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42"
+          }
+        ],
+        "disambiguation": [
+          {
+            "category": "bitbucket_pr_review",
+            "description": "The user wants an AI code review of a Bitbucket pull request, wants to ask a follow-up question about a finding from a review already run, or wants to verify their Bitbucket connection.",
+            "examples": [
+              "Review https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42",
+              "Do a deep review of https://bitbucket.org/myteam/myrepo/pull-requests/17",
+              "Explain finding #3",
+              "Add finding #2 as a comment on the PR",
+              "Check my Bitbucket connection"
+            ]
+          }
+        ]
       }
     ],
     "commands": [
