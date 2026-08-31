@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { findPath, loadWorkflowCache, discoverWorkflow, preserveSkippedStatuses, resolveAndApplyTransition, saveWorkflowCache } from '../services/WorkflowService';
+import { findPath, loadWorkflowCache, discoverWorkflow, preserveSkippedStatuses, resolveAndApplyTransition, discoverAndCacheWorkflow, saveWorkflowCache } from '../services/WorkflowService';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService } from '../services/TicketService';
 
@@ -203,5 +203,59 @@ describe('resolveAndApplyTransition', () => {
       hasCache: false,
     });
     expect(client.executeTransitionCalls).toEqual([]);
+  });
+});
+
+describe('discoverAndCacheWorkflow', () => {
+  let tmpDir: string | undefined;
+
+  afterEach(() => {
+    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    tmpDir = undefined;
+  });
+
+  it('does not touch the cache when discovery finds no statuses', async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'ticket-sidekick-workflow-'));
+    const client = new MockJiraClient();
+    client.getProjectStatuses = async () => [];
+
+    const result = await discoverAndCacheWorkflow(client, tmpDir, 'PROJ', 'Unknown');
+
+    expect(result).toEqual({ graph: {}, skippedStatuses: [], preserved: [] });
+    expect(loadWorkflowCache(tmpDir)).toEqual({});
+  });
+
+  it('caches a freshly discovered graph and reports no preserved statuses on first discovery', async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'ticket-sidekick-workflow-'));
+    const client = new MockJiraClient();
+
+    const result = await discoverAndCacheWorkflow(client, tmpDir, 'PROJ', 'Bug');
+
+    expect(Object.keys(result.graph)).toHaveLength(4);
+    expect(result.preserved).toEqual([]);
+    expect(loadWorkflowCache(tmpDir).PROJ.Bug.graph).toEqual(result.graph);
+  });
+
+  it('preserves a prior cache entry for a status this run could not sample', async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'ticket-sidekick-workflow-'));
+    const staleTransitions = [{ id: '9', name: 'Reopen', to: 'In Progress' }];
+    saveWorkflowCache(tmpDir, { PROJ: { Bug: { discovered: '2020-01-01', graph: { 'Done': staleTransitions } } } });
+    const client = new MockJiraClient();
+    client.searchJql = async (jql) => {
+      if (jql.includes('"In Progress"')) {
+        return {
+          issues: [{ id: '1', key: 'PROJ-1', fields: { summary: 'x', description: null, status: { name: 'In Progress' }, assignee: null, reporter: null, priority: null, labels: [], fixVersions: [], comment: null } }],
+          total: 1,
+        };
+      }
+      return { issues: [], total: 0 };
+    };
+
+    const result = await discoverAndCacheWorkflow(client, tmpDir, 'PROJ', 'Bug');
+
+    expect(result.skippedStatuses).toContain('Done');
+    expect(result.preserved).toEqual(['Done']);
+    expect(result.graph['Done']).toEqual(staleTransitions);
+    expect(loadWorkflowCache(tmpDir).PROJ.Bug.graph['Done']).toEqual(staleTransitions);
   });
 });

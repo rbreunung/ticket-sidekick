@@ -10,6 +10,7 @@ vi.mock('../participant/jira/llmHelpers', () => ({
   buildHistoryContext: vi.fn(),
 }));
 
+import * as vscode from 'vscode';
 import { streamContentPreview, handleContentSession, buildContentContext } from '../participant/jira/contentHandler';
 import { generateContent, isLmRefusal, buildHistoryContext } from '../participant/jira/llmHelpers';
 import type { ContentSession } from '../participant/sessionState';
@@ -140,6 +141,10 @@ describe('handleContentSession — createTicket confirmation', () => {
 
     // Ticket marker appended
     expect(allMarkdown).toContain('<!-- @jira-ticket:PROJ-125 -->');
+
+    // Jira Getting-Started walkthrough's "first ticket" step completes on this context key
+    // (KTD9) — must fire on the real success path, not merely on an attempted create.
+    expect(vscode.commands.executeCommand).toHaveBeenCalledWith('setContext', 'ticketSidekick.firstTicketCreated', true);
   });
 
   it('links the ticket key when baseUrl is configured, and still appends the correct marker', async () => {
@@ -182,6 +187,7 @@ describe('handleContentSession — createTicket confirmation', () => {
     expect(ws.update).toHaveBeenCalledWith('jira.session.previewing', undefined);
     expect(createTicketSpy).not.toHaveBeenCalled();
     expect(stream.markdown).toHaveBeenCalledWith('_Cancelled._');
+    expect(vscode.commands.executeCommand).not.toHaveBeenCalledWith('setContext', 'ticketSidekick.firstTicketCreated', true);
   });
 
   it('also cancels with "c" shorthand', async () => {

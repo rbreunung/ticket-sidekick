@@ -45,6 +45,9 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/services/PrReviewService.ts` | PR review logic: diff parsing, file gathering, two-pass LLM prompt building, result formatting |
 | `src/services/ConfigService.ts` | VS Code settings + SecretStorage for both Jira and Bitbucket |
 | `src/services/configValidation.ts` | Pure (vscode-free) config validators; `validateBaseUrl` rejects malformed/non-http(s) base URLs. Surfaced by `@jira check` and `@bitbucket check` (DC) before attempting a connection |
+| `src/tools/jiraTools.ts` | Jira `contributes.languageModelTools` registration + `prepareInvocation`/`invoke` for each tool — thin glue over `TicketService`/`WorkflowService`/`TemplateService`, reusing chat-flow safeguards (never-guess-issue-type) rather than reimplementing them |
+| `src/tools/bitbucketTools.ts` | Bitbucket `contributes.languageModelTools` registration, same shape as `jiraTools.ts` — single-object read/write tools over `IBitbucketClient`/`PrReviewService` |
+| `src/tools/toolConfirmation.ts` | Shared `ToolConfirmation` type (`prepareInvocation()`'s title/message) both tool files' confirmation builders return — keeps `sessionState.ts`/`reviewSessionState.ts` from depending on each other |
 | `src/participant/JiraParticipant.ts` | Jira chat handler + intent routing; delegates to `src/participant/jira/` handlers |
 | `src/participant/jira/llmHelpers.ts` | `Operation` type, `ParsedIntent`, `INTENT_PROMPT`, all LLM utility functions |
 | `src/participant/jira/ticketContext.ts` | Ticket key + project key resolution helpers |
@@ -246,3 +249,11 @@ sync with any change to the review pipeline.**
 Report into Jira tickets — including the dedup/review/batch-creation flow
 Veracode and Waltz import share via `reportImportHandler.ts`. Documented in
 [`docs/report-import.md`](docs/report-import.md).
+
+## Onboarding
+
+Language Model tools (`contributes.languageModelTools`, letting Copilot Agent
+Mode call Jira/Bitbucket operations directly), slash commands, disambiguation
+metadata, follow-up suggestion chips, the first-touch/unclassified-prompt
+fallback, and the two Getting-Started walkthroughs are documented in
+[`docs/onboarding.md`](docs/onboarding.md).

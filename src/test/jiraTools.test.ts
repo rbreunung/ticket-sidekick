@@ -128,6 +128,32 @@ describe('jira_discoverWorkflow result message', () => {
     const message = formatWorkflowDiscoveryMessage('PROJ', 'Bug', {}, [], []);
     expect(message).toContain('No tickets found');
   });
+
+  it('notes a status that kept its cached transitions when it had no representative ticket', () => {
+    const message = formatWorkflowDiscoveryMessage(
+      'PROJ',
+      'Bug',
+      { 'To Do': [{ id: '1', name: 'Start', to: 'In Progress' }], 'Done': [{ id: '9', name: 'Reopen', to: 'To Do' }] },
+      ['Done'],
+      ['Done'],
+    );
+    expect(message).toContain('kept cached transitions');
+    expect(message).toContain('Done');
+    expect(message).not.toContain('re-run jira_discoverWorkflow');
+  });
+
+  it('warns about a status with no tickets and no cached transitions to fall back on', () => {
+    const message = formatWorkflowDiscoveryMessage(
+      'PROJ',
+      'Bug',
+      { 'To Do': [{ id: '1', name: 'Start', to: 'In Progress' }] },
+      ['Blocked'],
+      [],
+    );
+    expect(message).toContain('no cached transitions');
+    expect(message).toContain('Blocked');
+    expect(message).toContain('re-run jira_discoverWorkflow');
+  });
 });
 
 // jira_getTicket / jira_searchTickets / jira_getComments delegate straight to TicketService

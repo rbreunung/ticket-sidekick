@@ -4,8 +4,9 @@ import { ConfigService, type JiraConfig } from '../services/ConfigService';
 import { TicketService, renderFieldValue } from '../services/TicketService';
 import { TemplateService } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
-import { discoverWorkflow, loadWorkflowCache, saveWorkflowCache, preserveSkippedStatuses, resolveAndApplyTransition } from '../services/WorkflowService';
+import { discoverAndCacheWorkflow, resolveAndApplyTransition } from '../services/WorkflowService';
 import { logDiag } from '../utils/diagLog';
+import { isSafePathSegment } from './pathSafety';
 import {
   buildJiraNotConfiguredMessage,
   formatCommentsInFull,
@@ -108,6 +109,7 @@ class GetTicketTool implements vscode.LanguageModelTool<GetTicketInput> {
   async invoke(options: vscode.LanguageModelToolInvocationOptions<GetTicketInput>): Promise<vscode.LanguageModelToolResult> {
     const ticketKey = options.input.ticketKey?.trim();
     if (!ticketKey) return textResult('A ticket key is required, e.g. PROJ-123.');
+    if (!isSafePathSegment(ticketKey)) return textResult(`"${ticketKey}" is not a valid ticket key.`);
 
     const ctx = await tryGetConfiguredContext(this.configService);
     if (isNotConfiguredResult(ctx)) return ctx;
@@ -175,6 +177,7 @@ class GetCommentsTool implements vscode.LanguageModelTool<GetCommentsInput> {
   async invoke(options: vscode.LanguageModelToolInvocationOptions<GetCommentsInput>): Promise<vscode.LanguageModelToolResult> {
     const ticketKey = options.input.ticketKey?.trim();
     if (!ticketKey) return textResult('A ticket key is required, e.g. PROJ-123.');
+    if (!isSafePathSegment(ticketKey)) return textResult(`"${ticketKey}" is not a valid ticket key.`);
     const maxResults = options.input.maxResults && options.input.maxResults > 0 ? options.input.maxResults : 20;
 
     const ctx = await tryGetConfiguredContext(this.configService);
@@ -245,24 +248,20 @@ class DiscoverWorkflowTool implements vscode.LanguageModelTool<DiscoverWorkflowI
     if (!projectKey || !issueType) {
       return textResult('Both a project key and an issue type are required, e.g. { "projectKey": "PROJ", "issueType": "Bug" }.');
     }
+    if (!isSafePathSegment(projectKey)) return textResult(`"${projectKey}" is not a valid project key.`);
 
     const ctx = await tryGetConfiguredContext(this.configService);
     if (isNotConfiguredResult(ctx)) return ctx;
     const { jiraClient } = ctx;
 
     try {
-      const { graph, skippedStatuses } = await discoverWorkflow(jiraClient, projectKey, issueType);
+      // Same discover-then-cache sequence the chat 'discoverWorkflow' operation uses
+      // (src/participant/jira/workflowHandler.ts, src/services/WorkflowService.ts) — R3.
+      const workspaceRoot = currentWorkspaceRoot();
+      const { graph, skippedStatuses, preserved } = await discoverAndCacheWorkflow(jiraClient, workspaceRoot, projectKey, issueType);
       if (Object.keys(graph).length === 0) {
         return textResult(formatWorkflowDiscoveryMessage(projectKey, issueType, graph, skippedStatuses, []));
       }
-
-      const workspaceRoot = currentWorkspaceRoot();
-      const cache = loadWorkflowCache(workspaceRoot);
-      if (!cache[projectKey]) cache[projectKey] = {};
-      const oldGraph = cache[projectKey][issueType]?.graph ?? {};
-      const preserved = preserveSkippedStatuses(graph, skippedStatuses, oldGraph);
-      cache[projectKey][issueType] = { discovered: new Date().toISOString().slice(0, 10), graph };
-      saveWorkflowCache(workspaceRoot, cache);
 
       logDiag('jira.tools', 'info', `Workflow discovered — ${projectKey}/${issueType}`, {
         projectKey, issueType, statusCount: Object.keys(graph).length,
@@ -304,6 +303,7 @@ class AddCommentTool implements vscode.LanguageModelTool<AddCommentInput> {
     const ticketKey = options.input.ticketKey?.trim();
     const comment = options.input.comment?.trim();
     if (!ticketKey) return textResult('A ticket key is required, e.g. PROJ-123.');
+    if (!isSafePathSegment(ticketKey)) return textResult(`"${ticketKey}" is not a valid ticket key.`);
     if (!comment) return textResult('Comment text is required.');
 
     const ctx = await tryGetConfiguredContext(this.configService);
@@ -370,6 +370,7 @@ class UpdateFieldTool implements vscode.LanguageModelTool<UpdateFieldInput> {
     const fieldName = options.input.fieldName?.trim();
     const value = options.input.value ?? '';
     if (!ticketKey) return textResult('A ticket key is required, e.g. PROJ-123.');
+    if (!isSafePathSegment(ticketKey)) return textResult(`"${ticketKey}" is not a valid ticket key.`);
     if (!fieldName) return textResult('A field name is required.');
 
     const ctx = await tryGetConfiguredContext(this.configService);
@@ -551,6 +552,7 @@ class TransitionTicketTool implements vscode.LanguageModelTool<TransitionTicketI
     const targetStatus = options.input.targetStatus?.trim();
     const resolution = options.input.resolution?.trim() || undefined;
     if (!ticketKey) return textResult('A ticket key is required, e.g. PROJ-123.');
+    if (!isSafePathSegment(ticketKey)) return textResult(`"${ticketKey}" is not a valid ticket key.`);
     if (!targetStatus) return textResult('A target status is required, e.g. "Done".');
 
     const ctx = await tryGetConfiguredContext(this.configService);

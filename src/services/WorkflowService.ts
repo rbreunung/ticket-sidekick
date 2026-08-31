@@ -164,3 +164,41 @@ export async function resolveAndApplyTransition(
     hasCache: !!graph,
   };
 }
+
+export interface WorkflowDiscoveryResult {
+  graph: WorkflowGraph;
+  skippedStatuses: string[];
+  /** Statuses with no representative ticket this run whose transitions were carried over from
+   * a prior cache entry (see `preserveSkippedStatuses`). Empty when nothing was cached yet, or
+   * when discovery found no tickets at all (the cache is left untouched in that case). */
+  preserved: string[];
+}
+
+/**
+ * Samples a project/issue type's workflow (`discoverWorkflow`) and — when at least one status
+ * was found — merges it into `.jira-workflow-cache.json`, preserving prior transitions for any
+ * status this run didn't sample. Shared by `@jira`'s chat `'discoverWorkflow'` operation
+ * (`src/participant/jira/workflowHandler.ts`) and the `jira_discoverWorkflow` Language Model
+ * tool (`src/tools/jiraTools.ts`) — previously each reimplemented this same cache read/merge/
+ * write sequence independently (R3).
+ */
+export async function discoverAndCacheWorkflow(
+  jiraClient: IJiraClient,
+  workspaceRoot: string,
+  projectKey: string,
+  issueType: string,
+): Promise<WorkflowDiscoveryResult> {
+  const { graph, skippedStatuses } = await discoverWorkflow(jiraClient, projectKey, issueType);
+  if (Object.keys(graph).length === 0) {
+    return { graph, skippedStatuses, preserved: [] };
+  }
+
+  const cache = loadWorkflowCache(workspaceRoot);
+  if (!cache[projectKey]) cache[projectKey] = {};
+  const oldGraph = cache[projectKey][issueType]?.graph ?? {};
+  const preserved = preserveSkippedStatuses(graph, skippedStatuses, oldGraph);
+  cache[projectKey][issueType] = { discovered: new Date().toISOString().slice(0, 10), graph };
+  saveWorkflowCache(workspaceRoot, cache);
+
+  return { graph, skippedStatuses, preserved };
+}

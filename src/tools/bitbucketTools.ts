@@ -4,6 +4,7 @@ import type { BitbucketConfig } from '../bitbucket/IBitbucketClient';
 import { ConfigService } from '../services/ConfigService';
 import { PrReviewService } from '../services/PrReviewService';
 import { logDiag } from '../utils/diagLog';
+import { isSafePathSegment } from './pathSafety';
 import {
   buildBitbucketNotConfiguredMessage,
   buildPostCommentConfirmation,
@@ -109,6 +110,7 @@ class GetPullRequestTool implements vscode.LanguageModelTool<GetPullRequestInput
     const repo = options.input.repo?.trim();
     const prId = options.input.prId;
     if (!project || !repo) return textResult('A project (or workspace) and a repo are required.');
+    if (!isSafePathSegment(project) || !isSafePathSegment(repo)) return textResult('The project/workspace or repo value is not valid.');
     if (!Number.isInteger(prId) || prId <= 0) return textResult('A positive pull request id is required, e.g. 42.');
 
     const ctx = await tryGetConfiguredContext(this.configService);
@@ -147,13 +149,18 @@ class GetPullRequestDiffTool implements vscode.LanguageModelTool<GetPullRequestD
     const project = options.input.project?.trim();
     const repo = options.input.repo?.trim();
     const prId = options.input.prId;
-    const contextLines = options.input.contextLines;
     if (!project || !repo) return textResult('A project (or workspace) and a repo are required.');
+    if (!isSafePathSegment(project) || !isSafePathSegment(repo)) return textResult('The project/workspace or repo value is not valid.');
     if (!Number.isInteger(prId) || prId <= 0) return textResult('A positive pull request id is required, e.g. 42.');
 
     const ctx = await tryGetConfiguredContext(this.configService);
     if (isNotConfiguredResult(ctx)) return ctx;
-    const { bitbucketClient } = ctx;
+    const { config, bitbucketClient } = ctx;
+    // Falls back to the configured reviewContextLines (matching BitbucketParticipant.ts's own
+    // review flow) when the caller omits contextLines — otherwise BitbucketApiClient silently
+    // drops to Bitbucket's own server-side default instead of the value this tool's own
+    // modelDescription promises.
+    const contextLines = options.input.contextLines ?? config.reviewContextLines;
 
     try {
       const diff = await bitbucketClient.getPullRequestDiff(project, repo, prId, contextLines);
@@ -201,6 +208,7 @@ class PostCommentTool implements vscode.LanguageModelTool<PostCommentInput> {
     const prId = options.input.prId;
     const comment = options.input.comment?.trim();
     if (!project || !repo) return textResult('A project (or workspace) and a repo are required.');
+    if (!isSafePathSegment(project) || !isSafePathSegment(repo)) return textResult('The project/workspace or repo value is not valid.');
     if (!Number.isInteger(prId) || prId <= 0) return textResult('A positive pull request id is required, e.g. 42.');
     if (!comment) return textResult('Comment text is required.');
 
