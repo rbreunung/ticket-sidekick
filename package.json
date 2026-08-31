@@ -2,7 +2,7 @@
   "name": "ticket-sidekick",
   "displayName": "Ticket Sidekick",
   "description": "Manage Jira tickets with GitHub Copilot Chat",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "license": "MIT",
   "publisher": "RobertBreunung",
   "engines": {
@@ -153,7 +153,9 @@
         "toolReferenceName": "jiraGetTicket",
         "icon": "$(preview)",
         "when": "ticketSidekick.jiraCredentialsSet",
-        "tags": ["jira"],
+        "tags": [
+          "jira"
+        ],
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -162,7 +164,9 @@
               "description": "Jira ticket key, e.g. PROJ-123"
             }
           },
-          "required": ["ticketKey"]
+          "required": [
+            "ticketKey"
+          ]
         }
       },
       {
@@ -174,7 +178,9 @@
         "toolReferenceName": "jiraSearchTickets",
         "icon": "$(search)",
         "when": "ticketSidekick.jiraCredentialsSet",
-        "tags": ["jira"],
+        "tags": [
+          "jira"
+        ],
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -183,7 +189,9 @@
               "description": "JQL query, e.g. 'project = PROJ AND status = \"In Progress\"'"
             }
           },
-          "required": ["jql"]
+          "required": [
+            "jql"
+          ]
         }
       },
       {
@@ -195,7 +203,9 @@
         "toolReferenceName": "jiraGetComments",
         "icon": "$(comment)",
         "when": "ticketSidekick.jiraCredentialsSet",
-        "tags": ["jira"],
+        "tags": [
+          "jira"
+        ],
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -208,7 +218,9 @@
               "description": "Maximum number of comments to return (default 20)."
             }
           },
-          "required": ["ticketKey"]
+          "required": [
+            "ticketKey"
+          ]
         }
       },
       {
@@ -220,7 +232,9 @@
         "toolReferenceName": "jiraListTemplates",
         "icon": "$(list-unordered)",
         "when": "ticketSidekick.jiraCredentialsSet",
-        "tags": ["jira"],
+        "tags": [
+          "jira"
+        ],
         "inputSchema": {
           "type": "object",
           "properties": {}
@@ -235,7 +249,9 @@
         "toolReferenceName": "jiraDiscoverWorkflow",
         "icon": "$(type-hierarchy)",
         "when": "ticketSidekick.jiraCredentialsSet",
-        "tags": ["jira"],
+        "tags": [
+          "jira"
+        ],
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -248,7 +264,10 @@
               "description": "Issue type name, e.g. Bug, Story, Task"
             }
           },
-          "required": ["projectKey", "issueType"]
+          "required": [
+            "projectKey",
+            "issueType"
+          ]
         }
       },
       {
@@ -260,7 +279,9 @@
         "toolReferenceName": "jiraAddComment",
         "icon": "$(comment-add)",
         "when": "ticketSidekick.jiraCredentialsSet",
-        "tags": ["jira"],
+        "tags": [
+          "jira"
+        ],
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -273,7 +294,10 @@
               "description": "The comment text to post, in Jira wiki markup or plain text."
             }
           },
-          "required": ["ticketKey", "comment"]
+          "required": [
+            "ticketKey",
+            "comment"
+          ]
         }
       },
       {
@@ -285,7 +309,9 @@
         "toolReferenceName": "jiraUpdateField",
         "icon": "$(edit)",
         "when": "ticketSidekick.jiraCredentialsSet",
-        "tags": ["jira"],
+        "tags": [
+          "jira"
+        ],
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -302,7 +328,11 @@
               "description": "New value. For labels/components, a comma-separated list."
             }
           },
-          "required": ["ticketKey", "fieldName", "value"]
+          "required": [
+            "ticketKey",
+            "fieldName",
+            "value"
+          ]
         }
       },
       {
@@ -314,7 +344,9 @@
         "toolReferenceName": "jiraCreateTicket",
         "icon": "$(add)",
         "when": "ticketSidekick.jiraCredentialsSet",
-        "tags": ["jira"],
+        "tags": [
+          "jira"
+        ],
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -339,7 +371,10 @@
               "description": "Ticket description text"
             }
           },
-          "required": ["projectKey", "summary"]
+          "required": [
+            "projectKey",
+            "summary"
+          ]
         }
       },
       {
@@ -351,7 +386,9 @@
         "toolReferenceName": "jiraTransitionTicket",
         "icon": "$(arrow-right)",
         "when": "ticketSidekick.jiraCredentialsSet",
-        "tags": ["jira"],
+        "tags": [
+          "jira"
+        ],
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -368,7 +405,10 @@
               "description": "Resolution to set when transitioning to a closed state, e.g. Fixed, Won't Do"
             }
           },
-          "required": ["ticketKey", "targetStatus"]
+          "required": [
+            "ticketKey",
+            "targetStatus"
+          ]
         }
       },
       {
@@ -380,7 +420,9 @@
         "toolReferenceName": "bitbucketGetPullRequest",
         "icon": "$(preview)",
         "when": "ticketSidekick.bitbucketCredentialsSet",
-        "tags": ["bitbucket"],
+        "tags": [
+          "bitbucket"
+        ],
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -397,7 +439,11 @@
               "description": "Pull request id, e.g. 42"
             }
           },
-          "required": ["project", "repo", "prId"]
+          "required": [
+            "project",
+            "repo",
+            "prId"
+          ]
         }
       },
       {
@@ -409,7 +455,9 @@
         "toolReferenceName": "bitbucketGetPullRequestDiff",
         "icon": "$(diff)",
         "when": "ticketSidekick.bitbucketCredentialsSet",
-        "tags": ["bitbucket"],
+        "tags": [
+          "bitbucket"
+        ],
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -430,7 +478,11 @@
               "description": "Diff context lines to request around each hunk (default: the configured ticketSidekick.bitbucket.reviewContextLines, 12)."
             }
           },
-          "required": ["project", "repo", "prId"]
+          "required": [
+            "project",
+            "repo",
+            "prId"
+          ]
         }
       },
       {
@@ -442,7 +494,9 @@
         "toolReferenceName": "bitbucketPostComment",
         "icon": "$(comment-add)",
         "when": "ticketSidekick.bitbucketCredentialsSet",
-        "tags": ["bitbucket"],
+        "tags": [
+          "bitbucket"
+        ],
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -463,7 +517,12 @@
               "description": "The comment text to post to the pull request's activity feed."
             }
           },
-          "required": ["project", "repo", "prId", "comment"]
+          "required": [
+            "project",
+            "repo",
+            "prId",
+            "comment"
+          ]
         }
       }
     ],
