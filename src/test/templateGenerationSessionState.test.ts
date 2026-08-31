@@ -4,6 +4,7 @@ import {
   buildTemplateFieldReviewRows,
   formatTemplateFieldValue,
   buildTemplateFieldReviewTable,
+  buildEmptyRequiredFieldsWarning,
   findUnsetIncludedRows,
   buildDefaultFieldsFromRows,
   buildGeneratedTemplate,
@@ -97,6 +98,16 @@ describe('buildTemplateFieldReviewTable', () => {
     const table = buildTemplateFieldReviewTable([]);
     expect(table).toContain('`<number>=<value>`');
     expect(table).toContain('post it');
+  });
+});
+
+describe('buildEmptyRequiredFieldsWarning (R4)', () => {
+  it('names the issue type and project, and covers both the zero-required-fields and no-permission cases without distinguishing them', () => {
+    const warning = buildEmptyRequiredFieldsWarning('Bug', 'PROJ');
+    expect(warning).toContain('Bug');
+    expect(warning).toContain('PROJ');
+    expect(warning).toContain('may mean the type has none');
+    expect(warning).toContain('lack Create permission');
   });
 });
 

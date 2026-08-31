@@ -818,6 +818,16 @@ export function buildTemplateFieldReviewTable(rows: TemplateFieldReviewRow[]): s
     'or `<number>=<value>` to set a value (e.g. `3=High`).';
 }
 
+/** Warning line for the required-fields review screen when the fetch legitimately returns zero
+ * candidates (R4). The Jira API gives no way to distinguish "this issue type genuinely has no
+ * required fields" from "the caller lacks Create-issue permission on it" — both produce the same
+ * empty response — so the wording covers both rather than guessing which applies. Purely
+ * informational: the caller still renders the (empty) review list and still allows saving it. */
+export function buildEmptyRequiredFieldsWarning(issueType: string, projectKey: string): string {
+  return `_No required fields found for **${issueType}** in **${projectKey}** — this may mean the ` +
+    `type has none, or that you lack Create permission for it._`;
+}
+
 /** Rows still included but with no value filled in. A confirm ("post it") must not silently save
  * a required field as blank, and must not silently drop it from the template either — the caller
  * re-prompts for these instead of proceeding to save. */

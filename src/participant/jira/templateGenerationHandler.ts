@@ -19,6 +19,7 @@ import { TemplateService, type JiraTemplate } from '../../templates/TemplateServ
 import {
   isCancellation, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION,
   filterOutPerTicketFields, buildTemplateFieldReviewRows, buildTemplateFieldReviewTable,
+  buildEmptyRequiredFieldsWarning,
   findUnsetIncludedRows, buildGeneratedTemplate,
   extractProjectKeyFromTicketKey, parseIssueTypePick, parseTemplateCollisionReply, parseOfferCreateReply,
   parseReviewInput, applyReviewToggle, applyReviewSetValue,
@@ -211,6 +212,15 @@ async function startFromRequiredFields(
   }
 
   const rows = buildTemplateFieldReviewRows(filterOutPerTicketFields(candidates));
+  if (rows.length === 0) {
+    // Legitimately empty: either the issue type genuinely has no required fields, or the caller
+    // lacks Create-issue permission on it — the API gives no way to tell these apart (R4), so this
+    // single warning covers both rather than guessing. Informational only: the (empty) review list
+    // still renders below and is still confirmable/saveable, exactly as before this warning existed.
+    logDiag(SCOPE, 'warn', `No required fields found — ${projectKey}/${issueType}`, { projectKey, issueType });
+    stream.markdown(`${buildEmptyRequiredFieldsWarning(issueType, projectKey)}\n\n`);
+  }
+
   const reviewSession: TemplateGenerationReviewSession = {
     templateName, projectKey, issueType, sourceTicketKey: null, rows, schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
   };
