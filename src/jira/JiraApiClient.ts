@@ -321,21 +321,8 @@ export class JiraApiClient implements IJiraClient {
   }
 
   async getAllComments(issueKey: string): Promise<JiraComment[]> {
-    const pageSize = 100;
-    const all: JiraComment[] = [];
-    let startAt = 0;
-    // Hard cap as a backstop: an empty page should already break the loop, but this
-    // guarantees termination for any other non-advancing server response.
-    const maxIterations = 1000;
-    for (let i = 0; i < maxIterations; i++) {
-      const { comments, total } = await this.getIssueComments(issueKey, pageSize, startAt);
-      all.push(...comments);
-      // Stop when we've collected everything, or a page came back empty (which would
-      // otherwise leave startAt unchanged and spin forever).
-      if (comments.length === 0 || all.length >= total) break;
-      startAt += comments.length;
-    }
-    return all;
+    return this.collectPaginated<JiraComment>((startAt) =>
+      this.getIssueComments(issueKey, 100, startAt).then(({ comments, total }) => ({ items: comments, total })));
   }
 
   async downloadAttachment(content: string): Promise<Uint8Array> {
@@ -392,11 +379,13 @@ export class JiraApiClient implements IJiraClient {
   /**
    * Generic pagination collector for the granular createmeta endpoints (and any future
    * offset/total/isLast-shaped listing). Mirrors getAllComments()'s loop convention: stop
-   * on an empty page, once `collected.length >= total`, or once `isLast` reports true —
-   * with a hard iteration cap as a backstop against a server response that never advances.
+   * on an empty page, once `collected.length >= total`, once `isLast` reports true, or once
+   * `stopWhen` (an early-exit search predicate) is satisfied — with a hard iteration cap as
+   * a backstop against a server response that never advances.
    */
   private async collectPaginated<T>(
     fetchPage: (startAt: number) => Promise<{ items: T[]; total?: number; isLast?: boolean }>,
+    stopWhen?: (collected: T[]) => boolean,
   ): Promise<T[]> {
     const collected: T[] = [];
     let startAt = 0;
@@ -404,28 +393,44 @@ export class JiraApiClient implements IJiraClient {
     for (let i = 0; i < maxIterations; i++) {
       const { items, total, isLast } = await fetchPage(startAt);
       collected.push(...items);
-      if (items.length === 0 || isLast === true || (total !== undefined && collected.length >= total)) break;
+      if (items.length === 0 || isLast === true || (total !== undefined && collected.length >= total) || stopWhen?.(collected)) break;
       startAt += items.length;
     }
     return collected;
   }
 
   /**
+   * Paginated fetch against the granular createmeta family, branched by authType like
+   * searchJql(): v2 `values`/`isLast` for Data Center, v3 `requestV3()` keyed by `cloudKey`
+   * (no `isLast`) for Cloud — Cloud does not support the v2 granular path. Shared by
+   * resolveIssueTypeId (the issue-types list) and getRequiredFields (the per-type fields list).
+   */
+  private async fetchCreateMetaList<T, K extends string>(
+    basePath: string,
+    cloudKey: K,
+    stopWhen?: (collected: T[]) => boolean,
+  ): Promise<T[]> {
+    return this.authType === 'cloud'
+      ? this.collectPaginated<T>((startAt) =>
+          this.requestV3<Record<K, T[]> & { total?: number }>(`${basePath}?startAt=${startAt}`)
+            .then((data) => ({ items: data[cloudKey] ?? [], total: data.total })), stopWhen)
+      : this.collectPaginated<T>((startAt) =>
+          this.request<{ values: T[]; total?: number; isLast?: boolean }>(`${basePath}?startAt=${startAt}`)
+            .then((data) => ({ items: data.values ?? [], total: data.total, isLast: data.isLast })), stopWhen);
+  }
+
+  /**
    * Resolves an issue type's id by case-insensitive name match against the project-scoped
    * createmeta issue-type list — the same granular family used to fetch fields, not a
    * global issue-type list (consistent with TicketService.getIssueTypes()'s project scope).
+   * Stops paginating as soon as a match is found rather than draining every page.
    */
   private async resolveIssueTypeId(projectKey: string, issueType: string): Promise<string | undefined> {
     type ListItem = { id: string; name: string };
     const basePath = `/issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes`;
-    const items = this.authType === 'cloud'
-      ? await this.collectPaginated<ListItem>((startAt) =>
-          this.requestV3<{ issueTypes: ListItem[]; total?: number }>(`${basePath}?startAt=${startAt}`)
-            .then((data) => ({ items: data.issueTypes ?? [], total: data.total })))
-      : await this.collectPaginated<ListItem>((startAt) =>
-          this.request<{ values: ListItem[]; total?: number; isLast?: boolean }>(`${basePath}?startAt=${startAt}`)
-            .then((data) => ({ items: data.values ?? [], total: data.total, isLast: data.isLast })));
     const lowerName = issueType.toLowerCase();
+    const items = await this.fetchCreateMetaList<ListItem, 'issueTypes'>(basePath, 'issueTypes',
+      (collected) => collected.some((it) => it.name.toLowerCase() === lowerName));
     return items.find((it) => it.name.toLowerCase() === lowerName)?.id;
   }
 
@@ -440,13 +445,7 @@ export class JiraApiClient implements IJiraClient {
     if (!resolvedId) return [];
 
     const basePath = `/issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes/${encodeURIComponent(resolvedId)}`;
-    const fieldItems = this.authType === 'cloud'
-      ? await this.collectPaginated<CreateMetaFieldItem>((startAt) =>
-          this.requestV3<{ fields: CreateMetaFieldItem[]; total?: number }>(`${basePath}?startAt=${startAt}`)
-            .then((data) => ({ items: data.fields ?? [], total: data.total })))
-      : await this.collectPaginated<CreateMetaFieldItem>((startAt) =>
-          this.request<{ values: CreateMetaFieldItem[]; total?: number; isLast?: boolean }>(`${basePath}?startAt=${startAt}`)
-            .then((data) => ({ items: data.values ?? [], total: data.total, isLast: data.isLast })));
+    const fieldItems = await this.fetchCreateMetaList<CreateMetaFieldItem, 'fields'>(basePath, 'fields');
 
     return fieldItems
       .filter((field) => field.required)

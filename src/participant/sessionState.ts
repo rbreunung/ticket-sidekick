@@ -1,4 +1,4 @@
-import type { JiraComment, JiraFieldMeta, JiraFilter, JiraSprintCandidate } from '../jira/IJiraClient';
+import type { JiraComment, JiraFieldMeta, JiraFilter, JiraIssueType, JiraSprintCandidate } from '../jira/IJiraClient';
 import { formatJiraBody } from '../utils/markdownFormatter';
 import type { VeracodeFlaw, VeracodeReviewRow } from '../utils/veracodeReport';
 import type { WaltzComponent, WaltzReviewRow } from '../utils/waltzReport';
@@ -920,7 +920,7 @@ export function parseOfferCreateReply(reply: string): OfferCreateReply {
 export interface TemplateGenerationTypePickSession {
   templateName: string;
   projectKey: string;
-  availableIssueTypes: Array<{ id: string; name: string }>;
+  availableIssueTypes: Array<Pick<JiraIssueType, 'id' | 'name'>>;
   schemaVersion: number;
 }
 

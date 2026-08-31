@@ -90,6 +90,22 @@ function makeFetch(body: unknown, status = 200, contentType = 'application/json'
   });
 }
 
+// Shared by getAllComments and getRequiredFields pagination tests: returns each page in
+// sequence, clamping to the last page if fetch is called more times than pages supplied.
+function makePagedFetch<T>(pages: T[]): ReturnType<typeof vi.fn> {
+  let call = 0;
+  return vi.fn().mockImplementation(() => {
+    const page = pages[Math.min(call, pages.length - 1)];
+    call++;
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: { get: (h: string) => (h === 'content-type' ? 'application/json' : null) },
+      json: () => Promise.resolve(page),
+    });
+  });
+}
+
 describe('JiraApiClient', () => {
   afterEach(() => vi.unstubAllGlobals());
 
@@ -248,20 +264,6 @@ describe('JiraApiClient', () => {
   describe('getAllComments', () => {
     const comment = (id: string) => ({ id, author: { displayName: 'A' }, body: 'x', created: '2026-01-01' });
 
-    function makePagedFetch(pages: Array<{ comments: unknown[]; total: number }>): ReturnType<typeof vi.fn> {
-      let call = 0;
-      return vi.fn().mockImplementation(() => {
-        const page = pages[Math.min(call, pages.length - 1)];
-        call++;
-        return Promise.resolve({
-          ok: true,
-          status: 200,
-          headers: { get: (h: string) => (h === 'content-type' ? 'application/json' : null) },
-          json: () => Promise.resolve(page),
-        });
-      });
-    }
-
     it('paginates across full pages until total is reached', async () => {
       const mockFetch = makePagedFetch([
         { comments: [comment('1'), comment('2')], total: 3 },
@@ -397,20 +399,6 @@ describe('JiraApiClient', () => {
     const fieldItem = (fieldId: string, name: string, required: boolean, schema: Record<string, unknown>) => ({
       fieldId, name, required, schema,
     });
-
-    function makePagedFetch(pages: unknown[]): ReturnType<typeof vi.fn> {
-      let call = 0;
-      return vi.fn().mockImplementation(() => {
-        const page = pages[Math.min(call, pages.length - 1)];
-        call++;
-        return Promise.resolve({
-          ok: true,
-          status: 200,
-          headers: { get: (h: string) => (h === 'content-type' ? 'application/json' : null) },
-          json: () => Promise.resolve(page),
-        });
-      });
-    }
 
     describe('issueTypeId given — skips list resolution', () => {
       it('Data Center: calls the per-type endpoint directly and extracts required fields from `values`', async () => {
