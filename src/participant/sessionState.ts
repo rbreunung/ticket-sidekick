@@ -8,6 +8,7 @@ import type { JiraTemplate } from '../templates/TemplateService';
 // Type-only — ConfigService.ts imports `vscode`, but a type-only import is erased before
 // this (vscode-free, Vitest-loadable) module is ever loaded at runtime.
 import type { JiraConfig } from '../services/ConfigService';
+import type { WorkflowGraph } from '../services/WorkflowService';
 
 export type { VeracodeReviewRow } from '../utils/veracodeReport';
 export type { WaltzReviewRow } from '../utils/waltzReport';
@@ -925,4 +926,145 @@ export interface TemplateGenerationTemplateStageSession {
 export type TemplateGenerationCollisionSession = TemplateGenerationTemplateStageSession;
 export type TemplateGenerationOfferCreateSession = TemplateGenerationTemplateStageSession;
 export type TemplateGenerationAwaitSummarySession = TemplateGenerationTemplateStageSession;
+
+// ---------------------------------------------------------------------------------------------
+// Language Model tools (Agent Mode) — pure confirmation-text and result-message builders shared
+// by every `jira_*` tool in `src/tools/jiraTools.ts`. Kept here (rather than in jiraTools.ts,
+// which imports `vscode` and is not Vitest-loadable) so this wording is unit-tested the same way
+// every other user-facing message in this file is. `jiraTools.ts` stays thin glue: it resolves
+// live data (current field values, project issue types, workflow graphs) via TicketService/
+// WorkflowService/TemplateService and hands it to these functions to render.
+// ---------------------------------------------------------------------------------------------
+
+/** A tool's `prepareInvocation()` confirmation — `title`/`message` map directly onto
+ * `vscode.LanguageModelToolConfirmationMessages`. */
+export interface ToolConfirmation {
+  title: string;
+  message: string;
+}
+
+/** Renders a "current → new" change, e.g. `Critical → High` (KTD3). Shared by every builder
+ * below that shows a before/after value. */
+export function formatFieldChangeDisplay(currentValue: string, newValue: string): string {
+  return `${currentValue} → ${newValue}`;
+}
+
+/** Confirmation for `jira_updateField` — always shows current → new (KTD3), even when the
+ * current value could not be fetched (the caller passes a placeholder string in that case; the
+ * confirmation still renders, it just can't show a real "before"). */
+export function buildUpdateFieldConfirmation(
+  ticketKey: string,
+  fieldName: string,
+  currentValue: string,
+  newValue: string,
+): ToolConfirmation {
+  return {
+    title: `Update ${fieldName} on ${ticketKey}`,
+    message: `Set **${fieldName}** on **${ticketKey}**: ${formatFieldChangeDisplay(currentValue, newValue)}`,
+  };
+}
+
+/** Confirmation for `jira_addComment` — names the ticket and shows the literal comment text. */
+export function buildAddCommentConfirmation(ticketKey: string, comment: string): ToolConfirmation {
+  return {
+    title: `Add comment to ${ticketKey}`,
+    message: `Post this comment on **${ticketKey}**:\n\n${comment}`,
+  };
+}
+
+/** Confirmation for `jira_createTicket` — names project/type/summary (KTD4). `issueType` is
+ * `null` when it hasn't been resolved yet at confirmation time (e.g. it depends on a template);
+ * `invoke()` itself still enforces the never-guess fallback (KTD4) regardless of what this
+ * confirmation showed. */
+export function buildCreateTicketConfirmation(
+  projectKey: string,
+  issueType: string | null,
+  summary: string,
+  templateName: string | null,
+): ToolConfirmation {
+  const typeLabel = issueType ? `a **${issueType}**` : 'a ticket (issue type to be resolved)';
+  const templateNote = templateName ? ` using template **${templateName}**` : '';
+  return {
+    title: `Create ticket in ${projectKey}`,
+    message: `Create ${typeLabel} in **${projectKey}**${templateNote}: "${summary}"`,
+  };
+}
+
+/** Confirmation for `jira_transitionTicket` — names the ticket and the target status.
+ * `currentStatus` is `null` when it couldn't be fetched at confirmation time. */
+export function buildTransitionConfirmation(
+  ticketKey: string,
+  currentStatus: string | null,
+  targetStatus: string,
+  resolution?: string,
+): ToolConfirmation {
+  const fromLabel = currentStatus ? `**${currentStatus}**` : 'its current status';
+  const resNote = resolution ? ` (resolution: ${resolution})` : '';
+  return {
+    title: `Move ${ticketKey} to ${targetStatus}`,
+    message: `Transition **${ticketKey}** from ${fromLabel} to **${targetStatus}**${resNote}.`,
+  };
+}
+
+/** The never-guess fallback text for `jira_createTicket` (KTD4): when neither `issueType` nor a
+ * resolvable `templateName` was given, nothing is created and this lists the project's valid
+ * issue types (from `TicketService.getIssueTypes`) as the actionable next step — mirrors the
+ * chat create flow's own never-guess sentinel handling
+ * (docs/solutions/logic-errors/combined-create-list-silently-guesses-issue-type-and-drops-no-template-fallback.md)
+ * adapted from a `showInputBox` prompt to a returned list, since Agent Mode has no interactive
+ * input box to fall back to. */
+export function formatIssueTypeOptionsMessage(projectKey: string, issueTypes: string[]): string {
+  if (issueTypes.length === 0) {
+    return (
+      `No ticket was created: no issue type or resolvable template was given for project ${projectKey}, ` +
+      `and its issue types could not be fetched from Jira. Call jira_createTicket again with an explicit "issueType".`
+    );
+  }
+  const list = issueTypes.map(t => `- ${t}`).join('\n');
+  return (
+    `No ticket was created: no issue type or resolvable template was given. Valid issue types for **${projectKey}**:\n\n${list}\n\n` +
+    `Call jira_createTicket again with one of these as "issueType", or with a "templateName" from jira_listTemplates.`
+  );
+}
+
+/** Result text for `jira_listTemplates` — a missing/empty `.jira-templates.json` is a normal,
+ * error-free outcome (an empty list), not a failure. */
+export function formatTemplateListMessage(templates: Array<{ name: string; issueType?: string }>): string {
+  if (templates.length === 0) {
+    return 'No templates found. Create a `.jira-templates.json` file in the workspace root to define reusable ticket templates.';
+  }
+  const list = templates
+    .map(t => `- **${t.name}**${t.issueType ? ` (${t.issueType})` : ' (issue type not set on the template)'}`)
+    .join('\n');
+  return `Available templates:\n\n${list}`;
+}
+
+/** Result text for `jira_discoverWorkflow` — mirrors `handleDiscoverWorkflow`'s chat summary
+ * (`src/participant/jira/workflowHandler.ts`) in plain returned text rather than a streamed
+ * response, since a tool result is a single returned string, not a live chat stream. */
+export function formatWorkflowDiscoveryMessage(
+  projectKey: string,
+  issueType: string,
+  graph: WorkflowGraph,
+  skippedStatuses: string[],
+  preserved: string[],
+): string {
+  const statuses = Object.keys(graph);
+  if (statuses.length === 0) {
+    return `No tickets found for ${projectKey} / ${issueType} — workflow could not be sampled.`;
+  }
+  const lines = statuses.map((s) => {
+    const targets = graph[s].map((t) => `${t.name} → ${t.to}`).join(', ');
+    return `**${s}**: ${targets}`;
+  });
+  let summary = `Workflow discovered for **${projectKey} / ${issueType}** (${lines.length} statuses):\n\n${lines.join('\n\n')}\n\nSaved to \`.jira-workflow-cache.json\`.`;
+  const trulySkipped = skippedStatuses.filter(s => !preserved.includes(s));
+  if (preserved.length > 0) {
+    summary += `\n\n_${preserved.length} status(es) had no tickets and kept cached transitions: ${preserved.join(', ')}._`;
+  }
+  if (trulySkipped.length > 0) {
+    summary += `\n\n_${trulySkipped.length} status(es) had no tickets and no cached transitions: ${trulySkipped.join(', ')} — re-run jira_discoverWorkflow once tickets exist in those states._`;
+  }
+  return summary;
+}
 

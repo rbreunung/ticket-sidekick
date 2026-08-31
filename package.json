@@ -67,6 +67,235 @@
         "title": "Ticket Sidekick: Create Jira tickets from OSS report (.xlsx)"
       }
     ],
+    "languageModelTools": [
+      {
+        "name": "jira_getTicket",
+        "displayName": "Get Jira Ticket",
+        "modelDescription": "Fetches a Jira ticket's fields and description by key. Use to look up ticket details before answering a question or deciding what to change.",
+        "userDescription": "View a Jira ticket's fields and description.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraGetTicket",
+        "icon": "$(preview)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": ["jira"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "Jira ticket key, e.g. PROJ-123"
+            }
+          },
+          "required": ["ticketKey"]
+        }
+      },
+      {
+        "name": "jira_searchTickets",
+        "displayName": "Search Jira Tickets",
+        "modelDescription": "Searches Jira tickets using JQL (Jira Query Language) and returns a table of matching tickets.",
+        "userDescription": "Search Jira tickets with a JQL query.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraSearchTickets",
+        "icon": "$(search)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": ["jira"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "jql": {
+              "type": "string",
+              "description": "JQL query, e.g. 'project = PROJ AND status = \"In Progress\"'"
+            }
+          },
+          "required": ["jql"]
+        }
+      },
+      {
+        "name": "jira_getComments",
+        "displayName": "Get Jira Comments",
+        "modelDescription": "Fetches the comments on a Jira ticket, most recent first.",
+        "userDescription": "View comments on a Jira ticket.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraGetComments",
+        "icon": "$(comment)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": ["jira"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "Jira ticket key, e.g. PROJ-123"
+            },
+            "maxResults": {
+              "type": "number",
+              "description": "Maximum number of comments to return (default 20)."
+            }
+          },
+          "required": ["ticketKey"]
+        }
+      },
+      {
+        "name": "jira_listTemplates",
+        "displayName": "List Jira Templates",
+        "modelDescription": "Lists the ticket templates defined in this workspace's .jira-templates.json, each with its name and issue type. Call this before jira_createTicket to see whether a suitable template exists — a template carries default field values a bare issue type does not. Returns an empty list, not an error, when no templates file exists.",
+        "userDescription": "List the Jira ticket templates configured for this workspace.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraListTemplates",
+        "icon": "$(list-unordered)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": ["jira"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "jira_discoverWorkflow",
+        "displayName": "Discover Jira Workflow",
+        "modelDescription": "Discovers and caches the Jira status-transition graph for a project/issue type by sampling real tickets in each status. Run this when jira_transitionTicket reports no direct transition to the target status, then retry the transition — it enables multi-hop transitions.",
+        "userDescription": "Sample a project's Jira workflow and cache its status transitions.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraDiscoverWorkflow",
+        "icon": "$(type-hierarchy)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": ["jira"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "projectKey": {
+              "type": "string",
+              "description": "Jira project key, e.g. PROJ"
+            },
+            "issueType": {
+              "type": "string",
+              "description": "Issue type name, e.g. Bug, Story, Task"
+            }
+          },
+          "required": ["projectKey", "issueType"]
+        }
+      },
+      {
+        "name": "jira_addComment",
+        "displayName": "Add Jira Comment",
+        "modelDescription": "Adds a comment to a Jira ticket. This writes to Jira — the user is asked to confirm the exact comment text before it is posted.",
+        "userDescription": "Add a comment to a Jira ticket.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraAddComment",
+        "icon": "$(comment-add)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": ["jira"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "Jira ticket key, e.g. PROJ-123"
+            },
+            "comment": {
+              "type": "string",
+              "description": "The comment text to post, in Jira wiki markup or plain text."
+            }
+          },
+          "required": ["ticketKey", "comment"]
+        }
+      },
+      {
+        "name": "jira_updateField",
+        "displayName": "Update Jira Field",
+        "modelDescription": "Updates a single field on one Jira ticket. Supported field names: summary, description, priority, assignee, labels, components, fix version. This writes to Jira — the user is shown the current and new value and asked to confirm before it is written.",
+        "userDescription": "Update one field on a Jira ticket.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraUpdateField",
+        "icon": "$(edit)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": ["jira"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "Jira ticket key, e.g. PROJ-123"
+            },
+            "fieldName": {
+              "type": "string",
+              "description": "Field to update: summary, description, priority, assignee, labels, components, or fix version."
+            },
+            "value": {
+              "type": "string",
+              "description": "New value. For labels/components, a comma-separated list."
+            }
+          },
+          "required": ["ticketKey", "fieldName", "value"]
+        }
+      },
+      {
+        "name": "jira_createTicket",
+        "displayName": "Create Jira Ticket",
+        "modelDescription": "Creates one new Jira ticket. Call jira_listTemplates first and prefer passing templateName over a bare issueType, since a template carries the process's default field values. If neither issueType nor a resolvable templateName is given, no ticket is created — the tool instead returns the project's valid issue types to choose from. This writes to Jira — the user is asked to confirm the project, issue type, and summary before the ticket is created.",
+        "userDescription": "Create a new Jira ticket, optionally from a template.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraCreateTicket",
+        "icon": "$(add)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": ["jira"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "projectKey": {
+              "type": "string",
+              "description": "Jira project key, e.g. PROJ"
+            },
+            "summary": {
+              "type": "string",
+              "description": "Ticket summary/title"
+            },
+            "issueType": {
+              "type": "string",
+              "description": "Issue type name, e.g. Bug, Story, Task. Prefer templateName when a suitable template exists — omit this when passing templateName and letting the template supply it."
+            },
+            "templateName": {
+              "type": "string",
+              "description": "Name of a template returned by jira_listTemplates. Preferred over a bare issueType."
+            },
+            "description": {
+              "type": "string",
+              "description": "Ticket description text"
+            }
+          },
+          "required": ["projectKey", "summary"]
+        }
+      },
+      {
+        "name": "jira_transitionTicket",
+        "displayName": "Transition Jira Ticket",
+        "modelDescription": "Moves a Jira ticket to a target status, via a direct transition or a cached multi-hop workflow path (see jira_discoverWorkflow). This writes to Jira — the user is asked to confirm the ticket and target status before it is transitioned.",
+        "userDescription": "Move a Jira ticket to a new status.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraTransitionTicket",
+        "icon": "$(arrow-right)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": ["jira"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "Jira ticket key, e.g. PROJ-123"
+            },
+            "targetStatus": {
+              "type": "string",
+              "description": "Target status name, e.g. Done, In Progress"
+            },
+            "resolution": {
+              "type": "string",
+              "description": "Resolution to set when transitioning to a closed state, e.g. Fixed, Won't Do"
+            }
+          },
+          "required": ["ticketKey", "targetStatus"]
+        }
+      }
+    ],
     "configuration": [
       {
         "id": "jira",
