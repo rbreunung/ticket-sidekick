@@ -27,6 +27,7 @@ import {
   type TemplateGenerationAwaitSummarySession,
 } from '../sessionState';
 import { resolveProjectKey } from './ticketContext';
+import type { JiraIssueType } from '../../jira/IJiraClient';
 
 const SCOPE = 'jira.templateGeneration';
 
@@ -99,18 +100,18 @@ export async function handleGenerateTemplate(
   // same list: an unmatched name (LLM extraction drift, a typo, "Bug" vs "Software Bug") must not
   // be trusted as-is, since getRequiredFields silently returns no fields for an unknown type,
   // which would otherwise produce an empty, un-flagged review list ready to save.
-  let issueTypes: string[] = [];
+  let issueTypes: JiraIssueType[] = [];
   try {
-    issueTypes = (await ticketService.getIssueTypes(projectKey)).map(t => t.name);
+    issueTypes = await ticketService.getIssueTypes(projectKey);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logDiag(SCOPE, 'warn', `Could not fetch issue types — ${projectKey}`, { projectKey, error: message });
   }
 
   if (request.issueTypeHint) {
-    const matched = issueTypes.find(t => t.toLowerCase() === request.issueTypeHint!.toLowerCase());
+    const matched = issueTypes.find(t => t.name.toLowerCase() === request.issueTypeHint!.toLowerCase());
     if (matched) {
-      await startFromRequiredFields(templateName, projectKey, matched, ticketService, stream, ws);
+      await startFromRequiredFields(templateName, projectKey, matched.name, ticketService, stream, ws, matched.id);
       return;
     }
     stream.markdown(`_"${request.issueTypeHint}" isn't one of **${projectKey}**'s issue types — pick from the list instead._\n\n`);
@@ -197,10 +198,11 @@ async function startFromRequiredFields(
   ticketService: TicketService,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
+  issueTypeId?: string,
 ): Promise<void> {
   let candidates: TemplateFieldCandidate[];
   try {
-    candidates = await ticketService.getTemplateCandidatesFromRequiredFields(projectKey, issueType);
+    candidates = await ticketService.getTemplateCandidatesFromRequiredFields(projectKey, issueType, issueTypeId);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logDiag(SCOPE, 'error', `Could not fetch required fields — ${projectKey}/${issueType}`, { projectKey, issueType, error: message });
@@ -223,7 +225,7 @@ export async function streamTypePick(
   ws: vscode.Memento,
 ): Promise<void> {
   await ws.update(TEMPLATE_GEN_SESSION_KEYS.typePick, session);
-  const list = session.availableIssueTypes.map((t, i) => `${i + 1}. ${t}`).join('\n');
+  const list = session.availableIssueTypes.map((t, i) => `${i + 1}. ${t.name}`).join('\n');
   stream.markdown(
     `Generating template **${session.templateName}** for project **${session.projectKey}** — which issue type?\n\n` +
     `${list}\n\nReply with a number, or **(c)** to cancel.\n\n${TEMPLATE_GEN_TAGS.typePick}`,
@@ -255,7 +257,7 @@ export async function handleTypePickReply(
   }
 
   await ws.update(TEMPLATE_GEN_SESSION_KEYS.typePick, undefined);
-  await startFromRequiredFields(session.templateName, session.projectKey, pick, ticketService, stream, ws);
+  await startFromRequiredFields(session.templateName, session.projectKey, pick.name, ticketService, stream, ws, pick.id);
 }
 
 // --- Review list (toggle / setValue / confirm) ---

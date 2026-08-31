@@ -215,20 +215,22 @@ export function parseSkipInput(reply: string, tickets: TransitionBatchTicket[]):
 }
 
 // Shared by parseResolutionSelection and parseIssueTypePick: resolves a reply to one list item
-// by 1-based number or by exact case-insensitive name. The `String(n) === trimmed` guard rejects
-// a partially-numeric string like "1abc" rather than letting parseInt silently truncate it into
-// a match. Returns undefined when neither form matches.
-function pickByNumberOrName(reply: string, options: string[]): string | undefined {
+// by 1-based number or by exact case-insensitive name (matched via `nameOf`). The
+// `String(n) === trimmed` guard rejects a partially-numeric string like "1abc" rather than letting
+// parseInt silently truncate it into a match. Returns undefined when neither form matches. Generic
+// over `T` so callers can pass either a plain `string[]` (nameOf: (s) => s) or a richer option
+// shape like `{id, name}[]` (nameOf: (t) => t.name) and get the matched entry itself back.
+function pickByNumberOrName<T>(reply: string, options: T[], nameOf: (t: T) => string): T | undefined {
   const trimmed = reply.trim();
   const n = parseInt(trimmed, 10);
   if (!isNaN(n) && String(n) === trimmed && n >= 1 && n <= options.length) return options[n - 1];
-  return options.find(o => o.toLowerCase() === trimmed.toLowerCase());
+  return options.find(o => nameOf(o).toLowerCase() === trimmed.toLowerCase());
 }
 
 export function parseResolutionSelection(reply: string, options: string[]): string | null | 'invalid' {
   const normalized = reply.trim().toLowerCase();
   if (normalized === 'none' || normalized === 'skip') return null;
-  return pickByNumberOrName(reply, options) ?? 'invalid';
+  return pickByNumberOrName(reply, options, (s) => s) ?? 'invalid';
 }
 
 export function extractLastTicketFromText(text: string): string | null {
@@ -503,7 +505,7 @@ export function buildJiraNotConfiguredMessage(config: Pick<JiraConfig, 'baseUrl'
 // persisted) session render incorrectly if fed straight to the current code. A session written by
 // a build that predates this field entirely reads as `undefined`, which isSessionExpired() also
 // treats as expired — see AE7.
-export const CURRENT_SESSION_SCHEMA_VERSION = 1;
+export const CURRENT_SESSION_SCHEMA_VERSION = 2;
 
 export interface ImportTemplateSelectionSession<TItem> {
   reportFileName: string;
@@ -858,10 +860,14 @@ export function extractProjectKeyFromTicketKey(ticketKey: string): string | null
 }
 
 /** Parses a reply to the "pick an issue type" list (no-reference path, no type named) — by
- * number or by exact (case-insensitive) name. */
-export function parseIssueTypePick(reply: string, issueTypes: string[]): string | 'cancel' | 'invalid' {
+ * number or by exact (case-insensitive) name. Returns the matched `{id, name}` entry itself (not
+ * just its name) so the caller can forward the real issue type id to getRequiredFields(). */
+export function parseIssueTypePick<T extends { name: string }>(
+  reply: string,
+  issueTypes: T[],
+): T | 'cancel' | 'invalid' {
   if (isCancellation(reply)) return 'cancel';
-  return pickByNumberOrName(reply, issueTypes) ?? 'invalid';
+  return pickByNumberOrName(reply, issueTypes, (t) => t.name) ?? 'invalid';
 }
 
 export type TemplateCollisionReply =
@@ -904,7 +910,7 @@ export function parseOfferCreateReply(reply: string): OfferCreateReply {
 export interface TemplateGenerationTypePickSession {
   templateName: string;
   projectKey: string;
-  availableIssueTypes: string[];
+  availableIssueTypes: Array<{ id: string; name: string }>;
   schemaVersion: number;
 }
 

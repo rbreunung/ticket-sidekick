@@ -1105,6 +1105,11 @@ describe('isSessionExpired (schemaVersion shape guard — AE7)', () => {
     expect(isSessionExpired(null)).toBe(false);
   });
 
+  it('treats a session persisted with the pre-fix schemaVersion (1) as expired after the bump to 2 — a stale TemplateGenerationTypePickSession (old string[] availableIssueTypes shape) never reaches the new {id, name}[] parsing', () => {
+    expect(CURRENT_SESSION_SCHEMA_VERSION).toBe(2);
+    expect(isSessionExpired({ schemaVersion: 1 })).toBe(true);
+  });
+
   it('exposes a user-facing message that tells the user to re-run the import', () => {
     expect(SESSION_EXPIRED_MESSAGE.toLowerCase()).toContain('re-run the import');
   });

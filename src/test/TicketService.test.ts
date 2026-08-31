@@ -1298,6 +1298,28 @@ describe('getTemplateCandidatesFromRequiredFields (template generation, no-refer
 
     expect(candidates).toEqual([]);
   });
+
+  it('forwards a supplied issueTypeId to client.getRequiredFields unchanged', async () => {
+    const client = new MockJiraClient();
+    const spy = vi.fn(async () => []);
+    client.getRequiredFields = spy;
+    const service = new TicketService(client);
+
+    await service.getTemplateCandidatesFromRequiredFields('PROJ', 'Bug', '10001');
+
+    expect(spy).toHaveBeenCalledWith('PROJ', 'Bug', '10001');
+  });
+
+  it('forwards undefined issueTypeId when none is given', async () => {
+    const client = new MockJiraClient();
+    const spy = vi.fn(async () => []);
+    client.getRequiredFields = spy;
+    const service = new TicketService(client);
+
+    await service.getTemplateCandidatesFromRequiredFields('PROJ', 'Bug');
+
+    expect(spy).toHaveBeenCalledWith('PROJ', 'Bug', undefined);
+  });
 });
 
 describe('coerceTypedFieldValue', () => {
