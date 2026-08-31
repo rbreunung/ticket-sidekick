@@ -63,4 +63,21 @@ export class ConfigService {
   async storeBitbucketToken(token: string): Promise<void> {
     await this.context.secrets.store(ConfigService.BITBUCKET_TOKEN_KEY, token);
   }
+
+  /** Mirrors the check both @jira's participant and its Language Model tools have always
+   * gated on: a usable Jira connection needs both a base URL and a token, regardless of
+   * DC vs Cloud (Cloud's token already encodes the Jira Cloud site via the account it's for).
+   * A type predicate so call sites that go on to read `config.baseUrl`/`config.token` as plain
+   * (non-optional) strings keep TypeScript's control-flow narrowing — same as the inline
+   * `!config.baseUrl` / `!config.token` checks it replaces. */
+  isConfigured(config: Pick<JiraConfig, 'baseUrl' | 'token'>): config is Pick<JiraConfig, 'baseUrl' | 'token'> & { baseUrl: string; token: string } {
+    return !!(config.baseUrl && config.token);
+  }
+
+  /** Mirrors @bitbucket's existing Cloud-vs-DC asymmetry: Cloud talks to the fixed
+   * api.bitbucket.org host and only needs a token, while Data Center additionally needs
+   * a configured baseUrl. */
+  isBitbucketConfigured(config: Pick<BitbucketConfig, 'authType' | 'baseUrl' | 'token'>): boolean {
+    return config.authType === 'cloud' ? !!config.token : !!(config.baseUrl && config.token);
+  }
 }

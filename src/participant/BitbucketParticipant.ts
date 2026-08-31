@@ -241,11 +241,9 @@ async function parseReviewResponse(raw: string): Promise<{
 async function handleCheck(
   stream: vscode.ChatResponseStream,
   config: BitbucketConfig,
+  configService: ConfigService,
 ): Promise<void> {
-  const isConfigured = config.authType === 'cloud'
-    ? !!config.token
-    : !!(config.baseUrl && config.token);
-  if (!isConfigured) {
+  if (!configService.isBitbucketConfigured(config)) {
     const urlStatus = config.authType === 'cloud'
       ? 'n/a (Cloud)'
       : (config.baseUrl ? 'present' : '**absent** — add `ticketSidekick.bitbucket.baseUrl` to VS Code settings');
@@ -326,7 +324,7 @@ export function createBitbucketParticipant(
 
     // 1. check command
     if (/^check\b/i.test(prompt)) {
-      await handleCheck(stream, config);
+      await handleCheck(stream, config, configService);
       return;
     }
 
@@ -556,10 +554,7 @@ export function createBitbucketParticipant(
       return;
     }
 
-    const isConfigured = config.authType === 'cloud'
-      ? !!config.token
-      : !!(config.baseUrl && config.token);
-    if (!isConfigured) {
+    if (!configService.isBitbucketConfigured(config)) {
       const setupCommand = config.authType === 'cloud'
         ? 'ticket-sidekick.configureBitbucketCloud'
         : 'ticket-sidekick.setBitbucketDataCenterToken';

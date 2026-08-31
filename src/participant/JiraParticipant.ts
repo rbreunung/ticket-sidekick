@@ -56,18 +56,18 @@ export function createJiraParticipant(
   ): Promise<void> => {
     const config = await configService.getConfig();
 
-    if (!config.baseUrl) {
-      const settingsLink = new vscode.MarkdownString(
-        '**Jira base URL not configured.**\n\n' +
-        'Add `ticketSidekick.jira.baseUrl` to your VS Code settings (e.g. `https://jira.mycompany.com`), ' +
-        `or [open Settings](command:workbench.action.openSettings?${encodeURIComponent(JSON.stringify('ticketSidekick.jira.baseUrl'))}) directly.`,
-      );
-      settingsLink.isTrusted = { enabledCommands: ['workbench.action.openSettings'] };
-      stream.markdown(settingsLink);
-      return;
-    }
+    if (!configService.isConfigured(config)) {
+      if (!config.baseUrl) {
+        const settingsLink = new vscode.MarkdownString(
+          '**Jira base URL not configured.**\n\n' +
+          'Add `ticketSidekick.jira.baseUrl` to your VS Code settings (e.g. `https://jira.mycompany.com`), ' +
+          `or [open Settings](command:workbench.action.openSettings?${encodeURIComponent(JSON.stringify('ticketSidekick.jira.baseUrl'))}) directly.`,
+        );
+        settingsLink.isTrusted = { enabledCommands: ['workbench.action.openSettings'] };
+        stream.markdown(settingsLink);
+        return;
+      }
 
-    if (!config.token) {
       const setupCommand = config.authType === 'cloud'
         ? 'ticket-sidekick.configureCloud'
         : 'ticket-sidekick.setDataCenterToken';

@@ -143,6 +143,30 @@ function registerReportImportCommand<TRaw, TItem>(
 export function activate(context: vscode.ExtensionContext): void {
   const configService = new ConfigService(context);
 
+  // Keeps `ticketSidekick.jiraCredentialsSet` / `ticketSidekick.bitbucketCredentialsSet` in
+  // sync with the actual configured state — `when` clauses (later units: Getting-Started
+  // walkthrough steps, tool availability) gate on these instead of re-deriving the check
+  // themselves. Fires once at activation (so the very first window already has the right
+  // value) and again on every secrets change (token set/cleared).
+  const updateJiraContextKey = async (): Promise<void> => {
+    const config = await configService.getConfig();
+    await vscode.commands.executeCommand('setContext', 'ticketSidekick.jiraCredentialsSet', configService.isConfigured(config));
+  };
+  const updateBitbucketContextKey = async (): Promise<void> => {
+    const config = await configService.getBitbucketConfig();
+    await vscode.commands.executeCommand('setContext', 'ticketSidekick.bitbucketCredentialsSet', configService.isBitbucketConfigured(config));
+  };
+  context.subscriptions.push(
+    context.secrets.onDidChange(async (e) => {
+      if (e.key === 'ticket-sidekick.token') await updateJiraContextKey();
+    }),
+    context.secrets.onDidChange(async (e) => {
+      if (e.key === 'ticket-sidekick.bitbucket.token') await updateBitbucketContextKey();
+    }),
+  );
+  void updateJiraContextKey();
+  void updateBitbucketContextKey();
+
   context.subscriptions.push(
     vscode.commands.registerCommand('ticket-sidekick.setDataCenterToken', async () => {
       const token = await vscode.window.showInputBox({

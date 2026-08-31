@@ -1,4 +1,7 @@
 import { extractJsonObject } from '../utils/extractJsonObject';
+// Type-only — IBitbucketClient.ts has no imports of its own (vscode included), so this
+// stays safe for a vscode-free, Vitest-loadable module.
+import type { BitbucketConfig } from '../bitbucket/IBitbucketClient';
 
 export interface ParsedPrUrl {
   project: string;
@@ -61,6 +64,25 @@ export interface BitbucketCommentPreviewSession {
 
 export function hasPrUrl(prompt: string): boolean {
   return /https?:\/\/\S+\/pull-requests\/\d+/.test(prompt);
+}
+
+/**
+ * Plain-text "Bitbucket isn't configured" message naming the specific missing setting or
+ * setup command — the Bitbucket equivalent of `buildJiraNotConfiguredMessage` (sessionState.ts).
+ * No trusted `MarkdownString` command link (a `LanguageModelToolResult` can't carry one), so
+ * this doubles as both a tool result and plain chat text.
+ */
+export function buildBitbucketNotConfiguredMessage(config: Pick<BitbucketConfig, 'authType' | 'baseUrl' | 'token'>): string {
+  const setupLabel = config.authType === 'cloud'
+    ? 'Ticket Sidekick: Configure Bitbucket Cloud Credentials'
+    : 'Ticket Sidekick: Set Bitbucket Personal Access Token';
+  if (config.authType === 'datacenter' && !config.baseUrl) {
+    return (
+      'Bitbucket base URL not configured. Add `ticketSidekick.bitbucket.baseUrl` in VS Code settings, ' +
+      `then run "${setupLabel}" from the Command Palette.`
+    );
+  }
+  return `Bitbucket credentials not configured. Run "${setupLabel}" from the Command Palette.`;
 }
 
 export function parsePrUrl(url: string): ParsedPrUrl | null {

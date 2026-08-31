@@ -5,6 +5,9 @@ import type { WaltzComponent, WaltzReviewRow } from '../utils/waltzReport';
 import { BATCH_LIMIT, sanitizeCellText } from '../utils/reportImport';
 import { formatKeyLink, coerceTypedFieldValue, type TemplateFieldCandidate } from '../services/TicketService';
 import type { JiraTemplate } from '../templates/TemplateService';
+// Type-only — ConfigService.ts imports `vscode`, but a type-only import is erased before
+// this (vscode-free, Vitest-loadable) module is ever loaded at runtime.
+import type { JiraConfig } from '../services/ConfigService';
 
 export type { VeracodeReviewRow } from '../utils/veracodeReport';
 export type { WaltzReviewRow } from '../utils/waltzReport';
@@ -459,6 +462,25 @@ export function formatIssueTypeInlinePhrase(issueType: string): string {
 export function buildTeamJql(teamJql: string, extraJql: string | null): string {
   const extra = extraJql ? ` AND (${extraJql})` : ' AND resolution is NULL';
   return `(${teamJql})${extra}`;
+}
+
+/**
+ * Plain-text "Jira isn't configured" message naming the specific missing setting or setup
+ * command — the same information @jira's chat handler's own not-configured messages give,
+ * but without a trusted `MarkdownString` command link (a `LanguageModelToolResult`, unlike a
+ * chat stream, can't carry one), so this doubles as both a tool result and plain chat text.
+ */
+export function buildJiraNotConfiguredMessage(config: Pick<JiraConfig, 'baseUrl' | 'token' | 'authType'>): string {
+  if (!config.baseUrl) {
+    return (
+      'Jira base URL not configured. Add `ticketSidekick.jira.baseUrl` in VS Code settings ' +
+      '(e.g. `https://jira.mycompany.com`), then set your credentials.'
+    );
+  }
+  const setupLabel = config.authType === 'cloud'
+    ? 'Ticket Sidekick: Configure Jira Cloud Credentials'
+    : 'Ticket Sidekick: Set Jira Personal Access Token';
+  return `Jira credentials not configured. Run "${setupLabel}" from the Command Palette.`;
 }
 
 // ---------------------------------------------------------------------------------------------
