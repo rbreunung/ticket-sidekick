@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('vscode', () => ({
   window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
+  commands: { executeCommand: vi.fn() },
 }));
 vi.mock('../participant/jira/llmHelpers', () => ({
   generateContent: vi.fn(),

@@ -30,6 +30,9 @@ export async function handleDiscoverWorkflow(
   const preserved = preserveSkippedStatuses(graph, skippedStatuses, oldGraph);
   cache[projectKey][issueType] = { discovered: new Date().toISOString().slice(0, 10), graph };
   saveWorkflowCache(workspaceRoot, cache);
+  // Real success point (KTD9): workflow actually discovered and persisted, not merely attempted —
+  // the "no tickets found" bail-out above already returned before reaching here.
+  await vscode.commands.executeCommand('setContext', 'ticketSidekick.workflowViewed', true);
 
   const lines = Object.keys(graph).map((s) => {
     const targets = graph[s].map((t) => `${t.name} → **${t.to}**`).join(', ');

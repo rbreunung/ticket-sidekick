@@ -296,3 +296,33 @@ a non-greeting, non-URL prompt.
 deliver their example prompts *only* as follow-up chips, capped at 2-3 and
 phrased as literal next prompts a user could send — never duplicated as a
 bulleted list in the response's own markdown.
+
+## Getting-Started walkthrough: Jira
+
+`contributes.walkthroughs` in `package.json` declares a "Ticket Sidekick:
+Jira" walkthrough (id `ticket-sidekick.jiraGettingStarted`) that takes a new
+user from zero Jira config to a real first ticket. Every step completes on
+real extension state via VS Code's native `completionEvents` — never a
+static checklist a user has to tick off by hand (R12). Step markdown bodies
+live in `walkthroughs/jira/*.md`; each links (or runs) the real
+setting/command it describes.
+
+| # | Step id | What it asks for | Completion signal |
+| --- | --- | --- | --- |
+| 1 | `jiraBaseUrl` | `ticketSidekick.jira.baseUrl` setting | `onSettingChanged:ticketSidekick.jira.baseUrl` |
+| 2 | `jiraCredentials` | A Data Center PAT or Cloud email+API token, via `ticket-sidekick.setDataCenterToken` / `ticket-sidekick.configureCloud` | `onContext:ticketSidekick.jiraCredentialsSet` (U1's context key, kept in sync in `extension.ts`) |
+| 3 | `jiraDefaultProject` | `ticketSidekick.jira.defaultProject` setting | `onSettingChanged:ticketSidekick.jira.defaultProject` |
+| 4 | `jiraWorkflow` | Running `@jira discover workflow <PROJ> <IssueType>` | `onContext:ticketSidekick.workflowViewed` — set in `handleDiscoverWorkflow` (`workflowHandler.ts`) right after the workflow graph is actually cached, not on an attempted-but-empty sample |
+| 5 | `jiraFirstTicket` | Generating a template (`@jira generate a template`) and creating a ticket from it, or `@jira create` directly | `onContext:ticketSidekick.firstTicketCreated` — set at every real `ticketService.createTicket()` success point reachable from chat: `contentHandler.ts`'s `createTicket`-operation branch (backs the `createHandler.ts` flow) and `templateGenerationHandler.ts`'s `createFirstTicket()` |
+
+**First-touch auto-open (KTD11).** `extension.ts`'s `activate()` opens this
+walkthrough automatically once, guarded by the `globalState` flag
+`ticketSidekick.jiraWalkthroughSeen` — set the first time `activate()` runs
+and never re-checked false afterward, so the walkthrough never reopens on
+a later VS Code start. The Bitbucket walkthrough (a separate contribution,
+added in a later unit) does not auto-open.
+
+Each step's button opens Copilot Chat pre-filled with the relevant `@jira`
+query via `workbench.action.chat.open` (the same command
+`extension.ts`'s `.eml`/Veracode/Waltz import commands already use to open
+chat with a fixed query), or runs the credential-setup command directly.

@@ -393,6 +393,19 @@ export function activate(context: vscode.ExtensionContext): void {
   createBitbucketParticipant(context, configService);
   registerJiraTools(context, configService);
   registerBitbucketTools(context, configService);
+
+  // KTD11: auto-open the Jira Getting-Started walkthrough once — on first install/first
+  // activation only — guarded by a globalState "seen" flag so it never reopens on later VS Code
+  // starts. Only the Jira walkthrough auto-opens (KTD10); the Bitbucket one (U7) is opt-in only.
+  const JIRA_WALKTHROUGH_SEEN_KEY = 'ticketSidekick.jiraWalkthroughSeen';
+  if (!context.globalState.get<boolean>(JIRA_WALKTHROUGH_SEEN_KEY)) {
+    void context.globalState.update(JIRA_WALKTHROUGH_SEEN_KEY, true);
+    void vscode.commands.executeCommand(
+      'workbench.action.openWalkthrough',
+      `${context.extension.id}#ticket-sidekick.jiraGettingStarted`,
+      false,
+    );
+  }
 }
 
 export function deactivate(): void {}

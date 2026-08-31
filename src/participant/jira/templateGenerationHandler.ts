@@ -523,6 +523,9 @@ async function createFirstTicket(
   }
   try {
     const created = await ticketService.createTicket(projectKey, summary, template.issueType, template.defaultFields, baseUrl);
+    // Real success point (KTD9): createTicket resolved without throwing — a walkthrough step
+    // watching this must never fire on an attempted-but-failed create.
+    await vscode.commands.executeCommand('setContext', 'ticketSidekick.firstTicketCreated', true);
     stream.markdown(created.message);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

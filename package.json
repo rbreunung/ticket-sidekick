@@ -688,6 +688,70 @@
           }
         }
       }
+    ],
+    "walkthroughs": [
+      {
+        "id": "ticket-sidekick.jiraGettingStarted",
+        "title": "Ticket Sidekick: Jira",
+        "description": "Set up @jira and create your first ticket.",
+        "steps": [
+          {
+            "id": "jiraBaseUrl",
+            "title": "Set your Jira base URL",
+            "description": "Point Ticket Sidekick at your Jira instance.\n[Open setting](command:workbench.action.openSettings?%22ticketSidekick.jira.baseUrl%22)",
+            "media": {
+              "markdown": "walkthroughs/jira/base-url.md"
+            },
+            "completionEvents": [
+              "onSettingChanged:ticketSidekick.jira.baseUrl"
+            ]
+          },
+          {
+            "id": "jiraCredentials",
+            "title": "Add your Jira credentials",
+            "description": "Store a Data Center Personal Access Token or Cloud email + API token in VS Code's encrypted Secret Storage.\n[Set Data Center Token](command:ticket-sidekick.setDataCenterToken)\n[Configure Cloud Credentials](command:ticket-sidekick.configureCloud)",
+            "media": {
+              "markdown": "walkthroughs/jira/credentials.md"
+            },
+            "completionEvents": [
+              "onContext:ticketSidekick.jiraCredentialsSet"
+            ]
+          },
+          {
+            "id": "jiraDefaultProject",
+            "title": "Set a default project",
+            "description": "So `@jira create` and the report importers don't need a project key in every prompt.\n[Open setting](command:workbench.action.openSettings?%22ticketSidekick.jira.defaultProject%22)",
+            "media": {
+              "markdown": "walkthroughs/jira/default-project.md"
+            },
+            "completionEvents": [
+              "onSettingChanged:ticketSidekick.jira.defaultProject"
+            ]
+          },
+          {
+            "id": "jiraWorkflow",
+            "title": "Discover your ticket types & workflow",
+            "description": "Sample your project's real tickets to learn its issue types and status-transition graph.\n[Ask @jira](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40jira%20discover%20workflow%20%22%7D%5D)",
+            "media": {
+              "markdown": "walkthroughs/jira/workflow.md"
+            },
+            "completionEvents": [
+              "onContext:ticketSidekick.workflowViewed"
+            ]
+          },
+          {
+            "id": "jiraFirstTicket",
+            "title": "Create your first ticket",
+            "description": "Generate a template from real project data, then create a ticket from it — or create one directly.\n[Ask @jira](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40jira%20generate%20a%20template%22%7D%5D)",
+            "media": {
+              "markdown": "walkthroughs/jira/first-ticket.md"
+            },
+            "completionEvents": [
+              "onContext:ticketSidekick.firstTicketCreated"
+            ]
+          }
+        ]
+      }
     ]
   },
   "scripts": {
