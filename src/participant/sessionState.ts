@@ -1039,6 +1039,86 @@ export function formatTemplateListMessage(templates: Array<{ name: string; issue
   return `Available templates:\n\n${list}`;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Follow-up suggestion chips + greeting/empty-prompt detection (onboarding, U5) — pure logic so
+// it stays Vitest-covered (KTD15). The vscode-coupled `participant.followupProvider` wiring and
+// the pre-`parseIntent` greeting/empty check live in `JiraParticipant.ts`; both consume the
+// exports below rather than re-deriving this logic.
+// ---------------------------------------------------------------------------------------------
+
+/** A `vscode.ChatFollowup`-shaped suggestion, without the `vscode` dependency — the participant
+ * maps this 1:1 onto a real `vscode.ChatFollowup` in its `followupProvider`. */
+export interface FollowupSuggestion {
+  prompt: string;
+  label?: string;
+}
+
+/**
+ * Exact-match (not substring/word-list) detection of an empty invocation or an obvious
+ * greeting/help-shaped prompt — mirrors `isConfirmation()`/`isCancellation()`'s own
+ * whole-normalized-string `Set` membership above, for the same reason: a substring or
+ * per-word test on "hi" would misfire on legitimate operation text like "update HI-1
+ * status", but an exact-string `Set` membership check never can, since the normalized whole
+ * prompt "update hi-1 status" is never equal to "hi". See the specific-before-generic ordering
+ * principle in
+ * docs/solutions/logic-errors/confirm-cancel-word-list-broadening-swallows-domain-name-collisions.md
+ * — this function sidesteps that hazard entirely by never doing substring matching in the first
+ * place, rather than needing a live-domain-value check ordered ahead of it.
+ */
+const GREETING_OR_HELP_PHRASES = new Set<string>([
+  '', 'hi', 'hello', 'hey', 'hiya', 'yo', 'howdy',
+  'help', 'help me', '?', "what's up", 'whats up',
+  'what can you do', 'what do you do', 'what can you help with', 'what can you help me with',
+  'how does this work', 'how do i use this', 'how do i use you',
+  'getting started', 'get started', 'what is this', 'who are you',
+]);
+
+export function isGreetingOrEmpty(prompt: string): boolean {
+  const normalized = prompt.trim().toLowerCase().replace(/[!?.]+$/g, '').replace(/\s+/g, ' ').trim();
+  return GREETING_OR_HELP_PHRASES.has(normalized);
+}
+
+/** Discriminated "what just happened" shape `JiraParticipant.ts` round-trips through
+ * `vscode.ChatResult.metadata` so its `followupProvider` can compute the right suggestion chips
+ * for the response that was just streamed, without re-deriving state from response text. */
+export type JiraFollowupState =
+  | { kind: 'greeting' }
+  | { kind: 'fallback' }
+  | { kind: 'loadedTicket'; ticketKey: string }
+  | { kind: 'none' };
+
+const JIRA_MAX_FOLLOWUPS = 3;
+
+/**
+ * R6/KTD14: 2-3 example prompts, phrased as literal next messages a user could send, for a
+ * major `@jira` response — including R8's unclassifiable-prompt fallback and R9's
+ * greeting/empty-prompt response, which deliver their examples ONLY as these chips rather than
+ * as separate inline prose guidance.
+ */
+export function computeJiraFollowups(state: JiraFollowupState): FollowupSuggestion[] {
+  switch (state.kind) {
+    case 'greeting':
+      return [
+        { prompt: 'create a ticket', label: 'Create a ticket' },
+        { prompt: 'show me PROJ-123', label: 'View a ticket' },
+        { prompt: 'search my open tickets', label: 'Search tickets' },
+      ].slice(0, JIRA_MAX_FOLLOWUPS);
+    case 'fallback':
+      return [
+        { prompt: 'show me PROJ-123', label: 'View a ticket' },
+        { prompt: 'add a comment to PROJ-123', label: 'Add a comment' },
+        { prompt: 'search my open tickets', label: 'Search tickets' },
+      ].slice(0, JIRA_MAX_FOLLOWUPS);
+    case 'loadedTicket':
+      return [
+        { prompt: `add a comment to ${state.ticketKey}`, label: 'Add a comment' },
+        { prompt: `transition ${state.ticketKey}`, label: 'Transition it' },
+      ];
+    case 'none':
+      return [];
+  }
+}
+
 /** Result text for `jira_discoverWorkflow` — mirrors `handleDiscoverWorkflow`'s chat summary
  * (`src/participant/jira/workflowHandler.ts`) in plain returned text rather than a streamed
  * response, since a tool result is a single returned string, not a live chat stream. */

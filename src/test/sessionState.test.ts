@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderReviewTable, buildJiraNotConfiguredMessage, type ReviewTableColumn } from '../participant/sessionState';
+import { renderReviewTable, buildJiraNotConfiguredMessage, isGreetingOrEmpty, computeJiraFollowups, type ReviewTableColumn, type JiraFollowupState } from '../participant/sessionState';
 
 interface Widget {
   name: string;
@@ -106,5 +106,77 @@ describe('buildJiraNotConfiguredMessage', () => {
     const message = buildJiraNotConfiguredMessage({ baseUrl: undefined, token: undefined, authType: 'cloud' });
 
     expect(message).not.toContain('(command:');
+  });
+});
+
+describe('isGreetingOrEmpty', () => {
+  it('detects a bare greeting', () => {
+    expect(isGreetingOrEmpty('hi')).toBe(true);
+  });
+
+  it('detects an empty prompt', () => {
+    expect(isGreetingOrEmpty('')).toBe(true);
+  });
+
+  it('detects a bare "help"', () => {
+    expect(isGreetingOrEmpty('help')).toBe(true);
+  });
+
+  it('detects greetings/help phrases case-insensitively and with surrounding whitespace/punctuation', () => {
+    expect(isGreetingOrEmpty('  Hi!  ')).toBe(true);
+    expect(isGreetingOrEmpty('HELLO?')).toBe(true);
+    expect(isGreetingOrEmpty('What can you do?')).toBe(true);
+  });
+
+  it('does not classify a real operation prompt as a greeting', () => {
+    expect(isGreetingOrEmpty('update PROJ-1 priority to high')).toBe(false);
+  });
+
+  it('does not misclassify a prompt whose ticket key looks like a greeting word (specific-before-generic)', () => {
+    // A ticket literally keyed "HI-1" must not make this prompt read as the greeting "hi" —
+    // isGreetingOrEmpty only matches the whole normalized prompt, never a substring/word within it
+    // (see docs/solutions/logic-errors/confirm-cancel-word-list-broadening-swallows-domain-name-collisions.md).
+    expect(isGreetingOrEmpty('update HI-1 status')).toBe(false);
+    expect(isGreetingOrEmpty('show me HELP-42')).toBe(false);
+  });
+
+  it('does not classify an ordinary multi-word sentence as a greeting just because it starts with a greeting word', () => {
+    expect(isGreetingOrEmpty('hi there, can you show me PROJ-123 please')).toBe(false);
+  });
+});
+
+describe('computeJiraFollowups', () => {
+  it('returns example prompts for a greeting, capped at 3', () => {
+    const chips = computeJiraFollowups({ kind: 'greeting' });
+
+    expect(chips.length).toBeGreaterThan(0);
+    expect(chips.length).toBeLessThanOrEqual(3);
+    for (const chip of chips) {
+      expect(chip.prompt.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('returns example prompts for the unclassifiable-prompt fallback, capped at 3', () => {
+    const chips = computeJiraFollowups({ kind: 'fallback' });
+
+    expect(chips.length).toBeGreaterThan(0);
+    expect(chips.length).toBeLessThanOrEqual(3);
+  });
+
+  it('returns "add a comment"/"transition it"-shaped chips after loading a ticket', () => {
+    const state: JiraFollowupState = { kind: 'loadedTicket', ticketKey: 'PROJ-123' };
+
+    const chips = computeJiraFollowups(state);
+
+    expect(chips.length).toBeLessThanOrEqual(3);
+    expect(chips.some((c) => /comment/i.test(c.prompt) || /comment/i.test(c.label ?? ''))).toBe(true);
+    expect(chips.some((c) => /transition/i.test(c.prompt) || /transition/i.test(c.label ?? ''))).toBe(true);
+    // The prompt itself names the real ticket key so it works without relying on pronoun
+    // resolution against chat history.
+    expect(chips.every((c) => c.prompt.includes('PROJ-123'))).toBe(true);
+  });
+
+  it('returns no chips when there is no prior operation state', () => {
+    expect(computeJiraFollowups({ kind: 'none' })).toEqual([]);
   });
 });

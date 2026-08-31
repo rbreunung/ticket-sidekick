@@ -7,7 +7,7 @@ import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { tokenStatus } from '../utils/diagUtils';
 import { logDiag } from '../utils/diagLog';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, isConfirmation, isCancellation, pickEmailOption, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewTable } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, type JiraFollowupState, isConfirmation, isCancellation, isGreetingOrEmpty, computeJiraFollowups, pickEmailOption, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewTable } from './sessionState';
 import { loadWorkflowCache, findPath } from '../services/WorkflowService';
 import type { WorkflowGraph } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
@@ -48,12 +48,18 @@ export function createJiraParticipant(
   context: vscode.ExtensionContext,
   configService: ConfigService,
 ): vscode.ChatParticipant {
+  // U5/R6: the handler returns `{ metadata: { jiraFollowup } }` from a major response so
+  // `participant.followupProvider` below can compute the right suggestion chips for it without
+  // re-deriving state from response text — `vscode.ChatResult.metadata` is the VS Code-native
+  // channel a chat handler uses to hand its own `followupProvider` this kind of state. A bare
+  // `return;` (still valid — `void` stays in the union) means "no chip-worthy state", e.g. a
+  // multi-turn session reply whose own response tag already carries the next-step guidance.
   const handler: vscode.ChatRequestHandler = async (
     request: vscode.ChatRequest,
     chatContext: vscode.ChatContext,
     stream: vscode.ChatResponseStream,
     token: vscode.CancellationToken,
-  ): Promise<void> => {
+  ): Promise<vscode.ChatResult | void> => {
     const config = await configService.getConfig();
 
     if (!configService.isConfigured(config)) {
@@ -659,6 +665,21 @@ export function createJiraParticipant(
       }
     }
 
+    // U5/R9: an empty invocation or an obvious greeting/help-shaped prompt is detected before
+    // it's ever handed to the LLM intent parser — but only after every multi-turn session-tag
+    // branch above has already had its chance to claim the turn (same ordering rule U4's
+    // command override follows: a session in flight always wins), and only when no `/command`
+    // was used (an explicit slash command is never ambiguous, so it skips this check entirely).
+    if (!request.command && isGreetingOrEmpty(request.prompt)) {
+      stream.markdown(
+        '**@jira** manages Jira tickets in natural language — create, view, comment, update ' +
+        'fields, transition, and search. Tell me what you need, or try one of the suggestions ' +
+        'below.',
+      );
+      const greetingState: JiraFollowupState = { kind: 'greeting' };
+      return { metadata: { jiraFollowup: greetingState } };
+    }
+
     let intent: ParsedIntent;
     try {
       intent = await parseIntent(request.prompt, request.model, token);
@@ -1165,7 +1186,10 @@ export function createJiraParticipant(
           const loadAlwaysShow = new Set<string>(config.additionalDisplayFields);
           const loadHidden = new Set<string>(config.hiddenDisplayFields);
           await handleLoadTicket(ticketKey!, ticketService, stream, ws, loadFieldMeta, loadAlwaysShow, loadHidden);
-          return;
+          // R6: "after loading a ticket: add a comment, transition it" — the flagship example
+          // the plan names for follow-up chips.
+          const loadedState: JiraFollowupState = { kind: 'loadedTicket', ticketKey: ticketKey! };
+          return { metadata: { jiraFollowup: loadedState } };
         }
         case 'validateFields':
           result = await ticketService.validateRequiredFields(ticketKey!, config.requiredFields);
@@ -1178,11 +1202,24 @@ export function createJiraParticipant(
           await handleSpellCheck(ticketKey, ticketService, request.model, stream, token, ws);
           return;
         }
-        default:
-          result = 'Unrecognised operation.';
+        default: {
+          // R8: replaces the bare "Unrecognised operation." message — an example-driven
+          // response mirroring @bitbucket's existing no-PR-URL guidance, with the examples
+          // delivered as follow-up chips (KTD14) rather than repeated as inline prose.
+          stream.markdown(
+            "I couldn't tell what you'd like to do. Try being more specific — name a ticket " +
+            'and an action — or try one of the suggestions below.',
+          );
+          const fallbackState: JiraFollowupState = { kind: 'fallback' };
+          return { metadata: { jiraFollowup: fallbackState } };
+        }
       }
       stream.markdown(result);
       if (ticketKey) stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
+      if (ticketKey) {
+        const viewedState: JiraFollowupState = { kind: 'loadedTicket', ticketKey };
+        return { metadata: { jiraFollowup: viewedState } };
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logDiag('jira.participant', 'error', message, { operation: intent.operation });
@@ -1191,6 +1228,17 @@ export function createJiraParticipant(
   };
 
   const participant = vscode.chat.createChatParticipant('ticket-sidekick.jira', handler);
+  // U5/R6: follow-up suggestion chips for the response `result` was just returned from —
+  // `result.metadata.jiraFollowup` is set above wherever the handler has chip-worthy state;
+  // no metadata (a bare `return;`) means no chips, e.g. a multi-turn session reply whose own
+  // response tag already carries the next-step guidance.
+  participant.followupProvider = {
+    provideFollowups(result: vscode.ChatResult): vscode.ChatFollowup[] {
+      const state = (result.metadata as { jiraFollowup?: JiraFollowupState } | undefined)?.jiraFollowup;
+      if (!state) return [];
+      return computeJiraFollowups(state).map((s) => ({ prompt: s.prompt, label: s.label }));
+    },
+  };
   context.subscriptions.push(participant);
   return participant;
 }

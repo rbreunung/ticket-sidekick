@@ -956,6 +956,58 @@ export function formatContinuationMessage(uncoveredFileCount: number): string {
   );
 }
 
+// ---------------------------------------------------------------------------------------------
+// Follow-up suggestion chips (onboarding, U5) — pure logic so it stays Vitest-covered (KTD15).
+// The vscode-coupled `participant.followupProvider` wiring lives in `BitbucketParticipant.ts`.
+// Empty/greeting-prompt detection itself (`isGreetingOrEmpty`) is shared with `@jira` and lives
+// in `sessionState.ts` — `BitbucketParticipant.ts` already imports directly from there, so it
+// is not duplicated or re-exported here.
+// ---------------------------------------------------------------------------------------------
+
+/** A `vscode.ChatFollowup`-shaped suggestion, without the `vscode` dependency — the participant
+ * maps this 1:1 onto a real `vscode.ChatFollowup` in its `followupProvider`. */
+export interface BitbucketFollowupSuggestion {
+  prompt: string;
+  label?: string;
+}
+
+/** Discriminated "what just happened" shape `BitbucketParticipant.ts` round-trips through
+ * `vscode.ChatResult.metadata` so its `followupProvider` can compute the right suggestion chips
+ * for the response that was just streamed, without re-deriving state from response text. */
+export type BitbucketFollowupState =
+  | { kind: 'greeting' }
+  | { kind: 'reviewCompleted'; findingCount: number }
+  | { kind: 'none' };
+
+const BITBUCKET_MAX_FOLLOWUPS = 3;
+
+/**
+ * R6/KTD14: 2-3 example prompts, phrased as literal next messages a user could send, for a
+ * major `@bitbucket` response. There is no separate R8-equivalent "unrecognized operation"
+ * fallback for `@bitbucket` to reroute — unlike `@jira`, it has no LLM intent classifier to
+ * bypass, only a PR-URL match, and its existing "Point me at a PR to review" guidance already
+ * covers a non-greeting, non-URL prompt; R9's greeting/empty-prompt case is the one this
+ * function's `'greeting'` state covers.
+ */
+export function computeBitbucketFollowups(state: BitbucketFollowupState): BitbucketFollowupSuggestion[] {
+  switch (state.kind) {
+    case 'greeting':
+      return [
+        { prompt: 'check', label: 'Check my connection' },
+      ];
+    case 'reviewCompleted':
+      if (state.findingCount === 0) {
+        return [{ prompt: 'ask a question about this PR', label: 'Ask a question' }];
+      }
+      return [
+        { prompt: 'add all findings to review', label: 'Add findings to review' },
+        { prompt: 'explain finding #1', label: 'Explain finding #1' },
+      ].slice(0, BITBUCKET_MAX_FOLLOWUPS);
+    case 'none':
+      return [];
+  }
+}
+
 export function buildAdaptiveChunks(diffs: FileDiff[], tokenBudget: number): FileDiff[][] {
   if (diffs.length === 0) return [];
   // A file must share a chunk with the fixed overhead, so its own budget is what remains.

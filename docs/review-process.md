@@ -307,3 +307,10 @@ a `<!-- bitbucket:review-session -->` marker is present in the last response —
 | `ticketSidekick.bitbucket.contextBudgetRatio` | 0.7 | fraction of context window per chunk |
 | `ticketSidekick.bitbucket.modelContextTokens` | (model API) | token budget override |
 | `ticketSidekick.bitbucket.reviewExcludePatterns` | `[]` | globs skipped before review |
+
+## Onboarding: follow-up chips and greeting detection
+
+Follow-up suggestion chips after a completed review (add findings to
+review, explain finding #1), and greeting/empty-prompt detection ahead of
+the "Point me at a PR to review" guidance, are documented in
+[`docs/onboarding.md`](onboarding.md#follow-up-suggestion-chips-greeting-detection-and-the-unclassifiable-prompt-fallback).

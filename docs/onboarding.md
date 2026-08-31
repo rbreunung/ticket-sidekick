@@ -239,3 +239,60 @@ Code's Chat API never includes the participant name or command name in
 PR URL — which the existing `prUrlMatch`-driven flow in
 `BitbucketParticipant.ts` already handles unchanged, including its "Point me
 at a PR to review" guidance when `/review` is used with no URL.
+
+## Follow-up suggestion chips, greeting detection, and the unclassifiable-prompt fallback
+
+Both participants offer follow-up suggestion chips (`vscode.ChatFollowup`,
+via `participant.followupProvider`) after every major response, proposing a
+likely next action — e.g. after loading a ticket: add a comment, transition
+it; after a PR review: add findings to review, explain finding #1 (R6).
+
+**State passing.** `vscode.ChatResult.metadata` is the VS Code-native
+channel a chat handler uses to hand its own `followupProvider` "what just
+happened," so each handler's major return points now return
+`{ metadata: { jiraFollowup } }` / `{ metadata: { bitbucketFollowup } }`
+instead of a bare `return;`; a bare `return;` (still valid — `void` stays in
+the handler's return-type union) means "no chip-worthy state," e.g. a
+multi-turn session reply whose own response tag already carries the
+next-step guidance. `followupProvider.provideFollowups(result, …)` reads
+`result.metadata` and hands it to the pure computer below.
+
+**Pure logic (KTD15).** `computeJiraFollowups(state: JiraFollowupState)`
+(`src/participant/sessionState.ts`) and
+`computeBitbucketFollowups(state: BitbucketFollowupState)`
+(`src/participant/reviewSessionState.ts`) each take one discriminated
+"what just happened" state (`'greeting'`, `'fallback'` (`@jira` only),
+`'loadedTicket'` / `'reviewCompleted'`, or `'none'`) and return 2-3
+`{ prompt, label? }` suggestions phrased as literal next prompts — one
+function per participant, rather than a separate function per state, since
+"no prior operation, this is a greeting" is just one more case of the same
+"what just happened" question every other state answers.
+
+**Greeting/empty-prompt detection (R9).** `isGreetingOrEmpty(prompt)`
+(`src/participant/sessionState.ts`, shared by both participants) detects an
+empty invocation or an obvious greeting/help-shaped prompt ("hi", "help",
+"what can you do") before it's ever handed to `@jira`'s LLM intent parser or
+`@bitbucket`'s PR-URL match — checked only *after* every multi-turn
+session-tag branch has had its chance to claim the turn (a session already
+in flight always wins, mirroring the ordering `docs/jira-flows.md`'s
+slash-command dispatch already follows), and, for `@jira`, only when no
+`/command` was used. It matches the WHOLE normalized prompt against a fixed
+phrase set — never a substring or per-word test — so a real ticket key that
+happens to look like a greeting word (e.g. `HI-1`) or a genuine operation
+prompt ("update HI-1 status") is never misclassified; see
+[`docs/solutions/logic-errors/confirm-cancel-word-list-broadening-swallows-domain-name-collisions.md`](solutions/logic-errors/confirm-cancel-word-list-broadening-swallows-domain-name-collisions.md)
+for the general specific-before-generic principle this sidesteps by
+construction.
+
+**Unclassifiable-prompt fallback (R8, `@jira` only).** The old bare
+`"Unrecognised operation."` message (the `default:` case of `@jira`'s
+operation switch) is replaced with a short, helpful line plus follow-up
+chips carrying example prompts — `@bitbucket` has no equivalent fallback to
+reroute, since it has no LLM intent classifier to bypass, only a PR-URL
+match, and its existing "Point me at a PR to review" guidance already covers
+a non-greeting, non-URL prompt.
+
+**KTD14.** Both the greeting response and the unclassifiable-prompt fallback
+deliver their example prompts *only* as follow-up chips, capped at 2-3 and
+phrased as literal next prompts a user could send — never duplicated as a
+bulleted list in the response's own markdown.
