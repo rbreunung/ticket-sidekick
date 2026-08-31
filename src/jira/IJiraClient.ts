@@ -142,7 +142,7 @@ export interface IJiraClient {
   searchFiltersByName(name: string): Promise<JiraFilter[]>;
   getFields(): Promise<JiraFieldMeta[]>;
   getEditMeta(issueKey: string): Promise<Record<string, JiraEditMetaField>>;
-  getRequiredFields(projectKey: string, issueType: string): Promise<JiraFieldMeta[]>;
+  getRequiredFields(projectKey: string, issueType: string, issueTypeId?: string): Promise<JiraFieldMeta[]>;
   findSprints(projectKey: string, query: string): Promise<JiraSprintCandidate[]>;
   uploadAttachment(issueKey: string, filename: string, contentType: string, contentBytes: string): Promise<void>;
   getRemoteLinks(issueKey: string): Promise<JiraRemoteLink[]>;

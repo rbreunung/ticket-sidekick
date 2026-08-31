@@ -389,22 +389,68 @@ export class JiraApiClient implements IJiraClient {
     return data.fields;
   }
 
-  async getRequiredFields(projectKey: string, issueType: string): Promise<JiraFieldMeta[]> {
-    type CreateMetaField = { required: boolean; name: string; schema: { type: string; items?: string; custom?: string } };
-    type CreateMetaResponse = {
-      projects: Array<{
-        key: string;
-        issuetypes: Array<{ name: string; fields: Record<string, CreateMetaField> }>;
-      }>;
+  /**
+   * Generic pagination collector for the granular createmeta endpoints (and any future
+   * offset/total/isLast-shaped listing). Mirrors getAllComments()'s loop convention: stop
+   * on an empty page, once `collected.length >= total`, or once `isLast` reports true —
+   * with a hard iteration cap as a backstop against a server response that never advances.
+   */
+  private async collectPaginated<T>(
+    fetchPage: (startAt: number) => Promise<{ items: T[]; total?: number; isLast?: boolean }>,
+  ): Promise<T[]> {
+    const collected: T[] = [];
+    let startAt = 0;
+    const maxIterations = 1000;
+    for (let i = 0; i < maxIterations; i++) {
+      const { items, total, isLast } = await fetchPage(startAt);
+      collected.push(...items);
+      if (items.length === 0 || isLast === true || (total !== undefined && collected.length >= total)) break;
+      startAt += items.length;
+    }
+    return collected;
+  }
+
+  /**
+   * Resolves an issue type's id by case-insensitive name match against the project-scoped
+   * createmeta issue-type list — the same granular family used to fetch fields, not a
+   * global issue-type list (consistent with TicketService.getIssueTypes()'s project scope).
+   */
+  private async resolveIssueTypeId(projectKey: string, issueType: string): Promise<string | undefined> {
+    type ListItem = { id: string; name: string };
+    const basePath = `/issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes`;
+    const items = this.authType === 'cloud'
+      ? await this.collectPaginated<ListItem>((startAt) =>
+          this.requestV3<{ issueTypes: ListItem[]; total?: number }>(`${basePath}?startAt=${startAt}`)
+            .then((data) => ({ items: data.issueTypes ?? [], total: data.total })))
+      : await this.collectPaginated<ListItem>((startAt) =>
+          this.request<{ values: ListItem[]; total?: number; isLast?: boolean }>(`${basePath}?startAt=${startAt}`)
+            .then((data) => ({ items: data.values ?? [], total: data.total, isLast: data.isLast })));
+    const lowerName = issueType.toLowerCase();
+    return items.find((it) => it.name.toLowerCase() === lowerName)?.id;
+  }
+
+  async getRequiredFields(projectKey: string, issueType: string, issueTypeId?: string): Promise<JiraFieldMeta[]> {
+    type CreateMetaFieldItem = {
+      fieldId: string;
+      name: string;
+      required: boolean;
+      schema: { type: string; items?: string; custom?: string };
     };
-    const qs = `projectKeys=${encodeURIComponent(projectKey)}&issuetypeNames=${encodeURIComponent(issueType)}&expand=projects.issuetypes.fields`;
-    const data = await this.request<CreateMetaResponse>(`/issue/createmeta?${qs}`);
-    const project = data.projects.find((p) => p.key === projectKey);
-    const issueTypeMeta = project?.issuetypes.find((it) => it.name.toLowerCase() === issueType.toLowerCase());
-    if (!issueTypeMeta) return [];
-    return Object.entries(issueTypeMeta.fields)
-      .filter(([, field]) => field.required)
-      .map(([id, field]) => ({ id, name: field.name, schema: field.schema }));
+    const resolvedId = issueTypeId ?? await this.resolveIssueTypeId(projectKey, issueType);
+    if (!resolvedId) return [];
+
+    const basePath = `/issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes/${encodeURIComponent(resolvedId)}`;
+    const fieldItems = this.authType === 'cloud'
+      ? await this.collectPaginated<CreateMetaFieldItem>((startAt) =>
+          this.requestV3<{ fields: CreateMetaFieldItem[]; total?: number }>(`${basePath}?startAt=${startAt}`)
+            .then((data) => ({ items: data.fields ?? [], total: data.total })))
+      : await this.collectPaginated<CreateMetaFieldItem>((startAt) =>
+          this.request<{ values: CreateMetaFieldItem[]; total?: number; isLast?: boolean }>(`${basePath}?startAt=${startAt}`)
+            .then((data) => ({ items: data.values ?? [], total: data.total, isLast: data.isLast })));
+
+    return fieldItems
+      .filter((field) => field.required)
+      .map((field) => ({ id: field.fieldId, name: field.name, schema: field.schema }));
   }
 
   async getRemoteLinks(issueKey: string): Promise<JiraRemoteLink[]> {

@@ -391,81 +391,227 @@ describe('JiraApiClient', () => {
     });
   });
 
-  describe('getRequiredFields (create-metadata)', () => {
-    const createMetaPayload = (fields: Record<string, unknown>) => ({
-      projects: [
-        {
-          id: '10000',
-          key: 'PROJ',
-          issuetypes: [
-            { id: '1', name: 'Bug', fields },
-          ],
-        },
-      ],
+  describe('getRequiredFields (granular createmeta)', () => {
+    // Per-issue-type field metadata item shape shared by DC (v2, under `values`) and
+    // Cloud (v3, under `fields`) — both wrap the same field-item shape.
+    const fieldItem = (fieldId: string, name: string, required: boolean, schema: Record<string, unknown>) => ({
+      fieldId, name, required, schema,
     });
 
-    it('calls the createmeta endpoint with project key and issue type', async () => {
-      const mockFetch = makeFetch(createMetaPayload({
-        summary: { required: true, name: 'Summary', schema: { type: 'string' } },
+    function makePagedFetch(pages: unknown[]): ReturnType<typeof vi.fn> {
+      let call = 0;
+      return vi.fn().mockImplementation(() => {
+        const page = pages[Math.min(call, pages.length - 1)];
+        call++;
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: { get: (h: string) => (h === 'content-type' ? 'application/json' : null) },
+          json: () => Promise.resolve(page),
+        });
+      });
+    }
+
+    describe('issueTypeId given — skips list resolution', () => {
+      it('Data Center: calls the per-type endpoint directly and extracts required fields from `values`', async () => {
+        const mockFetch = makeFetch({
+          maxResults: 50, startAt: 0, total: 2, isLast: true,
+          values: [
+            fieldItem('summary', 'Summary', true, { type: 'string' }),
+            fieldItem('description', 'Description', false, { type: 'string' }),
+          ],
+        });
+        vi.stubGlobal('fetch', mockFetch);
+        const client = new JiraApiClient(BASE_CONFIG);
+        const result = await client.getRequiredFields('PROJ', 'Bug', '10001');
+        const [url, options] = mockFetch.mock.calls[0] as [string, RequestInit];
+        expect(url).toContain('/rest/api/2/issue/createmeta/PROJ/issuetypes/10001');
+        expect(options.method).toBeUndefined();
+        expect(result).toEqual([{ id: 'summary', name: 'Summary', schema: { type: 'string' } }]);
+      });
+
+      it('Cloud: calls the v3 per-type endpoint and extracts required fields from `fields`', async () => {
+        const mockFetch = makeFetch({
+          maxResults: 50, startAt: 0, total: 1,
+          fields: [
+            fieldItem('customfield_10500', 'Team', true, {
+              type: 'array', items: 'option', custom: 'com.atlassian.jira.plugin.system.customfieldtypes:multiselect',
+            }),
+          ],
+        });
+        vi.stubGlobal('fetch', mockFetch);
+        const client = new JiraApiClient({ ...BASE_CONFIG, authType: 'cloud' });
+        const result = await client.getRequiredFields('PROJ', 'Bug', '10001');
+        const [url] = mockFetch.mock.calls[0] as [string, RequestInit];
+        expect(url).toContain('/rest/api/3/issue/createmeta/PROJ/issuetypes/10001');
+        expect(result).toEqual([{
+          id: 'customfield_10500', name: 'Team',
+          schema: { type: 'array', items: 'option', custom: 'com.atlassian.jira.plugin.system.customfieldtypes:multiselect' },
+        }]);
+      });
+    });
+
+    describe('issueTypeId absent — resolves via list endpoint first', () => {
+      it('Data Center: resolves id by case-insensitive name match, then fetches per-type fields', async () => {
+        const mockFetch = vi.fn().mockImplementation((url: string) => {
+          if (url.includes('/issuetypes/10001')) {
+            return Promise.resolve({
+              ok: true, status: 200,
+              headers: { get: () => 'application/json' },
+              json: () => Promise.resolve({
+                maxResults: 50, startAt: 0, total: 1, isLast: true,
+                values: [fieldItem('summary', 'Summary', true, { type: 'string' })],
+              }),
+            });
+          }
+          if (url.includes('/issuetypes?') || url.endsWith('/issuetypes')) {
+            return Promise.resolve({
+              ok: true, status: 200,
+              headers: { get: () => 'application/json' },
+              json: () => Promise.resolve({
+                maxResults: 50, startAt: 0, total: 1, isLast: true,
+                values: [{ id: '10001', name: 'Bug' }],
+              }),
+            });
+          }
+          throw new Error(`unexpected url ${url}`);
+        });
+        vi.stubGlobal('fetch', mockFetch);
+        const client = new JiraApiClient(BASE_CONFIG);
+        const result = await client.getRequiredFields('PROJ', 'bug'); // lowercase — must match case-insensitively
+        expect(result).toEqual([{ id: 'summary', name: 'Summary', schema: { type: 'string' } }]);
+        const listCall = mockFetch.mock.calls.find(([u]) => (u as string).includes('/issuetypes') && !(u as string).includes('/issuetypes/'));
+        expect(listCall?.[0]).toContain('/rest/api/2/issue/createmeta/PROJ/issuetypes');
+        const perTypeCall = mockFetch.mock.calls.find(([u]) => (u as string).includes('/issuetypes/10001'));
+        expect(perTypeCall?.[0]).toContain('/rest/api/2/issue/createmeta/PROJ/issuetypes/10001');
+      });
+
+      it('Cloud: resolves id from `issueTypes` list, then fetches per-type fields from v3', async () => {
+        const mockFetch = vi.fn().mockImplementation((url: string) => {
+          if (url.includes('/issuetypes/20002')) {
+            return Promise.resolve({
+              ok: true, status: 200,
+              headers: { get: () => 'application/json' },
+              json: () => Promise.resolve({
+                maxResults: 50, startAt: 0, total: 1,
+                fields: [fieldItem('summary', 'Summary', true, { type: 'string' })],
+              }),
+            });
+          }
+          return Promise.resolve({
+            ok: true, status: 200,
+            headers: { get: () => 'application/json' },
+            json: () => Promise.resolve({
+              maxResults: 50, startAt: 0, total: 1,
+              issueTypes: [{ id: '20002', name: 'Bug' }],
+            }),
+          });
+        });
+        vi.stubGlobal('fetch', mockFetch);
+        const client = new JiraApiClient({ ...BASE_CONFIG, authType: 'cloud' });
+        const result = await client.getRequiredFields('PROJ', 'Bug');
+        expect(result).toEqual([{ id: 'summary', name: 'Summary', schema: { type: 'string' } }]);
+        const listCall = mockFetch.mock.calls.find(([u]) => (u as string).includes('/issuetypes') && !(u as string).includes('/issuetypes/'));
+        expect(listCall?.[0]).toContain('/rest/api/3/issue/createmeta/PROJ/issuetypes');
+      });
+
+      it('returns [] when no issue type in the list matches the given name (preserves current behavior)', async () => {
+        vi.stubGlobal('fetch', makeFetch({
+          maxResults: 50, startAt: 0, total: 1, isLast: true,
+          values: [{ id: '10001', name: 'Story' }],
+        }));
+        const client = new JiraApiClient(BASE_CONFIG);
+        const result = await client.getRequiredFields('PROJ', 'Bug');
+        expect(result).toEqual([]);
+      });
+    });
+
+    describe('pagination', () => {
+      it('Data Center: list call spans two pages (isLast false then true) before a match is found', async () => {
+        const mockFetch = makePagedFetch([
+          { maxResults: 1, startAt: 0, total: 2, isLast: false, values: [{ id: '10000', name: 'Task' }] },
+          { maxResults: 1, startAt: 1, total: 2, isLast: true, values: [{ id: '10001', name: 'Bug' }] },
+        ]);
+        // Per-type fetch (once id is resolved) always returns a single page.
+        const perTypeFetch = makeFetch({
+          maxResults: 50, startAt: 0, total: 1, isLast: true,
+          values: [fieldItem('summary', 'Summary', true, { type: 'string' })],
+        });
+        let listCalls = 0;
+        vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string, opts: RequestInit) => {
+          if (url.includes('/issuetypes/10001')) return perTypeFetch(url, opts);
+          listCalls++;
+          return mockFetch(url, opts);
+        }));
+        const client = new JiraApiClient(BASE_CONFIG);
+        const result = await client.getRequiredFields('PROJ', 'Bug');
+        expect(result).toEqual([{ id: 'summary', name: 'Summary', schema: { type: 'string' } }]);
+        expect(listCalls).toBe(2);
+      });
+
+      it('Cloud: per-type call spans two pages of `fields` (total/startAt, no isLast) before filtering', async () => {
+        const idFetch = makeFetch({ maxResults: 50, startAt: 0, total: 1, issueTypes: [{ id: '20002', name: 'Bug' }] });
+        const perTypePages = makePagedFetch([
+          { maxResults: 1, startAt: 0, total: 2, fields: [fieldItem('summary', 'Summary', true, { type: 'string' })] },
+          { maxResults: 1, startAt: 1, total: 2, fields: [fieldItem('description', 'Description', false, { type: 'string' })] },
+        ]);
+        let perTypeCalls = 0;
+        vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string, opts: RequestInit) => {
+          if (url.includes('/issuetypes/20002')) {
+            perTypeCalls++;
+            return perTypePages(url, opts);
+          }
+          return idFetch(url, opts);
+        }));
+        const client = new JiraApiClient({ ...BASE_CONFIG, authType: 'cloud' });
+        const result = await client.getRequiredFields('PROJ', 'Bug');
+        expect(result).toEqual([{ id: 'summary', name: 'Summary', schema: { type: 'string' } }]);
+        expect(perTypeCalls).toBe(2);
+      });
+    });
+
+    describe('empty results', () => {
+      it('Data Center: a 200 with an empty `values` array (no create permission) returns [] without throwing', async () => {
+        vi.stubGlobal('fetch', makeFetch({ maxResults: 50, startAt: 0, total: 0, isLast: true, values: [] }));
+        const client = new JiraApiClient(BASE_CONFIG);
+        await expect(client.getRequiredFields('PROJ', 'Bug', '10001')).resolves.toEqual([]);
+      });
+
+      it('Cloud: a 200 with an empty `issueTypes` array returns [] without throwing', async () => {
+        vi.stubGlobal('fetch', makeFetch({ maxResults: 50, startAt: 0, total: 0, issueTypes: [] }));
+        const client = new JiraApiClient({ ...BASE_CONFIG, authType: 'cloud' });
+        await expect(client.getRequiredFields('PROJ', 'Bug')).resolves.toEqual([]);
+      });
+    });
+
+    it('runaway pagination is capped by maxIterations instead of hanging', async () => {
+      // Never reports completion: isLast always false, total never reached, item never matches.
+      const mockFetch = vi.fn().mockImplementation(() => Promise.resolve({
+        ok: true, status: 200,
+        headers: { get: () => 'application/json' },
+        json: () => Promise.resolve({
+          maxResults: 1, startAt: 0, total: 999999, isLast: false,
+          values: [{ id: '999', name: 'Never Matches' }],
+        }),
       }));
       vi.stubGlobal('fetch', mockFetch);
       const client = new JiraApiClient(BASE_CONFIG);
-      await client.getRequiredFields('PROJ', 'Bug');
-      const [url, options] = mockFetch.mock.calls[0] as [string, RequestInit];
-      expect(url).toContain('/rest/api/2/issue/createmeta?');
-      expect(url).toContain('projectKeys=PROJ');
-      expect(url).toContain('issuetypeNames=Bug');
-      expect(options.method).toBeUndefined();
-    });
-
-    it('returns only the required fields for the requested issue type', async () => {
-      vi.stubGlobal('fetch', makeFetch(createMetaPayload({
-        summary: { required: true, name: 'Summary', schema: { type: 'string' } },
-        description: { required: false, name: 'Description', schema: { type: 'string' } },
-        customfield_10500: {
-          required: true,
-          name: 'Team',
-          schema: { type: 'array', items: 'option', custom: 'com.atlassian.jira.plugin.system.customfieldtypes:multiselect' },
-        },
-      })));
-      const client = new JiraApiClient(BASE_CONFIG);
-      const result = await client.getRequiredFields('PROJ', 'Bug');
-      expect(result).toEqual([
-        { id: 'summary', name: 'Summary', schema: { type: 'string' } },
-        {
-          id: 'customfield_10500',
-          name: 'Team',
-          schema: { type: 'array', items: 'option', custom: 'com.atlassian.jira.plugin.system.customfieldtypes:multiselect' },
-        },
-      ]);
-    });
-
-    it('returns an empty array when the issue type has no required fields', async () => {
-      vi.stubGlobal('fetch', makeFetch(createMetaPayload({
-        description: { required: false, name: 'Description', schema: { type: 'string' } },
-      })));
-      const client = new JiraApiClient(BASE_CONFIG);
       const result = await client.getRequiredFields('PROJ', 'Bug');
       expect(result).toEqual([]);
-    });
-
-    it('returns an empty array when the project/issue type is absent from the response', async () => {
-      vi.stubGlobal('fetch', makeFetch({ projects: [] }));
-      const client = new JiraApiClient(BASE_CONFIG);
-      const result = await client.getRequiredFields('PROJ', 'Bug');
-      expect(result).toEqual([]);
+      // Bounded by the hard iteration cap, not an infinite loop.
+      expect(mockFetch.mock.calls.length).toBeLessThanOrEqual(1000);
     });
 
     it('throws a typed JiraApiError on 404', async () => {
       vi.stubGlobal('fetch', makeFetch({}, 404));
       const client = new JiraApiClient(BASE_CONFIG);
-      await expect(client.getRequiredFields('PROJ', 'Bug')).rejects.toBeInstanceOf(JiraApiError);
+      await expect(client.getRequiredFields('PROJ', 'Bug', '10001')).rejects.toBeInstanceOf(JiraApiError);
     });
 
     it('throws a typed JiraApiError carrying status 401 on auth failure', async () => {
       vi.stubGlobal('fetch', makeFetch({}, 401));
       const client = new JiraApiClient(BASE_CONFIG);
-      const err = await client.getRequiredFields('PROJ', 'Bug').catch((e: unknown) => e);
+      const err = await client.getRequiredFields('PROJ', 'Bug', '10001').catch((e: unknown) => e);
       expect(err).toBeInstanceOf(JiraApiError);
       expect((err as JiraApiError).status).toBe(401);
     });
