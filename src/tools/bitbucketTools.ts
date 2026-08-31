@@ -5,6 +5,7 @@ import { ConfigService } from '../services/ConfigService';
 import { PrReviewService } from '../services/PrReviewService';
 import { logDiag } from '../utils/diagLog';
 import { isSafePathSegment } from './pathSafety';
+import { RecentCallGuard, fingerprint } from './recentCallGuard';
 import {
   buildBitbucketNotConfiguredMessage,
   buildPostCommentConfirmation,
@@ -187,6 +188,10 @@ interface PostCommentInput {
 }
 
 class PostCommentTool implements vscode.LanguageModelTool<PostCommentInput> {
+  // Each call posts a new comment (not idempotent) — a retried Agent Mode call with identical
+  // input would otherwise post the same comment twice with no reconciliation.
+  private readonly recentCalls = new RecentCallGuard();
+
   constructor(private readonly configService: ConfigService) {}
 
   async prepareInvocation(
@@ -211,9 +216,14 @@ class PostCommentTool implements vscode.LanguageModelTool<PostCommentInput> {
     if (!isSafePathSegment(project) || !isSafePathSegment(repo)) return textResult('The project/workspace or repo value is not valid.');
     if (!Number.isInteger(prId) || prId <= 0) return textResult('A positive pull request id is required, e.g. 42.');
     if (!comment) return textResult('Comment text is required.');
+    const dupeKey = fingerprint(project, repo, prId, comment);
+    if (!this.recentCalls.claim(dupeKey)) {
+      return textResult(`Skipped: an identical comment on PR #${prId} (${project}/${repo}) was just posted in the last minute. If this is intentional, change the text or wait before retrying.`);
+    }
+    const release = () => this.recentCalls.release(dupeKey);
 
     const ctx = await tryGetConfiguredContext(this.configService);
-    if (isNotConfiguredResult(ctx)) return ctx;
+    if (isNotConfiguredResult(ctx)) { release(); return ctx; } // not a real attempt — don't block a real retry
     const { prReviewService } = ctx;
 
     // A synthetic, line-less finding — postCommentItems only reads `line`/`lineType`/`fileType`
@@ -239,8 +249,10 @@ class PostCommentTool implements vscode.LanguageModelTool<PostCommentInput> {
           : `comment #${result.result.commentId}`;
         return textResult(`Posted ${ref} on PR #${prId} (${project}/${repo}).`);
       }
+      release(); // the comment wasn't actually posted — a retry isn't a duplicate
       return textResult(`Could not post comment on PR #${prId} (${project}/${repo}): ${result.error}`);
     } catch (err) {
+      release(); // the comment wasn't actually posted — a retry isn't a duplicate
       const message = err instanceof Error ? err.message : String(err);
       logDiag('bitbucket.tools', 'error', `bitbucket_postComment failed — ${project}/${repo}#${prId}`, { project, repo, prId, error: message });
       return textResult(`Could not post comment on PR #${prId} (${project}/${repo}): ${message}`);

@@ -57,6 +57,26 @@ describe('jira_createTicket confirmation (KTD4: names project/type/summary)', ()
     expect(confirmation.message).not.toMatch(/\*\*null\*\*/);
     expect(confirmation.message).toContain('to be resolved');
   });
+
+  it('lists the template\'s resolved field values so approval is not blind to what it sets', () => {
+    const confirmation = buildCreateTicketConfirmation('PROJ', 'Bug', 'Login fails on Safari', 'Bug report', {
+      priority: { name: 'High' },
+      labels: ['frontend', 'safari'],
+      description: 'This should not appear — shown separately.',
+    });
+    expect(confirmation.message).toContain('priority');
+    expect(confirmation.message).toContain('High');
+    expect(confirmation.message).toContain('frontend');
+    expect(confirmation.message).toContain('safari');
+    expect(confirmation.message).not.toContain('should not appear');
+  });
+
+  it('adds no extra note when there are no resolved fields to show', () => {
+    const withNull = buildCreateTicketConfirmation('PROJ', 'Bug', 'Login fails on Safari', null, null);
+    const withEmpty = buildCreateTicketConfirmation('PROJ', 'Bug', 'Login fails on Safari', null, {});
+    expect(withNull.message).not.toContain('will also set');
+    expect(withEmpty.message).not.toContain('will also set');
+  });
 });
 
 describe('jira_transitionTicket confirmation', () => {

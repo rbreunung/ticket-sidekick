@@ -510,8 +510,13 @@ export function createJiraParticipant(
       }
     }
 
-    // Bulk update review — user replied ok / skip keys / cancel
-    if (lastResponse.includes('<!-- jira:bulk-update-review -->')) {
+    // Bulk update review — user replied ok / skip keys / cancel. Only when no explicit slash
+    // command was typed this turn: an ordinary reply like "skip PROJ-1 PROJ-2" is meant for this
+    // session, but a real `/comment`/`/field`/etc. command whose leftover prompt text happens to
+    // start with a generic word this parser recognizes (e.g. "skip") is an unambiguous signal
+    // the user meant a new operation, not a continuation reply — the session itself is left
+    // untouched, so it's still there to resume on the next ordinary-text turn.
+    if (!request.command && lastResponse.includes('<!-- jira:bulk-update-review -->')) {
       const bulkSession = ws.get<BulkUpdateReviewSession>('jira.session.bulkUpdateReview');
       if (bulkSession) {
         const decision = parseBulkUpdateReview(request.prompt);
@@ -1036,6 +1041,11 @@ export function createJiraParticipant(
               break;
             case 'multiHop':
               result = `**${ticketKey}** moved to **${transResult.toStatus}** (${transResult.hops} hop${transResult.hops > 1 ? 's' : ''}).`;
+              break;
+            case 'partialFailure':
+              result = `⚠️ **${ticketKey}** moved partway to **${transResult.landedStatus}** ` +
+                `(${transResult.completedHops} of ${transResult.totalHops} hops) but the next step to **${transResult.targetStatus}** failed: ${transResult.error} ` +
+                `The ticket is now in **${transResult.landedStatus}**, not its original status — check its current state before retrying.`;
               break;
             case 'unavailable': {
               const available = transResult.available.map(name => `**${name}**`).join(', ');

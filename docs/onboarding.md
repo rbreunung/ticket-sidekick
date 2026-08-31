@@ -71,6 +71,25 @@ Write tools touch exactly one ticket per call — there is no bulk/multi-ticket
 write tool. (`jira_searchTickets` and `jira_discoverWorkflow` are reads and
 aren't bound by this.)
 
+Two additional safeguards apply specifically because tool inputs are
+LLM-supplied rather than typed by a human into chat:
+
+- **Path-safety validation** ([`src/tools/pathSafety.ts`](../src/tools/pathSafety.ts)):
+  every `ticketKey`/`projectKey` (Jira) and `project`/`repo` (Bitbucket) is
+  checked with `isSafePathSegment()` before use — rejecting a value
+  containing `/`, `\`, or `..`, since these values are interpolated
+  unencoded into `JiraApiClient`/`BitbucketApiClient` request URLs and a
+  crafted value could otherwise redirect a request to an unintended
+  endpoint on the same host.
+- **Duplicate-write guard** ([`src/tools/recentCallGuard.ts`](../src/tools/recentCallGuard.ts)):
+  `jira_createTicket`, `jira_addComment`, and `bitbucket_postComment` each
+  create a new artifact per call rather than converging on an idempotent
+  end state, so a retried or looped Agent Mode call with identical inputs
+  is fingerprinted and skipped for one minute rather than creating a
+  duplicate ticket/comment. A call that fails (not-configured, a template
+  error, an API error) releases its claim immediately, so a genuine retry
+  after a real failure is never mistaken for a duplicate.
+
 ### Never-guess issue type (`jira_createTicket`)
 
 `jira_createTicket`'s `modelDescription` steers the calling model to call
@@ -87,6 +106,23 @@ interactive `showInputBox` prompt (chat has one; Agent Mode doesn't) to a
 returned list the calling model can act on in its next call. See
 [`docs/solutions/logic-errors/combined-create-list-silently-guesses-issue-type-and-drops-no-template-fallback.md`](solutions/logic-errors/combined-create-list-silently-guesses-issue-type-and-drops-no-template-fallback.md)
 for the failure mode this must not repeat.
+
+When `templateName` resolves, `prepareInvocation()` also previews the
+template's own default field values (e.g. priority, labels) below the main
+confirmation line — approving a template-driven create is never blind to
+what the template silently sets beyond project/type/summary. That preview
+is best-effort (never throws); `invoke()` resolves the template for real
+regardless of what the preview managed to show.
+
+`jira_transitionTicket`'s multi-hop path (via a cached workflow graph) can
+fail partway through — each hop is a real Jira write, so a mid-path failure
+leaves the ticket at an intermediate status, not its original one. The tool
+(and the equivalent `@jira` chat `transition` operation, which shares the
+same `resolveAndApplyTransition()` resolution — see
+[`src/services/WorkflowService.ts`](../src/services/WorkflowService.ts))
+reports exactly how many of the planned hops completed and where the
+ticket actually landed, rather than a bare "transition failed" that would
+imply nothing changed.
 
 ### No session memory
 
@@ -209,6 +245,15 @@ already in flight always finishes claiming the turn before a slash command
 can (KTD12). `/check` is the one exception — it's merged directly into the
 existing plain-text `check` regex special-case, which runs (unchanged)
 before the session-tag scan, same as it always did.
+
+The bulk-update-review session is the other exception: its own reply parser
+recognizes bare generic words (`skip <keys>`) that could coincidentally be
+the leftover prompt text of an unrelated `/comment`/`/field`/etc. command
+(e.g. `/comment skip PROJ-1, moving on`). That session step only fires when
+`request.command` is unset — an explicit slash command is an unambiguous
+"this is a new operation" signal, and the pending session is left untouched
+(not cleared), so it's still there to resume on the next ordinary-text
+reply.
 
 | Command | Target flow | `sampleRequest` |
 | --- | --- | --- |

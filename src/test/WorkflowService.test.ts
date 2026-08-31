@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { findPath, loadWorkflowCache, discoverWorkflow, preserveSkippedStatuses, resolveAndApplyTransition, discoverAndCacheWorkflow, saveWorkflowCache } from '../services/WorkflowService';
 import { MockJiraClient } from './mocks/MockJiraClient';
-import { TicketService } from '../services/TicketService';
+import { TicketService, PartialTransitionError } from '../services/TicketService';
 
 const graph = {
   'Open':        [{ id: '11', name: 'Start Progress', to: 'In Progress' }],
@@ -186,6 +186,63 @@ describe('resolveAndApplyTransition', () => {
       { issueKey: 'PROJ-123', transitionId: '31', fields: undefined },
       { issueKey: 'PROJ-123', transitionId: '99', fields: undefined },
     ]);
+  });
+
+  it('reports a partial failure — with how far it got — when a multi-hop transition fails after the first hop', async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'ticket-sidekick-workflow-'));
+    saveWorkflowCache(tmpDir, {
+      PROJ: {
+        '': {
+          discovered: '2020-01-01',
+          graph: {
+            'In Progress': [{ id: '31', name: 'Review', to: 'In Review' }],
+            'In Review': [{ id: '99', name: 'Close', to: 'Closed' }],
+          },
+        },
+      },
+    });
+    const client = new MockJiraClient();
+    let calls = 0;
+    client.executeTransition = async (issueKey, transitionId) => {
+      calls++;
+      client.executeTransitionCalls.push({ issueKey, transitionId });
+      if (calls === 2) throw new Error('Jira 500: internal error');
+    };
+    const service = new TicketService(client);
+
+    const result = await resolveAndApplyTransition(client, service, tmpDir, 'PROJ-123', 'Closed');
+
+    expect(result).toEqual({
+      kind: 'partialFailure',
+      completedHops: 1,
+      totalHops: 2,
+      landedStatus: 'In Review',
+      targetStatus: 'Closed',
+      error: expect.stringContaining('Jira 500: internal error'),
+    });
+    // Both hops were attempted (the second failed) — the ticket really did move to "In Review".
+    expect(client.executeTransitionCalls).toHaveLength(2);
+  });
+
+  it('does not report a partial failure when the very first hop fails — nothing changed, so it throws normally', async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'ticket-sidekick-workflow-'));
+    saveWorkflowCache(tmpDir, {
+      PROJ: {
+        '': {
+          discovered: '2020-01-01',
+          graph: {
+            'In Progress': [{ id: '31', name: 'Review', to: 'In Review' }],
+            'In Review': [{ id: '99', name: 'Close', to: 'Closed' }],
+          },
+        },
+      },
+    });
+    const client = new MockJiraClient();
+    client.executeTransition = async () => { throw new Error('Jira 403: forbidden'); };
+    const service = new TicketService(client);
+
+    await expect(resolveAndApplyTransition(client, service, tmpDir, 'PROJ-123', 'Closed'))
+      .rejects.toThrow(PartialTransitionError);
   });
 
   it('reports unavailable with the real transition list when no direct or cached path exists', async () => {

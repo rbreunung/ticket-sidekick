@@ -978,13 +978,37 @@ export function buildCreateTicketConfirmation(
   issueType: string | null,
   summary: string,
   templateName: string | null,
+  resolvedFields?: Record<string, unknown> | null,
 ): ToolConfirmation {
   const typeLabel = issueType ? `a **${issueType}**` : 'a ticket (issue type to be resolved)';
   const templateNote = templateName ? ` using template **${templateName}**` : '';
   return {
     title: `Create ticket in ${projectKey}`,
-    message: `Create ${typeLabel} in **${projectKey}**${templateNote}: "${summary}"`,
+    message: `Create ${typeLabel} in **${projectKey}**${templateNote}: "${summary}"${formatResolvedFieldsNote(resolvedFields)}`,
   };
+}
+
+/** Lists the template's own default field values below the main confirmation line, so approving
+ * a template-driven create isn't blind to what the template silently sets beyond project/type/
+ * summary. `description` is left out — it's already shown separately by the caller when given. */
+function formatResolvedFieldsNote(resolvedFields?: Record<string, unknown> | null): string {
+  if (!resolvedFields) return '';
+  const entries = Object.entries(resolvedFields).filter(([key]) => key !== 'description');
+  if (entries.length === 0) return '';
+  const lines = entries.map(([key, value]) => `- **${key}**: ${formatResolvedFieldValue(value)}`);
+  return `\n\nTemplate will also set:\n${lines.join('\n')}`;
+}
+
+function formatResolvedFieldValue(value: unknown): string {
+  if (value === null || value === undefined) return '_(not set)_';
+  if (Array.isArray(value)) return value.map((v) => formatResolvedFieldValue(v)).join(', ');
+  if (typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    if (typeof obj.name === 'string') return obj.name;
+    if (typeof obj.value === 'string') return obj.value;
+    return JSON.stringify(value);
+  }
+  return String(value);
 }
 
 /** Confirmation for `jira_transitionTicket` — names the ticket and the target status.

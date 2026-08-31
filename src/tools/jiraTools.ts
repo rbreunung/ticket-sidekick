@@ -7,6 +7,7 @@ import { FieldResolver } from '../templates/FieldResolver';
 import { discoverAndCacheWorkflow, resolveAndApplyTransition } from '../services/WorkflowService';
 import { logDiag } from '../utils/diagLog';
 import { isSafePathSegment } from './pathSafety';
+import { RecentCallGuard, fingerprint } from './recentCallGuard';
 import {
   buildJiraNotConfiguredMessage,
   formatCommentsInFull,
@@ -286,6 +287,10 @@ interface AddCommentInput {
 }
 
 class AddCommentTool implements vscode.LanguageModelTool<AddCommentInput> {
+  // Each call posts a new comment (not idempotent) — a retried Agent Mode call with identical
+  // input would otherwise post the same comment twice with no reconciliation.
+  private readonly recentCalls = new RecentCallGuard();
+
   constructor(private readonly configService: ConfigService) {}
 
   async prepareInvocation(
@@ -305,15 +310,23 @@ class AddCommentTool implements vscode.LanguageModelTool<AddCommentInput> {
     if (!ticketKey) return textResult('A ticket key is required, e.g. PROJ-123.');
     if (!isSafePathSegment(ticketKey)) return textResult(`"${ticketKey}" is not a valid ticket key.`);
     if (!comment) return textResult('Comment text is required.');
+    const dupeKey = fingerprint(ticketKey, comment);
+    if (!this.recentCalls.claim(dupeKey)) {
+      return textResult(`Skipped: an identical comment on ${ticketKey} was just posted in the last minute. If this is intentional, change the text or wait before retrying.`);
+    }
 
     const ctx = await tryGetConfiguredContext(this.configService);
-    if (isNotConfiguredResult(ctx)) return ctx;
+    if (isNotConfiguredResult(ctx)) {
+      this.recentCalls.release(dupeKey); // not a real attempt — don't block a real retry
+      return ctx;
+    }
     const { config, ticketService } = ctx;
 
     try {
       const text = await ticketService.addComment(ticketKey, comment, config.baseUrl);
       return textResult(text);
     } catch (err) {
+      this.recentCalls.release(dupeKey); // the write didn't actually happen — a retry isn't a duplicate
       const message = err instanceof Error ? err.message : String(err);
       logDiag('jira.tools', 'error', `jira_addComment failed — ${ticketKey}`, { ticketKey, error: message });
       return textResult(`Could not add comment to ${ticketKey}: ${message}`);
@@ -442,14 +455,34 @@ interface CreateTicketInput {
 }
 
 class CreateTicketTool implements vscode.LanguageModelTool<CreateTicketInput> {
+  // Each call creates a new ticket (not idempotent) — a retried Agent Mode call with identical
+  // input would otherwise create a duplicate ticket with no reconciliation.
+  private readonly recentCalls = new RecentCallGuard();
+
   constructor(private readonly configService: ConfigService) {}
 
   async prepareInvocation(
     options: vscode.LanguageModelToolInvocationPrepareOptions<CreateTicketInput>,
   ): Promise<vscode.PreparedToolInvocation> {
     const { projectKey, summary, issueType, templateName } = options.input;
+    // Best-effort preview of the template's own field values, so approving a template-driven
+    // create isn't blind to what the template silently sets — never throws (same rationale as
+    // UpdateFieldTool/TransitionTicketTool's live pre-fetch): invoke() resolves (and validates)
+    // the template for real regardless of what this preview managed to show.
+    let resolvedFields: Record<string, unknown> | null = null;
+    if (templateName && projectKey) {
+      try {
+        const ctx = await tryGetConfiguredContext(this.configService);
+        if (!isNotConfiguredResult(ctx)) {
+          const templateResult = await resolveTemplateFields(ctx.jiraClient, currentWorkspaceRoot(), projectKey, templateName);
+          if (templateResult.kind === 'resolved') resolvedFields = templateResult.fields;
+        }
+      } catch {
+        // Keep resolvedFields null — see the note above.
+      }
+    }
     const confirmation = buildCreateTicketConfirmation(
-      projectKey || '(unknown project)', issueType || null, summary || '(no summary given)', templateName || null,
+      projectKey || '(unknown project)', issueType || null, summary || '(no summary given)', templateName || null, resolvedFields,
     );
     return {
       invocationMessage: `Creating a ticket in ${projectKey}…`,
@@ -470,16 +503,23 @@ class CreateTicketTool implements vscode.LanguageModelTool<CreateTicketInput> {
 
     if (!projectKey) return textResult('A project key is required, e.g. PROJ.');
     if (!summary) return textResult('A summary is required.');
+    // Fingerprinted on the raw call inputs (not post-resolution values) — this is about
+    // detecting the calling model repeating the same call, not the resolved ticket shape.
+    const dupeKey = fingerprint(projectKey, summary, issueType ?? '', templateName ?? '', description ?? '');
+    if (!this.recentCalls.claim(dupeKey)) {
+      return textResult(`Skipped: an identical ticket in ${projectKey} was just created in the last minute. If this is intentional, change something in the request or wait before retrying.`);
+    }
+    const release = () => this.recentCalls.release(dupeKey);
 
     const ctx = await tryGetConfiguredContext(this.configService);
-    if (isNotConfiguredResult(ctx)) return ctx;
+    if (isNotConfiguredResult(ctx)) { release(); return ctx; } // not a real attempt — don't block a real retry
     const { config, jiraClient, ticketService } = ctx;
 
     let resolvedFields: Record<string, unknown> = {};
 
     if (templateName) {
       const templateResult = await resolveTemplateFields(jiraClient, currentWorkspaceRoot(), projectKey, templateName);
-      if (templateResult.kind === 'error') return textResult(templateResult.message);
+      if (templateResult.kind === 'error') { release(); return textResult(templateResult.message); }
       if (templateResult.kind === 'resolved') {
         if (!issueType) issueType = templateResult.issueType;
         resolvedFields = templateResult.fields;
@@ -497,6 +537,7 @@ class CreateTicketTool implements vscode.LanguageModelTool<CreateTicketInput> {
           projectKey, error: err instanceof Error ? err.message : String(err),
         });
       }
+      release(); // no ticket was created — the never-guess fallback isn't a real attempt either
       return textResult(formatIssueTypeOptionsMessage(projectKey, issueTypes));
     }
 
@@ -506,6 +547,7 @@ class CreateTicketTool implements vscode.LanguageModelTool<CreateTicketInput> {
       const created = await ticketService.createTicket(projectKey, summary, issueType, resolvedFields, config.baseUrl);
       return textResult(created.message);
     } catch (err) {
+      release(); // the ticket wasn't actually created — a retry isn't a duplicate
       const message = err instanceof Error ? err.message : String(err);
       logDiag('jira.tools', 'error', `jira_createTicket failed — ${projectKey}`, { projectKey, issueType, error: message });
       return textResult(`Could not create ticket: ${message}`);
@@ -575,6 +617,15 @@ class TransitionTicketTool implements vscode.LanguageModelTool<TransitionTicketI
             ticketKey, targetStatus, hops: transResult.hops,
           });
           return textResult(`${ticketKey} moved to ${targetStatus} (${transResult.hops} hop${transResult.hops > 1 ? 's' : ''}).`);
+        case 'partialFailure':
+          logDiag('jira.tools', 'warn', `Partial transition — ${ticketKey} landed at ${transResult.landedStatus}`, {
+            ticketKey, targetStatus, completedHops: transResult.completedHops, totalHops: transResult.totalHops, error: transResult.error,
+          });
+          return textResult(
+            `${ticketKey} moved partway to ${transResult.landedStatus} (${transResult.completedHops} of ${transResult.totalHops} hops) ` +
+            `but the next step to ${transResult.targetStatus} failed: ${transResult.error} ` +
+            `The ticket is now in ${transResult.landedStatus}, not its original status — check its current state before retrying.`,
+          );
         case 'unavailable': {
           const available = transResult.available.join(', ');
           const cacheHint = transResult.hasCache

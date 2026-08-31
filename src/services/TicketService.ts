@@ -14,6 +14,27 @@ export interface CreatedTicket {
   message: string;
 }
 
+/** Thrown by `transitionAlongPath` when a multi-hop transition fails partway through. Each hop
+ * is a real Jira write, so a failure after hop 1 leaves the ticket at an intermediate status —
+ * not its original one — and the caller needs `completedHops`/`totalHops` to say so accurately,
+ * rather than reporting a bare "transition failed" that implies nothing changed. */
+export class PartialTransitionError extends Error {
+  constructor(
+    public readonly issueKey: string,
+    public readonly completedHops: number,
+    public readonly totalHops: number,
+    public readonly failedTargetStatus: string,
+    public readonly cause: unknown,
+  ) {
+    const causeMessage = cause instanceof Error ? cause.message : String(cause);
+    const progress = completedHops > 0
+      ? `${completedHops} of ${totalHops} hop(s) completed before failing`
+      : 'failed on the first hop';
+    super(`${issueKey}: transition to "${failedTargetStatus}" failed (${progress}): ${causeMessage}`);
+    this.name = 'PartialTransitionError';
+  }
+}
+
 /** One field proposed for a generated template's review list. `value` is a literal snapshot
  * taken from a reference ticket; it's absent for a no-reference candidate pulled from
  * required-fields create-metadata, where the review step fills the value in later. */
@@ -508,7 +529,8 @@ export class TicketService {
     path: Array<{ id: string; name: string; to: string }>,
     resolution?: string,
   ): Promise<void> {
-    for (const step of path) {
+    for (let i = 0; i < path.length; i++) {
+      const step = path[i];
       const fields: Record<string, unknown> = {};
       if (resolution && step.to === path.at(-1)!.to) fields.resolution = { name: resolution };
       const hasFields = Object.keys(fields).length > 0;
@@ -516,9 +538,13 @@ export class TicketService {
         await this.client.executeTransition(issueKey, step.id, hasFields ? fields : undefined);
       } catch (err) {
         if (hasFields && err instanceof Error && err.message.includes('"resolution"')) {
-          await this.client.executeTransition(issueKey, step.id, undefined);
+          try {
+            await this.client.executeTransition(issueKey, step.id, undefined);
+          } catch (retryErr) {
+            throw new PartialTransitionError(issueKey, i, path.length, step.to, retryErr);
+          }
         } else {
-          throw err;
+          throw new PartialTransitionError(issueKey, i, path.length, step.to, err);
         }
       }
     }

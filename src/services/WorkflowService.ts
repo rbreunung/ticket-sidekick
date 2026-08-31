@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { IJiraClient } from '../jira/IJiraClient';
 import type { TicketService } from './TicketService';
+import { PartialTransitionError } from './TicketService';
 
 export interface CachedTransition {
   id: string;
@@ -114,6 +115,11 @@ export type TransitionResolution =
   | { kind: 'alreadyThere'; currentStatus: string }
   | { kind: 'direct'; toStatus: string }
   | { kind: 'multiHop'; toStatus: string; hops: number }
+  // A multi-hop transition failed partway — the ticket already moved through `completedHops` of
+  // `totalHops` real Jira writes before the failure, so it's now sitting at `landedStatus`, not
+  // its original status. Only surfaced when at least one hop actually completed; a failure on the
+  // very first hop leaves no partial state and is reported as an ordinary thrown error instead.
+  | { kind: 'partialFailure'; completedHops: number; totalHops: number; landedStatus: string; targetStatus: string; error: string }
   | { kind: 'unavailable'; currentStatus: string; available: string[]; projectKey: string; issueType: string; hasCache: boolean };
 
 /**
@@ -150,8 +156,25 @@ export async function resolveAndApplyTransition(
   if (graph) {
     const path = findPath(graph, currentStatus, targetStatus);
     if (path && path.length > 0) {
-      await ticketService.transitionAlongPath(ticketKey, path, resolution);
-      return { kind: 'multiHop', toStatus: targetStatus, hops: path.length };
+      try {
+        await ticketService.transitionAlongPath(ticketKey, path, resolution);
+        return { kind: 'multiHop', toStatus: targetStatus, hops: path.length };
+      } catch (err) {
+        // Only a genuinely partial failure (at least one hop actually landed) gets its own
+        // result kind — a failure on the very first hop left no partial state, so it's no
+        // different from any other transition failure and falls through to the ordinary throw.
+        if (err instanceof PartialTransitionError && err.completedHops > 0) {
+          return {
+            kind: 'partialFailure',
+            completedHops: err.completedHops,
+            totalHops: err.totalHops,
+            landedStatus: path[err.completedHops - 1].to,
+            targetStatus,
+            error: err.message,
+          };
+        }
+        throw err;
+      }
     }
   }
 
