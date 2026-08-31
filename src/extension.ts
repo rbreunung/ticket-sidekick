@@ -20,6 +20,7 @@ import { readAndFilterReport } from './participant/jira/reportImportHandler';
 import { logDiag } from './utils/diagLog';
 import type { IJiraClient } from './jira/IJiraClient';
 import { registerJiraTools } from './tools/jiraTools';
+import { registerBitbucketTools } from './tools/bitbucketTools';
 
 // Shared shape for the two nearly-identical report-import commands (Veracode .xml, Waltz OSS .xlsx):
 // pick a file -> check credentials -> stat+size-cap+read+parse+filter -> empty-result message ->
@@ -391,6 +392,7 @@ export function activate(context: vscode.ExtensionContext): void {
   createJiraParticipant(context, configService);
   createBitbucketParticipant(context, configService);
   registerJiraTools(context, configService);
+  registerBitbucketTools(context, configService);
 }
 
 export function deactivate(): void {}

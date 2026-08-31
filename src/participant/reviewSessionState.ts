@@ -1,7 +1,13 @@
 import { extractJsonObject } from '../utils/extractJsonObject';
 // Type-only — IBitbucketClient.ts has no imports of its own (vscode included), so this
 // stays safe for a vscode-free, Vitest-loadable module.
-import type { BitbucketConfig } from '../bitbucket/IBitbucketClient';
+import type { BitbucketConfig, BitbucketPR } from '../bitbucket/IBitbucketClient';
+// Type-only re-import of the confirmation shape U2's Jira tools already defined — a
+// `prepareInvocation()` confirmation always maps onto the same
+// `vscode.LanguageModelToolConfirmationMessages` shape regardless of which participant's
+// tool is asking, so `bitbucketTools.ts`'s single write tool reuses it rather than
+// declaring an equivalent local interface.
+import type { ToolConfirmation } from './sessionState';
 
 export interface ParsedPrUrl {
   project: string;
@@ -83,6 +89,34 @@ export function buildBitbucketNotConfiguredMessage(config: Pick<BitbucketConfig,
     );
   }
   return `Bitbucket credentials not configured. Run "${setupLabel}" from the Command Palette.`;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Pure helpers for `bitbucket_*` Language Model tools (`src/tools/bitbucketTools.ts`, U3) —
+// result formatting and confirmation-text building kept here so they stay Vitest-loadable,
+// mirroring U2's `jira_*` tool builders in `sessionState.ts`.
+// ---------------------------------------------------------------------------------------------
+
+/** Result text for `bitbucket_getPullRequest` — the same PR fields the chat review's header
+ * surfaces (title, author, target branch), formatted as a standalone summary rather than a
+ * review-in-progress header. */
+export function formatPullRequestSummary(pr: BitbucketPR): string {
+  return (
+    `## PR #${pr.id} — ${pr.title}\n` +
+    `Author: ${pr.author.displayName} → ${pr.targetBranch}\n` +
+    `Source commit: ${pr.fromCommitHash}\n\n` +
+    (pr.description?.trim() ? pr.description.trim() : '_No description._')
+  );
+}
+
+/** Confirmation for `bitbucket_postComment` — names the PR (project/repo/id, which for Cloud
+ * is workspace/slug/id — `parsePrUrl` already normalizes both into this same shape) and shows
+ * the literal comment text, mirroring `buildAddCommentConfirmation`'s Jira equivalent. */
+export function buildPostCommentConfirmation(project: string, repo: string, prId: number, comment: string): ToolConfirmation {
+  return {
+    title: `Post comment on ${project}/${repo}#${prId}`,
+    message: `Post this comment on **${project}/${repo}#${prId}**:\n\n${comment}`,
+  };
 }
 
 export function parsePrUrl(url: string): ParsedPrUrl | null {

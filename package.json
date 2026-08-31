@@ -294,6 +294,101 @@
           },
           "required": ["ticketKey", "targetStatus"]
         }
+      },
+      {
+        "name": "bitbucket_getPullRequest",
+        "displayName": "Get Bitbucket Pull Request",
+        "modelDescription": "Fetches a Bitbucket pull request's title, description, author, target branch, and source commit hash.",
+        "userDescription": "View a Bitbucket pull request's details.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "bitbucketGetPullRequest",
+        "icon": "$(preview)",
+        "when": "ticketSidekick.bitbucketCredentialsSet",
+        "tags": ["bitbucket"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string",
+              "description": "Bitbucket project key (Data Center) or workspace (Cloud), e.g. PROJ or myworkspace"
+            },
+            "repo": {
+              "type": "string",
+              "description": "Repository slug, e.g. myrepo"
+            },
+            "prId": {
+              "type": "number",
+              "description": "Pull request id, e.g. 42"
+            }
+          },
+          "required": ["project", "repo", "prId"]
+        }
+      },
+      {
+        "name": "bitbucket_getPullRequestDiff",
+        "displayName": "Get Bitbucket Pull Request Diff",
+        "modelDescription": "Fetches the unified diff for a Bitbucket pull request.",
+        "userDescription": "View a Bitbucket pull request's diff.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "bitbucketGetPullRequestDiff",
+        "icon": "$(diff)",
+        "when": "ticketSidekick.bitbucketCredentialsSet",
+        "tags": ["bitbucket"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string",
+              "description": "Bitbucket project key (Data Center) or workspace (Cloud), e.g. PROJ or myworkspace"
+            },
+            "repo": {
+              "type": "string",
+              "description": "Repository slug, e.g. myrepo"
+            },
+            "prId": {
+              "type": "number",
+              "description": "Pull request id, e.g. 42"
+            },
+            "contextLines": {
+              "type": "number",
+              "description": "Diff context lines to request around each hunk (default: the configured ticketSidekick.bitbucket.reviewContextLines, 12)."
+            }
+          },
+          "required": ["project", "repo", "prId"]
+        }
+      },
+      {
+        "name": "bitbucket_postComment",
+        "displayName": "Post Bitbucket Comment",
+        "modelDescription": "Posts a comment to a Bitbucket pull request's activity feed. This writes to Bitbucket — the user is asked to confirm the exact comment text before it is posted.",
+        "userDescription": "Post a comment on a Bitbucket pull request.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "bitbucketPostComment",
+        "icon": "$(comment-add)",
+        "when": "ticketSidekick.bitbucketCredentialsSet",
+        "tags": ["bitbucket"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string",
+              "description": "Bitbucket project key (Data Center) or workspace (Cloud), e.g. PROJ or myworkspace"
+            },
+            "repo": {
+              "type": "string",
+              "description": "Repository slug, e.g. myrepo"
+            },
+            "prId": {
+              "type": "number",
+              "description": "Pull request id, e.g. 42"
+            },
+            "comment": {
+              "type": "string",
+              "description": "The comment text to post to the pull request's activity feed."
+            }
+          },
+          "required": ["project", "repo", "prId", "comment"]
+        }
       }
     ],
     "configuration": [
