@@ -4,6 +4,7 @@ import {
   buildTemplateFieldReviewRows,
   formatTemplateFieldValue,
   buildTemplateFieldReviewTable,
+  buildEmptyRequiredFieldsWarning,
   findUnsetIncludedRows,
   buildDefaultFieldsFromRows,
   buildGeneratedTemplate,
@@ -97,6 +98,16 @@ describe('buildTemplateFieldReviewTable', () => {
     const table = buildTemplateFieldReviewTable([]);
     expect(table).toContain('`<number>=<value>`');
     expect(table).toContain('post it');
+  });
+});
+
+describe('buildEmptyRequiredFieldsWarning (R4)', () => {
+  it('names the issue type and project, and covers both the zero-required-fields and no-permission cases without distinguishing them', () => {
+    const warning = buildEmptyRequiredFieldsWarning('Bug', 'PROJ');
+    expect(warning).toContain('Bug');
+    expect(warning).toContain('PROJ');
+    expect(warning).toContain('may mean the type has none');
+    expect(warning).toContain('lack Create permission');
   });
 });
 
@@ -209,14 +220,18 @@ describe('extractProjectKeyFromTicketKey', () => {
 });
 
 describe('parseIssueTypePick', () => {
-  const types = ['Bug', 'Story', 'Task'];
+  const types = [
+    { id: '10001', name: 'Bug' },
+    { id: '10002', name: 'Story' },
+    { id: '10003', name: 'Task' },
+  ];
 
-  it('picks by number', () => {
-    expect(parseIssueTypePick('2', types)).toBe('Story');
+  it('picks by number, returning the matched {id, name} entry', () => {
+    expect(parseIssueTypePick('2', types)).toEqual({ id: '10002', name: 'Story' });
   });
 
-  it('picks by exact name, case-insensitively', () => {
-    expect(parseIssueTypePick('bug', types)).toBe('Bug');
+  it('picks by exact name, case-insensitively, returning the matched {id, name} entry', () => {
+    expect(parseIssueTypePick('bug', types)).toEqual({ id: '10001', name: 'Bug' });
   });
 
   it('recognizes cancellation', () => {

@@ -759,8 +759,9 @@ export class TicketService {
   async getTemplateCandidatesFromRequiredFields(
     projectKey: string,
     issueType: string,
+    issueTypeId?: string,
   ): Promise<TemplateFieldCandidate[]> {
-    const required = await this.client.getRequiredFields(projectKey, issueType);
+    const required = await this.client.getRequiredFields(projectKey, issueType, issueTypeId);
     return required.map(f => ({ id: f.id, name: f.name, schema: f.schema }));
   }
 

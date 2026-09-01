@@ -321,21 +321,8 @@ export class JiraApiClient implements IJiraClient {
   }
 
   async getAllComments(issueKey: string): Promise<JiraComment[]> {
-    const pageSize = 100;
-    const all: JiraComment[] = [];
-    let startAt = 0;
-    // Hard cap as a backstop: an empty page should already break the loop, but this
-    // guarantees termination for any other non-advancing server response.
-    const maxIterations = 1000;
-    for (let i = 0; i < maxIterations; i++) {
-      const { comments, total } = await this.getIssueComments(issueKey, pageSize, startAt);
-      all.push(...comments);
-      // Stop when we've collected everything, or a page came back empty (which would
-      // otherwise leave startAt unchanged and spin forever).
-      if (comments.length === 0 || all.length >= total) break;
-      startAt += comments.length;
-    }
-    return all;
+    return this.collectPaginated<JiraComment>((startAt) =>
+      this.getIssueComments(issueKey, 100, startAt).then(({ comments, total }) => ({ items: comments, total })));
   }
 
   async downloadAttachment(content: string): Promise<Uint8Array> {
@@ -389,22 +376,105 @@ export class JiraApiClient implements IJiraClient {
     return data.fields;
   }
 
-  async getRequiredFields(projectKey: string, issueType: string): Promise<JiraFieldMeta[]> {
-    type CreateMetaField = { required: boolean; name: string; schema: { type: string; items?: string; custom?: string } };
-    type CreateMetaResponse = {
-      projects: Array<{
-        key: string;
-        issuetypes: Array<{ name: string; fields: Record<string, CreateMetaField> }>;
-      }>;
+  /**
+   * Generic pagination collector for the granular createmeta endpoints (and any future
+   * offset/total/isLast-shaped listing). Mirrors getAllComments()'s loop convention: stop
+   * on an empty page, once `collected.length >= total`, once `isLast` reports true, or once
+   * `stopWhen` (an early-exit search predicate) is satisfied — with a hard iteration cap as
+   * a backstop against a server response that never advances.
+   */
+  private async collectPaginated<T>(
+    fetchPage: (startAt: number) => Promise<{ items: T[]; total?: number; isLast?: boolean }>,
+    stopWhen?: (collected: T[]) => boolean,
+  ): Promise<T[]> {
+    const collected: T[] = [];
+    let startAt = 0;
+    const maxIterations = 1000;
+    let stoppedCleanly = false;
+    for (let i = 0; i < maxIterations; i++) {
+      const { items, total, isLast } = await fetchPage(startAt);
+      collected.push(...items);
+      if (items.length === 0 || isLast === true || (total !== undefined && collected.length >= total) || stopWhen?.(collected)) {
+        stoppedCleanly = true;
+        break;
+      }
+      startAt += items.length;
+    }
+    // A response that never advances (or a truly unbounded list) exhausts the cap without any
+    // clean stop condition firing — the result is a silent partial page, not the real full list.
+    // Callers (e.g. the R4 empty-result warning) can't tell that apart from a legitimate empty
+    // result without this signal, so log it as a warning rather than returning silently.
+    if (!stoppedCleanly) {
+      this.onDiag?.('warn', 'Pagination hit the iteration cap without a clean stop condition', { maxIterations, collected: collected.length });
+    }
+    return collected;
+  }
+
+  /**
+   * Paginated fetch against the granular createmeta family, branched by authType like
+   * searchJql(): v2 `values`/`isLast` for Data Center, v3 `requestV3()` keyed by `cloudKey`
+   * (no `isLast`) for Cloud — Cloud does not support the v2 granular path. Shared by
+   * resolveIssueTypeId (the issue-types list) and getRequiredFields (the per-type fields list).
+   */
+  private async fetchCreateMetaList<T, K extends string>(
+    basePath: string,
+    cloudKey: K,
+    stopWhen?: (collected: T[]) => boolean,
+  ): Promise<T[]> {
+    return this.authType === 'cloud'
+      ? this.collectPaginated<T>((startAt) =>
+          this.requestV3<Record<K, T[]> & { total?: number }>(`${basePath}?startAt=${startAt}`)
+            .then((data) => ({ items: data[cloudKey] ?? [], total: data.total })), stopWhen)
+      : this.collectPaginated<T>((startAt) =>
+          this.request<{ values: T[]; total?: number; isLast?: boolean }>(`${basePath}?startAt=${startAt}`)
+            .then((data) => ({ items: data.values ?? [], total: data.total, isLast: data.isLast })), stopWhen);
+  }
+
+  /**
+   * Resolves an issue type's id by case-insensitive name match against the project-scoped
+   * createmeta issue-type list — the same granular family used to fetch fields, not a
+   * global issue-type list (consistent with TicketService.getIssueTypes()'s project scope).
+   * Stops paginating as soon as a match is found rather than draining every page.
+   */
+  private async resolveIssueTypeId(projectKey: string, issueType: string): Promise<string | undefined> {
+    type ListItem = { id: string; name: string };
+    const basePath = `/issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes`;
+    const lowerName = issueType.toLowerCase();
+    const items = await this.fetchCreateMetaList<ListItem, 'issueTypes'>(basePath, 'issueTypes',
+      (collected) => collected.some((it) => it.name.toLowerCase() === lowerName));
+    return items.find((it) => it.name.toLowerCase() === lowerName)?.id;
+  }
+
+  async getRequiredFields(projectKey: string, issueType: string, issueTypeId?: string): Promise<JiraFieldMeta[]> {
+    type CreateMetaFieldItem = {
+      fieldId: string;
+      name: string;
+      required: boolean;
+      schema: { type: string; items?: string; custom?: string };
     };
-    const qs = `projectKeys=${encodeURIComponent(projectKey)}&issuetypeNames=${encodeURIComponent(issueType)}&expand=projects.issuetypes.fields`;
-    const data = await this.request<CreateMetaResponse>(`/issue/createmeta?${qs}`);
-    const project = data.projects.find((p) => p.key === projectKey);
-    const issueTypeMeta = project?.issuetypes.find((it) => it.name.toLowerCase() === issueType.toLowerCase());
-    if (!issueTypeMeta) return [];
-    return Object.entries(issueTypeMeta.fields)
-      .filter(([, field]) => field.required)
-      .map(([id, field]) => ({ id, name: field.name, schema: field.schema }));
+    const resolvedId = issueTypeId ?? await this.resolveIssueTypeId(projectKey, issueType);
+    if (!resolvedId) return [];
+
+    const basePath = `/issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes/${encodeURIComponent(resolvedId)}`;
+    let fieldItems: CreateMetaFieldItem[];
+    try {
+      fieldItems = await this.fetchCreateMetaList<CreateMetaFieldItem, 'fields'>(basePath, 'fields');
+    } catch (err) {
+      // A caller-supplied issueTypeId (from a caller's own project-schema lookup, not the
+      // permission-scoped createmeta list resolveIssueTypeId() uses) can name a type the caller
+      // can't create — Jira 404s the per-type endpoint in that case. Degrade the same way the
+      // permission-scoped path already does (empty result, not a thrown error) rather than
+      // surfacing a raw HTTP error for the identical underlying permission gap.
+      if (err instanceof ApiError && err.status === 404) {
+        this.onDiag?.('warn', `No required fields — ${projectKey}/${resolvedId} (404)`, { projectKey, issueTypeId: resolvedId });
+        return [];
+      }
+      throw err;
+    }
+
+    return fieldItems
+      .filter((field) => field.required)
+      .map((field) => ({ id: field.fieldId, name: field.name, schema: field.schema }));
   }
 
   async getRemoteLinks(issueKey: string): Promise<JiraRemoteLink[]> {
