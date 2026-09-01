@@ -390,11 +390,22 @@ export class JiraApiClient implements IJiraClient {
     const collected: T[] = [];
     let startAt = 0;
     const maxIterations = 1000;
+    let stoppedCleanly = false;
     for (let i = 0; i < maxIterations; i++) {
       const { items, total, isLast } = await fetchPage(startAt);
       collected.push(...items);
-      if (items.length === 0 || isLast === true || (total !== undefined && collected.length >= total) || stopWhen?.(collected)) break;
+      if (items.length === 0 || isLast === true || (total !== undefined && collected.length >= total) || stopWhen?.(collected)) {
+        stoppedCleanly = true;
+        break;
+      }
       startAt += items.length;
+    }
+    // A response that never advances (or a truly unbounded list) exhausts the cap without any
+    // clean stop condition firing — the result is a silent partial page, not the real full list.
+    // Callers (e.g. the R4 empty-result warning) can't tell that apart from a legitimate empty
+    // result without this signal, so log it as a warning rather than returning silently.
+    if (!stoppedCleanly) {
+      this.onDiag?.('warn', 'Pagination hit the iteration cap without a clean stop condition', { maxIterations, collected: collected.length });
     }
     return collected;
   }
@@ -445,7 +456,21 @@ export class JiraApiClient implements IJiraClient {
     if (!resolvedId) return [];
 
     const basePath = `/issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes/${encodeURIComponent(resolvedId)}`;
-    const fieldItems = await this.fetchCreateMetaList<CreateMetaFieldItem, 'fields'>(basePath, 'fields');
+    let fieldItems: CreateMetaFieldItem[];
+    try {
+      fieldItems = await this.fetchCreateMetaList<CreateMetaFieldItem, 'fields'>(basePath, 'fields');
+    } catch (err) {
+      // A caller-supplied issueTypeId (from a caller's own project-schema lookup, not the
+      // permission-scoped createmeta list resolveIssueTypeId() uses) can name a type the caller
+      // can't create — Jira 404s the per-type endpoint in that case. Degrade the same way the
+      // permission-scoped path already does (empty result, not a thrown error) rather than
+      // surfacing a raw HTTP error for the identical underlying permission gap.
+      if (err instanceof ApiError && err.status === 404) {
+        this.onDiag?.('warn', `No required fields — ${projectKey}/${resolvedId} (404)`, { projectKey, issueTypeId: resolvedId });
+        return [];
+      }
+      throw err;
+    }
 
     return fieldItems
       .filter((field) => field.required)

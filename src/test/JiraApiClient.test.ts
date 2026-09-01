@@ -358,6 +358,36 @@ describe('JiraApiClient', () => {
       const client = new JiraApiClient(BASE_CONFIG);
       await expect(client.getRemoteLinks('PROJ-1')).resolves.toEqual([]);
     });
+
+    it('logs a warn when getRequiredFields 404s on a caller-supplied issueTypeId', async () => {
+      vi.stubGlobal('fetch', makeFetch({}, 404));
+      const onDiag = vi.fn();
+      const client = new JiraApiClient({ ...BASE_CONFIG, onDiag });
+      await expect(client.getRequiredFields('PROJ', 'Bug', '10001')).resolves.toEqual([]);
+      expect(onDiag).toHaveBeenCalledWith(
+        'warn', expect.stringContaining('PROJ/10001'),
+        expect.objectContaining({ projectKey: 'PROJ', issueTypeId: '10001' }),
+      );
+    });
+
+    it('logs a warn when pagination hits the iteration cap without a clean stop condition', async () => {
+      const mockFetch = vi.fn().mockImplementation(() => Promise.resolve({
+        ok: true, status: 200,
+        headers: { get: () => 'application/json' },
+        json: () => Promise.resolve({
+          maxResults: 1, startAt: 0, total: 999999, isLast: false,
+          values: [{ id: '999', name: 'Never Matches' }],
+        }),
+      }));
+      vi.stubGlobal('fetch', mockFetch);
+      const onDiag = vi.fn();
+      const client = new JiraApiClient({ ...BASE_CONFIG, onDiag });
+      await client.getRequiredFields('PROJ', 'Bug');
+      expect(onDiag).toHaveBeenCalledWith(
+        'warn', expect.stringContaining('iteration cap'),
+        expect.objectContaining({ maxIterations: 1000 }),
+      );
+    });
   });
 
   describe('getProjectStatuses', () => {
@@ -590,10 +620,14 @@ describe('JiraApiClient', () => {
       expect(mockFetch.mock.calls.length).toBeLessThanOrEqual(1000);
     });
 
-    it('throws a typed JiraApiError on 404', async () => {
+    it('degrades to an empty result on a 404 for a caller-supplied issueTypeId (permission-scope mismatch)', async () => {
+      // A caller-supplied id (from a project-schema lookup that isn't Create-permission-scoped)
+      // can name a type this caller can't create; Jira 404s the per-type endpoint for that case.
+      // Match the graceful degradation the permission-scoped id-resolution path already gets,
+      // rather than surfacing a raw error for the same underlying permission gap.
       vi.stubGlobal('fetch', makeFetch({}, 404));
       const client = new JiraApiClient(BASE_CONFIG);
-      await expect(client.getRequiredFields('PROJ', 'Bug', '10001')).rejects.toBeInstanceOf(JiraApiError);
+      await expect(client.getRequiredFields('PROJ', 'Bug', '10001')).resolves.toEqual([]);
     });
 
     it('throws a typed JiraApiError carrying status 401 on auth failure', async () => {

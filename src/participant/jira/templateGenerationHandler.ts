@@ -211,8 +211,11 @@ async function startFromRequiredFields(
     return;
   }
 
-  const rows = buildTemplateFieldReviewRows(filterOutPerTicketFields(candidates));
-  if (rows.length === 0) {
+  // Checked on the unfiltered fetch result, not the per-ticket-filtered rows below: an issue type
+  // whose only required fields are summary/description/etc. (the common, fully successful case —
+  // Jira requires summary on virtually every type) would otherwise trip this warning on every
+  // generation, even though the fetch succeeded and nothing is actually missing.
+  if (candidates.length === 0) {
     // Legitimately empty: either the issue type genuinely has no required fields, or the caller
     // lacks Create-issue permission on it — the API gives no way to tell these apart (R4), so this
     // single warning covers both rather than guessing. Informational only: the (empty) review list
@@ -220,6 +223,8 @@ async function startFromRequiredFields(
     logDiag(SCOPE, 'warn', `No required fields found — ${projectKey}/${issueType}`, { projectKey, issueType });
     stream.markdown(`${buildEmptyRequiredFieldsWarning(issueType, projectKey)}\n\n`);
   }
+
+  const rows = buildTemplateFieldReviewRows(filterOutPerTicketFields(candidates));
 
   const reviewSession: TemplateGenerationReviewSession = {
     templateName, projectKey, issueType, sourceTicketKey: null, rows, schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
