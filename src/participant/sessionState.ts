@@ -547,6 +547,43 @@ export interface ImportTemplateSelectionSession<TItem> {
 export type VeracodeTemplateSelectionSession = ImportTemplateSelectionSession<VeracodeFlaw>;
 export type WaltzTemplateSelectionSession = ImportTemplateSelectionSession<WaltzComponent>;
 
+// ---------------------------------------------------------------------------------------------
+// Shared issue-type chat-ask (R6/KTD4) — every flow that resolves an issue type before creating a
+// ticket (create, Veracode/Waltz report import, email-to-ticket) detours through this one session
+// type instead of each having its own `showInputBox`. `resume` carries the *identity* of what the
+// user already picked before the detour (a project/summary, a picked template name, the rest of
+// the originating session), not a pre-resolved object — each family's own continuation function
+// (`continueAfterIssueType`, report import's `continueAfterImportIssueType`, `finishEmailTicket`)
+// re-derives whatever it needs (e.g. re-looking up a template by name) once the type is known,
+// exactly as it does today. See docs/jira-flows.md for the session-type table.
+// ---------------------------------------------------------------------------------------------
+
+export type AwaitIssueTypeResume =
+  | {
+      kind: 'create';
+      projectKey: string;
+      summary: string | null;
+      description: string | null;
+      extraFields?: Record<string, unknown>;
+      pickedTemplateName: string | null;
+    }
+  | {
+      kind: 'reportImport';
+      descriptorKind: 'veracode' | 'waltz';
+      pickedTemplateName: string | null;
+      session: VeracodeTemplateSelectionSession | WaltzTemplateSelectionSession;
+    }
+  | {
+      kind: 'email';
+      session: EmailContentSession;
+      pickedTemplateName: string | null;
+    };
+
+export interface AwaitIssueTypeSession {
+  resume: AwaitIssueTypeResume;
+  schemaVersion: number;
+}
+
 export interface ReviewRowBase {
   id: string; // '1'..'N' new candidates, 'A1'..'Am' already-ticketed
   existingTicketKey: string | null;

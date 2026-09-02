@@ -282,16 +282,18 @@ export async function handleCreateTicket(
   }
 
   if (templates.length === 0 && issueTypes.length === 0) {
-    // Nothing to list — fall back to the free-type input box (R6).
-    stream.markdown('_Could not fetch issue types — opening input box…_\n\n');
-    const entered = await resolveIssueTypeOrPrompt(NO_ISSUE_TYPE, stream);
+    // Nothing to list — fall back to a chat-based ask (R6/KTD4).
+    const entered = await resolveIssueTypeOrPrompt(NO_ISSUE_TYPE, {
+      kind: 'create', projectKey, summary: intent.summary, description: intent.description,
+      extraFields, pickedTemplateName: null,
+    }, stream, workspaceState);
     if (entered === null) return null;
     return continueAfterIssueType(projectKey, intent.summary, entered, intent.description, null, request.model, stream, token, jiraClient, ticketService, workspaceState, extraFields);
   }
 
   // '' is a sentinel meaning "no resolvable issue type" — never a real Jira issue type name.
-  // Picking a template or entry carrying it opens the free-type input box instead of guessing
-  // (see the routing block in JiraParticipant.ts). This covers both a template with no explicit
+  // Picking a template or entry carrying it opens the shared chat-based ask (R6) instead of
+  // guessing (see the routing block in JiraParticipant.ts). This covers both a template with no explicit
   // issueType when nothing was fetched to fall back to, and — when templates exist but the
   // issue-type fetch failed entirely — a standalone "type it yourself" entry, so there's always
   // a way to create a ticket without one of the listed templates (R6's intent extended to this

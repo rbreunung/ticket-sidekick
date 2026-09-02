@@ -1,7 +1,15 @@
 import * as vscode from 'vscode';
 import { execSync } from 'child_process';
 import { extractTicketId } from '../../utils/branchParser';
-import { extractLastTicketFromText, NO_ISSUE_TYPE } from '../sessionState';
+import {
+  extractLastTicketFromText, NO_ISSUE_TYPE, CURRENT_SESSION_SCHEMA_VERSION,
+  type AwaitIssueTypeResume, type AwaitIssueTypeSession,
+} from '../sessionState';
+
+// workspaceState key + response tag for the shared issue-type chat-ask (R6/KTD4) — one session type
+// shared by every flow that resolves an issue type before creating a ticket. See docs/jira-flows.md.
+export const AWAIT_ISSUE_TYPE_SESSION_KEY = 'jira.session.awaitIssueType';
+export const AWAIT_ISSUE_TYPE_TAG = '<!-- jira:await-issue-type -->';
 
 export function getLastAssistantText(context: vscode.ChatContext): string {
   for (let i = context.history.length - 1; i >= 0; i--) {
@@ -42,30 +50,45 @@ export async function resolveProjectKey(
   return entered ?? null;
 }
 
-// '' is the never-guess sentinel (see NO_ISSUE_TYPE in sessionState.ts) — detour to a free-type
-// input box instead of ever creating a ticket with a guessed type. Shared by every flow that
-// resolves an issue type before creating a ticket (create, email import, report import).
-// Returns the resolved type, or null if the user cancelled (caller must not proceed on null).
+// '' is the never-guess sentinel (see NO_ISSUE_TYPE in sessionState.ts) — detour to a chat-based
+// ask (R6/KTD4) instead of ever creating a ticket with a guessed type, and instead of a native
+// `showInputBox`. Shared by every flow that resolves an issue type before creating a ticket
+// (create, email import, report import). Returns the resolved type when one was already known
+// (synchronous continue — the caller proceeds in the same turn, unchanged from before); returns
+// null when it detoured to chat (the caller must return without further work — resumption happens
+// on a later turn via JiraParticipant.ts's shared router, using `resume` to get back to the right
+// continuation). A caller that already treated null as "stop and return" needs no control-flow
+// change, only the two new arguments.
 export async function resolveIssueTypeOrPrompt(
   issueType: string,
+  resume: AwaitIssueTypeResume,
   stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
 ): Promise<string | null> {
   if (issueType !== NO_ISSUE_TYPE) return issueType;
-  const entered = await vscode.window.showInputBox({ prompt: 'Enter the issue type (e.g. Bug, Story, Task)', ignoreFocusOut: true }) ?? null;
-  if (!entered) {
-    stream.markdown('No issue type provided — cancelled.');
-    return null;
-  }
-  return entered;
+  await streamAwaitIssueType({ resume, schemaVersion: CURRENT_SESSION_SCHEMA_VERSION }, stream, ws);
+  return null;
 }
 
-// A flow that clears its own workspaceState session before awaiting a free-type input box
-// (resolveIssueTypeOrPrompt above) opens an async gap: while the native box sits open, the user
-// can start a second, independent run of the same command, which writes its own session to the
-// same key. When the first box finally resolves, resuming with the closure-held session would act
-// on stale data instead of noticing a newer run has since claimed the key. Call this right after
-// the detour resolves and before doing any further work (template resolution, dedup search,
-// ticket creation) — a superseded session must abort, not silently proceed.
+export async function streamAwaitIssueType(
+  session: AwaitIssueTypeSession,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+): Promise<void> {
+  await ws.update(AWAIT_ISSUE_TYPE_SESSION_KEY, session);
+  stream.markdown(
+    `What issue type should this use (e.g. Bug, Story, Task)?\n\nReply with a type, or **(c)** to cancel.\n\n${AWAIT_ISSUE_TYPE_TAG}`,
+  );
+}
+
+// A flow that clears its own workspaceState session before detouring to the chat-based issue-type
+// ask (resolveIssueTypeOrPrompt above) opens a gap that now spans a whole extra chat turn: while
+// the ask is pending, the user can start a second, independent run of the same command, which
+// writes its own session to the same key. When the first ask's reply finally resumes, resuming
+// with the closure-held session would act on stale data instead of noticing a newer run has since
+// claimed the key. Call this on the resume path, right after the detour resolves and before doing
+// any further work (template resolution, dedup search, ticket creation) — a superseded session
+// must abort, not silently proceed.
 export function sessionWasSuperseded(ws: vscode.Memento, key: string): boolean {
   return ws.get(key) !== undefined;
 }
