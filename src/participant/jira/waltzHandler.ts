@@ -10,9 +10,11 @@ import type { WaltzTemplateSelectionSession, WaltzReviewSession } from '../sessi
 import { WALTZ_REVIEW_COLUMNS } from '../sessionState';
 import {
   readAndFilterReport, buildImportTemplateSession, handleImportReport,
-  handleImportTemplateSelection, handleImportReviewReply,
+  handleImportTemplateSelection, handleImportReviewReply, continueAfterImportIssueType,
   type ReportImportDescriptor,
 } from './reportImportHandler';
+import type { AwaitIssueTypeResume } from '../sessionState';
+import { sessionWasSuperseded } from './ticketContext';
 
 function getWaltzConfig(): { minVulnRating: string; includeRemediationActions: string[] } {
   const cfg = vscode.workspace.getConfiguration('ticketSidekick');
@@ -33,6 +35,7 @@ async function readAndFilterWaltzFile(filePath: string): Promise<WaltzComponent[
 }
 
 const waltzDescriptor: ReportImportDescriptor<WaltzComponent, WaltzReviewRow> = {
+  descriptorKind: 'waltz',
   scope: 'jira.waltz',
   importLabel: 'Waltz OSS',
   itemNoun: 'component(s)',
@@ -105,6 +108,29 @@ export async function handleWaltzTemplateSelection(
   baseUrl?: string,
 ): Promise<void> {
   return handleImportTemplateSelection(reply, session, jiraClient, ticketService, stream, ws, waltzDescriptor, baseUrl);
+}
+
+// R6/KTD4: resumes a Waltz import once the shared issue-type chat-ask (JiraParticipant.ts's
+// router) has a typed type for a 'reportImport'-kind resume with descriptorKind 'waltz'.
+// Mirrors the sessionWasSuperseded() guard handleImportTemplateSelection already runs after its
+// own (now-shared) detour, since a newer import may have started while this one was waiting.
+export async function handleWaltzAwaitIssueType(
+  resume: Extract<AwaitIssueTypeResume, { kind: 'reportImport' }>,
+  issueType: string,
+  jiraClient: IJiraClient,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  baseUrl?: string,
+): Promise<void> {
+  if (sessionWasSuperseded(ws, waltzDescriptor.sessionKeys.templateSelection)) {
+    stream.markdown('_A newer import was started while this one was waiting for the issue type — cancelled to avoid creating a stale batch._');
+    return;
+  }
+  await continueAfterImportIssueType(
+    issueType, resume.pickedTemplateName, resume.session as WaltzTemplateSelectionSession,
+    jiraClient, ticketService, stream, ws, waltzDescriptor, baseUrl,
+  );
 }
 
 export async function handleWaltzReviewReply(

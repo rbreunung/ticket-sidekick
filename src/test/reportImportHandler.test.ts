@@ -16,9 +16,16 @@ vi.mock('vscode', () => ({
 import * as vscode from 'vscode';
 import {
   buildImportTemplateSession, streamImportTemplateSelection, handleImportTemplateSelection,
+  continueAfterImportIssueType,
   type ReportImportDescriptor, type ReportImportRow,
 } from '../participant/jira/reportImportHandler';
-import type { ImportTemplateSelectionSession, ReviewSession } from '../participant/sessionState';
+import { handleVeracodeAwaitIssueType } from '../participant/jira/veracodeHandler';
+import { handleWaltzAwaitIssueType } from '../participant/jira/waltzHandler';
+import type {
+  ImportTemplateSelectionSession, ReviewSession, VeracodeTemplateSelectionSession, WaltzTemplateSelectionSession,
+  AwaitIssueTypeResume,
+} from '../participant/sessionState';
+import { AWAIT_ISSUE_TYPE_SESSION_KEY } from '../participant/jira/ticketContext';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService } from '../services/TicketService';
 
@@ -31,6 +38,7 @@ interface TestRow extends ReportImportRow {
 }
 
 const descriptor: ReportImportDescriptor<TestItem, TestRow> = {
+  descriptorKind: 'veracode', // arbitrary — this generic test descriptor isn't a real importer
   scope: 'jira.testImport',
   importLabel: 'Test',
   itemNoun: 'item(s)',
@@ -124,7 +132,7 @@ describe('streamImportTemplateSelection (never-guess sentinel rendering, U3/AE2)
   });
 });
 
-describe('handleImportTemplateSelection (never-guess sentinel detour, U3)', () => {
+describe('handleImportTemplateSelection (never-guess sentinel detour, R6/KTD4)', () => {
   let client: MockJiraClient;
   let ticketService: TicketService;
 
@@ -134,8 +142,7 @@ describe('handleImportTemplateSelection (never-guess sentinel detour, U3)', () =
     (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockReset();
   });
 
-  it('picking the sentinel entry opens the input box before any dedup search; a typed value becomes the batch issueType', async () => {
-    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockResolvedValueOnce('Spike');
+  it('picking the sentinel entry detours to the shared chat-based ask, not an input box', async () => {
     const searchSpy = vi.spyOn(client, 'searchJql');
     const session = makeSession({ availableIssueTypes: [''] });
     const stream = mockStream();
@@ -143,30 +150,16 @@ describe('handleImportTemplateSelection (never-guess sentinel detour, U3)', () =
 
     await handleImportTemplateSelection('1', session, client, ticketService, stream as never, ws as never, descriptor);
 
-    expect(vscode.window.showInputBox).toHaveBeenCalledTimes(1);
+    expect(vscode.window.showInputBox).not.toHaveBeenCalled();
     // Session was already cleared before the detour (mirrors the create-ticket/email-import pattern).
     expect(ws.store[descriptor.sessionKeys.templateSelection]).toBeUndefined();
-    const reviewSession = ws.store[descriptor.sessionKeys.review] as ReviewSession<TestRow>;
-    expect(reviewSession.issueType).toBe('Spike');
-    expect(searchSpy).toHaveBeenCalled(); // dedup search still ran, after the detour resolved
-  });
-
-  it('a cancelled/empty input box aborts before any dedup search or ticket creation', async () => {
-    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined);
-    const searchSpy = vi.spyOn(client, 'searchJql');
-    const session = makeSession({ availableIssueTypes: [''] });
-    const stream = mockStream();
-    const ws = makeMockWs();
-
-    await handleImportTemplateSelection('1', session, client, ticketService, stream as never, ws as never, descriptor);
-
-    expect(searchSpy).not.toHaveBeenCalled();
-    expect(ws.store[descriptor.sessionKeys.review]).toBeUndefined();
+    expect(ws.store[AWAIT_ISSUE_TYPE_SESSION_KEY]).toBeDefined();
     const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
-    expect(calls.some(c => c.includes('No issue type provided'))).toBe(true);
+    expect(calls.some(c => c.includes('What issue type'))).toBe(true);
+    expect(searchSpy).not.toHaveBeenCalled(); // dedup search hasn't run yet — only after the reply resumes
   });
 
-  it('a real configured issue type is entirely unaffected — no input box shown', async () => {
+  it('a real configured issue type is entirely unaffected — no detour, no input box', async () => {
     const session = makeSession({ availableIssueTypes: ['Bug', 'Story'] });
     const stream = mockStream();
     const ws = makeMockWs();
@@ -174,39 +167,40 @@ describe('handleImportTemplateSelection (never-guess sentinel detour, U3)', () =
     await handleImportTemplateSelection('1', session, client, ticketService, stream as never, ws as never, descriptor);
 
     expect(vscode.window.showInputBox).not.toHaveBeenCalled();
+    expect(ws.store[AWAIT_ISSUE_TYPE_SESSION_KEY]).toBeUndefined();
     const reviewSession = ws.store[descriptor.sessionKeys.review] as ReviewSession<TestRow>;
     expect(reviewSession.issueType).toBe('Bug');
   });
+});
 
-  it('aborts instead of creating a batch when a newer import session was written while the input box was open', async () => {
-    const ws = makeMockWs();
-    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
-      // Simulate a second, independent import starting and claiming the session key while this
-      // flow's native input box was still open.
-      ws.store[descriptor.sessionKeys.templateSelection] = makeSession({ reportFileName: 'other-report.test' });
-      return 'Spike';
-    });
+describe('continueAfterImportIssueType (R6/KTD4 resume continuation)', () => {
+  let client: MockJiraClient;
+  let ticketService: TicketService;
+
+  beforeEach(() => {
+    client = new MockJiraClient();
+    ticketService = new TicketService(client);
+  });
+
+  it('a typed reply resumes into the review flow, running the dedup search', async () => {
     const searchSpy = vi.spyOn(client, 'searchJql');
     const session = makeSession({ availableIssueTypes: [''] });
     const stream = mockStream();
+    const ws = makeMockWs();
 
-    await handleImportTemplateSelection('1', session, client, ticketService, stream as never, ws as never, descriptor);
+    await continueAfterImportIssueType('Spike', null, session, client, ticketService, stream as never, ws as never, descriptor);
 
-    expect(searchSpy).not.toHaveBeenCalled();
-    expect(ws.store[descriptor.sessionKeys.review]).toBeUndefined();
-    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
-    expect(calls.some(c => c.includes('newer import was started'))).toBe(true);
-    // The second flow's session must survive untouched — this abort must not clear it.
-    expect(ws.store[descriptor.sessionKeys.templateSelection]).toBeDefined();
+    const reviewSession = ws.store[descriptor.sessionKeys.review] as ReviewSession<TestRow>;
+    expect(reviewSession.issueType).toBe('Spike');
+    expect(searchSpy).toHaveBeenCalled();
   });
 
   it('the resolved (typed) issue type flows all the way into created tickets, never the sentinel', async () => {
-    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockResolvedValueOnce('Spike');
     const session = makeSession({ availableIssueTypes: [''] });
     const stream = mockStream();
     const ws = makeMockWs();
 
-    await handleImportTemplateSelection('1', session, client, ticketService, stream as never, ws as never, descriptor);
+    await continueAfterImportIssueType('Spike', null, session, client, ticketService, stream as never, ws as never, descriptor);
     const reviewSession = ws.store[descriptor.sessionKeys.review] as ReviewSession<TestRow>;
 
     // executeImportBatch (invoked via the review flow) creates one ticket per included row.
@@ -215,5 +209,82 @@ describe('handleImportTemplateSelection (never-guess sentinel detour, U3)', () =
 
     expect(client.createIssueCalls).toHaveLength(1);
     expect(client.createIssueCalls[0].issueType).toBe('Spike');
+  });
+});
+
+describe('handleVeracodeAwaitIssueType (R6/KTD4 resume, supersession guard)', () => {
+  let client: MockJiraClient;
+  let ticketService: TicketService;
+
+  beforeEach(() => {
+    client = new MockJiraClient();
+    ticketService = new TicketService(client);
+  });
+
+  function makeVeracodeSession(overrides: Partial<VeracodeTemplateSelectionSession> = {}): VeracodeTemplateSelectionSession {
+    return {
+      reportFileName: 'report.xml', projectKey: 'PROJ', items: [], availableTemplates: [],
+      availableIssueTypes: [''], schemaVersion: 1, ...overrides,
+    };
+  }
+
+  function makeResume(session: VeracodeTemplateSelectionSession): Extract<AwaitIssueTypeResume, { kind: 'reportImport' }> {
+    return { kind: 'reportImport', descriptorKind: 'veracode', pickedTemplateName: null, session };
+  }
+
+  it('aborts instead of creating a batch when a newer import session was written while the ask was open', async () => {
+    const ws = makeMockWs();
+    // Simulate a second, independent import starting and claiming the session key while this
+    // flow's chat-based ask was still open (across the turn boundary the detour introduces).
+    ws.store['jira.session.veracodeTemplateSelection'] = makeVeracodeSession({ reportFileName: 'other-report.xml' });
+    const searchSpy = vi.spyOn(client, 'searchJql');
+    const stream = mockStream();
+
+    await handleVeracodeAwaitIssueType(makeResume(makeVeracodeSession()), 'Spike', client, ticketService, stream as never, ws as never);
+
+    expect(searchSpy).not.toHaveBeenCalled();
+    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
+    expect(calls.some(c => c.includes('newer import was started'))).toBe(true);
+    // The second flow's session must survive untouched — this abort must not clear it.
+    expect(ws.store['jira.session.veracodeTemplateSelection']).toBeDefined();
+  });
+
+  it('resumes normally into the review flow when not superseded', async () => {
+    const ws = makeMockWs();
+    const stream = mockStream();
+
+    await handleVeracodeAwaitIssueType(makeResume(makeVeracodeSession()), 'Spike', client, ticketService, stream as never, ws as never);
+
+    const reviewSession = ws.store['jira.session.veracodeReview'] as ReviewSession<TestRow>;
+    expect(reviewSession.issueType).toBe('Spike');
+  });
+});
+
+describe('handleWaltzAwaitIssueType (R6/KTD4 resume, same mechanism as Veracode)', () => {
+  let client: MockJiraClient;
+  let ticketService: TicketService;
+
+  beforeEach(() => {
+    client = new MockJiraClient();
+    ticketService = new TicketService(client);
+  });
+
+  function makeWaltzSession(overrides: Partial<WaltzTemplateSelectionSession> = {}): WaltzTemplateSelectionSession {
+    return {
+      reportFileName: 'report.xlsx', projectKey: 'PROJ', items: [], availableTemplates: [],
+      availableIssueTypes: [''], schemaVersion: 1, ...overrides,
+    };
+  }
+
+  it('resumes normally into the review flow when not superseded', async () => {
+    const ws = makeMockWs();
+    const resume: Extract<AwaitIssueTypeResume, { kind: 'reportImport' }> = {
+      kind: 'reportImport', descriptorKind: 'waltz', pickedTemplateName: null, session: makeWaltzSession(),
+    };
+
+    await handleWaltzAwaitIssueType(resume, 'Task', client, ticketService, mockStream() as never, ws as never);
+
+    const reviewSession = ws.store['jira.session.waltzReview'] as ReviewSession<TestRow>;
+    expect(reviewSession.issueType).toBe('Task');
   });
 });

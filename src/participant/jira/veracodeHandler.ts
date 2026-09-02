@@ -10,9 +10,11 @@ import type { VeracodeTemplateSelectionSession, VeracodeReviewSession } from '..
 import { VERACODE_REVIEW_COLUMNS } from '../sessionState';
 import {
   readAndFilterReport, buildImportTemplateSession, handleImportReport,
-  handleImportTemplateSelection, handleImportReviewReply,
+  handleImportTemplateSelection, handleImportReviewReply, continueAfterImportIssueType,
   type ReportImportDescriptor,
 } from './reportImportHandler';
+import type { AwaitIssueTypeResume } from '../sessionState';
+import { sessionWasSuperseded } from './ticketContext';
 
 function getVeracodeConfig(): { minSeverity: number; includeStatuses: string[] } {
   const cfg = vscode.workspace.getConfiguration('ticketSidekick');
@@ -34,6 +36,7 @@ async function readAndFilterVeracodeFile(filePath: string): Promise<VeracodeFlaw
 }
 
 const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw, VeracodeReviewRow> = {
+  descriptorKind: 'veracode',
   scope: 'jira.veracode',
   importLabel: 'Veracode',
   itemNoun: 'flaw(s)',
@@ -117,6 +120,29 @@ export async function handleVeracodeTemplateSelection(
   baseUrl?: string,
 ): Promise<void> {
   return handleImportTemplateSelection(reply, session, jiraClient, ticketService, stream, ws, veracodeDescriptor, baseUrl);
+}
+
+// R6/KTD4: resumes a Veracode import once the shared issue-type chat-ask (JiraParticipant.ts's
+// router) has a typed type for a 'reportImport'-kind resume with descriptorKind 'veracode'.
+// Mirrors the sessionWasSuperseded() guard handleImportTemplateSelection already runs after its
+// own (now-shared) detour, since a newer import may have started while this one was waiting.
+export async function handleVeracodeAwaitIssueType(
+  resume: Extract<AwaitIssueTypeResume, { kind: 'reportImport' }>,
+  issueType: string,
+  jiraClient: IJiraClient,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  baseUrl?: string,
+): Promise<void> {
+  if (sessionWasSuperseded(ws, veracodeDescriptor.sessionKeys.templateSelection)) {
+    stream.markdown('_A newer import was started while this one was waiting for the issue type — cancelled to avoid creating a stale batch._');
+    return;
+  }
+  await continueAfterImportIssueType(
+    issueType, resume.pickedTemplateName, resume.session as VeracodeTemplateSelectionSession,
+    jiraClient, ticketService, stream, ws, veracodeDescriptor, baseUrl,
+  );
 }
 
 export async function handleVeracodeReviewReply(
