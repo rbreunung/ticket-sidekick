@@ -12,8 +12,14 @@ import {
   parseIssueTypePick,
   parseTemplateCollisionReply,
   parseOfferCreateReply,
+  isExplicitCancelToken,
+  parseAwaitFreeTextReply,
   applyReviewSetValue,
+  isSessionExpired,
+  CURRENT_SESSION_SCHEMA_VERSION,
   type TemplateFieldReviewRow,
+  type TemplateGenerationAwaitNameSession,
+  type TemplateGenerationAwaitFreeTypeSession,
 } from '../participant/sessionState';
 import type { TemplateFieldCandidate } from '../services/TicketService';
 
@@ -277,5 +283,74 @@ describe('parseOfferCreateReply (R7)', () => {
 
   it('treats an empty reply as decline', () => {
     expect(parseOfferCreateReply('   ')).toEqual({ action: 'decline' });
+  });
+});
+
+describe('isExplicitCancelToken (KTD3)', () => {
+  it('recognizes "(c)", case-insensitively and trimmed', () => {
+    expect(isExplicitCancelToken('(c)')).toBe(true);
+    expect(isExplicitCancelToken('(C)')).toBe(true);
+    expect(isExplicitCancelToken('  (c)  ')).toBe(true);
+  });
+
+  it('does not recognize isCancellation()\'s broader word list, e.g. "Stop" or "cancel"', () => {
+    expect(isExplicitCancelToken('Stop')).toBe(false);
+    expect(isExplicitCancelToken('cancel')).toBe(false);
+    expect(isExplicitCancelToken('c')).toBe(false);
+    expect(isExplicitCancelToken('no')).toBe(false);
+  });
+});
+
+describe('parseAwaitFreeTextReply (R2/R3, KTD3)', () => {
+  it('happy: treats a valid template name reply as a value to resume with', () => {
+    expect(parseAwaitFreeTextReply('Billing Bug')).toEqual({ action: 'value', value: 'Billing Bug' });
+  });
+
+  it('happy: treats a valid free-text issue type reply as a value to resume with', () => {
+    expect(parseAwaitFreeTextReply('Bug')).toEqual({ action: 'value', value: 'Bug' });
+  });
+
+  it('edge: an empty (or whitespace-only) reply is reported as empty, not a value', () => {
+    expect(parseAwaitFreeTextReply('')).toEqual({ action: 'empty' });
+    expect(parseAwaitFreeTextReply('   ')).toEqual({ action: 'empty' });
+  });
+
+  it('edge (KTD3): a reply of exactly "Stop" is accepted as a literal value, not cancellation', () => {
+    expect(parseAwaitFreeTextReply('Stop')).toEqual({ action: 'value', value: 'Stop' });
+  });
+
+  it('cancellation: only an explicit "(c)" reply is recognized as cancellation', () => {
+    expect(parseAwaitFreeTextReply('(c)')).toEqual({ action: 'cancel' });
+    expect(parseAwaitFreeTextReply('(C)')).toEqual({ action: 'cancel' });
+  });
+});
+
+describe('TemplateGenerationAwaitNameSession / TemplateGenerationAwaitFreeTypeSession expiry (R2/R3, KTD2)', () => {
+  it('a stale schemaVersion on an await-name session is detected via isSessionExpired', () => {
+    const stale: TemplateGenerationAwaitNameSession = {
+      projectKeyHint: null, sourceTicketKey: null, issueTypeHint: null, schemaVersion: CURRENT_SESSION_SCHEMA_VERSION - 1,
+    };
+    expect(isSessionExpired(stale)).toBe(true);
+  });
+
+  it('a current schemaVersion on an await-name session is not expired', () => {
+    const current: TemplateGenerationAwaitNameSession = {
+      projectKeyHint: 'PROJ', sourceTicketKey: null, issueTypeHint: null, schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
+    };
+    expect(isSessionExpired(current)).toBe(false);
+  });
+
+  it('a stale schemaVersion on an await-free-type session is detected via isSessionExpired', () => {
+    const stale: TemplateGenerationAwaitFreeTypeSession = {
+      templateName: 'Billing Bug', projectKey: 'PROJ', schemaVersion: CURRENT_SESSION_SCHEMA_VERSION - 1,
+    };
+    expect(isSessionExpired(stale)).toBe(true);
+  });
+
+  it('a current schemaVersion on an await-free-type session is not expired', () => {
+    const current: TemplateGenerationAwaitFreeTypeSession = {
+      templateName: 'Billing Bug', projectKey: 'PROJ', schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
+    };
+    expect(isSessionExpired(current)).toBe(false);
   });
 });

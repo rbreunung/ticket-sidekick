@@ -14,7 +14,7 @@ import type { CleanupRule } from '../templates/TemplateService';
 import type { Operation, ParsedIntent } from './jira/llmHelpers';
 import { parseIntent, extractFixVersionFromPrompt, generateContent, isLmRefusal, synthesizeComments, generateDescriptionAndCommentsSummary, isPointerPrompt, extractLastAssistantText, mapCommandToOperation } from './jira/llmHelpers';
 import { streamFieldUpdatePreview, continueSetField, handleSetField, handleSpellCheck } from './jira/fieldHandler';
-import { getLastAssistantText, resolveTicketFromBranch, resolveProjectKey, resolveIssueTypeOrPrompt, parseLastTicketFromContext } from './jira/ticketContext';
+import { getLastAssistantText, resolveTicketFromBranch, resolveProjectKey, resolveIssueTypeOrPrompt, parseLastTicketFromContext, sessionWasSuperseded } from './jira/ticketContext';
 import { validateBaseUrl } from '../services/configValidation';
 import { gatherFileContent, buildContentContext, streamContentPreview, handleContentSession } from './jira/contentHandler';
 import { streamCreateSelection, continueAfterIssueType, streamNextSection, finishTicketCreation, handleCreateTicket } from './jira/createHandler';
@@ -36,13 +36,43 @@ import {
 import type { WaltzTemplateSelectionSession, WaltzReviewSession } from './sessionState';
 import {
   TEMPLATE_GEN_SESSION_KEYS, TEMPLATE_GEN_TAGS,
-  handleGenerateTemplate, handleTypePickReply, handleTemplateGenReviewReply,
-  handleTemplateGenCollisionReply, handleOfferCreateReply, handleAwaitSummaryReply,
+  handleGenerateTemplate, handleAwaitNameReply, handleTypePickReply, handleAwaitFreeTypeReply,
+  handleTemplateGenReviewReply, handleTemplateGenCollisionReply, handleOfferCreateReply, handleAwaitSummaryReply,
 } from './jira/templateGenerationHandler';
 import type {
-  TemplateGenerationTypePickSession, TemplateGenerationReviewSession, TemplateGenerationCollisionSession,
+  TemplateGenerationAwaitNameSession, TemplateGenerationTypePickSession, TemplateGenerationAwaitFreeTypeSession,
+  TemplateGenerationReviewSession, TemplateGenerationCollisionSession,
   TemplateGenerationOfferCreateSession, TemplateGenerationAwaitSummarySession,
 } from './sessionState';
+import { AWAIT_ISSUE_TYPE_SESSION_KEY, AWAIT_ISSUE_TYPE_TAG } from './jira/ticketContext';
+import { parseAwaitFreeTextReply, type AwaitIssueTypeSession } from './sessionState';
+import { handleVeracodeAwaitIssueType } from './jira/veracodeHandler';
+import { handleWaltzAwaitIssueType } from './jira/waltzHandler';
+import { handleEmailAwaitIssueType } from './jira/emailHandler';
+
+// Shared by the combined template/issue-type selection block and the R6/KTD4 issue-type
+// chat-ask's 'create' resume branch — both need to re-look-up a picked template by name (a
+// template may have been renamed or removed since it was picked) before calling
+// continueAfterIssueType. Returns null when no name was picked, no workspace is open, or the
+// template is no longer found (warning already streamed in that case).
+async function resolveTemplateByName(name: string | null, stream: vscode.ChatResponseStream): Promise<JiraTemplate | null> {
+  if (!name) return null;
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+  if (!workspaceRoot) return null;
+  let found: JiraTemplate | null = null;
+  try {
+    const { templates } = new TemplateService(workspaceRoot).loadTemplates();
+    found = templates.find((t) => t.name === name) ?? null;
+  } catch (err) {
+    logDiag('jira.participant', 'warn', `Could not reload template — ${name}`, {
+      templateName: name, error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  if (!found) {
+    stream.markdown(`_Warning: template "${name}" is no longer available — proceeding without its default fields._\n\n`);
+  }
+  return found;
+}
 
 export function createJiraParticipant(
   context: vscode.ExtensionContext,
@@ -241,29 +271,22 @@ export function createJiraParticipant(
         }
         await ws.update('jira.session.creatingSelection', undefined);
 
-        let selectedTemplate: JiraTemplate | null = null;
-        if (pick.kind === 'template') {
-          const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-          if (workspaceRoot) {
-            try {
-              const { templates } = new TemplateService(workspaceRoot).loadTemplates();
-              selectedTemplate = templates.find((t) => t.name === pick.name) ?? null;
-              if (!selectedTemplate) {
-                stream.markdown(`_Warning: template "${pick.name}" is no longer available — proceeding without its default fields._\n\n`);
-              }
-            } catch (err) {
-              logDiag('jira.participant', 'warn', `Could not reload template — ${pick.name}`, {
-                templateName: pick.name, error: err instanceof Error ? err.message : String(err),
-              });
-              stream.markdown(`_Warning: template "${pick.name}" is no longer available — proceeding without its default fields._\n\n`);
-            }
-          }
-        }
+        const pickedTemplateName = pick.kind === 'template' ? pick.name : null;
 
-        // '' is the "no resolvable issue type" sentinel (see handleCreateTicket) — ask instead
-        // of silently creating the ticket with a guessed type.
-        const issueType = await resolveIssueTypeOrPrompt(pick.issueType, stream);
+        // '' is the "no resolvable issue type" sentinel (see handleCreateTicket) — detour to the
+        // shared chat-based ask (R6/KTD4) instead of silently creating the ticket with a guessed
+        // type. AwaitIssueTypeResume carries pickedTemplateName (identity, not the resolved
+        // object) so the resume path re-looks it up the same way, once the type is known.
+        const issueType = await resolveIssueTypeOrPrompt(pick.issueType, {
+          kind: 'create', projectKey: selSession.projectKey, summary: selSession.summary,
+          description: selSession.description, extraFields: selSession.extraFields, pickedTemplateName,
+        }, stream, ws);
         if (issueType === null) return;
+
+        // Looked up only now, after the detour check above — on a chat detour this result would
+        // be thrown away, and its "no longer available" warning would then repeat a second time
+        // on resume (efficiency review).
+        const selectedTemplate = await resolveTemplateByName(pickedTemplateName, stream);
 
         try {
           await continueAfterIssueType(
@@ -271,6 +294,73 @@ export function createJiraParticipant(
             selectedTemplate, request.model, stream, token, jiraClient, ticketService, ws,
             selSession.extraFields,
           );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          logDiag('jira.participant', 'error', message, {});
+          stream.markdown(message);
+        }
+        return;
+      }
+    }
+
+    // Shared issue-type chat-ask (R6/KTD4) — every flow that needed an issue type it couldn't
+    // otherwise resolve (create, Veracode/Waltz report import, email-to-ticket) resumes here,
+    // dispatching on resume.kind to each family's own existing continuation. Lives in
+    // JiraParticipant.ts (not ticketContext.ts) because it needs createHandler.ts/
+    // reportImportHandler.ts/emailHandler.ts's continuations, all of which already import from
+    // ticketContext.ts — this avoids a require cycle while keeping ticketContext.ts a leaf module.
+    if (lastResponse.includes(AWAIT_ISSUE_TYPE_TAG)) {
+      const session = ws.get<AwaitIssueTypeSession>(AWAIT_ISSUE_TYPE_SESSION_KEY);
+      if (session) {
+        if (isSessionExpired(session)) {
+          await ws.update(AWAIT_ISSUE_TYPE_SESSION_KEY, undefined);
+          stream.markdown(SESSION_EXPIRED_MESSAGE);
+          return;
+        }
+
+        // KTD3: only an explicit "(c)" cancels here, matching what the ask's own prompt text
+        // advertises — same divergence from isCancellation() as R2/R3's asks.
+        const parsed = parseAwaitFreeTextReply(request.prompt);
+        if (parsed.action === 'cancel') {
+          await ws.update(AWAIT_ISSUE_TYPE_SESSION_KEY, undefined);
+          stream.markdown('No issue type provided — cancelled.');
+          return;
+        }
+        if (parsed.action === 'empty') {
+          stream.markdown(`What issue type should this use (e.g. Bug, Story, Task)?\n\nReply with a type, or **(c)** to cancel.\n\n${AWAIT_ISSUE_TYPE_TAG}`);
+          return;
+        }
+
+        await ws.update(AWAIT_ISSUE_TYPE_SESSION_KEY, undefined);
+        const issueType = parsed.value;
+        const { resume } = session;
+        try {
+          if (resume.kind === 'create') {
+            // Mirrors the sibling branches' sessionWasSuperseded() guard — a second @jira create
+            // started while this one awaited its issue type must not resume on stale data (plan's
+            // own U4 test scenario). 'jira.session.creatingSelection' is the key the combined
+            // template/issue-type selection block above clears right before this detour; the rare
+            // createHandler.ts NO_ISSUE_TYPE fallback (no prior selection session) finds it
+            // undefined here and proceeds normally.
+            if (sessionWasSuperseded(ws, 'jira.session.creatingSelection')) {
+              stream.markdown('_A newer create was started while this one was waiting for the issue type — cancelled to avoid creating a stale ticket._');
+              return;
+            }
+            const selectedTemplate = await resolveTemplateByName(resume.pickedTemplateName, stream);
+            await continueAfterIssueType(
+              resume.projectKey, resume.summary, issueType, resume.description,
+              selectedTemplate, request.model, stream, token, jiraClient, ticketService, ws,
+              resume.extraFields,
+            );
+          } else if (resume.kind === 'reportImport') {
+            if (resume.descriptorKind === 'veracode') {
+              await handleVeracodeAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws, config.baseUrl);
+            } else {
+              await handleWaltzAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws, config.baseUrl);
+            }
+          } else {
+            await handleEmailAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws);
+          }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logDiag('jira.participant', 'error', message, {});
@@ -608,11 +698,31 @@ export function createJiraParticipant(
       }
     }
 
+    // Template generation — chat-ask for the template name (R2, no showInputBox)
+    if (lastResponse.includes(TEMPLATE_GEN_TAGS.awaitName)) {
+      const session = ws.get<TemplateGenerationAwaitNameSession>(TEMPLATE_GEN_SESSION_KEYS.awaitName);
+      if (session) {
+        const templateGenWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+        await handleAwaitNameReply(request.prompt, session, ticketService, templateGenWorkspaceRoot, config.hiddenDisplayFields, stream, ws);
+        return;
+      }
+    }
+
     // Template generation — issue-type pick list (no-reference path, no type named)
     if (lastResponse.includes(TEMPLATE_GEN_TAGS.typePick)) {
       const session = ws.get<TemplateGenerationTypePickSession>(TEMPLATE_GEN_SESSION_KEYS.typePick);
       if (session) {
         await handleTypePickReply(request.prompt, session, ticketService, stream, ws);
+        return;
+      }
+    }
+
+    // Template generation — chat-ask for a free-text issue type when the list couldn't be
+    // fetched (R3, no showInputBox)
+    if (lastResponse.includes(TEMPLATE_GEN_TAGS.awaitFreeType)) {
+      const session = ws.get<TemplateGenerationAwaitFreeTypeSession>(TEMPLATE_GEN_SESSION_KEYS.awaitFreeType);
+      if (session) {
+        await handleAwaitFreeTypeReply(request.prompt, session, ticketService, stream, ws);
         return;
       }
     }

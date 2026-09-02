@@ -8,7 +8,7 @@ import { FieldResolver } from '../../templates/FieldResolver';
 import type { ContentSession, CreationSession, CreateSelectionSession } from '../sessionState';
 import { NO_ISSUE_TYPE, resolveTemplateIssueType, formatIssueTypeOptionLabel } from '../sessionState';
 import { streamContentPreview } from './contentHandler';
-import { parseIntent } from './llmHelpers';
+import { parseIntent, looksLikeUnfilledPlaceholder } from './llmHelpers';
 import { resolveProjectKey, resolveIssueTypeOrPrompt } from './ticketContext';
 
 async function sendAndCollect(
@@ -236,6 +236,14 @@ export async function handleCreateTicket(
   // Project key is resolved first — issue types are project-scoped, so the combined list can't
   // be built without it (R4).
   const intent = await parseIntent(request.prompt, request.model, token);
+  // R5: the walkthrough's direct-create button opens chat with unsent literal
+  // `<TYPE> in <PROJECT>: <SUMMARY>` placeholders. Null out an unedited token right after the
+  // intent parse so it flows into the existing "missing" paths (project input box, ask-for-summary)
+  // instead of resolveProjectKey treating it as a real hint or it becoming the ticket's summary.
+  // intent.issueType is never read in this function — the template/issue-type selection screen
+  // below (streamCreateSelection) always shows regardless of what was parsed, so it needs no guard.
+  if (looksLikeUnfilledPlaceholder(intent.projectKey)) intent.projectKey = null;
+  if (looksLikeUnfilledPlaceholder(intent.summary)) intent.summary = null;
   const projectKey = await resolveProjectKey(intent.projectKey, stream);
   if (!projectKey) { stream.markdown('No project key provided — cancelled.'); return null; }
 
@@ -274,16 +282,18 @@ export async function handleCreateTicket(
   }
 
   if (templates.length === 0 && issueTypes.length === 0) {
-    // Nothing to list — fall back to the free-type input box (R6).
-    stream.markdown('_Could not fetch issue types — opening input box…_\n\n');
-    const entered = await resolveIssueTypeOrPrompt(NO_ISSUE_TYPE, stream);
+    // Nothing to list — fall back to a chat-based ask (R6/KTD4).
+    const entered = await resolveIssueTypeOrPrompt(NO_ISSUE_TYPE, {
+      kind: 'create', projectKey, summary: intent.summary, description: intent.description,
+      extraFields, pickedTemplateName: null,
+    }, stream, workspaceState);
     if (entered === null) return null;
     return continueAfterIssueType(projectKey, intent.summary, entered, intent.description, null, request.model, stream, token, jiraClient, ticketService, workspaceState, extraFields);
   }
 
   // '' is a sentinel meaning "no resolvable issue type" — never a real Jira issue type name.
-  // Picking a template or entry carrying it opens the free-type input box instead of guessing
-  // (see the routing block in JiraParticipant.ts). This covers both a template with no explicit
+  // Picking a template or entry carrying it opens the shared chat-based ask (R6) instead of
+  // guessing (see the routing block in JiraParticipant.ts). This covers both a template with no explicit
   // issueType when nothing was fetched to fall back to, and — when templates exist but the
   // issue-type fetch failed entirely — a standalone "type it yourself" entry, so there's always
   // a way to create a ticket without one of the listed templates (R6's intent extended to this

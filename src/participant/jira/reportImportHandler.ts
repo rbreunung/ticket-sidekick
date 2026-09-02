@@ -25,6 +25,7 @@ import {
   CURRENT_SESSION_SCHEMA_VERSION, isSessionExpired, SESSION_EXPIRED_MESSAGE,
   NO_ISSUE_TYPE, resolveTemplateIssueType, formatIssueTypeOptionLabel,
   type ImportTemplateSelectionSession, type ReviewSession, type ReviewTableColumn, type ReviewRowBase,
+  type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession,
 } from '../sessionState';
 import { resolveProjectKey, resolveIssueTypeOrPrompt, sessionWasSuperseded } from './ticketContext';
 
@@ -41,6 +42,10 @@ export interface ReportImportRow extends ReviewRowBase {
  * below and must not be overridable through this object.
  */
 export interface ReportImportDescriptor<TItem, TRow extends ReportImportRow> {
+  // R6/KTD4: identifies which importer this is to the shared issue-type chat-ask's
+  // AwaitIssueTypeResume — JiraParticipant.ts's router uses it to pick which of
+  // veracodeHandler.ts's/waltzHandler.ts's handleXAwaitIssueType wrapper to resume through.
+  descriptorKind: 'veracode' | 'waltz';
   scope: string; // logDiag scope, e.g. 'jira.veracode' / 'jira.waltz'
   importLabel: string; // e.g. 'Veracode' / 'Waltz OSS' — used only in the final diag-log line
   itemNoun: string; // e.g. 'flaw(s)' / 'component(s)' — table/summary wording
@@ -249,23 +254,52 @@ export async function handleImportTemplateSelection<TItem, TRow extends ReportIm
 
   // The whole batch shares this one resolved type, so this single detour — before dedup search or
   // review-table work starts — covers every row in the import (mirrors JiraParticipant.ts's
-  // create-ticket detour).
-  const issueType = await resolveIssueTypeOrPrompt(pick.issueType, stream);
+  // create-ticket detour). R6/KTD4: NO_ISSUE_TYPE now always detours to the shared chat-based ask
+  // instead of a showInputBox; `pick.kind === 'template' ? pick.name : null` is the picked
+  // identity the resume path re-looks up once the type is known.
+  const pickedTemplateName = pick.kind === 'template' ? pick.name : null;
+  // Generic TItem is erased to the concrete Veracode/Waltz union AwaitIssueTypeResume carries —
+  // safe because descriptorKind and session always come from the same importer's own descriptor.
+  const resumeSession = session as unknown as VeracodeTemplateSelectionSession | WaltzTemplateSelectionSession;
+  const issueType = await resolveIssueTypeOrPrompt(pick.issueType, {
+    kind: 'reportImport', descriptorKind: descriptor.descriptorKind, pickedTemplateName, session: resumeSession,
+  }, stream, ws);
   if (issueType === null) return;
   if (sessionWasSuperseded(ws, descriptor.sessionKeys.templateSelection)) {
     stream.markdown('_A newer import was started while this one was waiting for the issue type — cancelled to avoid creating a stale batch._');
     return;
   }
 
+  await continueAfterImportIssueType(issueType, pickedTemplateName, session, jiraClient, ticketService, stream, ws, descriptor, baseUrl);
+}
+
+/**
+ * Continuation of handleImportTemplateSelection() once the issue type is known — either resolved
+ * directly (a template/entry with a real type) or via R6's chat-based ask
+ * (JiraParticipant.ts's shared router calling back in through veracodeHandler.ts/waltzHandler.ts's
+ * handleXAwaitIssueType wrappers). `pickedTemplateName` is the picked template's *name* (identity),
+ * re-looked-up here — not a pre-resolved template object — matching KTD4.
+ */
+export async function continueAfterImportIssueType<TItem, TRow extends ReportImportRow>(
+  issueType: string,
+  pickedTemplateName: string | null,
+  session: ImportTemplateSelectionSession<TItem>,
+  jiraClient: IJiraClient,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+  baseUrl?: string,
+): Promise<void> {
   let additionalFields: Record<string, unknown> = {};
   let templateName: string | null = null;
-  if (pick.kind === 'template') {
-    templateName = pick.name;
+  if (pickedTemplateName) {
+    templateName = pickedTemplateName;
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
     if (workspaceRoot) {
       try {
         const { templates } = new TemplateService(workspaceRoot).loadTemplates();
-        const fullTemplate = templates.find(t => t.name === pick.name);
+        const fullTemplate = templates.find(t => t.name === pickedTemplateName);
         if (fullTemplate) {
           const resolver = new FieldResolver(jiraClient, session.projectKey);
           additionalFields = await resolver.resolve(fullTemplate.defaultFields, fullTemplate.resolveFields);
@@ -273,14 +307,14 @@ export async function handleImportTemplateSelection<TItem, TRow extends ReportIm
           // The template was renamed or removed from .jira-templates.json between the list being
           // shown and this reply — additionalFields would otherwise silently stay {} with no signal,
           // unlike the thrown-error path right below, which does warn (R6/AE3).
-          logDiag(descriptor.scope, 'warn', `Template no longer found — proceeding without it — ${pick.name}`, { templateName: pick.name });
+          logDiag(descriptor.scope, 'warn', `Template no longer found — proceeding without it — ${pickedTemplateName}`, { templateName: pickedTemplateName });
           stream.markdown(
-            `_Warning: template "${pick.name}" is no longer available — proceeding without its default fields._\n\n`,
+            `_Warning: template "${pickedTemplateName}" is no longer available — proceeding without its default fields._\n\n`,
           );
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        logDiag(descriptor.scope, 'warn', `Could not resolve template fields — ${pick.name}`, { templateName: pick.name, error: message });
+        logDiag(descriptor.scope, 'warn', `Could not resolve template fields — ${pickedTemplateName}`, { templateName: pickedTemplateName, error: message });
         stream.markdown(
           `_Warning: could not resolve template fields — proceeding without them: ${message}_\n\n`,
         );

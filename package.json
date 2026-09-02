@@ -790,7 +790,7 @@
           {
             "id": "jiraWorkflow",
             "title": "Discover your ticket types & workflow",
-            "description": "Sample your project's real tickets to learn its issue types and status-transition graph.\n[Ask @jira](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40jira%20discover%20workflow%20%22%7D%5D)",
+            "description": "Sample your project's real tickets to learn its issue types and status-transition graph.\n[Ask @jira](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40jira%20discover%20workflow%20%3CPROJECT%3E%20%3CISSUE_TYPE%3E%22%2C%22isPartialQuery%22%3Atrue%7D%5D)",
             "media": {
               "markdown": "walkthroughs/jira/workflow.md"
             },
@@ -801,7 +801,7 @@
           {
             "id": "jiraFirstTicket",
             "title": "Create your first ticket",
-            "description": "Generate a template from real project data, then create a ticket from it — or create one directly.\n[Ask @jira](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40jira%20generate%20a%20template%22%7D%5D)",
+            "description": "Generate a template from real project data, then create a ticket from it — or create one directly.\n[Ask @jira](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40jira%20generate%20a%20template%22%7D%5D)\n[Or create directly](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40jira%20create%20%3CTYPE%3E%20in%20%3CPROJECT%3E%3A%20%3CSUMMARY%3E%22%2C%22isPartialQuery%22%3Atrue%7D%5D)",
             "media": {
               "markdown": "walkthroughs/jira/first-ticket.md"
             },
@@ -841,7 +841,7 @@
           {
             "id": "bitbucketFirstReview",
             "title": "Review your first pull request",
-            "description": "Paste a real Bitbucket PR URL to @bitbucket and get a structured, line-accurate review.\n[Ask @bitbucket](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40bitbucket%20check%22%7D%5D)",
+            "description": "Paste a real Bitbucket PR URL to @bitbucket and get a structured, line-accurate review.\n[Ask @bitbucket](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40bitbucket%20check%22%7D%5D)\n[Review a PR](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40bitbucket%20%3CURL%3E%22%2C%22isPartialQuery%22%3Atrue%7D%5D)",
             "media": {
               "markdown": "walkthroughs/bitbucket/first-review.md"
             },

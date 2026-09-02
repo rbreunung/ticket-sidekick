@@ -26,7 +26,7 @@ vi.mock('vscode', () => {
 });
 
 import * as vscode from 'vscode';
-import { extractHistoryTurns, buildHistoryContext, extractLastAssistantText, generateContent, extractFixVersionFromPrompt, parseIntent, mapCommandToOperation } from '../participant/jira/llmHelpers';
+import { extractHistoryTurns, buildHistoryContext, extractLastAssistantText, generateContent, extractFixVersionFromPrompt, parseIntent, mapCommandToOperation, looksLikeUnfilledPlaceholder } from '../participant/jira/llmHelpers';
 
 describe('parseIntent', () => {
   const makeModel = (output: string) => ({
@@ -327,5 +327,28 @@ describe('mapCommandToOperation', () => {
 
   it('returns undefined when no command was given (plain-text prompt)', () => {
     expect(mapCommandToOperation(undefined)).toBeUndefined();
+  });
+});
+
+describe('looksLikeUnfilledPlaceholder', () => {
+  it('does not flag a normal value', () => {
+    expect(looksLikeUnfilledPlaceholder('VSJI')).toBe(false);
+  });
+
+  it('flags the literal walkthrough placeholder tokens', () => {
+    expect(looksLikeUnfilledPlaceholder('<PROJECT>')).toBe(true);
+    expect(looksLikeUnfilledPlaceholder('<ISSUE_TYPE>')).toBe(true);
+    expect(looksLikeUnfilledPlaceholder('<TYPE>')).toBe(true);
+    expect(looksLikeUnfilledPlaceholder('<SUMMARY>')).toBe(true);
+  });
+
+  it('does not flag a real value that merely contains angle brackets', () => {
+    expect(looksLikeUnfilledPlaceholder('<Urgent> Bug')).toBe(false);
+  });
+
+  it('does not flag null, undefined, or empty string', () => {
+    expect(looksLikeUnfilledPlaceholder(null)).toBe(false);
+    expect(looksLikeUnfilledPlaceholder(undefined)).toBe(false);
+    expect(looksLikeUnfilledPlaceholder('')).toBe(false);
   });
 });
