@@ -22,8 +22,10 @@ import {
   buildEmptyRequiredFieldsWarning,
   findUnsetIncludedRows, buildGeneratedTemplate,
   extractProjectKeyFromTicketKey, parseIssueTypePick, parseTemplateCollisionReply, parseOfferCreateReply,
+  parseAwaitFreeTextReply,
   parseReviewInput, applyReviewToggle, applyReviewSetValue,
-  type TemplateGenerationTypePickSession, type TemplateGenerationReviewSession,
+  type TemplateGenerationAwaitNameSession, type TemplateGenerationTypePickSession,
+  type TemplateGenerationAwaitFreeTypeSession, type TemplateGenerationReviewSession,
   type TemplateGenerationCollisionSession, type TemplateGenerationOfferCreateSession,
   type TemplateGenerationAwaitSummarySession,
 } from '../sessionState';
@@ -32,12 +34,14 @@ import type { JiraIssueType } from '../../jira/IJiraClient';
 
 const SCOPE = 'jira.templateGeneration';
 
-// workspaceState keys + response tags for this flow's five session states (CLAUDE.md's multi-turn
+// workspaceState keys + response tags for this flow's seven session states (CLAUDE.md's multi-turn
 // session convention). Exported so the routing layer in JiraParticipant.ts can detect the tag in
 // the last assistant response and load the matching session without hardcoding these literals
 // separately from this file.
 export const TEMPLATE_GEN_SESSION_KEYS = {
+  awaitName: 'jira.session.templateGenAwaitName',
   typePick: 'jira.session.templateGenTypePick',
+  awaitFreeType: 'jira.session.templateGenAwaitFreeType',
   review: 'jira.session.templateGenReview',
   collision: 'jira.session.templateGenCollision',
   offerCreate: 'jira.session.templateGenOfferCreate',
@@ -45,7 +49,9 @@ export const TEMPLATE_GEN_SESSION_KEYS = {
 } as const;
 
 export const TEMPLATE_GEN_TAGS = {
+  awaitName: '<!-- jira:template-gen-await-name -->',
   typePick: '<!-- jira:template-gen-type-pick -->',
+  awaitFreeType: '<!-- jira:template-gen-await-free-type -->',
   review: '<!-- jira:template-gen-review -->',
   collision: '<!-- jira:template-gen-collision -->',
   offerCreate: '<!-- jira:template-gen-offer-create -->',
@@ -53,9 +59,10 @@ export const TEMPLATE_GEN_TAGS = {
 } as const;
 
 // What the routing layer's parsed intent supplies. templateName/issueTypeHint may be null — this
-// flow resolves both interactively (a showInputBox for the name, a pick-list for the issue type)
-// rather than requiring the LLM intent parser to have extracted them. sourceTicketKey null means
-// the no-reference path; non-null means the reference-ticket path.
+// flow resolves both interactively, in chat (a reply-and-continue ask for the name, a pick-list or
+// reply-and-continue ask for the issue type) rather than requiring the LLM intent parser to have
+// extracted them. sourceTicketKey null means the no-reference path; non-null means the
+// reference-ticket path.
 export interface TemplateGenerationRequest {
   templateName: string | null;
   projectKeyHint: string | null;
@@ -64,10 +71,11 @@ export interface TemplateGenerationRequest {
 }
 
 /**
- * Entry point for the "generate a template" operation. Resolves whatever
- * the parsed intent didn't supply (template name via input box; project key via the shared
- * resolveProjectKey helper on the no-reference path; issue type via a pick-list when the
- * no-reference path didn't name one), then fetches candidates and streams the review list.
+ * Entry point for the "generate a template" operation. When the parsed intent already supplied a
+ * template name, resolves the rest of the request synchronously via continueGenerateTemplate();
+ * otherwise detours to a chat-ask for the name (R2 — see streamAwaitName/handleAwaitNameReply)
+ * and resumes into that same continuation once the reply arrives, instead of blocking on a
+ * showInputBox.
  */
 export async function handleGenerateTemplate(
   stream: vscode.ChatResponseStream,
@@ -77,17 +85,37 @@ export async function handleGenerateTemplate(
   hiddenDisplayFields: string[],
   request: TemplateGenerationRequest,
 ): Promise<void> {
-  let templateName = request.templateName;
-  if (!templateName) {
-    const entered = (await vscode.window.showInputBox({
-      prompt: 'Name for the new template',
-      placeHolder: 'e.g. Billing Bug',
-      ignoreFocusOut: true,
-    })) ?? null;
-    if (!entered) { stream.markdown('_No template name provided — cancelled._'); return; }
-    templateName = entered;
+  if (!request.templateName) {
+    const awaitNameSession: TemplateGenerationAwaitNameSession = {
+      projectKeyHint: request.projectKeyHint,
+      sourceTicketKey: request.sourceTicketKey,
+      issueTypeHint: request.issueTypeHint,
+      schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
+    };
+    await streamAwaitName(awaitNameSession, stream, ws);
+    return;
   }
 
+  await continueGenerateTemplate(request.templateName, request, ticketService, workspaceRoot, hiddenDisplayFields, stream, ws);
+}
+
+/**
+ * Continuation of handleGenerateTemplate() once templateName is known — either supplied directly
+ * in the original request, or resolved via R2's chat-ask (handleAwaitNameReply). Resolves the
+ * reference-ticket path, or the no-reference path's project key + issue type (pick-list, or R3's
+ * chat-ask when the type list can't be fetched — see streamAwaitFreeType/handleAwaitFreeTypeReply),
+ * then fetches candidates and streams the review list. Factored out of handleGenerateTemplate so
+ * both the "name already given" path and the "name arrived via chat reply" resume path share it.
+ */
+async function continueGenerateTemplate(
+  templateName: string,
+  request: Omit<TemplateGenerationRequest, 'templateName'>,
+  ticketService: TicketService,
+  workspaceRoot: string,
+  hiddenDisplayFields: string[],
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+): Promise<void> {
   if (request.sourceTicketKey) {
     await startFromReferenceTicket(templateName, request.sourceTicketKey, ticketService, hiddenDisplayFields, stream, ws);
     return;
@@ -116,23 +144,20 @@ export async function handleGenerateTemplate(
       return;
     }
     stream.markdown(`_"${request.issueTypeHint}" isn't one of **${projectKey}**'s issue types — pick from the list instead._\n\n`);
-    // Falls through to the pick-list (or input-box) flow below, same as no hint at all.
+    // Falls through to the pick-list (or chat-ask) flow below, same as no hint at all.
   }
 
   // The no-reference path has no resolvable issue type yet — ask the user to pick one from the
   // project's available types before fetching required-fields metadata.
   // getTemplateCandidatesFromRequiredFields takes issue type as a mandatory, already-resolved
-  // input and does no prompting itself; this is the one vscode-coupled layer allowed to prompt.
+  // input and does no prompting itself; this is the one layer allowed to prompt (in chat, R2/R3).
   if (issueTypes.length === 0) {
-    // No resolvable issue type from any real source — an input box, never a guessed default
+    // No resolvable issue type from any real source — ask via chat, never a guessed default
     // (see docs/solutions/logic-errors/combined-create-list-silently-guesses-issue-type…).
-    stream.markdown('_Could not fetch issue types — opening input box…_\n\n');
-    const entered = (await vscode.window.showInputBox({
-      prompt: 'Enter the issue type (e.g. Bug, Story, Task)',
-      ignoreFocusOut: true,
-    })) ?? null;
-    if (!entered) { stream.markdown('_No issue type provided — cancelled._'); return; }
-    await startFromRequiredFields(templateName, projectKey, entered, ticketService, stream, ws);
+    const awaitTypeSession: TemplateGenerationAwaitFreeTypeSession = {
+      templateName, projectKey, schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
+    };
+    await streamAwaitFreeType(awaitTypeSession, stream, ws);
     return;
   }
 
@@ -140,6 +165,53 @@ export async function handleGenerateTemplate(
     templateName, projectKey, availableIssueTypes: issueTypes, schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
   };
   await streamTypePick(typePickSession, stream, ws);
+}
+
+// --- Template name chat-ask (R2: a chat reply-and-continue step, not a showInputBox) ---
+
+export async function streamAwaitName(
+  session: TemplateGenerationAwaitNameSession,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+): Promise<void> {
+  await ws.update(TEMPLATE_GEN_SESSION_KEYS.awaitName, session);
+  stream.markdown(`What should the new template be named?\n\nReply with a name, or **(c)** to cancel.\n\n${TEMPLATE_GEN_TAGS.awaitName}`);
+}
+
+export async function handleAwaitNameReply(
+  reply: string,
+  session: TemplateGenerationAwaitNameSession,
+  ticketService: TicketService,
+  workspaceRoot: string,
+  hiddenDisplayFields: string[],
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+): Promise<void> {
+  if (isSessionExpired(session)) {
+    await ws.update(TEMPLATE_GEN_SESSION_KEYS.awaitName, undefined);
+    stream.markdown(SESSION_EXPIRED_MESSAGE);
+    return;
+  }
+
+  // KTD3: only an explicit "(c)" cancels here, not isCancellation()'s broader word list — see
+  // parseAwaitFreeTextReply's doc comment in sessionState.ts.
+  const parsed = parseAwaitFreeTextReply(reply);
+  if (parsed.action === 'cancel') {
+    await ws.update(TEMPLATE_GEN_SESSION_KEYS.awaitName, undefined);
+    stream.markdown('_Cancelled — no template was saved._');
+    return;
+  }
+  if (parsed.action === 'empty') {
+    stream.markdown(`What should the new template be named?\n\nReply with a name, or **(c)** to cancel.\n\n${TEMPLATE_GEN_TAGS.awaitName}`);
+    return;
+  }
+
+  await ws.update(TEMPLATE_GEN_SESSION_KEYS.awaitName, undefined);
+  const { projectKeyHint, sourceTicketKey, issueTypeHint } = session;
+  await continueGenerateTemplate(
+    parsed.value, { projectKeyHint, sourceTicketKey, issueTypeHint },
+    ticketService, workspaceRoot, hiddenDisplayFields, stream, ws,
+  );
 }
 
 async function startFromReferenceTicket(
@@ -273,6 +345,54 @@ export async function handleTypePickReply(
 
   await ws.update(TEMPLATE_GEN_SESSION_KEYS.typePick, undefined);
   await startFromRequiredFields(session.templateName, session.projectKey, pick.name, ticketService, stream, ws, pick.id);
+}
+
+// --- Free-text issue type chat-ask (R3: a chat reply-and-continue step when the type list can't
+// be fetched, not a showInputBox) ---
+
+export async function streamAwaitFreeType(
+  session: TemplateGenerationAwaitFreeTypeSession,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+): Promise<void> {
+  await ws.update(TEMPLATE_GEN_SESSION_KEYS.awaitFreeType, session);
+  stream.markdown(
+    `Could not fetch **${session.projectKey}**'s issue types. What issue type should **${session.templateName}** use ` +
+    `(e.g. Bug, Story, Task)?\n\nReply with a type, or **(c)** to cancel.\n\n${TEMPLATE_GEN_TAGS.awaitFreeType}`,
+  );
+}
+
+export async function handleAwaitFreeTypeReply(
+  reply: string,
+  session: TemplateGenerationAwaitFreeTypeSession,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+): Promise<void> {
+  if (isSessionExpired(session)) {
+    await ws.update(TEMPLATE_GEN_SESSION_KEYS.awaitFreeType, undefined);
+    stream.markdown(SESSION_EXPIRED_MESSAGE);
+    return;
+  }
+
+  // KTD3: only an explicit "(c)" cancels here, not isCancellation()'s broader word list — see
+  // parseAwaitFreeTextReply's doc comment in sessionState.ts.
+  const parsed = parseAwaitFreeTextReply(reply);
+  if (parsed.action === 'cancel') {
+    await ws.update(TEMPLATE_GEN_SESSION_KEYS.awaitFreeType, undefined);
+    stream.markdown('_Cancelled — no template was saved._');
+    return;
+  }
+  if (parsed.action === 'empty') {
+    stream.markdown(
+      `What issue type should **${session.templateName}** use (e.g. Bug, Story, Task)?\n\n` +
+      `Reply with a type, or **(c)** to cancel.\n\n${TEMPLATE_GEN_TAGS.awaitFreeType}`,
+    );
+    return;
+  }
+
+  await ws.update(TEMPLATE_GEN_SESSION_KEYS.awaitFreeType, undefined);
+  await startFromRequiredFields(session.templateName, session.projectKey, parsed.value, ticketService, stream, ws);
 }
 
 // --- Review list (toggle / setValue / confirm) ---

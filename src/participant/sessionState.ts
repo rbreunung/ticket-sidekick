@@ -280,6 +280,34 @@ export function isCancellation(text: string): boolean {
   return CANCELLATIONS.has(normalized);
 }
 
+/** KTD3: unlike isCancellation()'s broad word list (which treats a literal "stop" as
+ * cancellation), the template-generation flow's R2/R3 chat-asks (a template name, a free-text
+ * issue type) recognize only an explicit "(c)" reply as cancellation, checked before any other
+ * interpretation — so a template or issue type genuinely named "Stop" stays enterable there. This
+ * is a deliberate, one-time divergence scoped to those two new asks; handleAwaitSummaryReply (an
+ * existing, different session type in templateGenerationHandler.ts) keeps its own unmodified
+ * isCancellation() check. */
+export function isExplicitCancelToken(reply: string): boolean {
+  return reply.trim().toLowerCase() === '(c)';
+}
+
+export type AwaitFreeTextReply =
+  | { action: 'cancel' }
+  | { action: 'empty' }
+  | { action: 'value'; value: string };
+
+/** Shared parser for the template-generation flow's two free-text chat-asks (R2's template name,
+ * R3's free-text issue type) — both just need "a non-empty string, or cancel/re-prompt", so one
+ * parser covers both; each caller assigns the returned value to whichever field it means
+ * (templateName / issueType). Cancellation uses isExplicitCancelToken() (KTD3), not
+ * isCancellation(). */
+export function parseAwaitFreeTextReply(reply: string): AwaitFreeTextReply {
+  if (isExplicitCancelToken(reply)) return { action: 'cancel' };
+  const trimmed = reply.trim();
+  if (trimmed.length === 0) return { action: 'empty' };
+  return { action: 'value', value: trimmed };
+}
+
 export function buildCommentListSession(ticketKey: string, comments: JiraComment[]): CommentListSession {
   return {
     ticketKey,
@@ -917,10 +945,34 @@ export function parseOfferCreateReply(reply: string): OfferCreateReply {
 // --- Session shapes, workspaceState-persisted across turns. Keys/tags live in
 // templateGenerationHandler.ts (the vscode-coupled layer that reads/writes workspaceState). ---
 
+/** R2: chat-ask for the template name when handleGenerateTemplate's request didn't supply one
+ * (replaces a showInputBox — see KTD2). Carries TemplateGenerationRequest's other three fields,
+ * already known at prompt time, so the resuming turn can hand them straight to
+ * continueGenerateTemplate() once the name arrives, without re-deriving them from the original
+ * chat message. Everything else that continuation needs (workspaceRoot, hiddenDisplayFields,
+ * ticketService) is re-derived fresh on the resuming turn from the live call in
+ * JiraParticipant.ts, the same way every other resume in this flow already works. */
+export interface TemplateGenerationAwaitNameSession {
+  projectKeyHint: string | null;
+  sourceTicketKey: string | null;
+  issueTypeHint: string | null;
+  schemaVersion: number;
+}
+
 export interface TemplateGenerationTypePickSession {
   templateName: string;
   projectKey: string;
   availableIssueTypes: Array<Pick<JiraIssueType, 'id' | 'name'>>;
+  schemaVersion: number;
+}
+
+/** R3: chat-ask for a free-text issue type when the project's issue-type list couldn't be fetched
+ * and no issue type is otherwise known (replaces a showInputBox — see KTD2). templateName and
+ * projectKey are already resolved by this point in the flow, so both travel with the session
+ * rather than being re-asked. */
+export interface TemplateGenerationAwaitFreeTypeSession {
+  templateName: string;
+  projectKey: string;
   schemaVersion: number;
 }
 

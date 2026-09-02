@@ -36,11 +36,12 @@ import {
 import type { WaltzTemplateSelectionSession, WaltzReviewSession } from './sessionState';
 import {
   TEMPLATE_GEN_SESSION_KEYS, TEMPLATE_GEN_TAGS,
-  handleGenerateTemplate, handleTypePickReply, handleTemplateGenReviewReply,
-  handleTemplateGenCollisionReply, handleOfferCreateReply, handleAwaitSummaryReply,
+  handleGenerateTemplate, handleAwaitNameReply, handleTypePickReply, handleAwaitFreeTypeReply,
+  handleTemplateGenReviewReply, handleTemplateGenCollisionReply, handleOfferCreateReply, handleAwaitSummaryReply,
 } from './jira/templateGenerationHandler';
 import type {
-  TemplateGenerationTypePickSession, TemplateGenerationReviewSession, TemplateGenerationCollisionSession,
+  TemplateGenerationAwaitNameSession, TemplateGenerationTypePickSession, TemplateGenerationAwaitFreeTypeSession,
+  TemplateGenerationReviewSession, TemplateGenerationCollisionSession,
   TemplateGenerationOfferCreateSession, TemplateGenerationAwaitSummarySession,
 } from './sessionState';
 
@@ -608,11 +609,31 @@ export function createJiraParticipant(
       }
     }
 
+    // Template generation — chat-ask for the template name (R2, no showInputBox)
+    if (lastResponse.includes(TEMPLATE_GEN_TAGS.awaitName)) {
+      const session = ws.get<TemplateGenerationAwaitNameSession>(TEMPLATE_GEN_SESSION_KEYS.awaitName);
+      if (session) {
+        const templateGenWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+        await handleAwaitNameReply(request.prompt, session, ticketService, templateGenWorkspaceRoot, config.hiddenDisplayFields, stream, ws);
+        return;
+      }
+    }
+
     // Template generation — issue-type pick list (no-reference path, no type named)
     if (lastResponse.includes(TEMPLATE_GEN_TAGS.typePick)) {
       const session = ws.get<TemplateGenerationTypePickSession>(TEMPLATE_GEN_SESSION_KEYS.typePick);
       if (session) {
         await handleTypePickReply(request.prompt, session, ticketService, stream, ws);
+        return;
+      }
+    }
+
+    // Template generation — chat-ask for a free-text issue type when the list couldn't be
+    // fetched (R3, no showInputBox)
+    if (lastResponse.includes(TEMPLATE_GEN_TAGS.awaitFreeType)) {
+      const session = ws.get<TemplateGenerationAwaitFreeTypeSession>(TEMPLATE_GEN_SESSION_KEYS.awaitFreeType);
+      if (session) {
+        await handleAwaitFreeTypeReply(request.prompt, session, ticketService, stream, ws);
         return;
       }
     }
