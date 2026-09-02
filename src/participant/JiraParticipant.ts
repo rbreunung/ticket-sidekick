@@ -59,20 +59,19 @@ async function resolveTemplateByName(name: string | null, stream: vscode.ChatRes
   if (!name) return null;
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
   if (!workspaceRoot) return null;
+  let found: JiraTemplate | null = null;
   try {
     const { templates } = new TemplateService(workspaceRoot).loadTemplates();
-    const found = templates.find((t) => t.name === name) ?? null;
-    if (!found) {
-      stream.markdown(`_Warning: template "${name}" is no longer available — proceeding without its default fields._\n\n`);
-    }
-    return found;
+    found = templates.find((t) => t.name === name) ?? null;
   } catch (err) {
     logDiag('jira.participant', 'warn', `Could not reload template — ${name}`, {
       templateName: name, error: err instanceof Error ? err.message : String(err),
     });
-    stream.markdown(`_Warning: template "${name}" is no longer available — proceeding without its default fields._\n\n`);
-    return null;
   }
+  if (!found) {
+    stream.markdown(`_Warning: template "${name}" is no longer available — proceeding without its default fields._\n\n`);
+  }
+  return found;
 }
 
 export function createJiraParticipant(
@@ -273,7 +272,6 @@ export function createJiraParticipant(
         await ws.update('jira.session.creatingSelection', undefined);
 
         const pickedTemplateName = pick.kind === 'template' ? pick.name : null;
-        const selectedTemplate = await resolveTemplateByName(pickedTemplateName, stream);
 
         // '' is the "no resolvable issue type" sentinel (see handleCreateTicket) — detour to the
         // shared chat-based ask (R6/KTD4) instead of silently creating the ticket with a guessed
@@ -284,6 +282,11 @@ export function createJiraParticipant(
           description: selSession.description, extraFields: selSession.extraFields, pickedTemplateName,
         }, stream, ws);
         if (issueType === null) return;
+
+        // Looked up only now, after the detour check above — on a chat detour this result would
+        // be thrown away, and its "no longer available" warning would then repeat a second time
+        // on resume (efficiency review).
+        const selectedTemplate = await resolveTemplateByName(pickedTemplateName, stream);
 
         try {
           await continueAfterIssueType(
