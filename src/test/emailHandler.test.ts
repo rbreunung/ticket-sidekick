@@ -28,10 +28,12 @@ import {
   streamEmailContentPreview,
   handleEmailContentSession,
   handleCreateFromEmail,
+  handleEmailAwaitIssueType,
 } from '../participant/jira/emailHandler';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService } from '../services/TicketService';
-import type { EmailContentSession } from '../participant/sessionState';
+import type { EmailContentSession, AwaitIssueTypeResume } from '../participant/sessionState';
+import { AWAIT_ISSUE_TYPE_SESSION_KEY } from '../participant/jira/ticketContext';
 
 function makeSession(overrides: Partial<EmailContentSession> = {}): EmailContentSession {
   return {
@@ -520,23 +522,32 @@ describe('streamEmailContentPreview', () => {
     expect(text).not.toContain('create as ****');
   });
 
-  it('list-less path with session.issueType === "" detours to the input box instead of stating a fake type', async () => {
-    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockResolvedValueOnce('Task');
+  it('list-less path with session.issueType === "" detours to the shared chat-based ask instead of stating a fake type', async () => {
     const session = makeSession({ issueType: '', availableTemplates: undefined, availableIssueTypes: undefined });
     const stream = mockStream();
     const ws = makeMockWs();
     await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
 
-    expect(vscode.window.showInputBox).toHaveBeenCalledTimes(1);
-    // No "post it to create as <fake type>" message is ever streamed before showInputBox resolves.
+    expect(vscode.window.showInputBox).not.toHaveBeenCalled();
+    expect(ws.store[AWAIT_ISSUE_TYPE_SESSION_KEY]).toBeDefined();
     const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
+    // No "post it to create as <fake type>" message is ever streamed before the ask resolves.
     expect(calls.some(c => c.includes('post it'))).toBe(false);
+    expect(calls.some(c => c.includes('What issue type'))).toBe(true);
+    expect(client.createIssueCalls).toHaveLength(0); // not created yet — only after the reply resumes
+  });
+
+  it('a typed reply resumes and creates the ticket with the typed type', async () => {
+    const session = makeSession({ issueType: '', availableTemplates: undefined, availableIssueTypes: undefined });
+    const ws = makeMockWs();
+    const resume: Extract<AwaitIssueTypeResume, { kind: 'email' }> = { kind: 'email', session, pickedTemplateName: null };
+    await handleEmailAwaitIssueType(resume, 'Task', client, ticketService, mockStream() as never, ws as never);
+
     expect(client.createIssueCalls).toHaveLength(1);
     expect(client.createIssueCalls[0].issueType).toBe('Task');
   });
 
-  it('list-less path with session.issueType === "" still shows the email preview before detouring to the input box', async () => {
-    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockResolvedValueOnce('Task');
+  it('list-less path with session.issueType === "" still shows the email preview before detouring to the ask', async () => {
     const session = makeSession({ issueType: '', availableTemplates: undefined, availableIssueTypes: undefined });
     const stream = mockStream();
     const ws = makeMockWs();
@@ -549,31 +560,23 @@ describe('streamEmailContentPreview', () => {
     expect(calls.some(c => c.includes('Hello **world**'))).toBe(true);
   });
 
-  it('list-less path with session.issueType === "" and a cancelled input box never creates a ticket', async () => {
-    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined);
-    const session = makeSession({ issueType: '', availableTemplates: undefined, availableIssueTypes: undefined });
-    const stream = mockStream();
+  it('list-less path aborts instead of creating a ticket when a newer session was written while the ask was open', async () => {
     const ws = makeMockWs();
-    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
-
-    expect(client.createIssueCalls).toHaveLength(0);
-    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
-    expect(calls.some(c => c.includes('No issue type provided'))).toBe(true);
-  });
-
-  it('list-less path aborts instead of creating a ticket when a newer session was written while the input box was open', async () => {
-    const ws = makeMockWs();
-    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
-      ws.store['jira.session.emailContent'] = makeSession({ subject: 'A different email' });
-      return 'Task';
-    });
     const session = makeSession({ issueType: '', availableTemplates: undefined, availableIssueTypes: undefined });
     const stream = mockStream();
     await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
+    // Simulate a second, independent email import starting and claiming the session key while
+    // this flow's chat-based ask was still open (across the turn boundary the detour introduces).
+    ws.store['jira.session.emailContent'] = makeSession({ subject: 'A different email' });
+
+    const resume: Extract<AwaitIssueTypeResume, { kind: 'email' }> = { kind: 'email', session, pickedTemplateName: null };
+    const resumeStream = mockStream();
+    await handleEmailAwaitIssueType(resume, 'Task', client, ticketService, resumeStream as never, ws as never);
 
     expect(client.createIssueCalls).toHaveLength(0);
-    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
+    const calls = (resumeStream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
     expect(calls.some(c => c.includes('newer email import was started'))).toBe(true);
+    // The second flow's session must survive untouched — this abort must not clear it.
     expect(ws.store['jira.session.emailContent']).toBeDefined();
   });
 
@@ -717,10 +720,9 @@ describe('handleEmailContentSession — ticket creation', () => {
     expect(calls.some(c => c.includes('<!-- jira:email-content -->'))).toBe(true);
   });
 
-  // --- Never-guess sentinel detour (U2) ---
+  // --- Never-guess sentinel detour (R6/KTD4) ---
 
-  it('picking the sentinel ("type it") list entry opens the input box; a typed value flows through to ticket creation unchanged', async () => {
-    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockResolvedValueOnce('Spike');
+  it('picking the sentinel ("type it") list entry detours to the shared chat-based ask, not an input box', async () => {
     // '' sentinel as the only "issue type" entry (index 1) — mirrors handleCreateTicket's
     // fully-empty-issueTypes fallback (issueTypes: ['']).
     const session = makeSession({ issueType: 'Bug', availableIssueTypes: [''] });
@@ -728,62 +730,61 @@ describe('handleEmailContentSession — ticket creation', () => {
     const ws = makeMockWs();
     await handleEmailContentSession('1', session, ticketService, stream as never, ws as never, client);
 
-    expect(vscode.window.showInputBox).toHaveBeenCalledTimes(1);
+    expect(vscode.window.showInputBox).not.toHaveBeenCalled();
+    expect(client.createIssueCalls).toHaveLength(0); // not created yet — only after the reply resumes
+    expect(ws.store[AWAIT_ISSUE_TYPE_SESSION_KEY]).toBeDefined();
+    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
+    expect(calls.some(c => c.includes('What issue type'))).toBe(true);
+  });
+
+  it('a typed reply resumes and flows through to ticket creation unchanged', async () => {
+    const session = makeSession({ issueType: 'Bug', availableIssueTypes: [''] });
+    const ws = makeMockWs();
+    const resume: Extract<AwaitIssueTypeResume, { kind: 'email' }> = { kind: 'email', session, pickedTemplateName: null };
+    await handleEmailAwaitIssueType(resume, 'Spike', client, ticketService, mockStream() as never, ws as never);
+
     expect(client.createIssueCalls).toHaveLength(1);
     expect(client.createIssueCalls[0].issueType).toBe('Spike');
   });
 
-  it('picking the sentinel list entry with an empty/cancelled input box cancels — never falls back to a guess', async () => {
-    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined);
-    const session = makeSession({ issueType: 'Bug', availableIssueTypes: [''] });
-    const stream = mockStream();
-    const ws = makeMockWs();
-    await handleEmailContentSession('1', session, ticketService, stream as never, ws as never, client);
-
-    expect(client.createIssueCalls).toHaveLength(0);
-    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
-    expect(calls.some(c => c.includes('No issue type provided'))).toBe(true);
-  });
-
-  it('a bare "post it" confirm when session.issueType === "" also detours to the input box, not straight to ticket creation', async () => {
-    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockResolvedValueOnce('Bug');
+  it('a bare "post it" confirm when session.issueType === "" also detours to the ask, not straight to ticket creation', async () => {
     const session = makeSession({ issueType: '', availableIssueTypes: ['Bug', 'Story'] });
     const stream = mockStream();
     const ws = makeMockWs();
     await handleEmailContentSession('post it', session, ticketService, stream as never, ws as never, client);
 
-    expect(vscode.window.showInputBox).toHaveBeenCalledTimes(1);
-    expect(client.createIssueCalls).toHaveLength(1);
-    expect(client.createIssueCalls[0].issueType).toBe('Bug');
+    expect(vscode.window.showInputBox).not.toHaveBeenCalled();
+    expect(client.createIssueCalls).toHaveLength(0);
+    expect(ws.store[AWAIT_ISSUE_TYPE_SESSION_KEY]).toBeDefined();
   });
 
-  it('a real configured issueType picked from the list is entirely unaffected — no input box appears', async () => {
+  it('a real configured issueType picked from the list is entirely unaffected — no input box, no detour', async () => {
     const session = makeSession({ issueType: 'Bug', availableIssueTypes: ['Bug', 'Story', 'Task'] });
     const stream = mockStream();
     const ws = makeMockWs();
     await handleEmailContentSession('2', session, ticketService, stream as never, ws as never, client);
 
     expect(vscode.window.showInputBox).not.toHaveBeenCalled();
+    expect(ws.store[AWAIT_ISSUE_TYPE_SESSION_KEY]).toBeUndefined();
     expect(client.createIssueCalls).toHaveLength(1);
     expect(client.createIssueCalls[0].issueType).toBe('Story');
   });
 
-  // --- Session-freshness guard against an abandoned input box ---
+  // --- Session-freshness guard against an abandoned ask ---
 
-  it('a session written while the sentinel input box was open aborts the resume instead of creating a stale ticket', async () => {
-    const ws = makeMockWs();
-    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
-      // Simulate a second, independent email import starting and claiming the session key while
-      // this flow's native input box was still open.
-      ws.store['jira.session.emailContent'] = makeSession({ subject: 'A different email' });
-      return 'Spike';
-    });
+  it('a session written while the sentinel ask was open aborts the resume instead of creating a stale ticket', async () => {
     const session = makeSession({ issueType: 'Bug', availableIssueTypes: [''] });
-    const stream = mockStream();
-    await handleEmailContentSession('1', session, ticketService, stream as never, ws as never, client);
+    const ws = makeMockWs();
+    // Simulate a second, independent email import starting and claiming the session key while
+    // this flow's chat-based ask was still open (across the turn boundary the detour introduces).
+    ws.store['jira.session.emailContent'] = makeSession({ subject: 'A different email' });
+
+    const resume: Extract<AwaitIssueTypeResume, { kind: 'email' }> = { kind: 'email', session, pickedTemplateName: null };
+    const resumeStream = mockStream();
+    await handleEmailAwaitIssueType(resume, 'Spike', client, ticketService, resumeStream as never, ws as never);
 
     expect(client.createIssueCalls).toHaveLength(0);
-    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
+    const calls = (resumeStream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
     expect(calls.some(c => c.includes('newer email import was started'))).toBe(true);
     // The second flow's session must survive untouched — this abort must not clear it.
     expect(ws.store['jira.session.emailContent']).toBeDefined();

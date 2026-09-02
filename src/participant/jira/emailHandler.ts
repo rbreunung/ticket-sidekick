@@ -10,12 +10,40 @@ import { parseEml, type ParsedEml } from '../../utils/emlParser';
 import { htmlToMarkdown } from '../../utils/htmlToMarkdown';
 import { TemplateService } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
-import type { EmailContentSession } from '../sessionState';
+import type { EmailContentSession, AwaitIssueTypeResume } from '../sessionState';
 import {
   isCancellation, isConfirmation, pickEmailOption, selectDefaultIssueType, resolveTemplateIssueType,
   formatIssueTypeOptionLabel, formatIssueTypeInlinePhrase,
 } from '../sessionState';
 import { resolveIssueTypeOrPrompt, sessionWasSuperseded } from './ticketContext';
+
+// Shared by every call site that resolves a picked template's default fields once the issue type
+// is known (R6/KTD4's `pickedTemplateName` identity is re-looked-up here, not pre-resolved) — the
+// direct (same-turn) paths in handleEmailContentSession/streamEmailContentPreview and the
+// chat-detour resume path in handleEmailAwaitIssueType below all share this one lookup.
+async function resolveEmailTemplateFields(
+  pickedTemplateName: string | null,
+  projectKey: string,
+  baseAdditionalFields: Record<string, unknown>,
+  jiraClient: IJiraClient,
+): Promise<Record<string, unknown>> {
+  if (!pickedTemplateName) return baseAdditionalFields;
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+  if (!workspaceRoot) return baseAdditionalFields;
+  try {
+    const { templates } = new TemplateService(workspaceRoot).loadTemplates();
+    const fullTemplate = templates.find(t => t.name === pickedTemplateName);
+    if (!fullTemplate) return baseAdditionalFields;
+    const resolver = new FieldResolver(jiraClient, projectKey);
+    const resolved = await resolver.resolve(fullTemplate.defaultFields, fullTemplate.resolveFields);
+    return { ...resolved, ...baseAdditionalFields };
+  } catch (err) {
+    logDiag('jira.email', 'warn', `Could not resolve template fields — ${pickedTemplateName}`, {
+      templateName: pickedTemplateName, error: err instanceof Error ? err.message : String(err),
+    });
+    return baseAdditionalFields; // proceed without template fields
+  }
+}
 
 // Shared by every resolveIssueTypeOrPrompt call site below (see sessionWasSuperseded's doc comment
 // in ticketContext.ts for why this check exists).
@@ -296,36 +324,20 @@ export async function handleEmailContentSession(
   const pick = isNaN(n) ? null : pickEmailOption(n, session.availableTemplates ?? [], session.availableIssueTypes ?? []);
   if (pick) {
     await ws.update('jira.session.emailContent', undefined);
+    const pickedTemplateName = pick.kind === 'template' ? pick.name : null;
     // Resolve the issue type before doing any template-field resolution (which makes real Jira API
-    // calls) — a cancelled input box must not have paid for or waited on work it then discards.
-    const resolvedIssueType = await resolveIssueTypeOrPrompt(pick.issueType, stream);
+    // calls) — a cancelled/detoured ask must not have paid for or waited on work it then discards.
+    const resolvedIssueType = await resolveIssueTypeOrPrompt(pick.issueType, {
+      kind: 'email', session, pickedTemplateName,
+    }, stream, ws);
     if (resolvedIssueType === null) return;
     if (sessionWasSuperseded(ws, 'jira.session.emailContent')) {
       stream.markdown(STALE_EMAIL_SESSION_MESSAGE);
       return;
     }
-    let additionalFields = session.additionalFields;
-    if (pick.kind === 'template') {
-      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-      if (workspaceRoot) {
-        try {
-          const { templates } = new TemplateService(workspaceRoot).loadTemplates();
-          const fullTemplate = templates.find(t => t.name === pick.name);
-          if (fullTemplate) {
-            const resolver = new FieldResolver(jiraClient, session.projectKey);
-            const resolved = await resolver.resolve(fullTemplate.defaultFields, fullTemplate.resolveFields);
-            additionalFields = { ...resolved, ...session.additionalFields };
-          }
-        } catch (err) {
-          logDiag('jira.email', 'warn', `Could not resolve template fields — ${pick.name}`, {
-            templateName: pick.name, error: err instanceof Error ? err.message : String(err),
-          });
-          // proceed without template fields
-        }
-      }
-    }
-    const overrides = pick.kind === 'template'
-      ? { issueType: resolvedIssueType, selectedTemplateName: pick.name, additionalFields }
+    const additionalFields = await resolveEmailTemplateFields(pickedTemplateName, session.projectKey, session.additionalFields, jiraClient);
+    const overrides = pickedTemplateName
+      ? { issueType: resolvedIssueType, selectedTemplateName: pickedTemplateName, additionalFields }
       : { issueType: resolvedIssueType };
     await finishEmailTicket({ ...session, ...overrides }, ticketService, stream, baseUrl);
     return;
@@ -333,7 +345,9 @@ export async function handleEmailContentSession(
 
   if (isConfirmation(reply)) {
     await ws.update('jira.session.emailContent', undefined);
-    const resolvedIssueType = await resolveIssueTypeOrPrompt(session.issueType, stream);
+    const resolvedIssueType = await resolveIssueTypeOrPrompt(session.issueType, {
+      kind: 'email', session, pickedTemplateName: null,
+    }, stream, ws);
     if (resolvedIssueType === null) return;
     if (sessionWasSuperseded(ws, 'jira.session.emailContent')) {
       stream.markdown(STALE_EMAIL_SESSION_MESSAGE);
@@ -455,7 +469,9 @@ export async function streamEmailContentPreview(
   if (!hasOptions && session.issueType === '') {
     stream.markdown(preview);
     await ws.update('jira.session.emailContent', undefined);
-    const resolvedIssueType = await resolveIssueTypeOrPrompt(session.issueType, stream);
+    const resolvedIssueType = await resolveIssueTypeOrPrompt(session.issueType, {
+      kind: 'email', session, pickedTemplateName: null,
+    }, stream, ws);
     if (resolvedIssueType === null) return;
     if (sessionWasSuperseded(ws, 'jira.session.emailContent')) {
       stream.markdown(STALE_EMAIL_SESSION_MESSAGE);
@@ -525,4 +541,31 @@ export async function finishEmailTicket(session: EmailContentSession, ticketServ
       });
     }
   }
+}
+
+// R6/KTD4: resumes email-to-ticket once the shared issue-type chat-ask (JiraParticipant.ts's
+// router) has a typed type for a 'email'-kind resume — covers all three of this file's original
+// resolveIssueTypeOrPrompt call sites (template pick, confirm-as-is, no-options fallback), which
+// all converged on finishEmailTicket() already. Mirrors the STALE_EMAIL_SESSION_MESSAGE /
+// sessionWasSuperseded() guard each of those three call sites already ran after its own
+// (now-shared) detour.
+export async function handleEmailAwaitIssueType(
+  resume: Extract<AwaitIssueTypeResume, { kind: 'email' }>,
+  issueType: string,
+  jiraClient: IJiraClient,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+): Promise<void> {
+  if (sessionWasSuperseded(ws, 'jira.session.emailContent')) {
+    stream.markdown(STALE_EMAIL_SESSION_MESSAGE);
+    return;
+  }
+  const { session, pickedTemplateName } = resume;
+  const baseUrl = vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.baseUrl') ?? '';
+  const additionalFields = await resolveEmailTemplateFields(pickedTemplateName, session.projectKey, session.additionalFields, jiraClient);
+  const overrides = pickedTemplateName
+    ? { issueType, selectedTemplateName: pickedTemplateName, additionalFields }
+    : { issueType };
+  await finishEmailTicket({ ...session, ...overrides }, ticketService, stream, baseUrl);
 }
