@@ -18,6 +18,12 @@ vi.mock('vscode', () => ({
   },
 }));
 
+vi.mock('../templates/TemplateService', () => ({
+  TemplateService: vi.fn().mockImplementation(() => ({
+    loadTemplates: vi.fn(),
+  })),
+}));
+
 import * as vscode from 'vscode';
 import {
   buildEmailJiraWiki,
@@ -32,6 +38,7 @@ import {
 } from '../participant/jira/emailHandler';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService } from '../services/TicketService';
+import { TemplateService } from '../templates/TemplateService';
 import type { EmailContentSession, AwaitIssueTypeResume } from '../participant/sessionState';
 import { AWAIT_ISSUE_TYPE_SESSION_KEY } from '../participant/jira/ticketContext';
 
@@ -745,6 +752,23 @@ describe('handleEmailContentSession — ticket creation', () => {
 
     expect(client.createIssueCalls).toHaveLength(1);
     expect(client.createIssueCalls[0].issueType).toBe('Spike');
+  });
+
+  it('a picked template name resolves and merges its default fields (R6/KTD4 re-derivation, run only on resume)', async () => {
+    vi.mocked(TemplateService).mockImplementation(() => ({
+      loadTemplates: vi.fn().mockReturnValue({
+        templates: [{ name: 'Incident Template', issueType: 'Bug', defaultFields: { priority: 'High' } }],
+        cleanupRules: [],
+      }),
+    }) as unknown as InstanceType<typeof TemplateService>);
+
+    const session = makeSession({ issueType: 'Bug', availableIssueTypes: [''], additionalFields: { labels: ['from-email'] } });
+    const ws = makeMockWs();
+    const resume: Extract<AwaitIssueTypeResume, { kind: 'email' }> = { kind: 'email', session, pickedTemplateName: 'Incident Template' };
+    await handleEmailAwaitIssueType(resume, 'Spike', client, ticketService, mockStream() as never, ws as never);
+
+    expect(client.createIssueCalls).toHaveLength(1);
+    expect(client.createIssueCalls[0].additionalFields).toMatchObject({ priority: 'High', labels: ['from-email'] });
   });
 
   it('a bare "post it" confirm when session.issueType === "" also detours to the ask, not straight to ticket creation', async () => {

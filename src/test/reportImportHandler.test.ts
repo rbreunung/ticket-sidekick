@@ -13,6 +13,12 @@ vi.mock('vscode', () => ({
   Uri: { file: (p: string) => ({ fsPath: p }) },
 }));
 
+vi.mock('../templates/TemplateService', () => ({
+  TemplateService: vi.fn().mockImplementation(() => ({
+    loadTemplates: vi.fn(),
+  })),
+}));
+
 import * as vscode from 'vscode';
 import {
   buildImportTemplateSession, streamImportTemplateSelection, handleImportTemplateSelection,
@@ -28,6 +34,7 @@ import type {
 import { AWAIT_ISSUE_TYPE_SESSION_KEY } from '../participant/jira/ticketContext';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService } from '../services/TicketService';
+import { TemplateService } from '../templates/TemplateService';
 
 interface TestItem {
   ref: string;
@@ -210,6 +217,29 @@ describe('continueAfterImportIssueType (R6/KTD4 resume continuation)', () => {
     expect(client.createIssueCalls).toHaveLength(1);
     expect(client.createIssueCalls[0].issueType).toBe('Spike');
   });
+
+  it('a picked template name resolves and merges its default fields into the batch (R6/KTD4 re-derivation)', async () => {
+    (vscode.workspace as { workspaceFolders?: unknown }).workspaceFolders = [{ uri: { fsPath: '/workspace' } }];
+    vi.mocked(TemplateService).mockImplementation(() => ({
+      loadTemplates: vi.fn().mockReturnValue({
+        templates: [{ name: 'Security Template', issueType: 'Bug', defaultFields: { priority: 'High' } }],
+        cleanupRules: [],
+      }),
+    }) as unknown as InstanceType<typeof TemplateService>);
+    try {
+      const session = makeSession({ availableIssueTypes: [''] });
+      const stream = mockStream();
+      const ws = makeMockWs();
+
+      await continueAfterImportIssueType('Spike', 'Security Template', session, client, ticketService, stream as never, ws as never, descriptor);
+
+      const reviewSession = ws.store[descriptor.sessionKeys.review] as ReviewSession<TestRow>;
+      expect(reviewSession.templateName).toBe('Security Template');
+      expect(reviewSession.additionalFields).toEqual({ priority: 'High' });
+    } finally {
+      (vscode.workspace as { workspaceFolders?: unknown }).workspaceFolders = undefined;
+    }
+  });
 });
 
 describe('handleVeracodeAwaitIssueType (R6/KTD4 resume, supersession guard)', () => {
@@ -286,5 +316,25 @@ describe('handleWaltzAwaitIssueType (R6/KTD4 resume, same mechanism as Veracode)
 
     const reviewSession = ws.store['jira.session.waltzReview'] as ReviewSession<TestRow>;
     expect(reviewSession.issueType).toBe('Task');
+  });
+
+  it('aborts instead of creating a batch when a newer import session was written while the ask was open', async () => {
+    const ws = makeMockWs();
+    // Simulate a second, independent import starting and claiming the session key while this
+    // flow's chat-based ask was still open (across the turn boundary the detour introduces).
+    ws.store['jira.session.waltzTemplateSelection'] = makeWaltzSession({ reportFileName: 'other-report.xlsx' });
+    const searchSpy = vi.spyOn(client, 'searchJql');
+    const resume: Extract<AwaitIssueTypeResume, { kind: 'reportImport' }> = {
+      kind: 'reportImport', descriptorKind: 'waltz', pickedTemplateName: null, session: makeWaltzSession(),
+    };
+    const stream = mockStream();
+
+    await handleWaltzAwaitIssueType(resume, 'Task', client, ticketService, stream as never, ws as never);
+
+    expect(searchSpy).not.toHaveBeenCalled();
+    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
+    expect(calls.some(c => c.includes('newer import was started'))).toBe(true);
+    // The second flow's session must survive untouched — this abort must not clear it.
+    expect(ws.store['jira.session.waltzTemplateSelection']).toBeDefined();
   });
 });
