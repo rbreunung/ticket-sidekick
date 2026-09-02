@@ -14,7 +14,7 @@ import type { CleanupRule } from '../templates/TemplateService';
 import type { Operation, ParsedIntent } from './jira/llmHelpers';
 import { parseIntent, extractFixVersionFromPrompt, generateContent, isLmRefusal, synthesizeComments, generateDescriptionAndCommentsSummary, isPointerPrompt, extractLastAssistantText, mapCommandToOperation } from './jira/llmHelpers';
 import { streamFieldUpdatePreview, continueSetField, handleSetField, handleSpellCheck } from './jira/fieldHandler';
-import { getLastAssistantText, resolveTicketFromBranch, resolveProjectKey, resolveIssueTypeOrPrompt, parseLastTicketFromContext } from './jira/ticketContext';
+import { getLastAssistantText, resolveTicketFromBranch, resolveProjectKey, resolveIssueTypeOrPrompt, parseLastTicketFromContext, sessionWasSuperseded } from './jira/ticketContext';
 import { validateBaseUrl } from '../services/configValidation';
 import { gatherFileContent, buildContentContext, streamContentPreview, handleContentSession } from './jira/contentHandler';
 import { streamCreateSelection, continueAfterIssueType, streamNextSection, finishTicketCreation, handleCreateTicket } from './jira/createHandler';
@@ -336,6 +336,16 @@ export function createJiraParticipant(
         const { resume } = session;
         try {
           if (resume.kind === 'create') {
+            // Mirrors the sibling branches' sessionWasSuperseded() guard — a second @jira create
+            // started while this one awaited its issue type must not resume on stale data (plan's
+            // own U4 test scenario). 'jira.session.creatingSelection' is the key the combined
+            // template/issue-type selection block above clears right before this detour; the rare
+            // createHandler.ts NO_ISSUE_TYPE fallback (no prior selection session) finds it
+            // undefined here and proceeds normally.
+            if (sessionWasSuperseded(ws, 'jira.session.creatingSelection')) {
+              stream.markdown('_A newer create was started while this one was waiting for the issue type — cancelled to avoid creating a stale ticket._');
+              return;
+            }
             const selectedTemplate = await resolveTemplateByName(resume.pickedTemplateName, stream);
             await continueAfterIssueType(
               resume.projectKey, resume.summary, issueType, resume.description,
