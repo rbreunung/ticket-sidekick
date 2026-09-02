@@ -113,6 +113,16 @@ export function mapCommandToOperation(command: string | undefined): Operation | 
   return command ? COMMAND_OPERATIONS[command] : undefined;
 }
 
+// Onboarding walkthrough buttons (R1/R5) open chat pre-filled with literal placeholder tokens
+// like `<PROJECT>`/`<ISSUE_TYPE>`/`<TYPE>`/`<SUMMARY>` that the user is meant to replace before
+// sending. If sent unedited, a resolved field carrying one of these tokens must be treated the
+// same as "missing" rather than reaching an LLM intent parse or a real API call — this is the
+// one shared predicate every such call site guards with (KTD1), instead of duplicating the regex.
+export function looksLikeUnfilledPlaceholder(value: string | null | undefined): boolean {
+  if (!value) return false;
+  return /^<[A-Z][A-Z0-9_]*>$/.test(value);
+}
+
 export function extractFixVersionFromPrompt(prompt: string): string | null {
   const quoted = prompt.match(/\bin\s+["']([^"']+)["']/i);
   if (quoted) return quoted[1];

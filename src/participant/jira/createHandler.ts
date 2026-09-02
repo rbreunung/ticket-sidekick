@@ -8,7 +8,7 @@ import { FieldResolver } from '../../templates/FieldResolver';
 import type { ContentSession, CreationSession, CreateSelectionSession } from '../sessionState';
 import { NO_ISSUE_TYPE, resolveTemplateIssueType, formatIssueTypeOptionLabel } from '../sessionState';
 import { streamContentPreview } from './contentHandler';
-import { parseIntent } from './llmHelpers';
+import { parseIntent, looksLikeUnfilledPlaceholder } from './llmHelpers';
 import { resolveProjectKey, resolveIssueTypeOrPrompt } from './ticketContext';
 
 async function sendAndCollect(
@@ -236,6 +236,14 @@ export async function handleCreateTicket(
   // Project key is resolved first — issue types are project-scoped, so the combined list can't
   // be built without it (R4).
   const intent = await parseIntent(request.prompt, request.model, token);
+  // R5: the walkthrough's direct-create button opens chat with unsent literal
+  // `<TYPE> in <PROJECT>: <SUMMARY>` placeholders. Null out an unedited token right after the
+  // intent parse so it flows into the existing "missing" paths (project input box, ask-for-summary)
+  // instead of resolveProjectKey treating it as a real hint or it becoming the ticket's summary.
+  // intent.issueType is never read in this function — the template/issue-type selection screen
+  // below (streamCreateSelection) always shows regardless of what was parsed, so it needs no guard.
+  if (looksLikeUnfilledPlaceholder(intent.projectKey)) intent.projectKey = null;
+  if (looksLikeUnfilledPlaceholder(intent.summary)) intent.summary = null;
   const projectKey = await resolveProjectKey(intent.projectKey, stream);
   if (!projectKey) { stream.markdown('No project key provided — cancelled.'); return null; }
 
