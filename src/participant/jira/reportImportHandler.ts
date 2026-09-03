@@ -37,38 +37,58 @@ export interface ReportImportRow extends ReviewRowBase {
 
 /**
  * Per-importer descriptor (KTD3) — a plain object of typed fields/functions, not a class hierarchy
- * or a registry. Everything genuinely different between Veracode and Waltz lives here; everything
- * about the session flow itself (control flow AND message wording, per KTD1) lives in the functions
- * below and must not be overridable through this object.
+ * or a registry. Everything genuinely different between an importer lives here; everything about
+ * the session flow itself (control flow AND message wording, per KTD1) lives in the functions below
+ * and must not be overridable through this object. `TRow` need only satisfy `ReviewRowBase` — the
+ * dedup-shaped `ReportImportRow` fields (labels/summary/descriptionWiki) are Veracode/Waltz-specific,
+ * not a shared-row requirement, so an importer with no dedup concept (email) can supply its own row
+ * shape instead.
  */
-export interface ReportImportDescriptor<TItem, TRow extends ReportImportRow> {
+export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   // R6/KTD4: identifies which importer this is to the shared issue-type chat-ask's
   // AwaitIssueTypeResume — JiraParticipant.ts's router uses it to pick which of
-  // veracodeHandler.ts's/waltzHandler.ts's handleXAwaitIssueType wrapper to resume through.
-  descriptorKind: 'veracode' | 'waltz';
-  scope: string; // logDiag scope, e.g. 'jira.veracode' / 'jira.waltz'
+  // veracodeHandler.ts's/waltzHandler.ts's/emailHandler.ts's handleXAwaitIssueType wrapper to
+  // resume through.
+  descriptorKind: 'veracode' | 'waltz' | 'email';
+  scope: string; // logDiag scope, e.g. 'jira.veracode' / 'jira.waltz' / 'jira.email'
   importLabel: string; // e.g. 'Veracode' / 'Waltz OSS' — used only in the final diag-log line
   itemNoun: string; // e.g. 'flaw(s)' / 'component(s)' — table/summary wording
   filterKindLabel: string; // e.g. 'severity/status' / 'rating/remediation' — template-selection wording
   noMatchMessage: string; // full "no items matched your filters" message (config key names differ per importer)
-  fileFilter: { label: string; extensions: string[] };
-  filePickerTitle: string;
-  parseAndFilter: (filePath: string) => Promise<TItem[]>; // readAndFilterXFile — encoding-aware per importer
+  // These three back openReportFilePicker()/handleImportReport() below, which are single-file (one
+  // report -> many items) — Veracode/Waltz's only file-picker entry point. Optional because email's
+  // one-file-per-item shape doesn't fit that contract; email's own entry points (emailHandler.ts)
+  // build EmailImportItem[] themselves via a multi-select picker and call buildImportTemplateSession()
+  // directly, bypassing openReportFilePicker()/handleImportReport() entirely — so email's descriptor
+  // omits all three rather than supplying values nothing would ever invoke.
+  fileFilter?: { label: string; extensions: string[] };
+  filePickerTitle?: string;
+  parseAndFilter?: (filePath: string) => Promise<TItem[]>; // readAndFilterXFile — encoding-aware per importer
   sessionKeys: {
     templateSelection: string;
     templateTag: string;
     review: string;
     reviewTag: string;
   };
-  searchLabelOf: (item: TItem) => string; // the full label value searched for in the dedup JQL
-  dedupKeyOf: (item: TItem) => string; // the key looked up in the dedup map (may differ from searchLabelOf)
-  labelToDedupKey: (label: string) => string | null;
+  // KTD2: dedup is optional — an importer with no dedup key (email) omits all three, and the
+  // "already ticketed" search step is skipped entirely instead of run and found empty.
+  searchLabelOf?: (item: TItem) => string; // the full label value searched for in the dedup JQL
+  dedupKeyOf?: (item: TItem) => string; // the key looked up in the dedup map (may differ from searchLabelOf)
+  labelToDedupKey?: (label: string) => string | null;
   buildRowFields: (item: TItem, templateLabels: string[]) => Omit<TRow, keyof ReviewRowBase>;
   reviewColumns: ReviewTableColumn<TRow>[];
   itemRefFor: (row: TRow) => string; // e.g. 'Flaw 10101' / 'example-lib:1.2.3' — creation-failure line + log details
+  // KTD3: builds the ticket's summary + create-fields from a row (and the batch's resolved template
+  // fields) — the only place a row's fields become a `createTicket()` call, so an importer with no
+  // `labels`/`descriptionWiki` concept (email) never needs those fields at all.
+  buildTicketFields: (row: TRow, additionalFields: Record<string, unknown>) => { summary: string; fields: Record<string, unknown> };
+  // KTD4: optional per-row work after a ticket is created (email uses this for attachment upload).
+  // A rejection is caught by executeImportBatch and shown as a warning — it never fails the row,
+  // since the ticket already exists by the time this runs.
+  afterCreate?: (row: TRow, issueKey: string, ticketService: TicketService) => Promise<void>;
   // KTD9: optional UI-notify callback for issue-type-fetch failure, so Veracode's user-visible
-  // showWarningMessage on that path survives being driven through this shared builder. Waltz omits
-  // it (or could pass a log-only callback) since it has no such warning today.
+  // showWarningMessage on that path survives being driven through this shared builder. Waltz/email
+  // omit it (or could pass a log-only callback) since they have no such warning today.
   onIssueTypeFetchFailed?: (message: string, projectKey: string) => void;
 }
 
@@ -93,21 +113,23 @@ export async function readAndFilterReport<TRaw, TItem>(
   return filter(items);
 }
 
-// Chat-only entry point's own file picker.
-async function openReportFilePicker<TItem, TRow extends ReportImportRow>(
+// Chat-only entry point's own file picker. Single-file only — callable only by handleImportReport()
+// below, whose own callers (Veracode/Waltz's thin wrappers) always supply fileFilter/filePickerTitle/
+// parseAndFilter; email never reaches this function at all (see the descriptor fields' doc comment).
+async function openReportFilePicker<TItem, TRow extends ReviewRowBase>(
   stream: vscode.ChatResponseStream,
   descriptor: ReportImportDescriptor<TItem, TRow>,
 ): Promise<{ items: TItem[]; fileName: string } | null> {
   const uris = await vscode.window.showOpenDialog({
     canSelectMany: false,
-    filters: { [descriptor.fileFilter.label]: descriptor.fileFilter.extensions },
+    filters: { [descriptor.fileFilter!.label]: descriptor.fileFilter!.extensions },
     defaultUri: vscode.Uri.file(path.join(os.homedir(), 'Downloads')),
     title: descriptor.filePickerTitle,
   });
   if (!uris || uris.length === 0) return null;
 
   try {
-    const items = await descriptor.parseAndFilter(uris[0].fsPath);
+    const items = await descriptor.parseAndFilter!(uris[0].fsPath);
     return { items, fileName: path.basename(uris[0].fsPath) };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -117,7 +139,7 @@ async function openReportFilePicker<TItem, TRow extends ReportImportRow>(
   }
 }
 
-export async function buildImportTemplateSession<TItem, TRow extends ReportImportRow>(
+export async function buildImportTemplateSession<TItem, TRow extends ReviewRowBase>(
   items: TItem[],
   fileName: string,
   projectKey: string,
@@ -161,7 +183,7 @@ export async function buildImportTemplateSession<TItem, TRow extends ReportImpor
   };
 }
 
-export async function streamImportTemplateSelection<TItem, TRow extends ReportImportRow>(
+export async function streamImportTemplateSelection<TItem, TRow extends ReviewRowBase>(
   session: ImportTemplateSelectionSession<TItem>,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
@@ -189,7 +211,7 @@ export async function streamImportTemplateSelection<TItem, TRow extends ReportIm
 //  2. Chat-only (e.g. "@jira import veracode report" with no prior command) — opens its own file picker.
 // projectKeyHint comes from the LLM-parsed intent.projectKey; resolveProjectKey() falls back to the
 // defaultProject setting, then an input box, when it's null.
-export async function handleImportReport<TItem, TRow extends ReportImportRow>(
+export async function handleImportReport<TItem, TRow extends ReviewRowBase>(
   _request: vscode.ChatRequest,
   stream: vscode.ChatResponseStream,
   _token: vscode.CancellationToken,
@@ -227,7 +249,7 @@ export async function handleImportReport<TItem, TRow extends ReportImportRow>(
   await streamImportTemplateSelection(session, stream, ws, descriptor);
 }
 
-export async function handleImportTemplateSelection<TItem, TRow extends ReportImportRow>(
+export async function handleImportTemplateSelection<TItem, TRow extends ReviewRowBase>(
   reply: string,
   session: ImportTemplateSelectionSession<TItem>,
   jiraClient: IJiraClient,
@@ -280,7 +302,7 @@ export async function handleImportTemplateSelection<TItem, TRow extends ReportIm
  * handleXAwaitIssueType wrappers). `pickedTemplateName` is the picked template's *name* (identity),
  * re-looked-up here — not a pre-resolved template object — matching KTD4.
  */
-export async function continueAfterImportIssueType<TItem, TRow extends ReportImportRow>(
+export async function continueAfterImportIssueType<TItem, TRow extends ReviewRowBase>(
   issueType: string,
   pickedTemplateName: string | null,
   session: ImportTemplateSelectionSession<TItem>,
@@ -323,40 +345,45 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReportImp
   }
 
   const plural = descriptor.itemNoun.replace('(s)', 's'); // 'flaw(s)' -> 'flaws', 'component(s)' -> 'components'
-  stream.markdown(`_Checking for already-ticketed ${plural}…_\n\n`);
   const templateLabels = Array.isArray(additionalFields.labels) ? additionalFields.labels as string[] : [];
 
-  // The template session was already cleared above, so a failure here must degrade gracefully
-  // rather than throw with nothing left to resume from. findAlreadyTicketed() is itself
-  // fault-tolerant per chunk (R5/AE2) and never rejects — this catch is a defensive backstop for a
-  // failure outside the per-chunk loop (e.g. an error thrown by descriptor.searchLabelOf/labelToDedupKey
-  // themselves). Total per-chunk coverage loss (every chunk failed) is a distinct, non-throwing
-  // outcome, surfaced instead via the failedChunks/totalChunks check below, which reuses this
-  // same user-facing warning for the total-coverage-loss case.
-  let dedupMap: Map<string, string>;
-  try {
-    const searchLabels = session.items.map(descriptor.searchLabelOf);
-    const result = await findAlreadyTicketed(
-      searchLabels,
-      DEFAULT_DEDUP_CHUNK_SIZE,
-      chunk => ticketService.searchTicketsRaw(buildDedupJql(session.projectKey, chunk), 100).then(r => r.issues as JqlIssueLike[]),
-      descriptor.labelToDedupKey,
-      (level, message, details) => logDiag(descriptor.scope, level, message, details),
-    );
-    dedupMap = result.map;
-    if (result.totalChunks > 0 && result.failedChunks === result.totalChunks) {
+  // KTD2: dedup is optional — an importer that omits searchLabelOf/dedupKeyOf/labelToDedupKey (email)
+  // has no per-item dedup key, so the "already ticketed" search is skipped entirely rather than run
+  // and found empty. dedupMap stays empty, so every item is treated as new below.
+  let dedupMap: Map<string, string> = new Map();
+  if (descriptor.searchLabelOf && descriptor.dedupKeyOf && descriptor.labelToDedupKey) {
+    stream.markdown(`_Checking for already-ticketed ${plural}…_\n\n`);
+    // The template session was already cleared above, so a failure here must degrade gracefully
+    // rather than throw with nothing left to resume from. findAlreadyTicketed() is itself
+    // fault-tolerant per chunk (R5/AE2) and never rejects — this catch is a defensive backstop for a
+    // failure outside the per-chunk loop (e.g. an error thrown by descriptor.searchLabelOf/labelToDedupKey
+    // themselves). Total per-chunk coverage loss (every chunk failed) is a distinct, non-throwing
+    // outcome, surfaced instead via the failedChunks/totalChunks check below, which reuses this
+    // same user-facing warning for the total-coverage-loss case.
+    try {
+      const searchLabels = session.items.map(descriptor.searchLabelOf);
+      const result = await findAlreadyTicketed(
+        searchLabels,
+        DEFAULT_DEDUP_CHUNK_SIZE,
+        chunk => ticketService.searchTicketsRaw(buildDedupJql(session.projectKey, chunk), 100).then(r => r.issues as JqlIssueLike[]),
+        descriptor.labelToDedupKey,
+        (level, message, details) => logDiag(descriptor.scope, level, message, details),
+      );
+      dedupMap = result.map;
+      if (result.totalChunks > 0 && result.failedChunks === result.totalChunks) {
+        logDiag(descriptor.scope, 'warn', `Could not check for already-ticketed ${plural} — proceeding without dedup`, {
+          projectKey: session.projectKey, failedChunks: result.failedChunks, totalChunks: result.totalChunks,
+        });
+        stream.markdown(`_Warning: could not check for already-ticketed ${plural} — proceeding without dedup._\n\n`);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       logDiag(descriptor.scope, 'warn', `Could not check for already-ticketed ${plural} — proceeding without dedup`, {
-        projectKey: session.projectKey, failedChunks: result.failedChunks, totalChunks: result.totalChunks,
+        projectKey: session.projectKey, error: message,
       });
-      stream.markdown(`_Warning: could not check for already-ticketed ${plural} — proceeding without dedup._\n\n`);
+      stream.markdown(`_Warning: could not check for already-ticketed ${plural} — proceeding without dedup: ${message}_\n\n`);
+      dedupMap = new Map();
     }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    logDiag(descriptor.scope, 'warn', `Could not check for already-ticketed ${plural} — proceeding without dedup`, {
-      projectKey: session.projectKey, error: message,
-    });
-    stream.markdown(`_Warning: could not check for already-ticketed ${plural} — proceeding without dedup: ${message}_\n\n`);
-    dedupMap = new Map();
   }
 
   // Cap "new" (not-yet-ticketed) items at BATCH_LIMIT *before* building full review rows —
@@ -365,12 +392,13 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReportImp
   // discard that work for every excess "new" item on a report larger than one run's worth.
   // Already-ticketed rows are never capped. Re-running the import after this batch completes
   // surfaces the next BATCH_LIMIT new candidates for free, since the ones just created are now
-  // dedup-matched.
-  const capped = capNewRows(session.items, BATCH_LIMIT, item => dedupMap.has(descriptor.dedupKeyOf(item)));
+  // dedup-matched. (When there is no dedup key, dedupMap is always empty and every item is "new".)
+  const dedupKeyOf = descriptor.dedupKeyOf ?? (() => '');
+  const capped = capNewRows(session.items, BATCH_LIMIT, item => dedupMap.has(dedupKeyOf(item)));
   const rows = buildReviewRows<TItem, TRow>(
     capped.included,
     dedupMap,
-    descriptor.dedupKeyOf,
+    dedupKeyOf,
     item => descriptor.buildRowFields(item, templateLabels),
   );
 
@@ -386,7 +414,7 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReportImp
   await streamImportReview(reviewSession, stream, ws, descriptor, baseUrl);
 }
 
-export async function streamImportReview<TItem, TRow extends ReportImportRow>(
+export async function streamImportReview<TItem, TRow extends ReviewRowBase>(
   session: ReviewSession<TRow>,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
@@ -399,7 +427,7 @@ export async function streamImportReview<TItem, TRow extends ReportImportRow>(
   );
 }
 
-export async function handleImportReviewReply<TItem, TRow extends ReportImportRow>(
+export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>(
   reply: string,
   session: ReviewSession<TRow>,
   ticketService: TicketService,
@@ -444,7 +472,7 @@ export async function handleImportReviewReply<TItem, TRow extends ReportImportRo
   await executeImportBatch(session, ticketService, stream, descriptor, baseUrl);
 }
 
-export async function executeImportBatch<TItem, TRow extends ReportImportRow>(
+export async function executeImportBatch<TItem, TRow extends ReviewRowBase>(
   session: ReviewSession<TRow>,
   ticketService: TicketService,
   stream: vscode.ChatResponseStream,
@@ -472,12 +500,23 @@ export async function executeImportBatch<TItem, TRow extends ReportImportRow>(
   let failed = 0;
 
   for (const row of toCreate) {
+    const { summary: ticketSummary, fields } = descriptor.buildTicketFields(row, session.additionalFields);
     try {
-      const fields = { ...session.additionalFields, labels: row.labels, description: row.descriptionWiki };
-      const createdTicket = await ticketService.createTicket(session.projectKey, row.summary, session.issueType, fields, baseUrl);
+      const createdTicket = await ticketService.createTicket(session.projectKey, ticketSummary, session.issueType, fields, baseUrl);
       const keyRef = formatKeyLink(createdTicket.key, baseUrl);
-      stream.markdown(`✓ ${keyRef} — ${row.summary}\n\n`);
+      stream.markdown(`✓ ${keyRef} — ${ticketSummary}\n\n`);
       created++;
+      // KTD4: optional per-row post-creation work (email uses this for attachment upload). A
+      // rejection is shown as a warning but never fails the row — the ticket already exists.
+      if (descriptor.afterCreate) {
+        try {
+          await descriptor.afterCreate(row, createdTicket.key, ticketService);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          logDiag(descriptor.scope, 'warn', `Post-creation step failed — ${createdTicket.key}`, { issueKey: createdTicket.key, error: message });
+          stream.markdown(`_Warning: ${message}_\n\n`);
+        }
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const ref = descriptor.itemRefFor(row);

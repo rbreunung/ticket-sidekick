@@ -70,6 +70,10 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw, VeracodeReviewRow
   }),
   reviewColumns: VERACODE_REVIEW_COLUMNS,
   itemRefFor: row => `Flaw ${row.issueId}`,
+  buildTicketFields: (row, additionalFields) => ({
+    summary: row.summary,
+    fields: { ...additionalFields, labels: row.labels, description: row.descriptionWiki },
+  }),
   // KTD9: this pop-up previously lived only in extension.ts's own (pre-consolidation) duplicate of
   // this flow; wiring it through the descriptor keeps it alive for both the command-triggered and
   // chat-only entry points once extension.ts is switched onto this shared session builder.

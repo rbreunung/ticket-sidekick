@@ -2,6 +2,7 @@ import type { JiraComment, JiraFieldMeta, JiraFilter, JiraIssueType, JiraSprintC
 import { formatJiraBody } from '../utils/markdownFormatter';
 import type { VeracodeFlaw, VeracodeReviewRow } from '../utils/veracodeReport';
 import type { WaltzComponent, WaltzReviewRow } from '../utils/waltzReport';
+import type { EmailImportItem, EmailReviewRow } from '../utils/emlParser';
 import { BATCH_LIMIT, sanitizeCellText } from '../utils/reportImport';
 import { formatKeyLink, coerceTypedFieldValue, type TemplateFieldCandidate } from '../services/TicketService';
 import type { JiraTemplate } from '../templates/TemplateService';
@@ -16,6 +17,7 @@ import type { ToolConfirmation } from '../tools/toolConfirmation';
 
 export type { VeracodeReviewRow } from '../utils/veracodeReport';
 export type { WaltzReviewRow } from '../utils/waltzReport';
+export type { EmailImportItem, EmailReviewRow } from '../utils/emlParser';
 
 export interface CreationSession {
   template: string;
@@ -104,7 +106,7 @@ interface TransitionReviewRow {
   resolution: string;
 }
 
-export function buildReviewTable(session: TransitionBatchSession): string {
+export function buildReviewTable(session: TransitionBatchSession, baseUrl?: string): string {
   const hasResolution = session.resolution !== undefined;
 
   const sorted = [...session.tickets].sort((a, b) =>
@@ -115,7 +117,7 @@ export function buildReviewTable(session: TransitionBatchSession): string {
   for (const t of sorted) {
     flatRows.push({
       type: session.issueType,
-      key: t.key,
+      key: formatKeyLink(t.key, baseUrl),
       summary: t.summary,
       currentStatus: t.currentStatus,
       to: t.transitionPath.at(-1)?.to ?? '?',
@@ -124,7 +126,7 @@ export function buildReviewTable(session: TransitionBatchSession): string {
     for (const s of t.subtasks) {
       flatRows.push({
         type: 'Sub-task',
-        key: `↳ ${s.key}`,
+        key: `↳ ${formatKeyLink(s.key, baseUrl)}`,
         summary: s.summary,
         currentStatus: s.currentStatus,
         to: s.transitionPath.at(-1)?.to ?? '?',
@@ -161,6 +163,9 @@ export type SkipParseResult =
   | { action: 'skip'; keys: string[] }
   | { action: 'invalid' };
 
+// The remaining fields (once template/issue-type selection and ticket creation moved to
+// EmailTemplateSelectionSession/EmailReviewSession — see KTD1 in reportImportHandler.ts) are exactly
+// what the single-file "add email as a comment" flow needs.
 export interface EmailContentSession {
   emailId: string;
   subject: string;
@@ -173,12 +178,6 @@ export interface EmailContentSession {
     isInline: boolean; contentId?: string;
   }>;
   emlFilePath?: string;
-  selectedTemplateName: string | null;
-  projectKey: string;
-  issueType: string;
-  additionalFields: Record<string, unknown>;
-  availableTemplates?: Array<{ name: string; issueType: string }>;
-  availableIssueTypes?: string[];
   pendingCommentTicketKey?: string;
 }
 
@@ -546,16 +545,17 @@ export interface ImportTemplateSelectionSession<TItem> {
 
 export type VeracodeTemplateSelectionSession = ImportTemplateSelectionSession<VeracodeFlaw>;
 export type WaltzTemplateSelectionSession = ImportTemplateSelectionSession<WaltzComponent>;
+export type EmailTemplateSelectionSession = ImportTemplateSelectionSession<EmailImportItem>;
 
 // ---------------------------------------------------------------------------------------------
 // Shared issue-type chat-ask (R6/KTD4) — every flow that resolves an issue type before creating a
-// ticket (create, Veracode/Waltz report import, email-to-ticket) detours through this one session
-// type instead of each having its own `showInputBox`. `resume` carries the *identity* of what the
-// user already picked before the detour (a project/summary, a picked template name, the rest of
-// the originating session), not a pre-resolved object — each family's own continuation function
-// (`continueAfterIssueType`, report import's `continueAfterImportIssueType`, `finishEmailTicket`)
-// re-derives whatever it needs (e.g. re-looking up a template by name) once the type is known,
-// exactly as it does today. See docs/jira-flows.md for the session-type table.
+// ticket (create; Veracode/Waltz/email report/batch import) detours through this one session type
+// instead of each having its own `showInputBox`. `resume` carries the *identity* of what the user
+// already picked before the detour (a project/summary, a picked template name, the rest of the
+// originating session), not a pre-resolved object — each family's own continuation function
+// (`continueAfterIssueType`, report import's `continueAfterImportIssueType`, reused unmodified for
+// email) re-derives whatever it needs (e.g. re-looking up a template by name) once the type is
+// known, exactly as it does today. See docs/jira-flows.md for the session-type table.
 // ---------------------------------------------------------------------------------------------
 
 export type AwaitIssueTypeResume =
@@ -568,15 +568,13 @@ export type AwaitIssueTypeResume =
       pickedTemplateName: string | null;
     }
   | {
+      // R1/KTD1: batch email import is a third ReportImportDescriptor kind ('email'), reusing this
+      // same resume path instead of the retired standalone 'email' AwaitIssueTypeResume kind — it
+      // resumes into an EmailTemplateSelectionSession exactly as 'veracode'/'waltz' already do.
       kind: 'reportImport';
-      descriptorKind: 'veracode' | 'waltz';
+      descriptorKind: 'veracode' | 'waltz' | 'email';
       pickedTemplateName: string | null;
-      session: VeracodeTemplateSelectionSession | WaltzTemplateSelectionSession;
-    }
-  | {
-      kind: 'email';
-      session: EmailContentSession;
-      pickedTemplateName: string | null;
+      session: VeracodeTemplateSelectionSession | WaltzTemplateSelectionSession | EmailTemplateSelectionSession;
     };
 
 export interface AwaitIssueTypeSession {
@@ -605,6 +603,7 @@ export interface ReviewSession<TRow> {
 
 export type VeracodeReviewSession = ReviewSession<VeracodeReviewRow>;
 export type WaltzReviewSession = ReviewSession<WaltzReviewRow>;
+export type EmailReviewSession = ReviewSession<EmailReviewRow>;
 
 /**
  * A stored session written before `schemaVersion` existed (reads back as `undefined`) — or by an

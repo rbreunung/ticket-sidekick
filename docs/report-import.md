@@ -5,38 +5,39 @@ Report into Jira tickets.
 
 The code lives in:
 
-- [`src/utils/emlParser.ts`](../src/utils/emlParser.ts) — `.eml` parsing (`postal-mime`).
-- [`src/participant/jira/emailHandler.ts`](../src/participant/jira/emailHandler.ts) — email-to-ticket chat flow.
-- [`src/utils/reportImport.ts`](../src/utils/reportImport.ts) — shared, `vscode`-free primitives used by both the Veracode and Waltz importers.
-- [`src/participant/jira/reportImportHandler.ts`](../src/participant/jira/reportImportHandler.ts) — shared session-flow orchestration for both report importers.
+- [`src/utils/emlParser.ts`](../src/utils/emlParser.ts) — `.eml` parsing (`postal-mime`), plus `parseEmlFile()` (one file → one batch item) and the `EmailImportItem`/`EmailReviewRow` types.
+- [`src/participant/jira/emailHandler.ts`](../src/participant/jira/emailHandler.ts) — batch email-to-ticket chat flow (the `email` `ReportImportDescriptor`) and the untouched single-file comment-attach flow.
+- [`src/utils/reportImport.ts`](../src/utils/reportImport.ts) — shared, `vscode`-free primitives used by all three importers, including `BATCH_LIMIT` and `MAX_EMAIL_BATCH_BYTES`.
+- [`src/participant/jira/reportImportHandler.ts`](../src/participant/jira/reportImportHandler.ts) — shared session-flow orchestration for all three report importers; dedup fields on `ReportImportDescriptor` are optional, and `buildTicketFields`/`afterCreate` let an importer with no `labels`/`descriptionWiki` concept (email) still drive the same `executeImportBatch`.
 - [`src/utils/veracodeReport.ts`](../src/utils/veracodeReport.ts) / [`src/participant/jira/veracodeHandler.ts`](../src/participant/jira/veracodeHandler.ts) — Veracode-specific parsing and thin wrapper.
 - [`src/utils/waltzReport.ts`](../src/utils/waltzReport.ts) / [`src/participant/jira/waltzHandler.ts`](../src/participant/jira/waltzHandler.ts) — Waltz-specific parsing and thin wrapper.
-- [`src/services/TicketService.ts`](../src/services/TicketService.ts) — `searchTicketsRaw` (dedup search) and `createTicket` (batch creation) backing both importers.
-- [`src/participant/sessionState.ts`](../src/participant/sessionState.ts) — `pickEmailOption()`, reused by both importers for template/issue-type selection.
+- [`src/services/TicketService.ts`](../src/services/TicketService.ts) — `searchTicketsRaw` (dedup search) and `createTicket` (batch creation) backing all three importers.
+- [`src/participant/sessionState.ts`](../src/participant/sessionState.ts) — `pickEmailOption()`, reused by all three importers for template/issue-type selection.
 
-## EML email import
+## EML email import (batch)
 
-Users download `.eml` files from OWA via **More actions → Download message** and import them via the VS Code command.
+Users download `.eml` files from OWA via **More actions → Download message** and import one or more of them in a single run — every selected file becomes a candidate ticket, reviewed together and created as a batch. See `docs/plans/2026-09-03-2108-feat-batch-email-import-plan.md` for the batching decisions and rationale.
+
+Email import is the third `ReportImportDescriptor` kind (`descriptorKind: 'email'`), reusing the same shared session flow, review screen, and batch-creation machinery the OSS/vulnerability importers below already share — see that section for the mechanics common to all three. Email supplies no dedup fields (there is no per-email dedup key, so the "already ticketed" search step is skipped entirely) and its own `buildTicketFields` (subject → summary, `buildEmailJiraWiki(markdownBody)` → description) and `afterCreate` hook (per-ticket attachment upload, then the `ticketSidekick.email.deleteEmlAfterImport` cleanup step).
 
 ### Import flow
 
-1. Command Palette → **Ticket Sidekick: Create Jira ticket from email (.eml)**
-2. File picker opens (defaults to `~/Downloads`)
-3. `parseEml(buffer)` (postal-mime) extracts subject, sender, date, HTML body, inline images, file attachments
-4. HTML body → `htmlToMarkdown(html, inlineImageMap)` → `markdownBody` with `[📎 name]` for inline images
-5. `EmailContentSession` (with `emlFilePath`, `senderName`, `receivedDateTime`) stored in `workspaceState('jira.session.emailContent')`
-6. Chat opened with `@jira create from email`
-7. `handleCreateFromEmail` reads session from workspaceState → `streamEmailContentPreview`
-8. User picks template/type or confirms → `finishEmailTicket` creates ticket + uploads attachments
-9. If `ticketSidekick.email.deleteEmlAfterImport: true` → `.eml` file deleted after successful creation (non-fatal)
+1. Any of three entry points: Command Palette → **Ticket Sidekick: Create Jira ticket from email (.eml)** (multi-select file picker), `@jira create from email` / `@jira import email` in chat (multi-select), or `@jira add email` with no ticket key in the prompt (also routes into batch creation — only a prompt naming a ticket key stays single-file, adding the email as a comment instead)
+2. Before any file is read: the selected-file count is checked against `BATCH_LIMIT` (50), and the selected files' total size against `MAX_EMAIL_BATCH_BYTES` (150 MB) — both in `src/utils/reportImport.ts`. Either cap being exceeded rejects the whole selection with a message naming the cap
+3. `parseEmlFile(filePath)` (`src/utils/emlParser.ts`) reads and parses each selected file (via `parseEml`/postal-mime), converting the HTML body to Markdown (`htmlToMarkdown`) with `[📎 name]` placeholders for inline images. A file that fails to parse is reported immediately and excluded — the rest of the batch still proceeds
+4. `EmailTemplateSelectionSession` stored in `workspaceState('jira.session.emailTemplateSelection')`; chat opened (or continued) with the template/issue-type picker — **one shared template/issue type for the whole batch**, not a per-email choice
+5. `EmailReviewSession` stored in `workspaceState('jira.session.emailReview')` — the review table lists every email's subject and non-inline attachment names; user replies **ok** / **(c)** / a list of row ids to toggle inclusion, exactly like Veracode/Waltz's review screen
+6. On **ok**, one ticket is created per included email (skip-and-continue: a single email's creation failure is reported and does not stop the rest), each with `buildEmailJiraWiki(markdownBody)` as the description and its own attachments uploaded afterward; if `ticketSidekick.email.deleteEmlAfterImport: true`, the source `.eml` is deleted after each successful creation (non-fatal)
+
+The "add email as a comment to an existing ticket" flow (a ticket key present in the `@jira add email ...` prompt) is unaffected by any of the above — it stays single-file, using `EmailContentSession`/`workspaceState('jira.session.emailContent')` and `handleEmailContentSession`.
 
 ### `pickEmailOption` helper
 
 `pickEmailOption(n, templates, issueTypes)` in `sessionState.ts` maps a 1-based user reply index to a template or issue type pick. Templates occupy indices 1..N, issue types N+1..N+M. Returns `{ kind: 'template', name, issueType }` or `{ kind: 'type', issueType }` or `null` if out of range.
 
-## OSS/vulnerability report import (Veracode + Waltz)
+## OSS/vulnerability report import (Veracode + Waltz) and email
 
-Veracode and Waltz report import share one implementation — `src/participant/jira/reportImportHandler.ts` + `src/utils/reportImport.ts` — for session flow, dedup search, the review-table/toggle-reply UX, and batch ticket creation. Each importer supplies only its own parser, config, and label/summary/description-building specifics via a `ReportImportDescriptor` passed from its thin wrapper (`veracodeHandler.ts`/`waltzHandler.ts`). This means: dedup search is fault-tolerant per chunk and JQL-quoted for both; a picked template that vanishes before the user replies produces the same warning for both; both cap "new" rows at `BATCH_LIMIT` before building them and show the same "N more matched, re-run to get them" note; both link to each newly created ticket in the per-item progress output. A behavior difference between the two today is a bug, not a feature — see `docs/plans/2026-08-13-001-refactor-consolidate-report-importers-plan.md` for the consolidation rationale.
+Veracode, Waltz, and email import share one implementation — `src/participant/jira/reportImportHandler.ts` + `src/utils/reportImport.ts` — for session flow, dedup search, the review-table/toggle-reply UX, and batch ticket creation. Each importer supplies only its own parser, config, and ticket-field-building specifics via a `ReportImportDescriptor` passed from its thin wrapper (`veracodeHandler.ts`/`waltzHandler.ts`/`emailHandler.ts`). This means: dedup search is fault-tolerant per chunk and JQL-quoted where an importer has a dedup key (Veracode/Waltz), or skipped entirely where it doesn't (email); a picked template that vanishes before the user replies produces the same warning for all three; all three cap "new" rows at `BATCH_LIMIT` before building them and show the same "N more matched, re-run to get them" note; all three link to each newly created ticket in the per-item progress output, and any importer may supply an `afterCreate` hook for per-row work after ticket creation (email uses this for attachment upload). A behavior difference between importers on shared ground is a bug, not a feature — see `docs/plans/2026-08-13-001-refactor-consolidate-report-importers-plan.md` for the original Veracode/Waltz consolidation rationale and `docs/plans/2026-09-03-2108-feat-batch-email-import-plan.md` for email's extension of the same pattern.
 
 ### Veracode report import
 

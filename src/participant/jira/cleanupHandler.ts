@@ -14,9 +14,10 @@ export async function streamReviewScreen(
   stream: vscode.ChatResponseStream,
   workspaceState: vscode.Memento,
   header: string,
+  baseUrl?: string,
 ): Promise<void> {
   await workspaceState.update('jira.session.transitionReview', session);
-  stream.markdown(`${header}\n\n${buildReviewTable(session)}\n\n<!-- jira:transition-review -->`);
+  stream.markdown(`${header}\n\n${buildReviewTable(session, baseUrl)}\n\n<!-- jira:transition-review -->`);
 }
 
 export async function executeCleanupBatch(
@@ -227,5 +228,5 @@ export async function handleRunCleanup(
   const header = `**Cleanup${rule ? `: ${rule.name}` : ''}**  ·  ${project} / ${issueType}${fvLabel ? `  ·  ${fvLabel}` : ''}`;
   const batchSession: TransitionBatchSession = { tickets, resolution, ruleName: rule?.name, issueType };
   await workspaceState.update('jira.session.transitionReview', batchSession);
-  stream.markdown(`${buffer.join('')}${header}\n\n${buildReviewTable(batchSession)}\n\n<!-- jira:transition-review -->`);
+  stream.markdown(`${buffer.join('')}${header}\n\n${buildReviewTable(batchSession, baseUrl)}\n\n<!-- jira:transition-review -->`);
 }

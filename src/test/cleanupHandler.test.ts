@@ -786,4 +786,18 @@ describe('buildReviewTable', () => {
     const session = makeSession({ tickets: [makeTicket('PROJ-1')] });
     expect(buildReviewTable(session)).toContain('post it · (c) · key numbers to skip');
   });
+
+  it('renders keys as bare text when no baseUrl is given', () => {
+    const session = makeSession({ tickets: [makeTicket('PROJ-1')] });
+    expect(buildReviewTable(session)).toContain('| PROJ-1 |');
+    expect(buildReviewTable(session)).not.toContain('](');
+  });
+
+  it('renders parent and subtask keys as clickable links when baseUrl is given', () => {
+    const subtask = makeSubtask('PROJ-1a');
+    const session = makeSession({ tickets: [makeTicket('PROJ-1', { subtasks: [subtask] })] });
+    const table = buildReviewTable(session, 'https://jira.example.com');
+    expect(table).toContain('| [PROJ-1](https://jira.example.com/browse/PROJ-1) |');
+    expect(table).toContain('↳ [PROJ-1a](https://jira.example.com/browse/PROJ-1a)');
+  });
 });
