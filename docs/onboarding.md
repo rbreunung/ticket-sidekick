@@ -30,7 +30,7 @@ never a raw `JiraApiError`.
 
 | Tool | Purpose | Required input | Optional input |
 | --- | --- | --- | --- |
-| `jira_getTicket` | Fetch a ticket's fields and description | `ticketKey` | — |
+| `jira_getTicket` | Fetch a ticket's fields, description, and attachment filenames | `ticketKey` | — |
 | `jira_searchTickets` | Search tickets with a JQL query | `jql` | — |
 | `jira_getComments` | Fetch a ticket's comments, most recent first | `ticketKey` | `maxResults` (default 20) |
 | `jira_listTemplates` | List the templates in `.jira-templates.json` | — | — |
@@ -58,6 +58,8 @@ dialog, is the real safety boundary.
 | `jira_updateField` | Update one field on one ticket | `ticketKey`, `fieldName`, `value` | — |
 | `jira_createTicket` | Create a new ticket | `projectKey`, `summary` | `issueType`, `templateName`, `description` |
 | `jira_transitionTicket` | Move a ticket to a target status | `ticketKey`, `targetStatus` | `resolution` |
+| `jira_loadTicket` | Download a ticket's description, comments, and attachments into `.jira-context/<key>/` | `ticketKey` | — |
+| `jira_downloadAttachment` | Download one named attachment into `.jira-context/<key>/attachments/`, bypassing `jira_loadTicket`'s eligibility filter | `ticketKey`, `filename` | — |
 
 `fieldName` for `jira_updateField` accepts: `summary`, `description`,
 `priority`, `assignee`, `labels`, `components`, `fix version` — the same
@@ -89,6 +91,31 @@ LLM-supplied rather than typed by a human into chat:
   duplicate ticket/comment. A call that fails (not-configured, a template
   error, an API error) releases its claim immediately, so a genuine retry
   after a real failure is never mistaken for a duplicate.
+  `jira_loadTicket` and `jira_downloadAttachment` deliberately skip this
+  guard: a repeat call overwrites the same file(s) on disk rather than
+  creating a new artifact, so there is nothing to de-duplicate.
+
+### Loading a ticket's context (`jira_loadTicket`, `jira_downloadAttachment`)
+
+`jira_loadTicket` is the Agent Mode entry point for the same
+"download description/comments/attachments into `.jira-context/<key>/`"
+capability `@jira load` (and the `/load` slash command) already provide in
+chat — one implementation (`loadTicketToWorkspace()` in
+[`src/participant/jira/loadHandler.ts`](../src/participant/jira/loadHandler.ts))
+backs all three entry points. Its result text names the files it wrote and
+explicitly **asks the user before reading them to analyze the ticket** — a
+tool call has no chip mechanism the way `@jira` chat follow-ups do (chips are
+chat-only), so that returned text is the only channel available to keep
+"start analyzing" a user decision rather than something the model does
+automatically after every load.
+
+`jira_downloadAttachment` fetches one named attachment on its own —
+including one a load skipped as oversized or an unrecognized type, since it
+bypasses that eligibility filter by design. Call `jira_getTicket` first to
+discover a ticket's real attachment filenames; if a ticket has more than one
+attachment sharing the given filename (Jira does not enforce per-issue
+uniqueness), the most recently created one is downloaded, matching how the
+Jira web UI itself resolves a same-named attachment.
 
 ### Never-guess issue type (`jira_createTicket`)
 
@@ -264,6 +291,7 @@ reply.
 | `/field` | `updateField` | `PROJ-123 set priority to High` |
 | `/move` | `transition` | `PROJ-123 to In Progress` |
 | `/search` | `searchJql` | `my open bugs in PROJ` |
+| `/load` | `loadTicket` — download description/comments/attachments into `.jira-context/<key>/` | `load PROJ-123` |
 
 The pure `mapCommandToOperation()` (`src/participant/jira/llmHelpers.ts`)
 holds the command-name → `Operation` mapping and is unit-tested in
