@@ -5,6 +5,7 @@ import { TicketService, renderFieldValue } from '../services/TicketService';
 import { TemplateService } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
 import { discoverAndCacheWorkflow, resolveAndApplyTransition } from '../services/WorkflowService';
+import { loadTicketToWorkspace } from '../participant/jira/loadHandler';
 import { logDiag } from '../utils/diagLog';
 import { isSafePathSegment } from './pathSafety';
 import { RecentCallGuard, fingerprint } from './recentCallGuard';
@@ -15,6 +16,8 @@ import {
   buildAddCommentConfirmation,
   buildCreateTicketConfirmation,
   buildTransitionConfirmation,
+  buildLoadTicketConfirmation,
+  buildLoadTicketResultMessage,
   formatIssueTypeOptionsMessage,
   formatTemplateListMessage,
   formatWorkflowDiscoveryMessage,
@@ -644,6 +647,64 @@ class TransitionTicketTool implements vscode.LanguageModelTool<TransitionTicketI
   }
 }
 
+interface LoadTicketInput {
+  ticketKey: string;
+}
+
+class LoadTicketTool implements vscode.LanguageModelTool<LoadTicketInput> {
+  // Writes to workspace disk rather than to Jira, but treated as a write tool requiring
+  // confirmation like every other one here (Key Decision) — no `RecentCallGuard`, though
+  // (KTD3): a repeat load overwrites the same files, so there's nothing to de-duplicate.
+  constructor(private readonly configService: ConfigService) {}
+
+  async prepareInvocation(
+    options: vscode.LanguageModelToolInvocationPrepareOptions<LoadTicketInput>,
+  ): Promise<vscode.PreparedToolInvocation> {
+    const { ticketKey } = options.input;
+    const confirmation = buildLoadTicketConfirmation(ticketKey || '(unknown ticket)');
+    return {
+      invocationMessage: `Loading ${ticketKey}…`,
+      confirmationMessages: confirmation,
+    };
+  }
+
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<LoadTicketInput>): Promise<vscode.LanguageModelToolResult> {
+    const ticketKey = options.input.ticketKey?.trim();
+    if (!ticketKey) return textResult('A ticket key is required, e.g. PROJ-123.');
+    if (!isSafePathSegment(ticketKey)) return textResult(`"${ticketKey}" is not a valid ticket key.`);
+
+    // R6: checked before any Jira call, mirroring @jira load's own chat message.
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!workspaceFolder) return textResult('No workspace folder is open. Open a folder to use jira_loadTicket.');
+
+    const ctx = await tryGetConfiguredContext(this.configService);
+    if (isNotConfiguredResult(ctx)) return ctx;
+    const { config, ticketService } = ctx;
+
+    try {
+      // Fetched once here (not inside loadTicketToWorkspace) — this tool has no ticket
+      // preview to stream, unlike @jira load, so there's no reason to split the fetch.
+      const issue = await ticketService.getIssue(ticketKey);
+      const comments = await ticketService.getAllComments(ticketKey);
+      const attachments = ticketService.getAttachments(issue);
+      const fieldMeta = await ticketService.getFieldMeta();
+      const remoteLinks = await ticketService.getRemoteLinks(ticketKey);
+      const alwaysShowIds = new Set<string>(config.additionalDisplayFields);
+      const hiddenIds = new Set<string>(config.hiddenDisplayFields);
+      const { downloadedCount, skipped, writeErrors } = await loadTicketToWorkspace(
+        ticketKey, ticketService, issue, comments, attachments, fieldMeta, alwaysShowIds, hiddenIds,
+        config.baseUrl, remoteLinks, workspaceFolder.uri,
+      );
+      logDiag('jira.tools', 'info', `Loaded — ${ticketKey}`, { ticketKey, downloadedCount, skippedCount: skipped.length });
+      return textResult(buildLoadTicketResultMessage(ticketKey, comments.length, downloadedCount, skipped, writeErrors));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logDiag('jira.tools', 'error', `jira_loadTicket failed — ${ticketKey}`, { ticketKey, error: message });
+      return textResult(`Could not load ${ticketKey}: ${message}`);
+    }
+  }
+}
+
 /** Registers every `jira_*` Language Model tool with VS Code (matching the `name`s declared under
  * `contributes.languageModelTools` in package.json) and ties their disposal to the extension's
  * lifecycle via `context.subscriptions`. Called once from `activate()` in `extension.ts`. */
@@ -658,5 +719,6 @@ export function registerJiraTools(context: vscode.ExtensionContext, configServic
     vscode.lm.registerTool('jira_updateField', new UpdateFieldTool(configService)),
     vscode.lm.registerTool('jira_createTicket', new CreateTicketTool(configService)),
     vscode.lm.registerTool('jira_transitionTicket', new TransitionTicketTool(configService)),
+    vscode.lm.registerTool('jira_loadTicket', new LoadTicketTool(configService)),
   );
 }

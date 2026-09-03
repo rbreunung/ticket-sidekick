@@ -5,6 +5,8 @@ import {
   buildAddCommentConfirmation,
   buildCreateTicketConfirmation,
   buildTransitionConfirmation,
+  buildLoadTicketConfirmation,
+  buildLoadTicketResultMessage,
   formatIssueTypeOptionsMessage,
   formatTemplateListMessage,
   formatWorkflowDiscoveryMessage,
@@ -36,6 +38,47 @@ describe('jira_addComment confirmation', () => {
     expect(confirmation.title).toContain('PROJ-123');
     expect(confirmation.message).toContain('PROJ-123');
     expect(confirmation.message).toContain('This looks good to me.');
+  });
+});
+
+describe('jira_loadTicket confirmation (R4: names ticket and folder)', () => {
+  it('names both the ticket and the target folder, from the ticket key alone', () => {
+    const confirmation = buildLoadTicketConfirmation('VSJI-38');
+    expect(confirmation.title).toContain('VSJI-38');
+    expect(confirmation.message).toContain('VSJI-38');
+    expect(confirmation.message).toContain('.jira-context/VSJI-38/');
+  });
+});
+
+describe('jira_loadTicket result message (R8/KTD4: ask the user, make no assumption)', () => {
+  it('names the written files and asks the user before reading them, without instructing the model to read them itself', () => {
+    const message = buildLoadTicketResultMessage('VSJI-38', 3, 2, [], []);
+    expect(message).toContain('VSJI-38');
+    expect(message).toContain('.jira-context/VSJI-38/');
+    expect(message).toContain('ticket.md');
+    expect(message).toContain('comments.md');
+    expect(message).toContain('attachments/');
+    expect(message).toMatch(/ask the user/i);
+    expect(message).not.toMatch(/read (these|them) (files )?to analyze/i);
+  });
+
+  it('omits attachments/ from the file list when nothing was downloaded', () => {
+    const message = buildLoadTicketResultMessage('VSJI-38', 0, 0, [], []);
+    expect(message).not.toContain('attachments/');
+  });
+
+  it('names skipped attachments and points at jira_downloadAttachment to fetch one', () => {
+    const skipped = [
+      { filename: 'heap-dump.bin', content: 'https://jira.example.com/x', size: 52428800, mimeType: 'application/octet-stream', reason: 'unknown binary format' },
+    ];
+    const message = buildLoadTicketResultMessage('VSJI-38', 1, 1, skipped, []);
+    expect(message).toContain('heap-dump.bin');
+    expect(message).toContain('jira_downloadAttachment');
+  });
+
+  it('surfaces write errors when present', () => {
+    const message = buildLoadTicketResultMessage('VSJI-38', 1, 0, [], ['ticket.md: disk full']);
+    expect(message).toContain('ticket.md: disk full');
   });
 });
 

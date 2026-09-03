@@ -417,6 +417,31 @@
         }
       },
       {
+        "name": "jira_loadTicket",
+        "displayName": "Load Jira Ticket",
+        "modelDescription": "Downloads a Jira ticket's description, comments, and attachments into .jira-context/<ticketKey>/ in the workspace (ticket.md, comments.md, attachments/). This writes files to the workspace — the user is asked to confirm the ticket and target folder before anything is written. The result names those files as available for follow-up reading; ask the user before reading them to analyze the ticket rather than doing so automatically.",
+        "userDescription": "Download a ticket's description, comments, and attachments into the workspace.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraLoadTicket",
+        "icon": "$(cloud-download)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "Jira ticket key, e.g. PROJ-123"
+            }
+          },
+          "required": [
+            "ticketKey"
+          ]
+        }
+      },
+      {
         "name": "bitbucket_getPullRequest",
         "displayName": "Get Bitbucket Pull Request",
         "modelDescription": "Fetches a Bitbucket pull request's title, description, author, target branch, and source commit hash.",

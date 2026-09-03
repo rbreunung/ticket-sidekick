@@ -1132,6 +1132,44 @@ export function buildTransitionConfirmation(
   };
 }
 
+/** Confirmation for `jira_loadTicket` — names the ticket and the target folder (R4).
+ * Deterministic from `ticketKey` alone, so `prepareInvocation()` needs no network call. */
+export function buildLoadTicketConfirmation(ticketKey: string): ToolConfirmation {
+  return {
+    title: `Load ${ticketKey}`,
+    message: `Load **${ticketKey}**'s description, comments, and attachments into \`.jira-context/${ticketKey}/\`.`,
+  };
+}
+
+/** Result text for `jira_loadTicket` (R8/KTD4) — names the files it wrote as available for
+ * follow-up reading and explicitly asks the calling model to check with the user before
+ * reading them to analyze the ticket, rather than continuing on its own: Agent Mode tool
+ * calls have no chip mechanism (chips are `@jira` chat-only), so this returned text is the
+ * only channel available to steer that next step toward the user's decision. */
+export function buildLoadTicketResultMessage(
+  ticketKey: string,
+  commentCount: number,
+  downloadedCount: number,
+  skipped: LoadSkippedSession['skipped'],
+  writeErrors: string[],
+): string {
+  const files = ['ticket.md', 'comments.md'];
+  if (downloadedCount > 0) files.push('attachments/');
+  const lines = [
+    `Loaded ${ticketKey} into \`.jira-context/${ticketKey}/\` (${files.join(', ')}) — ${commentCount} comment${commentCount !== 1 ? 's' : ''}` +
+      `${downloadedCount > 0 ? `, ${downloadedCount} attachment${downloadedCount !== 1 ? 's' : ''} downloaded` : ''}.`,
+    'Ask the user before reading these to analyze the ticket. Make no assumption.',
+  ];
+  if (skipped.length > 0) {
+    const names = skipped.map(s => s.filename).join(', ');
+    lines.push(`${skipped.length} attachment${skipped.length !== 1 ? 's' : ''} skipped (oversized or an unrecognized type): ${names}. Call jira_downloadAttachment to fetch one by name.`);
+  }
+  if (writeErrors.length > 0) {
+    lines.push(`Write errors: ${writeErrors.join('; ')}`);
+  }
+  return lines.join('\n');
+}
+
 /** The never-guess fallback text for `jira_createTicket` (KTD4): when neither `issueType` nor a
  * resolvable `templateName` was given, nothing is created and this lists the project's valid
  * issue types (from `TicketService.getIssueTypes`) as the actionable next step — mirrors the
