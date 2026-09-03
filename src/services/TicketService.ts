@@ -1,6 +1,7 @@
 import type { IJiraClient, JiraAttachment, JiraComment, JiraEditMetaField, JiraFieldMeta, JiraFilter, JiraIssue, JiraIssueLink, JiraIssueType, JiraRemoteLink, JiraSearchResult, JiraSprintCandidate } from '../jira/IJiraClient';
 import type { DiagLogger } from '../utils/diagTypes';
 import { formatJiraBody } from '../utils/markdownFormatter';
+import { formatFileSize } from '../utils/attachmentEligibility';
 
 export type FieldResolutionResult =
   | { kind: 'match'; field: JiraFieldMeta }
@@ -276,12 +277,7 @@ export function formatIssueFields(
     if (isNull) { tableRows.push(`| **${meta.name}** | _Not set_ |`); continue; }
 
     if (meta.id === 'attachment' && Array.isArray(value)) {
-      const lines = (value as JiraAttachment[]).map(a => {
-        const size = a.size >= 1_048_576
-          ? `${(a.size / 1_048_576).toFixed(1)} MB`
-          : `${Math.round(a.size / 1024)} KB`;
-        return `- [${a.filename}](${a.content}) — ${size} (${a.mimeType})`;
-      });
+      const lines = (value as JiraAttachment[]).map(a => `- [${a.filename}](${a.content}) — ${formatFileSize(a.size)} (${a.mimeType})`);
       sections.push(`## Attachments\n\n${lines.join('\n')}`);
       continue;
     }

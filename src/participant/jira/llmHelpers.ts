@@ -107,6 +107,7 @@ export const COMMAND_OPERATIONS: Partial<Record<string, Operation>> = {
   field: 'updateField',
   move: 'transition',
   search: 'searchJql',
+  load: 'loadTicket',
 };
 
 export function mapCommandToOperation(command: string | undefined): Operation | undefined {

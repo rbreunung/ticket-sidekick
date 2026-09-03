@@ -1132,6 +1132,79 @@ export function buildTransitionConfirmation(
   };
 }
 
+/** Confirmation for `jira_loadTicket` — names the ticket and the target folder (R4).
+ * Deterministic from `ticketKey` alone, so `prepareInvocation()` needs no network call. */
+export function buildLoadTicketConfirmation(ticketKey: string): ToolConfirmation {
+  return {
+    title: `Load ${ticketKey}`,
+    message: `Load **${ticketKey}**'s description, comments, and attachments into \`.jira-context/${ticketKey}/\`.`,
+  };
+}
+
+/** Result text for `jira_loadTicket` (R8/KTD4) — names the files it wrote as available for
+ * follow-up reading and explicitly asks the calling model to check with the user before
+ * reading them to analyze the ticket, rather than continuing on its own: Agent Mode tool
+ * calls have no chip mechanism (chips are `@jira` chat-only), so this returned text is the
+ * only channel available to steer that next step toward the user's decision. */
+export function buildLoadTicketResultMessage(
+  ticketKey: string,
+  commentCount: number,
+  downloadedCount: number,
+  skipped: LoadSkippedSession['skipped'],
+  writeErrors: string[],
+): string {
+  const files = ['ticket.md', 'comments.md'];
+  if (downloadedCount > 0) files.push('attachments/');
+  const lines = [
+    `Loaded ${ticketKey} into \`.jira-context/${ticketKey}/\` (${files.join(', ')}) — ${commentCount} comment${commentCount !== 1 ? 's' : ''}` +
+      `${downloadedCount > 0 ? `, ${downloadedCount} attachment${downloadedCount !== 1 ? 's' : ''} downloaded` : ''}.`,
+    'Ask the user before reading these to analyze the ticket. Make no assumption.',
+  ];
+  if (skipped.length > 0) {
+    const names = skipped.map(s => s.filename).join(', ');
+    lines.push(`${skipped.length} attachment${skipped.length !== 1 ? 's' : ''} skipped (oversized or an unrecognized type): ${names}. Call jira_downloadAttachment to fetch one by name.`);
+  }
+  if (writeErrors.length > 0) {
+    lines.push(`Write errors: ${writeErrors.join('; ')}`);
+  }
+  return lines.join('\n');
+}
+
+/** Confirmation for `jira_downloadAttachment` — names the ticket, filename, and target path (R10). */
+export function buildDownloadAttachmentConfirmation(ticketKey: string, filename: string): ToolConfirmation {
+  return {
+    title: `Download ${filename} from ${ticketKey}`,
+    message: `Download **${filename}** from **${ticketKey}** into \`.jira-context/${ticketKey}/attachments/${filename}\`.`,
+  };
+}
+
+/** Renders `items` as a `- ` bulleted list, one per line — shared by every result message
+ * below that lists plain strings or pre-formatted per-item text. */
+function formatBulletList(items: string[]): string {
+  return items.map(item => `- ${item}`).join('\n');
+}
+
+/** Not-found message for `jira_downloadAttachment` (R10/KTD5) — lists the ticket's actual
+ * attachment filenames instead of a raw not-found error, so the calling model can retry with
+ * a correct one. */
+export function buildAttachmentNotFoundMessage(ticketKey: string, filename: string, availableFilenames: string[]): string {
+  if (availableFilenames.length === 0) {
+    return `${ticketKey} has no attachments. "${filename}" does not exist on this ticket.`;
+  }
+  return `"${filename}" does not exist on ${ticketKey}. Its attachments are:\n\n${formatBulletList(availableFilenames)}`;
+}
+
+/** Result text for `jira_downloadAttachment` on success (R9/R10, KTD5) — names the ticket,
+ * filename, and target path, and, when the filename matched more than one attachment, says a
+ * duplicate was resolved to the most recently created one. */
+export function buildDownloadAttachmentResultMessage(ticketKey: string, filename: string, matchCount: number): string {
+  const base = `Downloaded **${filename}** from **${ticketKey}** into \`.jira-context/${ticketKey}/attachments/${filename}\`.`;
+  if (matchCount > 1) {
+    return `${base} ${matchCount} attachments on this ticket share that filename — the most recently created one was used.`;
+  }
+  return base;
+}
+
 /** The never-guess fallback text for `jira_createTicket` (KTD4): when neither `issueType` nor a
  * resolvable `templateName` was given, nothing is created and this lists the project's valid
  * issue types (from `TicketService.getIssueTypes`) as the actionable next step — mirrors the
@@ -1146,7 +1219,7 @@ export function formatIssueTypeOptionsMessage(projectKey: string, issueTypes: st
       `and its issue types could not be fetched from Jira. Call jira_createTicket again with an explicit "issueType".`
     );
   }
-  const list = issueTypes.map(t => `- ${t}`).join('\n');
+  const list = formatBulletList(issueTypes);
   return (
     `No ticket was created: no issue type or resolvable template was given. Valid issue types for **${projectKey}**:\n\n${list}\n\n` +
     `Call jira_createTicket again with one of these as "issueType", or with a "templateName" from jira_listTemplates.`
@@ -1159,9 +1232,9 @@ export function formatTemplateListMessage(templates: Array<{ name: string; issue
   if (templates.length === 0) {
     return 'No templates found. Create a `.jira-templates.json` file in the workspace root to define reusable ticket templates.';
   }
-  const list = templates
-    .map(t => `- **${t.name}**${t.issueType ? ` (${t.issueType})` : ' (issue type not set on the template)'}`)
-    .join('\n');
+  const list = formatBulletList(
+    templates.map(t => `**${t.name}**${t.issueType ? ` (${t.issueType})` : ' (issue type not set on the template)'}`),
+  );
   return `Available templates:\n\n${list}`;
 }
 

@@ -45,6 +45,11 @@
             "sampleRequest": "view PROJ-123"
           },
           {
+            "name": "load",
+            "description": "Download a ticket's description, comments, and attachments into the workspace",
+            "sampleRequest": "load PROJ-123"
+          },
+          {
             "name": "comment",
             "description": "Add a comment to a ticket",
             "sampleRequest": "PROJ-123 thanks, looks good to merge"
@@ -147,7 +152,7 @@
       {
         "name": "jira_getTicket",
         "displayName": "Get Jira Ticket",
-        "modelDescription": "Fetches a Jira ticket's fields and description by key. Use to look up ticket details before answering a question or deciding what to change.",
+        "modelDescription": "Fetches a Jira ticket's fields, description, and attachment filenames (with size and MIME type) by key. Use to look up ticket details before answering a question or deciding what to change, or to discover an attachment's filename before calling jira_downloadAttachment.",
         "userDescription": "View a Jira ticket's fields and description.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraGetTicket",
@@ -408,6 +413,61 @@
           "required": [
             "ticketKey",
             "targetStatus"
+          ]
+        }
+      },
+      {
+        "name": "jira_loadTicket",
+        "displayName": "Load Jira Ticket",
+        "modelDescription": "Downloads a Jira ticket's description, comments, and attachments into .jira-context/<ticketKey>/ in the workspace (ticket.md, comments.md, attachments/). This writes files to the workspace — the user is asked to confirm the ticket and target folder before anything is written. The result names those files as available for follow-up reading; ask the user before reading them to analyze the ticket rather than doing so automatically.",
+        "userDescription": "Download a ticket's description, comments, and attachments into the workspace.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraLoadTicket",
+        "icon": "$(cloud-download)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "Jira ticket key, e.g. PROJ-123"
+            }
+          },
+          "required": [
+            "ticketKey"
+          ]
+        }
+      },
+      {
+        "name": "jira_downloadAttachment",
+        "displayName": "Download Jira Attachment",
+        "modelDescription": "Downloads one named attachment from a Jira ticket into .jira-context/<ticketKey>/attachments/, bypassing jira_loadTicket's type/extension eligibility filter — use this to fetch an attachment a load skipped, or any specific attachment by filename (see jira_getTicket for filenames). This writes a file to the workspace — the user is asked to confirm the ticket, filename, and target path before it is written. If more than one attachment on the ticket shares the given filename, the most recently created one is downloaded.",
+        "userDescription": "Download one named attachment from a Jira ticket into the workspace.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraDownloadAttachment",
+        "icon": "$(cloud-download)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "Jira ticket key, e.g. PROJ-123"
+            },
+            "filename": {
+              "type": "string",
+              "description": "Exact attachment filename, e.g. error.log (see jira_getTicket's Attachments output for real filenames)"
+            }
+          },
+          "required": [
+            "ticketKey",
+            "filename"
           ]
         }
       },

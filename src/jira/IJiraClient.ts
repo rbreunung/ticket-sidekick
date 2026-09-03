@@ -35,6 +35,7 @@ export interface JiraAttachment {
   mimeType: string;
   size: number;     // bytes
   content: string;  // full URL for authenticated download; matches Jira API v2 field name
+  created: string;  // ISO 8601; used to resolve same-filename duplicates (KTD5/KTD7)
 }
 
 export interface JiraIssue {

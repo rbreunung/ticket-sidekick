@@ -5,9 +5,11 @@ import { TicketService, renderFieldValue } from '../services/TicketService';
 import { TemplateService } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
 import { discoverAndCacheWorkflow, resolveAndApplyTransition } from '../services/WorkflowService';
+import { attachmentsDirFor, ensureJiraContextGitignored, loadTicketToWorkspace } from '../participant/jira/loadHandler';
 import { logDiag } from '../utils/diagLog';
-import { isSafePathSegment } from './pathSafety';
+import { isSafeFilename, isSafePathSegment } from './pathSafety';
 import { RecentCallGuard, fingerprint } from './recentCallGuard';
+import { ATTACHMENT_SIZE_LIMIT, findAttachmentByFilename, formatFileSize } from '../utils/attachmentEligibility';
 import {
   buildJiraNotConfiguredMessage,
   formatCommentsInFull,
@@ -15,6 +17,11 @@ import {
   buildAddCommentConfirmation,
   buildCreateTicketConfirmation,
   buildTransitionConfirmation,
+  buildLoadTicketConfirmation,
+  buildLoadTicketResultMessage,
+  buildDownloadAttachmentConfirmation,
+  buildAttachmentNotFoundMessage,
+  buildDownloadAttachmentResultMessage,
   formatIssueTypeOptionsMessage,
   formatTemplateListMessage,
   formatWorkflowDiscoveryMessage,
@@ -644,6 +651,150 @@ class TransitionTicketTool implements vscode.LanguageModelTool<TransitionTicketI
   }
 }
 
+/** Shared entry guard for `jira_loadTicket`/`jira_downloadAttachment`: validates `ticketKey`
+ * and resolves the open workspace folder before any Jira call, in that order (R6/R10) — both
+ * tools write to workspace disk and need the identical two checks (code-review fix: this was
+ * previously copy-pasted in each tool's `invoke()`). */
+type WorkspaceGuardResult =
+  | { ok: true; ticketKey: string; workspaceFolder: vscode.WorkspaceFolder }
+  | { ok: false; result: vscode.LanguageModelToolResult };
+
+function requireTicketKeyAndWorkspace(rawTicketKey: string | undefined, toolName: string): WorkspaceGuardResult {
+  const ticketKey = rawTicketKey?.trim();
+  if (!ticketKey) return { ok: false, result: textResult('A ticket key is required, e.g. PROJ-123.') };
+  if (!isSafePathSegment(ticketKey)) return { ok: false, result: textResult(`"${ticketKey}" is not a valid ticket key.`) };
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!workspaceFolder) return { ok: false, result: textResult(`No workspace folder is open. Open a folder to use ${toolName}.`) };
+  return { ok: true, ticketKey, workspaceFolder };
+}
+
+interface LoadTicketInput {
+  ticketKey: string;
+}
+
+class LoadTicketTool implements vscode.LanguageModelTool<LoadTicketInput> {
+  // Writes to workspace disk rather than to Jira, but treated as a write tool requiring
+  // confirmation like every other one here (Key Decision) — no `RecentCallGuard`, though
+  // (KTD3): a repeat load overwrites the same files, so there's nothing to de-duplicate.
+  constructor(private readonly configService: ConfigService) {}
+
+  async prepareInvocation(
+    options: vscode.LanguageModelToolInvocationPrepareOptions<LoadTicketInput>,
+  ): Promise<vscode.PreparedToolInvocation> {
+    const { ticketKey } = options.input;
+    const confirmation = buildLoadTicketConfirmation(ticketKey || '(unknown ticket)');
+    return {
+      invocationMessage: `Loading ${ticketKey}…`,
+      confirmationMessages: confirmation,
+    };
+  }
+
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<LoadTicketInput>): Promise<vscode.LanguageModelToolResult> {
+    // R5/R6: ticketKey validated and the workspace-folder check made before any Jira call.
+    const guard = requireTicketKeyAndWorkspace(options.input.ticketKey, 'jira_loadTicket');
+    if (!guard.ok) return guard.result;
+    const { ticketKey, workspaceFolder } = guard;
+
+    const ctx = await tryGetConfiguredContext(this.configService);
+    if (isNotConfiguredResult(ctx)) return ctx;
+    const { config, ticketService } = ctx;
+
+    try {
+      // Fetched once here (not inside loadTicketToWorkspace) — this tool has no ticket
+      // preview to stream, unlike @jira load, so there's no reason to split the fetch.
+      // The three ticketKey-scoped calls are independent, so they run in parallel;
+      // getAttachments needs the resolved issue, so it stays outside the batch.
+      const [issue, comments, fieldMeta, remoteLinks] = await Promise.all([
+        ticketService.getIssue(ticketKey),
+        ticketService.getAllComments(ticketKey),
+        ticketService.getFieldMeta(),
+        ticketService.getRemoteLinks(ticketKey),
+      ]);
+      const attachments = ticketService.getAttachments(issue);
+      const alwaysShowIds = new Set<string>(config.additionalDisplayFields);
+      const hiddenIds = new Set<string>(config.hiddenDisplayFields);
+      const { downloadedCount, skipped, writeErrors } = await loadTicketToWorkspace(
+        ticketKey, ticketService,
+        { issue, comments, attachments, remoteLinks },
+        { fieldMeta, alwaysShowIds, hiddenIds, baseUrl: config.baseUrl },
+        workspaceFolder.uri,
+      );
+      logDiag('jira.tools', 'info', `Loaded — ${ticketKey}`, { ticketKey, downloadedCount, skippedCount: skipped.length });
+      return textResult(buildLoadTicketResultMessage(ticketKey, comments.length, downloadedCount, skipped, writeErrors));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logDiag('jira.tools', 'error', `jira_loadTicket failed — ${ticketKey}`, { ticketKey, error: message });
+      return textResult(`Could not load ${ticketKey}: ${message}`);
+    }
+  }
+}
+
+interface DownloadAttachmentInput {
+  ticketKey: string;
+  filename: string;
+}
+
+class DownloadAttachmentTool implements vscode.LanguageModelTool<DownloadAttachmentInput> {
+  // No RecentCallGuard (KTD3): a repeat download overwrites the same file, nothing to
+  // de-duplicate.
+  constructor(private readonly configService: ConfigService) {}
+
+  async prepareInvocation(
+    options: vscode.LanguageModelToolInvocationPrepareOptions<DownloadAttachmentInput>,
+  ): Promise<vscode.PreparedToolInvocation> {
+    const { ticketKey, filename } = options.input;
+    const confirmation = buildDownloadAttachmentConfirmation(ticketKey || '(unknown ticket)', filename || '(unknown file)');
+    return {
+      invocationMessage: `Downloading ${filename} from ${ticketKey}…`,
+      confirmationMessages: confirmation,
+    };
+  }
+
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<DownloadAttachmentInput>): Promise<vscode.LanguageModelToolResult> {
+    // R10: ticketKey validated and the workspace-folder check made before any Jira call.
+    const guard = requireTicketKeyAndWorkspace(options.input.ticketKey, 'jira_downloadAttachment');
+    if (!guard.ok) return guard.result;
+    const { ticketKey, workspaceFolder } = guard;
+
+    const filename = options.input.filename?.trim();
+    if (!filename) return textResult('A filename is required, e.g. error.log.');
+    // isSafeFilename, not isSafePathSegment (code-review fix): a filename may legitimately
+    // contain ".." as a substring (e.g. "v1..2-notes.txt") without being a traversal attempt.
+    if (!isSafeFilename(filename)) return textResult(`"${filename}" is not a valid filename.`);
+
+    const ctx = await tryGetConfiguredContext(this.configService);
+    if (isNotConfiguredResult(ctx)) return ctx;
+    const { ticketService } = ctx;
+
+    try {
+      // KTD5: always re-derives the ticket's attachment list live — no session/cache of a
+      // prior load's skip list — so this works whether or not a load ever ran for this ticket.
+      const issue = await ticketService.getIssue(ticketKey);
+      const attachments = ticketService.getAttachments(issue);
+      const { attachment, matchCount } = findAttachmentByFilename(attachments, filename);
+      if (!attachment) {
+        return textResult(buildAttachmentNotFoundMessage(ticketKey, filename, attachments.map(a => a.filename)));
+      }
+      if (attachment.size > ATTACHMENT_SIZE_LIMIT) {
+        return textResult(`"${filename}" is ${formatFileSize(attachment.size)}, over the 100 MB size limit — not downloaded.`);
+      }
+
+      const bytes = await ticketService.downloadAttachment(attachment.content);
+      const attachmentsDir = attachmentsDirFor(workspaceFolder.uri, ticketKey);
+      await vscode.workspace.fs.createDirectory(attachmentsDir);
+      await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(attachmentsDir, filename), bytes);
+      await ensureJiraContextGitignored(workspaceFolder.uri);
+
+      logDiag('jira.tools', 'info', `Downloaded attachment — ${ticketKey}/${filename}`, { ticketKey, filename, matchCount });
+      return textResult(buildDownloadAttachmentResultMessage(ticketKey, filename, matchCount));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logDiag('jira.tools', 'error', `jira_downloadAttachment failed — ${ticketKey}/${filename}`, { ticketKey, filename, error: message });
+      return textResult(`Could not download ${filename} from ${ticketKey}: ${message}`);
+    }
+  }
+}
+
 /** Registers every `jira_*` Language Model tool with VS Code (matching the `name`s declared under
  * `contributes.languageModelTools` in package.json) and ties their disposal to the extension's
  * lifecycle via `context.subscriptions`. Called once from `activate()` in `extension.ts`. */
@@ -658,5 +809,7 @@ export function registerJiraTools(context: vscode.ExtensionContext, configServic
     vscode.lm.registerTool('jira_updateField', new UpdateFieldTool(configService)),
     vscode.lm.registerTool('jira_createTicket', new CreateTicketTool(configService)),
     vscode.lm.registerTool('jira_transitionTicket', new TransitionTicketTool(configService)),
+    vscode.lm.registerTool('jira_loadTicket', new LoadTicketTool(configService)),
+    vscode.lm.registerTool('jira_downloadAttachment', new DownloadAttachmentTool(configService)),
   );
 }

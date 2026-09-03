@@ -5,12 +5,19 @@ import {
   buildAddCommentConfirmation,
   buildCreateTicketConfirmation,
   buildTransitionConfirmation,
+  buildLoadTicketConfirmation,
+  buildLoadTicketResultMessage,
+  buildDownloadAttachmentConfirmation,
+  buildAttachmentNotFoundMessage,
+  buildDownloadAttachmentResultMessage,
   formatIssueTypeOptionsMessage,
   formatTemplateListMessage,
   formatWorkflowDiscoveryMessage,
 } from '../participant/sessionState';
 import { TicketService } from '../services/TicketService';
 import { MockJiraClient } from './mocks/MockJiraClient';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 
 // These tests cover the pure builders `src/tools/jiraTools.ts` (vscode-coupled, not
 // Vitest-loadable — see CLAUDE.md's Testing section) delegates to for every jira_* Language
@@ -36,6 +43,93 @@ describe('jira_addComment confirmation', () => {
     expect(confirmation.title).toContain('PROJ-123');
     expect(confirmation.message).toContain('PROJ-123');
     expect(confirmation.message).toContain('This looks good to me.');
+  });
+});
+
+describe('jira_loadTicket confirmation (R4: names ticket and folder)', () => {
+  it('names both the ticket and the target folder, from the ticket key alone', () => {
+    const confirmation = buildLoadTicketConfirmation('VSJI-38');
+    expect(confirmation.title).toContain('VSJI-38');
+    expect(confirmation.message).toContain('VSJI-38');
+    expect(confirmation.message).toContain('.jira-context/VSJI-38/');
+  });
+});
+
+describe('jira_loadTicket result message (R8/KTD4: ask the user, make no assumption)', () => {
+  it('names the written files and asks the user before reading them, without instructing the model to read them itself', () => {
+    const message = buildLoadTicketResultMessage('VSJI-38', 3, 2, [], []);
+    expect(message).toContain('VSJI-38');
+    expect(message).toContain('.jira-context/VSJI-38/');
+    expect(message).toContain('ticket.md');
+    expect(message).toContain('comments.md');
+    expect(message).toContain('attachments/');
+    expect(message).toMatch(/ask the user/i);
+    expect(message).not.toMatch(/read (these|them) (files )?to analyze/i);
+  });
+
+  it('omits attachments/ from the file list when nothing was downloaded', () => {
+    const message = buildLoadTicketResultMessage('VSJI-38', 0, 0, [], []);
+    expect(message).not.toContain('attachments/');
+  });
+
+  it('names skipped attachments and points at jira_downloadAttachment to fetch one', () => {
+    const skipped = [
+      { filename: 'heap-dump.bin', content: 'https://jira.example.com/x', size: 52428800, mimeType: 'application/octet-stream', reason: 'unknown binary format' },
+    ];
+    const message = buildLoadTicketResultMessage('VSJI-38', 1, 1, skipped, []);
+    expect(message).toContain('heap-dump.bin');
+    expect(message).toContain('jira_downloadAttachment');
+  });
+
+  it('surfaces write errors when present', () => {
+    const message = buildLoadTicketResultMessage('VSJI-38', 1, 0, [], ['ticket.md: disk full']);
+    expect(message).toContain('ticket.md: disk full');
+  });
+});
+
+describe('jira_downloadAttachment confirmation (R10: names ticket, filename, and target path)', () => {
+  it('names the ticket, filename, and target path', () => {
+    const confirmation = buildDownloadAttachmentConfirmation('VSJI-38', 'heap-dump.bin');
+    expect(confirmation.title).toContain('VSJI-38');
+    expect(confirmation.title).toContain('heap-dump.bin');
+    expect(confirmation.message).toContain('.jira-context/VSJI-38/attachments/heap-dump.bin');
+  });
+});
+
+describe('jira_downloadAttachment not-found message (R10/KTD5)', () => {
+  it('lists the ticket\'s real attachment filenames instead of a raw not-found error', () => {
+    const message = buildAttachmentNotFoundMessage('VSJI-38', 'wrong-name.txt', ['screenshot.png', 'error.log']);
+    expect(message).toContain('wrong-name.txt');
+    expect(message).toContain('screenshot.png');
+    expect(message).toContain('error.log');
+  });
+
+  it('handles a ticket with no attachments gracefully', () => {
+    const message = buildAttachmentNotFoundMessage('VSJI-38', 'anything.txt', []);
+    expect(message).toContain('no attachments');
+  });
+});
+
+describe('jira_downloadAttachment result message (R9/R10, KTD5)', () => {
+  it('names the ticket, filename, and target path for a single match', () => {
+    const message = buildDownloadAttachmentResultMessage('VSJI-38', 'report.log', 1);
+    expect(message).toContain('report.log');
+    expect(message).toContain('.jira-context/VSJI-38/attachments/report.log');
+    expect(message).not.toMatch(/share that filename/);
+  });
+
+  it('names that a duplicate filename was resolved to the most recent match', () => {
+    const message = buildDownloadAttachmentResultMessage('VSJI-38', 'report.log', 2);
+    expect(message).toMatch(/share that filename/);
+    expect(message).toMatch(/most recently created/);
+  });
+});
+
+describe('jira_getTicket modelDescription mentions attachments (R11, AE7)', () => {
+  it('advertises attachment filenames as part of what jira_getTicket returns', () => {
+    const pkg = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf-8'));
+    const tool = pkg.contributes.languageModelTools.find((t: { name: string }) => t.name === 'jira_getTicket');
+    expect(tool.modelDescription.toLowerCase()).toContain('attachment');
   });
 });
 
