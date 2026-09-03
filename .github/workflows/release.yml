@@ -116,9 +116,11 @@ jobs:
           DATE="$(date -u +%Y-%m-%d)"
           # Strip GitHub's "by @author in #PR" attribution from each line for the in-editor
           # copy only — the GitHub Release created later keeps release-notes.md unstripped.
+          # Stripping goes through scripts/changelogNotes.mjs, the same helper
+          # scripts/backfill-changelog.mjs uses, so the two entry sources can't drift.
           {
             printf '## [%s] - %s\n\n' "${VERSION}" "${DATE}"
-            sed -E 's/ by @[A-Za-z0-9_-]+ in (#[0-9]+|https:\/\/\S+)//' release-notes.md
+            node scripts/changelogNotes.mjs strip < release-notes.md
             printf '\n'
             if [ -f CHANGELOG.md ]; then cat CHANGELOG.md; fi
           } > CHANGELOG.md.new

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildChangelog, stripAttribution } from '../../scripts/backfill-changelog.mjs';
+import { buildChangelog } from '../../scripts/backfill-changelog.mjs';
+import { stripAttribution } from '../../scripts/changelogNotes.mjs';
 
 describe('stripAttribution', () => {
   it('strips a "by @author in #PR" clause from a generated bullet line', () => {

@@ -2,9 +2,10 @@
 // One-off (but re-runnable) utility that seeds CHANGELOG.md from existing GitHub Releases.
 //
 // Reads every non-prerelease GitHub Release, strips the "by @author in #PR" attribution
-// GitHub's generator appends per line (the same stripping the release workflow applies —
-// see .github/workflows/release.yml's "Update CHANGELOG.md" step), and writes one
-// `## [tag] - date` section per release into CHANGELOG.md, newest first.
+// GitHub's generator appends per line via the shared scripts/changelogNotes.mjs helper
+// (also used by .github/workflows/release.yml's "Update CHANGELOG.md" step, so the two
+// entry sources can't drift out of formatting sync), and writes one `## [tag] - date`
+// section per release into CHANGELOG.md, newest first.
 //
 // Safe to re-run: it always rebuilds CHANGELOG.md from the current release history rather
 // than appending to it, so a second run never produces duplicate entries.
@@ -20,6 +21,7 @@ import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { stripAttribution } from './changelogNotes.mjs';
 
 const CHANGELOG_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -28,15 +30,6 @@ const CHANGELOG_PATH = path.resolve(
 );
 
 /** @typedef {{ tagName: string, isPrerelease: boolean, body: string, publishedAt: string }} GhRelease */
-
-/**
- * Strips GitHub's generated "by @author in #123" / "by @author in <url>" attribution
- * from each bullet line. Mirrors the sed pattern in release.yml's CHANGELOG step.
- * @param {string} body
- */
-export function stripAttribution(body) {
-  return body.replace(/ by @[A-Za-z0-9_-]+ in (#\d+|https:\/\/\S+)/g, '');
-}
 
 function formatDate(publishedAt) {
   return publishedAt ? publishedAt.slice(0, 10) : 'unknown-date';
