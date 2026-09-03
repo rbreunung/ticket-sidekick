@@ -1,3 +1,16 @@
+## [0.5.4] - 2026-09-03
+
+## What's Changed
+* feat(jira): generate a reusable template from a ticket
+* fix(jira): never guess an issue type across all ticket-creation flows
+* feat: add onboarding entry points for @jira and @bitbucket
+* fix(jira): restore template generation on Data Center 11.3+ and Cloud
+* fix(jira): keep onboarding and ticket creation entirely in chat
+* feat(release): write CHANGELOG.md from GitHub release notes
+
+
+**Full Changelog**: https://github.com/rbreunung/ticket-sidekick/compare/0.5.0...0.5.4
+
 ## [0.5.0] - 2026-08-28
 
 ## What's Changed
