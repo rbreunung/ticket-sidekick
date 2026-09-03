@@ -7,7 +7,7 @@ import { FieldResolver } from '../templates/FieldResolver';
 import { discoverAndCacheWorkflow, resolveAndApplyTransition } from '../services/WorkflowService';
 import { attachmentsDirFor, ensureJiraContextGitignored, loadTicketToWorkspace } from '../participant/jira/loadHandler';
 import { logDiag } from '../utils/diagLog';
-import { isSafePathSegment } from './pathSafety';
+import { isSafeFilename, isSafePathSegment } from './pathSafety';
 import { RecentCallGuard, fingerprint } from './recentCallGuard';
 import { ATTACHMENT_SIZE_LIMIT, findAttachmentByFilename, formatFileSize } from '../utils/attachmentEligibility';
 import {
@@ -651,6 +651,23 @@ class TransitionTicketTool implements vscode.LanguageModelTool<TransitionTicketI
   }
 }
 
+/** Shared entry guard for `jira_loadTicket`/`jira_downloadAttachment`: validates `ticketKey`
+ * and resolves the open workspace folder before any Jira call, in that order (R6/R10) — both
+ * tools write to workspace disk and need the identical two checks (code-review fix: this was
+ * previously copy-pasted in each tool's `invoke()`). */
+type WorkspaceGuardResult =
+  | { ok: true; ticketKey: string; workspaceFolder: vscode.WorkspaceFolder }
+  | { ok: false; result: vscode.LanguageModelToolResult };
+
+function requireTicketKeyAndWorkspace(rawTicketKey: string | undefined, toolName: string): WorkspaceGuardResult {
+  const ticketKey = rawTicketKey?.trim();
+  if (!ticketKey) return { ok: false, result: textResult('A ticket key is required, e.g. PROJ-123.') };
+  if (!isSafePathSegment(ticketKey)) return { ok: false, result: textResult(`"${ticketKey}" is not a valid ticket key.`) };
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!workspaceFolder) return { ok: false, result: textResult(`No workspace folder is open. Open a folder to use ${toolName}.`) };
+  return { ok: true, ticketKey, workspaceFolder };
+}
+
 interface LoadTicketInput {
   ticketKey: string;
 }
@@ -673,13 +690,10 @@ class LoadTicketTool implements vscode.LanguageModelTool<LoadTicketInput> {
   }
 
   async invoke(options: vscode.LanguageModelToolInvocationOptions<LoadTicketInput>): Promise<vscode.LanguageModelToolResult> {
-    const ticketKey = options.input.ticketKey?.trim();
-    if (!ticketKey) return textResult('A ticket key is required, e.g. PROJ-123.');
-    if (!isSafePathSegment(ticketKey)) return textResult(`"${ticketKey}" is not a valid ticket key.`);
-
-    // R6: checked before any Jira call, mirroring @jira load's own chat message.
-    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-    if (!workspaceFolder) return textResult('No workspace folder is open. Open a folder to use jira_loadTicket.');
+    // R5/R6: ticketKey validated and the workspace-folder check made before any Jira call.
+    const guard = requireTicketKeyAndWorkspace(options.input.ticketKey, 'jira_loadTicket');
+    if (!guard.ok) return guard.result;
+    const { ticketKey, workspaceFolder } = guard;
 
     const ctx = await tryGetConfiguredContext(this.configService);
     if (isNotConfiguredResult(ctx)) return ctx;
@@ -737,16 +751,16 @@ class DownloadAttachmentTool implements vscode.LanguageModelTool<DownloadAttachm
   }
 
   async invoke(options: vscode.LanguageModelToolInvocationOptions<DownloadAttachmentInput>): Promise<vscode.LanguageModelToolResult> {
-    const ticketKey = options.input.ticketKey?.trim();
-    const filename = options.input.filename?.trim();
-    if (!ticketKey) return textResult('A ticket key is required, e.g. PROJ-123.');
-    if (!isSafePathSegment(ticketKey)) return textResult(`"${ticketKey}" is not a valid ticket key.`);
-    if (!filename) return textResult('A filename is required, e.g. error.log.');
-    if (!isSafePathSegment(filename)) return textResult(`"${filename}" is not a valid filename.`);
+    // R10: ticketKey validated and the workspace-folder check made before any Jira call.
+    const guard = requireTicketKeyAndWorkspace(options.input.ticketKey, 'jira_downloadAttachment');
+    if (!guard.ok) return guard.result;
+    const { ticketKey, workspaceFolder } = guard;
 
-    // R10: checked before any Jira call, mirroring jira_loadTicket/@jira load.
-    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-    if (!workspaceFolder) return textResult('No workspace folder is open. Open a folder to use jira_downloadAttachment.');
+    const filename = options.input.filename?.trim();
+    if (!filename) return textResult('A filename is required, e.g. error.log.');
+    // isSafeFilename, not isSafePathSegment (code-review fix): a filename may legitimately
+    // contain ".." as a substring (e.g. "v1..2-notes.txt") without being a traversal attempt.
+    if (!isSafeFilename(filename)) return textResult(`"${filename}" is not a valid filename.`);
 
     const ctx = await tryGetConfiguredContext(this.configService);
     if (isNotConfiguredResult(ctx)) return ctx;

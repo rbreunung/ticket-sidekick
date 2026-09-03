@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { logDiag } from '../../utils/diagLog';
 import { formatJiraBody } from '../../utils/markdownFormatter';
-import { ATTACHMENT_SIZE_LIMIT, classifyAttachmentEligibility, formatFileSize } from '../../utils/attachmentEligibility';
+import { ATTACHMENT_SIZE_LIMIT, classifyAttachmentEligibility, dedupeByLatestFilename, formatFileSize } from '../../utils/attachmentEligibility';
 import type { JiraAttachment, JiraComment, JiraFieldMeta, JiraIssue, JiraRemoteLink } from '../../jira/IJiraClient';
 import { formatIssueFields, formatKeyLink } from '../../services/TicketService';
 import type { TicketService } from '../../services/TicketService';
@@ -95,7 +95,11 @@ export async function loadTicketToWorkspace(
 ): Promise<LoadTicketCoreResult> {
   const { issue, comments, attachments, remoteLinks } = data;
   const { fieldMeta, alwaysShowIds, hiddenIds, baseUrl } = display;
-  const { toDownload, toSkip } = classifyAttachmentEligibility(attachments);
+  const { toDownload: classified, toSkip } = classifyAttachmentEligibility(attachments);
+  // Two attachments sharing a filename would otherwise race to write the same
+  // attachments/<name> path concurrently below, silently dropping one (code-review fix) —
+  // resolved the same "latest created wins" way jira_downloadAttachment resolves it (KTD5).
+  const { unique: toDownload, duplicates } = dedupeByLatestFilename(classified);
 
   // Create directories
   const contextDir = jiraContextDir(wsRoot, ticketKey);
@@ -105,7 +109,7 @@ export async function loadTicketToWorkspace(
   // Download attachments (max 3 concurrent)
   const downloaded = new Set<string>();
   const skippedUrls = new Map<string, string>();
-  const downloadErrors: string[] = [];
+  const downloadFailures: JiraAttachment[] = [];
   for (let i = 0; i < toDownload.length; i += 3) {
     await Promise.all(toDownload.slice(i, i + 3).map(async (att) => {
       try {
@@ -115,12 +119,13 @@ export async function loadTicketToWorkspace(
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         logDiag('jira.load', 'warn', `Attachment download failed — ${att.filename}`, { fileName: att.filename, error: message });
-        downloadErrors.push(`${att.filename}: ${message}`);
+        downloadFailures.push(att);
         skippedUrls.set(att.filename, att.content);
       }
     }));
   }
   for (const att of toSkip) skippedUrls.set(att.filename, att.content);
+  for (const att of duplicates) skippedUrls.set(att.filename, att.content);
 
   // Build ticket.md — suppress built-in attachment section, append custom one
   const hiddenWithAttachment = new Set([...hiddenIds, 'attachment']);
@@ -133,8 +138,13 @@ export async function loadTicketToWorkspace(
   if (mdTable) mdParts.push('', mdTable);
   if (mdSections.length > 0) mdParts.push('', ...mdSections);
   if (attachments.length > 0) {
+    // duplicateIds guards the `downloaded` filename check below: a losing duplicate shares its
+    // filename with the winner that was actually written, so a filename-only lookup would
+    // otherwise show both as "downloaded" from the same path (code-review fix).
+    const duplicateIds = new Set(duplicates.map(a => a.id));
     const attLines = attachments.map(att => {
       const size = formatFileSize(att.size);
+      if (duplicateIds.has(att.id)) return `- \`${att.filename}\` — ${size} — skipped (duplicate filename)`;
       if (downloaded.has(att.filename)) return `- \`attachments/${att.filename}\` — ${size} (${att.mimeType})`;
       if (att.size > ATTACHMENT_SIZE_LIMIT) return `- \`${att.filename}\` — ${size} — skipped (over 100 MB size limit)`;
       return `- \`${att.filename}\` — ${size} — skipped (binary non-image)`;
@@ -169,17 +179,19 @@ export async function loadTicketToWorkspace(
 
   await ensureJiraContextGitignored(wsRoot);
 
-  // Build skipped list (oversized + unknown binary + download failures)
+  // Build skipped list (oversized + unknown binary + same-filename duplicates + download failures)
   const skipped: LoadSkippedSession['skipped'] = [
     ...toSkip.map(a => ({
       filename: a.filename, content: a.content, size: a.size, mimeType: a.mimeType,
       reason: a.size > ATTACHMENT_SIZE_LIMIT ? 'over 100 MB size limit' : 'unknown binary format',
     })),
-    ...downloadErrors.map(e => {
-      const filename = e.split(':')[0];
-      const att = toDownload.find(a => a.filename === filename);
-      return { filename, content: att?.content ?? '', size: att?.size ?? 0, mimeType: att?.mimeType ?? 'unknown', reason: 'download failed' };
-    }),
+    ...duplicates.map(a => ({
+      filename: a.filename, content: a.content, size: a.size, mimeType: a.mimeType,
+      reason: 'duplicate filename — use jira_downloadAttachment to fetch it by name',
+    })),
+    ...downloadFailures.map(a => ({
+      filename: a.filename, content: a.content, size: a.size, mimeType: a.mimeType, reason: 'download failed',
+    })),
   ];
 
   return { downloadedCount: downloaded.size, skipped, writeErrors };

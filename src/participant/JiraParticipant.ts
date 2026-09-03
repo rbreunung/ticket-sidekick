@@ -18,7 +18,8 @@ import { getLastAssistantText, resolveTicketFromBranch, resolveProjectKey, resol
 import { validateBaseUrl } from '../services/configValidation';
 import { gatherFileContent, buildContentContext, streamContentPreview, handleContentSession } from './jira/contentHandler';
 import { streamCreateSelection, continueAfterIssueType, streamNextSection, finishTicketCreation, handleCreateTicket } from './jira/createHandler';
-import { serializeCommentsForLLM, handleLoadTicket } from './jira/loadHandler';
+import { serializeCommentsForLLM, handleLoadTicket, attachmentsDirFor } from './jira/loadHandler';
+import { formatFileSize } from '../utils/attachmentEligibility';
 import { streamReviewScreen, executeCleanupBatch, handleRunCleanup } from './jira/cleanupHandler';
 import { handleDiscoverWorkflow } from './jira/workflowHandler';
 import {
@@ -552,10 +553,9 @@ export function createJiraParticipant(
       const loadSkippedSession = ws.get<LoadSkippedSession>('jira.session.loadSkipped');
       if (loadSkippedSession) {
         const selection = parseSkippedAttachmentSelection(request.prompt, loadSkippedSession.skipped.length);
-        const skippedList = (items: LoadSkippedSession['skipped']) => items.map((s, i) => {
-          const sz = s.size >= 1_048_576 ? `${(s.size / 1_048_576).toFixed(1)} MB` : `${Math.round(s.size / 1024)} KB`;
-          return `${i + 1}. \`${s.filename}\` — ${sz} (${s.mimeType}) — ${s.reason}`;
-        }).join('\n');
+        const skippedList = (items: LoadSkippedSession['skipped']) => items
+          .map((s, i) => `${i + 1}. \`${s.filename}\` — ${formatFileSize(s.size)} (${s.mimeType}) — ${s.reason}`)
+          .join('\n');
         if (selection === 'not-a-selection') {
           await ws.update('jira.session.loadSkipped', undefined);
           // fall through to intent parsing
@@ -569,7 +569,7 @@ export function createJiraParticipant(
             stream.markdown('No workspace folder is open.');
             return;
           }
-          const attachmentsDir = vscode.Uri.joinPath(workspaceFolder.uri, '.jira-context', loadSkippedSession.ticketKey, 'attachments');
+          const attachmentsDir = attachmentsDirFor(workspaceFolder.uri, loadSkippedSession.ticketKey);
           const lines: string[] = [];
           const downloadedSet = new Set(selection.map(i => i - 1));
           for (const i of selection) {

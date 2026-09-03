@@ -55,6 +55,32 @@ export function findAttachmentByFilename(
   return { attachment, matchCount: matches.length };
 }
 
+/** Resolves same-filename duplicates within a set of attachments the default load path is
+ * about to download — the same "latest `created` wins" rule {@link findAttachmentByFilename}
+ * applies for `jira_downloadAttachment`, but here it matters because `loadTicketToWorkspace`
+ * downloads its `toDownload` set concurrently: two attachments sharing a filename would race
+ * to write the same `attachments/<name>` path with no error and no indication a file was
+ * silently dropped. `duplicates` (every losing attachment) is meant to be folded into the
+ * skipped-attachments list instead of written. */
+export function dedupeByLatestFilename(
+  attachments: JiraAttachment[],
+): { unique: JiraAttachment[]; duplicates: JiraAttachment[] } {
+  const byFilename = new Map<string, JiraAttachment[]>();
+  for (const att of attachments) {
+    const group = byFilename.get(att.filename);
+    if (group) group.push(att); else byFilename.set(att.filename, [att]);
+  }
+  const unique: JiraAttachment[] = [];
+  const duplicates: JiraAttachment[] = [];
+  for (const group of byFilename.values()) {
+    if (group.length === 1) { unique.push(group[0]); continue; }
+    const winner = group.reduce((latest, current) => (current.created > latest.created ? current : latest));
+    unique.push(winner);
+    duplicates.push(...group.filter(a => a !== winner));
+  }
+  return { unique, duplicates };
+}
+
 /** Renders a byte count as `"1.2 MB"` or `"46 KB"` — shared by `ticket.md`'s attachment list,
  * the skipped-attachments summary, and `jira_downloadAttachment`'s size-cap rejection message. */
 export function formatFileSize(bytes: number): string {

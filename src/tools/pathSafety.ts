@@ -11,3 +11,17 @@
 export function isSafePathSegment(value: string): boolean {
   return value.length > 0 && !value.includes('/') && !value.includes('\\') && !value.includes('..');
 }
+
+/**
+ * Rejects a value unsafe to use as a single filesystem path segment (e.g. joined under
+ * `.jira-context/<ticketKey>/attachments/`) — deliberately more permissive than
+ * `isSafePathSegment` above. That function rejects any `..` *substring* because a ticket/project
+ * key is interpolated into a REST URL path, where a bare `..` substring is already suspicious.
+ * A filename has no such constraint: without `/` or `\` it is inherently a single segment, so
+ * the only values with directory-traversal meaning are the literal segments `.` and `..`
+ * themselves — a real, unremarkable filename like `v1..2-notes.txt` must not be rejected just
+ * because it contains that substring (code-review fix).
+ */
+export function isSafeFilename(value: string): boolean {
+  return value.length > 0 && !value.includes('/') && !value.includes('\\') && value !== '.' && value !== '..';
+}

@@ -120,6 +120,61 @@ describe('loadTicketToWorkspace (KTD8 integration)', () => {
     expect(fakeFiles.has('/workspace/.jira-context/PROJ-123/attachments/error.log')).toBe(true);
   });
 
+  it('downloads only the most-recently-created attachment when two share a filename (code-review fix)', async () => {
+    const client = new MockJiraClient();
+    const service = new TicketService(client);
+    const { issue, comments, fieldMeta, remoteLinks } = await loadFixtureTicket(client, service, 'PROJ-123');
+    const olderVersion = {
+      id: 'att010', filename: 'notes.txt', mimeType: 'text/plain', size: 100,
+      content: 'https://jira.example.com/secure/attachment/att010/notes.txt', created: '2024-01-01T00:00:00.000+0000',
+    };
+    const newerVersion = {
+      id: 'att011', filename: 'notes.txt', mimeType: 'text/plain', size: 200,
+      content: 'https://jira.example.com/secure/attachment/att011/notes.txt', created: '2024-01-05T00:00:00.000+0000',
+    };
+    client.downloadAttachment = async (contentUrl: string) =>
+      new TextEncoder().encode(contentUrl.includes('att010') ? 'older content' : 'newer content');
+
+    const result = await loadTicketToWorkspace(
+      'PROJ-123', service,
+      { issue, comments, attachments: [olderVersion, newerVersion], remoteLinks },
+      { fieldMeta, alwaysShowIds: new Set(), hiddenIds: new Set(), baseUrl: 'https://jira.example.com' },
+      wsRoot,
+    );
+
+    // Exactly one file lands on disk — no write race between the two same-named attachments —
+    // and it holds the newer attachment's content, not whichever happened to write last.
+    expect(result.downloadedCount).toBe(1);
+    expect(new TextDecoder().decode(fakeFiles.get('/workspace/.jira-context/PROJ-123/attachments/notes.txt'))).toBe('newer content');
+    expect(result.skipped).toEqual([
+      expect.objectContaining({ filename: 'notes.txt', reason: 'duplicate filename — use jira_downloadAttachment to fetch it by name' }),
+    ]);
+  });
+
+  it('keeps the exact filename in the skipped list for a download failure, even when the filename contains a colon (code-review fix)', async () => {
+    const client = new MockJiraClient();
+    const service = new TicketService(client);
+    const { issue, comments, fieldMeta, remoteLinks } = await loadFixtureTicket(client, service, 'PROJ-123');
+    const colonNamed = {
+      id: 'att020', filename: 'log:2024-01-15.txt', mimeType: 'text/plain', size: 50,
+      content: 'https://jira.example.com/secure/attachment/att020/log:2024-01-15.txt', created: '2024-01-01T00:00:00.000+0000',
+    };
+    client.downloadAttachment = async () => { throw new Error('HTTP 500: request failed'); };
+
+    const result = await loadTicketToWorkspace(
+      'PROJ-123', service,
+      { issue, comments, attachments: [colonNamed], remoteLinks },
+      { fieldMeta, alwaysShowIds: new Set(), hiddenIds: new Set(), baseUrl: 'https://jira.example.com' },
+      wsRoot,
+    );
+
+    // Previously, the failed-download filename was recovered by splitting a logged
+    // "<filename>: <message>" string on ":" — which truncated a filename containing a colon.
+    expect(result.skipped).toEqual([
+      expect.objectContaining({ filename: 'log:2024-01-15.txt', reason: 'download failed', size: 50, mimeType: 'text/plain' }),
+    ]);
+  });
+
   it('leaves .jira-context/ out of .gitignore untouched when it is already present', async () => {
     fakeFiles.set('/workspace/.gitignore', new TextEncoder().encode('node_modules/\n.jira-context/\n'));
     const client = new MockJiraClient();

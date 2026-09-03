@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ATTACHMENT_SIZE_LIMIT, classifyAttachmentEligibility, findAttachmentByFilename, formatFileSize } from '../utils/attachmentEligibility';
+import { ATTACHMENT_SIZE_LIMIT, classifyAttachmentEligibility, dedupeByLatestFilename, findAttachmentByFilename, formatFileSize } from '../utils/attachmentEligibility';
 import type { JiraAttachment } from '../jira/IJiraClient';
 
 function makeAttachment(overrides: Partial<JiraAttachment>): JiraAttachment {
@@ -71,6 +71,39 @@ describe('findAttachmentByFilename (R9/R10, KTD5/KTD7)', () => {
 
     expect(findAttachmentByFilename([older, newer], 'report.log')).toEqual({ attachment: newer, matchCount: 2 });
     expect(findAttachmentByFilename([newer, older], 'report.log')).toEqual({ attachment: newer, matchCount: 2 });
+  });
+});
+
+describe('dedupeByLatestFilename (code-review fix: concurrent-download filename collision)', () => {
+  it('leaves a set with no duplicate filenames unchanged', () => {
+    const a = makeAttachment({ filename: 'a.txt', id: '1' });
+    const b = makeAttachment({ filename: 'b.txt', id: '2' });
+
+    expect(dedupeByLatestFilename([a, b])).toEqual({ unique: [a, b], duplicates: [] });
+  });
+
+  it('keeps the most-recently-created attachment among same-filename duplicates and reports the rest as duplicates', () => {
+    const older = makeAttachment({ filename: 'report.log', id: '1', created: '2024-01-10T09:00:00.000+0000' });
+    const newer = makeAttachment({ filename: 'report.log', id: '2', created: '2024-01-20T09:00:00.000+0000' });
+    const other = makeAttachment({ filename: 'other.txt', id: '3' });
+
+    const { unique, duplicates } = dedupeByLatestFilename([older, newer, other]);
+
+    expect(unique).toEqual(expect.arrayContaining([newer, other]));
+    expect(unique).not.toEqual(expect.arrayContaining([older]));
+    expect(duplicates).toEqual([older]);
+  });
+
+  it('handles three-way duplicates, keeping only the single latest', () => {
+    const a = makeAttachment({ filename: 'x.txt', id: '1', created: '2024-01-01T00:00:00.000+0000' });
+    const b = makeAttachment({ filename: 'x.txt', id: '2', created: '2024-01-03T00:00:00.000+0000' });
+    const c = makeAttachment({ filename: 'x.txt', id: '3', created: '2024-01-02T00:00:00.000+0000' });
+
+    const { unique, duplicates } = dedupeByLatestFilename([a, b, c]);
+
+    expect(unique).toEqual([b]);
+    expect(duplicates).toEqual(expect.arrayContaining([a, c]));
+    expect(duplicates).toHaveLength(2);
   });
 });
 
