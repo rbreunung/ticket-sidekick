@@ -1170,6 +1170,36 @@ export function buildLoadTicketResultMessage(
   return lines.join('\n');
 }
 
+/** Confirmation for `jira_downloadAttachment` — names the ticket, filename, and target path (R10). */
+export function buildDownloadAttachmentConfirmation(ticketKey: string, filename: string): ToolConfirmation {
+  return {
+    title: `Download ${filename} from ${ticketKey}`,
+    message: `Download **${filename}** from **${ticketKey}** into \`.jira-context/${ticketKey}/attachments/${filename}\`.`,
+  };
+}
+
+/** Not-found message for `jira_downloadAttachment` (R10/KTD5) — lists the ticket's actual
+ * attachment filenames instead of a raw not-found error, so the calling model can retry with
+ * a correct one. */
+export function buildAttachmentNotFoundMessage(ticketKey: string, filename: string, availableFilenames: string[]): string {
+  if (availableFilenames.length === 0) {
+    return `${ticketKey} has no attachments. "${filename}" does not exist on this ticket.`;
+  }
+  const list = availableFilenames.map(f => `- ${f}`).join('\n');
+  return `"${filename}" does not exist on ${ticketKey}. Its attachments are:\n\n${list}`;
+}
+
+/** Result text for `jira_downloadAttachment` on success (R9/R10, KTD5) — names the ticket,
+ * filename, and target path, and, when the filename matched more than one attachment, says a
+ * duplicate was resolved to the most recently created one. */
+export function buildDownloadAttachmentResultMessage(ticketKey: string, filename: string, matchCount: number): string {
+  const base = `Downloaded **${filename}** from **${ticketKey}** into \`.jira-context/${ticketKey}/attachments/${filename}\`.`;
+  if (matchCount > 1) {
+    return `${base} ${matchCount} attachments on this ticket share that filename — the most recently created one was used.`;
+  }
+  return base;
+}
+
 /** The never-guess fallback text for `jira_createTicket` (KTD4): when neither `issueType` nor a
  * resolvable `templateName` was given, nothing is created and this lists the project's valid
  * issue types (from `TicketService.getIssueTypes`) as the actionable next step — mirrors the

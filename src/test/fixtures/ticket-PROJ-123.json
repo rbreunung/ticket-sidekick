@@ -37,21 +37,24 @@
         "filename": "screenshot.png",
         "mimeType": "image/png",
         "size": 239616,
-        "content": "https://jira.example.com/secure/attachment/att001/screenshot.png"
+        "content": "https://jira.example.com/secure/attachment/att001/screenshot.png",
+        "created": "2024-01-15T10:00:00.000+0000"
       },
       {
         "id": "att002",
         "filename": "error.log",
         "mimeType": "text/plain",
         "size": 46080,
-        "content": "https://jira.example.com/secure/attachment/att002/error.log"
+        "content": "https://jira.example.com/secure/attachment/att002/error.log",
+        "created": "2024-01-16T11:00:00.000+0000"
       },
       {
         "id": "att003",
         "filename": "heap-dump.bin",
         "mimeType": "application/octet-stream",
         "size": 52428800,
-        "content": "https://jira.example.com/secure/attachment/att003/heap-dump.bin"
+        "content": "https://jira.example.com/secure/attachment/att003/heap-dump.bin",
+        "created": "2024-01-17T12:00:00.000+0000"
       }
     ],
     "comment": {

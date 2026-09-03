@@ -37,3 +37,17 @@ export function classifyAttachmentEligibility(
   }
   return { toDownload, toSkip };
 }
+
+/** Finds the attachment matching `filename` exactly, for `jira_downloadAttachment` (R9/R10).
+ * Jira does not enforce attachment-filename uniqueness per issue, so more than one attachment
+ * can share a name (e.g. a log re-uploaded after a fix attempt); when that happens the one
+ * with the latest `created` timestamp wins, mirroring how the Jira web UI itself resolves a
+ * same-named attachment (KTD5/KTD7). Returns `undefined` when nothing matches. */
+export function findAttachmentByFilename(
+  attachments: JiraAttachment[],
+  filename: string,
+): JiraAttachment | undefined {
+  const matches = attachments.filter((a) => a.filename === filename);
+  if (matches.length === 0) return undefined;
+  return matches.reduce((latest, current) => (current.created > latest.created ? current : latest));
+}

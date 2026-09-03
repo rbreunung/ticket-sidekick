@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ATTACHMENT_SIZE_LIMIT, classifyAttachmentEligibility } from '../utils/attachmentEligibility';
+import { ATTACHMENT_SIZE_LIMIT, classifyAttachmentEligibility, findAttachmentByFilename } from '../utils/attachmentEligibility';
 import type { JiraAttachment } from '../jira/IJiraClient';
 
 function makeAttachment(overrides: Partial<JiraAttachment>): JiraAttachment {
@@ -9,6 +9,7 @@ function makeAttachment(overrides: Partial<JiraAttachment>): JiraAttachment {
     mimeType: 'text/plain',
     size: 1024,
     content: 'https://jira.example.com/secure/attachment/1/file.txt',
+    created: '2024-01-01T00:00:00.000+0000',
     ...overrides,
   };
 }
@@ -47,5 +48,28 @@ describe('classifyAttachmentEligibility', () => {
 
   it('returns empty toDownload/toSkip for an empty attachment list', () => {
     expect(classifyAttachmentEligibility([])).toEqual({ toDownload: [], toSkip: [] });
+  });
+});
+
+describe('findAttachmentByFilename (R9/R10, KTD5/KTD7)', () => {
+  it('returns the single attachment matching the exact filename', () => {
+    const target = makeAttachment({ filename: 'report.log', id: '2' });
+    const attachments = [makeAttachment({ filename: 'other.log', id: '1' }), target];
+
+    expect(findAttachmentByFilename(attachments, 'report.log')).toBe(target);
+  });
+
+  it('returns undefined when no attachment matches', () => {
+    const attachments = [makeAttachment({ filename: 'other.log' })];
+
+    expect(findAttachmentByFilename(attachments, 'missing.log')).toBeUndefined();
+  });
+
+  it('picks the attachment with the latest created timestamp when the filename is duplicated', () => {
+    const older = makeAttachment({ filename: 'report.log', id: '1', created: '2024-01-10T09:00:00.000+0000' });
+    const newer = makeAttachment({ filename: 'report.log', id: '2', created: '2024-01-20T09:00:00.000+0000' });
+
+    expect(findAttachmentByFilename([older, newer], 'report.log')).toBe(newer);
+    expect(findAttachmentByFilename([newer, older], 'report.log')).toBe(newer);
   });
 });
