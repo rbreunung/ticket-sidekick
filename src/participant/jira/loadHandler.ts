@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import { logDiag } from '../../utils/diagLog';
 import { formatJiraBody } from '../../utils/markdownFormatter';
-import type { JiraAttachment, JiraComment, JiraFieldMeta } from '../../jira/IJiraClient';
+import { ATTACHMENT_SIZE_LIMIT, classifyAttachmentEligibility } from '../../utils/attachmentEligibility';
+import type { JiraAttachment, JiraComment, JiraFieldMeta, JiraIssue, JiraRemoteLink } from '../../jira/IJiraClient';
 import { formatIssueFields, formatKeyLink } from '../../services/TicketService';
 import type { TicketService } from '../../services/TicketService';
 import type { LoadSkippedSession } from '../sessionState';
@@ -15,68 +16,58 @@ export function serializeCommentsForLLM(comments: JiraComment[]): string {
   }).join('\n\n---\n\n');
 }
 
+/** Ensures `.jira-context/` is git-ignored at the workspace root — extracted so both the
+ * full load core below and `jira_downloadAttachment` (U4, which can run on a ticket that
+ * was never loaded) can call it standalone, not only as a step bundled inside a full load
+ * (U2/KTD1). */
+export async function ensureJiraContextGitignored(wsRoot: vscode.Uri): Promise<void> {
+  try {
+    let existing = '';
+    try {
+      const bytes = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(wsRoot, '.gitignore'));
+      existing = new TextDecoder().decode(bytes);
+    } catch { /* file absent — not logged, this is the normal case for a fresh workspace */ }
+    if (!existing.split('\n').some(line => line.trim() === '.jira-context/')) {
+      const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
+      await vscode.workspace.fs.writeFile(
+        vscode.Uri.joinPath(wsRoot, '.gitignore'),
+        new TextEncoder().encode(existing + prefix + '.jira-context/\n'),
+      );
+    }
+  } catch (err) {
+    logDiag('jira.load', 'warn', 'Could not update .gitignore', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
 
-export const DOWNLOADABLE_EXTENSIONS = new Set([
-  // text / source
-  '.log', '.txt', '.java', '.xml', '.json', '.yaml', '.yml', '.md',
-  '.properties', '.sql', '.sh', '.py', '.js', '.ts', '.html', '.css',
-  '.patch', '.diff',
-  // documents
-  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
-  '.odt', '.ods', '.odp', '.rtf', '.csv',
-  // archives
-  '.zip', '.tar', '.gz', '.tgz', '.bz2', '.7z', '.rar', '.jar', '.war', '.ear',
-]);
-export const ATTACHMENT_SIZE_LIMIT = 100 * 1024 * 1024;
+export interface LoadTicketCoreResult {
+  downloadedCount: number;
+  skipped: LoadSkippedSession['skipped'];
+  writeErrors: string[];
+}
 
-export async function handleLoadTicket(
+/** The non-streaming core of a ticket load (KTD2): classify attachments, download the
+ * eligible ones, write `ticket.md`/`comments.md`, ensure `.jira-context/` is git-ignored, and
+ * build the skipped-attachments list — given already-fetched issue/comments/attachments/
+ * remote-links data so the caller (chat or a tool) fetches Jira exactly once. Never streams
+ * or touches `vscode.Memento` — `handleLoadTicket` (chat) owns the ticket-preview stream and
+ * the skipped-attachments resume session; `jira_loadTicket` (tool, U3) renders its own
+ * single-string result from the returned `LoadTicketCoreResult`. */
+export async function loadTicketToWorkspace(
   ticketKey: string,
   ticketService: TicketService,
-  stream: vscode.ChatResponseStream,
-  ws: vscode.Memento,
+  issue: JiraIssue,
+  comments: JiraComment[],
+  attachments: JiraAttachment[],
   fieldMeta: JiraFieldMeta[],
   alwaysShowIds: Set<string>,
   hiddenIds: Set<string>,
-): Promise<void> {
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-  if (!workspaceFolder) {
-    stream.markdown('No workspace folder is open. Open a folder to use `@jira load`.');
-    return;
-  }
-  const wsRoot = workspaceFolder.uri;
-
-  const issue = await ticketService.getIssue(ticketKey);
-  const comments = await ticketService.getAllComments(ticketKey);
-  const attachments = ticketService.getAttachments(issue);
-
-  // Stream ticket content first (same as @jira show)
-  // Build a map of all attachment filenames → Jira content URLs for link rewriting
-  const allAttachmentUrls = new Map(attachments.map(a => [a.filename, a.content]));
-
-  // Stream ticket content first (same as @jira show), with inline attachment links
-  // rewritten to their Jira URLs so they are clickable in the chat.
-  const baseUrl = vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.baseUrl') ?? '';
-  const { table, sections } = formatIssueFields(issue, fieldMeta, alwaysShowIds, hiddenIds, baseUrl);
-  const remoteLinks = await ticketService.getRemoteLinks(ticketKey);
-  if (remoteLinks.length > 0) {
-    const lines = remoteLinks.map(r => `- [${r.object.title}](${r.object.url})`);
-    sections.push(`## Web Links\n\n${lines.join('\n')}`);
-  }
-  const heading = `## ${formatKeyLink(issue.key, baseUrl)}: ${issue.fields.summary}`;
-  const showParts: string[] = [heading];
-  if (table) showParts.push('', table);
-  if (sections.length > 0) showParts.push('', ...sections);
-  stream.markdown(rewriteAttachmentLinks(showParts.join('\n'), new Set(), allAttachmentUrls));
-
-  // Classify attachments
-  const toDownload: JiraAttachment[] = [];
-  const toSkip: JiraAttachment[] = [];
-  for (const att of attachments) {
-    if (att.size > ATTACHMENT_SIZE_LIMIT) { toSkip.push(att); continue; }
-    const ext = att.filename.includes('.') ? ('.' + att.filename.split('.').pop()!.toLowerCase()) : '';
-    const eligible = att.mimeType.startsWith('text/') || att.mimeType.startsWith('image/') || DOWNLOADABLE_EXTENSIONS.has(ext);
-    (eligible ? toDownload : toSkip).push(att);
-  }
+  baseUrl: string,
+  remoteLinks: JiraRemoteLink[],
+  wsRoot: vscode.Uri,
+): Promise<LoadTicketCoreResult> {
+  const { toDownload, toSkip } = classifyAttachmentEligibility(attachments);
 
   // Create directories
   const contextDir = vscode.Uri.joinPath(wsRoot, '.jira-context', ticketKey);
@@ -150,28 +141,10 @@ export async function handleLoadTicket(
     }
   }
 
-  // Update .gitignore
-  try {
-    let existing = '';
-    try {
-      const bytes = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(wsRoot, '.gitignore'));
-      existing = new TextDecoder().decode(bytes);
-    } catch { /* file absent — not logged, this is the normal case for a fresh workspace */ }
-    if (!existing.split('\n').some(line => line.trim() === '.jira-context/')) {
-      const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
-      await vscode.workspace.fs.writeFile(
-        vscode.Uri.joinPath(wsRoot, '.gitignore'),
-        enc.encode(existing + prefix + '.jira-context/\n'),
-      );
-    }
-  } catch (err) {
-    logDiag('jira.load', 'warn', 'Could not update .gitignore', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
+  await ensureJiraContextGitignored(wsRoot);
 
   // Build skipped list (oversized + unknown binary + download failures)
-  const allSkipped: LoadSkippedSession['skipped'] = [
+  const skipped: LoadSkippedSession['skipped'] = [
     ...toSkip.map(a => ({
       filename: a.filename, content: a.content, size: a.size, mimeType: a.mimeType,
       reason: a.size > ATTACHMENT_SIZE_LIMIT ? 'over 100 MB size limit' : 'unknown binary format',
@@ -183,21 +156,67 @@ export async function handleLoadTicket(
     }),
   ];
 
+  return { downloadedCount: downloaded.size, skipped, writeErrors };
+}
+
+export async function handleLoadTicket(
+  ticketKey: string,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  fieldMeta: JiraFieldMeta[],
+  alwaysShowIds: Set<string>,
+  hiddenIds: Set<string>,
+): Promise<void> {
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!workspaceFolder) {
+    stream.markdown('No workspace folder is open. Open a folder to use `@jira load`.');
+    return;
+  }
+  const wsRoot = workspaceFolder.uri;
+
+  const issue = await ticketService.getIssue(ticketKey);
+  const comments = await ticketService.getAllComments(ticketKey);
+  const attachments = ticketService.getAttachments(issue);
+
+  // Stream ticket content first (same as @jira show)
+  // Build a map of all attachment filenames → Jira content URLs for link rewriting
+  const allAttachmentUrls = new Map(attachments.map(a => [a.filename, a.content]));
+
+  // Stream ticket content first (same as @jira show), with inline attachment links
+  // rewritten to their Jira URLs so they are clickable in the chat.
+  const baseUrl = vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.baseUrl') ?? '';
+  const { table, sections } = formatIssueFields(issue, fieldMeta, alwaysShowIds, hiddenIds, baseUrl);
+  const remoteLinks = await ticketService.getRemoteLinks(ticketKey);
+  if (remoteLinks.length > 0) {
+    const lines = remoteLinks.map(r => `- [${r.object.title}](${r.object.url})`);
+    sections.push(`## Web Links\n\n${lines.join('\n')}`);
+  }
+  const heading = `## ${formatKeyLink(issue.key, baseUrl)}: ${issue.fields.summary}`;
+  const showParts: string[] = [heading];
+  if (table) showParts.push('', table);
+  if (sections.length > 0) showParts.push('', ...sections);
+  stream.markdown(rewriteAttachmentLinks(showParts.join('\n'), new Set(), allAttachmentUrls));
+
+  const { downloadedCount, skipped, writeErrors } = await loadTicketToWorkspace(
+    ticketKey, ticketService, issue, comments, attachments, fieldMeta, alwaysShowIds, hiddenIds, baseUrl, remoteLinks, wsRoot,
+  );
+
   // Stream summary
   const summaryLines: string[] = [`\n\nLoaded **${issue.key}** into \`.jira-context/${ticketKey}/\``];
   summaryLines.push(`- \`ticket.md\` — metadata and description`);
   summaryLines.push(`- \`comments.md\` — ${comments.length} comment${comments.length !== 1 ? 's' : ''}`);
-  if (downloaded.size > 0) summaryLines.push(`- \`attachments/\` — ${downloaded.size} file${downloaded.size !== 1 ? 's' : ''} downloaded`);
+  if (downloadedCount > 0) summaryLines.push(`- \`attachments/\` — ${downloadedCount} file${downloadedCount !== 1 ? 's' : ''} downloaded`);
   if (writeErrors.length > 0) summaryLines.push(`\n_Write errors:_\n${writeErrors.map(e => `- ${e}`).join('\n')}`);
   stream.markdown(summaryLines.join('\n'));
 
-  if (allSkipped.length > 0) {
-    const listLines = allSkipped.map((s, i) => {
+  if (skipped.length > 0) {
+    const listLines = skipped.map((s, i) => {
       const size = s.size >= 1_048_576 ? `${(s.size / 1_048_576).toFixed(1)} MB` : `${Math.round(s.size / 1024)} KB`;
       return `${i + 1}. \`${s.filename}\` — ${size} (${s.mimeType}) — ${s.reason}`;
     });
     stream.markdown(`\n\n**Skipped attachments:**\n\n${listLines.join('\n')}\n\nReply with a number to download it anyway.`);
-    await ws.update('jira.session.loadSkipped', { ticketKey, skipped: allSkipped } satisfies LoadSkippedSession);
+    await ws.update('jira.session.loadSkipped', { ticketKey, skipped } satisfies LoadSkippedSession);
     stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:load-skipped -->`);
   } else {
     stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
