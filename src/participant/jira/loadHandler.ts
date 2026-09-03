@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { logDiag } from '../../utils/diagLog';
 import { formatJiraBody } from '../../utils/markdownFormatter';
-import { ATTACHMENT_SIZE_LIMIT, classifyAttachmentEligibility } from '../../utils/attachmentEligibility';
+import { ATTACHMENT_SIZE_LIMIT, classifyAttachmentEligibility, formatFileSize } from '../../utils/attachmentEligibility';
 import type { JiraAttachment, JiraComment, JiraFieldMeta, JiraIssue, JiraRemoteLink } from '../../jira/IJiraClient';
 import { formatIssueFields, formatKeyLink } from '../../services/TicketService';
 import type { TicketService } from '../../services/TicketService';
@@ -47,26 +47,42 @@ export interface LoadTicketCoreResult {
   writeErrors: string[];
 }
 
+/** The issue/comments/attachments/remote-links a caller fetches once (chat or a tool) and
+ * hands to {@link loadTicketToWorkspace} — grouped so the function doesn't need four separate
+ * positional parameters for data that is always fetched and passed together. */
+export interface LoadedTicketData {
+  issue: JiraIssue;
+  comments: JiraComment[];
+  attachments: JiraAttachment[];
+  remoteLinks: JiraRemoteLink[];
+}
+
+/** Field-display options for rendering `ticket.md` — the same shape `formatIssueFields`
+ * (`TicketService.ts`) itself takes, grouped here for the same reason as
+ * {@link LoadedTicketData}. */
+export interface LoadDisplayOptions {
+  fieldMeta: JiraFieldMeta[];
+  alwaysShowIds: Set<string>;
+  hiddenIds: Set<string>;
+  baseUrl: string;
+}
+
 /** The non-streaming core of a ticket load (KTD2): classify attachments, download the
  * eligible ones, write `ticket.md`/`comments.md`, ensure `.jira-context/` is git-ignored, and
- * build the skipped-attachments list — given already-fetched issue/comments/attachments/
- * remote-links data so the caller (chat or a tool) fetches Jira exactly once. Never streams
- * or touches `vscode.Memento` — `handleLoadTicket` (chat) owns the ticket-preview stream and
- * the skipped-attachments resume session; `jira_loadTicket` (tool, U3) renders its own
- * single-string result from the returned `LoadTicketCoreResult`. */
+ * build the skipped-attachments list — given already-fetched data so the caller (chat or a
+ * tool) fetches Jira exactly once. Never streams or touches `vscode.Memento` —
+ * `handleLoadTicket` (chat) owns the ticket-preview stream and the skipped-attachments resume
+ * session; `jira_loadTicket` (tool, U3) renders its own single-string result from the returned
+ * `LoadTicketCoreResult`. */
 export async function loadTicketToWorkspace(
   ticketKey: string,
   ticketService: TicketService,
-  issue: JiraIssue,
-  comments: JiraComment[],
-  attachments: JiraAttachment[],
-  fieldMeta: JiraFieldMeta[],
-  alwaysShowIds: Set<string>,
-  hiddenIds: Set<string>,
-  baseUrl: string,
-  remoteLinks: JiraRemoteLink[],
+  data: LoadedTicketData,
+  display: LoadDisplayOptions,
   wsRoot: vscode.Uri,
 ): Promise<LoadTicketCoreResult> {
+  const { issue, comments, attachments, remoteLinks } = data;
+  const { fieldMeta, alwaysShowIds, hiddenIds, baseUrl } = display;
   const { toDownload, toSkip } = classifyAttachmentEligibility(attachments);
 
   // Create directories
@@ -106,9 +122,7 @@ export async function loadTicketToWorkspace(
   if (mdSections.length > 0) mdParts.push('', ...mdSections);
   if (attachments.length > 0) {
     const attLines = attachments.map(att => {
-      const size = att.size >= 1_048_576
-        ? `${(att.size / 1_048_576).toFixed(1)} MB`
-        : `${Math.round(att.size / 1024)} KB`;
+      const size = formatFileSize(att.size);
       if (downloaded.has(att.filename)) return `- \`attachments/${att.filename}\` — ${size} (${att.mimeType})`;
       if (att.size > ATTACHMENT_SIZE_LIMIT) return `- \`${att.filename}\` — ${size} — skipped (over 100 MB size limit)`;
       return `- \`${att.filename}\` — ${size} — skipped (binary non-image)`;
@@ -199,7 +213,10 @@ export async function handleLoadTicket(
   stream.markdown(rewriteAttachmentLinks(showParts.join('\n'), new Set(), allAttachmentUrls));
 
   const { downloadedCount, skipped, writeErrors } = await loadTicketToWorkspace(
-    ticketKey, ticketService, issue, comments, attachments, fieldMeta, alwaysShowIds, hiddenIds, baseUrl, remoteLinks, wsRoot,
+    ticketKey, ticketService,
+    { issue, comments, attachments, remoteLinks },
+    { fieldMeta, alwaysShowIds, hiddenIds, baseUrl },
+    wsRoot,
   );
 
   // Stream summary
@@ -211,10 +228,7 @@ export async function handleLoadTicket(
   stream.markdown(summaryLines.join('\n'));
 
   if (skipped.length > 0) {
-    const listLines = skipped.map((s, i) => {
-      const size = s.size >= 1_048_576 ? `${(s.size / 1_048_576).toFixed(1)} MB` : `${Math.round(s.size / 1024)} KB`;
-      return `${i + 1}. \`${s.filename}\` — ${size} (${s.mimeType}) — ${s.reason}`;
-    });
+    const listLines = skipped.map((s, i) => `${i + 1}. \`${s.filename}\` — ${formatFileSize(s.size)} (${s.mimeType}) — ${s.reason}`);
     stream.markdown(`\n\n**Skipped attachments:**\n\n${listLines.join('\n')}\n\nReply with a number to download it anyway.`);
     await ws.update('jira.session.loadSkipped', { ticketKey, skipped } satisfies LoadSkippedSession);
     stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:load-skipped -->`);

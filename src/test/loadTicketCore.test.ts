@@ -1,15 +1,50 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Same shape as this suite's other `vscode`-importing handler tests (e.g.
+// reportImportHandler.test.ts, emailHandler.test.ts) — a local `vi.mock('vscode', ...)`
+// factory, not a project-wide mock. `workspace.fs` is backed by an in-memory `Map` so
+// loadTicketToWorkspace()'s writes are assertable; `vi.hoisted` is required because the
+// factory below is hoisted above this file's own imports.
+const { fakeFiles, resetFakeFiles } = vi.hoisted(() => {
+  const files = new Map<string, Uint8Array>();
+  return { fakeFiles: files, resetFakeFiles: () => files.clear() };
+});
+
+vi.mock('vscode', () => ({
+  Uri: {
+    file: (path: string) => ({ fsPath: path }),
+    joinPath: (base: { fsPath: string }, ...segments: string[]) => ({
+      fsPath: [base.fsPath.replace(/\/+$/, ''), ...segments].join('/'),
+    }),
+  },
+  workspace: {
+    fs: {
+      createDirectory: vi.fn(async () => {}),
+      writeFile: vi.fn(async (uri: { fsPath: string }, content: Uint8Array) => {
+        fakeFiles.set(uri.fsPath, content);
+      }),
+      readFile: vi.fn(async (uri: { fsPath: string }) => {
+        const content = fakeFiles.get(uri.fsPath);
+        if (!content) throw new Error(`ENOENT: ${uri.fsPath}`);
+        return content;
+      }),
+    },
+    getConfiguration: vi.fn(() => ({ get: () => 'https://jira.example.com' })),
+  },
+  window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
+}));
+
+import * as vscode from 'vscode';
 import { loadTicketToWorkspace } from '../participant/jira/loadHandler';
 import { TicketService } from '../services/TicketService';
 import { MockJiraClient } from './mocks/MockJiraClient';
-import { FakeUri, fakeFiles, resetVscodeMock, setFakeBaseUrl } from './mocks/vscode';
 
 // Integration coverage for U2's extracted load core (KTD8) — exercised against the real
 // `ticket-PROJ-123.json` fixture (via `MockJiraClient`/`TicketService`, exactly as the chat
-// handler and the Agent Mode tools do) and the in-memory `vscode` mock, so the fetch→classify→
-// download→write→gitignore sequence is proven end to end instead of manually only.
+// handler and the Agent Mode tools do) and the mocked `vscode.workspace.fs`, so the fetch→
+// classify→download→write→gitignore sequence is proven end to end instead of manually only.
 
-const wsRoot = new FakeUri('/workspace');
+const wsRoot = vscode.Uri.file('/workspace');
 
 async function loadFixtureTicket(client: MockJiraClient, service: TicketService, ticketKey: string) {
   const issue = await service.getIssue(ticketKey);
@@ -22,8 +57,7 @@ async function loadFixtureTicket(client: MockJiraClient, service: TicketService,
 
 describe('loadTicketToWorkspace (KTD8 integration)', () => {
   beforeEach(() => {
-    resetVscodeMock();
-    setFakeBaseUrl('https://jira.example.com');
+    resetFakeFiles();
   });
 
   it('writes ticket.md and comments.md, downloads eligible attachments, skips the rest, and git-ignores .jira-context/', async () => {
@@ -32,7 +66,10 @@ describe('loadTicketToWorkspace (KTD8 integration)', () => {
     const { issue, comments, attachments, fieldMeta, remoteLinks } = await loadFixtureTicket(client, service, 'PROJ-123');
 
     const result = await loadTicketToWorkspace(
-      'PROJ-123', service, issue, comments, attachments, fieldMeta, new Set(), new Set(), 'https://jira.example.com', remoteLinks, wsRoot,
+      'PROJ-123', service,
+      { issue, comments, attachments, remoteLinks },
+      { fieldMeta, alwaysShowIds: new Set(), hiddenIds: new Set(), baseUrl: 'https://jira.example.com' },
+      wsRoot,
     );
 
     // screenshot.png (image/png) and error.log (text/plain) are eligible; heap-dump.bin
@@ -69,7 +106,10 @@ describe('loadTicketToWorkspace (KTD8 integration)', () => {
     const { issue, comments, attachments, fieldMeta, remoteLinks } = await loadFixtureTicket(client, service, 'PROJ-123');
 
     const result = await loadTicketToWorkspace(
-      'PROJ-123', service, issue, comments, attachments, fieldMeta, new Set(), new Set(), 'https://jira.example.com', remoteLinks, wsRoot,
+      'PROJ-123', service,
+      { issue, comments, attachments, remoteLinks },
+      { fieldMeta, alwaysShowIds: new Set(), hiddenIds: new Set(), baseUrl: 'https://jira.example.com' },
+      wsRoot,
     );
 
     expect(result.downloadedCount).toBe(1); // error.log still downloads
@@ -87,7 +127,10 @@ describe('loadTicketToWorkspace (KTD8 integration)', () => {
     const { issue, comments, attachments, fieldMeta, remoteLinks } = await loadFixtureTicket(client, service, 'PROJ-123');
 
     await loadTicketToWorkspace(
-      'PROJ-123', service, issue, comments, attachments, fieldMeta, new Set(), new Set(), 'https://jira.example.com', remoteLinks, wsRoot,
+      'PROJ-123', service,
+      { issue, comments, attachments, remoteLinks },
+      { fieldMeta, alwaysShowIds: new Set(), hiddenIds: new Set(), baseUrl: 'https://jira.example.com' },
+      wsRoot,
     );
 
     const gitignore = new TextDecoder().decode(fakeFiles.get('/workspace/.gitignore'));

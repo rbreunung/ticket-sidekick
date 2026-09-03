@@ -1178,6 +1178,12 @@ export function buildDownloadAttachmentConfirmation(ticketKey: string, filename:
   };
 }
 
+/** Renders `items` as a `- ` bulleted list, one per line — shared by every result message
+ * below that lists plain strings or pre-formatted per-item text. */
+function formatBulletList(items: string[]): string {
+  return items.map(item => `- ${item}`).join('\n');
+}
+
 /** Not-found message for `jira_downloadAttachment` (R10/KTD5) — lists the ticket's actual
  * attachment filenames instead of a raw not-found error, so the calling model can retry with
  * a correct one. */
@@ -1185,8 +1191,7 @@ export function buildAttachmentNotFoundMessage(ticketKey: string, filename: stri
   if (availableFilenames.length === 0) {
     return `${ticketKey} has no attachments. "${filename}" does not exist on this ticket.`;
   }
-  const list = availableFilenames.map(f => `- ${f}`).join('\n');
-  return `"${filename}" does not exist on ${ticketKey}. Its attachments are:\n\n${list}`;
+  return `"${filename}" does not exist on ${ticketKey}. Its attachments are:\n\n${formatBulletList(availableFilenames)}`;
 }
 
 /** Result text for `jira_downloadAttachment` on success (R9/R10, KTD5) — names the ticket,
@@ -1214,7 +1219,7 @@ export function formatIssueTypeOptionsMessage(projectKey: string, issueTypes: st
       `and its issue types could not be fetched from Jira. Call jira_createTicket again with an explicit "issueType".`
     );
   }
-  const list = issueTypes.map(t => `- ${t}`).join('\n');
+  const list = formatBulletList(issueTypes);
   return (
     `No ticket was created: no issue type or resolvable template was given. Valid issue types for **${projectKey}**:\n\n${list}\n\n` +
     `Call jira_createTicket again with one of these as "issueType", or with a "templateName" from jira_listTemplates.`
@@ -1227,9 +1232,9 @@ export function formatTemplateListMessage(templates: Array<{ name: string; issue
   if (templates.length === 0) {
     return 'No templates found. Create a `.jira-templates.json` file in the workspace root to define reusable ticket templates.';
   }
-  const list = templates
-    .map(t => `- **${t.name}**${t.issueType ? ` (${t.issueType})` : ' (issue type not set on the template)'}`)
-    .join('\n');
+  const list = formatBulletList(
+    templates.map(t => `**${t.name}**${t.issueType ? ` (${t.issueType})` : ' (issue type not set on the template)'}`),
+  );
   return `Available templates:\n\n${list}`;
 }
 

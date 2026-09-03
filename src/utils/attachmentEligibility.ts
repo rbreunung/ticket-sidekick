@@ -42,12 +42,21 @@ export function classifyAttachmentEligibility(
  * Jira does not enforce attachment-filename uniqueness per issue, so more than one attachment
  * can share a name (e.g. a log re-uploaded after a fix attempt); when that happens the one
  * with the latest `created` timestamp wins, mirroring how the Jira web UI itself resolves a
- * same-named attachment (KTD5/KTD7). Returns `undefined` when nothing matches. */
+ * same-named attachment (KTD5/KTD7). Returns `matchCount` alongside the winner (or `undefined`
+ * when nothing matches) in one pass, since callers need both. */
 export function findAttachmentByFilename(
   attachments: JiraAttachment[],
   filename: string,
-): JiraAttachment | undefined {
+): { attachment: JiraAttachment | undefined; matchCount: number } {
   const matches = attachments.filter((a) => a.filename === filename);
-  if (matches.length === 0) return undefined;
-  return matches.reduce((latest, current) => (current.created > latest.created ? current : latest));
+  const attachment = matches.length === 0
+    ? undefined
+    : matches.reduce((latest, current) => (current.created > latest.created ? current : latest));
+  return { attachment, matchCount: matches.length };
+}
+
+/** Renders a byte count as `"1.2 MB"` or `"46 KB"` — shared by `ticket.md`'s attachment list,
+ * the skipped-attachments summary, and `jira_downloadAttachment`'s size-cap rejection message. */
+export function formatFileSize(bytes: number): string {
+  return bytes >= 1_048_576 ? `${(bytes / 1_048_576).toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`;
 }

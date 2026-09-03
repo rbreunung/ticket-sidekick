@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ATTACHMENT_SIZE_LIMIT, classifyAttachmentEligibility, findAttachmentByFilename } from '../utils/attachmentEligibility';
+import { ATTACHMENT_SIZE_LIMIT, classifyAttachmentEligibility, findAttachmentByFilename, formatFileSize } from '../utils/attachmentEligibility';
 import type { JiraAttachment } from '../jira/IJiraClient';
 
 function makeAttachment(overrides: Partial<JiraAttachment>): JiraAttachment {
@@ -52,24 +52,34 @@ describe('classifyAttachmentEligibility', () => {
 });
 
 describe('findAttachmentByFilename (R9/R10, KTD5/KTD7)', () => {
-  it('returns the single attachment matching the exact filename', () => {
+  it('returns the single attachment matching the exact filename, with matchCount 1', () => {
     const target = makeAttachment({ filename: 'report.log', id: '2' });
     const attachments = [makeAttachment({ filename: 'other.log', id: '1' }), target];
 
-    expect(findAttachmentByFilename(attachments, 'report.log')).toBe(target);
+    expect(findAttachmentByFilename(attachments, 'report.log')).toEqual({ attachment: target, matchCount: 1 });
   });
 
-  it('returns undefined when no attachment matches', () => {
+  it('returns attachment: undefined and matchCount 0 when nothing matches', () => {
     const attachments = [makeAttachment({ filename: 'other.log' })];
 
-    expect(findAttachmentByFilename(attachments, 'missing.log')).toBeUndefined();
+    expect(findAttachmentByFilename(attachments, 'missing.log')).toEqual({ attachment: undefined, matchCount: 0 });
   });
 
-  it('picks the attachment with the latest created timestamp when the filename is duplicated', () => {
+  it('picks the attachment with the latest created timestamp when the filename is duplicated, with matchCount 2', () => {
     const older = makeAttachment({ filename: 'report.log', id: '1', created: '2024-01-10T09:00:00.000+0000' });
     const newer = makeAttachment({ filename: 'report.log', id: '2', created: '2024-01-20T09:00:00.000+0000' });
 
-    expect(findAttachmentByFilename([older, newer], 'report.log')).toBe(newer);
-    expect(findAttachmentByFilename([newer, older], 'report.log')).toBe(newer);
+    expect(findAttachmentByFilename([older, newer], 'report.log')).toEqual({ attachment: newer, matchCount: 2 });
+    expect(findAttachmentByFilename([newer, older], 'report.log')).toEqual({ attachment: newer, matchCount: 2 });
+  });
+});
+
+describe('formatFileSize', () => {
+  it('renders sub-megabyte sizes in KB, rounded', () => {
+    expect(formatFileSize(46080)).toBe('45 KB');
+  });
+
+  it('renders megabyte-and-above sizes in MB, to one decimal', () => {
+    expect(formatFileSize(52428800)).toBe('50.0 MB');
   });
 });

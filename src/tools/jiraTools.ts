@@ -9,7 +9,7 @@ import { ensureJiraContextGitignored, loadTicketToWorkspace } from '../participa
 import { logDiag } from '../utils/diagLog';
 import { isSafePathSegment } from './pathSafety';
 import { RecentCallGuard, fingerprint } from './recentCallGuard';
-import { ATTACHMENT_SIZE_LIMIT, findAttachmentByFilename } from '../utils/attachmentEligibility';
+import { ATTACHMENT_SIZE_LIMIT, findAttachmentByFilename, formatFileSize } from '../utils/attachmentEligibility';
 import {
   buildJiraNotConfiguredMessage,
   formatCommentsInFull,
@@ -688,16 +688,22 @@ class LoadTicketTool implements vscode.LanguageModelTool<LoadTicketInput> {
     try {
       // Fetched once here (not inside loadTicketToWorkspace) — this tool has no ticket
       // preview to stream, unlike @jira load, so there's no reason to split the fetch.
-      const issue = await ticketService.getIssue(ticketKey);
-      const comments = await ticketService.getAllComments(ticketKey);
+      // The three ticketKey-scoped calls are independent, so they run in parallel;
+      // getAttachments needs the resolved issue, so it stays outside the batch.
+      const [issue, comments, fieldMeta, remoteLinks] = await Promise.all([
+        ticketService.getIssue(ticketKey),
+        ticketService.getAllComments(ticketKey),
+        ticketService.getFieldMeta(),
+        ticketService.getRemoteLinks(ticketKey),
+      ]);
       const attachments = ticketService.getAttachments(issue);
-      const fieldMeta = await ticketService.getFieldMeta();
-      const remoteLinks = await ticketService.getRemoteLinks(ticketKey);
       const alwaysShowIds = new Set<string>(config.additionalDisplayFields);
       const hiddenIds = new Set<string>(config.hiddenDisplayFields);
       const { downloadedCount, skipped, writeErrors } = await loadTicketToWorkspace(
-        ticketKey, ticketService, issue, comments, attachments, fieldMeta, alwaysShowIds, hiddenIds,
-        config.baseUrl, remoteLinks, workspaceFolder.uri,
+        ticketKey, ticketService,
+        { issue, comments, attachments, remoteLinks },
+        { fieldMeta, alwaysShowIds, hiddenIds, baseUrl: config.baseUrl },
+        workspaceFolder.uri,
       );
       logDiag('jira.tools', 'info', `Loaded — ${ticketKey}`, { ticketKey, downloadedCount, skippedCount: skipped.length });
       return textResult(buildLoadTicketResultMessage(ticketKey, comments.length, downloadedCount, skipped, writeErrors));
@@ -751,13 +757,12 @@ class DownloadAttachmentTool implements vscode.LanguageModelTool<DownloadAttachm
       // prior load's skip list — so this works whether or not a load ever ran for this ticket.
       const issue = await ticketService.getIssue(ticketKey);
       const attachments = ticketService.getAttachments(issue);
-      const matchCount = attachments.filter(a => a.filename === filename).length;
-      const attachment = findAttachmentByFilename(attachments, filename);
+      const { attachment, matchCount } = findAttachmentByFilename(attachments, filename);
       if (!attachment) {
         return textResult(buildAttachmentNotFoundMessage(ticketKey, filename, attachments.map(a => a.filename)));
       }
       if (attachment.size > ATTACHMENT_SIZE_LIMIT) {
-        return textResult(`"${filename}" is ${Math.round(attachment.size / 1_048_576)} MB, over the 100 MB size limit — not downloaded.`);
+        return textResult(`"${filename}" is ${formatFileSize(attachment.size)}, over the 100 MB size limit — not downloaded.`);
       }
 
       const bytes = await ticketService.downloadAttachment(attachment.content);
