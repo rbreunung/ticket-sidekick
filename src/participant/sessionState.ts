@@ -104,7 +104,7 @@ interface TransitionReviewRow {
   resolution: string;
 }
 
-export function buildReviewTable(session: TransitionBatchSession): string {
+export function buildReviewTable(session: TransitionBatchSession, baseUrl?: string): string {
   const hasResolution = session.resolution !== undefined;
 
   const sorted = [...session.tickets].sort((a, b) =>
@@ -115,7 +115,7 @@ export function buildReviewTable(session: TransitionBatchSession): string {
   for (const t of sorted) {
     flatRows.push({
       type: session.issueType,
-      key: t.key,
+      key: formatKeyLink(t.key, baseUrl),
       summary: t.summary,
       currentStatus: t.currentStatus,
       to: t.transitionPath.at(-1)?.to ?? '?',
@@ -124,7 +124,7 @@ export function buildReviewTable(session: TransitionBatchSession): string {
     for (const s of t.subtasks) {
       flatRows.push({
         type: 'Sub-task',
-        key: `↳ ${s.key}`,
+        key: `↳ ${formatKeyLink(s.key, baseUrl)}`,
         summary: s.summary,
         currentStatus: s.currentStatus,
         to: s.transitionPath.at(-1)?.to ?? '?',

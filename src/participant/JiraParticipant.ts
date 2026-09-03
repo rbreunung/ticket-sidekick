@@ -191,7 +191,7 @@ export function createJiraParticipant(
           issueType: selSession.issueType,
         };
         const header = `**Cleanup${selSession.ruleName ? `: ${selSession.ruleName}` : ''}**`;
-        await streamReviewScreen(batchSession, stream, ws, header);
+        await streamReviewScreen(batchSession, stream, ws, header, config.baseUrl);
         return;
       }
     }
@@ -203,7 +203,7 @@ export function createJiraParticipant(
         const result = parseSkipInput(request.prompt, session.tickets);
         if (result.action === 'invalid') {
           const header = `**Cleanup${session.ruleName ? `: ${session.ruleName}` : ''}**`;
-          await streamReviewScreen(session, stream, ws, header);
+          await streamReviewScreen(session, stream, ws, header, config.baseUrl);
           return;
         }
         await ws.update('jira.session.transitionReview', undefined);
@@ -1227,7 +1227,7 @@ export function createJiraParticipant(
             }
           }
           const batchSession: TransitionBatchSession = { tickets, resolution: undefined, ruleName: undefined, issueType: intent.issueType ?? '' };
-          await streamReviewScreen(batchSession, stream, ws, `**Bulk transition → ${targetStatus}**`);
+          await streamReviewScreen(batchSession, stream, ws, `**Bulk transition → ${targetStatus}**`, config.baseUrl);
           return;
         }
         case 'bulkUpdateField': {
