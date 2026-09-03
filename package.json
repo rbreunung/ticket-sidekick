@@ -89,7 +89,7 @@
         "id": "ticket-sidekick.bitbucket",
         "name": "bitbucket",
         "fullName": "Ticket Sidekick — Bitbucket",
-        "description": "Review Bitbucket pull requests with natural language",
+        "description": "Paste a PR URL to review it: @bitbucket <url> — type \"help\" for options",
         "isSticky": true,
         "commands": [
           {

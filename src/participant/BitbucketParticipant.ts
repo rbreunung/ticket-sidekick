@@ -579,9 +579,10 @@ export function createBitbucketParticipant(
         return { metadata: { bitbucketFollowup: greetingState } };
       }
       stream.markdown(
-        'Point me at a PR to review:\n\n' +
+        'Point me at a PR to review — paste the URL right after `@bitbucket`:\n\n' +
         '`@bitbucket https://bitbucket.company.com/projects/PROJ/repos/myrepo/pull-requests/42`\n\n' +
-        'Or run `@bitbucket check` to verify your connection.',
+        'Optionally add a focus question: `@bitbucket <url> -- Did I introduce any regression?`\n\n' +
+        'Not sure what to do? Type `@bitbucket help`.',
       );
       return;
     }
