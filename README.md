@@ -1058,6 +1058,7 @@ Both channels do the same thing with that version — they just differ by the pr
 
 - The workflow **commits the version bump back to the branch** (commit titled with the bare version, matching the existing convention), creates the GitHub Release + bare tag `X.Y.Z` (auto-generated notes, `.vsix` attached), and publishes to the VS Code Marketplace.
 - **release** publishes a normal release; **preview** publishes with `--pre-release` (and marks the GitHub Release as a pre-release) for sideloading/dogfooding.
+- A **release**-channel run also captures those generated notes before packaging, strips the "by @author in #PR" attribution, and prepends the result to `CHANGELOG.md` (committed in the same bump commit) — so the version's entry ships inside that release's own `.vsix` and shows up in VS Code's Extensions view Changelog tab. **preview** runs never touch `CHANGELOG.md`. `scripts/backfill-changelog.mjs` seeded the file once with every prior stable release's notes and stays in the repo as a re-runnable regenerator.
 
 Because every run advances and commits the version, the published version line is **strictly increasing** — a version is never reused, so the Marketplace's "no duplicate version" rule can never bite and you never have to bump by hand. (The Marketplace versions must be plain `x.y.z`; the `--pre-release` _flag_ — not a `-preview` suffix — is what marks a pre-release.) The workflow runs `npm ci → compile → test` first and will not publish a red build.
 
