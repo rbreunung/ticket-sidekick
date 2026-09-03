@@ -34,12 +34,12 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7.0.0
         with:
           node-version: '24'
           cache: 'npm'
@@ -72,6 +72,57 @@ jobs:
           NEW_VERSION="$(node -p "require('./package.json').version")"
           echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "Resolved version: $NEW_VERSION"
+
+      - name: Resolve last stable release
+        id: laststable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Anchor generated notes to the last stable release so preview tags don't truncate
+          # the accumulated changelog. Applied to both channels for consistent behaviour.
+          # If no stable release exists yet the output is empty and the flag is omitted below.
+          LAST_STABLE="$(gh release list --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)"
+          echo "tag=$LAST_STABLE" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch release notes
+        id: notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          LAST_STABLE="${{ steps.laststable.outputs.tag }}"
+          # Captured once, before the .vsix is packaged, so CHANGELOG.md (below) and the
+          # GitHub Release (created later in Publish) both trace to this one fetch.
+          if [ -n "$LAST_STABLE" ]; then
+            gh api "repos/${{ github.repository }}/releases/generate-notes" \
+              -f tag_name="${VERSION}" \
+              -f target_commitish="$(git rev-parse HEAD)" \
+              -f previous_tag_name="${LAST_STABLE}" \
+              --jq '.body' > release-notes.md
+          else
+            gh api "repos/${{ github.repository }}/releases/generate-notes" \
+              -f tag_name="${VERSION}" \
+              -f target_commitish="$(git rev-parse HEAD)" \
+              --jq '.body' > release-notes.md
+          fi
+
+      - name: Update CHANGELOG.md
+        if: inputs.channel == 'release'
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          DATE="$(date -u +%Y-%m-%d)"
+          # Strip GitHub's "by @author in #PR" attribution from each line for the in-editor
+          # copy only — the GitHub Release created later keeps release-notes.md unstripped.
+          {
+            printf '## [%s] - %s\n\n' "${VERSION}" "${DATE}"
+            sed -E 's/ by @[A-Za-z0-9_-]+ in (#[0-9]+|https:\/\/\S+)//' release-notes.md
+            printf '\n'
+            if [ -f CHANGELOG.md ]; then cat CHANGELOG.md; fi
+          } > CHANGELOG.md.new
+          mv CHANGELOG.md.new CHANGELOG.md
 
       - name: Package VSIX
         id: pkg
@@ -112,14 +163,6 @@ jobs:
             echo "::error::Version ${VERSION} already exists. Choose a different bump or version."
             exit 1
           fi
-          # Anchor --notes-start-tag to the last stable release so preview tags don't truncate
-          # the accumulated changelog. Applied to both channels for consistent behaviour.
-          # If no stable release exists yet the variable is empty and the flag is omitted.
-          LAST_STABLE="$(gh release list --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)"
-          NOTES_START_FLAG=""
-          if [ -n "$LAST_STABLE" ]; then
-            NOTES_START_FLAG="--notes-start-tag ${LAST_STABLE}"
-          fi
           # Marketplace first (the irreversible step). Only once it succeeds do we record the
           # bump in the repo and create the GitHub release + bare tag at that commit.
           npx vsce publish ${VSCE_PRERELEASE} --packagePath "${VSIX}" --pat "${VSCE_PAT}"
@@ -128,6 +171,5 @@ jobs:
           gh release create "${VERSION}" ${GH_PRERELEASE} \
             --target "$(git rev-parse HEAD)" \
             --title "${TITLE}" \
-            --generate-notes \
-            ${NOTES_START_FLAG} \
+            --notes-file release-notes.md \
             "${VSIX}"
