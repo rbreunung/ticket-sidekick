@@ -5,7 +5,7 @@ import { TicketService, renderFieldValue } from '../services/TicketService';
 import { TemplateService } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
 import { discoverAndCacheWorkflow, resolveAndApplyTransition } from '../services/WorkflowService';
-import { ensureJiraContextGitignored, loadTicketToWorkspace } from '../participant/jira/loadHandler';
+import { attachmentsDirFor, ensureJiraContextGitignored, loadTicketToWorkspace } from '../participant/jira/loadHandler';
 import { logDiag } from '../utils/diagLog';
 import { isSafePathSegment } from './pathSafety';
 import { RecentCallGuard, fingerprint } from './recentCallGuard';
@@ -766,7 +766,7 @@ class DownloadAttachmentTool implements vscode.LanguageModelTool<DownloadAttachm
       }
 
       const bytes = await ticketService.downloadAttachment(attachment.content);
-      const attachmentsDir = vscode.Uri.joinPath(workspaceFolder.uri, '.jira-context', ticketKey, 'attachments');
+      const attachmentsDir = attachmentsDirFor(workspaceFolder.uri, ticketKey);
       await vscode.workspace.fs.createDirectory(attachmentsDir);
       await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(attachmentsDir, filename), bytes);
       await ensureJiraContextGitignored(workspaceFolder.uri);

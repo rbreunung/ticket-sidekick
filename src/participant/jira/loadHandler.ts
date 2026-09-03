@@ -16,6 +16,18 @@ export function serializeCommentsForLLM(comments: JiraComment[]): string {
   }).join('\n\n---\n\n');
 }
 
+/** `.jira-context/<ticketKey>/` under the workspace root — the one place this path is built,
+ * shared by the full load core below and `jira_downloadAttachment` (U4), which needs the same
+ * layout for a ticket that was never loaded via the full path. */
+export function jiraContextDir(wsRoot: vscode.Uri, ticketKey: string): vscode.Uri {
+  return vscode.Uri.joinPath(wsRoot, '.jira-context', ticketKey);
+}
+
+/** `.jira-context/<ticketKey>/attachments/` — see {@link jiraContextDir}. */
+export function attachmentsDirFor(wsRoot: vscode.Uri, ticketKey: string): vscode.Uri {
+  return vscode.Uri.joinPath(jiraContextDir(wsRoot, ticketKey), 'attachments');
+}
+
 /** Ensures `.jira-context/` is git-ignored at the workspace root — extracted so both the
  * full load core below and `jira_downloadAttachment` (U4, which can run on a ticket that
  * was never loaded) can call it standalone, not only as a step bundled inside a full load
@@ -86,8 +98,8 @@ export async function loadTicketToWorkspace(
   const { toDownload, toSkip } = classifyAttachmentEligibility(attachments);
 
   // Create directories
-  const contextDir = vscode.Uri.joinPath(wsRoot, '.jira-context', ticketKey);
-  const attachmentsDir = vscode.Uri.joinPath(contextDir, 'attachments');
+  const contextDir = jiraContextDir(wsRoot, ticketKey);
+  const attachmentsDir = attachmentsDirFor(wsRoot, ticketKey);
   await vscode.workspace.fs.createDirectory(attachmentsDir);
 
   // Download attachments (max 3 concurrent)
