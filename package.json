@@ -45,6 +45,11 @@
             "sampleRequest": "view PROJ-123"
           },
           {
+            "name": "load",
+            "description": "Download a ticket's description, comments, and attachments into the workspace",
+            "sampleRequest": "load PROJ-123"
+          },
+          {
             "name": "comment",
             "description": "Add a comment to a ticket",
             "sampleRequest": "PROJ-123 thanks, looks good to merge"

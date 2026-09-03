@@ -315,6 +315,7 @@ describe('mapCommandToOperation', () => {
     expect(mapCommandToOperation('field')).toBe('updateField');
     expect(mapCommandToOperation('move')).toBe('transition');
     expect(mapCommandToOperation('search')).toBe('searchJql');
+    expect(mapCommandToOperation('load')).toBe('loadTicket');
   });
 
   it('returns undefined for "check" — it bypasses parseIntent entirely, not this map', () => {
