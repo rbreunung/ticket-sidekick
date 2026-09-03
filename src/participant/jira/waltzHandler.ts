@@ -64,6 +64,10 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent, WaltzReviewRow> = 
   }),
   reviewColumns: WALTZ_REVIEW_COLUMNS,
   itemRefFor: row => row.nameVersion,
+  buildTicketFields: (row, additionalFields) => ({
+    summary: row.summary,
+    fields: { ...additionalFields, labels: row.labels, description: row.descriptionWiki },
+  }),
   // Waltz has no issue-type-fetch-failure pop-up today — omitting onIssueTypeFetchFailed keeps that
   // path log-only, matching current behavior (KTD9).
 };

@@ -15,6 +15,12 @@ import { TRIGGER_CHARS_PATTERN } from './markdownToJiraWiki';
 export const MAX_REPORT_BYTES = 20 * 1024 * 1024; // 20 MB
 export const BATCH_LIMIT = 50;
 
+// Batch email import (KTD7): a per-file report size cap doesn't bound a multi-file batch's total
+// in-memory attachment payload — this caps the sum of selected .eml file sizes, checked before any
+// file is read, so a large batch with sizable attachments can't hold hundreds of MB of base64
+// content in memory before the review screen even renders.
+export const MAX_EMAIL_BATCH_BYTES = 150 * 1024 * 1024; // 150 MB total per batch
+
 // Exported so callers that need to pass the value explicitly (e.g. findAlreadyTicketed) use this
 // single source of truth instead of an independently-declared local copy of "40".
 export const DEFAULT_DEDUP_CHUNK_SIZE = 40; // keeps generated JQL well under Jira's practical query-length limits

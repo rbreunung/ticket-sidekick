@@ -23,8 +23,9 @@ import { streamReviewScreen, executeCleanupBatch, handleRunCleanup } from './jir
 import { handleDiscoverWorkflow } from './jira/workflowHandler';
 import {
   handleCreateFromEmail, handleAddEmailFromChat, handleEmailContentSession,
+  handleEmailTemplateSelection, handleEmailReviewReply,
 } from './jira/emailHandler';
-import type { EmailContentSession } from './sessionState';
+import type { EmailContentSession, EmailTemplateSelectionSession, EmailReviewSession } from './sessionState';
 import {
   handleImportVeracodeReport, handleVeracodeTemplateSelection, handleVeracodeReviewReply,
 } from './jira/veracodeHandler';
@@ -352,14 +353,12 @@ export function createJiraParticipant(
               selectedTemplate, request.model, stream, token, jiraClient, ticketService, ws,
               resume.extraFields,
             );
-          } else if (resume.kind === 'reportImport') {
-            if (resume.descriptorKind === 'veracode') {
-              await handleVeracodeAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws, config.baseUrl);
-            } else {
-              await handleWaltzAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws, config.baseUrl);
-            }
+          } else if (resume.descriptorKind === 'veracode') {
+            await handleVeracodeAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws, config.baseUrl);
+          } else if (resume.descriptorKind === 'waltz') {
+            await handleWaltzAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws, config.baseUrl);
           } else {
-            await handleEmailAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws);
+            await handleEmailAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws, config.baseUrl);
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -633,11 +632,41 @@ export function createJiraParticipant(
       }
     }
 
-    // Email content session — user is confirming/refining ticket content from email
+    // Email content session — user is confirming/posting an email-as-comment (the only remaining
+    // ticket-key-present flow; batch ticket creation routes through the email-template/email-review
+    // tags below instead).
     if (lastResponse.includes('<!-- jira:email-content -->')) {
       const contentSession = ws.get<EmailContentSession>('jira.session.emailContent');
       if (contentSession) {
-        await handleEmailContentSession(request.prompt, contentSession, ticketService, stream, ws, jiraClient);
+        await handleEmailContentSession(request.prompt, contentSession, ticketService, stream, ws);
+        return;
+      }
+    }
+
+    // Batch email import — template/issue-type selection
+    if (lastResponse.includes('<!-- jira:email-template -->')) {
+      const templateSession = ws.get<EmailTemplateSelectionSession>('jira.session.emailTemplateSelection');
+      if (templateSession) {
+        if (isSessionExpired(templateSession)) {
+          await ws.update('jira.session.emailTemplateSelection', undefined);
+          stream.markdown(SESSION_EXPIRED_MESSAGE);
+          return;
+        }
+        await handleEmailTemplateSelection(request.prompt, templateSession, jiraClient, ticketService, stream, ws, config.baseUrl);
+        return;
+      }
+    }
+
+    // Batch email import — review / selection screen
+    if (lastResponse.includes('<!-- jira:email-review -->')) {
+      const reviewSession = ws.get<EmailReviewSession>('jira.session.emailReview');
+      if (reviewSession) {
+        if (isSessionExpired(reviewSession)) {
+          await ws.update('jira.session.emailReview', undefined);
+          stream.markdown(SESSION_EXPIRED_MESSAGE);
+          return;
+        }
+        await handleEmailReviewReply(request.prompt, reviewSession, ticketService, stream, ws, config.baseUrl);
         return;
       }
     }

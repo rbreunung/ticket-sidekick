@@ -66,6 +66,10 @@ const descriptor: ReportImportDescriptor<TestItem, TestRow> = {
   buildRowFields: item => ({ ref: item.ref, labels: [], summary: `Summary ${item.ref}`, descriptionWiki: 'desc' }),
   reviewColumns: [],
   itemRefFor: row => row.ref,
+  buildTicketFields: (row, additionalFields) => ({
+    summary: row.summary,
+    fields: { ...additionalFields, labels: row.labels, description: row.descriptionWiki },
+  }),
 };
 
 const mockStream = () => ({ markdown: vi.fn() });

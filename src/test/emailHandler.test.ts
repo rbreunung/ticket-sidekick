@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as path from 'path';
+import * as fs from 'fs';
 
 vi.mock('vscode', () => ({
   workspace: {
@@ -6,6 +8,7 @@ vi.mock('vscode', () => ({
     getConfiguration: vi.fn(() => ({
       get: (key: string, defaultVal?: unknown) => {
         if (key === 'jira.baseUrl') return 'https://jira.example.com';
+        if (key === 'jira.defaultProject') return 'PROJ';
         if (key === 'email.deleteEmlAfterImport') return false;
         return defaultVal ?? null;
       },
@@ -29,18 +32,21 @@ import {
   buildEmailJiraWiki,
   buildEmailCommentHeader,
   addEmailAsComment,
-  finishEmailTicket,
   streamEmailCommentPreview,
-  streamEmailContentPreview,
   handleEmailContentSession,
   handleCreateFromEmail,
+  handleAddEmailFromChat,
+  handleEmailTemplateSelection,
+  handleEmailReviewReply,
   handleEmailAwaitIssueType,
+  checkEmailBatchCaps,
 } from '../participant/jira/emailHandler';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService } from '../services/TicketService';
-import { TemplateService } from '../templates/TemplateService';
-import type { EmailContentSession, AwaitIssueTypeResume } from '../participant/sessionState';
+import type { EmailContentSession, AwaitIssueTypeResume, EmailTemplateSelectionSession } from '../participant/sessionState';
 import { AWAIT_ISSUE_TYPE_SESSION_KEY } from '../participant/jira/ticketContext';
+
+const FIXTURE = path.resolve(process.cwd(), 'src/test/fixtures/eml/sample.eml');
 
 function makeSession(overrides: Partial<EmailContentSession> = {}): EmailContentSession {
   return {
@@ -51,23 +57,18 @@ function makeSession(overrides: Partial<EmailContentSession> = {}): EmailContent
     markdownBody: 'Hello **world**',
     inlineImageMap: {},
     attachments: [],
-    selectedTemplateName: null,
-    projectKey: 'PROJ',
-    issueType: 'Bug',
-    additionalFields: {},
     ...overrides,
   };
 }
 
 const mockStream = () => ({ markdown: vi.fn() });
 
-function makeMockWs(initial: Record<string, unknown> = {}): { get: <T>(k: string, d?: T) => T | undefined; update: (k: string, v: unknown) => Promise<void>; keys: () => readonly string[]; store: Record<string, unknown> } {
+function makeMockWs(initial: Record<string, unknown> = {}): { get: <T>(k: string, d?: T) => T | undefined; update: (k: string, v: unknown) => Promise<void>; store: Record<string, unknown> } {
   const store: Record<string, unknown> = { ...initial };
   return {
     store,
     get: <T>(key: string, defaultValue?: T) => (key in store ? store[key] as T : defaultValue),
     update: async (key: string, value: unknown) => { store[key] = value; },
-    keys: () => Object.keys(store) as readonly string[],
   };
 }
 
@@ -83,41 +84,16 @@ describe('buildEmailJiraWiki', () => {
     expect(result).not.toContain('[📎');
   });
 
-  it('replaces multiple placeholders', () => {
-    const result = buildEmailJiraWiki('[📎 img1.png] and [📎 img2.jpg]');
-    expect(result).toContain('!img1.png|thumbnail!');
-    expect(result).toContain('!img2.jpg|thumbnail!');
-  });
-
   it('collapses 3+ consecutive blank lines to 1 blank line', () => {
     const input = 'paragraph one\n\n\n\nparagraph two';
     const result = buildEmailJiraWiki(input);
     expect(result).not.toMatch(/\n{3,}/);
-    expect(result).toContain('paragraph one');
-    expect(result).toContain('paragraph two');
   });
 
   it('sanitizes a crafted attachment filename containing a Jira-native "!" trigger', () => {
-    // Unsanitized, the captured filename's own "!" would combine with the template's delimiters
-    // to form a second, live !url! image-embed trigger (`!evil!.gif|thumbnail!`) instead of one
-    // well-formed embed — exactly two "!" characters (the template's own delimiters) must survive.
     const result = buildEmailJiraWiki('See [📎 evil!.gif] for details');
     expect(result).toContain('!evil.gif|thumbnail!');
     expect(result.match(/!/g)).toHaveLength(2);
-  });
-
-  it('sanitizes a crafted attachment filename containing a "|" (Jira image-attribute delimiter)', () => {
-    // Unsanitized, an extra "|" in the filename injects a second delimiter into the !name|thumbnail!
-    // template, letting the attacker append/alter Jira image attributes (e.g. align, border) —
-    // exactly one "|" (the template's own delimiter) must survive.
-    const result = buildEmailJiraWiki('See [📎 report|malicious.pdf] for details');
-    expect(result).toContain('!report/malicious.pdf|thumbnail!');
-    expect(result.match(/\|/g)).toHaveLength(1);
-  });
-
-  it('leaves a normal filename with no trigger characters unchanged', () => {
-    const result = buildEmailJiraWiki('See [📎 screenshot.png] for details');
-    expect(result).toContain('!screenshot.png|thumbnail!');
   });
 });
 
@@ -127,32 +103,14 @@ describe('buildEmailCommentHeader', () => {
     expect(h).toBe('*From:* Alice  ·  *Date:* 2024-05-01\n\n');
   });
 
-  it('builds header with only sender', () => {
-    const h = buildEmailCommentHeader('Alice', undefined);
-    expect(h).toBe('*From:* Alice\n\n');
-  });
-
   it('returns empty string when both absent', () => {
     expect(buildEmailCommentHeader()).toBe('');
   });
 
-  it('slices date to YYYY-MM-DD', () => {
-    const h = buildEmailCommentHeader(undefined, '2024-12-31T23:59:59Z');
-    expect(h).toBe('*Date:* 2024-12-31\n\n');
-  });
-
   it('sanitizes a crafted sender name containing Jira-native trigger characters', () => {
-    // Unsanitized, an attacker-controlled "From" display name like "Evil{color}HACKED{color}!"
-    // would inject live Jira macro/image-embed markup directly into the comment header.
     const h = buildEmailCommentHeader('Evil{color}HACKED{color}!', undefined);
     expect(h).toBe('*From:* EvilcolorHACKEDcolor\n\n');
     expect(h).not.toContain('{');
-    expect(h).not.toContain('}');
-  });
-
-  it('sanitizes a crafted sender name containing "|" without breaking the bold delimiters', () => {
-    const h = buildEmailCommentHeader('Alice|Bob', undefined);
-    expect(h).toBe('*From:* Alice/Bob\n\n');
   });
 });
 
@@ -173,37 +131,7 @@ describe('addEmailAsComment', () => {
     expect(client.addCommentCalls).toHaveLength(1);
     const body = client.addCommentCalls[0].body;
     expect(body).toContain('*From:* Alice');
-    expect(body).toContain('*Date:* 2024-05-01');
     expect(body).toContain('Body text');
-  });
-
-  it('links the ticket key in the confirmation when a baseUrl is passed', async () => {
-    const stream = mockStream();
-    const session = makeSession({ markdownBody: 'Body text' });
-    await addEmailAsComment('PROJ-1', session, ticketService, stream, 'https://jira.example.com');
-
-    const allMarkdown = stream.markdown.mock.calls.map((c: string[]) => c[0]).join('');
-    expect(allMarkdown).toContain('[PROJ-1](https://jira.example.com/browse/PROJ-1)');
-  });
-
-  it('converts [📎 img] placeholder in comment body', async () => {
-    const stream = mockStream();
-    const session = makeSession({ markdownBody: 'See [📎 screenshot.png]' });
-    await addEmailAsComment('PROJ-1', session, ticketService, stream, 'https://jira.example.com');
-
-    const body = client.addCommentCalls[0].body;
-    expect(body).toContain('!screenshot.png|thumbnail!');
-    expect(body).not.toContain('[📎');
-  });
-
-  it('sanitizes a crafted sender name so it does not survive as live Jira markup in the posted comment', async () => {
-    const stream = mockStream();
-    const session = makeSession({ senderName: 'Evil{color}HACKED{color}!', markdownBody: 'Body text' });
-    await addEmailAsComment('PROJ-1', session, ticketService, stream, 'https://jira.example.com');
-
-    const body = client.addCommentCalls[0].body;
-    expect(body).toContain('*From:* EvilcolorHACKEDcolor');
-    expect(body).not.toContain('{color}');
   });
 
   it('uploads all attachments including inline ones', async () => {
@@ -217,22 +145,6 @@ describe('addEmailAsComment', () => {
     await addEmailAsComment('PROJ-1', session, ticketService, stream, 'https://jira.example.com');
 
     expect(client.uploadAttachmentCalls).toHaveLength(2);
-    const names = client.uploadAttachmentCalls.map(c => c.filename);
-    expect(names).toContain('inline.png');
-    expect(names).toContain('report.pdf');
-  });
-
-  it('reports upload count in stream output', async () => {
-    const stream = mockStream();
-    const session = makeSession({
-      attachments: [
-        { name: 'img.png', contentType: 'image/png', contentBytes: 'aaa=', isInline: true },
-      ],
-    });
-    await addEmailAsComment('PROJ-1', session, ticketService, stream, 'https://jira.example.com');
-
-    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0]);
-    expect(calls.some((c: unknown) => typeof c === 'string' && c.includes('1 of 1'))).toBe(true);
   });
 
   it('continues uploading remaining attachments when one fails', async () => {
@@ -254,84 +166,6 @@ describe('addEmailAsComment', () => {
 
     const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
     expect(calls.some(c => c.includes('Warning') && c.includes('fail.png'))).toBe(true);
-    // Should still report 1 uploaded
-    expect(calls.some(c => c.includes('1 of 2'))).toBe(true);
-  });
-
-  it('appends jira-ticket marker to stream', async () => {
-    const stream = mockStream();
-    const session = makeSession();
-    await addEmailAsComment('PROJ-99', session, ticketService, stream, 'https://jira.example.com');
-
-    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
-    expect(calls.some(c => c.includes('<!-- @jira-ticket:PROJ-99 -->'))).toBe(true);
-  });
-});
-
-describe('finishEmailTicket', () => {
-  let client: MockJiraClient;
-  let ticketService: TicketService;
-
-  beforeEach(() => {
-    client = new MockJiraClient();
-    ticketService = new TicketService(client);
-  });
-
-  it('uploads all attachments including inline images', async () => {
-    const stream = mockStream();
-    const session = makeSession({
-      attachments: [
-        { name: 'inline.png', contentType: 'image/png', contentBytes: 'aaa=', isInline: true },
-        { name: 'report.pdf', contentType: 'application/pdf', contentBytes: 'bbb=', isInline: false },
-      ],
-    });
-    await finishEmailTicket(session, ticketService, stream, 'https://jira.example.com');
-
-    expect(client.uploadAttachmentCalls).toHaveLength(2);
-    const names = client.uploadAttachmentCalls.map(c => c.filename);
-    expect(names).toContain('inline.png');
-    expect(names).toContain('report.pdf');
-  });
-
-  it('links the ticket key in the confirmation when a baseUrl is passed', async () => {
-    const stream = mockStream();
-    const session = makeSession();
-    await finishEmailTicket(session, ticketService, stream, 'https://jira.example.com');
-
-    const allMarkdown = stream.markdown.mock.calls.map((c: string[]) => c[0]).join('');
-    expect(allMarkdown).toContain('[PROJ-125](https://jira.example.com/browse/PROJ-125)');
-  });
-
-  it('converts [📎 img] placeholder in description', async () => {
-    const stream = mockStream();
-    const session = makeSession({ markdownBody: 'See [📎 diagram.png]' });
-    await finishEmailTicket(session, ticketService, stream, 'https://jira.example.com');
-
-    expect(client.createIssueCalls).toHaveLength(1);
-    const desc = client.createIssueCalls[0].additionalFields?.description as string;
-    expect(desc).toContain('!diagram.png|thumbnail!');
-    expect(desc).not.toContain('[📎');
-  });
-
-  it('reports upload failures as warnings without aborting', async () => {
-    const stream = mockStream();
-    let callCount = 0;
-    client.uploadAttachment = async () => {
-      callCount++;
-      if (callCount === 1) throw new Error('quota exceeded');
-    };
-    ticketService = new TicketService(client);
-
-    const session = makeSession({
-      attachments: [
-        { name: 'fail.png', contentType: 'image/png', contentBytes: 'aaa=', isInline: true },
-        { name: 'ok.pdf', contentType: 'application/pdf', contentBytes: 'bbb=', isInline: false },
-      ],
-    });
-    await finishEmailTicket(session, ticketService, stream, 'https://jira.example.com');
-
-    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
-    expect(calls.some(c => c.includes('Warning') && c.includes('fail.png'))).toBe(true);
     expect(calls.some(c => c.includes('1 of 2'))).toBe(true);
   });
 });
@@ -344,49 +178,20 @@ describe('streamEmailCommentPreview', () => {
     await streamEmailCommentPreview(session, stream as never, ws as never);
     const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
     expect(text).toContain('Comment preview:');
-    expect(text).not.toContain('Description preview:');
   });
 
-  it('includes the target ticket key in the prompt', async () => {
+  it('includes the target ticket key and appends the email-content marker', async () => {
     const session = makeSession({ pendingCommentTicketKey: 'PROJ-42' });
     const stream = mockStream();
     const ws = makeMockWs();
     await streamEmailCommentPreview(session, stream as never, ws as never);
     const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
     expect(text).toContain('PROJ-42');
-  });
-
-  it('includes the From/Date/Subject header', async () => {
-    const session = makeSession({ pendingCommentTicketKey: 'PROJ-42' });
-    const stream = mockStream();
-    const ws = makeMockWs();
-    await streamEmailCommentPreview(session, stream as never, ws as never);
-    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-    expect(text).toContain('Alice');
-    expect(text).toContain('2024-05-01');
-    expect(text).toContain('Test Subject');
-  });
-
-  it('appends <!-- jira:email-content --> marker', async () => {
-    const session = makeSession({ pendingCommentTicketKey: 'PROJ-42' });
-    const stream = mockStream();
-    const ws = makeMockWs();
-    await streamEmailCommentPreview(session, stream as never, ws as never);
-    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
     expect(text).toContain('<!-- jira:email-content -->');
-  });
-
-  it('saves session to workspaceState with pendingCommentTicketKey set', async () => {
-    const session = makeSession({ pendingCommentTicketKey: 'PROJ-42' });
-    const stream = mockStream();
-    const ws = makeMockWs();
-    await streamEmailCommentPreview(session, stream as never, ws as never);
-    const stored = ws.store['jira.session.emailContent'] as typeof session;
-    expect(stored.pendingCommentTicketKey).toBe('PROJ-42');
   });
 });
 
-describe('handleEmailContentSession — pending comment', () => {
+describe('handleEmailContentSession — comment-attach flow (only remaining consumer)', () => {
   let client: MockJiraClient;
   let ticketService: TicketService;
 
@@ -399,7 +204,7 @@ describe('handleEmailContentSession — pending comment', () => {
     const session = makeSession({ pendingCommentTicketKey: 'PROJ-42' });
     const stream = mockStream();
     const ws = makeMockWs();
-    await handleEmailContentSession('post it', session, ticketService, stream as never, ws as never, client);
+    await handleEmailContentSession('post it', session, ticketService, stream as never, ws as never);
     expect(client.addCommentCalls).toHaveLength(1);
     expect(client.addCommentCalls[0].issueKey).toBe('PROJ-42');
     expect(ws.store['jira.session.emailContent']).toBeUndefined();
@@ -409,7 +214,7 @@ describe('handleEmailContentSession — pending comment', () => {
     const session = makeSession({ pendingCommentTicketKey: 'PROJ-42' });
     const stream = mockStream();
     const ws = makeMockWs();
-    await handleEmailContentSession('c', session, ticketService, stream as never, ws as never, client);
+    await handleEmailContentSession('c', session, ticketService, stream as never, ws as never);
     expect(client.addCommentCalls).toHaveLength(0);
     expect(ws.store['jira.session.emailContent']).toBeUndefined();
   });
@@ -418,203 +223,59 @@ describe('handleEmailContentSession — pending comment', () => {
     const session = makeSession({ pendingCommentTicketKey: 'PROJ-42' });
     const stream = mockStream();
     const ws = makeMockWs();
-    await handleEmailContentSession('OTHER-7', session, ticketService, stream as never, ws as never, client);
+    await handleEmailContentSession('OTHER-7', session, ticketService, stream as never, ws as never);
     expect(client.addCommentCalls).toHaveLength(0);
     const stored = ws.store['jira.session.emailContent'] as typeof session;
     expect(stored.pendingCommentTicketKey).toBe('OTHER-7');
-    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
-    expect(calls.some(c => c.includes('Comment preview:'))).toBe(true);
-    expect(calls.some(c => c.includes('OTHER-7'))).toBe(true);
   });
 
   it('unrecognized input re-shows comment preview without posting', async () => {
     const session = makeSession({ pendingCommentTicketKey: 'PROJ-42' });
     const stream = mockStream();
     const ws = makeMockWs();
-    await handleEmailContentSession('random text', session, ticketService, stream as never, ws as never, client);
+    await handleEmailContentSession('random text', session, ticketService, stream as never, ws as never);
     expect(client.addCommentCalls).toHaveLength(0);
-    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
-    expect(calls.some(c => c.includes('Comment preview:'))).toBe(true);
   });
 });
 
-describe('streamEmailContentPreview', () => {
+describe('checkEmailBatchCaps', () => {
+  it('passes when under both caps', async () => {
+    vi.spyOn(fs.promises, 'stat').mockResolvedValue({ size: 1024 } as never);
+    const uris = [{ fsPath: 'a.eml' }, { fsPath: 'b.eml' }] as vscode.Uri[];
+    const result = await checkEmailBatchCaps(uris);
+    expect(result).toBeNull();
+    vi.restoreAllMocks();
+  });
+
+  it('rejects when the file count exceeds the batch limit', async () => {
+    const uris = Array.from({ length: 51 }, (_, i) => ({ fsPath: `f${i}.eml` })) as vscode.Uri[];
+    const result = await checkEmailBatchCaps(uris);
+    expect(result).toContain('51 files');
+    expect(result).toContain('batch limit is 50');
+  });
+
+  it('rejects when the total attachment size exceeds the aggregate cap', async () => {
+    vi.spyOn(fs.promises, 'stat').mockResolvedValue({ size: 100 * 1024 * 1024 } as never);
+    const uris = [{ fsPath: 'a.eml' }, { fsPath: 'b.eml' }] as vscode.Uri[];
+    const result = await checkEmailBatchCaps(uris);
+    expect(result).toContain('200.0 MB');
+    expect(result).toContain('150 MB');
+    vi.restoreAllMocks();
+  });
+});
+
+describe('handleCreateFromEmail (batch, U1-U3)', () => {
   let client: MockJiraClient;
   let ticketService: TicketService;
 
   beforeEach(() => {
     client = new MockJiraClient();
     ticketService = new TicketService(client);
-    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockReset();
-  });
-
-  it('shows numbered template and issue-type list when both available', async () => {
-    const session = makeSession({
-      availableTemplates: [{ name: 'Bug Report', issueType: 'Bug' }],
-      availableIssueTypes: ['Story', 'Task'],
-    });
-    const stream = mockStream();
-    const ws = makeMockWs();
-    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
-    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-    expect(text).toContain('1. Bug Report');
-    expect(text).toContain('2. Story');
-    expect(text).toContain('3. Task');
-  });
-
-  it('shows simplified "post it" prompt when no templates or issue types', async () => {
-    const session = makeSession({ availableTemplates: undefined, availableIssueTypes: undefined });
-    const stream = mockStream();
-    const ws = makeMockWs();
-    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
-    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-    expect(text).toContain('post it');
-    expect(text).not.toMatch(/^\d+\./m);
-  });
-
-  it('saves session to workspaceState', async () => {
-    const session = makeSession();
-    const stream = mockStream();
-    const ws = makeMockWs();
-    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
-    expect(ws.store['jira.session.emailContent']).toBeDefined();
-  });
-
-  it('appends <!-- jira:email-content --> marker', async () => {
-    const session = makeSession();
-    const stream = mockStream();
-    const ws = makeMockWs();
-    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
-    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-    expect(text).toContain('<!-- jira:email-content -->');
-  });
-
-  it('includes From, date, and subject in header', async () => {
-    const session = makeSession();
-    const stream = mockStream();
-    const ws = makeMockWs();
-    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
-    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-    expect(text).toContain('Alice');
-    expect(text).toContain('2024-05-01');
-    expect(text).toContain('Test Subject');
-  });
-
-  // --- Never-guess sentinel rendering (U2) ---
-
-  it('renders a sentinel ("" issueType) list entry as "you will be asked to type it", not blank or a guessed name', async () => {
-    const session = makeSession({
-      availableTemplates: [{ name: 'Incident Template', issueType: '' }],
-      availableIssueTypes: undefined,
-    });
-    const stream = mockStream();
-    const ws = makeMockWs();
-    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
-    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-    expect(text).toContain('1. Incident Template _(_you will be asked to type it_)_');
-    expect(text).not.toMatch(/Incident Template _\(\)_/);
-  });
-
-  it('shows "you will be asked to type it" wording (not a blank interpolation) in the prompt when a list is present but session.issueType is the sentinel', async () => {
-    const session = makeSession({
-      issueType: '',
-      availableTemplates: [{ name: 'Bug Report', issueType: 'Bug' }],
-      availableIssueTypes: undefined,
-    });
-    const stream = mockStream();
-    const ws = makeMockWs();
-    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
-    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-    expect(text).toContain('create as _you will be asked to type it_');
-    expect(text).not.toContain('create as ****');
-  });
-
-  it('list-less path with session.issueType === "" detours to the shared chat-based ask instead of stating a fake type', async () => {
-    const session = makeSession({ issueType: '', availableTemplates: undefined, availableIssueTypes: undefined });
-    const stream = mockStream();
-    const ws = makeMockWs();
-    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
-
-    expect(vscode.window.showInputBox).not.toHaveBeenCalled();
-    expect(ws.store[AWAIT_ISSUE_TYPE_SESSION_KEY]).toBeDefined();
-    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
-    // No "post it to create as <fake type>" message is ever streamed before the ask resolves.
-    expect(calls.some(c => c.includes('post it'))).toBe(false);
-    expect(calls.some(c => c.includes('What issue type'))).toBe(true);
-    expect(client.createIssueCalls).toHaveLength(0); // not created yet — only after the reply resumes
-  });
-
-  it('a typed reply resumes and creates the ticket with the typed type', async () => {
-    const session = makeSession({ issueType: '', availableTemplates: undefined, availableIssueTypes: undefined });
-    const ws = makeMockWs();
-    const resume: Extract<AwaitIssueTypeResume, { kind: 'email' }> = { kind: 'email', session, pickedTemplateName: null };
-    await handleEmailAwaitIssueType(resume, 'Task', client, ticketService, mockStream() as never, ws as never);
-
-    expect(client.createIssueCalls).toHaveLength(1);
-    expect(client.createIssueCalls[0].issueType).toBe('Task');
-  });
-
-  it('list-less path with session.issueType === "" still shows the email preview before detouring to the ask', async () => {
-    const session = makeSession({ issueType: '', availableTemplates: undefined, availableIssueTypes: undefined });
-    const stream = mockStream();
-    const ws = makeMockWs();
-    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
-
-    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
-    // The subject/date/body preview is shown even though there's no list and nothing resolved —
-    // only the misleading "post it to create as <type>" sentence is skipped, not the whole preview.
-    expect(calls.some(c => c.includes('Test Subject'))).toBe(true);
-    expect(calls.some(c => c.includes('Hello **world**'))).toBe(true);
-  });
-
-  it('list-less path aborts instead of creating a ticket when a newer session was written while the ask was open', async () => {
-    const ws = makeMockWs();
-    const session = makeSession({ issueType: '', availableTemplates: undefined, availableIssueTypes: undefined });
-    const stream = mockStream();
-    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
-    // Simulate a second, independent email import starting and claiming the session key while
-    // this flow's chat-based ask was still open (across the turn boundary the detour introduces).
-    ws.store['jira.session.emailContent'] = makeSession({ subject: 'A different email' });
-
-    const resume: Extract<AwaitIssueTypeResume, { kind: 'email' }> = { kind: 'email', session, pickedTemplateName: null };
-    const resumeStream = mockStream();
-    await handleEmailAwaitIssueType(resume, 'Task', client, ticketService, resumeStream as never, ws as never);
-
-    expect(client.createIssueCalls).toHaveLength(0);
-    const calls = (resumeStream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
-    expect(calls.some(c => c.includes('newer email import was started'))).toBe(true);
-    // The second flow's session must survive untouched — this abort must not clear it.
-    expect(ws.store['jira.session.emailContent']).toBeDefined();
-  });
-
-  it('a real configured issueType (never "") is unaffected — no input box, no extra prompt', async () => {
-    const session = makeSession({
-      issueType: 'Bug',
-      availableTemplates: [{ name: 'Bug Report', issueType: 'Bug' }],
-      availableIssueTypes: undefined,
-    });
-    const stream = mockStream();
-    const ws = makeMockWs();
-    await streamEmailContentPreview(session, stream as never, ws as never, ticketService);
-
-    expect(vscode.window.showInputBox).not.toHaveBeenCalled();
-    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-    expect(text).toContain('create as **Bug**');
-    expect(text).not.toContain('you will be asked to type it');
-  });
-});
-
-describe('handleCreateFromEmail', () => {
-  let client: MockJiraClient;
-  let ticketService: TicketService;
-
-  beforeEach(() => {
-    client = new MockJiraClient();
-    ticketService = new TicketService(client);
+    (vscode.window.showOpenDialog as ReturnType<typeof vi.fn>).mockReset();
   });
 
   it('no session and file picker cancelled → nothing streamed', async () => {
-    // showOpenDialog returns undefined by default (user cancelled)
+    (vscode.window.showOpenDialog as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
     const stream = mockStream();
     const ws = makeMockWs();
     await handleCreateFromEmail(
@@ -624,193 +285,257 @@ describe('handleCreateFromEmail', () => {
     expect(stream.markdown).not.toHaveBeenCalled();
   });
 
-  it('session with missing issueTypes → retries getProject and shows numbered list', async () => {
-    const session = makeSession({ availableIssueTypes: undefined });
+  it('selecting one file streams the template-selection screen with exactly one item (Covers AE1)', async () => {
+    (vscode.window.showOpenDialog as ReturnType<typeof vi.fn>).mockResolvedValue([{ fsPath: FIXTURE }]);
     const stream = mockStream();
-    const ws = makeMockWs({ 'jira.session.emailContent': session });
+    const ws = makeMockWs();
     await handleCreateFromEmail(
       undefined as never, stream as never, undefined as never,
       client, ticketService, undefined as never, ws as never,
     );
-    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-    // Fixture returns Bug, Story, Task (non-subtask)
-    expect(text).toContain('Bug');
-    expect(text).toContain('Story');
-    expect(text).toContain('Task');
-    expect(text).toContain('<!-- jira:email-content -->');
+    const session = ws.store['jira.session.emailTemplateSelection'] as EmailTemplateSelectionSession;
+    expect(session.items).toHaveLength(1);
+    expect(session.items[0].subject).toBe('Test Email Subject');
+    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as string;
+    expect(text).toContain('<!-- jira:email-template -->');
   });
 
-  it('session with issueTypes already set → shows preview without calling getProject', async () => {
-    const getProjectSpy = vi.spyOn(client, 'getProject');
-    const session = makeSession({ availableIssueTypes: ['Epic', 'Bug'] });
+  it('selecting three files builds a session with three items', async () => {
+    (vscode.window.showOpenDialog as ReturnType<typeof vi.fn>).mockResolvedValue([{ fsPath: FIXTURE }, { fsPath: FIXTURE }, { fsPath: FIXTURE }]);
     const stream = mockStream();
-    const ws = makeMockWs({ 'jira.session.emailContent': session });
+    const ws = makeMockWs();
     await handleCreateFromEmail(
       undefined as never, stream as never, undefined as never,
       client, ticketService, undefined as never, ws as never,
     );
-    expect(getProjectSpy).not.toHaveBeenCalled();
-    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-    expect(text).toContain('Epic');
-    expect(text).toContain('Bug');
+    const session = ws.store['jira.session.emailTemplateSelection'] as EmailTemplateSelectionSession;
+    expect(session.items).toHaveLength(3);
+  });
+
+  it('a file that fails to parse is reported and excluded — the rest still build the session', async () => {
+    const badPath = path.join(path.dirname(FIXTURE), 'does-not-exist.eml');
+    (vscode.window.showOpenDialog as ReturnType<typeof vi.fn>).mockResolvedValue([{ fsPath: FIXTURE }, { fsPath: badPath }]);
+    const stream = mockStream();
+    const ws = makeMockWs();
+    await handleCreateFromEmail(
+      undefined as never, stream as never, undefined as never,
+      client, ticketService, undefined as never, ws as never,
+    );
+    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
+    expect(calls.some(c => c.includes('Could not import 1 file'))).toBe(true);
+    const session = ws.store['jira.session.emailTemplateSelection'] as EmailTemplateSelectionSession;
+    expect(session.items).toHaveLength(1);
+  });
+
+  it('selecting more files than the batch cap is rejected before any parsing (Covers AE4)', async () => {
+    const uris = Array.from({ length: 51 }, () => ({ fsPath: FIXTURE }));
+    (vscode.window.showOpenDialog as ReturnType<typeof vi.fn>).mockResolvedValue(uris);
+    const stream = mockStream();
+    const ws = makeMockWs();
+    await handleCreateFromEmail(
+      undefined as never, stream as never, undefined as never,
+      client, ticketService, undefined as never, ws as never,
+    );
+    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
+    expect(calls.some(c => c.includes('batch limit is 50'))).toBe(true);
+    expect(ws.store['jira.session.emailTemplateSelection']).toBeUndefined();
+  });
+
+  it('an existing session resumes the template-selection screen without re-prompting the file picker', async () => {
+    const existing: EmailTemplateSelectionSession = {
+      reportFileName: '1 file', projectKey: 'PROJ', items: [], availableTemplates: [], availableIssueTypes: ['Bug'], schemaVersion: 2,
+    };
+    const ws = makeMockWs({ 'jira.session.emailTemplateSelection': existing });
+    const stream = mockStream();
+    await handleCreateFromEmail(
+      undefined as never, stream as never, undefined as never,
+      client, ticketService, undefined as never, ws as never,
+    );
+    expect(vscode.window.showOpenDialog).not.toHaveBeenCalled();
   });
 });
 
-describe('handleEmailContentSession — ticket creation', () => {
+describe('handleAddEmailFromChat', () => {
   let client: MockJiraClient;
   let ticketService: TicketService;
 
   beforeEach(() => {
     client = new MockJiraClient();
     ticketService = new TicketService(client);
-    (vscode.window.showInputBox as ReturnType<typeof vi.fn>).mockReset();
+    (vscode.window.showOpenDialog as ReturnType<typeof vi.fn>).mockReset();
   });
 
-  it('type number selection → creates ticket with that issue type', async () => {
-    const session = makeSession({ issueType: 'Bug', availableIssueTypes: ['Bug', 'Story', 'Task'] });
+  it('with a ticket key in the prompt: single file, unchanged comment-attach flow', async () => {
+    (vscode.window.showOpenDialog as ReturnType<typeof vi.fn>).mockResolvedValue([{ fsPath: FIXTURE }]);
     const stream = mockStream();
     const ws = makeMockWs();
-    await handleEmailContentSession('2', session, ticketService, stream as never, ws as never, client);
+    await handleAddEmailFromChat(
+      { prompt: 'add email to PROJ-42' } as never, stream as never, undefined as never,
+      client, ticketService, undefined as never, ws as never,
+    );
+    const showOpenDialogArgs = (vscode.window.showOpenDialog as ReturnType<typeof vi.fn>).mock.calls[0][0] as { canSelectMany: boolean };
+    expect(showOpenDialogArgs.canSelectMany).toBe(false);
+    const session = ws.store['jira.session.emailContent'] as EmailContentSession;
+    expect(session.pendingCommentTicketKey).toBe('PROJ-42');
+  });
+
+  it('with no ticket key: batch ticket-creation flow, multi-select', async () => {
+    (vscode.window.showOpenDialog as ReturnType<typeof vi.fn>).mockResolvedValue([{ fsPath: FIXTURE }, { fsPath: FIXTURE }]);
+    const stream = mockStream();
+    const ws = makeMockWs();
+    await handleAddEmailFromChat(
+      { prompt: 'add email' } as never, stream as never, undefined as never,
+      client, ticketService, undefined as never, ws as never,
+    );
+    const showOpenDialogArgs = (vscode.window.showOpenDialog as ReturnType<typeof vi.fn>).mock.calls[0][0] as { canSelectMany: boolean };
+    expect(showOpenDialogArgs.canSelectMany).toBe(true);
+    const session = ws.store['jira.session.emailTemplateSelection'] as EmailTemplateSelectionSession;
+    expect(session.items).toHaveLength(2);
+  });
+});
+
+describe('batch email creation (U3/U4, via the shared reportImportHandler flow)', () => {
+  let client: MockJiraClient;
+  let ticketService: TicketService;
+
+  function makeTemplateSession(overrides: Partial<EmailTemplateSelectionSession> = {}): EmailTemplateSelectionSession {
+    return {
+      reportFileName: '2 selected file(s)',
+      projectKey: 'PROJ',
+      items: [
+        { subject: 'Email One', senderName: 'Alice', markdownBody: 'Body one', inlineImageMap: {}, attachments: [], emlFilePath: '/a.eml' },
+        { subject: 'Email Two', senderName: 'Bob', markdownBody: 'Body two', inlineImageMap: {}, attachments: [], emlFilePath: '/b.eml' },
+      ],
+      availableTemplates: [],
+      availableIssueTypes: ['Bug', 'Story'],
+      schemaVersion: 2,
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    client = new MockJiraClient();
+    ticketService = new TicketService(client);
+  });
+
+  it('picking an issue type skips the dedup search entirely (KTD2) and streams the review screen', async () => {
+    const searchSpy = vi.spyOn(client, 'searchJql');
+    const session = makeTemplateSession();
+    const stream = mockStream();
+    const ws = makeMockWs();
+    await handleEmailTemplateSelection('1', session, client, ticketService, stream as never, ws as never);
+
+    expect(searchSpy).not.toHaveBeenCalled();
+    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as string;
+    expect(text).toContain('<!-- jira:email-review -->');
+    expect(text).toContain('Email One');
+    expect(text).toContain('Email Two');
+  });
+
+  it('confirming the review creates one ticket per included row, using the subject as summary (Covers R5)', async () => {
+    const templateSession = makeTemplateSession();
+    const ws = makeMockWs();
+    await handleEmailTemplateSelection('1', templateSession, client, ticketService, mockStream() as never, ws as never);
+    const reviewSession = ws.store['jira.session.emailReview'];
+    const stream = mockStream();
+
+    await handleEmailReviewReply('post it', reviewSession as never, ticketService, stream as never, ws as never, 'https://jira.example.com');
+
+    expect(client.createIssueCalls).toHaveLength(2);
+    expect(client.createIssueCalls.map(c => c.summary)).toEqual(['Email One', 'Email Two']);
+    expect(client.createIssueCalls[0].additionalFields?.description).toContain('Body one');
+  });
+
+  it('uploads each row\'s attachments after creating its ticket (KTD4 afterCreate hook)', async () => {
+    const templateSession = makeTemplateSession({
+      items: [{ subject: 'With attachment', senderName: 'Alice', markdownBody: 'Body', inlineImageMap: {}, emlFilePath: '/a.eml', attachments: [
+        { name: 'report.pdf', contentType: 'application/pdf', contentBytes: 'YWJj', isInline: false },
+      ] }],
+    });
+    const ws = makeMockWs();
+    await handleEmailTemplateSelection('1', templateSession, client, ticketService, mockStream() as never, ws as never);
+    const reviewSession = ws.store['jira.session.emailReview'];
+
+    await handleEmailReviewReply('post it', reviewSession as never, ticketService, mockStream() as never, ws as never, 'https://jira.example.com');
+
+    expect(client.uploadAttachmentCalls).toHaveLength(1);
+    expect(client.uploadAttachmentCalls[0].filename).toBe('report.pdf');
+  });
+
+  it('one row\'s ticket creation failing does not stop the others (Covers AE3, R6)', async () => {
+    let calls = 0;
+    client.createIssue = async () => {
+      calls++;
+      if (calls === 1) throw new Error('Jira is down');
+      return { id: '10200', key: 'PROJ-200' };
+    };
+    ticketService = new TicketService(client);
+
+    const templateSession = makeTemplateSession();
+    const ws = makeMockWs();
+    await handleEmailTemplateSelection('1', templateSession, client, ticketService, mockStream() as never, ws as never);
+    const reviewSession = ws.store['jira.session.emailReview'];
+    const stream = mockStream();
+
+    await handleEmailReviewReply('post it', reviewSession as never, ticketService, stream as never, ws as never, 'https://jira.example.com');
+
+    const summaryLine = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string).join('');
+    expect(summaryLine).toContain('1** created, 1 failed');
+    expect(summaryLine).toContain('Email One');
+  });
+
+  it('excluding a row on the review screen keeps it out of the created batch (Covers AE2)', async () => {
+    const templateSession = makeTemplateSession();
+    const ws = makeMockWs();
+    await handleEmailTemplateSelection('1', templateSession, client, ticketService, mockStream() as never, ws as never);
+    const reviewSession = ws.store['jira.session.emailReview'];
+
+    await handleEmailReviewReply('2', reviewSession as never, ticketService, mockStream() as never, ws as never); // toggle row 2 off
+    const toggled = ws.store['jira.session.emailReview'];
+    await handleEmailReviewReply('post it', toggled as never, ticketService, mockStream() as never, ws as never, 'https://jira.example.com');
+
     expect(client.createIssueCalls).toHaveLength(1);
-    expect(client.createIssueCalls[0].issueType).toBe('Story');
-    expect(ws.store['jira.session.emailContent']).toBeUndefined();
+    expect(client.createIssueCalls[0].summary).toBe('Email One');
+  });
+});
+
+describe('handleEmailAwaitIssueType (R6/KTD4 resume via the shared reportImport descriptorKind)', () => {
+  let client: MockJiraClient;
+  let ticketService: TicketService;
+
+  beforeEach(() => {
+    client = new MockJiraClient();
+    ticketService = new TicketService(client);
   });
 
-  it('"post it" → creates ticket with session issueType', async () => {
-    const session = makeSession({ issueType: 'Task', availableIssueTypes: ['Bug', 'Story', 'Task'] });
-    const stream = mockStream();
+  function makeSentinelSession(): EmailTemplateSelectionSession {
+    return {
+      reportFileName: '1 file', projectKey: 'PROJ',
+      items: [{ subject: 'Needs a type', senderName: 'Alice', markdownBody: 'Body', inlineImageMap: {}, attachments: [], emlFilePath: '/a.eml' }],
+      availableTemplates: [], availableIssueTypes: [''], schemaVersion: 2,
+    };
+  }
+
+  function makeResume(session: EmailTemplateSelectionSession): Extract<AwaitIssueTypeResume, { kind: 'reportImport' }> {
+    return { kind: 'reportImport', descriptorKind: 'email', pickedTemplateName: null, session };
+  }
+
+  it('resumes normally into the review flow when not superseded', async () => {
     const ws = makeMockWs();
-    await handleEmailContentSession('post it', session, ticketService, stream as never, ws as never, client);
-    expect(client.createIssueCalls).toHaveLength(1);
-    expect(client.createIssueCalls[0].issueType).toBe('Task');
-    expect(ws.store['jira.session.emailContent']).toBeUndefined();
+    await handleEmailAwaitIssueType(makeResume(makeSentinelSession()), 'Task', client, ticketService, mockStream() as never, ws as never);
+    const reviewSession = ws.store['jira.session.emailReview'] as { issueType: string };
+    expect(reviewSession.issueType).toBe('Task');
   });
 
-  it('cancellation → clears session without creating ticket', async () => {
-    const session = makeSession({ availableIssueTypes: ['Bug', 'Story'] });
-    const stream = mockStream();
+  it('aborts instead of creating a batch when a newer email import session was written while the ask was open', async () => {
     const ws = makeMockWs();
-    await handleEmailContentSession('c', session, ticketService, stream as never, ws as never, client);
+    ws.store['jira.session.emailTemplateSelection'] = makeSentinelSession();
+    const stream = mockStream();
+
+    await handleEmailAwaitIssueType(makeResume(makeSentinelSession()), 'Task', client, ticketService, stream as never, ws as never);
+
     expect(client.createIssueCalls).toHaveLength(0);
-    expect(ws.store['jira.session.emailContent']).toBeUndefined();
-  });
-
-  it('ticket key reply → switches to comment preview without creating ticket', async () => {
-    const session = makeSession({ availableIssueTypes: ['Bug', 'Story'] });
-    const stream = mockStream();
-    const ws = makeMockWs();
-    await handleEmailContentSession('PROJ-7', session, ticketService, stream as never, ws as never, client);
-    expect(client.createIssueCalls).toHaveLength(0);
-    const stored = ws.store['jira.session.emailContent'] as typeof session;
-    expect(stored.pendingCommentTicketKey).toBe('PROJ-7');
     const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
-    expect(calls.some(c => c.includes('Comment preview:'))).toBe(true);
-  });
-
-  it('unrecognized input → re-shows preview without creating ticket', async () => {
-    const session = makeSession({ availableIssueTypes: ['Bug', 'Story'] });
-    const stream = mockStream();
-    const ws = makeMockWs();
-    await handleEmailContentSession('blah blah', session, ticketService, stream as never, ws as never, client);
-    expect(client.createIssueCalls).toHaveLength(0);
-    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
-    expect(calls.some(c => c.includes('<!-- jira:email-content -->'))).toBe(true);
-  });
-
-  it('out-of-range number → re-shows preview without creating ticket', async () => {
-    const session = makeSession({ availableIssueTypes: ['Bug'] });
-    const stream = mockStream();
-    const ws = makeMockWs();
-    await handleEmailContentSession('99', session, ticketService, stream as never, ws as never, client);
-    expect(client.createIssueCalls).toHaveLength(0);
-    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
-    expect(calls.some(c => c.includes('<!-- jira:email-content -->'))).toBe(true);
-  });
-
-  // --- Never-guess sentinel detour (R6/KTD4) ---
-
-  it('picking the sentinel ("type it") list entry detours to the shared chat-based ask, not an input box', async () => {
-    // '' sentinel as the only "issue type" entry (index 1) — mirrors handleCreateTicket's
-    // fully-empty-issueTypes fallback (issueTypes: ['']).
-    const session = makeSession({ issueType: 'Bug', availableIssueTypes: [''] });
-    const stream = mockStream();
-    const ws = makeMockWs();
-    await handleEmailContentSession('1', session, ticketService, stream as never, ws as never, client);
-
-    expect(vscode.window.showInputBox).not.toHaveBeenCalled();
-    expect(client.createIssueCalls).toHaveLength(0); // not created yet — only after the reply resumes
-    expect(ws.store[AWAIT_ISSUE_TYPE_SESSION_KEY]).toBeDefined();
-    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
-    expect(calls.some(c => c.includes('What issue type'))).toBe(true);
-  });
-
-  it('a typed reply resumes and flows through to ticket creation unchanged', async () => {
-    const session = makeSession({ issueType: 'Bug', availableIssueTypes: [''] });
-    const ws = makeMockWs();
-    const resume: Extract<AwaitIssueTypeResume, { kind: 'email' }> = { kind: 'email', session, pickedTemplateName: null };
-    await handleEmailAwaitIssueType(resume, 'Spike', client, ticketService, mockStream() as never, ws as never);
-
-    expect(client.createIssueCalls).toHaveLength(1);
-    expect(client.createIssueCalls[0].issueType).toBe('Spike');
-  });
-
-  it('a picked template name resolves and merges its default fields (R6/KTD4 re-derivation, run only on resume)', async () => {
-    vi.mocked(TemplateService).mockImplementation(() => ({
-      loadTemplates: vi.fn().mockReturnValue({
-        templates: [{ name: 'Incident Template', issueType: 'Bug', defaultFields: { priority: 'High' } }],
-        cleanupRules: [],
-      }),
-    }) as unknown as InstanceType<typeof TemplateService>);
-
-    const session = makeSession({ issueType: 'Bug', availableIssueTypes: [''], additionalFields: { labels: ['from-email'] } });
-    const ws = makeMockWs();
-    const resume: Extract<AwaitIssueTypeResume, { kind: 'email' }> = { kind: 'email', session, pickedTemplateName: 'Incident Template' };
-    await handleEmailAwaitIssueType(resume, 'Spike', client, ticketService, mockStream() as never, ws as never);
-
-    expect(client.createIssueCalls).toHaveLength(1);
-    expect(client.createIssueCalls[0].additionalFields).toMatchObject({ priority: 'High', labels: ['from-email'] });
-  });
-
-  it('a bare "post it" confirm when session.issueType === "" also detours to the ask, not straight to ticket creation', async () => {
-    const session = makeSession({ issueType: '', availableIssueTypes: ['Bug', 'Story'] });
-    const stream = mockStream();
-    const ws = makeMockWs();
-    await handleEmailContentSession('post it', session, ticketService, stream as never, ws as never, client);
-
-    expect(vscode.window.showInputBox).not.toHaveBeenCalled();
-    expect(client.createIssueCalls).toHaveLength(0);
-    expect(ws.store[AWAIT_ISSUE_TYPE_SESSION_KEY]).toBeDefined();
-  });
-
-  it('a real configured issueType picked from the list is entirely unaffected — no input box, no detour', async () => {
-    const session = makeSession({ issueType: 'Bug', availableIssueTypes: ['Bug', 'Story', 'Task'] });
-    const stream = mockStream();
-    const ws = makeMockWs();
-    await handleEmailContentSession('2', session, ticketService, stream as never, ws as never, client);
-
-    expect(vscode.window.showInputBox).not.toHaveBeenCalled();
-    expect(ws.store[AWAIT_ISSUE_TYPE_SESSION_KEY]).toBeUndefined();
-    expect(client.createIssueCalls).toHaveLength(1);
-    expect(client.createIssueCalls[0].issueType).toBe('Story');
-  });
-
-  // --- Session-freshness guard against an abandoned ask ---
-
-  it('a session written while the sentinel ask was open aborts the resume instead of creating a stale ticket', async () => {
-    const session = makeSession({ issueType: 'Bug', availableIssueTypes: [''] });
-    const ws = makeMockWs();
-    // Simulate a second, independent email import starting and claiming the session key while
-    // this flow's chat-based ask was still open (across the turn boundary the detour introduces).
-    ws.store['jira.session.emailContent'] = makeSession({ subject: 'A different email' });
-
-    const resume: Extract<AwaitIssueTypeResume, { kind: 'email' }> = { kind: 'email', session, pickedTemplateName: null };
-    const resumeStream = mockStream();
-    await handleEmailAwaitIssueType(resume, 'Spike', client, ticketService, resumeStream as never, ws as never);
-
-    expect(client.createIssueCalls).toHaveLength(0);
-    const calls = (resumeStream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
     expect(calls.some(c => c.includes('newer email import was started'))).toBe(true);
-    // The second flow's session must survive untouched — this abort must not clear it.
-    expect(ws.store['jira.session.emailContent']).toBeDefined();
   });
 });

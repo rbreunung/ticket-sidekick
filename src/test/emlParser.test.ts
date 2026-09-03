@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as path from 'path';
 import * as fs from 'fs';
-import { parseEml } from '../utils/emlParser';
+import { parseEml, parseEmlFile } from '../utils/emlParser';
 
 const FIXTURE = path.resolve(process.cwd(), 'src/test/fixtures/eml/sample.eml');
 
@@ -103,5 +103,47 @@ describe('parseEml — edge cases', () => {
     const img = result.attachments.find(a => a.name.startsWith('image'));
     expect(img).toBeDefined();
     expect(img!.isInline).toBe(true);
+  });
+});
+
+describe('parseEmlFile — fixture: sample.eml', () => {
+  it('reads the file and returns the parsed subject/sender/date', async () => {
+    const item = await parseEmlFile(FIXTURE);
+    expect(item.subject).toBe('Test Email Subject');
+    expect(item.senderName).toBe('Jane Doe');
+    expect(item.receivedDateTime).toBe('2026-05-22T15:22:00.000Z');
+  });
+
+  it('converts the HTML body to markdown', async () => {
+    const item = await parseEmlFile(FIXTURE);
+    expect(item.markdownBody).toContain('World');
+  });
+
+  it('falls back to the plain-text body when no HTML body is present', async () => {
+    const plainOnly = path.join(path.dirname(FIXTURE), 'plain-only.eml');
+    fs.writeFileSync(plainOnly, 'Subject: Plain\r\nFrom: t@t.com\r\nContent-Type: text/plain\r\n\r\nJust plain text');
+    try {
+      const item = await parseEmlFile(plainOnly);
+      expect(item.markdownBody).toContain('Just plain text');
+    } finally {
+      fs.unlinkSync(plainOnly);
+    }
+  });
+
+  it('maps inline vs. non-inline attachments identically to parseEml', async () => {
+    const item = await parseEmlFile(FIXTURE);
+    const img = item.attachments.find(a => a.name === 'email-image-1.png');
+    const pdf = item.attachments.find(a => a.name === 'report.pdf');
+    expect(img?.isInline).toBe(true);
+    expect(pdf?.isInline).toBe(false);
+  });
+
+  it('records the source file path', async () => {
+    const item = await parseEmlFile(FIXTURE);
+    expect(item.emlFilePath).toBe(FIXTURE);
+  });
+
+  it('rejects with a clear error when the file cannot be read', async () => {
+    await expect(parseEmlFile(path.join(path.dirname(FIXTURE), 'does-not-exist.eml'))).rejects.toThrow();
   });
 });

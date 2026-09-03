@@ -5,16 +5,14 @@ import * as fs from 'fs';
 import { ConfigService } from './services/ConfigService';
 import { createJiraParticipant } from './participant/JiraParticipant';
 import { createBitbucketParticipant } from './participant/BitbucketParticipant';
-import { parseEml, type ParsedEml } from './utils/emlParser';
-import { htmlToMarkdown } from './utils/htmlToMarkdown';
 import { JiraApiClient } from './jira/JiraApiClient';
-import { TemplateService } from './templates/TemplateService';
-import { selectDefaultIssueType, resolveTemplateIssueType } from './participant/sessionState';
-import type { EmailContentSession } from './participant/sessionState';
 import { parseVeracodeReport, filterFlaws } from './utils/veracodeReport';
 import { buildVeracodeTemplateSession } from './participant/jira/veracodeHandler';
 import { parseWaltzReport, filterComponents } from './utils/waltzReport';
 import { buildWaltzTemplateSession } from './participant/jira/waltzHandler';
+import {
+  checkEmailBatchCaps, buildEmailTemplateSession, parseEmlFiles, describeEmailFileSelection, EMAIL_TEMPLATE_SESSION_KEY,
+} from './participant/jira/emailHandler';
 import { MAX_REPORT_BYTES } from './utils/reportImport';
 import { readAndFilterReport } from './participant/jira/reportImportHandler';
 import { logDiag } from './utils/diagLog';
@@ -230,33 +228,22 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
 
+    // R1/KTD1: selects one or more .eml files and hands off into the same email
+    // ReportImportDescriptor flow the chat-triggered picker uses (emailHandler.ts) — building an
+    // EmailTemplateSelectionSession here (Command Palette context, native VS Code messages) instead
+    // of a chat-only EmailContentSession.
     vscode.commands.registerCommand('ticket-sidekick.importEml', async () => {
       const uris = await vscode.window.showOpenDialog({
-        canSelectMany: false,
+        canSelectMany: true,
         filters: { 'Email files': ['eml'] },
         defaultUri: vscode.Uri.file(path.join(os.homedir(), 'Downloads')),
-        title: 'Select email (.eml) to import',
+        title: 'Select .eml file(s) to import',
       });
       if (!uris || uris.length === 0) return;
-      const emlPath = uris[0].fsPath;
 
-      let buffer: Buffer;
-      try {
-        buffer = await fs.promises.readFile(emlPath);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        logDiag('extension', 'error', `Could not read .eml file — ${emlPath}`, { emlPath, error: message });
-        vscode.window.showErrorMessage(`Ticket Sidekick: Could not read file: ${message}`);
-        return;
-      }
-
-      let parsed: ParsedEml;
-      try {
-        parsed = await parseEml(buffer);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        logDiag('extension', 'error', `Could not parse .eml file — ${emlPath}`, { emlPath, error: message });
-        vscode.window.showErrorMessage(`Ticket Sidekick: Could not parse email: ${message}`);
+      const capError = await checkEmailBatchCaps(uris);
+      if (capError) {
+        vscode.window.showErrorMessage(`Ticket Sidekick: ${capError}`);
         return;
       }
 
@@ -265,6 +252,15 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.window.showErrorMessage('Ticket Sidekick: Configure Jira credentials first.');
         return;
       }
+
+      const items = await parseEmlFiles(uris, failures => {
+        vscode.window.showWarningMessage(`Ticket Sidekick: Could not import ${failures.length} file(s): ${failures.join('; ')}`);
+      }, 'extension');
+      if (items.length === 0) {
+        vscode.window.showErrorMessage('Ticket Sidekick: No emails could be imported.');
+        return;
+      }
+
       const projectKey = vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.defaultProject') ?? '';
       if (!projectKey) {
         vscode.window.showErrorMessage('Ticket Sidekick: Set ticketSidekick.jira.defaultProject in VS Code settings before importing email.');
@@ -277,66 +273,10 @@ export function activate(context: vscode.ExtensionContext): void {
         token: config.token,
         onDiag: (level, message, details) => logDiag('jira.apiClient', level, message, details),
       });
-      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
-      const issueTypes = await jiraClient.getProject(projectKey)
-        .then(p => p.issueTypes.filter(t => !t.subtask).map(t => t.name))
-        .catch((err: unknown) => {
-          const message = err instanceof Error ? err.message : String(err);
-          logDiag('extension', 'warn', `Could not fetch issue types — ${projectKey}`, { projectKey, error: message });
-          vscode.window.showWarningMessage(
-            `Ticket Sidekick: Could not fetch issue types for ${projectKey} — you'll be asked to type it. ${message}`,
-          );
-          return [] as string[];
-        });
+      const session = await buildEmailTemplateSession(items, describeEmailFileSelection(items), projectKey, jiraClient);
 
-      const availableTemplates: Array<{ name: string; issueType: string }> = (() => {
-        if (!workspaceRoot) return [];
-        try {
-          return new TemplateService(workspaceRoot).loadTemplates().templates
-            .map(t => ({ name: t.name, issueType: resolveTemplateIssueType(t.issueType, issueTypes) }));
-        } catch (err) {
-          logDiag('extension', 'warn', 'Could not load templates — proceeding without', {
-            error: err instanceof Error ? err.message : String(err),
-          });
-          return [];
-        }
-      })();
-
-      const issueType = selectDefaultIssueType(issueTypes);
-
-      const markdownBody = parsed.htmlBody
-        ? htmlToMarkdown(parsed.htmlBody, parsed.inlineImageMap)
-        : (parsed.plainBody ?? '');
-
-      const inlineImageMap: Record<string, string> = {};
-      for (const [k, v] of parsed.inlineImageMap) {
-        inlineImageMap[k] = v;
-      }
-
-      const session: EmailContentSession = {
-        emailId: 'eml-import',
-        subject: parsed.subject,
-        senderName: parsed.senderName,
-        receivedDateTime: parsed.receivedDateTime,
-        markdownBody,
-        inlineImageMap,
-        attachments: parsed.attachments.map(a => ({
-          name: a.name,
-          contentType: a.contentType,
-          contentBytes: a.contentBytes,
-          isInline: a.isInline,
-        })),
-        emlFilePath: emlPath,
-        selectedTemplateName: null,
-        projectKey,
-        issueType,
-        additionalFields: {},
-        availableTemplates: availableTemplates.length > 0 ? availableTemplates : undefined,
-        availableIssueTypes: issueTypes.length > 0 ? issueTypes : undefined,
-      };
-
-      await context.workspaceState.update('jira.session.emailContent', session);
+      await context.workspaceState.update(EMAIL_TEMPLATE_SESSION_KEY, session);
       await vscode.commands.executeCommand('workbench.action.chat.open', { query: '@jira create from email' });
     }),
   );

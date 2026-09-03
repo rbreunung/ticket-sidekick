@@ -123,6 +123,8 @@ Each session below is looked up by its `workspaceState` key and expires once its
 | `VeracodeReviewSession` | `jira.session.veracodeReview` | `<!-- jira:veracode-review -->` |
 | `WaltzTemplateSelectionSession` | `jira.session.waltzTemplateSelection` | `<!-- jira:waltz-template -->` |
 | `WaltzReviewSession` | `jira.session.waltzReview` | `<!-- jira:waltz-review -->` |
+| `EmailTemplateSelectionSession` | `jira.session.emailTemplateSelection` | `<!-- jira:email-template -->` |
+| `EmailReviewSession` | `jira.session.emailReview` | `<!-- jira:email-review -->` |
 | `TemplateGenerationAwaitNameSession` | `jira.session.templateGenAwaitName` | `<!-- jira:template-gen-await-name -->` |
 | `TemplateGenerationTypePickSession` | `jira.session.templateGenTypePick` | `<!-- jira:template-gen-type-pick -->` |
 | `TemplateGenerationAwaitFreeTypeSession` | `jira.session.templateGenAwaitFreeType` | `<!-- jira:template-gen-await-free-type -->` |
@@ -131,18 +133,22 @@ Each session below is looked up by its `workspaceState` key and expires once its
 | `TemplateGenerationOfferCreateSession` | `jira.session.templateGenOfferCreate` | `<!-- jira:template-gen-offer-create -->` |
 | `TemplateGenerationAwaitSummarySession` | `jira.session.templateGenAwaitSummary` | `<!-- jira:template-gen-await-summary -->` |
 
-Detection order in the Jira handler: resolution selection → transition review → filter selection → bulk-update-review → combined template/issue-type selection → shared issue-type ask (R6) → creation → content → more-comments → check command → load-skipped → email content → veracode template selection → veracode review → Waltz template selection → Waltz review → template-gen await-name (R2) → template-gen type pick → template-gen await-free-type (R3) → template-gen review → template-gen collision → template-gen offer-create → template-gen await-summary → comment list → greeting/empty-prompt check → intent parse.
+Detection order in the Jira handler: resolution selection → transition review → filter selection → bulk-update-review → combined template/issue-type selection → shared issue-type ask (R6) → creation → content → more-comments → check command → load-skipped → email content (comment-attach) → batch email template selection → batch email review → veracode template selection → veracode review → Waltz template selection → Waltz review → template-gen await-name (R2) → template-gen type pick → template-gen await-free-type (R3) → template-gen review → template-gen collision → template-gen offer-create → template-gen await-summary → comment list → greeting/empty-prompt check → intent parse.
 
 The shared issue-type ask (`AwaitIssueTypeSession`, R6/KTD4) replaces `resolveIssueTypeOrPrompt()`'s
 former `showInputBox` for every flow that resolves an issue type before creating a ticket —
-`@jira create`, Veracode/Waltz report import, and all three issue-type-resolution points in
-email-to-ticket. Its `resume` field is a discriminated union (`'create' | 'reportImport' | 'email'`)
-carrying the *identity* of what the user already picked (a project/summary, a picked template name,
-the rest of the originating session) rather than a pre-resolved object; each family resumes through
-its own existing continuation (`continueAfterIssueType`, report import's
-`continueAfterImportIssueType`, `finishEmailTicket`) once the type is known. See
-`src/participant/jira/ticketContext.ts` (`resolveIssueTypeOrPrompt`/`streamAwaitIssueType`) and the
-resume dispatcher in `JiraParticipant.ts` (kept there rather than in `ticketContext.ts` to avoid a
-require cycle with the handler files it resumes into).
+`@jira create` and Veracode/Waltz/email report import. Its `resume` field is a discriminated union
+(`'create' | 'reportImport'`) carrying the *identity* of what the user already picked (a
+project/summary, a picked template name, the rest of the originating session) rather than a
+pre-resolved object; the `'reportImport'` kind's `descriptorKind` (`'veracode' | 'waltz' | 'email'`)
+picks which family's thin wrapper resumes through. Each family resumes through its own existing
+continuation (`continueAfterIssueType` for `create`; report import's `continueAfterImportIssueType`,
+reused unmodified for email) once the type is known. Batch email import (KTD1, see
+`docs/report-import.md`) is the `reportImport` kind's third `descriptorKind` rather than a
+standalone resume kind — the single-file comment-attach flow (`EmailContentSession`) never resolves
+an issue type, so it never reaches this ask at all. See `src/participant/jira/ticketContext.ts`
+(`resolveIssueTypeOrPrompt`/`streamAwaitIssueType`) and the resume dispatcher in `JiraParticipant.ts`
+(kept there rather than in `ticketContext.ts` to avoid a require cycle with the handler files it
+resumes into).
 
 Follow-up suggestion chips (after every major response), greeting/empty-prompt detection, and the unclassifiable-prompt fallback that replaces the old bare "Unrecognised operation." message are documented in [`docs/onboarding.md`](onboarding.md#follow-up-suggestion-chips-greeting-detection-and-the-unclassifiable-prompt-fallback).
