@@ -11,6 +11,7 @@ import {
   formatCallLine, formatFindingsFunnel, buildRunTag,
   buildTruncationEvent, formatRecoveryDecision, formatStructuredRunRecord,
   formatContinuationMessage, createAttemptTracker,
+  resolveReviewMode, deriveCriticEnabled,
 } from '../participant/reviewSessionState';
 import type { ReviewFinding } from '../participant/reviewSessionState';
 import { PrReviewService, PERSONAS } from '../services/PrReviewService';
@@ -1918,6 +1919,45 @@ describe('stripUpfrontQuestion', () => {
     const stripped = stripUpfrontQuestion(prompt);
     expect(stripped).toBe('https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42');
     expect(stripped).not.toContain('concurrent writes');
+  });
+});
+
+describe('resolveReviewMode', () => {
+  it('resolves deep when both deep and smart keywords are present (deep wins)', () => {
+    expect(resolveReviewMode('please do a deep smart review', 'standard')).toBe('deep');
+  });
+
+  it('resolves smart when only the smart keyword is present', () => {
+    expect(resolveReviewMode('run a smart review please', 'standard')).toBe('smart');
+  });
+
+  it('resolves quick when only the quick keyword is present', () => {
+    expect(resolveReviewMode('quick review please', 'standard')).toBe('quick');
+  });
+
+  it('falls back to the configured default when no mode keyword matches', () => {
+    expect(resolveReviewMode('review this pr', 'standard')).toBe('standard');
+    expect(resolveReviewMode('review this pr', 'smart')).toBe('smart');
+  });
+
+  it('deep beats quick when both are present', () => {
+    expect(resolveReviewMode('deep but quick please', 'standard')).toBe('deep');
+  });
+
+  it('smart beats quick when both are present', () => {
+    expect(resolveReviewMode('smart but quick please', 'standard')).toBe('smart');
+  });
+});
+
+describe('deriveCriticEnabled', () => {
+  it('is true only for deep mode', () => {
+    expect(deriveCriticEnabled('deep')).toBe(true);
+  });
+
+  it('is false for quick, standard, and smart modes', () => {
+    expect(deriveCriticEnabled('quick')).toBe(false);
+    expect(deriveCriticEnabled('standard')).toBe(false);
+    expect(deriveCriticEnabled('smart')).toBe(false);
   });
 });
 

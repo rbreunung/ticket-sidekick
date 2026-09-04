@@ -32,6 +32,8 @@ import {
   RAW_PREVIEW_CHARS,
   createAttemptTracker,
   computeBitbucketFollowups,
+  resolveReviewMode,
+  deriveCriticEnabled,
   type ReviewFinding,
   type ReviewSession,
   type BitbucketCommentPreviewSession,
@@ -632,12 +634,13 @@ export function createBitbucketParticipant(
       // Detect quick/deep mode keyword from prompt (overrides setting). Strip the upfront
       // question first so a question containing "deep"/"quick" can't flip the review mode.
       const promptWithoutUrl = stripUpfrontQuestion(prompt).replace(/https?:\/\/\S+/g, '').toLowerCase();
-      const deepRequested = /\bdeep\b/.test(promptWithoutUrl);
-      const reviewMode = /\bquick\b/.test(promptWithoutUrl) ? 'quick'
-        : deepRequested ? 'standard'
-        : (config.reviewMode ?? 'standard');
+      // Widened 4-value mode (quick < standard < smart < deep by capability), resolved with
+      // deep > smart > quick > configured-default detection precedence (KTD1). `resolvedMode`
+      // is the single source of truth later units read to decide which personas are active.
+      const resolvedMode = resolveReviewMode(promptWithoutUrl, config.reviewMode ?? 'standard');
+      const reviewMode = resolvedMode;
       // The critic (verification) pass is opt-in via "deep" — it roughly doubles per-chunk cost.
-      const criticEnabled = deepRequested;
+      const criticEnabled = deriveCriticEnabled(resolvedMode);
       const extraInstructions = [config.reviewInstructions, upfrontQuestion].filter(Boolean).join('\n\n');
 
       // Resolve token budget: user setting → model API → safe fallback

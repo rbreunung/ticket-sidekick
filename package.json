@@ -717,10 +717,12 @@
             "type": "string",
             "enum": [
               "standard",
-              "quick"
+              "quick",
+              "smart",
+              "deep"
             ],
             "default": "standard",
-            "description": "Default review depth. 'standard' enables the two-pass review where the LLM can request additional file context. 'quick' skips the second pass (diffs only) — faster and cheaper for large PRs. Override per-review with '@bitbucket review quick <url>' or '@bitbucket review deep <url>'."
+            "description": "Default review depth, ordered by capability quick < standard < smart < deep. 'standard' enables the two-pass review where the LLM can request additional file context. 'quick' skips the second pass (diffs only) — faster and cheaper for large PRs. 'smart' adds specialist persona lenses (security, performance, reliability, maintainability) on top of standard. 'deep' adds persona lenses plus a critic (verification) pass — the most thorough and most expensive option. Override per-review with '@bitbucket review quick <url>', '@bitbucket review smart <url>', or '@bitbucket review deep <url>'."
           },
           "ticketSidekick.bitbucket.reviewExcludePatterns": {
             "type": "array",

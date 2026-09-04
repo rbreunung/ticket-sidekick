@@ -14,6 +14,14 @@ export interface BitbucketPR {
   fromCommitHash: string;
 }
 
+/**
+ * Review depth, ordered by capability quick < standard < smart < deep — not by
+ * mode-keyword detection priority (that precedence is deep > smart > quick > standard,
+ * see `resolveReviewMode` in reviewSessionState.ts / KTD1). `deep` is the only mode that
+ * runs the critic (verification) pass; `smart` and `deep` additionally run persona lenses.
+ */
+export type ReviewMode = 'quick' | 'standard' | 'smart' | 'deep';
+
 export interface BitbucketConfig {
   baseUrl: string | undefined;
   authType: BitbucketAuthType;
@@ -22,7 +30,7 @@ export interface BitbucketConfig {
   reviewInstructions?: string;
   modelContextTokens?: number;
   contextBudgetRatio?: number;
-  reviewMode?: 'standard' | 'quick';
+  reviewMode?: ReviewMode;
   reviewExcludePatterns?: string[];
   /** Diff context lines requested around each hunk (wider = more surrounding code for the reviewer). */
   reviewContextLines?: number;

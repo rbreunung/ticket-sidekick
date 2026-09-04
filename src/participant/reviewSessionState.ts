@@ -1,7 +1,7 @@
 import { extractJsonObject } from '../utils/extractJsonObject';
 // Type-only — IBitbucketClient.ts has no imports of its own (vscode included), so this
 // stays safe for a vscode-free, Vitest-loadable module.
-import type { BitbucketConfig, BitbucketPR } from '../bitbucket/IBitbucketClient';
+import type { BitbucketConfig, BitbucketPR, ReviewMode } from '../bitbucket/IBitbucketClient';
 // Type-only — shared with sessionState.ts's Jira tool builders via a neutral module (neither
 // participant's pure-logic file depends on the other's) so `bitbucketTools.ts`'s single write
 // tool can reuse the same confirmation shape rather than declaring an equivalent local interface.
@@ -195,6 +195,30 @@ export function stripUpfrontQuestion(prompt: string): string {
   const match = findUpfrontQuestionMatch(prompt);
   if (!match) return prompt.trim();
   return (prompt.slice(0, match.start) + prompt.slice(match.end)).trim();
+}
+
+/**
+ * Resolves the effective review mode from the prompt's mode keywords, falling back to
+ * the configured default when none match. Precedence is `deep` > `smart` > `quick` >
+ * configured default (KTD1) — capability order is quick < standard < smart < deep, but
+ * detection priority favors the more thorough mode on an ambiguous prompt that contains
+ * more than one keyword, rather than silently downgrading a `deep`/`smart` request.
+ *
+ * `promptWithoutUrl` should already have the upfront question and PR URL stripped
+ * (mirrors the call site in BitbucketParticipant.ts) so a question or URL containing one
+ * of these words can't flip the resolved mode.
+ */
+export function resolveReviewMode(promptWithoutUrl: string, configuredDefault: ReviewMode): ReviewMode {
+  const text = promptWithoutUrl.toLowerCase();
+  if (/\bdeep\b/.test(text)) return 'deep';
+  if (/\bsmart\b/.test(text)) return 'smart';
+  if (/\bquick\b/.test(text)) return 'quick';
+  return configuredDefault;
+}
+
+/** Only `deep` mode runs the critic (verification) pass (R5, KTD1b). */
+export function deriveCriticEnabled(mode: ReviewMode): boolean {
+  return mode === 'deep';
 }
 
 const stripABPrefix = (p: string): string => p.replace(/^[ab]\//, '').trim();
