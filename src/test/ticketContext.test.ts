@@ -25,6 +25,8 @@ vi.mock('vscode', () => {
 
 import * as vscode from 'vscode';
 import { getActiveJiraSession } from '../participant/jira/ticketContext';
+import { streamNextSection } from '../participant/jira/createHandler';
+import type { CreationSession } from '../participant/sessionState';
 
 function makeContext(history: unknown[]): vscode.ChatContext {
   return { history } as unknown as vscode.ChatContext;
@@ -69,5 +71,25 @@ describe('getActiveJiraSession', () => {
       }),
     ]);
     expect(getActiveJiraSession(context)?.kinds).toEqual(['more-comments', 'comment-list']);
+  });
+
+  // U3: an end-to-end round trip through a real handler-file production site (not just a
+  // hand-built metadata literal) — createHandler.ts's streamNextSection() produces the
+  // 'creating' session, and the next turn's getActiveJiraSession() reads it back off history.
+  it('resumes a session actually produced by a handler-file streaming function', async () => {
+    const stream = { markdown: vi.fn() };
+    const ws = { update: vi.fn(), get: vi.fn() };
+    const session: CreationSession = {
+      template: '', project: 'PROJ', summary: null, issueType: 'Bug',
+      allSections: [], pending: ['__summary__'], answers: {}, fields: {},
+    };
+
+    const produced = await streamNextSection(session, stream as never, ws as never);
+    const rendered = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('');
+
+    const context = makeContext([
+      new vscode.ChatResponseTurn([{ value: rendered }], produced),
+    ]);
+    expect(getActiveJiraSession(context)?.kinds).toEqual(['creating']);
   });
 });

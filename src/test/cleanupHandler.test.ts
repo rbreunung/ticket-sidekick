@@ -402,13 +402,13 @@ describe('handleRunCleanup', () => {
       resolution: 'Fixed', // provided explicitly
     };
 
-    await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
+    const chatResult = await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
 
     const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
-    // Resolution dialog contains the "<!-- jira:selecting-resolution -->" marker
-    expect(allMarkdown).not.toContain('<!-- jira:selecting-resolution -->');
-    // The review screen should have been shown instead
-    expect(allMarkdown).toContain('<!-- jira:transition-review -->');
+    // No visible session marker in the rendered response (R3) — liveness is tracked via metadata.
+    expect(allMarkdown).not.toContain('<!-- jira:');
+    // The review screen should have been shown instead of the resolution dialog.
+    expect(chatResult?.metadata?.jiraSession?.kinds).toEqual(['transition-review']);
   });
 
   it('attaches subtasks to their parent in the review screen when closeSubtasks is true', async () => {
@@ -454,14 +454,14 @@ describe('handleRunCleanup', () => {
     const ws = mockWs();
     const intent = { ...baseIntent, cleanupRuleName: 'close-bugs', resolution: 'Fixed' };
 
-    await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
+    const chatResult = await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
 
     const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
     // Both parent and subtask should appear in the review screen
     expect(allMarkdown).toContain('PROJ-1');
     expect(allMarkdown).toContain('PROJ-1a');
     expect(allMarkdown).toContain('Child subtask');
-    expect(allMarkdown).toContain('<!-- jira:transition-review -->');
+    expect(chatResult?.metadata?.jiraSession?.kinds).toEqual(['transition-review']);
   });
 
   it('uses subtaskTargetState for the subtask JQL and path when set', async () => {

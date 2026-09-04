@@ -23,12 +23,13 @@ export async function streamReviewScreen(
   workspaceState: vscode.Memento,
   header: string,
   baseUrl?: string,
-): Promise<void> {
+): Promise<vscode.ChatResult> {
   await workspaceState.update('jira.session.transitionReview', session);
   const table = buildReviewTable(session, baseUrl, (fieldId) =>
     logDiag('jira.cleanup', 'warn', `Unrecognized field in cleanupFields: ${fieldId}`, { fieldId }),
   );
-  stream.markdown(`${header}\n\n${table}\n\n<!-- jira:transition-review -->`);
+  stream.markdown(`${header}\n\n${table}`);
+  return { metadata: { jiraSession: { kinds: ['transition-review'] } } };
 }
 
 export async function executeCleanupBatch(
@@ -95,7 +96,7 @@ export async function handleRunCleanup(
   baseUrl?: string,
   cleanupFields: string[] = [],
   cleanupFieldMeta: JiraFieldMeta[] = [],
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
   const { cleanupRules } = new TemplateService(workspaceRoot).loadTemplates();
@@ -232,8 +233,8 @@ export async function handleRunCleanup(
       };
       await workspaceState.update('jira.session.resolutionSelection', resSession);
       const list = resolutions.map((r, i) => `${i + 1}. ${r.name}`).join('\n');
-      stream.markdown(`Which resolution should be set when transitioning to **${targetState}**?\n\n${list}\n\nReply with the name or number, or **none** to skip setting a resolution.\n\n<!-- jira:selecting-resolution -->`);
-      return;
+      stream.markdown(`Which resolution should be set when transitioning to **${targetState}**?\n\n${list}\n\nReply with the name or number, or **none** to skip setting a resolution.`);
+      return { metadata: { jiraSession: { kinds: ['resolution-selection'] } } };
     }
   }
 
@@ -251,5 +252,6 @@ export async function handleRunCleanup(
   const table = buildReviewTable(batchSession, baseUrl, (fieldId) =>
     logDiag('jira.cleanup', 'warn', `Unrecognized field in cleanupFields: ${fieldId}`, { fieldId }),
   );
-  stream.markdown(`${buffer.join('')}${header}\n\n${table}\n\n<!-- jira:transition-review -->`);
+  stream.markdown(`${buffer.join('')}${header}\n\n${table}`);
+  return { metadata: { jiraSession: { kinds: ['transition-review'] } } };
 }

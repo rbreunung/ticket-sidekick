@@ -205,11 +205,11 @@ export async function handleLoadTicket(
   fieldMeta: JiraFieldMeta[],
   alwaysShowIds: Set<string>,
   hiddenIds: Set<string>,
-): Promise<void> {
+): Promise<boolean> {
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   if (!workspaceFolder) {
     stream.markdown('No workspace folder is open. Open a folder to use `@jira load`.');
-    return;
+    return false;
   }
   const wsRoot = workspaceFolder.uri;
 
@@ -255,8 +255,9 @@ export async function handleLoadTicket(
     const listLines = skipped.map((s, i) => `${i + 1}. \`${s.filename}\` — ${formatFileSize(s.size)} (${s.mimeType}) — ${s.reason}`);
     stream.markdown(`\n\n**Skipped attachments:**\n\n${listLines.join('\n')}\n\nReply with a number to download it anyway.`);
     await ws.update('jira.session.loadSkipped', { ticketKey, skipped } satisfies LoadSkippedSession);
-    stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:load-skipped -->`);
-  } else {
     stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
+    return true;
   }
+  stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
+  return false;
 }

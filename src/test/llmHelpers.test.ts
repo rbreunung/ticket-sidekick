@@ -6,8 +6,10 @@ vi.mock('vscode', () => {
   }
   class MockResponseTurn {
     response: MockMarkdownPart[];
-    constructor(parts: Array<{ value: string }>) {
+    result: { metadata?: Record<string, unknown> };
+    constructor(parts: Array<{ value: string }>, result: { metadata?: Record<string, unknown> } = {}) {
       this.response = parts.map((p) => new MockMarkdownPart(p));
+      this.result = result;
     }
   }
   class MockRequestTurn {
@@ -111,10 +113,13 @@ describe('extractHistoryTurns', () => {
     expect(turns[0].text).toBe('Here is the ticket.'); // marker stripped
   });
 
-  it('excludes assistant turns containing the jira:load-skipped marker', () => {
+  it('excludes assistant turns carrying the load-skipped session (metadata-based, R1/R3)', () => {
     const history = [
       new vscode.ChatRequestTurn('load PROJ-1'),
-      new vscode.ChatResponseTurn([{ value: 'Ticket loaded.\n\nSkipped attachments:\n\n1. trace.trc — 120 MB\n\nReply with a number to download it anyway.\n\n<!-- jira:load-skipped -->' }]),
+      new vscode.ChatResponseTurn(
+        [{ value: 'Ticket loaded.\n\nSkipped attachments:\n\n1. trace.trc — 120 MB\n\nReply with a number to download it anyway.' }],
+        { metadata: { jiraSession: { kinds: ['load-skipped'] } } },
+      ),
       new vscode.ChatRequestTurn('write a comment about the issue'),
     ];
     const turns = extractHistoryTurns({ history } as never);
@@ -123,10 +128,13 @@ describe('extractHistoryTurns', () => {
     expect(turns.every((t) => t.role === 'user')).toBe(true);
   });
 
-  it('excludes assistant turns containing the jira:previewing marker', () => {
+  it('excludes assistant turns carrying the previewing session (metadata-based, R1/R3)', () => {
     const history = [
       new vscode.ChatRequestTurn('write a comment'),
-      new vscode.ChatResponseTurn([{ value: 'Here is my draft.\n\nReply post it to confirm.\n\n<!-- jira:previewing -->' }]),
+      new vscode.ChatResponseTurn(
+        [{ value: 'Here is my draft.\n\nReply post it to confirm.' }],
+        { metadata: { jiraSession: { kinds: ['previewing'] } } },
+      ),
       new vscode.ChatRequestTurn('post it'),
     ];
     const turns = extractHistoryTurns({ history } as never);
@@ -140,7 +148,10 @@ describe('extractHistoryTurns', () => {
   it('includes the assistant turn after a confirmed preview (the final accepted response)', () => {
     const history = [
       new vscode.ChatRequestTurn('write a comment'),
-      new vscode.ChatResponseTurn([{ value: 'Draft content.\n\n<!-- jira:previewing -->' }]),
+      new vscode.ChatResponseTurn(
+        [{ value: 'Draft content.' }],
+        { metadata: { jiraSession: { kinds: ['previewing'] } } },
+      ),
       new vscode.ChatRequestTurn('post it'),
       new vscode.ChatResponseTurn([{ value: 'Comment posted to PROJ-1.\n\n<!-- @jira-ticket:PROJ-1 -->' }]),
     ];
@@ -214,10 +225,10 @@ describe('extractLastAssistantText', () => {
     expect(extractLastAssistantText({ history } as never)).toBe('second answer');
   });
 
-  it('skips assistant turns containing the jira:previewing marker', () => {
+  it('skips assistant turns carrying the previewing session (metadata-based, R1/R3)', () => {
     const history = [
       new vscode.ChatResponseTurn([{ value: 'real answer' }]),
-      new vscode.ChatResponseTurn([{ value: 'Draft.\n\n<!-- jira:previewing -->' }]),
+      new vscode.ChatResponseTurn([{ value: 'Draft.' }], { metadata: { jiraSession: { kinds: ['previewing'] } } }),
     ];
     expect(extractLastAssistantText({ history } as never)).toBe('real answer');
   });

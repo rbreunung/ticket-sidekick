@@ -40,7 +40,7 @@ describe('streamContentPreview — createTicket', () => {
       currentContent: 'Steps to reproduce the issue.',
     };
 
-    await streamContentPreview(session, stream as never, ws as never);
+    const chatResult = await streamContentPreview(session, stream as never, ws as never);
 
     expect(ws.update).toHaveBeenCalledWith('jira.session.previewing', session);
     const rendered: string = stream.markdown.mock.calls[0][0];
@@ -50,7 +50,9 @@ describe('streamContentPreview — createTicket', () => {
     expect(rendered).toContain('**Template:** Billing Bug');
     expect(rendered).toContain('Steps to reproduce the issue.');
     expect(rendered).toContain('create it');
-    expect(rendered).toContain('<!-- jira:previewing -->');
+    // No visible session marker in the rendered response (R3) — liveness is metadata-based.
+    expect(rendered).not.toContain('<!-- jira:');
+    expect(chatResult.metadata?.jiraSession?.kinds).toEqual(['previewing']);
   });
 
   it('omits template line when templateName is null', async () => {
@@ -182,12 +184,14 @@ describe('handleContentSession — createTicket confirmation', () => {
     const stream = mockStream();
     const ws = mockWs();
 
-    await handleContentSession(session, 'cancel', nullModel, nullToken, stream as never, ticketService, ws as never);
+    const chatResult = await handleContentSession(session, 'cancel', nullModel, nullToken, stream as never, ticketService, ws as never);
 
     expect(ws.update).toHaveBeenCalledWith('jira.session.previewing', undefined);
     expect(createTicketSpy).not.toHaveBeenCalled();
     expect(stream.markdown).toHaveBeenCalledWith('_Cancelled._');
     expect(vscode.commands.executeCommand).not.toHaveBeenCalledWith('setContext', 'ticketSidekick.firstTicketCreated', true);
+    // No session continues past a cancellation — no jiraSession metadata is returned.
+    expect(chatResult).toBeUndefined();
   });
 
   it('also cancels with "c" shorthand', async () => {
@@ -265,7 +269,7 @@ describe('handleContentSession — createTicket refinement', () => {
     const stream = mockStream();
     const ws = mockWs();
 
-    await handleContentSession(session, 'make it more concise', nullModel, nullToken, stream as never, ticketService, ws as never);
+    const chatResult = await handleContentSession(session, 'make it more concise', nullModel, nullToken, stream as never, ticketService, ws as never);
 
     // generateContent was called with the refinement prompt
     expect(generateContent).toHaveBeenCalledOnce();
@@ -282,6 +286,8 @@ describe('handleContentSession — createTicket refinement', () => {
     // The rendered output contains the refined content
     const rendered: string = stream.markdown.mock.calls[0][0];
     expect(rendered).toContain('Improved description text.');
+    // The re-preview forwards streamContentPreview's metadata — the session stays live (R1).
+    expect(chatResult?.metadata?.jiraSession?.kinds).toEqual(['previewing']);
   });
 
   it('re-previews original session when LLM returns a refusal', async () => {

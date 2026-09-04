@@ -104,22 +104,25 @@ Execution streams one line per ticket (subtasks first), then a summary. Failures
 
 ## Jira sessions
 
-Each session below is looked up by its `workspaceState` key and expires once its response tag is no longer the **last** assistant message — see `CLAUDE.md`'s "Multi-turn session state" for the tag/workspaceState mechanism itself.
+Each session below is looked up by its `workspaceState` key and its liveness is checked one of two ways: most sessions still expire once a visible response tag is no longer the **last** assistant message (see `CLAUDE.md`'s "Multi-turn session state"); a growing subset instead round-trip a `kind` through `ChatResult.metadata.jiraSession` (read by `getActiveJiraSession()` in `ticketContext.ts`) with no visible marker in the rendered response — see `JiraSessionContinuity` in `sessionState.ts`.
 
-| Session | workspaceState key | Tag in response |
+| Session | workspaceState key | Liveness check |
 | --- | --- | --- |
-| `ResolutionSelectionSession` | `jira.session.resolutionSelection` | `<!-- jira:selecting-resolution -->` |
-| `TransitionBatchSession` | `jira.session.transitionReview` | `<!-- jira:transition-review -->` |
+| `ResolutionSelectionSession` | `jira.session.resolutionSelection` | metadata — `jiraSession.kinds: ['resolution-selection']` |
+| `TransitionBatchSession` | `jira.session.transitionReview` | metadata — `jiraSession.kinds: ['transition-review']` |
 | `FilterSelectionSession` | `jira.session.filterSelection` | `<!-- jira:selecting-filter -->` |
 | `BulkUpdateReviewSession` | `jira.session.bulkUpdateReview` | `<!-- jira:bulk-update-review -->` |
 | `SearchResultSession` | `jira.session.searchResult` | _(no marker — background session, overwritten on each search)_ |
-| `CreateSelectionSession` | `jira.session.creatingSelection` | `<!-- jira:selecting-create-option -->` |
+| `CreateSelectionSession` | `jira.session.creatingSelection` | metadata — `jiraSession.kinds: ['selecting-create-option']` |
 | `AwaitIssueTypeSession` | `jira.session.awaitIssueType` | `<!-- jira:await-issue-type -->` |
-| `CreationSession` | `jira.session.creating` | `<!-- jira:creating -->` |
-| `ContentSession` | `jira.session.previewing` | `<!-- jira:previewing -->` |
-| `MoreCommentsSession` | `jira.session.moreComments` | `<!-- jira:more-comments -->` |
-| `CommentListSession` | `jira.session.commentList` | `<!-- jira:comment-list -->` |
-| `LoadSkippedSession` | `jira.session.loadSkipped` | `<!-- jira:load-skipped -->` |
+| `CreationSession` | `jira.session.creating` | metadata — `jiraSession.kinds: ['creating']` |
+| `ContentSession` | `jira.session.previewing` | metadata — `jiraSession.kinds: ['previewing']` |
+| `MoreCommentsSession` | `jira.session.moreComments` | metadata — `jiraSession.kinds: ['more-comments']` |
+| `CommentListSession` | `jira.session.commentList` | metadata — `jiraSession.kinds: ['comment-list']` |
+| `LoadSkippedSession` | `jira.session.loadSkipped` | metadata — `jiraSession.kinds: ['load-skipped']` |
+| `SprintSelectionSession` | `jira.session.sprintSelection` | metadata — `jiraSession.kinds: ['sprint-selection']` |
+| `FieldSelectionSession` | `jira.session.fieldSelection` | metadata — `jiraSession.kinds: ['field-selection']` |
+| `FieldUpdatePreviewSession` | `jira.session.fieldUpdatePreview` | metadata — `jiraSession.kinds: ['field-update-preview']` |
 | `EmailContentSession` | `jira.session.emailContent` | `<!-- jira:email-content -->` |
 | `VeracodeTemplateSelectionSession` | `jira.session.veracodeTemplateSelection` | `<!-- jira:veracode-template -->` |
 | `VeracodeReviewSession` | `jira.session.veracodeReview` | `<!-- jira:veracode-review -->` |

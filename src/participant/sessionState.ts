@@ -1383,17 +1383,24 @@ export function computeJiraFollowups(state: JiraFollowupState): FollowupSuggesti
  * e.g. a comment page that's simultaneously a valid `more-comments`-confirm target and a valid
  * `comment-list`-index target).
  */
-// Only the kinds actually wired to this mechanism so far. 'resolution-selection',
-// 'transition-review', 'sprint-selection', 'field-selection', and 'field-update-preview' are
-// NOT here yet — each of those sessions also has a production site inside a `*Handler.ts` file
-// (cleanupHandler.ts / fieldHandler.ts) that still emits the old visible tag; converting only
-// their JiraParticipant.ts-side resume branch without also converting that other producer would
-// silently break resumption for sessions started from there. A future unit that also migrates
-// the relevant handler file's production site should add the matching kind here.
+// U3 finished migrating the six core flow handler files (createHandler.ts, contentHandler.ts,
+// fieldHandler.ts, cleanupHandler.ts, loadHandler.ts, plus JiraParticipant.ts's own matching
+// production/resume sites) onto this mechanism — every production site for a given kind below
+// is metadata-based and its visible `<!-- jira:TAG -->` marker is gone. Report-import sessions
+// (email/Veracode/Waltz/template-generation) and Bitbucket sessions are untouched — out of
+// scope for this unit.
 export type JiraSessionKind =
   | 'more-comments'
   | 'comment-list'
-  | 'load-skipped';
+  | 'load-skipped'
+  | 'creating'
+  | 'selecting-create-option'
+  | 'previewing'
+  | 'resolution-selection'
+  | 'transition-review'
+  | 'sprint-selection'
+  | 'field-selection'
+  | 'field-update-preview';
 
 export interface JiraSessionContinuity {
   kinds: JiraSessionKind[];

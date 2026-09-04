@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { serializeTurns, stripHiddenMarkers } from '../sessionState';
 import { extractJsonObject } from '../../utils/extractJsonObject';
+import { turnCarriesJiraSessionKind } from './ticketContext';
 
 export type Operation =
   | 'getTicket'
@@ -231,12 +232,13 @@ export function extractHistoryTurns(context: vscode.ChatContext): Array<{ role: 
       return [{ role: 'user', text: turn.prompt }];
     }
     if (turn instanceof vscode.ChatResponseTurn) {
+      // Skip session-management responses — they are noise, not findings. Metadata-based (R1/R3):
+      // these turns carry no visible `<!-- jira:TAG -->` marker to text-match against any more.
+      if (turnCarriesJiraSessionKind(turn, 'previewing')) return [];
+      if (turnCarriesJiraSessionKind(turn, 'load-skipped')) return [];
       const raw = turn.response
         .map((p) => (p instanceof vscode.ChatResponseMarkdownPart ? p.value.value : ''))
         .join('');
-      // Skip session-management responses — they are noise, not findings
-      if (raw.includes('<!-- jira:previewing -->')) return [];
-      if (raw.includes('<!-- jira:load-skipped -->')) return [];
       const text = stripHiddenMarkers(raw);
       return text ? [{ role: 'assistant', text }] : [];
     }

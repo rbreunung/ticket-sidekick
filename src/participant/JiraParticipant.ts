@@ -175,23 +175,17 @@ export function createJiraParticipant(
       return;
     }
 
-    // Resolution selection — user replied with a resolution choice before the review screen
-    //
-    // NOTE (U2 scope decision): this session's initial production also happens in
-    // cleanupHandler.ts (the single-ticket transition flow further below shares the same
-    // 'jira.session.resolutionSelection' key/tag with the bulk-cleanup path). Converting only
-    // this resume branch to the metadata check while that other producer keeps emitting the
-    // visible tag (and no metadata) would silently break resumption for sessions started from
-    // there. Left on the tag mechanism for this unit — see final report for the full list of
-    // sessions with a handler-file production site.
-    if (lastResponse.includes('<!-- jira:selecting-resolution -->')) {
+    // Resolution selection — user replied with a resolution choice before the review screen.
+    // Shared by cleanupHandler.ts (bulk-cleanup path) and the bulkTransition production site
+    // further below in this file — both now use the metadata-based liveness check (R1/R3).
+    if (getActiveJiraSession(chatContext)?.kinds.includes('resolution-selection')) {
       const selSession = ws.get<ResolutionSelectionSession>('jira.session.resolutionSelection');
       if (selSession) {
         const choice = parseResolutionSelection(request.prompt, selSession.resolutionOptions);
         if (choice === 'invalid') {
           const list = selSession.resolutionOptions.map((r, i) => `${i + 1}. ${r}`).join('\n');
-          stream.markdown(`Please choose a resolution:\n\n${list}\n\nReply with name or number, or **none** to skip.\n\n<!-- jira:selecting-resolution -->`);
-          return;
+          stream.markdown(`Please choose a resolution:\n\n${list}\n\nReply with name or number, or **none** to skip.`);
+          return { metadata: { jiraSession: { kinds: ['resolution-selection'] } } };
         }
         await ws.update('jira.session.resolutionSelection', undefined);
         const batchSession: TransitionBatchSession = {
@@ -203,20 +197,18 @@ export function createJiraParticipant(
           fieldMeta: selSession.fieldMeta,
         };
         const header = `**Cleanup${selSession.ruleName ? `: ${selSession.ruleName}` : ''}**`;
-        await streamReviewScreen(batchSession, stream, ws, header, config.baseUrl);
-        return;
+        return await streamReviewScreen(batchSession, stream, ws, header, config.baseUrl);
       }
     }
 
     // Transition review — user replied ok/cancel/skip keys
-    if (lastResponse.includes('<!-- jira:transition-review -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('transition-review')) {
       const session = ws.get<TransitionBatchSession>('jira.session.transitionReview');
       if (session) {
         const result = parseSkipInput(request.prompt, session.tickets);
         if (result.action === 'invalid') {
           const header = `**Cleanup${session.ruleName ? `: ${session.ruleName}` : ''}**`;
-          await streamReviewScreen(session, stream, ws, header, config.baseUrl);
-          return;
+          return await streamReviewScreen(session, stream, ws, header, config.baseUrl);
         }
         await ws.update('jira.session.transitionReview', undefined);
         if (result.action === 'cancel') {
@@ -267,7 +259,7 @@ export function createJiraParticipant(
     }
 
     // Combined template/issue-type selection — user replied with their pick
-    if (lastResponse.includes('<!-- jira:selecting-create-option -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('selecting-create-option')) {
       const selSession = ws.get<CreateSelectionSession>('jira.session.creatingSelection');
       if (selSession) {
         if (isCancellation(request.prompt)) {
@@ -278,8 +270,7 @@ export function createJiraParticipant(
         const n = parseInt(request.prompt.trim(), 10);
         const pick = isNaN(n) ? null : pickEmailOption(n, selSession.templates, selSession.issueTypes);
         if (!pick) {
-          await streamCreateSelection(selSession, stream, ws);
-          return;
+          return await streamCreateSelection(selSession, stream, ws);
         }
         await ws.update('jira.session.creatingSelection', undefined);
 
@@ -301,7 +292,7 @@ export function createJiraParticipant(
         const selectedTemplate = await resolveTemplateByName(pickedTemplateName, stream);
 
         try {
-          await continueAfterIssueType(
+          return await continueAfterIssueType(
             selSession.projectKey, selSession.summary, issueType, selSession.description,
             selectedTemplate, request.model, stream, token, jiraClient, ticketService, ws,
             selSession.extraFields,
@@ -346,6 +337,7 @@ export function createJiraParticipant(
         await ws.update(AWAIT_ISSUE_TYPE_SESSION_KEY, undefined);
         const issueType = parsed.value;
         const { resume } = session;
+        let awaitResult: vscode.ChatResult | void = undefined;
         try {
           if (resume.kind === 'create') {
             // Mirrors the sibling branches' sessionWasSuperseded() guard — a second @jira create
@@ -359,7 +351,7 @@ export function createJiraParticipant(
               return;
             }
             const selectedTemplate = await resolveTemplateByName(resume.pickedTemplateName, stream);
-            await continueAfterIssueType(
+            awaitResult = await continueAfterIssueType(
               resume.projectKey, resume.summary, issueType, resume.description,
               selectedTemplate, request.model, stream, token, jiraClient, ticketService, ws,
               resume.extraFields,
@@ -376,12 +368,12 @@ export function createJiraParticipant(
           logDiag('jira.participant', 'error', message, {});
           stream.markdown(message);
         }
-        return;
+        return awaitResult;
       }
     }
 
     // Creation session continuation — user answered a section prompt
-    if (lastResponse.includes('<!-- jira:creating -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('creating')) {
       const session = ws.get<CreationSession>('jira.session.creating');
       if (session) {
         try {
@@ -394,9 +386,9 @@ export function createJiraParticipant(
           session.pending = session.pending.slice(1);
           if (session.pending.length === 0) {
             await ws.update('jira.session.creating', undefined);
-            await finishTicketCreation(session, stream, ws);
+            return await finishTicketCreation(session, stream, ws);
           } else {
-            await streamNextSection(session, stream, ws);
+            return await streamNextSection(session, stream, ws);
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -408,11 +400,11 @@ export function createJiraParticipant(
     }
 
     // Content session — comment/description preview awaiting confirm/refine
-    if (lastResponse.includes('<!-- jira:previewing -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('previewing')) {
       const session = ws.get<ContentSession>('jira.session.previewing');
       if (session) {
         try {
-          await handleContentSession(session, request.prompt, request.model, token, stream, ticketService, ws, config.baseUrl);
+          return await handleContentSession(session, request.prompt, request.model, token, stream, ticketService, ws, config.baseUrl);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logDiag('jira.participant', 'error', message, {});
@@ -423,7 +415,7 @@ export function createJiraParticipant(
     }
 
     // Sprint selection — user replied with their sprint choice
-    if (lastResponse.includes('<!-- jira:sprint-selection -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('sprint-selection')) {
       const sprintSession = ws.get<SprintSelectionSession>('jira.session.sprintSelection');
       if (sprintSession) {
         const trimmed = request.prompt.trim();
@@ -435,8 +427,8 @@ export function createJiraParticipant(
         const idx = parseInt(trimmed, 10);
         if (isNaN(idx) || idx < 1 || idx > sprintSession.candidates.length) {
           const list = sprintSession.candidates.map((s, i) => `${i + 1}. ${s.name} (${s.state})`).join('\n');
-          stream.markdown(`Please reply with a number (1–${sprintSession.candidates.length}):\n\n${list}\n\n<!-- jira:sprint-selection -->`);
-          return;
+          stream.markdown(`Please reply with a number (1–${sprintSession.candidates.length}):\n\n${list}`);
+          return { metadata: { jiraSession: { kinds: ['sprint-selection'] } } };
         }
         await ws.update('jira.session.sprintSelection', undefined);
         const chosen = sprintSession.candidates[idx - 1];
@@ -445,14 +437,14 @@ export function createJiraParticipant(
             ...sprintSession.pending.session,
             fieldValue: chosen.id,
           };
-          await streamFieldUpdatePreview(preview, stream, ws);
+          return await streamFieldUpdatePreview(preview, stream, ws);
         }
         return;
       }
     }
 
     // Field selection — user replied with their field choice
-    if (lastResponse.includes('<!-- jira:selecting-field -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('field-selection')) {
       const fieldSelSession = ws.get<FieldSelectionSession>('jira.session.fieldSelection');
       if (fieldSelSession) {
         const trimmed = request.prompt.trim();
@@ -467,13 +459,13 @@ export function createJiraParticipant(
           : fieldSelSession.candidates.find(f => f.name.toLowerCase() === trimmed.toLowerCase());
         if (!chosen) {
           const list = fieldSelSession.candidates.map((f, i) => `${i + 1}. ${f.name} (\`${f.id}\`)`).join('\n');
-          stream.markdown(`Please reply with a number:\n\n${list}\n\n<!-- jira:selecting-field -->`);
-          return;
+          stream.markdown(`Please reply with a number:\n\n${list}`);
+          return { metadata: { jiraSession: { kinds: ['field-selection'] } } };
         }
         await ws.update('jira.session.fieldSelection', undefined);
         const { fieldValue, arrayOp, ticketKeys } = fieldSelSession.pending;
         try {
-          await continueSetField(ticketKeys, chosen, fieldValue, arrayOp, ticketService, stream, ws, request.model, token);
+          return await continueSetField(ticketKeys, chosen, fieldValue, arrayOp, ticketService, stream, ws, request.model, token);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logDiag('jira.participant', 'error', message, {});
@@ -484,7 +476,7 @@ export function createJiraParticipant(
     }
 
     // Field update preview — user replied ok / cancel
-    if (lastResponse.includes('<!-- jira:field-update-preview -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('field-update-preview')) {
       const previewSession = ws.get<FieldUpdatePreviewSession>('jira.session.fieldUpdatePreview');
       if (previewSession) {
         if (isCancellation(request.prompt)) {
@@ -517,9 +509,9 @@ export function createJiraParticipant(
           return;
         }
         // Not ok or cancel — re-present
-        stream.markdown(`Please reply **post it** to apply, or **(c)** to cancel.\n\n<!-- jira:field-update-preview -->`);
+        stream.markdown(`Please reply **post it** to apply, or **(c)** to cancel.`);
         await ws.update('jira.session.fieldUpdatePreview', previewSession);
-        return;
+        return { metadata: { jiraSession: { kinds: ['field-update-preview'] } } };
       }
     }
 
@@ -867,7 +859,7 @@ export function createJiraParticipant(
     // createTicket has its own multi-turn flow
     if (intent.operation === 'createTicket') {
       try {
-        await handleCreateTicket(request, stream, token, jiraClient, ticketService, ws);
+        return await handleCreateTicket(request, stream, token, jiraClient, ticketService, ws);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         logDiag('jira.participant', 'error', message, {});
@@ -890,7 +882,7 @@ export function createJiraParticipant(
     if (intent.operation === 'runCleanup') {
       try {
         const cleanupFieldMeta = config.cleanupFields.length > 0 ? await ticketService.getFieldMeta() : [];
-        await handleRunCleanup(intent, stream, jiraClient, ticketService, ws, config.baseUrl, config.cleanupFields, cleanupFieldMeta);
+        return await handleRunCleanup(intent, stream, jiraClient, ticketService, ws, config.baseUrl, config.cleanupFields, cleanupFieldMeta);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         logDiag('jira.participant', 'error', message, {});
@@ -1068,11 +1060,10 @@ export function createJiraParticipant(
             if (intent.contentSource === 'history-recent' && isPointerPrompt(request.prompt)) {
               const lastText = extractLastAssistantText(chatContext);
               if (lastText.length > 200) {
-                await streamContentPreview(
+                return await streamContentPreview(
                   { ticketKey: ticketKey!, operation: 'addComment', currentContent: lastText, historyContext: undefined, contentSource: 'history-recent' },
                   stream, ws,
                 );
-                return;
               }
             }
 
@@ -1083,11 +1074,10 @@ export function createJiraParticipant(
               stream.markdown(`_Could not generate comment content — the AI model declined the request. Try rephrasing your instruction or use \`@jira add comment to ${ticketKey}\` with explicit text._`);
               return;
             }
-            await streamContentPreview(
+            return await streamContentPreview(
               { ticketKey: ticketKey!, operation: 'addComment', currentContent: content, historyContext: context, contentSource: nonLiteralSource },
               stream, ws,
             );
-            return;
           }
           break;
         }
@@ -1114,22 +1104,20 @@ export function createJiraParticipant(
               stream.markdown(`_Could not generate description content — the AI model declined the request. Try rephrasing your instruction._`);
               return;
             }
-            await streamContentPreview(
+            return await streamContentPreview(
               { ticketKey: ticketKey!, operation: 'updateDescription', currentContent: content, historyContext: contentCtx, contentSource: nonLiteralSource },
               stream, ws,
             );
-            return;
           }
           // All other fields → fuzzy match + preview flow
           const setFieldMeta = await ticketService.getFieldMeta();
           const setTicketKeys = intent.scope === 'bulk'
             ? (ws.get<SearchResultSession>('jira.session.searchResult')?.ticketKeys ?? [ticketKey!])
             : [ticketKey!];
-          await handleSetField(
+          return await handleSetField(
             setTicketKeys, fieldNameRaw, fieldValueRaw, intent.arrayOp ?? 'set',
             setFieldMeta, ticketService, stream, ws, request.model, token,
           );
-          return;
         }
         case 'showFields': {
           const showFieldMeta = await ticketService.getFieldMeta();
@@ -1291,16 +1279,15 @@ export function createJiraParticipant(
               };
               await ws.update('jira.session.resolutionSelection', resSession);
               const list = resolutions.map((r, i) => `${i + 1}. ${r.name}`).join('\n');
-              stream.markdown(`Which resolution should be set when transitioning to **${targetStatus}**?\n\n${list}\n\nReply with the name or number, or **none** to skip setting a resolution.\n\n<!-- jira:selecting-resolution -->`);
-              return;
+              stream.markdown(`Which resolution should be set when transitioning to **${targetStatus}**?\n\n${list}\n\nReply with the name or number, or **none** to skip setting a resolution.`);
+              return { metadata: { jiraSession: { kinds: ['resolution-selection'] } } };
             }
           }
           const batchSession: TransitionBatchSession = {
             tickets, resolution: undefined, ruleName: undefined, issueType: intent.issueType ?? '',
             fieldIds: config.cleanupFields, fieldMeta: cleanupFieldMeta,
           };
-          await streamReviewScreen(batchSession, stream, ws, `**Bulk transition → ${targetStatus}**`, config.baseUrl);
-          return;
+          return await streamReviewScreen(batchSession, stream, ws, `**Bulk transition → ${targetStatus}**`, config.baseUrl);
         }
         case 'bulkUpdateField': {
           const searchSession = ws.get<SearchResultSession>('jira.session.searchResult');
@@ -1370,11 +1357,16 @@ export function createJiraParticipant(
           const loadFieldMeta = await ticketService.getFieldMeta();
           const loadAlwaysShow = new Set<string>(config.additionalDisplayFields);
           const loadHidden = new Set<string>(config.hiddenDisplayFields);
-          await handleLoadTicket(ticketKey!, ticketService, stream, ws, loadFieldMeta, loadAlwaysShow, loadHidden);
+          const hasSkippedAttachments = await handleLoadTicket(ticketKey!, ticketService, stream, ws, loadFieldMeta, loadAlwaysShow, loadHidden);
           // R6: "after loading a ticket: add a comment, transition it" — the flagship example
           // the plan names for follow-up chips.
           const loadedState: JiraFollowupState = { kind: 'loadedTicket', ticketKey: ticketKey! };
-          return { metadata: { jiraFollowup: loadedState } };
+          return {
+            metadata: {
+              jiraFollowup: loadedState,
+              ...(hasSkippedAttachments ? { jiraSession: { kinds: ['load-skipped'] } } : {}),
+            },
+          };
         }
         case 'validateFields':
           result = await ticketService.validateRequiredFields(ticketKey!, config.requiredFields);
@@ -1384,8 +1376,7 @@ export function createJiraParticipant(
             stream.markdown('No ticket key found. Please specify a ticket, e.g. `@jira spell check PROJ-123`.');
             return;
           }
-          await handleSpellCheck(ticketKey, ticketService, request.model, stream, token, ws);
-          return;
+          return await handleSpellCheck(ticketKey, ticketService, request.model, stream, token, ws);
         }
         default: {
           // R8: replaces the bare "Unrecognised operation." message — an example-driven
