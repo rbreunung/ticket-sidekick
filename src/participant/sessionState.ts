@@ -364,6 +364,9 @@ export interface FilterSelectionSession {
   originalPrompt: string;
 }
 
+// Intentionally excluded from the `JiraSessionContinuity` metadata migration: this session is
+// written to workspaceState in the background and silently overwritten by the next search — it
+// never had a reply-detection tag/branch to convert, so there's nothing to migrate here.
 export interface SearchResultSession {
   ticketKeys: string[];
   jql: string;
@@ -1368,6 +1371,32 @@ export function computeJiraFollowups(state: JiraFollowupState): FollowupSuggesti
     case 'none':
       return [];
   }
+}
+
+/**
+ * Sibling of `JiraFollowupState` on the same `vscode.ChatResult.metadata` channel, but for
+ * session-continuity detection instead of follow-up chips: replaces matching the last rendered
+ * response text against a visible `<!-- jira:TAG -->` HTML comment with a check against this
+ * metadata read off `chatContext.history` (see `getActiveJiraSession` in `jira/ticketContext.ts`).
+ * `workspaceState` still owns the actual session data — `kinds` is only a liveness flag, so a
+ * response streams as many kinds as it left tags for today (some responses leave more than one,
+ * e.g. a comment page that's simultaneously a valid `more-comments`-confirm target and a valid
+ * `comment-list`-index target).
+ */
+// Only the kinds actually wired to this mechanism so far. 'resolution-selection',
+// 'transition-review', 'sprint-selection', 'field-selection', and 'field-update-preview' are
+// NOT here yet — each of those sessions also has a production site inside a `*Handler.ts` file
+// (cleanupHandler.ts / fieldHandler.ts) that still emits the old visible tag; converting only
+// their JiraParticipant.ts-side resume branch without also converting that other producer would
+// silently break resumption for sessions started from there. A future unit that also migrates
+// the relevant handler file's production site should add the matching kind here.
+export type JiraSessionKind =
+  | 'more-comments'
+  | 'comment-list'
+  | 'load-skipped';
+
+export interface JiraSessionContinuity {
+  kinds: JiraSessionKind[];
 }
 
 /** Result text for `jira_discoverWorkflow` — mirrors `handleDiscoverWorkflow`'s chat summary

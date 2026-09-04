@@ -7,14 +7,14 @@ import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { tokenStatus } from '../utils/diagUtils';
 import { logDiag } from '../utils/diagLog';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, type JiraFollowupState, isConfirmation, isCancellation, isGreetingOrEmpty, computeJiraFollowups, pickEmailOption, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewTable } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, type JiraFollowupState, type JiraSessionKind, isConfirmation, isCancellation, isGreetingOrEmpty, computeJiraFollowups, pickEmailOption, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewTable } from './sessionState';
 import { findPath, resolveAndApplyTransition } from '../services/WorkflowService';
 import type { WorkflowGraph } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
 import type { Operation, ParsedIntent } from './jira/llmHelpers';
 import { parseIntent, extractFixVersionFromPrompt, generateContent, isLmRefusal, synthesizeComments, generateDescriptionAndCommentsSummary, isPointerPrompt, extractLastAssistantText, mapCommandToOperation } from './jira/llmHelpers';
 import { streamFieldUpdatePreview, continueSetField, handleSetField, handleSpellCheck } from './jira/fieldHandler';
-import { getLastAssistantText, resolveTicketFromBranch, resolveProjectKey, resolveIssueTypeOrPrompt, parseLastTicketFromContext, sessionWasSuperseded } from './jira/ticketContext';
+import { getLastAssistantText, getActiveJiraSession, resolveTicketFromBranch, resolveProjectKey, resolveIssueTypeOrPrompt, parseLastTicketFromContext, sessionWasSuperseded } from './jira/ticketContext';
 import { validateBaseUrl } from '../services/configValidation';
 import { gatherFileContent, buildContentContext, streamContentPreview, handleContentSession } from './jira/contentHandler';
 import { streamCreateSelection, continueAfterIssueType, streamNextSection, finishTicketCreation, handleCreateTicket } from './jira/createHandler';
@@ -176,6 +176,14 @@ export function createJiraParticipant(
     }
 
     // Resolution selection — user replied with a resolution choice before the review screen
+    //
+    // NOTE (U2 scope decision): this session's initial production also happens in
+    // cleanupHandler.ts (the single-ticket transition flow further below shares the same
+    // 'jira.session.resolutionSelection' key/tag with the bulk-cleanup path). Converting only
+    // this resume branch to the metadata check while that other producer keeps emitting the
+    // visible tag (and no metadata) would silently break resumption for sessions started from
+    // there. Left on the tag mechanism for this unit — see final report for the full list of
+    // sessions with a handler-file production site.
     if (lastResponse.includes('<!-- jira:selecting-resolution -->')) {
       const selSession = ws.get<ResolutionSelectionSession>('jira.session.resolutionSelection');
       if (selSession) {
@@ -515,8 +523,10 @@ export function createJiraParticipant(
       }
     }
 
-    // More-comments session — user confirmed "load all"
-    if (lastResponse.includes('<!-- jira:more-comments -->') && isConfirmation(request.prompt)) {
+    // More-comments session — user confirmed "load all". Fully self-contained in
+    // JiraParticipant.ts (both this resume branch and every production site further below), so
+    // this is the metadata-based liveness check (R1/R3) rather than the visible tag.
+    if (getActiveJiraSession(chatContext)?.kinds.includes('more-comments') && isConfirmation(request.prompt)) {
       const session = ws.get<MoreCommentsSession>('jira.session.moreComments');
       if (session) {
         try {
@@ -525,7 +535,8 @@ export function createJiraParticipant(
           if (session.displayMode === 'full') {
             await ws.update('jira.session.commentList', buildCommentListSession(session.ticketKey, comments));
             stream.markdown(formatCommentsInFull(comments));
-            stream.markdown(`\n\n<!-- @jira-ticket:${session.ticketKey} -->\n\n<!-- jira:comment-list -->`);
+            stream.markdown(`\n\n<!-- @jira-ticket:${session.ticketKey} -->`);
+            return { metadata: { jiraSession: { kinds: ['comment-list'] } } };
           } else {
             const synthesis = await synthesizeComments(
               serializeCommentsForLLM(comments),
@@ -537,8 +548,8 @@ export function createJiraParticipant(
               await ws.update('jira.session.commentList', buildCommentListSession(session.ticketKey, comments));
             }
             stream.markdown(synthesis);
-            const listTag = session.commentQuery ? '' : '\n\n<!-- jira:comment-list -->';
-            stream.markdown(`\n\n<!-- @jira-ticket:${session.ticketKey} -->${listTag}`);
+            stream.markdown(`\n\n<!-- @jira-ticket:${session.ticketKey} -->`);
+            if (!session.commentQuery) return { metadata: { jiraSession: { kinds: ['comment-list'] } } };
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -549,8 +560,9 @@ export function createJiraParticipant(
       }
     }
 
-    // Load skipped — user replied with a number (or "download N") to download skipped attachments
-    if (lastResponse.includes('<!-- jira:load-skipped -->')) {
+    // Load skipped — user replied with a number (or "download N") to download skipped
+    // attachments. Fully self-contained in JiraParticipant.ts — metadata-based (R1/R3).
+    if (getActiveJiraSession(chatContext)?.kinds.includes('load-skipped')) {
       const loadSkippedSession = ws.get<LoadSkippedSession>('jira.session.loadSkipped');
       if (loadSkippedSession) {
         const selection = parseSkippedAttachmentSelection(request.prompt, loadSkippedSession.skipped.length);
@@ -561,8 +573,8 @@ export function createJiraParticipant(
           await ws.update('jira.session.loadSkipped', undefined);
           // fall through to intent parsing
         } else if (selection === 'out-of-range') {
-          stream.markdown(`Please reply with a number:\n\n${skippedList(loadSkippedSession.skipped)}\n\nReply with a number to download it anyway.\n\n<!-- jira:load-skipped -->`);
-          return;
+          stream.markdown(`Please reply with a number:\n\n${skippedList(loadSkippedSession.skipped)}\n\nReply with a number to download it anyway.`);
+          return { metadata: { jiraSession: { kinds: ['load-skipped'] } } };
         } else {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
           if (!workspaceFolder) {
@@ -591,7 +603,8 @@ export function createJiraParticipant(
           const remaining = loadSkippedSession.skipped.filter((_, i) => !downloadedSet.has(i));
           if (remaining.length > 0) {
             await ws.update('jira.session.loadSkipped', { ticketKey: loadSkippedSession.ticketKey, skipped: remaining } satisfies LoadSkippedSession);
-            stream.markdown(`${lines.join('\n')}\n\n**Remaining skipped attachments:**\n\n${skippedList(remaining)}\n\nReply with a number to download another.\n\n<!-- @jira-ticket:${loadSkippedSession.ticketKey} -->\n\n<!-- jira:load-skipped -->`);
+            stream.markdown(`${lines.join('\n')}\n\n**Remaining skipped attachments:**\n\n${skippedList(remaining)}\n\nReply with a number to download another.\n\n<!-- @jira-ticket:${loadSkippedSession.ticketKey} -->`);
+            return { metadata: { jiraSession: { kinds: ['load-skipped'] } } };
           } else {
             await ws.update('jira.session.loadSkipped', undefined);
             stream.markdown(`${lines.join('\n')}\n\nAll attachments saved.\n\n<!-- @jira-ticket:${loadSkippedSession.ticketKey} -->`);
@@ -796,16 +809,17 @@ export function createJiraParticipant(
       }
     }
 
-    // Comment list — user replied with a comment number to view in full
-    if (lastResponse.includes('<!-- jira:comment-list -->')) {
+    // Comment list — user replied with a comment number to view in full. Fully self-contained
+    // in JiraParticipant.ts — metadata-based (R1/R3).
+    if (getActiveJiraSession(chatContext)?.kinds.includes('comment-list')) {
       const commentSession = ws.get<CommentListSession>('jira.session.commentList');
       if (commentSession) {
         const index = parseCommentIndex(request.prompt, commentSession.comments.length);
         if (index !== 'invalid') {
           const entry = commentSession.comments[index - 1];
           stream.markdown(`**Comment ${index}** — ${entry.author} (${entry.date})\n\n${entry.bodyMarkdown}`);
-          stream.markdown(`\n\n<!-- @jira-ticket:${commentSession.ticketKey} -->\n\n<!-- jira:comment-list -->`);
-          return;
+          stream.markdown(`\n\n<!-- @jira-ticket:${commentSession.ticketKey} -->`);
+          return { metadata: { jiraSession: { kinds: ['comment-list'] } } };
         }
         // Not a comment index — fall through to intent parse
       }
@@ -960,11 +974,12 @@ export function createJiraParticipant(
             if (total > MAX_SHOW) {
               const moreSession: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: null };
               await ws.update('jira.session.moreComments', moreSession);
-              stream.markdown(`\n\n_${total - MAX_SHOW} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:more-comments -->\n\n<!-- jira:comment-list -->`);
+              stream.markdown(`\n\n_${total - MAX_SHOW} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->`);
+              return { metadata: { jiraSession: { kinds: ['more-comments', 'comment-list'] } } };
             } else {
-              stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:comment-list -->`);
+              stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
+              return { metadata: { jiraSession: { kinds: ['comment-list'] } } };
             }
-            return;
           }
           result = base;
           break;
@@ -998,11 +1013,12 @@ export function createJiraParticipant(
           if (fullTotal > MAX_SHOW_FULL) {
             const moreSession: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: null, displayMode: 'full' };
             await ws.update('jira.session.moreComments', moreSession);
-            stream.markdown(`\n\n_${fullTotal - MAX_SHOW_FULL} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:more-comments -->\n\n<!-- jira:comment-list -->`);
+            stream.markdown(`\n\n_${fullTotal - MAX_SHOW_FULL} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->`);
+            return { metadata: { jiraSession: { kinds: ['more-comments', 'comment-list'] } } };
           } else {
-            stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:comment-list -->`);
+            stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
+            return { metadata: { jiraSession: { kinds: ['comment-list'] } } };
           }
-          return;
         }
         case 'getComments': {
           const MAX_INITIAL = 20;
@@ -1023,15 +1039,16 @@ export function createJiraParticipant(
           }
           const getCommentsRef = formatKeyLink(ticketKey!, config.baseUrl);
           stream.markdown(`**${getCommentsRef} — Comments**\n\n` + synthesis);
-          const listTag = hasQuery ? '' : '\n\n<!-- jira:comment-list -->';
+          const listKinds: JiraSessionKind[] = hasQuery ? [] : ['comment-list'];
           if (total > MAX_INITIAL) {
             const moreSession: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: intent.commentQuery };
             await ws.update('jira.session.moreComments', moreSession);
-            stream.markdown(`\n\n_${total - MAX_INITIAL} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:more-comments -->${listTag}`);
+            stream.markdown(`\n\n_${total - MAX_INITIAL} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->`);
+            return { metadata: { jiraSession: { kinds: ['more-comments', ...listKinds] } } };
           } else {
-            stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->${listTag}`);
+            stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
+            return listKinds.length > 0 ? { metadata: { jiraSession: { kinds: listKinds } } } : undefined;
           }
-          return;
         }
         case 'addComment': {
           const isLiteral = intent.contentSource === 'literal' || intent.contentSource === undefined;

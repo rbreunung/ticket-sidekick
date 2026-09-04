@@ -3,7 +3,7 @@ import { execSync } from 'child_process';
 import { extractTicketId } from '../../utils/branchParser';
 import {
   extractLastTicketFromText, NO_ISSUE_TYPE, CURRENT_SESSION_SCHEMA_VERSION,
-  type AwaitIssueTypeResume, type AwaitIssueTypeSession,
+  type AwaitIssueTypeResume, type AwaitIssueTypeSession, type JiraSessionContinuity,
 } from '../sessionState';
 
 // workspaceState key + response tag for the shared issue-type chat-ask (R6/KTD4) — one session type
@@ -21,6 +21,20 @@ export function getLastAssistantText(context: vscode.ChatContext): string {
     }
   }
   return '';
+}
+
+// R1/R3: replaces `getLastAssistantText(...).includes('<!-- jira:TAG -->')` for sessions that
+// have migrated off the visible-tag mechanism (see JiraSessionContinuity in sessionState.ts).
+// Reads the metadata a session-producing response returned via `{ metadata: { jiraSession } }`
+// off the last turn in `chatContext.history` — no rendered-text scanning, so no artifact of
+// session-tracking is left in the chat transcript. Returns undefined when the last turn isn't a
+// `ChatResponseTurn`, carries no result metadata, or the user has moved on since (a different,
+// non-session response is now last) — matching today's "tag absent" behavior.
+export function getActiveJiraSession(context: vscode.ChatContext): JiraSessionContinuity | undefined {
+  const last = context.history[context.history.length - 1];
+  if (!(last instanceof vscode.ChatResponseTurn)) return undefined;
+  const metadata = last.result.metadata as { jiraSession?: JiraSessionContinuity } | undefined;
+  return metadata?.jiraSession;
 }
 
 export function resolveTicketFromBranch(): string | null {
