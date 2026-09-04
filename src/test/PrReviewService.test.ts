@@ -1067,7 +1067,20 @@ describe('PrReviewService.buildCriticPrompt', () => {
     );
     expect(prompt).toContain('**Full content:**');
     expect(prompt).toContain('export function helper() { return 1; }');
-    expect(prompt).toContain('Full contents of the files you previously requested');
+    expect(prompt).toContain('Contents of the requested file(s) that fit the available context budget');
+  });
+
+  it('does not claim completeness in the context note, since budget selection can drop a requested file', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const findings = [
+      { file: 'src/a.ts', line: 5, severity: 'critical' as const, title: 'SQLi', description: 'concat', recommendation: 'params' },
+    ];
+    const fileContents = new Map([['src/a.ts', 'const q = () => {};']]);
+    const prompt = service.buildCriticPrompt(
+      pr, [{ path: 'src/a.ts', diff: '@@ -1 +5 @@\n+const x = q(sql);' }], findings, undefined, fileContents,
+    );
+    expect(prompt).not.toContain('Full contents');
+    expect(prompt).toContain('a requested file may be missing if it did not fit');
   });
 
   it('omits the context note when fileContents is empty or absent', () => {
@@ -1078,7 +1091,7 @@ describe('PrReviewService.buildCriticPrompt', () => {
     const prompt = service.buildCriticPrompt(
       pr, [{ path: 'src/a.ts', diff: '@@ -1 +5 @@\n+const x = q(sql);' }], findings, undefined, new Map(),
     );
-    expect(prompt).not.toContain('Full contents of the files you previously requested');
+    expect(prompt).not.toContain('Contents of the requested file(s)');
   });
 });
 

@@ -74,12 +74,10 @@ const PERSONA_TRAILER_LINE = `Last line lists additional files needed and recomm
 
 const PROMPT_TAIL = PROMPT_TAIL_BODY + PROMPT_TAIL_TRAILER + DEFAULT_TRAILER_LINE;
 
-/** Only `buildPrompt` (smart mode's phase-1 call) ever passes `true` here — every other
- * caller keeps today's exact `PROMPT_TAIL` text unchanged. */
-function buildTail(includePersonaRecommendation?: boolean): string {
-  if (!includePersonaRecommendation) return PROMPT_TAIL;
-  return PROMPT_TAIL_BODY + PERSONA_RECOMMENDATION_INSTRUCTION + PROMPT_TAIL_TRAILER + PERSONA_TRAILER_LINE;
-}
+/** Only smart mode's phase-1 standard pass (`buildPrompt(..., includePersonaRecommendation: true)`)
+ * uses this tail; every other caller uses `PROMPT_TAIL` directly, unchanged. */
+const PERSONA_RECOMMENDATION_TAIL =
+  PROMPT_TAIL_BODY + PERSONA_RECOMMENDATION_INSTRUCTION + PROMPT_TAIL_TRAILER + PERSONA_TRAILER_LINE;
 
 const REVIEW_PROMPT_PREFIX = PROMPT_INTRO + GENERALIST_FOCUS + PROMPT_TAIL;
 
@@ -199,7 +197,7 @@ export class PrReviewService {
     includePersonaRecommendation?: boolean,
   ): string {
     const prefix = includePersonaRecommendation
-      ? PROMPT_INTRO + GENERALIST_FOCUS + buildTail(true)
+      ? PROMPT_INTRO + GENERALIST_FOCUS + PERSONA_RECOMMENDATION_TAIL
       : REVIEW_PROMPT_PREFIX;
     return this.assemblePrompt(prefix, pr, fileDiffs, fileContents, additionalInstructions);
   }
@@ -292,12 +290,15 @@ export class PrReviewService {
     const extra = additionalInstructions
       ? `ADDITIONAL INSTRUCTIONS:\n${additionalInstructions}\n\n`
       : '';
-    // Mirrors buildPrompt's pass2Note: once full file contents have been fetched for a
+    // Mirrors buildPrompt's pass2Note: once file contents have been fetched for a
     // requested path, tell the model to use them rather than re-request the same file.
+    // Worded to not claim every requested file made it in — the caller's budget
+    // selection can silently drop some, and this is the final round regardless.
     const contextNote =
       fileContents && fileContents.size > 0
-        ? 'Note: Full contents of the files you previously requested are included below. Use ' +
-          'them to confirm or retract candidate findings.\n\n'
+        ? 'Note: Contents of the requested file(s) that fit the available context budget are ' +
+          'included below (a requested file may be missing if it did not fit). Use what is ' +
+          'included to confirm or retract candidate findings.\n\n'
         : '';
     return (
       'You are verifying the findings of a code review against the diff. For each ' +

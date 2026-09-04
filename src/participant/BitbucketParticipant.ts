@@ -1146,7 +1146,7 @@ export function createBitbucketParticipant(
               try {
                 const continuationNote = 'Continuation pass — the previous response was truncated. Review ONLY the files provided below.';
                 const contInstructions = continuationNote + (extraInstructions ? '\n' + extraInstructions : '');
-                const contPrompt = service.buildPrompt(pr, uncoveredFiles, undefined, contInstructions);
+                const contPrompt = service.buildPrompt(pr, uncoveredFiles, undefined, contInstructions, resolvedMode === 'smart');
                 totalInputChars += contPrompt.length;
                 const contAttempt: CallAttemptOut = { attempt: 0, durationMs: 0 };
                 const contRaw = await callLLMWithProgress(
@@ -1167,6 +1167,13 @@ export function createBitbucketParticipant(
                   itemCount: uncoveredFiles.length, promptChars: contPrompt.length, responseChars: contRaw.length,
                   durationMs: contAttempt.durationMs, status: cont.truncated ? 'truncated' : 'ok',
                 }));
+                // Pass1's own trailer never parsed for a truncated response (truncated is
+                // defined as !hasMetaLine), so the continuation's trailer is this chunk's
+                // only chance to contribute a smart-mode persona recommendation.
+                if (resolvedMode === 'smart' && cont.hasMetaLine) {
+                  chunkPersonaUsable = true;
+                  for (const p of cont.recommendedPersonas ?? []) chunkRecPersonas.add(p);
+                }
                 const contCombined = [...findings, ...cont.findings];
                 batchRawCount = contCombined.length;
                 batchFindings = resolveFindingAnchors(contCombined, batch.items);
@@ -1332,7 +1339,7 @@ export function createBitbucketParticipant(
                   );
                   totalInputChars += round2Prompt.length;
                   const round2Attempt: CallAttemptOut = { attempt: 0, durationMs: 0 };
-                  criticRaw = await callLLMWithProgress(
+                  const round2Raw = await callLLMWithProgress(
                     round2Prompt, request.model, token, `${batchStatus} verifying (round 2)`,
                     `critic round2 batch ${i + 1}/${chunks.length}`,
                     {
@@ -1343,12 +1350,24 @@ export function createBitbucketParticipant(
                       })),
                     },
                   );
-                  totalOutputChars += criticRaw.length;
-                  logReview('info', formatCallLine({
-                    runTag, pass: 'critic-r2', batch: i + 1, totalBatches: chunks.length, attempt: round2Attempt.attempt,
-                    itemCount: batch.items.length, promptChars: round2Prompt.length, responseChars: criticRaw.length,
-                    durationMs: round2Attempt.durationMs, status: 'ok',
-                  }));
+                  totalOutputChars += round2Raw.length;
+                  // Only trust round 2 when it actually parses. A successful-but-garbled
+                  // reply must not silently replace round 1's real keep decision with
+                  // parseCriticKeep's fail-open "keep everything" default — that would
+                  // contradict the fail-soft fallback below, which only triggers on a
+                  // thrown exception, not on a reply that came back but made no sense.
+                  if (extractJsonObject(round2Raw)) {
+                    criticRaw = round2Raw;
+                    logReview('info', formatCallLine({
+                      runTag, pass: 'critic-r2', batch: i + 1, totalBatches: chunks.length, attempt: round2Attempt.attempt,
+                      itemCount: batch.items.length, promptChars: round2Prompt.length, responseChars: round2Raw.length,
+                      durationMs: round2Attempt.durationMs, status: 'ok',
+                    }));
+                  } else {
+                    logReview('warn', `Critic round 2 returned no parseable JSON — keeping round 1's decision — batch ${i + 1}`, {
+                      batch: i + 1, responseChars: round2Raw.length,
+                    });
+                  }
                 }
               } catch (err) {
                 logReview('warn', `Critic file-fetch round failed — batch ${i + 1}`, {
