@@ -1461,6 +1461,31 @@ describe('formatFindingsFunnel', () => {
     });
     expect(summary).not.toContain('critic');
   });
+
+  it('KTD6: folds persona-pass findings into the same raw count as the standard pass, with no separate persona stage', () => {
+    // Simulates a deep/smart run: the standard pass's raw findings plus all four persona
+    // passes' raw findings are summed into one `raw` before the funnel ever sees them —
+    // exactly what BitbucketParticipant.ts's `rawFindingsTotal` accumulator does across
+    // both the per-chunk standard-pass tally and every `runPersonaPassesForChunk` result.
+    const standardPassRaw = 6;
+    const personaPassesRaw = 2 + 1 + 3 + 0; // security, performance, reliability, maintainability
+    const counts = {
+      raw: standardPassRaw + personaPassesRaw,
+      dedupedCrossBatch: 2,
+      droppedByAnchor: 1,
+      foldedByConfidence: 3,
+      droppedByCritic: 2,
+      final: 4,
+    };
+    expect(counts.raw).toBe(12);
+
+    const summary = formatFindingsFunnel(counts);
+    // No persona-specific stage or label appears — persona findings are invisible in the
+    // funnel shape, only inflating the same `raw` count a standard-only run would produce.
+    expect(summary).toContain('raw 12');
+    expect(summary).not.toMatch(/security|performance|reliability|maintainability|persona/i);
+    expect(summary.split('\n')).toHaveLength(6); // header + 4 stage lines + final — unchanged shape
+  });
 });
 
 describe('formatStructuredRunRecord', () => {
