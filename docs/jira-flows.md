@@ -94,6 +94,8 @@ Trigger: `@jira run cleanup "rule name"` or ad-hoc `@jira close PROJ bugs in "Fi
 
 Review screen shows all tickets with their subtasks and proposed transitions. User replies: **ok**, **(c)** to cancel the run, or key numbers to skip (cascading: subtask skip → parent skipped; parent skip → all subtasks skipped).
 
+`ticketSidekick.jira.cleanupFields` (array of field IDs, default empty) adds one column per configured field to this review table — for both `@jira run cleanup` and the ad-hoc bulk-transition flow, and for both parent and subtask rows. It's the same generic, opt-in mechanism as `ticketSidekick.jira.searchFields` (`@jira search`'s extra columns): any field ID valid for one works in the other, rendered through the same shared column-building helper (`buildExtraFieldColumns` in `TicketService.ts`). A configured field ID that doesn't match any known field logs a warning to the "Ticket Sidekick" Output Channel once per review-table render, for either setting.
+
 Execution streams one line per ticket (subtasks first), then a summary. Failures are collected and reported at the end — the batch continues on failure.
 
 ## Template generation
