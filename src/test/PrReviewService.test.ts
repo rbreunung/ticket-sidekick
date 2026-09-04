@@ -13,7 +13,7 @@ import {
   formatContinuationMessage, createAttemptTracker,
 } from '../participant/reviewSessionState';
 import type { ReviewFinding } from '../participant/reviewSessionState';
-import { PrReviewService } from '../services/PrReviewService';
+import { PrReviewService, PERSONAS } from '../services/PrReviewService';
 import { MockBitbucketClient } from './mocks/MockBitbucketClient';
 import type { BitbucketPR } from '../bitbucket/IBitbucketClient';
 import { dcDiffToUnified, BitbucketApiError } from '../bitbucket/BitbucketApiClient';
@@ -328,6 +328,89 @@ describe('PrReviewService.buildPrompt', () => {
     const prompt = service.buildPrompt(pr, fileDiffs, contents);
 
     expect(prompt).toContain('second-pass review');
+  });
+});
+
+describe('PrReviewService.buildPersonaPrompt', () => {
+  const pr: BitbucketPR = {
+    id: 42, title: 'My PR', description: 'A description',
+    author: { displayName: 'Jane', emailAddress: 'j@example.com' },
+    targetBranch: 'main', fromCommitHash: 'abc123',
+  };
+  const fileDiffs = [{ path: 'src/foo.ts', diff: '@@ -1 +1 @@\n+const x = 1;' }];
+
+  it('exposes exactly the four persona lenses', () => {
+    expect(PERSONAS.map((p) => p.id).sort()).toEqual(
+      ['maintainability', 'performance', 'reliability', 'security'].sort(),
+    );
+  });
+
+  it.each(PERSONAS)('$id prompt keeps grounding rules and untrusted-content markers unchanged from buildPrompt', (persona) => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+
+    const generalist = service.buildPrompt(pr, fileDiffs);
+    const personaPrompt = service.buildPersonaPrompt(persona, pr, fileDiffs);
+
+    expect(personaPrompt).toContain('GROUNDING RULES');
+    expect(personaPrompt).toContain('diff --git');
+    expect(personaPrompt).toContain('JSON fixtures');
+    expect(personaPrompt).toContain('«UNTRUSTED-CONTENT»');
+    expect(personaPrompt).toContain('«END-UNTRUSTED-CONTENT»');
+
+    // Grounding rules text is identical between the generalist and persona prompts.
+    const groundingRulesText = generalist.slice(
+      generalist.indexOf('GROUNDING RULES'),
+      generalist.indexOf('Review the changes for:'),
+    );
+    expect(personaPrompt).toContain(groundingRulesText);
+  });
+
+  it.each(PERSONAS)('$id prompt contains only its own persona focus text', (persona) => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+
+    const personaPrompt = service.buildPersonaPrompt(persona, pr, fileDiffs);
+
+    expect(personaPrompt).toContain(persona.focus.trim());
+    for (const other of PERSONAS) {
+      if (other.id === persona.id) continue;
+      expect(personaPrompt).not.toContain(other.focus.trim());
+    }
+    // The generalist instruction block must not leak into a persona prompt.
+    expect(personaPrompt).not.toContain('Review the changes for:');
+  });
+
+  it.each(PERSONAS)('$id prompt keeps the NDJSON output contract unchanged', (persona) => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+
+    const generalist = service.buildPrompt(pr, fileDiffs);
+    const personaPrompt = service.buildPersonaPrompt(persona, pr, fileDiffs);
+
+    expect(personaPrompt).toContain('Respond with one JSON object per line (NDJSON)');
+    expect(personaPrompt).toContain('additionalFilesNeeded');
+
+    const ndjsonContract = generalist.slice(
+      generalist.indexOf('Output findings ordered by severity'),
+      generalist.indexOf('additionalFilesNeeded":["path/to/other.ts"]}') + 'additionalFilesNeeded":["path/to/other.ts"]}'.length,
+    );
+    expect(personaPrompt).toContain(ndjsonContract);
+  });
+
+  it('respects additional instructions and fileContents the same way buildPrompt does', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const contents = new Map([['src/foo.ts', 'const x = 1;\n']]);
+
+    const prompt = service.buildPersonaPrompt(
+      PERSONAS[0], pr, fileDiffs, contents, 'Focus extra hard.',
+    );
+
+    expect(prompt).toContain('Full content');
+    expect(prompt).toContain('second-pass review');
+    expect(prompt).toContain('ADDITIONAL INSTRUCTIONS');
+    expect(prompt).toContain('Focus extra hard.');
   });
 });
 
