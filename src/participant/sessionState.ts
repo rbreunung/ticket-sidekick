@@ -541,6 +541,25 @@ export function buildJiraNotConfiguredMessage(config: Pick<JiraConfig, 'baseUrl'
   return `Jira credentials not configured. Run "${setupLabel}" from the Command Palette.`;
 }
 
+/**
+ * Builds a raw `[label](command:workbench.action.chat.open?<encoded>)` markdown link that,
+ * when clicked, re-submits `replyText` to this participant exactly as if the user had typed it
+ * (R5) — reusing VS Code's built-in `workbench.action.chat.open` command rather than a new
+ * registered wrapper command (KTD2).
+ *
+ * Pure string building only — this never touches `vscode.MarkdownString` (KTD5). Every call site
+ * that assembles a `MarkdownString` from output containing one or more of these links MUST set
+ * `.isTrusted = { enabledCommands: ['workbench.action.chat.open'] }` on that `MarkdownString`
+ * before calling `stream.markdown(...)`, mirroring the existing `settingsLink`/`credentialsLink`
+ * trust-gate pattern in `JiraParticipant.ts` (and `notConfigured` in `BitbucketParticipant.ts`).
+ * Without that, VS Code renders the link as inert plain text instead of a clickable command.
+ */
+export function buildChatCommandLink(label: string, participantId: '@jira' | '@bitbucket', replyText: string): string {
+  const query = `${participantId} ${replyText}`;
+  const encodedArgs = encodeURIComponent(JSON.stringify({ query, isPartialQuery: false }));
+  return `[${label}](command:workbench.action.chat.open?${encodedArgs})`;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Shared Veracode/Waltz import session types + review-table renderer + toggle-reply parser.
 //

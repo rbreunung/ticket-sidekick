@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderReviewTable, buildJiraNotConfiguredMessage, isGreetingOrEmpty, computeJiraFollowups, type ReviewTableColumn, type JiraFollowupState } from '../participant/sessionState';
+import { renderReviewTable, buildJiraNotConfiguredMessage, buildChatCommandLink, isGreetingOrEmpty, computeJiraFollowups, type ReviewTableColumn, type JiraFollowupState } from '../participant/sessionState';
 
 interface Widget {
   name: string;
@@ -106,6 +106,37 @@ describe('buildJiraNotConfiguredMessage', () => {
     const message = buildJiraNotConfiguredMessage({ baseUrl: undefined, token: undefined, authType: 'cloud' });
 
     expect(message).not.toContain('(command:');
+  });
+});
+
+describe('buildChatCommandLink', () => {
+  it('returns a markdown command link whose decoded query JSON matches the participant + reply text', () => {
+    const link = buildChatCommandLink('Fixed', '@jira', 'Fixed');
+
+    const match = link.match(/^\[Fixed\]\(command:workbench\.action\.chat\.open\?(.+)\)$/);
+    expect(match).not.toBeNull();
+
+    const decoded = JSON.parse(decodeURIComponent(match![1]));
+    expect(decoded).toEqual({ query: '@jira Fixed', isPartialQuery: false });
+  });
+
+  it('round-trips a reply text containing characters that require JSON/URI escaping', () => {
+    const replyText = 'It\'s "done", right? 100% — yes/no';
+    const link = buildChatCommandLink('Reply', '@jira', replyText);
+
+    const match = link.match(/^\[Reply\]\(command:workbench\.action\.chat\.open\?(.+)\)$/);
+    expect(match).not.toBeNull();
+
+    const decoded = JSON.parse(decodeURIComponent(match![1]));
+    expect(decoded.query).toBe(`@jira ${replyText}`);
+    expect(decoded.isPartialQuery).toBe(false);
+  });
+
+  it('never sets isTrusted or touches vscode.MarkdownString — plain string building only (KTD5)', () => {
+    const link = buildChatCommandLink('Fixed', '@jira', 'Fixed');
+
+    expect(typeof link).toBe('string');
+    expect(link).not.toContain('isTrusted');
   });
 });
 

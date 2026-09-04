@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildBitbucketNotConfiguredMessage,
+  buildChatCommandLink,
   computeBitbucketFollowups,
   parseSmartFallbackReply,
   ALL_PERSONA_IDS,
@@ -32,6 +33,37 @@ describe('buildBitbucketNotConfiguredMessage', () => {
     const message = buildBitbucketNotConfiguredMessage({ authType: 'datacenter', baseUrl: undefined, token: undefined });
 
     expect(message).not.toContain('(command:');
+  });
+});
+
+describe('buildChatCommandLink', () => {
+  it('returns a markdown command link whose decoded query JSON matches the @bitbucket participant + reply text', () => {
+    const link = buildChatCommandLink('Fixed', '@bitbucket', 'Fixed');
+
+    const match = link.match(/^\[Fixed\]\(command:workbench\.action\.chat\.open\?(.+)\)$/);
+    expect(match).not.toBeNull();
+
+    const decoded = JSON.parse(decodeURIComponent(match![1]));
+    expect(decoded).toEqual({ query: '@bitbucket Fixed', isPartialQuery: false });
+  });
+
+  it('round-trips a reply text containing characters that require JSON/URI escaping', () => {
+    const replyText = 'It\'s "done", right? 100% — yes/no';
+    const link = buildChatCommandLink('Reply', '@bitbucket', replyText);
+
+    const match = link.match(/^\[Reply\]\(command:workbench\.action\.chat\.open\?(.+)\)$/);
+    expect(match).not.toBeNull();
+
+    const decoded = JSON.parse(decodeURIComponent(match![1]));
+    expect(decoded.query).toBe(`@bitbucket ${replyText}`);
+    expect(decoded.isPartialQuery).toBe(false);
+  });
+
+  it('never sets isTrusted or touches vscode.MarkdownString — plain string building only (KTD5)', () => {
+    const link = buildChatCommandLink('Fixed', '@bitbucket', 'Fixed');
+
+    expect(typeof link).toBe('string');
+    expect(link).not.toContain('isTrusted');
   });
 });
 

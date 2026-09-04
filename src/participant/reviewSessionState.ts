@@ -144,6 +144,27 @@ export function buildBitbucketNotConfiguredMessage(config: Pick<BitbucketConfig,
   return `Bitbucket credentials not configured. Run "${setupLabel}" from the Command Palette.`;
 }
 
+/**
+ * Builds a raw `[label](command:workbench.action.chat.open?<encoded>)` markdown link that,
+ * when clicked, re-submits `replyText` to this participant exactly as if the user had typed it
+ * (R5) — reusing VS Code's built-in `workbench.action.chat.open` command rather than a new
+ * registered wrapper command (KTD2). Mirrors `buildChatCommandLink` in `sessionState.ts` — this
+ * file intentionally does not import from that one (the two participants stay independent), so
+ * the helper is duplicated here rather than shared.
+ *
+ * Pure string building only — this never touches `vscode.MarkdownString` (KTD5). Every call site
+ * that assembles a `MarkdownString` from output containing one or more of these links MUST set
+ * `.isTrusted = { enabledCommands: ['workbench.action.chat.open'] }` on that `MarkdownString`
+ * before calling `stream.markdown(...)`, mirroring the existing `notConfigured` trust-gate
+ * pattern in `BitbucketParticipant.ts`. Without that, VS Code renders the link as inert plain
+ * text instead of a clickable command.
+ */
+export function buildChatCommandLink(label: string, participantId: '@jira' | '@bitbucket', replyText: string): string {
+  const query = `${participantId} ${replyText}`;
+  const encodedArgs = encodeURIComponent(JSON.stringify({ query, isPartialQuery: false }));
+  return `[${label}](command:workbench.action.chat.open?${encodedArgs})`;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Pure helpers for `bitbucket_*` Language Model tools (`src/tools/bitbucketTools.ts`, U3) —
 // result formatting and confirmation-text building kept here so they stay Vitest-loadable,
