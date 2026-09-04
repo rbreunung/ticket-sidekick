@@ -12,6 +12,7 @@ import {
   buildTruncationEvent, formatRecoveryDecision, formatStructuredRunRecord,
   formatContinuationMessage, createAttemptTracker,
   resolveReviewMode, deriveCriticEnabled,
+  aggregateRecommendedPersonas,
 } from '../participant/reviewSessionState';
 import type { ReviewFinding } from '../participant/reviewSessionState';
 import { PrReviewService, PERSONAS } from '../services/PrReviewService';
@@ -330,6 +331,27 @@ describe('PrReviewService.buildPrompt', () => {
     const prompt = service.buildPrompt(pr, fileDiffs, contents);
 
     expect(prompt).toContain('second-pass review');
+  });
+
+  it('mentions recommendedPersonas in the trailer instruction when includePersonaRecommendation is true (U7/KTD2)', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+
+    const prompt = service.buildPrompt(pr, fileDiffs, undefined, undefined, true);
+
+    expect(prompt).toContain('recommendedPersonas');
+    expect(prompt).toContain('security, performance, reliability, maintainability');
+  });
+
+  it('does not mention recommendedPersonas when includePersonaRecommendation is omitted or false', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+
+    const promptOmitted = service.buildPrompt(pr, fileDiffs);
+    const promptFalse = service.buildPrompt(pr, fileDiffs, undefined, undefined, false);
+
+    expect(promptOmitted).not.toContain('recommendedPersonas');
+    expect(promptFalse).not.toContain('recommendedPersonas');
   });
 });
 
@@ -1229,6 +1251,44 @@ describe('parseNdjsonFindings', () => {
     // A meta line completed the response, so the mid-stream garbage is not a truncation tail.
     expect(result.danglingTail).toBeUndefined();
   });
+
+  // P0 regression (U7/KTD2): the old "exactly one key" meta-line check would have
+  // rejected this combined trailer (two keys) and silently misclassified it — widen
+  // the check to "every key present is a known meta key" instead.
+  it('parses a combined additionalFilesNeeded + recommendedPersonas trailer as one meta line (P0 regression)', () => {
+    const raw = [
+      JSON.stringify(f1),
+      '{"additionalFilesNeeded":["a.ts"],"recommendedPersonas":["security"]}',
+    ].join('\n');
+    const result = parseNdjsonFindings(raw);
+    expect(result.findings).toHaveLength(1);
+    expect(result.hasMetaLine).toBe(true);
+    expect(result.additionalFilesNeeded).toEqual(['a.ts']);
+    expect(result.recommendedPersonas).toEqual(['security']);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('parses a recommendedPersonas-only trailer (additionalFilesNeeded omitted) as a meta line', () => {
+    const raw = [JSON.stringify(f1), '{"recommendedPersonas":["performance","reliability"]}'].join('\n');
+    const result = parseNdjsonFindings(raw);
+    expect(result.hasMetaLine).toBe(true);
+    expect(result.recommendedPersonas).toEqual(['performance', 'reliability']);
+    expect(result.additionalFilesNeeded).toEqual([]);
+  });
+
+  it('still rejects a plain findings-shaped object as the meta line (has "file", not a known meta key)', () => {
+    const raw = [JSON.stringify(f1), JSON.stringify(f2)].join('\n');
+    const result = parseNdjsonFindings(raw);
+    expect(result.hasMetaLine).toBe(false);
+    expect(result.recommendedPersonas).toEqual([]);
+  });
+
+  it('defaults recommendedPersonas to an empty array when the trailer omits it entirely', () => {
+    const raw = [JSON.stringify(f1), '{"additionalFilesNeeded":["a.ts"]}'].join('\n');
+    const result = parseNdjsonFindings(raw);
+    expect(result.hasMetaLine).toBe(true);
+    expect(result.recommendedPersonas).toEqual([]);
+  });
 });
 
 describe('createAttemptTracker', () => {
@@ -1841,6 +1901,46 @@ describe('persona pass merge (U3)', () => {
     expect(result[0].error).toBeUndefined();
     expect(result[0].result).toBe('ok response');
     expect(attempts).toBe(2); // identical retry succeeded — no split needed
+  });
+});
+
+describe('aggregateRecommendedPersonas (U7/R4/KTD2)', () => {
+  it('unions recommendations across chunks — only one chunk recommending performance still includes it (AE2)', () => {
+    const result = aggregateRecommendedPersonas([
+      { recommendedPersonas: ['security'], failed: false },
+      { recommendedPersonas: ['performance'], failed: false },
+      { recommendedPersonas: [], failed: false },
+    ]);
+    expect(result.hasUsableSignal).toBe(true);
+    expect(result.selected.sort()).toEqual(['performance', 'security']);
+  });
+
+  it('a docs-only chunk (empty recommendation) contributes nothing but still counts as usable signal', () => {
+    const result = aggregateRecommendedPersonas([{ recommendedPersonas: [], failed: false }]);
+    expect(result.hasUsableSignal).toBe(true);
+    expect(result.selected).toEqual([]);
+  });
+
+  it('drops an id not in the fixed catalog instead of passing it through', () => {
+    const result = aggregateRecommendedPersonas([
+      { recommendedPersonas: ['security', 'typo-lens'], failed: false },
+    ]);
+    expect(result.selected).toEqual(['security']);
+  });
+
+  it('routes to "no usable signal" when every chunk failed or returned an unparseable recommendation (AE3)', () => {
+    const result = aggregateRecommendedPersonas([
+      { recommendedPersonas: undefined, failed: true },
+      { recommendedPersonas: undefined, failed: false },
+    ]);
+    expect(result.hasUsableSignal).toBe(false);
+    expect(result.selected).toEqual([]);
+  });
+
+  it('empty input has no usable signal', () => {
+    const result = aggregateRecommendedPersonas([]);
+    expect(result.hasUsableSignal).toBe(false);
+    expect(result.selected).toEqual([]);
   });
 });
 
