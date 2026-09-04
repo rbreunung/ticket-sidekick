@@ -825,8 +825,16 @@ export function buildTruncationEvent(params: {
   };
 }
 
-/** The four LLM calls in the review pipeline that emit diagnostic lines (R1). */
-export type ReviewPass = 'pass1' | 'continuation' | 'pass2' | 'critic';
+/**
+ * The LLM calls in the review pipeline that emit diagnostic lines (R1). The four
+ * persona-lens ids ('security' | 'performance' | 'reliability' | 'maintainability')
+ * are duplicated here as literals rather than imported from `PrReviewService`'s
+ * `PersonaId` — that module already imports from this one, and importing back would
+ * create a cycle.
+ */
+export type ReviewPass =
+  | 'pass1' | 'continuation' | 'pass2' | 'critic'
+  | 'security' | 'performance' | 'reliability' | 'maintainability';
 
 /** R5's three recovery-decision shapes — logged so a reader can follow what happened
  * without knowing the retry/split algorithm. */

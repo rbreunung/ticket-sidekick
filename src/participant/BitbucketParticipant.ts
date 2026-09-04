@@ -3,7 +3,7 @@ import { minimatch } from 'minimatch';
 import { BitbucketApiClient } from '../bitbucket/BitbucketApiClient';
 import type { BitbucketConfig } from '../bitbucket/IBitbucketClient';
 import type { ConfigService } from '../services/ConfigService';
-import { PrReviewService } from '../services/PrReviewService';
+import { PrReviewService, PERSONAS, type Persona } from '../services/PrReviewService';
 import {
   parsePrUrl,
   parseDiff,
@@ -961,6 +961,68 @@ export function createBitbucketParticipant(
           rawFindingsTotal += batchRawCount;
           anchorDroppedTotal += batchRawCount - batchFindings.length;
           chunkFindings = chunkFindings.concat(batchFindings);
+        }
+
+        // U3: persona lens passes. One independent LLM call per active persona over
+        // this chunk's files, reusing the identical withEasierRetry → callLLMOnceWith
+        // Progress → resolveFindingAnchors sequence pass1 uses above, logged with
+        // pass: '<persona-id>' so each lens's calls are distinguishable in the output
+        // channel. Findings merge straight into chunkFindings — resolveFindingAnchors/
+        // dedupeFindings are pass-agnostic (R2), so no separate merge step is needed.
+        //
+        // TODO(U5/U7): `resolvedMode === 'deep'` is a temporary stand-in for "which
+        // personas are active this mode" — this unit only builds the reusable
+        // per-chunk-persona-execution mechanism. U5 wires deep mode's unconditional
+        // four-persona activation (R8) properly; U7 wires smart mode's selective
+        // activation. Both should replace this line rather than duplicate the loop
+        // below.
+        const activePersonas: Persona[] = resolvedMode === 'deep' ? PERSONAS : [];
+        for (const persona of activePersonas) {
+          const personaLabel = `${persona.id} batch ${i + 1}/${chunks.length}`;
+          const personaTracker = createAttemptTracker<FileDiff>();
+          let personaPromptChars = 0;
+          const personaBatches = await withEasierRetry(
+            chunk,
+            async (files) => {
+              const attempt = personaTracker.start(files);
+              const prompt = service.buildPersonaPrompt(persona, pr, files, undefined, extraInstructions);
+              personaPromptChars = prompt.length;
+              totalInputChars += prompt.length;
+              const raw = await callLLMOnceWithProgress(prompt, request.model, token, batchStatus);
+              totalOutputChars += raw.length;
+              const status = parseNdjsonFindings(raw).truncated ? 'truncated' : 'ok';
+              logReview('info', formatCallLine({
+                runTag, pass: persona.id, batch: i + 1, totalBatches: chunks.length, attempt,
+                itemCount: files.length, promptChars: prompt.length, responseChars: raw.length,
+                durationMs: personaTracker.elapsedMs(), status,
+              }));
+              return raw;
+            },
+            halveFiles,
+            {
+              onAttemptFailed: (attempt, err, files) => handleAttemptFailure({
+                runTag, pass: persona.id, batch: i + 1, totalBatches: chunks.length,
+                libraryAttempt: attempt, err, items: files, originalItems: chunk,
+                tracker: personaTracker, promptChars: personaPromptChars, split: halveFiles,
+                logFailure: (a, e) => logLmFailure(personaLabel, a, e, { files: files.map((f) => f.path) }),
+                logReview,
+              }),
+            },
+          );
+
+          for (const batch of personaBatches) {
+            if (batch.error !== undefined) {
+              anyBatchFailed = true;
+              const filePaths = batch.items.map((f) => f.path).join(', ');
+              stream.markdown(`_⚠ ${persona.displayName} pass — batch ${i + 1} — could not review ${filePaths} after retrying: ${describeFailure(batch.error)}_\n\n`);
+              continue;
+            }
+            const { findings } = await parseReviewResponse(batch.result!);
+            const resolved = resolveFindingAnchors(findings, batch.items);
+            rawFindingsTotal += findings.length;
+            anchorDroppedTotal += findings.length - resolved.length;
+            chunkFindings = chunkFindings.concat(resolved);
+          }
         }
 
         // Deep mode only: re-verify findings against the diff and drop the ones the critic can't confirm.

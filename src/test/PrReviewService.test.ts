@@ -18,6 +18,7 @@ import { PrReviewService, PERSONAS } from '../services/PrReviewService';
 import { MockBitbucketClient } from './mocks/MockBitbucketClient';
 import type { BitbucketPR } from '../bitbucket/IBitbucketClient';
 import { dcDiffToUnified, BitbucketApiError } from '../bitbucket/BitbucketApiClient';
+import { withEasierRetry } from '../utils/lmRetry';
 
 describe('parsePrUrl', () => {
   it('parses a Data Center URL with trailing /overview', () => {
@@ -1688,6 +1689,93 @@ describe('resolveFindingAnchors', () => {
     const findings = [{ file: 'src/other.ts', anchorCode: 'const timeout = 5000;',
       severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
     expect(resolveFindingAnchors(findings, diffs)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Persona pass merge (U3) — a persona-lens pass's findings go through the same
+// resolveFindingAnchors → dedupeFindings pipeline as the standard pass, with no
+// pass-specific merge step (R2: findings from any pass are pass-agnostic once
+// resolved). These tests simulate BitbucketParticipant.ts's per-chunk persona
+// loop by resolving a "standard pass" array and a "persona pass" array
+// separately (mirroring the two independent LLM calls) and then concatenating
+// + deduping exactly as the real loop does.
+// ---------------------------------------------------------------------------
+
+describe('persona pass merge (U3)', () => {
+  const diffs = [{ path: 'src/api.ts', diff: SAMPLE_DIFF }];
+
+  it('a security-persona finding with no standard-pass counterpart survives to the merged result', () => {
+    const standardRaw = [{ file: 'src/api.ts', anchorCode: 'const url = NEW_URL;',
+      severity: 'warning' as const, title: 'Hardcoded URL', description: 'D', recommendation: 'R' }];
+    const securityRaw = [{ file: 'src/api.ts', anchorCode: 'const timeout = 5000;',
+      severity: 'critical' as const, title: 'Missing auth check', description: 'D', recommendation: 'R' }];
+
+    const standardResolved = resolveFindingAnchors(standardRaw, diffs);
+    const securityResolved = resolveFindingAnchors(securityRaw, diffs);
+    const merged = dedupeFindings([...standardResolved, ...securityResolved]);
+
+    expect(merged).toHaveLength(2);
+    expect(merged.map((f) => f.title)).toEqual(
+      expect.arrayContaining(['Hardcoded URL', 'Missing auth check']),
+    );
+  });
+
+  it('collapses a security-persona finding and a standard-pass finding on the same file/line/title, keeping the stronger by severity then confidence', () => {
+    const standardRaw = [{ file: 'src/api.ts', anchorCode: 'const timeout = 5000;',
+      severity: 'warning' as const, confidence: 0.5, title: 'Insecure default', description: 'D', recommendation: 'R' }];
+    const securityRaw = [{ file: 'src/api.ts', anchorCode: 'const timeout = 5000;',
+      severity: 'critical' as const, confidence: 0.9, title: 'insecure default', description: 'D', recommendation: 'R' }];
+
+    const standardResolved = resolveFindingAnchors(standardRaw, diffs);
+    const securityResolved = resolveFindingAnchors(securityRaw, diffs);
+    const merged = dedupeFindings([...standardResolved, ...securityResolved]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0].severity).toBe('critical');
+    expect(merged[0].confidence).toBe(0.9);
+  });
+
+  it('drops an anchor-unlocatable persona finding the same way an unlocatable standard finding is dropped', () => {
+    const standardRaw = [{ file: 'src/api.ts', anchorCode: 'const url = NEW_URL;',
+      severity: 'warning' as const, title: 'Hardcoded URL', description: 'D', recommendation: 'R' }];
+    const personaRaw = [{ file: 'src/api.ts', anchorCode: 'this line does not exist',
+      severity: 'critical' as const, title: 'Unverifiable finding', description: 'D', recommendation: 'R' }];
+
+    const standardResolved = resolveFindingAnchors(standardRaw, diffs);
+    const personaResolved = resolveFindingAnchors(personaRaw, diffs);
+    expect(personaResolved).toHaveLength(0);
+
+    const merged = dedupeFindings([...standardResolved, ...personaResolved]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].title).toBe('Hardcoded URL');
+  });
+
+  it('a transient failure on a persona call\'s first attempt succeeds on retry via withEasierRetry, same as pass1', async () => {
+    // Mirrors the real per-chunk persona call site's withEasierRetry usage: same
+    // identical-retry-then-split contract pass1 already relies on — no persona-
+    // specific retry behavior was introduced.
+    const items = [{ path: 'src/api.ts', diff: SAMPLE_DIFF }];
+    const halve = (arr: typeof items): [typeof items, typeof items] => {
+      const mid = Math.ceil(arr.length / 2);
+      return [arr.slice(0, mid), arr.slice(mid)];
+    };
+    let attempts = 0;
+    const call = vi.fn(async () => {
+      attempts++;
+      if (attempts === 1) {
+        const err = new Error('The chat response contained no choices.');
+        throw err;
+      }
+      return 'ok response';
+    });
+
+    const result = await withEasierRetry(items, call, halve, { sleep: async () => {} });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].error).toBeUndefined();
+    expect(result[0].result).toBe('ok response');
+    expect(attempts).toBe(2); // identical retry succeeded — no split needed
   });
 });
 
