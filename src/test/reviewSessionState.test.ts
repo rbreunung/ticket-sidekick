@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { buildBitbucketNotConfiguredMessage, computeBitbucketFollowups, type BitbucketFollowupState } from '../participant/reviewSessionState';
+import {
+  buildBitbucketNotConfiguredMessage,
+  computeBitbucketFollowups,
+  parseSmartFallbackReply,
+  ALL_PERSONA_IDS,
+  type BitbucketFollowupState,
+} from '../participant/reviewSessionState';
 import { isGreetingOrEmpty } from '../participant/sessionState';
 
 describe('buildBitbucketNotConfiguredMessage', () => {
@@ -72,5 +78,35 @@ describe('isGreetingOrEmpty (shared with @jira — re-verified from the @bitbuck
 
   it('does not classify a PR URL prompt as a greeting', () => {
     expect(isGreetingOrEmpty('https://bitbucket.company.com/projects/PROJ/repos/myrepo/pull-requests/42')).toBe(false);
+  });
+});
+
+describe('parseSmartFallbackReply (U4/R7)', () => {
+  it('resolves "all" to the full four-persona set', () => {
+    const choice = parseSmartFallbackReply('all');
+
+    expect(choice.kind).toBe('all');
+    expect(choice.personas).toEqual(ALL_PERSONA_IDS);
+    expect(choice.personas).toHaveLength(4);
+  });
+
+  it('resolves "standard" to an empty persona set', () => {
+    const choice = parseSmartFallbackReply('standard');
+
+    expect(choice.kind).toBe('standard');
+    expect(choice.personas).toEqual([]);
+  });
+
+  it('is case/whitespace-insensitive and tolerates surrounding words', () => {
+    expect(parseSmartFallbackReply('  ALL please  ').kind).toBe('all');
+    expect(parseSmartFallbackReply('go standard').kind).toBe('standard');
+  });
+
+  it('classifies an unrecognized reply as unrecognized rather than defaulting', () => {
+    const choice = parseSmartFallbackReply('maybe later');
+
+    expect(choice.kind).toBe('unrecognized');
+    expect(choice.kind).not.toBe('all');
+    expect(choice.kind).not.toBe('standard');
   });
 });

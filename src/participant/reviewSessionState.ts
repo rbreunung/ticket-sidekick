@@ -6,6 +6,9 @@ import type { BitbucketConfig, BitbucketPR, ReviewMode } from '../bitbucket/IBit
 // participant's pure-logic file depends on the other's) so `bitbucketTools.ts`'s single write
 // tool can reuse the same confirmation shape rather than declaring an equivalent local interface.
 import type { ToolConfirmation } from '../tools/toolConfirmation';
+// Type-only — PrReviewService.ts imports FileDiff/ReviewFinding from this module, so this stays
+// a type-only (erased) import to avoid a runtime circular dependency.
+import type { PersonaId } from '../services/PrReviewService';
 
 export interface ParsedPrUrl {
   project: string;
@@ -64,6 +67,58 @@ export interface BitbucketCommentPreviewSession {
   repo: string;
   prId: number;
   items: Array<{ finding: ReviewFinding; text: string }>;
+}
+
+/**
+ * U4/R7: `smart`-mode selection-failure fallback session — stored in `workspaceState` under
+ * `bitbucket.session.smartFallback` and tagged with `<!-- bitbucket:smart-fallback-session -->`,
+ * following the exact same shape/convention as `ReviewSession` (see docs/review-process.md
+ * "Follow-ups"). Holds enough in-flight state to resume phase 2 once the user answers:
+ * PR reference, fetched diff, chunk boundaries, and phase 1's already-collected standard-pass
+ * findings. Built by U7's aggregation call site (not yet implemented); consumed by
+ * `resumeSmartReviewPhase2` in `BitbucketParticipant.ts` once U7 implements it.
+ */
+export interface SmartFallbackSession {
+  prTitle: string;
+  prUrl: string;
+  project: string;
+  repo: string;
+  prId: number;
+  /** Fetched diff, split per file — the same shape `buildAdaptiveChunks` consumes/produces. */
+  diffs: FileDiff[];
+  /** Chunk boundaries phase 1 already computed, reused so phase 2 doesn't re-chunk. */
+  chunks: FileDiff[][];
+  /** Findings phase 1's standard pass already collected, merged with phase 2's persona findings on resume. */
+  phase1Findings: ReviewFinding[];
+}
+
+/**
+ * Persona ids the "all" choice resolves to. Kept as a literal list (not an import of
+ * `PrReviewService.PERSONAS`) to avoid a runtime circular dependency — `PrReviewService.ts`
+ * already imports `FileDiff`/`ReviewFinding` from this module. Update alongside `PERSONAS`
+ * (`src/services/PrReviewService.ts`) if the persona catalog ever changes.
+ */
+export const ALL_PERSONA_IDS: PersonaId[] = ['security', 'performance', 'reliability', 'maintainability'];
+
+export type SmartFallbackChoice =
+  | { kind: 'all'; personas: PersonaId[] }
+  | { kind: 'standard'; personas: [] }
+  | { kind: 'unrecognized' };
+
+/**
+ * Pure parse of the user's reply to the smart-fallback question into a persona set. `all`
+ * resolves to all four personas, `standard` resolves to an empty persona set (standard pass
+ * only), anything else is `unrecognized` so the caller re-prompts without losing the session.
+ */
+export function parseSmartFallbackReply(prompt: string): SmartFallbackChoice {
+  const normalized = prompt.trim().toLowerCase();
+  if (/\ball\b/.test(normalized)) {
+    return { kind: 'all', personas: [...ALL_PERSONA_IDS] };
+  }
+  if (/\bstandard\b/.test(normalized)) {
+    return { kind: 'standard', personas: [] };
+  }
+  return { kind: 'unrecognized' };
 }
 
 export function hasPrUrl(prompt: string): boolean {

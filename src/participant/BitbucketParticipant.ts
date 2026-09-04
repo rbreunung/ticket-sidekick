@@ -3,7 +3,7 @@ import { minimatch } from 'minimatch';
 import { BitbucketApiClient } from '../bitbucket/BitbucketApiClient';
 import type { BitbucketConfig } from '../bitbucket/IBitbucketClient';
 import type { ConfigService } from '../services/ConfigService';
-import { PrReviewService, PERSONAS, type Persona } from '../services/PrReviewService';
+import { PrReviewService, PERSONAS, type Persona, type PersonaId } from '../services/PrReviewService';
 import {
   parsePrUrl,
   parseDiff,
@@ -35,11 +35,13 @@ import {
   computeBitbucketFollowups,
   resolveReviewMode,
   deriveCriticEnabled,
+  parseSmartFallbackReply,
   type ReviewFinding,
   type ReviewSession,
   type BitbucketCommentPreviewSession,
   type BitbucketFollowupState,
   type FileDiff,
+  type SmartFallbackSession,
 } from './reviewSessionState';
 import { isConfirmation, isCancellation, isGreetingOrEmpty } from './sessionState';
 import { generateContent } from './jira/llmHelpers';
@@ -412,6 +414,48 @@ export function createBitbucketParticipant(
       stream.markdown(output + `<!-- bitbucket:review-session -->`);
     };
 
+    // U4/R7: smart-mode selection-failure fallback — entry point U7 calls once persona-recommendation
+    // aggregation finds no usable signal from any chunk. Stores a SmartFallbackSession (PR reference,
+    // fetched diff, chunk boundaries, phase 1's collected findings) and asks the user to choose between
+    // running all four persona passes or continuing with the standard pass only. Tagged the same way
+    // ReviewSession/BitbucketCommentPreviewSession are, so the next turn's detection (below) can find it.
+    const askSmartFallbackChoice = async (
+      pr: { prTitle: string; prUrl: string; project: string; repo: string; prId: number },
+      diffs: FileDiff[],
+      chunks: FileDiff[][],
+      phase1Findings: ReviewFinding[],
+    ): Promise<void> => {
+      const fallbackSession: SmartFallbackSession = { ...pr, diffs, chunks, phase1Findings };
+      await ws.update('bitbucket.session.smartFallback', fallbackSession);
+      stream.markdown(
+        `_Smart mode couldn't determine a persona recommendation for this PR from any diff chunk._\n\n` +
+        `Reply **all** to run all four specialist passes (${PERSONAS.map(p => p.displayName).join(', ')}), ` +
+        `or **standard** to continue with just the standard review.\n\n<!-- bitbucket:smart-fallback-session -->`,
+      );
+    };
+
+    // U4/R7 stub — U7 implements the real resume once smart mode's phase 2 (persona-pass execution
+    // over the already-computed chunks) exists.
+    // TODO(U7): implement phase 2 resume — for each chunk in `session.chunks`, run U3's per-chunk
+    // persona execution loop for `chosenPersonas` (build each prompt via PrReviewService.buildPersonaPrompt,
+    // call the model, parse findings), merge the resulting findings with `session.phase1Findings`, then
+    // dedupe (dedupeFindings), format, and stream the merged review result the same way a normal review
+    // completes (and rebuild/store the ReviewSession for follow-ups). `chosenPersonas` is `[]` for the
+    // "standard" choice, meaning phase 2 should just stream the phase-1 findings as-is.
+    const resumeSmartReviewPhase2 = async (
+      session: SmartFallbackSession,
+      chosenPersonas: PersonaId[],
+    ): Promise<void> => {
+      await ws.update('bitbucket.session.smartFallback', undefined);
+      const choiceLabel = chosenPersonas.length === 0
+        ? 'the standard pass only'
+        : `all four persona passes (${chosenPersonas.join(', ')})`;
+      stream.markdown(
+        `_Resuming review of **${session.prTitle}** with ${choiceLabel}… ` +
+        `(phase 2 persona-pass resume is not implemented yet)_`,
+      );
+    };
+
     // 2a. Comment preview — confirmation, cancellation, or refinement
     if (!prUrlMatch && lastResponse.includes('<!-- bitbucket:comment-preview -->')) {
       const previewSession = ws.get<BitbucketCommentPreviewSession>('bitbucket.session.commentPreview');
@@ -445,6 +489,31 @@ export function createBitbucketParticipant(
             `${friendlyLmFailureMessage('**Refinement failed:**', err)}\n\n<!-- bitbucket:comment-preview -->`,
           );
         }
+        return;
+      }
+    }
+
+    // 2a2. Smart-mode selection-failure fallback question (U4/R7) — detected ahead of the
+    // ReviewSession follow-up check (2b) below, same detection-order discipline as 2a above.
+    if (!prUrlMatch && lastResponse.includes('<!-- bitbucket:smart-fallback-session -->')) {
+      const fallbackSession = ws.get<SmartFallbackSession>('bitbucket.session.smartFallback');
+      if (fallbackSession) {
+        if (isCancellation(prompt)) {
+          await ws.update('bitbucket.session.smartFallback', undefined);
+          stream.markdown('_Fallback question cancelled — the review stops here._');
+          return;
+        }
+
+        const choice = parseSmartFallbackReply(prompt);
+        if (choice.kind === 'unrecognized') {
+          stream.markdown(
+            `_Didn't catch that — reply **all** to run all four persona passes, ` +
+            `or **standard** to continue with the standard review only._\n\n<!-- bitbucket:smart-fallback-session -->`,
+          );
+          return;
+        }
+
+        await resumeSmartReviewPhase2(fallbackSession, choice.personas);
         return;
       }
     }
