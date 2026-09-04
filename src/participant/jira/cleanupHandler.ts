@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { logDiag } from '../../utils/diagLog';
-import type { IJiraClient } from '../../jira/IJiraClient';
+import type { IJiraClient, JiraFieldMeta } from '../../jira/IJiraClient';
 import type { TicketService } from '../../services/TicketService';
 import { loadWorkflowCache, findPath } from '../../services/WorkflowService';
 import { TemplateService } from '../../templates/TemplateService';
@@ -8,6 +8,14 @@ import type { CleanupRule } from '../../templates/TemplateService';
 import type { TransitionBatchSession, TransitionBatchTicket, ResolutionSelectionSession } from '../sessionState';
 import { buildReviewTable, parseResolutionSelection, parseSkipInput } from '../sessionState';
 import type { ParsedIntent } from './llmHelpers';
+
+/** Reads each configured `cleanupFields` ID off an issue's `fields` into a ticket/subtask's `.extra` bag. */
+export function extractExtraFields(fields: Record<string, unknown>, fieldIds: string[]): Record<string, unknown> | undefined {
+  if (fieldIds.length === 0) return undefined;
+  const extra: Record<string, unknown> = {};
+  for (const id of fieldIds) extra[id] = fields[id];
+  return extra;
+}
 
 export async function streamReviewScreen(
   session: TransitionBatchSession,
@@ -17,7 +25,10 @@ export async function streamReviewScreen(
   baseUrl?: string,
 ): Promise<void> {
   await workspaceState.update('jira.session.transitionReview', session);
-  stream.markdown(`${header}\n\n${buildReviewTable(session, baseUrl)}\n\n<!-- jira:transition-review -->`);
+  const table = buildReviewTable(session, baseUrl, (fieldId) =>
+    logDiag('jira.cleanup', 'warn', `Unrecognized field in cleanupFields: ${fieldId}`, { fieldId }),
+  );
+  stream.markdown(`${header}\n\n${table}\n\n<!-- jira:transition-review -->`);
 }
 
 export async function executeCleanupBatch(
@@ -82,6 +93,8 @@ export async function handleRunCleanup(
   ticketService: TicketService,
   workspaceState: vscode.Memento,
   baseUrl?: string,
+  cleanupFields: string[] = [],
+  cleanupFieldMeta: JiraFieldMeta[] = [],
 ): Promise<void> {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
@@ -138,7 +151,7 @@ export async function handleRunCleanup(
     }
   }
 
-  const result = await ticketService.searchTicketsRaw(jql, 50);
+  const result = await ticketService.searchTicketsRaw(jql, 50, cleanupFields);
   const truncated = (result.total ?? 0) > 50 || result.isLast === false;
 
   if (result.issues.length === 0) {
@@ -166,6 +179,7 @@ export async function handleRunCleanup(
       currentStatus: issue.fields.status.name,
       transitionPath: path,
       subtasks: [],
+      extra: extractExtraFields(issue.fields, cleanupFields),
     });
   }
 
@@ -176,7 +190,7 @@ export async function handleRunCleanup(
     const subJql =
       `parent in (${parentKeys.map((k) => `"${k}"`).join(', ')}) ` +
       `AND status != "${subTargetState}" AND resolution is EMPTY`;
-    const subResult = await ticketService.searchTicketsRaw(subJql, 250);
+    const subResult = await ticketService.searchTicketsRaw(subJql, 250, cleanupFields);
     for (const s of subResult.issues) {
       const parentKey = s.fields.parent?.key;
       if (!parentKey) continue;
@@ -193,6 +207,7 @@ export async function handleRunCleanup(
         currentStatus: s.fields.status.name,
         transitionPath: subPath,
         resolution: subtaskResolution,
+        extra: extractExtraFields(s.fields, cleanupFields),
       });
     }
   }
@@ -212,6 +227,8 @@ export async function handleRunCleanup(
         issueType,
         targetState,
         resolutionOptions: resolutions.map((r) => r.name),
+        fieldIds: cleanupFields,
+        fieldMeta: cleanupFieldMeta,
       };
       await workspaceState.update('jira.session.resolutionSelection', resSession);
       const list = resolutions.map((r, i) => `${i + 1}. ${r.name}`).join('\n');
@@ -226,7 +243,13 @@ export async function handleRunCleanup(
     fixVersion?.includes('*') ? `Fix version ~ "${fixVersion}"` :
     fixVersion ? `Fix version "${fixVersion}"` : null;
   const header = `**Cleanup${rule ? `: ${rule.name}` : ''}**  ·  ${project} / ${issueType}${fvLabel ? `  ·  ${fvLabel}` : ''}`;
-  const batchSession: TransitionBatchSession = { tickets, resolution, ruleName: rule?.name, issueType };
+  const batchSession: TransitionBatchSession = {
+    tickets, resolution, ruleName: rule?.name, issueType,
+    fieldIds: cleanupFields, fieldMeta: cleanupFieldMeta,
+  };
   await workspaceState.update('jira.session.transitionReview', batchSession);
-  stream.markdown(`${buffer.join('')}${header}\n\n${buildReviewTable(batchSession, baseUrl)}\n\n<!-- jira:transition-review -->`);
+  const table = buildReviewTable(batchSession, baseUrl, (fieldId) =>
+    logDiag('jira.cleanup', 'warn', `Unrecognized field in cleanupFields: ${fieldId}`, { fieldId }),
+  );
+  stream.markdown(`${buffer.join('')}${header}\n\n${table}\n\n<!-- jira:transition-review -->`);
 }

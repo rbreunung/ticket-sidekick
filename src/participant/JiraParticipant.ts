@@ -20,7 +20,7 @@ import { gatherFileContent, buildContentContext, streamContentPreview, handleCon
 import { streamCreateSelection, continueAfterIssueType, streamNextSection, finishTicketCreation, handleCreateTicket } from './jira/createHandler';
 import { serializeCommentsForLLM, handleLoadTicket, attachmentsDirFor } from './jira/loadHandler';
 import { formatFileSize } from '../utils/attachmentEligibility';
-import { streamReviewScreen, executeCleanupBatch, handleRunCleanup } from './jira/cleanupHandler';
+import { streamReviewScreen, executeCleanupBatch, handleRunCleanup, extractExtraFields } from './jira/cleanupHandler';
 import { handleDiscoverWorkflow } from './jira/workflowHandler';
 import {
   handleCreateFromEmail, handleAddEmailFromChat, handleEmailContentSession,
@@ -191,6 +191,8 @@ export function createJiraParticipant(
           resolution: choice ?? undefined,
           ruleName: selSession.ruleName,
           issueType: selSession.issueType,
+          fieldIds: selSession.fieldIds,
+          fieldMeta: selSession.fieldMeta,
         };
         const header = `**Cleanup${selSession.ruleName ? `: ${selSession.ruleName}` : ''}**`;
         await streamReviewScreen(batchSession, stream, ws, header, config.baseUrl);
@@ -873,7 +875,8 @@ export function createJiraParticipant(
 
     if (intent.operation === 'runCleanup') {
       try {
-        await handleRunCleanup(intent, stream, jiraClient, ticketService, ws, config.baseUrl);
+        const cleanupFieldMeta = config.cleanupFields.length > 0 ? await ticketService.getFieldMeta() : [];
+        await handleRunCleanup(intent, stream, jiraClient, ticketService, ws, config.baseUrl, config.cleanupFields, cleanupFieldMeta);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         logDiag('jira.participant', 'error', message, {});
@@ -1209,6 +1212,7 @@ export function createJiraParticipant(
           }
           const targetStatus = intent.targetStatus;
           stream.markdown(`_Building transition paths…_\n\n`);
+          const cleanupFieldMeta = config.cleanupFields.length > 0 ? await ticketService.getFieldMeta() : [];
           const tickets: TransitionBatchTicket[] = [];
           for (const key of searchSession.ticketKeys) {
             const issue = await jiraClient.getIssue(key);
@@ -1232,11 +1236,28 @@ export function createJiraParticipant(
               const subPath = findPath(subGraph, s.fields.status.name, targetStatus);
               if (subPath) subtasks.push({ key: s.key, summary: s.fields.summary, currentStatus: s.fields.status.name, transitionPath: subPath });
             }
-            tickets.push({ key, summary: issue.fields.summary, currentStatus, transitionPath: path, subtasks });
+            tickets.push({
+              key, summary: issue.fields.summary, currentStatus, transitionPath: path, subtasks,
+              extra: extractExtraFields(issue.fields, config.cleanupFields),
+            });
           }
           if (tickets.length === 0) {
             result = `No tickets could be transitioned to **${targetStatus}** — all were either already there or have no direct path.`;
             break;
+          }
+          // Subtasks come from the parent's embedded `fields.subtasks`, which only carries
+          // key/summary/status regardless of what fields the parent was fetched with (KTD3) — a
+          // batched `parent in (...)` search gets their real cleanupFields values in one call.
+          if (config.cleanupFields.length > 0) {
+            const parentKeys = tickets.filter((t) => t.subtasks.length > 0).map((t) => t.key);
+            if (parentKeys.length > 0) {
+              const subJql = `parent in (${parentKeys.map((k) => `"${k}"`).join(', ')})`;
+              const subResult = await ticketService.searchTicketsRaw(subJql, 250, config.cleanupFields);
+              const extraByKey = new Map(subResult.issues.map((s) => [s.key, extractExtraFields(s.fields, config.cleanupFields)]));
+              for (const t of tickets) {
+                for (const s of t.subtasks) s.extra = extraByKey.get(s.key);
+              }
+            }
           }
           const CLOSED_STATES = new Set(['done', 'closed', 'resolved', 'cancelled', 'canceled']);
           if (CLOSED_STATES.has(targetStatus.toLowerCase())) {
@@ -1248,6 +1269,8 @@ export function createJiraParticipant(
                 ruleName: undefined,
                 issueType: intent.issueType ?? '',
                 targetState: targetStatus,
+                fieldIds: config.cleanupFields,
+                fieldMeta: cleanupFieldMeta,
               };
               await ws.update('jira.session.resolutionSelection', resSession);
               const list = resolutions.map((r, i) => `${i + 1}. ${r.name}`).join('\n');
@@ -1255,7 +1278,10 @@ export function createJiraParticipant(
               return;
             }
           }
-          const batchSession: TransitionBatchSession = { tickets, resolution: undefined, ruleName: undefined, issueType: intent.issueType ?? '' };
+          const batchSession: TransitionBatchSession = {
+            tickets, resolution: undefined, ruleName: undefined, issueType: intent.issueType ?? '',
+            fieldIds: config.cleanupFields, fieldMeta: cleanupFieldMeta,
+          };
           await streamReviewScreen(batchSession, stream, ws, `**Bulk transition → ${targetStatus}**`, config.baseUrl);
           return;
         }

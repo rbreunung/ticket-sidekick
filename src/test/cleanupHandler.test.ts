@@ -709,6 +709,65 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
     expect(output).toContain('fixVersion = "v1.2"');
     expect(output).not.toContain('releasedVersions()');
   });
+
+  it('passes cleanupFields to searchTicketsRaw and builds a ticket whose .extra matches the search result (#cleanupFields U5)', async () => {
+    const spy = vi.spyOn(ticketService, 'searchTicketsRaw').mockResolvedValue({
+      issues: [{
+        id: '1', key: 'PROJ-1',
+        fields: {
+          summary: 'Fix login', status: { name: 'Open' },
+          assignee: null, reporter: null, priority: null,
+          labels: [], fixVersions: [{ name: '2.0' }], comment: null, description: null,
+        },
+      }],
+      total: 1,
+    });
+
+    const stream = mockStream();
+    const ws = mockWs();
+    const intent = { ...baseIntent, resolution: 'Fixed' };
+    const fieldMeta = [{ id: 'fixVersions', name: 'Fix Version', navigable: true, schema: { type: 'array', items: 'version' } }];
+
+    await handleRunCleanup(intent, stream as never, client, ticketService, ws as never, undefined, ['fixVersions'], fieldMeta);
+
+    expect(spy).toHaveBeenCalledWith(expect.any(String), 50, ['fixVersions']);
+    const output = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    // Covers AE2/AE3: the review table shows the configured extra column with the fetched value.
+    expect(output).toContain('| Fix Version |');
+    expect(output).toContain('2.0');
+  });
+
+  it('carries fieldIds/fieldMeta on the stored TransitionBatchSession so a resume still renders the extra column', async () => {
+    vi.spyOn(ticketService, 'searchTicketsRaw').mockResolvedValue({
+      issues: [{
+        id: '1', key: 'PROJ-1',
+        fields: {
+          summary: 'Fix login', status: { name: 'Open' },
+          assignee: null, reporter: null, priority: null,
+          labels: [], fixVersions: [{ name: '2.0' }], comment: null, description: null,
+        },
+      }],
+      total: 1,
+    });
+
+    const stream = mockStream();
+    const ws = mockWs();
+    const intent = { ...baseIntent, resolution: 'Fixed' };
+    const fieldMeta = [{ id: 'fixVersions', name: 'Fix Version', navigable: true, schema: { type: 'array', items: 'version' } }];
+
+    await handleRunCleanup(intent, stream as never, client, ticketService, ws as never, undefined, ['fixVersions'], fieldMeta);
+
+    const stored = ws.update.mock.calls.find((c: [string, unknown]) => c[0] === 'jira.session.transitionReview')?.[1] as TransitionBatchSession;
+    expect(stored.fieldIds).toEqual(['fixVersions']);
+    expect(stored.fieldMeta).toEqual(fieldMeta);
+
+    const resumeStream = mockStream();
+    const resumeWs = mockWs();
+    await streamReviewScreen(stored, resumeStream as never, resumeWs as never, '**Cleanup**');
+    const resumeOutput = resumeStream.markdown.mock.calls[0][0] as string;
+    expect(resumeOutput).toContain('| Fix Version |');
+    expect(resumeOutput).toContain('2.0');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -799,5 +858,51 @@ describe('buildReviewTable', () => {
     const table = buildReviewTable(session, 'https://jira.example.com');
     expect(table).toContain('| [PROJ-1](https://jira.example.com/browse/PROJ-1) |');
     expect(table).toContain('↳ [PROJ-1a](https://jira.example.com/browse/PROJ-1a)');
+  });
+
+  it('renders exactly as today when fieldIds is empty (default)', () => {
+    const session = makeSession({ tickets: [makeTicket('PROJ-1')], fieldIds: [], fieldMeta: [] });
+    const table = buildReviewTable(session);
+    expect(table).not.toContain('Fix Version');
+  });
+
+  it('renders a configured extra column with the ticket\'s .extra value (#cleanupFields KTD1/KTD4)', () => {
+    const fieldMeta = [{ id: 'fixVersions', name: 'Fix Version', navigable: true, schema: { type: 'array', items: 'version' } }];
+    const session = makeSession({
+      tickets: [makeTicket('PROJ-1', { extra: { fixVersions: [{ name: '2.0' }] } })],
+      fieldIds: ['fixVersions'],
+      fieldMeta,
+    });
+    const table = buildReviewTable(session);
+    expect(table).toContain('| Fix Version |');
+    expect(table).toContain('2.0');
+  });
+
+  it('renders a subtask\'s own .extra value independently of the parent (Covers AE4)', () => {
+    const fieldMeta = [{ id: 'fixVersions', name: 'Fix Version', navigable: true, schema: { type: 'array', items: 'version' } }];
+    const subtask = makeSubtask('PROJ-1a', { extra: { fixVersions: [{ name: '1.0' }] } });
+    const session = makeSession({
+      tickets: [makeTicket('PROJ-1', { subtasks: [subtask], extra: { fixVersions: [{ name: '2.0' }] } })],
+      fieldIds: ['fixVersions'],
+      fieldMeta,
+    });
+    const table = buildReviewTable(session);
+    const lines = table.split('\n');
+    const parentLine = lines.find((l) => l.includes('PROJ-1') && !l.includes('PROJ-1a'));
+    const subtaskLine = lines.find((l) => l.includes('PROJ-1a'));
+    expect(parentLine).toContain('2.0');
+    expect(subtaskLine).toContain('1.0');
+  });
+
+  it('calls onUnknownField once for an unrecognized cleanupFields ID (Covers AE6)', () => {
+    const session = makeSession({
+      tickets: [makeTicket('PROJ-1')],
+      fieldIds: ['gixVersions'],
+      fieldMeta: [],
+    });
+    const onUnknownField = vi.fn();
+    buildReviewTable(session, undefined, onUnknownField);
+    expect(onUnknownField).toHaveBeenCalledTimes(1);
+    expect(onUnknownField).toHaveBeenCalledWith('gixVersions');
   });
 });

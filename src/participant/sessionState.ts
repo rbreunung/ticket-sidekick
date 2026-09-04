@@ -4,7 +4,7 @@ import type { VeracodeFlaw, VeracodeReviewRow } from '../utils/veracodeReport';
 import type { WaltzComponent, WaltzReviewRow } from '../utils/waltzReport';
 import type { EmailImportItem, EmailReviewRow } from '../utils/emlParser';
 import { BATCH_LIMIT, sanitizeCellText } from '../utils/reportImport';
-import { formatKeyLink, coerceTypedFieldValue, type TemplateFieldCandidate } from '../services/TicketService';
+import { formatKeyLink, coerceTypedFieldValue, buildExtraFieldColumns, type TemplateFieldCandidate } from '../services/TicketService';
 import type { JiraTemplate } from '../templates/TemplateService';
 // Type-only — ConfigService.ts imports `vscode`, but a type-only import is erased before
 // this (vscode-free, Vitest-loadable) module is ever loaded at runtime.
@@ -80,6 +80,7 @@ export interface TransitionSubtask {
   currentStatus: string;
   transitionPath: Array<{ id: string; name: string; to: string }>;
   resolution?: string;
+  extra?: Record<string, unknown>;
 }
 
 export interface TransitionBatchTicket {
@@ -88,6 +89,7 @@ export interface TransitionBatchTicket {
   currentStatus: string;
   transitionPath: Array<{ id: string; name: string; to: string }>;
   subtasks: TransitionSubtask[];
+  extra?: Record<string, unknown>;
 }
 
 export interface TransitionBatchSession {
@@ -95,6 +97,8 @@ export interface TransitionBatchSession {
   resolution: string | undefined;
   ruleName: string | undefined;
   issueType: string;
+  fieldIds: string[];
+  fieldMeta: JiraFieldMeta[];
 }
 
 interface TransitionReviewRow {
@@ -104,9 +108,19 @@ interface TransitionReviewRow {
   currentStatus: string;
   to: string;
   resolution: string;
+  extra?: Record<string, unknown>;
 }
 
-export function buildReviewTable(session: TransitionBatchSession, baseUrl?: string): string {
+/**
+ * Renders the cleanup/bulk-transition review table. `onUnknownField`, when given, is forwarded to
+ * `buildExtraFieldColumns` (KTD5) so a caller that imports `vscode` can log a warning for a
+ * `cleanupFields` ID with no matching field metadata — this function itself stays vscode-free.
+ */
+export function buildReviewTable(
+  session: TransitionBatchSession,
+  baseUrl?: string,
+  onUnknownField?: (fieldId: string) => void,
+): string {
   const hasResolution = session.resolution !== undefined;
 
   const sorted = [...session.tickets].sort((a, b) =>
@@ -122,6 +136,7 @@ export function buildReviewTable(session: TransitionBatchSession, baseUrl?: stri
       currentStatus: t.currentStatus,
       to: t.transitionPath.at(-1)?.to ?? '?',
       resolution: session.resolution ?? '',
+      extra: t.extra,
     });
     for (const s of t.subtasks) {
       flatRows.push({
@@ -131,6 +146,7 @@ export function buildReviewTable(session: TransitionBatchSession, baseUrl?: stri
         currentStatus: s.currentStatus,
         to: s.transitionPath.at(-1)?.to ?? '?',
         resolution: s.resolution ?? session.resolution ?? '',
+        extra: s.extra,
       });
     }
   }
@@ -144,6 +160,12 @@ export function buildReviewTable(session: TransitionBatchSession, baseUrl?: stri
     ...(hasResolution
       ? [{ header: 'Resolution', accessor: (r: TransitionReviewRow) => r.resolution }]
       : []),
+    ...buildExtraFieldColumns<TransitionReviewRow>(
+      session.fieldIds ?? [],
+      session.fieldMeta ?? [],
+      (row, id) => row.extra?.[id],
+      onUnknownField,
+    ),
   ];
 
   return renderReviewTable(columns, flatRows) + '\n\npost it · (c) · key numbers to skip (e.g. 11 14)';
@@ -155,6 +177,8 @@ export interface ResolutionSelectionSession {
   issueType: string;
   targetState: string;
   resolutionOptions: string[];
+  fieldIds: string[];
+  fieldMeta: JiraFieldMeta[];
 }
 
 export type SkipParseResult =

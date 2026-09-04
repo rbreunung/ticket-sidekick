@@ -2,6 +2,7 @@ import type { IJiraClient, JiraAttachment, JiraComment, JiraEditMetaField, JiraF
 import type { DiagLogger } from '../utils/diagTypes';
 import { formatJiraBody } from '../utils/markdownFormatter';
 import { formatFileSize } from '../utils/attachmentEligibility';
+import { renderReviewTable, type ReviewTableColumn } from '../participant/sessionState';
 
 export type FieldResolutionResult =
   | { kind: 'match'; field: JiraFieldMeta }
@@ -213,6 +214,34 @@ export function renderFieldValue(value: unknown, meta: JiraFieldMeta): string {
   if (typeof value === 'number') return String(value);
   if (typeof value === 'string') return value;
   return String(value);
+}
+
+/**
+ * Builds one `ReviewTableColumn` per configured field ID, shared by search's own extra columns
+ * (#3), the cleanup/transition review table, and any future review table that wants opt-in extra
+ * field columns (KTD1). `valueOf` lets each caller read a field's raw value off its own row shape;
+ * `onUnknownField`, when given, fires once per unrecognized field ID for this call — not once per
+ * row — so callers can log a single warning per render (KTD5) rather than spamming one per row.
+ * Every rendered value is pipe-escaped so it can't break the surrounding markdown table.
+ */
+export function buildExtraFieldColumns<TRow>(
+  fieldIds: string[],
+  fieldMeta: JiraFieldMeta[],
+  valueOf: (row: TRow, fieldId: string) => unknown,
+  onUnknownField?: (fieldId: string) => void,
+): ReviewTableColumn<TRow>[] {
+  const metaById = new Map(fieldMeta.map((m) => [m.id, m]));
+  return fieldIds.map((id) => {
+    const meta = metaById.get(id);
+    if (!meta) onUnknownField?.(id);
+    return {
+      header: meta?.name ?? id,
+      accessor: (row: TRow) => {
+        const rendered = meta ? renderFieldValue(valueOf(row, id), meta) : '_Not set_';
+        return rendered.replace(/\|/g, '\\|');
+      },
+    };
+  });
 }
 
 export function isMultiLine(value: unknown, meta: JiraFieldMeta): boolean {
@@ -440,33 +469,24 @@ export class TicketService {
     const result = await this.client.searchJql(jql, undefined, undefined, extraFields);
     if (result.issues.length === 0) return 'No tickets found.';
 
-    // Build the configured extra columns (#3): header name from field meta, value via the
-    // shared renderFieldValue; cells escape pipes so a value can't break the table.
-    const metaById = new Map(fieldMeta.map((m) => [m.id, m]));
-    const extraCols = extraFields.map((id) => ({ id, meta: metaById.get(id), name: metaById.get(id)?.name ?? id }));
-    const extraHeader = extraCols.map((c) => ` ${c.name} |`).join('');
-    const extraSep = extraCols.map(() => ' --- |').join('');
-    const renderExtra = (issue: JiraIssue) =>
-      extraCols.map((col) => {
-        const value = (issue.fields as Record<string, unknown>)[col.id];
-        const rendered = col.meta
-          ? renderFieldValue(value, col.meta)
-          : value === null || value === undefined ? '_Not set_' : String(value);
-        return ` ${rendered.replace(/\|/g, '\\|')} |`;
-      }).join('');
+    const columns: ReviewTableColumn<JiraIssue>[] = [
+      { header: 'Key', accessor: (issue) => formatKeyLink(issue.key, baseUrl) },
+      { header: 'Summary', accessor: (issue) => issue.fields.summary },
+      { header: 'Status', accessor: (issue) => issue.fields.status.name },
+      { header: 'Assignee', accessor: (issue) => issue.fields.assignee ? issue.fields.assignee.displayName : 'Unassigned' },
+      ...buildExtraFieldColumns<JiraIssue>(
+        extraFields,
+        fieldMeta,
+        (issue, id) => (issue.fields as Record<string, unknown>)[id],
+        (id) => this.onDiag?.('warn', `Unrecognized field in searchFields: ${id}`, { fieldId: id }),
+      ),
+    ];
 
-    const rows = result.issues.map((issue) => {
-      const assignee = issue.fields.assignee ? issue.fields.assignee.displayName : 'Unassigned';
-      const key = formatKeyLink(issue.key, baseUrl);
-      return `| ${key} | ${issue.fields.summary} | ${issue.fields.status.name} | ${assignee} |${renderExtra(issue)}`;
-    });
     return [
       `Found ${result.total ?? result.issues.length} ticket(s):`,
       '',
       ...(baseUrl ? [`[View in Jira](${baseUrl}/issues/?jql=${encodeURIComponent(jql)})`, ''] : []),
-      `| Key | Summary | Status | Assignee |${extraHeader}`,
-      `| --- | --- | --- | --- |${extraSep}`,
-      ...rows,
+      renderReviewTable(columns, result.issues),
     ].join('\n');
   }
 
@@ -546,8 +566,8 @@ export class TicketService {
     }
   }
 
-  async searchTicketsRaw(jql: string, maxResults = 50): Promise<JiraSearchResult> {
-    return this.client.searchJql(jql, maxResults);
+  async searchTicketsRaw(jql: string, maxResults = 50, extraFields: string[] = []): Promise<JiraSearchResult> {
+    return this.client.searchJql(jql, maxResults, undefined, extraFields);
   }
 
   async getFilterById(id: string): Promise<JiraFilter> {

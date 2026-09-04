@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { TicketService, assembleDescription, extractTextFromAdf, resolveFieldIdFuzzy, formatIssueFields, renderFieldValue, isMultiLine, coerceTypedFieldValue } from '../services/TicketService';
+import { TicketService, assembleDescription, extractTextFromAdf, resolveFieldIdFuzzy, formatIssueFields, renderFieldValue, isMultiLine, coerceTypedFieldValue, buildExtraFieldColumns } from '../services/TicketService';
 import type { JiraAttachment, JiraFieldMeta, JiraIssue } from '../jira/IJiraClient';
 import { MockJiraClient, FIXTURE_ATTACHMENT_BYTES } from './mocks/MockJiraClient';
 
@@ -70,6 +70,80 @@ describe('searchTickets extra columns (#3)', () => {
 
     expect(out).toContain('| Key | Summary | Status | Assignee |');
     expect(out).not.toContain('Severity');
+  });
+
+  it('logs a warning via onDiag for an unrecognized searchFields ID and still renders the table', async () => {
+    const client = new MockJiraClient();
+    client.searchJql = async () => ({ issues, total: 1, isLast: true } as never);
+    const onDiag = vi.fn();
+    const service = new TicketService(client, onDiag);
+
+    const out = await service.searchTickets('jql', undefined, ['gixVersions'], []);
+
+    expect(onDiag).toHaveBeenCalledWith('warn', expect.stringContaining('gixVersions'), expect.anything());
+    expect(out).toContain('| Key | Summary | Status | Assignee | gixVersions |');
+    expect(out).toContain('_Not set_');
+  });
+});
+
+describe('buildExtraFieldColumns (#3 KTD1)', () => {
+  const fieldMeta: JiraFieldMeta[] = [
+    { id: 'priority', name: 'Priority', navigable: true, schema: { type: 'string' } },
+  ];
+
+  it('builds one column per field ID, header from the field display name', () => {
+    const columns = buildExtraFieldColumns(['priority'], fieldMeta, () => ({ name: 'High' }));
+    expect(columns).toHaveLength(1);
+    expect(columns[0].header).toBe('Priority');
+  });
+
+  it('renders a recognized field with a real value via renderFieldValue', () => {
+    const columns = buildExtraFieldColumns<{ id: number }>(['priority'], fieldMeta, () => ({ name: 'High' }));
+    expect(columns[0].accessor({ id: 1 })).toBe('High');
+  });
+
+  it('renders _Not set_ for a recognized field absent on a row, without calling onUnknownField', () => {
+    const onUnknownField = vi.fn();
+    const columns = buildExtraFieldColumns<{ id: number }>(['priority'], fieldMeta, () => undefined, onUnknownField);
+    expect(columns[0].accessor({ id: 1 })).toBe('_Not set_');
+    expect(onUnknownField).not.toHaveBeenCalled();
+  });
+
+  it('calls onUnknownField exactly once for an unrecognized field ID, not once per row', () => {
+    const onUnknownField = vi.fn();
+    const columns = buildExtraFieldColumns<{ id: number }>(['gixVersions'], fieldMeta, () => 'x', onUnknownField);
+    columns[0].accessor({ id: 1 });
+    columns[0].accessor({ id: 2 });
+    columns[0].accessor({ id: 3 });
+    expect(onUnknownField).toHaveBeenCalledTimes(1);
+    expect(onUnknownField).toHaveBeenCalledWith('gixVersions');
+  });
+
+  it('escapes a literal pipe in a rendered value so it cannot break the markdown table', () => {
+    const columns = buildExtraFieldColumns<{ id: number }>(['priority'], fieldMeta, () => 'a | b');
+    expect(columns[0].accessor({ id: 1 })).toBe('a \\| b');
+  });
+});
+
+describe('TicketService.searchTicketsRaw extraFields (#3 KTD1)', () => {
+  it('forwards a non-empty extraFields array to client.searchJql\'s 4th parameter', async () => {
+    const client = new MockJiraClient();
+    client.searchJql = vi.fn().mockResolvedValue({ issues: [], total: 0 });
+    const service = new TicketService(client);
+
+    await service.searchTicketsRaw('jql', 50, ['fixVersions']);
+
+    expect(client.searchJql).toHaveBeenCalledWith('jql', 50, undefined, ['fixVersions']);
+  });
+
+  it('omitting extraFields preserves today\'s call shape', async () => {
+    const client = new MockJiraClient();
+    client.searchJql = vi.fn().mockResolvedValue({ issues: [], total: 0 });
+    const service = new TicketService(client);
+
+    await service.searchTicketsRaw('jql', 50);
+
+    expect(client.searchJql).toHaveBeenCalledWith('jql', 50, undefined, []);
   });
 });
 

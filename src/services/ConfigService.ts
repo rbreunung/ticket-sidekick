@@ -11,6 +11,7 @@ export interface JiraConfig {
   additionalDisplayFields: string[];
   hiddenDisplayFields: string[];
   searchFields: string[];
+  cleanupFields: string[];
   token: string | undefined;
   sprintBoardId?: number;
   myTeamJql?: string;
@@ -32,6 +33,7 @@ export class ConfigService {
       additionalDisplayFields: config.get<string[]>('jira.additionalDisplayFields') ?? [],
       hiddenDisplayFields: config.get<string[]>('jira.hiddenDisplayFields') ?? [],
       searchFields: config.get<string[]>('jira.searchFields') ?? [],
+      cleanupFields: config.get<string[]>('jira.cleanupFields') ?? [],
       token: await this.context.secrets.get(ConfigService.TOKEN_KEY),
       sprintBoardId: config.get<number>('jira.sprintBoardId') || undefined,
       myTeamJql: config.get<string>('jira.myTeamJql') || undefined,
