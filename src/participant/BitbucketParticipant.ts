@@ -257,6 +257,47 @@ function splitFilesInHalf(items: FileDiff[]): [FileDiff[], FileDiff[]] {
 }
 
 /**
+ * Shared by pass1→pass2's additionalFilesNeeded fetch and the critic's file-pulling
+ * round (R9/KTD4): fetch any requested files not already in the cross-batch
+ * `fetchedFileCache`, then select as many as fit the remaining token budget. Callers
+ * differ only in which files they're requesting and budgeting against, and in the
+ * stream/log message text — everything else (cache-check, cap, fetch, select) is
+ * identical between the two call sites.
+ */
+async function fetchAndBudgetContextFiles(params: {
+  requestedFiles: string[];
+  fetchedFileCache: Map<string, string>;
+  service: PrReviewService;
+  project: string;
+  repo: string;
+  commitHash: string;
+  tokenBudget: number;
+  /** The diff items to subtract from `tokenBudget` via `estimateChunkTokens` before selecting. */
+  budgetAgainst: FileDiff[];
+  fetchMessage: (count: number) => string;
+  logLabel: string;
+  batchNum: number;
+  logReview: (level: 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>) => void;
+  stream: vscode.ChatResponseStream;
+}): Promise<Map<string, string>> {
+  const { requestedFiles, fetchedFileCache, service, project, repo, commitHash, tokenBudget, budgetAgainst, fetchMessage, logLabel, batchNum, logReview, stream } = params;
+  const toFetch = requestedFiles.filter((p) => !fetchedFileCache.has(p)).slice(0, MAX_CONTEXT_FILES_PER_BATCH);
+  if (toFetch.length > 0) {
+    stream.markdown(fetchMessage(toFetch.length));
+    const fetched = await service.gatherFileContents(project, repo, commitHash, toFetch);
+    for (const [p, c] of fetched) fetchedFileCache.set(p, c);
+    logReview('info', `${logLabel} — batch ${batchNum}`, {
+      batch: batchNum, requestedCount: toFetch.length, fetchedCount: fetched.size,
+    });
+  }
+  const requestedEntries = requestedFiles
+    .filter((p) => fetchedFileCache.has(p))
+    .map((p) => ({ path: p, content: fetchedFileCache.get(p)! }));
+  const contentBudget = Math.max(0, tokenBudget - estimateChunkTokens(budgetAgainst));
+  return selectFilesWithinBudget(requestedEntries, contentBudget);
+}
+
+/**
  * U3/U7: run one persona lens pass per active persona over a single chunk's files —
  * the identical withEasierRetry → callLLMOnceWithProgress → resolveFindingAnchors
  * sequence pass1 uses, logged with `pass: '<persona-id>'`. Extracted into a standalone
@@ -991,11 +1032,6 @@ export function createBitbucketParticipant(
       // Session-level cache so a file requested in batch 2 isn't re-fetched in batch 5.
       const fetchedFileCache = new Map<string, string>();
 
-      const halveFiles = (items: FileDiff[]): [FileDiff[], FileDiff[]] => {
-        const mid = Math.ceil(items.length / 2);
-        return [items.slice(0, mid), items.slice(mid)];
-      };
-
       const halveFindings = (
         items: Array<Omit<ReviewFinding, 'id'>>,
       ): [Array<Omit<ReviewFinding, 'id'>>, Array<Omit<ReviewFinding, 'id'>>] => {
@@ -1005,10 +1041,10 @@ export function createBitbucketParticipant(
 
       let anyBatchFailed = false;
 
-      // U7/R4: one entry per chunk, populated only in `smart` mode — each chunk's standard
-      // pass's own recommendation (or `undefined` when the call failed or the trailer's
-      // recommendedPersonas field was missing/unparseable), aggregated after the loop below.
-      const smartPersonaResults: Array<{ recommendedPersonas: string[] | undefined; failed: boolean }> = [];
+      // One entry per chunk, populated only in `smart` mode — each chunk's standard pass's
+      // own recommendation, or `undefined` when the call failed or the trailer's
+      // recommendedPersonas field was missing/unparseable — aggregated after the loop below.
+      const smartPersonaResults: Array<string[] | undefined> = [];
 
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
@@ -1044,12 +1080,12 @@ export function createBitbucketParticipant(
             }));
             return raw;
           },
-          halveFiles,
+          splitFilesInHalf,
           {
             onAttemptFailed: (attempt, err, files) => handleAttemptFailure({
               runTag, pass: 'pass1', batch: i + 1, totalBatches: chunks.length,
               libraryAttempt: attempt, err, items: files, originalItems: chunk,
-              tracker: pass1Tracker, promptChars: pass1PromptChars, split: halveFiles,
+              tracker: pass1Tracker, promptChars: pass1PromptChars, split: splitFilesInHalf,
               logFailure: (a, e) => logLmFailure(pass1Label, a, e, { files: files.map((f) => f.path) }),
               logReview,
             }),
@@ -1146,27 +1182,15 @@ export function createBitbucketParticipant(
             try {
               // Fetch only files not already pulled in an earlier batch (cross-chunk cache),
               // bounded by a high per-batch ceiling — no longer a flat 5. A large PR pulls
-              // many context files across its batches, each fetched at most once.
-              const toFetch = additionalFilesNeeded
-                .filter((p) => !fetchedFileCache.has(p))
-                .slice(0, MAX_CONTEXT_FILES_PER_BATCH);
-              if (toFetch.length > 0) {
-                const batchSuffix = chunks.length > 1 ? ` (batch ${i + 1})` : '';
-                stream.markdown(`_Fetching ${toFetch.length} context file${toFetch.length !== 1 ? 's' : ''}${batchSuffix}…_\n\n`);
-                const fetched = await service.gatherFileContents(
-                  parsed.project, parsed.repo, pr.fromCommitHash, toFetch,
-                );
-                for (const [p, c] of fetched) fetchedFileCache.set(p, c);
-                logReview('info', `Additional context files fetched — batch ${i + 1}`, {
-                  batch: i + 1, requestedCount: toFetch.length, fetchedCount: fetched.size,
-                });
-              }
-              // Include as many requested files as fit this chunk's remaining budget, smallest-first.
-              const requestedEntries = additionalFilesNeeded
-                .filter((p) => fetchedFileCache.has(p))
-                .map((p) => ({ path: p, content: fetchedFileCache.get(p)! }));
-              const contentBudget = Math.max(0, tokenBudget - estimateChunkTokens(batch.items));
-              const extraContents = selectFilesWithinBudget(requestedEntries, contentBudget);
+              // many context files across its batches, each fetched at most once. Include as
+              // many requested files as fit this chunk's remaining budget, smallest-first.
+              const extraContents = await fetchAndBudgetContextFiles({
+                requestedFiles: additionalFilesNeeded, fetchedFileCache, service,
+                project: parsed.project, repo: parsed.repo, commitHash: pr.fromCommitHash,
+                tokenBudget, budgetAgainst: batch.items,
+                fetchMessage: (n) => `_Fetching ${n} context file${n !== 1 ? 's' : ''}${chunks.length > 1 ? ` (batch ${i + 1})` : ''}…_\n\n`,
+                logLabel: 'Additional context files fetched', batchNum: i + 1, logReview, stream,
+              });
               if (extraContents.size > 0) {
                 const pass2Prompt = service.buildPrompt(pr, batch.items, extraContents, extraInstructions);
                 totalInputChars += pass2Prompt.length;
@@ -1209,10 +1233,7 @@ export function createBitbucketParticipant(
         }
 
         if (resolvedMode === 'smart') {
-          smartPersonaResults.push({
-            recommendedPersonas: chunkPersonaUsable ? [...chunkRecPersonas] : undefined,
-            failed: !chunkPersonaUsable,
-          });
+          smartPersonaResults.push(chunkPersonaUsable ? [...chunkRecPersonas] : undefined);
         }
 
         // U3/U5: deep mode's persona lens passes run inline, per-chunk, right here (unchanged
@@ -1290,26 +1311,15 @@ export function createBitbucketParticipant(
             const requestedFiles = parseCriticAdditionalFiles(criticRaw);
             if (requestedFiles.length > 0) {
               try {
-                const toFetch = requestedFiles
-                  .filter((p) => !fetchedFileCache.has(p))
-                  .slice(0, MAX_CONTEXT_FILES_PER_BATCH);
-                if (toFetch.length > 0) {
-                  stream.markdown(`_Fetching ${toFetch.length} context file${toFetch.length !== 1 ? 's' : ''} for critic verification (batch ${i + 1})…_\n\n`);
-                  const fetched = await service.gatherFileContents(
-                    parsed.project, parsed.repo, pr.fromCommitHash, toFetch,
-                  );
-                  for (const [p, c] of fetched) fetchedFileCache.set(p, c);
-                  logReview('info', `Critic context files fetched — batch ${i + 1}`, {
-                    batch: i + 1, requestedCount: toFetch.length, fetchedCount: fetched.size,
-                  });
-                }
                 const referencedPaths = new Set(batch.items.map((f) => f.file));
                 const relevantDiffs = chunk.filter((d) => referencedPaths.has(d.path));
-                const requestedEntries = requestedFiles
-                  .filter((p) => fetchedFileCache.has(p))
-                  .map((p) => ({ path: p, content: fetchedFileCache.get(p)! }));
-                const contentBudget = Math.max(0, tokenBudget - estimateChunkTokens(relevantDiffs));
-                const extraContents = selectFilesWithinBudget(requestedEntries, contentBudget);
+                const extraContents = await fetchAndBudgetContextFiles({
+                  requestedFiles, fetchedFileCache, service,
+                  project: parsed.project, repo: parsed.repo, commitHash: pr.fromCommitHash,
+                  tokenBudget, budgetAgainst: relevantDiffs,
+                  fetchMessage: (n) => `_Fetching ${n} context file${n !== 1 ? 's' : ''} for critic verification (batch ${i + 1})…_\n\n`,
+                  logLabel: 'Critic context files fetched', batchNum: i + 1, logReview, stream,
+                });
                 if (extraContents.size > 0) {
                   const finalRoundNote =
                     'This is the final verification round — no further files will be provided. ' +

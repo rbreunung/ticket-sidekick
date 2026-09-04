@@ -12,7 +12,7 @@ import {
   buildTruncationEvent, formatRecoveryDecision, formatStructuredRunRecord,
   formatContinuationMessage, createAttemptTracker,
   resolveReviewMode, deriveCriticEnabled,
-  aggregateRecommendedPersonas,
+  aggregateRecommendedPersonas, ALL_PERSONA_IDS,
 } from '../participant/reviewSessionState';
 import type { ReviewFinding } from '../participant/reviewSessionState';
 import { PrReviewService, PERSONAS } from '../services/PrReviewService';
@@ -1931,33 +1931,24 @@ describe('persona pass merge (U3)', () => {
 
 describe('aggregateRecommendedPersonas (U7/R4/KTD2)', () => {
   it('unions recommendations across chunks — only one chunk recommending performance still includes it (AE2)', () => {
-    const result = aggregateRecommendedPersonas([
-      { recommendedPersonas: ['security'], failed: false },
-      { recommendedPersonas: ['performance'], failed: false },
-      { recommendedPersonas: [], failed: false },
-    ]);
+    const result = aggregateRecommendedPersonas([['security'], ['performance'], []]);
     expect(result.hasUsableSignal).toBe(true);
     expect(result.selected.sort()).toEqual(['performance', 'security']);
   });
 
   it('a docs-only chunk (empty recommendation) contributes nothing but still counts as usable signal', () => {
-    const result = aggregateRecommendedPersonas([{ recommendedPersonas: [], failed: false }]);
+    const result = aggregateRecommendedPersonas([[]]);
     expect(result.hasUsableSignal).toBe(true);
     expect(result.selected).toEqual([]);
   });
 
   it('drops an id not in the fixed catalog instead of passing it through', () => {
-    const result = aggregateRecommendedPersonas([
-      { recommendedPersonas: ['security', 'typo-lens'], failed: false },
-    ]);
+    const result = aggregateRecommendedPersonas([['security', 'typo-lens']]);
     expect(result.selected).toEqual(['security']);
   });
 
   it('routes to "no usable signal" when every chunk failed or returned an unparseable recommendation (AE3)', () => {
-    const result = aggregateRecommendedPersonas([
-      { recommendedPersonas: undefined, failed: true },
-      { recommendedPersonas: undefined, failed: false },
-    ]);
+    const result = aggregateRecommendedPersonas([undefined, undefined]);
     expect(result.hasUsableSignal).toBe(false);
     expect(result.selected).toEqual([]);
   });
@@ -1966,6 +1957,10 @@ describe('aggregateRecommendedPersonas (U7/R4/KTD2)', () => {
     const result = aggregateRecommendedPersonas([]);
     expect(result.hasUsableSignal).toBe(false);
     expect(result.selected).toEqual([]);
+  });
+
+  it('stays in sync with the PERSONAS catalog — ALL_PERSONA_IDS is a duplicated literal to avoid a circular import', () => {
+    expect([...ALL_PERSONA_IDS].sort()).toEqual(PERSONAS.map((p) => p.id).sort());
   });
 });
 

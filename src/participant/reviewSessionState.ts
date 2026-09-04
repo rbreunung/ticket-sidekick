@@ -70,13 +70,13 @@ export interface BitbucketCommentPreviewSession {
 }
 
 /**
- * U4/R7: `smart`-mode selection-failure fallback session — stored in `workspaceState` under
+ * `smart`-mode selection-failure fallback session — stored in `workspaceState` under
  * `bitbucket.session.smartFallback` and tagged with `<!-- bitbucket:smart-fallback-session -->`,
  * following the exact same shape/convention as `ReviewSession` (see docs/review-process.md
  * "Follow-ups"). Holds enough in-flight state to resume phase 2 once the user answers:
  * PR reference, fetched diff, chunk boundaries, and phase 1's already-collected standard-pass
- * findings. Built by U7's aggregation call site (not yet implemented); consumed by
- * `resumeSmartReviewPhase2` in `BitbucketParticipant.ts` once U7 implements it.
+ * findings. Built by the smart-mode aggregation call site in `BitbucketParticipant.ts`;
+ * consumed by `resumeSmartReviewPhase2` there.
  */
 export interface SmartFallbackSession {
   prTitle: string;
@@ -395,22 +395,21 @@ export function parseNdjsonFindings(raw: string): {
 }
 
 /**
- * R4/KTD2: aggregate each chunk's standard-pass persona recommendation into one PR-wide
- * selected set. A chunk contributes `undefined` when it failed the call or returned no
- * usable (parseable) recommendation field at all — an empty array IS usable signal (the
- * model correctly recommended nothing, e.g. AE1's docs-only PR). Ids outside the fixed
- * catalog are dropped, never passed through. `hasUsableSignal` is false only when every
- * chunk contributed `undefined`/`failed` — the R7/AE3 trigger for the smart-fallback
- * question.
+ * Aggregate each chunk's standard-pass persona recommendation into one PR-wide selected
+ * set. A chunk contributes `undefined` when it failed the call or returned no usable
+ * (parseable) recommendation field at all — an empty array IS usable signal (the model
+ * correctly recommended nothing, e.g. a docs-only PR). Ids outside the fixed catalog are
+ * dropped, never passed through. `hasUsableSignal` is false only when every chunk
+ * contributed `undefined` — the trigger for the smart-fallback question.
  */
 export function aggregateRecommendedPersonas(
-  perChunkResults: Array<{ recommendedPersonas: string[] | undefined; failed: boolean }>,
+  perChunkResults: Array<string[] | undefined>,
 ): { selected: PersonaId[]; hasUsableSignal: boolean } {
   const validIds = new Set(ALL_PERSONA_IDS);
   const selected = new Set<PersonaId>();
   let hasUsableSignal = false;
-  for (const { recommendedPersonas, failed } of perChunkResults) {
-    if (failed || recommendedPersonas === undefined) continue;
+  for (const recommendedPersonas of perChunkResults) {
+    if (recommendedPersonas === undefined) continue;
     hasUsableSignal = true;
     for (const id of recommendedPersonas) {
       if (validIds.has(id as PersonaId)) selected.add(id as PersonaId);
