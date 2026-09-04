@@ -673,6 +673,23 @@ export function parseCriticKeep(raw: string, count: number): Set<number> {
   return all;
 }
 
+/**
+ * Extract the critic's requested extra files (KTD4), mirroring Pass 1's
+ * `additionalFilesNeeded` trailer. Absent or unparseable input yields an empty list —
+ * never treated as a request, unlike `parseCriticKeep`'s fail-open `keep` behavior.
+ */
+export function parseCriticAdditionalFiles(raw: string): string[] {
+  const json = extractJsonObject(raw);
+  if (!json) return [];
+  try {
+    const obj = JSON.parse(json) as { additionalFilesNeeded?: unknown };
+    if (Array.isArray(obj.additionalFilesNeeded)) {
+      return obj.additionalFilesNeeded.filter((p): p is string => typeof p === 'string');
+    }
+  } catch { /* ignore — no files requested */ }
+  return [];
+}
+
 export function langFromPath(filePath: string): string {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
   const map: Record<string, string> = {
@@ -833,7 +850,7 @@ export function buildTruncationEvent(params: {
  * create a cycle.
  */
 export type ReviewPass =
-  | 'pass1' | 'continuation' | 'pass2' | 'critic'
+  | 'pass1' | 'continuation' | 'pass2' | 'critic' | 'critic-r2'
   | 'security' | 'performance' | 'reliability' | 'maintainability';
 
 /** R5's three recovery-decision shapes — logged so a reader can follow what happened

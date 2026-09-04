@@ -5,7 +5,7 @@ import {
   resolveLineType, annotateWithLineTypes, hasPrUrl,
   numberDiffLines, locateAnchor, resolveFindingAnchors,
   estimateChunkTokens, selectFilesWithinBudget, MAX_CONTEXT_FILES_PER_BATCH,
-  parseCriticKeep, dedupeFindings, extractHunkAround,
+  parseCriticKeep, parseCriticAdditionalFiles, dedupeFindings, extractHunkAround,
   parseFollowUpIntent, buildPrContextPrompt, buildDiffAwarePrompt,
   parseUpfrontQuestion, stripUpfrontQuestion,
   formatCallLine, formatFindingsFunnel, buildRunTag,
@@ -1016,6 +1016,71 @@ describe('PrReviewService.buildCriticPrompt', () => {
       'Did I introduce any regression?',
     );
     expect(prompt).toContain('Did I introduce any regression?');
+  });
+
+  it('always instructs the model to emit additionalFilesNeeded alongside keep', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const findings = [
+      { file: 'src/a.ts', line: 5, severity: 'critical' as const, title: 'SQLi', description: 'concat', recommendation: 'params' },
+    ];
+    const prompt = service.buildCriticPrompt(pr, [{ path: 'src/a.ts', diff: '@@ -1 +5 @@\n+const x = q(sql);' }], findings);
+    expect(prompt).toContain('additionalFilesNeeded');
+  });
+
+  it('includes fetched fileContents inline per file and adds a context note', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const findings = [
+      { file: 'src/a.ts', line: 5, severity: 'critical' as const, title: 'SQLi', description: 'concat', recommendation: 'params' },
+    ];
+    const fileContents = new Map([['src/b.ts', 'export function helper() { return 1; }']]);
+    const prompt = service.buildCriticPrompt(
+      pr,
+      [
+        { path: 'src/a.ts', diff: '@@ -1 +5 @@\n+const x = q(sql);' },
+        { path: 'src/b.ts', diff: '@@ -1 +1 @@\n+export function helper() {}' },
+      ],
+      findings,
+      undefined,
+      fileContents,
+    );
+    expect(prompt).toContain('**Full content:**');
+    expect(prompt).toContain('export function helper() { return 1; }');
+    expect(prompt).toContain('Full contents of the files you previously requested');
+  });
+
+  it('omits the context note when fileContents is empty or absent', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const findings = [
+      { file: 'src/a.ts', line: 5, severity: 'critical' as const, title: 'SQLi', description: 'concat', recommendation: 'params' },
+    ];
+    const prompt = service.buildCriticPrompt(
+      pr, [{ path: 'src/a.ts', diff: '@@ -1 +5 @@\n+const x = q(sql);' }], findings, undefined, new Map(),
+    );
+    expect(prompt).not.toContain('Full contents of the files you previously requested');
+  });
+});
+
+describe('parseCriticAdditionalFiles', () => {
+  it('extracts requested file paths', () => {
+    expect(parseCriticAdditionalFiles('{"keep":[1],"additionalFilesNeeded":["src/config.ts"]}'))
+      .toEqual(['src/config.ts']);
+  });
+
+  it('returns an empty array when no files are requested', () => {
+    expect(parseCriticAdditionalFiles('{"keep":[1],"additionalFilesNeeded":[]}')).toEqual([]);
+  });
+
+  it('returns an empty array when the field is absent', () => {
+    expect(parseCriticAdditionalFiles('{"keep":[1]}')).toEqual([]);
+  });
+
+  it('returns an empty array (never treated as a request) when unparseable', () => {
+    expect(parseCriticAdditionalFiles('the model rambled')).toEqual([]);
+  });
+
+  it('extracts the field even with surrounding prose', () => {
+    expect(parseCriticAdditionalFiles('Verdict: {"keep":[1],"additionalFilesNeeded":["a.ts","b.ts"]} done'))
+      .toEqual(['a.ts', 'b.ts']);
   });
 });
 

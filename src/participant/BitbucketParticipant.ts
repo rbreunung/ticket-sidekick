@@ -21,6 +21,7 @@ import {
   selectFilesWithinBudget,
   MAX_CONTEXT_FILES_PER_BATCH,
   parseCriticKeep,
+  parseCriticAdditionalFiles,
   dedupeFindings,
   buildRunTag,
   formatCallLine,
@@ -1072,7 +1073,75 @@ export function createBitbucketParticipant(
               verified.push(...batch.items); // fail-soft: keep unverified rather than drop
               continue;
             }
-            const keep = parseCriticKeep(batch.result!, batch.items.length);
+
+            // R9/KTD4: give the critic one extra round to pull real files it needs to
+            // confirm/refute a candidate finding, reusing the same fetch/cache/budget
+            // machinery pass1→pass2 already uses. Capped at one round — the second-round
+            // prompt tells the model this is final, so its `keep` decision settles here
+            // even if it asks for more.
+            let criticRaw = batch.result!;
+            const requestedFiles = parseCriticAdditionalFiles(criticRaw);
+            if (requestedFiles.length > 0) {
+              try {
+                const toFetch = requestedFiles
+                  .filter((p) => !fetchedFileCache.has(p))
+                  .slice(0, MAX_CONTEXT_FILES_PER_BATCH);
+                if (toFetch.length > 0) {
+                  stream.markdown(`_Fetching ${toFetch.length} context file${toFetch.length !== 1 ? 's' : ''} for critic verification (batch ${i + 1})…_\n\n`);
+                  const fetched = await service.gatherFileContents(
+                    parsed.project, parsed.repo, pr.fromCommitHash, toFetch,
+                  );
+                  for (const [p, c] of fetched) fetchedFileCache.set(p, c);
+                  logReview('info', `Critic context files fetched — batch ${i + 1}`, {
+                    batch: i + 1, requestedCount: toFetch.length, fetchedCount: fetched.size,
+                  });
+                }
+                const referencedPaths = new Set(batch.items.map((f) => f.file));
+                const relevantDiffs = chunk.filter((d) => referencedPaths.has(d.path));
+                const requestedEntries = requestedFiles
+                  .filter((p) => fetchedFileCache.has(p))
+                  .map((p) => ({ path: p, content: fetchedFileCache.get(p)! }));
+                const contentBudget = Math.max(0, tokenBudget - estimateChunkTokens(relevantDiffs));
+                const extraContents = selectFilesWithinBudget(requestedEntries, contentBudget);
+                if (extraContents.size > 0) {
+                  const finalRoundNote =
+                    'This is the final verification round — no further files will be provided. ' +
+                    'Decide "keep" using only the files you now have.';
+                  const round2Instructions = extraInstructions
+                    ? `${finalRoundNote}\n${extraInstructions}`
+                    : finalRoundNote;
+                  const round2Prompt = service.buildCriticPrompt(
+                    pr, relevantDiffs, batch.items, round2Instructions, extraContents,
+                  );
+                  totalInputChars += round2Prompt.length;
+                  const round2Attempt: CallAttemptOut = { attempt: 0, durationMs: 0 };
+                  criticRaw = await callLLMWithProgress(
+                    round2Prompt, request.model, token, `${batchStatus} verifying (round 2)`,
+                    `critic round2 batch ${i + 1}/${chunks.length}`,
+                    {
+                      attemptOut: round2Attempt,
+                      onAttemptError: (attempt, durationMs, errorCode) => logReview('error', formatCallLine({
+                        runTag, pass: 'critic-r2', batch: i + 1, totalBatches: chunks.length, attempt,
+                        itemCount: batch.items.length, promptChars: round2Prompt.length, durationMs, status: 'error', errorCode,
+                      })),
+                    },
+                  );
+                  totalOutputChars += criticRaw.length;
+                  logReview('info', formatCallLine({
+                    runTag, pass: 'critic-r2', batch: i + 1, totalBatches: chunks.length, attempt: round2Attempt.attempt,
+                    itemCount: batch.items.length, promptChars: round2Prompt.length, responseChars: criticRaw.length,
+                    durationMs: round2Attempt.durationMs, status: 'ok',
+                  }));
+                }
+              } catch (err) {
+                logReview('warn', `Critic file-fetch round failed — batch ${i + 1}`, {
+                  batch: i + 1, error: err instanceof Error ? err.message : String(err),
+                });
+                // fail-soft: fall back to the first-round response's keep decision
+              }
+            }
+
+            const keep = parseCriticKeep(criticRaw, batch.items.length);
             batch.items.forEach((f, idx) => {
               if (keep.has(idx + 1)) verified.push(f);
               else droppedByCritic++;
