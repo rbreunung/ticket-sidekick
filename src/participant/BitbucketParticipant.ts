@@ -41,6 +41,7 @@ import {
   type ReviewSession,
   type BitbucketCommentPreviewSession,
   type BitbucketFollowupState,
+  type BitbucketSessionContinuity,
   type FileDiff,
   type SmartFallbackSession,
 } from './reviewSessionState';
@@ -56,16 +57,17 @@ import {
   type CallAttemptOut, type CallDiagHooks,
 } from './bitbucket/reviewDiagnostics';
 
-function getLastAssistantText(chatContext: vscode.ChatContext): string {
-  for (let i = chatContext.history.length - 1; i >= 0; i--) {
-    const item = chatContext.history[i];
-    if (item instanceof vscode.ChatResponseTurn) {
-      return item.response
-        .map((p) => (p instanceof vscode.ChatResponseMarkdownPart ? p.value.value : ''))
-        .join('');
-    }
-  }
-  return '';
+// R1/R3/U4: replaces the former `getLastAssistantText(...).includes('<!-- bitbucket:TAG -->')` — reads the
+// metadata a session-producing response returned via `{ metadata: { bitbucketSession } }` off the
+// last turn in `chatContext.history` instead of scanning rendered text, so no visible artifact of
+// session-tracking remains in the transcript. Mirrors `getActiveJiraSession` in
+// `jira/ticketContext.ts`. Returns undefined when the last turn isn't a `ChatResponseTurn`, carries
+// no result metadata, or the user has moved on since — matching today's "tag absent" behavior.
+function getActiveBitbucketSession(chatContext: vscode.ChatContext): BitbucketSessionContinuity | undefined {
+  const last = chatContext.history[chatContext.history.length - 1];
+  if (!(last instanceof vscode.ChatResponseTurn)) return undefined;
+  const metadata = last.result.metadata as { bitbucketSession?: BitbucketSessionContinuity } | undefined;
+  return metadata?.bitbucketSession;
 }
 
 const FOLLOW_UP_PROMPT_PREFIX = `A developer is asking a follow-up question about a specific finding from a code review. Answer their question directly and thoroughly. If they state an assumption, evaluate it. Include specific conditions under which this could be acceptable or needs fixing, and any concrete code changes where relevant.
@@ -500,11 +502,10 @@ export function createBitbucketParticipant(
     }
 
     const ws = context.workspaceState;
-    const lastResponse = getLastAssistantText(chatContext);
     const prUrlMatch = prompt.match(/https?:\/\/\S+\/pull-requests\/\d+\S*/);
 
     // Helper: stream a comment preview and save session
-    const streamCommentPreview = async (previewSession: BitbucketCommentPreviewSession) => {
+    const streamCommentPreview = async (previewSession: BitbucketCommentPreviewSession): Promise<vscode.ChatResult> => {
       await ws.update('bitbucket.session.commentPreview', previewSession);
       const n = previewSession.items.length;
       const parts: string[] = [`**Preview: ${n} comment${n !== 1 ? 's' : ''} to post**`];
@@ -518,12 +519,13 @@ export function createBitbucketParticipant(
         parts.push(`---\n\n**#${finding.id}** — ${finding.title}\n${anchorLine}\n\n${text}`);
       }
       const postLabel = allInline ? 'post inline' : 'post to activity feed';
-      parts.push(`---\n\nReply **"post it"** to ${postLabel}, give a refinement instruction, or **(c)** to cancel.\n\n<!-- bitbucket:comment-preview -->`);
+      parts.push(`---\n\nReply **"post it"** to ${postLabel}, give a refinement instruction, or **(c)** to cancel.`);
       stream.markdown(parts.join('\n\n'));
+      return { metadata: { bitbucketSession: { kinds: ['comment-preview'] } } };
     };
 
     // Helper: post results and format report
-    const postAndReport = async (previewSession: BitbucketCommentPreviewSession) => {
+    const postAndReport = async (previewSession: BitbucketCommentPreviewSession): Promise<vscode.ChatResult> => {
       await ws.update('bitbucket.session.commentPreview', undefined);
       stream.markdown(`_Posting ${previewSession.items.length} comment${previewSession.items.length !== 1 ? 's' : ''} to Bitbucket…_\n\n`);
       const client = new BitbucketApiClient({
@@ -555,27 +557,30 @@ export function createBitbucketParticipant(
       let output = '';
       if (successLines.length > 0) output += `**Posted ${successLines.length} comment${successLines.length !== 1 ? 's' : ''}:**\n\n${successLines.join('\n')}\n\n`;
       if (failureLines.length > 0) output += `**Failed to post ${failureLines.length} comment${failureLines.length !== 1 ? 's' : ''}:**\n\n${failureLines.join('\n')}\n\n`;
-      stream.markdown(output + `<!-- bitbucket:review-session -->`);
+      stream.markdown(output);
+      return { metadata: { bitbucketSession: { kinds: ['review-session'] } } };
     };
 
     // U4/R7: smart-mode selection-failure fallback — entry point U7 calls once persona-recommendation
     // aggregation finds no usable signal from any chunk. Stores a SmartFallbackSession (PR reference,
     // fetched diff, chunk boundaries, phase 1's collected findings) and asks the user to choose between
-    // running all four persona passes or continuing with the standard pass only. Tagged the same way
-    // ReviewSession/BitbucketCommentPreviewSession are, so the next turn's detection (below) can find it.
+    // running all four persona passes or continuing with the standard pass only. Metadata-tagged the
+    // same way ReviewSession/BitbucketCommentPreviewSession are, so the next turn's detection (below)
+    // can find it.
     const askSmartFallbackChoice = async (
       pr: { prTitle: string; prUrl: string; project: string; repo: string; prId: number },
       diffs: FileDiff[],
       chunks: FileDiff[][],
       phase1Findings: ReviewFinding[],
-    ): Promise<void> => {
+    ): Promise<vscode.ChatResult> => {
       const fallbackSession: SmartFallbackSession = { ...pr, diffs, chunks, phase1Findings };
       await ws.update('bitbucket.session.smartFallback', fallbackSession);
       stream.markdown(
         `_Smart mode couldn't determine a persona recommendation for this PR from any diff chunk._\n\n` +
         `Reply **all** to run all four specialist passes (${PERSONAS.map(p => p.displayName).join(', ')}), ` +
-        `or **standard** to continue with just the standard review.\n\n<!-- bitbucket:smart-fallback-session -->`,
+        `or **standard** to continue with just the standard review.`,
       );
+      return { metadata: { bitbucketSession: { kinds: ['smart-fallback-session'] } } };
     };
 
     // U7: resumes a smart-mode review whose fallback question (R7/AE3) fired — the user
@@ -588,7 +593,7 @@ export function createBitbucketParticipant(
     const resumeSmartReviewPhase2 = async (
       session: SmartFallbackSession,
       chosenPersonas: PersonaId[],
-    ): Promise<void> => {
+    ): Promise<vscode.ChatResult | void> => {
       await ws.update('bitbucket.session.smartFallback', undefined);
       const choiceLabel = chosenPersonas.length === 0
         ? 'the standard pass only'
@@ -650,6 +655,7 @@ export function createBitbucketParticipant(
           prDescription: pr.description,
           changedFiles: session.diffs.map((d) => ({ path: d.path, ...(d.deleted ? { deleted: true } : {}) })),
         } satisfies ReviewSession);
+        return { metadata: { bitbucketSession: { kinds: ['review-session'] } } };
       } catch (err) {
         logDiag('bitbucket.review', 'error', `Smart-fallback resume failed — [${runTag}]`, {
           runTag, error: err instanceof Error ? err.message : String(err),
@@ -658,18 +664,19 @@ export function createBitbucketParticipant(
       }
     };
 
+    const activeSession = getActiveBitbucketSession(chatContext);
+
     // 2a. Comment preview — confirmation, cancellation, or refinement
-    if (!prUrlMatch && lastResponse.includes('<!-- bitbucket:comment-preview -->')) {
+    if (!prUrlMatch && activeSession?.kinds.includes('comment-preview')) {
       const previewSession = ws.get<BitbucketCommentPreviewSession>('bitbucket.session.commentPreview');
       if (previewSession) {
         if (isCancellation(prompt)) {
           await ws.update('bitbucket.session.commentPreview', undefined);
-          stream.markdown(`_Cancelled._\n\n<!-- bitbucket:review-session -->`);
-          return;
+          stream.markdown(`_Cancelled._`);
+          return { metadata: { bitbucketSession: { kinds: ['review-session'] } } };
         }
         if (isConfirmation(prompt)) {
-          await postAndReport(previewSession);
-          return;
+          return postAndReport(previewSession);
         }
         // Refinement — revise each comment text with the instruction, one LLM call per item
         try {
@@ -683,21 +690,20 @@ export function createBitbucketParticipant(
             refOutputChars += (revised ?? '').length;
             revisedItems.push({ finding: item.finding, text: revised || item.text });
           }
-          await streamCommentPreview({ ...previewSession, items: revisedItems });
+          const result = await streamCommentPreview({ ...previewSession, items: revisedItems });
           stream.markdown(`\n\n_~${Math.ceil((refInputChars + refOutputChars) / 4).toLocaleString()} estimated tokens_`);
+          return result;
         } catch (err) {
           logDiag('bitbucket.followup', 'error', 'Comment refinement failed', { error: err instanceof Error ? err.message : String(err) });
-          stream.markdown(
-            `${friendlyLmFailureMessage('**Refinement failed:**', err)}\n\n<!-- bitbucket:comment-preview -->`,
-          );
+          stream.markdown(friendlyLmFailureMessage('**Refinement failed:**', err));
+          return { metadata: { bitbucketSession: { kinds: ['comment-preview'] } } };
         }
-        return;
       }
     }
 
     // 2a2. Smart-mode selection-failure fallback question (U4/R7) — detected ahead of the
     // ReviewSession follow-up check (2b) below, same detection-order discipline as 2a above.
-    if (!prUrlMatch && lastResponse.includes('<!-- bitbucket:smart-fallback-session -->')) {
+    if (!prUrlMatch && activeSession?.kinds.includes('smart-fallback-session')) {
       const fallbackSession = ws.get<SmartFallbackSession>('bitbucket.session.smartFallback');
       if (fallbackSession) {
         if (isCancellation(prompt)) {
@@ -710,20 +716,21 @@ export function createBitbucketParticipant(
         if (choice.kind === 'unrecognized') {
           stream.markdown(
             `_Didn't catch that — reply **all** to run all four persona passes, ` +
-            `or **standard** to continue with the standard review only._\n\n<!-- bitbucket:smart-fallback-session -->`,
+            `or **standard** to continue with the standard review only._`,
           );
-          return;
+          return { metadata: { bitbucketSession: { kinds: ['smart-fallback-session'] } } };
         }
 
-        await resumeSmartReviewPhase2(fallbackSession, choice.personas);
-        return;
+        return resumeSmartReviewPhase2(fallbackSession, choice.personas);
       }
     }
 
     // 2b. Multi-turn follow-up on an existing review
-    if (!prUrlMatch && lastResponse.includes('<!-- bitbucket:review-session -->')) {
+    if (!prUrlMatch && activeSession?.kinds.includes('review-session')) {
       const session = ws.get<ReviewSession>('bitbucket.session.review');
       if (session) {
+        const reviewSessionResult: vscode.ChatResult = { metadata: { bitbucketSession: { kinds: ['review-session'] } } };
+
         if (isCancellation(prompt)) {
           await ws.update('bitbucket.session.review', undefined);
           stream.markdown('_Review session ended._');
@@ -735,15 +742,15 @@ export function createBitbucketParticipant(
 
           if (intent.kind === 'add') {
             if (!session.project || !session.repo || !session.prId) {
-              stream.markdown(`_Session is from an older version — start a new review to use "add to review"._\n\n<!-- bitbucket:review-session -->`);
-              return;
+              stream.markdown(`_Session is from an older version — start a new review to use "add to review"._`);
+              return reviewSessionResult;
             }
             const selectedFindings = intent.targets === 'all'
               ? session.findings
               : session.findings.filter((f) => (intent.targets as number[]).includes(f.id));
             if (selectedFindings.length === 0) {
-              stream.markdown(`_No matching findings. Use **#N** references or **add all to review**._\n\n<!-- bitbucket:review-session -->`);
-              return;
+              stream.markdown(`_No matching findings. Use **#N** references or **add all to review**._`);
+              return reviewSessionResult;
             }
             const userNote = intent.note || undefined;
             const service = new PrReviewService(
@@ -759,8 +766,7 @@ export function createBitbucketParticipant(
             const previewSession: BitbucketCommentPreviewSession = {
               project: session.project, repo: session.repo, prId: session.prId, items,
             };
-            await streamCommentPreview(previewSession);
-            return;
+            return streamCommentPreview(previewSession);
           }
 
           // intent.kind === 'explain'
@@ -772,9 +778,9 @@ export function createBitbucketParticipant(
             finding = session.findings.find((f) => f.id === intent.findingRef);
             if (!finding) {
               stream.markdown(
-                `_Finding #${intent.findingRef} not found. The review has findings #1–#${session.findings.length}._\n\n<!-- bitbucket:review-session -->`,
+                `_Finding #${intent.findingRef} not found. The review has findings #1–#${session.findings.length}._`,
               );
-              return;
+              return reviewSessionResult;
             }
           } else {
             const matchPrompt =
@@ -800,9 +806,9 @@ export function createBitbucketParticipant(
               : buildPrContextPrompt(session, intent.question);
             const prAnswer = await callLLMWithProgress(prContextPrompt, request.model, token, 'Answering question', 'follow-up pr-answer');
             const totalEst = Math.ceil((matchInputChars + matchOutputChars + prContextPrompt.length + prAnswer.length) / 4);
-            stream.markdown(`${prAnswer}\n\n<!-- bitbucket:review-session -->`);
+            stream.markdown(prAnswer);
             stream.markdown(`\n\n_~${totalEst.toLocaleString()} estimated tokens_`);
-            return;
+            return reviewSessionResult;
           }
 
           const followUpPrompt =
@@ -820,16 +826,14 @@ export function createBitbucketParticipant(
 
           const answer = await callLLMWithProgress(followUpPrompt, request.model, token, 'Explaining finding', 'follow-up explain');
           const totalEst = Math.ceil((matchInputChars + matchOutputChars + followUpPrompt.length + answer.length) / 4);
-          stream.markdown(`**Finding #${finding.id} — ${finding.title}**\n\n${answer}\n\n<!-- bitbucket:review-session -->`);
+          stream.markdown(`**Finding #${finding.id} — ${finding.title}**\n\n${answer}`);
           stream.markdown(`\n\n_~${totalEst.toLocaleString()} estimated tokens_`);
-          return;
+          return reviewSessionResult;
 
         } catch (err) {
           logDiag('bitbucket.followup', 'error', 'Follow-up handling failed', { error: err instanceof Error ? err.message : String(err) });
-          stream.markdown(
-            `${friendlyLmFailureMessage('**Follow-up failed:**', err)}\n\n<!-- bitbucket:review-session -->`,
-          );
-          return;
+          stream.markdown(friendlyLmFailureMessage('**Follow-up failed:**', err));
+          return reviewSessionResult;
         }
       }
     }
@@ -1402,11 +1406,10 @@ export function createBitbucketParticipant(
           const phase1Deduped = dedupeFindings(allFindings);
           const phase1Numbered = phase1Deduped.map((f, idx) => ({ ...f, id: idx + 1 }));
           logReview('info', 'Smart mode: no usable persona recommendation from any chunk — asking user', { runTag });
-          await askSmartFallbackChoice(
+          return askSmartFallbackChoice(
             { prTitle: pr.title, prUrl: prUrlMatch[0], project: parsed.project, repo: parsed.repo, prId: parsed.prId },
             fileDiffs, chunks, phase1Numbered,
           );
-          return;
         }
 
         const selectedPersonas = PERSONAS.filter((p) => selected.includes(p.id));
@@ -1505,7 +1508,10 @@ export function createBitbucketParticipant(
       // R6: "after a PR review: add findings to review, ask about a finding" — the flagship
       // example the plan names for follow-up chips.
       const reviewState: BitbucketFollowupState = { kind: 'reviewCompleted', findingCount: numbered.length };
-      return { metadata: { bitbucketFollowup: reviewState } };
+      // R1/R3/U4: also carries bitbucketSession so this fresh review is itself detected as an
+      // active ReviewSession on the next turn — mirrors postAndReport/resumeSmartReviewPhase2
+      // above, which set the same session kind when they complete a review from a detour.
+      return { metadata: { bitbucketFollowup: reviewState, bitbucketSession: { kinds: ['review-session'] } } };
     } catch (err) {
       // KTD9: name the last stage reached, so this is distinguishable from a run that
       // silently never got here (e.g. a channel-write failure) — the funnel's absence

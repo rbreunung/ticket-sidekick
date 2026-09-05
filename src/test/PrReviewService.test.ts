@@ -462,7 +462,7 @@ describe('PrReviewService.formatReview', () => {
     expect(markdown).toContain('**#2**');
     expect(markdown).toContain('🔴');
     expect(markdown).toContain('🟡');
-    expect(markdown).toContain('<!-- bitbucket:review-session -->');
+    expect(markdown).not.toContain('<!-- bitbucket:review-session -->');
     expect(primaryCount).toBe(2);
     expect(lowCount).toBe(0);
   });
@@ -541,7 +541,7 @@ describe('PrReviewService.formatReview', () => {
     const { markdown, primaryCount, lowCount } = service.formatReview([], pr, 2);
 
     expect(markdown).toContain('_No issues found._');
-    expect(markdown).toContain('<!-- bitbucket:review-session -->');
+    expect(markdown).not.toContain('<!-- bitbucket:review-session -->');
     expect(primaryCount).toBe(0);
     expect(lowCount).toBe(0);
   });

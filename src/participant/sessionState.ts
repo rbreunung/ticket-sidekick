@@ -1389,8 +1389,9 @@ export function computeJiraFollowups(state: JiraFollowupState): FollowupSuggesti
 // is metadata-based and its visible `<!-- jira:TAG -->` marker is gone. U4 finished the rest:
 // the shared issue-type chat-ask (ticketContext.ts), report-import (reportImportHandler.ts,
 // veracodeHandler.ts, waltzHandler.ts, emailHandler.ts), and template generation
-// (templateGenerationHandler.ts). Only Bitbucket's ReviewSession remains — see
-// BitbucketSessionContinuity in reviewSessionState.ts for its sibling mechanism.
+// (templateGenerationHandler.ts). U4 also converted Bitbucket's ReviewSession/
+// BitbucketCommentPreviewSession/SmartFallbackSession — see BitbucketSessionContinuity in
+// reviewSessionState.ts for its sibling mechanism.
 export type JiraSessionKind =
   | 'more-comments'
   | 'comment-list'

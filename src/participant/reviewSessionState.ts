@@ -71,8 +71,9 @@ export interface BitbucketCommentPreviewSession {
 
 /**
  * `smart`-mode selection-failure fallback session — stored in `workspaceState` under
- * `bitbucket.session.smartFallback` and tagged with `<!-- bitbucket:smart-fallback-session -->`,
- * following the exact same shape/convention as `ReviewSession` (see docs/review-process.md
+ * `bitbucket.session.smartFallback` and detected via the `smart-fallback-session`
+ * `BitbucketSessionContinuity` kind (U4), following the exact same shape/convention as
+ * `ReviewSession` (see docs/review-process.md
  * "Follow-ups"). Holds enough in-flight state to resume phase 2 once the user answers:
  * PR reference, fetched diff, chunk boundaries, and phase 1's already-collected standard-pass
  * findings. Built by the smart-mode aggregation call site in `BitbucketParticipant.ts`;
@@ -1143,6 +1144,23 @@ export type BitbucketFollowupState =
   | { kind: 'greeting' }
   | { kind: 'reviewCompleted'; findingCount: number }
   | { kind: 'none' };
+
+/**
+ * Sibling of `BitbucketFollowupState` on the same `vscode.ChatResult.metadata` channel, but for
+ * session-continuity detection instead of follow-up chips — mirrors `JiraSessionContinuity` in
+ * `sessionState.ts` (see U4). Replaces matching the last rendered response text against a visible
+ * `<!-- bitbucket:TAG -->` HTML comment with a check against this metadata read off
+ * `chatContext.history` (see `getActiveBitbucketSession` in `BitbucketParticipant.ts`).
+ * `workspaceState` still owns the actual session data — `kinds` is only a liveness flag.
+ */
+export type BitbucketSessionKind =
+  | 'comment-preview'
+  | 'smart-fallback-session'
+  | 'review-session';
+
+export interface BitbucketSessionContinuity {
+  kinds: BitbucketSessionKind[];
+}
 
 const BITBUCKET_MAX_FOLLOWUPS = 3;
 
