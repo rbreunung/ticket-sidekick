@@ -35,7 +35,6 @@ export async function streamReviewScreen(
 
 export async function executeCleanupBatch(
   session: TransitionBatchSession,
-  skipKeys: Set<string>,
   ticketService: TicketService,
   stream: vscode.ChatResponseStream,
 ): Promise<void> {
@@ -46,14 +45,16 @@ export async function executeCleanupBatch(
 
   stream.markdown(`_Running transitions…_\n\n`);
 
+  // U6: excludes are now each ticket's/subtask's own `included` flag (toggled per-row via the
+  // review table, R8) rather than a skip-set passed in for this one call.
   for (const ticket of session.tickets) {
-    if (skipKeys.has(ticket.key)) {
+    if (!ticket.included) {
       skipped += 1 + ticket.subtasks.length;
       continue;
     }
 
     for (const sub of ticket.subtasks) {
-      if (skipKeys.has(sub.key)) { skipped++; continue; }
+      if (!sub.included) { skipped++; continue; }
       try {
         await ticketService.transitionAlongPath(sub.key, sub.transitionPath, sub.resolution ?? session.resolution);
         transitioned++;
@@ -182,6 +183,7 @@ export async function handleRunCleanup(
       transitionPath: path,
       subtasks: [],
       extra: extractExtraFields(issue.fields, cleanupFields),
+      included: true,
     });
   }
 
@@ -210,6 +212,7 @@ export async function handleRunCleanup(
         transitionPath: subPath,
         resolution: subtaskResolution,
         extra: extractExtraFields(s.fields, cleanupFields),
+        included: true,
       });
     }
   }

@@ -47,6 +47,7 @@ function makeTicket(key: string, overrides: Partial<TransitionBatchTicket> = {})
     currentStatus: 'Open',
     transitionPath: dummyPath,
     subtasks: [],
+    included: true,
     ...overrides,
   };
 }
@@ -57,6 +58,7 @@ function makeSubtask(key: string, overrides: Partial<TransitionSubtask> = {}): T
     summary: `Subtask ${key}`,
     currentStatus: 'Open',
     transitionPath: dummyPath,
+    included: true,
     ...overrides,
   };
 }
@@ -180,7 +182,7 @@ describe('executeCleanupBatch', () => {
     };
     const stream = mockStream();
 
-    await executeCleanupBatch(session, new Set(), ticketService, stream as never);
+    await executeCleanupBatch(session, ticketService, stream as never);
 
     // The call for PROJ-2 should pass subtask's own resolution
     const subCall = spy.mock.calls.find(([key]) => key === 'PROJ-2');
@@ -203,7 +205,7 @@ describe('executeCleanupBatch', () => {
     };
     const stream = mockStream();
 
-    await executeCleanupBatch(session, new Set(), ticketService, stream as never);
+    await executeCleanupBatch(session, ticketService, stream as never);
 
     const subCall = spy.mock.calls.find(([key]) => key === 'PROJ-2');
     expect(subCall).toBeDefined();
@@ -852,7 +854,7 @@ describe('buildReviewTable', () => {
   it('includes a clickable footer prompt line (post it / cancel)', () => {
     const session = makeSession({ tickets: [makeTicket('PROJ-1')] });
     const table = buildReviewTable(session);
-    expect(table).toContain('key numbers to skip');
+    expect(table).toContain('key numbers to toggle');
     expect(table).toContain('[post it](command:workbench.action.chat.open?');
     expect(table).toContain('[(c)](command:workbench.action.chat.open?');
   });
@@ -860,6 +862,22 @@ describe('buildReviewTable', () => {
   it('renders keys as bare text when no baseUrl is given', () => {
     const session = makeSession({ tickets: [makeTicket('PROJ-1')] });
     expect(buildReviewTable(session)).toContain('| PROJ-1 |');
+  });
+
+  it('renders each row\'s own Transition? cell as a clickable toggle resubmitting its numeric suffix (R8/AE4/AE5)', () => {
+    const session = makeSession({ tickets: [makeTicket('PROJ-11', { included: true })] });
+    const table = buildReviewTable(session);
+    expect(table).toContain('| Transition? |');
+    expect(table).toContain(
+      `[✓](command:workbench.action.chat.open?${encodeURIComponent(JSON.stringify({ query: '@jira 11', isPartialQuery: false }))})`,
+    );
+  });
+
+  it('renders an excluded row\'s Transition? cell as _excluded_, never a negative "Skip" framing (R9)', () => {
+    const session = makeSession({ tickets: [makeTicket('PROJ-11', { included: false })] });
+    const table = buildReviewTable(session);
+    expect(table).toContain('_excluded_');
+    expect(table).not.toContain('Skip');
   });
 
   it('neutralizes a ticket summary crafted to break out of a command link, since the footer is streamed as trusted markdown', () => {

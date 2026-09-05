@@ -81,6 +81,10 @@ export interface TransitionSubtask {
   transitionPath: Array<{ id: string; name: string; to: string }>;
   resolution?: string;
   extra?: Record<string, unknown>;
+  // U6/KTD6: mirrors ReviewRowBase's `included` convention — whether this subtask transitions if
+  // the batch runs. Defaults to true at construction (cleanupHandler.ts); toggled per-row (R8) by
+  // buildReviewTable()'s Include? column and parseSkipInput()'s cascading toggle.
+  included: boolean;
 }
 
 export interface TransitionBatchTicket {
@@ -90,6 +94,8 @@ export interface TransitionBatchTicket {
   transitionPath: Array<{ id: string; name: string; to: string }>;
   subtasks: TransitionSubtask[];
   extra?: Record<string, unknown>;
+  // U6/KTD6: see TransitionSubtask.included above — same convention, same default/toggle path.
+  included: boolean;
 }
 
 export interface TransitionBatchSession {
@@ -109,6 +115,8 @@ interface TransitionReviewRow {
   to: string;
   resolution: string;
   extra?: Record<string, unknown>;
+  included: boolean;
+  numericSuffix: string; // the digits after '-' in the ticket key — the toggle reply text (R8), matching the existing typed "skip 11 14" syntax's own number format
 }
 
 /**
@@ -140,6 +148,8 @@ export function buildReviewTable(
       to: t.transitionPath.at(-1)?.to ?? '?',
       resolution: session.resolution ?? '',
       extra: t.extra,
+      included: t.included,
+      numericSuffix: t.key.split('-')[1] ?? t.key,
     });
     for (const s of t.subtasks) {
       flatRows.push({
@@ -150,6 +160,8 @@ export function buildReviewTable(
         to: s.transitionPath.at(-1)?.to ?? '?',
         resolution: s.resolution ?? session.resolution ?? '',
         extra: s.extra,
+        included: s.included,
+        numericSuffix: s.key.split('-')[1] ?? s.key,
       });
     }
   }
@@ -169,10 +181,14 @@ export function buildReviewTable(
       (row, id) => row.extra?.[id],
       onUnknownField,
     ),
+    // R8/R9: positive "will transition when checked" framing — clicking resubmits this row's own
+    // numeric suffix, the exact text the existing typed "11 14" toggle syntax already accepts
+    // (parseSkipInput), so no new parser logic (Risks section).
+    { header: 'Transition?', accessor: (r) => buildChatCommandLink(r.included ? '✓' : '_excluded_', '@jira', r.numericSuffix) },
   ];
 
   return renderReviewTable(columns, flatRows) + '\n\n' +
-    `${buildChatCommandLink('post it', '@jira', 'post it')} · ${buildChatCommandLink('(c)', '@jira', 'cancel')} · key numbers to skip (e.g. 11 14)`;
+    `${buildChatCommandLink('post it', '@jira', 'post it')} · ${buildChatCommandLink('(c)', '@jira', 'cancel')} · key numbers to toggle (e.g. 11 14)`;
 }
 
 export interface ResolutionSelectionSession {
@@ -185,10 +201,14 @@ export interface ResolutionSelectionSession {
   fieldMeta: JiraFieldMeta[];
 }
 
+// U6: 'skip' was renamed 'toggle' — a mentioned ticket's (and its cascaded parent/subtask's)
+// `included` flag flips and the table re-renders (R8/AE4), rather than the reply immediately
+// executing the batch with those tickets excluded. 'ok' (e.g. "post it") is now the only action
+// that actually runs the batch, using each ticket/subtask's current `included` flag.
 export type SkipParseResult =
   | { action: 'ok' }
   | { action: 'cancel' }
-  | { action: 'skip'; keys: string[] }
+  | { action: 'toggle'; keys: string[] }
   | { action: 'invalid' };
 
 // The remaining fields (once template/issue-type selection and ticket creation moved to
@@ -228,7 +248,9 @@ export function parseSkipInput(reply: string, tickets: TransitionBatchTicket[]):
   }
   if (mentioned.size === 0) return { action: 'invalid' };
 
-  // Cascade: subtask mentioned → also skip parent; parent mentioned → also skip all subtasks
+  // Cascade: subtask mentioned → also toggle parent; parent mentioned → also toggle all subtasks —
+  // unchanged from the pre-U6 one-shot skip cascade, just applied as a flip now instead of a final
+  // exclude set (see applyTicketToggle below).
   const expanded = new Set(mentioned);
   for (const t of tickets) {
     if (mentioned.has(t.key)) {
@@ -238,7 +260,20 @@ export function parseSkipInput(reply: string, tickets: TransitionBatchTicket[]):
       if (mentioned.has(s.key)) expanded.add(t.key);
     }
   }
-  return { action: 'skip', keys: [...expanded] };
+  return { action: 'toggle', keys: [...expanded] };
+}
+
+// U6/AE4: flips `included` for every ticket/subtask whose key is in `keys` (the cascaded set
+// parseSkipInput already computed) — pure so it's independently testable, mirroring
+// applyReviewToggle's shape for the import-review tables. The caller re-renders via
+// buildReviewTable() afterward; this never executes anything itself.
+export function applyTicketToggle(tickets: TransitionBatchTicket[], keys: string[]): TransitionBatchTicket[] {
+  const toggleSet = new Set(keys);
+  return tickets.map(t => ({
+    ...t,
+    included: toggleSet.has(t.key) ? !t.included : t.included,
+    subtasks: t.subtasks.map(s => (toggleSet.has(s.key) ? { ...s, included: !s.included } : s)),
+  }));
 }
 
 // Shared by parseResolutionSelection and parseIssueTypePick: resolves a reply to one list item

@@ -4,7 +4,7 @@ vi.mock('vscode', () => ({
   window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
 }));
 
-import { extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseSkipInput, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, resolveTemplateIssueType, formatIssueTypeOptionLabel, formatIssueTypeInlinePhrase, NO_ISSUE_TYPE, buildImportReviewTable, parseReviewInput, applyReviewToggle, VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION, buildBulkUpdateReviewTable, type VeracodeReviewRow, type BulkUpdateReviewRow } from '../participant/sessionState';
+import { extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseSkipInput, applyTicketToggle, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, resolveTemplateIssueType, formatIssueTypeOptionLabel, formatIssueTypeInlinePhrase, NO_ISSUE_TYPE, buildImportReviewTable, parseReviewInput, applyReviewToggle, VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION, buildBulkUpdateReviewTable, type VeracodeReviewRow, type BulkUpdateReviewRow } from '../participant/sessionState';
 import type { WaltzReviewRow } from '../utils/waltzReport';
 import { isPointerPrompt } from '../participant/jira/llmHelpers';
 import type { TransitionBatchTicket } from '../participant/sessionState';
@@ -188,15 +188,15 @@ describe('parseSkipInput', () => {
   const tickets: TransitionBatchTicket[] = [
     {
       key: 'PROJ-10', summary: 'Login bug', currentStatus: 'In Review',
-      transitionPath: [{ id: '41', name: 'Approve', to: 'Done' }],
+      transitionPath: [{ id: '41', name: 'Approve', to: 'Done' }], included: true,
       subtasks: [
-        { key: 'PROJ-11', summary: 'Write tests', currentStatus: 'In Progress', transitionPath: [] },
-        { key: 'PROJ-12', summary: 'Code review', currentStatus: 'Open', transitionPath: [] },
+        { key: 'PROJ-11', summary: 'Write tests', currentStatus: 'In Progress', transitionPath: [], included: true },
+        { key: 'PROJ-12', summary: 'Code review', currentStatus: 'Open', transitionPath: [], included: true },
       ],
     },
     {
       key: 'PROJ-14', summary: 'Dark mode', currentStatus: 'Blocked',
-      transitionPath: [], subtasks: [],
+      transitionPath: [], subtasks: [], included: true,
     },
   ];
 
@@ -209,25 +209,25 @@ describe('parseSkipInput', () => {
     expect(parseSkipInput('cancel', tickets)).toEqual({ action: 'cancel' });
   });
 
-  it('skipping a subtask also skips the parent', () => {
+  it('toggling a subtask also toggles the parent (U6: toggle, not a one-shot skip)', () => {
     const result = parseSkipInput('11', tickets);
-    expect(result).toMatchObject({ action: 'skip' });
-    expect((result as { action: 'skip'; keys: string[] }).keys).toContain('PROJ-11');
-    expect((result as { action: 'skip'; keys: string[] }).keys).toContain('PROJ-10');
+    expect(result).toMatchObject({ action: 'toggle' });
+    expect((result as { action: 'toggle'; keys: string[] }).keys).toContain('PROJ-11');
+    expect((result as { action: 'toggle'; keys: string[] }).keys).toContain('PROJ-10');
   });
 
-  it('skipping a parent also skips all its subtasks', () => {
+  it('toggling a parent also toggles all its subtasks', () => {
     const result = parseSkipInput('10', tickets);
-    expect(result).toMatchObject({ action: 'skip' });
-    const keys = (result as { action: 'skip'; keys: string[] }).keys;
+    expect(result).toMatchObject({ action: 'toggle' });
+    const keys = (result as { action: 'toggle'; keys: string[] }).keys;
     expect(keys).toContain('PROJ-10');
     expect(keys).toContain('PROJ-11');
     expect(keys).toContain('PROJ-12');
   });
 
-  it('skips multiple groups', () => {
+  it('toggles multiple groups', () => {
     const result = parseSkipInput('11 14', tickets);
-    const keys = (result as { action: 'skip'; keys: string[] }).keys;
+    const keys = (result as { action: 'toggle'; keys: string[] }).keys;
     expect(keys).toContain('PROJ-11');
     expect(keys).toContain('PROJ-10');
     expect(keys).toContain('PROJ-14');
@@ -245,6 +245,46 @@ describe('parseSkipInput', () => {
   it('also recognizes other shared confirmation/cancellation words, not just ok/c/cancel', () => {
     expect(parseSkipInput('yes', tickets)).toEqual({ action: 'ok' });
     expect(parseSkipInput('stop', tickets)).toEqual({ action: 'cancel' });
+  });
+});
+
+describe('applyTicketToggle (U6/AE4)', () => {
+  function makeTickets(): TransitionBatchTicket[] {
+    return [
+      {
+        key: 'PROJ-10', summary: 'Login bug', currentStatus: 'In Review',
+        transitionPath: [{ id: '41', name: 'Approve', to: 'Done' }], included: true,
+        subtasks: [
+          { key: 'PROJ-11', summary: 'Write tests', currentStatus: 'In Progress', transitionPath: [], included: true },
+          { key: 'PROJ-12', summary: 'Code review', currentStatus: 'Open', transitionPath: [], included: true },
+        ],
+      },
+      { key: 'PROJ-14', summary: 'Dark mode', currentStatus: 'Blocked', transitionPath: [], subtasks: [], included: true },
+    ];
+  }
+
+  it('flips only the mentioned ticket, leaving every other row unchanged', () => {
+    const toggled = applyTicketToggle(makeTickets(), ['PROJ-14']);
+    expect(toggled.find(t => t.key === 'PROJ-14')!.included).toBe(false);
+    expect(toggled.find(t => t.key === 'PROJ-10')!.included).toBe(true);
+  });
+
+  it('cascading a subtask toggle flips both the subtask and its parent together (consistent with parseSkipInput\'s cascade)', () => {
+    const cascaded = parseSkipInput('11', makeTickets()) as { action: 'toggle'; keys: string[] };
+    const toggled = applyTicketToggle(makeTickets(), cascaded.keys);
+    const parent = toggled.find(t => t.key === 'PROJ-10')!;
+    expect(parent.included).toBe(false);
+    expect(parent.subtasks.find(s => s.key === 'PROJ-11')!.included).toBe(false);
+    // The sibling subtask (not mentioned, not cascaded to) stays included.
+    expect(parent.subtasks.find(s => s.key === 'PROJ-12')!.included).toBe(true);
+  });
+
+  it('toggling the same row twice returns it to its original state (repeat clicks flip back, R8)', () => {
+    let tickets = makeTickets();
+    tickets = applyTicketToggle(tickets, ['PROJ-14']);
+    expect(tickets.find(t => t.key === 'PROJ-14')!.included).toBe(false);
+    tickets = applyTicketToggle(tickets, ['PROJ-14']);
+    expect(tickets.find(t => t.key === 'PROJ-14')!.included).toBe(true);
   });
 });
 

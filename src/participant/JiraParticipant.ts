@@ -7,7 +7,7 @@ import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { tokenStatus } from '../utils/diagUtils';
 import { logDiag } from '../utils/diagLog';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, type JiraFollowupState, type JiraSessionKind, isConfirmation, isCancellation, isGreetingOrEmpty, computeJiraFollowups, pickEmailOption, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewTable } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, type JiraFollowupState, type JiraSessionKind, isConfirmation, isCancellation, isGreetingOrEmpty, computeJiraFollowups, pickEmailOption, parseSkipInput, applyTicketToggle, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewTable } from './sessionState';
 import { findPath, resolveAndApplyTransition } from '../services/WorkflowService';
 import type { WorkflowGraph } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
@@ -203,23 +203,31 @@ export function createJiraParticipant(
       }
     }
 
-    // Transition review — user replied ok/cancel/skip keys
+    // Transition review — user replied ok/cancel/toggle keys
     if (getActiveJiraSession(chatContext)?.kinds.includes('transition-review')) {
       const session = ws.get<TransitionBatchSession>('jira.session.transitionReview');
       if (session) {
         const result = parseSkipInput(request.prompt, session.tickets);
+        const header = `**Cleanup${session.ruleName ? `: ${session.ruleName}` : ''}**`;
         if (result.action === 'invalid') {
-          const header = `**Cleanup${session.ruleName ? `: ${session.ruleName}` : ''}**`;
           return await streamReviewScreen(session, stream, ws, header, config.baseUrl);
+        }
+        // R8/AE4: a toggle reply (click or typed numbers) flips included and re-renders — it never
+        // executes the batch itself, unlike the pre-U6 one-shot skip-and-run behavior.
+        if (result.action === 'toggle') {
+          const toggledSession: TransitionBatchSession = {
+            ...session,
+            tickets: applyTicketToggle(session.tickets, result.keys),
+          };
+          return await streamReviewScreen(toggledSession, stream, ws, header, config.baseUrl);
         }
         await ws.update('jira.session.transitionReview', undefined);
         if (result.action === 'cancel') {
           stream.markdown('_Cancelled — no tickets were changed._');
           return;
         }
-        const skipKeys = new Set<string>(result.action === 'skip' ? result.keys : []);
         try {
-          await executeCleanupBatch(session, skipKeys, ticketService, stream);
+          await executeCleanupBatch(session, ticketService, stream);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logDiag('jira.participant', 'error', message, {});
@@ -1256,11 +1264,12 @@ export function createJiraParticipant(
                 [s.fields.status.name]: subTransitions.map(t => ({ id: t.id, name: t.name, to: t.to.name })),
               };
               const subPath = findPath(subGraph, s.fields.status.name, targetStatus);
-              if (subPath) subtasks.push({ key: s.key, summary: s.fields.summary, currentStatus: s.fields.status.name, transitionPath: subPath });
+              if (subPath) subtasks.push({ key: s.key, summary: s.fields.summary, currentStatus: s.fields.status.name, transitionPath: subPath, included: true });
             }
             tickets.push({
               key, summary: issue.fields.summary, currentStatus, transitionPath: path, subtasks,
               extra: extractExtraFields(issue.fields, config.cleanupFields),
+              included: true,
             });
           }
           if (tickets.length === 0) {
