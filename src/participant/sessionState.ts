@@ -127,12 +127,15 @@ export function buildReviewTable(
     a.currentStatus.toLowerCase().localeCompare(b.currentStatus.toLowerCase()),
   );
 
+  // Ticket summaries are untrusted, externally-influenced content — this table's footer is a
+  // trusted MarkdownString (KTD5), so neutralizeMarkdownLinks() keeps a crafted summary from
+  // forming a live command link once the whole thing is trust-gated (see its own doc comment).
   const flatRows: TransitionReviewRow[] = [];
   for (const t of sorted) {
     flatRows.push({
       type: session.issueType,
       key: formatKeyLink(t.key, baseUrl),
-      summary: t.summary,
+      summary: neutralizeMarkdownLinks(t.summary),
       currentStatus: t.currentStatus,
       to: t.transitionPath.at(-1)?.to ?? '?',
       resolution: session.resolution ?? '',
@@ -142,7 +145,7 @@ export function buildReviewTable(
       flatRows.push({
         type: 'Sub-task',
         key: `↳ ${formatKeyLink(s.key, baseUrl)}`,
-        summary: s.summary,
+        summary: neutralizeMarkdownLinks(s.summary),
         currentStatus: s.currentStatus,
         to: s.transitionPath.at(-1)?.to ?? '?',
         resolution: s.resolution ?? session.resolution ?? '',
@@ -551,6 +554,13 @@ export function buildJiraNotConfiguredMessage(config: Pick<JiraConfig, 'baseUrl'
  * (R5) — reusing VS Code's built-in `workbench.action.chat.open` command rather than a new
  * registered wrapper command (KTD2).
  *
+ * `label` is neutralized (see `neutralizeMarkdownLinks()` below) before being embedded: a label
+ * built from externally-influenced text (a Jira filter/template name, a ticket subject, …) that
+ * contains an unneutralized `]` would close the `[label]` early, letting the rest of that text open
+ * a second, attacker-chosen `(command:...)` link of its own right next to this legitimate one —
+ * not merely garbled rendering, but a second live command. Callers therefore never need to
+ * pre-sanitize a label themselves.
+ *
  * Pure string building only — this never touches `vscode.MarkdownString` (KTD5). Every call site
  * that assembles a `MarkdownString` from output containing one or more of these links MUST set
  * `.isTrusted = { enabledCommands: ['workbench.action.chat.open'] }` on that `MarkdownString`
@@ -559,9 +569,27 @@ export function buildJiraNotConfiguredMessage(config: Pick<JiraConfig, 'baseUrl'
  * Without that, VS Code renders the link as inert plain text instead of a clickable command.
  */
 export function buildChatCommandLink(label: string, participantId: '@jira' | '@bitbucket', replyText: string): string {
+  const safeLabel = neutralizeMarkdownLinks(label);
   const query = `${participantId} ${replyText}`;
   const encodedArgs = encodeURIComponent(JSON.stringify({ query, isPartialQuery: false }));
-  return `[${label}](command:workbench.action.chat.open?${encodedArgs})`;
+  return `[${safeLabel}](command:workbench.action.chat.open?${encodedArgs})`;
+}
+
+/**
+ * `buildChatCommandLink()`'s counterpart on the untrusted side: neutralizes markdown link/image
+ * syntax in untrusted, externally-influenced text (a Jira ticket summary, custom field value, an
+ * imported item's subject/title, …) before it is combined into the same string as one or more
+ * real command links and the whole thing is trust-gated (`trustedChatMarkdown()`,
+ * `src/utils/chatMarkdown.ts`). Without this, a crafted `[label](command:workbench.action.chat.open?…)`
+ * sequence hiding inside that untrusted text would render as a live, clickable command once the
+ * response is trusted — silently resubmitting an attacker-chosen message as the user's own next
+ * chat turn. Replaces `[`/`]` with visually similar full-width brackets rather than stripping them,
+ * so the text stays readable and no other markdown-significant character is touched — unlike
+ * `sanitizeCellText()` (`reportImport.ts`), which also strips wiki-markup trigger characters for a
+ * different destination (Jira wiki markup, not this extension's own trusted chat responses).
+ */
+export function neutralizeMarkdownLinks(value: string): string {
+  return value.replace(/\[/g, '［').replace(/\]/g, '］');
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -775,10 +803,13 @@ export interface BulkUpdateReviewRow {
   currentValueDisplay: string;
 }
 
+// Summary/current-value are untrusted, externally-influenced Jira field content — this table's
+// composed response is trust-gated (KTD5) at its call site (JiraParticipant.ts), so both go
+// through neutralizeMarkdownLinks() (see its own doc comment).
 const BULK_UPDATE_REVIEW_COLUMNS: ReviewTableColumn<BulkUpdateReviewRow>[] = [
   { header: 'Key', accessor: (r) => r.key },
-  { header: 'Summary', accessor: (r) => r.summary },
-  { header: 'Current value', accessor: (r) => r.currentValueDisplay },
+  { header: 'Summary', accessor: (r) => neutralizeMarkdownLinks(r.summary) },
+  { header: 'Current value', accessor: (r) => neutralizeMarkdownLinks(r.currentValueDisplay) },
 ];
 
 /**

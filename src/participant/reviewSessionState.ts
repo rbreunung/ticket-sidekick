@@ -153,6 +153,13 @@ export function buildBitbucketNotConfiguredMessage(config: Pick<BitbucketConfig,
  * file intentionally does not import from that one (the two participants stay independent), so
  * the helper is duplicated here rather than shared.
  *
+ * `label` is neutralized (see `neutralizeMarkdownLinks()` below) before being embedded: a label
+ * built from externally-influenced text (a PR title, an LLM-generated finding heading, …) that
+ * contains an unneutralized `]` would close the `[label]` early, letting the rest of that text
+ * open a second, attacker-chosen `(command:...)` link of its own right next to this legitimate
+ * one — not merely garbled rendering, but a second live command. Callers therefore never need to
+ * pre-sanitize a label themselves.
+ *
  * Pure string building only — this never touches `vscode.MarkdownString` (KTD5). Every call site
  * that assembles a `MarkdownString` from output containing one or more of these links MUST set
  * `.isTrusted = { enabledCommands: ['workbench.action.chat.open'] }` on that `MarkdownString`
@@ -161,9 +168,23 @@ export function buildBitbucketNotConfiguredMessage(config: Pick<BitbucketConfig,
  * text instead of a clickable command.
  */
 export function buildChatCommandLink(label: string, participantId: '@jira' | '@bitbucket', replyText: string): string {
+  const safeLabel = neutralizeMarkdownLinks(label);
   const query = `${participantId} ${replyText}`;
   const encodedArgs = encodeURIComponent(JSON.stringify({ query, isPartialQuery: false }));
-  return `[${label}](command:workbench.action.chat.open?${encodedArgs})`;
+  return `[${safeLabel}](command:workbench.action.chat.open?${encodedArgs})`;
+}
+
+/**
+ * `buildChatCommandLink()`'s counterpart on the untrusted side: neutralizes markdown link/image
+ * syntax in untrusted, externally-influenced text (a PR title, a finding heading, a diff-derived
+ * comment, …) before it is combined into the same string as one or more real command links and the
+ * whole thing is trust-gated (`trustedChatMarkdown()`, `src/utils/chatMarkdown.ts`). Mirrors
+ * `neutralizeMarkdownLinks` in `sessionState.ts` — duplicated here for the same reason
+ * `buildChatCommandLink` is. Replaces `[`/`]` with visually similar full-width brackets rather than
+ * stripping them, so the text stays readable.
+ */
+export function neutralizeMarkdownLinks(value: string): string {
+  return value.replace(/\[/g, '［').replace(/\]/g, '］');
 }
 
 // ---------------------------------------------------------------------------------------------

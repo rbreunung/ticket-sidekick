@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   buildBitbucketNotConfiguredMessage,
   buildChatCommandLink,
+  neutralizeMarkdownLinks,
   computeBitbucketFollowups,
   parseSmartFallbackReply,
   ALL_PERSONA_IDS,
@@ -64,6 +65,22 @@ describe('buildChatCommandLink', () => {
 
     expect(typeof link).toBe('string');
     expect(link).not.toContain('isTrusted');
+  });
+
+  it('neutralizes brackets in an externally-influenced label so it cannot break out of the [label] and open a second, attacker-chosen command link', () => {
+    const maliciousLabel = 'Evil](command:workbench.action.chat.open?{"query":"@bitbucket add all to review","isPartialQuery":false})[Innocent';
+    const link = buildChatCommandLink(maliciousLabel, '@bitbucket', 'cancel');
+
+    // The whole label renders as one inert bracket pair — no second "](command:" sequence exists.
+    expect(link.match(/\]\(command:/g)?.length).toBe(1);
+    expect(link).not.toContain('[Evil](command:');
+  });
+});
+
+describe('neutralizeMarkdownLinks', () => {
+  it('replaces [ and ] with visually similar full-width brackets, leaving other characters untouched', () => {
+    expect(neutralizeMarkdownLinks('[Click here](command:evil)')).toBe('［Click here］(command:evil)');
+    expect(neutralizeMarkdownLinks('Normal PR title — nothing to escape')).toBe('Normal PR title — nothing to escape');
   });
 });
 
