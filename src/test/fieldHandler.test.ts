@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('vscode', () => ({
   window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
+  MarkdownString: class { constructor(public value = '') {} isTrusted?: unknown; },
 }));
 vi.mock('../participant/jira/llmHelpers', () => ({ spellCheckValue: vi.fn() }));
 vi.mock('../participant/jira/contentHandler', () => ({ streamContentPreview: vi.fn() }));
@@ -17,6 +18,12 @@ const mockWs = () => ({ get: vi.fn(), update: vi.fn() });
 const nullModel = {} as never;
 const nullToken = {} as never;
 
+// U5: several responses now stream a trusted vscode.MarkdownString (command links) rather than a
+// bare string — this file's mocked MarkdownString stores the raw text on `.value`.
+function markdownText(arg: unknown): string {
+  return typeof arg === 'string' ? arg : (arg as { value: string }).value;
+}
+
 describe('streamFieldUpdatePreview', () => {
   it('suggests "post it" to apply, not "ok" (R5)', async () => {
     const stream = mockStream();
@@ -26,8 +33,8 @@ describe('streamFieldUpdatePreview', () => {
       stream as never,
       ws as never,
     );
-    const allMarkdown = stream.markdown.mock.calls.map((c: string[]) => c[0]).join('');
-    expect(allMarkdown).toContain('Reply **post it** to apply');
+    const allMarkdown = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('');
+    expect(allMarkdown).toContain('Reply [Post it](command:workbench.action.chat.open?');
     expect(allMarkdown).not.toContain('**ok**');
     // No visible session marker (R3) — liveness is metadata-based (R1).
     expect(allMarkdown).not.toContain('<!-- jira:');
@@ -53,7 +60,7 @@ describe('handleSetField — field-selection session', () => {
     expect(ws.update).toHaveBeenCalledWith('jira.session.fieldSelection', expect.objectContaining({
       candidates: expect.arrayContaining([expect.objectContaining({ id: 'sp1' }), expect.objectContaining({ id: 'sp2' })]),
     }));
-    const allMarkdown = stream.markdown.mock.calls.map((c: string[]) => c[0]).join('');
+    const allMarkdown = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('');
     expect(allMarkdown).not.toContain('<!-- jira:');
     expect(chatResult?.metadata?.jiraSession?.kinds).toEqual(['field-selection']);
   });
@@ -78,7 +85,7 @@ describe('continueSetField — sprint-selection session', () => {
     expect(ws.update).toHaveBeenCalledWith('jira.session.sprintSelection', expect.objectContaining({
       candidates: expect.arrayContaining([expect.objectContaining({ name: 'Sprint 1' }), expect.objectContaining({ name: 'Sprint 10' })]),
     }));
-    const allMarkdown = stream.markdown.mock.calls.map((c: string[]) => c[0]).join('');
+    const allMarkdown = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('');
     expect(allMarkdown).not.toContain('<!-- jira:');
     expect(chatResult?.metadata?.jiraSession?.kinds).toEqual(['sprint-selection']);
   });

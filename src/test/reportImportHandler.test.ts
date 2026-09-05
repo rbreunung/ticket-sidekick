@@ -73,6 +73,12 @@ const descriptor: ReportImportDescriptor<TestItem, TestRow> = {
 
 const mockStream = () => ({ markdown: vi.fn() });
 
+// U5: several responses now stream a trusted vscode.MarkdownString (command links) rather than a
+// bare string — this file's mocked MarkdownString stores the raw text on `.value`.
+function markdownText(arg: unknown): string {
+  return typeof arg === 'string' ? arg : (arg as { value: string }).value;
+}
+
 function makeMockWs(initial: Record<string, unknown> = {}): { get: <T>(k: string, d?: T) => T | undefined; update: (k: string, v: unknown) => Promise<void>; store: Record<string, unknown> } {
   const store: Record<string, unknown> = { ...initial };
   return {
@@ -127,8 +133,8 @@ describe('streamImportTemplateSelection (never-guess sentinel rendering, U3/AE2)
     const stream = mockStream();
     const ws = makeMockWs();
     await streamImportTemplateSelection(session, stream as never, ws as never, descriptor);
-    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-    expect(text).toContain('1. _you will be asked to type it_');
+    const text = markdownText((stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0]);
+    expect(text).toContain('1. [_you will be asked to type it_](command:workbench.action.chat.open?');
     expect(text).not.toMatch(/1\.\s*\n/);
   });
 
@@ -137,8 +143,8 @@ describe('streamImportTemplateSelection (never-guess sentinel rendering, U3/AE2)
     const stream = mockStream();
     const ws = makeMockWs();
     await streamImportTemplateSelection(session, stream as never, ws as never, descriptor);
-    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-    expect(text).toContain('1. Bug');
+    const text = markdownText((stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0]);
+    expect(text).toContain('1. [Bug](command:workbench.action.chat.open?');
   });
 });
 

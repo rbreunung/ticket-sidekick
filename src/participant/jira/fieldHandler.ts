@@ -3,10 +3,11 @@ import { logDiag } from '../../utils/diagLog';
 import { TicketService, resolveFieldIdFuzzy, extractTextFromAdf } from '../../services/TicketService';
 import type { JiraFieldMeta } from '../../jira/IJiraClient';
 import type { FieldUpdatePreviewSession, FieldSelectionSession, SprintSelectionSession, ContentSession } from '../sessionState';
-import { isCancellation } from '../sessionState';
+import { isCancellation, buildChatCommandLink } from '../sessionState';
 import { spellCheckValue } from './llmHelpers';
 import { streamContentPreview } from './contentHandler';
 import { wikiToMarkdown } from '../../utils/markdownFormatter';
+import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 
 export async function streamFieldUpdatePreview(
   session: FieldUpdatePreviewSession,
@@ -20,11 +21,11 @@ export async function streamFieldUpdatePreview(
   const displayValue = typeof session.fieldValue === 'string'
     ? session.fieldValue
     : JSON.stringify(session.fieldValue);
-  stream.markdown(
+  stream.markdown(trustedChatMarkdown(
     `**Preview: set ${session.fieldName}**\n\n` +
     `Setting **${session.fieldName}** (\`${session.fieldId}\`) to \`${displayValue}\` on ${scope}.\n\n` +
-    `Reply **post it** to apply, or **(c)** to cancel.`,
-  );
+    `Reply ${buildChatCommandLink('Post it', '@jira', 'post it')} to apply, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+  ));
   return { metadata: { jiraSession: { kinds: ['field-update-preview'] } } };
 }
 
@@ -73,8 +74,10 @@ export async function continueSetField(
       pending: { kind: 'field-update', session: previewPlaceholder },
     };
     await ws.update('jira.session.sprintSelection', sprintSession);
-    const list = candidates.map((s, i) => `${i + 1}. ${s.name} (${s.state})`).join('\n');
-    stream.markdown(`Multiple sprints match "${fieldValueRaw}":\n\n${list}\n\nWhich one? Reply with a number, or **(c)** to cancel.`);
+    const list = candidates.map((s, i) => `${i + 1}. ${buildChatCommandLink(`${s.name} (${s.state})`, '@jira', String(i + 1))}`).join('\n');
+    stream.markdown(trustedChatMarkdown(
+      `Multiple sprints match "${fieldValueRaw}":\n\n${list}\n\nWhich one? Reply with a number, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+    ));
     return { metadata: { jiraSession: { kinds: ['sprint-selection'] } } };
   }
 
@@ -129,8 +132,10 @@ export async function handleSetField(
       pending: { fieldValue: fieldValueRaw, arrayOp, ticketKeys },
     };
     await ws.update('jira.session.fieldSelection', selSession);
-    const list = resolution.fields.map((f, i) => `${i + 1}. ${f.name} (\`${f.id}\`)`).join('\n');
-    stream.markdown(`Multiple fields match "${fieldNameRaw}":\n\n${list}\n\nWhich one? Reply with a number, or **(c)** to cancel.`);
+    const list = resolution.fields.map((f, i) => `${i + 1}. ${buildChatCommandLink(`${f.name} (\`${f.id}\`)`, '@jira', String(i + 1))}`).join('\n');
+    stream.markdown(trustedChatMarkdown(
+      `Multiple fields match "${fieldNameRaw}":\n\n${list}\n\nWhich one? Reply with a number, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+    ));
     return { metadata: { jiraSession: { kinds: ['field-selection'] } } };
   }
 

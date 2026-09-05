@@ -23,11 +23,12 @@ import {
 import {
   isCancellation, pickEmailOption, buildImportReviewTable, parseReviewInput, applyReviewToggle,
   CURRENT_SESSION_SCHEMA_VERSION, isSessionExpired, SESSION_EXPIRED_MESSAGE,
-  NO_ISSUE_TYPE, resolveTemplateIssueType, formatIssueTypeOptionLabel,
+  NO_ISSUE_TYPE, resolveTemplateIssueType, formatIssueTypeOptionLabel, buildChatCommandLink,
   type ImportTemplateSelectionSession, type ReviewSession, type ReviewTableColumn, type ReviewRowBase,
   type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession, type JiraSessionKind,
 } from '../sessionState';
 import { resolveProjectKey, resolveIssueTypeOrPrompt, sessionWasSuperseded } from './ticketContext';
+import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 
 export interface ReportImportRow extends ReviewRowBase {
   labels: string[];
@@ -202,16 +203,20 @@ export async function streamImportTemplateSelection<TItem, TRow extends ReviewRo
 
   let optionsList = '';
   if (templates.length > 0) {
-    optionsList += `**Templates:**\n${templates.map((t, i) => `${i + 1}. ${t.name} _(${formatIssueTypeOptionLabel(t.issueType)})_`).join('\n')}\n\n`;
+    optionsList += `**Templates:**\n${templates.map((t, i) =>
+      `${i + 1}. ${buildChatCommandLink(`${t.name} _(${formatIssueTypeOptionLabel(t.issueType)})_`, '@jira', String(i + 1))}`,
+    ).join('\n')}\n\n`;
   }
   const offset = templates.length;
-  optionsList += `**Issue types (no template):**\n${issueTypes.map((t, i) => `${offset + i + 1}. ${formatIssueTypeOptionLabel(t)}`).join('\n')}\n\n`;
+  optionsList += `**Issue types (no template):**\n${issueTypes.map((t, i) =>
+    `${offset + i + 1}. ${buildChatCommandLink(formatIssueTypeOptionLabel(t), '@jira', String(offset + i + 1))}`,
+  ).join('\n')}\n\n`;
 
-  stream.markdown(
+  stream.markdown(trustedChatMarkdown(
     `Found **${session.items.length}** ${descriptor.itemNoun} in \`${session.reportFileName}\` matching your ${descriptor.filterKindLabel} filters ` +
     `for project **${session.projectKey}**.\n\n${optionsList}` +
-    `Reply with a number to select a template or issue type, or **(c)** to cancel.`,
-  );
+    `Reply with a number to select a template or issue type, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+  ));
   return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].template] } } };
 }
 
@@ -448,10 +453,10 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
   const decision = parseReviewInput(reply, rowIds);
 
   if (decision.action === 'invalid') {
-    stream.markdown(
-      `Didn't understand that. Reply **post it** to proceed, **(c)** to cancel, ` +
-      `or a list of ids to toggle (e.g. \`2 4\` or \`A1\`).`,
-    );
+    stream.markdown(trustedChatMarkdown(
+      `Didn't understand that. Reply ${buildChatCommandLink('Post it', '@jira', 'post it')} to proceed, ` +
+      `${buildChatCommandLink('Cancel', '@jira', 'cancel')} to cancel, or a list of ids to toggle (e.g. \`2 4\` or \`A1\`).`,
+    ));
     return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
   }
   if (decision.action === 'cancel') {
@@ -467,10 +472,10 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
     // This review has no per-row value to set — parseReviewInput's `<id>=<value>` form exists
     // for the template-generation flow, not this one. Treat it the same as an unrecognized
     // reply rather than falling through to 'ok', which would silently confirm the batch.
-    stream.markdown(
-      `Didn't understand that. Reply **post it** to proceed, **(c)** to cancel, ` +
-      `or a list of ids to toggle (e.g. \`2 4\` or \`A1\`).`,
-    );
+    stream.markdown(trustedChatMarkdown(
+      `Didn't understand that. Reply ${buildChatCommandLink('Post it', '@jira', 'post it')} to proceed, ` +
+      `${buildChatCommandLink('Cancel', '@jira', 'cancel')} to cancel, or a list of ids to toggle (e.g. \`2 4\` or \`A1\`).`,
+    ));
     return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
   }
 

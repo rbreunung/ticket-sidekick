@@ -19,6 +19,7 @@ vi.mock('vscode', () => ({
     showInputBox: vi.fn(),
     createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })),
   },
+  MarkdownString: class { constructor(public value = '') {} isTrusted?: unknown; },
 }));
 
 vi.mock('../templates/TemplateService', () => ({
