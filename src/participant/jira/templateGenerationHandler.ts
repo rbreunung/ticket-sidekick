@@ -23,7 +23,7 @@ import {
   findUnsetIncludedRows, buildGeneratedTemplate,
   extractProjectKeyFromTicketKey, parseIssueTypePick, parseTemplateCollisionReply, parseOfferCreateReply,
   parseAwaitFreeTextReply,
-  parseReviewInput, applyReviewToggle, applyReviewSetValue,
+  parseReviewInput, applyReviewToggle, applyReviewSetValue, buildChatCommandLink,
   type TemplateGenerationAwaitNameSession, type TemplateGenerationTypePickSession,
   type TemplateGenerationAwaitFreeTypeSession, type TemplateGenerationReviewSession,
   type TemplateGenerationCollisionSession, type TemplateGenerationOfferCreateSession,
@@ -31,6 +31,7 @@ import {
 } from '../sessionState';
 import { resolveProjectKey } from './ticketContext';
 import type { JiraIssueType } from '../../jira/IJiraClient';
+import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 
 const SCOPE = 'jira.templateGeneration';
 
@@ -175,7 +176,12 @@ export async function streamAwaitName(
   ws: vscode.Memento,
 ): Promise<vscode.ChatResult> {
   await ws.update(TEMPLATE_GEN_SESSION_KEYS.awaitName, session);
-  stream.markdown(`What should the new template be named?\n\nReply with a name, or **(c)** to cancel.`);
+  // KTD3: this ask's cancel check is isExplicitCancelToken() (literal "(c)"), not isCancellation()'s
+  // broader word list — the link resubmits "(c)" itself so the click reproduces exactly what
+  // already works, without touching that parser (Risks section).
+  stream.markdown(trustedChatMarkdown(
+    `What should the new template be named?\n\nReply with a name, or ${buildChatCommandLink('Cancel', '@jira', '(c)')}.`,
+  ));
   return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.awaitName] } } };
 }
 
@@ -203,7 +209,12 @@ export async function handleAwaitNameReply(
     return;
   }
   if (parsed.action === 'empty') {
-    stream.markdown(`What should the new template be named?\n\nReply with a name, or **(c)** to cancel.`);
+    // KTD3: this ask's cancel check is isExplicitCancelToken() (literal "(c)"), not isCancellation()'s
+  // broader word list — the link resubmits "(c)" itself so the click reproduces exactly what
+  // already works, without touching that parser (Risks section).
+  stream.markdown(trustedChatMarkdown(
+    `What should the new template be named?\n\nReply with a name, or ${buildChatCommandLink('Cancel', '@jira', '(c)')}.`,
+  ));
     return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.awaitName] } } };
   }
 
@@ -313,11 +324,11 @@ export async function streamTypePick(
   ws: vscode.Memento,
 ): Promise<vscode.ChatResult> {
   await ws.update(TEMPLATE_GEN_SESSION_KEYS.typePick, session);
-  const list = session.availableIssueTypes.map((t, i) => `${i + 1}. ${t.name}`).join('\n');
-  stream.markdown(
+  const list = session.availableIssueTypes.map((t, i) => `${i + 1}. ${buildChatCommandLink(t.name, '@jira', String(i + 1))}`).join('\n');
+  stream.markdown(trustedChatMarkdown(
     `Generating template **${session.templateName}** for project **${session.projectKey}** — which issue type?\n\n` +
-    `${list}\n\nReply with a number, or **(c)** to cancel.`,
-  );
+    `${list}\n\nReply with a number, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+  ));
   return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.typePick] } } };
 }
 
@@ -341,7 +352,9 @@ export async function handleTypePickReply(
     return;
   }
   if (pick === 'invalid') {
-    stream.markdown(`Didn't understand that. Reply with a number, or **(c)** to cancel.`);
+    stream.markdown(trustedChatMarkdown(
+      `Didn't understand that. Reply with a number, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+    ));
     return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.typePick] } } };
   }
 
@@ -358,10 +371,13 @@ export async function streamAwaitFreeType(
   ws: vscode.Memento,
 ): Promise<vscode.ChatResult> {
   await ws.update(TEMPLATE_GEN_SESSION_KEYS.awaitFreeType, session);
-  stream.markdown(
+  // KTD3: this ask's cancel check is isExplicitCancelToken() (literal "(c)"), not isCancellation()'s
+  // broader word list — the link resubmits "(c)" itself so the click reproduces exactly what
+  // already works, without touching that parser (Risks section).
+  stream.markdown(trustedChatMarkdown(
     `Could not fetch **${session.projectKey}**'s issue types. What issue type should **${session.templateName}** use ` +
-    `(e.g. Bug, Story, Task)?\n\nReply with a type, or **(c)** to cancel.`,
-  );
+    `(e.g. Bug, Story, Task)?\n\nReply with a type, or ${buildChatCommandLink('Cancel', '@jira', '(c)')}.`,
+  ));
   return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.awaitFreeType] } } };
 }
 
@@ -387,10 +403,10 @@ export async function handleAwaitFreeTypeReply(
     return;
   }
   if (parsed.action === 'empty') {
-    stream.markdown(
+    stream.markdown(trustedChatMarkdown(
       `What issue type should **${session.templateName}** use (e.g. Bug, Story, Task)?\n\n` +
-      `Reply with a type, or **(c)** to cancel.`,
-    );
+      `Reply with a type, or ${buildChatCommandLink('Cancel', '@jira', '(c)')}.`,
+    ));
     return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.awaitFreeType] } } };
   }
 
@@ -430,10 +446,11 @@ export async function handleTemplateGenReviewReply(
   const decision = parseReviewInput(reply, rowIds);
 
   if (decision.action === 'invalid') {
-    stream.markdown(
-      `Didn't understand that. Reply **post it** to save, **(c)** to cancel, row numbers to toggle ` +
+    stream.markdown(trustedChatMarkdown(
+      `Didn't understand that. Reply ${buildChatCommandLink('Post it', '@jira', 'post it')} to save, ` +
+      `${buildChatCommandLink('Cancel', '@jira', 'cancel')} to cancel, row numbers to toggle ` +
       `(e.g. \`2 4\`), or \`<number>=<value>\` to set a value (e.g. \`3=High\`).`,
-    );
+    ));
     return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.review] } } };
   }
   if (decision.action === 'cancel') {
@@ -515,10 +532,10 @@ export async function streamCollision(
   ws: vscode.Memento,
 ): Promise<vscode.ChatResult> {
   await ws.update(TEMPLATE_GEN_SESSION_KEYS.collision, session);
-  stream.markdown(
+  stream.markdown(trustedChatMarkdown(
     `A template named **${session.template.name}** already exists. Reply with a different name to save ` +
-    `under, **yes** to overwrite the existing one, or **(c)** to cancel.`,
-  );
+    `under, ${buildChatCommandLink('Yes', '@jira', 'yes')} to overwrite the existing one, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+  ));
   return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.collision] } } };
 }
 
@@ -563,10 +580,10 @@ export async function streamOfferCreate(
   ws: vscode.Memento,
 ): Promise<vscode.ChatResult> {
   await ws.update(TEMPLATE_GEN_SESSION_KEYS.offerCreate, session);
-  stream.markdown(
+  stream.markdown(trustedChatMarkdown(
     `Template **${session.template.name}** saved.\n\nCreate a first ticket from it now? Reply with a ` +
-    `summary to create one, or **no** to skip.`,
-  );
+    `summary to create one, or ${buildChatCommandLink('No', '@jira', 'no')} to skip.`,
+  ));
   return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.offerCreate] } } };
 }
 
