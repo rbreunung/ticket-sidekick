@@ -49,9 +49,7 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw, VeracodeReviewRow
   parseAndFilter: readAndFilterVeracodeFile,
   sessionKeys: {
     templateSelection: 'jira.session.veracodeTemplateSelection',
-    templateTag: '<!-- jira:veracode-template -->',
     review: 'jira.session.veracodeReview',
-    reviewTag: '<!-- jira:veracode-review -->',
   },
   searchLabelOf: flaw => `veracode-issue-${flaw.issueId}`,
   dedupKeyOf: flaw => flaw.issueId,
@@ -110,7 +108,7 @@ export async function handleImportVeracodeReport(
   ticketService: TicketService,
   ws: vscode.Memento,
   projectKeyHint: string | null = null,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   return handleImportReport(request, stream, token, jiraClient, ticketService, ws, veracodeDescriptor, projectKeyHint);
 }
 
@@ -122,7 +120,7 @@ export async function handleVeracodeTemplateSelection(
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
   baseUrl?: string,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   return handleImportTemplateSelection(reply, session, jiraClient, ticketService, stream, ws, veracodeDescriptor, baseUrl);
 }
 
@@ -138,12 +136,12 @@ export async function handleVeracodeAwaitIssueType(
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
   baseUrl?: string,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   if (sessionWasSuperseded(ws, veracodeDescriptor.sessionKeys.templateSelection)) {
     stream.markdown('_A newer import was started while this one was waiting for the issue type — cancelled to avoid creating a stale batch._');
     return;
   }
-  await continueAfterImportIssueType(
+  return continueAfterImportIssueType(
     issueType, resume.pickedTemplateName, resume.session as VeracodeTemplateSelectionSession,
     jiraClient, ticketService, stream, ws, veracodeDescriptor, baseUrl,
   );
@@ -156,6 +154,6 @@ export async function handleVeracodeReviewReply(
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
   baseUrl?: string,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   return handleImportReviewReply(reply, session, ticketService, stream, ws, veracodeDescriptor, baseUrl);
 }

@@ -1386,9 +1386,11 @@ export function computeJiraFollowups(state: JiraFollowupState): FollowupSuggesti
 // U3 finished migrating the six core flow handler files (createHandler.ts, contentHandler.ts,
 // fieldHandler.ts, cleanupHandler.ts, loadHandler.ts, plus JiraParticipant.ts's own matching
 // production/resume sites) onto this mechanism — every production site for a given kind below
-// is metadata-based and its visible `<!-- jira:TAG -->` marker is gone. Report-import sessions
-// (email/Veracode/Waltz/template-generation) and Bitbucket sessions are untouched — out of
-// scope for this unit.
+// is metadata-based and its visible `<!-- jira:TAG -->` marker is gone. U4 finished the rest:
+// the shared issue-type chat-ask (ticketContext.ts), report-import (reportImportHandler.ts,
+// veracodeHandler.ts, waltzHandler.ts, emailHandler.ts), and template generation
+// (templateGenerationHandler.ts). Only Bitbucket's ReviewSession remains — see
+// BitbucketSessionContinuity in reviewSessionState.ts for its sibling mechanism.
 export type JiraSessionKind =
   | 'more-comments'
   | 'comment-list'
@@ -1400,7 +1402,22 @@ export type JiraSessionKind =
   | 'transition-review'
   | 'sprint-selection'
   | 'field-selection'
-  | 'field-update-preview';
+  | 'field-update-preview'
+  | 'await-issue-type'
+  | 'veracode-template'
+  | 'veracode-review'
+  | 'waltz-template'
+  | 'waltz-review'
+  | 'email-template'
+  | 'email-review'
+  | 'email-content'
+  | 'template-gen-await-name'
+  | 'template-gen-type-pick'
+  | 'template-gen-await-free-type'
+  | 'template-gen-review'
+  | 'template-gen-collision'
+  | 'template-gen-offer-create'
+  | 'template-gen-await-summary';
 
 export interface JiraSessionContinuity {
   kinds: JiraSessionKind[];

@@ -285,7 +285,7 @@ export async function handleCreateTicket(
       kind: 'create', projectKey, summary: intent.summary, description: intent.description,
       extraFields, pickedTemplateName: null,
     }, stream, workspaceState);
-    if (entered === null) return;
+    if (typeof entered !== 'string') return entered;
     return continueAfterIssueType(projectKey, intent.summary, entered, intent.description, null, request.model, stream, token, jiraClient, ticketService, workspaceState, extraFields);
   }
 

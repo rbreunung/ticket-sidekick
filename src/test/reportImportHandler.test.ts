@@ -56,9 +56,7 @@ const descriptor: ReportImportDescriptor<TestItem, TestRow> = {
   parseAndFilter: async () => [],
   sessionKeys: {
     templateSelection: 'jira.session.testTemplateSelection',
-    templateTag: '<!-- jira:test-template -->',
     review: 'jira.session.testReview',
-    reviewTag: '<!-- jira:test-review -->',
   },
   searchLabelOf: item => `test-${item.ref}`,
   dedupKeyOf: item => item.ref,

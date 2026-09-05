@@ -27,7 +27,7 @@ import {
   type TemplateGenerationAwaitNameSession, type TemplateGenerationTypePickSession,
   type TemplateGenerationAwaitFreeTypeSession, type TemplateGenerationReviewSession,
   type TemplateGenerationCollisionSession, type TemplateGenerationOfferCreateSession,
-  type TemplateGenerationAwaitSummarySession,
+  type TemplateGenerationAwaitSummarySession, type JiraSessionKind,
 } from '../sessionState';
 import { resolveProjectKey } from './ticketContext';
 import type { JiraIssueType } from '../../jira/IJiraClient';
@@ -48,15 +48,19 @@ export const TEMPLATE_GEN_SESSION_KEYS = {
   awaitSummary: 'jira.session.templateGenAwaitSummary',
 } as const;
 
-export const TEMPLATE_GEN_TAGS = {
-  awaitName: '<!-- jira:template-gen-await-name -->',
-  typePick: '<!-- jira:template-gen-type-pick -->',
-  awaitFreeType: '<!-- jira:template-gen-await-free-type -->',
-  review: '<!-- jira:template-gen-review -->',
-  collision: '<!-- jira:template-gen-collision -->',
-  offerCreate: '<!-- jira:template-gen-offer-create -->',
-  awaitSummary: '<!-- jira:template-gen-await-summary -->',
-} as const;
+// U4: liveness is now detected via ChatResult.metadata (getActiveJiraSession in ticketContext.ts),
+// not a visible response tag — each session state maps to its JiraSessionKind literal, spelled out
+// so a typo here is a compile error. Exported so JiraParticipant.ts's routing layer can detect the
+// active kind without hardcoding these literals separately from this file.
+export const TEMPLATE_GEN_KINDS = {
+  awaitName: 'template-gen-await-name',
+  typePick: 'template-gen-type-pick',
+  awaitFreeType: 'template-gen-await-free-type',
+  review: 'template-gen-review',
+  collision: 'template-gen-collision',
+  offerCreate: 'template-gen-offer-create',
+  awaitSummary: 'template-gen-await-summary',
+} as const satisfies Record<string, JiraSessionKind>;
 
 // What the routing layer's parsed intent supplies. templateName/issueTypeHint may be null — this
 // flow resolves both interactively, in chat (a reply-and-continue ask for the name, a pick-list or
@@ -84,7 +88,7 @@ export async function handleGenerateTemplate(
   workspaceRoot: string,
   hiddenDisplayFields: string[],
   request: TemplateGenerationRequest,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   if (!request.templateName) {
     const awaitNameSession: TemplateGenerationAwaitNameSession = {
       projectKeyHint: request.projectKeyHint,
@@ -92,11 +96,10 @@ export async function handleGenerateTemplate(
       issueTypeHint: request.issueTypeHint,
       schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
     };
-    await streamAwaitName(awaitNameSession, stream, ws);
-    return;
+    return streamAwaitName(awaitNameSession, stream, ws);
   }
 
-  await continueGenerateTemplate(request.templateName, request, ticketService, workspaceRoot, hiddenDisplayFields, stream, ws);
+  return continueGenerateTemplate(request.templateName, request, ticketService, workspaceRoot, hiddenDisplayFields, stream, ws);
 }
 
 /**
@@ -115,10 +118,9 @@ async function continueGenerateTemplate(
   hiddenDisplayFields: string[],
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   if (request.sourceTicketKey) {
-    await startFromReferenceTicket(templateName, request.sourceTicketKey, ticketService, hiddenDisplayFields, stream, ws);
-    return;
+    return startFromReferenceTicket(templateName, request.sourceTicketKey, ticketService, hiddenDisplayFields, stream, ws);
   }
 
   const projectKey = await resolveProjectKey(request.projectKeyHint, stream);
@@ -140,8 +142,7 @@ async function continueGenerateTemplate(
   if (request.issueTypeHint) {
     const matched = issueTypes.find(t => t.name.toLowerCase() === request.issueTypeHint!.toLowerCase());
     if (matched) {
-      await startFromRequiredFields(templateName, projectKey, matched.name, ticketService, stream, ws, matched.id);
-      return;
+      return startFromRequiredFields(templateName, projectKey, matched.name, ticketService, stream, ws, matched.id);
     }
     stream.markdown(`_"${request.issueTypeHint}" isn't one of **${projectKey}**'s issue types — pick from the list instead._\n\n`);
     // Falls through to the pick-list (or chat-ask) flow below, same as no hint at all.
@@ -157,14 +158,13 @@ async function continueGenerateTemplate(
     const awaitTypeSession: TemplateGenerationAwaitFreeTypeSession = {
       templateName, projectKey, schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
     };
-    await streamAwaitFreeType(awaitTypeSession, stream, ws);
-    return;
+    return streamAwaitFreeType(awaitTypeSession, stream, ws);
   }
 
   const typePickSession: TemplateGenerationTypePickSession = {
     templateName, projectKey, availableIssueTypes: issueTypes, schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
   };
-  await streamTypePick(typePickSession, stream, ws);
+  return streamTypePick(typePickSession, stream, ws);
 }
 
 // --- Template name chat-ask (R2: a chat reply-and-continue step, not a showInputBox) ---
@@ -173,9 +173,10 @@ export async function streamAwaitName(
   session: TemplateGenerationAwaitNameSession,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
-): Promise<void> {
+): Promise<vscode.ChatResult> {
   await ws.update(TEMPLATE_GEN_SESSION_KEYS.awaitName, session);
-  stream.markdown(`What should the new template be named?\n\nReply with a name, or **(c)** to cancel.\n\n${TEMPLATE_GEN_TAGS.awaitName}`);
+  stream.markdown(`What should the new template be named?\n\nReply with a name, or **(c)** to cancel.`);
+  return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.awaitName] } } };
 }
 
 export async function handleAwaitNameReply(
@@ -186,7 +187,7 @@ export async function handleAwaitNameReply(
   hiddenDisplayFields: string[],
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   if (isSessionExpired(session)) {
     await ws.update(TEMPLATE_GEN_SESSION_KEYS.awaitName, undefined);
     stream.markdown(SESSION_EXPIRED_MESSAGE);
@@ -202,13 +203,13 @@ export async function handleAwaitNameReply(
     return;
   }
   if (parsed.action === 'empty') {
-    stream.markdown(`What should the new template be named?\n\nReply with a name, or **(c)** to cancel.\n\n${TEMPLATE_GEN_TAGS.awaitName}`);
-    return;
+    stream.markdown(`What should the new template be named?\n\nReply with a name, or **(c)** to cancel.`);
+    return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.awaitName] } } };
   }
 
   await ws.update(TEMPLATE_GEN_SESSION_KEYS.awaitName, undefined);
   const { projectKeyHint, sourceTicketKey, issueTypeHint } = session;
-  await continueGenerateTemplate(
+  return continueGenerateTemplate(
     parsed.value, { projectKeyHint, sourceTicketKey, issueTypeHint },
     ticketService, workspaceRoot, hiddenDisplayFields, stream, ws,
   );
@@ -221,7 +222,7 @@ async function startFromReferenceTicket(
   hiddenDisplayFields: string[],
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   // getTemplateCandidatesFromTicket's candidate extraction fetches the issue itself but returns
   // only template-shaped fields — issuetype is never in that allowlist, so it's read here from
   // the raw issue instead of asking that method for it. This does mean the reference ticket is
@@ -261,7 +262,7 @@ async function startFromReferenceTicket(
   const reviewSession: TemplateGenerationReviewSession = {
     templateName, projectKey, issueType, sourceTicketKey, rows, schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
   };
-  await streamReview(reviewSession, stream, ws);
+  return streamReview(reviewSession, stream, ws);
 }
 
 async function startFromRequiredFields(
@@ -272,7 +273,7 @@ async function startFromRequiredFields(
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
   issueTypeId?: string,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   let candidates: TemplateFieldCandidate[];
   try {
     candidates = await ticketService.getTemplateCandidatesFromRequiredFields(projectKey, issueType, issueTypeId);
@@ -301,7 +302,7 @@ async function startFromRequiredFields(
   const reviewSession: TemplateGenerationReviewSession = {
     templateName, projectKey, issueType, sourceTicketKey: null, rows, schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
   };
-  await streamReview(reviewSession, stream, ws);
+  return streamReview(reviewSession, stream, ws);
 }
 
 // --- Issue-type pick list (no-reference path, no type named) ---
@@ -310,13 +311,14 @@ export async function streamTypePick(
   session: TemplateGenerationTypePickSession,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
-): Promise<void> {
+): Promise<vscode.ChatResult> {
   await ws.update(TEMPLATE_GEN_SESSION_KEYS.typePick, session);
   const list = session.availableIssueTypes.map((t, i) => `${i + 1}. ${t.name}`).join('\n');
   stream.markdown(
     `Generating template **${session.templateName}** for project **${session.projectKey}** — which issue type?\n\n` +
-    `${list}\n\nReply with a number, or **(c)** to cancel.\n\n${TEMPLATE_GEN_TAGS.typePick}`,
+    `${list}\n\nReply with a number, or **(c)** to cancel.`,
   );
+  return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.typePick] } } };
 }
 
 export async function handleTypePickReply(
@@ -325,7 +327,7 @@ export async function handleTypePickReply(
   ticketService: TicketService,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   if (isSessionExpired(session)) {
     await ws.update(TEMPLATE_GEN_SESSION_KEYS.typePick, undefined);
     stream.markdown(SESSION_EXPIRED_MESSAGE);
@@ -339,12 +341,12 @@ export async function handleTypePickReply(
     return;
   }
   if (pick === 'invalid') {
-    stream.markdown(`Didn't understand that. Reply with a number, or **(c)** to cancel.\n\n${TEMPLATE_GEN_TAGS.typePick}`);
-    return;
+    stream.markdown(`Didn't understand that. Reply with a number, or **(c)** to cancel.`);
+    return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.typePick] } } };
   }
 
   await ws.update(TEMPLATE_GEN_SESSION_KEYS.typePick, undefined);
-  await startFromRequiredFields(session.templateName, session.projectKey, pick.name, ticketService, stream, ws, pick.id);
+  return startFromRequiredFields(session.templateName, session.projectKey, pick.name, ticketService, stream, ws, pick.id);
 }
 
 // --- Free-text issue type chat-ask (R3: a chat reply-and-continue step when the type list can't
@@ -354,12 +356,13 @@ export async function streamAwaitFreeType(
   session: TemplateGenerationAwaitFreeTypeSession,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
-): Promise<void> {
+): Promise<vscode.ChatResult> {
   await ws.update(TEMPLATE_GEN_SESSION_KEYS.awaitFreeType, session);
   stream.markdown(
     `Could not fetch **${session.projectKey}**'s issue types. What issue type should **${session.templateName}** use ` +
-    `(e.g. Bug, Story, Task)?\n\nReply with a type, or **(c)** to cancel.\n\n${TEMPLATE_GEN_TAGS.awaitFreeType}`,
+    `(e.g. Bug, Story, Task)?\n\nReply with a type, or **(c)** to cancel.`,
   );
+  return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.awaitFreeType] } } };
 }
 
 export async function handleAwaitFreeTypeReply(
@@ -368,7 +371,7 @@ export async function handleAwaitFreeTypeReply(
   ticketService: TicketService,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   if (isSessionExpired(session)) {
     await ws.update(TEMPLATE_GEN_SESSION_KEYS.awaitFreeType, undefined);
     stream.markdown(SESSION_EXPIRED_MESSAGE);
@@ -386,13 +389,13 @@ export async function handleAwaitFreeTypeReply(
   if (parsed.action === 'empty') {
     stream.markdown(
       `What issue type should **${session.templateName}** use (e.g. Bug, Story, Task)?\n\n` +
-      `Reply with a type, or **(c)** to cancel.\n\n${TEMPLATE_GEN_TAGS.awaitFreeType}`,
+      `Reply with a type, or **(c)** to cancel.`,
     );
-    return;
+    return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.awaitFreeType] } } };
   }
 
   await ws.update(TEMPLATE_GEN_SESSION_KEYS.awaitFreeType, undefined);
-  await startFromRequiredFields(session.templateName, session.projectKey, parsed.value, ticketService, stream, ws);
+  return startFromRequiredFields(session.templateName, session.projectKey, parsed.value, ticketService, stream, ws);
 }
 
 // --- Review list (toggle / setValue / confirm) ---
@@ -401,12 +404,13 @@ export async function streamReview(
   session: TemplateGenerationReviewSession,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
-): Promise<void> {
+): Promise<vscode.ChatResult> {
   await ws.update(TEMPLATE_GEN_SESSION_KEYS.review, session);
   const sourceLine = session.sourceTicketKey
     ? `_Generating from **${session.sourceTicketKey}**._`
     : `_Generating from **${session.projectKey}**'s required fields for **${session.issueType}**._`;
-  stream.markdown(`${sourceLine}\n\n${buildTemplateFieldReviewTable(session.rows)}\n\n${TEMPLATE_GEN_TAGS.review}`);
+  stream.markdown(`${sourceLine}\n\n${buildTemplateFieldReviewTable(session.rows)}`);
+  return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.review] } } };
 }
 
 export async function handleTemplateGenReviewReply(
@@ -415,7 +419,7 @@ export async function handleTemplateGenReviewReply(
   workspaceRoot: string,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   if (isSessionExpired(session)) {
     await ws.update(TEMPLATE_GEN_SESSION_KEYS.review, undefined);
     stream.markdown(SESSION_EXPIRED_MESSAGE);
@@ -428,9 +432,9 @@ export async function handleTemplateGenReviewReply(
   if (decision.action === 'invalid') {
     stream.markdown(
       `Didn't understand that. Reply **post it** to save, **(c)** to cancel, row numbers to toggle ` +
-      `(e.g. \`2 4\`), or \`<number>=<value>\` to set a value (e.g. \`3=High\`).\n\n${TEMPLATE_GEN_TAGS.review}`,
+      `(e.g. \`2 4\`), or \`<number>=<value>\` to set a value (e.g. \`3=High\`).`,
     );
-    return;
+    return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.review] } } };
   }
   if (decision.action === 'cancel') {
     await ws.update(TEMPLATE_GEN_SESSION_KEYS.review, undefined);
@@ -439,13 +443,11 @@ export async function handleTemplateGenReviewReply(
   }
   if (decision.action === 'toggle') {
     session.rows = applyReviewToggle(session.rows, decision.ids);
-    await streamReview(session, stream, ws);
-    return;
+    return streamReview(session, stream, ws);
   }
   if (decision.action === 'setValue') {
     session.rows = applyReviewSetValue(session.rows, decision.id, decision.value);
-    await streamReview(session, stream, ws);
-    return;
+    return streamReview(session, stream, ws);
   }
 
   // decision.action === 'ok' — a required field with no value to copy is filled inline in this
@@ -456,14 +458,14 @@ export async function handleTemplateGenReviewReply(
     const names = unset.map(r => `**${r.name}** (reply \`${r.id}=<value>\`)`).join(', ');
     stream.markdown(
       `These included fields still need a value before saving: ${names}.\n\n` +
-      `${buildTemplateFieldReviewTable(session.rows)}\n\n${TEMPLATE_GEN_TAGS.review}`,
+      `${buildTemplateFieldReviewTable(session.rows)}`,
     );
-    return;
+    return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.review] } } };
   }
 
   await ws.update(TEMPLATE_GEN_SESSION_KEYS.review, undefined);
   const template = buildGeneratedTemplate(session.templateName, session.issueType, session.rows);
-  await attemptSave(template, session.projectKey, workspaceRoot, stream, ws, false);
+  return attemptSave(template, session.projectKey, workspaceRoot, stream, ws, false);
 }
 
 // --- Save + name-collision handling ---
@@ -475,7 +477,7 @@ async function attemptSave(
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
   overwrite: boolean,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   if (!workspaceRoot) {
     stream.markdown('_No workspace folder is open — cannot save a template. Open a folder and try again._');
     return;
@@ -497,27 +499,27 @@ async function attemptSave(
     const collisionSession: TemplateGenerationCollisionSession = {
       template, projectKey, schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
     };
-    await streamCollision(collisionSession, stream, ws);
-    return;
+    return streamCollision(collisionSession, stream, ws);
   }
 
   logDiag(SCOPE, 'info', `Template saved — ${template.name}`, { templateName: template.name, issueType: template.issueType });
   const offerSession: TemplateGenerationOfferCreateSession = {
     template: result.template, projectKey, schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
   };
-  await streamOfferCreate(offerSession, stream, ws);
+  return streamOfferCreate(offerSession, stream, ws);
 }
 
 export async function streamCollision(
   session: TemplateGenerationCollisionSession,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
-): Promise<void> {
+): Promise<vscode.ChatResult> {
   await ws.update(TEMPLATE_GEN_SESSION_KEYS.collision, session);
   stream.markdown(
     `A template named **${session.template.name}** already exists. Reply with a different name to save ` +
-    `under, **yes** to overwrite the existing one, or **(c)** to cancel.\n\n${TEMPLATE_GEN_TAGS.collision}`,
+    `under, **yes** to overwrite the existing one, or **(c)** to cancel.`,
   );
+  return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.collision] } } };
 }
 
 export async function handleTemplateGenCollisionReply(
@@ -526,7 +528,7 @@ export async function handleTemplateGenCollisionReply(
   workspaceRoot: string,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   if (isSessionExpired(session)) {
     await ws.update(TEMPLATE_GEN_SESSION_KEYS.collision, undefined);
     stream.markdown(SESSION_EXPIRED_MESSAGE);
@@ -536,8 +538,7 @@ export async function handleTemplateGenCollisionReply(
   const decision = parseTemplateCollisionReply(reply);
   if (decision.action === 'invalid') {
     stream.markdown(`Didn't understand that.\n\n`);
-    await streamCollision(session, stream, ws);
-    return;
+    return streamCollision(session, stream, ws);
   }
   if (decision.action === 'cancel') {
     await ws.update(TEMPLATE_GEN_SESSION_KEYS.collision, undefined);
@@ -547,12 +548,11 @@ export async function handleTemplateGenCollisionReply(
 
   await ws.update(TEMPLATE_GEN_SESSION_KEYS.collision, undefined);
   if (decision.action === 'overwrite') {
-    await attemptSave(session.template, session.projectKey, workspaceRoot, stream, ws, true);
-    return;
+    return attemptSave(session.template, session.projectKey, workspaceRoot, stream, ws, true);
   }
   // decision.action === 'rename'
   const renamed: JiraTemplate = { ...session.template, name: decision.name };
-  await attemptSave(renamed, session.projectKey, workspaceRoot, stream, ws, false);
+  return attemptSave(renamed, session.projectKey, workspaceRoot, stream, ws, false);
 }
 
 // --- Offer to create a first ticket ---
@@ -561,12 +561,13 @@ export async function streamOfferCreate(
   session: TemplateGenerationOfferCreateSession,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
-): Promise<void> {
+): Promise<vscode.ChatResult> {
   await ws.update(TEMPLATE_GEN_SESSION_KEYS.offerCreate, session);
   stream.markdown(
     `Template **${session.template.name}** saved.\n\nCreate a first ticket from it now? Reply with a ` +
-    `summary to create one, or **no** to skip.\n\n${TEMPLATE_GEN_TAGS.offerCreate}`,
+    `summary to create one, or **no** to skip.`,
   );
+  return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.offerCreate] } } };
 }
 
 export async function handleOfferCreateReply(
@@ -576,7 +577,7 @@ export async function handleOfferCreateReply(
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
   baseUrl?: string,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   if (isSessionExpired(session)) {
     await ws.update(TEMPLATE_GEN_SESSION_KEYS.offerCreate, undefined);
     stream.markdown(SESSION_EXPIRED_MESSAGE);
@@ -594,8 +595,7 @@ export async function handleOfferCreateReply(
     const summarySession: TemplateGenerationAwaitSummarySession = {
       template: session.template, projectKey: session.projectKey, schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
     };
-    await streamAwaitSummary(summarySession, stream, ws);
-    return;
+    return streamAwaitSummary(summarySession, stream, ws);
   }
 
   // decision.action === 'create'
@@ -607,9 +607,10 @@ export async function streamAwaitSummary(
   session: TemplateGenerationAwaitSummarySession,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
-): Promise<void> {
+): Promise<vscode.ChatResult> {
   await ws.update(TEMPLATE_GEN_SESSION_KEYS.awaitSummary, session);
-  stream.markdown(`What should the summary be?\n\n${TEMPLATE_GEN_TAGS.awaitSummary}`);
+  stream.markdown(`What should the summary be?`);
+  return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.awaitSummary] } } };
 }
 
 export async function handleAwaitSummaryReply(
@@ -619,7 +620,7 @@ export async function handleAwaitSummaryReply(
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
   baseUrl?: string,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   if (isSessionExpired(session)) {
     await ws.update(TEMPLATE_GEN_SESSION_KEYS.awaitSummary, undefined);
     stream.markdown(SESSION_EXPIRED_MESSAGE);
@@ -633,8 +634,8 @@ export async function handleAwaitSummaryReply(
   }
   const summary = reply.trim();
   if (!summary) {
-    stream.markdown(`What should the summary be?\n\n${TEMPLATE_GEN_TAGS.awaitSummary}`);
-    return;
+    stream.markdown(`What should the summary be?`);
+    return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.awaitSummary] } } };
   }
 
   await ws.update(TEMPLATE_GEN_SESSION_KEYS.awaitSummary, undefined);

@@ -180,14 +180,14 @@ describe('streamEmailCommentPreview', () => {
     expect(text).toContain('Comment preview:');
   });
 
-  it('includes the target ticket key and appends the email-content marker', async () => {
+  it('includes the target ticket key and returns email-content session metadata', async () => {
     const session = makeSession({ pendingCommentTicketKey: 'PROJ-42' });
     const stream = mockStream();
     const ws = makeMockWs();
-    await streamEmailCommentPreview(session, stream as never, ws as never);
+    const result = await streamEmailCommentPreview(session, stream as never, ws as never);
     const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
     expect(text).toContain('PROJ-42');
-    expect(text).toContain('<!-- jira:email-content -->');
+    expect(result.metadata?.jiraSession?.kinds).toEqual(['email-content']);
   });
 });
 
@@ -289,15 +289,14 @@ describe('handleCreateFromEmail (batch, U1-U3)', () => {
     (vscode.window.showOpenDialog as ReturnType<typeof vi.fn>).mockResolvedValue([{ fsPath: FIXTURE }]);
     const stream = mockStream();
     const ws = makeMockWs();
-    await handleCreateFromEmail(
+    const result = await handleCreateFromEmail(
       undefined as never, stream as never, undefined as never,
       client, ticketService, undefined as never, ws as never,
     );
     const session = ws.store['jira.session.emailTemplateSelection'] as EmailTemplateSelectionSession;
     expect(session.items).toHaveLength(1);
     expect(session.items[0].subject).toBe('Test Email Subject');
-    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as string;
-    expect(text).toContain('<!-- jira:email-template -->');
+    expect(result?.metadata?.jiraSession?.kinds).toEqual(['email-template']);
   });
 
   it('selecting three files builds a session with three items', async () => {
@@ -423,11 +422,11 @@ describe('batch email creation (U3/U4, via the shared reportImportHandler flow)'
     const session = makeTemplateSession();
     const stream = mockStream();
     const ws = makeMockWs();
-    await handleEmailTemplateSelection('1', session, client, ticketService, stream as never, ws as never);
+    const result = await handleEmailTemplateSelection('1', session, client, ticketService, stream as never, ws as never);
 
     expect(searchSpy).not.toHaveBeenCalled();
     const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as string;
-    expect(text).toContain('<!-- jira:email-review -->');
+    expect(result?.metadata?.jiraSession?.kinds).toEqual(['email-review']);
     expect(text).toContain('Email One');
     expect(text).toContain('Email Two');
   });

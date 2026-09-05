@@ -37,7 +37,7 @@ import {
 } from './jira/waltzHandler';
 import type { WaltzTemplateSelectionSession, WaltzReviewSession } from './sessionState';
 import {
-  TEMPLATE_GEN_SESSION_KEYS, TEMPLATE_GEN_TAGS,
+  TEMPLATE_GEN_SESSION_KEYS, TEMPLATE_GEN_KINDS,
   handleGenerateTemplate, handleAwaitNameReply, handleTypePickReply, handleAwaitFreeTypeReply,
   handleTemplateGenReviewReply, handleTemplateGenCollisionReply, handleOfferCreateReply, handleAwaitSummaryReply,
 } from './jira/templateGenerationHandler';
@@ -46,7 +46,7 @@ import type {
   TemplateGenerationReviewSession, TemplateGenerationCollisionSession,
   TemplateGenerationOfferCreateSession, TemplateGenerationAwaitSummarySession,
 } from './sessionState';
-import { AWAIT_ISSUE_TYPE_SESSION_KEY, AWAIT_ISSUE_TYPE_TAG } from './jira/ticketContext';
+import { AWAIT_ISSUE_TYPE_SESSION_KEY } from './jira/ticketContext';
 import { parseAwaitFreeTextReply, type AwaitIssueTypeSession } from './sessionState';
 import { handleVeracodeAwaitIssueType } from './jira/veracodeHandler';
 import { handleWaltzAwaitIssueType } from './jira/waltzHandler';
@@ -280,11 +280,12 @@ export function createJiraParticipant(
         // shared chat-based ask (R6/KTD4) instead of silently creating the ticket with a guessed
         // type. AwaitIssueTypeResume carries pickedTemplateName (identity, not the resolved
         // object) so the resume path re-looks it up the same way, once the type is known.
-        const issueType = await resolveIssueTypeOrPrompt(pick.issueType, {
+        const issueTypeOrResult = await resolveIssueTypeOrPrompt(pick.issueType, {
           kind: 'create', projectKey: selSession.projectKey, summary: selSession.summary,
           description: selSession.description, extraFields: selSession.extraFields, pickedTemplateName,
         }, stream, ws);
-        if (issueType === null) return;
+        if (typeof issueTypeOrResult !== 'string') return issueTypeOrResult;
+        const issueType = issueTypeOrResult;
 
         // Looked up only now, after the detour check above — on a chat detour this result would
         // be thrown away, and its "no longer available" warning would then repeat a second time
@@ -312,7 +313,7 @@ export function createJiraParticipant(
     // JiraParticipant.ts (not ticketContext.ts) because it needs createHandler.ts/
     // reportImportHandler.ts/emailHandler.ts's continuations, all of which already import from
     // ticketContext.ts — this avoids a require cycle while keeping ticketContext.ts a leaf module.
-    if (lastResponse.includes(AWAIT_ISSUE_TYPE_TAG)) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('await-issue-type')) {
       const session = ws.get<AwaitIssueTypeSession>(AWAIT_ISSUE_TYPE_SESSION_KEY);
       if (session) {
         if (isSessionExpired(session)) {
@@ -330,8 +331,8 @@ export function createJiraParticipant(
           return;
         }
         if (parsed.action === 'empty') {
-          stream.markdown(`What issue type should this use (e.g. Bug, Story, Task)?\n\nReply with a type, or **(c)** to cancel.\n\n${AWAIT_ISSUE_TYPE_TAG}`);
-          return;
+          stream.markdown(`What issue type should this use (e.g. Bug, Story, Task)?\n\nReply with a type, or **(c)** to cancel.`);
+          return { metadata: { jiraSession: { kinds: ['await-issue-type'] } } };
         }
 
         await ws.update(AWAIT_ISSUE_TYPE_SESSION_KEY, undefined);
@@ -357,11 +358,11 @@ export function createJiraParticipant(
               resume.extraFields,
             );
           } else if (resume.descriptorKind === 'veracode') {
-            await handleVeracodeAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws, config.baseUrl);
+            awaitResult = await handleVeracodeAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws, config.baseUrl);
           } else if (resume.descriptorKind === 'waltz') {
-            await handleWaltzAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws, config.baseUrl);
+            awaitResult = await handleWaltzAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws, config.baseUrl);
           } else {
-            await handleEmailAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws, config.baseUrl);
+            awaitResult = await handleEmailAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws, config.baseUrl);
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -641,17 +642,16 @@ export function createJiraParticipant(
 
     // Email content session — user is confirming/posting an email-as-comment (the only remaining
     // ticket-key-present flow; batch ticket creation routes through the email-template/email-review
-    // tags below instead).
-    if (lastResponse.includes('<!-- jira:email-content -->')) {
+    // sessions below instead).
+    if (getActiveJiraSession(chatContext)?.kinds.includes('email-content')) {
       const contentSession = ws.get<EmailContentSession>('jira.session.emailContent');
       if (contentSession) {
-        await handleEmailContentSession(request.prompt, contentSession, ticketService, stream, ws);
-        return;
+        return await handleEmailContentSession(request.prompt, contentSession, ticketService, stream, ws);
       }
     }
 
     // Batch email import — template/issue-type selection
-    if (lastResponse.includes('<!-- jira:email-template -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('email-template')) {
       const templateSession = ws.get<EmailTemplateSelectionSession>('jira.session.emailTemplateSelection');
       if (templateSession) {
         if (isSessionExpired(templateSession)) {
@@ -659,13 +659,12 @@ export function createJiraParticipant(
           stream.markdown(SESSION_EXPIRED_MESSAGE);
           return;
         }
-        await handleEmailTemplateSelection(request.prompt, templateSession, jiraClient, ticketService, stream, ws, config.baseUrl);
-        return;
+        return await handleEmailTemplateSelection(request.prompt, templateSession, jiraClient, ticketService, stream, ws, config.baseUrl);
       }
     }
 
     // Batch email import — review / selection screen
-    if (lastResponse.includes('<!-- jira:email-review -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('email-review')) {
       const reviewSession = ws.get<EmailReviewSession>('jira.session.emailReview');
       if (reviewSession) {
         if (isSessionExpired(reviewSession)) {
@@ -673,13 +672,12 @@ export function createJiraParticipant(
           stream.markdown(SESSION_EXPIRED_MESSAGE);
           return;
         }
-        await handleEmailReviewReply(request.prompt, reviewSession, ticketService, stream, ws, config.baseUrl);
-        return;
+        return await handleEmailReviewReply(request.prompt, reviewSession, ticketService, stream, ws, config.baseUrl);
       }
     }
 
     // Veracode template/issue-type selection
-    if (lastResponse.includes('<!-- jira:veracode-template -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('veracode-template')) {
       const templateSession = ws.get<VeracodeTemplateSelectionSession>('jira.session.veracodeTemplateSelection');
       if (templateSession) {
         if (isSessionExpired(templateSession)) {
@@ -687,13 +685,12 @@ export function createJiraParticipant(
           stream.markdown(SESSION_EXPIRED_MESSAGE);
           return;
         }
-        await handleVeracodeTemplateSelection(request.prompt, templateSession, jiraClient, ticketService, stream, ws, config.baseUrl);
-        return;
+        return await handleVeracodeTemplateSelection(request.prompt, templateSession, jiraClient, ticketService, stream, ws, config.baseUrl);
       }
     }
 
     // Veracode flaw review / selection screen
-    if (lastResponse.includes('<!-- jira:veracode-review -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('veracode-review')) {
       const reviewSession = ws.get<VeracodeReviewSession>('jira.session.veracodeReview');
       if (reviewSession) {
         if (isSessionExpired(reviewSession)) {
@@ -701,13 +698,12 @@ export function createJiraParticipant(
           stream.markdown(SESSION_EXPIRED_MESSAGE);
           return;
         }
-        await handleVeracodeReviewReply(request.prompt, reviewSession, ticketService, stream, ws, config.baseUrl);
-        return;
+        return await handleVeracodeReviewReply(request.prompt, reviewSession, ticketService, stream, ws, config.baseUrl);
       }
     }
 
     // Waltz OSS report template/issue-type selection
-    if (lastResponse.includes('<!-- jira:waltz-template -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('waltz-template')) {
       const templateSession = ws.get<WaltzTemplateSelectionSession>('jira.session.waltzTemplateSelection');
       if (templateSession) {
         if (isSessionExpired(templateSession)) {
@@ -715,13 +711,12 @@ export function createJiraParticipant(
           stream.markdown(SESSION_EXPIRED_MESSAGE);
           return;
         }
-        await handleWaltzTemplateSelection(request.prompt, templateSession, jiraClient, ticketService, stream, ws, config.baseUrl);
-        return;
+        return await handleWaltzTemplateSelection(request.prompt, templateSession, jiraClient, ticketService, stream, ws, config.baseUrl);
       }
     }
 
     // Waltz OSS report review / selection screen
-    if (lastResponse.includes('<!-- jira:waltz-review -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('waltz-review')) {
       const reviewSession = ws.get<WaltzReviewSession>('jira.session.waltzReview');
       if (reviewSession) {
         if (isSessionExpired(reviewSession)) {
@@ -729,75 +724,67 @@ export function createJiraParticipant(
           stream.markdown(SESSION_EXPIRED_MESSAGE);
           return;
         }
-        await handleWaltzReviewReply(request.prompt, reviewSession, ticketService, stream, ws, config.baseUrl);
-        return;
+        return await handleWaltzReviewReply(request.prompt, reviewSession, ticketService, stream, ws, config.baseUrl);
       }
     }
 
     // Template generation — chat-ask for the template name (R2, no showInputBox)
-    if (lastResponse.includes(TEMPLATE_GEN_TAGS.awaitName)) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes(TEMPLATE_GEN_KINDS.awaitName)) {
       const session = ws.get<TemplateGenerationAwaitNameSession>(TEMPLATE_GEN_SESSION_KEYS.awaitName);
       if (session) {
         const templateGenWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-        await handleAwaitNameReply(request.prompt, session, ticketService, templateGenWorkspaceRoot, config.hiddenDisplayFields, stream, ws);
-        return;
+        return await handleAwaitNameReply(request.prompt, session, ticketService, templateGenWorkspaceRoot, config.hiddenDisplayFields, stream, ws);
       }
     }
 
     // Template generation — issue-type pick list (no-reference path, no type named)
-    if (lastResponse.includes(TEMPLATE_GEN_TAGS.typePick)) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes(TEMPLATE_GEN_KINDS.typePick)) {
       const session = ws.get<TemplateGenerationTypePickSession>(TEMPLATE_GEN_SESSION_KEYS.typePick);
       if (session) {
-        await handleTypePickReply(request.prompt, session, ticketService, stream, ws);
-        return;
+        return await handleTypePickReply(request.prompt, session, ticketService, stream, ws);
       }
     }
 
     // Template generation — chat-ask for a free-text issue type when the list couldn't be
     // fetched (R3, no showInputBox)
-    if (lastResponse.includes(TEMPLATE_GEN_TAGS.awaitFreeType)) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes(TEMPLATE_GEN_KINDS.awaitFreeType)) {
       const session = ws.get<TemplateGenerationAwaitFreeTypeSession>(TEMPLATE_GEN_SESSION_KEYS.awaitFreeType);
       if (session) {
-        await handleAwaitFreeTypeReply(request.prompt, session, ticketService, stream, ws);
-        return;
+        return await handleAwaitFreeTypeReply(request.prompt, session, ticketService, stream, ws);
       }
     }
 
     // Template generation — review list (toggle / setValue / confirm)
-    if (lastResponse.includes(TEMPLATE_GEN_TAGS.review)) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes(TEMPLATE_GEN_KINDS.review)) {
       const session = ws.get<TemplateGenerationReviewSession>(TEMPLATE_GEN_SESSION_KEYS.review);
       if (session) {
         const templateGenWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-        await handleTemplateGenReviewReply(request.prompt, session, templateGenWorkspaceRoot, stream, ws);
-        return;
+        return await handleTemplateGenReviewReply(request.prompt, session, templateGenWorkspaceRoot, stream, ws);
       }
     }
 
     // Template generation — name-collision handling
-    if (lastResponse.includes(TEMPLATE_GEN_TAGS.collision)) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes(TEMPLATE_GEN_KINDS.collision)) {
       const session = ws.get<TemplateGenerationCollisionSession>(TEMPLATE_GEN_SESSION_KEYS.collision);
       if (session) {
         const templateGenWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-        await handleTemplateGenCollisionReply(request.prompt, session, templateGenWorkspaceRoot, stream, ws);
-        return;
+        return await handleTemplateGenCollisionReply(request.prompt, session, templateGenWorkspaceRoot, stream, ws);
       }
     }
 
     // Template generation — offer to create a first ticket from the saved template
-    if (lastResponse.includes(TEMPLATE_GEN_TAGS.offerCreate)) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes(TEMPLATE_GEN_KINDS.offerCreate)) {
       const session = ws.get<TemplateGenerationOfferCreateSession>(TEMPLATE_GEN_SESSION_KEYS.offerCreate);
       if (session) {
-        await handleOfferCreateReply(request.prompt, session, ticketService, stream, ws, config.baseUrl);
-        return;
+        return await handleOfferCreateReply(request.prompt, session, ticketService, stream, ws, config.baseUrl);
       }
     }
 
     // Template generation — awaiting the summary for the first ticket
-    if (lastResponse.includes(TEMPLATE_GEN_TAGS.awaitSummary)) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes(TEMPLATE_GEN_KINDS.awaitSummary)) {
       const session = ws.get<TemplateGenerationAwaitSummarySession>(TEMPLATE_GEN_SESSION_KEYS.awaitSummary);
       if (session) {
-        await handleAwaitSummaryReply(request.prompt, session, ticketService, stream, ws, config.baseUrl);
-        return;
+        return await handleAwaitSummaryReply(request.prompt, session, ticketService, stream, ws, config.baseUrl);
       }
     }
 
