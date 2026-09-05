@@ -104,17 +104,17 @@ Execution streams one line per ticket (subtasks first), then a summary. Failures
 
 ## Jira sessions
 
-Each session below is looked up by its `workspaceState` key and its liveness is checked one of two ways: most sessions still expire once a visible response tag is no longer the **last** assistant message (see `CLAUDE.md`'s "Multi-turn session state"); a growing subset instead round-trip a `kind` through `ChatResult.metadata.jiraSession` (read by `getActiveJiraSession()` in `ticketContext.ts`) with no visible marker in the rendered response — see `JiraSessionContinuity` in `sessionState.ts`.
+Each session below is looked up by its `workspaceState` key; liveness is checked by round-tripping a `kind` through `ChatResult.metadata.jiraSession` (read by `getActiveJiraSession()` in `ticketContext.ts`), with no visible marker in the rendered response — see `JiraSessionContinuity` in `sessionState.ts`. This replaced the former HTML-comment-tag mechanism (a visible `<!-- jira:TAG -->` matched against the last rendered response) for every session below.
 
 | Session | workspaceState key | Liveness check |
 | --- | --- | --- |
 | `ResolutionSelectionSession` | `jira.session.resolutionSelection` | metadata — `jiraSession.kinds: ['resolution-selection']` |
 | `TransitionBatchSession` | `jira.session.transitionReview` | metadata — `jiraSession.kinds: ['transition-review']` |
-| `FilterSelectionSession` | `jira.session.filterSelection` | `<!-- jira:selecting-filter -->` |
-| `BulkUpdateReviewSession` | `jira.session.bulkUpdateReview` | `<!-- jira:bulk-update-review -->` |
+| `FilterSelectionSession` | `jira.session.filterSelection` | metadata — `jiraSession.kinds: ['selecting-filter']` |
+| `BulkUpdateReviewSession` | `jira.session.bulkUpdateReview` | metadata — `jiraSession.kinds: ['bulk-update-review']` |
 | `SearchResultSession` | `jira.session.searchResult` | _(no marker — background session, overwritten on each search)_ |
 | `CreateSelectionSession` | `jira.session.creatingSelection` | metadata — `jiraSession.kinds: ['selecting-create-option']` |
-| `AwaitIssueTypeSession` | `jira.session.awaitIssueType` | `<!-- jira:await-issue-type -->` |
+| `AwaitIssueTypeSession` | `jira.session.awaitIssueType` | metadata — `jiraSession.kinds: ['await-issue-type']` |
 | `CreationSession` | `jira.session.creating` | metadata — `jiraSession.kinds: ['creating']` |
 | `ContentSession` | `jira.session.previewing` | metadata — `jiraSession.kinds: ['previewing']` |
 | `MoreCommentsSession` | `jira.session.moreComments` | metadata — `jiraSession.kinds: ['more-comments']` |
@@ -123,20 +123,20 @@ Each session below is looked up by its `workspaceState` key and its liveness is 
 | `SprintSelectionSession` | `jira.session.sprintSelection` | metadata — `jiraSession.kinds: ['sprint-selection']` |
 | `FieldSelectionSession` | `jira.session.fieldSelection` | metadata — `jiraSession.kinds: ['field-selection']` |
 | `FieldUpdatePreviewSession` | `jira.session.fieldUpdatePreview` | metadata — `jiraSession.kinds: ['field-update-preview']` |
-| `EmailContentSession` | `jira.session.emailContent` | `<!-- jira:email-content -->` |
-| `VeracodeTemplateSelectionSession` | `jira.session.veracodeTemplateSelection` | `<!-- jira:veracode-template -->` |
-| `VeracodeReviewSession` | `jira.session.veracodeReview` | `<!-- jira:veracode-review -->` |
-| `WaltzTemplateSelectionSession` | `jira.session.waltzTemplateSelection` | `<!-- jira:waltz-template -->` |
-| `WaltzReviewSession` | `jira.session.waltzReview` | `<!-- jira:waltz-review -->` |
-| `EmailTemplateSelectionSession` | `jira.session.emailTemplateSelection` | `<!-- jira:email-template -->` |
-| `EmailReviewSession` | `jira.session.emailReview` | `<!-- jira:email-review -->` |
-| `TemplateGenerationAwaitNameSession` | `jira.session.templateGenAwaitName` | `<!-- jira:template-gen-await-name -->` |
-| `TemplateGenerationTypePickSession` | `jira.session.templateGenTypePick` | `<!-- jira:template-gen-type-pick -->` |
-| `TemplateGenerationAwaitFreeTypeSession` | `jira.session.templateGenAwaitFreeType` | `<!-- jira:template-gen-await-free-type -->` |
-| `TemplateGenerationReviewSession` | `jira.session.templateGenReview` | `<!-- jira:template-gen-review -->` |
-| `TemplateGenerationCollisionSession` | `jira.session.templateGenCollision` | `<!-- jira:template-gen-collision -->` |
-| `TemplateGenerationOfferCreateSession` | `jira.session.templateGenOfferCreate` | `<!-- jira:template-gen-offer-create -->` |
-| `TemplateGenerationAwaitSummarySession` | `jira.session.templateGenAwaitSummary` | `<!-- jira:template-gen-await-summary -->` |
+| `EmailContentSession` | `jira.session.emailContent` | metadata — `jiraSession.kinds: ['email-content']` |
+| `VeracodeTemplateSelectionSession` | `jira.session.veracodeTemplateSelection` | metadata — `jiraSession.kinds: ['veracode-template']` |
+| `VeracodeReviewSession` | `jira.session.veracodeReview` | metadata — `jiraSession.kinds: ['veracode-review']` |
+| `WaltzTemplateSelectionSession` | `jira.session.waltzTemplateSelection` | metadata — `jiraSession.kinds: ['waltz-template']` |
+| `WaltzReviewSession` | `jira.session.waltzReview` | metadata — `jiraSession.kinds: ['waltz-review']` |
+| `EmailTemplateSelectionSession` | `jira.session.emailTemplateSelection` | metadata — `jiraSession.kinds: ['email-template']` |
+| `EmailReviewSession` | `jira.session.emailReview` | metadata — `jiraSession.kinds: ['email-review']` |
+| `TemplateGenerationAwaitNameSession` | `jira.session.templateGenAwaitName` | metadata — `jiraSession.kinds: ['template-gen-await-name']` |
+| `TemplateGenerationTypePickSession` | `jira.session.templateGenTypePick` | metadata — `jiraSession.kinds: ['template-gen-type-pick']` |
+| `TemplateGenerationAwaitFreeTypeSession` | `jira.session.templateGenAwaitFreeType` | metadata — `jiraSession.kinds: ['template-gen-await-free-type']` |
+| `TemplateGenerationReviewSession` | `jira.session.templateGenReview` | metadata — `jiraSession.kinds: ['template-gen-review']` |
+| `TemplateGenerationCollisionSession` | `jira.session.templateGenCollision` | metadata — `jiraSession.kinds: ['template-gen-collision']` |
+| `TemplateGenerationOfferCreateSession` | `jira.session.templateGenOfferCreate` | metadata — `jiraSession.kinds: ['template-gen-offer-create']` |
+| `TemplateGenerationAwaitSummarySession` | `jira.session.templateGenAwaitSummary` | metadata — `jiraSession.kinds: ['template-gen-await-summary']` |
 
 Detection order in the Jira handler: resolution selection → transition review → filter selection → bulk-update-review → combined template/issue-type selection → shared issue-type ask (R6) → creation → content → more-comments → check command → load-skipped → email content (comment-attach) → batch email template selection → batch email review → veracode template selection → veracode review → Waltz template selection → Waltz review → template-gen await-name (R2) → template-gen type pick → template-gen await-free-type (R3) → template-gen review → template-gen collision → template-gen offer-create → template-gen await-summary → comment list → greeting/empty-prompt check → intent parse.
 
@@ -157,3 +157,11 @@ an issue type, so it never reaches this ask at all. See `src/participant/jira/ti
 resumes into).
 
 Follow-up suggestion chips (after every major response), greeting/empty-prompt detection, and the unclassifiable-prompt fallback that replaces the old bare "Unrecognised operation." message are documented in [`docs/onboarding.md`](onboarding.md#follow-up-suggestion-chips-greeting-detection-and-the-unclassifiable-prompt-fallback).
+
+### Clickable replies
+
+Every reply a session above can currently only be answered by typing — a numbered pick, a confirm/cancel word, or a per-row batch-review toggle — also renders as a clickable element wrapping that exact text (`buildChatCommandLink()` in `sessionState.ts`), so clicking resubmits the identical reply a typed message would have sent; typing continues to work unchanged. The two shared issue-type asks (`AwaitIssueTypeSession`, template generation's `awaitName`/`awaitFreeType`) are the one exception — their cancel word must be the literal `(c)` (`isExplicitCancelToken()`), so their clickable "Cancel" resubmits `(c)` rather than the word "cancel".
+
+Batch review tables (`TransitionBatchSession`, `BulkUpdateReviewSession`, and the Veracode/Waltz/email import review screens) render each row's inclusion state as its own per-row toggle link — clicking flips that row's `included` flag and re-renders the table; typing the same row numbers/keys does the same thing. Only an explicit "post it" reply actually runs the batch, using each row's current `included` state.
+
+Any response containing one of these links is a trusted `vscode.MarkdownString` (`trustedChatMarkdown()` in `src/utils/chatMarkdown.ts`, enabled only for `workbench.action.chat.open`). Every externally-influenced string combined into such a response — a ticket summary, a custom field value, an email subject, a Veracode/Waltz finding — is neutralized first via `neutralizeMarkdownLinks()` (`sessionState.ts`), which also runs automatically inside `buildChatCommandLink()` on its own `label` argument. Without this, a crafted `[text](command:...)` sequence in that content could render as a second, attacker-chosen live command once the response is trusted.
