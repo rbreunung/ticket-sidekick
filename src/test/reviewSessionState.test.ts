@@ -3,6 +3,7 @@ import {
   buildBitbucketNotConfiguredMessage,
   buildChatCommandLink,
   neutralizeMarkdownLinks,
+  composeReviewOutput,
   computeBitbucketFollowups,
   parseSmartFallbackReply,
   ALL_PERSONA_IDS,
@@ -81,6 +82,28 @@ describe('neutralizeMarkdownLinks', () => {
   it('replaces [ and ] with visually similar full-width brackets, leaving other characters untouched', () => {
     expect(neutralizeMarkdownLinks('[Click here](command:evil)')).toBe('［Click here］(command:evil)');
     expect(neutralizeMarkdownLinks('Normal PR title — nothing to escape')).toBe('Normal PR title — nothing to escape');
+  });
+});
+
+describe('composeReviewOutput (U7/R10, relocated here for testability — code-review fix)', () => {
+  it('wraps each finding heading in a command link resubmitting "#<id>", leaving the rest of markdown unchanged', () => {
+    const result = {
+      markdown: '## PR #1 — Title\n\n**#1** 🔴 First bug\n→ Fix it\n\n---\n\n**#2** 🟡 Second bug\n→ Fix it too',
+      findingHeadings: [
+        { id: 1, heading: '**#1** 🔴 First bug' },
+        { id: 2, heading: '**#2** 🟡 Second bug' },
+      ],
+    };
+    const output = composeReviewOutput(result);
+    expect(output).toContain(buildChatCommandLink('**#1** 🔴 First bug', '@bitbucket', '#1'));
+    expect(output).toContain(buildChatCommandLink('**#2** 🟡 Second bug', '@bitbucket', '#2'));
+    // Non-heading text (the recommendation lines, the separators) is untouched.
+    expect(output).toContain('→ Fix it too');
+  });
+
+  it('returns markdown unchanged when there are no findingHeadings (e.g. an empty review)', () => {
+    const result = { markdown: '_No issues found._', findingHeadings: [] };
+    expect(composeReviewOutput(result)).toBe('_No issues found._');
   });
 });
 

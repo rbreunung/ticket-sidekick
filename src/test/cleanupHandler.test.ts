@@ -292,7 +292,7 @@ describe('handleRunCleanup', () => {
 
     await handleRunCleanup(baseIntent, stream as never, client, ticketService, ws as never);
 
-    const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const allMarkdown = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(allMarkdown).toContain('resolution is EMPTY');
   });
 
@@ -318,7 +318,7 @@ describe('handleRunCleanup', () => {
 
     await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
 
-    const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const allMarkdown = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(allMarkdown).toContain('ORDER BY');
     expect(allMarkdown).toContain('extra filter ignored');
     expect(allMarkdown).not.toContain('AND (priority = High');
@@ -346,7 +346,7 @@ describe('handleRunCleanup', () => {
 
     await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
 
-    const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const allMarkdown = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(allMarkdown).toContain('AND (priority = High)');
   });
 
@@ -414,7 +414,7 @@ describe('handleRunCleanup', () => {
 
     const chatResult = await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
 
-    const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const allMarkdown = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     // No visible session marker in the rendered response (R3) — liveness is tracked via metadata.
     expect(allMarkdown).not.toContain('<!-- jira:');
     // The review screen should have been shown instead of the resolution dialog.
@@ -466,7 +466,7 @@ describe('handleRunCleanup', () => {
 
     const chatResult = await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
 
-    const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const allMarkdown = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     // Both parent and subtask should appear in the review screen
     expect(allMarkdown).toContain('PROJ-1');
     expect(allMarkdown).toContain('PROJ-1a');
@@ -526,7 +526,7 @@ describe('handleRunCleanup', () => {
     expect(subtaskCall).not.toContain('status != "Done"');
 
     // Subtask should still appear in the review screen
-    const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const allMarkdown = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(allMarkdown).toContain('PROJ-1a');
   });
 
@@ -536,7 +536,7 @@ describe('handleRunCleanup', () => {
 
     await handleRunCleanup(baseIntent, stream as never, client, ticketService, ws as never, 'https://jira.example.com');
 
-    const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const allMarkdown = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(allMarkdown).toContain('[View in Jira](https://jira.example.com/issues/?jql=');
     expect(allMarkdown).not.toMatch(/Search scope\s*\n`/);
   });
@@ -547,7 +547,7 @@ describe('handleRunCleanup', () => {
 
     await handleRunCleanup(baseIntent, stream as never, client, ticketService, ws as never);
 
-    const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const allMarkdown = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(allMarkdown).toContain('**Search scope**');
     expect(allMarkdown).toMatch(/`project = PROJ/);
     expect(allMarkdown).not.toContain('[View in Jira]');
@@ -616,7 +616,7 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
 
     await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
 
-    const output = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const output = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(output).toContain('releasedVersions()');
     expect(output).not.toContain('fixVersion = "released"');
   });
@@ -628,7 +628,7 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
 
     await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
 
-    const output = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const output = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(output).toContain('unreleasedVersions()');
   });
 
@@ -639,7 +639,7 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
 
     await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
 
-    const output = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const output = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(output).toContain('fixVersion ~ "Release*"');
     expect(output).not.toContain('fixVersion = "Release*"');
   });
@@ -665,7 +665,7 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
 
     await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
 
-    const output = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const output = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(output).toContain('releasedVersions()');
   });
 
@@ -690,7 +690,7 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
 
     await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
 
-    const output = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const output = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(output).toContain('fixVersion ~ "Release*"');
   });
 
@@ -715,7 +715,7 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
 
     await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
 
-    const output = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const output = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(output).toContain('fixVersion = "v1.2"');
     expect(output).not.toContain('releasedVersions()');
   });
@@ -741,7 +741,7 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
     await handleRunCleanup(intent, stream as never, client, ticketService, ws as never, undefined, ['fixVersions'], fieldMeta);
 
     expect(spy).toHaveBeenCalledWith(expect.any(String), 50, ['fixVersions']);
-    const output = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const output = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     // Covers AE2/AE3: the review table shows the configured extra column with the fetched value.
     expect(output).toContain('| Fix Version |');
     expect(output).toContain('2.0');
@@ -864,12 +864,23 @@ describe('buildReviewTable', () => {
     expect(buildReviewTable(session)).toContain('| PROJ-1 |');
   });
 
-  it('renders each row\'s own Transition? cell as a clickable toggle resubmitting its numeric suffix (R8/AE4/AE5)', () => {
+  it('renders each row\'s own Transition? cell as a clickable toggle resubmitting its full key (R8/AE4/AE5)', () => {
     const session = makeSession({ tickets: [makeTicket('PROJ-11', { included: true })] });
     const table = buildReviewTable(session);
     expect(table).toContain('| Transition? |');
     expect(table).toContain(
-      `[✓](command:workbench.action.chat.open?${encodeURIComponent(JSON.stringify({ query: '@jira 11', isPartialQuery: false }))})`,
+      `[✓](command:workbench.action.chat.open?${encodeURIComponent(JSON.stringify({ query: '@jira PROJ-11', isPartialQuery: false }))})`,
+    );
+  });
+
+  it('code-review fix: the toggle link resubmits the full key, not just the numeric suffix, since a batch can span multiple projects sharing a suffix (e.g. ABC-11 and XYZ-11)', () => {
+    const session = makeSession({ tickets: [makeTicket('ABC-11', { included: true }), makeTicket('XYZ-11', { included: true })] });
+    const table = buildReviewTable(session);
+    expect(table).toContain(
+      `[✓](command:workbench.action.chat.open?${encodeURIComponent(JSON.stringify({ query: '@jira ABC-11', isPartialQuery: false }))})`,
+    );
+    expect(table).toContain(
+      `[✓](command:workbench.action.chat.open?${encodeURIComponent(JSON.stringify({ query: '@jira XYZ-11', isPartialQuery: false }))})`,
     );
   });
 

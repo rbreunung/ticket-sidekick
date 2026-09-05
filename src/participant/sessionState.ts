@@ -4,6 +4,7 @@ import type { VeracodeFlaw, VeracodeReviewRow } from '../utils/veracodeReport';
 import type { WaltzComponent, WaltzReviewRow } from '../utils/waltzReport';
 import type { EmailImportItem, EmailReviewRow } from '../utils/emlParser';
 import { BATCH_LIMIT, sanitizeCellText } from '../utils/reportImport';
+import { TICKET_ID_PATTERN } from '../utils/branchParser';
 import { formatKeyLink, coerceTypedFieldValue, buildExtraFieldColumns, type TemplateFieldCandidate } from '../services/TicketService';
 import type { JiraTemplate } from '../templates/TemplateService';
 // Type-only — ConfigService.ts imports `vscode`, but a type-only import is erased before
@@ -116,7 +117,11 @@ interface TransitionReviewRow {
   resolution: string;
   extra?: Record<string, unknown>;
   included: boolean;
-  numericSuffix: string; // the digits after '-' in the ticket key — the toggle reply text (R8), matching the existing typed "skip 11 14" syntax's own number format
+  // The row's own toggle reply text (R8). The FULL key, not just its numeric suffix — a batch can
+  // span multiple projects (an arbitrary JQL search), where two tickets can share a numeric suffix
+  // (e.g. ABC-11 and XYZ-11); parseSkipInput() resolves a full key unambiguously, whereas a bare
+  // suffix is only honored when it isn't ambiguous in the batch (code-review fix).
+  rawKey: string;
 }
 
 /**
@@ -149,7 +154,7 @@ export function buildReviewTable(
       resolution: session.resolution ?? '',
       extra: t.extra,
       included: t.included,
-      numericSuffix: t.key.split('-')[1] ?? t.key,
+      rawKey: t.key,
     });
     for (const s of t.subtasks) {
       flatRows.push({
@@ -161,7 +166,7 @@ export function buildReviewTable(
         resolution: s.resolution ?? session.resolution ?? '',
         extra: s.extra,
         included: s.included,
-        numericSuffix: s.key.split('-')[1] ?? s.key,
+        rawKey: s.key,
       });
     }
   }
@@ -184,7 +189,7 @@ export function buildReviewTable(
     // R8/R9: positive "will transition when checked" framing — clicking resubmits this row's own
     // numeric suffix, the exact text the existing typed "11 14" toggle syntax already accepts
     // (parseSkipInput), so no new parser logic (Risks section).
-    { header: 'Transition?', accessor: (r) => buildChatCommandLink(r.included ? '✓' : '_excluded_', '@jira', r.numericSuffix) },
+    { header: 'Transition?', accessor: (r) => buildChatCommandLink(r.included ? '✓' : '_excluded_', '@jira', r.rawKey) },
   ];
 
   return renderReviewTable(columns, flatRows) + '\n\n' +
@@ -235,16 +240,42 @@ export function parseSkipInput(reply: string, tickets: TransitionBatchTicket[]):
   if (isCancellation(reply)) return { action: 'cancel' };
 
   const parts = normalized.split(/\s+/).filter(Boolean);
-  const allKeys = new Map<string, string>(); // numeric suffix → full key
+  // Code-review fix: a batch can span multiple projects (an arbitrary JQL search, not
+  // project-scoped), so two tickets can share the same numeric suffix (e.g. ABC-11 and XYZ-11).
+  // buildReviewTable()'s per-row toggle link resubmits the row's own full key (unambiguous,
+  // matched via byFullKey below); the typed "11 14" shorthand still resolves by numeric suffix
+  // (bySuffix) but ONLY when that suffix is unambiguous in this batch — an ambiguous suffix is
+  // never guessed at, since silently toggling the wrong ticket is worse than treating it as
+  // unmatched.
+  const byFullKey = new Map<string, string>(); // lowercased full key → full key
+  const bySuffix = new Map<string, string>(); // numeric suffix → full key (only when unambiguous)
+  const ambiguousSuffixes = new Set<string>();
+  const registerKey = (key: string) => {
+    byFullKey.set(key.toLowerCase(), key);
+    const suffix = key.split('-')[1];
+    if (!suffix) return;
+    if (bySuffix.has(suffix) && bySuffix.get(suffix) !== key) {
+      ambiguousSuffixes.add(suffix);
+    } else {
+      bySuffix.set(suffix, key);
+    }
+  };
   for (const t of tickets) {
-    allKeys.set(t.key.split('-')[1], t.key);
-    for (const s of t.subtasks) allKeys.set(s.key.split('-')[1], s.key);
+    registerKey(t.key);
+    for (const s of t.subtasks) registerKey(s.key);
   }
 
   const mentioned = new Set<string>();
   for (const p of parts) {
-    const key = allKeys.get(p);
-    if (key) mentioned.add(key);
+    const fullKeyMatch = byFullKey.get(p);
+    if (fullKeyMatch) {
+      mentioned.add(fullKeyMatch);
+      continue;
+    }
+    if (!ambiguousSuffixes.has(p)) {
+      const suffixMatch = bySuffix.get(p);
+      if (suffixMatch) mentioned.add(suffixMatch);
+    }
   }
   if (mentioned.size === 0) return { action: 'invalid' };
 
@@ -419,6 +450,26 @@ export interface BulkUpdateReviewSession {
   fieldName: string;
   fieldValue: unknown;
   arrayOp: 'set' | 'add' | 'remove';
+  // Code-review fix: the initial render's own header (field name/value, ticket count, "View in
+  // Jira" link) built once and reused verbatim by buildBulkUpdateReviewMessage() on every
+  // toggle-resume render — previously the resume render duplicated a shorter, hand-written header
+  // that had already drifted from the initial one (missing the count and the Jira link).
+  headerLine: string;
+}
+
+/**
+ * Assembles a bulk-update review response — `session`'s own stored header line, the table (current
+ * `rows`, which may differ from `session.rows` right after a toggle), and the confirm/cancel/toggle
+ * footer — shared by both the initial render and every toggle-resume render so they can't drift
+ * apart (code-review fix).
+ */
+export function buildBulkUpdateReviewMessage(headerLine: string, rows: BulkUpdateReviewRow[]): string {
+  return (
+    `${headerLine}\n\n` +
+    buildBulkUpdateReviewTable(rows) +
+    `\n\nReply ${buildChatCommandLink('Post it', '@jira', 'post it')} to apply, ` +
+    `${buildChatCommandLink('Cancel', '@jira', 'cancel')} to cancel, or list keys to toggle (e.g. \`skip PROJ-2\`).`
+  );
 }
 
 export interface FieldUpdatePreviewSession {
@@ -456,7 +507,11 @@ export type BulkUpdateReviewParseResult =
   | { action: 'toggle'; keys: string[] }
   | { action: 'invalid' };
 
-const TICKET_KEY_TOKEN = /^[A-Z][A-Z0-9]+-\d+$/i;
+// Code-review fix: derived from branchParser.ts's own TICKET_ID_PATTERN (one source of truth for
+// the Jira ticket-key shape) rather than a second, independently-typed copy — anchored for a
+// full-token match and case-insensitive, since this validates a typed/click-generated toggle
+// token, not an arbitrary branch name.
+const TICKET_KEY_TOKEN = new RegExp(`^${TICKET_ID_PATTERN.source}$`, 'i');
 
 export function parseBulkUpdateReview(reply: string): BulkUpdateReviewParseResult {
   const trimmed = reply.trim();

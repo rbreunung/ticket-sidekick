@@ -259,6 +259,6 @@ export async function handleRunCleanup(
   const table = buildReviewTable(batchSession, baseUrl, (fieldId) =>
     logDiag('jira.cleanup', 'warn', `Unrecognized field in cleanupFields: ${fieldId}`, { fieldId }),
   );
-  stream.markdown(`${buffer.join('')}${header}\n\n${table}`);
+  stream.markdown(trustedChatMarkdown(`${buffer.join('')}${header}\n\n${table}`));
   return { metadata: { jiraSession: { kinds: ['transition-review'] } } };
 }

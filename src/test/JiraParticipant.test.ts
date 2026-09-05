@@ -4,7 +4,7 @@ vi.mock('vscode', () => ({
   window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
 }));
 
-import { extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseSkipInput, applyTicketToggle, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, resolveTemplateIssueType, formatIssueTypeOptionLabel, formatIssueTypeInlinePhrase, NO_ISSUE_TYPE, buildImportReviewTable, parseReviewInput, applyReviewToggle, VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION, buildBulkUpdateReviewTable, applyBulkUpdateToggle, type VeracodeReviewRow, type BulkUpdateReviewRow } from '../participant/sessionState';
+import { extractLastTicketFromText, isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseSkipInput, applyTicketToggle, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, resolveTemplateIssueType, formatIssueTypeOptionLabel, formatIssueTypeInlinePhrase, NO_ISSUE_TYPE, buildImportReviewTable, parseReviewInput, applyReviewToggle, VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION, buildBulkUpdateReviewTable, buildBulkUpdateReviewMessage, applyBulkUpdateToggle, type VeracodeReviewRow, type BulkUpdateReviewRow } from '../participant/sessionState';
 import type { WaltzReviewRow } from '../utils/waltzReport';
 import { isPointerPrompt } from '../participant/jira/llmHelpers';
 import type { TransitionBatchTicket } from '../participant/sessionState';
@@ -245,6 +245,28 @@ describe('parseSkipInput', () => {
   it('also recognizes other shared confirmation/cancellation words, not just ok/c/cancel', () => {
     expect(parseSkipInput('yes', tickets)).toEqual({ action: 'ok' });
     expect(parseSkipInput('stop', tickets)).toEqual({ action: 'cancel' });
+  });
+
+  it('code-review fix: resolves a full key unambiguously even when its numeric suffix collides with a ticket from a different project', () => {
+    const crossProjectTickets: TransitionBatchTicket[] = [
+      { key: 'ABC-11', summary: 'A', currentStatus: 'Open', transitionPath: [], subtasks: [], included: true },
+      { key: 'XYZ-11', summary: 'B', currentStatus: 'Open', transitionPath: [], subtasks: [], included: true },
+    ];
+    const result = parseSkipInput('ABC-11', crossProjectTickets);
+    expect(result).toEqual({ action: 'toggle', keys: ['ABC-11'] });
+  });
+
+  it('code-review fix: a bare numeric suffix that collides across projects is never guessed at (would otherwise silently toggle the wrong ticket)', () => {
+    const crossProjectTickets: TransitionBatchTicket[] = [
+      { key: 'ABC-11', summary: 'A', currentStatus: 'Open', transitionPath: [], subtasks: [], included: true },
+      { key: 'XYZ-11', summary: 'B', currentStatus: 'Open', transitionPath: [], subtasks: [], included: true },
+    ];
+    expect(parseSkipInput('11', crossProjectTickets)).toEqual({ action: 'invalid' });
+  });
+
+  it('a bare numeric suffix still resolves normally when it is unambiguous in the batch', () => {
+    const result = parseSkipInput('10', tickets);
+    expect(result).toMatchObject({ action: 'toggle' });
   });
 });
 
@@ -645,6 +667,27 @@ describe('buildBulkUpdateReviewTable', () => {
     expect(table).not.toContain('[Evil](command:');
     expect(table).not.toContain('[Fine](command:');
     expect(table).toContain('Evil］(command:');
+  });
+});
+
+describe('buildBulkUpdateReviewMessage (code-review fix: shared render for initial + toggle-resume)', () => {
+  it('includes the given header line verbatim, the table, and the confirm/cancel/toggle footer', () => {
+    const rows: BulkUpdateReviewRow[] = [
+      { key: 'PROJ-1', summary: 'Fix login bug', currentValueDisplay: 'High', included: true },
+    ];
+    const message = buildBulkUpdateReviewMessage('**Bulk update: Priority → High**\n(1 tickets)', rows);
+    expect(message).toContain('**Bulk update: Priority → High**\n(1 tickets)');
+    expect(message).toContain('| Key | Summary | Current value | Update? |');
+    expect(message).toContain('[Post it](command:workbench.action.chat.open?');
+    expect(message).toContain('[Cancel](command:workbench.action.chat.open?');
+  });
+
+  it('reflects a toggled row\'s state, since the caller passes the post-toggle rows', () => {
+    const rows: BulkUpdateReviewRow[] = [
+      { key: 'PROJ-1', summary: 'Fix login bug', currentValueDisplay: 'High', included: false },
+    ];
+    const message = buildBulkUpdateReviewMessage('**Bulk update: Priority → High**', rows);
+    expect(message).toContain('_excluded_');
   });
 });
 

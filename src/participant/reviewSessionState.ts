@@ -187,6 +187,26 @@ export function neutralizeMarkdownLinks(value: string): string {
   return value.replace(/\[/g, '［').replace(/\]/g, '］');
 }
 
+/**
+ * U7/R10/KTD3: wraps each finding's own heading (returned by `PrReviewService.formatReview()`
+ * alongside its assembled markdown) in a command-link resubmitting `#<id>` — the exact text
+ * `parseFollowUpIntent()`'s explain path already accepts, so clicking a finding's heading produces
+ * the same answer as typing a reference to it (R5). Every finding's heading is already unique (each
+ * embeds its own `#<id>`), so a plain string replace can't cross-match a different finding.
+ * `formatReview()` already neutralized every untrusted string embedded in its markdown (title, file
+ * path, PR title/author) before this function ever runs, so wrapping the result in a trusted
+ * MarkdownString (the caller's job, `BitbucketParticipant.ts`) is safe. Pure — moved here (rather
+ * than staying a `BitbucketParticipant.ts`-local function) so it's Vitest-loadable per CLAUDE.md's
+ * testing rule (code-review fix).
+ */
+export function composeReviewOutput(result: { markdown: string; findingHeadings: Array<{ id: number; heading: string }> }): string {
+  let output = result.markdown;
+  for (const { id, heading } of result.findingHeadings) {
+    output = output.replace(heading, buildChatCommandLink(heading, '@bitbucket', `#${id}`));
+  }
+  return output;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Pure helpers for `bitbucket_*` Language Model tools (`src/tools/bitbucketTools.ts`, U3) —
 // result formatting and confirmation-text building kept here so they stay Vitest-loadable,

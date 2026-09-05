@@ -208,14 +208,10 @@ export async function handleAwaitNameReply(
     stream.markdown('_Cancelled — no template was saved._');
     return;
   }
+  // Code-review fix: re-stream the exact same ask instead of duplicating its body — the two can no
+  // longer drift apart, and re-uses streamAwaitName's own ws.update() (idempotent — same session).
   if (parsed.action === 'empty') {
-    // KTD3: this ask's cancel check is isExplicitCancelToken() (literal "(c)"), not isCancellation()'s
-  // broader word list — the link resubmits "(c)" itself so the click reproduces exactly what
-  // already works, without touching that parser (Risks section).
-  stream.markdown(trustedChatMarkdown(
-    `What should the new template be named?\n\nReply with a name, or ${buildChatCommandLink('Cancel', '@jira', '(c)')}.`,
-  ));
-    return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.awaitName] } } };
+    return streamAwaitName(session, stream, ws);
   }
 
   await ws.update(TEMPLATE_GEN_SESSION_KEYS.awaitName, undefined);
