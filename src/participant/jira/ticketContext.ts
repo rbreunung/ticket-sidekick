@@ -2,9 +2,10 @@ import * as vscode from 'vscode';
 import { execSync } from 'child_process';
 import { extractTicketId } from '../../utils/branchParser';
 import {
-  extractLastTicketFromText, NO_ISSUE_TYPE, CURRENT_SESSION_SCHEMA_VERSION,
+  extractLastTicketFromText, NO_ISSUE_TYPE, CURRENT_SESSION_SCHEMA_VERSION, buildChatCommandLink,
   type AwaitIssueTypeResume, type AwaitIssueTypeSession, type JiraSessionContinuity,
 } from '../sessionState';
+import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 
 // workspaceState key for the shared issue-type chat-ask (R6/KTD4) — one session type shared by
 // every flow that resolves an issue type before creating a ticket. See docs/jira-flows.md.
@@ -96,9 +97,12 @@ export async function streamAwaitIssueType(
   ws: vscode.Memento,
 ): Promise<vscode.ChatResult> {
   await ws.update(AWAIT_ISSUE_TYPE_SESSION_KEY, session);
-  stream.markdown(
-    `What issue type should this use (e.g. Bug, Story, Task)?\n\nReply with a type, or **(c)** to cancel.`,
-  );
+  // KTD3: this ask's cancel check is isExplicitCancelToken() (literal "(c)"), not isCancellation()'s
+  // broader word list — the link resubmits "(c)" itself so the click reproduces exactly what
+  // already works, without touching that parser (Risks section).
+  stream.markdown(trustedChatMarkdown(
+    `What issue type should this use (e.g. Bug, Story, Task)?\n\nReply with a type, or ${buildChatCommandLink('Cancel', '@jira', '(c)')}.`,
+  ));
   return { metadata: { jiraSession: { kinds: ['await-issue-type'] } } };
 }
 

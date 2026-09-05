@@ -6,7 +6,8 @@ import { loadWorkflowCache, findPath } from '../../services/WorkflowService';
 import { TemplateService } from '../../templates/TemplateService';
 import type { CleanupRule } from '../../templates/TemplateService';
 import type { TransitionBatchSession, TransitionBatchTicket, ResolutionSelectionSession } from '../sessionState';
-import { buildReviewTable, parseResolutionSelection, parseSkipInput } from '../sessionState';
+import { buildReviewTable, parseResolutionSelection, parseSkipInput, buildChatCommandLink } from '../sessionState';
+import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import type { ParsedIntent } from './llmHelpers';
 
 /** Reads each configured `cleanupFields` ID off an issue's `fields` into a ticket/subtask's `.extra` bag. */
@@ -28,7 +29,7 @@ export async function streamReviewScreen(
   const table = buildReviewTable(session, baseUrl, (fieldId) =>
     logDiag('jira.cleanup', 'warn', `Unrecognized field in cleanupFields: ${fieldId}`, { fieldId }),
   );
-  stream.markdown(`${header}\n\n${table}`);
+  stream.markdown(trustedChatMarkdown(`${header}\n\n${table}`));
   return { metadata: { jiraSession: { kinds: ['transition-review'] } } };
 }
 
@@ -232,8 +233,11 @@ export async function handleRunCleanup(
         fieldMeta: cleanupFieldMeta,
       };
       await workspaceState.update('jira.session.resolutionSelection', resSession);
-      const list = resolutions.map((r, i) => `${i + 1}. ${r.name}`).join('\n');
-      stream.markdown(`Which resolution should be set when transitioning to **${targetState}**?\n\n${list}\n\nReply with the name or number, or **none** to skip setting a resolution.`);
+      const list = resolutions.map((r, i) => `${i + 1}. ${buildChatCommandLink(r.name, '@jira', String(i + 1))}`).join('\n');
+      stream.markdown(trustedChatMarkdown(
+        `Which resolution should be set when transitioning to **${targetState}**?\n\n${list}\n\n` +
+        `Reply with the name or number, or ${buildChatCommandLink('None', '@jira', 'none')} to skip setting a resolution.`,
+      ));
       return { metadata: { jiraSession: { kinds: ['resolution-selection'] } } };
     }
   }

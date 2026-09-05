@@ -5,6 +5,7 @@ vi.mock('vscode', () => ({
     workspaceFolders: [{ uri: { fsPath: '/workspace' } }],
   },
   window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
+  MarkdownString: class { constructor(public value = '') {} isTrusted?: unknown; },
 }));
 
 vi.mock('../services/WorkflowService', () => ({
@@ -29,6 +30,13 @@ import { TicketService } from '../services/TicketService';
 
 const mockStream = () => ({ markdown: vi.fn() });
 const mockWs = () => ({ get: vi.fn(), update: vi.fn() });
+
+// streamReviewScreen now streams a trusted vscode.MarkdownString (its footer contains command
+// links, U5) rather than a bare string — this file's mocked MarkdownString stores the raw text on
+// `.value`, so callers reading the streamed output as a plain string go through this helper.
+function markdownText(arg: unknown): string {
+  return typeof arg === 'string' ? arg : (arg as { value: string }).value;
+}
 
 const dummyPath = [{ id: '1', name: 'Go', to: 'Done' }];
 
@@ -70,7 +78,7 @@ describe('streamReviewScreen', () => {
 
     await streamReviewScreen(session, stream as never, ws as never, '**Cleanup**');
 
-    const rendered: string = stream.markdown.mock.calls[0][0];
+    const rendered: string = markdownText(stream.markdown.mock.calls[0][0]);
     // Table row should include the resolution in its own column
     expect(rendered).toContain('| Fixed |');
     // Arrow still present in the → To column area
@@ -90,7 +98,7 @@ describe('streamReviewScreen', () => {
 
     await streamReviewScreen(session, stream as never, ws as never, '**Cleanup**');
 
-    const rendered: string = stream.markdown.mock.calls[0][0];
+    const rendered: string = markdownText(stream.markdown.mock.calls[0][0]);
     // Subtask should show its own resolution
     expect(rendered).toContain('PROJ-2');
     expect(rendered).toContain('Cannot Reproduce');
@@ -115,7 +123,7 @@ describe('streamReviewScreen', () => {
 
     await streamReviewScreen(session, stream as never, ws as never, '**Cleanup**');
 
-    const rendered: string = stream.markdown.mock.calls[0][0];
+    const rendered: string = markdownText(stream.markdown.mock.calls[0][0]);
     const lines = rendered.split('\n');
     const subtaskLine = lines.find((l) => l.includes('PROJ-2'));
     expect(subtaskLine).toBeDefined();
@@ -136,7 +144,7 @@ describe('streamReviewScreen', () => {
 
     await streamReviewScreen(session, stream as never, ws as never, '**Cleanup**');
 
-    const rendered: string = stream.markdown.mock.calls[0][0];
+    const rendered: string = markdownText(stream.markdown.mock.calls[0][0]);
     // Neither parent nor subtask arrow should have a parenthesised resolution suffix
     const lines = rendered.split('\n');
     const ticketLines = lines.filter((l) => l.includes('→'));
@@ -764,7 +772,7 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
     const resumeStream = mockStream();
     const resumeWs = mockWs();
     await streamReviewScreen(stored, resumeStream as never, resumeWs as never, '**Cleanup**');
-    const resumeOutput = resumeStream.markdown.mock.calls[0][0] as string;
+    const resumeOutput = markdownText(resumeStream.markdown.mock.calls[0][0]);
     expect(resumeOutput).toContain('| Fix Version |');
     expect(resumeOutput).toContain('2.0');
   });
@@ -841,15 +849,17 @@ describe('buildReviewTable', () => {
     expect(subtaskLine).toContain('Sub-task');
   });
 
-  it('includes footer prompt line', () => {
+  it('includes a clickable footer prompt line (post it / cancel)', () => {
     const session = makeSession({ tickets: [makeTicket('PROJ-1')] });
-    expect(buildReviewTable(session)).toContain('post it · (c) · key numbers to skip');
+    const table = buildReviewTable(session);
+    expect(table).toContain('key numbers to skip');
+    expect(table).toContain('[post it](command:workbench.action.chat.open?');
+    expect(table).toContain('[(c)](command:workbench.action.chat.open?');
   });
 
   it('renders keys as bare text when no baseUrl is given', () => {
     const session = makeSession({ tickets: [makeTicket('PROJ-1')] });
     expect(buildReviewTable(session)).toContain('| PROJ-1 |');
-    expect(buildReviewTable(session)).not.toContain('](');
   });
 
   it('renders parent and subtask keys as clickable links when baseUrl is given', () => {

@@ -11,6 +11,7 @@ vi.mock('vscode', () => ({
     createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })),
   },
   Uri: { file: (p: string) => ({ fsPath: p }) },
+  MarkdownString: class { constructor(public value = '') {} isTrusted?: unknown; },
 }));
 
 vi.mock('../templates/TemplateService', () => ({
@@ -163,7 +164,10 @@ describe('handleImportTemplateSelection (never-guess sentinel detour, R6/KTD4)',
     // Session was already cleared before the detour (mirrors the create-ticket/email-import pattern).
     expect(ws.store[descriptor.sessionKeys.templateSelection]).toBeUndefined();
     expect(ws.store[AWAIT_ISSUE_TYPE_SESSION_KEY]).toBeDefined();
-    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
+    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => {
+      const arg = c[0];
+      return typeof arg === 'string' ? arg : (arg as { value: string }).value;
+    });
     expect(calls.some(c => c.includes('What issue type'))).toBe(true);
     expect(searchSpy).not.toHaveBeenCalled(); // dedup search hasn't run yet — only after the reply resumes
   });

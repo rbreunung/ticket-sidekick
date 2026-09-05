@@ -47,7 +47,8 @@ import type {
   TemplateGenerationOfferCreateSession, TemplateGenerationAwaitSummarySession,
 } from './sessionState';
 import { AWAIT_ISSUE_TYPE_SESSION_KEY } from './jira/ticketContext';
-import { parseAwaitFreeTextReply, type AwaitIssueTypeSession } from './sessionState';
+import { parseAwaitFreeTextReply, type AwaitIssueTypeSession, buildChatCommandLink } from './sessionState';
+import { trustedChatMarkdown } from '../utils/chatMarkdown';
 import { handleVeracodeAwaitIssueType } from './jira/veracodeHandler';
 import { handleWaltzAwaitIssueType } from './jira/waltzHandler';
 import { handleEmailAwaitIssueType } from './jira/emailHandler';
@@ -182,8 +183,10 @@ export function createJiraParticipant(
       if (selSession) {
         const choice = parseResolutionSelection(request.prompt, selSession.resolutionOptions);
         if (choice === 'invalid') {
-          const list = selSession.resolutionOptions.map((r, i) => `${i + 1}. ${r}`).join('\n');
-          stream.markdown(`Please choose a resolution:\n\n${list}\n\nReply with name or number, or **none** to skip.`);
+          const list = selSession.resolutionOptions.map((r, i) => `${i + 1}. ${buildChatCommandLink(r, '@jira', String(i + 1))}`).join('\n');
+          stream.markdown(trustedChatMarkdown(
+            `Please choose a resolution:\n\n${list}\n\nReply with name or number, or ${buildChatCommandLink('None', '@jira', 'none')} to skip.`,
+          ));
           return { metadata: { jiraSession: { kinds: ['resolution-selection'] } } };
         }
         await ws.update('jira.session.resolutionSelection', undefined);
@@ -232,8 +235,10 @@ export function createJiraParticipant(
       if (selSession) {
         const choice = parseFilterSelection(request.prompt, selSession.filters);
         if (choice === 'invalid') {
-          const list = selSession.filters.map((f, i) => `${i + 1}. ${f.name}`).join('\n');
-          stream.markdown(`Please choose a filter:\n\n${list}\n\nReply with the number or name, or **(c)** to cancel.`);
+          const list = selSession.filters.map((f, i) => `${i + 1}. ${buildChatCommandLink(f.name, '@jira', String(i + 1))}`).join('\n');
+          stream.markdown(trustedChatMarkdown(
+            `Please choose a filter:\n\n${list}\n\nReply with the number or name, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+          ));
           return { metadata: { jiraSession: { kinds: ['selecting-filter'] } } };
         }
         await ws.update('jira.session.filterSelection', undefined);
@@ -330,7 +335,12 @@ export function createJiraParticipant(
           return;
         }
         if (parsed.action === 'empty') {
-          stream.markdown(`What issue type should this use (e.g. Bug, Story, Task)?\n\nReply with a type, or **(c)** to cancel.`);
+          // KTD3: this ask's cancel check is isExplicitCancelToken() (literal "(c)"), not
+          // isCancellation()'s broader word list — the link resubmits "(c)" itself so the click
+          // reproduces exactly what already works, without touching that parser (Risks section).
+          stream.markdown(trustedChatMarkdown(
+            `What issue type should this use (e.g. Bug, Story, Task)?\n\nReply with a type, or ${buildChatCommandLink('Cancel', '@jira', '(c)')}.`,
+          ));
           return { metadata: { jiraSession: { kinds: ['await-issue-type'] } } };
         }
 
@@ -426,8 +436,13 @@ export function createJiraParticipant(
         }
         const idx = parseInt(trimmed, 10);
         if (isNaN(idx) || idx < 1 || idx > sprintSession.candidates.length) {
-          const list = sprintSession.candidates.map((s, i) => `${i + 1}. ${s.name} (${s.state})`).join('\n');
-          stream.markdown(`Please reply with a number (1–${sprintSession.candidates.length}):\n\n${list}`);
+          const list = sprintSession.candidates.map((s, i) =>
+            `${i + 1}. ${buildChatCommandLink(`${s.name} (${s.state})`, '@jira', String(i + 1))}`,
+          ).join('\n');
+          stream.markdown(trustedChatMarkdown(
+            `Please reply with a number (1–${sprintSession.candidates.length}):\n\n${list}\n\n` +
+            `or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+          ));
           return { metadata: { jiraSession: { kinds: ['sprint-selection'] } } };
         }
         await ws.update('jira.session.sprintSelection', undefined);
@@ -458,8 +473,12 @@ export function createJiraParticipant(
           ? fieldSelSession.candidates[idx - 1]
           : fieldSelSession.candidates.find(f => f.name.toLowerCase() === trimmed.toLowerCase());
         if (!chosen) {
-          const list = fieldSelSession.candidates.map((f, i) => `${i + 1}. ${f.name} (\`${f.id}\`)`).join('\n');
-          stream.markdown(`Please reply with a number:\n\n${list}`);
+          const list = fieldSelSession.candidates.map((f, i) =>
+            `${i + 1}. ${buildChatCommandLink(`${f.name} (\`${f.id}\`)`, '@jira', String(i + 1))}`,
+          ).join('\n');
+          stream.markdown(trustedChatMarkdown(
+            `Please reply with a number:\n\n${list}\n\nor ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+          ));
           return { metadata: { jiraSession: { kinds: ['field-selection'] } } };
         }
         await ws.update('jira.session.fieldSelection', undefined);
@@ -509,7 +528,9 @@ export function createJiraParticipant(
           return;
         }
         // Not ok or cancel — re-present
-        stream.markdown(`Please reply **post it** to apply, or **(c)** to cancel.`);
+        stream.markdown(trustedChatMarkdown(
+          `Please reply ${buildChatCommandLink('Post it', '@jira', 'post it')} to apply, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+        ));
         await ws.update('jira.session.fieldUpdatePreview', previewSession);
         return { metadata: { jiraSession: { kinds: ['field-update-preview'] } } };
       }
@@ -559,13 +580,15 @@ export function createJiraParticipant(
       if (loadSkippedSession) {
         const selection = parseSkippedAttachmentSelection(request.prompt, loadSkippedSession.skipped.length);
         const skippedList = (items: LoadSkippedSession['skipped']) => items
-          .map((s, i) => `${i + 1}. \`${s.filename}\` — ${formatFileSize(s.size)} (${s.mimeType}) — ${s.reason}`)
+          .map((s, i) => `${i + 1}. ${buildChatCommandLink(`\`${s.filename}\` — ${formatFileSize(s.size)} (${s.mimeType}) — ${s.reason}`, '@jira', String(i + 1))}`)
           .join('\n');
         if (selection === 'not-a-selection') {
           await ws.update('jira.session.loadSkipped', undefined);
           // fall through to intent parsing
         } else if (selection === 'out-of-range') {
-          stream.markdown(`Please reply with a number:\n\n${skippedList(loadSkippedSession.skipped)}\n\nReply with a number to download it anyway.`);
+          stream.markdown(trustedChatMarkdown(
+            `Please reply with a number:\n\n${skippedList(loadSkippedSession.skipped)}\n\nReply with a number to download it anyway.`,
+          ));
           return { metadata: { jiraSession: { kinds: ['load-skipped'] } } };
         } else {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
@@ -595,7 +618,10 @@ export function createJiraParticipant(
           const remaining = loadSkippedSession.skipped.filter((_, i) => !downloadedSet.has(i));
           if (remaining.length > 0) {
             await ws.update('jira.session.loadSkipped', { ticketKey: loadSkippedSession.ticketKey, skipped: remaining } satisfies LoadSkippedSession);
-            stream.markdown(`${lines.join('\n')}\n\n**Remaining skipped attachments:**\n\n${skippedList(remaining)}\n\nReply with a number to download another.\n\n<!-- @jira-ticket:${loadSkippedSession.ticketKey} -->`);
+            stream.markdown(trustedChatMarkdown(
+              `${lines.join('\n')}\n\n**Remaining skipped attachments:**\n\n${skippedList(remaining)}\n\n` +
+              `Reply with a number to download another.\n\n<!-- @jira-ticket:${loadSkippedSession.ticketKey} -->`,
+            ));
             return { metadata: { jiraSession: { kinds: ['load-skipped'] } } };
           } else {
             await ws.update('jira.session.loadSkipped', undefined);
@@ -617,7 +643,10 @@ export function createJiraParticipant(
       if (bulkSession) {
         const decision = parseBulkUpdateReview(request.prompt);
         if (decision.action === 'invalid') {
-          stream.markdown(`Didn't understand that. Reply **post it** to apply, **(c)** to cancel, or \`skip KEY1 KEY2\` to skip specific tickets.`);
+          stream.markdown(trustedChatMarkdown(
+            `Didn't understand that. Reply ${buildChatCommandLink('Post it', '@jira', 'post it')} to apply, ` +
+            `${buildChatCommandLink('Cancel', '@jira', 'cancel')} to cancel, or \`skip KEY1 KEY2\` to skip specific tickets.`,
+          ));
           return { metadata: { jiraSession: { kinds: ['bulk-update-review'] } } };
         }
         await ws.update('jira.session.bulkUpdateReview', undefined);
@@ -1128,8 +1157,10 @@ export function createJiraParticipant(
             } else {
               const session: FilterSelectionSession = { filters, originalPrompt: request.prompt };
               await ws.update('jira.session.filterSelection', session);
-              const list = filters.map((f, i) => `${i + 1}. ${f.name}`).join('\n');
-              stream.markdown(`Multiple filters match "${intent.filterName}":\n\n${list}\n\nWhich one? Reply with the number or name, or **(c)** to cancel.`);
+              const list = filters.map((f, i) => `${i + 1}. ${buildChatCommandLink(f.name, '@jira', String(i + 1))}`).join('\n');
+              stream.markdown(trustedChatMarkdown(
+                `Multiple filters match "${intent.filterName}":\n\n${list}\n\nWhich one? Reply with the number or name, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+              ));
               return { metadata: { jiraSession: { kinds: ['selecting-filter'] } } };
             }
           } else if (intent.useMyTeamJql) {
@@ -1330,13 +1361,14 @@ export function createJiraParticipant(
             arrayOp: 'set',
           };
           await ws.update('jira.session.bulkUpdateReview', bulkSession);
-          stream.markdown(
+          stream.markdown(trustedChatMarkdown(
             `**Bulk update: ${intent.bulkFieldName} → ${intent.bulkFieldValue}**\n` +
             `(${searchSession.ticketKeys.length} tickets)\n\n` +
             (config.baseUrl ? `[View in Jira](${config.baseUrl}/issues/?jql=${encodeURIComponent(searchSession.jql)})\n\n` : '') +
             buildBulkUpdateReviewTable(reviewRows) +
-            `\n\nReply **post it** to apply, **(c)** to cancel, or list keys to skip (e.g. \`skip PROJ-2\`).`
-          );
+            `\n\nReply ${buildChatCommandLink('Post it', '@jira', 'post it')} to apply, ` +
+            `${buildChatCommandLink('Cancel', '@jira', 'cancel')} to cancel, or list keys to skip (e.g. \`skip PROJ-2\`).`,
+          ));
           return { metadata: { jiraSession: { kinds: ['bulk-update-review'] } } };
         }
         case 'loadTicket': {

@@ -33,6 +33,7 @@ vi.mock('vscode', () => ({
     getConfiguration: vi.fn(() => ({ get: () => 'https://jira.example.com' })),
   },
   window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
+  MarkdownString: class { constructor(public value = '') {} isTrusted?: unknown; },
 }));
 
 import * as vscode from 'vscode';

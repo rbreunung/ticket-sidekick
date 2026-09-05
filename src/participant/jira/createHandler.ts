@@ -6,10 +6,11 @@ import { TemplateService } from '../../templates/TemplateService';
 import type { JiraTemplate } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
 import type { ContentSession, CreationSession, CreateSelectionSession } from '../sessionState';
-import { NO_ISSUE_TYPE, resolveTemplateIssueType, formatIssueTypeOptionLabel } from '../sessionState';
+import { NO_ISSUE_TYPE, resolveTemplateIssueType, formatIssueTypeOptionLabel, buildChatCommandLink } from '../sessionState';
 import { streamContentPreview } from './contentHandler';
 import { parseIntent, looksLikeUnfilledPlaceholder } from './llmHelpers';
 import { resolveProjectKey, resolveIssueTypeOrPrompt } from './ticketContext';
+import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 
 async function sendAndCollect(
   model: vscode.LanguageModelChat,
@@ -191,13 +192,19 @@ export async function streamCreateSelection(
   await workspaceState.update('jira.session.creatingSelection', session);
   let optionsList = '';
   if (session.templates.length > 0) {
-    optionsList += `**Templates:**\n${session.templates.map((t, i) => `${i + 1}. ${t.name} _(${formatIssueTypeOptionLabel(t.issueType)})_`).join('\n')}\n\n`;
+    optionsList += `**Templates:**\n${session.templates.map((t, i) =>
+      `${i + 1}. ${buildChatCommandLink(`${t.name} _(${formatIssueTypeOptionLabel(t.issueType)})_`, '@jira', String(i + 1))}`,
+    ).join('\n')}\n\n`;
   }
   if (session.issueTypes.length > 0) {
     const offset = session.templates.length;
-    optionsList += `**Issue types (no template):**\n${session.issueTypes.map((t, i) => `${offset + i + 1}. ${formatIssueTypeOptionLabel(t)}`).join('\n')}\n\n`;
+    optionsList += `**Issue types (no template):**\n${session.issueTypes.map((t, i) =>
+      `${offset + i + 1}. ${buildChatCommandLink(formatIssueTypeOptionLabel(t), '@jira', String(offset + i + 1))}`,
+    ).join('\n')}\n\n`;
   }
-  stream.markdown(`${optionsList}Reply with a number to select a template or issue type, or **(c)** to cancel.`);
+  stream.markdown(trustedChatMarkdown(
+    `${optionsList}Reply with a number to select a template or issue type, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+  ));
   return { metadata: { jiraSession: { kinds: ['selecting-create-option'] } } };
 }
 

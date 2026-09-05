@@ -6,7 +6,8 @@ import type { JiraAttachment, JiraComment, JiraFieldMeta, JiraIssue, JiraRemoteL
 import { formatIssueFields, formatKeyLink } from '../../services/TicketService';
 import type { TicketService } from '../../services/TicketService';
 import type { LoadSkippedSession } from '../sessionState';
-import { rewriteAttachmentLinks } from '../sessionState';
+import { rewriteAttachmentLinks, buildChatCommandLink } from '../sessionState';
+import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 
 export function serializeCommentsForLLM(comments: JiraComment[]): string {
   return comments.map((c) => {
@@ -252,8 +253,12 @@ export async function handleLoadTicket(
   stream.markdown(summaryLines.join('\n'));
 
   if (skipped.length > 0) {
-    const listLines = skipped.map((s, i) => `${i + 1}. \`${s.filename}\` — ${formatFileSize(s.size)} (${s.mimeType}) — ${s.reason}`);
-    stream.markdown(`\n\n**Skipped attachments:**\n\n${listLines.join('\n')}\n\nReply with a number to download it anyway.`);
+    const listLines = skipped.map((s, i) =>
+      `${i + 1}. ${buildChatCommandLink(`\`${s.filename}\` — ${formatFileSize(s.size)} (${s.mimeType}) — ${s.reason}`, '@jira', String(i + 1))}`,
+    );
+    stream.markdown(trustedChatMarkdown(
+      `\n\n**Skipped attachments:**\n\n${listLines.join('\n')}\n\nReply with a number to download it anyway.`,
+    ));
     await ws.update('jira.session.loadSkipped', { ticketKey, skipped } satisfies LoadSkippedSession);
     stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
     return true;

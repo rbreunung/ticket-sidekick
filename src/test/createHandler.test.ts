@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('vscode', () => ({
   window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
+  MarkdownString: class { constructor(public value = '') {} isTrusted?: unknown; },
 }));
 vi.mock('../participant/jira/llmHelpers', () => ({
   parseIntent: vi.fn(),
@@ -73,7 +74,9 @@ describe('streamCreateSelection', () => {
     const chatResult = await streamCreateSelection(session, stream as never, ws as never);
 
     expect(ws.update).toHaveBeenCalledWith('jira.session.creatingSelection', session);
-    const allMarkdown = stream.markdown.mock.calls.map((c: string[]) => c[0]).join('');
+    const allMarkdown = stream.markdown.mock.calls
+      .map((c: unknown[]) => { const arg = c[0]; return typeof arg === 'string' ? arg : (arg as { value: string }).value; })
+      .join('');
     expect(allMarkdown).toContain('Billing Bug');
     expect(allMarkdown).not.toContain('<!-- jira:');
     expect(chatResult.metadata?.jiraSession?.kinds).toEqual(['selecting-create-option']);

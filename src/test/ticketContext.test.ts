@@ -20,6 +20,7 @@ vi.mock('vscode', () => {
     ChatResponseTurn: MockResponseTurn,
     ChatResponseMarkdownPart: MockMarkdownPart,
     window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
+    MarkdownString: class { constructor(public value = '') {} isTrusted?: unknown; },
   };
 });
 

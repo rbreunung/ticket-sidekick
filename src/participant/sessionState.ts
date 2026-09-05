@@ -168,7 +168,8 @@ export function buildReviewTable(
     ),
   ];
 
-  return renderReviewTable(columns, flatRows) + '\n\npost it · (c) · key numbers to skip (e.g. 11 14)';
+  return renderReviewTable(columns, flatRows) + '\n\n' +
+    `${buildChatCommandLink('post it', '@jira', 'post it')} · ${buildChatCommandLink('(c)', '@jira', 'cancel')} · key numbers to skip (e.g. 11 14)`;
 }
 
 export interface ResolutionSelectionSession {
