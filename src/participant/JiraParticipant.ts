@@ -7,14 +7,14 @@ import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { tokenStatus } from '../utils/diagUtils';
 import { logDiag } from '../utils/diagLog';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, type JiraFollowupState, isConfirmation, isCancellation, isGreetingOrEmpty, computeJiraFollowups, pickEmailOption, parseSkipInput, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewTable } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, type JiraFollowupState, type JiraSessionKind, isConfirmation, isCancellation, isGreetingOrEmpty, computeJiraFollowups, pickEmailOption, parseSkipInput, applyTicketToggle, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, applyBulkUpdateToggle, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewMessage } from './sessionState';
 import { findPath, resolveAndApplyTransition } from '../services/WorkflowService';
 import type { WorkflowGraph } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
 import type { Operation, ParsedIntent } from './jira/llmHelpers';
 import { parseIntent, extractFixVersionFromPrompt, generateContent, isLmRefusal, synthesizeComments, generateDescriptionAndCommentsSummary, isPointerPrompt, extractLastAssistantText, mapCommandToOperation } from './jira/llmHelpers';
 import { streamFieldUpdatePreview, continueSetField, handleSetField, handleSpellCheck } from './jira/fieldHandler';
-import { getLastAssistantText, resolveTicketFromBranch, resolveProjectKey, resolveIssueTypeOrPrompt, parseLastTicketFromContext, sessionWasSuperseded } from './jira/ticketContext';
+import { getActiveJiraSession, resolveTicketFromBranch, resolveProjectKey, resolveIssueTypeOrPrompt, parseLastTicketFromContext, sessionWasSuperseded } from './jira/ticketContext';
 import { validateBaseUrl } from '../services/configValidation';
 import { gatherFileContent, buildContentContext, streamContentPreview, handleContentSession } from './jira/contentHandler';
 import { streamCreateSelection, continueAfterIssueType, streamNextSection, finishTicketCreation, handleCreateTicket } from './jira/createHandler';
@@ -37,7 +37,7 @@ import {
 } from './jira/waltzHandler';
 import type { WaltzTemplateSelectionSession, WaltzReviewSession } from './sessionState';
 import {
-  TEMPLATE_GEN_SESSION_KEYS, TEMPLATE_GEN_TAGS,
+  TEMPLATE_GEN_SESSION_KEYS, TEMPLATE_GEN_KINDS,
   handleGenerateTemplate, handleAwaitNameReply, handleTypePickReply, handleAwaitFreeTypeReply,
   handleTemplateGenReviewReply, handleTemplateGenCollisionReply, handleOfferCreateReply, handleAwaitSummaryReply,
 } from './jira/templateGenerationHandler';
@@ -46,8 +46,9 @@ import type {
   TemplateGenerationReviewSession, TemplateGenerationCollisionSession,
   TemplateGenerationOfferCreateSession, TemplateGenerationAwaitSummarySession,
 } from './sessionState';
-import { AWAIT_ISSUE_TYPE_SESSION_KEY, AWAIT_ISSUE_TYPE_TAG } from './jira/ticketContext';
-import { parseAwaitFreeTextReply, type AwaitIssueTypeSession } from './sessionState';
+import { AWAIT_ISSUE_TYPE_SESSION_KEY } from './jira/ticketContext';
+import { parseAwaitFreeTextReply, type AwaitIssueTypeSession, buildChatCommandLink } from './sessionState';
+import { trustedChatMarkdown } from '../utils/chatMarkdown';
 import { handleVeracodeAwaitIssueType } from './jira/veracodeHandler';
 import { handleWaltzAwaitIssueType } from './jira/waltzHandler';
 import { handleEmailAwaitIssueType } from './jira/emailHandler';
@@ -135,7 +136,6 @@ export function createJiraParticipant(
       (level, message, details) => logDiag('jira.ticketService', level, message, details),
     );
     const ws = context.workspaceState;
-    const lastResponse = getLastAssistantText(chatContext);
 
     // U4/R5: `/check` is the slash-command shortcut for this same check — checked
     // before the multi-turn session-tag scan below, exactly like the plain-text
@@ -175,15 +175,19 @@ export function createJiraParticipant(
       return;
     }
 
-    // Resolution selection — user replied with a resolution choice before the review screen
-    if (lastResponse.includes('<!-- jira:selecting-resolution -->')) {
+    // Resolution selection — user replied with a resolution choice before the review screen.
+    // Shared by cleanupHandler.ts (bulk-cleanup path) and the bulkTransition production site
+    // further below in this file — both now use the metadata-based liveness check (R1/R3).
+    if (getActiveJiraSession(chatContext)?.kinds.includes('resolution-selection')) {
       const selSession = ws.get<ResolutionSelectionSession>('jira.session.resolutionSelection');
       if (selSession) {
         const choice = parseResolutionSelection(request.prompt, selSession.resolutionOptions);
         if (choice === 'invalid') {
-          const list = selSession.resolutionOptions.map((r, i) => `${i + 1}. ${r}`).join('\n');
-          stream.markdown(`Please choose a resolution:\n\n${list}\n\nReply with name or number, or **none** to skip.\n\n<!-- jira:selecting-resolution -->`);
-          return;
+          const list = selSession.resolutionOptions.map((r, i) => `${i + 1}. ${buildChatCommandLink(r, '@jira', String(i + 1))}`).join('\n');
+          stream.markdown(trustedChatMarkdown(
+            `Please choose a resolution:\n\n${list}\n\nReply with name or number, or ${buildChatCommandLink('None', '@jira', 'none')} to skip.`,
+          ));
+          return { metadata: { jiraSession: { kinds: ['resolution-selection'] } } };
         }
         await ws.update('jira.session.resolutionSelection', undefined);
         const batchSession: TransitionBatchSession = {
@@ -195,29 +199,35 @@ export function createJiraParticipant(
           fieldMeta: selSession.fieldMeta,
         };
         const header = `**Cleanup${selSession.ruleName ? `: ${selSession.ruleName}` : ''}**`;
-        await streamReviewScreen(batchSession, stream, ws, header, config.baseUrl);
-        return;
+        return await streamReviewScreen(batchSession, stream, ws, header, config.baseUrl);
       }
     }
 
-    // Transition review — user replied ok/cancel/skip keys
-    if (lastResponse.includes('<!-- jira:transition-review -->')) {
+    // Transition review — user replied ok/cancel/toggle keys
+    if (getActiveJiraSession(chatContext)?.kinds.includes('transition-review')) {
       const session = ws.get<TransitionBatchSession>('jira.session.transitionReview');
       if (session) {
         const result = parseSkipInput(request.prompt, session.tickets);
+        const header = `**Cleanup${session.ruleName ? `: ${session.ruleName}` : ''}**`;
         if (result.action === 'invalid') {
-          const header = `**Cleanup${session.ruleName ? `: ${session.ruleName}` : ''}**`;
-          await streamReviewScreen(session, stream, ws, header, config.baseUrl);
-          return;
+          return await streamReviewScreen(session, stream, ws, header, config.baseUrl);
+        }
+        // R8/AE4: a toggle reply (click or typed numbers) flips included and re-renders — it never
+        // executes the batch itself, unlike the pre-U6 one-shot skip-and-run behavior.
+        if (result.action === 'toggle') {
+          const toggledSession: TransitionBatchSession = {
+            ...session,
+            tickets: applyTicketToggle(session.tickets, result.keys),
+          };
+          return await streamReviewScreen(toggledSession, stream, ws, header, config.baseUrl);
         }
         await ws.update('jira.session.transitionReview', undefined);
         if (result.action === 'cancel') {
           stream.markdown('_Cancelled — no tickets were changed._');
           return;
         }
-        const skipKeys = new Set<string>(result.action === 'skip' ? result.keys : []);
         try {
-          await executeCleanupBatch(session, skipKeys, ticketService, stream);
+          await executeCleanupBatch(session, ticketService, stream);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logDiag('jira.participant', 'error', message, {});
@@ -228,14 +238,16 @@ export function createJiraParticipant(
     }
 
     // Filter selection — user replied with their filter choice
-    if (lastResponse.includes('<!-- jira:selecting-filter -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('selecting-filter')) {
       const selSession = ws.get<FilterSelectionSession>('jira.session.filterSelection');
       if (selSession) {
         const choice = parseFilterSelection(request.prompt, selSession.filters);
         if (choice === 'invalid') {
-          const list = selSession.filters.map((f, i) => `${i + 1}. ${f.name}`).join('\n');
-          stream.markdown(`Please choose a filter:\n\n${list}\n\nReply with the number or name, or **(c)** to cancel.\n\n<!-- jira:selecting-filter -->`);
-          return;
+          const list = selSession.filters.map((f, i) => `${i + 1}. ${buildChatCommandLink(f.name, '@jira', String(i + 1))}`).join('\n');
+          stream.markdown(trustedChatMarkdown(
+            `Please choose a filter:\n\n${list}\n\nReply with the number or name, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+          ));
+          return { metadata: { jiraSession: { kinds: ['selecting-filter'] } } };
         }
         await ws.update('jira.session.filterSelection', undefined);
         if (choice === 'cancel') {
@@ -259,7 +271,7 @@ export function createJiraParticipant(
     }
 
     // Combined template/issue-type selection — user replied with their pick
-    if (lastResponse.includes('<!-- jira:selecting-create-option -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('selecting-create-option')) {
       const selSession = ws.get<CreateSelectionSession>('jira.session.creatingSelection');
       if (selSession) {
         if (isCancellation(request.prompt)) {
@@ -270,8 +282,7 @@ export function createJiraParticipant(
         const n = parseInt(request.prompt.trim(), 10);
         const pick = isNaN(n) ? null : pickEmailOption(n, selSession.templates, selSession.issueTypes);
         if (!pick) {
-          await streamCreateSelection(selSession, stream, ws);
-          return;
+          return await streamCreateSelection(selSession, stream, ws);
         }
         await ws.update('jira.session.creatingSelection', undefined);
 
@@ -281,11 +292,12 @@ export function createJiraParticipant(
         // shared chat-based ask (R6/KTD4) instead of silently creating the ticket with a guessed
         // type. AwaitIssueTypeResume carries pickedTemplateName (identity, not the resolved
         // object) so the resume path re-looks it up the same way, once the type is known.
-        const issueType = await resolveIssueTypeOrPrompt(pick.issueType, {
+        const issueTypeOrResult = await resolveIssueTypeOrPrompt(pick.issueType, {
           kind: 'create', projectKey: selSession.projectKey, summary: selSession.summary,
           description: selSession.description, extraFields: selSession.extraFields, pickedTemplateName,
         }, stream, ws);
-        if (issueType === null) return;
+        if (typeof issueTypeOrResult !== 'string') return issueTypeOrResult;
+        const issueType = issueTypeOrResult;
 
         // Looked up only now, after the detour check above — on a chat detour this result would
         // be thrown away, and its "no longer available" warning would then repeat a second time
@@ -293,7 +305,7 @@ export function createJiraParticipant(
         const selectedTemplate = await resolveTemplateByName(pickedTemplateName, stream);
 
         try {
-          await continueAfterIssueType(
+          return await continueAfterIssueType(
             selSession.projectKey, selSession.summary, issueType, selSession.description,
             selectedTemplate, request.model, stream, token, jiraClient, ticketService, ws,
             selSession.extraFields,
@@ -313,7 +325,7 @@ export function createJiraParticipant(
     // JiraParticipant.ts (not ticketContext.ts) because it needs createHandler.ts/
     // reportImportHandler.ts/emailHandler.ts's continuations, all of which already import from
     // ticketContext.ts — this avoids a require cycle while keeping ticketContext.ts a leaf module.
-    if (lastResponse.includes(AWAIT_ISSUE_TYPE_TAG)) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('await-issue-type')) {
       const session = ws.get<AwaitIssueTypeSession>(AWAIT_ISSUE_TYPE_SESSION_KEY);
       if (session) {
         if (isSessionExpired(session)) {
@@ -331,13 +343,19 @@ export function createJiraParticipant(
           return;
         }
         if (parsed.action === 'empty') {
-          stream.markdown(`What issue type should this use (e.g. Bug, Story, Task)?\n\nReply with a type, or **(c)** to cancel.\n\n${AWAIT_ISSUE_TYPE_TAG}`);
-          return;
+          // KTD3: this ask's cancel check is isExplicitCancelToken() (literal "(c)"), not
+          // isCancellation()'s broader word list — the link resubmits "(c)" itself so the click
+          // reproduces exactly what already works, without touching that parser (Risks section).
+          stream.markdown(trustedChatMarkdown(
+            `What issue type should this use (e.g. Bug, Story, Task)?\n\nReply with a type, or ${buildChatCommandLink('Cancel', '@jira', '(c)')}.`,
+          ));
+          return { metadata: { jiraSession: { kinds: ['await-issue-type'] } } };
         }
 
         await ws.update(AWAIT_ISSUE_TYPE_SESSION_KEY, undefined);
         const issueType = parsed.value;
         const { resume } = session;
+        let awaitResult: vscode.ChatResult | void = undefined;
         try {
           if (resume.kind === 'create') {
             // Mirrors the sibling branches' sessionWasSuperseded() guard — a second @jira create
@@ -351,29 +369,29 @@ export function createJiraParticipant(
               return;
             }
             const selectedTemplate = await resolveTemplateByName(resume.pickedTemplateName, stream);
-            await continueAfterIssueType(
+            awaitResult = await continueAfterIssueType(
               resume.projectKey, resume.summary, issueType, resume.description,
               selectedTemplate, request.model, stream, token, jiraClient, ticketService, ws,
               resume.extraFields,
             );
           } else if (resume.descriptorKind === 'veracode') {
-            await handleVeracodeAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws, config.baseUrl);
+            awaitResult = await handleVeracodeAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws, config.baseUrl);
           } else if (resume.descriptorKind === 'waltz') {
-            await handleWaltzAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws, config.baseUrl);
+            awaitResult = await handleWaltzAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws, config.baseUrl);
           } else {
-            await handleEmailAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws, config.baseUrl);
+            awaitResult = await handleEmailAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws, config.baseUrl);
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logDiag('jira.participant', 'error', message, {});
           stream.markdown(message);
         }
-        return;
+        return awaitResult;
       }
     }
 
     // Creation session continuation — user answered a section prompt
-    if (lastResponse.includes('<!-- jira:creating -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('creating')) {
       const session = ws.get<CreationSession>('jira.session.creating');
       if (session) {
         try {
@@ -386,9 +404,9 @@ export function createJiraParticipant(
           session.pending = session.pending.slice(1);
           if (session.pending.length === 0) {
             await ws.update('jira.session.creating', undefined);
-            await finishTicketCreation(session, stream, ws);
+            return await finishTicketCreation(session, stream, ws);
           } else {
-            await streamNextSection(session, stream, ws);
+            return await streamNextSection(session, stream, ws);
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -400,11 +418,11 @@ export function createJiraParticipant(
     }
 
     // Content session — comment/description preview awaiting confirm/refine
-    if (lastResponse.includes('<!-- jira:previewing -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('previewing')) {
       const session = ws.get<ContentSession>('jira.session.previewing');
       if (session) {
         try {
-          await handleContentSession(session, request.prompt, request.model, token, stream, ticketService, ws, config.baseUrl);
+          return await handleContentSession(session, request.prompt, request.model, token, stream, ticketService, ws, config.baseUrl);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logDiag('jira.participant', 'error', message, {});
@@ -415,7 +433,7 @@ export function createJiraParticipant(
     }
 
     // Sprint selection — user replied with their sprint choice
-    if (lastResponse.includes('<!-- jira:sprint-selection -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('sprint-selection')) {
       const sprintSession = ws.get<SprintSelectionSession>('jira.session.sprintSelection');
       if (sprintSession) {
         const trimmed = request.prompt.trim();
@@ -426,9 +444,14 @@ export function createJiraParticipant(
         }
         const idx = parseInt(trimmed, 10);
         if (isNaN(idx) || idx < 1 || idx > sprintSession.candidates.length) {
-          const list = sprintSession.candidates.map((s, i) => `${i + 1}. ${s.name} (${s.state})`).join('\n');
-          stream.markdown(`Please reply with a number (1–${sprintSession.candidates.length}):\n\n${list}\n\n<!-- jira:sprint-selection -->`);
-          return;
+          const list = sprintSession.candidates.map((s, i) =>
+            `${i + 1}. ${buildChatCommandLink(`${s.name} (${s.state})`, '@jira', String(i + 1))}`,
+          ).join('\n');
+          stream.markdown(trustedChatMarkdown(
+            `Please reply with a number (1–${sprintSession.candidates.length}):\n\n${list}\n\n` +
+            `or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+          ));
+          return { metadata: { jiraSession: { kinds: ['sprint-selection'] } } };
         }
         await ws.update('jira.session.sprintSelection', undefined);
         const chosen = sprintSession.candidates[idx - 1];
@@ -437,14 +460,14 @@ export function createJiraParticipant(
             ...sprintSession.pending.session,
             fieldValue: chosen.id,
           };
-          await streamFieldUpdatePreview(preview, stream, ws);
+          return await streamFieldUpdatePreview(preview, stream, ws);
         }
         return;
       }
     }
 
     // Field selection — user replied with their field choice
-    if (lastResponse.includes('<!-- jira:selecting-field -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('field-selection')) {
       const fieldSelSession = ws.get<FieldSelectionSession>('jira.session.fieldSelection');
       if (fieldSelSession) {
         const trimmed = request.prompt.trim();
@@ -458,14 +481,18 @@ export function createJiraParticipant(
           ? fieldSelSession.candidates[idx - 1]
           : fieldSelSession.candidates.find(f => f.name.toLowerCase() === trimmed.toLowerCase());
         if (!chosen) {
-          const list = fieldSelSession.candidates.map((f, i) => `${i + 1}. ${f.name} (\`${f.id}\`)`).join('\n');
-          stream.markdown(`Please reply with a number:\n\n${list}\n\n<!-- jira:selecting-field -->`);
-          return;
+          const list = fieldSelSession.candidates.map((f, i) =>
+            `${i + 1}. ${buildChatCommandLink(`${f.name} (\`${f.id}\`)`, '@jira', String(i + 1))}`,
+          ).join('\n');
+          stream.markdown(trustedChatMarkdown(
+            `Please reply with a number:\n\n${list}\n\nor ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+          ));
+          return { metadata: { jiraSession: { kinds: ['field-selection'] } } };
         }
         await ws.update('jira.session.fieldSelection', undefined);
         const { fieldValue, arrayOp, ticketKeys } = fieldSelSession.pending;
         try {
-          await continueSetField(ticketKeys, chosen, fieldValue, arrayOp, ticketService, stream, ws, request.model, token);
+          return await continueSetField(ticketKeys, chosen, fieldValue, arrayOp, ticketService, stream, ws, request.model, token);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logDiag('jira.participant', 'error', message, {});
@@ -476,7 +503,7 @@ export function createJiraParticipant(
     }
 
     // Field update preview — user replied ok / cancel
-    if (lastResponse.includes('<!-- jira:field-update-preview -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('field-update-preview')) {
       const previewSession = ws.get<FieldUpdatePreviewSession>('jira.session.fieldUpdatePreview');
       if (previewSession) {
         if (isCancellation(request.prompt)) {
@@ -509,14 +536,18 @@ export function createJiraParticipant(
           return;
         }
         // Not ok or cancel — re-present
-        stream.markdown(`Please reply **post it** to apply, or **(c)** to cancel.\n\n<!-- jira:field-update-preview -->`);
+        stream.markdown(trustedChatMarkdown(
+          `Please reply ${buildChatCommandLink('Post it', '@jira', 'post it')} to apply, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+        ));
         await ws.update('jira.session.fieldUpdatePreview', previewSession);
-        return;
+        return { metadata: { jiraSession: { kinds: ['field-update-preview'] } } };
       }
     }
 
-    // More-comments session — user confirmed "load all"
-    if (lastResponse.includes('<!-- jira:more-comments -->') && isConfirmation(request.prompt)) {
+    // More-comments session — user confirmed "load all". Fully self-contained in
+    // JiraParticipant.ts (both this resume branch and every production site further below), so
+    // this is the metadata-based liveness check (R1/R3) rather than the visible tag.
+    if (getActiveJiraSession(chatContext)?.kinds.includes('more-comments') && isConfirmation(request.prompt)) {
       const session = ws.get<MoreCommentsSession>('jira.session.moreComments');
       if (session) {
         try {
@@ -525,7 +556,8 @@ export function createJiraParticipant(
           if (session.displayMode === 'full') {
             await ws.update('jira.session.commentList', buildCommentListSession(session.ticketKey, comments));
             stream.markdown(formatCommentsInFull(comments));
-            stream.markdown(`\n\n<!-- @jira-ticket:${session.ticketKey} -->\n\n<!-- jira:comment-list -->`);
+            stream.markdown(`\n\n<!-- @jira-ticket:${session.ticketKey} -->`);
+            return { metadata: { jiraSession: { kinds: ['comment-list'] } } };
           } else {
             const synthesis = await synthesizeComments(
               serializeCommentsForLLM(comments),
@@ -537,8 +569,8 @@ export function createJiraParticipant(
               await ws.update('jira.session.commentList', buildCommentListSession(session.ticketKey, comments));
             }
             stream.markdown(synthesis);
-            const listTag = session.commentQuery ? '' : '\n\n<!-- jira:comment-list -->';
-            stream.markdown(`\n\n<!-- @jira-ticket:${session.ticketKey} -->${listTag}`);
+            stream.markdown(`\n\n<!-- @jira-ticket:${session.ticketKey} -->`);
+            if (!session.commentQuery) return { metadata: { jiraSession: { kinds: ['comment-list'] } } };
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -549,20 +581,23 @@ export function createJiraParticipant(
       }
     }
 
-    // Load skipped — user replied with a number (or "download N") to download skipped attachments
-    if (lastResponse.includes('<!-- jira:load-skipped -->')) {
+    // Load skipped — user replied with a number (or "download N") to download skipped
+    // attachments. Fully self-contained in JiraParticipant.ts — metadata-based (R1/R3).
+    if (getActiveJiraSession(chatContext)?.kinds.includes('load-skipped')) {
       const loadSkippedSession = ws.get<LoadSkippedSession>('jira.session.loadSkipped');
       if (loadSkippedSession) {
         const selection = parseSkippedAttachmentSelection(request.prompt, loadSkippedSession.skipped.length);
         const skippedList = (items: LoadSkippedSession['skipped']) => items
-          .map((s, i) => `${i + 1}. \`${s.filename}\` — ${formatFileSize(s.size)} (${s.mimeType}) — ${s.reason}`)
+          .map((s, i) => `${i + 1}. ${buildChatCommandLink(`\`${s.filename}\` — ${formatFileSize(s.size)} (${s.mimeType}) — ${s.reason}`, '@jira', String(i + 1))}`)
           .join('\n');
         if (selection === 'not-a-selection') {
           await ws.update('jira.session.loadSkipped', undefined);
           // fall through to intent parsing
         } else if (selection === 'out-of-range') {
-          stream.markdown(`Please reply with a number:\n\n${skippedList(loadSkippedSession.skipped)}\n\nReply with a number to download it anyway.\n\n<!-- jira:load-skipped -->`);
-          return;
+          stream.markdown(trustedChatMarkdown(
+            `Please reply with a number:\n\n${skippedList(loadSkippedSession.skipped)}\n\nReply with a number to download it anyway.`,
+          ));
+          return { metadata: { jiraSession: { kinds: ['load-skipped'] } } };
         } else {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
           if (!workspaceFolder) {
@@ -591,7 +626,11 @@ export function createJiraParticipant(
           const remaining = loadSkippedSession.skipped.filter((_, i) => !downloadedSet.has(i));
           if (remaining.length > 0) {
             await ws.update('jira.session.loadSkipped', { ticketKey: loadSkippedSession.ticketKey, skipped: remaining } satisfies LoadSkippedSession);
-            stream.markdown(`${lines.join('\n')}\n\n**Remaining skipped attachments:**\n\n${skippedList(remaining)}\n\nReply with a number to download another.\n\n<!-- @jira-ticket:${loadSkippedSession.ticketKey} -->\n\n<!-- jira:load-skipped -->`);
+            stream.markdown(trustedChatMarkdown(
+              `${lines.join('\n')}\n\n**Remaining skipped attachments:**\n\n${skippedList(remaining)}\n\n` +
+              `Reply with a number to download another.\n\n<!-- @jira-ticket:${loadSkippedSession.ticketKey} -->`,
+            ));
+            return { metadata: { jiraSession: { kinds: ['load-skipped'] } } };
           } else {
             await ws.update('jira.session.loadSkipped', undefined);
             stream.markdown(`${lines.join('\n')}\n\nAll attachments saved.\n\n<!-- @jira-ticket:${loadSkippedSession.ticketKey} -->`);
@@ -607,21 +646,32 @@ export function createJiraParticipant(
     // start with a generic word this parser recognizes (e.g. "skip") is an unambiguous signal
     // the user meant a new operation, not a continuation reply — the session itself is left
     // untouched, so it's still there to resume on the next ordinary-text turn.
-    if (!request.command && lastResponse.includes('<!-- jira:bulk-update-review -->')) {
+    if (!request.command && getActiveJiraSession(chatContext)?.kinds.includes('bulk-update-review')) {
       const bulkSession = ws.get<BulkUpdateReviewSession>('jira.session.bulkUpdateReview');
       if (bulkSession) {
         const decision = parseBulkUpdateReview(request.prompt);
         if (decision.action === 'invalid') {
-          stream.markdown(`Didn't understand that. Reply **post it** to apply, **(c)** to cancel, or \`skip KEY1 KEY2\` to skip specific tickets.\n\n<!-- jira:bulk-update-review -->`);
-          return;
+          stream.markdown(trustedChatMarkdown(
+            `Didn't understand that. Reply ${buildChatCommandLink('Post it', '@jira', 'post it')} to apply, ` +
+            `${buildChatCommandLink('Cancel', '@jira', 'cancel')} to cancel, or \`skip KEY1 KEY2\` to toggle specific tickets.`,
+          ));
+          return { metadata: { jiraSession: { kinds: ['bulk-update-review'] } } };
+        }
+        // R8/AE4: a toggle reply (click or typed keys) flips included and re-renders — it never
+        // runs the update itself, unlike the pre-U6 one-shot skip-and-run behavior.
+        if (decision.action === 'toggle') {
+          const toggledRows = applyBulkUpdateToggle(bulkSession.rows, decision.keys);
+          const toggledSession: BulkUpdateReviewSession = { ...bulkSession, rows: toggledRows };
+          await ws.update('jira.session.bulkUpdateReview', toggledSession);
+          stream.markdown(trustedChatMarkdown(buildBulkUpdateReviewMessage(bulkSession.headerLine, toggledRows)));
+          return { metadata: { jiraSession: { kinds: ['bulk-update-review'] } } };
         }
         await ws.update('jira.session.bulkUpdateReview', undefined);
         if (decision.action === 'cancel') {
           stream.markdown('_Cancelled — no tickets were changed._');
           return;
         }
-        const skipSet = new Set(decision.skip);
-        const toUpdate = bulkSession.ticketKeys.filter(k => !skipSet.has(k));
+        const toUpdate = bulkSession.rows.filter(r => r.included).map(r => r.key);
         stream.markdown(`Updating **${bulkSession.fieldName}** on ${toUpdate.length} ticket(s)…\n\n`);
         let passed = 0;
         let failed = 0;
@@ -636,17 +686,16 @@ export function createJiraParticipant(
 
     // Email content session — user is confirming/posting an email-as-comment (the only remaining
     // ticket-key-present flow; batch ticket creation routes through the email-template/email-review
-    // tags below instead).
-    if (lastResponse.includes('<!-- jira:email-content -->')) {
+    // sessions below instead).
+    if (getActiveJiraSession(chatContext)?.kinds.includes('email-content')) {
       const contentSession = ws.get<EmailContentSession>('jira.session.emailContent');
       if (contentSession) {
-        await handleEmailContentSession(request.prompt, contentSession, ticketService, stream, ws);
-        return;
+        return await handleEmailContentSession(request.prompt, contentSession, ticketService, stream, ws);
       }
     }
 
     // Batch email import — template/issue-type selection
-    if (lastResponse.includes('<!-- jira:email-template -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('email-template')) {
       const templateSession = ws.get<EmailTemplateSelectionSession>('jira.session.emailTemplateSelection');
       if (templateSession) {
         if (isSessionExpired(templateSession)) {
@@ -654,13 +703,12 @@ export function createJiraParticipant(
           stream.markdown(SESSION_EXPIRED_MESSAGE);
           return;
         }
-        await handleEmailTemplateSelection(request.prompt, templateSession, jiraClient, ticketService, stream, ws, config.baseUrl);
-        return;
+        return await handleEmailTemplateSelection(request.prompt, templateSession, jiraClient, ticketService, stream, ws, config.baseUrl);
       }
     }
 
     // Batch email import — review / selection screen
-    if (lastResponse.includes('<!-- jira:email-review -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('email-review')) {
       const reviewSession = ws.get<EmailReviewSession>('jira.session.emailReview');
       if (reviewSession) {
         if (isSessionExpired(reviewSession)) {
@@ -668,13 +716,12 @@ export function createJiraParticipant(
           stream.markdown(SESSION_EXPIRED_MESSAGE);
           return;
         }
-        await handleEmailReviewReply(request.prompt, reviewSession, ticketService, stream, ws, config.baseUrl);
-        return;
+        return await handleEmailReviewReply(request.prompt, reviewSession, ticketService, stream, ws, config.baseUrl);
       }
     }
 
     // Veracode template/issue-type selection
-    if (lastResponse.includes('<!-- jira:veracode-template -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('veracode-template')) {
       const templateSession = ws.get<VeracodeTemplateSelectionSession>('jira.session.veracodeTemplateSelection');
       if (templateSession) {
         if (isSessionExpired(templateSession)) {
@@ -682,13 +729,12 @@ export function createJiraParticipant(
           stream.markdown(SESSION_EXPIRED_MESSAGE);
           return;
         }
-        await handleVeracodeTemplateSelection(request.prompt, templateSession, jiraClient, ticketService, stream, ws, config.baseUrl);
-        return;
+        return await handleVeracodeTemplateSelection(request.prompt, templateSession, jiraClient, ticketService, stream, ws, config.baseUrl);
       }
     }
 
     // Veracode flaw review / selection screen
-    if (lastResponse.includes('<!-- jira:veracode-review -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('veracode-review')) {
       const reviewSession = ws.get<VeracodeReviewSession>('jira.session.veracodeReview');
       if (reviewSession) {
         if (isSessionExpired(reviewSession)) {
@@ -696,13 +742,12 @@ export function createJiraParticipant(
           stream.markdown(SESSION_EXPIRED_MESSAGE);
           return;
         }
-        await handleVeracodeReviewReply(request.prompt, reviewSession, ticketService, stream, ws, config.baseUrl);
-        return;
+        return await handleVeracodeReviewReply(request.prompt, reviewSession, ticketService, stream, ws, config.baseUrl);
       }
     }
 
     // Waltz OSS report template/issue-type selection
-    if (lastResponse.includes('<!-- jira:waltz-template -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('waltz-template')) {
       const templateSession = ws.get<WaltzTemplateSelectionSession>('jira.session.waltzTemplateSelection');
       if (templateSession) {
         if (isSessionExpired(templateSession)) {
@@ -710,13 +755,12 @@ export function createJiraParticipant(
           stream.markdown(SESSION_EXPIRED_MESSAGE);
           return;
         }
-        await handleWaltzTemplateSelection(request.prompt, templateSession, jiraClient, ticketService, stream, ws, config.baseUrl);
-        return;
+        return await handleWaltzTemplateSelection(request.prompt, templateSession, jiraClient, ticketService, stream, ws, config.baseUrl);
       }
     }
 
     // Waltz OSS report review / selection screen
-    if (lastResponse.includes('<!-- jira:waltz-review -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('waltz-review')) {
       const reviewSession = ws.get<WaltzReviewSession>('jira.session.waltzReview');
       if (reviewSession) {
         if (isSessionExpired(reviewSession)) {
@@ -724,88 +768,81 @@ export function createJiraParticipant(
           stream.markdown(SESSION_EXPIRED_MESSAGE);
           return;
         }
-        await handleWaltzReviewReply(request.prompt, reviewSession, ticketService, stream, ws, config.baseUrl);
-        return;
+        return await handleWaltzReviewReply(request.prompt, reviewSession, ticketService, stream, ws, config.baseUrl);
       }
     }
 
     // Template generation — chat-ask for the template name (R2, no showInputBox)
-    if (lastResponse.includes(TEMPLATE_GEN_TAGS.awaitName)) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes(TEMPLATE_GEN_KINDS.awaitName)) {
       const session = ws.get<TemplateGenerationAwaitNameSession>(TEMPLATE_GEN_SESSION_KEYS.awaitName);
       if (session) {
         const templateGenWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-        await handleAwaitNameReply(request.prompt, session, ticketService, templateGenWorkspaceRoot, config.hiddenDisplayFields, stream, ws);
-        return;
+        return await handleAwaitNameReply(request.prompt, session, ticketService, templateGenWorkspaceRoot, config.hiddenDisplayFields, stream, ws);
       }
     }
 
     // Template generation — issue-type pick list (no-reference path, no type named)
-    if (lastResponse.includes(TEMPLATE_GEN_TAGS.typePick)) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes(TEMPLATE_GEN_KINDS.typePick)) {
       const session = ws.get<TemplateGenerationTypePickSession>(TEMPLATE_GEN_SESSION_KEYS.typePick);
       if (session) {
-        await handleTypePickReply(request.prompt, session, ticketService, stream, ws);
-        return;
+        return await handleTypePickReply(request.prompt, session, ticketService, stream, ws);
       }
     }
 
     // Template generation — chat-ask for a free-text issue type when the list couldn't be
     // fetched (R3, no showInputBox)
-    if (lastResponse.includes(TEMPLATE_GEN_TAGS.awaitFreeType)) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes(TEMPLATE_GEN_KINDS.awaitFreeType)) {
       const session = ws.get<TemplateGenerationAwaitFreeTypeSession>(TEMPLATE_GEN_SESSION_KEYS.awaitFreeType);
       if (session) {
-        await handleAwaitFreeTypeReply(request.prompt, session, ticketService, stream, ws);
-        return;
+        return await handleAwaitFreeTypeReply(request.prompt, session, ticketService, stream, ws);
       }
     }
 
     // Template generation — review list (toggle / setValue / confirm)
-    if (lastResponse.includes(TEMPLATE_GEN_TAGS.review)) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes(TEMPLATE_GEN_KINDS.review)) {
       const session = ws.get<TemplateGenerationReviewSession>(TEMPLATE_GEN_SESSION_KEYS.review);
       if (session) {
         const templateGenWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-        await handleTemplateGenReviewReply(request.prompt, session, templateGenWorkspaceRoot, stream, ws);
-        return;
+        return await handleTemplateGenReviewReply(request.prompt, session, templateGenWorkspaceRoot, stream, ws);
       }
     }
 
     // Template generation — name-collision handling
-    if (lastResponse.includes(TEMPLATE_GEN_TAGS.collision)) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes(TEMPLATE_GEN_KINDS.collision)) {
       const session = ws.get<TemplateGenerationCollisionSession>(TEMPLATE_GEN_SESSION_KEYS.collision);
       if (session) {
         const templateGenWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-        await handleTemplateGenCollisionReply(request.prompt, session, templateGenWorkspaceRoot, stream, ws);
-        return;
+        return await handleTemplateGenCollisionReply(request.prompt, session, templateGenWorkspaceRoot, stream, ws);
       }
     }
 
     // Template generation — offer to create a first ticket from the saved template
-    if (lastResponse.includes(TEMPLATE_GEN_TAGS.offerCreate)) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes(TEMPLATE_GEN_KINDS.offerCreate)) {
       const session = ws.get<TemplateGenerationOfferCreateSession>(TEMPLATE_GEN_SESSION_KEYS.offerCreate);
       if (session) {
-        await handleOfferCreateReply(request.prompt, session, ticketService, stream, ws, config.baseUrl);
-        return;
+        return await handleOfferCreateReply(request.prompt, session, ticketService, stream, ws, config.baseUrl);
       }
     }
 
     // Template generation — awaiting the summary for the first ticket
-    if (lastResponse.includes(TEMPLATE_GEN_TAGS.awaitSummary)) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes(TEMPLATE_GEN_KINDS.awaitSummary)) {
       const session = ws.get<TemplateGenerationAwaitSummarySession>(TEMPLATE_GEN_SESSION_KEYS.awaitSummary);
       if (session) {
-        await handleAwaitSummaryReply(request.prompt, session, ticketService, stream, ws, config.baseUrl);
-        return;
+        return await handleAwaitSummaryReply(request.prompt, session, ticketService, stream, ws, config.baseUrl);
       }
     }
 
-    // Comment list — user replied with a comment number to view in full
-    if (lastResponse.includes('<!-- jira:comment-list -->')) {
+    // Comment list — user replied with a comment number to view in full. Fully self-contained
+    // in JiraParticipant.ts — metadata-based (R1/R3).
+    if (getActiveJiraSession(chatContext)?.kinds.includes('comment-list')) {
       const commentSession = ws.get<CommentListSession>('jira.session.commentList');
       if (commentSession) {
         const index = parseCommentIndex(request.prompt, commentSession.comments.length);
         if (index !== 'invalid') {
           const entry = commentSession.comments[index - 1];
           stream.markdown(`**Comment ${index}** — ${entry.author} (${entry.date})\n\n${entry.bodyMarkdown}`);
-          stream.markdown(`\n\n<!-- @jira-ticket:${commentSession.ticketKey} -->\n\n<!-- jira:comment-list -->`);
-          return;
+          stream.markdown(`\n\n<!-- @jira-ticket:${commentSession.ticketKey} -->`);
+          return { metadata: { jiraSession: { kinds: ['comment-list'] } } };
         }
         // Not a comment index — fall through to intent parse
       }
@@ -853,7 +890,7 @@ export function createJiraParticipant(
     // createTicket has its own multi-turn flow
     if (intent.operation === 'createTicket') {
       try {
-        await handleCreateTicket(request, stream, token, jiraClient, ticketService, ws);
+        return await handleCreateTicket(request, stream, token, jiraClient, ticketService, ws);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         logDiag('jira.participant', 'error', message, {});
@@ -876,7 +913,7 @@ export function createJiraParticipant(
     if (intent.operation === 'runCleanup') {
       try {
         const cleanupFieldMeta = config.cleanupFields.length > 0 ? await ticketService.getFieldMeta() : [];
-        await handleRunCleanup(intent, stream, jiraClient, ticketService, ws, config.baseUrl, config.cleanupFields, cleanupFieldMeta);
+        return await handleRunCleanup(intent, stream, jiraClient, ticketService, ws, config.baseUrl, config.cleanupFields, cleanupFieldMeta);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         logDiag('jira.participant', 'error', message, {});
@@ -960,11 +997,12 @@ export function createJiraParticipant(
             if (total > MAX_SHOW) {
               const moreSession: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: null };
               await ws.update('jira.session.moreComments', moreSession);
-              stream.markdown(`\n\n_${total - MAX_SHOW} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:more-comments -->\n\n<!-- jira:comment-list -->`);
+              stream.markdown(`\n\n_${total - MAX_SHOW} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->`);
+              return { metadata: { jiraSession: { kinds: ['more-comments', 'comment-list'] } } };
             } else {
-              stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:comment-list -->`);
+              stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
+              return { metadata: { jiraSession: { kinds: ['comment-list'] } } };
             }
-            return;
           }
           result = base;
           break;
@@ -998,11 +1036,12 @@ export function createJiraParticipant(
           if (fullTotal > MAX_SHOW_FULL) {
             const moreSession: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: null, displayMode: 'full' };
             await ws.update('jira.session.moreComments', moreSession);
-            stream.markdown(`\n\n_${fullTotal - MAX_SHOW_FULL} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:more-comments -->\n\n<!-- jira:comment-list -->`);
+            stream.markdown(`\n\n_${fullTotal - MAX_SHOW_FULL} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->`);
+            return { metadata: { jiraSession: { kinds: ['more-comments', 'comment-list'] } } };
           } else {
-            stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:comment-list -->`);
+            stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
+            return { metadata: { jiraSession: { kinds: ['comment-list'] } } };
           }
-          return;
         }
         case 'getComments': {
           const MAX_INITIAL = 20;
@@ -1023,15 +1062,16 @@ export function createJiraParticipant(
           }
           const getCommentsRef = formatKeyLink(ticketKey!, config.baseUrl);
           stream.markdown(`**${getCommentsRef} — Comments**\n\n` + synthesis);
-          const listTag = hasQuery ? '' : '\n\n<!-- jira:comment-list -->';
+          const listKinds: JiraSessionKind[] = hasQuery ? [] : ['comment-list'];
           if (total > MAX_INITIAL) {
             const moreSession: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: intent.commentQuery };
             await ws.update('jira.session.moreComments', moreSession);
-            stream.markdown(`\n\n_${total - MAX_INITIAL} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->\n\n<!-- jira:more-comments -->${listTag}`);
+            stream.markdown(`\n\n_${total - MAX_INITIAL} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->`);
+            return { metadata: { jiraSession: { kinds: ['more-comments', ...listKinds] } } };
           } else {
-            stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->${listTag}`);
+            stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
+            return listKinds.length > 0 ? { metadata: { jiraSession: { kinds: listKinds } } } : undefined;
           }
-          return;
         }
         case 'addComment': {
           const isLiteral = intent.contentSource === 'literal' || intent.contentSource === undefined;
@@ -1051,11 +1091,10 @@ export function createJiraParticipant(
             if (intent.contentSource === 'history-recent' && isPointerPrompt(request.prompt)) {
               const lastText = extractLastAssistantText(chatContext);
               if (lastText.length > 200) {
-                await streamContentPreview(
+                return await streamContentPreview(
                   { ticketKey: ticketKey!, operation: 'addComment', currentContent: lastText, historyContext: undefined, contentSource: 'history-recent' },
                   stream, ws,
                 );
-                return;
               }
             }
 
@@ -1066,11 +1105,10 @@ export function createJiraParticipant(
               stream.markdown(`_Could not generate comment content — the AI model declined the request. Try rephrasing your instruction or use \`@jira add comment to ${ticketKey}\` with explicit text._`);
               return;
             }
-            await streamContentPreview(
+            return await streamContentPreview(
               { ticketKey: ticketKey!, operation: 'addComment', currentContent: content, historyContext: context, contentSource: nonLiteralSource },
               stream, ws,
             );
-            return;
           }
           break;
         }
@@ -1097,22 +1135,20 @@ export function createJiraParticipant(
               stream.markdown(`_Could not generate description content — the AI model declined the request. Try rephrasing your instruction._`);
               return;
             }
-            await streamContentPreview(
+            return await streamContentPreview(
               { ticketKey: ticketKey!, operation: 'updateDescription', currentContent: content, historyContext: contentCtx, contentSource: nonLiteralSource },
               stream, ws,
             );
-            return;
           }
           // All other fields → fuzzy match + preview flow
           const setFieldMeta = await ticketService.getFieldMeta();
           const setTicketKeys = intent.scope === 'bulk'
             ? (ws.get<SearchResultSession>('jira.session.searchResult')?.ticketKeys ?? [ticketKey!])
             : [ticketKey!];
-          await handleSetField(
+          return await handleSetField(
             setTicketKeys, fieldNameRaw, fieldValueRaw, intent.arrayOp ?? 'set',
             setFieldMeta, ticketService, stream, ws, request.model, token,
           );
-          return;
         }
         case 'showFields': {
           const showFieldMeta = await ticketService.getFieldMeta();
@@ -1137,9 +1173,11 @@ export function createJiraParticipant(
             } else {
               const session: FilterSelectionSession = { filters, originalPrompt: request.prompt };
               await ws.update('jira.session.filterSelection', session);
-              const list = filters.map((f, i) => `${i + 1}. ${f.name}`).join('\n');
-              stream.markdown(`Multiple filters match "${intent.filterName}":\n\n${list}\n\nWhich one? Reply with the number or name, or **(c)** to cancel.\n\n<!-- jira:selecting-filter -->`);
-              return;
+              const list = filters.map((f, i) => `${i + 1}. ${buildChatCommandLink(f.name, '@jira', String(i + 1))}`).join('\n');
+              stream.markdown(trustedChatMarkdown(
+                `Multiple filters match "${intent.filterName}":\n\n${list}\n\nWhich one? Reply with the number or name, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+              ));
+              return { metadata: { jiraSession: { kinds: ['selecting-filter'] } } };
             }
           } else if (intent.useMyTeamJql) {
             const teamJql = config.myTeamJql;
@@ -1234,11 +1272,12 @@ export function createJiraParticipant(
                 [s.fields.status.name]: subTransitions.map(t => ({ id: t.id, name: t.name, to: t.to.name })),
               };
               const subPath = findPath(subGraph, s.fields.status.name, targetStatus);
-              if (subPath) subtasks.push({ key: s.key, summary: s.fields.summary, currentStatus: s.fields.status.name, transitionPath: subPath });
+              if (subPath) subtasks.push({ key: s.key, summary: s.fields.summary, currentStatus: s.fields.status.name, transitionPath: subPath, included: true });
             }
             tickets.push({
               key, summary: issue.fields.summary, currentStatus, transitionPath: path, subtasks,
               extra: extractExtraFields(issue.fields, config.cleanupFields),
+              included: true,
             });
           }
           if (tickets.length === 0) {
@@ -1274,16 +1313,15 @@ export function createJiraParticipant(
               };
               await ws.update('jira.session.resolutionSelection', resSession);
               const list = resolutions.map((r, i) => `${i + 1}. ${r.name}`).join('\n');
-              stream.markdown(`Which resolution should be set when transitioning to **${targetStatus}**?\n\n${list}\n\nReply with the name or number, or **none** to skip setting a resolution.\n\n<!-- jira:selecting-resolution -->`);
-              return;
+              stream.markdown(`Which resolution should be set when transitioning to **${targetStatus}**?\n\n${list}\n\nReply with the name or number, or **none** to skip setting a resolution.`);
+              return { metadata: { jiraSession: { kinds: ['resolution-selection'] } } };
             }
           }
           const batchSession: TransitionBatchSession = {
             tickets, resolution: undefined, ruleName: undefined, issueType: intent.issueType ?? '',
             fieldIds: config.cleanupFields, fieldMeta: cleanupFieldMeta,
           };
-          await streamReviewScreen(batchSession, stream, ws, `**Bulk transition → ${targetStatus}**`, config.baseUrl);
-          return;
+          return await streamReviewScreen(batchSession, stream, ws, `**Bulk transition → ${targetStatus}**`, config.baseUrl);
         }
         case 'bulkUpdateField': {
           const searchSession = ws.get<SearchResultSession>('jira.session.searchResult');
@@ -1330,34 +1368,38 @@ export function createJiraParticipant(
               : current !== null && current !== undefined
                 ? String(current)
                 : '—';
-            return { key: issue.key, summary: issue.fields.summary, currentValueDisplay: display };
+            return { key: issue.key, summary: issue.fields.summary, currentValueDisplay: display, included: true };
           });
+          const headerLine =
+            `**Bulk update: ${intent.bulkFieldName} → ${intent.bulkFieldValue}**\n` +
+            `(${searchSession.ticketKeys.length} tickets)\n\n` +
+            (config.baseUrl ? `[View in Jira](${config.baseUrl}/issues/?jql=${encodeURIComponent(searchSession.jql)})` : '');
           const bulkSession: BulkUpdateReviewSession = {
-            ticketKeys: searchSession.ticketKeys,
+            rows: reviewRows,
             fieldId,
             fieldName: intent.bulkFieldName,
             fieldValue,
             arrayOp: 'set',
+            headerLine,
           };
           await ws.update('jira.session.bulkUpdateReview', bulkSession);
-          stream.markdown(
-            `**Bulk update: ${intent.bulkFieldName} → ${intent.bulkFieldValue}**\n` +
-            `(${searchSession.ticketKeys.length} tickets)\n\n` +
-            (config.baseUrl ? `[View in Jira](${config.baseUrl}/issues/?jql=${encodeURIComponent(searchSession.jql)})\n\n` : '') +
-            buildBulkUpdateReviewTable(reviewRows) +
-            `\n\nReply **post it** to apply, **(c)** to cancel, or list keys to skip (e.g. \`skip PROJ-2\`).\n\n<!-- jira:bulk-update-review -->`
-          );
-          return;
+          stream.markdown(trustedChatMarkdown(buildBulkUpdateReviewMessage(headerLine, reviewRows)));
+          return { metadata: { jiraSession: { kinds: ['bulk-update-review'] } } };
         }
         case 'loadTicket': {
           const loadFieldMeta = await ticketService.getFieldMeta();
           const loadAlwaysShow = new Set<string>(config.additionalDisplayFields);
           const loadHidden = new Set<string>(config.hiddenDisplayFields);
-          await handleLoadTicket(ticketKey!, ticketService, stream, ws, loadFieldMeta, loadAlwaysShow, loadHidden);
+          const hasSkippedAttachments = await handleLoadTicket(ticketKey!, ticketService, stream, ws, loadFieldMeta, loadAlwaysShow, loadHidden);
           // R6: "after loading a ticket: add a comment, transition it" — the flagship example
           // the plan names for follow-up chips.
           const loadedState: JiraFollowupState = { kind: 'loadedTicket', ticketKey: ticketKey! };
-          return { metadata: { jiraFollowup: loadedState } };
+          return {
+            metadata: {
+              jiraFollowup: loadedState,
+              ...(hasSkippedAttachments ? { jiraSession: { kinds: ['load-skipped'] } } : {}),
+            },
+          };
         }
         case 'validateFields':
           result = await ticketService.validateRequiredFields(ticketKey!, config.requiredFields);
@@ -1367,8 +1409,7 @@ export function createJiraParticipant(
             stream.markdown('No ticket key found. Please specify a ticket, e.g. `@jira spell check PROJ-123`.');
             return;
           }
-          await handleSpellCheck(ticketKey, ticketService, request.model, stream, token, ws);
-          return;
+          return await handleSpellCheck(ticketKey, ticketService, request.model, stream, token, ws);
         }
         default: {
           // R8: replaces the bare "Unrecognised operation." message — an example-driven

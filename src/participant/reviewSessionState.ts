@@ -71,8 +71,9 @@ export interface BitbucketCommentPreviewSession {
 
 /**
  * `smart`-mode selection-failure fallback session — stored in `workspaceState` under
- * `bitbucket.session.smartFallback` and tagged with `<!-- bitbucket:smart-fallback-session -->`,
- * following the exact same shape/convention as `ReviewSession` (see docs/review-process.md
+ * `bitbucket.session.smartFallback` and detected via the `smart-fallback-session`
+ * `BitbucketSessionContinuity` kind (U4), following the exact same shape/convention as
+ * `ReviewSession` (see docs/review-process.md
  * "Follow-ups"). Holds enough in-flight state to resume phase 2 once the user answers:
  * PR reference, fetched diff, chunk boundaries, and phase 1's already-collected standard-pass
  * findings. Built by the smart-mode aggregation call site in `BitbucketParticipant.ts`;
@@ -142,6 +143,68 @@ export function buildBitbucketNotConfiguredMessage(config: Pick<BitbucketConfig,
     );
   }
   return `Bitbucket credentials not configured. Run "${setupLabel}" from the Command Palette.`;
+}
+
+/**
+ * Builds a raw `[label](command:workbench.action.chat.open?<encoded>)` markdown link that,
+ * when clicked, re-submits `replyText` to this participant exactly as if the user had typed it
+ * (R5) — reusing VS Code's built-in `workbench.action.chat.open` command rather than a new
+ * registered wrapper command (KTD2). Mirrors `buildChatCommandLink` in `sessionState.ts` — this
+ * file intentionally does not import from that one (the two participants stay independent), so
+ * the helper is duplicated here rather than shared.
+ *
+ * `label` is neutralized (see `neutralizeMarkdownLinks()` below) before being embedded: a label
+ * built from externally-influenced text (a PR title, an LLM-generated finding heading, …) that
+ * contains an unneutralized `]` would close the `[label]` early, letting the rest of that text
+ * open a second, attacker-chosen `(command:...)` link of its own right next to this legitimate
+ * one — not merely garbled rendering, but a second live command. Callers therefore never need to
+ * pre-sanitize a label themselves.
+ *
+ * Pure string building only — this never touches `vscode.MarkdownString` (KTD5). Every call site
+ * that assembles a `MarkdownString` from output containing one or more of these links MUST set
+ * `.isTrusted = { enabledCommands: ['workbench.action.chat.open'] }` on that `MarkdownString`
+ * before calling `stream.markdown(...)`, mirroring the existing `notConfigured` trust-gate
+ * pattern in `BitbucketParticipant.ts`. Without that, VS Code renders the link as inert plain
+ * text instead of a clickable command.
+ */
+export function buildChatCommandLink(label: string, participantId: '@jira' | '@bitbucket', replyText: string): string {
+  const safeLabel = neutralizeMarkdownLinks(label);
+  const query = `${participantId} ${replyText}`;
+  const encodedArgs = encodeURIComponent(JSON.stringify({ query, isPartialQuery: false }));
+  return `[${safeLabel}](command:workbench.action.chat.open?${encodedArgs})`;
+}
+
+/**
+ * `buildChatCommandLink()`'s counterpart on the untrusted side: neutralizes markdown link/image
+ * syntax in untrusted, externally-influenced text (a PR title, a finding heading, a diff-derived
+ * comment, …) before it is combined into the same string as one or more real command links and the
+ * whole thing is trust-gated (`trustedChatMarkdown()`, `src/utils/chatMarkdown.ts`). Mirrors
+ * `neutralizeMarkdownLinks` in `sessionState.ts` — duplicated here for the same reason
+ * `buildChatCommandLink` is. Replaces `[`/`]` with visually similar full-width brackets rather than
+ * stripping them, so the text stays readable.
+ */
+export function neutralizeMarkdownLinks(value: string): string {
+  return value.replace(/\[/g, '［').replace(/\]/g, '］');
+}
+
+/**
+ * U7/R10/KTD3: wraps each finding's own heading (returned by `PrReviewService.formatReview()`
+ * alongside its assembled markdown) in a command-link resubmitting `#<id>` — the exact text
+ * `parseFollowUpIntent()`'s explain path already accepts, so clicking a finding's heading produces
+ * the same answer as typing a reference to it (R5). Every finding's heading is already unique (each
+ * embeds its own `#<id>`), so a plain string replace can't cross-match a different finding.
+ * `formatReview()` already neutralized every untrusted string embedded in its markdown (title, file
+ * path, PR title/author) before this function ever runs, so wrapping the result in a trusted
+ * MarkdownString (the caller's job, `BitbucketParticipant.ts`) is safe. Pure — moved here (rather
+ * than staying a `BitbucketParticipant.ts`-local function) so it's Vitest-loadable per CLAUDE.md's
+ * testing rule (code-review fix).
+ */
+export function composeReviewOutput(result: { markdown: string; findingHeadings: Array<{ id: number; heading: string }> }): string {
+  let output = result.markdown;
+  for (const { id, heading } of result.findingHeadings) {
+    output = output.replace(heading, buildChatCommandLink(heading, '@bitbucket', `#${id}`));
+  }
+  return output;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1122,6 +1185,23 @@ export type BitbucketFollowupState =
   | { kind: 'greeting' }
   | { kind: 'reviewCompleted'; findingCount: number }
   | { kind: 'none' };
+
+/**
+ * Sibling of `BitbucketFollowupState` on the same `vscode.ChatResult.metadata` channel, but for
+ * session-continuity detection instead of follow-up chips — mirrors `JiraSessionContinuity` in
+ * `sessionState.ts` (see U4). Replaces matching the last rendered response text against a visible
+ * `<!-- bitbucket:TAG -->` HTML comment with a check against this metadata read off
+ * `chatContext.history` (see `getActiveBitbucketSession` in `BitbucketParticipant.ts`).
+ * `workspaceState` still owns the actual session data — `kinds` is only a liveness flag.
+ */
+export type BitbucketSessionKind =
+  | 'comment-preview'
+  | 'smart-fallback-session'
+  | 'review-session';
+
+export interface BitbucketSessionContinuity {
+  kinds: BitbucketSessionKind[];
+}
 
 const BITBUCKET_MAX_FOLLOWUPS = 3;
 

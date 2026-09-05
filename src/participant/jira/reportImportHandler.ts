@@ -23,11 +23,12 @@ import {
 import {
   isCancellation, pickEmailOption, buildImportReviewTable, parseReviewInput, applyReviewToggle,
   CURRENT_SESSION_SCHEMA_VERSION, isSessionExpired, SESSION_EXPIRED_MESSAGE,
-  NO_ISSUE_TYPE, resolveTemplateIssueType, formatIssueTypeOptionLabel,
+  NO_ISSUE_TYPE, resolveTemplateIssueType, formatIssueTypeOptionLabel, buildChatCommandLink,
   type ImportTemplateSelectionSession, type ReviewSession, type ReviewTableColumn, type ReviewRowBase,
-  type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession,
+  type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession, type JiraSessionKind,
 } from '../sessionState';
 import { resolveProjectKey, resolveIssueTypeOrPrompt, sessionWasSuperseded } from './ticketContext';
+import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 
 export interface ReportImportRow extends ReviewRowBase {
   labels: string[];
@@ -66,9 +67,7 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   parseAndFilter?: (filePath: string) => Promise<TItem[]>; // readAndFilterXFile — encoding-aware per importer
   sessionKeys: {
     templateSelection: string;
-    templateTag: string;
     review: string;
-    reviewTag: string;
   };
   // KTD2: dedup is optional — an importer with no dedup key (email) omits all three, and the
   // "already ticketed" search step is skipped entirely instead of run and found empty.
@@ -91,6 +90,16 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   // omit it (or could pass a log-only callback) since they have no such warning today.
   onIssueTypeFetchFailed?: (message: string, projectKey: string) => void;
 }
+
+// U4: maps each importer's `descriptorKind` to its two JiraSessionKind literals — replaces the
+// per-descriptor `templateTag`/`reviewTag` strings the ChatResult.metadata mechanism no longer
+// needs (R1/R3). A plain object literal rather than a `${descriptorKind}-template` template-string
+// cast keeps every kind spelled out as a literal JiraSessionKind, so a typo here is a compile error.
+const IMPORT_SESSION_KINDS: Record<ReportImportDescriptor<unknown, ReviewRowBase>['descriptorKind'], { template: JiraSessionKind; review: JiraSessionKind }> = {
+  veracode: { template: 'veracode-template', review: 'veracode-review' },
+  waltz: { template: 'waltz-template', review: 'waltz-review' },
+  email: { template: 'email-template', review: 'email-review' },
+};
 
 /**
  * Shared read+parse+filter orchestration (stat + size cap, then parse + filter). The two importers
@@ -188,22 +197,27 @@ export async function streamImportTemplateSelection<TItem, TRow extends ReviewRo
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
   descriptor: ReportImportDescriptor<TItem, TRow>,
-): Promise<void> {
+): Promise<vscode.ChatResult> {
   await ws.update(descriptor.sessionKeys.templateSelection, session);
   const { availableTemplates: templates, availableIssueTypes: issueTypes } = session;
 
   let optionsList = '';
   if (templates.length > 0) {
-    optionsList += `**Templates:**\n${templates.map((t, i) => `${i + 1}. ${t.name} _(${formatIssueTypeOptionLabel(t.issueType)})_`).join('\n')}\n\n`;
+    optionsList += `**Templates:**\n${templates.map((t, i) =>
+      `${i + 1}. ${buildChatCommandLink(`${t.name} _(${formatIssueTypeOptionLabel(t.issueType)})_`, '@jira', String(i + 1))}`,
+    ).join('\n')}\n\n`;
   }
   const offset = templates.length;
-  optionsList += `**Issue types (no template):**\n${issueTypes.map((t, i) => `${offset + i + 1}. ${formatIssueTypeOptionLabel(t)}`).join('\n')}\n\n`;
+  optionsList += `**Issue types (no template):**\n${issueTypes.map((t, i) =>
+    `${offset + i + 1}. ${buildChatCommandLink(formatIssueTypeOptionLabel(t), '@jira', String(offset + i + 1))}`,
+  ).join('\n')}\n\n`;
 
-  stream.markdown(
+  stream.markdown(trustedChatMarkdown(
     `Found **${session.items.length}** ${descriptor.itemNoun} in \`${session.reportFileName}\` matching your ${descriptor.filterKindLabel} filters ` +
     `for project **${session.projectKey}**.\n\n${optionsList}` +
-    `Reply with a number to select a template or issue type, or **(c)** to cancel.\n\n${descriptor.sessionKeys.templateTag}`,
-  );
+    `Reply with a number to select a template or issue type, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+  ));
+  return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].template] } } };
 }
 
 // Entry point for the "importX" operation. Handles both invocation paths:
@@ -220,7 +234,7 @@ export async function handleImportReport<TItem, TRow extends ReviewRowBase>(
   ws: vscode.Memento,
   descriptor: ReportImportDescriptor<TItem, TRow>,
   projectKeyHint: string | null = null,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   const existing = ws.get<ImportTemplateSelectionSession<TItem>>(descriptor.sessionKeys.templateSelection);
   if (existing) {
     if (isSessionExpired(existing)) {
@@ -228,8 +242,7 @@ export async function handleImportReport<TItem, TRow extends ReviewRowBase>(
       stream.markdown(SESSION_EXPIRED_MESSAGE);
       return;
     }
-    await streamImportTemplateSelection(existing, stream, ws, descriptor);
-    return;
+    return streamImportTemplateSelection(existing, stream, ws, descriptor);
   }
 
   const picked = await openReportFilePicker(stream, descriptor);
@@ -246,7 +259,7 @@ export async function handleImportReport<TItem, TRow extends ReviewRowBase>(
   }
 
   const session = await buildImportTemplateSession(picked.items, picked.fileName, projectKey, jiraClient, descriptor);
-  await streamImportTemplateSelection(session, stream, ws, descriptor);
+  return streamImportTemplateSelection(session, stream, ws, descriptor);
 }
 
 export async function handleImportTemplateSelection<TItem, TRow extends ReviewRowBase>(
@@ -258,7 +271,7 @@ export async function handleImportTemplateSelection<TItem, TRow extends ReviewRo
   ws: vscode.Memento,
   descriptor: ReportImportDescriptor<TItem, TRow>,
   baseUrl?: string,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   if (isCancellation(reply)) {
     await ws.update(descriptor.sessionKeys.templateSelection, undefined);
     stream.markdown('_Cancelled — no tickets were created._');
@@ -269,8 +282,7 @@ export async function handleImportTemplateSelection<TItem, TRow extends ReviewRo
   const pick = isNaN(n) ? null : pickEmailOption(n, session.availableTemplates, session.availableIssueTypes);
   if (!pick) {
     stream.markdown(`Didn't understand that reply.\n\n`);
-    await streamImportTemplateSelection(session, stream, ws, descriptor);
-    return;
+    return streamImportTemplateSelection(session, stream, ws, descriptor);
   }
   await ws.update(descriptor.sessionKeys.templateSelection, undefined);
 
@@ -283,16 +295,16 @@ export async function handleImportTemplateSelection<TItem, TRow extends ReviewRo
   // Generic TItem is erased to the concrete Veracode/Waltz union AwaitIssueTypeResume carries —
   // safe because descriptorKind and session always come from the same importer's own descriptor.
   const resumeSession = session as unknown as VeracodeTemplateSelectionSession | WaltzTemplateSelectionSession;
-  const issueType = await resolveIssueTypeOrPrompt(pick.issueType, {
+  const issueTypeOrResult = await resolveIssueTypeOrPrompt(pick.issueType, {
     kind: 'reportImport', descriptorKind: descriptor.descriptorKind, pickedTemplateName, session: resumeSession,
   }, stream, ws);
-  if (issueType === null) return;
+  if (typeof issueTypeOrResult !== 'string') return issueTypeOrResult;
   if (sessionWasSuperseded(ws, descriptor.sessionKeys.templateSelection)) {
     stream.markdown('_A newer import was started while this one was waiting for the issue type — cancelled to avoid creating a stale batch._');
     return;
   }
 
-  await continueAfterImportIssueType(issueType, pickedTemplateName, session, jiraClient, ticketService, stream, ws, descriptor, baseUrl);
+  return continueAfterImportIssueType(issueTypeOrResult, pickedTemplateName, session, jiraClient, ticketService, stream, ws, descriptor, baseUrl);
 }
 
 /**
@@ -312,7 +324,7 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
   ws: vscode.Memento,
   descriptor: ReportImportDescriptor<TItem, TRow>,
   baseUrl?: string,
-): Promise<void> {
+): Promise<vscode.ChatResult> {
   let additionalFields: Record<string, unknown> = {};
   let templateName: string | null = null;
   if (pickedTemplateName) {
@@ -411,7 +423,7 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
     totalNewMatched: capped.totalNewMatched,
     schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
   };
-  await streamImportReview(reviewSession, stream, ws, descriptor, baseUrl);
+  return streamImportReview(reviewSession, stream, ws, descriptor, baseUrl);
 }
 
 export async function streamImportReview<TItem, TRow extends ReviewRowBase>(
@@ -420,11 +432,16 @@ export async function streamImportReview<TItem, TRow extends ReviewRowBase>(
   ws: vscode.Memento,
   descriptor: ReportImportDescriptor<TItem, TRow>,
   baseUrl?: string,
-): Promise<void> {
+): Promise<vscode.ChatResult> {
   await ws.update(descriptor.sessionKeys.review, session);
-  stream.markdown(
-    `${buildImportReviewTable(session.rows, baseUrl, session.totalNewMatched, descriptor.reviewColumns, descriptor.itemNoun)}\n\n${descriptor.sessionKeys.reviewTag}`,
-  );
+  // U6: the table's own Include? column is now a per-row toggle command-link (R8), so this whole
+  // response must be trust-gated (KTD5) — every row's own field content going through it is
+  // neutralized against markdown-link injection at its source (VERACODE_REVIEW_COLUMNS,
+  // WALTZ_REVIEW_COLUMNS, EMAIL_REVIEW_COLUMNS in sessionState.ts/emailHandler.ts).
+  stream.markdown(trustedChatMarkdown(
+    buildImportReviewTable(session.rows, baseUrl, session.totalNewMatched, descriptor.reviewColumns, descriptor.itemNoun),
+  ));
+  return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
 }
 
 export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>(
@@ -435,16 +452,16 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
   ws: vscode.Memento,
   descriptor: ReportImportDescriptor<TItem, TRow>,
   baseUrl?: string,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   const rowIds = session.rows.map(r => r.id);
   const decision = parseReviewInput(reply, rowIds);
 
   if (decision.action === 'invalid') {
-    stream.markdown(
-      `Didn't understand that. Reply **post it** to proceed, **(c)** to cancel, ` +
-      `or a list of ids to toggle (e.g. \`2 4\` or \`A1\`).\n\n${descriptor.sessionKeys.reviewTag}`,
-    );
-    return;
+    stream.markdown(trustedChatMarkdown(
+      `Didn't understand that. Reply ${buildChatCommandLink('Post it', '@jira', 'post it')} to proceed, ` +
+      `${buildChatCommandLink('Cancel', '@jira', 'cancel')} to cancel, or a list of ids to toggle (e.g. \`2 4\` or \`A1\`).`,
+    ));
+    return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
   }
   if (decision.action === 'cancel') {
     await ws.update(descriptor.sessionKeys.review, undefined);
@@ -453,18 +470,17 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
   }
   if (decision.action === 'toggle') {
     session.rows = applyReviewToggle(session.rows, decision.ids);
-    await streamImportReview(session, stream, ws, descriptor, baseUrl);
-    return;
+    return streamImportReview(session, stream, ws, descriptor, baseUrl);
   }
   if (decision.action === 'setValue') {
     // This review has no per-row value to set — parseReviewInput's `<id>=<value>` form exists
     // for the template-generation flow, not this one. Treat it the same as an unrecognized
     // reply rather than falling through to 'ok', which would silently confirm the batch.
-    stream.markdown(
-      `Didn't understand that. Reply **post it** to proceed, **(c)** to cancel, ` +
-      `or a list of ids to toggle (e.g. \`2 4\` or \`A1\`).\n\n${descriptor.sessionKeys.reviewTag}`,
-    );
-    return;
+    stream.markdown(trustedChatMarkdown(
+      `Didn't understand that. Reply ${buildChatCommandLink('Post it', '@jira', 'post it')} to proceed, ` +
+      `${buildChatCommandLink('Cancel', '@jira', 'cancel')} to cancel, or a list of ids to toggle (e.g. \`2 4\` or \`A1\`).`,
+    ));
+    return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
   }
 
   // decision.action === 'ok'

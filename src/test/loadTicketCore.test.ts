@@ -18,6 +18,7 @@ vi.mock('vscode', () => ({
     }),
   },
   workspace: {
+    workspaceFolders: [{ uri: { fsPath: '/workspace' } }],
     fs: {
       createDirectory: vi.fn(async () => {}),
       writeFile: vi.fn(async (uri: { fsPath: string }, content: Uint8Array) => {
@@ -32,10 +33,11 @@ vi.mock('vscode', () => ({
     getConfiguration: vi.fn(() => ({ get: () => 'https://jira.example.com' })),
   },
   window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
+  MarkdownString: class { constructor(public value = '') {} isTrusted?: unknown; },
 }));
 
 import * as vscode from 'vscode';
-import { loadTicketToWorkspace } from '../participant/jira/loadHandler';
+import { loadTicketToWorkspace, handleLoadTicket } from '../participant/jira/loadHandler';
 import { TicketService } from '../services/TicketService';
 import { MockJiraClient } from './mocks/MockJiraClient';
 
@@ -190,5 +192,47 @@ describe('loadTicketToWorkspace (KTD8 integration)', () => {
 
     const gitignore = new TextDecoder().decode(fakeFiles.get('/workspace/.gitignore'));
     expect(gitignore).toBe('node_modules/\n.jira-context/\n');
+  });
+});
+
+// U3: handleLoadTicket() is the chat entry point that owns the 'load-skipped' resume session —
+// it must report back (via its boolean return) whether that session is now live, so
+// JiraParticipant.ts's loadTicket case can carry the matching jiraSession metadata (R1).
+describe('handleLoadTicket — load-skipped session liveness (U3)', () => {
+  beforeEach(() => {
+    resetFakeFiles();
+  });
+
+  const mockStream = () => ({ markdown: vi.fn() });
+  const mockWs = () => ({ get: vi.fn(), update: vi.fn() });
+
+  it('returns true and stores the session when attachments were skipped', async () => {
+    const client = new MockJiraClient();
+    const service = new TicketService(client);
+    const stream = mockStream();
+    const ws = mockWs();
+
+    const hasSkipped = await handleLoadTicket('PROJ-123', service, stream as never, ws as never, [], new Set(), new Set());
+
+    // heap-dump.bin (application/octet-stream) is skipped in the PROJ-123 fixture.
+    expect(hasSkipped).toBe(true);
+    expect(ws.update).toHaveBeenCalledWith('jira.session.loadSkipped', expect.objectContaining({ ticketKey: 'PROJ-123' }));
+  });
+
+  it('returns false and does not touch the session when nothing was skipped', async () => {
+    const client = new MockJiraClient();
+    const originalGetIssue = client.getIssue.bind(client);
+    client.getIssue = async (issueKey: string) => {
+      const issue = await originalGetIssue(issueKey);
+      return { ...issue, fields: { ...issue.fields, attachment: [] } };
+    };
+    const service = new TicketService(client);
+    const stream = mockStream();
+    const ws = mockWs();
+
+    const hasSkipped = await handleLoadTicket('PROJ-123', service, stream as never, ws as never, [], new Set(), new Set());
+
+    expect(hasSkipped).toBe(false);
+    expect(ws.update).not.toHaveBeenCalledWith('jira.session.loadSkipped', expect.anything());
   });
 });

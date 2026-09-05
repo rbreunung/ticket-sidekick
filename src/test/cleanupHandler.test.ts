@@ -5,6 +5,7 @@ vi.mock('vscode', () => ({
     workspaceFolders: [{ uri: { fsPath: '/workspace' } }],
   },
   window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
+  MarkdownString: class { constructor(public value = '') {} isTrusted?: unknown; },
 }));
 
 vi.mock('../services/WorkflowService', () => ({
@@ -30,6 +31,13 @@ import { TicketService } from '../services/TicketService';
 const mockStream = () => ({ markdown: vi.fn() });
 const mockWs = () => ({ get: vi.fn(), update: vi.fn() });
 
+// streamReviewScreen now streams a trusted vscode.MarkdownString (its footer contains command
+// links, U5) rather than a bare string — this file's mocked MarkdownString stores the raw text on
+// `.value`, so callers reading the streamed output as a plain string go through this helper.
+function markdownText(arg: unknown): string {
+  return typeof arg === 'string' ? arg : (arg as { value: string }).value;
+}
+
 const dummyPath = [{ id: '1', name: 'Go', to: 'Done' }];
 
 function makeTicket(key: string, overrides: Partial<TransitionBatchTicket> = {}): TransitionBatchTicket {
@@ -39,6 +47,7 @@ function makeTicket(key: string, overrides: Partial<TransitionBatchTicket> = {})
     currentStatus: 'Open',
     transitionPath: dummyPath,
     subtasks: [],
+    included: true,
     ...overrides,
   };
 }
@@ -49,6 +58,7 @@ function makeSubtask(key: string, overrides: Partial<TransitionSubtask> = {}): T
     summary: `Subtask ${key}`,
     currentStatus: 'Open',
     transitionPath: dummyPath,
+    included: true,
     ...overrides,
   };
 }
@@ -70,7 +80,7 @@ describe('streamReviewScreen', () => {
 
     await streamReviewScreen(session, stream as never, ws as never, '**Cleanup**');
 
-    const rendered: string = stream.markdown.mock.calls[0][0];
+    const rendered: string = markdownText(stream.markdown.mock.calls[0][0]);
     // Table row should include the resolution in its own column
     expect(rendered).toContain('| Fixed |');
     // Arrow still present in the → To column area
@@ -90,7 +100,7 @@ describe('streamReviewScreen', () => {
 
     await streamReviewScreen(session, stream as never, ws as never, '**Cleanup**');
 
-    const rendered: string = stream.markdown.mock.calls[0][0];
+    const rendered: string = markdownText(stream.markdown.mock.calls[0][0]);
     // Subtask should show its own resolution
     expect(rendered).toContain('PROJ-2');
     expect(rendered).toContain('Cannot Reproduce');
@@ -115,7 +125,7 @@ describe('streamReviewScreen', () => {
 
     await streamReviewScreen(session, stream as never, ws as never, '**Cleanup**');
 
-    const rendered: string = stream.markdown.mock.calls[0][0];
+    const rendered: string = markdownText(stream.markdown.mock.calls[0][0]);
     const lines = rendered.split('\n');
     const subtaskLine = lines.find((l) => l.includes('PROJ-2'));
     expect(subtaskLine).toBeDefined();
@@ -136,7 +146,7 @@ describe('streamReviewScreen', () => {
 
     await streamReviewScreen(session, stream as never, ws as never, '**Cleanup**');
 
-    const rendered: string = stream.markdown.mock.calls[0][0];
+    const rendered: string = markdownText(stream.markdown.mock.calls[0][0]);
     // Neither parent nor subtask arrow should have a parenthesised resolution suffix
     const lines = rendered.split('\n');
     const ticketLines = lines.filter((l) => l.includes('→'));
@@ -172,7 +182,7 @@ describe('executeCleanupBatch', () => {
     };
     const stream = mockStream();
 
-    await executeCleanupBatch(session, new Set(), ticketService, stream as never);
+    await executeCleanupBatch(session, ticketService, stream as never);
 
     // The call for PROJ-2 should pass subtask's own resolution
     const subCall = spy.mock.calls.find(([key]) => key === 'PROJ-2');
@@ -195,7 +205,7 @@ describe('executeCleanupBatch', () => {
     };
     const stream = mockStream();
 
-    await executeCleanupBatch(session, new Set(), ticketService, stream as never);
+    await executeCleanupBatch(session, ticketService, stream as never);
 
     const subCall = spy.mock.calls.find(([key]) => key === 'PROJ-2');
     expect(subCall).toBeDefined();
@@ -282,7 +292,7 @@ describe('handleRunCleanup', () => {
 
     await handleRunCleanup(baseIntent, stream as never, client, ticketService, ws as never);
 
-    const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const allMarkdown = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(allMarkdown).toContain('resolution is EMPTY');
   });
 
@@ -308,7 +318,7 @@ describe('handleRunCleanup', () => {
 
     await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
 
-    const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const allMarkdown = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(allMarkdown).toContain('ORDER BY');
     expect(allMarkdown).toContain('extra filter ignored');
     expect(allMarkdown).not.toContain('AND (priority = High');
@@ -336,7 +346,7 @@ describe('handleRunCleanup', () => {
 
     await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
 
-    const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const allMarkdown = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(allMarkdown).toContain('AND (priority = High)');
   });
 
@@ -402,13 +412,13 @@ describe('handleRunCleanup', () => {
       resolution: 'Fixed', // provided explicitly
     };
 
-    await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
+    const chatResult = await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
 
-    const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
-    // Resolution dialog contains the "<!-- jira:selecting-resolution -->" marker
-    expect(allMarkdown).not.toContain('<!-- jira:selecting-resolution -->');
-    // The review screen should have been shown instead
-    expect(allMarkdown).toContain('<!-- jira:transition-review -->');
+    const allMarkdown = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
+    // No visible session marker in the rendered response (R3) — liveness is tracked via metadata.
+    expect(allMarkdown).not.toContain('<!-- jira:');
+    // The review screen should have been shown instead of the resolution dialog.
+    expect(chatResult?.metadata?.jiraSession?.kinds).toEqual(['transition-review']);
   });
 
   it('attaches subtasks to their parent in the review screen when closeSubtasks is true', async () => {
@@ -454,14 +464,14 @@ describe('handleRunCleanup', () => {
     const ws = mockWs();
     const intent = { ...baseIntent, cleanupRuleName: 'close-bugs', resolution: 'Fixed' };
 
-    await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
+    const chatResult = await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
 
-    const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const allMarkdown = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     // Both parent and subtask should appear in the review screen
     expect(allMarkdown).toContain('PROJ-1');
     expect(allMarkdown).toContain('PROJ-1a');
     expect(allMarkdown).toContain('Child subtask');
-    expect(allMarkdown).toContain('<!-- jira:transition-review -->');
+    expect(chatResult?.metadata?.jiraSession?.kinds).toEqual(['transition-review']);
   });
 
   it('uses subtaskTargetState for the subtask JQL and path when set', async () => {
@@ -516,7 +526,7 @@ describe('handleRunCleanup', () => {
     expect(subtaskCall).not.toContain('status != "Done"');
 
     // Subtask should still appear in the review screen
-    const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const allMarkdown = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(allMarkdown).toContain('PROJ-1a');
   });
 
@@ -526,7 +536,7 @@ describe('handleRunCleanup', () => {
 
     await handleRunCleanup(baseIntent, stream as never, client, ticketService, ws as never, 'https://jira.example.com');
 
-    const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const allMarkdown = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(allMarkdown).toContain('[View in Jira](https://jira.example.com/issues/?jql=');
     expect(allMarkdown).not.toMatch(/Search scope\s*\n`/);
   });
@@ -537,7 +547,7 @@ describe('handleRunCleanup', () => {
 
     await handleRunCleanup(baseIntent, stream as never, client, ticketService, ws as never);
 
-    const allMarkdown = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const allMarkdown = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(allMarkdown).toContain('**Search scope**');
     expect(allMarkdown).toMatch(/`project = PROJ/);
     expect(allMarkdown).not.toContain('[View in Jira]');
@@ -606,7 +616,7 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
 
     await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
 
-    const output = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const output = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(output).toContain('releasedVersions()');
     expect(output).not.toContain('fixVersion = "released"');
   });
@@ -618,7 +628,7 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
 
     await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
 
-    const output = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const output = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(output).toContain('unreleasedVersions()');
   });
 
@@ -629,7 +639,7 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
 
     await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
 
-    const output = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const output = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(output).toContain('fixVersion ~ "Release*"');
     expect(output).not.toContain('fixVersion = "Release*"');
   });
@@ -655,7 +665,7 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
 
     await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
 
-    const output = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const output = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(output).toContain('releasedVersions()');
   });
 
@@ -680,7 +690,7 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
 
     await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
 
-    const output = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const output = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(output).toContain('fixVersion ~ "Release*"');
   });
 
@@ -705,7 +715,7 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
 
     await handleRunCleanup(intent, stream as never, client, ticketService, ws as never);
 
-    const output = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const output = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     expect(output).toContain('fixVersion = "v1.2"');
     expect(output).not.toContain('releasedVersions()');
   });
@@ -731,7 +741,7 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
     await handleRunCleanup(intent, stream as never, client, ticketService, ws as never, undefined, ['fixVersions'], fieldMeta);
 
     expect(spy).toHaveBeenCalledWith(expect.any(String), 50, ['fixVersions']);
-    const output = stream.markdown.mock.calls.map((c: [string]) => c[0]).join('\n');
+    const output = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
     // Covers AE2/AE3: the review table shows the configured extra column with the fetched value.
     expect(output).toContain('| Fix Version |');
     expect(output).toContain('2.0');
@@ -764,7 +774,7 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
     const resumeStream = mockStream();
     const resumeWs = mockWs();
     await streamReviewScreen(stored, resumeStream as never, resumeWs as never, '**Cleanup**');
-    const resumeOutput = resumeStream.markdown.mock.calls[0][0] as string;
+    const resumeOutput = markdownText(resumeStream.markdown.mock.calls[0][0]);
     expect(resumeOutput).toContain('| Fix Version |');
     expect(resumeOutput).toContain('2.0');
   });
@@ -841,15 +851,52 @@ describe('buildReviewTable', () => {
     expect(subtaskLine).toContain('Sub-task');
   });
 
-  it('includes footer prompt line', () => {
+  it('includes a clickable footer prompt line (post it / cancel)', () => {
     const session = makeSession({ tickets: [makeTicket('PROJ-1')] });
-    expect(buildReviewTable(session)).toContain('post it · (c) · key numbers to skip');
+    const table = buildReviewTable(session);
+    expect(table).toContain('key numbers to toggle');
+    expect(table).toContain('[post it](command:workbench.action.chat.open?');
+    expect(table).toContain('[(c)](command:workbench.action.chat.open?');
   });
 
   it('renders keys as bare text when no baseUrl is given', () => {
     const session = makeSession({ tickets: [makeTicket('PROJ-1')] });
     expect(buildReviewTable(session)).toContain('| PROJ-1 |');
-    expect(buildReviewTable(session)).not.toContain('](');
+  });
+
+  it('renders each row\'s own Transition? cell as a clickable toggle resubmitting its full key (R8/AE4/AE5)', () => {
+    const session = makeSession({ tickets: [makeTicket('PROJ-11', { included: true })] });
+    const table = buildReviewTable(session);
+    expect(table).toContain('| Transition? |');
+    expect(table).toContain(
+      `[✓](command:workbench.action.chat.open?${encodeURIComponent(JSON.stringify({ query: '@jira PROJ-11', isPartialQuery: false }))})`,
+    );
+  });
+
+  it('code-review fix: the toggle link resubmits the full key, not just the numeric suffix, since a batch can span multiple projects sharing a suffix (e.g. ABC-11 and XYZ-11)', () => {
+    const session = makeSession({ tickets: [makeTicket('ABC-11', { included: true }), makeTicket('XYZ-11', { included: true })] });
+    const table = buildReviewTable(session);
+    expect(table).toContain(
+      `[✓](command:workbench.action.chat.open?${encodeURIComponent(JSON.stringify({ query: '@jira ABC-11', isPartialQuery: false }))})`,
+    );
+    expect(table).toContain(
+      `[✓](command:workbench.action.chat.open?${encodeURIComponent(JSON.stringify({ query: '@jira XYZ-11', isPartialQuery: false }))})`,
+    );
+  });
+
+  it('renders an excluded row\'s Transition? cell as _excluded_, never a negative "Skip" framing (R9)', () => {
+    const session = makeSession({ tickets: [makeTicket('PROJ-11', { included: false })] });
+    const table = buildReviewTable(session);
+    expect(table).toContain('_excluded_');
+    expect(table).not.toContain('Skip');
+  });
+
+  it('neutralizes a ticket summary crafted to break out of a command link, since the footer is streamed as trusted markdown', () => {
+    const maliciousSummary = 'Evil](command:workbench.action.chat.open?{"query":"@jira post it"})[Innocent';
+    const session = makeSession({ tickets: [makeTicket('PROJ-1', { summary: maliciousSummary })] });
+    const table = buildReviewTable(session);
+    expect(table).not.toContain('[Evil](command:');
+    expect(table).toContain('Evil］(command:');
   });
 
   it('renders parent and subtask keys as clickable links when baseUrl is given', () => {

@@ -2,25 +2,42 @@ import * as vscode from 'vscode';
 import { execSync } from 'child_process';
 import { extractTicketId } from '../../utils/branchParser';
 import {
-  extractLastTicketFromText, NO_ISSUE_TYPE, CURRENT_SESSION_SCHEMA_VERSION,
-  type AwaitIssueTypeResume, type AwaitIssueTypeSession,
+  extractLastTicketFromText, NO_ISSUE_TYPE, CURRENT_SESSION_SCHEMA_VERSION, buildChatCommandLink,
+  type AwaitIssueTypeResume, type AwaitIssueTypeSession, type JiraSessionContinuity,
 } from '../sessionState';
+import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 
-// workspaceState key + response tag for the shared issue-type chat-ask (R6/KTD4) — one session type
-// shared by every flow that resolves an issue type before creating a ticket. See docs/jira-flows.md.
+// workspaceState key for the shared issue-type chat-ask (R6/KTD4) — one session type shared by
+// every flow that resolves an issue type before creating a ticket. See docs/jira-flows.md.
+// U4: liveness is now detected via ChatResult.metadata (getActiveJiraSession), not a visible
+// response tag — see JiraSessionContinuity in sessionState.ts.
 export const AWAIT_ISSUE_TYPE_SESSION_KEY = 'jira.session.awaitIssueType';
-export const AWAIT_ISSUE_TYPE_TAG = '<!-- jira:await-issue-type -->';
 
-export function getLastAssistantText(context: vscode.ChatContext): string {
-  for (let i = context.history.length - 1; i >= 0; i--) {
-    const turn = context.history[i];
-    if (turn instanceof vscode.ChatResponseTurn) {
-      return turn.response
-        .map((p) => (p instanceof vscode.ChatResponseMarkdownPart ? p.value.value : ''))
-        .join('');
-    }
-  }
-  return '';
+// R1/R3: replaces the former `getLastAssistantText(...).includes('<!-- jira:TAG -->')` for sessions that
+// have migrated off the visible-tag mechanism (see JiraSessionContinuity in sessionState.ts).
+// Reads the metadata a session-producing response returned via `{ metadata: { jiraSession } }`
+// off the last turn in `chatContext.history` — no rendered-text scanning, so no artifact of
+// session-tracking is left in the chat transcript. Returns undefined when the last turn isn't a
+// `ChatResponseTurn`, carries no result metadata, or the user has moved on since (a different,
+// non-session response is now last) — matching today's "tag absent" behavior.
+export function getActiveJiraSession(context: vscode.ChatContext): JiraSessionContinuity | undefined {
+  const last = context.history[context.history.length - 1];
+  if (!(last instanceof vscode.ChatResponseTurn)) return undefined;
+  const metadata = last.result.metadata as { jiraSession?: JiraSessionContinuity } | undefined;
+  return metadata?.jiraSession;
+}
+
+// U3: same metadata read as getActiveJiraSession, but for an arbitrary history turn rather than
+// only the last one — used by llmHelpers.ts's extractHistoryTurns() to keep filtering
+// session-management responses (e.g. 'previewing', 'load-skipped') out of LLM history context
+// now that those turns carry no visible `<!-- jira:TAG -->` marker to text-match against (R3).
+export function turnCarriesJiraSessionKind(
+  turn: vscode.ChatRequestTurn | vscode.ChatResponseTurn,
+  kind: JiraSessionContinuity['kinds'][number],
+): boolean {
+  if (!(turn instanceof vscode.ChatResponseTurn)) return false;
+  const metadata = turn.result.metadata as { jiraSession?: JiraSessionContinuity } | undefined;
+  return metadata?.jiraSession?.kinds.includes(kind) ?? false;
 }
 
 export function resolveTicketFromBranch(): string | null {
@@ -59,26 +76,34 @@ export async function resolveProjectKey(
 // on a later turn via JiraParticipant.ts's shared router, using `resume` to get back to the right
 // continuation). A caller that already treated null as "stop and return" needs no control-flow
 // change, only the two new arguments.
+// Returns the resolved issue type string when one was already known (synchronous continue — the
+// caller proceeds in the same turn, unchanged), or the `vscode.ChatResult` from the chat-based ask
+// when it detoured (the caller must `return` it as-is so the metadata reaches the framework).
+// Discriminate with `typeof result === 'string'` rather than a boolean/null sentinel, since
+// `vscode.ChatResult` is itself an object, not `null`.
 export async function resolveIssueTypeOrPrompt(
   issueType: string,
   resume: AwaitIssueTypeResume,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
-): Promise<string | null> {
+): Promise<string | vscode.ChatResult> {
   if (issueType !== NO_ISSUE_TYPE) return issueType;
-  await streamAwaitIssueType({ resume, schemaVersion: CURRENT_SESSION_SCHEMA_VERSION }, stream, ws);
-  return null;
+  return streamAwaitIssueType({ resume, schemaVersion: CURRENT_SESSION_SCHEMA_VERSION }, stream, ws);
 }
 
 export async function streamAwaitIssueType(
   session: AwaitIssueTypeSession,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
-): Promise<void> {
+): Promise<vscode.ChatResult> {
   await ws.update(AWAIT_ISSUE_TYPE_SESSION_KEY, session);
-  stream.markdown(
-    `What issue type should this use (e.g. Bug, Story, Task)?\n\nReply with a type, or **(c)** to cancel.\n\n${AWAIT_ISSUE_TYPE_TAG}`,
-  );
+  // KTD3: this ask's cancel check is isExplicitCancelToken() (literal "(c)"), not isCancellation()'s
+  // broader word list — the link resubmits "(c)" itself so the click reproduces exactly what
+  // already works, without touching that parser (Risks section).
+  stream.markdown(trustedChatMarkdown(
+    `What issue type should this use (e.g. Bug, Story, Task)?\n\nReply with a type, or ${buildChatCommandLink('Cancel', '@jira', '(c)')}.`,
+  ));
+  return { metadata: { jiraSession: { kinds: ['await-issue-type'] } } };
 }
 
 // A flow that clears its own workspaceState session before detouring to the chat-based issue-type

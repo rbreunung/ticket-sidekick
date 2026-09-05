@@ -75,7 +75,7 @@ export async function buildContentContext(
   return parts.join('\n\n---\n\n');
 }
 
-export async function streamContentPreview(session: ContentSession, stream: vscode.ChatResponseStream, workspaceState: vscode.Memento): Promise<void> {
+export async function streamContentPreview(session: ContentSession, stream: vscode.ChatResponseStream, workspaceState: vscode.Memento): Promise<vscode.ChatResult> {
   await workspaceState.update('jira.session.previewing', session);
   if (session.operation === 'createTicket') {
     const templateLine = session.templateName ? `  |  **Template:** ${session.templateName}` : '';
@@ -83,14 +83,15 @@ export async function streamContentPreview(session: ContentSession, stream: vsco
       ? `\n\n**Description:**\n${session.currentContent}`
       : '';
     stream.markdown(
-      `**Summary:** ${session.summary}\n**Type:** ${session.issueType}  |  **Project:** ${session.projectKey}${templateLine}${descSection}\n\nReply **"create it"** to create the ticket, or tell me how to adjust the description.\n\n<!-- jira:previewing -->`,
+      `**Summary:** ${session.summary}\n**Type:** ${session.issueType}  |  **Project:** ${session.projectKey}${templateLine}${descSection}\n\nReply **"create it"** to create the ticket, or tell me how to adjust the description.`,
     );
-    return;
+    return { metadata: { jiraSession: { kinds: ['previewing'] } } };
   }
   const actionLabel = session.operation === 'addComment' ? 'post this comment' : 'update the description';
   stream.markdown(
-    `${session.currentContent}\n\nReply **"post it"** to ${actionLabel}, or tell me how to adjust it.\n\n<!-- jira:previewing -->`,
+    `${session.currentContent}\n\nReply **"post it"** to ${actionLabel}, or tell me how to adjust it.`,
   );
+  return { metadata: { jiraSession: { kinds: ['previewing'] } } };
 }
 
 export async function handleContentSession(
@@ -102,7 +103,7 @@ export async function handleContentSession(
   ticketService: TicketService,
   workspaceState: vscode.Memento,
   baseUrl?: string,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   if (isCancellation(prompt)) {
     await workspaceState.update('jira.session.previewing', undefined);
     stream.markdown('_Cancelled._');
@@ -150,8 +151,7 @@ export async function handleContentSession(
   const refined = await generateContent(prompt, model, token, refineContext, contentSource);
   if (isLmRefusal(refined)) {
     stream.markdown(`_Could not refine content — the AI model declined the request. Try rephrasing your instruction._`);
-    await streamContentPreview(session, stream, workspaceState);
-    return;
+    return streamContentPreview(session, stream, workspaceState);
   }
-  await streamContentPreview({ ...session, currentContent: refined }, stream, workspaceState);
+  return streamContentPreview({ ...session, currentContent: refined }, stream, workspaceState);
 }

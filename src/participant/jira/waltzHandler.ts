@@ -48,9 +48,7 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent, WaltzReviewRow> = 
   parseAndFilter: readAndFilterWaltzFile,
   sessionKeys: {
     templateSelection: 'jira.session.waltzTemplateSelection',
-    templateTag: '<!-- jira:waltz-template -->',
     review: 'jira.session.waltzReview',
-    reviewTag: '<!-- jira:waltz-review -->',
   },
   searchLabelOf: component => sanitizeComponentLabel(component.nameVersion),
   dedupKeyOf: component => sanitizeComponentLabel(component.nameVersion),
@@ -98,7 +96,7 @@ export async function handleImportWaltzReport(
   ticketService: TicketService,
   ws: vscode.Memento,
   projectKeyHint: string | null = null,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   return handleImportReport(request, stream, token, jiraClient, ticketService, ws, waltzDescriptor, projectKeyHint);
 }
 
@@ -110,7 +108,7 @@ export async function handleWaltzTemplateSelection(
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
   baseUrl?: string,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   return handleImportTemplateSelection(reply, session, jiraClient, ticketService, stream, ws, waltzDescriptor, baseUrl);
 }
 
@@ -126,12 +124,12 @@ export async function handleWaltzAwaitIssueType(
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
   baseUrl?: string,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   if (sessionWasSuperseded(ws, waltzDescriptor.sessionKeys.templateSelection)) {
     stream.markdown('_A newer import was started while this one was waiting for the issue type — cancelled to avoid creating a stale batch._');
     return;
   }
-  await continueAfterImportIssueType(
+  return continueAfterImportIssueType(
     issueType, resume.pickedTemplateName, resume.session as WaltzTemplateSelectionSession,
     jiraClient, ticketService, stream, ws, waltzDescriptor, baseUrl,
   );
@@ -144,6 +142,6 @@ export async function handleWaltzReviewReply(
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
   baseUrl?: string,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   return handleImportReviewReply(reply, session, ticketService, stream, ws, waltzDescriptor, baseUrl);
 }

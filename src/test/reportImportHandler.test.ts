@@ -11,6 +11,7 @@ vi.mock('vscode', () => ({
     createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })),
   },
   Uri: { file: (p: string) => ({ fsPath: p }) },
+  MarkdownString: class { constructor(public value = '') {} isTrusted?: unknown; },
 }));
 
 vi.mock('../templates/TemplateService', () => ({
@@ -56,9 +57,7 @@ const descriptor: ReportImportDescriptor<TestItem, TestRow> = {
   parseAndFilter: async () => [],
   sessionKeys: {
     templateSelection: 'jira.session.testTemplateSelection',
-    templateTag: '<!-- jira:test-template -->',
     review: 'jira.session.testReview',
-    reviewTag: '<!-- jira:test-review -->',
   },
   searchLabelOf: item => `test-${item.ref}`,
   dedupKeyOf: item => item.ref,
@@ -73,6 +72,12 @@ const descriptor: ReportImportDescriptor<TestItem, TestRow> = {
 };
 
 const mockStream = () => ({ markdown: vi.fn() });
+
+// U5: several responses now stream a trusted vscode.MarkdownString (command links) rather than a
+// bare string — this file's mocked MarkdownString stores the raw text on `.value`.
+function markdownText(arg: unknown): string {
+  return typeof arg === 'string' ? arg : (arg as { value: string }).value;
+}
 
 function makeMockWs(initial: Record<string, unknown> = {}): { get: <T>(k: string, d?: T) => T | undefined; update: (k: string, v: unknown) => Promise<void>; store: Record<string, unknown> } {
   const store: Record<string, unknown> = { ...initial };
@@ -128,8 +133,8 @@ describe('streamImportTemplateSelection (never-guess sentinel rendering, U3/AE2)
     const stream = mockStream();
     const ws = makeMockWs();
     await streamImportTemplateSelection(session, stream as never, ws as never, descriptor);
-    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-    expect(text).toContain('1. _you will be asked to type it_');
+    const text = markdownText((stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0]);
+    expect(text).toContain('1. [_you will be asked to type it_](command:workbench.action.chat.open?');
     expect(text).not.toMatch(/1\.\s*\n/);
   });
 
@@ -138,8 +143,8 @@ describe('streamImportTemplateSelection (never-guess sentinel rendering, U3/AE2)
     const stream = mockStream();
     const ws = makeMockWs();
     await streamImportTemplateSelection(session, stream as never, ws as never, descriptor);
-    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-    expect(text).toContain('1. Bug');
+    const text = markdownText((stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0]);
+    expect(text).toContain('1. [Bug](command:workbench.action.chat.open?');
   });
 });
 
@@ -165,7 +170,10 @@ describe('handleImportTemplateSelection (never-guess sentinel detour, R6/KTD4)',
     // Session was already cleared before the detour (mirrors the create-ticket/email-import pattern).
     expect(ws.store[descriptor.sessionKeys.templateSelection]).toBeUndefined();
     expect(ws.store[AWAIT_ISSUE_TYPE_SESSION_KEY]).toBeDefined();
-    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
+    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => {
+      const arg = c[0];
+      return typeof arg === 'string' ? arg : (arg as { value: string }).value;
+    });
     expect(calls.some(c => c.includes('What issue type'))).toBe(true);
     expect(searchSpy).not.toHaveBeenCalled(); // dedup search hasn't run yet — only after the reply resumes
   });

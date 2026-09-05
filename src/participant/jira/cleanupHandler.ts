@@ -6,7 +6,8 @@ import { loadWorkflowCache, findPath } from '../../services/WorkflowService';
 import { TemplateService } from '../../templates/TemplateService';
 import type { CleanupRule } from '../../templates/TemplateService';
 import type { TransitionBatchSession, TransitionBatchTicket, ResolutionSelectionSession } from '../sessionState';
-import { buildReviewTable, parseResolutionSelection, parseSkipInput } from '../sessionState';
+import { buildReviewTable, parseResolutionSelection, parseSkipInput, buildChatCommandLink } from '../sessionState';
+import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import type { ParsedIntent } from './llmHelpers';
 
 /** Reads each configured `cleanupFields` ID off an issue's `fields` into a ticket/subtask's `.extra` bag. */
@@ -23,17 +24,17 @@ export async function streamReviewScreen(
   workspaceState: vscode.Memento,
   header: string,
   baseUrl?: string,
-): Promise<void> {
+): Promise<vscode.ChatResult> {
   await workspaceState.update('jira.session.transitionReview', session);
   const table = buildReviewTable(session, baseUrl, (fieldId) =>
     logDiag('jira.cleanup', 'warn', `Unrecognized field in cleanupFields: ${fieldId}`, { fieldId }),
   );
-  stream.markdown(`${header}\n\n${table}\n\n<!-- jira:transition-review -->`);
+  stream.markdown(trustedChatMarkdown(`${header}\n\n${table}`));
+  return { metadata: { jiraSession: { kinds: ['transition-review'] } } };
 }
 
 export async function executeCleanupBatch(
   session: TransitionBatchSession,
-  skipKeys: Set<string>,
   ticketService: TicketService,
   stream: vscode.ChatResponseStream,
 ): Promise<void> {
@@ -44,14 +45,16 @@ export async function executeCleanupBatch(
 
   stream.markdown(`_Running transitions…_\n\n`);
 
+  // U6: excludes are now each ticket's/subtask's own `included` flag (toggled per-row via the
+  // review table, R8) rather than a skip-set passed in for this one call.
   for (const ticket of session.tickets) {
-    if (skipKeys.has(ticket.key)) {
+    if (!ticket.included) {
       skipped += 1 + ticket.subtasks.length;
       continue;
     }
 
     for (const sub of ticket.subtasks) {
-      if (skipKeys.has(sub.key)) { skipped++; continue; }
+      if (!sub.included) { skipped++; continue; }
       try {
         await ticketService.transitionAlongPath(sub.key, sub.transitionPath, sub.resolution ?? session.resolution);
         transitioned++;
@@ -95,7 +98,7 @@ export async function handleRunCleanup(
   baseUrl?: string,
   cleanupFields: string[] = [],
   cleanupFieldMeta: JiraFieldMeta[] = [],
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
   const { cleanupRules } = new TemplateService(workspaceRoot).loadTemplates();
@@ -180,6 +183,7 @@ export async function handleRunCleanup(
       transitionPath: path,
       subtasks: [],
       extra: extractExtraFields(issue.fields, cleanupFields),
+      included: true,
     });
   }
 
@@ -208,6 +212,7 @@ export async function handleRunCleanup(
         transitionPath: subPath,
         resolution: subtaskResolution,
         extra: extractExtraFields(s.fields, cleanupFields),
+        included: true,
       });
     }
   }
@@ -231,9 +236,12 @@ export async function handleRunCleanup(
         fieldMeta: cleanupFieldMeta,
       };
       await workspaceState.update('jira.session.resolutionSelection', resSession);
-      const list = resolutions.map((r, i) => `${i + 1}. ${r.name}`).join('\n');
-      stream.markdown(`Which resolution should be set when transitioning to **${targetState}**?\n\n${list}\n\nReply with the name or number, or **none** to skip setting a resolution.\n\n<!-- jira:selecting-resolution -->`);
-      return;
+      const list = resolutions.map((r, i) => `${i + 1}. ${buildChatCommandLink(r.name, '@jira', String(i + 1))}`).join('\n');
+      stream.markdown(trustedChatMarkdown(
+        `Which resolution should be set when transitioning to **${targetState}**?\n\n${list}\n\n` +
+        `Reply with the name or number, or ${buildChatCommandLink('None', '@jira', 'none')} to skip setting a resolution.`,
+      ));
+      return { metadata: { jiraSession: { kinds: ['resolution-selection'] } } };
     }
   }
 
@@ -251,5 +259,6 @@ export async function handleRunCleanup(
   const table = buildReviewTable(batchSession, baseUrl, (fieldId) =>
     logDiag('jira.cleanup', 'warn', `Unrecognized field in cleanupFields: ${fieldId}`, { fieldId }),
   );
-  stream.markdown(`${buffer.join('')}${header}\n\n${table}\n\n<!-- jira:transition-review -->`);
+  stream.markdown(trustedChatMarkdown(`${buffer.join('')}${header}\n\n${table}`));
+  return { metadata: { jiraSession: { kinds: ['transition-review'] } } };
 }

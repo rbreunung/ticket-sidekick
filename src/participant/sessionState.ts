@@ -4,6 +4,7 @@ import type { VeracodeFlaw, VeracodeReviewRow } from '../utils/veracodeReport';
 import type { WaltzComponent, WaltzReviewRow } from '../utils/waltzReport';
 import type { EmailImportItem, EmailReviewRow } from '../utils/emlParser';
 import { BATCH_LIMIT, sanitizeCellText } from '../utils/reportImport';
+import { TICKET_ID_PATTERN } from '../utils/branchParser';
 import { formatKeyLink, coerceTypedFieldValue, buildExtraFieldColumns, type TemplateFieldCandidate } from '../services/TicketService';
 import type { JiraTemplate } from '../templates/TemplateService';
 // Type-only — ConfigService.ts imports `vscode`, but a type-only import is erased before
@@ -81,6 +82,10 @@ export interface TransitionSubtask {
   transitionPath: Array<{ id: string; name: string; to: string }>;
   resolution?: string;
   extra?: Record<string, unknown>;
+  // U6/KTD6: mirrors ReviewRowBase's `included` convention — whether this subtask transitions if
+  // the batch runs. Defaults to true at construction (cleanupHandler.ts); toggled per-row (R8) by
+  // buildReviewTable()'s Include? column and parseSkipInput()'s cascading toggle.
+  included: boolean;
 }
 
 export interface TransitionBatchTicket {
@@ -90,6 +95,8 @@ export interface TransitionBatchTicket {
   transitionPath: Array<{ id: string; name: string; to: string }>;
   subtasks: TransitionSubtask[];
   extra?: Record<string, unknown>;
+  // U6/KTD6: see TransitionSubtask.included above — same convention, same default/toggle path.
+  included: boolean;
 }
 
 export interface TransitionBatchSession {
@@ -109,6 +116,12 @@ interface TransitionReviewRow {
   to: string;
   resolution: string;
   extra?: Record<string, unknown>;
+  included: boolean;
+  // The row's own toggle reply text (R8). The FULL key, not just its numeric suffix — a batch can
+  // span multiple projects (an arbitrary JQL search), where two tickets can share a numeric suffix
+  // (e.g. ABC-11 and XYZ-11); parseSkipInput() resolves a full key unambiguously, whereas a bare
+  // suffix is only honored when it isn't ambiguous in the batch (code-review fix).
+  rawKey: string;
 }
 
 /**
@@ -127,26 +140,33 @@ export function buildReviewTable(
     a.currentStatus.toLowerCase().localeCompare(b.currentStatus.toLowerCase()),
   );
 
+  // Ticket summaries are untrusted, externally-influenced content — this table's footer is a
+  // trusted MarkdownString (KTD5), so neutralizeMarkdownLinks() keeps a crafted summary from
+  // forming a live command link once the whole thing is trust-gated (see its own doc comment).
   const flatRows: TransitionReviewRow[] = [];
   for (const t of sorted) {
     flatRows.push({
       type: session.issueType,
       key: formatKeyLink(t.key, baseUrl),
-      summary: t.summary,
+      summary: neutralizeMarkdownLinks(t.summary),
       currentStatus: t.currentStatus,
       to: t.transitionPath.at(-1)?.to ?? '?',
       resolution: session.resolution ?? '',
       extra: t.extra,
+      included: t.included,
+      rawKey: t.key,
     });
     for (const s of t.subtasks) {
       flatRows.push({
         type: 'Sub-task',
         key: `↳ ${formatKeyLink(s.key, baseUrl)}`,
-        summary: s.summary,
+        summary: neutralizeMarkdownLinks(s.summary),
         currentStatus: s.currentStatus,
         to: s.transitionPath.at(-1)?.to ?? '?',
         resolution: s.resolution ?? session.resolution ?? '',
         extra: s.extra,
+        included: s.included,
+        rawKey: s.key,
       });
     }
   }
@@ -166,9 +186,14 @@ export function buildReviewTable(
       (row, id) => row.extra?.[id],
       onUnknownField,
     ),
+    // R8/R9: positive "will transition when checked" framing — clicking resubmits this row's own
+    // numeric suffix, the exact text the existing typed "11 14" toggle syntax already accepts
+    // (parseSkipInput), so no new parser logic (Risks section).
+    { header: 'Transition?', accessor: (r) => buildChatCommandLink(r.included ? '✓' : '_excluded_', '@jira', r.rawKey) },
   ];
 
-  return renderReviewTable(columns, flatRows) + '\n\npost it · (c) · key numbers to skip (e.g. 11 14)';
+  return renderReviewTable(columns, flatRows) + '\n\n' +
+    `${buildChatCommandLink('post it', '@jira', 'post it')} · ${buildChatCommandLink('(c)', '@jira', 'cancel')} · key numbers to toggle (e.g. 11 14)`;
 }
 
 export interface ResolutionSelectionSession {
@@ -181,10 +206,14 @@ export interface ResolutionSelectionSession {
   fieldMeta: JiraFieldMeta[];
 }
 
+// U6: 'skip' was renamed 'toggle' — a mentioned ticket's (and its cascaded parent/subtask's)
+// `included` flag flips and the table re-renders (R8/AE4), rather than the reply immediately
+// executing the batch with those tickets excluded. 'ok' (e.g. "post it") is now the only action
+// that actually runs the batch, using each ticket/subtask's current `included` flag.
 export type SkipParseResult =
   | { action: 'ok' }
   | { action: 'cancel' }
-  | { action: 'skip'; keys: string[] }
+  | { action: 'toggle'; keys: string[] }
   | { action: 'invalid' };
 
 // The remaining fields (once template/issue-type selection and ticket creation moved to
@@ -211,20 +240,48 @@ export function parseSkipInput(reply: string, tickets: TransitionBatchTicket[]):
   if (isCancellation(reply)) return { action: 'cancel' };
 
   const parts = normalized.split(/\s+/).filter(Boolean);
-  const allKeys = new Map<string, string>(); // numeric suffix → full key
+  // Code-review fix: a batch can span multiple projects (an arbitrary JQL search, not
+  // project-scoped), so two tickets can share the same numeric suffix (e.g. ABC-11 and XYZ-11).
+  // buildReviewTable()'s per-row toggle link resubmits the row's own full key (unambiguous,
+  // matched via byFullKey below); the typed "11 14" shorthand still resolves by numeric suffix
+  // (bySuffix) but ONLY when that suffix is unambiguous in this batch — an ambiguous suffix is
+  // never guessed at, since silently toggling the wrong ticket is worse than treating it as
+  // unmatched.
+  const byFullKey = new Map<string, string>(); // lowercased full key → full key
+  const bySuffix = new Map<string, string>(); // numeric suffix → full key (only when unambiguous)
+  const ambiguousSuffixes = new Set<string>();
+  const registerKey = (key: string) => {
+    byFullKey.set(key.toLowerCase(), key);
+    const suffix = key.split('-')[1];
+    if (!suffix) return;
+    if (bySuffix.has(suffix) && bySuffix.get(suffix) !== key) {
+      ambiguousSuffixes.add(suffix);
+    } else {
+      bySuffix.set(suffix, key);
+    }
+  };
   for (const t of tickets) {
-    allKeys.set(t.key.split('-')[1], t.key);
-    for (const s of t.subtasks) allKeys.set(s.key.split('-')[1], s.key);
+    registerKey(t.key);
+    for (const s of t.subtasks) registerKey(s.key);
   }
 
   const mentioned = new Set<string>();
   for (const p of parts) {
-    const key = allKeys.get(p);
-    if (key) mentioned.add(key);
+    const fullKeyMatch = byFullKey.get(p);
+    if (fullKeyMatch) {
+      mentioned.add(fullKeyMatch);
+      continue;
+    }
+    if (!ambiguousSuffixes.has(p)) {
+      const suffixMatch = bySuffix.get(p);
+      if (suffixMatch) mentioned.add(suffixMatch);
+    }
   }
   if (mentioned.size === 0) return { action: 'invalid' };
 
-  // Cascade: subtask mentioned → also skip parent; parent mentioned → also skip all subtasks
+  // Cascade: subtask mentioned → also toggle parent; parent mentioned → also toggle all subtasks —
+  // unchanged from the pre-U6 one-shot skip cascade, just applied as a flip now instead of a final
+  // exclude set (see applyTicketToggle below).
   const expanded = new Set(mentioned);
   for (const t of tickets) {
     if (mentioned.has(t.key)) {
@@ -234,7 +291,20 @@ export function parseSkipInput(reply: string, tickets: TransitionBatchTicket[]):
       if (mentioned.has(s.key)) expanded.add(t.key);
     }
   }
-  return { action: 'skip', keys: [...expanded] };
+  return { action: 'toggle', keys: [...expanded] };
+}
+
+// U6/AE4: flips `included` for every ticket/subtask whose key is in `keys` (the cascaded set
+// parseSkipInput already computed) — pure so it's independently testable, mirroring
+// applyReviewToggle's shape for the import-review tables. The caller re-renders via
+// buildReviewTable() afterward; this never executes anything itself.
+export function applyTicketToggle(tickets: TransitionBatchTicket[], keys: string[]): TransitionBatchTicket[] {
+  const toggleSet = new Set(keys);
+  return tickets.map(t => ({
+    ...t,
+    included: toggleSet.has(t.key) ? !t.included : t.included,
+    subtasks: t.subtasks.map(s => (toggleSet.has(s.key) ? { ...s, included: !s.included } : s)),
+  }));
 }
 
 // Shared by parseResolutionSelection and parseIssueTypePick: resolves a reply to one list item
@@ -364,17 +434,42 @@ export interface FilterSelectionSession {
   originalPrompt: string;
 }
 
+// Intentionally excluded from the `JiraSessionContinuity` metadata migration: this session is
+// written to workspaceState in the background and silently overwritten by the next search — it
+// never had a reply-detection tag/branch to convert, so there's nothing to migrate here.
 export interface SearchResultSession {
   ticketKeys: string[];
   jql: string;
 }
 
 export interface BulkUpdateReviewSession {
-  ticketKeys: string[];
+  // U6/KTD6: rows (not just keys) so a toggle round-trip needs no re-fetch — each row's own
+  // `included` flag persists across turns, same convention as ReviewRowBase/TransitionBatchTicket.
+  rows: BulkUpdateReviewRow[];
   fieldId: string;
   fieldName: string;
   fieldValue: unknown;
   arrayOp: 'set' | 'add' | 'remove';
+  // Code-review fix: the initial render's own header (field name/value, ticket count, "View in
+  // Jira" link) built once and reused verbatim by buildBulkUpdateReviewMessage() on every
+  // toggle-resume render — previously the resume render duplicated a shorter, hand-written header
+  // that had already drifted from the initial one (missing the count and the Jira link).
+  headerLine: string;
+}
+
+/**
+ * Assembles a bulk-update review response — `session`'s own stored header line, the table (current
+ * `rows`, which may differ from `session.rows` right after a toggle), and the confirm/cancel/toggle
+ * footer — shared by both the initial render and every toggle-resume render so they can't drift
+ * apart (code-review fix).
+ */
+export function buildBulkUpdateReviewMessage(headerLine: string, rows: BulkUpdateReviewRow[]): string {
+  return (
+    `${headerLine}\n\n` +
+    buildBulkUpdateReviewTable(rows) +
+    `\n\nReply ${buildChatCommandLink('Post it', '@jira', 'post it')} to apply, ` +
+    `${buildChatCommandLink('Cancel', '@jira', 'cancel')} to cancel, or list keys to toggle (e.g. \`skip PROJ-2\`).`
+  );
 }
 
 export interface FieldUpdatePreviewSession {
@@ -402,17 +497,36 @@ export interface SprintSelectionSession {
     | { kind: 'creation'; sprintFieldId: string };
 }
 
-export function parseBulkUpdateReview(reply: string): { action: 'ok'; skip: string[] } | { action: 'cancel' } | { action: 'invalid' } {
+// U6/KTD6: 'ok'/'skip' -> 'ok'/'toggle' — a key list (typed "skip PROJ-2 PROJ-5", or a bare list a
+// row's own toggle click resubmits, e.g. "PROJ-2") now flips those rows' `included` and re-renders
+// (R8/AE4), rather than the pre-U6 one-shot "these are excluded, run the rest now." Only 'ok'
+// (e.g. "post it") actually runs the update, using each row's current `included` flag.
+export type BulkUpdateReviewParseResult =
+  | { action: 'ok' }
+  | { action: 'cancel' }
+  | { action: 'toggle'; keys: string[] }
+  | { action: 'invalid' };
+
+// Code-review fix: derived from branchParser.ts's own TICKET_ID_PATTERN (one source of truth for
+// the Jira ticket-key shape) rather than a second, independently-typed copy — anchored for a
+// full-token match and case-insensitive, since this validates a typed/click-generated toggle
+// token, not an arbitrary branch name.
+const TICKET_KEY_TOKEN = new RegExp(`^${TICKET_ID_PATTERN.source}$`, 'i');
+
+export function parseBulkUpdateReview(reply: string): BulkUpdateReviewParseResult {
   const trimmed = reply.trim();
   if (!trimmed) return { action: 'invalid' };
   if (isCancellation(reply)) return { action: 'cancel' };
-  if (isConfirmation(reply)) return { action: 'ok', skip: [] };
+  if (isConfirmation(reply)) return { action: 'ok' };
   const skipMatch = trimmed.match(/^skip\s+(.*)/i);
-  if (skipMatch) {
-    const keys = skipMatch[1].trim().split(/[\s,]+/).filter(Boolean);
-    return { action: 'ok', skip: keys };
-  }
-  return { action: 'invalid' };
+  // A bare key list (no "skip" prefix) is what a row's own toggle link resubmits (R8/KTD6) — accept
+  // it the same way, without requiring the typed "skip" keyword.
+  const tokenSource = skipMatch ? skipMatch[1] : trimmed;
+  const keys = tokenSource.trim().split(/[\s,]+/).filter(Boolean)
+    .filter(t => TICKET_KEY_TOKEN.test(t))
+    .map(t => t.toUpperCase());
+  if (keys.length === 0) return { action: 'invalid' };
+  return { action: 'toggle', keys };
 }
 
 export function parseFilterSelection(reply: string, filters: JiraFilter[]): JiraFilter | 'cancel' | 'invalid' {
@@ -541,6 +655,50 @@ export function buildJiraNotConfiguredMessage(config: Pick<JiraConfig, 'baseUrl'
   return `Jira credentials not configured. Run "${setupLabel}" from the Command Palette.`;
 }
 
+/**
+ * Builds a raw `[label](command:workbench.action.chat.open?<encoded>)` markdown link that,
+ * when clicked, re-submits `replyText` to this participant exactly as if the user had typed it
+ * (R5) — reusing VS Code's built-in `workbench.action.chat.open` command rather than a new
+ * registered wrapper command (KTD2).
+ *
+ * `label` is neutralized (see `neutralizeMarkdownLinks()` below) before being embedded: a label
+ * built from externally-influenced text (a Jira filter/template name, a ticket subject, …) that
+ * contains an unneutralized `]` would close the `[label]` early, letting the rest of that text open
+ * a second, attacker-chosen `(command:...)` link of its own right next to this legitimate one —
+ * not merely garbled rendering, but a second live command. Callers therefore never need to
+ * pre-sanitize a label themselves.
+ *
+ * Pure string building only — this never touches `vscode.MarkdownString` (KTD5). Every call site
+ * that assembles a `MarkdownString` from output containing one or more of these links MUST set
+ * `.isTrusted = { enabledCommands: ['workbench.action.chat.open'] }` on that `MarkdownString`
+ * before calling `stream.markdown(...)`, mirroring the existing `settingsLink`/`credentialsLink`
+ * trust-gate pattern in `JiraParticipant.ts` (and `notConfigured` in `BitbucketParticipant.ts`).
+ * Without that, VS Code renders the link as inert plain text instead of a clickable command.
+ */
+export function buildChatCommandLink(label: string, participantId: '@jira' | '@bitbucket', replyText: string): string {
+  const safeLabel = neutralizeMarkdownLinks(label);
+  const query = `${participantId} ${replyText}`;
+  const encodedArgs = encodeURIComponent(JSON.stringify({ query, isPartialQuery: false }));
+  return `[${safeLabel}](command:workbench.action.chat.open?${encodedArgs})`;
+}
+
+/**
+ * `buildChatCommandLink()`'s counterpart on the untrusted side: neutralizes markdown link/image
+ * syntax in untrusted, externally-influenced text (a Jira ticket summary, custom field value, an
+ * imported item's subject/title, …) before it is combined into the same string as one or more
+ * real command links and the whole thing is trust-gated (`trustedChatMarkdown()`,
+ * `src/utils/chatMarkdown.ts`). Without this, a crafted `[label](command:workbench.action.chat.open?…)`
+ * sequence hiding inside that untrusted text would render as a live, clickable command once the
+ * response is trusted — silently resubmitting an attacker-chosen message as the user's own next
+ * chat turn. Replaces `[`/`]` with visually similar full-width brackets rather than stripping them,
+ * so the text stays readable and no other markdown-significant character is touched — unlike
+ * `sanitizeCellText()` (`reportImport.ts`), which also strips wiki-markup trigger characters for a
+ * different destination (Jira wiki markup, not this extension's own trusted chat responses).
+ */
+export function neutralizeMarkdownLinks(value: string): string {
+  return value.replace(/\[/g, '［').replace(/\]/g, '］');
+}
+
 // ---------------------------------------------------------------------------------------------
 // Shared Veracode/Waltz import session types + review-table renderer + toggle-reply parser.
 //
@@ -667,14 +825,18 @@ export function renderReviewTable<TRow>(columns: ReviewTableColumn<TRow>[], rows
   return [headerRow, separatorRow, ...dataRows].join('\n');
 }
 
+// Summary/component name are untrusted, scan-report-derived free text — this table's whole output
+// is trust-gated (KTD5, U6) once it carries the per-row toggle links below, so both go through
+// neutralizeMarkdownLinks() (see its own doc comment). Severity/CWE-id/rating stay unsanitized —
+// enum-shaped/numeric values from the report's own schema, not free text.
 export const VERACODE_REVIEW_COLUMNS: ReviewTableColumn<VeracodeReviewRow>[] = [
   { header: 'Severity', accessor: (r) => `${r.severityLabelText} (${r.severity})` },
   { header: 'CWE', accessor: (r) => (r.cweId ? `CWE-${r.cweId}` : '—') },
-  { header: 'Summary', accessor: (r) => r.summary },
+  { header: 'Summary', accessor: (r) => neutralizeMarkdownLinks(r.summary) },
 ];
 
 export const WALTZ_REVIEW_COLUMNS: ReviewTableColumn<WaltzReviewRow>[] = [
-  { header: 'Component', accessor: (r) => r.nameVersion },
+  { header: 'Component', accessor: (r) => neutralizeMarkdownLinks(r.nameVersion) },
   { header: 'Rating', accessor: (r) => r.maxVulnRating },
 ];
 
@@ -694,12 +856,16 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
   const idColumn: ReviewTableColumn<TRow> = { header: '#', accessor: (r) => r.id };
   const pluralBare = itemNoun.replace('(s)', 's'); // 'component(s)' -> 'components'
 
+  // R8: the Include? cell is itself the toggle — clicking it resubmits the row's own id, which
+  // parseReviewInput already parses as a toggle reply (same text a typed "2 4"/"A1" list uses), so
+  // no new parser logic is needed (Risks section). R9: always the positive "will (re-)create when
+  // checked" framing, never a negative "Skip" column.
   if (ticketed.length > 0) {
     const ticketedColumns: ReviewTableColumn<TRow>[] = [
       idColumn,
       ...columns,
       { header: 'Ticket', accessor: (r) => formatKeyLink(r.existingTicketKey!, baseUrl) },
-      { header: 'Include?', accessor: (r) => (r.included ? '✓ re-create' : '_excluded_') },
+      { header: 'Include?', accessor: (r) => buildChatCommandLink(r.included ? '✓ re-create' : '_excluded_', '@jira', r.id) },
     ];
     lines.push('### Already ticketed');
     lines.push(renderReviewTable(ticketedColumns, ticketed));
@@ -713,7 +879,7 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
     const freshColumns: ReviewTableColumn<TRow>[] = [
       idColumn,
       ...columns,
-      { header: 'Include?', accessor: (r) => (r.included ? '✓' : '_excluded_') },
+      { header: 'Include?', accessor: (r) => buildChatCommandLink(r.included ? '✓' : '_excluded_', '@jira', r.id) },
     ];
     lines.push(renderReviewTable(freshColumns, fresh));
   }
@@ -741,7 +907,10 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
     lines.push(`_Only the first ${REVIEW_BATCH_LIMIT} included rows will be created this run — re-run the import afterward for the remainder._`);
   }
   lines.push('');
-  lines.push('Reply **post it** to proceed, **(c)** to cancel, or a list of ids to toggle (e.g. `2 4` or `A1`).');
+  lines.push(
+    `Reply ${buildChatCommandLink('Post it', '@jira', 'post it')} to proceed, ` +
+    `${buildChatCommandLink('Cancel', '@jira', 'cancel')} to cancel, or a list of ids to toggle (e.g. \`2 4\` or \`A1\`).`,
+  );
 
   return lines.join('\n');
 }
@@ -750,12 +919,23 @@ export interface BulkUpdateReviewRow {
   key: string;
   summary: string;
   currentValueDisplay: string;
+  // U6/KTD6: mirrors ReviewRowBase's `included` convention — whether this ticket is updated if the
+  // batch runs. Defaults to true at construction (JiraParticipant.ts); toggled per-row (R8) by this
+  // table's own Update? column and parseBulkUpdateReview()'s key-list toggle.
+  included: boolean;
 }
 
+// Summary/current-value are untrusted, externally-influenced Jira field content — this table's
+// composed response is trust-gated (KTD5) at its call site (JiraParticipant.ts), so both go
+// through neutralizeMarkdownLinks() (see its own doc comment).
 const BULK_UPDATE_REVIEW_COLUMNS: ReviewTableColumn<BulkUpdateReviewRow>[] = [
   { header: 'Key', accessor: (r) => r.key },
-  { header: 'Summary', accessor: (r) => r.summary },
-  { header: 'Current value', accessor: (r) => r.currentValueDisplay },
+  { header: 'Summary', accessor: (r) => neutralizeMarkdownLinks(r.summary) },
+  { header: 'Current value', accessor: (r) => neutralizeMarkdownLinks(r.currentValueDisplay) },
+  // R8/R9: positive "will update when checked" framing — clicking resubmits this row's own key,
+  // the exact text parseBulkUpdateReview() already accepts as a toggle (bare key list), so no new
+  // parser shape beyond what KTD6 already calls for.
+  { header: 'Update?', accessor: (r) => buildChatCommandLink(r.included ? '✓' : '_excluded_', '@jira', r.key) },
 ];
 
 /**
@@ -765,6 +945,13 @@ const BULK_UPDATE_REVIEW_COLUMNS: ReviewTableColumn<BulkUpdateReviewRow>[] = [
  */
 export function buildBulkUpdateReviewTable(rows: BulkUpdateReviewRow[]): string {
   return renderReviewTable(BULK_UPDATE_REVIEW_COLUMNS, rows);
+}
+
+// U6/AE4: flips `included` for every row whose key is in `keys` — pure so it's independently
+// testable, mirroring applyReviewToggle()/applyTicketToggle()'s shape for the other review tables.
+export function applyBulkUpdateToggle(rows: BulkUpdateReviewRow[], keys: string[]): BulkUpdateReviewRow[] {
+  const toggleSet = new Set(keys.map(k => k.toUpperCase()));
+  return rows.map(r => (toggleSet.has(r.key.toUpperCase()) ? { ...r, included: !r.included } : r));
 }
 
 export type ReviewParseResult =
@@ -1349,6 +1536,59 @@ export function computeJiraFollowups(state: JiraFollowupState): FollowupSuggesti
     case 'none':
       return [];
   }
+}
+
+/**
+ * Sibling of `JiraFollowupState` on the same `vscode.ChatResult.metadata` channel, but for
+ * session-continuity detection instead of follow-up chips: replaces matching the last rendered
+ * response text against a visible `<!-- jira:TAG -->` HTML comment with a check against this
+ * metadata read off `chatContext.history` (see `getActiveJiraSession` in `jira/ticketContext.ts`).
+ * `workspaceState` still owns the actual session data — `kinds` is only a liveness flag, so a
+ * response streams as many kinds as it left tags for today (some responses leave more than one,
+ * e.g. a comment page that's simultaneously a valid `more-comments`-confirm target and a valid
+ * `comment-list`-index target).
+ */
+// U3 finished migrating the six core flow handler files (createHandler.ts, contentHandler.ts,
+// fieldHandler.ts, cleanupHandler.ts, loadHandler.ts, plus JiraParticipant.ts's own matching
+// production/resume sites) onto this mechanism — every production site for a given kind below
+// is metadata-based and its visible `<!-- jira:TAG -->` marker is gone. U4 finished the rest:
+// the shared issue-type chat-ask (ticketContext.ts), report-import (reportImportHandler.ts,
+// veracodeHandler.ts, waltzHandler.ts, emailHandler.ts), and template generation
+// (templateGenerationHandler.ts). U4 also converted Bitbucket's ReviewSession/
+// BitbucketCommentPreviewSession/SmartFallbackSession — see BitbucketSessionContinuity in
+// reviewSessionState.ts for its sibling mechanism.
+export type JiraSessionKind =
+  | 'more-comments'
+  | 'comment-list'
+  | 'load-skipped'
+  | 'creating'
+  | 'selecting-create-option'
+  | 'previewing'
+  | 'resolution-selection'
+  | 'transition-review'
+  | 'selecting-filter'
+  | 'bulk-update-review'
+  | 'sprint-selection'
+  | 'field-selection'
+  | 'field-update-preview'
+  | 'await-issue-type'
+  | 'veracode-template'
+  | 'veracode-review'
+  | 'waltz-template'
+  | 'waltz-review'
+  | 'email-template'
+  | 'email-review'
+  | 'email-content'
+  | 'template-gen-await-name'
+  | 'template-gen-type-pick'
+  | 'template-gen-await-free-type'
+  | 'template-gen-review'
+  | 'template-gen-collision'
+  | 'template-gen-offer-create'
+  | 'template-gen-await-summary';
+
+export interface JiraSessionContinuity {
+  kinds: JiraSessionKind[];
 }
 
 /** Result text for `jira_discoverWorkflow` — mirrors `handleDiscoverWorkflow`'s chat summary

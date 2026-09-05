@@ -3,16 +3,17 @@ import { logDiag } from '../../utils/diagLog';
 import { TicketService, resolveFieldIdFuzzy, extractTextFromAdf } from '../../services/TicketService';
 import type { JiraFieldMeta } from '../../jira/IJiraClient';
 import type { FieldUpdatePreviewSession, FieldSelectionSession, SprintSelectionSession, ContentSession } from '../sessionState';
-import { isCancellation } from '../sessionState';
+import { isCancellation, buildChatCommandLink } from '../sessionState';
 import { spellCheckValue } from './llmHelpers';
 import { streamContentPreview } from './contentHandler';
 import { wikiToMarkdown } from '../../utils/markdownFormatter';
+import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 
 export async function streamFieldUpdatePreview(
   session: FieldUpdatePreviewSession,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
-): Promise<void> {
+): Promise<vscode.ChatResult> {
   await ws.update('jira.session.fieldUpdatePreview', session);
   const scope = session.ticketKeys.length === 1
     ? session.ticketKeys[0]
@@ -20,11 +21,12 @@ export async function streamFieldUpdatePreview(
   const displayValue = typeof session.fieldValue === 'string'
     ? session.fieldValue
     : JSON.stringify(session.fieldValue);
-  stream.markdown(
+  stream.markdown(trustedChatMarkdown(
     `**Preview: set ${session.fieldName}**\n\n` +
     `Setting **${session.fieldName}** (\`${session.fieldId}\`) to \`${displayValue}\` on ${scope}.\n\n` +
-    `Reply **post it** to apply, or **(c)** to cancel.\n\n<!-- jira:field-update-preview -->`,
-  );
+    `Reply ${buildChatCommandLink('Post it', '@jira', 'post it')} to apply, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+  ));
+  return { metadata: { jiraSession: { kinds: ['field-update-preview'] } } };
 }
 
 export async function continueSetField(
@@ -37,7 +39,7 @@ export async function continueSetField(
   ws: vscode.Memento,
   model: vscode.LanguageModelChat,
   token: vscode.CancellationToken,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   const sampleKey = ticketKeys[0];
   const isSprintField = Boolean(field.schema.custom?.includes('gh-sprint'));
   const isArray = field.schema.type === 'array';
@@ -58,11 +60,10 @@ export async function continueSetField(
       return;
     }
     if (candidates.length === 1) {
-      await streamFieldUpdatePreview({
+      return streamFieldUpdatePreview({
         ticketKeys, fieldId: field.id, fieldName: field.name,
         fieldValue: candidates[0].id, isArray: true, arrayOp: 'set',
       }, stream, ws);
-      return;
     }
     const previewPlaceholder: FieldUpdatePreviewSession = {
       ticketKeys, fieldId: field.id, fieldName: field.name,
@@ -73,9 +74,11 @@ export async function continueSetField(
       pending: { kind: 'field-update', session: previewPlaceholder },
     };
     await ws.update('jira.session.sprintSelection', sprintSession);
-    const list = candidates.map((s, i) => `${i + 1}. ${s.name} (${s.state})`).join('\n');
-    stream.markdown(`Multiple sprints match "${fieldValueRaw}":\n\n${list}\n\nWhich one? Reply with a number, or **(c)** to cancel.\n\n<!-- jira:sprint-selection -->`);
-    return;
+    const list = candidates.map((s, i) => `${i + 1}. ${buildChatCommandLink(`${s.name} (${s.state})`, '@jira', String(i + 1))}`).join('\n');
+    stream.markdown(trustedChatMarkdown(
+      `Multiple sprints match "${fieldValueRaw}":\n\n${list}\n\nWhich one? Reply with a number, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+    ));
+    return { metadata: { jiraSession: { kinds: ['sprint-selection'] } } };
   }
 
   let fieldValue: unknown;
@@ -97,7 +100,7 @@ export async function continueSetField(
     return;
   }
 
-  await streamFieldUpdatePreview({
+  return streamFieldUpdatePreview({
     ticketKeys, fieldId: field.id, fieldName: field.name,
     fieldValue, isArray, arrayOp,
   }, stream, ws);
@@ -114,7 +117,7 @@ export async function handleSetField(
   ws: vscode.Memento,
   model: vscode.LanguageModelChat,
   token: vscode.CancellationToken,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   const navigable = fieldMeta.filter(f => f.navigable === true);
   const resolution = resolveFieldIdFuzzy(fieldNameRaw, navigable);
 
@@ -129,12 +132,14 @@ export async function handleSetField(
       pending: { fieldValue: fieldValueRaw, arrayOp, ticketKeys },
     };
     await ws.update('jira.session.fieldSelection', selSession);
-    const list = resolution.fields.map((f, i) => `${i + 1}. ${f.name} (\`${f.id}\`)`).join('\n');
-    stream.markdown(`Multiple fields match "${fieldNameRaw}":\n\n${list}\n\nWhich one? Reply with a number, or **(c)** to cancel.\n\n<!-- jira:selecting-field -->`);
-    return;
+    const list = resolution.fields.map((f, i) => `${i + 1}. ${buildChatCommandLink(`${f.name} (\`${f.id}\`)`, '@jira', String(i + 1))}`).join('\n');
+    stream.markdown(trustedChatMarkdown(
+      `Multiple fields match "${fieldNameRaw}":\n\n${list}\n\nWhich one? Reply with a number, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+    ));
+    return { metadata: { jiraSession: { kinds: ['field-selection'] } } };
   }
 
-  await continueSetField(
+  return continueSetField(
     ticketKeys, resolution.field, fieldValueRaw, arrayOp,
     ticketService, stream, ws, model, token,
   );
@@ -147,7 +152,7 @@ export async function handleSpellCheck(
   stream: vscode.ChatResponseStream,
   token: vscode.CancellationToken,
   ws: vscode.Memento,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   const issue = await ticketService.getIssue(ticketKey);
   const rawDescription = extractTextFromAdf(issue.fields.description);
   if (!rawDescription.trim()) {
@@ -170,6 +175,7 @@ export async function handleSpellCheck(
     historyContext: undefined,
     contentSource: 'generate',
   };
-  await streamContentPreview(session, stream, ws);
+  const chatResult = await streamContentPreview(session, stream, ws);
   stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
+  return chatResult;
 }

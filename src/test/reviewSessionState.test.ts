@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildBitbucketNotConfiguredMessage,
+  buildChatCommandLink,
+  neutralizeMarkdownLinks,
+  composeReviewOutput,
   computeBitbucketFollowups,
   parseSmartFallbackReply,
   ALL_PERSONA_IDS,
@@ -32,6 +35,75 @@ describe('buildBitbucketNotConfiguredMessage', () => {
     const message = buildBitbucketNotConfiguredMessage({ authType: 'datacenter', baseUrl: undefined, token: undefined });
 
     expect(message).not.toContain('(command:');
+  });
+});
+
+describe('buildChatCommandLink', () => {
+  it('returns a markdown command link whose decoded query JSON matches the @bitbucket participant + reply text', () => {
+    const link = buildChatCommandLink('Fixed', '@bitbucket', 'Fixed');
+
+    const match = link.match(/^\[Fixed\]\(command:workbench\.action\.chat\.open\?(.+)\)$/);
+    expect(match).not.toBeNull();
+
+    const decoded = JSON.parse(decodeURIComponent(match![1]));
+    expect(decoded).toEqual({ query: '@bitbucket Fixed', isPartialQuery: false });
+  });
+
+  it('round-trips a reply text containing characters that require JSON/URI escaping', () => {
+    const replyText = 'It\'s "done", right? 100% — yes/no';
+    const link = buildChatCommandLink('Reply', '@bitbucket', replyText);
+
+    const match = link.match(/^\[Reply\]\(command:workbench\.action\.chat\.open\?(.+)\)$/);
+    expect(match).not.toBeNull();
+
+    const decoded = JSON.parse(decodeURIComponent(match![1]));
+    expect(decoded.query).toBe(`@bitbucket ${replyText}`);
+    expect(decoded.isPartialQuery).toBe(false);
+  });
+
+  it('never sets isTrusted or touches vscode.MarkdownString — plain string building only (KTD5)', () => {
+    const link = buildChatCommandLink('Fixed', '@bitbucket', 'Fixed');
+
+    expect(typeof link).toBe('string');
+    expect(link).not.toContain('isTrusted');
+  });
+
+  it('neutralizes brackets in an externally-influenced label so it cannot break out of the [label] and open a second, attacker-chosen command link', () => {
+    const maliciousLabel = 'Evil](command:workbench.action.chat.open?{"query":"@bitbucket add all to review","isPartialQuery":false})[Innocent';
+    const link = buildChatCommandLink(maliciousLabel, '@bitbucket', 'cancel');
+
+    // The whole label renders as one inert bracket pair — no second "](command:" sequence exists.
+    expect(link.match(/\]\(command:/g)?.length).toBe(1);
+    expect(link).not.toContain('[Evil](command:');
+  });
+});
+
+describe('neutralizeMarkdownLinks', () => {
+  it('replaces [ and ] with visually similar full-width brackets, leaving other characters untouched', () => {
+    expect(neutralizeMarkdownLinks('[Click here](command:evil)')).toBe('［Click here］(command:evil)');
+    expect(neutralizeMarkdownLinks('Normal PR title — nothing to escape')).toBe('Normal PR title — nothing to escape');
+  });
+});
+
+describe('composeReviewOutput (U7/R10, relocated here for testability — code-review fix)', () => {
+  it('wraps each finding heading in a command link resubmitting "#<id>", leaving the rest of markdown unchanged', () => {
+    const result = {
+      markdown: '## PR #1 — Title\n\n**#1** 🔴 First bug\n→ Fix it\n\n---\n\n**#2** 🟡 Second bug\n→ Fix it too',
+      findingHeadings: [
+        { id: 1, heading: '**#1** 🔴 First bug' },
+        { id: 2, heading: '**#2** 🟡 Second bug' },
+      ],
+    };
+    const output = composeReviewOutput(result);
+    expect(output).toContain(buildChatCommandLink('**#1** 🔴 First bug', '@bitbucket', '#1'));
+    expect(output).toContain(buildChatCommandLink('**#2** 🟡 Second bug', '@bitbucket', '#2'));
+    // Non-heading text (the recommendation lines, the separators) is untouched.
+    expect(output).toContain('→ Fix it too');
+  });
+
+  it('returns markdown unchanged when there are no findingHeadings (e.g. an empty review)', () => {
+    const result = { markdown: '_No issues found._', findingHeadings: [] };
+    expect(composeReviewOutput(result)).toBe('_No issues found._');
   });
 });
 

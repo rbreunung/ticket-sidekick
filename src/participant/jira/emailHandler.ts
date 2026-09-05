@@ -11,8 +11,9 @@ import { parseEmlFile, type EmailImportItem, type EmailReviewRow } from '../../u
 import type {
   EmailContentSession, AwaitIssueTypeResume, EmailTemplateSelectionSession, EmailReviewSession, ReviewTableColumn,
 } from '../sessionState';
-import { isCancellation, isConfirmation, isSessionExpired, SESSION_EXPIRED_MESSAGE } from '../sessionState';
+import { isCancellation, isConfirmation, isSessionExpired, SESSION_EXPIRED_MESSAGE, buildChatCommandLink, neutralizeMarkdownLinks } from '../sessionState';
 import { resolveProjectKey, sessionWasSuperseded } from './ticketContext';
+import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import {
   buildImportTemplateSession, streamImportTemplateSelection, handleImportTemplateSelection,
   continueAfterImportIssueType, handleImportReviewReply, type ReportImportDescriptor,
@@ -23,9 +24,12 @@ import {
 // reportImportHandler.ts (see that file's KTD1/KTD2/KTD3/KTD4) rather than a parallel session type.
 // The dedup fields are omitted — email has no per-item dedup concept (KTD2) — and buildTicketFields/
 // afterCreate supply email's own ticket-field-building and attachment-upload step.
+// Subject/attachment filenames are untrusted, email-derived content — this table's whole output is
+// trust-gated (KTD5, U6) once it carries the per-row toggle links (buildImportReviewTable), so both
+// go through neutralizeMarkdownLinks() (see its own doc comment in sessionState.ts).
 const EMAIL_REVIEW_COLUMNS: ReviewTableColumn<EmailReviewRow>[] = [
-  { header: 'Subject', accessor: row => row.subject },
-  { header: 'Attachments', accessor: row => (row.attachmentNames.length > 0 ? row.attachmentNames.join(', ') : '—') },
+  { header: 'Subject', accessor: row => neutralizeMarkdownLinks(row.subject) },
+  { header: 'Attachments', accessor: row => (row.attachmentNames.length > 0 ? neutralizeMarkdownLinks(row.attachmentNames.join(', ')) : '—') },
 ];
 
 // Exported so extension.ts's Command Palette command writes the session under exactly the key this
@@ -45,9 +49,7 @@ const emailDescriptor: ReportImportDescriptor<EmailImportItem, EmailReviewRow> =
   // openReportFilePicker()/handleImportReport() those three fields exist for.
   sessionKeys: {
     templateSelection: EMAIL_TEMPLATE_SESSION_KEY,
-    templateTag: '<!-- jira:email-template -->',
     review: 'jira.session.emailReview',
-    reviewTag: '<!-- jira:email-review -->',
   },
   buildRowFields: item => ({
     subject: item.subject,
@@ -193,7 +195,7 @@ async function startEmailBatchImport(
   stream: vscode.ChatResponseStream,
   jiraClient: IJiraClient,
   ws: vscode.Memento,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   const items = await pickAndParseEmlFiles(stream);
   if (!items) return;
 
@@ -204,7 +206,7 @@ async function startEmailBatchImport(
   }
 
   const session = await buildImportTemplateSession(items, describeEmailFileSelection(items), projectKey, jiraClient, emailDescriptor);
-  await streamImportTemplateSelection(session, stream, ws, emailDescriptor);
+  return streamImportTemplateSelection(session, stream, ws, emailDescriptor);
 }
 
 // Thin wrapper mirroring buildVeracodeTemplateSession/buildWaltzTemplateSession — used by
@@ -233,7 +235,7 @@ export async function handleCreateFromEmail(
   _ticketService: TicketService,
   _configService: ConfigService,
   ws: vscode.Memento,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   const existing = ws.get<EmailTemplateSelectionSession>(emailDescriptor.sessionKeys.templateSelection);
   if (existing) {
     if (isSessionExpired(existing)) {
@@ -241,11 +243,10 @@ export async function handleCreateFromEmail(
       stream.markdown(SESSION_EXPIRED_MESSAGE);
       return;
     }
-    await streamImportTemplateSelection(existing, stream, ws, emailDescriptor);
-    return;
+    return streamImportTemplateSelection(existing, stream, ws, emailDescriptor);
   }
 
-  await startEmailBatchImport(stream, jiraClient, ws);
+  return startEmailBatchImport(stream, jiraClient, ws);
 }
 
 export async function handleAddEmailFromChat(
@@ -256,7 +257,7 @@ export async function handleAddEmailFromChat(
   _ticketService: TicketService,
   _configService: ConfigService,
   ws: vscode.Memento,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   // Extract ticket key from prompt if present (e.g. "add email to PROJ-42")
   const ticketKeyMatch = request.prompt.match(/\b([A-Z][A-Z0-9]+-\d+)\b/i);
   const promptTicketKey = ticketKeyMatch?.[1]?.toUpperCase() ?? null;
@@ -292,13 +293,12 @@ export async function handleAddEmailFromChat(
       emlFilePath: item.emlFilePath,
       pendingCommentTicketKey: promptTicketKey,
     };
-    await streamEmailCommentPreview(quickSession, stream, ws);
-    return;
+    return streamEmailCommentPreview(quickSession, stream, ws);
   }
 
   // No ticket key — this is a ticket-creation request, same batch flow as handleCreateFromEmail's
   // fresh-session path (R1: batching applies to every ticket-creation entry point).
-  await startEmailBatchImport(stream, jiraClient, ws);
+  return startEmailBatchImport(stream, jiraClient, ws);
 }
 
 export async function handleEmailTemplateSelection(
@@ -309,7 +309,7 @@ export async function handleEmailTemplateSelection(
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
   baseUrl?: string,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   return handleImportTemplateSelection(reply, session, jiraClient, ticketService, stream, ws, emailDescriptor, baseUrl);
 }
 
@@ -324,12 +324,12 @@ export async function handleEmailAwaitIssueType(
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
   baseUrl?: string,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   if (sessionWasSuperseded(ws, emailDescriptor.sessionKeys.templateSelection)) {
     stream.markdown('_A newer email import was started while this one was waiting for the issue type — cancelled to avoid creating a stale batch._');
     return;
   }
-  await continueAfterImportIssueType(
+  return continueAfterImportIssueType(
     issueType, resume.pickedTemplateName, resume.session as EmailTemplateSelectionSession,
     jiraClient, ticketService, stream, ws, emailDescriptor, baseUrl,
   );
@@ -342,7 +342,7 @@ export async function handleEmailReviewReply(
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
   baseUrl?: string,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   return handleImportReviewReply(reply, session, ticketService, stream, ws, emailDescriptor, baseUrl);
 }
 
@@ -400,7 +400,7 @@ export async function addEmailAsComment(
   }
 }
 
-export async function streamEmailCommentPreview(session: EmailContentSession, stream: vscode.ChatResponseStream, ws: vscode.Memento): Promise<void> {
+export async function streamEmailCommentPreview(session: EmailContentSession, stream: vscode.ChatResponseStream, ws: vscode.Memento): Promise<vscode.ChatResult> {
   await ws.update('jira.session.emailContent', session);
   const key = session.pendingCommentTicketKey!;
 
@@ -417,11 +417,18 @@ export async function streamEmailCommentPreview(session: EmailContentSession, st
     headerLines.push(`**Attachments:** ${nonInlineAttachments.map(a => a.name).join(', ')}`);
   }
 
+  // The preview body is untrusted, email-derived content (`session.markdownBody`) — streamed as a
+  // plain, untrusted string so any markdown-looking `command:` link it happens to contain renders
+  // as inert text rather than a clickable command. The confirm/cancel footer is a separate,
+  // trusted `stream.markdown()` call so only this handler's own two fixed links are live (KTD5).
   stream.markdown(
-    `${headerLines.join('\n')}\n\n` +
-    `**Comment preview:**\n\n${session.markdownBody}\n\n` +
-    `Reply **post it** to add as comment to **${key}**, or **(c)** to cancel.\n\n<!-- jira:email-content -->`,
+    `${headerLines.join('\n')}\n\n**Comment preview:**\n\n${session.markdownBody}`,
   );
+  stream.markdown(trustedChatMarkdown(
+    `\n\nReply ${buildChatCommandLink('Post it', '@jira', 'post it')} to add as comment to **${key}**, ` +
+    `or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+  ));
+  return { metadata: { jiraSession: { kinds: ['email-content'] } } };
 }
 
 // Handles replies to the comment-attach preview (streamEmailCommentPreview above) — the only
@@ -433,7 +440,7 @@ export async function handleEmailContentSession(
   ticketService: TicketService,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
-): Promise<void> {
+): Promise<vscode.ChatResult | void> {
   const baseUrl = vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.baseUrl') ?? '';
 
   if (isCancellation(reply)) {
@@ -448,8 +455,7 @@ export async function handleEmailContentSession(
   }
   const pendingKeyMatch = reply.trim().match(/^([A-Z][A-Z0-9]+-\d+)$/i);
   if (pendingKeyMatch) {
-    await streamEmailCommentPreview({ ...session, pendingCommentTicketKey: pendingKeyMatch[1].toUpperCase() }, stream, ws);
-    return;
+    return streamEmailCommentPreview({ ...session, pendingCommentTicketKey: pendingKeyMatch[1].toUpperCase() }, stream, ws);
   }
-  await streamEmailCommentPreview(session, stream, ws);
+  return streamEmailCommentPreview(session, stream, ws);
 }

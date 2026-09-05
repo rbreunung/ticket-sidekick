@@ -370,11 +370,22 @@ asked, so it keeps informing follow-up answers.
 detail and `diffHunk`. `#N` where `N` doesn't exist gets a friendly "Finding #N
 not found. The review has findings #1–#M." message. `c` / `cancel` / etc.
 (`isCancellation`) clears the session and shows "Review session ended."
-without the session marker, so no further follow-ups fire until a new review.
-Any LLM error surfaces as `**Follow-up failed: …**` with the session marker
-preserved so the user can retry; a comment-preview refinement error surfaces
-as `**Refinement failed: …**` with the comment-preview marker preserved the
-same way.
+without carrying the session forward, so no further follow-ups fire until a
+new review. Any LLM error surfaces as `**Follow-up failed: …**` with the
+session kept alive so the user can retry; a comment-preview refinement error
+surfaces as `**Refinement failed: …**` with the comment-preview session kept
+alive the same way.
+
+Each finding's own heading in a completed review is itself a clickable
+element (`composeReviewOutput()` in `BitbucketParticipant.ts`, over
+`PrReviewService.formatReview()`'s returned `findingHeadings`) that resubmits
+`#<id>` — the exact text the `#N` follow-up path above already accepts — so
+clicking a finding produces the same answer as typing a reference to it.
+Every externally-influenced string `formatReview()` combines into that
+response (PR title/author, each finding's file path/title/recommendation) is
+neutralized first via `neutralizeMarkdownLinks()`, since the composed output
+is streamed as a trusted `vscode.MarkdownString` once those links are woven
+in — see `docs/jira-flows.md`'s "Clickable replies" for why.
 
 The session also stores `rawDiff` — the full unified diff, distinct from any
 single finding's `diffHunk` — bounded to the token budget before it's saved
@@ -388,20 +399,23 @@ view may be incomplete. Sessions without a stored `rawDiff` (e.g. from before th
 feature) keep falling back to the old findings-only prompt.
 
 `ReviewSession` is looked up under the `workspaceState` key `bitbucket.session.review`
-and expires once its response tag, `<!-- bitbucket:review-session -->`, is no
-longer the **last** assistant message. The Bitbucket handler's detection order is:
-`check` command → comment preview → review-session follow-up (cancel check first,
-then try-catch around intent handling) → new PR review. A PR URL anywhere in the
-prompt always bypasses both follow-up branches and starts a fresh review, even when
-a `<!-- bitbucket:review-session -->` marker is present in the last response —
-`hasPrUrl()` in `reviewSessionState.ts` encodes this check and is unit-tested.
+and expires once its `kind` is no longer present in `ChatResult.metadata.bitbucketSession`
+on the **last** assistant turn (`getActiveBitbucketSession()` in `BitbucketParticipant.ts`,
+mirroring Jira's `JiraSessionContinuity` — see `BitbucketSessionContinuity` in
+`reviewSessionState.ts`) — no visible marker rides along in the rendered response. The
+Bitbucket handler's detection order is: `check` command → comment preview → smart-mode
+fallback question → review-session follow-up (cancel check first, then try-catch around
+intent handling) → new PR review. A PR URL anywhere in the prompt always bypasses every
+follow-up branch and starts a fresh review, even when a `review-session` (or
+`comment-preview`/`smart-fallback-session`) kind is active — `hasPrUrl()` in
+`reviewSessionState.ts` encodes this check and is unit-tested.
 
 ### Smart-mode fallback session
 
 `SmartFallbackSession` (`bitbucket.session.smartFallback` in `workspaceState`,
-tag `<!-- bitbucket:smart-fallback-session -->`) is a second, narrower
-multi-turn session that only fires mid-`smart`-mode-review — not after one has
-completed. It's created when phase 1's aggregation step (`aggregateRecommendedPersonas`)
+detected via the `smart-fallback-session` `bitbucketSession` kind) is a second,
+narrower multi-turn session that only fires mid-`smart`-mode-review — not
+after one has completed. It's created when phase 1's aggregation step (`aggregateRecommendedPersonas`)
 finds no usable persona recommendation from any chunk: rather than guessing,
 the handler stores the PR reference, the fetched diffs, the chunk boundaries,
 and phase 1's already-numbered findings, then asks the user to reply **all**

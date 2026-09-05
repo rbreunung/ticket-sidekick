@@ -19,6 +19,7 @@ vi.mock('vscode', () => ({
     showInputBox: vi.fn(),
     createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })),
   },
+  MarkdownString: class { constructor(public value = '') {} isTrusted?: unknown; },
 }));
 
 vi.mock('../templates/TemplateService', () => ({
@@ -62,6 +63,12 @@ function makeSession(overrides: Partial<EmailContentSession> = {}): EmailContent
 }
 
 const mockStream = () => ({ markdown: vi.fn() });
+
+// U5/U6: several responses now stream a trusted vscode.MarkdownString (command links) rather than
+// a bare string — this file's mocked MarkdownString stores the raw text on `.value`.
+function markdownText(arg: unknown): string {
+  return typeof arg === 'string' ? arg : (arg as { value: string }).value;
+}
 
 function makeMockWs(initial: Record<string, unknown> = {}): { get: <T>(k: string, d?: T) => T | undefined; update: (k: string, v: unknown) => Promise<void>; store: Record<string, unknown> } {
   const store: Record<string, unknown> = { ...initial };
@@ -180,14 +187,17 @@ describe('streamEmailCommentPreview', () => {
     expect(text).toContain('Comment preview:');
   });
 
-  it('includes the target ticket key and appends the email-content marker', async () => {
+  it('includes the target ticket key and returns email-content session metadata', async () => {
     const session = makeSession({ pendingCommentTicketKey: 'PROJ-42' });
     const stream = mockStream();
     const ws = makeMockWs();
-    await streamEmailCommentPreview(session, stream as never, ws as never);
-    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-    expect(text).toContain('PROJ-42');
-    expect(text).toContain('<!-- jira:email-content -->');
+    const result = await streamEmailCommentPreview(session, stream as never, ws as never);
+    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => {
+      const arg = c[0];
+      return typeof arg === 'string' ? arg : (arg as { value: string }).value;
+    });
+    expect(calls.some(c => c.includes('PROJ-42'))).toBe(true);
+    expect(result.metadata?.jiraSession?.kinds).toEqual(['email-content']);
   });
 });
 
@@ -289,15 +299,14 @@ describe('handleCreateFromEmail (batch, U1-U3)', () => {
     (vscode.window.showOpenDialog as ReturnType<typeof vi.fn>).mockResolvedValue([{ fsPath: FIXTURE }]);
     const stream = mockStream();
     const ws = makeMockWs();
-    await handleCreateFromEmail(
+    const result = await handleCreateFromEmail(
       undefined as never, stream as never, undefined as never,
       client, ticketService, undefined as never, ws as never,
     );
     const session = ws.store['jira.session.emailTemplateSelection'] as EmailTemplateSelectionSession;
     expect(session.items).toHaveLength(1);
     expect(session.items[0].subject).toBe('Test Email Subject');
-    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as string;
-    expect(text).toContain('<!-- jira:email-template -->');
+    expect(result?.metadata?.jiraSession?.kinds).toEqual(['email-template']);
   });
 
   it('selecting three files builds a session with three items', async () => {
@@ -423,11 +432,11 @@ describe('batch email creation (U3/U4, via the shared reportImportHandler flow)'
     const session = makeTemplateSession();
     const stream = mockStream();
     const ws = makeMockWs();
-    await handleEmailTemplateSelection('1', session, client, ticketService, stream as never, ws as never);
+    const result = await handleEmailTemplateSelection('1', session, client, ticketService, stream as never, ws as never);
 
     expect(searchSpy).not.toHaveBeenCalled();
-    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as string;
-    expect(text).toContain('<!-- jira:email-review -->');
+    const text = markdownText((stream.markdown as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0]);
+    expect(result?.metadata?.jiraSession?.kinds).toEqual(['email-review']);
     expect(text).toContain('Email One');
     expect(text).toContain('Email Two');
   });

@@ -6,10 +6,11 @@ import { TemplateService } from '../../templates/TemplateService';
 import type { JiraTemplate } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
 import type { ContentSession, CreationSession, CreateSelectionSession } from '../sessionState';
-import { NO_ISSUE_TYPE, resolveTemplateIssueType, formatIssueTypeOptionLabel } from '../sessionState';
+import { NO_ISSUE_TYPE, resolveTemplateIssueType, formatIssueTypeOptionLabel, buildChatCommandLink } from '../sessionState';
 import { streamContentPreview } from './contentHandler';
 import { parseIntent, looksLikeUnfilledPlaceholder } from './llmHelpers';
 import { resolveProjectKey, resolveIssueTypeOrPrompt } from './ticketContext';
+import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 
 async function sendAndCollect(
   model: vscode.LanguageModelChat,
@@ -75,7 +76,7 @@ export async function continueAfterIssueType(
   ticketService: TicketService,
   workspaceState: vscode.Memento,
   extraFields?: Record<string, unknown>,
-): Promise<string | null> {
+): Promise<vscode.ChatResult | void> {
   let resolvedFields: Record<string, unknown> = {};
   if (selectedTemplate) {
     const resolver = new FieldResolver(jiraClient, projectKey);
@@ -88,7 +89,7 @@ export async function continueAfterIssueType(
         title: `Field resolution error: ${message}`,
         ignoreFocusOut: true,
       });
-      if (pick !== 'Proceed without template') { stream.markdown('Cancelled.'); return null; }
+      if (pick !== 'Proceed without template') { stream.markdown('Cancelled.'); return; }
       resolvedFields = {};
       selectedTemplate = null;
     }
@@ -109,8 +110,7 @@ export async function continueAfterIssueType(
       extraFields: resolvedFields,
       currentContent: description ?? '',
     };
-    await streamContentPreview(contentSession, stream, workspaceState);
-    return null;
+    return streamContentPreview(contentSession, stream, workspaceState);
   }
 
   // Build the pending section list, checking description coverage only when summary is known
@@ -133,8 +133,7 @@ export async function continueAfterIssueType(
       extraFields: resolvedFields,
       currentContent: descriptionText,
     };
-    await streamContentPreview(contentSession, stream, workspaceState);
-    return null;
+    return streamContentPreview(contentSession, stream, workspaceState);
   }
 
   if (selectedTemplate && pendingRealSections.length > 0) {
@@ -160,17 +159,16 @@ export async function continueAfterIssueType(
     answers,
     fields: resolvedFields,
   };
-  await streamNextSection(newSession, stream, workspaceState);
-  return null;
+  return streamNextSection(newSession, stream, workspaceState);
 }
 
-export async function streamNextSection(session: CreationSession, stream: vscode.ChatResponseStream, workspaceState: vscode.Memento): Promise<void> {
+export async function streamNextSection(session: CreationSession, stream: vscode.ChatResponseStream, workspaceState: vscode.Memento): Promise<vscode.ChatResult> {
   await workspaceState.update('jira.session.creating', session);
   const next = session.pending[0];
 
   if (next === '__summary__') {
-    stream.markdown(`What should the **summary** be?\n\nReply with the ticket summary to continue.\n\n<!-- jira:creating -->`);
-    return;
+    stream.markdown(`What should the **summary** be?\n\nReply with the ticket summary to continue.`);
+    return { metadata: { jiraSession: { kinds: ['creating'] } } };
   }
 
   const pendingRealSections = session.pending.filter((s) => s !== '__summary__');
@@ -182,34 +180,42 @@ export async function streamNextSection(session: CreationSession, stream: vscode
   const cta = isLast
     ? 'Reply with your content to finish the ticket.'
     : 'Reply with your content and I\'ll ask for the next section.';
-  stream.markdown(`${header}\n\n${cta}\n\n<!-- jira:creating -->`);
+  stream.markdown(`${header}\n\n${cta}`);
+  return { metadata: { jiraSession: { kinds: ['creating'] } } };
 }
 
 export async function streamCreateSelection(
   session: CreateSelectionSession,
   stream: vscode.ChatResponseStream,
   workspaceState: vscode.Memento,
-): Promise<void> {
+): Promise<vscode.ChatResult> {
   await workspaceState.update('jira.session.creatingSelection', session);
   let optionsList = '';
   if (session.templates.length > 0) {
-    optionsList += `**Templates:**\n${session.templates.map((t, i) => `${i + 1}. ${t.name} _(${formatIssueTypeOptionLabel(t.issueType)})_`).join('\n')}\n\n`;
+    optionsList += `**Templates:**\n${session.templates.map((t, i) =>
+      `${i + 1}. ${buildChatCommandLink(`${t.name} _(${formatIssueTypeOptionLabel(t.issueType)})_`, '@jira', String(i + 1))}`,
+    ).join('\n')}\n\n`;
   }
   if (session.issueTypes.length > 0) {
     const offset = session.templates.length;
-    optionsList += `**Issue types (no template):**\n${session.issueTypes.map((t, i) => `${offset + i + 1}. ${formatIssueTypeOptionLabel(t)}`).join('\n')}\n\n`;
+    optionsList += `**Issue types (no template):**\n${session.issueTypes.map((t, i) =>
+      `${offset + i + 1}. ${buildChatCommandLink(formatIssueTypeOptionLabel(t), '@jira', String(offset + i + 1))}`,
+    ).join('\n')}\n\n`;
   }
-  stream.markdown(`${optionsList}Reply with a number to select a template or issue type, or **(c)** to cancel.\n\n<!-- jira:selecting-create-option -->`);
+  stream.markdown(trustedChatMarkdown(
+    `${optionsList}Reply with a number to select a template or issue type, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+  ));
+  return { metadata: { jiraSession: { kinds: ['selecting-create-option'] } } };
 }
 
 export async function finishTicketCreation(
   session: CreationSession,
   stream: vscode.ChatResponseStream,
   workspaceState: vscode.Memento,
-): Promise<null> {
+): Promise<vscode.ChatResult | void> {
   if (!session.summary) {
     stream.markdown('_Cannot create ticket: no summary was provided._');
-    return null;
+    return;
   }
   const descriptionText = assembleDescription(session.allSections, session.answers);
   const contentSession: ContentSession = {
@@ -221,8 +227,7 @@ export async function finishTicketCreation(
     extraFields: { ...session.fields },
     currentContent: descriptionText,
   };
-  await streamContentPreview(contentSession, stream, workspaceState);
-  return null;
+  return streamContentPreview(contentSession, stream, workspaceState);
 }
 
 export async function handleCreateTicket(
@@ -232,7 +237,7 @@ export async function handleCreateTicket(
   jiraClient: IJiraClient,
   ticketService: TicketService,
   workspaceState: vscode.Memento,
-): Promise<string | null> {
+): Promise<vscode.ChatResult | void> {
   // Project key is resolved first — issue types are project-scoped, so the combined list can't
   // be built without it (R4).
   const intent = await parseIntent(request.prompt, request.model, token);
@@ -245,12 +250,12 @@ export async function handleCreateTicket(
   if (looksLikeUnfilledPlaceholder(intent.projectKey)) intent.projectKey = null;
   if (looksLikeUnfilledPlaceholder(intent.summary)) intent.summary = null;
   const projectKey = await resolveProjectKey(intent.projectKey, stream);
-  if (!projectKey) { stream.markdown('No project key provided — cancelled.'); return null; }
+  if (!projectKey) { stream.markdown('No project key provided — cancelled.'); return; }
 
   const extraFields: Record<string, unknown> = {};
   if (intent.assignee) {
     const resolved = await ticketService.resolveAssignee(intent.assignee);
-    if (typeof resolved === 'string') { stream.markdown(resolved); return null; }
+    if (typeof resolved === 'string') { stream.markdown(resolved); return; }
     extraFields.assignee = resolved;
   }
   if (intent.components) {
@@ -287,7 +292,7 @@ export async function handleCreateTicket(
       kind: 'create', projectKey, summary: intent.summary, description: intent.description,
       extraFields, pickedTemplateName: null,
     }, stream, workspaceState);
-    if (entered === null) return null;
+    if (typeof entered !== 'string') return entered;
     return continueAfterIssueType(projectKey, intent.summary, entered, intent.description, null, request.model, stream, token, jiraClient, ticketService, workspaceState, extraFields);
   }
 
@@ -307,6 +312,5 @@ export async function handleCreateTicket(
     extraFields: Object.keys(extraFields).length > 0 ? extraFields : undefined,
     originalPrompt: request.prompt,
   };
-  await streamCreateSelection(session, stream, workspaceState);
-  return null;
+  return streamCreateSelection(session, stream, workspaceState);
 }

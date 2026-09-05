@@ -2,7 +2,7 @@ import type { IJiraClient, JiraAttachment, JiraComment, JiraEditMetaField, JiraF
 import type { DiagLogger } from '../utils/diagTypes';
 import { formatJiraBody } from '../utils/markdownFormatter';
 import { formatFileSize } from '../utils/attachmentEligibility';
-import { renderReviewTable, type ReviewTableColumn } from '../participant/sessionState';
+import { renderReviewTable, neutralizeMarkdownLinks, type ReviewTableColumn } from '../participant/sessionState';
 
 export type FieldResolutionResult =
   | { kind: 'match'; field: JiraFieldMeta }
@@ -238,7 +238,10 @@ export function buildExtraFieldColumns<TRow>(
       header: meta?.name ?? id,
       accessor: (row: TRow) => {
         const rendered = meta ? renderFieldValue(valueOf(row, id), meta) : '_Not set_';
-        return rendered.replace(/\|/g, '\\|');
+        // Custom field values are untrusted, externally-influenced content — see
+        // neutralizeMarkdownLinks()'s own doc comment (sessionState.ts) for why this table's
+        // trust-gated footer (KTD5) requires it here.
+        return neutralizeMarkdownLinks(rendered.replace(/\|/g, '\\|'));
       },
     };
   });
