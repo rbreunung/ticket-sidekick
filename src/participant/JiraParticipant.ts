@@ -14,7 +14,7 @@ import type { CleanupRule } from '../templates/TemplateService';
 import type { Operation, ParsedIntent } from './jira/llmHelpers';
 import { parseIntent, extractFixVersionFromPrompt, generateContent, isLmRefusal, synthesizeComments, generateDescriptionAndCommentsSummary, isPointerPrompt, extractLastAssistantText, mapCommandToOperation } from './jira/llmHelpers';
 import { streamFieldUpdatePreview, continueSetField, handleSetField, handleSpellCheck } from './jira/fieldHandler';
-import { getLastAssistantText, getActiveJiraSession, resolveTicketFromBranch, resolveProjectKey, resolveIssueTypeOrPrompt, parseLastTicketFromContext, sessionWasSuperseded } from './jira/ticketContext';
+import { getActiveJiraSession, resolveTicketFromBranch, resolveProjectKey, resolveIssueTypeOrPrompt, parseLastTicketFromContext, sessionWasSuperseded } from './jira/ticketContext';
 import { validateBaseUrl } from '../services/configValidation';
 import { gatherFileContent, buildContentContext, streamContentPreview, handleContentSession } from './jira/contentHandler';
 import { streamCreateSelection, continueAfterIssueType, streamNextSection, finishTicketCreation, handleCreateTicket } from './jira/createHandler';
@@ -135,7 +135,6 @@ export function createJiraParticipant(
       (level, message, details) => logDiag('jira.ticketService', level, message, details),
     );
     const ws = context.workspaceState;
-    const lastResponse = getLastAssistantText(chatContext);
 
     // U4/R5: `/check` is the slash-command shortcut for this same check — checked
     // before the multi-turn session-tag scan below, exactly like the plain-text
@@ -228,14 +227,14 @@ export function createJiraParticipant(
     }
 
     // Filter selection — user replied with their filter choice
-    if (lastResponse.includes('<!-- jira:selecting-filter -->')) {
+    if (getActiveJiraSession(chatContext)?.kinds.includes('selecting-filter')) {
       const selSession = ws.get<FilterSelectionSession>('jira.session.filterSelection');
       if (selSession) {
         const choice = parseFilterSelection(request.prompt, selSession.filters);
         if (choice === 'invalid') {
           const list = selSession.filters.map((f, i) => `${i + 1}. ${f.name}`).join('\n');
-          stream.markdown(`Please choose a filter:\n\n${list}\n\nReply with the number or name, or **(c)** to cancel.\n\n<!-- jira:selecting-filter -->`);
-          return;
+          stream.markdown(`Please choose a filter:\n\n${list}\n\nReply with the number or name, or **(c)** to cancel.`);
+          return { metadata: { jiraSession: { kinds: ['selecting-filter'] } } };
         }
         await ws.update('jira.session.filterSelection', undefined);
         if (choice === 'cancel') {
@@ -613,13 +612,13 @@ export function createJiraParticipant(
     // start with a generic word this parser recognizes (e.g. "skip") is an unambiguous signal
     // the user meant a new operation, not a continuation reply — the session itself is left
     // untouched, so it's still there to resume on the next ordinary-text turn.
-    if (!request.command && lastResponse.includes('<!-- jira:bulk-update-review -->')) {
+    if (!request.command && getActiveJiraSession(chatContext)?.kinds.includes('bulk-update-review')) {
       const bulkSession = ws.get<BulkUpdateReviewSession>('jira.session.bulkUpdateReview');
       if (bulkSession) {
         const decision = parseBulkUpdateReview(request.prompt);
         if (decision.action === 'invalid') {
-          stream.markdown(`Didn't understand that. Reply **post it** to apply, **(c)** to cancel, or \`skip KEY1 KEY2\` to skip specific tickets.\n\n<!-- jira:bulk-update-review -->`);
-          return;
+          stream.markdown(`Didn't understand that. Reply **post it** to apply, **(c)** to cancel, or \`skip KEY1 KEY2\` to skip specific tickets.`);
+          return { metadata: { jiraSession: { kinds: ['bulk-update-review'] } } };
         }
         await ws.update('jira.session.bulkUpdateReview', undefined);
         if (decision.action === 'cancel') {
@@ -1130,8 +1129,8 @@ export function createJiraParticipant(
               const session: FilterSelectionSession = { filters, originalPrompt: request.prompt };
               await ws.update('jira.session.filterSelection', session);
               const list = filters.map((f, i) => `${i + 1}. ${f.name}`).join('\n');
-              stream.markdown(`Multiple filters match "${intent.filterName}":\n\n${list}\n\nWhich one? Reply with the number or name, or **(c)** to cancel.\n\n<!-- jira:selecting-filter -->`);
-              return;
+              stream.markdown(`Multiple filters match "${intent.filterName}":\n\n${list}\n\nWhich one? Reply with the number or name, or **(c)** to cancel.`);
+              return { metadata: { jiraSession: { kinds: ['selecting-filter'] } } };
             }
           } else if (intent.useMyTeamJql) {
             const teamJql = config.myTeamJql;
@@ -1336,9 +1335,9 @@ export function createJiraParticipant(
             `(${searchSession.ticketKeys.length} tickets)\n\n` +
             (config.baseUrl ? `[View in Jira](${config.baseUrl}/issues/?jql=${encodeURIComponent(searchSession.jql)})\n\n` : '') +
             buildBulkUpdateReviewTable(reviewRows) +
-            `\n\nReply **post it** to apply, **(c)** to cancel, or list keys to skip (e.g. \`skip PROJ-2\`).\n\n<!-- jira:bulk-update-review -->`
+            `\n\nReply **post it** to apply, **(c)** to cancel, or list keys to skip (e.g. \`skip PROJ-2\`).`
           );
-          return;
+          return { metadata: { jiraSession: { kinds: ['bulk-update-review'] } } };
         }
         case 'loadTicket': {
           const loadFieldMeta = await ticketService.getFieldMeta();

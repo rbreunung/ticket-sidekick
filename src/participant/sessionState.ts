@@ -1401,6 +1401,8 @@ export type JiraSessionKind =
   | 'previewing'
   | 'resolution-selection'
   | 'transition-review'
+  | 'selecting-filter'
+  | 'bulk-update-review'
   | 'sprint-selection'
   | 'field-selection'
   | 'field-update-preview'

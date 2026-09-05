@@ -12,19 +12,7 @@ import {
 // response tag — see JiraSessionContinuity in sessionState.ts.
 export const AWAIT_ISSUE_TYPE_SESSION_KEY = 'jira.session.awaitIssueType';
 
-export function getLastAssistantText(context: vscode.ChatContext): string {
-  for (let i = context.history.length - 1; i >= 0; i--) {
-    const turn = context.history[i];
-    if (turn instanceof vscode.ChatResponseTurn) {
-      return turn.response
-        .map((p) => (p instanceof vscode.ChatResponseMarkdownPart ? p.value.value : ''))
-        .join('');
-    }
-  }
-  return '';
-}
-
-// R1/R3: replaces `getLastAssistantText(...).includes('<!-- jira:TAG -->')` for sessions that
+// R1/R3: replaces the former `getLastAssistantText(...).includes('<!-- jira:TAG -->')` for sessions that
 // have migrated off the visible-tag mechanism (see JiraSessionContinuity in sessionState.ts).
 // Reads the metadata a session-producing response returned via `{ metadata: { jiraSession } }`
 // off the last turn in `chatContext.history` — no rendered-text scanning, so no artifact of
