@@ -186,8 +186,11 @@ describe('streamEmailCommentPreview', () => {
     const stream = mockStream();
     const ws = makeMockWs();
     const result = await streamEmailCommentPreview(session, stream as never, ws as never);
-    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-    expect(text).toContain('PROJ-42');
+    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => {
+      const arg = c[0];
+      return typeof arg === 'string' ? arg : (arg as { value: string }).value;
+    });
+    expect(calls.some(c => c.includes('PROJ-42'))).toBe(true);
     expect(result.metadata?.jiraSession?.kinds).toEqual(['email-content']);
   });
 });

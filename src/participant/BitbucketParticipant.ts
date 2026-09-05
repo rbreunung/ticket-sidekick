@@ -37,6 +37,7 @@ import {
   deriveCriticEnabled,
   parseSmartFallbackReply,
   aggregateRecommendedPersonas,
+  buildChatCommandLink,
   type ReviewFinding,
   type ReviewSession,
   type BitbucketCommentPreviewSession,
@@ -47,6 +48,7 @@ import {
 } from './reviewSessionState';
 import { isConfirmation, isCancellation, isGreetingOrEmpty } from './sessionState';
 import { generateContent } from './jira/llmHelpers';
+import { trustedChatMarkdown } from '../utils/chatMarkdown';
 import { tokenStatus } from '../utils/diagUtils';
 import { validateBaseUrl } from '../services/configValidation';
 import { withLmRetry, withEasierRetry, isTransientLmError, PartialLmResponseError } from '../utils/lmRetry';
@@ -519,8 +521,15 @@ export function createBitbucketParticipant(
         parts.push(`---\n\n**#${finding.id}** — ${finding.title}\n${anchorLine}\n\n${text}`);
       }
       const postLabel = allInline ? 'post inline' : 'post to activity feed';
-      parts.push(`---\n\nReply **"post it"** to ${postLabel}, give a refinement instruction, or **(c)** to cancel.`);
+      // `parts` above includes each finding's LLM-generated comment text — derived from the PR's
+      // own diff content, so untrusted — streamed as a plain (untrusted) string so a crafted
+      // command-link inside it can't render as clickable. The confirm/cancel footer is a separate,
+      // trusted `stream.markdown()` call so only this handler's own two fixed links are live (KTD5).
       stream.markdown(parts.join('\n\n'));
+      stream.markdown(trustedChatMarkdown(
+        `---\n\nReply ${buildChatCommandLink('Post it', '@bitbucket', 'post it')} to ${postLabel}, ` +
+        `give a refinement instruction, or ${buildChatCommandLink('Cancel', '@bitbucket', 'cancel')}.`,
+      ));
       return { metadata: { bitbucketSession: { kinds: ['comment-preview'] } } };
     };
 
@@ -575,11 +584,11 @@ export function createBitbucketParticipant(
     ): Promise<vscode.ChatResult> => {
       const fallbackSession: SmartFallbackSession = { ...pr, diffs, chunks, phase1Findings };
       await ws.update('bitbucket.session.smartFallback', fallbackSession);
-      stream.markdown(
+      stream.markdown(trustedChatMarkdown(
         `_Smart mode couldn't determine a persona recommendation for this PR from any diff chunk._\n\n` +
-        `Reply **all** to run all four specialist passes (${PERSONAS.map(p => p.displayName).join(', ')}), ` +
-        `or **standard** to continue with just the standard review.`,
-      );
+        `Reply ${buildChatCommandLink('All', '@bitbucket', 'all')} to run all four specialist passes ` +
+        `(${PERSONAS.map(p => p.displayName).join(', ')}), or ${buildChatCommandLink('Standard', '@bitbucket', 'standard')} to continue with just the standard review.`,
+      ));
       return { metadata: { bitbucketSession: { kinds: ['smart-fallback-session'] } } };
     };
 
@@ -714,10 +723,10 @@ export function createBitbucketParticipant(
 
         const choice = parseSmartFallbackReply(prompt);
         if (choice.kind === 'unrecognized') {
-          stream.markdown(
-            `_Didn't catch that — reply **all** to run all four persona passes, ` +
-            `or **standard** to continue with the standard review only._`,
-          );
+          stream.markdown(trustedChatMarkdown(
+            `_Didn't catch that — reply ${buildChatCommandLink('All', '@bitbucket', 'all')} to run all four persona passes, ` +
+            `or ${buildChatCommandLink('Standard', '@bitbucket', 'standard')} to continue with the standard review only._`,
+          ));
           return { metadata: { bitbucketSession: { kinds: ['smart-fallback-session'] } } };
         }
 

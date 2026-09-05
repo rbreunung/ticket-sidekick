@@ -11,8 +11,9 @@ import { parseEmlFile, type EmailImportItem, type EmailReviewRow } from '../../u
 import type {
   EmailContentSession, AwaitIssueTypeResume, EmailTemplateSelectionSession, EmailReviewSession, ReviewTableColumn,
 } from '../sessionState';
-import { isCancellation, isConfirmation, isSessionExpired, SESSION_EXPIRED_MESSAGE } from '../sessionState';
+import { isCancellation, isConfirmation, isSessionExpired, SESSION_EXPIRED_MESSAGE, buildChatCommandLink } from '../sessionState';
 import { resolveProjectKey, sessionWasSuperseded } from './ticketContext';
+import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import {
   buildImportTemplateSession, streamImportTemplateSelection, handleImportTemplateSelection,
   continueAfterImportIssueType, handleImportReviewReply, type ReportImportDescriptor,
@@ -413,11 +414,17 @@ export async function streamEmailCommentPreview(session: EmailContentSession, st
     headerLines.push(`**Attachments:** ${nonInlineAttachments.map(a => a.name).join(', ')}`);
   }
 
+  // The preview body is untrusted, email-derived content (`session.markdownBody`) — streamed as a
+  // plain, untrusted string so any markdown-looking `command:` link it happens to contain renders
+  // as inert text rather than a clickable command. The confirm/cancel footer is a separate,
+  // trusted `stream.markdown()` call so only this handler's own two fixed links are live (KTD5).
   stream.markdown(
-    `${headerLines.join('\n')}\n\n` +
-    `**Comment preview:**\n\n${session.markdownBody}\n\n` +
-    `Reply **post it** to add as comment to **${key}**, or **(c)** to cancel.`,
+    `${headerLines.join('\n')}\n\n**Comment preview:**\n\n${session.markdownBody}`,
   );
+  stream.markdown(trustedChatMarkdown(
+    `\n\nReply ${buildChatCommandLink('Post it', '@jira', 'post it')} to add as comment to **${key}**, ` +
+    `or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+  ));
   return { metadata: { jiraSession: { kinds: ['email-content'] } } };
 }
 
