@@ -72,6 +72,22 @@ function getActiveBitbucketSession(chatContext: vscode.ChatContext): BitbucketSe
   return metadata?.bitbucketSession;
 }
 
+// U7/R10/KTD3: wraps each finding's own heading (returned by formatReview() alongside its
+// assembled markdown) in a command-link resubmitting "#<id>" — the exact text
+// parseFollowUpIntent()'s explain path already accepts (reviewSessionState.ts), so clicking a
+// finding's heading produces the same answer as typing a reference to it (R5). Every finding's
+// heading is already unique (each embeds its own "#<id>"), so a plain string replace can't cross-
+// match a different finding. formatReview() already neutralized every untrusted string embedded in
+// its markdown (title, file path, PR title/author) before this function ever runs, so wrapping the
+// result in a trusted MarkdownString (the caller's job) is safe.
+function composeReviewOutput(result: { markdown: string; findingHeadings: Array<{ id: number; heading: string }> }): string {
+  let output = result.markdown;
+  for (const { id, heading } of result.findingHeadings) {
+    output = output.replace(heading, buildChatCommandLink(heading, '@bitbucket', `#${id}`));
+  }
+  return output;
+}
+
 const FOLLOW_UP_PROMPT_PREFIX = `A developer is asking a follow-up question about a specific finding from a code review. Answer their question directly and thoroughly. If they state an assumption, evaluate it. Include specific conditions under which this could be acceptable or needs fixing, and any concrete code changes where relevant.
 
 Finding:
@@ -648,11 +664,11 @@ export function createBitbucketParticipant(
 
         const deduped = dedupeFindings(allFindings);
         const numbered = deduped.map((f, idx) => ({ ...f, id: idx + 1 }));
-        const { markdown: output } = service.formatReview(numbered, pr, session.diffs.length, config.confidenceThreshold);
+        const reviewResult = service.formatReview(numbered, pr, session.diffs.length, config.confidenceThreshold);
         logReview('info', `Smart-fallback resume completed — ${numbered.length} finding(s)`, {
           runTag, findingCount: numbered.length, chosenPersonas,
         });
-        stream.markdown(output);
+        stream.markdown(trustedChatMarkdown(composeReviewOutput(reviewResult)));
 
         await ws.update('bitbucket.session.review', {
           prTitle: session.prTitle,
@@ -1454,9 +1470,10 @@ export function createBitbucketParticipant(
       const deduped = dedupeFindings(allFindings);
       const dedupedCrossBatch = allFindings.length - deduped.length;
       const numbered = deduped.map((f, idx) => ({ ...f, id: idx + 1 }));
-      const { markdown: output, primaryCount, lowCount } = service.formatReview(
+      const reviewResult = service.formatReview(
         numbered, pr, fileDiffs.length, config.confidenceThreshold,
       );
+      const { primaryCount, lowCount } = reviewResult;
       logReview('info', `PR review completed — ${numbered.length} finding(s)`, {
         project: parsed.project, repo: parsed.repo, prId: parsed.prId,
         findingCount: numbered.length, fileCount: fileDiffs.length, batchCount: chunks.length, anyBatchFailed,
@@ -1489,7 +1506,7 @@ export function createBitbucketParticipant(
       if (anyBatchFailed) {
         stream.markdown(`_⚠ Some batches had failures after retrying — showing partial results. See the "Ticket Sidekick" output channel for details._\n\n`);
       }
-      stream.markdown(output);
+      stream.markdown(trustedChatMarkdown(composeReviewOutput(reviewResult)));
       const reviewTokenEst = Math.ceil((totalInputChars + totalOutputChars) / 4);
       stream.markdown(`\n\n_~${reviewTokenEst.toLocaleString()} estimated tokens · budget ${tokenBudget.toLocaleString()}_`);
 

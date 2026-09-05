@@ -2,7 +2,7 @@ import type { BitbucketCommentResult, BitbucketPR, IBitbucketClient, InlineAncho
 import type { DiagLogger } from '../utils/diagTypes';
 import { ApiError } from '../utils/apiError';
 import type { FileDiff, ReviewFinding } from '../participant/reviewSessionState';
-import { langFromPath, numberDiffLines } from '../participant/reviewSessionState';
+import { langFromPath, numberDiffLines, neutralizeMarkdownLinks } from '../participant/reviewSessionState';
 
 const PROMPT_INTRO = `You are a senior software engineer performing a code review.
 
@@ -325,7 +325,7 @@ export class PrReviewService {
     pr: BitbucketPR,
     fileCount: number,
     confidenceThreshold?: number,
-  ): { markdown: string; primaryCount: number; lowCount: number } {
+  ): { markdown: string; primaryCount: number; lowCount: number; findingHeadings: Array<{ id: number; heading: string }> } {
     const severityIcon = (s: ReviewFinding['severity']) =>
       s === 'critical' ? '🔴' : s === 'warning' ? '🟡' : '🔵';
     const provenanceIcon = (p: ReviewFinding['provenance']) =>
@@ -351,23 +351,32 @@ export class PrReviewService {
       .join(' · ');
 
     const emptyLabel = low.length > 0 ? '_No high-confidence issues._' : '_No issues found._';
+    // U7/R10: PR title/author are externally-influenced (set by the PR's own author) — this whole
+    // response is trust-gated at the caller (BitbucketParticipant.ts, once findingHeadings' command
+    // links are woven in), so both go through neutralizeMarkdownLinks() (see its own doc comment).
     const header =
-      `## PR #${pr.id} — ${pr.title}\n` +
-      `_by ${pr.author.displayName} → ${pr.targetBranch} · ${fileCount} file${fileCount !== 1 ? 's' : ''} changed_\n\n` +
+      `## PR #${pr.id} — ${neutralizeMarkdownLinks(pr.title)}\n` +
+      `_by ${neutralizeMarkdownLinks(pr.author.displayName)} → ${pr.targetBranch} · ${fileCount} file${fileCount !== 1 ? 's' : ''} changed_\n\n` +
       (countLine || emptyLabel);
 
+    // R10/R11: each low-confidence entry's own line is a "heading" too — clickable the same as a
+    // primary finding's — over a plain, always-visible list (VS Code's chat markdown renderer
+    // doesn't support raw HTML, so the prior <details>/<summary> fold never actually collapsed
+    // anything; it rendered as inert literal tags).
+    const findingHeadings: Array<{ id: number; heading: string }> = [];
     const lowFold =
       low.length > 0
-        ? '\n\n<details>\n' +
-          `<summary>🔽 ${low.length} low-confidence finding${low.length !== 1 ? 's' : ''} (hidden — reply #N to inspect)</summary>\n\n` +
+        ? '\n\n' +
+          `**${low.length} low-confidence finding${low.length !== 1 ? 's' : ''}** (reply #N to inspect):\n\n` +
           low
             .map((f) => {
               const loc = f.line ? ` \`L${f.line}\`` : '';
               const pct = typeof f.confidence === 'number' ? ` _(${Math.round(f.confidence * 100)}%)_` : '';
-              return `**#${f.id}** ${severityIcon(f.severity)} ${f.file}${loc} ${f.title}${pct}`;
+              const heading = `**#${f.id}** ${severityIcon(f.severity)} ${neutralizeMarkdownLinks(f.file)}${loc} ${neutralizeMarkdownLinks(f.title)}${pct}`;
+              findingHeadings.push({ id: f.id, heading });
+              return heading;
             })
-            .join('\n') +
-          '\n\n</details>'
+            .join('\n')
         : '';
 
     if (primary.length === 0) {
@@ -375,6 +384,7 @@ export class PrReviewService {
         markdown: `${header}${lowFold}\n\n_Ask a question about the PR or reply **(c)** to exit._`,
         primaryCount: primary.length,
         lowCount: low.length,
+        findingHeadings,
       };
     }
 
@@ -385,6 +395,11 @@ export class PrReviewService {
       byFile.set(f.file, existing);
     }
 
+    // R10: each finding's own heading line is returned alongside the assembled markdown so
+    // BitbucketParticipant.ts can wrap the exact same substring in a command link (KTD3) — title/
+    // location text is neutralized here since the wrapped result is embedded verbatim into a
+    // trusted response either way, clicked or not. Reuses the same findingHeadings array the
+    // low-confidence fold above already started, so both primary and low findings end up clickable.
     const fileSections = [...byFile.entries()]
       .map(([file, items]) => {
         const lines = items.map((f) => {
@@ -393,9 +408,11 @@ export class PrReviewService {
           const related = f.relatedLines?.length
             ? ` (also ${f.relatedLines.map((l) => `L${l}`).join(', ')})`
             : '';
-          return `**#${f.id}** ${severityIcon(f.severity)}${prov ? ' ' + prov : ''}${loc ? ' ' + loc : ''}${related} ${f.title}\n→ ${f.recommendation}`;
+          const heading = `**#${f.id}** ${severityIcon(f.severity)}${prov ? ' ' + prov : ''}${loc ? ' ' + loc : ''}${related} ${neutralizeMarkdownLinks(f.title)}`;
+          findingHeadings.push({ id: f.id, heading });
+          return `${heading}\n→ ${neutralizeMarkdownLinks(f.recommendation)}`;
         });
-        return `**📄 ${file}**\n${lines.join('\n')}`;
+        return `**📄 ${neutralizeMarkdownLinks(file)}**\n${lines.join('\n')}`;
       })
       .join('\n\n---\n\n');
 
@@ -403,6 +420,7 @@ export class PrReviewService {
       markdown: `${header}\n\n---\n\n${fileSections}${lowFold}\n\n---\n\n_Reply **#1** or describe a finding to ask a follow-up, or ask any question about the PR. To post findings as PR comments: **#2 #3 add to review**. Reply **(c)** to exit this session._`,
       primaryCount: primary.length,
       lowCount: low.length,
+      findingHeadings,
     };
   }
 
