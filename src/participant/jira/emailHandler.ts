@@ -11,7 +11,7 @@ import { parseEmlFile, type EmailImportItem, type EmailReviewRow } from '../../u
 import type {
   EmailContentSession, AwaitIssueTypeResume, EmailTemplateSelectionSession, EmailReviewSession, ReviewTableColumn,
 } from '../sessionState';
-import { isCancellation, isConfirmation, isSessionExpired, SESSION_EXPIRED_MESSAGE, buildChatCommandLink } from '../sessionState';
+import { isCancellation, isConfirmation, isSessionExpired, SESSION_EXPIRED_MESSAGE, buildChatCommandLink, neutralizeMarkdownLinks } from '../sessionState';
 import { resolveProjectKey, sessionWasSuperseded } from './ticketContext';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import {
@@ -24,9 +24,12 @@ import {
 // reportImportHandler.ts (see that file's KTD1/KTD2/KTD3/KTD4) rather than a parallel session type.
 // The dedup fields are omitted — email has no per-item dedup concept (KTD2) — and buildTicketFields/
 // afterCreate supply email's own ticket-field-building and attachment-upload step.
+// Subject/attachment filenames are untrusted, email-derived content — this table's whole output is
+// trust-gated (KTD5, U6) once it carries the per-row toggle links (buildImportReviewTable), so both
+// go through neutralizeMarkdownLinks() (see its own doc comment in sessionState.ts).
 const EMAIL_REVIEW_COLUMNS: ReviewTableColumn<EmailReviewRow>[] = [
-  { header: 'Subject', accessor: row => row.subject },
-  { header: 'Attachments', accessor: row => (row.attachmentNames.length > 0 ? row.attachmentNames.join(', ') : '—') },
+  { header: 'Subject', accessor: row => neutralizeMarkdownLinks(row.subject) },
+  { header: 'Attachments', accessor: row => (row.attachmentNames.length > 0 ? neutralizeMarkdownLinks(row.attachmentNames.join(', ')) : '—') },
 ];
 
 // Exported so extension.ts's Command Palette command writes the session under exactly the key this

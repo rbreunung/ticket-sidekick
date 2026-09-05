@@ -434,9 +434,13 @@ export async function streamImportReview<TItem, TRow extends ReviewRowBase>(
   baseUrl?: string,
 ): Promise<vscode.ChatResult> {
   await ws.update(descriptor.sessionKeys.review, session);
-  stream.markdown(
+  // U6: the table's own Include? column is now a per-row toggle command-link (R8), so this whole
+  // response must be trust-gated (KTD5) — every row's own field content going through it is
+  // neutralized against markdown-link injection at its source (VERACODE_REVIEW_COLUMNS,
+  // WALTZ_REVIEW_COLUMNS, EMAIL_REVIEW_COLUMNS in sessionState.ts/emailHandler.ts).
+  stream.markdown(trustedChatMarkdown(
     buildImportReviewTable(session.rows, baseUrl, session.totalNewMatched, descriptor.reviewColumns, descriptor.itemNoun),
-  );
+  ));
   return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
 }
 

@@ -718,14 +718,18 @@ export function renderReviewTable<TRow>(columns: ReviewTableColumn<TRow>[], rows
   return [headerRow, separatorRow, ...dataRows].join('\n');
 }
 
+// Summary/component name are untrusted, scan-report-derived free text — this table's whole output
+// is trust-gated (KTD5, U6) once it carries the per-row toggle links below, so both go through
+// neutralizeMarkdownLinks() (see its own doc comment). Severity/CWE-id/rating stay unsanitized —
+// enum-shaped/numeric values from the report's own schema, not free text.
 export const VERACODE_REVIEW_COLUMNS: ReviewTableColumn<VeracodeReviewRow>[] = [
   { header: 'Severity', accessor: (r) => `${r.severityLabelText} (${r.severity})` },
   { header: 'CWE', accessor: (r) => (r.cweId ? `CWE-${r.cweId}` : '—') },
-  { header: 'Summary', accessor: (r) => r.summary },
+  { header: 'Summary', accessor: (r) => neutralizeMarkdownLinks(r.summary) },
 ];
 
 export const WALTZ_REVIEW_COLUMNS: ReviewTableColumn<WaltzReviewRow>[] = [
-  { header: 'Component', accessor: (r) => r.nameVersion },
+  { header: 'Component', accessor: (r) => neutralizeMarkdownLinks(r.nameVersion) },
   { header: 'Rating', accessor: (r) => r.maxVulnRating },
 ];
 
@@ -745,12 +749,16 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
   const idColumn: ReviewTableColumn<TRow> = { header: '#', accessor: (r) => r.id };
   const pluralBare = itemNoun.replace('(s)', 's'); // 'component(s)' -> 'components'
 
+  // R8: the Include? cell is itself the toggle — clicking it resubmits the row's own id, which
+  // parseReviewInput already parses as a toggle reply (same text a typed "2 4"/"A1" list uses), so
+  // no new parser logic is needed (Risks section). R9: always the positive "will (re-)create when
+  // checked" framing, never a negative "Skip" column.
   if (ticketed.length > 0) {
     const ticketedColumns: ReviewTableColumn<TRow>[] = [
       idColumn,
       ...columns,
       { header: 'Ticket', accessor: (r) => formatKeyLink(r.existingTicketKey!, baseUrl) },
-      { header: 'Include?', accessor: (r) => (r.included ? '✓ re-create' : '_excluded_') },
+      { header: 'Include?', accessor: (r) => buildChatCommandLink(r.included ? '✓ re-create' : '_excluded_', '@jira', r.id) },
     ];
     lines.push('### Already ticketed');
     lines.push(renderReviewTable(ticketedColumns, ticketed));
@@ -764,7 +772,7 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
     const freshColumns: ReviewTableColumn<TRow>[] = [
       idColumn,
       ...columns,
-      { header: 'Include?', accessor: (r) => (r.included ? '✓' : '_excluded_') },
+      { header: 'Include?', accessor: (r) => buildChatCommandLink(r.included ? '✓' : '_excluded_', '@jira', r.id) },
     ];
     lines.push(renderReviewTable(freshColumns, fresh));
   }
@@ -792,7 +800,10 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
     lines.push(`_Only the first ${REVIEW_BATCH_LIMIT} included rows will be created this run — re-run the import afterward for the remainder._`);
   }
   lines.push('');
-  lines.push('Reply **post it** to proceed, **(c)** to cancel, or a list of ids to toggle (e.g. `2 4` or `A1`).');
+  lines.push(
+    `Reply ${buildChatCommandLink('Post it', '@jira', 'post it')} to proceed, ` +
+    `${buildChatCommandLink('Cancel', '@jira', 'cancel')} to cancel, or a list of ids to toggle (e.g. \`2 4\` or \`A1\`).`,
+  );
 
   return lines.join('\n');
 }

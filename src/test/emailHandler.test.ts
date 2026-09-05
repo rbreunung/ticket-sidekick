@@ -64,6 +64,12 @@ function makeSession(overrides: Partial<EmailContentSession> = {}): EmailContent
 
 const mockStream = () => ({ markdown: vi.fn() });
 
+// U5/U6: several responses now stream a trusted vscode.MarkdownString (command links) rather than
+// a bare string — this file's mocked MarkdownString stores the raw text on `.value`.
+function markdownText(arg: unknown): string {
+  return typeof arg === 'string' ? arg : (arg as { value: string }).value;
+}
+
 function makeMockWs(initial: Record<string, unknown> = {}): { get: <T>(k: string, d?: T) => T | undefined; update: (k: string, v: unknown) => Promise<void>; store: Record<string, unknown> } {
   const store: Record<string, unknown> = { ...initial };
   return {
@@ -429,7 +435,7 @@ describe('batch email creation (U3/U4, via the shared reportImportHandler flow)'
     const result = await handleEmailTemplateSelection('1', session, client, ticketService, stream as never, ws as never);
 
     expect(searchSpy).not.toHaveBeenCalled();
-    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as string;
+    const text = markdownText((stream.markdown as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0]);
     expect(result?.metadata?.jiraSession?.kinds).toEqual(['email-review']);
     expect(text).toContain('Email One');
     expect(text).toContain('Email Two');
