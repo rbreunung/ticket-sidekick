@@ -7,7 +7,7 @@ import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { tokenStatus } from '../utils/diagUtils';
 import { logDiag } from '../utils/diagLog';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, type JiraFollowupState, type JiraSessionKind, isConfirmation, isCancellation, isGreetingOrEmpty, computeJiraFollowups, pickEmailOption, parseSkipInput, applyTicketToggle, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewTable } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, type JiraFollowupState, type JiraSessionKind, isConfirmation, isCancellation, isGreetingOrEmpty, computeJiraFollowups, pickEmailOption, parseSkipInput, applyTicketToggle, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, applyBulkUpdateToggle, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewTable } from './sessionState';
 import { findPath, resolveAndApplyTransition } from '../services/WorkflowService';
 import type { WorkflowGraph } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
@@ -653,7 +653,21 @@ export function createJiraParticipant(
         if (decision.action === 'invalid') {
           stream.markdown(trustedChatMarkdown(
             `Didn't understand that. Reply ${buildChatCommandLink('Post it', '@jira', 'post it')} to apply, ` +
-            `${buildChatCommandLink('Cancel', '@jira', 'cancel')} to cancel, or \`skip KEY1 KEY2\` to skip specific tickets.`,
+            `${buildChatCommandLink('Cancel', '@jira', 'cancel')} to cancel, or \`skip KEY1 KEY2\` to toggle specific tickets.`,
+          ));
+          return { metadata: { jiraSession: { kinds: ['bulk-update-review'] } } };
+        }
+        // R8/AE4: a toggle reply (click or typed keys) flips included and re-renders — it never
+        // runs the update itself, unlike the pre-U6 one-shot skip-and-run behavior.
+        if (decision.action === 'toggle') {
+          const toggledRows = applyBulkUpdateToggle(bulkSession.rows, decision.keys);
+          const toggledSession: BulkUpdateReviewSession = { ...bulkSession, rows: toggledRows };
+          await ws.update('jira.session.bulkUpdateReview', toggledSession);
+          stream.markdown(trustedChatMarkdown(
+            `**Bulk update: ${bulkSession.fieldName}**\n\n` +
+            buildBulkUpdateReviewTable(toggledRows) +
+            `\n\nReply ${buildChatCommandLink('Post it', '@jira', 'post it')} to apply, ` +
+            `${buildChatCommandLink('Cancel', '@jira', 'cancel')} to cancel, or list keys to toggle (e.g. \`skip PROJ-2\`).`,
           ));
           return { metadata: { jiraSession: { kinds: ['bulk-update-review'] } } };
         }
@@ -662,8 +676,7 @@ export function createJiraParticipant(
           stream.markdown('_Cancelled — no tickets were changed._');
           return;
         }
-        const skipSet = new Set(decision.skip);
-        const toUpdate = bulkSession.ticketKeys.filter(k => !skipSet.has(k));
+        const toUpdate = bulkSession.rows.filter(r => r.included).map(r => r.key);
         stream.markdown(`Updating **${bulkSession.fieldName}** on ${toUpdate.length} ticket(s)…\n\n`);
         let passed = 0;
         let failed = 0;
@@ -1360,10 +1373,10 @@ export function createJiraParticipant(
               : current !== null && current !== undefined
                 ? String(current)
                 : '—';
-            return { key: issue.key, summary: issue.fields.summary, currentValueDisplay: display };
+            return { key: issue.key, summary: issue.fields.summary, currentValueDisplay: display, included: true };
           });
           const bulkSession: BulkUpdateReviewSession = {
-            ticketKeys: searchSession.ticketKeys,
+            rows: reviewRows,
             fieldId,
             fieldName: intent.bulkFieldName,
             fieldValue,
@@ -1376,7 +1389,7 @@ export function createJiraParticipant(
             (config.baseUrl ? `[View in Jira](${config.baseUrl}/issues/?jql=${encodeURIComponent(searchSession.jql)})\n\n` : '') +
             buildBulkUpdateReviewTable(reviewRows) +
             `\n\nReply ${buildChatCommandLink('Post it', '@jira', 'post it')} to apply, ` +
-            `${buildChatCommandLink('Cancel', '@jira', 'cancel')} to cancel, or list keys to skip (e.g. \`skip PROJ-2\`).`,
+            `${buildChatCommandLink('Cancel', '@jira', 'cancel')} to cancel, or list keys to toggle (e.g. \`skip PROJ-2\`).`,
           ));
           return { metadata: { jiraSession: { kinds: ['bulk-update-review'] } } };
         }

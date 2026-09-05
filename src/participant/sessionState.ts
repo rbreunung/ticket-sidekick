@@ -412,7 +412,9 @@ export interface SearchResultSession {
 }
 
 export interface BulkUpdateReviewSession {
-  ticketKeys: string[];
+  // U6/KTD6: rows (not just keys) so a toggle round-trip needs no re-fetch — each row's own
+  // `included` flag persists across turns, same convention as ReviewRowBase/TransitionBatchTicket.
+  rows: BulkUpdateReviewRow[];
   fieldId: string;
   fieldName: string;
   fieldValue: unknown;
@@ -444,17 +446,32 @@ export interface SprintSelectionSession {
     | { kind: 'creation'; sprintFieldId: string };
 }
 
-export function parseBulkUpdateReview(reply: string): { action: 'ok'; skip: string[] } | { action: 'cancel' } | { action: 'invalid' } {
+// U6/KTD6: 'ok'/'skip' -> 'ok'/'toggle' — a key list (typed "skip PROJ-2 PROJ-5", or a bare list a
+// row's own toggle click resubmits, e.g. "PROJ-2") now flips those rows' `included` and re-renders
+// (R8/AE4), rather than the pre-U6 one-shot "these are excluded, run the rest now." Only 'ok'
+// (e.g. "post it") actually runs the update, using each row's current `included` flag.
+export type BulkUpdateReviewParseResult =
+  | { action: 'ok' }
+  | { action: 'cancel' }
+  | { action: 'toggle'; keys: string[] }
+  | { action: 'invalid' };
+
+const TICKET_KEY_TOKEN = /^[A-Z][A-Z0-9]+-\d+$/i;
+
+export function parseBulkUpdateReview(reply: string): BulkUpdateReviewParseResult {
   const trimmed = reply.trim();
   if (!trimmed) return { action: 'invalid' };
   if (isCancellation(reply)) return { action: 'cancel' };
-  if (isConfirmation(reply)) return { action: 'ok', skip: [] };
+  if (isConfirmation(reply)) return { action: 'ok' };
   const skipMatch = trimmed.match(/^skip\s+(.*)/i);
-  if (skipMatch) {
-    const keys = skipMatch[1].trim().split(/[\s,]+/).filter(Boolean);
-    return { action: 'ok', skip: keys };
-  }
-  return { action: 'invalid' };
+  // A bare key list (no "skip" prefix) is what a row's own toggle link resubmits (R8/KTD6) — accept
+  // it the same way, without requiring the typed "skip" keyword.
+  const tokenSource = skipMatch ? skipMatch[1] : trimmed;
+  const keys = tokenSource.trim().split(/[\s,]+/).filter(Boolean)
+    .filter(t => TICKET_KEY_TOKEN.test(t))
+    .map(t => t.toUpperCase());
+  if (keys.length === 0) return { action: 'invalid' };
+  return { action: 'toggle', keys };
 }
 
 export function parseFilterSelection(reply: string, filters: JiraFilter[]): JiraFilter | 'cancel' | 'invalid' {
@@ -847,6 +864,10 @@ export interface BulkUpdateReviewRow {
   key: string;
   summary: string;
   currentValueDisplay: string;
+  // U6/KTD6: mirrors ReviewRowBase's `included` convention — whether this ticket is updated if the
+  // batch runs. Defaults to true at construction (JiraParticipant.ts); toggled per-row (R8) by this
+  // table's own Update? column and parseBulkUpdateReview()'s key-list toggle.
+  included: boolean;
 }
 
 // Summary/current-value are untrusted, externally-influenced Jira field content — this table's
@@ -856,6 +877,10 @@ const BULK_UPDATE_REVIEW_COLUMNS: ReviewTableColumn<BulkUpdateReviewRow>[] = [
   { header: 'Key', accessor: (r) => r.key },
   { header: 'Summary', accessor: (r) => neutralizeMarkdownLinks(r.summary) },
   { header: 'Current value', accessor: (r) => neutralizeMarkdownLinks(r.currentValueDisplay) },
+  // R8/R9: positive "will update when checked" framing — clicking resubmits this row's own key,
+  // the exact text parseBulkUpdateReview() already accepts as a toggle (bare key list), so no new
+  // parser shape beyond what KTD6 already calls for.
+  { header: 'Update?', accessor: (r) => buildChatCommandLink(r.included ? '✓' : '_excluded_', '@jira', r.key) },
 ];
 
 /**
@@ -865,6 +890,13 @@ const BULK_UPDATE_REVIEW_COLUMNS: ReviewTableColumn<BulkUpdateReviewRow>[] = [
  */
 export function buildBulkUpdateReviewTable(rows: BulkUpdateReviewRow[]): string {
   return renderReviewTable(BULK_UPDATE_REVIEW_COLUMNS, rows);
+}
+
+// U6/AE4: flips `included` for every row whose key is in `keys` — pure so it's independently
+// testable, mirroring applyReviewToggle()/applyTicketToggle()'s shape for the other review tables.
+export function applyBulkUpdateToggle(rows: BulkUpdateReviewRow[], keys: string[]): BulkUpdateReviewRow[] {
+  const toggleSet = new Set(keys.map(k => k.toUpperCase()));
+  return rows.map(r => (toggleSet.has(r.key.toUpperCase()) ? { ...r, included: !r.included } : r));
 }
 
 export type ReviewParseResult =
