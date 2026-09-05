@@ -24,7 +24,7 @@ const GENERALIST_FOCUS = `Review the changes for:
 
 `;
 
-const PROMPT_TAIL = `Severity rubric — apply consistently, do not inflate:
+const PROMPT_TAIL_BODY = `Severity rubric — apply consistently, do not inflate:
 - critical: exploitable security hole or data loss (SQL injection, auth bypass, secret leak, data corruption).
 - warning: a real bug or a practice that will bite (unhandled error, race condition, resource leak, broken edge case).
 - suggestion: an improvement with no correctness impact (naming, duplication, readability, minor style).
@@ -42,15 +42,42 @@ For each confirmed issue identify:
 
 Also list any additional real source files (not in the diff) needed to complete the review. Maximum 5 files.
 
-Output findings ordered by severity — critical first, then warning, then suggestion.
+`;
+
+/**
+ * KTD2: only emitted when `buildPrompt`'s `includePersonaRecommendation` flag is set
+ * (smart mode's phase-1 standard pass) — inserted between the finding-fields
+ * instructions and the NDJSON output contract.
+ */
+const PERSONA_RECOMMENDATION_INSTRUCTION =
+  `Also decide which specialist review lenses apply to this chunk's changes. Choose from these ids: ` +
+  `security, performance, reliability, maintainability. List the ids that apply in "recommendedPersonas", ` +
+  `or an empty array if none do.\n\n`;
+
+const PROMPT_TAIL_TRAILER = `Output findings ordered by severity — critical first, then warning, then suggestion.
 Keep descriptions ≤80 words and recommendations ≤60 words. Code examples ≤8 lines; omit if the fix is architectural.
 Respond with one JSON object per line (NDJSON) — no markdown fences, no wrapping array, no explanation.
 Each finding on its own line:
 {"file":"path/to/file.ts","line":42,"anchorCode":"const user = db.query(sql);","severity":"critical","confidence":0.9,"title":"Short title","description":"What is wrong","recommendation":"What to do","codeExample":"optional fix snippet"}
-Last line lists additional files needed (always include this line, even if empty):
+`;
+
+const DEFAULT_TRAILER_LINE = `Last line lists additional files needed (always include this line, even if empty):
 {"additionalFilesNeeded":["path/to/other.ts"]}
 
 `;
+
+/** KTD2: the combined meta-line format smart mode's phase-1 standard pass requests. */
+const PERSONA_TRAILER_LINE = `Last line lists additional files needed and recommended persona lenses (always include this line, even if both are empty):
+{"additionalFilesNeeded":["path/to/other.ts"],"recommendedPersonas":["security"]}
+
+`;
+
+const PROMPT_TAIL = PROMPT_TAIL_BODY + PROMPT_TAIL_TRAILER + DEFAULT_TRAILER_LINE;
+
+/** Only smart mode's phase-1 standard pass (`buildPrompt(..., includePersonaRecommendation: true)`)
+ * uses this tail; every other caller uses `PROMPT_TAIL` directly, unchanged. */
+const PERSONA_RECOMMENDATION_TAIL =
+  PROMPT_TAIL_BODY + PERSONA_RECOMMENDATION_INSTRUCTION + PROMPT_TAIL_TRAILER + PERSONA_TRAILER_LINE;
 
 const REVIEW_PROMPT_PREFIX = PROMPT_INTRO + GENERALIST_FOCUS + PROMPT_TAIL;
 
@@ -167,8 +194,12 @@ export class PrReviewService {
     fileDiffs: FileDiff[],
     fileContents?: Map<string, string>,
     additionalInstructions?: string,
+    includePersonaRecommendation?: boolean,
   ): string {
-    return this.assemblePrompt(REVIEW_PROMPT_PREFIX, pr, fileDiffs, fileContents, additionalInstructions);
+    const prefix = includePersonaRecommendation
+      ? PROMPT_INTRO + GENERALIST_FOCUS + PERSONA_RECOMMENDATION_TAIL
+      : REVIEW_PROMPT_PREFIX;
+    return this.assemblePrompt(prefix, pr, fileDiffs, fileContents, additionalInstructions);
   }
 
   /**
@@ -259,12 +290,15 @@ export class PrReviewService {
     const extra = additionalInstructions
       ? `ADDITIONAL INSTRUCTIONS:\n${additionalInstructions}\n\n`
       : '';
-    // Mirrors buildPrompt's pass2Note: once full file contents have been fetched for a
+    // Mirrors buildPrompt's pass2Note: once file contents have been fetched for a
     // requested path, tell the model to use them rather than re-request the same file.
+    // Worded to not claim every requested file made it in — the caller's budget
+    // selection can silently drop some, and this is the final round regardless.
     const contextNote =
       fileContents && fileContents.size > 0
-        ? 'Note: Full contents of the files you previously requested are included below. Use ' +
-          'them to confirm or retract candidate findings.\n\n'
+        ? 'Note: Contents of the requested file(s) that fit the available context budget are ' +
+          'included below (a requested file may be missing if it did not fit). Use what is ' +
+          'included to confirm or retract candidate findings.\n\n'
         : '';
     return (
       'You are verifying the findings of a code review against the diff. For each ' +

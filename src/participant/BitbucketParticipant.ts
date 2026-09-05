@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { minimatch } from 'minimatch';
 import { BitbucketApiClient } from '../bitbucket/BitbucketApiClient';
-import type { BitbucketConfig } from '../bitbucket/IBitbucketClient';
+import type { BitbucketConfig, BitbucketPR } from '../bitbucket/IBitbucketClient';
 import type { ConfigService } from '../services/ConfigService';
 import { PrReviewService, PERSONAS, type Persona, type PersonaId } from '../services/PrReviewService';
 import {
@@ -36,6 +36,7 @@ import {
   resolveReviewMode,
   deriveCriticEnabled,
   parseSmartFallbackReply,
+  aggregateRecommendedPersonas,
   type ReviewFinding,
   type ReviewSession,
   type BitbucketCommentPreviewSession,
@@ -205,6 +206,10 @@ async function parseReviewResponse(raw: string): Promise<{
    * carried through so a truncation branch doesn't have to re-parse `raw` a second time. */
   hasMetaLine?: boolean;
   danglingTail?: string;
+  /** U7/KTD2: persona ids the standard pass recommended for this chunk — only meaningful
+   * (and only ever requested) for smart mode's phase-1 call. Undefined for every other
+   * caller/parse path (legacy JSON, partial recovery) since they never ask for the field. */
+  recommendedPersonas?: string[];
 }> {
   // Primary: NDJSON format
   const ndjson = parseNdjsonFindings(raw);
@@ -213,6 +218,7 @@ async function parseReviewResponse(raw: string): Promise<{
       findings: ndjson.findings as Array<Omit<ReviewFinding, 'id'>>,
       additionalFilesNeeded: ndjson.additionalFilesNeeded,
       hasMetaLine: ndjson.hasMetaLine,
+      recommendedPersonas: ndjson.recommendedPersonas,
       ...(ndjson.danglingTail !== undefined ? { danglingTail: ndjson.danglingTail } : {}),
       ...(ndjson.truncated ? { truncated: true } : {}),
     };
@@ -243,6 +249,144 @@ async function parseReviewResponse(raw: string): Promise<{
       ? `LLM response was truncated before completing. Try lowering 'contextBudgetRatio' (e.g. 0.5) or use '@bitbucket review quick <url>'.\n\nRaw (first 600):\n${raw.slice(0, 600)}`
       : `LLM returned no JSON for review.\n\nRaw (first 600):\n${raw.slice(0, 600) || '(empty)'}`,
   );
+}
+
+function splitFilesInHalf(items: FileDiff[]): [FileDiff[], FileDiff[]] {
+  const mid = Math.ceil(items.length / 2);
+  return [items.slice(0, mid), items.slice(mid)];
+}
+
+/**
+ * Shared by pass1→pass2's additionalFilesNeeded fetch and the critic's file-pulling
+ * round (R9/KTD4): fetch any requested files not already in the cross-batch
+ * `fetchedFileCache`, then select as many as fit the remaining token budget. Callers
+ * differ only in which files they're requesting and budgeting against, and in the
+ * stream/log message text — everything else (cache-check, cap, fetch, select) is
+ * identical between the two call sites.
+ */
+async function fetchAndBudgetContextFiles(params: {
+  requestedFiles: string[];
+  fetchedFileCache: Map<string, string>;
+  service: PrReviewService;
+  project: string;
+  repo: string;
+  commitHash: string;
+  tokenBudget: number;
+  /** The diff items to subtract from `tokenBudget` via `estimateChunkTokens` before selecting. */
+  budgetAgainst: FileDiff[];
+  fetchMessage: (count: number) => string;
+  logLabel: string;
+  batchNum: number;
+  logReview: (level: 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>) => void;
+  stream: vscode.ChatResponseStream;
+}): Promise<Map<string, string>> {
+  const { requestedFiles, fetchedFileCache, service, project, repo, commitHash, tokenBudget, budgetAgainst, fetchMessage, logLabel, batchNum, logReview, stream } = params;
+  const toFetch = requestedFiles.filter((p) => !fetchedFileCache.has(p)).slice(0, MAX_CONTEXT_FILES_PER_BATCH);
+  if (toFetch.length > 0) {
+    stream.markdown(fetchMessage(toFetch.length));
+    const fetched = await service.gatherFileContents(project, repo, commitHash, toFetch);
+    for (const [p, c] of fetched) fetchedFileCache.set(p, c);
+    logReview('info', `${logLabel} — batch ${batchNum}`, {
+      batch: batchNum, requestedCount: toFetch.length, fetchedCount: fetched.size,
+    });
+  }
+  const requestedEntries = requestedFiles
+    .filter((p) => fetchedFileCache.has(p))
+    .map((p) => ({ path: p, content: fetchedFileCache.get(p)! }));
+  const contentBudget = Math.max(0, tokenBudget - estimateChunkTokens(budgetAgainst));
+  return selectFilesWithinBudget(requestedEntries, contentBudget);
+}
+
+/**
+ * U3/U7: run one persona lens pass per active persona over a single chunk's files —
+ * the identical withEasierRetry → callLLMOnceWithProgress → resolveFindingAnchors
+ * sequence pass1 uses, logged with `pass: '<persona-id>'`. Extracted into a standalone
+ * function (rather than left inline in the per-chunk review loop) so three call sites
+ * share one implementation instead of drifting apart: the deep-mode inline persona pass
+ * (still per-chunk, behavior unchanged), smart mode's phase 2 (run once, after all
+ * chunks' standard passes complete, over the same chunks), and the smart-fallback resume
+ * path (`resumeSmartReviewPhase2`, a later chat turn with none of the main review's
+ * local state in scope).
+ */
+async function runPersonaPassesForChunk(params: {
+  personas: Persona[];
+  chunk: FileDiff[];
+  batchNum: number;
+  totalBatches: number;
+  pr: BitbucketPR;
+  service: PrReviewService;
+  extraInstructions: string;
+  request: vscode.ChatRequest;
+  token: vscode.CancellationToken;
+  runTag: string;
+  batchStatus: string;
+  logReview: (level: 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>) => void;
+  stream: vscode.ChatResponseStream;
+}): Promise<{
+  findings: Array<Omit<ReviewFinding, 'id'>>;
+  rawCount: number;
+  anchorDropped: number;
+  inputChars: number;
+  outputChars: number;
+  anyFailed: boolean;
+}> {
+  const { personas, chunk, batchNum, totalBatches, pr, service, extraInstructions, request, token, runTag, batchStatus, logReview, stream } = params;
+  let findings: Array<Omit<ReviewFinding, 'id'>> = [];
+  let rawCount = 0;
+  let anchorDropped = 0;
+  let inputChars = 0;
+  let outputChars = 0;
+  let anyFailed = false;
+
+  for (const persona of personas) {
+    const personaLabel = `${persona.id} batch ${batchNum}/${totalBatches}`;
+    const personaTracker = createAttemptTracker<FileDiff>();
+    let personaPromptChars = 0;
+    const personaBatches = await withEasierRetry(
+      chunk,
+      async (files) => {
+        const attempt = personaTracker.start(files);
+        const prompt = service.buildPersonaPrompt(persona, pr, files, undefined, extraInstructions);
+        personaPromptChars = prompt.length;
+        inputChars += prompt.length;
+        const raw = await callLLMOnceWithProgress(prompt, request.model, token, batchStatus);
+        outputChars += raw.length;
+        const status = parseNdjsonFindings(raw).truncated ? 'truncated' : 'ok';
+        logReview('info', formatCallLine({
+          runTag, pass: persona.id, batch: batchNum, totalBatches, attempt,
+          itemCount: files.length, promptChars: prompt.length, responseChars: raw.length,
+          durationMs: personaTracker.elapsedMs(), status,
+        }));
+        return raw;
+      },
+      splitFilesInHalf,
+      {
+        onAttemptFailed: (attempt, err, files) => handleAttemptFailure({
+          runTag, pass: persona.id, batch: batchNum, totalBatches,
+          libraryAttempt: attempt, err, items: files, originalItems: chunk,
+          tracker: personaTracker, promptChars: personaPromptChars, split: splitFilesInHalf,
+          logFailure: (a, e) => logLmFailure(personaLabel, a, e, { files: files.map((f) => f.path) }),
+          logReview,
+        }),
+      },
+    );
+
+    for (const batch of personaBatches) {
+      if (batch.error !== undefined) {
+        anyFailed = true;
+        const filePaths = batch.items.map((f) => f.path).join(', ');
+        stream.markdown(`_⚠ ${persona.displayName} pass — batch ${batchNum} — could not review ${filePaths} after retrying: ${describeFailure(batch.error)}_\n\n`);
+        continue;
+      }
+      const { findings: batchFindings } = await parseReviewResponse(batch.result!);
+      const resolved = resolveFindingAnchors(batchFindings, batch.items);
+      rawCount += batchFindings.length;
+      anchorDropped += batchFindings.length - resolved.length;
+      findings = findings.concat(resolved);
+    }
+  }
+
+  return { findings, rawCount, anchorDropped, inputChars, outputChars, anyFailed };
 }
 
 async function handleCheck(
@@ -434,14 +578,13 @@ export function createBitbucketParticipant(
       );
     };
 
-    // U4/R7 stub — U7 implements the real resume once smart mode's phase 2 (persona-pass execution
-    // over the already-computed chunks) exists.
-    // TODO(U7): implement phase 2 resume — for each chunk in `session.chunks`, run U3's per-chunk
-    // persona execution loop for `chosenPersonas` (build each prompt via PrReviewService.buildPersonaPrompt,
-    // call the model, parse findings), merge the resulting findings with `session.phase1Findings`, then
-    // dedupe (dedupeFindings), format, and stream the merged review result the same way a normal review
-    // completes (and rebuild/store the ReviewSession for follow-ups). `chosenPersonas` is `[]` for the
-    // "standard" choice, meaning phase 2 should just stream the phase-1 findings as-is.
+    // U7: resumes a smart-mode review whose fallback question (R7/AE3) fired — the user
+    // has now chosen `all` or `standard`. Runs phase 2 (persona passes, reusing the same
+    // shared helper the main flow's phase 2 uses) over `session.chunks` for the chosen
+    // personas, merges with `session.phase1Findings`, dedupes, formats, and streams —
+    // completing the review the same way a normal (non-fallback) run does. This turn has
+    // none of the main handler's try-block-local state (`service`/`runTag`/`logReview`/
+    // `pr`), so it builds its own, mirroring `postAndReport`'s pattern above.
     const resumeSmartReviewPhase2 = async (
       session: SmartFallbackSession,
       chosenPersonas: PersonaId[],
@@ -449,11 +592,70 @@ export function createBitbucketParticipant(
       await ws.update('bitbucket.session.smartFallback', undefined);
       const choiceLabel = chosenPersonas.length === 0
         ? 'the standard pass only'
-        : `all four persona passes (${chosenPersonas.join(', ')})`;
-      stream.markdown(
-        `_Resuming review of **${session.prTitle}** with ${choiceLabel}… ` +
-        `(phase 2 persona-pass resume is not implemented yet)_`,
+        : `all four persona passes (${chosenPersonas.map((id) => PERSONAS.find((p) => p.id === id)?.displayName ?? id).join(', ')})`;
+      stream.markdown(`_Resuming review of **${session.prTitle}** with ${choiceLabel}…_\n\n`);
+
+      const runTag = buildRunTag(session.project, session.repo, session.prId);
+      const client = new BitbucketApiClient({
+        baseUrl: config.baseUrl ?? '',
+        authType: config.authType,
+        token: config.token!,
+        onDiag: (level, message, details) => logDiag('bitbucket.apiClient', level, message, details),
+      });
+      const service = new PrReviewService(
+        client,
+        (level, message, details) => logDiag('bitbucket.prReviewService', level, message, details),
       );
+      const logReview = (level: 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>): void => {
+        logDiag('bitbucket.review', level, message, details);
+      };
+      const extraInstructions = config.reviewInstructions ?? '';
+
+      try {
+        const pr = await client.getPullRequest(session.project, session.repo, session.prId);
+        // Findings already carry an `id` (numbered when the fallback session was stored) —
+        // dedupeFindings works on `Omit<ReviewFinding, 'id'>[]`, so strip it before merging.
+        let allFindings: Array<Omit<ReviewFinding, 'id'>> = session.phase1Findings.map(
+          ({ id: _id, ...rest }) => rest,
+        );
+
+        const selectedPersonas = PERSONAS.filter((p) => chosenPersonas.includes(p.id));
+        if (selectedPersonas.length > 0) {
+          for (let i = 0; i < session.chunks.length; i++) {
+            const chunk = session.chunks[i];
+            const batchStatus = session.chunks.length > 1 ? `Batch ${i + 1}/${session.chunks.length}` : 'Analysing';
+            const personaResult = await runPersonaPassesForChunk({
+              personas: selectedPersonas, chunk, batchNum: i + 1, totalBatches: session.chunks.length,
+              pr, service, extraInstructions, request, token, runTag, batchStatus, logReview, stream,
+            });
+            allFindings = allFindings.concat(personaResult.findings);
+          }
+        }
+
+        const deduped = dedupeFindings(allFindings);
+        const numbered = deduped.map((f, idx) => ({ ...f, id: idx + 1 }));
+        const { markdown: output } = service.formatReview(numbered, pr, session.diffs.length, config.confidenceThreshold);
+        logReview('info', `Smart-fallback resume completed — ${numbered.length} finding(s)`, {
+          runTag, findingCount: numbered.length, chosenPersonas,
+        });
+        stream.markdown(output);
+
+        await ws.update('bitbucket.session.review', {
+          prTitle: session.prTitle,
+          prUrl: session.prUrl,
+          project: session.project,
+          repo: session.repo,
+          prId: session.prId,
+          findings: numbered,
+          prDescription: pr.description,
+          changedFiles: session.diffs.map((d) => ({ path: d.path, ...(d.deleted ? { deleted: true } : {}) })),
+        } satisfies ReviewSession);
+      } catch (err) {
+        logDiag('bitbucket.review', 'error', `Smart-fallback resume failed — [${runTag}]`, {
+          runTag, error: err instanceof Error ? err.message : String(err),
+        });
+        stream.markdown(friendlyLmFailureMessage('**Review failed:**', err));
+      }
     };
 
     // 2a. Comment preview — confirmation, cancellation, or refinement
@@ -830,11 +1032,6 @@ export function createBitbucketParticipant(
       // Session-level cache so a file requested in batch 2 isn't re-fetched in batch 5.
       const fetchedFileCache = new Map<string, string>();
 
-      const halveFiles = (items: FileDiff[]): [FileDiff[], FileDiff[]] => {
-        const mid = Math.ceil(items.length / 2);
-        return [items.slice(0, mid), items.slice(mid)];
-      };
-
       const halveFindings = (
         items: Array<Omit<ReviewFinding, 'id'>>,
       ): [Array<Omit<ReviewFinding, 'id'>>, Array<Omit<ReviewFinding, 'id'>>] => {
@@ -843,6 +1040,11 @@ export function createBitbucketParticipant(
       };
 
       let anyBatchFailed = false;
+
+      // One entry per chunk, populated only in `smart` mode — each chunk's standard pass's
+      // own recommendation, or `undefined` when the call failed or the trailer's
+      // recommendedPersonas field was missing/unparseable — aggregated after the loop below.
+      const smartPersonaResults: Array<string[] | undefined> = [];
 
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
@@ -865,7 +1067,7 @@ export function createBitbucketParticipant(
           chunk,
           async (files) => {
             const attempt = pass1Tracker.start(files);
-            const prompt = service.buildPrompt(pr, files, undefined, extraInstructions);
+            const prompt = service.buildPrompt(pr, files, undefined, extraInstructions, resolvedMode === 'smart');
             pass1PromptChars = prompt.length;
             totalInputChars += prompt.length;
             const raw = await callLLMOnceWithProgress(prompt, request.model, token, batchStatus);
@@ -878,12 +1080,12 @@ export function createBitbucketParticipant(
             }));
             return raw;
           },
-          halveFiles,
+          splitFilesInHalf,
           {
             onAttemptFailed: (attempt, err, files) => handleAttemptFailure({
               runTag, pass: 'pass1', batch: i + 1, totalBatches: chunks.length,
               libraryAttempt: attempt, err, items: files, originalItems: chunk,
-              tracker: pass1Tracker, promptChars: pass1PromptChars, split: halveFiles,
+              tracker: pass1Tracker, promptChars: pass1PromptChars, split: splitFilesInHalf,
               logFailure: (a, e) => logLmFailure(pass1Label, a, e, { files: files.map((f) => f.path) }),
               logReview,
             }),
@@ -891,6 +1093,11 @@ export function createBitbucketParticipant(
         );
 
         let chunkFindings: Array<Omit<ReviewFinding, 'id'>> = [];
+        // U7/R4: smart mode's phase-1 recommendation signal for this chunk — usable once
+        // any batch's trailer parsed (hasMetaLine), unioning recommendedPersonas across
+        // batches (a chunk split by retry-halving may answer in more than one batch).
+        let chunkPersonaUsable = false;
+        const chunkRecPersonas = new Set<string>();
 
         for (const batch of pass1Batches) {
           if (batch.error !== undefined) {
@@ -900,8 +1107,12 @@ export function createBitbucketParticipant(
             continue;
           }
 
-          const { findings, additionalFilesNeeded, truncated, hasMetaLine, danglingTail } =
+          const { findings, additionalFilesNeeded, truncated, hasMetaLine, danglingTail, recommendedPersonas } =
             await parseReviewResponse(batch.result!);
+          if (resolvedMode === 'smart' && hasMetaLine) {
+            chunkPersonaUsable = true;
+            for (const p of recommendedPersonas ?? []) chunkRecPersonas.add(p);
+          }
           // R6: `batchRawCount` tracks whichever raw findings set is CURRENTLY the one
           // that will feed this batch's final result — reassigned, not accumulated, as
           // continuation/pass2 supersede the earlier attempt. Tallying at every
@@ -935,7 +1146,7 @@ export function createBitbucketParticipant(
               try {
                 const continuationNote = 'Continuation pass — the previous response was truncated. Review ONLY the files provided below.';
                 const contInstructions = continuationNote + (extraInstructions ? '\n' + extraInstructions : '');
-                const contPrompt = service.buildPrompt(pr, uncoveredFiles, undefined, contInstructions);
+                const contPrompt = service.buildPrompt(pr, uncoveredFiles, undefined, contInstructions, resolvedMode === 'smart');
                 totalInputChars += contPrompt.length;
                 const contAttempt: CallAttemptOut = { attempt: 0, durationMs: 0 };
                 const contRaw = await callLLMWithProgress(
@@ -956,6 +1167,13 @@ export function createBitbucketParticipant(
                   itemCount: uncoveredFiles.length, promptChars: contPrompt.length, responseChars: contRaw.length,
                   durationMs: contAttempt.durationMs, status: cont.truncated ? 'truncated' : 'ok',
                 }));
+                // Pass1's own trailer never parsed for a truncated response (truncated is
+                // defined as !hasMetaLine), so the continuation's trailer is this chunk's
+                // only chance to contribute a smart-mode persona recommendation.
+                if (resolvedMode === 'smart' && cont.hasMetaLine) {
+                  chunkPersonaUsable = true;
+                  for (const p of cont.recommendedPersonas ?? []) chunkRecPersonas.add(p);
+                }
                 const contCombined = [...findings, ...cont.findings];
                 batchRawCount = contCombined.length;
                 batchFindings = resolveFindingAnchors(contCombined, batch.items);
@@ -971,27 +1189,15 @@ export function createBitbucketParticipant(
             try {
               // Fetch only files not already pulled in an earlier batch (cross-chunk cache),
               // bounded by a high per-batch ceiling — no longer a flat 5. A large PR pulls
-              // many context files across its batches, each fetched at most once.
-              const toFetch = additionalFilesNeeded
-                .filter((p) => !fetchedFileCache.has(p))
-                .slice(0, MAX_CONTEXT_FILES_PER_BATCH);
-              if (toFetch.length > 0) {
-                const batchSuffix = chunks.length > 1 ? ` (batch ${i + 1})` : '';
-                stream.markdown(`_Fetching ${toFetch.length} context file${toFetch.length !== 1 ? 's' : ''}${batchSuffix}…_\n\n`);
-                const fetched = await service.gatherFileContents(
-                  parsed.project, parsed.repo, pr.fromCommitHash, toFetch,
-                );
-                for (const [p, c] of fetched) fetchedFileCache.set(p, c);
-                logReview('info', `Additional context files fetched — batch ${i + 1}`, {
-                  batch: i + 1, requestedCount: toFetch.length, fetchedCount: fetched.size,
-                });
-              }
-              // Include as many requested files as fit this chunk's remaining budget, smallest-first.
-              const requestedEntries = additionalFilesNeeded
-                .filter((p) => fetchedFileCache.has(p))
-                .map((p) => ({ path: p, content: fetchedFileCache.get(p)! }));
-              const contentBudget = Math.max(0, tokenBudget - estimateChunkTokens(batch.items));
-              const extraContents = selectFilesWithinBudget(requestedEntries, contentBudget);
+              // many context files across its batches, each fetched at most once. Include as
+              // many requested files as fit this chunk's remaining budget, smallest-first.
+              const extraContents = await fetchAndBudgetContextFiles({
+                requestedFiles: additionalFilesNeeded, fetchedFileCache, service,
+                project: parsed.project, repo: parsed.repo, commitHash: pr.fromCommitHash,
+                tokenBudget, budgetAgainst: batch.items,
+                fetchMessage: (n) => `_Fetching ${n} context file${n !== 1 ? 's' : ''}${chunks.length > 1 ? ` (batch ${i + 1})` : ''}…_\n\n`,
+                logLabel: 'Additional context files fetched', batchNum: i + 1, logReview, stream,
+              });
               if (extraContents.size > 0) {
                 const pass2Prompt = service.buildPrompt(pr, batch.items, extraContents, extraInstructions);
                 totalInputChars += pass2Prompt.length;
@@ -1033,66 +1239,26 @@ export function createBitbucketParticipant(
           chunkFindings = chunkFindings.concat(batchFindings);
         }
 
-        // U3: persona lens passes. One independent LLM call per active persona over
-        // this chunk's files, reusing the identical withEasierRetry → callLLMOnceWith
-        // Progress → resolveFindingAnchors sequence pass1 uses above, logged with
-        // pass: '<persona-id>' so each lens's calls are distinguishable in the output
-        // channel. Findings merge straight into chunkFindings — resolveFindingAnchors/
-        // dedupeFindings are pass-agnostic (R2), so no separate merge step is needed.
-        //
-        // TODO(U5/U7): `resolvedMode === 'deep'` is a temporary stand-in for "which
-        // personas are active this mode" — this unit only builds the reusable
-        // per-chunk-persona-execution mechanism. U5 wires deep mode's unconditional
-        // four-persona activation (R8) properly; U7 wires smart mode's selective
-        // activation. Both should replace this line rather than duplicate the loop
-        // below.
-        const activePersonas: Persona[] = resolvedMode === 'deep' ? PERSONAS : [];
-        for (const persona of activePersonas) {
-          const personaLabel = `${persona.id} batch ${i + 1}/${chunks.length}`;
-          const personaTracker = createAttemptTracker<FileDiff>();
-          let personaPromptChars = 0;
-          const personaBatches = await withEasierRetry(
-            chunk,
-            async (files) => {
-              const attempt = personaTracker.start(files);
-              const prompt = service.buildPersonaPrompt(persona, pr, files, undefined, extraInstructions);
-              personaPromptChars = prompt.length;
-              totalInputChars += prompt.length;
-              const raw = await callLLMOnceWithProgress(prompt, request.model, token, batchStatus);
-              totalOutputChars += raw.length;
-              const status = parseNdjsonFindings(raw).truncated ? 'truncated' : 'ok';
-              logReview('info', formatCallLine({
-                runTag, pass: persona.id, batch: i + 1, totalBatches: chunks.length, attempt,
-                itemCount: files.length, promptChars: prompt.length, responseChars: raw.length,
-                durationMs: personaTracker.elapsedMs(), status,
-              }));
-              return raw;
-            },
-            halveFiles,
-            {
-              onAttemptFailed: (attempt, err, files) => handleAttemptFailure({
-                runTag, pass: persona.id, batch: i + 1, totalBatches: chunks.length,
-                libraryAttempt: attempt, err, items: files, originalItems: chunk,
-                tracker: personaTracker, promptChars: personaPromptChars, split: halveFiles,
-                logFailure: (a, e) => logLmFailure(personaLabel, a, e, { files: files.map((f) => f.path) }),
-                logReview,
-              }),
-            },
-          );
+        if (resolvedMode === 'smart') {
+          smartPersonaResults.push(chunkPersonaUsable ? [...chunkRecPersonas] : undefined);
+        }
 
-          for (const batch of personaBatches) {
-            if (batch.error !== undefined) {
-              anyBatchFailed = true;
-              const filePaths = batch.items.map((f) => f.path).join(', ');
-              stream.markdown(`_⚠ ${persona.displayName} pass — batch ${i + 1} — could not review ${filePaths} after retrying: ${describeFailure(batch.error)}_\n\n`);
-              continue;
-            }
-            const { findings } = await parseReviewResponse(batch.result!);
-            const resolved = resolveFindingAnchors(findings, batch.items);
-            rawFindingsTotal += findings.length;
-            anchorDroppedTotal += findings.length - resolved.length;
-            chunkFindings = chunkFindings.concat(resolved);
-          }
+        // U3/U5: deep mode's persona lens passes run inline, per-chunk, right here (unchanged
+        // from before this unit). Smart mode's persona passes do NOT run in this loop — R4
+        // requires aggregating every chunk's recommendation first, so smart mode's phase 2
+        // runs once, after this whole per-chunk loop, over the same `chunks` (see below).
+        const activePersonas: Persona[] = resolvedMode === 'deep' ? PERSONAS : [];
+        if (activePersonas.length > 0) {
+          const personaResult = await runPersonaPassesForChunk({
+            personas: activePersonas, chunk, batchNum: i + 1, totalBatches: chunks.length,
+            pr, service, extraInstructions, request, token, runTag, batchStatus, logReview, stream,
+          });
+          totalInputChars += personaResult.inputChars;
+          totalOutputChars += personaResult.outputChars;
+          rawFindingsTotal += personaResult.rawCount;
+          anchorDroppedTotal += personaResult.anchorDropped;
+          if (personaResult.anyFailed) anyBatchFailed = true;
+          chunkFindings = chunkFindings.concat(personaResult.findings);
         }
 
         // Deep mode only: re-verify findings against the diff and drop the ones the critic can't confirm.
@@ -1152,26 +1318,15 @@ export function createBitbucketParticipant(
             const requestedFiles = parseCriticAdditionalFiles(criticRaw);
             if (requestedFiles.length > 0) {
               try {
-                const toFetch = requestedFiles
-                  .filter((p) => !fetchedFileCache.has(p))
-                  .slice(0, MAX_CONTEXT_FILES_PER_BATCH);
-                if (toFetch.length > 0) {
-                  stream.markdown(`_Fetching ${toFetch.length} context file${toFetch.length !== 1 ? 's' : ''} for critic verification (batch ${i + 1})…_\n\n`);
-                  const fetched = await service.gatherFileContents(
-                    parsed.project, parsed.repo, pr.fromCommitHash, toFetch,
-                  );
-                  for (const [p, c] of fetched) fetchedFileCache.set(p, c);
-                  logReview('info', `Critic context files fetched — batch ${i + 1}`, {
-                    batch: i + 1, requestedCount: toFetch.length, fetchedCount: fetched.size,
-                  });
-                }
                 const referencedPaths = new Set(batch.items.map((f) => f.file));
                 const relevantDiffs = chunk.filter((d) => referencedPaths.has(d.path));
-                const requestedEntries = requestedFiles
-                  .filter((p) => fetchedFileCache.has(p))
-                  .map((p) => ({ path: p, content: fetchedFileCache.get(p)! }));
-                const contentBudget = Math.max(0, tokenBudget - estimateChunkTokens(relevantDiffs));
-                const extraContents = selectFilesWithinBudget(requestedEntries, contentBudget);
+                const extraContents = await fetchAndBudgetContextFiles({
+                  requestedFiles, fetchedFileCache, service,
+                  project: parsed.project, repo: parsed.repo, commitHash: pr.fromCommitHash,
+                  tokenBudget, budgetAgainst: relevantDiffs,
+                  fetchMessage: (n) => `_Fetching ${n} context file${n !== 1 ? 's' : ''} for critic verification (batch ${i + 1})…_\n\n`,
+                  logLabel: 'Critic context files fetched', batchNum: i + 1, logReview, stream,
+                });
                 if (extraContents.size > 0) {
                   const finalRoundNote =
                     'This is the final verification round — no further files will be provided. ' +
@@ -1184,7 +1339,7 @@ export function createBitbucketParticipant(
                   );
                   totalInputChars += round2Prompt.length;
                   const round2Attempt: CallAttemptOut = { attempt: 0, durationMs: 0 };
-                  criticRaw = await callLLMWithProgress(
+                  const round2Raw = await callLLMWithProgress(
                     round2Prompt, request.model, token, `${batchStatus} verifying (round 2)`,
                     `critic round2 batch ${i + 1}/${chunks.length}`,
                     {
@@ -1195,12 +1350,24 @@ export function createBitbucketParticipant(
                       })),
                     },
                   );
-                  totalOutputChars += criticRaw.length;
-                  logReview('info', formatCallLine({
-                    runTag, pass: 'critic-r2', batch: i + 1, totalBatches: chunks.length, attempt: round2Attempt.attempt,
-                    itemCount: batch.items.length, promptChars: round2Prompt.length, responseChars: criticRaw.length,
-                    durationMs: round2Attempt.durationMs, status: 'ok',
-                  }));
+                  totalOutputChars += round2Raw.length;
+                  // Only trust round 2 when it actually parses. A successful-but-garbled
+                  // reply must not silently replace round 1's real keep decision with
+                  // parseCriticKeep's fail-open "keep everything" default — that would
+                  // contradict the fail-soft fallback below, which only triggers on a
+                  // thrown exception, not on a reply that came back but made no sense.
+                  if (extractJsonObject(round2Raw)) {
+                    criticRaw = round2Raw;
+                    logReview('info', formatCallLine({
+                      runTag, pass: 'critic-r2', batch: i + 1, totalBatches: chunks.length, attempt: round2Attempt.attempt,
+                      itemCount: batch.items.length, promptChars: round2Prompt.length, responseChars: round2Raw.length,
+                      durationMs: round2Attempt.durationMs, status: 'ok',
+                    }));
+                  } else {
+                    logReview('warn', `Critic round 2 returned no parseable JSON — keeping round 1's decision — batch ${i + 1}`, {
+                      batch: i + 1, responseChars: round2Raw.length,
+                    });
+                  }
                 }
               } catch (err) {
                 logReview('warn', `Critic file-fetch round failed — batch ${i + 1}`, {
@@ -1237,6 +1404,56 @@ export function createBitbucketParticipant(
             sugg ? `${sugg} 🔵` : '',
           ].filter(Boolean).join(' · ') || 'no issues';
           stream.markdown(`_Batch ${i + 1}/${chunks.length} done · ${tally}_\n\n`);
+        }
+      }
+
+      // U7/R4/R6/R7: smart mode's phase 2 — run once, after every chunk's standard pass
+      // (phase 1, the loop above) has returned, over the SAME chunks, for the PR-wide
+      // aggregated persona set (never per-chunk — see the note above the loop).
+      if (resolvedMode === 'smart') {
+        const { selected, hasUsableSignal } = aggregateRecommendedPersonas(smartPersonaResults);
+
+        if (!hasUsableSignal) {
+          // R7/AE3: no chunk returned a usable recommendation — surface the choice to the
+          // user instead of guessing. Number phase 1's findings now (the fallback session
+          // stores them fully formed) and return early; `resumeSmartReviewPhase2` (a later
+          // turn) runs phase 2 and streams the completed review.
+          const phase1Deduped = dedupeFindings(allFindings);
+          const phase1Numbered = phase1Deduped.map((f, idx) => ({ ...f, id: idx + 1 }));
+          logReview('info', 'Smart mode: no usable persona recommendation from any chunk — asking user', { runTag });
+          await askSmartFallbackChoice(
+            { prTitle: pr.title, prUrl: prUrlMatch[0], project: parsed.project, repo: parsed.repo, prId: parsed.prId },
+            fileDiffs, chunks, phase1Numbered,
+          );
+          return;
+        }
+
+        const selectedPersonas = PERSONAS.filter((p) => selected.includes(p.id));
+        logReview('info', `Smart mode: personas selected — ${selectedPersonas.map((p) => p.id).join(', ') || '(none)'}`, {
+          runTag, selected,
+        });
+        stream.markdown(
+          selectedPersonas.length > 0
+            ? `_Smart mode selected specialist lenses: **${selectedPersonas.map((p) => p.displayName).join(', ')}**._\n\n`
+            : `_Smart mode found no specialist lens recommended for this PR — continuing with the standard review only._\n\n`,
+        );
+
+        if (selectedPersonas.length > 0) {
+          for (let i = 0; i < chunks.length; i++) {
+            const chunk = chunks[i];
+            const batchStatus = chunks.length > 1 ? `Batch ${i + 1}/${chunks.length}` : 'Analysing';
+            lastStage = `smart phase 2 batch ${i + 1}/${chunks.length}`;
+            const personaResult = await runPersonaPassesForChunk({
+              personas: selectedPersonas, chunk, batchNum: i + 1, totalBatches: chunks.length,
+              pr, service, extraInstructions, request, token, runTag, batchStatus, logReview, stream,
+            });
+            totalInputChars += personaResult.inputChars;
+            totalOutputChars += personaResult.outputChars;
+            rawFindingsTotal += personaResult.rawCount;
+            anchorDroppedTotal += personaResult.anchorDropped;
+            if (personaResult.anyFailed) anyBatchFailed = true;
+            allFindings = allFindings.concat(personaResult.findings);
+          }
         }
       }
 

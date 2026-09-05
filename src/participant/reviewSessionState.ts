@@ -70,13 +70,13 @@ export interface BitbucketCommentPreviewSession {
 }
 
 /**
- * U4/R7: `smart`-mode selection-failure fallback session — stored in `workspaceState` under
+ * `smart`-mode selection-failure fallback session — stored in `workspaceState` under
  * `bitbucket.session.smartFallback` and tagged with `<!-- bitbucket:smart-fallback-session -->`,
  * following the exact same shape/convention as `ReviewSession` (see docs/review-process.md
  * "Follow-ups"). Holds enough in-flight state to resume phase 2 once the user answers:
  * PR reference, fetched diff, chunk boundaries, and phase 1's already-collected standard-pass
- * findings. Built by U7's aggregation call site (not yet implemented); consumed by
- * `resumeSmartReviewPhase2` in `BitbucketParticipant.ts` once U7 implements it.
+ * findings. Built by the smart-mode aggregation call site in `BitbucketParticipant.ts`;
+ * consumed by `resumeSmartReviewPhase2` there.
  */
 export interface SmartFallbackSession {
   prTitle: string;
@@ -336,9 +336,18 @@ export function extractPartialFindings(raw: string): Array<Record<string, unknow
   return results;
 }
 
+/** The only keys a meta (trailer) line may carry — KTD2 widens the `additionalFilesNeeded`-only
+ * check to "every key present is one of these", so the combined additionalFilesNeeded +
+ * recommendedPersonas trailer smart mode emits still parses as one meta line. */
+const NDJSON_META_KEYS = new Set(['additionalFilesNeeded', 'recommendedPersonas']);
+
 export function parseNdjsonFindings(raw: string): {
   findings: Array<Record<string, unknown>>;
   additionalFilesNeeded: string[];
+  /** KTD2: persona ids the standard pass recommends for this chunk — only ever populated
+   * when the prompt requested it (smart mode's phase-1 call); empty array when the trailer
+   * carried no such key (either the model omitted it, or the call didn't request it). */
+  recommendedPersonas: string[];
   hasMetaLine: boolean;
   truncated: boolean;
   /** The un-parsed text of the last line, when the response was cut off mid-line
@@ -349,6 +358,7 @@ export function parseNdjsonFindings(raw: string): {
 } {
   const findings: Array<Record<string, unknown>> = [];
   let additionalFilesNeeded: string[] = [];
+  let recommendedPersonas: string[] = [];
   let hasMetaLine = false;
   let danglingTail: string | undefined;
   for (const line of raw.split('\n')) {
@@ -357,8 +367,15 @@ export function parseNdjsonFindings(raw: string): {
     try {
       const obj = JSON.parse(t) as Record<string, unknown>;
       danglingTail = undefined; // this line parsed — any earlier failure was not the tail
-      if (Array.isArray(obj.additionalFilesNeeded) && Object.keys(obj).length === 1) {
-        additionalFilesNeeded = obj.additionalFilesNeeded as string[];
+      const keys = Object.keys(obj);
+      const isMetaLine =
+        keys.length > 0 &&
+        keys.every((k) => NDJSON_META_KEYS.has(k)) &&
+        (obj.additionalFilesNeeded === undefined || Array.isArray(obj.additionalFilesNeeded)) &&
+        (obj.recommendedPersonas === undefined || Array.isArray(obj.recommendedPersonas));
+      if (isMetaLine) {
+        if (Array.isArray(obj.additionalFilesNeeded)) additionalFilesNeeded = obj.additionalFilesNeeded as string[];
+        if (Array.isArray(obj.recommendedPersonas)) recommendedPersonas = obj.recommendedPersonas as string[];
         hasMetaLine = true;
       } else if (typeof obj.file === 'string') {
         findings.push(obj);
@@ -370,10 +387,35 @@ export function parseNdjsonFindings(raw: string): {
   return {
     findings,
     additionalFilesNeeded,
+    recommendedPersonas,
     hasMetaLine,
     truncated: !hasMetaLine && (findings.length > 0 || raw.trim().length > 0),
     ...(danglingTail !== undefined ? { danglingTail } : {}),
   };
+}
+
+/**
+ * Aggregate each chunk's standard-pass persona recommendation into one PR-wide selected
+ * set. A chunk contributes `undefined` when it failed the call or returned no usable
+ * (parseable) recommendation field at all — an empty array IS usable signal (the model
+ * correctly recommended nothing, e.g. a docs-only PR). Ids outside the fixed catalog are
+ * dropped, never passed through. `hasUsableSignal` is false only when every chunk
+ * contributed `undefined` — the trigger for the smart-fallback question.
+ */
+export function aggregateRecommendedPersonas(
+  perChunkResults: Array<string[] | undefined>,
+): { selected: PersonaId[]; hasUsableSignal: boolean } {
+  const validIds = new Set(ALL_PERSONA_IDS);
+  const selected = new Set<PersonaId>();
+  let hasUsableSignal = false;
+  for (const recommendedPersonas of perChunkResults) {
+    if (recommendedPersonas === undefined) continue;
+    hasUsableSignal = true;
+    for (const id of recommendedPersonas) {
+      if (validIds.has(id as PersonaId)) selected.add(id as PersonaId);
+    }
+  }
+  return { selected: [...selected], hasUsableSignal };
 }
 
 export type FollowUpIntent =

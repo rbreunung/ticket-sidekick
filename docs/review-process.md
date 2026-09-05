@@ -20,7 +20,7 @@ flowchart TD
     C --> D[drop no-hunk files + reviewExcludePatterns]
     D --> E[buildAdaptiveChunks<br/>pack to token budget]
     E --> F{for each chunk}
-    F --> G[buildPrompt<br/>numberDiffLines render-only + grounding rules]
+    F --> G[buildPrompt<br/>numberDiffLines render-only + grounding rules<br/>smart mode also asks for recommendedPersonas]
     G --> H[LLM pass 1 → NDJSON findings + additionalFilesNeeded]
     H --> I[resolveFindingAnchors<br/>locate anchorCode → verified line + provenance]
     I --> J{truncated?}
@@ -30,16 +30,31 @@ flowchart TD
     L -- no --> N
     K --> N
     M --> N[chunk findings]
-    N --> O{deep mode?}
+    N --> DP{deep mode?}
+    DP -- yes --> PP[persona passes, inline<br/>buildPersonaPrompt × 4, this chunk]
+    DP -- no --> O
+    PP --> O{deep mode?}
     O -- yes --> P[critic pass<br/>buildCriticPrompt → parseCriticKeep → drop unverified]
     O -- no --> Q
     P --> Q[concat into allFindings]
     Q --> F
-    F -- done --> R[dedupeFindings<br/>file + line + title]
+    F -- done --> SM{smart mode?}
+    SM -- no --> R
+    SM -- yes --> AGG[aggregateRecommendedPersonas<br/>across every chunk's trailer]
+    AGG --> USB{hasUsableSignal?}
+    USB -- no --> FB[askSmartFallbackChoice<br/>SmartFallbackSession → next turn]
+    USB -- yes --> PP2[phase 2: persona passes<br/>selected personas × every chunk<br/>runPersonaPassesForChunk]
+    PP2 --> R[dedupeFindings<br/>file + line + title]
     R --> S[number findings 1..N]
     S --> T[formatReview<br/>by-file, provenance tags, low-confidence fold]
     T --> U[store ReviewSession in workspaceState]
 ```
+
+Smart mode's persona passes never run inside the per-chunk loop above — they need the
+recommendation aggregated across *all* chunks first, so phase 2 is a second, separate
+walk over the same `chunks` after the loop completes. `deep` mode instead runs all four
+persona passes inline, per chunk, alongside the standard pass — no aggregation needed
+because deep mode always uses every persona.
 
 ## Diff intake and chunk budgeting
 
@@ -101,6 +116,12 @@ recall — a review never looks empty because filters stacked up.
 | Confidence (`formatReview`, `confidenceThreshold`) | always | **fold** into a collapsed section if `confidence < threshold` — never deleted |
 | Critic (`buildCriticPrompt` + `parseCriticKeep`) | deep mode only | **drop** findings the verification pass can't confirm; fail-open if its reply is unparseable |
 
+Persona-pass findings (smart/deep) are not a separate filtering stage — they
+flow through the exact same two hard drops as standard-pass findings (anchor
+locate, and critic in deep mode), then merge into `allFindings` alongside
+the standard pass's findings before the shared dedup/confidence/format steps
+run once over the combined set.
+
 Fixed order: `parse → number(render) → LLM → locate+classify (drop only if
 unlocatable) → confidence fold → [deep: critic] → merge chunks → dedup → format`.
 The end-of-review findings funnel (below) reports these same stages — cross-batch
@@ -131,11 +152,22 @@ critic-enabled, and context lines — enough to see a misconfiguration (e.g. an
 unusually small `contextBudgetRatio`) without re-running the review.
 
 Every LLM call in the pipeline — pass 1, a truncation continuation, pass 2,
-and the critic pass — then logs one compact per-call line: pass, batch,
-attempt, a short run tag (`pr=PROJ/repo#42`, so two reviews running
-concurrently in one VS Code window stay attributable to their own lines),
-prompt size with estimated tokens, response size, duration, and outcome
-status (`ok`, `truncated`, or `error` with its code). A truncated response —
+each persona pass, and the critic pass — then logs one compact per-call
+line: pass, batch, attempt, a short run tag (`pr=PROJ/repo#42`, so two
+reviews running concurrently in one VS Code window stay attributable to
+their own lines), prompt size with estimated tokens, response size,
+duration, and outcome status (`ok`, `truncated`, or `error` with its code).
+A persona pass's `pass` value is the persona's own id (`security`,
+`performance`, `reliability`, or `maintainability`) — the exact same
+`formatCallLine`/`handleAttemptFailure` diagnostic machinery every other
+pass uses, just with that id instead of `pass1`/`pass2`/`critic` (KTD6). In
+`smart` mode, the standard pass's per-chunk `recommendedPersonas` trailer and
+the aggregation step that follows it are not separate LLM calls, so neither
+gets its own `pass` tag — instead each gets one plain diagnostic line: the
+aggregation result (`"Smart mode: personas selected — …"`, or an explicit
+`"no usable persona recommendation from any chunk"` line when every chunk's
+trailer failed to parse, which is also when the smart-fallback question
+fires). A truncated response —
 previously the one event in the pipeline that threw nothing and logged
 nothing — gets its own event: response size, complete-vs-cut-off line
 counts, whether the final meta line was present, which files were covered
@@ -150,7 +182,11 @@ At the end of every review, one findings-funnel summary line reports counts
 at each stage from the table above — raw findings from LLM responses,
 deduped as cross-batch duplicate, dropped by anchor verification, folded by
 confidence threshold, and (deep mode) dropped by critic — down to the final
-count shown. If a review is cancelled or throws before reaching this line,
+count shown. Persona-pass findings (smart/deep) fold into that same `raw`
+count alongside the standard pass's — there is no separate persona stage or
+line in the funnel (KTD6); a persona-heavy run is distinguishable only via
+the per-call `pass:` tags above, not via the funnel shape. If a review is
+cancelled or throws before reaching this line,
 the outer catch logs a closing line naming the last batch/stage reached, so
 that's distinguishable from a channel-write failure (the funnel's absence
 alone can't tell those apart).
@@ -194,19 +230,70 @@ the full line-by-line walk happens on follow-up.
 
 ## Modes
 
-| Invocation | Pass 2 (whole-file context) | Critic pass |
-| --- | --- | --- |
-| `@bitbucket review quick <url>` | off | off |
-| `@bitbucket <url>` (standard, default) | on (budget-aware) | off |
-| `@bitbucket review deep <url>` | on | on |
+Capability order is `quick < standard < smart < deep`; mode-keyword *detection*
+priority in the prompt is the reverse — `deep` > `smart` > `quick` > the
+configured default (`resolveReviewMode`, KTD1) — so a prompt that accidentally
+contains more than one keyword resolves to the more thorough mode rather than
+silently downgrading a `deep`/`smart` request.
 
-Context widening applies in **all** modes — only the expensive whole-file Pass 2
-and the critic pass are mode-gated.
+| Invocation | Pass 2 (whole-file context) | Persona passes | Critic pass |
+| --- | --- | --- | --- |
+| `@bitbucket review quick <url>` | off | off | off |
+| `@bitbucket <url>` (standard, default) | on (budget-aware) | off | off |
+| `@bitbucket review smart <url>` | on (budget-aware) | on — selected subset, phase 2 | off |
+| `@bitbucket review deep <url>` | on | on — all four, inline per chunk | on |
+
+Context widening applies in **all** modes — only the expensive whole-file Pass 2,
+the persona passes, and the critic pass are mode-gated.
 
 `deep` mode's critic pass adds one LLM call per chunk on top of the main
 review call — roughly doubling the number of sequential calls made per
 review, and proportionally increasing exposure to a transient provider
 failure (see "Resilience & debugging" above).
+
+## Persona lenses (`smart` and `deep`)
+
+`PERSONAS` (`src/services/PrReviewService.ts`) is a fixed catalog of four
+single-lens review personas, mirroring compound-engineering-plugin's persona
+set: **security**, **performance**, **reliability**, **maintainability**. Each
+is an independent LLM call over the same numbered diff chunks the standard
+pass already uses (`buildPersonaPrompt` — identical grounding rules, severity
+rubric, and NDJSON output contract as `buildPrompt`, with the generalist
+"Review the changes for:" section swapped for the persona's own focus
+paragraph, which explicitly tells the model not to report findings outside
+its lens).
+
+- **`deep` mode** runs all four persona passes inline, once per chunk,
+  alongside the standard pass — no selection step, since deep mode always
+  wants full coverage.
+- **`smart` mode** runs a cheaper two-phase flow instead of always paying for
+  all four:
+  1. **Phase 1** — the standard pass runs over every chunk as usual, but its
+     prompt also asks the model to name which personas it thinks are worth a
+     dedicated look, in a `recommendedPersonas` trailer field (ids from the
+     fixed catalog only).
+  2. **Aggregation** — after every chunk's phase 1 pass has returned,
+     `aggregateRecommendedPersonas` unions the recommended ids across all
+     chunks into one PR-wide selected set. A chunk that failed or returned no
+     parseable trailer contributes no signal; an empty `recommendedPersonas`
+     array (the model explicitly recommending nothing) still counts as usable
+     signal. If **no** chunk contributed usable signal, smart mode doesn't
+     guess — it stores a `SmartFallbackSession` and asks the user to choose
+     between running all four passes or continuing with the standard review
+     only (see "Follow-ups" below). Otherwise it streams one line announcing
+     the selected personas (or explicitly says none were selected, if the
+     union came back empty).
+  3. **Phase 2** — the selected personas' passes run once, after every
+     chunk's phase 1 has completed, over the *same* chunks
+     (`runPersonaPassesForChunk`, the same shared helper deep mode's inline
+     passes and the fallback-resume turn use) — never per-chunk during phase
+     1, since the selection is PR-wide, not per-chunk.
+
+Persona-sourced findings carry no persona tag on the `ReviewFinding` itself —
+they're formatted, deduped, and funneled exactly like a standard-pass finding
+(R2). The only place a persona pass is visible at all is the diagnostic
+timeline (see below); the review output and follow-up flow are unaware which
+pass produced which finding.
 
 ### Upfront question
 
@@ -258,6 +345,18 @@ continuation, Pass 2, and critic for a review; the single call for a
 follow-up). VS Code's LM API does not expose actual token counts; this is a
 ballpark consistent with the chunk-budget heuristic above.
 
+Persona passes (`buildPersonaPrompt`) and smart mode's phase 1
+`recommendedPersonas` trailer add no separate accounting — they're regular
+prompt/response calls whose char counts are added into the same
+`totalInputChars`/`totalOutputChars` accumulators as every other pass
+(`runPersonaPassesForChunk` returns its own `inputChars`/`outputChars`,
+summed at each call site the same way pass1/pass2/critic already are), so
+the estimate line already reflects them without any special-casing. A
+`smart`-mode review's estimate therefore covers phase 1 (standard pass, all
+chunks) plus phase 2 (selected personas × all chunks); a `deep`-mode
+review's covers the standard pass, all four persona passes, and the critic
+pass, all per chunk.
+
 ## Follow-ups
 
 After a review, `ReviewSession` is stored in `workspaceState` with the findings,
@@ -297,13 +396,33 @@ prompt always bypasses both follow-up branches and starts a fresh review, even w
 a `<!-- bitbucket:review-session -->` marker is present in the last response —
 `hasPrUrl()` in `reviewSessionState.ts` encodes this check and is unit-tested.
 
+### Smart-mode fallback session
+
+`SmartFallbackSession` (`bitbucket.session.smartFallback` in `workspaceState`,
+tag `<!-- bitbucket:smart-fallback-session -->`) is a second, narrower
+multi-turn session that only fires mid-`smart`-mode-review — not after one has
+completed. It's created when phase 1's aggregation step (`aggregateRecommendedPersonas`)
+finds no usable persona recommendation from any chunk: rather than guessing,
+the handler stores the PR reference, the fetched diffs, the chunk boundaries,
+and phase 1's already-numbered findings, then asks the user to reply **all**
+(run all four persona passes) or **standard** (skip straight to formatting
+phase 1's findings). The next turn's reply resumes via
+`resumeSmartReviewPhase2`, which — having none of the original review's local
+state in scope — rebuilds its own client/service/`runTag`, runs phase 2 (or
+skips it, for "standard") over the stored chunks with `runPersonaPassesForChunk`
+(the same helper the main flow's phase 2 and deep mode's inline passes use),
+merges the result with the stored phase 1 findings, dedupes, formats, streams
+the completed review, and finally stores a normal `ReviewSession` so ordinary
+follow-ups (`#N`, "add to review", etc.) work on it exactly as they would
+after any other review.
+
 ## Settings that shape the run
 
 | Setting | Default | Effect |
 | --- | --- | --- |
 | `ticketSidekick.bitbucket.reviewContextLines` | 12 | context lines around each hunk |
 | `ticketSidekick.bitbucket.confidenceThreshold` | 0.7 | below → low-confidence fold |
-| `ticketSidekick.bitbucket.reviewMode` | standard | default depth (`standard` \| `quick`) |
+| `ticketSidekick.bitbucket.reviewMode` | standard | default depth (`standard` \| `quick` \| `smart` \| `deep`) — `smart`/`deep` are also selectable per-review via the `review smart`/`review deep` prompt keyword, same as `quick` already was |
 | `ticketSidekick.bitbucket.contextBudgetRatio` | 0.7 | fraction of context window per chunk |
 | `ticketSidekick.bitbucket.modelContextTokens` | (model API) | token budget override |
 | `ticketSidekick.bitbucket.reviewExcludePatterns` | `[]` | globs skipped before review |
