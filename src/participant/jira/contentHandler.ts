@@ -129,8 +129,8 @@ export async function handleContentSession(
       // watching this must never fire on an attempted-but-failed create.
       await vscode.commands.executeCommand('setContext', 'ticketSidekick.firstTicketCreated', true);
       stream.markdown(created.message);
-      stream.markdown(`\n\n<!-- @jira-ticket:${created.key} -->`);
-      return;
+      // R13: carry the created ticket key on metadata instead of a visible marker.
+      return { metadata: { jiraSession: { kinds: [], lastTicketKey: created.key } } };
     }
     let result: string;
     const jiraText = markdownToJiraWiki(session.currentContent);
@@ -140,8 +140,8 @@ export async function handleContentSession(
       result = await ticketService.updateField(session.ticketKey, 'description', jiraText, baseUrl);
     }
     stream.markdown(result);
-    stream.markdown(`\n\n<!-- @jira-ticket:${session.ticketKey} -->`);
-    return;
+    // R13: carry the referenced ticket key on metadata instead of a visible marker.
+    return { metadata: { jiraSession: { kinds: [], lastTicketKey: session.ticketKey } } };
   }
   // Refinement instruction
   const historyContext = session.operation !== 'createTicket' ? session.historyContext : undefined;

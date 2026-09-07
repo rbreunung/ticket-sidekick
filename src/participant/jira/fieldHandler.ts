@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { logDiag } from '../../utils/diagLog';
 import { TicketService, resolveFieldIdFuzzy, extractTextFromAdf } from '../../services/TicketService';
 import type { JiraFieldMeta } from '../../jira/IJiraClient';
-import type { FieldUpdatePreviewSession, FieldSelectionSession, SprintSelectionSession, ContentSession } from '../sessionState';
+import type { FieldUpdatePreviewSession, FieldSelectionSession, SprintSelectionSession, ContentSession, JiraSessionContinuity } from '../sessionState';
 import { isCancellation, buildChatCommandLink } from '../sessionState';
 import { spellCheckValue } from './llmHelpers';
 import { streamContentPreview } from './contentHandler';
@@ -176,6 +176,8 @@ export async function handleSpellCheck(
     contentSource: 'generate',
   };
   const chatResult = await streamContentPreview(session, stream, ws);
-  stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
-  return chatResult;
+  // R13: carry the referenced ticket key on metadata instead of a visible marker. Merge into the
+  // preview session's existing metadata (which carries the 'previewing' kind) so both survive.
+  const prevSession = (chatResult?.metadata as { jiraSession?: JiraSessionContinuity } | undefined)?.jiraSession;
+  return { metadata: { jiraSession: { kinds: prevSession?.kinds ?? [], lastTicketKey: ticketKey } } };
 }

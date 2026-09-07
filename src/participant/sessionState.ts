@@ -326,11 +326,6 @@ export function parseResolutionSelection(reply: string, options: string[]): stri
   return pickByNumberOrName(reply, options, (s) => s) ?? 'invalid';
 }
 
-export function extractLastTicketFromText(text: string): string | null {
-  const match = text.match(/<!--\s*@jira-ticket:([A-Z][A-Z0-9]+-\d+)\s*-->/);
-  return match ? match[1] : null;
-}
-
 export function stripHiddenMarkers(text: string): string {
   return text.replace(/<!--[\s\S]*?-->/g, '').replace(/\s+/g, ' ').trim();
 }
@@ -1595,6 +1590,11 @@ export type JiraSessionKind =
 
 export interface JiraSessionContinuity {
   kinds: JiraSessionKind[];
+  /** R13: the most recently referenced ticket key, carried on metadata instead of a visible
+   * `<!-- @jira-ticket:KEY -->` marker. A branch that references a ticket but starts no session
+   * returns `{ kinds: [], lastTicketKey }` — empty kinds keep every `getActiveJiraSession(...)?.kinds.includes(...)`
+   * check false (no active session) while still letting `parseLastTicketFromContext` find the key. */
+  lastTicketKey?: string;
 }
 
 /** Result text for `jira_discoverWorkflow` — mirrors `handleDiscoverWorkflow`'s chat summary
