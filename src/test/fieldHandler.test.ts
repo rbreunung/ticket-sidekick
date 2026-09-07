@@ -166,19 +166,25 @@ describe('handleSpellCheck', () => {
     });
     const stream = mockStream();
 
-    await handleSpellCheck('PROJ-123', service, nullModel, stream as never, nullToken, mockWs() as never);
+    const chatResult = await handleSpellCheck('PROJ-123', service, nullModel, stream as never, nullToken, mockWs() as never);
 
     expect(spellCheckValue).not.toHaveBeenCalled();
     expect(stream.markdown).toHaveBeenCalledWith('**PROJ-123** has no description to check.');
+    // R13: the no-op response still names the ticket, so it rides on metadata for bare follow-ups.
+    expect(chatResult?.metadata?.jiraSession?.kinds).toEqual([]);
+    expect(chatResult?.metadata?.jiraSession?.lastTicketKey).toBe('PROJ-123');
   });
 
   it('streams a no-issues message when spellCheckValue returns null', async () => {
     vi.mocked(spellCheckValue).mockResolvedValue(null);
     const stream = mockStream();
 
-    await handleSpellCheck('PROJ-123', service, nullModel, stream as never, nullToken, mockWs() as never);
+    const chatResult = await handleSpellCheck('PROJ-123', service, nullModel, stream as never, nullToken, mockWs() as never);
 
     expect(streamContentPreview).not.toHaveBeenCalled();
     expect(stream.markdown).toHaveBeenCalledWith('No spelling or grammar issues found in **PROJ-123**.');
+    // R13: a completed no-op still references the ticket.
+    expect(chatResult?.metadata?.jiraSession?.kinds).toEqual([]);
+    expect(chatResult?.metadata?.jiraSession?.lastTicketKey).toBe('PROJ-123');
   });
 });

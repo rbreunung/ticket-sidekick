@@ -157,13 +157,15 @@ export async function handleSpellCheck(
   const rawDescription = extractTextFromAdf(issue.fields.description);
   if (!rawDescription.trim()) {
     stream.markdown(`**${ticketKey}** has no description to check.`);
-    return;
+    // R13: the response names the ticket, so carry it on metadata for bare follow-ups.
+    return { metadata: { jiraSession: { kinds: [], lastTicketKey: ticketKey } } };
   }
   const markdownDescription = wikiToMarkdown(rawDescription);
   const result = await spellCheckValue(markdownDescription, model, token);
   if (!result) {
     stream.markdown(`No spelling or grammar issues found in **${ticketKey}**.`);
-    return;
+    // R13: same — a completed no-op still references the ticket.
+    return { metadata: { jiraSession: { kinds: [], lastTicketKey: ticketKey } } };
   }
   if (result.changeSummary) {
     stream.markdown(`**Changes:**\n${result.changeSummary}\n\n`);
