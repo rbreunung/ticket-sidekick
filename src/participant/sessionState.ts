@@ -1084,6 +1084,10 @@ export const TEMPLATE_FIELD_REVIEW_COLUMNS: ReviewTableColumn<TemplateFieldRevie
   { header: 'Include?', accessor: (r) => buildChatCommandLink(r.included ? '✓' : '_excluded_', '@jira', r.id) },
 ];
 
+// R12(c/d): the output embeds live command links (the Include? toggle cells and the Post it /
+// Cancel footer), so callers MUST stream it through `trustedChatMarkdown(...)` — a plain
+// `stream.markdown(string)` would render those links inert. This function stays vscode-free
+// (KTD5) and therefore cannot wrap itself; the trust-gate is a caller obligation.
 export function buildTemplateFieldReviewTable(rows: TemplateFieldReviewRow[]): string {
   return renderReviewTable(TEMPLATE_FIELD_REVIEW_COLUMNS, rows) +
     // R12(c): the cancel link resubmits the word `cancel`, not `(c)` — this table is parsed by

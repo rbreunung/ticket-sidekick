@@ -77,6 +77,15 @@ async function resolveTemplateByName(name: string | null, stream: vscode.ChatRes
   return found;
 }
 
+// Shared by the three comment-listing sites (getTicket / showComments / getComments) that offer to
+// load older comments. Returns a trusted MarkdownString so the embedded "load all" command link is
+// live — callers stream it directly via `stream.markdown(...)`.
+function olderCommentsNotShownLink(count: number): vscode.MarkdownString {
+  return trustedChatMarkdown(
+    `\n\n_${count} older comment(s) not shown. Reply ${buildChatCommandLink('load all', '@jira', 'load all')} to include them._`,
+  );
+}
+
 export function createJiraParticipant(
   context: vscode.ExtensionContext,
   configService: ConfigService,
@@ -1001,7 +1010,7 @@ export function createJiraParticipant(
             if (total > MAX_SHOW) {
               const moreSession: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: null };
               await ws.update('jira.session.moreComments', moreSession);
-              stream.markdown(trustedChatMarkdown(`\n\n_${total - MAX_SHOW} older comment(s) not shown. Reply ${buildChatCommandLink('load all', '@jira', 'load all')} to include them._`));
+              stream.markdown(olderCommentsNotShownLink(total - MAX_SHOW));
               // R13: carry the ticket key on metadata instead of a visible marker.
               return { metadata: { jiraSession: { kinds: ['more-comments', 'comment-list'], lastTicketKey: ticketKey! } } };
             } else {
@@ -1040,7 +1049,7 @@ export function createJiraParticipant(
           if (fullTotal > MAX_SHOW_FULL) {
             const moreSession: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: null, displayMode: 'full' };
             await ws.update('jira.session.moreComments', moreSession);
-            stream.markdown(trustedChatMarkdown(`\n\n_${fullTotal - MAX_SHOW_FULL} older comment(s) not shown. Reply ${buildChatCommandLink('load all', '@jira', 'load all')} to include them._`));
+            stream.markdown(olderCommentsNotShownLink(fullTotal - MAX_SHOW_FULL));
             // R13: carry the ticket key on metadata instead of a visible marker.
             return { metadata: { jiraSession: { kinds: ['more-comments', 'comment-list'], lastTicketKey: ticketKey! } } };
           } else {
@@ -1070,7 +1079,7 @@ export function createJiraParticipant(
           if (total > MAX_INITIAL) {
             const moreSession: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: intent.commentQuery };
             await ws.update('jira.session.moreComments', moreSession);
-            stream.markdown(trustedChatMarkdown(`\n\n_${total - MAX_INITIAL} older comment(s) not shown. Reply ${buildChatCommandLink('load all', '@jira', 'load all')} to include them._`));
+            stream.markdown(olderCommentsNotShownLink(total - MAX_INITIAL));
             // R13: carry the ticket key on metadata instead of a visible marker.
             return { metadata: { jiraSession: { kinds: ['more-comments', ...listKinds], lastTicketKey: ticketKey! } } };
           } else {

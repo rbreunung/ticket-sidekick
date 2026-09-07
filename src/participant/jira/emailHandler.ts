@@ -367,7 +367,7 @@ export function buildEmailCommentHeader(senderName?: string, receivedDateTime?: 
   return parts.length > 0 ? parts.join('  ·  ') + '\n\n' : '';
 }
 
-// R13: returns the referenced ticket key so the caller can carry it on `metadata.jiraSession.lastTicketKey`
+// R13: the referenced ticket key is carried on metadata by the caller (handleEmailContentSession)
 // instead of a visible marker. The attachment-upload summary is streamed here; the ticket-key marker
 // that used to ride along in that string is gone.
 export async function addEmailAsComment(
@@ -376,7 +376,7 @@ export async function addEmailAsComment(
   ticketService: TicketService,
   stream: vscode.ChatResponseStream,
   baseUrl: string,
-): Promise<string> {
+): Promise<void> {
   const jiraWiki = buildEmailJiraWiki(session.markdownBody);
   const header = buildEmailCommentHeader(session.senderName, session.receivedDateTime);
   const commentBody = `${header}${jiraWiki}`;
@@ -399,7 +399,6 @@ export async function addEmailAsComment(
     );
     stream.markdown(`Uploaded ${uploaded} of ${session.attachments.length} attachment(s).`);
   }
-  return ticketKey;
 }
 
 export async function streamEmailCommentPreview(session: EmailContentSession, stream: vscode.ChatResponseStream, ws: vscode.Memento): Promise<vscode.ChatResult> {
@@ -452,9 +451,9 @@ export async function handleEmailContentSession(
   }
   if (isConfirmation(reply)) {
     await ws.update('jira.session.emailContent', undefined);
-    const key = await addEmailAsComment(session.pendingCommentTicketKey!, session, ticketService, stream, baseUrl);
+    await addEmailAsComment(session.pendingCommentTicketKey!, session, ticketService, stream, baseUrl);
     // R13: carry the referenced ticket key on metadata instead of a visible marker.
-    return { metadata: { jiraSession: { kinds: [], lastTicketKey: key } } };
+    return { metadata: { jiraSession: { kinds: [], lastTicketKey: session.pendingCommentTicketKey! } } };
   }
   const pendingKeyMatch = reply.trim().match(/^([A-Z][A-Z0-9]+-\d+)$/i);
   if (pendingKeyMatch) {
