@@ -421,7 +421,7 @@ export async function streamReview(
   const sourceLine = session.sourceTicketKey
     ? `_Generating from **${session.sourceTicketKey}**._`
     : `_Generating from **${session.projectKey}**'s required fields for **${session.issueType}**._`;
-  stream.markdown(`${sourceLine}\n\n${buildTemplateFieldReviewTable(session.rows)}`);
+  stream.markdown(trustedChatMarkdown(`${sourceLine}\n\n${buildTemplateFieldReviewTable(session.rows)}`));
   return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.review] } } };
 }
 
@@ -469,10 +469,10 @@ export async function handleTemplateGenReviewReply(
   const unset = findUnsetIncludedRows(session.rows);
   if (unset.length > 0) {
     const names = unset.map(r => `**${r.name}** (reply \`${r.id}=<value>\`)`).join(', ');
-    stream.markdown(
+    stream.markdown(trustedChatMarkdown(
       `These included fields still need a value before saving: ${names}.\n\n` +
       `${buildTemplateFieldReviewTable(session.rows)}`,
-    );
+    ));
     return { metadata: { jiraSession: { kinds: [TEMPLATE_GEN_KINDS.review] } } };
   }
 

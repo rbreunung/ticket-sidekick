@@ -326,11 +326,9 @@ export function parseResolutionSelection(reply: string, options: string[]): stri
   return pickByNumberOrName(reply, options, (s) => s) ?? 'invalid';
 }
 
-export function extractLastTicketFromText(text: string): string | null {
-  const match = text.match(/<!--\s*@jira-ticket:([A-Z][A-Z0-9]+-\d+)\s*-->/);
-  return match ? match[1] : null;
-}
-
+// Defensive sanitizer over LLM history text (llmHelpers.ts): no code path emits HTML-comment
+// markers anymore since the R13 metadata migration, but history turns from pre-migration
+// versions may still carry them — strip before that text is fed back into an LLM prompt.
 export function stripHiddenMarkers(text: string): string {
   return text.replace(/<!--[\s\S]*?-->/g, '').replace(/\s+/g, ' ').trim();
 }
@@ -1084,12 +1082,22 @@ export const TEMPLATE_FIELD_REVIEW_COLUMNS: ReviewTableColumn<TemplateFieldRevie
       ? `_not set — reply \`${r.id}=<value>\`_`
       : sanitizeCellText(formatTemplateFieldValue(r.value)),
   },
-  { header: 'Include?', accessor: (r) => (r.included ? '✓' : '_excluded_') },
+  // R12(d): the Include? cell is itself the toggle — clicking it resubmits the row's own id, which
+  // applyReviewToggle already flips (same text a typed "2 4" list uses), so no new parser logic.
+  { header: 'Include?', accessor: (r) => buildChatCommandLink(r.included ? '✓' : '_excluded_', '@jira', r.id) },
 ];
 
+// R12(c/d): the output embeds live command links (the Include? toggle cells and the Post it /
+// Cancel footer), so callers MUST stream it through `trustedChatMarkdown(...)` — a plain
+// `stream.markdown(string)` would render those links inert. This function stays vscode-free
+// (KTD5) and therefore cannot wrap itself; the trust-gate is a caller obligation.
 export function buildTemplateFieldReviewTable(rows: TemplateFieldReviewRow[]): string {
   return renderReviewTable(TEMPLATE_FIELD_REVIEW_COLUMNS, rows) +
-    '\n\nReply **post it** to save, **(c)** to cancel, row numbers to toggle in/out (e.g. `2 4`), ' +
+    // R12(c): the cancel link resubmits the word `cancel`, not `(c)` — this table is parsed by
+    // parseReviewInput → isCancellation(), which contains `cancel` but not the literal `(c)`. A
+    // `(c)` link would parse as `invalid` and re-prompt instead of cancelling.
+    `\n\nReply ${buildChatCommandLink('Post it', '@jira', 'post it')} to save, ` +
+    `${buildChatCommandLink('Cancel', '@jira', 'cancel')} to cancel, row numbers to toggle in/out (e.g. \`2 4\`), ` +
     'or `<number>=<value>` to set a value (e.g. `3=High`).';
 }
 
@@ -1589,6 +1597,11 @@ export type JiraSessionKind =
 
 export interface JiraSessionContinuity {
   kinds: JiraSessionKind[];
+  /** R13: the most recently referenced ticket key, carried on metadata instead of a visible
+   * `<!-- @jira-ticket:KEY -->` marker. A branch that references a ticket but starts no session
+   * returns `{ kinds: [], lastTicketKey }` — empty kinds keep every `getActiveJiraSession(...)?.kinds.includes(...)`
+   * check false (no active session) while still letting `parseLastTicketFromContext` find the key. */
+  lastTicketKey?: string;
 }
 
 /** Result text for `jira_discoverWorkflow` — mirrors `handleDiscoverWorkflow`'s chat summary

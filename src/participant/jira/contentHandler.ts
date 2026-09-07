@@ -3,7 +3,8 @@ import { logDiag } from '../../utils/diagLog';
 import type { TicketService } from '../../services/TicketService';
 import { markdownToJiraWiki } from '../../utils/markdownToJiraWiki';
 import type { ContentSession } from '../sessionState';
-import { isCancellation, isConfirmation } from '../sessionState';
+import { isCancellation, isConfirmation, buildChatCommandLink } from '../sessionState';
+import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import { generateContent, isLmRefusal, buildHistoryContext } from './llmHelpers';
 
 export const FILE_MAX_BYTES = 60_000;
@@ -82,15 +83,15 @@ export async function streamContentPreview(session: ContentSession, stream: vsco
     const descSection = session.currentContent
       ? `\n\n**Description:**\n${session.currentContent}`
       : '';
-    stream.markdown(
-      `**Summary:** ${session.summary}\n**Type:** ${session.issueType}  |  **Project:** ${session.projectKey}${templateLine}${descSection}\n\nReply **"create it"** to create the ticket, or tell me how to adjust the description.`,
-    );
+    stream.markdown(trustedChatMarkdown(
+      `**Summary:** ${session.summary}\n**Type:** ${session.issueType}  |  **Project:** ${session.projectKey}${templateLine}${descSection}\n\nReply ${buildChatCommandLink('create it', '@jira', 'create it')} to create the ticket, or tell me how to adjust the description.`,
+    ));
     return { metadata: { jiraSession: { kinds: ['previewing'] } } };
   }
   const actionLabel = session.operation === 'addComment' ? 'post this comment' : 'update the description';
-  stream.markdown(
-    `${session.currentContent}\n\nReply **"post it"** to ${actionLabel}, or tell me how to adjust it.`,
-  );
+  stream.markdown(trustedChatMarkdown(
+    `${session.currentContent}\n\nReply ${buildChatCommandLink('post it', '@jira', 'post it')} to ${actionLabel}, or tell me how to adjust it.`,
+  ));
   return { metadata: { jiraSession: { kinds: ['previewing'] } } };
 }
 
@@ -128,8 +129,8 @@ export async function handleContentSession(
       // watching this must never fire on an attempted-but-failed create.
       await vscode.commands.executeCommand('setContext', 'ticketSidekick.firstTicketCreated', true);
       stream.markdown(created.message);
-      stream.markdown(`\n\n<!-- @jira-ticket:${created.key} -->`);
-      return;
+      // R13: carry the created ticket key on metadata instead of a visible marker.
+      return { metadata: { jiraSession: { kinds: [], lastTicketKey: created.key } } };
     }
     let result: string;
     const jiraText = markdownToJiraWiki(session.currentContent);
@@ -139,8 +140,8 @@ export async function handleContentSession(
       result = await ticketService.updateField(session.ticketKey, 'description', jiraText, baseUrl);
     }
     stream.markdown(result);
-    stream.markdown(`\n\n<!-- @jira-ticket:${session.ticketKey} -->`);
-    return;
+    // R13: carry the referenced ticket key on metadata instead of a visible marker.
+    return { metadata: { jiraSession: { kinds: [], lastTicketKey: session.ticketKey } } };
   }
   // Refinement instruction
   const historyContext = session.operation !== 'createTicket' ? session.historyContext : undefined;

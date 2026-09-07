@@ -58,15 +58,15 @@ If the ticket has more than 20 comments the response includes a load-more offer 
 
 ## Last-ticket context
 
-After every successful ticket operation, `JiraParticipant` appends `<!-- @jira-ticket:KEY -->` to the response (invisible in rendered markdown).
+After every successful ticket operation, the handler carries the referenced ticket key on `ChatResult.metadata` as `jiraSession.lastTicketKey` (R13). No visible marker is appended to rendered responses. A branch that references a ticket but starts no session returns `{ jiraSession: { kinds: [], lastTicketKey } }` — empty `kinds` keep every session-detection check false while still letting the key be found.
 
-When a follow-up prompt arrives without an explicit ticket key, the handler scans `ChatContext.history` in reverse via `extractLastTicketFromText` and resolves to the last referenced ticket automatically.
+When a follow-up prompt arrives without an explicit ticket key, the handler scans `ChatContext.history` in reverse via `parseLastTicketFromContext` (in `ticketContext.ts`) and reads `metadata.jiraSession.lastTicketKey` off each turn, resolving to the last referenced ticket automatically.
 
 **Ticket key resolution order (highest to lowest priority):**
 
 1. Explicit key in the user's prompt
 2. Current git branch (regex `[A-Z][A-Z0-9]+-\d+`)
-3. Last ticket from `ChatContext` history (hidden marker)
+3. Last ticket from `ChatContext` history (`metadata.jiraSession.lastTicketKey`)
 4. `showInputBox` — ask the user
 
 ## Workflow discovery

@@ -260,9 +260,9 @@ export async function handleLoadTicket(
       `\n\n**Skipped attachments:**\n\n${listLines.join('\n')}\n\nReply with a number to download it anyway.`,
     ));
     await ws.update('jira.session.loadSkipped', { ticketKey, skipped } satisfies LoadSkippedSession);
-    stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
+    // R13: the referenced ticket key is carried on metadata by the caller (JiraParticipant's
+    // loadTicket case) instead of a visible marker here.
     return true;
   }
-  stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
   return false;
 }

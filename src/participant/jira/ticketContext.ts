@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { execSync } from 'child_process';
 import { extractTicketId } from '../../utils/branchParser';
 import {
-  extractLastTicketFromText, NO_ISSUE_TYPE, CURRENT_SESSION_SCHEMA_VERSION, buildChatCommandLink,
+  NO_ISSUE_TYPE, CURRENT_SESSION_SCHEMA_VERSION, buildChatCommandLink,
   type AwaitIssueTypeResume, type AwaitIssueTypeSession, type JiraSessionContinuity,
 } from '../sessionState';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
@@ -119,13 +119,13 @@ export function sessionWasSuperseded(ws: vscode.Memento, key: string): boolean {
 }
 
 export function parseLastTicketFromContext(context: vscode.ChatContext): string | null {
+  // R13: the last-referenced ticket key now rides on `metadata.jiraSession.lastTicketKey`
+  // (set by every branch that references a ticket) instead of a visible HTML-comment marker in
+  // the rendered markdown. Scan all turns, latest first — same "latest wins" semantics as before.
   for (let i = context.history.length - 1; i >= 0; i--) {
     const turn = context.history[i];
     if (turn instanceof vscode.ChatResponseTurn) {
-      const text = turn.response
-        .map((p) => (p instanceof vscode.ChatResponseMarkdownPart ? p.value.value : ''))
-        .join('');
-      const key = extractLastTicketFromText(text);
+      const key = (turn.result.metadata as { jiraSession?: JiraSessionContinuity } | undefined)?.jiraSession?.lastTicketKey;
       if (key) return key;
     }
   }

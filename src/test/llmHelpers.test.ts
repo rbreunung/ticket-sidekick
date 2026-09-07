@@ -103,14 +103,19 @@ describe('extractHistoryTurns', () => {
     expect(turns[0]).toEqual({ role: 'user', text: 'show PROJ-1' });
   });
 
-  it('includes assistant turns without a preview marker', () => {
+  it('includes assistant turns that carry a lastTicketKey but no session kind (R13)', () => {
     const history = [
-      new vscode.ChatResponseTurn([{ value: 'Here is the ticket.\n<!-- @jira-ticket:PROJ-1 -->' }]),
+      new vscode.ChatResponseTurn(
+        [{ value: 'Here is the ticket.' }],
+        { metadata: { jiraSession: { kinds: [], lastTicketKey: 'PROJ-1' } } },
+      ),
     ];
     const turns = extractHistoryTurns({ history } as never);
     expect(turns).toHaveLength(1);
     expect(turns[0].role).toBe('assistant');
-    expect(turns[0].text).toBe('Here is the ticket.'); // marker stripped
+    // Carrying lastTicketKey with empty kinds must NOT exclude the turn from LLM history —
+    // exclusion is keyed on 'previewing'/'load-skipped', not on the ticket key.
+    expect(turns[0].text).toBe('Here is the ticket.');
   });
 
   it('excludes assistant turns carrying the load-skipped session (metadata-based, R1/R3)', () => {
@@ -153,10 +158,13 @@ describe('extractHistoryTurns', () => {
         { metadata: { jiraSession: { kinds: ['previewing'] } } },
       ),
       new vscode.ChatRequestTurn('post it'),
-      new vscode.ChatResponseTurn([{ value: 'Comment posted to PROJ-1.\n\n<!-- @jira-ticket:PROJ-1 -->' }]),
+      new vscode.ChatResponseTurn(
+        [{ value: 'Comment posted to PROJ-1.' }],
+        { metadata: { jiraSession: { kinds: [], lastTicketKey: 'PROJ-1' } } },
+      ),
     ];
     const turns = extractHistoryTurns({ history } as never);
-    // Preview draft excluded; confirmation response included
+    // Preview draft excluded; confirmation response included (R13: key on metadata, no marker)
     expect(turns).toHaveLength(3);
     const assistantTurns = turns.filter((t) => t.role === 'assistant');
     expect(assistantTurns).toHaveLength(1);

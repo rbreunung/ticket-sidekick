@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { logDiag } from '../../utils/diagLog';
 import { TicketService, resolveFieldIdFuzzy, extractTextFromAdf } from '../../services/TicketService';
 import type { JiraFieldMeta } from '../../jira/IJiraClient';
-import type { FieldUpdatePreviewSession, FieldSelectionSession, SprintSelectionSession, ContentSession } from '../sessionState';
+import type { FieldUpdatePreviewSession, FieldSelectionSession, SprintSelectionSession, ContentSession, JiraSessionContinuity } from '../sessionState';
 import { isCancellation, buildChatCommandLink } from '../sessionState';
 import { spellCheckValue } from './llmHelpers';
 import { streamContentPreview } from './contentHandler';
@@ -157,13 +157,15 @@ export async function handleSpellCheck(
   const rawDescription = extractTextFromAdf(issue.fields.description);
   if (!rawDescription.trim()) {
     stream.markdown(`**${ticketKey}** has no description to check.`);
-    return;
+    // R13: the response names the ticket, so carry it on metadata for bare follow-ups.
+    return { metadata: { jiraSession: { kinds: [], lastTicketKey: ticketKey } } };
   }
   const markdownDescription = wikiToMarkdown(rawDescription);
   const result = await spellCheckValue(markdownDescription, model, token);
   if (!result) {
     stream.markdown(`No spelling or grammar issues found in **${ticketKey}**.`);
-    return;
+    // R13: same — a completed no-op still references the ticket.
+    return { metadata: { jiraSession: { kinds: [], lastTicketKey: ticketKey } } };
   }
   if (result.changeSummary) {
     stream.markdown(`**Changes:**\n${result.changeSummary}\n\n`);
@@ -176,6 +178,8 @@ export async function handleSpellCheck(
     contentSource: 'generate',
   };
   const chatResult = await streamContentPreview(session, stream, ws);
-  stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
-  return chatResult;
+  // R13: carry the referenced ticket key on metadata instead of a visible marker. Merge into the
+  // preview session's existing metadata (which carries the 'previewing' kind) so both survive.
+  const prevSession = (chatResult?.metadata as { jiraSession?: JiraSessionContinuity } | undefined)?.jiraSession;
+  return { metadata: { jiraSession: { kinds: prevSession?.kinds ?? [], lastTicketKey: ticketKey } } };
 }

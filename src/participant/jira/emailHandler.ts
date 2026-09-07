@@ -367,6 +367,9 @@ export function buildEmailCommentHeader(senderName?: string, receivedDateTime?: 
   return parts.length > 0 ? parts.join('  ·  ') + '\n\n' : '';
 }
 
+// R13: the referenced ticket key is carried on metadata by the caller (handleEmailContentSession)
+// instead of a visible marker. The attachment-upload summary is streamed here; the ticket-key marker
+// that used to ride along in that string is gone.
 export async function addEmailAsComment(
   ticketKey: string,
   session: EmailContentSession,
@@ -394,9 +397,7 @@ export async function addEmailAsComment(
           }),
       ),
     );
-    stream.markdown(`Uploaded ${uploaded} of ${session.attachments.length} attachment(s).\n\n<!-- @jira-ticket:${ticketKey} -->`);
-  } else {
-    stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
+    stream.markdown(`Uploaded ${uploaded} of ${session.attachments.length} attachment(s).`);
   }
 }
 
@@ -451,7 +452,8 @@ export async function handleEmailContentSession(
   if (isConfirmation(reply)) {
     await ws.update('jira.session.emailContent', undefined);
     await addEmailAsComment(session.pendingCommentTicketKey!, session, ticketService, stream, baseUrl);
-    return;
+    // R13: carry the referenced ticket key on metadata instead of a visible marker.
+    return { metadata: { jiraSession: { kinds: [], lastTicketKey: session.pendingCommentTicketKey! } } };
   }
   const pendingKeyMatch = reply.trim().match(/^([A-Z][A-Z0-9]+-\d+)$/i);
   if (pendingKeyMatch) {

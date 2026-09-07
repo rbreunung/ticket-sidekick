@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('vscode', () => ({
   window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
   commands: { executeCommand: vi.fn() },
+  MarkdownString: class { constructor(public value = '') {} isTrusted?: unknown; },
 }));
 vi.mock('../participant/jira/llmHelpers', () => ({
   generateContent: vi.fn(),
@@ -14,6 +15,7 @@ import * as vscode from 'vscode';
 import { streamContentPreview, handleContentSession, buildContentContext } from '../participant/jira/contentHandler';
 import { generateContent, isLmRefusal, buildHistoryContext } from '../participant/jira/llmHelpers';
 import type { ContentSession } from '../participant/sessionState';
+import { buildChatCommandLink } from '../participant/sessionState';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService } from '../services/TicketService';
 
@@ -21,6 +23,12 @@ const mockStream = () => ({ markdown: vi.fn() });
 const mockWs = () => ({ get: vi.fn(), update: vi.fn() });
 const nullModel = {} as never;
 const nullToken = {} as never;
+
+// U9: streamContentPreview now streams a trusted vscode.MarkdownString (command links) rather than
+// a bare string — this file's mocked MarkdownString stores the raw text on `.value`.
+function markdownText(arg: unknown): string {
+  return typeof arg === 'string' ? arg : (arg as { value: string }).value;
+}
 
 // ---------------------------------------------------------------------------
 // streamContentPreview — createTicket renders a ticket card
@@ -43,13 +51,14 @@ describe('streamContentPreview — createTicket', () => {
     const chatResult = await streamContentPreview(session, stream as never, ws as never);
 
     expect(ws.update).toHaveBeenCalledWith('jira.session.previewing', session);
-    const rendered: string = stream.markdown.mock.calls[0][0];
+    const rendered = markdownText(stream.markdown.mock.calls[0][0]);
     expect(rendered).toContain('**Summary:** Login times out');
     expect(rendered).toContain('**Type:** Bug');
     expect(rendered).toContain('**Project:** PROJ');
     expect(rendered).toContain('**Template:** Billing Bug');
     expect(rendered).toContain('Steps to reproduce the issue.');
-    expect(rendered).toContain('create it');
+    // R12(a): "create it" is a clickable command-link resubmitting '@jira create it'.
+    expect(rendered).toContain(buildChatCommandLink('create it', '@jira', 'create it'));
     // No visible session marker in the rendered response (R3) — liveness is metadata-based.
     expect(rendered).not.toContain('<!-- jira:');
     expect(chatResult.metadata?.jiraSession?.kinds).toEqual(['previewing']);
@@ -70,7 +79,7 @@ describe('streamContentPreview — createTicket', () => {
 
     await streamContentPreview(session, stream as never, ws as never);
 
-    const rendered: string = stream.markdown.mock.calls[0][0];
+    const rendered = markdownText(stream.markdown.mock.calls[0][0]);
     expect(rendered).not.toContain('Template:');
   });
 
@@ -89,8 +98,30 @@ describe('streamContentPreview — createTicket', () => {
 
     await streamContentPreview(session, stream as never, ws as never);
 
-    const rendered: string = stream.markdown.mock.calls[0][0];
+    const rendered = markdownText(stream.markdown.mock.calls[0][0]);
     expect(rendered).not.toContain('Description:');
+  });
+});
+
+describe('streamContentPreview — addComment/updateDescription (R12b)', () => {
+  it('renders a clickable "post it" command-link resubmitting @jira post it', async () => {
+    const stream = mockStream();
+    const ws = mockWs();
+    const session: ContentSession = {
+      operation: 'addComment',
+      ticketKey: 'PROJ-123',
+      currentContent: 'A new comment body.',
+      historyContext: undefined,
+      contentSource: 'generate',
+    };
+
+    const chatResult = await streamContentPreview(session, stream as never, ws as never);
+
+    const rendered = markdownText(stream.markdown.mock.calls[0][0]);
+    expect(rendered).toContain('A new comment body.');
+    // R12(b): "post it" is a clickable command-link resubmitting '@jira post it'.
+    expect(rendered).toContain(buildChatCommandLink('post it', '@jira', 'post it'));
+    expect(chatResult.metadata?.jiraSession?.kinds).toEqual(['previewing']);
   });
 });
 
@@ -123,7 +154,7 @@ describe('handleContentSession — createTicket confirmation', () => {
     const stream = mockStream();
     const ws = mockWs();
 
-    await handleContentSession(session, 'create it', nullModel, nullToken, stream as never, ticketService, ws as never);
+    const chatResult = await handleContentSession(session, 'create it', nullModel, nullToken, stream as never, ticketService, ws as never);
 
     // Session should be cleared
     expect(ws.update).toHaveBeenCalledWith('jira.session.previewing', undefined);
@@ -141,15 +172,16 @@ describe('handleContentSession — createTicket confirmation', () => {
     const allMarkdown = stream.markdown.mock.calls.map((c: string[]) => c[0]).join('');
     expect(allMarkdown).toContain('PROJ-125');
 
-    // Ticket marker appended
-    expect(allMarkdown).toContain('<!-- @jira-ticket:PROJ-125 -->');
+    // R13: the created ticket key rides on metadata, not a visible marker.
+    expect(chatResult?.metadata?.jiraSession?.lastTicketKey).toBe('PROJ-125');
+    expect(allMarkdown).not.toContain('<!-- @jira-ticket:');
 
     // Jira Getting-Started walkthrough's "first ticket" step completes on this context key
     // (KTD9) — must fire on the real success path, not merely on an attempted create.
     expect(vscode.commands.executeCommand).toHaveBeenCalledWith('setContext', 'ticketSidekick.firstTicketCreated', true);
   });
 
-  it('links the ticket key when baseUrl is configured, and still appends the correct marker', async () => {
+  it('links the ticket key when baseUrl is configured, and carries the key on metadata', async () => {
     const session: ContentSession = {
       operation: 'createTicket',
       projectKey: 'PROJ',
@@ -162,11 +194,13 @@ describe('handleContentSession — createTicket confirmation', () => {
     const stream = mockStream();
     const ws = mockWs();
 
-    await handleContentSession(session, 'create it', nullModel, nullToken, stream as never, ticketService, ws as never, 'https://jira.example.com');
+    const chatResult = await handleContentSession(session, 'create it', nullModel, nullToken, stream as never, ticketService, ws as never, 'https://jira.example.com');
 
     const allMarkdown = stream.markdown.mock.calls.map((c: string[]) => c[0]).join('');
     expect(allMarkdown).toContain('[PROJ-125](https://jira.example.com/browse/PROJ-125)');
-    expect(allMarkdown).toContain('<!-- @jira-ticket:PROJ-125 -->');
+    // R13: the created ticket key rides on metadata, not a visible marker.
+    expect(chatResult?.metadata?.jiraSession?.lastTicketKey).toBe('PROJ-125');
+    expect(allMarkdown).not.toContain('<!-- @jira-ticket:');
   });
 
   it('clears session on cancellation without calling createTicket', async () => {
@@ -284,7 +318,7 @@ describe('handleContentSession — createTicket refinement', () => {
     );
 
     // The rendered output contains the refined content
-    const rendered: string = stream.markdown.mock.calls[0][0];
+    const rendered = markdownText(stream.markdown.mock.calls[0][0]);
     expect(rendered).toContain('Improved description text.');
     // The re-preview forwards streamContentPreview's metadata — the session stays live (R1).
     expect(chatResult?.metadata?.jiraSession?.kinds).toEqual(['previewing']);
@@ -348,7 +382,7 @@ describe('handleContentSession — addComment regression', () => {
     const stream = mockStream();
     const ws = mockWs();
 
-    await handleContentSession(session, 'post it', nullModel, nullToken, stream as never, ticketService, ws as never);
+    const chatResult = await handleContentSession(session, 'post it', nullModel, nullToken, stream as never, ticketService, ws as never);
 
     // Session cleared
     expect(ws.update).toHaveBeenCalledWith('jira.session.previewing', undefined);
@@ -359,9 +393,10 @@ describe('handleContentSession — addComment regression', () => {
     expect(issueKey).toBe('PROJ-123');
     expect(body).toBeTruthy(); // converted Jira wiki text
 
-    // Ticket marker appended
+    // R13: the referenced ticket key rides on metadata, not a visible marker.
+    expect(chatResult?.metadata?.jiraSession?.lastTicketKey).toBe('PROJ-123');
     const allMarkdown = stream.markdown.mock.calls.map((c: string[]) => c[0]).join('');
-    expect(allMarkdown).toContain('<!-- @jira-ticket:PROJ-123 -->');
+    expect(allMarkdown).not.toContain('<!-- @jira-ticket:');
   });
 
   it('links the ticket key when baseUrl is configured', async () => {
