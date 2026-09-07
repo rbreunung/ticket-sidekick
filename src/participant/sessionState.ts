@@ -1084,12 +1084,18 @@ export const TEMPLATE_FIELD_REVIEW_COLUMNS: ReviewTableColumn<TemplateFieldRevie
       ? `_not set — reply \`${r.id}=<value>\`_`
       : sanitizeCellText(formatTemplateFieldValue(r.value)),
   },
-  { header: 'Include?', accessor: (r) => (r.included ? '✓' : '_excluded_') },
+  // R12(d): the Include? cell is itself the toggle — clicking it resubmits the row's own id, which
+  // applyReviewToggle already flips (same text a typed "2 4" list uses), so no new parser logic.
+  { header: 'Include?', accessor: (r) => buildChatCommandLink(r.included ? '✓' : '_excluded_', '@jira', r.id) },
 ];
 
 export function buildTemplateFieldReviewTable(rows: TemplateFieldReviewRow[]): string {
   return renderReviewTable(TEMPLATE_FIELD_REVIEW_COLUMNS, rows) +
-    '\n\nReply **post it** to save, **(c)** to cancel, row numbers to toggle in/out (e.g. `2 4`), ' +
+    // R12(c): the cancel link resubmits the word `cancel`, not `(c)` — this table is parsed by
+    // parseReviewInput → isCancellation(), which contains `cancel` but not the literal `(c)`. A
+    // `(c)` link would parse as `invalid` and re-prompt instead of cancelling.
+    `\n\nReply ${buildChatCommandLink('Post it', '@jira', 'post it')} to save, ` +
+    `${buildChatCommandLink('Cancel', '@jira', 'cancel')} to cancel, row numbers to toggle in/out (e.g. \`2 4\`), ` +
     'or `<number>=<value>` to set a value (e.g. `3=High`).';
 }
 

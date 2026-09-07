@@ -997,7 +997,7 @@ export function createJiraParticipant(
             if (total > MAX_SHOW) {
               const moreSession: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: null };
               await ws.update('jira.session.moreComments', moreSession);
-              stream.markdown(`\n\n_${total - MAX_SHOW} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->`);
+              stream.markdown(trustedChatMarkdown(`\n\n_${total - MAX_SHOW} older comment(s) not shown. Reply ${buildChatCommandLink('load all', '@jira', 'load all')} to include them._\n\n<!-- @jira-ticket:${ticketKey} -->`));
               return { metadata: { jiraSession: { kinds: ['more-comments', 'comment-list'] } } };
             } else {
               stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
@@ -1036,7 +1036,7 @@ export function createJiraParticipant(
           if (fullTotal > MAX_SHOW_FULL) {
             const moreSession: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: null, displayMode: 'full' };
             await ws.update('jira.session.moreComments', moreSession);
-            stream.markdown(`\n\n_${fullTotal - MAX_SHOW_FULL} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->`);
+            stream.markdown(trustedChatMarkdown(`\n\n_${fullTotal - MAX_SHOW_FULL} older comment(s) not shown. Reply ${buildChatCommandLink('load all', '@jira', 'load all')} to include them._\n\n<!-- @jira-ticket:${ticketKey} -->`));
             return { metadata: { jiraSession: { kinds: ['more-comments', 'comment-list'] } } };
           } else {
             stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);
@@ -1066,7 +1066,7 @@ export function createJiraParticipant(
           if (total > MAX_INITIAL) {
             const moreSession: MoreCommentsSession = { ticketKey: ticketKey!, commentQuery: intent.commentQuery };
             await ws.update('jira.session.moreComments', moreSession);
-            stream.markdown(`\n\n_${total - MAX_INITIAL} older comment(s) not shown. Reply **"load all"** to include them._\n\n<!-- @jira-ticket:${ticketKey} -->`);
+            stream.markdown(trustedChatMarkdown(`\n\n_${total - MAX_INITIAL} older comment(s) not shown. Reply ${buildChatCommandLink('load all', '@jira', 'load all')} to include them._\n\n<!-- @jira-ticket:${ticketKey} -->`));
             return { metadata: { jiraSession: { kinds: ['more-comments', ...listKinds] } } };
           } else {
             stream.markdown(`\n\n<!-- @jira-ticket:${ticketKey} -->`);

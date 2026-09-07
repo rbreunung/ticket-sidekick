@@ -15,6 +15,7 @@ import {
   isExplicitCancelToken,
   parseAwaitFreeTextReply,
   applyReviewSetValue,
+  buildChatCommandLink,
   isSessionExpired,
   CURRENT_SESSION_SCHEMA_VERSION,
   type TemplateFieldReviewRow,
@@ -90,20 +91,25 @@ describe('buildTemplateFieldReviewTable', () => {
     expect(table).toContain('_not set — reply `1=<value>`_');
   });
 
-  it('renders a resolved value and the Include column state', () => {
+  it('renders a resolved value and the Include column as clickable toggles (R12d)', () => {
     const rows: TemplateFieldReviewRow[] = [
       { id: '1', fieldId: 'priority', name: 'Priority', value: { name: 'High' }, included: true },
       { id: '2', fieldId: 'labels', name: 'Labels', value: ['billing'], included: false },
     ];
     const table = buildTemplateFieldReviewTable(rows);
-    expect(table).toContain('| 1 | Priority | High | ✓ |');
-    expect(table).toContain('| 2 | Labels | billing | _excluded_ |');
+    // Each Include? cell is a command-link resubmitting the row's own id (applyReviewToggle flips it).
+    expect(table).toContain(buildChatCommandLink('✓', '@jira', '1'));
+    expect(table).toContain(buildChatCommandLink('_excluded_', '@jira', '2'));
   });
 
-  it('includes the setValue reply syntax in the footer', () => {
+  it('includes the setValue reply syntax and clickable post/cancel in the footer (R12c)', () => {
     const table = buildTemplateFieldReviewTable([]);
     expect(table).toContain('`<number>=<value>`');
-    expect(table).toContain('post it');
+    // The confirm link resubmits 'post it'; the cancel link resubmits the word 'cancel' — NOT '(c)',
+    // which parseReviewInput → isCancellation() does not accept (it would re-prompt, not cancel).
+    expect(table).toContain(buildChatCommandLink('Post it', '@jira', 'post it'));
+    expect(table).toContain(buildChatCommandLink('Cancel', '@jira', 'cancel'));
+    expect(table).not.toContain('(c)');
   });
 });
 
