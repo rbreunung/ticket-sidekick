@@ -95,7 +95,7 @@ export function createJiraParticipant(
   // re-deriving state from response text — `vscode.ChatResult.metadata` is the VS Code-native
   // channel a chat handler uses to hand its own `followupProvider` this kind of state. A bare
   // `return;` (still valid — `void` stays in the union) means "no chip-worthy state", e.g. a
-  // multi-turn session reply whose own response tag already carries the next-step guidance.
+  // multi-turn session reply whose own response already carries the next-step guidance.
   const handler: vscode.ChatRequestHandler = async (
     request: vscode.ChatRequest,
     chatContext: vscode.ChatContext,
@@ -523,6 +523,7 @@ export function createJiraParticipant(
         if (isConfirmation(request.prompt)) {
           await ws.update('jira.session.fieldUpdatePreview', undefined);
           const toUpdate = previewSession.ticketKeys;
+          let lastUpdatedKey: string | undefined;
           if (toUpdate.length === 1) {
             try {
               await jiraClient.updateIssue(toUpdate[0], { [previewSession.fieldId]: previewSession.fieldValue });
@@ -538,10 +539,15 @@ export function createJiraParticipant(
             let passed = 0, failed = 0;
             await ticketService.bulkUpdateField(toUpdate, previewSession.fieldId, previewSession.fieldValue, (key, ok, err) => {
               const keyRef = formatKeyLink(key, config.baseUrl);
-              if (ok) { stream.markdown(`✓ ${keyRef}\n\n`); passed++; }
+              if (ok) { stream.markdown(`✓ ${keyRef}\n\n`); passed++; lastUpdatedKey = key; }
               else { stream.markdown(`✗ ${keyRef}: ${err}\n\n`); failed++; }
             });
             stream.markdown(`\n_Done — ${passed} updated${failed > 0 ? `, ${failed} failed` : ''}_`);
+          }
+          // R13: carry the last successfully updated key on metadata (parity with the
+          // single-key path above) so a bare follow-up after a multi-ticket update resolves.
+          if (lastUpdatedKey !== undefined) {
+            return { metadata: { jiraSession: { kinds: [], lastTicketKey: lastUpdatedKey } } };
           }
           return;
         }
@@ -1459,7 +1465,7 @@ export function createJiraParticipant(
   // U5/R6: follow-up suggestion chips for the response `result` was just returned from —
   // `result.metadata.jiraFollowup` is set above wherever the handler has chip-worthy state;
   // no metadata (a bare `return;`) means no chips, e.g. a multi-turn session reply whose own
-  // response tag already carries the next-step guidance.
+  // response already carries the next-step guidance.
   participant.followupProvider = {
     provideFollowups(result: vscode.ChatResult): vscode.ChatFollowup[] {
       const state = (result.metadata as { jiraFollowup?: JiraFollowupState } | undefined)?.jiraFollowup;

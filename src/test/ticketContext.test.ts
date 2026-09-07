@@ -25,7 +25,7 @@ vi.mock('vscode', () => {
 });
 
 import * as vscode from 'vscode';
-import { getActiveJiraSession } from '../participant/jira/ticketContext';
+import { getActiveJiraSession, parseLastTicketFromContext } from '../participant/jira/ticketContext';
 import { streamNextSection } from '../participant/jira/createHandler';
 import type { CreationSession } from '../participant/sessionState';
 
@@ -92,5 +92,52 @@ describe('getActiveJiraSession', () => {
       new vscode.ChatResponseTurn([{ value: rendered }], produced),
     ]);
     expect(getActiveJiraSession(context)?.kinds).toEqual(['creating']);
+  });
+});
+
+describe('parseLastTicketFromContext', () => {
+  it('returns the lastTicketKey carried in the latest response turn\'s metadata', () => {
+    const context = makeContext([
+      new vscode.ChatResponseTurn([{ value: 'Updated PROJ-1.' }], {
+        metadata: { jiraSession: { kinds: [], lastTicketKey: 'PROJ-1' } },
+      }),
+    ]);
+    expect(parseLastTicketFromContext(context)).toBe('PROJ-1');
+  });
+
+  it('latest wins when multiple turns carry a key', () => {
+    const context = makeContext([
+      new vscode.ChatResponseTurn([{ value: 'Updated PROJ-1.' }], {
+        metadata: { jiraSession: { kinds: [], lastTicketKey: 'PROJ-1' } },
+      }),
+      new vscode.ChatResponseTurn([{ value: 'Updated PROJ-2.' }], {
+        metadata: { jiraSession: { kinds: [], lastTicketKey: 'PROJ-2' } },
+      }),
+    ]);
+    expect(parseLastTicketFromContext(context)).toBe('PROJ-2');
+  });
+
+  it('a non-metadata turn does not clear an earlier key', () => {
+    const context = makeContext([
+      new vscode.ChatResponseTurn([{ value: 'Updated PROJ-1.' }], {
+        metadata: { jiraSession: { kinds: [], lastTicketKey: 'PROJ-1' } },
+      }),
+      new vscode.ChatResponseTurn([{ value: 'Sure, here is the summary.' }], {}),
+    ]);
+    expect(parseLastTicketFromContext(context)).toBe('PROJ-1');
+  });
+
+  it('skips request turns', () => {
+    const context = makeContext([
+      new vscode.ChatRequestTurn('what was the last ticket?'),
+      new vscode.ChatResponseTurn([{ value: 'Updated PROJ-1.' }], {
+        metadata: { jiraSession: { kinds: [], lastTicketKey: 'PROJ-1' } },
+      }),
+    ]);
+    expect(parseLastTicketFromContext(context)).toBe('PROJ-1');
+  });
+
+  it('returns null for an empty history', () => {
+    expect(parseLastTicketFromContext(makeContext([]))).toBeNull();
   });
 });

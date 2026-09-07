@@ -326,6 +326,9 @@ export function parseResolutionSelection(reply: string, options: string[]): stri
   return pickByNumberOrName(reply, options, (s) => s) ?? 'invalid';
 }
 
+// Defensive sanitizer over LLM history text (llmHelpers.ts): no code path emits HTML-comment
+// markers anymore since the R13 metadata migration, but history turns from pre-migration
+// versions may still carry them — strip before that text is fed back into an LLM prompt.
 export function stripHiddenMarkers(text: string): string {
   return text.replace(/<!--[\s\S]*?-->/g, '').replace(/\s+/g, ' ').trim();
 }
