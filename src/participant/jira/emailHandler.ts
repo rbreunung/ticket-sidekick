@@ -11,7 +11,7 @@ import { parseEmlFile, type EmailImportItem, type EmailReviewRow } from '../../u
 import type {
   EmailContentSession, AwaitIssueTypeResume, EmailTemplateSelectionSession, EmailReviewSession, ReviewTableColumn,
 } from '../sessionState';
-import { isCancellation, isConfirmation, isSessionExpired, SESSION_EXPIRED_MESSAGE, buildChatCommandLink, neutralizeMarkdownLinks } from '../sessionState';
+import { isCancellation, isConfirmation, isSessionExpired, SESSION_EXPIRED_MESSAGE, buildChatCommandLink, neutralizeMarkdownLinks, withLastTicket } from '../sessionState';
 import { resolveProjectKey, sessionWasSuperseded } from './ticketContext';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import {
@@ -453,7 +453,7 @@ export async function handleEmailContentSession(
     await ws.update('jira.session.emailContent', undefined);
     await addEmailAsComment(session.pendingCommentTicketKey!, session, ticketService, stream, baseUrl);
     // R13: carry the referenced ticket key on metadata instead of a visible marker.
-    return { metadata: { jiraSession: { kinds: [], lastTicketKey: session.pendingCommentTicketKey! } } };
+    return withLastTicket(session.pendingCommentTicketKey!);
   }
   const pendingKeyMatch = reply.trim().match(/^([A-Z][A-Z0-9]+-\d+)$/i);
   if (pendingKeyMatch) {

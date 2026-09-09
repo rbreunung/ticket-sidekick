@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderReviewTable, buildJiraNotConfiguredMessage, buildChatCommandLink, neutralizeMarkdownLinks, isGreetingOrEmpty, computeJiraFollowups, type ReviewTableColumn, type JiraFollowupState } from '../participant/sessionState';
+import { renderReviewTable, buildJiraNotConfiguredMessage, buildChatCommandLink, neutralizeMarkdownLinks, isGreetingOrEmpty, computeJiraFollowups, withLastTicket, type ReviewTableColumn, type JiraFollowupState } from '../participant/sessionState';
 
 interface Widget {
   name: string;
@@ -153,6 +153,18 @@ describe('neutralizeMarkdownLinks', () => {
   it('replaces [ and ] with visually similar full-width brackets, leaving other characters untouched', () => {
     expect(neutralizeMarkdownLinks('[Click here](command:evil)')).toBe('［Click here］(command:evil)');
     expect(neutralizeMarkdownLinks('Normal summary text — nothing to escape')).toBe('Normal summary text — nothing to escape');
+  });
+});
+
+describe('withLastTicket (code-review fix — shared constructor for the ~22 hand-copied metadata literals)', () => {
+  it('defaults kinds to an empty array (the "no session, but a ticket key is carried" sentinel)', () => {
+    expect(withLastTicket('PROJ-1')).toEqual({ metadata: { jiraSession: { kinds: [], lastTicketKey: 'PROJ-1' } } });
+  });
+
+  it('carries an explicit kinds array for a branch that also starts/continues a session', () => {
+    expect(withLastTicket('PROJ-1', ['comment-list'])).toEqual({
+      metadata: { jiraSession: { kinds: ['comment-list'], lastTicketKey: 'PROJ-1' } },
+    });
   });
 });
 

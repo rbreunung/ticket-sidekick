@@ -39,6 +39,7 @@ import {
   aggregateRecommendedPersonas,
   buildChatCommandLink,
   composeReviewOutput,
+  hasPrUrl,
   type ReviewFinding,
   type ReviewSession,
   type BitbucketCommentPreviewSession,
@@ -509,6 +510,11 @@ export function createBitbucketParticipant(
     }
 
     const ws = context.workspaceState;
+    // Code-review fix: docs/review-process.md documents hasPrUrl() as the PR-URL-bypass gate
+    // (R1's "follow-ups"), but the boolean checks below used to re-derive their own regex here
+    // instead of calling it — same input set today, but a doc/code drift waiting to diverge.
+    // Boolean gates now call hasPrUrl(prompt); this match stays only for extracting the URL text
+    // itself (prUrlMatch[0]) where a gate needs the matched substring, not just a yes/no.
     const prUrlMatch = prompt.match(/https?:\/\/\S+\/pull-requests\/\d+\S*/);
 
     // Helper: stream a comment preview and save session
@@ -681,7 +687,7 @@ export function createBitbucketParticipant(
     const activeSession = getActiveBitbucketSession(chatContext);
 
     // 2a. Comment preview — confirmation, cancellation, or refinement
-    if (!prUrlMatch && activeSession?.kinds.includes('comment-preview')) {
+    if (!hasPrUrl(prompt) && activeSession?.kinds.includes('comment-preview')) {
       const previewSession = ws.get<BitbucketCommentPreviewSession>('bitbucket.session.commentPreview');
       if (previewSession) {
         if (isCancellation(prompt)) {
@@ -717,7 +723,7 @@ export function createBitbucketParticipant(
 
     // 2a2. Smart-mode selection-failure fallback question (U4/R7) — detected ahead of the
     // ReviewSession follow-up check (2b) below, same detection-order discipline as 2a above.
-    if (!prUrlMatch && activeSession?.kinds.includes('smart-fallback-session')) {
+    if (!hasPrUrl(prompt) && activeSession?.kinds.includes('smart-fallback-session')) {
       const fallbackSession = ws.get<SmartFallbackSession>('bitbucket.session.smartFallback');
       if (fallbackSession) {
         if (isCancellation(prompt)) {
@@ -740,7 +746,7 @@ export function createBitbucketParticipant(
     }
 
     // 2b. Multi-turn follow-up on an existing review
-    if (!prUrlMatch && activeSession?.kinds.includes('review-session')) {
+    if (!hasPrUrl(prompt) && activeSession?.kinds.includes('review-session')) {
       const session = ws.get<ReviewSession>('bitbucket.session.review');
       if (session) {
         const reviewSessionResult: vscode.ChatResult = { metadata: { bitbucketSession: { kinds: ['review-session'] } } };
@@ -852,7 +858,10 @@ export function createBitbucketParticipant(
       }
     }
 
-    // 3. New review
+    // 3. New review. Keeps the `prUrlMatch`-based check (not `hasPrUrl(prompt)`) deliberately —
+    // this early return is what lets TypeScript narrow `prUrlMatch` to non-null for every use
+    // below (parsePrUrl(prUrlMatch[0]), etc.); the hasPrUrl() consolidation applies to the
+    // bypass gates above, which only ever need a boolean.
     if (!prUrlMatch) {
       // U5/R9: an empty invocation or an obvious greeting/help-shaped prompt gets a friendlier
       // orientation message, with its example next step delivered as a follow-up chip (KTD14)

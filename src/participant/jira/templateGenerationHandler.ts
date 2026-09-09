@@ -30,6 +30,7 @@ import {
   type TemplateGenerationAwaitSummarySession, type JiraSessionKind,
 } from '../sessionState';
 import { resolveProjectKey } from './ticketContext';
+import { sanitizeCellText } from '../../utils/reportImport';
 import type { JiraIssueType } from '../../jira/IJiraClient';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 
@@ -468,7 +469,9 @@ export async function handleTemplateGenReviewReply(
   // of silently saving it blank or silently dropping it from the template.
   const unset = findUnsetIncludedRows(session.rows);
   if (unset.length > 0) {
-    const names = unset.map(r => `**${r.name}** (reply \`${r.id}=<value>\`)`).join(', ');
+    // Code-review fix: sanitize r.name the same way TEMPLATE_FIELD_REVIEW_COLUMNS' 'Field' column
+    // already does, before it reaches this now-trustedChatMarkdown()-wrapped message.
+    const names = unset.map(r => `**${sanitizeCellText(r.name)}** (reply \`${r.id}=<value>\`)`).join(', ');
     stream.markdown(trustedChatMarkdown(
       `These included fields still need a value before saving: ${names}.\n\n` +
       `${buildTemplateFieldReviewTable(session.rows)}`,

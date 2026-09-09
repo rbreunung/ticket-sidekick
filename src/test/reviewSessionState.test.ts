@@ -105,6 +105,22 @@ describe('composeReviewOutput (U7/R10, relocated here for testability — code-r
     const result = { markdown: '_No issues found._', findingHeadings: [] };
     expect(composeReviewOutput(result)).toBe('_No issues found._');
   });
+
+  it('does not corrupt a heading containing a $-pattern (code-review fix)', () => {
+    // String.replace(search, replacementString) gives $&/$$/$`/$'/$<name> special meaning in the
+    // REPLACEMENT argument. buildChatCommandLink(heading, ...) embeds `heading` itself inside the
+    // string it returns, so a heading containing one of these sequences used to corrupt the row
+    // once that returned string became the replacement. A replacer function must treat it as a
+    // literal string regardless of content.
+    const heading = '**#1** 🔴 Cost is $& per unit';
+    const result = {
+      markdown: `## PR #1 — Title\n\n${heading}\n→ Fix it`,
+      findingHeadings: [{ id: 1, heading }],
+    };
+    const output = composeReviewOutput(result);
+    expect(output).toContain(buildChatCommandLink(heading, '@bitbucket', '#1'));
+    expect(output).not.toContain('**#1** 🔴 Cost is **#1** 🔴 Cost is $& per unit per unit');
+  });
 });
 
 describe('computeBitbucketFollowups', () => {

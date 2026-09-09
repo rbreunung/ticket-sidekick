@@ -218,7 +218,12 @@ export function neutralizeMarkdownLinks(value: string): string {
 export function composeReviewOutput(result: { markdown: string; findingHeadings: Array<{ id: number; heading: string }> }): string {
   let output = result.markdown;
   for (const { id, heading } of result.findingHeadings) {
-    output = output.replace(heading, buildChatCommandLink(heading, '@bitbucket', `#${id}`));
+    // Code-review fix: a string replacement argument gives $&, $$, $`, $', and $<name> special
+    // meaning in JS — and `heading` (LLM-generated finding text, not filtered for these tokens)
+    // is embedded inside the replacement string via buildChatCommandLink. A heading containing
+    // one of those sequences would corrupt this finding's rendered row. A replacer function
+    // treats the whole thing as a literal string, no matter what it contains.
+    output = output.replace(heading, () => buildChatCommandLink(heading, '@bitbucket', `#${id}`));
   }
   return output;
 }
