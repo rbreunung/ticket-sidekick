@@ -417,7 +417,7 @@ describe('PrReviewService.buildPersonaPrompt', () => {
 
     const ndjsonContract = generalist.slice(
       generalist.indexOf('Output findings ordered by severity'),
-      generalist.indexOf('additionalFilesNeeded:["path/to/other.ts"]}') + 'additionalFilesNeeded:["path/to/other.ts"]}'.length,
+      generalist.indexOf('additionalFilesNeeded":["path/to/other.ts"]}') + 'additionalFilesNeeded":["path/to/other.ts"]}'.length,
     );
     expect(personaPrompt).toContain(ndjsonContract);
   });
@@ -712,6 +712,59 @@ describe('PrReviewService.formatReview', () => {
     const noFindings = service.formatReview([], pr, 1);
     expect(withFindings.markdown).toContain('(c)');
     expect(noFindings.markdown).toContain('(c)');
+  });
+
+  it('renders a finding\'s line as "L42", never "LL42" (code-review fix)', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const pr: BitbucketPR = {
+      id: 7, title: 'PR', description: '', author: { displayName: 'A', emailAddress: '' },
+      targetBranch: 'main', fromCommitHash: 'h',
+    };
+    const findings: ReviewFinding[] = [
+      { id: 1, file: 'a.ts', line: 42, severity: 'critical', title: 'Some bug', description: 'D', recommendation: 'R' },
+    ];
+    const { markdown } = service.formatReview(findings, pr, 1);
+    expect(markdown).toContain('L42');
+    expect(markdown).not.toContain('LL42');
+  });
+
+  it('folds the line number into the "File · Line" column, not just the Finding cell (code-review fix)', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const pr: BitbucketPR = {
+      id: 7, title: 'PR', description: '', author: { displayName: 'A', emailAddress: '' },
+      targetBranch: 'main', fromCommitHash: 'h',
+    };
+    const findings: ReviewFinding[] = [
+      { id: 1, file: 'src/foo.ts', line: 12, severity: 'warning', title: 'Some bug', description: 'D', recommendation: 'R' },
+    ];
+    const { markdown } = service.formatReview(findings, pr, 1);
+    const rowLines = markdown.split('\n').filter((l) => l.startsWith('|') && !l.includes('---') && !l.includes('File · Line'));
+    expect(rowLines).toHaveLength(1);
+    const fileCell = rowLines[0].split('|')[1].trim();
+    expect(fileCell).toBe('src/foo.ts:L12');
+  });
+
+  it('preserves hyphens, backticks, and other ordinary characters in table cells (code-review fix -- no longer reuses the Jira-wiki sanitizer)', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const pr: BitbucketPR = {
+      id: 7, title: 'PR', description: '', author: { displayName: 'A', emailAddress: '' },
+      targetBranch: 'main', fromCommitHash: 'h',
+    };
+    const findings: ReviewFinding[] = [
+      {
+        id: 1, file: 'src/off-by-one.ts', line: 5, severity: 'critical',
+        title: 'Off-by-one error in loop bound check',
+        description: 'D',
+        recommendation: 'Use `PreparedStatement` instead of string concatenation! See {docs}.',
+      },
+    ];
+    const { markdown } = service.formatReview(findings, pr, 1);
+    expect(markdown).toContain('Off-by-one error in loop bound check');
+    expect(markdown).toContain('src/off-by-one.ts');
+    expect(markdown).toContain('Use `PreparedStatement` instead of string concatenation! See {docs}.');
   });
 });
 
@@ -1195,6 +1248,31 @@ describe('dedupeFindings', () => {
     ]);
     expect(result).toHaveLength(1);
     expect(result[0].severity).toBe('critical');
+  });
+
+  it('carries title/description/recommendation from the first-encountered finding on merge, even when the second wins on severity/confidence (code-review fix)', () => {
+    // Identical titles take the exact-match fast path, so the merge is unconditional regardless
+    // of how dissimilar the recommendations are -- isolating the field-carry behavior under test.
+    // The merge only lets severity move to the stronger finding -- every other descriptive field
+    // stays with whichever finding was scanned first, per the plan's documented contract. Before
+    // the fix, the whole winning object (including its text) silently replaced the first one's.
+    const first = {
+      file: 'a.ts', line: 47, title: 'SQL injection in user lookup', severity: 'warning' as const,
+      confidence: 0.6, sources: ['general'] as SourceTag[],
+      description: 'First-encountered description', recommendation: 'First-encountered recommendation',
+    };
+    const second = {
+      file: 'a.ts', line: 47, title: 'SQL injection in user lookup', severity: 'critical' as const,
+      confidence: 0.92, sources: ['security'] as SourceTag[],
+      description: 'Second finding description', recommendation: 'Second finding recommendation',
+    };
+    const result = dedupeFindings([first, second]);
+    expect(result).toHaveLength(1);
+    // Severity moves to the stronger finding...
+    expect(result[0].severity).toBe('critical');
+    // ...but the descriptive text stays with the first-encountered finding.
+    expect(result[0].description).toBe('First-encountered description');
+    expect(result[0].recommendation).toBe('First-encountered recommendation');
   });
 
   it('resolves provenance by precedence (new > removed > existing), not discovery order', () => {
@@ -2607,5 +2685,15 @@ describe('formatSourceConfidence', () => {
   it('accepts a custom threshold', () => {
     expect(formatSourceConfidence(f(['security'], 0.65), 0.6)).toBe('security · **0.65**');
     expect(formatSourceConfidence(f(['security'], 0.65), 0.8)).toBe('security · 0.65');
+  });
+
+  it('sanitizes a non-numeric confidence so it cannot corrupt the table row (code-review fix)', () => {
+    // A malformed LLM response could put a non-numeric value in `confidence`. Previously this
+    // reached the cell unsanitized -- the one field in the row that skipped the guard every other
+    // cell gets. A literal `|` there must not survive into the rendered cell.
+    const malformed = { sources: ['security'] as SourceTag[], confidence: 'bad|value\nwith newline' as unknown as number };
+    const result = formatSourceConfidence(malformed);
+    expect(result).not.toContain('|');
+    expect(result).not.toContain('\n');
   });
 });

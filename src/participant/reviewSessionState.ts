@@ -246,10 +246,29 @@ export function formatSourceConfidence(finding: Pick<ReviewFinding, 'sources' | 
   const confidence = finding.confidence;
   const confidenceComponent =
     typeof confidence === 'number'
-      ? (threshold !== undefined && confidence < threshold ? String(confidence) : `**${confidence}**`)
-      : String(confidence ?? '');
+      ? (confidence < threshold ? String(confidence) : `**${confidence}**`)
+      // Code-review fix: a non-numeric `confidence` (a malformed LLM NDJSON response) previously
+      // reached the table cell unsanitized — the one field in the row that skipped tierRows' own
+      // sanitizer — risking row corruption or a crafted `**#N**`-shaped substring hijacking the
+      // command-link replace (composeReviewOutput). Route it through the same GFM-safe sanitizer
+      // every other cell gets.
+      : sanitizeGfmCellText(String(confidence ?? ''));
 
   return `${sourceComponent} · ${confidenceComponent}`;
+}
+
+/**
+ * GFM-table-safe sanitizer for untrusted cell text (finding titles, recommendations, file paths,
+ * and the confidence fallback above). Code-review fix: the table renderer previously reused
+ * `sanitizeCellText` from `../utils/reportImport`, which is scoped to stripping Jira wiki-markup
+ * trigger characters (`* _ \` [ ] ~ - + ^ ? { } !`) for the Veracode/Waltz/email importers — a
+ * different rendering target with a different threat model. Reused here it silently deleted
+ * ordinary characters from every finding (hyphens, backticks, etc.). This table's only structural
+ * hazards are a literal `|` (splits a GFM row into extra columns) and an embedded newline (breaks
+ * the row) — collapse/replace those two and nothing else.
+ */
+export function sanitizeGfmCellText(value: string): string {
+  return value.replace(/\r\n|\r|\n/g, ' ').replace(/\|/g, '/');
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -902,9 +921,15 @@ export function dedupeFindings(
       targetProvenance && incomingProvenance
         ? (PROVENANCE_RANK[targetProvenance] >= PROVENANCE_RANK[incomingProvenance] ? targetProvenance : incomingProvenance)
         : targetProvenance ?? incomingProvenance;
-    const merged = stronger(target, incoming) ? target : incoming;
+    // Code-review fix: this used to spread the ENTIRE winning finding (`stronger(target, incoming)
+    // ? target : incoming`), so a later, higher-confidence duplicate could silently replace the
+    // first-encountered finding's title/description/recommendation/relatedLines/diffHunk — not
+    // just its severity. The plan's documented contract (KTD3/U2) only lets severity move to the
+    // stronger finding; every other descriptive field stays with the first-encountered one.
+    const severity = stronger(target, incoming) ? target.severity : incoming.severity;
     return {
-      ...merged,
+      ...target,
+      severity,
       sources: [...sources],
       confidence,
       ...(provenance ? { provenance } : {}),

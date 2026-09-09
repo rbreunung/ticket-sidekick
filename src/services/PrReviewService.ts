@@ -1,13 +1,13 @@
 import type { BitbucketCommentResult, BitbucketPR, IBitbucketClient, InlineAnchor } from '../bitbucket/IBitbucketClient';
 import type { DiagLogger } from '../utils/diagTypes';
 import { ApiError } from '../utils/apiError';
-import { sanitizeCellText } from '../utils/reportImport';
 import type { FileDiff, ReviewFinding } from '../participant/reviewSessionState';
 import {
   formatSourceConfidence,
   langFromPath,
   numberDiffLines,
   neutralizeMarkdownLinks,
+  sanitizeGfmCellText,
 } from '../participant/reviewSessionState';
 
 const PROMPT_INTRO = `You are a senior software engineer performing a code review.
@@ -364,22 +364,30 @@ export class PrReviewService {
     // the exact same substring. No other cell may contain a `#<id>` token, so the replace cannot
     // cross-match a different finding (R12).
     const tierRows = (f: ReviewFinding): string[] => {
-      const loc = f.line ? `L${f.line}` : '';
+      // Code-review fix: `loc` holds the bare line number (was `L${f.line}`) — the heading below
+      // was prepending its own `L`, so a doubled-up `loc` here produced the rendered "LL42" bug.
+      const loc = f.line ? String(f.line) : '';
       const prov = provenanceIcon(f.provenance);
       const related = f.relatedLines?.length
         ? ` (also ${f.relatedLines.map((l) => `L${l}`).join(', ')})`
         : '';
       // Sanitize before building the heading so the pushed substring is byte-identical to what's
       // rendered in the cell (KTD2) — sanitizing after would break the exact-substring contract.
-      const title = sanitizeCellText(neutralizeMarkdownLinks(f.title));
-      const recommendation = sanitizeCellText(neutralizeMarkdownLinks(f.recommendation));
-      const file = sanitizeCellText(neutralizeMarkdownLinks(f.file));
+      // Code-review fix: sanitizeGfmCellText (not the Jira-wiki-scoped sanitizeCellText) — the
+      // latter stripped ordinary characters (hyphens, backticks, `!`/`{}`/`^`/`?`) out of every
+      // finding's title/recommendation/file, corrupting legitimate text it was never meant to touch.
+      const title = sanitizeGfmCellText(neutralizeMarkdownLinks(f.title));
+      const recommendation = sanitizeGfmCellText(neutralizeMarkdownLinks(f.recommendation));
+      const file = sanitizeGfmCellText(neutralizeMarkdownLinks(f.file));
       const heading = `**#${f.id}** ${severityIcon(f.severity)}${prov ? ' ' + prov : ''}${related}${loc ? ` · L${loc}` : ''} ${title}`;
       findingHeadings.push({ id: f.id, heading });
       // KTD5: formatSourceConfidence mutes (non-bold) the confidence cell when below the threshold.
       const confidenceCell = formatSourceConfidence(f, confidenceThreshold);
+      // Code-review fix: fold the line number into the "File · Line" cell so the column actually
+      // carries what its own header promises — previously it held only the file path.
+      const fileCell = `${file}${loc ? `:L${loc}` : ''}`;
       return [
-        `| ${file} | ${prov || '—'} | ${heading} | ${recommendation} | ${confidenceCell} |`,
+        `| ${fileCell} | ${prov || '—'} | ${heading} | ${recommendation} | ${confidenceCell} |`,
       ];
     };
 
