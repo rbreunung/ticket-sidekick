@@ -240,7 +240,7 @@ export function formatSourceConfidence(finding: Pick<ReviewFinding, 'sources' | 
   const sources = finding.sources;
   const sourceComponent =
     sources && sources.length > 0
-      ? [...ALL_PERSONA_IDS, 'general'].filter((tag) => sources.includes(tag)).join(', ')
+      ? (ALL_PERSONA_IDS as SourceTag[]).concat('general').filter((tag) => sources.includes(tag)).join(', ')
       : 'general';
 
   const confidence = finding.confidence;
