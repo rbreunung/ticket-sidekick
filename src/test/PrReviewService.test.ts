@@ -439,7 +439,7 @@ describe('PrReviewService.buildPersonaPrompt', () => {
 });
 
 describe('PrReviewService.formatReview', () => {
-  it('renders header, severity counts, file sections, and numbered findings', () => {
+  it('renders three severity tables ordered Critical → Warning → Suggestion, each headed with its count (R1)', () => {
     const client = new MockBitbucketClient();
     const service = new PrReviewService(client);
     const pr: BitbucketPR = {
@@ -452,22 +452,30 @@ describe('PrReviewService.formatReview', () => {
         title: 'SQL injection', description: 'Bad query', recommendation: 'Use params' },
       { id: 2, file: 'src/auth/login.ts', severity: 'warning',
         title: 'No error handling', description: 'Missing try/catch', recommendation: 'Add try/catch' },
+      { id: 3, file: 'src/auth/login.ts', severity: 'suggestion',
+        title: 'Naming', description: 'Rename', recommendation: 'Rename it' },
     ];
 
     const { markdown, primaryCount, lowCount } = service.formatReview(findings, pr, 1);
 
-    expect(markdown).toContain('## PR #42');
-    expect(markdown).toContain('Jane Smith');
-    expect(markdown).toContain('**#1**');
-    expect(markdown).toContain('**#2**');
-    expect(markdown).toContain('🔴');
-    expect(markdown).toContain('🟡');
+    const criticalIdx = markdown.indexOf('### 🔴 Critical');
+    const warningIdx = markdown.indexOf('### 🟡 Warning');
+    const suggestionIdx = markdown.indexOf('### 🔵 Suggestion');
+    expect(criticalIdx).toBeGreaterThan(-1);
+    expect(warningIdx).toBeGreaterThan(criticalIdx);
+    expect(suggestionIdx).toBeGreaterThan(warningIdx);
+    // Each tier header carries its count.
+    expect(markdown).toContain('### 🔴 Critical (1)');
+    expect(markdown).toContain('### 🟡 Warning (1)');
+    expect(markdown).toContain('### 🔵 Suggestion (1)');
+    // The pipe-table header row is present in every tier.
+    expect(markdown).toContain('| File · Line | Provenance | Finding | Recommendation | Source · Confidence |');
     expect(markdown).not.toContain('<!-- bitbucket:review-session -->');
-    expect(primaryCount).toBe(2);
+    expect(primaryCount).toBe(3);
     expect(lowCount).toBe(0);
   });
 
-  it('folds low-confidence findings into a collapsed section and keeps high-confidence ones primary', () => {
+  it('omits empty tiers entirely (R1)', () => {
     const client = new MockBitbucketClient();
     const service = new PrReviewService(client);
     const pr: BitbucketPR = {
@@ -475,23 +483,54 @@ describe('PrReviewService.formatReview', () => {
       targetBranch: 'main', fromCommitHash: 'h',
     };
     const findings: ReviewFinding[] = [
-      { id: 1, file: 'a.ts', line: 5, confidence: 0.95, severity: 'critical', title: 'Solid bug', description: 'D', recommendation: 'R' },
-      { id: 2, file: 'a.ts', line: 9, confidence: 0.3, severity: 'warning', title: 'Shaky guess', description: 'D', recommendation: 'R' },
+      { id: 1, file: 'a.ts', line: 5, severity: 'critical', title: 'Only critical', description: 'D', recommendation: 'R' },
+    ];
+    const { markdown } = service.formatReview(findings, pr, 1);
+    expect(markdown).toContain('### 🔴 Critical (1)');
+    expect(markdown).not.toContain('### 🟡 Warning');
+    expect(markdown).not.toContain('### 🔵 Suggestion');
+  });
+
+  it('sorts each tier by confidence descending, preserving discovery order for ties (R2)', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const pr: BitbucketPR = {
+      id: 7, title: 'PR', description: '', author: { displayName: 'A', emailAddress: '' },
+      targetBranch: 'main', fromCommitHash: 'h',
+    };
+    const findings: ReviewFinding[] = [
+      { id: 1, file: 'a.ts', line: 5, confidence: 0.80, severity: 'warning', title: 'Tie A', description: 'D', recommendation: 'R' },
+      { id: 2, file: 'a.ts', line: 9, confidence: 0.95, severity: 'warning', title: 'High', description: 'D', recommendation: 'R' },
+      { id: 3, file: 'a.ts', line: 13, confidence: 0.80, severity: 'warning', title: 'Tie B', description: 'D', recommendation: 'R' },
+    ];
+    const { markdown } = service.formatReview(findings, pr, 1);
+    const highIdx = markdown.indexOf('High');
+    const tieAIdx = markdown.indexOf('Tie A');
+    const tieBIdx = markdown.indexOf('Tie B');
+    expect(highIdx).toBeLessThan(tieAIdx);
+    expect(tieAIdx).toBeLessThan(tieBIdx);
+  });
+
+  it('renders a low-confidence critical finding in the Critical table with a muted (non-bold) confidence cell, still counted (R5)', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const pr: BitbucketPR = {
+      id: 7, title: 'PR', description: '', author: { displayName: 'A', emailAddress: '' },
+      targetBranch: 'main', fromCommitHash: 'h',
+    };
+    const findings: ReviewFinding[] = [
+      { id: 1, file: 'a.ts', line: 5, confidence: 0.65, severity: 'critical', title: 'Low but critical', description: 'D', recommendation: 'R' },
     ];
     const { markdown, primaryCount, lowCount } = service.formatReview(findings, pr, 1, 0.7);
-    expect(markdown).toContain('Solid bug');
-    // R11: the fold is plain, always-visible markdown — VS Code's chat renderer doesn't support
-    // raw HTML, so <details>/<summary> never actually collapsed anything.
-    expect(markdown).not.toContain('<details>');
-    expect(markdown).not.toContain('<summary>');
-    expect(markdown).toContain('low-confidence');
-    expect(markdown).toContain('Shaky guess');
-    expect(markdown).toContain('30%');
+    expect(markdown).toContain('### 🔴 Critical (1)');
+    // Muted: the confidence is plain, not bold.
+    expect(markdown).toContain('0.65');
+    expect(markdown).not.toContain('**0.65**');
     expect(primaryCount).toBe(1);
-    expect(lowCount).toBe(1);
+    expect(lowCount).toBe(0);
   });
 
-  it('reports zero primary and the full low count when every finding is below threshold', () => {
+  it('renders every confidence cell bold when no finding is below threshold (R6)', () => {
     const client = new MockBitbucketClient();
     const service = new PrReviewService(client);
     const pr: BitbucketPR = {
@@ -499,21 +538,54 @@ describe('PrReviewService.formatReview', () => {
       targetBranch: 'main', fromCommitHash: 'h',
     };
     const findings: ReviewFinding[] = [
-      { id: 1, file: 'a.ts', line: 5, confidence: 0.4, severity: 'warning', title: 'Shaky one', description: 'D', recommendation: 'R' },
-      { id: 2, file: 'a.ts', line: 9, confidence: 0.2, severity: 'suggestion', title: 'Shaky two', description: 'D', recommendation: 'R' },
+      { id: 1, file: 'a.ts', line: 5, confidence: 0.95, severity: 'critical', title: 'Solid', description: 'D', recommendation: 'R' },
+      { id: 2, file: 'a.ts', line: 9, confidence: 0.70, severity: 'warning', title: 'At threshold', description: 'D', recommendation: 'R' },
     ];
-
-    const { markdown, primaryCount, lowCount } = service.formatReview(findings, pr, 1, 0.7);
-
-    expect(primaryCount).toBe(0);
-    expect(lowCount).toBe(2);
-    expect(markdown).toContain('_No high-confidence issues._');
-    expect(markdown).not.toContain('<details>');
-    expect(markdown).toContain('Shaky one');
-    expect(markdown).toContain('Shaky two');
+    const { markdown } = service.formatReview(findings, pr, 1, 0.7);
+    expect(markdown).toContain('**0.95**');
+    expect(markdown).toContain('**0.7**');
+    // No muted (plain, non-bold) confidence value anywhere: the Source · Confidence cell (the last
+    // cell in each row) is always bold when no finding is below threshold.
+    const dataRows = markdown.split('\n').filter((l) => l.startsWith('|') && !l.includes('---') && !l.includes('File · Line'));
+    for (const row of dataRows) {
+      const parts = row.split('|');
+      const confidenceCell = parts[parts.length - 2].trim();
+      // The confidence value (after the " · ") is bold — never a plain, muted decimal.
+      const afterDot = confidenceCell.split(' · ')[1] ?? '';
+      expect(afterDot.startsWith('**')).toBe(true);
+      expect(afterDot.endsWith('**')).toBe(true);
+    }
   });
 
-  it('renders provenance tags and related-line references on findings', () => {
+  it('renders a standard-mode finding\'s Source · Confidence cell as "general · <confidence>" (R8)', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const pr: BitbucketPR = {
+      id: 7, title: 'PR', description: '', author: { displayName: 'A', emailAddress: '' },
+      targetBranch: 'main', fromCommitHash: 'h',
+    };
+    const findings: ReviewFinding[] = [
+      { id: 1, file: 'a.ts', line: 5, confidence: 0.88, severity: 'critical', title: 'Standard', description: 'D', recommendation: 'R', sources: ['general'] },
+    ];
+    const { markdown } = service.formatReview(findings, pr, 1);
+    expect(markdown).toContain('general · **0.88**');
+  });
+
+  it('renders a multi-source finding\'s Source · Confidence cell with persona ids in ALL_PERSONA_IDS order (R9)', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const pr: BitbucketPR = {
+      id: 7, title: 'PR', description: '', author: { displayName: 'A', emailAddress: '' },
+      targetBranch: 'main', fromCommitHash: 'h',
+    };
+    const findings: ReviewFinding[] = [
+      { id: 1, file: 'a.ts', line: 5, confidence: 0.92, severity: 'critical', title: 'Merged', description: 'D', recommendation: 'R', sources: ['reliability', 'security'] },
+    ];
+    const { markdown } = service.formatReview(findings, pr, 1);
+    expect(markdown).toContain('security, reliability · **0.92**');
+  });
+
+  it('renders provenance tags and related-line references on findings (R11)', () => {
     const client = new MockBitbucketClient();
     const service = new PrReviewService(client);
     const pr: BitbucketPR = {
@@ -550,7 +622,7 @@ describe('PrReviewService.formatReview', () => {
     expect(findingHeadings).toEqual([]);
   });
 
-  it('returns each primary finding\'s own heading text, an exact substring of markdown, keyed by id (R10/KTD3)', () => {
+  it('returns each finding\'s own heading text, an exact substring of markdown, keyed by id (R10/KTD2)', () => {
     const client = new MockBitbucketClient();
     const service = new PrReviewService(client);
     const pr: BitbucketPR = {
@@ -570,24 +642,6 @@ describe('PrReviewService.formatReview', () => {
     expect(findingHeadings.map(h => h.id)).toEqual([1, 2]);
   });
 
-  it('includes a low-confidence finding\'s heading in findingHeadings too — clickable regardless of confidence (R10)', () => {
-    const client = new MockBitbucketClient();
-    const service = new PrReviewService(client);
-    const pr: BitbucketPR = {
-      id: 7, title: 'PR', description: '', author: { displayName: 'A', emailAddress: '' },
-      targetBranch: 'main', fromCommitHash: 'h',
-    };
-    const findings: ReviewFinding[] = [
-      { id: 1, file: 'a.ts', line: 5, confidence: 0.95, severity: 'critical', title: 'Solid bug', description: 'D', recommendation: 'R' },
-      { id: 2, file: 'a.ts', line: 9, confidence: 0.3, severity: 'warning', title: 'Shaky guess', description: 'D', recommendation: 'R' },
-    ];
-    const { markdown, findingHeadings } = service.formatReview(findings, pr, 1, 0.7);
-    expect(findingHeadings.map(h => h.id).sort()).toEqual([1, 2]);
-    const lowHeading = findingHeadings.find(h => h.id === 2)!;
-    expect(lowHeading.heading).toContain('Shaky guess');
-    expect(markdown).toContain(lowHeading.heading);
-  });
-
   it('neutralizes brackets in a finding title/PR title crafted to break out of a command link, since the caller trust-gates this markdown once headings are wrapped (U7 security)', () => {
     const client = new MockBitbucketClient();
     const service = new PrReviewService(client);
@@ -603,6 +657,44 @@ describe('PrReviewService.formatReview', () => {
     expect(markdown).not.toContain('[Also](command:');
     expect(markdown).toContain('Evil］(command:');
     expect(markdown).toContain('Also］(command:');
+  });
+
+  it('sanitizes a literal pipe in a title so it does not corrupt the table column count, and the sanitized heading is still an exact substring (KTD2)', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const pr: BitbucketPR = {
+      id: 7, title: 'PR', description: '', author: { displayName: 'A', emailAddress: '' },
+      targetBranch: 'main', fromCommitHash: 'h',
+    };
+    const findings: ReviewFinding[] = [
+      { id: 1, file: 'a.ts', line: 5, severity: 'critical', title: 'Pipe | in title', description: 'D', recommendation: 'R' },
+    ];
+    const { markdown, findingHeadings } = service.formatReview(findings, pr, 1);
+    // Exactly one data row (excluding the header and separator rows).
+    const rowLines = markdown.split('\n').filter((l) => l.startsWith('|') && !l.includes('---') && !l.includes('File · Line'));
+    expect(rowLines.length).toBe(1);
+    expect(rowLines[0].split('|').length - 2).toBe(5);
+    expect(markdown).not.toContain('Pipe | in title');
+    expect(markdown).toContain('Pipe / in title');
+    // The pushed heading is byte-identical to what's rendered in the cell.
+    expect(markdown).toContain(findingHeadings[0].heading);
+  });
+
+  it('collapses an embedded newline in a recommendation into a single table row (KTD2)', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const pr: BitbucketPR = {
+      id: 7, title: 'PR', description: '', author: { displayName: 'A', emailAddress: '' },
+      targetBranch: 'main', fromCommitHash: 'h',
+    };
+    const findings: ReviewFinding[] = [
+      { id: 1, file: 'a.ts', line: 5, severity: 'critical', title: 'Newline rec', description: 'D', recommendation: 'Line one\nLine two' },
+    ];
+    const { markdown } = service.formatReview(findings, pr, 1);
+    const rowLines = markdown.split('\n').filter((l) => l.startsWith('|') && !l.includes('---') && !l.includes('File · Line'));
+    expect(rowLines.length).toBe(1);
+    expect(markdown).not.toContain('Line one\nLine two');
+    expect(markdown).toContain('Line one Line two');
   });
 
   it('includes a cancel hint in the reply instruction', () => {
