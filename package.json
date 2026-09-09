@@ -17,7 +17,8 @@
   ],
   "icon": "images/ticket-sidekick.png",
   "activationEvents": [
-    "onUri"
+    "onUri",
+    "onStartupFinished"
   ],
   "main": "./out/extension.js",
   "contributes": {
