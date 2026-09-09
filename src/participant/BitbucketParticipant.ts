@@ -388,7 +388,10 @@ async function runPersonaPassesForChunk(params: {
       const resolved = resolveFindingAnchors(batchFindings, batch.items);
       rawCount += batchFindings.length;
       anchorDropped += batchFindings.length - resolved.length;
-      findings = findings.concat(resolved);
+      // KTD4: stamp each persona-pass finding with its persona's id so the Source column and the
+      // dedup corroboration bump can both rely on `sources` always being a real, populated array.
+      // This is the single seam where pass identity is known.
+      findings = findings.concat(resolved.map((f) => ({ ...f, sources: [persona.id] })));
     }
   }
 
@@ -1251,7 +1254,10 @@ export function createBitbucketParticipant(
           // Tally once, on whichever raw/resolved pair actually settled above.
           rawFindingsTotal += batchRawCount;
           anchorDroppedTotal += batchRawCount - batchFindings.length;
-          chunkFindings = chunkFindings.concat(batchFindings);
+          // KTD4: stamp standard-pass (phase 1) findings with the literal 'general' tag so they
+          // carry an explicit `sources` array like persona findings — `'general'` is a real
+          // SourceTag that participates in the dedup sources union, not just a display fallback.
+          chunkFindings = chunkFindings.concat(batchFindings.map((f) => ({ ...f, sources: ['general'] })));
         }
 
         if (resolvedMode === 'smart') {
@@ -1489,9 +1495,10 @@ export function createBitbucketParticipant(
         raw: rawFindingsTotal,
         dedupedCrossBatch,
         droppedByAnchor: anchorDroppedTotal,
-        foldedByConfidence: lowCount,
-        ...(criticEnabled ? { droppedByCritic: criticDroppedTotal } : {}),
+        // KTD5/KTD6: no confidence fold — every finding lands in a severity table, so `final` is the
+        // total finding count shown and there is no `foldedByConfidence` stage.
         final: primaryCount,
+        ...(criticEnabled ? { droppedByCritic: criticDroppedTotal } : {}),
       };
       const funnelSummary = formatFindingsFunnel(funnelCounts);
       logReview('info', funnelSummary);

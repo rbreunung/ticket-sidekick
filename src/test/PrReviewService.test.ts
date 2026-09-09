@@ -12,9 +12,9 @@ import {
   buildTruncationEvent, formatRecoveryDecision, formatStructuredRunRecord,
   formatContinuationMessage, createAttemptTracker,
   resolveReviewMode, deriveCriticEnabled,
-  aggregateRecommendedPersonas, ALL_PERSONA_IDS,
+  aggregateRecommendedPersonas, ALL_PERSONA_IDS, formatSourceConfidence,
 } from '../participant/reviewSessionState';
-import type { ReviewFinding } from '../participant/reviewSessionState';
+import type { ReviewFinding, SourceTag } from '../participant/reviewSessionState';
 import { PrReviewService, PERSONAS } from '../services/PrReviewService';
 import { MockBitbucketClient } from './mocks/MockBitbucketClient';
 import type { BitbucketPR } from '../bitbucket/IBitbucketClient';
@@ -417,7 +417,7 @@ describe('PrReviewService.buildPersonaPrompt', () => {
 
     const ndjsonContract = generalist.slice(
       generalist.indexOf('Output findings ordered by severity'),
-      generalist.indexOf('additionalFilesNeeded":["path/to/other.ts"]}') + 'additionalFilesNeeded":["path/to/other.ts"]}'.length,
+      generalist.indexOf('additionalFilesNeeded:["path/to/other.ts"]}') + 'additionalFilesNeeded:["path/to/other.ts"]}'.length,
     );
     expect(personaPrompt).toContain(ndjsonContract);
   });
@@ -439,7 +439,7 @@ describe('PrReviewService.buildPersonaPrompt', () => {
 });
 
 describe('PrReviewService.formatReview', () => {
-  it('renders header, severity counts, file sections, and numbered findings', () => {
+  it('renders three severity tables ordered Critical → Warning → Suggestion, each headed with its count (R1)', () => {
     const client = new MockBitbucketClient();
     const service = new PrReviewService(client);
     const pr: BitbucketPR = {
@@ -452,22 +452,30 @@ describe('PrReviewService.formatReview', () => {
         title: 'SQL injection', description: 'Bad query', recommendation: 'Use params' },
       { id: 2, file: 'src/auth/login.ts', severity: 'warning',
         title: 'No error handling', description: 'Missing try/catch', recommendation: 'Add try/catch' },
+      { id: 3, file: 'src/auth/login.ts', severity: 'suggestion',
+        title: 'Naming', description: 'Rename', recommendation: 'Rename it' },
     ];
 
     const { markdown, primaryCount, lowCount } = service.formatReview(findings, pr, 1);
 
-    expect(markdown).toContain('## PR #42');
-    expect(markdown).toContain('Jane Smith');
-    expect(markdown).toContain('**#1**');
-    expect(markdown).toContain('**#2**');
-    expect(markdown).toContain('🔴');
-    expect(markdown).toContain('🟡');
+    const criticalIdx = markdown.indexOf('### 🔴 Critical');
+    const warningIdx = markdown.indexOf('### 🟡 Warning');
+    const suggestionIdx = markdown.indexOf('### 🔵 Suggestion');
+    expect(criticalIdx).toBeGreaterThan(-1);
+    expect(warningIdx).toBeGreaterThan(criticalIdx);
+    expect(suggestionIdx).toBeGreaterThan(warningIdx);
+    // Each tier header carries its count.
+    expect(markdown).toContain('### 🔴 Critical (1)');
+    expect(markdown).toContain('### 🟡 Warning (1)');
+    expect(markdown).toContain('### 🔵 Suggestion (1)');
+    // The pipe-table header row is present in every tier.
+    expect(markdown).toContain('| File · Line | Provenance | Finding | Recommendation | Source · Confidence |');
     expect(markdown).not.toContain('<!-- bitbucket:review-session -->');
-    expect(primaryCount).toBe(2);
+    expect(primaryCount).toBe(3);
     expect(lowCount).toBe(0);
   });
 
-  it('folds low-confidence findings into a collapsed section and keeps high-confidence ones primary', () => {
+  it('omits empty tiers entirely (R1)', () => {
     const client = new MockBitbucketClient();
     const service = new PrReviewService(client);
     const pr: BitbucketPR = {
@@ -475,23 +483,54 @@ describe('PrReviewService.formatReview', () => {
       targetBranch: 'main', fromCommitHash: 'h',
     };
     const findings: ReviewFinding[] = [
-      { id: 1, file: 'a.ts', line: 5, confidence: 0.95, severity: 'critical', title: 'Solid bug', description: 'D', recommendation: 'R' },
-      { id: 2, file: 'a.ts', line: 9, confidence: 0.3, severity: 'warning', title: 'Shaky guess', description: 'D', recommendation: 'R' },
+      { id: 1, file: 'a.ts', line: 5, severity: 'critical', title: 'Only critical', description: 'D', recommendation: 'R' },
+    ];
+    const { markdown } = service.formatReview(findings, pr, 1);
+    expect(markdown).toContain('### 🔴 Critical (1)');
+    expect(markdown).not.toContain('### 🟡 Warning');
+    expect(markdown).not.toContain('### 🔵 Suggestion');
+  });
+
+  it('sorts each tier by confidence descending, preserving discovery order for ties (R2)', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const pr: BitbucketPR = {
+      id: 7, title: 'PR', description: '', author: { displayName: 'A', emailAddress: '' },
+      targetBranch: 'main', fromCommitHash: 'h',
+    };
+    const findings: ReviewFinding[] = [
+      { id: 1, file: 'a.ts', line: 5, confidence: 0.80, severity: 'warning', title: 'Tie A', description: 'D', recommendation: 'R' },
+      { id: 2, file: 'a.ts', line: 9, confidence: 0.95, severity: 'warning', title: 'High', description: 'D', recommendation: 'R' },
+      { id: 3, file: 'a.ts', line: 13, confidence: 0.80, severity: 'warning', title: 'Tie B', description: 'D', recommendation: 'R' },
+    ];
+    const { markdown } = service.formatReview(findings, pr, 1);
+    const highIdx = markdown.indexOf('High');
+    const tieAIdx = markdown.indexOf('Tie A');
+    const tieBIdx = markdown.indexOf('Tie B');
+    expect(highIdx).toBeLessThan(tieAIdx);
+    expect(tieAIdx).toBeLessThan(tieBIdx);
+  });
+
+  it('renders a low-confidence critical finding in the Critical table with a muted (non-bold) confidence cell, still counted (R5)', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const pr: BitbucketPR = {
+      id: 7, title: 'PR', description: '', author: { displayName: 'A', emailAddress: '' },
+      targetBranch: 'main', fromCommitHash: 'h',
+    };
+    const findings: ReviewFinding[] = [
+      { id: 1, file: 'a.ts', line: 5, confidence: 0.65, severity: 'critical', title: 'Low but critical', description: 'D', recommendation: 'R' },
     ];
     const { markdown, primaryCount, lowCount } = service.formatReview(findings, pr, 1, 0.7);
-    expect(markdown).toContain('Solid bug');
-    // R11: the fold is plain, always-visible markdown — VS Code's chat renderer doesn't support
-    // raw HTML, so <details>/<summary> never actually collapsed anything.
-    expect(markdown).not.toContain('<details>');
-    expect(markdown).not.toContain('<summary>');
-    expect(markdown).toContain('low-confidence');
-    expect(markdown).toContain('Shaky guess');
-    expect(markdown).toContain('30%');
+    expect(markdown).toContain('### 🔴 Critical (1)');
+    // Muted: the confidence is plain, not bold.
+    expect(markdown).toContain('0.65');
+    expect(markdown).not.toContain('**0.65**');
     expect(primaryCount).toBe(1);
-    expect(lowCount).toBe(1);
+    expect(lowCount).toBe(0);
   });
 
-  it('reports zero primary and the full low count when every finding is below threshold', () => {
+  it('renders every confidence cell bold when no finding is below threshold (R6)', () => {
     const client = new MockBitbucketClient();
     const service = new PrReviewService(client);
     const pr: BitbucketPR = {
@@ -499,21 +538,54 @@ describe('PrReviewService.formatReview', () => {
       targetBranch: 'main', fromCommitHash: 'h',
     };
     const findings: ReviewFinding[] = [
-      { id: 1, file: 'a.ts', line: 5, confidence: 0.4, severity: 'warning', title: 'Shaky one', description: 'D', recommendation: 'R' },
-      { id: 2, file: 'a.ts', line: 9, confidence: 0.2, severity: 'suggestion', title: 'Shaky two', description: 'D', recommendation: 'R' },
+      { id: 1, file: 'a.ts', line: 5, confidence: 0.95, severity: 'critical', title: 'Solid', description: 'D', recommendation: 'R' },
+      { id: 2, file: 'a.ts', line: 9, confidence: 0.70, severity: 'warning', title: 'At threshold', description: 'D', recommendation: 'R' },
     ];
-
-    const { markdown, primaryCount, lowCount } = service.formatReview(findings, pr, 1, 0.7);
-
-    expect(primaryCount).toBe(0);
-    expect(lowCount).toBe(2);
-    expect(markdown).toContain('_No high-confidence issues._');
-    expect(markdown).not.toContain('<details>');
-    expect(markdown).toContain('Shaky one');
-    expect(markdown).toContain('Shaky two');
+    const { markdown } = service.formatReview(findings, pr, 1, 0.7);
+    expect(markdown).toContain('**0.95**');
+    expect(markdown).toContain('**0.7**');
+    // No muted (plain, non-bold) confidence value anywhere: the Source · Confidence cell (the last
+    // cell in each row) is always bold when no finding is below threshold.
+    const dataRows = markdown.split('\n').filter((l) => l.startsWith('|') && !l.includes('---') && !l.includes('File · Line'));
+    for (const row of dataRows) {
+      const parts = row.split('|');
+      const confidenceCell = parts[parts.length - 2].trim();
+      // The confidence value (after the " · ") is bold — never a plain, muted decimal.
+      const afterDot = confidenceCell.split(' · ')[1] ?? '';
+      expect(afterDot.startsWith('**')).toBe(true);
+      expect(afterDot.endsWith('**')).toBe(true);
+    }
   });
 
-  it('renders provenance tags and related-line references on findings', () => {
+  it('renders a standard-mode finding\'s Source · Confidence cell as "general · <confidence>" (R8)', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const pr: BitbucketPR = {
+      id: 7, title: 'PR', description: '', author: { displayName: 'A', emailAddress: '' },
+      targetBranch: 'main', fromCommitHash: 'h',
+    };
+    const findings: ReviewFinding[] = [
+      { id: 1, file: 'a.ts', line: 5, confidence: 0.88, severity: 'critical', title: 'Standard', description: 'D', recommendation: 'R', sources: ['general'] },
+    ];
+    const { markdown } = service.formatReview(findings, pr, 1);
+    expect(markdown).toContain('general · **0.88**');
+  });
+
+  it('renders a multi-source finding\'s Source · Confidence cell with persona ids in ALL_PERSONA_IDS order (R9)', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const pr: BitbucketPR = {
+      id: 7, title: 'PR', description: '', author: { displayName: 'A', emailAddress: '' },
+      targetBranch: 'main', fromCommitHash: 'h',
+    };
+    const findings: ReviewFinding[] = [
+      { id: 1, file: 'a.ts', line: 5, confidence: 0.92, severity: 'critical', title: 'Merged', description: 'D', recommendation: 'R', sources: ['reliability', 'security'] },
+    ];
+    const { markdown } = service.formatReview(findings, pr, 1);
+    expect(markdown).toContain('security, reliability · **0.92**');
+  });
+
+  it('renders provenance tags and related-line references on findings (R11)', () => {
     const client = new MockBitbucketClient();
     const service = new PrReviewService(client);
     const pr: BitbucketPR = {
@@ -550,7 +622,7 @@ describe('PrReviewService.formatReview', () => {
     expect(findingHeadings).toEqual([]);
   });
 
-  it('returns each primary finding\'s own heading text, an exact substring of markdown, keyed by id (R10/KTD3)', () => {
+  it('returns each finding\'s own heading text, an exact substring of markdown, keyed by id (R10/KTD2)', () => {
     const client = new MockBitbucketClient();
     const service = new PrReviewService(client);
     const pr: BitbucketPR = {
@@ -570,24 +642,6 @@ describe('PrReviewService.formatReview', () => {
     expect(findingHeadings.map(h => h.id)).toEqual([1, 2]);
   });
 
-  it('includes a low-confidence finding\'s heading in findingHeadings too — clickable regardless of confidence (R10)', () => {
-    const client = new MockBitbucketClient();
-    const service = new PrReviewService(client);
-    const pr: BitbucketPR = {
-      id: 7, title: 'PR', description: '', author: { displayName: 'A', emailAddress: '' },
-      targetBranch: 'main', fromCommitHash: 'h',
-    };
-    const findings: ReviewFinding[] = [
-      { id: 1, file: 'a.ts', line: 5, confidence: 0.95, severity: 'critical', title: 'Solid bug', description: 'D', recommendation: 'R' },
-      { id: 2, file: 'a.ts', line: 9, confidence: 0.3, severity: 'warning', title: 'Shaky guess', description: 'D', recommendation: 'R' },
-    ];
-    const { markdown, findingHeadings } = service.formatReview(findings, pr, 1, 0.7);
-    expect(findingHeadings.map(h => h.id).sort()).toEqual([1, 2]);
-    const lowHeading = findingHeadings.find(h => h.id === 2)!;
-    expect(lowHeading.heading).toContain('Shaky guess');
-    expect(markdown).toContain(lowHeading.heading);
-  });
-
   it('neutralizes brackets in a finding title/PR title crafted to break out of a command link, since the caller trust-gates this markdown once headings are wrapped (U7 security)', () => {
     const client = new MockBitbucketClient();
     const service = new PrReviewService(client);
@@ -603,6 +657,44 @@ describe('PrReviewService.formatReview', () => {
     expect(markdown).not.toContain('[Also](command:');
     expect(markdown).toContain('Evil］(command:');
     expect(markdown).toContain('Also］(command:');
+  });
+
+  it('sanitizes a literal pipe in a title so it does not corrupt the table column count, and the sanitized heading is still an exact substring (KTD2)', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const pr: BitbucketPR = {
+      id: 7, title: 'PR', description: '', author: { displayName: 'A', emailAddress: '' },
+      targetBranch: 'main', fromCommitHash: 'h',
+    };
+    const findings: ReviewFinding[] = [
+      { id: 1, file: 'a.ts', line: 5, severity: 'critical', title: 'Pipe | in title', description: 'D', recommendation: 'R' },
+    ];
+    const { markdown, findingHeadings } = service.formatReview(findings, pr, 1);
+    // Exactly one data row (excluding the header and separator rows).
+    const rowLines = markdown.split('\n').filter((l) => l.startsWith('|') && !l.includes('---') && !l.includes('File · Line'));
+    expect(rowLines.length).toBe(1);
+    expect(rowLines[0].split('|').length - 2).toBe(5);
+    expect(markdown).not.toContain('Pipe | in title');
+    expect(markdown).toContain('Pipe / in title');
+    // The pushed heading is byte-identical to what's rendered in the cell.
+    expect(markdown).toContain(findingHeadings[0].heading);
+  });
+
+  it('collapses an embedded newline in a recommendation into a single table row (KTD2)', () => {
+    const client = new MockBitbucketClient();
+    const service = new PrReviewService(client);
+    const pr: BitbucketPR = {
+      id: 7, title: 'PR', description: '', author: { displayName: 'A', emailAddress: '' },
+      targetBranch: 'main', fromCommitHash: 'h',
+    };
+    const findings: ReviewFinding[] = [
+      { id: 1, file: 'a.ts', line: 5, severity: 'critical', title: 'Newline rec', description: 'D', recommendation: 'Line one\nLine two' },
+    ];
+    const { markdown } = service.formatReview(findings, pr, 1);
+    const rowLines = markdown.split('\n').filter((l) => l.startsWith('|') && !l.includes('---') && !l.includes('File · Line'));
+    expect(rowLines.length).toBe(1);
+    expect(markdown).not.toContain('Line one\nLine two');
+    expect(markdown).toContain('Line one Line two');
   });
 
   it('includes a cancel hint in the reply instruction', () => {
@@ -994,8 +1086,11 @@ describe('buildAdaptiveChunks', () => {
 });
 
 describe('dedupeFindings', () => {
-  const f = (file: string, line: number, title: string, severity: 'critical' | 'warning' | 'suggestion', confidence?: number) =>
-    ({ file, line, title, severity, confidence, description: 'D', recommendation: 'R' });
+  const f = (
+    file: string, line: number, title: string, severity: 'critical' | 'warning' | 'suggestion',
+    confidence?: number, sources?: SourceTag[], provenance?: 'new' | 'existing' | 'removed',
+  ) =>
+    ({ file, line, title, severity, confidence, sources, provenance, description: 'D', recommendation: 'R' });
 
   it('collapses the same finding reported in two chunks', () => {
     const result = dedupeFindings([f('a.ts', 5, 'SQL injection', 'critical'), f('a.ts', 5, 'SQL injection', 'critical')]);
@@ -1008,7 +1103,7 @@ describe('dedupeFindings', () => {
     expect(result[0].severity).toBe('critical');
   });
 
-  it('keeps distinct titles on the same line separate', () => {
+  it('keeps distinct titles on the same line separate (bucket-append path)', () => {
     const result = dedupeFindings([f('a.ts', 5, 'SQL injection', 'critical'), f('a.ts', 5, 'No error handling', 'warning')]);
     expect(result).toHaveLength(2);
   });
@@ -1021,6 +1116,137 @@ describe('dedupeFindings', () => {
   it('matches titles case-insensitively and ignoring surrounding whitespace', () => {
     const result = dedupeFindings([f('a.ts', 5, 'SQL Injection', 'critical'), f('a.ts', 5, '  sql injection ', 'critical')]);
     expect(result).toHaveLength(1);
+  });
+
+  it('merges identical titles even when recommendations differ (exact-match fast path)', () => {
+    const a = f('a.ts', 5, 'SQL injection', 'critical', 0.9, ['general']);
+    const b = { ...f('a.ts', 5, 'SQL injection', 'critical', 0.8, ['security']), recommendation: 'totally different fix' };
+    const result = dedupeFindings([a, b]);
+    expect(result).toHaveLength(1);
+    expect(result[0].sources).toEqual(expect.arrayContaining(['general', 'security']));
+  });
+
+  it('merges similar-but-not-identical titles on the same line (fuzzy gate)', () => {
+    const result = dedupeFindings([
+      f('a.ts', 47, 'SQL injection in user lookup', 'critical', 0.92, ['general']),
+      f('a.ts', 47, 'Unparameterized query in lookup', 'critical', 0.88, ['security']),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0].sources).toEqual(expect.arrayContaining(['general', 'security']));
+  });
+
+  it('keeps dissimilar titles and fix proposals on the same line as two rows (bucket-append path)', () => {
+    const result = dedupeFindings([
+      f('a.ts', 47, 'SQL injection in user lookup', 'critical', 0.92, ['general']),
+      f('a.ts', 47, 'Missing rate-limit on password reset endpoint', 'warning', 0.8, ['security']),
+    ]);
+    expect(result).toHaveLength(2);
+  });
+
+  it('merges the first two of three same-line findings and keeps the dissimilar third separate', () => {
+    const result = dedupeFindings([
+      f('a.ts', 1, 'SQL injection', 'critical', 0.9, ['general']),
+      f('a.ts', 1, 'SQL injecion', 'critical', 0.85, ['security']),
+      f('a.ts', 1, 'Off-by-one in loop', 'warning', 0.7, ['reliability']),
+    ]);
+    expect(result).toHaveLength(2);
+  });
+
+  it('unions sources on merge', () => {
+    const result = dedupeFindings([
+      f('a.ts', 5, 'SQL injection', 'critical', 0.9, ['general']),
+      f('a.ts', 5, 'SQL injection', 'critical', 0.8, ['security']),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(new Set(result[0].sources)).toEqual(new Set(['general', 'security']));
+  });
+
+  it('applies the +0.05 corroboration bump when the unioned sources have 2+ distinct entries', () => {
+    const result = dedupeFindings([
+      f('a.ts', 5, 'SQL injection', 'critical', 0.6, ['security']),
+      f('a.ts', 5, 'SQL injection', 'critical', 0.65, ['general']),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0].confidence).toBe(0.7);
+  });
+
+  it('applies no bump when both findings carry the same single source', () => {
+    const result = dedupeFindings([
+      f('a.ts', 5, 'SQL injection', 'critical', 0.6, ['general']),
+      f('a.ts', 5, 'SQL injection', 'critical', 0.65, ['general']),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0].confidence).toBe(0.65);
+  });
+
+  it('caps the merged confidence at 0.95', () => {
+    const result = dedupeFindings([
+      f('a.ts', 5, 'SQL injection', 'critical', 0.93, ['security']),
+      f('a.ts', 5, 'SQL injection', 'critical', 0.9, ['general']),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0].confidence).toBe(0.95);
+  });
+
+  it('takes the stronger severity on merge', () => {
+    const result = dedupeFindings([
+      f('a.ts', 5, 'Issue', 'warning', 0.9, ['general']),
+      f('a.ts', 5, 'Issue', 'critical', 0.8, ['security']),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0].severity).toBe('critical');
+  });
+
+  it('resolves provenance by precedence (new > removed > existing), not discovery order', () => {
+    const result = dedupeFindings([
+      f('a.ts', 5, 'Issue', 'warning', 0.9, ['general'], 'existing'),
+      f('a.ts', 5, 'Issue', 'warning', 0.9, ['security'], 'new'),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0].provenance).toBe('new');
+  });
+
+  it('resolves provenance removed over existing', () => {
+    const result = dedupeFindings([
+      f('a.ts', 5, 'Issue', 'warning', 0.9, ['general'], 'existing'),
+      f('a.ts', 5, 'Issue', 'warning', 0.9, ['security'], 'removed'),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0].provenance).toBe('removed');
+  });
+
+  it('carries provenance from a single finding when only one has it', () => {
+    const result = dedupeFindings([
+      f('a.ts', 5, 'Issue', 'warning', 0.9, ['general'], 'existing'),
+      f('a.ts', 5, 'Issue', 'warning', 0.9, ['security']),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0].provenance).toBe('existing');
+  });
+
+  it('pulls a borderline title match below threshold when recommendations diverge', () => {
+    // Titles are similar enough to clear the fuzzy gate alone, but the recommendations are
+    // dissimilar, so min(titleJaccard, recommendationJaccard) drops below threshold → separate.
+    const result = dedupeFindings([
+      f('a.ts', 5, 'SQL injection in lookup', 'critical', 0.9, ['general']),
+      f('a.ts', 5, 'SQL injection in lookup', 'critical', 0.9, ['security']),
+    ]);
+    // Same title → exact-match fast path still merges regardless of recommendation.
+    expect(result).toHaveLength(1);
+  });
+
+  it('keeps findings on the same file but different lines separate', () => {
+    const result = dedupeFindings([f('a.ts', 5, 'Issue', 'warning'), f('a.ts', 9, 'Issue', 'warning')]);
+    expect(result).toHaveLength(2);
+  });
+
+  it('preserves first-occurrence order across keys', () => {
+    const result = dedupeFindings([
+      f('b.ts', 1, 'First file', 'warning'),
+      f('a.ts', 1, 'Second file', 'warning'),
+      f('b.ts', 2, 'Third finding', 'warning'),
+    ]);
+    expect(result.map((r) => r.file)).toEqual(['b.ts', 'a.ts', 'b.ts']);
   });
 });
 
@@ -1510,26 +1736,26 @@ describe('formatFindingsFunnel', () => {
       raw: 20,
       dedupedCrossBatch: 3,
       droppedByAnchor: 4,
-      foldedByConfidence: 5,
       droppedByCritic: 2,
-      final: 6,
+      final: 11,
     };
+    // KTD6: no foldedByConfidence stage — raw = dedupedCrossBatch + droppedByAnchor + (droppedByCritic ?? 0) + final.
     expect(
-      counts.dedupedCrossBatch + counts.droppedByAnchor + counts.foldedByConfidence + counts.droppedByCritic + counts.final,
+      counts.dedupedCrossBatch + counts.droppedByAnchor + counts.droppedByCritic + counts.final,
     ).toBe(counts.raw);
 
     const summary = formatFindingsFunnel(counts);
     expect(summary).toContain('raw 20');
     expect(summary).toContain('deduped as cross-batch duplicate: 3');
     expect(summary).toContain('dropped by anchor verification: 4');
-    expect(summary).toContain('folded by confidence threshold: 5');
+    expect(summary).not.toContain('folded by confidence');
     expect(summary).toContain('dropped by critic: 2');
-    expect(summary).toContain('final: 6');
+    expect(summary).toContain('final: 11');
   });
 
   it('omits the critic line outside deep mode', () => {
     const summary = formatFindingsFunnel({
-      raw: 10, dedupedCrossBatch: 1, droppedByAnchor: 2, foldedByConfidence: 3, final: 4,
+      raw: 10, dedupedCrossBatch: 1, droppedByAnchor: 2, final: 4,
     });
     expect(summary).not.toContain('critic');
   });
@@ -1545,9 +1771,8 @@ describe('formatFindingsFunnel', () => {
       raw: standardPassRaw + personaPassesRaw,
       dedupedCrossBatch: 2,
       droppedByAnchor: 1,
-      foldedByConfidence: 3,
       droppedByCritic: 2,
-      final: 4,
+      final: 7,
     };
     expect(counts.raw).toBe(12);
 
@@ -1556,7 +1781,7 @@ describe('formatFindingsFunnel', () => {
     // funnel shape, only inflating the same `raw` count a standard-only run would produce.
     expect(summary).toContain('raw 12');
     expect(summary).not.toMatch(/security|performance|reliability|maintainability|persona/i);
-    expect(summary.split('\n')).toHaveLength(6); // header + 4 stage lines + final — unchanged shape
+    expect(summary.split('\n')).toHaveLength(5); // header + 3 stage lines + critic + final — KTD6 dropped the fold stage
   });
 });
 
@@ -2343,5 +2568,44 @@ describe('PrReviewService onDiag', () => {
     const service = new PrReviewService(client);
     const result = await service.gatherFileContents('PROJ', 'repo', 'abc123', ['src/foo.ts']);
     expect(result.get('src/foo.ts')).toBeDefined();
+  });
+});
+
+describe('formatSourceConfidence', () => {
+  const f = (sources: SourceTag[] | undefined, confidence?: number) =>
+    ({ sources, confidence });
+
+  it('renders persona ids in ALL_PERSONA_IDS order regardless of input order', () => {
+    expect(formatSourceConfidence(f(['reliability', 'security'], 0.92))).toBe('security, reliability · **0.92**');
+  });
+
+  it('renders general for a standard-mode finding', () => {
+    expect(formatSourceConfidence(f(['general'], 0.88))).toBe('general · **0.88**');
+  });
+
+  it('renders general via the absent-field legacy fallback (pre-existing session state)', () => {
+    expect(formatSourceConfidence(f(undefined, 0.88))).toBe('general · **0.88**');
+  });
+
+  it('renders general last regardless of array order (merged persona + standard pass)', () => {
+    expect(formatSourceConfidence(f(['security', 'general'], 0.92))).toBe('security, general · **0.92**');
+  });
+
+  it('mutes (non-bold) a confidence below the threshold', () => {
+    expect(formatSourceConfidence(f(['security'], 0.65))).toBe('security · 0.65');
+  });
+
+  it('bolds a confidence at or above the threshold', () => {
+    expect(formatSourceConfidence(f(['security'], 0.7))).toBe('security · **0.7**');
+    expect(formatSourceConfidence(f(['security'], 0.95))).toBe('security · **0.95**');
+  });
+
+  it('renders an absent confidence plain with no emphasis', () => {
+    expect(formatSourceConfidence(f(['security'], undefined))).toBe('security · ');
+  });
+
+  it('accepts a custom threshold', () => {
+    expect(formatSourceConfidence(f(['security'], 0.65), 0.6)).toBe('security · **0.65**');
+    expect(formatSourceConfidence(f(['security'], 0.65), 0.8)).toBe('security · 0.65');
   });
 });

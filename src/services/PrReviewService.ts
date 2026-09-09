@@ -1,8 +1,14 @@
 import type { BitbucketCommentResult, BitbucketPR, IBitbucketClient, InlineAnchor } from '../bitbucket/IBitbucketClient';
 import type { DiagLogger } from '../utils/diagTypes';
 import { ApiError } from '../utils/apiError';
+import { sanitizeCellText } from '../utils/reportImport';
 import type { FileDiff, ReviewFinding } from '../participant/reviewSessionState';
-import { langFromPath, numberDiffLines, neutralizeMarkdownLinks } from '../participant/reviewSessionState';
+import {
+  formatSourceConfidence,
+  langFromPath,
+  numberDiffLines,
+  neutralizeMarkdownLinks,
+} from '../participant/reviewSessionState';
 
 const PROMPT_INTRO = `You are a senior software engineer performing a code review.
 
@@ -332,95 +338,86 @@ export class PrReviewService {
     const provenanceIcon = (p: ReviewFinding['provenance']) =>
       p === 'new' ? '🆕' : p === 'existing' ? '📍' : p === 'removed' ? '➖' : '';
 
-    // Confidence below the threshold folds into a collapsed section — never deleted.
-    const isLow = (f: ReviewFinding) =>
-      confidenceThreshold !== undefined && typeof f.confidence === 'number' && f.confidence < confidenceThreshold;
-    const primary = findings.filter((f) => !isLow(f));
-    const low = findings.filter(isLow);
-
-    const counts = {
-      critical: primary.filter((f) => f.severity === 'critical').length,
-      warning: primary.filter((f) => f.severity === 'warning').length,
-      suggestion: primary.filter((f) => f.severity === 'suggestion').length,
-    };
-    const countLine = [
-      counts.critical > 0 ? `${counts.critical} 🔴 critical` : '',
-      counts.warning > 0 ? `${counts.warning} 🟡 warning` : '',
-      counts.suggestion > 0 ? `${counts.suggestion} 🔵 suggestion` : '',
-    ]
-      .filter(Boolean)
-      .join(' · ');
-
-    const emptyLabel = low.length > 0 ? '_No high-confidence issues._' : '_No issues found._';
     // U7/R10: PR title/author are externally-influenced (set by the PR's own author) — this whole
     // response is trust-gated at the caller (BitbucketParticipant.ts, once findingHeadings' command
     // links are woven in), so both go through neutralizeMarkdownLinks() (see its own doc comment).
     const header =
       `## PR #${pr.id} — ${neutralizeMarkdownLinks(pr.title)}\n` +
-      `_by ${neutralizeMarkdownLinks(pr.author.displayName)} → ${pr.targetBranch} · ${fileCount} file${fileCount !== 1 ? 's' : ''} changed_\n\n` +
-      (countLine || emptyLabel);
+      `_by ${neutralizeMarkdownLinks(pr.author.displayName)} → ${pr.targetBranch} · ${fileCount} file${fileCount !== 1 ? 's' : ''} changed_\n\n`;
 
-    // R10/R11: each low-confidence entry's own line is a "heading" too — clickable the same as a
-    // primary finding's — over a plain, always-visible list (VS Code's chat markdown renderer
-    // doesn't support raw HTML, so the prior <details>/<summary> fold never actually collapsed
-    // anything; it rendered as inert literal tags).
-    const findingHeadings: Array<{ id: number; heading: string }> = [];
-    const lowFold =
-      low.length > 0
-        ? '\n\n' +
-          `**${low.length} low-confidence finding${low.length !== 1 ? 's' : ''}** (reply #N to inspect):\n\n` +
-          low
-            .map((f) => {
-              const loc = f.line ? ` \`L${f.line}\`` : '';
-              const pct = typeof f.confidence === 'number' ? ` _(${Math.round(f.confidence * 100)}%)_` : '';
-              const heading = `**#${f.id}** ${severityIcon(f.severity)} ${neutralizeMarkdownLinks(f.file)}${loc} ${neutralizeMarkdownLinks(f.title)}${pct}`;
-              findingHeadings.push({ id: f.id, heading });
-              return heading;
-            })
-            .join('\n')
-        : '';
-
-    if (primary.length === 0) {
+    // No findings: a single no-issues message, no tables.
+    if (findings.length === 0) {
       return {
-        markdown: `${header}${lowFold}\n\n_Ask a question about the PR or reply **(c)** to exit._`,
-        primaryCount: primary.length,
-        lowCount: low.length,
-        findingHeadings,
+        markdown: `${header}_No issues found._\n\n_Ask a question about the PR or reply **(c)** to exit._`,
+        primaryCount: 0,
+        lowCount: 0,
+        findingHeadings: [],
       };
     }
 
-    const byFile = new Map<string, ReviewFinding[]>();
-    for (const f of primary) {
-      const existing = byFile.get(f.file) ?? [];
-      existing.push(f);
-      byFile.set(f.file, existing);
-    }
+    // KTD1: three severity-ordered tiers, Critical → Warning → Suggestion. Empty tiers are omitted.
+    const SEVERITY_ORDER: Array<ReviewFinding['severity']> = ['critical', 'warning', 'suggestion'];
+    const findingHeadings: Array<{ id: number; heading: string }> = [];
 
-    // R10: each finding's own heading line is returned alongside the assembled markdown so
-    // BitbucketParticipant.ts can wrap the exact same substring in a command link (KTD3) — title/
-    // location text is neutralized here since the wrapped result is embedded verbatim into a
-    // trusted response either way, clicked or not. Reuses the same findingHeadings array the
-    // low-confidence fold above already started, so both primary and low findings end up clickable.
-    const fileSections = [...byFile.entries()]
-      .map(([file, items]) => {
-        const lines = items.map((f) => {
-          const loc = f.line ? `\`L${f.line}\`` : '';
-          const prov = provenanceIcon(f.provenance);
-          const related = f.relatedLines?.length
-            ? ` (also ${f.relatedLines.map((l) => `L${l}`).join(', ')})`
-            : '';
-          const heading = `**#${f.id}** ${severityIcon(f.severity)}${prov ? ' ' + prov : ''}${loc ? ' ' + loc : ''}${related} ${neutralizeMarkdownLinks(f.title)}`;
-          findingHeadings.push({ id: f.id, heading });
-          return `${heading}\n→ ${neutralizeMarkdownLinks(f.recommendation)}`;
-        });
-        return `**📄 ${neutralizeMarkdownLinks(file)}**\n${lines.join('\n')}`;
+    // KTD2: each row's `#N` + title run is emitted as one contiguous string inside its Finding cell
+    // and pushed to findingHeadings verbatim, so composeReviewOutput's plain-string replace can wrap
+    // the exact same substring. No other cell may contain a `#<id>` token, so the replace cannot
+    // cross-match a different finding (R12).
+    const tierRows = (f: ReviewFinding): string[] => {
+      const loc = f.line ? `L${f.line}` : '';
+      const prov = provenanceIcon(f.provenance);
+      const related = f.relatedLines?.length
+        ? ` (also ${f.relatedLines.map((l) => `L${l}`).join(', ')})`
+        : '';
+      // Sanitize before building the heading so the pushed substring is byte-identical to what's
+      // rendered in the cell (KTD2) — sanitizing after would break the exact-substring contract.
+      const title = sanitizeCellText(neutralizeMarkdownLinks(f.title));
+      const recommendation = sanitizeCellText(neutralizeMarkdownLinks(f.recommendation));
+      const file = sanitizeCellText(neutralizeMarkdownLinks(f.file));
+      const heading = `**#${f.id}** ${severityIcon(f.severity)}${prov ? ' ' + prov : ''}${related}${loc ? ` · L${loc}` : ''} ${title}`;
+      findingHeadings.push({ id: f.id, heading });
+      // KTD5: formatSourceConfidence mutes (non-bold) the confidence cell when below the threshold.
+      const confidenceCell = formatSourceConfidence(f, confidenceThreshold);
+      return [
+        `| ${file} | ${prov || '—'} | ${heading} | ${recommendation} | ${confidenceCell} |`,
+      ];
+    };
+
+    const tierTable = (severity: ReviewFinding['severity'], rows: ReviewFinding[]): string | null => {
+      if (rows.length === 0) return null;
+      const icon = severityIcon(severity);
+      const label = severity.charAt(0).toUpperCase() + severity.slice(1);
+      const header = `| File · Line | Provenance | Finding | Recommendation | Source · Confidence |`;
+      const sep = `| --- | --- | --- | --- | --- |`;
+      const body = rows.map(tierRows).join('\n');
+      return `### ${icon} ${label} (${rows.length})\n\n${header}\n${sep}\n${body}`;
+    };
+
+    // KTD1/KTD3: group by severity, then sort each tier by confidence descending (stable, absent
+    // confidence sorts last) preserving discovery order for ties (R2).
+    const bySeverity = new Map<ReviewFinding['severity'], ReviewFinding[]>();
+    for (const severity of SEVERITY_ORDER) bySeverity.set(severity, []);
+    for (const f of findings) bySeverity.get(f.severity)!.push(f);
+
+    const tiers = SEVERITY_ORDER
+      .map((severity) => {
+        const rows = bySeverity.get(severity) ?? [];
+        const sorted = rows
+          .map((f, idx) => ({ f, idx }))
+          .sort((a, b) => {
+            const ca = typeof a.f.confidence === 'number' ? a.f.confidence : -Infinity;
+            const cb = typeof b.f.confidence === 'number' ? b.f.confidence : -Infinity;
+            return cb - ca || a.idx - b.idx;
+          })
+          .map((d) => d.f);
+        return tierTable(severity, sorted);
       })
-      .join('\n\n---\n\n');
+      .filter((t): t is string => t !== null);
 
     return {
-      markdown: `${header}\n\n---\n\n${fileSections}${lowFold}\n\n---\n\n_Reply **#1** or describe a finding to ask a follow-up, or ask any question about the PR. To post findings as PR comments: **#2 #3 add to review**. Reply **(c)** to exit this session._`,
-      primaryCount: primary.length,
-      lowCount: low.length,
+      markdown: `${header}\n\n${tiers.join('\n\n')}\n\n---\n\n_Reply **#1** or describe a finding to ask a follow-up, or ask any question about the PR. To post findings as PR comments: **#2 #3 add to review**. Reply **(c)** to exit this session._`,
+      primaryCount: findings.length,
+      lowCount: 0,
       findingHeadings,
     };
   }
