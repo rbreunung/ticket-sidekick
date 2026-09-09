@@ -791,28 +791,144 @@ export function extractHunkAround(diff: string, line: number): string | undefine
 const SEVERITY_RANK: Record<ReviewFinding['severity'], number> = { critical: 3, warning: 2, suggestion: 1 };
 
 /**
+ * KTD3: fixed precedence for resolving `provenance` on a dedup merge — 🆕 new > ➖ removed >
+ * 📍 existing — rather than first-encountered (which is scan-order-dependent and can silently
+ * downgrade a genuinely new issue to "existing" when the standard pass happens to resolve before
+ * the persona pass that correctly flagged it as new). Mirrors the existing "more urgent wins"
+ * severity-escalation rule applied to the one other field where it also holds.
+ */
+const PROVENANCE_RANK: Record<NonNullable<ReviewFinding['provenance']>, number> = { new: 3, removed: 2, existing: 1 };
+
+/**
+ * KTD3: the one merge knob. A low threshold merges aggressively (catches differently-worded same
+ * issues but risks over-merging distinct issues); a high threshold separates aggressively (catches
+ * distinct issues but lets differently-worded same issues survive as two rows). Chosen as a
+ * reasonable default; same-line distinct issues are rare, so the residual over/under-merge risk is
+ * acceptable (see the plan's Assumptions).
+ */
+/** Corroboration bump applied when a merge unites 2+ distinct passes — independent corroboration
+ * across passes is itself evidence, so a merged finding is more trustworthy than either alone. */
+const CORROBORATION_BUMP = 0.05;
+const MAX_CONFIDENCE = 0.95;
+
+/**
+ * KTD3: the one merge knob. A low threshold merges aggressively (catches differently-worded same
+ * issues but risks over-merging distinct issues); a high threshold separates aggressively (catches
+ * distinct issues but lets differently-worded same issues survive as two rows). Chosen as a
+ * reasonable default; same-line distinct issues are rare, so the residual over/under-merge risk is
+ * acceptable (see the plan's Assumptions). Set low enough that the plan's own R14 acceptance
+ * example ("SQL injection in user lookup" vs "Unparameterized query in lookup", Jaccard ≈ 0.29)
+ * collapses while genuinely distinct same-line titles (Jaccard 0) stay separate.
+ */
+const SIMILARITY_THRESHOLD = 0.25;
+
+/**
+ * KTD3: pure-logic lexical same-meaning heuristic (no LLM call, so `dedupeFindings` stays fast and
+ * `reviewSessionState.ts` stays Vitest-loadable). Tokenize on non-alphanumerics, lowercase, build a
+ * set, and return the Jaccard similarity of the two token sets.
+ */
+function jaccard(a: string, b: string): number {
+  const tokens = (s: string): Set<string> => new Set(s.toLowerCase().match(/[a-z0-9]+/g) ?? []);
+  const sa = tokens(a);
+  const sb = tokens(b);
+  if (sa.size === 0 && sb.size === 0) return 1;
+  if (sa.size === 0 || sb.size === 0) return 0;
+  let intersection = 0;
+  for (const t of sa) if (sb.has(t)) intersection += 1;
+  const union = sa.size + sb.size - intersection;
+  return union === 0 ? 1 : intersection / union;
+}
+
+/**
+ * KTD3: two-layer same-meaning gate, mirroring ce-code-review's own dedup split as closely as a
+ * pure-logic (no LLM call) implementation allows.
+ *
+ * - Exact-match fast path: identical normalized titles merge unconditionally — no similarity math.
+ *   An identical title is a stronger same-issue signal than any recommendation mismatch, so this
+ *   fixes a gap a single fuzzy gate alone would have (two reports with the same title but very
+ *   different recommendations should still merge).
+ * - Fuzzy gate: only when titles are not already identical, compare titles and — when both findings
+ *   have a `recommendation` — recommendations too, combining as `min(titleJaccard,
+ *   recommendationJaccard)` when both are present, else `titleJaccard` alone. `min` is the more
+ *   conservative combinator: it never merges on a near-title-match alone when the recommendations
+ *   clearly diverge.
+ */
+function sameMeaning(a: Omit<ReviewFinding, 'id'>, b: Omit<ReviewFinding, 'id'>): boolean {
+  const na = a.title.trim().toLowerCase();
+  const nb = b.title.trim().toLowerCase();
+  if (na === nb) return true; // exact-match fast path
+  const titleJaccard = jaccard(a.title, b.title);
+  if (typeof a.recommendation === 'string' && typeof b.recommendation === 'string') {
+    const recJaccard = jaccard(a.recommendation, b.recommendation);
+    return Math.min(titleJaccard, recJaccard) >= SIMILARITY_THRESHOLD;
+  }
+  return titleJaccard >= SIMILARITY_THRESHOLD;
+}
+
+/**
  * Collapse duplicate findings that surfaced in more than one chunk (e.g. a shared
- * helper, or the continuation/critic passes re-emitting the same issue). Keyed by
- * (file + verified line + normalized title); the stronger of two duplicates wins
- * (higher severity, then higher confidence). Distinct titles on the same line are
- * kept separate — they're genuinely different findings.
+ * helper, or the continuation/critic passes re-emitting the same issue).
+ *
+ * Keyed by (file + verified line) — the title is dropped from the key (KTD3) so the same real
+ * issue found by the standard pass and a persona with a *different* title collapses to one finding
+ * with unioned sources and max confidence, rather than surviving as two rows (and letting a
+ * downgraded re-report outrank the critical original). On a key collision the two findings are
+ * compared through the two-layer same-meaning gate (KTD3): if they are the same issue they merge
+ * (sources unioned, confidence set to the max then bumped +0.05 when the unioned sources have 2+
+ * distinct entries, severity taken from the stronger, provenance by fixed precedence); if they are
+ * genuinely different (dissimilar titles and fix proposals on the same line) they stay as separate
+ * rows.
+ *
+ * The internal per-key store is a bucket (`Map<string, Array<Omit<ReviewFinding,'id'>>>`), not a
+ * single value, because a dissimilar collision must survive as its own entry rather than being
+ * discarded by whichever finding scanned second. Each incoming finding is compared against every
+ * existing bucket member in turn and merges into the first that either layer accepts; if no member
+ * matches it is appended as a new entry. Output is flattened in first-occurrence order, preserving
+ * discovery-order tie-breaking for the severity-table sort.
  */
 export function dedupeFindings(
   findings: Array<Omit<ReviewFinding, 'id'>>,
 ): Array<Omit<ReviewFinding, 'id'>> {
-  const byKey = new Map<string, Omit<ReviewFinding, 'id'>>();
+  const byKey = new Map<string, Array<Omit<ReviewFinding, 'id'>>>();
   const order: string[] = [];
   const stronger = (a: Omit<ReviewFinding, 'id'>, b: Omit<ReviewFinding, 'id'>) => {
     if (SEVERITY_RANK[a.severity] !== SEVERITY_RANK[b.severity]) return SEVERITY_RANK[a.severity] > SEVERITY_RANK[b.severity];
     return (a.confidence ?? 1) >= (b.confidence ?? 1);
   };
+  const mergeInto = (target: Omit<ReviewFinding, 'id'>, incoming: Omit<ReviewFinding, 'id'>) => {
+    const sources = new Set([...(target.sources ?? []), ...(incoming.sources ?? [])]);
+    const maxConfidence = Math.max(target.confidence ?? 0, incoming.confidence ?? 0);
+    const confidence = sources.size >= 2
+      ? Math.min(MAX_CONFIDENCE, maxConfidence + CORROBORATION_BUMP)
+      : maxConfidence;
+    const targetProvenance = target.provenance;
+    const incomingProvenance = incoming.provenance;
+    const provenance =
+      targetProvenance && incomingProvenance
+        ? (PROVENANCE_RANK[targetProvenance] >= PROVENANCE_RANK[incomingProvenance] ? targetProvenance : incomingProvenance)
+        : targetProvenance ?? incomingProvenance;
+    // Severity taken from the stronger of the two (existing SEVERITY_RANK rule).
+    const stronger = stronger(target, incoming) ? target : incoming;
+    return {
+      ...stronger,
+      sources: [...sources],
+      confidence,
+      ...(provenance ? { provenance } : {}),
+    };
+  };
   for (const f of findings) {
-    const key = `${f.file}::${f.line ?? ''}::${f.title.trim().toLowerCase()}`;
-    const existing = byKey.get(key);
-    if (!existing) { byKey.set(key, f); order.push(key); continue; }
-    byKey.set(key, stronger(f, existing) ? f : existing);
+    const key = `${f.file}::${f.line ?? ''}`;
+    const bucket = byKey.get(key);
+    if (!bucket) { byKey.set(key, [f]); order.push(key); continue; }
+    const match = bucket.find((existing) => sameMeaning(existing, f));
+    if (match) {
+      const idx = bucket.indexOf(match);
+      bucket[idx] = mergeInto(match, f);
+    } else {
+      bucket.push(f);
+    }
   }
-  return order.map((k) => byKey.get(k)!);
+  return order.flatMap((k) => byKey.get(k)!);
 }
 
 /**

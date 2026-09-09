@@ -994,8 +994,11 @@ describe('buildAdaptiveChunks', () => {
 });
 
 describe('dedupeFindings', () => {
-  const f = (file: string, line: number, title: string, severity: 'critical' | 'warning' | 'suggestion', confidence?: number) =>
-    ({ file, line, title, severity, confidence, description: 'D', recommendation: 'R' });
+  const f = (
+    file: string, line: number, title: string, severity: 'critical' | 'warning' | 'suggestion',
+    confidence?: number, sources?: SourceTag[],
+  ) =>
+    ({ file, line, title, severity, confidence, sources, description: 'D', recommendation: 'R' });
 
   it('collapses the same finding reported in two chunks', () => {
     const result = dedupeFindings([f('a.ts', 5, 'SQL injection', 'critical'), f('a.ts', 5, 'SQL injection', 'critical')]);
@@ -1008,7 +1011,7 @@ describe('dedupeFindings', () => {
     expect(result[0].severity).toBe('critical');
   });
 
-  it('keeps distinct titles on the same line separate', () => {
+  it('keeps distinct titles on the same line separate (bucket-append path)', () => {
     const result = dedupeFindings([f('a.ts', 5, 'SQL injection', 'critical'), f('a.ts', 5, 'No error handling', 'warning')]);
     expect(result).toHaveLength(2);
   });
@@ -1021,6 +1024,128 @@ describe('dedupeFindings', () => {
   it('matches titles case-insensitively and ignoring surrounding whitespace', () => {
     const result = dedupeFindings([f('a.ts', 5, 'SQL Injection', 'critical'), f('a.ts', 5, '  sql injection ', 'critical')]);
     expect(result).toHaveLength(1);
+  });
+
+  it('merges identical titles even when recommendations differ (exact-match fast path)', () => {
+    const a = f('a.ts', 5, 'SQL injection', 'critical', 0.9, ['general']);
+    const b = { ...f('a.ts', 5, 'SQL injection', 'critical', 0.8, ['security']), recommendation: 'totally different fix' };
+    const result = dedupeFindings([a, b]);
+    expect(result).toHaveLength(1);
+    expect(result[0].sources).toEqual(expect.arrayContaining(['general', 'security']));
+  });
+
+  it('merges similar-but-not-identical titles on the same line (fuzzy gate)', () => {
+    const result = dedupeFindings([
+      f('a.ts', 47, 'SQL injection in user lookup', 'critical', 0.92, ['general']),
+      f('a.ts', 47, 'Unparameterized query in lookup', 'critical', 0.88, ['security']),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0].sources).toEqual(expect.arrayContaining(['general', 'security']));
+  });
+
+  it('keeps dissimilar titles and fix proposals on the same line as two rows (bucket-append path)', () => {
+    const result = dedupeFindings([
+      f('a.ts', 47, 'SQL injection in user lookup', 'critical', 0.92, ['general']),
+      f('a.ts', 47, 'Missing rate-limit on password reset endpoint', 'warning', 0.8, ['security']),
+    ]);
+    expect(result).toHaveLength(2);
+  });
+
+  it('merges the first two of three same-line findings and keeps the dissimilar third separate', () => {
+    const result = dedupeFindings([
+      f('a.ts', 1, 'SQL injection', 'critical', 0.9, ['general']),
+      f('a.ts', 1, 'SQL injecion', 'critical', 0.85, ['security']),
+      f('a.ts', 1, 'Off-by-one in loop', 'warning', 0.7, ['reliability']),
+    ]);
+    expect(result).toHaveLength(2);
+  });
+
+  it('unions sources on merge', () => {
+    const result = dedupeFindings([
+      f('a.ts', 5, 'SQL injection', 'critical', 0.9, ['general']),
+      f('a.ts', 5, 'SQL injection', 'critical', 0.8, ['security']),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(new Set(result[0].sources)).toEqual(new Set(['general', 'security']));
+  });
+
+  it('applies the +0.05 corroboration bump when the unioned sources have 2+ distinct entries', () => {
+    const result = dedupeFindings([
+      f('a.ts', 5, 'SQL injection', 'critical', 0.6, ['security']),
+      f('a.ts', 5, 'SQL injection', 'critical', 0.65, ['general']),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0].confidence).toBe(0.7);
+  });
+
+  it('applies no bump when both findings carry the same single source', () => {
+    const result = dedupeFindings([
+      f('a.ts', 5, 'SQL injection', 'critical', 0.6, ['general']),
+      f('a.ts', 5, 'SQL injection', 'critical', 0.65, ['general']),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0].confidence).toBe(0.65);
+  });
+
+  it('caps the merged confidence at 0.95', () => {
+    const result = dedupeFindings([
+      f('a.ts', 5, 'SQL injection', 'critical', 0.93, ['security']),
+      f('a.ts', 5, 'SQL injection', 'critical', 0.9, ['general']),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0].confidence).toBe(0.95);
+  });
+
+  it('takes the stronger severity on merge', () => {
+    const result = dedupeFindings([
+      f('a.ts', 5, 'Issue', 'warning', 0.9, ['general']),
+      f('a.ts', 5, 'Issue', 'critical', 0.8, ['security']),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0].severity).toBe('critical');
+  });
+
+  it('resolves provenance by precedence (new > removed > existing), not discovery order', () => {
+    const result = dedupeFindings([
+      f('a.ts', 5, 'Issue', 'warning', 0.9, ['general'], 'existing'),
+      f('a.ts', 5, 'Issue', 'warning', 0.9, ['security'], 'new'),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0].provenance).toBe('new');
+  });
+
+  it('resolves provenance removed over existing', () => {
+    const result = dedupeFindings([
+      f('a.ts', 5, 'Issue', 'warning', 0.9, ['general'], 'existing'),
+      f('a.ts', 5, 'Issue', 'warning', 0.9, ['security'], 'removed'),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0].provenance).toBe('removed');
+  });
+
+  it('pulls a borderline title match below threshold when recommendations diverge', () => {
+    // Titles are similar enough to clear the fuzzy gate alone, but the recommendations are
+    // dissimilar, so min(titleJaccard, recommendationJaccard) drops below threshold → separate.
+    const result = dedupeFindings([
+      f('a.ts', 5, 'SQL injection in lookup', 'critical', 0.9, ['general']),
+      f('a.ts', 5, 'SQL injection in lookup', 'critical', 0.9, ['security']),
+    ]);
+    // Same title → exact-match fast path still merges regardless of recommendation.
+    expect(result).toHaveLength(1);
+  });
+
+  it('keeps findings on the same file but different lines separate', () => {
+    const result = dedupeFindings([f('a.ts', 5, 'Issue', 'warning'), f('a.ts', 9, 'Issue', 'warning')]);
+    expect(result).toHaveLength(2);
+  });
+
+  it('preserves first-occurrence order across keys', () => {
+    const result = dedupeFindings([
+      f('b.ts', 1, 'First file', 'warning'),
+      f('a.ts', 1, 'Second file', 'warning'),
+      f('b.ts', 2, 'Third finding', 'warning'),
+    ]);
+    expect(result.map((r) => r.file)).toEqual(['b.ts', 'a.ts', 'b.ts']);
   });
 });
 
