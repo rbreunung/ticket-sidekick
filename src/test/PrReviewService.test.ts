@@ -996,9 +996,9 @@ describe('buildAdaptiveChunks', () => {
 describe('dedupeFindings', () => {
   const f = (
     file: string, line: number, title: string, severity: 'critical' | 'warning' | 'suggestion',
-    confidence?: number, sources?: SourceTag[],
+    confidence?: number, sources?: SourceTag[], provenance?: 'new' | 'existing' | 'removed',
   ) =>
-    ({ file, line, title, severity, confidence, sources, description: 'D', recommendation: 'R' });
+    ({ file, line, title, severity, confidence, sources, provenance, description: 'D', recommendation: 'R' });
 
   it('collapses the same finding reported in two chunks', () => {
     const result = dedupeFindings([f('a.ts', 5, 'SQL injection', 'critical'), f('a.ts', 5, 'SQL injection', 'critical')]);
@@ -1121,6 +1121,15 @@ describe('dedupeFindings', () => {
     ]);
     expect(result).toHaveLength(1);
     expect(result[0].provenance).toBe('removed');
+  });
+
+  it('carries provenance from a single finding when only one has it', () => {
+    const result = dedupeFindings([
+      f('a.ts', 5, 'Issue', 'warning', 0.9, ['general'], 'existing'),
+      f('a.ts', 5, 'Issue', 'warning', 0.9, ['security']),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0].provenance).toBe('existing');
   });
 
   it('pulls a borderline title match below threshold when recommendations diverge', () => {

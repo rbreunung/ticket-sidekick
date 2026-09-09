@@ -799,13 +799,6 @@ const SEVERITY_RANK: Record<ReviewFinding['severity'], number> = { critical: 3, 
  */
 const PROVENANCE_RANK: Record<NonNullable<ReviewFinding['provenance']>, number> = { new: 3, removed: 2, existing: 1 };
 
-/**
- * KTD3: the one merge knob. A low threshold merges aggressively (catches differently-worded same
- * issues but risks over-merging distinct issues); a high threshold separates aggressively (catches
- * distinct issues but lets differently-worded same issues survive as two rows). Chosen as a
- * reasonable default; same-line distinct issues are rare, so the residual over/under-merge risk is
- * acceptable (see the plan's Assumptions).
- */
 /** Corroboration bump applied when a merge unites 2+ distinct passes — independent corroboration
  * across passes is itself evidence, so a merged finding is more trustworthy than either alone. */
 const CORROBORATION_BUMP = 0.05;
@@ -891,6 +884,8 @@ export function dedupeFindings(
 ): Array<Omit<ReviewFinding, 'id'>> {
   const byKey = new Map<string, Array<Omit<ReviewFinding, 'id'>>>();
   const order: string[] = [];
+  // Severity taken from the stronger of the two (existing SEVERITY_RANK rule). Declared before
+  // mergeInto so it's initialized before mergeInto (which calls it) runs.
   const stronger = (a: Omit<ReviewFinding, 'id'>, b: Omit<ReviewFinding, 'id'>) => {
     if (SEVERITY_RANK[a.severity] !== SEVERITY_RANK[b.severity]) return SEVERITY_RANK[a.severity] > SEVERITY_RANK[b.severity];
     return (a.confidence ?? 1) >= (b.confidence ?? 1);
@@ -899,7 +894,7 @@ export function dedupeFindings(
     const sources = new Set([...(target.sources ?? []), ...(incoming.sources ?? [])]);
     const maxConfidence = Math.max(target.confidence ?? 0, incoming.confidence ?? 0);
     const confidence = sources.size >= 2
-      ? Math.min(MAX_CONFIDENCE, maxConfidence + CORROBORATION_BUMP)
+      ? Math.min(MAX_CONFIDENCE, Math.round((maxConfidence + CORROBORATION_BUMP) * 100) / 100)
       : maxConfidence;
     const targetProvenance = target.provenance;
     const incomingProvenance = incoming.provenance;
@@ -907,10 +902,9 @@ export function dedupeFindings(
       targetProvenance && incomingProvenance
         ? (PROVENANCE_RANK[targetProvenance] >= PROVENANCE_RANK[incomingProvenance] ? targetProvenance : incomingProvenance)
         : targetProvenance ?? incomingProvenance;
-    // Severity taken from the stronger of the two (existing SEVERITY_RANK rule).
-    const stronger = stronger(target, incoming) ? target : incoming;
+    const merged = stronger(target, incoming) ? target : incoming;
     return {
-      ...stronger,
+      ...merged,
       sources: [...sources],
       confidence,
       ...(provenance ? { provenance } : {}),
