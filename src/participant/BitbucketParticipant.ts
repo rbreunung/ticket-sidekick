@@ -1495,9 +1495,10 @@ export function createBitbucketParticipant(
         raw: rawFindingsTotal,
         dedupedCrossBatch,
         droppedByAnchor: anchorDroppedTotal,
-        foldedByConfidence: lowCount,
-        ...(criticEnabled ? { droppedByCritic: criticDroppedTotal } : {}),
+        // KTD5/KTD6: no confidence fold — every finding lands in a severity table, so `final` is the
+        // total finding count shown and there is no `foldedByConfidence` stage.
         final: primaryCount,
+        ...(criticEnabled ? { droppedByCritic: criticDroppedTotal } : {}),
       };
       const funnelSummary = formatFindingsFunnel(funnelCounts);
       logReview('info', funnelSummary);

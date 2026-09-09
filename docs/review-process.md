@@ -46,7 +46,7 @@ flowchart TD
     USB -- yes --> PP2[phase 2: persona passes<br/>selected personas × every chunk<br/>runPersonaPassesForChunk]
     PP2 --> R[dedupeFindings<br/>file + line + title]
     R --> S[number findings 1..N]
-    S --> T[formatReview<br/>by-file, provenance tags, low-confidence fold]
+    S --> T[formatReview<br/>three severity tables, muted low-confidence]
     T --> U[store ReviewSession in workspaceState]
 ```
 
@@ -113,7 +113,7 @@ recall — a review never looks empty because filters stacked up.
 | --- | --- | --- |
 | Cross-batch dedup (`dedupeFindings`) | always | **drop** the weaker of two findings keyed by file + verified line + normalized title (the stronger by severity, then confidence, survives) |
 | Anchor locate (`resolveFindingAnchors`) | always | **drop** if `anchorCode` is unlocatable in the diff (unverifiable) |
-| Confidence (`formatReview`, `confidenceThreshold`) | always | **fold** into a collapsed section if `confidence < threshold` — never deleted |
+| Confidence (`formatReview`, `confidenceThreshold`) | always | **mute** (render the confidence cell non-bold) if `confidence < threshold` — never deleted, always shown in its severity table |
 | Critic (`buildCriticPrompt` + `parseCriticKeep`) | deep mode only | **drop** findings the verification pass can't confirm; fail-open if its reply is unparseable |
 
 Persona-pass findings (smart/deep) are not a separate filtering stage — they
@@ -180,9 +180,11 @@ the retry/split algorithm.
 
 At the end of every review, one findings-funnel summary line reports counts
 at each stage from the table above — raw findings from LLM responses,
-deduped as cross-batch duplicate, dropped by anchor verification, folded by
-confidence threshold, and (deep mode) dropped by critic — down to the final
-count shown. Persona-pass findings (smart/deep) fold into that same `raw`
+deduped as cross-batch duplicate, dropped by anchor verification, and
+(deep mode) dropped by critic — down to the final count shown. There is no
+"folded by confidence" stage: every finding lands in a severity table, so
+`final` is the total finding count shown (KTD5/KTD6). Persona-pass findings
+(smart/deep) fold into that same `raw`
 count alongside the standard pass's — there is no separate persona stage or
 line in the funnel (KTD6); a persona-heavy run is distinguishable only via
 the per-call `pass:` tags above, not via the funnel shape. If a review is
@@ -435,7 +437,7 @@ after any other review.
 | Setting | Default | Effect |
 | --- | --- | --- |
 | `ticketSidekick.bitbucket.reviewContextLines` | 12 | context lines around each hunk |
-| `ticketSidekick.bitbucket.confidenceThreshold` | 0.7 | below → low-confidence fold |
+| `ticketSidekick.bitbucket.confidenceThreshold` | 0.7 | below → muted (non-bold) confidence cell, not folded |
 | `ticketSidekick.bitbucket.reviewMode` | standard | default depth (`standard` \| `quick` \| `smart` \| `deep`) — `smart`/`deep` are also selectable per-review via the `review smart`/`review deep` prompt keyword, same as `quick` already was |
 | `ticketSidekick.bitbucket.contextBudgetRatio` | 0.7 | fraction of context window per chunk |
 | `ticketSidekick.bitbucket.modelContextTokens` | (model API) | token budget override |

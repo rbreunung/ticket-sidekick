@@ -1736,26 +1736,26 @@ describe('formatFindingsFunnel', () => {
       raw: 20,
       dedupedCrossBatch: 3,
       droppedByAnchor: 4,
-      foldedByConfidence: 5,
       droppedByCritic: 2,
-      final: 6,
+      final: 11,
     };
+    // KTD6: no foldedByConfidence stage — raw = dedupedCrossBatch + droppedByAnchor + (droppedByCritic ?? 0) + final.
     expect(
-      counts.dedupedCrossBatch + counts.droppedByAnchor + counts.foldedByConfidence + counts.droppedByCritic + counts.final,
+      counts.dedupedCrossBatch + counts.droppedByAnchor + counts.droppedByCritic + counts.final,
     ).toBe(counts.raw);
 
     const summary = formatFindingsFunnel(counts);
     expect(summary).toContain('raw 20');
     expect(summary).toContain('deduped as cross-batch duplicate: 3');
     expect(summary).toContain('dropped by anchor verification: 4');
-    expect(summary).toContain('folded by confidence threshold: 5');
+    expect(summary).not.toContain('folded by confidence');
     expect(summary).toContain('dropped by critic: 2');
-    expect(summary).toContain('final: 6');
+    expect(summary).toContain('final: 11');
   });
 
   it('omits the critic line outside deep mode', () => {
     const summary = formatFindingsFunnel({
-      raw: 10, dedupedCrossBatch: 1, droppedByAnchor: 2, foldedByConfidence: 3, final: 4,
+      raw: 10, dedupedCrossBatch: 1, droppedByAnchor: 2, final: 4,
     });
     expect(summary).not.toContain('critic');
   });
@@ -1771,9 +1771,8 @@ describe('formatFindingsFunnel', () => {
       raw: standardPassRaw + personaPassesRaw,
       dedupedCrossBatch: 2,
       droppedByAnchor: 1,
-      foldedByConfidence: 3,
       droppedByCritic: 2,
-      final: 4,
+      final: 7,
     };
     expect(counts.raw).toBe(12);
 
@@ -1782,7 +1781,7 @@ describe('formatFindingsFunnel', () => {
     // funnel shape, only inflating the same `raw` count a standard-only run would produce.
     expect(summary).toContain('raw 12');
     expect(summary).not.toMatch(/security|performance|reliability|maintainability|persona/i);
-    expect(summary.split('\n')).toHaveLength(6); // header + 4 stage lines + final — unchanged shape
+    expect(summary.split('\n')).toHaveLength(5); // header + 3 stage lines + critic + final — KTD6 dropped the fold stage
   });
 });
 

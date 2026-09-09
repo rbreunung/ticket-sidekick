@@ -1246,18 +1246,15 @@ export function formatCallLine(info: CallLineInfo): string {
 /**
  * Findings funnel counts (R6). Stage counts, not remainders — `dedupedCrossBatch` is
  * how many were removed as a cross-batch duplicate, `droppedByAnchor` how many an
- * unlocatable `anchorCode` dropped, `foldedByConfidence` how many folded into the
- * collapsed low-confidence section (still shown, just not primary), `droppedByCritic`
- * (deep mode only) how many the critic pass rejected, and `final` the primary
- * (high-confidence, critic-confirmed) count actually listed in the review body.
- * They reconcile as: raw = dedupedCrossBatch + droppedByAnchor + foldedByConfidence
- * + (droppedByCritic ?? 0) + final.
+ * unlocatable `anchorCode` dropped, `droppedByCritic` (deep mode only) how many the
+ * critic pass rejected, and `final` the total finding count actually listed in the
+ * review body (every finding lands in a severity table — none is folded away, KTD5).
+ * They reconcile as: raw = dedupedCrossBatch + droppedByAnchor + (droppedByCritic ?? 0) + final.
  */
 export interface FindingsFunnelCounts {
   raw: number;
   dedupedCrossBatch: number;
   droppedByAnchor: number;
-  foldedByConfidence: number;
   droppedByCritic?: number;
   final: number;
 }
@@ -1268,7 +1265,6 @@ export function formatFindingsFunnel(counts: FindingsFunnelCounts): string {
     `Findings funnel — raw ${counts.raw}`,
     `-> deduped as cross-batch duplicate: ${counts.dedupedCrossBatch}`,
     `-> dropped by anchor verification: ${counts.droppedByAnchor}`,
-    `-> folded by confidence threshold: ${counts.foldedByConfidence}`,
   ];
   if (counts.droppedByCritic !== undefined) {
     lines.push(`-> dropped by critic: ${counts.droppedByCritic}`);

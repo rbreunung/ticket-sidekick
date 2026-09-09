@@ -84,7 +84,6 @@ describe('sanitizeDetails', () => {
       reviewContextLines: 12,
       dedupedCrossBatch: 3,
       droppedByAnchor: 4,
-      foldedByConfidence: 5,
       droppedByCritic: 2,
       bearerToken: 'should-be-redacted',
     });
@@ -101,7 +100,6 @@ describe('sanitizeDetails', () => {
     expect(result.reviewContextLines).toBe(12);
     expect(result.dedupedCrossBatch).toBe(3);
     expect(result.droppedByAnchor).toBe(4);
-    expect(result.foldedByConfidence).toBe(5);
     expect(result.droppedByCritic).toBe(2);
     expect(result.bearerToken).toBe('[REDACTED]');
   });
