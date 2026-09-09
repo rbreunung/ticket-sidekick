@@ -39,8 +39,16 @@ export interface ReviewFinding {
   description: string;
   recommendation: string;
   codeExample?: string;
-  /** Model self-rated confidence 0–1; low-confidence findings fold, never delete. */
+  /** Model self-rated confidence 0–1; low-confidence findings are muted, never deleted. */
   confidence?: number;
+  /**
+   * Pass(es) that produced this finding — real persona ids and/or the literal `'general'` tag for
+   * the standard pass. Populated at the merge site in `BitbucketParticipant.ts` (KTD4), unioned on
+   * dedup (KTD3). Present on every finding created after this field was added; absent only on
+   * pre-existing session state saved before it existed, which `formatSourceConfidence` renders as
+   * `general` (see its doc comment).
+   */
+  sources?: SourceTag[];
   /** Numbered diff hunk around the anchor, stored so follow-up answers see the real code. */
   diffHunk?: string;
   /** Transient model-output fields, consumed by resolveFindingAnchors and then dropped. */
@@ -100,6 +108,14 @@ export interface SmartFallbackSession {
  * (`src/services/PrReviewService.ts`) if the persona catalog ever changes.
  */
 export const ALL_PERSONA_IDS: PersonaId[] = ['security', 'performance', 'reliability', 'maintainability'];
+
+/**
+ * A finding's provenance tag: a real persona id, or the literal `'general'` for the standard
+ * (phase 1) pass. `'general'` is a real stored `SourceTag` (KTD4), not just a display fallback —
+ * it participates in the dedup sources union — so corroboration-bump logic in `dedupeFindings`
+ * can count it as a distinct pass.
+ */
+export type SourceTag = PersonaId | 'general';
 
 export type SmartFallbackChoice =
   | { kind: 'all'; personas: PersonaId[] }
@@ -205,6 +221,35 @@ export function composeReviewOutput(result: { markdown: string; findingHeadings:
     output = output.replace(heading, buildChatCommandLink(heading, '@bitbucket', `#${id}`));
   }
   return output;
+}
+
+/**
+ * Renders the "Source · Confidence" cell of a severity table (KTD3/U1). Pure — no `vscode` import.
+ *
+ * The Source component is the comma-joined `sources` of the finding, real persona ids in
+ * `ALL_PERSONA_IDS` order first and `'general'` last when present (KTD7), or the literal `general`
+ * when the `sources` field is absent entirely (pre-existing session state saved before the field
+ * existed — KTD4). The Confidence component is the finding's own `confidence` (already the
+ * max-plus-corroboration-bump after `dedupeFindings`' merge), rendered as a decimal. Its emphasis
+ * encodes confidence against `threshold`: at or above it the value is bold (`**0.92**`); below it
+ * the value is plain/muted (`0.65`) — this is the "muted" signal that replaces the old confidence
+ * fold (R5). An absent confidence renders plain with no emphasis and sorts last within its tier.
+ * The two components are joined by a single middle-dot ` · ` with a space on each side (R10).
+ */
+export function formatSourceConfidence(finding: Pick<ReviewFinding, 'sources' | 'confidence'>, threshold = 0.7): string {
+  const sources = finding.sources;
+  const sourceComponent =
+    sources && sources.length > 0
+      ? [...ALL_PERSONA_IDS, 'general'].filter((tag) => sources.includes(tag)).join(', ')
+      : 'general';
+
+  const confidence = finding.confidence;
+  const confidenceComponent =
+    typeof confidence === 'number'
+      ? (threshold !== undefined && confidence < threshold ? String(confidence) : `**${confidence}**`)
+      : String(confidence ?? '');
+
+  return `${sourceComponent} · ${confidenceComponent}`;
 }
 
 // ---------------------------------------------------------------------------------------------

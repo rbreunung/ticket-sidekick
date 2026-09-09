@@ -12,9 +12,9 @@ import {
   buildTruncationEvent, formatRecoveryDecision, formatStructuredRunRecord,
   formatContinuationMessage, createAttemptTracker,
   resolveReviewMode, deriveCriticEnabled,
-  aggregateRecommendedPersonas, ALL_PERSONA_IDS,
+  aggregateRecommendedPersonas, ALL_PERSONA_IDS, formatSourceConfidence,
 } from '../participant/reviewSessionState';
-import type { ReviewFinding } from '../participant/reviewSessionState';
+import type { ReviewFinding, SourceTag } from '../participant/reviewSessionState';
 import { PrReviewService, PERSONAS } from '../services/PrReviewService';
 import { MockBitbucketClient } from './mocks/MockBitbucketClient';
 import type { BitbucketPR } from '../bitbucket/IBitbucketClient';
@@ -417,7 +417,7 @@ describe('PrReviewService.buildPersonaPrompt', () => {
 
     const ndjsonContract = generalist.slice(
       generalist.indexOf('Output findings ordered by severity'),
-      generalist.indexOf('additionalFilesNeeded":["path/to/other.ts"]}') + 'additionalFilesNeeded":["path/to/other.ts"]}'.length,
+      generalist.indexOf('additionalFilesNeeded:["path/to/other.ts"]}') + 'additionalFilesNeeded:["path/to/other.ts"]}'.length,
     );
     expect(personaPrompt).toContain(ndjsonContract);
   });
@@ -2343,5 +2343,44 @@ describe('PrReviewService onDiag', () => {
     const service = new PrReviewService(client);
     const result = await service.gatherFileContents('PROJ', 'repo', 'abc123', ['src/foo.ts']);
     expect(result.get('src/foo.ts')).toBeDefined();
+  });
+});
+
+describe('formatSourceConfidence', () => {
+  const f = (sources: SourceTag[] | undefined, confidence?: number) =>
+    ({ sources, confidence });
+
+  it('renders persona ids in ALL_PERSONA_IDS order regardless of input order', () => {
+    expect(formatSourceConfidence(f(['reliability', 'security'], 0.92))).toBe('security, reliability · **0.92**');
+  });
+
+  it('renders general for a standard-mode finding', () => {
+    expect(formatSourceConfidence(f(['general'], 0.88))).toBe('general · **0.88**');
+  });
+
+  it('renders general via the absent-field legacy fallback (pre-existing session state)', () => {
+    expect(formatSourceConfidence(f(undefined, 0.88))).toBe('general · **0.88**');
+  });
+
+  it('renders general last regardless of array order (merged persona + standard pass)', () => {
+    expect(formatSourceConfidence(f(['security', 'general'], 0.92))).toBe('security, general · **0.92**');
+  });
+
+  it('mutes (non-bold) a confidence below the threshold', () => {
+    expect(formatSourceConfidence(f(['security'], 0.65))).toBe('security · 0.65');
+  });
+
+  it('bolds a confidence at or above the threshold', () => {
+    expect(formatSourceConfidence(f(['security'], 0.7))).toBe('security · **0.7**');
+    expect(formatSourceConfidence(f(['security'], 0.95))).toBe('security · **0.95**');
+  });
+
+  it('renders an absent confidence plain with no emphasis', () => {
+    expect(formatSourceConfidence(f(['security'], undefined))).toBe('security · ');
+  });
+
+  it('accepts a custom threshold', () => {
+    expect(formatSourceConfidence(f(['security'], 0.65), 0.6)).toBe('security · **0.65**');
+    expect(formatSourceConfidence(f(['security'], 0.65), 0.8)).toBe('security · 0.65');
   });
 });
