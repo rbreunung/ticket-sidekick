@@ -1604,6 +1604,24 @@ export interface JiraSessionContinuity {
   lastTicketKey?: string;
 }
 
+/**
+ * Code-review fix: `{ metadata: { jiraSession: { kinds, lastTicketKey } } }` was hand-copied at
+ * ~22 call sites across `JiraParticipant.ts`, `contentHandler.ts`, `emailHandler.ts`, and
+ * `fieldHandler.ts` — the docs/solutions best-practice this repo wrote after two real
+ * regressions (a ticket-referencing branch that forgot to carry `lastTicketKey`) is a direct
+ * result of that duplication. One constructor, one place to get the shape right.
+ *
+ * `kinds` defaults to `[]` (the "no session, but a ticket key is carried" sentinel — see
+ * `JiraSessionContinuity`'s own doc comment); pass it explicitly for a branch that also starts
+ * or continues a session.
+ */
+export function withLastTicket(
+  ticketKey: string,
+  kinds: JiraSessionKind[] = [],
+): { metadata: { jiraSession: JiraSessionContinuity } } {
+  return { metadata: { jiraSession: { kinds, lastTicketKey: ticketKey } } };
+}
+
 /** Result text for `jira_discoverWorkflow` — mirrors `handleDiscoverWorkflow`'s chat summary
  * (`src/participant/jira/workflowHandler.ts`) in plain returned text rather than a streamed
  * response, since a tool result is a single returned string, not a live chat stream. */

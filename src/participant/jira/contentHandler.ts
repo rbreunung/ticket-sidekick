@@ -3,7 +3,7 @@ import { logDiag } from '../../utils/diagLog';
 import type { TicketService } from '../../services/TicketService';
 import { markdownToJiraWiki } from '../../utils/markdownToJiraWiki';
 import type { ContentSession } from '../sessionState';
-import { isCancellation, isConfirmation, buildChatCommandLink } from '../sessionState';
+import { isCancellation, isConfirmation, buildChatCommandLink, neutralizeMarkdownLinks, withLastTicket } from '../sessionState';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import { generateContent, isLmRefusal, buildHistoryContext } from './llmHelpers';
 
@@ -79,18 +79,21 @@ export async function buildContentContext(
 export async function streamContentPreview(session: ContentSession, stream: vscode.ChatResponseStream, workspaceState: vscode.Memento): Promise<vscode.ChatResult> {
   await workspaceState.update('jira.session.previewing', session);
   if (session.operation === 'createTicket') {
-    const templateLine = session.templateName ? `  |  **Template:** ${session.templateName}` : '';
+    const templateLine = session.templateName ? `  |  **Template:** ${neutralizeMarkdownLinks(session.templateName)}` : '';
     const descSection = session.currentContent
-      ? `\n\n**Description:**\n${session.currentContent}`
+      ? `\n\n**Description:**\n${neutralizeMarkdownLinks(session.currentContent)}`
       : '';
+    // Code-review fix: this response is wrapped in trustedChatMarkdown() below, so any markdown
+    // link syntax in the LLM-generated summary/description would render as a live command link
+    // once trusted. neutralizeMarkdownLinks() closes that off (see its own doc comment).
     stream.markdown(trustedChatMarkdown(
-      `**Summary:** ${session.summary}\n**Type:** ${session.issueType}  |  **Project:** ${session.projectKey}${templateLine}${descSection}\n\nReply ${buildChatCommandLink('create it', '@jira', 'create it')} to create the ticket, or tell me how to adjust the description.`,
+      `**Summary:** ${neutralizeMarkdownLinks(session.summary)}\n**Type:** ${session.issueType}  |  **Project:** ${session.projectKey}${templateLine}${descSection}\n\nReply ${buildChatCommandLink('create it', '@jira', 'create it')} to create the ticket, or tell me how to adjust the description.`,
     ));
     return { metadata: { jiraSession: { kinds: ['previewing'] } } };
   }
   const actionLabel = session.operation === 'addComment' ? 'post this comment' : 'update the description';
   stream.markdown(trustedChatMarkdown(
-    `${session.currentContent}\n\nReply ${buildChatCommandLink('post it', '@jira', 'post it')} to ${actionLabel}, or tell me how to adjust it.`,
+    `${neutralizeMarkdownLinks(session.currentContent)}\n\nReply ${buildChatCommandLink('post it', '@jira', 'post it')} to ${actionLabel}, or tell me how to adjust it.`,
   ));
   return { metadata: { jiraSession: { kinds: ['previewing'] } } };
 }
@@ -130,7 +133,7 @@ export async function handleContentSession(
       await vscode.commands.executeCommand('setContext', 'ticketSidekick.firstTicketCreated', true);
       stream.markdown(created.message);
       // R13: carry the created ticket key on metadata instead of a visible marker.
-      return { metadata: { jiraSession: { kinds: [], lastTicketKey: created.key } } };
+      return withLastTicket(created.key);
     }
     let result: string;
     const jiraText = markdownToJiraWiki(session.currentContent);
@@ -141,7 +144,7 @@ export async function handleContentSession(
     }
     stream.markdown(result);
     // R13: carry the referenced ticket key on metadata instead of a visible marker.
-    return { metadata: { jiraSession: { kinds: [], lastTicketKey: session.ticketKey } } };
+    return withLastTicket(session.ticketKey);
   }
   // Refinement instruction
   const historyContext = session.operation !== 'createTicket' ? session.historyContext : undefined;

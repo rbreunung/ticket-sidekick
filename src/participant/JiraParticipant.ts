@@ -47,7 +47,7 @@ import type {
   TemplateGenerationOfferCreateSession, TemplateGenerationAwaitSummarySession,
 } from './sessionState';
 import { AWAIT_ISSUE_TYPE_SESSION_KEY } from './jira/ticketContext';
-import { parseAwaitFreeTextReply, type AwaitIssueTypeSession, buildChatCommandLink } from './sessionState';
+import { parseAwaitFreeTextReply, type AwaitIssueTypeSession, buildChatCommandLink, neutralizeMarkdownLinks, withLastTicket } from './sessionState';
 import { trustedChatMarkdown } from '../utils/chatMarkdown';
 import { handleVeracodeAwaitIssueType } from './jira/veracodeHandler';
 import { handleWaltzAwaitIssueType } from './jira/waltzHandler';
@@ -529,7 +529,7 @@ export function createJiraParticipant(
               await jiraClient.updateIssue(toUpdate[0], { [previewSession.fieldId]: previewSession.fieldValue });
               stream.markdown(`Updated **${previewSession.fieldName}** on ${formatKeyLink(toUpdate[0], config.baseUrl)}.`);
               // R13: carry the updated ticket key on metadata instead of a visible marker.
-              return { metadata: { jiraSession: { kinds: [], lastTicketKey: toUpdate[0] } } };
+              return withLastTicket(toUpdate[0]);
             } catch (err) {
               const message = err instanceof Error ? err.message : String(err);
               logDiag('jira.participant', 'error', message, {});
@@ -547,7 +547,7 @@ export function createJiraParticipant(
           // R13: carry the last successfully updated key on metadata (parity with the
           // single-key path above) so a bare follow-up after a multi-ticket update resolves.
           if (lastUpdatedKey !== undefined) {
-            return { metadata: { jiraSession: { kinds: [], lastTicketKey: lastUpdatedKey } } };
+            return withLastTicket(lastUpdatedKey);
           }
           return;
         }
@@ -573,7 +573,7 @@ export function createJiraParticipant(
             await ws.update('jira.session.commentList', buildCommentListSession(session.ticketKey, comments));
             stream.markdown(formatCommentsInFull(comments));
             // R13: carry the ticket key on metadata instead of a visible marker.
-            return { metadata: { jiraSession: { kinds: ['comment-list'], lastTicketKey: session.ticketKey } } };
+            return withLastTicket(session.ticketKey, ['comment-list']);
           } else {
             const synthesis = await synthesizeComments(
               serializeCommentsForLLM(comments),
@@ -587,7 +587,7 @@ export function createJiraParticipant(
             stream.markdown(synthesis);
             // R13: carry the ticket key on metadata instead of a visible marker. With a query the
             // comment list isn't started (empty kinds) but the key is still carried for last-ticket.
-            return { metadata: { jiraSession: { kinds: session.commentQuery ? [] : ['comment-list'], lastTicketKey: session.ticketKey } } };
+            return withLastTicket(session.ticketKey, session.commentQuery ? [] : ['comment-list']);
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -632,12 +632,16 @@ export function createJiraParticipant(
               const bytes = await ticketService.downloadAttachment(chosen.content);
               await vscode.workspace.fs.createDirectory(attachmentsDir);
               await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(attachmentsDir, chosen.filename), bytes);
-              lines.push(`✓ \`${chosen.filename}\` downloaded.`);
+              // Code-review fix: these lines are joined into a trustedChatMarkdown()-wrapped
+              // response below (unlike the plain "_Downloading..._" progress line above), so the
+              // attachment filename and any error text must be neutralized the same way
+              // skippedList's buildChatCommandLink label already is.
+              lines.push(`✓ \`${neutralizeMarkdownLinks(chosen.filename)}\` downloaded.`);
             } catch (err) {
               const message = err instanceof Error ? err.message : String(err);
               logDiag('jira.participant', 'warn', `Attachment download failed — ${chosen.filename}`, { fileName: chosen.filename, error: message });
               downloadedSet.delete(i - 1);
-              lines.push(`✗ Failed to download \`${chosen.filename}\`: ${message}`);
+              lines.push(`✗ Failed to download \`${neutralizeMarkdownLinks(chosen.filename)}\`: ${neutralizeMarkdownLinks(message)}`);
             }
           }
           const remaining = loadSkippedSession.skipped.filter((_, i) => !downloadedSet.has(i));
@@ -648,12 +652,12 @@ export function createJiraParticipant(
               `Reply with a number to download another.`,
             ));
             // R13: carry the ticket key on metadata instead of a visible marker.
-            return { metadata: { jiraSession: { kinds: ['load-skipped'], lastTicketKey: loadSkippedSession.ticketKey } } };
+            return withLastTicket(loadSkippedSession.ticketKey, ['load-skipped']);
           } else {
             await ws.update('jira.session.loadSkipped', undefined);
             stream.markdown(`${lines.join('\n')}\n\nAll attachments saved.`);
             // R13: carry the ticket key on metadata instead of a visible marker.
-            return { metadata: { jiraSession: { kinds: [], lastTicketKey: loadSkippedSession.ticketKey } } };
+            return withLastTicket(loadSkippedSession.ticketKey);
           }
         }
       }
@@ -861,7 +865,7 @@ export function createJiraParticipant(
           const entry = commentSession.comments[index - 1];
           stream.markdown(`**Comment ${index}** — ${entry.author} (${entry.date})\n\n${entry.bodyMarkdown}`);
           // R13: carry the ticket key on metadata instead of a visible marker.
-          return { metadata: { jiraSession: { kinds: ['comment-list'], lastTicketKey: commentSession.ticketKey } } };
+          return withLastTicket(commentSession.ticketKey, ['comment-list']);
         }
         // Not a comment index — fall through to intent parse
       }
@@ -1018,9 +1022,9 @@ export function createJiraParticipant(
               await ws.update('jira.session.moreComments', moreSession);
               stream.markdown(olderCommentsNotShownLink(total - MAX_SHOW));
               // R13: carry the ticket key on metadata instead of a visible marker.
-              return { metadata: { jiraSession: { kinds: ['more-comments', 'comment-list'], lastTicketKey: ticketKey! } } };
+              return withLastTicket(ticketKey!, ['more-comments', 'comment-list']);
             } else {
-              return { metadata: { jiraSession: { kinds: ['comment-list'], lastTicketKey: ticketKey! } } };
+              return withLastTicket(ticketKey!, ['comment-list']);
             }
           }
           result = base;
@@ -1040,7 +1044,7 @@ export function createJiraParticipant(
           const synthesis = await generateDescriptionAndCommentsSummary(descriptionText, commentBlocks, request.model, token);
           stream.markdown(fieldsHeader + '\n\n**Overview (summarized):**\n\n' + synthesis);
           // R13: carry the ticket key on metadata instead of a visible marker.
-          return { metadata: { jiraSession: { kinds: [], lastTicketKey: ticketKey! } } };
+          return withLastTicket(ticketKey!);
         }
         case 'showComments': {
           const MAX_SHOW_FULL = 20;
@@ -1057,9 +1061,9 @@ export function createJiraParticipant(
             await ws.update('jira.session.moreComments', moreSession);
             stream.markdown(olderCommentsNotShownLink(fullTotal - MAX_SHOW_FULL));
             // R13: carry the ticket key on metadata instead of a visible marker.
-            return { metadata: { jiraSession: { kinds: ['more-comments', 'comment-list'], lastTicketKey: ticketKey! } } };
+            return withLastTicket(ticketKey!, ['more-comments', 'comment-list']);
           } else {
-            return { metadata: { jiraSession: { kinds: ['comment-list'], lastTicketKey: ticketKey! } } };
+            return withLastTicket(ticketKey!, ['comment-list']);
           }
         }
         case 'getComments': {
@@ -1087,11 +1091,11 @@ export function createJiraParticipant(
             await ws.update('jira.session.moreComments', moreSession);
             stream.markdown(olderCommentsNotShownLink(total - MAX_INITIAL));
             // R13: carry the ticket key on metadata instead of a visible marker.
-            return { metadata: { jiraSession: { kinds: ['more-comments', ...listKinds], lastTicketKey: ticketKey! } } };
+            return withLastTicket(ticketKey!, ['more-comments', ...listKinds]);
           } else {
             // R13: always carry the ticket key now (even when no comment-list session started),
             // so a bare "show comments" reply still resolves as the last-referenced ticket.
-            return { metadata: { jiraSession: { kinds: listKinds, lastTicketKey: ticketKey! } } };
+            return withLastTicket(ticketKey!, listKinds);
           }
         }
         case 'addComment': {
@@ -1333,8 +1337,12 @@ export function createJiraParticipant(
                 fieldMeta: cleanupFieldMeta,
               };
               await ws.update('jira.session.resolutionSelection', resSession);
-              const list = resolutions.map((r, i) => `${i + 1}. ${r.name}`).join('\n');
-              stream.markdown(`Which resolution should be set when transitioning to **${targetStatus}**?\n\n${list}\n\nReply with the name or number, or **none** to skip setting a resolution.`);
+              // Code-review fix: mirror the retry branch above (line ~195) and cleanupHandler.ts's
+              // equivalent — this initial prompt had drifted to plain, non-clickable text.
+              const list = resolutions.map((r, i) => `${i + 1}. ${buildChatCommandLink(r.name, '@jira', String(i + 1))}`).join('\n');
+              stream.markdown(trustedChatMarkdown(
+                `Which resolution should be set when transitioning to **${targetStatus}**?\n\n${list}\n\nReply with the name or number, or ${buildChatCommandLink('none', '@jira', 'none')} to skip setting a resolution.`,
+              ));
               return { metadata: { jiraSession: { kinds: ['resolution-selection'] } } };
             }
           }
@@ -1415,12 +1423,12 @@ export function createJiraParticipant(
           // R6: "after loading a ticket: add a comment, transition it" — the flagship example
           // the plan names for follow-up chips.
           const loadedState: JiraFollowupState = { kind: 'loadedTicket', ticketKey: ticketKey! };
+          // R13: carry the loaded ticket key on metadata instead of a visible marker. Empty
+          // kinds when no load-skipped session started — keeps every detection check false.
           return {
             metadata: {
               jiraFollowup: loadedState,
-              // R13: carry the loaded ticket key on metadata instead of a visible marker. Empty
-              // kinds when no load-skipped session started — keeps every detection check false.
-              jiraSession: { kinds: hasSkippedAttachments ? ['load-skipped'] : [], lastTicketKey: ticketKey! },
+              ...withLastTicket(ticketKey!, hasSkippedAttachments ? ['load-skipped'] : []).metadata,
             },
           };
         }
@@ -1452,7 +1460,7 @@ export function createJiraParticipant(
         // action this operation itself performed (e.g. no "add a comment" chip right after
         // addComment succeeded). R13: carry the ticket key on metadata instead of a visible marker.
         const viewedState: JiraFollowupState = { kind: 'loadedTicket', ticketKey, justDid: intent.operation };
-        return { metadata: { jiraFollowup: viewedState, jiraSession: { kinds: [], lastTicketKey: ticketKey } } };
+        return { metadata: { jiraFollowup: viewedState, ...withLastTicket(ticketKey).metadata } };
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
