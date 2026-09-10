@@ -242,7 +242,12 @@ export class JiraApiClient implements IJiraClient {
   }
 
   async getTransitions(issueKey: string): Promise<JiraTransition[]> {
-    const result = await this.request<{ transitions: JiraTransition[] }>(`/issue/${issueKey}/transitions`);
+    // expand=transitions.fields surfaces each transition's own resolution requirement
+    // (KTD1) — passed through unchanged; an instance that omits `fields` even when
+    // requested just leaves it undefined, which callers already treat as "not required".
+    const result = await this.request<{ transitions: JiraTransition[] }>(
+      `/issue/${issueKey}/transitions?expand=transitions.fields`,
+    );
     return result.transitions;
   }
 

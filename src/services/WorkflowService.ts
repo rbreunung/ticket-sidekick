@@ -68,6 +68,58 @@ export function findPath(graph: WorkflowGraph, from: string, to: string): Cached
   return null;
 }
 
+/**
+ * Enumerates up to `options.maxPaths` distinct routes from `from` to `to`, shortest first — used
+ * by the guided transition flow to offer a ranked choice of multi-hop paths instead of the single
+ * route `findPath` returns (KTD2). A depth-bounded DFS with a *per-path* visited set (not global):
+ * a cycle elsewhere in the graph must not block finding a second, different route to the target,
+ * so each recursive branch tracks only the statuses its own path has already visited. The depth
+ * ceiling is set a little past the shortest path found so far (shortest length + 2) so a
+ * pathological cyclic graph can't make the search run away, while still surfacing one or two
+ * longer alternatives beyond the shortest. Returns `[]` (not `null`, unlike `findPath`) when no
+ * route exists — enumeration naturally reports "none" as an empty list.
+ */
+export function findAllPaths(
+  graph: WorkflowGraph,
+  from: string,
+  to: string,
+  options?: { maxPaths?: number },
+): CachedTransition[][] {
+  const maxPaths = options?.maxPaths ?? 3;
+  if (from === to) return [[]];
+
+  // First pass: find the shortest path length via the existing BFS, so the DFS below knows where
+  // to cap depth. No shortest path at all means no path at all — short-circuit to `[]`.
+  const shortest = findPath(graph, from, to);
+  if (!shortest) return [];
+  const maxDepth = shortest.length + 2;
+
+  // The depth bound (not a result-count cutoff) is what keeps this from running away on a cyclic
+  // graph: every candidate path is enumerated in full up to maxDepth, then sorted shortest-first
+  // and capped — stopping early on result count would risk a DFS-order accident dropping a
+  // genuinely shorter path in favor of a longer one found first.
+  const results: CachedTransition[][] = [];
+
+  function dfs(state: string, path: CachedTransition[], visited: Set<string>): void {
+    if (path.length >= maxDepth) return;
+    for (const t of graph[state] ?? []) {
+      if (t.to === to) {
+        results.push([...path, t]);
+        continue;
+      }
+      if (visited.has(t.to)) continue; // per-path visited set: cycles elsewhere don't block other routes
+      const nextVisited = new Set(visited);
+      nextVisited.add(t.to);
+      dfs(t.to, [...path, t], nextVisited);
+    }
+  }
+
+  dfs(from, [], new Set([from]));
+
+  results.sort((a, b) => a.length - b.length);
+  return results.slice(0, maxPaths);
+}
+
 export async function discoverWorkflow(
   client: IJiraClient,
   projectKey: string,

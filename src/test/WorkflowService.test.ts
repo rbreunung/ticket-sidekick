@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { findPath, loadWorkflowCache, discoverWorkflow, preserveSkippedStatuses, resolveAndApplyTransition, discoverAndCacheWorkflow, saveWorkflowCache } from '../services/WorkflowService';
+import { findPath, findAllPaths, loadWorkflowCache, discoverWorkflow, preserveSkippedStatuses, resolveAndApplyTransition, discoverAndCacheWorkflow, saveWorkflowCache } from '../services/WorkflowService';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService, PartialTransitionError } from '../services/TicketService';
 
@@ -39,6 +39,94 @@ describe('findPath', () => {
 
   it('returns empty array when already at target', () => {
     expect(findPath(graph, 'Done', 'Done')).toEqual([]);
+  });
+});
+
+describe('findAllPaths', () => {
+  it('returns exactly one path in a single-path graph', () => {
+    const paths = findAllPaths(graph, 'In Review', 'Done');
+    expect(paths).toHaveLength(1);
+    expect(paths[0].map((t) => t.to)).toEqual(['Done']);
+  });
+
+  it('returns both equal-length shortest paths in a deterministic order', () => {
+    // Two 2-hop routes of identical length from 'Start' to 'End' (via A or via B) — no direct edge.
+    const twoShortest = {
+      'Start': [
+        { id: '1', name: 'Via A', to: 'A' },
+        { id: '2', name: 'Via B', to: 'B' },
+      ],
+      'A': [{ id: '3', name: 'A to End', to: 'End' }],
+      'B': [{ id: '4', name: 'B to End', to: 'End' }],
+    };
+    const paths = findAllPaths(twoShortest, 'Start', 'End');
+    expect(paths).toHaveLength(2);
+    expect(paths.every((p) => p.length === 2)).toBe(true);
+    // Deterministic: DFS visits 'Start' transitions in declared order (Via A before Via B).
+    expect(paths[0][0].name).toBe('Via A');
+    expect(paths[1][0].name).toBe('Via B');
+  });
+
+  it('includes a longer valid path only when the cap has not been reached', () => {
+    // Shortest path length 1 (Start -> End directly); a longer 2-hop alternative exists too.
+    // maxDepth = shortest(1) + 2 = 3, so the 2-hop route is within range and included alongside
+    // the direct one, without a third route pushing anything out.
+    const mixed = {
+      'Start': [
+        { id: '1', name: 'Direct', to: 'End' },
+        { id: '2', name: 'Via Mid', to: 'Mid' },
+      ],
+      'Mid': [{ id: '3', name: 'Mid to End', to: 'End' }],
+    };
+    const paths = findAllPaths(mixed, 'Start', 'End');
+    expect(paths).toHaveLength(2);
+    expect(paths[0].map((t) => t.to)).toEqual(['End']);
+    expect(paths[1].map((t) => t.to)).toEqual(['Mid', 'End']);
+  });
+
+  it('caps at 3 distinct routes when more exist', () => {
+    const manyRoutes = {
+      'Start': [
+        { id: '1', name: 'Via A', to: 'A' },
+        { id: '2', name: 'Via B', to: 'B' },
+        { id: '3', name: 'Via C', to: 'C' },
+        { id: '4', name: 'Via D', to: 'D' },
+      ],
+      'A': [{ id: '5', name: 'A to End', to: 'End' }],
+      'B': [{ id: '6', name: 'B to End', to: 'End' }],
+      'C': [{ id: '7', name: 'C to End', to: 'End' }],
+      'D': [{ id: '8', name: 'D to End', to: 'End' }],
+    };
+    const paths = findAllPaths(manyRoutes, 'Start', 'End');
+    expect(paths).toHaveLength(3);
+  });
+
+  it('terminates on a cyclic graph and never revisits a status within one candidate path', () => {
+    const cyclic = {
+      'Open':        [{ id: '1', name: 'Start Progress', to: 'In Progress' }],
+      'In Progress': [
+        { id: '2', name: 'Back to Open', to: 'Open' },
+        { id: '3', name: 'Finish', to: 'Done' },
+      ],
+    };
+    const paths = findAllPaths(cyclic, 'Open', 'Done');
+    expect(paths.length).toBeGreaterThan(0);
+    for (const path of paths) {
+      const visited = new Set<string>(['Open']);
+      for (const t of path) {
+        expect(visited.has(t.to)).toBe(false);
+        visited.add(t.to);
+      }
+    }
+  });
+
+  it('returns an empty array (not null) when no path exists', () => {
+    const paths = findAllPaths(graph, 'Done', 'Open');
+    expect(paths).toEqual([]);
+  });
+
+  it('returns a single empty-array path when already at the target', () => {
+    expect(findAllPaths(graph, 'Done', 'Done')).toEqual([[]]);
   });
 });
 

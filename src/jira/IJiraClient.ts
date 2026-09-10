@@ -71,6 +71,9 @@ export interface JiraTransition {
   id: string;
   name: string;
   to: { name: string };
+  // Populated only when `getTransitions` requests `?expand=transitions.fields` — absent (or with
+  // no `resolution` key) means "not required", matching today's implicit pre-expansion behavior.
+  fields?: { resolution?: { required: boolean; allowedValues: { name: string }[] } };
 }
 
 export interface JiraIssueType {
