@@ -2,7 +2,7 @@ import type { IJiraClient, JiraAttachment, JiraComment, JiraEditMetaField, JiraF
 import type { DiagLogger } from '../utils/diagTypes';
 import { formatJiraBody } from '../utils/markdownFormatter';
 import { formatFileSize } from '../utils/attachmentEligibility';
-import { renderReviewTable, neutralizeMarkdownLinks, type ReviewTableColumn } from '../participant/sessionState';
+import { renderReviewTable, neutralizeMarkdownLinks, buildChatCommandLink, type ReviewTableColumn } from '../participant/sessionState';
 
 export type FieldResolutionResult =
   | { kind: 'match'; field: JiraFieldMeta }
@@ -473,10 +473,28 @@ export class TicketService {
     if (result.issues.length === 0) return 'No tickets found.';
 
     const columns: ReviewTableColumn<JiraIssue>[] = [
-      { header: 'Key', accessor: (issue) => formatKeyLink(issue.key, baseUrl) },
-      { header: 'Summary', accessor: (issue) => issue.fields.summary },
+      { header: 'Key', accessor: (issue) => issue.key },
+      // KTD3: summary/assignee are ticket-derived (untrusted) text that lands in a response wrapped
+      // in trustedChatMarkdown() (JiraParticipant.ts's searchJql case) alongside the real command
+      // links below — neutralize before assembly so a crafted `[x](command:...)` summary can't
+      // become a live, auto-firing link once the whole table is trust-gated. Mirrors buildReviewTable().
+      { header: 'Summary', accessor: (issue) => neutralizeMarkdownLinks(issue.fields.summary) },
       { header: 'Status', accessor: (issue) => issue.fields.status.name },
-      { header: 'Assignee', accessor: (issue) => issue.fields.assignee ? issue.fields.assignee.displayName : 'Unassigned' },
+      { header: 'Assignee', accessor: (issue) => neutralizeMarkdownLinks(issue.fields.assignee ? issue.fields.assignee.displayName : 'Unassigned') },
+      // R9/F3/AE4: per-row view/load/browse actions, each icon paired with a short visible word
+      // (never icon-only — a chat markdown table has no reliable hover-tooltip rendering). View
+      // and load are clickable command links scoped to that row's own key; browse is a plain
+      // markdown link to the real Jira URL, omitted when no baseUrl is configured (matching
+      // formatKeyLink's existing no-baseUrl behavior) rather than a command link, since it needs
+      // no chat round-trip.
+      {
+        header: 'Actions', accessor: (issue) => {
+          const view = buildChatCommandLink('👁 view', '@jira', `show me ${issue.key}`);
+          const load = buildChatCommandLink('⤓ load', '@jira', `load ${issue.key}`);
+          const open = baseUrl ? `[🌐 open](${baseUrl}/browse/${issue.key})` : '';
+          return [view, load, open].filter(Boolean).join(' · ');
+        },
+      },
       ...buildExtraFieldColumns<JiraIssue>(
         extraFields,
         fieldMeta,

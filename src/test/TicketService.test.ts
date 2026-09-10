@@ -57,18 +57,18 @@ describe('searchTickets extra columns (#3)', () => {
 
     const out = await service.searchTickets('jql', undefined, ['customfield_100'], fieldMeta);
 
-    expect(out).toContain('| Key | Summary | Status | Assignee | Severity |');
+    expect(out).toContain('| Key | Summary | Status | Assignee | Actions | Severity |');
     expect(out).toContain('High'); // rendered via renderFieldValue (named object)
   });
 
-  it('keeps the default four columns when no extra fields are configured', async () => {
+  it('keeps the default five columns when no extra fields are configured', async () => {
     const client = new MockJiraClient();
     client.searchJql = async () => ({ issues, total: 1, isLast: true } as never);
     const service = new TicketService(client);
 
     const out = await service.searchTickets('jql');
 
-    expect(out).toContain('| Key | Summary | Status | Assignee |');
+    expect(out).toContain('| Key | Summary | Status | Assignee | Actions |');
     expect(out).not.toContain('Severity');
   });
 
@@ -81,7 +81,7 @@ describe('searchTickets extra columns (#3)', () => {
     const out = await service.searchTickets('jql', undefined, ['gixVersions'], []);
 
     expect(onDiag).toHaveBeenCalledWith('warn', expect.stringContaining('gixVersions'), expect.anything());
-    expect(out).toContain('| Key | Summary | Status | Assignee | gixVersions |');
+    expect(out).toContain('| Key | Summary | Status | Assignee | Actions | gixVersions |');
     expect(out).toContain('_Not set_');
   });
 });
@@ -368,10 +368,12 @@ describe('TicketService', () => {
       expect(result).toContain('No tickets found');
     });
 
-    it('makes ticket keys clickable when baseUrl is provided', async () => {
+    it('keeps the Key column plain text (not a link) — the browse link now lives in Actions', async () => {
       const result = await service.searchTickets('project = PROJ', 'https://jira.example.com');
-      expect(result).toContain('[PROJ-123](https://jira.example.com/browse/PROJ-123)');
-      expect(result).toContain('[PROJ-124](https://jira.example.com/browse/PROJ-124)');
+      expect(result).not.toContain('[PROJ-123](https://jira.example.com/browse/PROJ-123)');
+      expect(result).not.toContain('[PROJ-124](https://jira.example.com/browse/PROJ-124)');
+      expect(result).toContain('PROJ-123');
+      expect(result).toContain('PROJ-124');
     });
 
     it('omits links when baseUrl is absent', async () => {
@@ -389,6 +391,67 @@ describe('TicketService', () => {
     it('omits View in Jira link when baseUrl is absent', async () => {
       const result = await service.searchTickets('project = PROJ');
       expect(result).not.toContain('[View in Jira]');
+    });
+
+    // R9/F3/AE4: per-row Actions column — view/load command links plus a plain browse link.
+    it('renders three distinct, row-scoped action links per ticket, each keyed to its own row', async () => {
+      const result = await service.searchTickets('project = PROJ', 'https://jira.example.com');
+
+      // view/load are command links resubmitting "show me {key}"/"load {key}" via workbench.action.chat.open.
+      expect(result).toContain(encodeURIComponent(JSON.stringify({ query: '@jira show me PROJ-123', isPartialQuery: false })));
+      expect(result).toContain(encodeURIComponent(JSON.stringify({ query: '@jira load PROJ-123', isPartialQuery: false })));
+      expect(result).toContain(encodeURIComponent(JSON.stringify({ query: '@jira show me PROJ-124', isPartialQuery: false })));
+      expect(result).toContain(encodeURIComponent(JSON.stringify({ query: '@jira load PROJ-124', isPartialQuery: false })));
+      // browse is a plain markdown link to the real Jira URL, scoped to that row's key.
+      expect(result).toContain('[🌐 open](https://jira.example.com/browse/PROJ-123)');
+      expect(result).toContain('[🌐 open](https://jira.example.com/browse/PROJ-124)');
+      // labels are never icon-only.
+      expect(result).toContain('👁 view');
+      expect(result).toContain('⤓ load');
+    });
+
+    it('AE4: the ⤓ load link on one row is scoped to that row\'s key, independent of the other rows', async () => {
+      const result = await service.searchTickets('project = PROJ', 'https://jira.example.com');
+      const row124LoadQuery = encodeURIComponent(JSON.stringify({ query: '@jira load PROJ-124', isPartialQuery: false }));
+      const row123LoadQuery = encodeURIComponent(JSON.stringify({ query: '@jira load PROJ-123', isPartialQuery: false }));
+
+      expect(result).toContain(row124LoadQuery);
+      expect(row124LoadQuery).not.toBe(row123LoadQuery);
+      // row 123's load link must not resubmit row 124's key or vice versa.
+      expect(result.includes(row124LoadQuery) && result.includes(row123LoadQuery)).toBe(true);
+    });
+
+    it('omits the browse link when no baseUrl is configured, keeping both command links', async () => {
+      const result = await service.searchTickets('project = PROJ');
+      expect(result).not.toContain('🌐 open');
+      expect(result).toContain('👁 view');
+      expect(result).toContain('⤓ load');
+    });
+
+    it('renders no Actions column for zero search results', async () => {
+      client.searchJql = async () => ({ issues: [], total: 0, maxResults: 20 });
+      const result = await service.searchTickets('project = EMPTY');
+      expect(result).toBe('No tickets found.');
+      expect(result).not.toContain('Actions');
+    });
+
+    it('neutralizes markdown-link-injection syntax in an untrusted ticket summary', async () => {
+      client.searchJql = async () => ({
+        issues: [{
+          key: 'PROJ-1',
+          fields: {
+            summary: '[click me](command:evil)',
+            status: { name: 'Open' },
+            assignee: { displayName: 'Jane Doe' },
+          },
+        }],
+        total: 1, isLast: true,
+      } as never);
+
+      const result = await service.searchTickets('project = PROJ', 'https://jira.example.com');
+
+      expect(result).not.toMatch(/\[click me\]\(command:/);
+      expect(result).toContain('［click me］(command:evil)');
     });
   });
 

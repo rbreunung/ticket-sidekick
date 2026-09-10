@@ -1539,8 +1539,14 @@ export function createJiraParticipant(
             await ws.update('jira.session.searchResult', searchSession);
           }
           const searchFieldMeta = config.searchFields.length > 0 ? await ticketService.getFieldMeta() : [];
-          result = jqlLabel + await ticketService.searchTickets(resolvedJql, config.baseUrl, config.searchFields, searchFieldMeta);
-          break;
+          const searchResult = jqlLabel + await ticketService.searchTickets(resolvedJql, config.baseUrl, config.searchFields, searchFieldMeta);
+          // U5/R9: the search-results table's Actions column can contain real command links
+          // (view/load), so this response needs the trusted-markdown gate the shared tail below
+          // doesn't apply. searchJql doesn't set `ticketKey`, so that shared tail wouldn't do
+          // anything for this case anyway (no follow-up-chip metadata) — return directly instead
+          // of widening the shared `result: string` variable's type for every other case.
+          stream.markdown(trustedChatMarkdown(searchResult));
+          return;
         }
         case 'transition': {
           if (!intent.targetStatus) {
