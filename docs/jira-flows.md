@@ -75,6 +75,19 @@ When a follow-up prompt arrives without an explicit ticket key, the handler scan
 
 `WorkflowService.findPath(graph, from, to)` uses BFS to find the shortest sequence of transitions from the current status to the target state.
 
+## Guided single-ticket transition
+
+The `loadedTicket` "Transition it" chip (and any other `transition {key}` prompt naming no target
+status) opens a guided multi-turn flow instead of the old static "please specify a target status"
+message: pick a target status (direct transitions plus any multi-hop target discoverable via the
+cached workflow graph) → an optional resolution ask (read from that specific transition's own
+`fields.resolution`, not the global resolution list) → an optional multi-hop path pick when no
+direct transition exists (`WorkflowService.findAllPaths`, ranked shortest-first, capped at 3) → a
+confirm step naming the resolved status/resolution/path → apply or cancel. An unmatched reply at
+any choice point re-shows that step's options with a "didn't understand that" message rather than
+erroring. See `GuidedTransitionSession` and its pure helpers in `sessionState.ts`, and
+`continueGuidedTransition`/`startGuidedTransition` in `JiraParticipant.ts`.
+
 ## Bulk cleanup
 
 `cleanupRules` in `.jira-templates.json` define named rules:
@@ -110,6 +123,7 @@ Each session below is looked up by its `workspaceState` key; liveness is checked
 | --- | --- | --- |
 | `ResolutionSelectionSession` | `jira.session.resolutionSelection` | metadata — `jiraSession.kinds: ['resolution-selection']` |
 | `TransitionBatchSession` | `jira.session.transitionReview` | metadata — `jiraSession.kinds: ['transition-review']` |
+| `GuidedTransitionSession` | `jira.session.guidedTransition` | metadata — `jiraSession.kinds: ['guided-transition']` |
 | `FilterSelectionSession` | `jira.session.filterSelection` | metadata — `jiraSession.kinds: ['selecting-filter']` |
 | `BulkUpdateReviewSession` | `jira.session.bulkUpdateReview` | metadata — `jiraSession.kinds: ['bulk-update-review']` |
 | `SearchResultSession` | `jira.session.searchResult` | _(no marker — background session, overwritten on each search)_ |
@@ -138,7 +152,7 @@ Each session below is looked up by its `workspaceState` key; liveness is checked
 | `TemplateGenerationOfferCreateSession` | `jira.session.templateGenOfferCreate` | metadata — `jiraSession.kinds: ['template-gen-offer-create']` |
 | `TemplateGenerationAwaitSummarySession` | `jira.session.templateGenAwaitSummary` | metadata — `jiraSession.kinds: ['template-gen-await-summary']` |
 
-Detection order in the Jira handler: resolution selection → transition review → filter selection → bulk-update-review → combined template/issue-type selection → shared issue-type ask (R6) → creation → content → more-comments → check command → load-skipped → email content (comment-attach) → batch email template selection → batch email review → veracode template selection → veracode review → Waltz template selection → Waltz review → template-gen await-name (R2) → template-gen type pick → template-gen await-free-type (R3) → template-gen review → template-gen collision → template-gen offer-create → template-gen await-summary → comment list → greeting/empty-prompt check → intent parse.
+Detection order in the Jira handler: resolution selection → transition review → guided transition → filter selection → bulk-update-review → combined template/issue-type selection → shared issue-type ask (R6) → creation → content → more-comments → check command → load-skipped → email content (comment-attach) → batch email template selection → batch email review → veracode template selection → veracode review → Waltz template selection → Waltz review → template-gen await-name (R2) → template-gen type pick → template-gen await-free-type (R3) → template-gen review → template-gen collision → template-gen offer-create → template-gen await-summary → comment list → greeting/empty-prompt check → intent parse.
 
 The shared issue-type ask (`AwaitIssueTypeSession`, R6/KTD4) replaces `resolveIssueTypeOrPrompt()`'s
 former `showInputBox` for every flow that resolves an issue type before creating a ticket —
