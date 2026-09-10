@@ -680,6 +680,43 @@ describe('JiraApiClient', () => {
     });
   });
 
+  describe('getTransitions (resolution metadata expansion — KTD1)', () => {
+    it('requests expand=transitions.fields', async () => {
+      const mockFetch = makeFetch({ transitions: [] });
+      vi.stubGlobal('fetch', mockFetch);
+      const client = new JiraApiClient(BASE_CONFIG);
+      await client.getTransitions('PROJ-1');
+      const [url] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(url).toContain('/issue/PROJ-1/transitions?expand=transitions.fields');
+    });
+
+    it('parses a transition whose fields.resolution is required, with its allowedValues', async () => {
+      const mockFetch = makeFetch({
+        transitions: [{
+          id: '41', name: 'Done', to: { name: 'Done' },
+          fields: { resolution: { required: true, allowedValues: [{ name: 'Fixed' }, { name: "Won't Fix" }] } },
+        }],
+      });
+      vi.stubGlobal('fetch', mockFetch);
+      const client = new JiraApiClient(BASE_CONFIG);
+      const result = await client.getTransitions('PROJ-1');
+      expect(result[0].fields?.resolution).toEqual({
+        required: true,
+        allowedValues: [{ name: 'Fixed' }, { name: "Won't Fix" }],
+      });
+    });
+
+    it('parses a transition with no fields.resolution (older instance / omitted expansion) as not requiring one', async () => {
+      const mockFetch = makeFetch({
+        transitions: [{ id: '11', name: 'To Do', to: { name: 'To Do' } }],
+      });
+      vi.stubGlobal('fetch', mockFetch);
+      const client = new JiraApiClient(BASE_CONFIG);
+      const result = await client.getTransitions('PROJ-1');
+      expect(result[0].fields?.resolution).toBeUndefined();
+    });
+  });
+
   describe('sprint board resolution', () => {
     const scrumBoard = { id: 10, type: 'scrum' };
     const kanbanBoard = { id: 99, type: 'kanban' };

@@ -144,13 +144,12 @@ describe('computeBitbucketFollowups', () => {
     expect(chips.some((c) => /explain/i.test(c.prompt) || /explain/i.test(c.label ?? ''))).toBe(true);
   });
 
-  it('suggests asking a question instead of "add findings" when the review found nothing', () => {
+  it('returns no chips when the review found nothing (R10: no "ask a question" replacement)', () => {
     const state: BitbucketFollowupState = { kind: 'reviewCompleted', findingCount: 0 };
 
     const chips = computeBitbucketFollowups(state);
 
-    expect(chips.length).toBeGreaterThan(0);
-    expect(chips.every((c) => !/add.*findings?.*review/i.test(c.prompt))).toBe(true);
+    expect(chips).toEqual([]);
   });
 
   it('returns no chips when there is no prior operation state', () => {

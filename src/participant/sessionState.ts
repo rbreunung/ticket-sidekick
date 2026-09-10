@@ -1,4 +1,4 @@
-import type { JiraComment, JiraFieldMeta, JiraFilter, JiraIssueType, JiraSprintCandidate } from '../jira/IJiraClient';
+import type { JiraComment, JiraFieldMeta, JiraFilter, JiraIssueType, JiraSprintCandidate, JiraTransition } from '../jira/IJiraClient';
 import { formatJiraBody } from '../utils/markdownFormatter';
 import type { VeracodeFlaw, VeracodeReviewRow } from '../utils/veracodeReport';
 import type { WaltzComponent, WaltzReviewRow } from '../utils/waltzReport';
@@ -10,7 +10,7 @@ import type { JiraTemplate } from '../templates/TemplateService';
 // Type-only — ConfigService.ts imports `vscode`, but a type-only import is erased before
 // this (vscode-free, Vitest-loadable) module is ever loaded at runtime.
 import type { JiraConfig } from '../services/ConfigService';
-import type { WorkflowGraph } from '../services/WorkflowService';
+import type { CachedTransition, WorkflowGraph } from '../services/WorkflowService';
 // Type-only — llmHelpers.ts imports from this file too, but a type-only import is erased
 // before either module is ever loaded at runtime, so this stays safe (no runtime cycle).
 import type { Operation } from './jira/llmHelpers';
@@ -324,6 +324,161 @@ export function parseResolutionSelection(reply: string, options: string[]): stri
   const normalized = reply.trim().toLowerCase();
   if (normalized === 'none' || normalized === 'skip') return null;
   return pickByNumberOrName(reply, options, (s) => s) ?? 'invalid';
+}
+
+// ---------------------------------------------------------------------------------------------
+// R2/F1: guided single-ticket transition flow ("Transition it" chip). Unlike bulk transition
+// (TransitionBatchSession/findPath — untouched by this unit), this flow can ask for a target
+// status, a required resolution (read from that *specific* transition's own `fields.resolution`
+// per U1 — never the global getResolutions() list), and — when no direct transition exists — a
+// choice among the discovered multi-hop paths (findAllPaths, KTD2) before ever writing anything.
+// One workspaceState key, one session object, `step` says which choice point is currently live —
+// mirrors CreationSession's single-object-through-multiple-turns shape rather than the
+// one-key-per-step split used by ResolutionSelectionSession/FilterSelectionSession, since every
+// step here shares the same accumulating context (ticket, current status, project/issue type).
+// ---------------------------------------------------------------------------------------------
+
+export interface GuidedTransitionSession {
+  ticketKey: string;
+  currentStatus: string;
+  projectKey: string;
+  issueType: string;
+  // The ticket's own currently-available transitions (from a single getTransitions call, carrying
+  // `fields.resolution` per U1) — reused both to check whether a picked target has a direct
+  // transition and to build the initial status-pick list below.
+  directTransitions: JiraTransition[];
+  // Every status offered at the status-pick step: direct transition targets plus (when a cached
+  // workflow graph exists) every other status reachable in that graph (AE1's 2-hop target must be
+  // pickable, not just directly-adjacent ones) — see buildGuidedTransitionStatusOptions().
+  statusOptions: string[];
+  step: 'pick-status' | 'pick-resolution' | 'pick-path' | 'confirm';
+  targetStatus?: string;
+  // Populated only when no direct transition to targetStatus exists — the enumerated, shortest-
+  // first, capped candidate routes (KTD2) shown at the pick-path step.
+  pathOptions?: CachedTransition[][];
+  // The finalized route to apply on confirm: a single direct hop, or the multi-hop path the user
+  // picked from pathOptions.
+  chosenPath?: CachedTransition[];
+  // This transition's own valid resolution names (direct transition's `fields.resolution
+  // .allowedValues`, or the path's final hop's live equivalent — see resolveFinalHopResolution in
+  // JiraParticipant.ts) — populated only when a resolution is actually required.
+  resolutionOptions?: string[];
+  resolution?: string;
+}
+
+/**
+ * R2/AE1: builds the guided transition flow's status-pick option list — every direct transition
+ * target (in their own order) plus, when a cached workflow graph exists for this project/issue
+ * type, every other status appearing anywhere in that graph (as a "from" key or a "to" target),
+ * sorted alphabetically and appended after the direct ones. This is what lets a target reachable
+ * only via 2+ hops (AE1) be offered as a pick at all — the direct-transitions list alone can never
+ * include it. `currentStatus` is always excluded (moving to where the ticket already is isn't a
+ * choice this flow offers — that's the existing "already there" short-circuit, kept unchanged).
+ */
+export function buildGuidedTransitionStatusOptions(
+  directTransitions: Array<{ to: { name: string } }>,
+  graph: WorkflowGraph | undefined,
+  currentStatus: string,
+): string[] {
+  const seen = new Set<string>([currentStatus]);
+  const options: string[] = [];
+  for (const t of directTransitions) {
+    if (!seen.has(t.to.name)) {
+      seen.add(t.to.name);
+      options.push(t.to.name);
+    }
+  }
+  if (graph) {
+    const graphStatuses = new Set<string>();
+    for (const [from, edges] of Object.entries(graph)) {
+      graphStatuses.add(from);
+      for (const e of edges) graphStatuses.add(e.to);
+    }
+    for (const s of [...graphStatuses].sort((a, b) => a.localeCompare(b))) {
+      if (!seen.has(s)) {
+        seen.add(s);
+        options.push(s);
+      }
+    }
+  }
+  return options;
+}
+
+/** KTD6: an unmatched reply at the status-pick step is reported as 'invalid' so the caller re-shows
+ * this step's options with a "didn't understand that" message rather than erroring or dropping the
+ * turn — same convention as parseFilterSelection/parseResolutionSelection. */
+export function parseGuidedTransitionStatusPick(reply: string, statusOptions: string[]): string | 'cancel' | 'invalid' {
+  if (isCancellation(reply)) return 'cancel';
+  return pickByNumberOrName(reply, statusOptions, (s) => s) ?? 'invalid';
+}
+
+/** Finds the ticket's own direct (single-hop) transition to `targetStatus`, if one exists —
+ * case-insensitive on the target name, matching resolveAndApplyTransition's own direct-transition
+ * lookup. */
+export function findGuidedDirectTransition(transitions: JiraTransition[], targetStatus: string): JiraTransition | undefined {
+  return transitions.find((t) => t.to.name.toLowerCase() === targetStatus.toLowerCase());
+}
+
+/** KTD6: unmatched path-pick reply → 'invalid' (re-show with "didn't understand"), matching the
+ * same convention used at every other guided-transition choice point. */
+export function parseGuidedTransitionPathPick(reply: string, pathCount: number): number | 'cancel' | 'invalid' {
+  if (isCancellation(reply)) return 'cancel';
+  const options = Array.from({ length: pathCount }, (_, i) => i + 1);
+  return pickByNumberOrName(reply, options, String) ?? 'invalid';
+}
+
+/** KTD5: one path's clickable-option label, e.g. "In Progress → In Review → Done (2 hops)" —
+ * `currentStatus` is prepended since a CachedTransition path only stores each hop's *destination*
+ * (`to`), not where it started. */
+export function formatTransitionPathOption(currentStatus: string, path: CachedTransition[]): string {
+  const hops = path.length;
+  const statuses = [currentStatus, ...path.map((p) => p.to)];
+  return `${statuses.join(' → ')} (${hops} hop${hops === 1 ? '' : 's'})`;
+}
+
+/** KTD6: unmatched resolution-pick reply → 'invalid'. Unlike parseResolutionSelection (bulk
+ * transition's global resolution ask, where "none"/"skip" opts out), this ask is only ever shown
+ * when the transition's own metadata says a resolution is *required* — so there is no "skip"
+ * option here; an unrecognized reply (including "none") is simply unmatched. */
+export function parseGuidedTransitionResolutionPick(reply: string, options: string[]): string | 'cancel' | 'invalid' {
+  if (isCancellation(reply)) return 'cancel';
+  return pickByNumberOrName(reply, options, (s) => s) ?? 'invalid';
+}
+
+/** R2 step 4's confirm-step summary: resolved status, resolution (if any), and path (only when
+ * more than one hop — a direct transition's "path" is just the target itself and isn't worth
+ * repeating). */
+export function buildGuidedTransitionConfirmSummary(
+  ticketKey: string,
+  targetStatus: string,
+  resolution: string | undefined,
+  path: CachedTransition[],
+  currentStatus: string,
+): string {
+  const lines = [`Move **${ticketKey}** from **${currentStatus}** to **${targetStatus}**?`];
+  if (path.length > 1) {
+    lines.push(`Path: ${formatTransitionPathOption(currentStatus, path)}`);
+  }
+  if (resolution) {
+    lines.push(`Resolution: **${resolution}**`);
+  }
+  return lines.join('\n\n');
+}
+
+/** Shared wording for a multi-hop transition that landed partway before a later hop failed —
+ * used by both the guided single-ticket flow's confirm step and `resolveAndApplyTransition`'s
+ * own `partialFailure` case, which previously each hand-wrote the identical message. */
+export function formatPartialTransitionFailure(
+  ticketKey: string,
+  landedStatus: string,
+  completedHops: number,
+  totalHops: number,
+  targetStatus: string,
+  errorMessage: string,
+): string {
+  return `⚠️ **${ticketKey}** moved partway to **${landedStatus}** (${completedHops} of ${totalHops} hops) ` +
+    `but the next step to **${targetStatus}** failed: ${errorMessage} The ticket is now in **${landedStatus}**, ` +
+    `not its original status — check its current state before retrying.`;
 }
 
 // Defensive sanitizer over LLM history text (llmHelpers.ts): no code path emits HTML-comment
@@ -1499,12 +1654,18 @@ export function isGreetingOrEmpty(prompt: string): boolean {
  * `vscode.ChatResult.metadata` so its `followupProvider` can compute the right suggestion chips
  * for the response that was just streamed, without re-deriving state from response text. */
 export type JiraFollowupState =
-  | { kind: 'greeting' }
-  | { kind: 'fallback' }
+  // `branchKey`, when set, is the ticket key resolved from the current git branch — the only
+  // source `computeJiraFollowups` may use for a "Show me {key}" chip (R4/AE3): never a fabricated
+  // placeholder. `JiraParticipant.ts` resolves it once via `resolveTicketFromBranch()` before
+  // building this state, keeping this function a pure read of its input.
+  | { kind: 'greeting'; branchKey?: string }
+  | { kind: 'fallback'; branchKey?: string }
   // `justDid`, when set, names the operation that just ran on `ticketKey` — omitted for a plain
-  // ticket view, present for a write (e.g. `addComment`, `transition`) so the chip set below can
-  // leave out a suggestion that would just repeat the action the user already took.
-  | { kind: 'loadedTicket'; ticketKey: string; justDid?: Operation }
+  // ticket view, present for a write (e.g. `transition`) so the chip set below can leave out a
+  // suggestion that would just repeat the action the user already took. `projectKey`/`issueType`
+  // (KTD4) are the loaded ticket's own values, read once from the already-fetched issue, so the
+  // "Discover workflow" chip below never needs a re-fetch.
+  | { kind: 'loadedTicket'; ticketKey: string; projectKey: string; issueType: string; justDid?: Operation }
   | { kind: 'none' };
 
 const JIRA_MAX_FOLLOWUPS = 3;
@@ -1517,29 +1678,55 @@ const JIRA_MAX_FOLLOWUPS = 3;
  */
 export function computeJiraFollowups(state: JiraFollowupState): FollowupSuggestion[] {
   switch (state.kind) {
-    case 'greeting':
-      return [
+    case 'greeting': {
+      // R4/AE3: no fabricated ticket key — "Show me {key}" only appears when the current git
+      // branch actually resolved to one.
+      const chips: FollowupSuggestion[] = [
         { prompt: 'create a ticket', label: 'Create a ticket' },
-        { prompt: 'show me PROJ-123', label: 'View a ticket' },
         { prompt: 'search my open tickets', label: 'Search tickets' },
-      ].slice(0, JIRA_MAX_FOLLOWUPS);
-    case 'fallback':
-      return [
-        { prompt: 'show me PROJ-123', label: 'View a ticket' },
-        { prompt: 'add a comment to PROJ-123', label: 'Add a comment' },
+      ];
+      if (state.branchKey) {
+        chips.push({ prompt: `show me ${state.branchKey}`, label: `Show me ${state.branchKey}` });
+      }
+      return chips.slice(0, JIRA_MAX_FOLLOWUPS);
+    }
+    case 'fallback': {
+      // R1/R4: the comment chip is gone; same branch-key rule as greeting for the ticket chip.
+      const chips: FollowupSuggestion[] = [
         { prompt: 'search my open tickets', label: 'Search tickets' },
-      ].slice(0, JIRA_MAX_FOLLOWUPS);
+      ];
+      if (state.branchKey) {
+        chips.push({ prompt: `show me ${state.branchKey}`, label: `Show me ${state.branchKey}` });
+      }
+      return chips.slice(0, JIRA_MAX_FOLLOWUPS);
+    }
     case 'loadedTicket': {
       // Leave out a suggestion that would just repeat the write the user already performed
-      // (e.g. don't offer "add a comment" right after `addComment` succeeded).
+      // (e.g. don't offer "transition" right after `transition` succeeded). R1: the comment
+      // chip is gone entirely. R6/R7: template/discover-workflow chips carry the loaded
+      // ticket's own key/project/issue-type — both operations already have everything they
+      // need, so neither can ever land on its own missing-parameter dead end (AE2).
       const chips: FollowupSuggestion[] = [];
-      if (state.justDid !== 'addComment') {
-        chips.push({ prompt: `add a comment to ${state.ticketKey}`, label: 'Add a comment' });
-      }
       if (state.justDid !== 'transition') {
         chips.push({ prompt: `transition ${state.ticketKey}`, label: 'Transition it' });
       }
-      return chips;
+      if (state.justDid !== 'generateTemplate') {
+        chips.push({
+          prompt: `generate a template from ${state.ticketKey}`,
+          label: `Create a template from ${state.ticketKey}`,
+        });
+      }
+      // `issueType` is only ever populated where the caller already had the issue in hand
+      // (loading/viewing a ticket) — deliberately never worth a fresh fetch just for this chip
+      // (see JiraParticipant.ts's shared post-operation tail). Omit rather than render a chip
+      // with a blank issue type.
+      if (state.justDid !== 'discoverWorkflow' && state.issueType) {
+        chips.push({
+          prompt: `discover workflow ${state.projectKey} ${state.issueType}`,
+          label: `Discover workflow for ${state.projectKey}/${state.issueType}`,
+        });
+      }
+      return chips.slice(0, JIRA_MAX_FOLLOWUPS);
     }
     case 'none':
       return [];
@@ -1574,6 +1761,7 @@ export type JiraSessionKind =
   | 'previewing'
   | 'resolution-selection'
   | 'transition-review'
+  | 'guided-transition'
   | 'selecting-filter'
   | 'bulk-update-review'
   | 'sprint-selection'

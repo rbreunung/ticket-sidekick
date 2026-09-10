@@ -1402,7 +1402,9 @@ export function computeBitbucketFollowups(state: BitbucketFollowupState): Bitbuc
       ];
     case 'reviewCompleted':
       if (state.findingCount === 0) {
-        return [{ prompt: 'ask a question about this PR', label: 'Ask a question' }];
+        // R10: no one-click "ask a question" follow-up — a real Q&A flow needs its own
+        // review, and asking a question is relevant mid-review, not as a post-review chip.
+        return [];
       }
       return [
         { prompt: 'add all findings to review', label: 'Add findings to review' },

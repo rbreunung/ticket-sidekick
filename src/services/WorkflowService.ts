@@ -68,6 +68,94 @@ export function findPath(graph: WorkflowGraph, from: string, to: string): Cached
   return null;
 }
 
+/**
+ * Enumerates up to `options.maxPaths` distinct routes from `from` to `to`, shortest first — used
+ * by the guided transition flow to offer a ranked choice of multi-hop paths instead of the single
+ * route `findPath` returns (KTD2). A depth-bounded DFS with a *per-path* visited set (not global):
+ * a cycle elsewhere in the graph must not block finding a second, different route to the target,
+ * so each recursive branch tracks only the statuses its own path has already visited. The depth
+ * ceiling is set a little past the shortest path found so far (shortest length + 2) so a
+ * pathological cyclic graph can't make the search run away, while still surfacing one or two
+ * longer alternatives beyond the shortest. Returns `[]` (not `null`, unlike `findPath`) when no
+ * route exists — enumeration naturally reports "none" as an empty list.
+ */
+export function findAllPaths(
+  graph: WorkflowGraph,
+  from: string,
+  to: string,
+  options?: { maxPaths?: number },
+): CachedTransition[][] {
+  const maxPaths = options?.maxPaths ?? 3;
+  if (from === to) return [[]];
+
+  // First pass: find the shortest path length via the existing BFS, so the DFS below knows where
+  // to cap depth. No shortest path at all means no path at all — short-circuit to `[]`.
+  const shortest = findPath(graph, from, to);
+  if (!shortest) return [];
+  const maxDepth = shortest.length + 2;
+
+  // The depth bound (not a result-count cutoff) is what keeps this from running away on a cyclic
+  // graph: every candidate path is enumerated in full up to maxDepth, then sorted shortest-first
+  // and capped — stopping early on result count would risk a DFS-order accident dropping a
+  // genuinely shorter path in favor of a longer one found first.
+  const results: CachedTransition[][] = [];
+
+  // Depth bounds the length of any one path; it does not bound the *branching factor* per node,
+  // so a graph that is both densely connected and forced into a long shortest path (many statuses,
+  // many transitions each) could still make the DFS below examine an impractically large number of
+  // edges before it finishes. This is a hard ceiling on total work performed — orthogonal to the
+  // depth bound above and to the "no early exit on result count" rule: it never stops the search
+  // just because maxPaths results already exist, only once the search has done far more work than
+  // any real workflow graph should require.
+  const MAX_DFS_VISITS = 5000;
+  let visits = 0;
+  let budgetExceeded = false;
+
+  function dfs(state: string, path: CachedTransition[], visited: Set<string>): void {
+    if (budgetExceeded || path.length >= maxDepth) return;
+    for (const t of graph[state] ?? []) {
+      if (++visits > MAX_DFS_VISITS) {
+        budgetExceeded = true;
+        return;
+      }
+      if (t.to === to) {
+        results.push([...path, t]);
+        continue;
+      }
+      if (visited.has(t.to)) continue; // per-path visited set: cycles elsewhere don't block other routes
+      const nextVisited = new Set(visited);
+      nextVisited.add(t.to);
+      dfs(t.to, [...path, t], nextVisited);
+    }
+  }
+
+  dfs(from, [], new Set([from]));
+
+  results.sort((a, b) => a.length - b.length);
+  // The work budget hit before enumeration finished and nothing was collected yet — still surface
+  // the one path the earlier BFS already found rather than returning nothing.
+  if (budgetExceeded && results.length === 0) return [shortest];
+  return results.slice(0, maxPaths);
+}
+
+/** Finds one real ticket currently sitting in `status` for `projectKey`/`issueType` — the
+ * "representative ticket" technique `discoverWorkflow` uses to sample each status's live
+ * transitions, and reused by the guided single-ticket transition flow (`JiraParticipant.ts`'s
+ * `resolveFinalHopResolution`) to read a multi-hop path's final-hop resolution requirement off a
+ * ticket that has actually made that transition. Returns `undefined` when no such ticket exists. */
+export async function findRepresentativeTicket(
+  client: IJiraClient,
+  projectKey: string,
+  issueType: string,
+  status: string,
+): Promise<string | undefined> {
+  const search = await client.searchJql(
+    `project = ${projectKey} AND issuetype = "${issueType}" AND status = "${status}" ORDER BY updated DESC`,
+    1,
+  );
+  return search.issues[0]?.key;
+}
+
 export async function discoverWorkflow(
   client: IJiraClient,
   projectKey: string,
@@ -75,21 +163,16 @@ export async function discoverWorkflow(
 ): Promise<{ graph: WorkflowGraph; skippedStatuses: string[] }> {
   const statusNames = await client.getProjectStatuses(projectKey, issueType);
 
-  const searches = await Promise.all(
-    statusNames.map((status) =>
-      client.searchJql(
-        `project = ${projectKey} AND issuetype = "${issueType}" AND status = "${status}" ORDER BY updated DESC`,
-        1,
-      ),
-    ),
+  const representativeKeys = await Promise.all(
+    statusNames.map((status) => findRepresentativeTicket(client, projectKey, issueType, status)),
   );
 
   const representativeByStatus = new Map<string, string>();
   const skippedStatuses: string[] = [];
   for (let i = 0; i < statusNames.length; i++) {
-    const issue = searches[i].issues[0];
-    if (issue) {
-      representativeByStatus.set(statusNames[i], issue.key);
+    const key = representativeKeys[i];
+    if (key) {
+      representativeByStatus.set(statusNames[i], key);
     } else {
       skippedStatuses.push(statusNames[i]);
     }

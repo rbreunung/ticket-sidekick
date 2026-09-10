@@ -1,15 +1,21 @@
 import * as vscode from 'vscode';
 import { JiraApiClient } from '../jira/JiraApiClient';
 import { ConfigService } from '../services/ConfigService';
-import { TicketService, renderFieldValue, formatKeyLink } from '../services/TicketService';
-import type { JiraFieldMeta, JiraFilter, JiraSprintCandidate } from '../jira/IJiraClient';
+import { TicketService, renderFieldValue, formatKeyLink, PartialTransitionError } from '../services/TicketService';
+import type { IJiraClient, JiraFieldMeta, JiraFilter, JiraSprintCandidate } from '../jira/IJiraClient';
 import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { tokenStatus } from '../utils/diagUtils';
 import { logDiag } from '../utils/diagLog';
 import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, type JiraFollowupState, type JiraSessionKind, isConfirmation, isCancellation, isGreetingOrEmpty, computeJiraFollowups, pickEmailOption, parseSkipInput, applyTicketToggle, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, applyBulkUpdateToggle, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewMessage } from './sessionState';
-import { findPath, resolveAndApplyTransition } from '../services/WorkflowService';
-import type { WorkflowGraph } from '../services/WorkflowService';
+import {
+  type GuidedTransitionSession,
+  buildGuidedTransitionStatusOptions, parseGuidedTransitionStatusPick, findGuidedDirectTransition,
+  parseGuidedTransitionPathPick, formatTransitionPathOption, parseGuidedTransitionResolutionPick,
+  buildGuidedTransitionConfirmSummary, extractProjectKeyFromTicketKey, formatPartialTransitionFailure,
+} from './sessionState';
+import { findPath, findAllPaths, loadWorkflowCache, resolveAndApplyTransition, findRepresentativeTicket } from '../services/WorkflowService';
+import type { CachedTransition, WorkflowGraph } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
 import type { Operation, ParsedIntent } from './jira/llmHelpers';
 import { parseIntent, extractFixVersionFromPrompt, generateContent, isLmRefusal, synthesizeComments, generateDescriptionAndCommentsSummary, isPointerPrompt, extractLastAssistantText, mapCommandToOperation } from './jira/llmHelpers';
@@ -84,6 +90,292 @@ function olderCommentsNotShownLink(count: number): vscode.MarkdownString {
   return trustedChatMarkdown(
     `\n\n_${count} older comment(s) not shown. Reply ${buildChatCommandLink('load all', '@jira', 'load all')} to include them._`,
   );
+}
+
+// ---------------------------------------------------------------------------------------------
+// R2/F1: guided single-ticket transition flow ("Transition it" chip). See GuidedTransitionSession
+// in sessionState.ts for the session shape and every pure parsing/formatting helper this uses —
+// everything below is the vscode-dependent glue (streaming, workspaceState, live Jira lookups)
+// that can't live in that vscode-free file. Mirrors the resolution-selection/filter-selection
+// session blocks further down: one workspaceState key, re-rendered on every "didn't understand
+// that" retry (KTD6), cleared the moment the flow ends (apply or cancel).
+// ---------------------------------------------------------------------------------------------
+
+const GUIDED_TRANSITION_SESSION_KEY = 'jira.session.guidedTransition';
+
+// R5: static, non-clickable prose appended to the greeting and R8-fallback responses — no client
+// capability exists to look up a user's actual saved filters, so this stays plain text rather than
+// a chip that would need to fabricate a filter name (a failure mode this plan removes elsewhere).
+const SAVED_FILTER_TIP =
+  '_Tip: if you have a saved Jira filter, try "search from filter \'My open bugs\'" or "search filter 12345"._';
+
+// R13: the same "loadedTicket" follow-up shape the bottom of the main handler attaches to every
+// ordinary operation result — reproduced here so the guided flow's own early-return continuations
+// (which bypass that shared tail) still leave the user with the usual next-step chips and
+// lastTicketKey tracking once the flow ends, instead of silently dropping both.
+function guidedTransitionLoadedTicketResult(
+  ticketKey: string,
+  projectKey: string,
+  issueType: string,
+): { metadata: Record<string, unknown> } {
+  const followupState: JiraFollowupState = { kind: 'loadedTicket', ticketKey, projectKey, issueType, justDid: 'transition' };
+  return { metadata: { jiraFollowup: followupState, ...withLastTicket(ticketKey).metadata } };
+}
+
+async function streamGuidedTransitionStatusPick(
+  session: GuidedTransitionSession,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  invalid = false,
+): Promise<vscode.ChatResult> {
+  await ws.update(GUIDED_TRANSITION_SESSION_KEY, session);
+  const list = session.statusOptions.map((s, i) => `${i + 1}. ${buildChatCommandLink(s, '@jira', String(i + 1))}`).join('\n');
+  const prefix = invalid ? "Didn't understand that. " : '';
+  stream.markdown(trustedChatMarkdown(
+    `${prefix}**${session.ticketKey}** is currently in **${session.currentStatus}**. Which status should it move to?\n\n${list}\n\n` +
+    `Reply with the number or name, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+  ));
+  return { metadata: { jiraSession: { kinds: ['guided-transition'] } } };
+}
+
+async function streamGuidedTransitionResolutionPick(
+  session: GuidedTransitionSession,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  invalid = false,
+): Promise<vscode.ChatResult> {
+  await ws.update(GUIDED_TRANSITION_SESSION_KEY, session);
+  const options = session.resolutionOptions ?? [];
+  const list = options.map((r, i) => `${i + 1}. ${buildChatCommandLink(r, '@jira', String(i + 1))}`).join('\n');
+  const prefix = invalid ? "Didn't understand that. " : '';
+  stream.markdown(trustedChatMarkdown(
+    `${prefix}Moving **${session.ticketKey}** to **${session.targetStatus}** requires a resolution. Which one?\n\n${list}\n\n` +
+    `Reply with the name or number, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+  ));
+  return { metadata: { jiraSession: { kinds: ['guided-transition'] } } };
+}
+
+async function streamGuidedTransitionPathPick(
+  session: GuidedTransitionSession,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  invalid = false,
+): Promise<vscode.ChatResult> {
+  await ws.update(GUIDED_TRANSITION_SESSION_KEY, session);
+  const paths = session.pathOptions ?? [];
+  const list = paths
+    .map((p, i) => `${i + 1}. ${buildChatCommandLink(formatTransitionPathOption(session.currentStatus, p), '@jira', String(i + 1))}`)
+    .join('\n');
+  const prefix = invalid ? "Didn't understand that. " : '';
+  stream.markdown(trustedChatMarkdown(
+    `${prefix}**${session.targetStatus}** isn't directly reachable from **${session.currentStatus}** — here ` +
+    `${paths.length === 1 ? 'is the path' : 'are the paths'} found:\n\n${list}\n\nReply with the number, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+  ));
+  return { metadata: { jiraSession: { kinds: ['guided-transition'] } } };
+}
+
+async function streamGuidedTransitionConfirm(
+  session: GuidedTransitionSession,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  invalid = false,
+): Promise<vscode.ChatResult> {
+  await ws.update(GUIDED_TRANSITION_SESSION_KEY, session);
+  const prefix = invalid ? "Didn't understand that. " : '';
+  const summary = buildGuidedTransitionConfirmSummary(
+    session.ticketKey, session.targetStatus!, session.resolution, session.chosenPath ?? [], session.currentStatus,
+  );
+  stream.markdown(trustedChatMarkdown(
+    `${prefix}${summary}\n\nReply ${buildChatCommandLink('Yes', '@jira', 'yes')} to apply, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')} to cancel.`,
+  ));
+  return { metadata: { jiraSession: { kinds: ['guided-transition'] } } };
+}
+
+/**
+ * R2 step 3's "scoped to the path's final hop's transition metadata": the cached workflow graph
+ * (`WorkflowGraph`/`CachedTransition`, `WorkflowService.ts`) only ever stored `id`/`name`/`to` — it
+ * never carried `fields.resolution` (U1 added that only to the *live* `getTransitions` response,
+ * not the cache format, which is out of scope for this unit — see the report). A multi-hop path's
+ * final transition only becomes real once the ticket has actually moved through the earlier hops,
+ * so there is no live data for it on the ticket we actually have. This samples one real ticket
+ * already sitting in the second-to-last status — via the shared `findRepresentativeTicket` helper
+ * `discoverWorkflow` itself uses — and reads *that* ticket's live transitions to find the matching
+ * one by name/target. No representative ticket found (or the lookup fails outright) degrades to
+ * "not required", matching the plan's own Assumptions section for missing metadata.
+ */
+async function resolveFinalHopResolution(
+  jiraClient: IJiraClient,
+  projectKey: string,
+  issueType: string,
+  path: CachedTransition[],
+): Promise<{ required: boolean; allowedValues: string[] }> {
+  const notRequired = { required: false, allowedValues: [] };
+  if (path.length < 2) return notRequired;
+  const finalHop = path[path.length - 1];
+  const priorStatus = path[path.length - 2].to;
+  try {
+    const repKey = await findRepresentativeTicket(jiraClient, projectKey, issueType, priorStatus);
+    if (!repKey) return notRequired;
+    const liveTransitions = await jiraClient.getTransitions(repKey);
+    const match = liveTransitions.find((t) => t.name === finalHop.name && t.to.name === finalHop.to);
+    if (!match?.fields?.resolution?.required) return notRequired;
+    return { required: true, allowedValues: match.fields.resolution.allowedValues.map((v) => v.name) };
+  } catch {
+    return notRequired;
+  }
+}
+
+/**
+ * Starts the guided flow (R2/F1) when "Transition it" is clicked with no target status: fetches
+ * the ticket's current status and available transitions, builds the status-pick option list
+ * (AE1's multi-hop targets included, via any cached workflow graph), and streams the first choice
+ * point. A ticket with literally nothing to transition to (no direct transitions and no graph) is
+ * told so directly instead of opening a session with an empty picker.
+ */
+async function startGuidedTransition(
+  ticketKey: string,
+  jiraClient: IJiraClient,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  workspaceRoot: string,
+): Promise<vscode.ChatResult> {
+  const issue = await jiraClient.getIssue(ticketKey);
+  const currentStatus = issue.fields.status.name;
+  const projectKey = extractProjectKeyFromTicketKey(ticketKey) ?? ticketKey.split('-')[0];
+  const issueType = (issue.fields.issuetype as { name?: string } | undefined)?.name ?? '';
+  const directTransitions = await jiraClient.getTransitions(ticketKey);
+  const graph = loadWorkflowCache(workspaceRoot)[projectKey]?.[issueType]?.graph;
+  const statusOptions = buildGuidedTransitionStatusOptions(directTransitions, graph, currentStatus);
+
+  if (statusOptions.length === 0) {
+    stream.markdown(`**${ticketKey}** is in **${currentStatus}** and has no available transitions.`);
+    return guidedTransitionLoadedTicketResult(ticketKey, projectKey, issueType);
+  }
+
+  const session: GuidedTransitionSession = {
+    ticketKey, currentStatus, projectKey, issueType, directTransitions, statusOptions, step: 'pick-status',
+  };
+  return await streamGuidedTransitionStatusPick(session, stream, ws);
+}
+
+/**
+ * Continues an in-progress guided transition on the user's reply, dispatching on
+ * `session.step` — the single entry point the top-of-handler `'guided-transition'` session check
+ * calls into. Each step's unmatched-reply case follows KTD6 (re-show that step's options with a
+ * "didn't understand that" message, session kept alive); each cancel clears the session and takes
+ * no Jira write action (R2's confirm-step guarantee, applied uniformly at every step for the same
+ * reason bulk transition's own review screen lets you back out at any point).
+ */
+async function continueGuidedTransition(
+  session: GuidedTransitionSession,
+  reply: string,
+  jiraClient: IJiraClient,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  workspaceRoot: string,
+): Promise<vscode.ChatResult | void> {
+  const cancel = async () => {
+    await ws.update(GUIDED_TRANSITION_SESSION_KEY, undefined);
+    stream.markdown('_Cancelled — no changes made._');
+  };
+
+  if (session.step === 'pick-status') {
+    const pick = parseGuidedTransitionStatusPick(reply, session.statusOptions);
+    if (pick === 'cancel') return cancel();
+    if (pick === 'invalid') return await streamGuidedTransitionStatusPick(session, stream, ws, true);
+
+    session.targetStatus = pick;
+    const direct = findGuidedDirectTransition(session.directTransitions, pick);
+    if (direct) {
+      session.chosenPath = [{ id: direct.id, name: direct.name, to: direct.to.name }];
+      const resolutionMeta = direct.fields?.resolution;
+      if (resolutionMeta?.required) {
+        session.resolutionOptions = resolutionMeta.allowedValues.map((v) => v.name);
+        session.step = 'pick-resolution';
+        return await streamGuidedTransitionResolutionPick(session, stream, ws);
+      }
+      session.step = 'confirm';
+      return await streamGuidedTransitionConfirm(session, stream, ws);
+    }
+
+    // No direct transition — fall back to the cached workflow graph, exactly like
+    // resolveAndApplyTransition's own multi-hop fallback (R3: same source of truth, just
+    // enumerating every route instead of only the first one findPath returns).
+    const graph = loadWorkflowCache(workspaceRoot)[session.projectKey]?.[session.issueType]?.graph;
+    const paths = graph ? findAllPaths(graph, session.currentStatus, pick) : [];
+    if (paths.length === 0) {
+      await ws.update(GUIDED_TRANSITION_SESSION_KEY, undefined);
+      // Reuses resolveAndApplyTransition's own 'unavailable' wording verbatim (the plan's explicit
+      // instruction not to invent new copy here) rather than calling it directly — calling it would
+      // duplicate the getIssue/getTransitions round trip we've already made in this session.
+      const available = session.directTransitions.map((t) => t.to.name);
+      const availableText = available.length > 0 ? ` Available: ${available.map((n) => `**${n}**`).join(', ')}.` : '';
+      const cacheHint = graph
+        ? ''
+        : ` Run \`@jira discover workflow ${session.projectKey} ${session.issueType || '<issuetype>'}\` to enable multi-hop transitions.`;
+      stream.markdown(`No transition to **${pick}** available from **${session.currentStatus}**.${availableText}${cacheHint}`);
+      return guidedTransitionLoadedTicketResult(session.ticketKey, session.projectKey, session.issueType);
+    }
+    session.pathOptions = paths;
+    session.step = 'pick-path';
+    return await streamGuidedTransitionPathPick(session, stream, ws);
+  }
+
+  if (session.step === 'pick-path') {
+    const pick = parseGuidedTransitionPathPick(reply, session.pathOptions?.length ?? 0);
+    if (pick === 'cancel') return cancel();
+    if (pick === 'invalid') return await streamGuidedTransitionPathPick(session, stream, ws, true);
+
+    const chosen = session.pathOptions![pick - 1];
+    session.chosenPath = chosen;
+    const finalHopResolution = await resolveFinalHopResolution(jiraClient, session.projectKey, session.issueType, chosen);
+    if (finalHopResolution.required) {
+      session.resolutionOptions = finalHopResolution.allowedValues;
+      session.step = 'pick-resolution';
+      return await streamGuidedTransitionResolutionPick(session, stream, ws);
+    }
+    session.step = 'confirm';
+    return await streamGuidedTransitionConfirm(session, stream, ws);
+  }
+
+  if (session.step === 'pick-resolution') {
+    const pick = parseGuidedTransitionResolutionPick(reply, session.resolutionOptions ?? []);
+    if (pick === 'cancel') return cancel();
+    if (pick === 'invalid') return await streamGuidedTransitionResolutionPick(session, stream, ws, true);
+
+    session.resolution = pick;
+    session.step = 'confirm';
+    return await streamGuidedTransitionConfirm(session, stream, ws);
+  }
+
+  // session.step === 'confirm'
+  if (isCancellation(reply)) return cancel();
+  if (!isConfirmation(reply)) return await streamGuidedTransitionConfirm(session, stream, ws, true);
+
+  await ws.update(GUIDED_TRANSITION_SESSION_KEY, undefined);
+  try {
+    await ticketService.transitionAlongPath(session.ticketKey, session.chosenPath!, session.resolution);
+  } catch (err) {
+    if (err instanceof PartialTransitionError && err.completedHops > 0) {
+      const landedStatus = session.chosenPath![err.completedHops - 1].to;
+      stream.markdown(formatPartialTransitionFailure(
+        session.ticketKey, landedStatus, err.completedHops, err.totalHops, session.targetStatus!, err.message,
+      ));
+      return guidedTransitionLoadedTicketResult(session.ticketKey, session.projectKey, session.issueType);
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    logDiag('jira.participant', 'error', message, {});
+    stream.markdown(message);
+    return guidedTransitionLoadedTicketResult(session.ticketKey, session.projectKey, session.issueType);
+  }
+  const hops = session.chosenPath!.length;
+  stream.markdown(
+    hops > 1
+      ? `**${session.ticketKey}** moved to **${session.targetStatus}** (${hops} hops).`
+      : `**${session.ticketKey}** moved to **${session.targetStatus}**.`,
+  );
+  return guidedTransitionLoadedTicketResult(session.ticketKey, session.projectKey, session.issueType);
 }
 
 export function createJiraParticipant(
@@ -237,6 +529,23 @@ export function createJiraParticipant(
         }
         try {
           await executeCleanupBatch(session, ticketService, stream);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          logDiag('jira.participant', 'error', message, {});
+          stream.markdown(message);
+        }
+        return;
+      }
+    }
+
+    // Guided single-ticket transition (R2/F1) — user replied to the status/resolution/path/confirm
+    // choice point the "Transition it" chip opened. See continueGuidedTransition above.
+    if (getActiveJiraSession(chatContext)?.kinds.includes('guided-transition')) {
+      const session = ws.get<GuidedTransitionSession>(GUIDED_TRANSITION_SESSION_KEY);
+      if (session) {
+        const guidedWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+        try {
+          return await continueGuidedTransition(session, request.prompt, jiraClient, ticketService, stream, ws, guidedWorkspaceRoot);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logDiag('jira.participant', 'error', message, {});
@@ -880,9 +1189,11 @@ export function createJiraParticipant(
       stream.markdown(
         '**@jira** manages Jira tickets in natural language — create, view, comment, update ' +
         'fields, transition, and search. Tell me what you need, or try one of the suggestions ' +
-        'below.',
+        'below.\n\n' + SAVED_FILTER_TIP,
       );
-      const greetingState: JiraFollowupState = { kind: 'greeting' };
+      // R4/AE3: never fabricate a placeholder ticket key — the third chip only appears when the
+      // current branch actually resolves to one.
+      const greetingState: JiraFollowupState = { kind: 'greeting', branchKey: resolveTicketFromBranch() ?? undefined };
       return { metadata: { jiraFollowup: greetingState } };
     }
 
@@ -1222,13 +1533,25 @@ export function createJiraParticipant(
             await ws.update('jira.session.searchResult', searchSession);
           }
           const searchFieldMeta = config.searchFields.length > 0 ? await ticketService.getFieldMeta() : [];
-          result = jqlLabel + await ticketService.searchTickets(resolvedJql, config.baseUrl, config.searchFields, searchFieldMeta);
-          break;
+          const searchResult = jqlLabel + await ticketService.searchTickets(resolvedJql, config.baseUrl, config.searchFields, searchFieldMeta);
+          // U5/R9: the search-results table's Actions column can contain real command links
+          // (view/load), so this response needs the trusted-markdown gate the shared tail below
+          // doesn't apply. searchJql doesn't set `ticketKey`, so that shared tail wouldn't do
+          // anything for this case anyway (no follow-up-chip metadata) — return directly instead
+          // of widening the shared `result: string` variable's type for every other case.
+          stream.markdown(trustedChatMarkdown(searchResult));
+          return;
         }
         case 'transition': {
           if (!intent.targetStatus) {
-            result = 'Please specify a target status (e.g. "move to Done").';
-            break;
+            // R2/F1: the "Transition it" chip (and any other "transition {key}" prompt that
+            // names no status) now opens the guided flow instead of this dead-end message — the
+            // old static text is gone, not left dead alongside it (Definition of Done). A target
+            // status typed directly (e.g. "@jira move PROJ-123 to Done") never enters this branch
+            // at all, since `intent.targetStatus` is already set — it goes straight into the
+            // resolveAndApplyTransition call below, unchanged.
+            const guidedWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+            return await startGuidedTransition(ticketKey!, jiraClient, stream, ws, guidedWorkspaceRoot);
           }
           const targetStatus = intent.targetStatus;
           const transWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
@@ -1248,9 +1571,10 @@ export function createJiraParticipant(
               result = `**${ticketKey}** moved to **${transResult.toStatus}** (${transResult.hops} hop${transResult.hops > 1 ? 's' : ''}).`;
               break;
             case 'partialFailure':
-              result = `⚠️ **${ticketKey}** moved partway to **${transResult.landedStatus}** ` +
-                `(${transResult.completedHops} of ${transResult.totalHops} hops) but the next step to **${transResult.targetStatus}** failed: ${transResult.error} ` +
-                `The ticket is now in **${transResult.landedStatus}**, not its original status — check its current state before retrying.`;
+              result = formatPartialTransitionFailure(
+                ticketKey!, transResult.landedStatus, transResult.completedHops, transResult.totalHops,
+                transResult.targetStatus, transResult.error,
+              );
               break;
             case 'unavailable': {
               const available = transResult.available.map(name => `**${name}**`).join(', ');
@@ -1419,10 +1743,17 @@ export function createJiraParticipant(
           const loadFieldMeta = await ticketService.getFieldMeta();
           const loadAlwaysShow = new Set<string>(config.additionalDisplayFields);
           const loadHidden = new Set<string>(config.hiddenDisplayFields);
-          const hasSkippedAttachments = await handleLoadTicket(ticketKey!, ticketService, stream, ws, loadFieldMeta, loadAlwaysShow, loadHidden);
-          // R6: "after loading a ticket: add a comment, transition it" — the flagship example
-          // the plan names for follow-up chips.
-          const loadedState: JiraFollowupState = { kind: 'loadedTicket', ticketKey: ticketKey! };
+          const { hasSkippedAttachments, projectKey: loadedProjectKey, issueType: loadedIssueType } =
+            await handleLoadTicket(ticketKey!, ticketService, stream, ws, loadFieldMeta, loadAlwaysShow, loadHidden);
+          // R6/R7: "transition it, create a template from it, discover its workflow" — the
+          // flagship examples the plan names for follow-up chips, built from the ticket
+          // handleLoadTicket already fetched (KTD4 — no second getIssue call for the chips).
+          const loadedState: JiraFollowupState = {
+            kind: 'loadedTicket',
+            ticketKey: ticketKey!,
+            projectKey: loadedProjectKey,
+            issueType: loadedIssueType,
+          };
           // R13: carry the loaded ticket key on metadata instead of a visible marker. Empty
           // kinds when no load-skipped session started — keeps every detection check false.
           return {
@@ -1448,18 +1779,34 @@ export function createJiraParticipant(
           // delivered as follow-up chips (KTD14) rather than repeated as inline prose.
           stream.markdown(
             "I couldn't tell what you'd like to do. Try being more specific — name a ticket " +
-            'and an action — or try one of the suggestions below.',
+            'and an action — or try one of the suggestions below.\n\n' + SAVED_FILTER_TIP,
           );
-          const fallbackState: JiraFollowupState = { kind: 'fallback' };
+          // R4/AE3: same branch-resolution rule as greeting — never a fabricated ticket key.
+          const fallbackState: JiraFollowupState = { kind: 'fallback', branchKey: resolveTicketFromBranch() ?? undefined };
           return { metadata: { jiraFollowup: fallbackState } };
         }
       }
       stream.markdown(result);
       if (ticketKey) {
         // `justDid` lets computeJiraFollowups leave out a chip that would just repeat the
-        // action this operation itself performed (e.g. no "add a comment" chip right after
-        // addComment succeeded). R13: carry the ticket key on metadata instead of a visible marker.
-        const viewedState: JiraFollowupState = { kind: 'loadedTicket', ticketKey, justDid: intent.operation };
+        // action this operation itself performed (e.g. no "transition it" chip right after
+        // `transition` succeeded). R13: carry the ticket key on metadata instead of a visible
+        // marker. R6/R7: the "Create a template" chip only needs the ticket key (free). The
+        // "Discover workflow" chip additionally needs the issue type — KTD4 deliberately reads
+        // that from data already in hand rather than an extra fetch, and none of the operations
+        // landing in this shared tail (addComment, updateField, transition, …) already have the
+        // raw issue in scope, so this site leaves issueType empty and computeJiraFollowups omits
+        // that one chip here rather than paying for a fresh `getIssue` call on every response.
+        // `loadTicket`'s own case above populates issueType properly, since it already fetched
+        // the issue for the ticket view itself.
+        const tailProjectKey = extractProjectKeyFromTicketKey(ticketKey) ?? ticketKey.split('-')[0];
+        const viewedState: JiraFollowupState = {
+          kind: 'loadedTicket',
+          ticketKey,
+          projectKey: tailProjectKey,
+          issueType: '',
+          justDid: intent.operation,
+        };
         return { metadata: { jiraFollowup: viewedState, ...withLastTicket(ticketKey).metadata } };
       }
     } catch (err) {
