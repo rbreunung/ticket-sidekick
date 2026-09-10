@@ -423,10 +423,8 @@ export function findGuidedDirectTransition(transitions: JiraTransition[], target
  * same convention used at every other guided-transition choice point. */
 export function parseGuidedTransitionPathPick(reply: string, pathCount: number): number | 'cancel' | 'invalid' {
   if (isCancellation(reply)) return 'cancel';
-  const trimmed = reply.trim();
-  const n = parseInt(trimmed, 10);
-  if (!isNaN(n) && String(n) === trimmed && n >= 1 && n <= pathCount) return n;
-  return 'invalid';
+  const options = Array.from({ length: pathCount }, (_, i) => i + 1);
+  return pickByNumberOrName(reply, options, String) ?? 'invalid';
 }
 
 /** KTD5: one path's clickable-option label, e.g. "In Progress → In Review → Done (2 hops)" —
@@ -465,6 +463,22 @@ export function buildGuidedTransitionConfirmSummary(
     lines.push(`Resolution: **${resolution}**`);
   }
   return lines.join('\n\n');
+}
+
+/** Shared wording for a multi-hop transition that landed partway before a later hop failed —
+ * used by both the guided single-ticket flow's confirm step and `resolveAndApplyTransition`'s
+ * own `partialFailure` case, which previously each hand-wrote the identical message. */
+export function formatPartialTransitionFailure(
+  ticketKey: string,
+  landedStatus: string,
+  completedHops: number,
+  totalHops: number,
+  targetStatus: string,
+  errorMessage: string,
+): string {
+  return `⚠️ **${ticketKey}** moved partway to **${landedStatus}** (${completedHops} of ${totalHops} hops) ` +
+    `but the next step to **${targetStatus}** failed: ${errorMessage} The ticket is now in **${landedStatus}**, ` +
+    `not its original status — check its current state before retrying.`;
 }
 
 // Defensive sanitizer over LLM history text (llmHelpers.ts): no code path emits HTML-comment

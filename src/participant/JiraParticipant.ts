@@ -12,9 +12,9 @@ import {
   type GuidedTransitionSession,
   buildGuidedTransitionStatusOptions, parseGuidedTransitionStatusPick, findGuidedDirectTransition,
   parseGuidedTransitionPathPick, formatTransitionPathOption, parseGuidedTransitionResolutionPick,
-  buildGuidedTransitionConfirmSummary,
+  buildGuidedTransitionConfirmSummary, extractProjectKeyFromTicketKey, formatPartialTransitionFailure,
 } from './sessionState';
-import { findPath, findAllPaths, loadWorkflowCache, resolveAndApplyTransition } from '../services/WorkflowService';
+import { findPath, findAllPaths, loadWorkflowCache, resolveAndApplyTransition, findRepresentativeTicket } from '../services/WorkflowService';
 import type { CachedTransition, WorkflowGraph } from '../services/WorkflowService';
 import type { CleanupRule } from '../templates/TemplateService';
 import type { Operation, ParsedIntent } from './jira/llmHelpers';
@@ -198,10 +198,10 @@ async function streamGuidedTransitionConfirm(
  * not the cache format, which is out of scope for this unit — see the report). A multi-hop path's
  * final transition only becomes real once the ticket has actually moved through the earlier hops,
  * so there is no live data for it on the ticket we actually have. This samples one real ticket
- * already sitting in the second-to-last status — the same "representative ticket via JQL" technique
- * `discoverWorkflow` itself already uses — and reads *that* ticket's live transitions to find the
- * matching one by name/target. No representative ticket found (or the lookup fails outright)
- * degrades to "not required", matching the plan's own Assumptions section for missing metadata.
+ * already sitting in the second-to-last status — via the shared `findRepresentativeTicket` helper
+ * `discoverWorkflow` itself uses — and reads *that* ticket's live transitions to find the matching
+ * one by name/target. No representative ticket found (or the lookup fails outright) degrades to
+ * "not required", matching the plan's own Assumptions section for missing metadata.
  */
 async function resolveFinalHopResolution(
   jiraClient: IJiraClient,
@@ -214,11 +214,7 @@ async function resolveFinalHopResolution(
   const finalHop = path[path.length - 1];
   const priorStatus = path[path.length - 2].to;
   try {
-    const search = await jiraClient.searchJql(
-      `project = ${projectKey} AND issuetype = "${issueType}" AND status = "${priorStatus}" ORDER BY updated DESC`,
-      1,
-    );
-    const repKey = search.issues[0]?.key;
+    const repKey = await findRepresentativeTicket(jiraClient, projectKey, issueType, priorStatus);
     if (!repKey) return notRequired;
     const liveTransitions = await jiraClient.getTransitions(repKey);
     const match = liveTransitions.find((t) => t.name === finalHop.name && t.to.name === finalHop.to);
@@ -245,7 +241,7 @@ async function startGuidedTransition(
 ): Promise<vscode.ChatResult> {
   const issue = await jiraClient.getIssue(ticketKey);
   const currentStatus = issue.fields.status.name;
-  const projectKey = ticketKey.split('-')[0];
+  const projectKey = extractProjectKeyFromTicketKey(ticketKey) ?? ticketKey.split('-')[0];
   const issueType = (issue.fields.issuetype as { name?: string } | undefined)?.name ?? '';
   const directTransitions = await jiraClient.getTransitions(ticketKey);
   const graph = loadWorkflowCache(workspaceRoot)[projectKey]?.[issueType]?.graph;
@@ -363,11 +359,9 @@ async function continueGuidedTransition(
   } catch (err) {
     if (err instanceof PartialTransitionError && err.completedHops > 0) {
       const landedStatus = session.chosenPath![err.completedHops - 1].to;
-      stream.markdown(
-        `⚠️ **${session.ticketKey}** moved partway to **${landedStatus}** (${err.completedHops} of ${err.totalHops} hops) ` +
-        `but the next step to **${session.targetStatus}** failed: ${err.message} The ticket is now in **${landedStatus}**, ` +
-        `not its original status — check its current state before retrying.`,
-      );
+      stream.markdown(formatPartialTransitionFailure(
+        session.ticketKey, landedStatus, err.completedHops, err.totalHops, session.targetStatus!, err.message,
+      ));
       return guidedTransitionLoadedTicketResult(session.ticketKey, session.projectKey, session.issueType);
     }
     const message = err instanceof Error ? err.message : String(err);
@@ -1577,9 +1571,10 @@ export function createJiraParticipant(
               result = `**${ticketKey}** moved to **${transResult.toStatus}** (${transResult.hops} hop${transResult.hops > 1 ? 's' : ''}).`;
               break;
             case 'partialFailure':
-              result = `⚠️ **${ticketKey}** moved partway to **${transResult.landedStatus}** ` +
-                `(${transResult.completedHops} of ${transResult.totalHops} hops) but the next step to **${transResult.targetStatus}** failed: ${transResult.error} ` +
-                `The ticket is now in **${transResult.landedStatus}**, not its original status — check its current state before retrying.`;
+              result = formatPartialTransitionFailure(
+                ticketKey!, transResult.landedStatus, transResult.completedHops, transResult.totalHops,
+                transResult.targetStatus, transResult.error,
+              );
               break;
             case 'unavailable': {
               const available = transResult.available.map(name => `**${name}**`).join(', ');
@@ -1804,7 +1799,7 @@ export function createJiraParticipant(
         // that one chip here rather than paying for a fresh `getIssue` call on every response.
         // `loadTicket`'s own case above populates issueType properly, since it already fetched
         // the issue for the ticket view itself.
-        const tailProjectKey = ticketKey.split('-')[0];
+        const tailProjectKey = extractProjectKeyFromTicketKey(ticketKey) ?? ticketKey.split('-')[0];
         const viewedState: JiraFollowupState = {
           kind: 'loadedTicket',
           ticketKey,

@@ -100,9 +100,24 @@ export function findAllPaths(
   // genuinely shorter path in favor of a longer one found first.
   const results: CachedTransition[][] = [];
 
+  // Depth bounds the length of any one path; it does not bound the *branching factor* per node,
+  // so a graph that is both densely connected and forced into a long shortest path (many statuses,
+  // many transitions each) could still make the DFS below examine an impractically large number of
+  // edges before it finishes. This is a hard ceiling on total work performed — orthogonal to the
+  // depth bound above and to the "no early exit on result count" rule: it never stops the search
+  // just because maxPaths results already exist, only once the search has done far more work than
+  // any real workflow graph should require.
+  const MAX_DFS_VISITS = 5000;
+  let visits = 0;
+  let budgetExceeded = false;
+
   function dfs(state: string, path: CachedTransition[], visited: Set<string>): void {
-    if (path.length >= maxDepth) return;
+    if (budgetExceeded || path.length >= maxDepth) return;
     for (const t of graph[state] ?? []) {
+      if (++visits > MAX_DFS_VISITS) {
+        budgetExceeded = true;
+        return;
+      }
       if (t.to === to) {
         results.push([...path, t]);
         continue;
@@ -117,7 +132,28 @@ export function findAllPaths(
   dfs(from, [], new Set([from]));
 
   results.sort((a, b) => a.length - b.length);
+  // The work budget hit before enumeration finished and nothing was collected yet — still surface
+  // the one path the earlier BFS already found rather than returning nothing.
+  if (budgetExceeded && results.length === 0) return [shortest];
   return results.slice(0, maxPaths);
+}
+
+/** Finds one real ticket currently sitting in `status` for `projectKey`/`issueType` — the
+ * "representative ticket" technique `discoverWorkflow` uses to sample each status's live
+ * transitions, and reused by the guided single-ticket transition flow (`JiraParticipant.ts`'s
+ * `resolveFinalHopResolution`) to read a multi-hop path's final-hop resolution requirement off a
+ * ticket that has actually made that transition. Returns `undefined` when no such ticket exists. */
+export async function findRepresentativeTicket(
+  client: IJiraClient,
+  projectKey: string,
+  issueType: string,
+  status: string,
+): Promise<string | undefined> {
+  const search = await client.searchJql(
+    `project = ${projectKey} AND issuetype = "${issueType}" AND status = "${status}" ORDER BY updated DESC`,
+    1,
+  );
+  return search.issues[0]?.key;
 }
 
 export async function discoverWorkflow(
@@ -127,21 +163,16 @@ export async function discoverWorkflow(
 ): Promise<{ graph: WorkflowGraph; skippedStatuses: string[] }> {
   const statusNames = await client.getProjectStatuses(projectKey, issueType);
 
-  const searches = await Promise.all(
-    statusNames.map((status) =>
-      client.searchJql(
-        `project = ${projectKey} AND issuetype = "${issueType}" AND status = "${status}" ORDER BY updated DESC`,
-        1,
-      ),
-    ),
+  const representativeKeys = await Promise.all(
+    statusNames.map((status) => findRepresentativeTicket(client, projectKey, issueType, status)),
   );
 
   const representativeByStatus = new Map<string, string>();
   const skippedStatuses: string[] = [];
   for (let i = 0; i < statusNames.length; i++) {
-    const issue = searches[i].issues[0];
-    if (issue) {
-      representativeByStatus.set(statusNames[i], issue.key);
+    const key = representativeKeys[i];
+    if (key) {
+      representativeByStatus.set(statusNames[i], key);
     } else {
       skippedStatuses.push(statusNames[i]);
     }

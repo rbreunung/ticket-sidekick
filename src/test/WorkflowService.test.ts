@@ -128,6 +128,28 @@ describe('findAllPaths', () => {
   it('returns a single empty-array path when already at the target', () => {
     expect(findAllPaths(graph, 'Done', 'Done')).toEqual([[]]);
   });
+
+  it('terminates quickly and still returns a usable path on a densely-connected, highly-cyclic graph', () => {
+    // A fully-connected graph over many statuses, each pointing to every other — the kind of
+    // pathological shape the DFS's work-budget backstop guards against (branching factor alone,
+    // independent of the depth bound, could otherwise blow up combinatorially).
+    const statuses = Array.from({ length: 12 }, (_, i) => `S${i}`);
+    const dense: WorkflowGraph = {};
+    for (const s of statuses) {
+      dense[s] = statuses
+        .filter((other) => other !== s)
+        .map((other) => ({ id: `${s}->${other}`, name: `${s} to ${other}`, to: other }));
+    }
+    const start = Date.now();
+    const paths = findAllPaths(dense, 'S0', 'S11');
+    expect(Date.now() - start).toBeLessThan(2000);
+    expect(paths.length).toBeGreaterThan(0);
+    expect(paths.length).toBeLessThanOrEqual(3);
+    // Whatever is returned must still be a genuine route from S0 to S11.
+    for (const path of paths) {
+      expect(path.at(-1)?.to).toBe('S11');
+    }
+  });
 });
 
 describe('loadWorkflowCache', () => {

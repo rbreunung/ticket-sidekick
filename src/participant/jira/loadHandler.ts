@@ -6,7 +6,7 @@ import type { JiraAttachment, JiraComment, JiraFieldMeta, JiraIssue, JiraRemoteL
 import { formatIssueFields, formatKeyLink } from '../../services/TicketService';
 import type { TicketService } from '../../services/TicketService';
 import type { LoadSkippedSession } from '../sessionState';
-import { rewriteAttachmentLinks, buildChatCommandLink } from '../sessionState';
+import { rewriteAttachmentLinks, buildChatCommandLink, extractProjectKeyFromTicketKey } from '../sessionState';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 
 export function serializeCommentsForLLM(comments: JiraComment[]): string {
@@ -219,7 +219,11 @@ export async function handleLoadTicket(
 ): Promise<LoadTicketResult> {
   // No issue fetched yet on this early-out — fall back to the key's own project prefix and an
   // unknown issue type, same as elsewhere in this file when there's nothing better to read.
-  const noWorkspaceResult: LoadTicketResult = { hasSkippedAttachments: false, projectKey: ticketKey.split('-')[0], issueType: '' };
+  const noWorkspaceResult: LoadTicketResult = {
+    hasSkippedAttachments: false,
+    projectKey: extractProjectKeyFromTicketKey(ticketKey) ?? ticketKey.split('-')[0],
+    issueType: '',
+  };
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   if (!workspaceFolder) {
     stream.markdown('No workspace folder is open. Open a folder to use `@jira load`.');
@@ -228,7 +232,7 @@ export async function handleLoadTicket(
   const wsRoot = workspaceFolder.uri;
 
   const issue = await ticketService.getIssue(ticketKey);
-  const projectKey = ticketKey.split('-')[0];
+  const projectKey = extractProjectKeyFromTicketKey(ticketKey) ?? ticketKey.split('-')[0];
   const issueType = (issue.fields.issuetype as { name?: string } | undefined)?.name ?? '';
   const comments = await ticketService.getAllComments(ticketKey);
   const attachments = ticketService.getAttachments(issue);
