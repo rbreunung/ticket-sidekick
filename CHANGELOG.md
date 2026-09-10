@@ -1,3 +1,20 @@
+## [0.6.0] - 2026-09-10
+
+## What's Changed
+* feat(jira): add jira_loadTicket and jira_downloadAttachment tools
+* feat(jira): batch .eml import as a third ReportImportDescriptor kind
+* feat(jira): opt-in cleanupFields extra columns for cleanup/transition review table
+* feat(bitbucket): make smart mode select and run persona lenses
+* feat: native VS Code chat interaction (session continuity via metadata, clickable replies)
+* feat(jira): clickable replies + metadata last-ticket context (U9/U10)
+* feat(tools): expose @jira and @bitbucket tools on VS Code startup
+* fix(bitbucket): correct severity-table rendering defects
+* fix(jira,bitbucket): close injection gaps from PR #52/#53 review
+* fix(jira): make follow-up chips complete instead of dead-ending
+
+
+**Full Changelog**: https://github.com/rbreunung/ticket-sidekick/compare/0.5.4...0.6.0
+
 ## [0.5.4] - 2026-09-03
 
 ## What's Changed
