@@ -212,52 +212,105 @@ describe('isGreetingOrEmpty', () => {
 });
 
 describe('computeJiraFollowups', () => {
-  it('returns example prompts for a greeting, capped at 3', () => {
+  it('returns exactly 2 chips for a greeting with no resolvable branch key', () => {
     const chips = computeJiraFollowups({ kind: 'greeting' });
 
-    expect(chips.length).toBeGreaterThan(0);
-    expect(chips.length).toBeLessThanOrEqual(3);
+    expect(chips.length).toBe(2);
     for (const chip of chips) {
       expect(chip.prompt.length).toBeGreaterThan(0);
     }
+    // R1: the comment chip is gone everywhere.
+    expect(chips.some((c) => /comment/i.test(c.prompt))).toBe(false);
+    // R4/AE3: never a fabricated placeholder ticket key.
+    expect(chips.some((c) => c.prompt.includes('PROJ-123'))).toBe(false);
   });
 
-  it('returns example prompts for the unclassifiable-prompt fallback, capped at 3', () => {
+  it('returns 3 chips for a greeting with a resolved branch key, including "show me {key}"', () => {
+    const chips = computeJiraFollowups({ kind: 'greeting', branchKey: 'PROJ-123' });
+
+    expect(chips.length).toBe(3);
+    expect(chips.some((c) => /show me proj-123/i.test(c.prompt))).toBe(true);
+    expect(chips.length).toBeLessThanOrEqual(3);
+  });
+
+  it('returns exactly 1 chip for the unclassifiable-prompt fallback with no resolvable branch key', () => {
     const chips = computeJiraFollowups({ kind: 'fallback' });
 
-    expect(chips.length).toBeGreaterThan(0);
-    expect(chips.length).toBeLessThanOrEqual(3);
+    expect(chips.length).toBe(1);
+    expect(chips.some((c) => /search/i.test(c.prompt))).toBe(true);
+    // R1: no comment chip.
+    expect(chips.some((c) => /comment/i.test(c.prompt))).toBe(false);
   });
 
-  it('returns "add a comment"/"transition it"-shaped chips after loading a ticket', () => {
-    const state: JiraFollowupState = { kind: 'loadedTicket', ticketKey: 'PROJ-123' };
+  it('returns 2 chips for the fallback with a resolved branch key, including "show me {key}"', () => {
+    const chips = computeJiraFollowups({ kind: 'fallback', branchKey: 'PROJ-123' });
+
+    expect(chips.length).toBe(2);
+    expect(chips.some((c) => /show me proj-123/i.test(c.prompt))).toBe(true);
+    expect(chips.some((c) => /comment/i.test(c.prompt))).toBe(false);
+  });
+
+  it('returns "transition it"/"create a template"/"discover workflow"-shaped chips after loading a ticket, with no comment chip', () => {
+    const state: JiraFollowupState = { kind: 'loadedTicket', ticketKey: 'PROJ-123', projectKey: 'PROJ', issueType: 'Bug' };
 
     const chips = computeJiraFollowups(state);
 
     expect(chips.length).toBeLessThanOrEqual(3);
-    expect(chips.some((c) => /comment/i.test(c.prompt) || /comment/i.test(c.label ?? ''))).toBe(true);
+    expect(chips.some((c) => /comment/i.test(c.prompt) || /comment/i.test(c.label ?? ''))).toBe(false);
     expect(chips.some((c) => /transition/i.test(c.prompt) || /transition/i.test(c.label ?? ''))).toBe(true);
-    // The prompt itself names the real ticket key so it works without relying on pronoun
-    // resolution against chat history.
-    expect(chips.every((c) => c.prompt.includes('PROJ-123'))).toBe(true);
+    expect(chips.some((c) => /template/i.test(c.prompt) || /template/i.test(c.label ?? ''))).toBe(true);
+    expect(chips.some((c) => /discover workflow/i.test(c.prompt) || /discover workflow/i.test(c.label ?? ''))).toBe(true);
+    // The prompt itself names the real ticket key/project/issue type so it works without relying
+    // on pronoun resolution against chat history, and both new chips carry the state's own
+    // projectKey/issueType (KTD4) rather than needing a re-fetch when clicked.
+    expect(chips.find((c) => /transition/i.test(c.prompt))?.prompt).toContain('PROJ-123');
+    expect(chips.find((c) => /generate a template/i.test(c.prompt))?.prompt).toContain('PROJ-123');
+    expect(chips.find((c) => /discover workflow/i.test(c.prompt))?.prompt).toContain('PROJ Bug');
   });
 
-  it('omits the "add a comment" chip right after addComment succeeded', () => {
-    const state: JiraFollowupState = { kind: 'loadedTicket', ticketKey: 'PROJ-123', justDid: 'addComment' };
+  it('omits the "discover workflow" chip when issueType is unknown, keeping the other two', () => {
+    // JiraParticipant.ts's shared post-operation tail (addComment, updateField, transition, …)
+    // deliberately leaves issueType empty rather than paying for an extra getIssue call just for
+    // this one chip — computeJiraFollowups must degrade to omitting it, not render a broken
+    // "Discover workflow for PROJ/" chip with a blank issue type.
+    const state: JiraFollowupState = { kind: 'loadedTicket', ticketKey: 'PROJ-123', projectKey: 'PROJ', issueType: '' };
 
     const chips = computeJiraFollowups(state);
 
-    expect(chips.some((c) => /add a comment/i.test(c.prompt))).toBe(false);
+    expect(chips.some((c) => /discover workflow/i.test(c.prompt))).toBe(false);
     expect(chips.some((c) => /transition/i.test(c.prompt))).toBe(true);
+    expect(chips.some((c) => /template/i.test(c.prompt))).toBe(true);
   });
 
-  it('omits the "transition it" chip right after transition succeeded', () => {
-    const state: JiraFollowupState = { kind: 'loadedTicket', ticketKey: 'PROJ-123', justDid: 'transition' };
+  it('omits the "create a template" chip right after generateTemplate succeeded, keeping the other two', () => {
+    const state: JiraFollowupState = { kind: 'loadedTicket', ticketKey: 'PROJ-123', projectKey: 'PROJ', issueType: 'Bug', justDid: 'generateTemplate' };
+
+    const chips = computeJiraFollowups(state);
+
+    expect(chips.some((c) => /template/i.test(c.prompt))).toBe(false);
+    expect(chips.some((c) => /transition/i.test(c.prompt))).toBe(true);
+    expect(chips.some((c) => /discover workflow/i.test(c.prompt))).toBe(true);
+  });
+
+  it('omits the "discover workflow" chip right after discoverWorkflow succeeded, keeping the other two', () => {
+    const state: JiraFollowupState = { kind: 'loadedTicket', ticketKey: 'PROJ-123', projectKey: 'PROJ', issueType: 'Bug', justDid: 'discoverWorkflow' };
+
+    const chips = computeJiraFollowups(state);
+
+    expect(chips.some((c) => /discover workflow/i.test(c.prompt))).toBe(false);
+    expect(chips.some((c) => /transition/i.test(c.prompt))).toBe(true);
+    expect(chips.some((c) => /template/i.test(c.prompt))).toBe(true);
+  });
+
+  it('omits only the "transition it" chip right after transition succeeded, keeping the two new chips', () => {
+    const state: JiraFollowupState = { kind: 'loadedTicket', ticketKey: 'PROJ-123', projectKey: 'PROJ', issueType: 'Bug', justDid: 'transition' };
 
     const chips = computeJiraFollowups(state);
 
     expect(chips.some((c) => /transition/i.test(c.prompt))).toBe(false);
-    expect(chips.some((c) => /add a comment/i.test(c.prompt))).toBe(true);
+    expect(chips.some((c) => /template/i.test(c.prompt))).toBe(true);
+    expect(chips.some((c) => /discover workflow/i.test(c.prompt))).toBe(true);
+    expect(chips.length).toBeLessThanOrEqual(3);
   });
 
   it('returns no chips when there is no prior operation state', () => {

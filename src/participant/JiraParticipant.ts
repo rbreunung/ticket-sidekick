@@ -103,12 +103,22 @@ function olderCommentsNotShownLink(count: number): vscode.MarkdownString {
 
 const GUIDED_TRANSITION_SESSION_KEY = 'jira.session.guidedTransition';
 
+// R5: static, non-clickable prose appended to the greeting and R8-fallback responses — no client
+// capability exists to look up a user's actual saved filters, so this stays plain text rather than
+// a chip that would need to fabricate a filter name (a failure mode this plan removes elsewhere).
+const SAVED_FILTER_TIP =
+  '_Tip: if you have a saved Jira filter, try "search from filter \'My open bugs\'" or "search filter 12345"._';
+
 // R13: the same "loadedTicket" follow-up shape the bottom of the main handler attaches to every
 // ordinary operation result — reproduced here so the guided flow's own early-return continuations
 // (which bypass that shared tail) still leave the user with the usual next-step chips and
 // lastTicketKey tracking once the flow ends, instead of silently dropping both.
-function guidedTransitionLoadedTicketResult(ticketKey: string): { metadata: Record<string, unknown> } {
-  const followupState: JiraFollowupState = { kind: 'loadedTicket', ticketKey, justDid: 'transition' };
+function guidedTransitionLoadedTicketResult(
+  ticketKey: string,
+  projectKey: string,
+  issueType: string,
+): { metadata: Record<string, unknown> } {
+  const followupState: JiraFollowupState = { kind: 'loadedTicket', ticketKey, projectKey, issueType, justDid: 'transition' };
   return { metadata: { jiraFollowup: followupState, ...withLastTicket(ticketKey).metadata } };
 }
 
@@ -243,7 +253,7 @@ async function startGuidedTransition(
 
   if (statusOptions.length === 0) {
     stream.markdown(`**${ticketKey}** is in **${currentStatus}** and has no available transitions.`);
-    return guidedTransitionLoadedTicketResult(ticketKey);
+    return guidedTransitionLoadedTicketResult(ticketKey, projectKey, issueType);
   }
 
   const session: GuidedTransitionSession = {
@@ -309,7 +319,7 @@ async function continueGuidedTransition(
         ? ''
         : ` Run \`@jira discover workflow ${session.projectKey} ${session.issueType || '<issuetype>'}\` to enable multi-hop transitions.`;
       stream.markdown(`No transition to **${pick}** available from **${session.currentStatus}**.${availableText}${cacheHint}`);
-      return guidedTransitionLoadedTicketResult(session.ticketKey);
+      return guidedTransitionLoadedTicketResult(session.ticketKey, session.projectKey, session.issueType);
     }
     session.pathOptions = paths;
     session.step = 'pick-path';
@@ -358,12 +368,12 @@ async function continueGuidedTransition(
         `but the next step to **${session.targetStatus}** failed: ${err.message} The ticket is now in **${landedStatus}**, ` +
         `not its original status — check its current state before retrying.`,
       );
-      return guidedTransitionLoadedTicketResult(session.ticketKey);
+      return guidedTransitionLoadedTicketResult(session.ticketKey, session.projectKey, session.issueType);
     }
     const message = err instanceof Error ? err.message : String(err);
     logDiag('jira.participant', 'error', message, {});
     stream.markdown(message);
-    return guidedTransitionLoadedTicketResult(session.ticketKey);
+    return guidedTransitionLoadedTicketResult(session.ticketKey, session.projectKey, session.issueType);
   }
   const hops = session.chosenPath!.length;
   stream.markdown(
@@ -371,7 +381,7 @@ async function continueGuidedTransition(
       ? `**${session.ticketKey}** moved to **${session.targetStatus}** (${hops} hops).`
       : `**${session.ticketKey}** moved to **${session.targetStatus}**.`,
   );
-  return guidedTransitionLoadedTicketResult(session.ticketKey);
+  return guidedTransitionLoadedTicketResult(session.ticketKey, session.projectKey, session.issueType);
 }
 
 export function createJiraParticipant(
@@ -1185,9 +1195,11 @@ export function createJiraParticipant(
       stream.markdown(
         '**@jira** manages Jira tickets in natural language — create, view, comment, update ' +
         'fields, transition, and search. Tell me what you need, or try one of the suggestions ' +
-        'below.',
+        'below.\n\n' + SAVED_FILTER_TIP,
       );
-      const greetingState: JiraFollowupState = { kind: 'greeting' };
+      // R4/AE3: never fabricate a placeholder ticket key — the third chip only appears when the
+      // current branch actually resolves to one.
+      const greetingState: JiraFollowupState = { kind: 'greeting', branchKey: resolveTicketFromBranch() ?? undefined };
       return { metadata: { jiraFollowup: greetingState } };
     }
 
@@ -1730,10 +1742,17 @@ export function createJiraParticipant(
           const loadFieldMeta = await ticketService.getFieldMeta();
           const loadAlwaysShow = new Set<string>(config.additionalDisplayFields);
           const loadHidden = new Set<string>(config.hiddenDisplayFields);
-          const hasSkippedAttachments = await handleLoadTicket(ticketKey!, ticketService, stream, ws, loadFieldMeta, loadAlwaysShow, loadHidden);
-          // R6: "after loading a ticket: add a comment, transition it" — the flagship example
-          // the plan names for follow-up chips.
-          const loadedState: JiraFollowupState = { kind: 'loadedTicket', ticketKey: ticketKey! };
+          const { hasSkippedAttachments, projectKey: loadedProjectKey, issueType: loadedIssueType } =
+            await handleLoadTicket(ticketKey!, ticketService, stream, ws, loadFieldMeta, loadAlwaysShow, loadHidden);
+          // R6/R7: "transition it, create a template from it, discover its workflow" — the
+          // flagship examples the plan names for follow-up chips, built from the ticket
+          // handleLoadTicket already fetched (KTD4 — no second getIssue call for the chips).
+          const loadedState: JiraFollowupState = {
+            kind: 'loadedTicket',
+            ticketKey: ticketKey!,
+            projectKey: loadedProjectKey,
+            issueType: loadedIssueType,
+          };
           // R13: carry the loaded ticket key on metadata instead of a visible marker. Empty
           // kinds when no load-skipped session started — keeps every detection check false.
           return {
@@ -1759,18 +1778,34 @@ export function createJiraParticipant(
           // delivered as follow-up chips (KTD14) rather than repeated as inline prose.
           stream.markdown(
             "I couldn't tell what you'd like to do. Try being more specific — name a ticket " +
-            'and an action — or try one of the suggestions below.',
+            'and an action — or try one of the suggestions below.\n\n' + SAVED_FILTER_TIP,
           );
-          const fallbackState: JiraFollowupState = { kind: 'fallback' };
+          // R4/AE3: same branch-resolution rule as greeting — never a fabricated ticket key.
+          const fallbackState: JiraFollowupState = { kind: 'fallback', branchKey: resolveTicketFromBranch() ?? undefined };
           return { metadata: { jiraFollowup: fallbackState } };
         }
       }
       stream.markdown(result);
       if (ticketKey) {
         // `justDid` lets computeJiraFollowups leave out a chip that would just repeat the
-        // action this operation itself performed (e.g. no "add a comment" chip right after
-        // addComment succeeded). R13: carry the ticket key on metadata instead of a visible marker.
-        const viewedState: JiraFollowupState = { kind: 'loadedTicket', ticketKey, justDid: intent.operation };
+        // action this operation itself performed (e.g. no "transition it" chip right after
+        // `transition` succeeded). R13: carry the ticket key on metadata instead of a visible
+        // marker. R6/R7: the "Create a template" chip only needs the ticket key (free). The
+        // "Discover workflow" chip additionally needs the issue type — KTD4 deliberately reads
+        // that from data already in hand rather than an extra fetch, and none of the operations
+        // landing in this shared tail (addComment, updateField, transition, …) already have the
+        // raw issue in scope, so this site leaves issueType empty and computeJiraFollowups omits
+        // that one chip here rather than paying for a fresh `getIssue` call on every response.
+        // `loadTicket`'s own case above populates issueType properly, since it already fetched
+        // the issue for the ticket view itself.
+        const tailProjectKey = ticketKey.split('-')[0];
+        const viewedState: JiraFollowupState = {
+          kind: 'loadedTicket',
+          ticketKey,
+          projectKey: tailProjectKey,
+          issueType: '',
+          justDid: intent.operation,
+        };
         return { metadata: { jiraFollowup: viewedState, ...withLastTicket(ticketKey).metadata } };
       }
     } catch (err) {

@@ -1640,12 +1640,18 @@ export function isGreetingOrEmpty(prompt: string): boolean {
  * `vscode.ChatResult.metadata` so its `followupProvider` can compute the right suggestion chips
  * for the response that was just streamed, without re-deriving state from response text. */
 export type JiraFollowupState =
-  | { kind: 'greeting' }
-  | { kind: 'fallback' }
+  // `branchKey`, when set, is the ticket key resolved from the current git branch — the only
+  // source `computeJiraFollowups` may use for a "Show me {key}" chip (R4/AE3): never a fabricated
+  // placeholder. `JiraParticipant.ts` resolves it once via `resolveTicketFromBranch()` before
+  // building this state, keeping this function a pure read of its input.
+  | { kind: 'greeting'; branchKey?: string }
+  | { kind: 'fallback'; branchKey?: string }
   // `justDid`, when set, names the operation that just ran on `ticketKey` — omitted for a plain
-  // ticket view, present for a write (e.g. `addComment`, `transition`) so the chip set below can
-  // leave out a suggestion that would just repeat the action the user already took.
-  | { kind: 'loadedTicket'; ticketKey: string; justDid?: Operation }
+  // ticket view, present for a write (e.g. `transition`) so the chip set below can leave out a
+  // suggestion that would just repeat the action the user already took. `projectKey`/`issueType`
+  // (KTD4) are the loaded ticket's own values, read once from the already-fetched issue, so the
+  // "Discover workflow" chip below never needs a re-fetch.
+  | { kind: 'loadedTicket'; ticketKey: string; projectKey: string; issueType: string; justDid?: Operation }
   | { kind: 'none' };
 
 const JIRA_MAX_FOLLOWUPS = 3;
@@ -1658,29 +1664,55 @@ const JIRA_MAX_FOLLOWUPS = 3;
  */
 export function computeJiraFollowups(state: JiraFollowupState): FollowupSuggestion[] {
   switch (state.kind) {
-    case 'greeting':
-      return [
+    case 'greeting': {
+      // R4/AE3: no fabricated ticket key — "Show me {key}" only appears when the current git
+      // branch actually resolved to one.
+      const chips: FollowupSuggestion[] = [
         { prompt: 'create a ticket', label: 'Create a ticket' },
-        { prompt: 'show me PROJ-123', label: 'View a ticket' },
         { prompt: 'search my open tickets', label: 'Search tickets' },
-      ].slice(0, JIRA_MAX_FOLLOWUPS);
-    case 'fallback':
-      return [
-        { prompt: 'show me PROJ-123', label: 'View a ticket' },
-        { prompt: 'add a comment to PROJ-123', label: 'Add a comment' },
+      ];
+      if (state.branchKey) {
+        chips.push({ prompt: `show me ${state.branchKey}`, label: `Show me ${state.branchKey}` });
+      }
+      return chips.slice(0, JIRA_MAX_FOLLOWUPS);
+    }
+    case 'fallback': {
+      // R1/R4: the comment chip is gone; same branch-key rule as greeting for the ticket chip.
+      const chips: FollowupSuggestion[] = [
         { prompt: 'search my open tickets', label: 'Search tickets' },
-      ].slice(0, JIRA_MAX_FOLLOWUPS);
+      ];
+      if (state.branchKey) {
+        chips.push({ prompt: `show me ${state.branchKey}`, label: `Show me ${state.branchKey}` });
+      }
+      return chips.slice(0, JIRA_MAX_FOLLOWUPS);
+    }
     case 'loadedTicket': {
       // Leave out a suggestion that would just repeat the write the user already performed
-      // (e.g. don't offer "add a comment" right after `addComment` succeeded).
+      // (e.g. don't offer "transition" right after `transition` succeeded). R1: the comment
+      // chip is gone entirely. R6/R7: template/discover-workflow chips carry the loaded
+      // ticket's own key/project/issue-type — both operations already have everything they
+      // need, so neither can ever land on its own missing-parameter dead end (AE2).
       const chips: FollowupSuggestion[] = [];
-      if (state.justDid !== 'addComment') {
-        chips.push({ prompt: `add a comment to ${state.ticketKey}`, label: 'Add a comment' });
-      }
       if (state.justDid !== 'transition') {
         chips.push({ prompt: `transition ${state.ticketKey}`, label: 'Transition it' });
       }
-      return chips;
+      if (state.justDid !== 'generateTemplate') {
+        chips.push({
+          prompt: `generate a template from ${state.ticketKey}`,
+          label: `Create a template from ${state.ticketKey}`,
+        });
+      }
+      // `issueType` is only ever populated where the caller already had the issue in hand
+      // (loading/viewing a ticket) — deliberately never worth a fresh fetch just for this chip
+      // (see JiraParticipant.ts's shared post-operation tail). Omit rather than render a chip
+      // with a blank issue type.
+      if (state.justDid !== 'discoverWorkflow' && state.issueType) {
+        chips.push({
+          prompt: `discover workflow ${state.projectKey} ${state.issueType}`,
+          label: `Discover workflow for ${state.projectKey}/${state.issueType}`,
+        });
+      }
+      return chips.slice(0, JIRA_MAX_FOLLOWUPS);
     }
     case 'none':
       return [];

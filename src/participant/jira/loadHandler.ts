@@ -198,6 +198,16 @@ export async function loadTicketToWorkspace(
   return { downloadedCount: downloaded.size, skipped, writeErrors };
 }
 
+/** {@link handleLoadTicket}'s result: whether a skipped-attachments resume session started, plus
+ * the loaded ticket's own project key/issue type (R6/R7/KTD4) — read off the issue this function
+ * already fetches internally, so the `loadedTicket` follow-up chips built from it never need a
+ * second `getIssue` call. */
+export interface LoadTicketResult {
+  hasSkippedAttachments: boolean;
+  projectKey: string;
+  issueType: string;
+}
+
 export async function handleLoadTicket(
   ticketKey: string,
   ticketService: TicketService,
@@ -206,15 +216,20 @@ export async function handleLoadTicket(
   fieldMeta: JiraFieldMeta[],
   alwaysShowIds: Set<string>,
   hiddenIds: Set<string>,
-): Promise<boolean> {
+): Promise<LoadTicketResult> {
+  // No issue fetched yet on this early-out — fall back to the key's own project prefix and an
+  // unknown issue type, same as elsewhere in this file when there's nothing better to read.
+  const noWorkspaceResult: LoadTicketResult = { hasSkippedAttachments: false, projectKey: ticketKey.split('-')[0], issueType: '' };
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   if (!workspaceFolder) {
     stream.markdown('No workspace folder is open. Open a folder to use `@jira load`.');
-    return false;
+    return noWorkspaceResult;
   }
   const wsRoot = workspaceFolder.uri;
 
   const issue = await ticketService.getIssue(ticketKey);
+  const projectKey = ticketKey.split('-')[0];
+  const issueType = (issue.fields.issuetype as { name?: string } | undefined)?.name ?? '';
   const comments = await ticketService.getAllComments(ticketKey);
   const attachments = ticketService.getAttachments(issue);
 
@@ -262,7 +277,7 @@ export async function handleLoadTicket(
     await ws.update('jira.session.loadSkipped', { ticketKey, skipped } satisfies LoadSkippedSession);
     // R13: the referenced ticket key is carried on metadata by the caller (JiraParticipant's
     // loadTicket case) instead of a visible marker here.
-    return true;
+    return { hasSkippedAttachments: true, projectKey, issueType };
   }
-  return false;
+  return { hasSkippedAttachments: false, projectKey, issueType };
 }

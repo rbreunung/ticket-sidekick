@@ -196,8 +196,11 @@ describe('loadTicketToWorkspace (KTD8 integration)', () => {
 });
 
 // U3: handleLoadTicket() is the chat entry point that owns the 'load-skipped' resume session —
-// it must report back (via its boolean return) whether that session is now live, so
-// JiraParticipant.ts's loadTicket case can carry the matching jiraSession metadata (R1).
+// it must report back (via its return value) whether that session is now live, so
+// JiraParticipant.ts's loadTicket case can carry the matching jiraSession metadata (R1). Its
+// return also carries the loaded ticket's projectKey/issueType (followup-chip-reliability U3/
+// KTD4), read off the same `getIssue` call, so the loadedTicket follow-up chips never need a
+// second fetch.
 describe('handleLoadTicket — load-skipped session liveness (U3)', () => {
   beforeEach(() => {
     resetFakeFiles();
@@ -206,20 +209,21 @@ describe('handleLoadTicket — load-skipped session liveness (U3)', () => {
   const mockStream = () => ({ markdown: vi.fn() });
   const mockWs = () => ({ get: vi.fn(), update: vi.fn() });
 
-  it('returns true and stores the session when attachments were skipped', async () => {
+  it('returns hasSkippedAttachments: true and stores the session when attachments were skipped', async () => {
     const client = new MockJiraClient();
     const service = new TicketService(client);
     const stream = mockStream();
     const ws = mockWs();
 
-    const hasSkipped = await handleLoadTicket('PROJ-123', service, stream as never, ws as never, [], new Set(), new Set());
+    const result = await handleLoadTicket('PROJ-123', service, stream as never, ws as never, [], new Set(), new Set());
 
     // heap-dump.bin (application/octet-stream) is skipped in the PROJ-123 fixture.
-    expect(hasSkipped).toBe(true);
+    expect(result.hasSkippedAttachments).toBe(true);
+    expect(result.projectKey).toBe('PROJ');
     expect(ws.update).toHaveBeenCalledWith('jira.session.loadSkipped', expect.objectContaining({ ticketKey: 'PROJ-123' }));
   });
 
-  it('returns false and does not touch the session when nothing was skipped', async () => {
+  it('returns hasSkippedAttachments: false and does not touch the session when nothing was skipped', async () => {
     const client = new MockJiraClient();
     const originalGetIssue = client.getIssue.bind(client);
     client.getIssue = async (issueKey: string) => {
@@ -230,9 +234,9 @@ describe('handleLoadTicket — load-skipped session liveness (U3)', () => {
     const stream = mockStream();
     const ws = mockWs();
 
-    const hasSkipped = await handleLoadTicket('PROJ-123', service, stream as never, ws as never, [], new Set(), new Set());
+    const result = await handleLoadTicket('PROJ-123', service, stream as never, ws as never, [], new Set(), new Set());
 
-    expect(hasSkipped).toBe(false);
+    expect(result.hasSkippedAttachments).toBe(false);
     expect(ws.update).not.toHaveBeenCalledWith('jira.session.loadSkipped', expect.anything());
   });
 });
