@@ -1,3 +1,11 @@
+## [0.6.1] - 2026-09-11
+
+## What's Changed
+* fix(jira): propagate ChatResult from email/report-import dispatch branches
+
+
+**Full Changelog**: https://github.com/rbreunung/ticket-sidekick/compare/0.6.0...0.6.1
+
 ## [0.6.0] - 2026-09-10
 
 ## What's Changed
