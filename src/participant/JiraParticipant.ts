@@ -1257,29 +1257,25 @@ export function createJiraParticipant(
     }
 
     if (intent.operation === 'createFromEmail') {
-      await handleCreateFromEmail(request, stream, token, jiraClient, ticketService, configService, ws);
-      return;
+      return await handleCreateFromEmail(request, stream, token, jiraClient, ticketService, configService, ws);
     }
 
     if (intent.operation === 'addEmailComment') {
-      await handleAddEmailFromChat(request, stream, token, jiraClient, ticketService, configService, ws);
-      return;
+      return await handleAddEmailFromChat(request, stream, token, jiraClient, ticketService, configService, ws);
     }
 
     if (intent.operation === 'importVeracode') {
-      await handleImportVeracodeReport(request, stream, token, jiraClient, ticketService, ws, intent.projectKey);
-      return;
+      return await handleImportVeracodeReport(request, stream, token, jiraClient, ticketService, ws, intent.projectKey);
     }
 
     if (intent.operation === 'importWaltzReport') {
-      await handleImportWaltzReport(request, stream, token, jiraClient, ticketService, ws, intent.projectKey);
-      return;
+      return await handleImportWaltzReport(request, stream, token, jiraClient, ticketService, ws, intent.projectKey);
     }
 
     if (intent.operation === 'generateTemplate') {
       const templateGenWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
       try {
-        await handleGenerateTemplate(stream, ws, ticketService, templateGenWorkspaceRoot, config.hiddenDisplayFields, {
+        return await handleGenerateTemplate(stream, ws, ticketService, templateGenWorkspaceRoot, config.hiddenDisplayFields, {
           templateName: intent.templateName,
           sourceTicketKey: intent.ticketKey,
           projectKeyHint: intent.projectKey,
