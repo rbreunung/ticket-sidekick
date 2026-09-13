@@ -1806,19 +1806,40 @@ export function createJiraParticipant(
           }
 
           const raw = await ticketService.searchTicketsRaw(resolvedJql);
+          // U5/R8: sprint-refine-chip eligibility — every ticket must resolve to the same
+          // project AND a sprint board must be configured with a single resolvable active
+          // sprint on it. Both checks are async, so they happen here, before constructing the
+          // pure `JiraFollowupState` below — deliberately no multi-board discovery/fallback.
+          let sprintChipEligible = false;
+          let sprintName: string | undefined;
           if (raw.issues.length > 0) {
-            const searchSession: SearchResultSession = { ticketKeys: raw.issues.map(i => i.key), jql: resolvedJql };
+            const tickets = raw.issues.map(i => ({
+              key: i.key,
+              projectKey: extractProjectKeyFromTicketKey(i.key),
+              issueType: i.fields.issuetype?.name ?? '',
+            }));
+            const searchSession: SearchResultSession = { ticketKeys: raw.issues.map(i => i.key), jql: resolvedJql, tickets };
             await ws.update('jira.session.searchResult', searchSession);
+            const projectKeys = new Set(tickets.map(t => t.projectKey));
+            const sameProjectKey = projectKeys.size === 1 ? [...projectKeys][0] : null;
+            if (sameProjectKey && config.sprintBoardId) {
+              const activeSprint = await ticketService.getActiveSprintForBoard(config.sprintBoardId);
+              if (activeSprint) {
+                sprintChipEligible = true;
+                sprintName = activeSprint.name;
+              }
+            }
           }
           const searchFieldMeta = config.searchFields.length > 0 ? await ticketService.getFieldMeta() : [];
           const searchResult = jqlLabel + await ticketService.searchTickets(resolvedJql, config.baseUrl, config.searchFields, searchFieldMeta);
           // U5/R9: the search-results table's Actions column can contain real command links
           // (view/load), so this response needs the trusted-markdown gate the shared tail below
           // doesn't apply. searchJql doesn't set `ticketKey`, so that shared tail wouldn't do
-          // anything for this case anyway (no follow-up-chip metadata) — return directly instead
-          // of widening the shared `result: string` variable's type for every other case.
+          // anything ticket-key-specific for this case anyway — but it does now carry its own
+          // `jiraFollowup` metadata (R7/R8's refine chips) instead of returning bare.
           stream.markdown(trustedChatMarkdown(searchResult));
-          return;
+          const searchFollowupState: JiraFollowupState = { kind: 'searchResults', sprintChipEligible, sprintName };
+          return { metadata: { jiraFollowup: searchFollowupState, jiraSession: { kinds: [] } } };
         }
         case 'transition': {
           if (!intent.targetStatus) {

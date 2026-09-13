@@ -227,7 +227,10 @@ export class JiraApiClient implements IJiraClient {
   }
 
   async searchJql(jql: string, maxResults = 20, startAt?: number, extraFields: string[] = []): Promise<JiraSearchResult> {
-    const baseFields = ['summary', 'status', 'assignee', 'priority', 'labels', 'fixVersions', 'reporter', 'subtasks', 'parent'];
+    // U5: 'issuetype' added unconditionally (same convention as the other always-requested
+    // fields here) so search-result sessions can record each ticket's issue type/project for
+    // R8's sprint-refine-chip eligibility check without a second fetch.
+    const baseFields = ['summary', 'status', 'assignee', 'priority', 'labels', 'fixVersions', 'reporter', 'subtasks', 'parent', 'issuetype'];
     const fields = [...baseFields, ...extraFields.filter(f => !baseFields.includes(f))];
     let qs = `jql=${encodeURIComponent(jql)}&maxResults=${maxResults}&${fields.map(f => `fields=${encodeURIComponent(f)}`).join('&')}`;
     if (startAt !== undefined) qs += `&startAt=${startAt}`;

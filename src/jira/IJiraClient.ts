@@ -45,6 +45,10 @@ export interface JiraIssue {
     summary: string;
     description: unknown; // v3: Atlassian Document Format (ADF) object; v2: plain string
     status: { name: string };
+    // U5: requested unconditionally by `searchJql`'s `baseFields` so a search-result session can
+    // record each ticket's issue type without a second fetch (used for R8's sprint-refine-chip
+    // eligibility check). Optional since older fixtures/tests predate this field.
+    issuetype?: { name: string };
     assignee: JiraUser | null;
     reporter: JiraUser | null;
     priority: { name: string } | null;

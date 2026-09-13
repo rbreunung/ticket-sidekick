@@ -607,6 +607,14 @@ export interface FilterSelectionSession {
 export interface SearchResultSession {
   ticketKeys: string[];
   jql: string;
+  // U5/R7-R8: per-ticket project/issue-type metadata, populated only by the plain `searchJql`
+  // path (the only writer that needs it, since it's also the only one that computes refine-chip
+  // eligibility) — used to decide whether every ticket in the result shares one project (R8's
+  // sprint-refine-chip precondition). Optional: every other writer of this session (filter runs,
+  // R5's bare-constraint narrowing) keeps compiling and behaving unchanged without populating it,
+  // and `ticketKeys` stays the one field `bulkTransition` and the rest of this file's existing
+  // readers rely on.
+  tickets?: { key: string; projectKey: string | null; issueType: string }[];
 }
 
 export interface BulkUpdateReviewSession {
@@ -1827,6 +1835,16 @@ export type JiraFollowupState =
   // (KTD4) are the loaded ticket's own values, read once from the already-fetched issue, so the
   // "Discover workflow" chip below never needs a re-fetch.
   | { kind: 'loadedTicket'; ticketKey: string; projectKey: string; issueType: string; justDid?: Operation }
+  // U5/R7-R8: a plain `searchJql` result (search or single-filter run). "Refine to my tickets"
+  // (R7) is unconditional, so this case needs no field for it. "Refine to current sprint" (R8)
+  // is conditional on every ticket sharing one project AND `ticketSidekick.jira.sprintBoardId`
+  // resolving to a single active sprint — all of that resolution is async (project uniformity
+  // from fetched tickets, `TicketService.getActiveSprintForBoard`), so `JiraParticipant.ts` does
+  // it BEFORE constructing this state and hands this pure function only the answer: the resolved
+  // sprint's name when eligible, omitted otherwise. `sprintChipEligible` and `sprintName` are
+  // deliberately two fields (rather than folding eligibility into "is sprintName set") so a test
+  // can express "eligible but name missing" as the invalid state it would be — see test scenarios.
+  | { kind: 'searchResults'; sprintChipEligible: boolean; sprintName?: string }
   | { kind: 'none' };
 
 const JIRA_MAX_FOLLOWUPS = 3;
@@ -1895,6 +1913,23 @@ export function computeJiraFollowups(state: JiraFollowupState): FollowupSuggesti
         chips.push({
           prompt: `discover workflow ${state.projectKey} ${state.issueType}`,
           label: `Discover workflow for ${state.projectKey}/${state.issueType}`,
+        });
+      }
+      return chips.slice(0, JIRA_MAX_FOLLOWUPS);
+    }
+    case 'searchResults': {
+      // R7: always present, no eligibility check — narrowing to the current user's own tickets
+      // is always a valid refinement of any search/filter result.
+      const chips: FollowupSuggestion[] = [
+        { prompt: 'refine to my tickets', label: 'Refine to my tickets' },
+      ];
+      // R8: only when JiraParticipant.ts already resolved a single eligible active sprint — the
+      // chip's prompt names that sprint literally (the LLM intent parser can't know its name),
+      // so there is nothing to offer when it isn't eligible.
+      if (state.sprintChipEligible && state.sprintName) {
+        chips.push({
+          prompt: `refine to sprint '${state.sprintName}'`,
+          label: `Refine to sprint "${state.sprintName}"`,
         });
       }
       return chips.slice(0, JIRA_MAX_FOLLOWUPS);

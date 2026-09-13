@@ -322,6 +322,43 @@ describe('computeJiraFollowups', () => {
   it('returns no chips when there is no prior operation state', () => {
     expect(computeJiraFollowups({ kind: 'none' })).toEqual([]);
   });
+
+  // U5/R7-R8: search/filter result refine chips.
+  describe('searchResults', () => {
+    it('offers both "refine to my tickets" and "refine to current sprint" when the result is single-project and a sprint is eligible', () => {
+      const state: JiraFollowupState = { kind: 'searchResults', sprintChipEligible: true, sprintName: 'Sprint 24' };
+
+      const chips = computeJiraFollowups(state);
+
+      expect(chips.some((c) => c.prompt === 'refine to my tickets')).toBe(true);
+      expect(chips.some((c) => c.prompt === "refine to sprint 'Sprint 24'")).toBe(true);
+      expect(chips.length).toBeLessThanOrEqual(3);
+    });
+
+    it('offers only "refine to my tickets" when the result spans multiple projects (sprint chip not eligible)', () => {
+      const state: JiraFollowupState = { kind: 'searchResults', sprintChipEligible: false };
+
+      const chips = computeJiraFollowups(state);
+
+      expect(chips).toEqual([{ prompt: 'refine to my tickets', label: 'Refine to my tickets' }]);
+    });
+
+    it('offers only "refine to my tickets" when single-project but no sprint board is configured or no active sprint resolves', () => {
+      const state: JiraFollowupState = { kind: 'searchResults', sprintChipEligible: false, sprintName: undefined };
+
+      const chips = computeJiraFollowups(state);
+
+      expect(chips).toEqual([{ prompt: 'refine to my tickets', label: 'Refine to my tickets' }]);
+      expect(chips.some((c) => /sprint/i.test(c.prompt))).toBe(false);
+    });
+
+    it('"refine to my tickets" is always present, unconditionally, regardless of eligibility', () => {
+      expect(computeJiraFollowups({ kind: 'searchResults', sprintChipEligible: true, sprintName: 'X' })
+        .some((c) => c.prompt === 'refine to my tickets')).toBe(true);
+      expect(computeJiraFollowups({ kind: 'searchResults', sprintChipEligible: false })
+        .some((c) => c.prompt === 'refine to my tickets')).toBe(true);
+    });
+  });
 });
 
 // R2/F1/U2: guided single-ticket transition flow's pure helpers. JiraParticipant.ts's
