@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderReviewTable, buildJiraNotConfiguredMessage, buildChatCommandLink, neutralizeMarkdownLinks, isGreetingOrEmpty, computeJiraFollowups, withLastTicket, type ReviewTableColumn, type JiraFollowupState } from '../participant/sessionState';
+import { renderReviewTable, buildJiraNotConfiguredMessage, buildChatCommandLink, neutralizeMarkdownLinks, isGreetingOrEmpty, computeJiraFollowups, withLastTicket, buildConstraintJql, type ReviewTableColumn, type JiraFollowupState } from '../participant/sessionState';
 import {
   buildGuidedTransitionStatusOptions, parseGuidedTransitionStatusPick, findGuidedDirectTransition,
   parseGuidedTransitionPathPick, formatTransitionPathOption, parseGuidedTransitionResolutionPick,
@@ -479,5 +479,51 @@ describe('buildGuidedTransitionConfirmSummary', () => {
 
     expect(summary).toContain('Path: In Progress → In Review → Done (2 hops)');
     expect(summary).toContain('Resolution: **Fixed**');
+  });
+});
+
+describe('buildConstraintJql', () => {
+  it('ANDs a single sprint constraint onto a base filter JQL', () => {
+    const result = buildConstraintJql('filter = 12345', { sprint: 'Sprint 42' });
+    expect(result).toBe('(filter = 12345) AND (Sprint = "Sprint 42")');
+  });
+
+  it('combines all three constraints in one call', () => {
+    const result = buildConstraintJql('filter = 12345', {
+      fixVersion: 'Release 3.2',
+      sprint: 'Sprint 42',
+      assignee: 'me',
+    });
+    expect(result).toBe(
+      '(filter = 12345) AND (fixVersion = "Release 3.2" AND Sprint = "Sprint 42" AND assignee = currentUser())',
+    );
+  });
+
+  it('maps a literal assignee value of "me" to currentUser()', () => {
+    const result = buildConstraintJql('project = PROJ', { assignee: 'me' });
+    expect(result).toBe('(project = PROJ) AND (assignee = currentUser())');
+  });
+
+  it('quotes a non-"me" assignee identifier as a literal', () => {
+    const result = buildConstraintJql('project = PROJ', { assignee: 'jdoe' });
+    expect(result).toBe('(project = PROJ) AND (assignee = "jdoe")');
+  });
+
+  it('returns the base JQL unchanged when no constraints are given', () => {
+    const result = buildConstraintJql('filter = 12345', {});
+    expect(result).toBe('filter = 12345');
+  });
+
+  it('escapes a double quote in a constraint value instead of interpolating it raw', () => {
+    const result = buildConstraintJql('filter = 12345', { fixVersion: 'Release "3.2"' });
+    // The raw, unescaped value would produce: fixVersion = "Release "3.2""
+    // which closes the string literal after `Release ` and leaves `3.2""` as bare, injectable JQL.
+    expect(result).toBe('(filter = 12345) AND (fixVersion = "Release \\"3.2\\"")');
+    expect(result).not.toContain('"Release "3.2""');
+  });
+
+  it('escapes a backslash in a constraint value instead of interpolating it raw', () => {
+    const result = buildConstraintJql('filter = 12345', { assignee: 'dom\\jdoe' });
+    expect(result).toBe('(filter = 12345) AND (assignee = "dom\\\\jdoe")');
   });
 });

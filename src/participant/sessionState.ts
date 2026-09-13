@@ -790,6 +790,62 @@ export function buildTeamJql(teamJql: string, extraJql: string | null): string {
 }
 
 /**
+ * Already-resolved constraint values to AND onto a base JQL string. Resolving a human-typed
+ * name (a fixVersion name, a sprint name, an assignee's display name) to this shape — including
+ * disambiguating a name that matches multiple candidates — is a different unit's job; this type
+ * only carries the resolved value.
+ *
+ * - `fixVersion`: the version's name (e.g. "Release 3.2"), matched with `fixVersion = "<name>"`.
+ * - `sprint`: the sprint's *name*, not its numeric id — chosen for consistency with `fixVersion`
+ *   and `assignee` (both name-based) and because callers resolve a sprint from natural-language
+ *   text the same way they resolve a fixVersion; matched with `Sprint = "<name>"`.
+ * - `assignee`: an account identifier/display name, or the literal string `"me"`, which maps to
+ *   `assignee = currentUser()` — the same mapping `INTENT_PROMPT`'s "my tickets" guidance already
+ *   documents for the LLM-facing JQL translation.
+ */
+export interface JqlConstraints {
+  fixVersion?: string;
+  sprint?: string;
+  assignee?: string;
+}
+
+// Quotes a JQL string literal, escaping backslashes and double quotes so a constraint value
+// (which may originate from an LLM's own inference, not just human-typed chat text) cannot
+// terminate its clause early and inject additional JQL. Backslashes are escaped first so an
+// escaped quote's own backslash isn't re-escaped.
+function quoteJqlValue(value: string): string {
+  const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return `"${escaped}"`;
+}
+
+/**
+ * ANDs a fixVersion/sprint/assignee constraint set onto a base JQL string, generalizing
+ * `buildTeamJql`'s `(base) AND (extra)` wrapping pattern to any number of resolved constraints.
+ * Every value is quoted/escaped via `quoteJqlValue` before interpolation. Zero constraints
+ * provided returns `baseJql` unchanged.
+ */
+export function buildConstraintJql(baseJql: string, constraints: JqlConstraints): string {
+  const clauses: string[] = [];
+
+  if (constraints.fixVersion) {
+    clauses.push(`fixVersion = ${quoteJqlValue(constraints.fixVersion)}`);
+  }
+  if (constraints.sprint) {
+    clauses.push(`Sprint = ${quoteJqlValue(constraints.sprint)}`);
+  }
+  if (constraints.assignee) {
+    clauses.push(
+      constraints.assignee === 'me' ? 'assignee = currentUser()' : `assignee = ${quoteJqlValue(constraints.assignee)}`,
+    );
+  }
+
+  if (clauses.length === 0) {
+    return baseJql;
+  }
+  return `(${baseJql}) AND (${clauses.join(' AND ')})`;
+}
+
+/**
  * Plain-text "Jira isn't configured" message naming the specific missing setting or setup
  * command — the same information @jira's chat handler's own not-configured messages give,
  * but without a trusted `MarkdownString` command link (a `LanguageModelToolResult`, unlike a
