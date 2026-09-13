@@ -693,13 +693,25 @@ async function startMultiTicketTransition(
   stream.markdown('_Checking available transitions…_\n\n');
   const perTicket: { key: string; currentStatus: string; transitionNames: string[] }[] = [];
   for (const t of searchSession.tickets) {
-    const issue = await jiraClient.getIssue(t.key);
-    const transitions = await jiraClient.getTransitions(t.key);
-    perTicket.push({
-      key: t.key,
-      currentStatus: issue.fields.status.name,
-      transitionNames: transitions.map((tr) => tr.to.name),
-    });
+    // A per-ticket fetch failure (e.g. deleted after the search ran) skips that ticket rather
+    // than aborting the whole intersection — it's then also absent from the final apply set,
+    // matching bulkTransition's own tolerance of a ticket it can't act on.
+    try {
+      const issue = await jiraClient.getIssue(t.key);
+      const transitions = await jiraClient.getTransitions(t.key);
+      perTicket.push({
+        key: t.key,
+        currentStatus: issue.fields.status.name,
+        transitionNames: transitions.map((tr) => tr.to.name),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logDiag('jira.participant', 'warn', `Skipping ${t.key} in multi-ticket transition — fetch failed`, { key: t.key, error: message });
+      stream.markdown(`_Warning: couldn't fetch **${t.key}** — skipping it._\n\n`);
+    }
+  }
+  if (perTicket.length === 0) {
+    return 'None of these tickets could be checked for available transitions.';
   }
   const commonStatuses = computeCommonTransitionStatuses(perTicket.map((t) => t.transitionNames));
   if (commonStatuses.length === 0) {
