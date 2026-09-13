@@ -8,6 +8,7 @@ import type {
   JiraFieldMeta,
   JiraFilter,
   JiraIssue,
+  JiraMyFiltersResult,
   JiraProject,
   JiraProjectStatus,
   JiraRemoteLink,
@@ -153,4 +154,51 @@ export class MockJiraClient implements IJiraClient {
   }
 
   getRemoteLinks: (_issueKey: string) => Promise<JiraRemoteLink[]> = async () => [];
+
+  /** Set before calling `getMyFilters()` to simulate one or both sources failing (mirrors
+   * JiraApiClient's independent-fetch/dedup behavior for TicketService-level tests). */
+  public failFilterSource: 'favourites' | 'owned' | 'both' | null = null;
+
+  async getMyFilters(): Promise<JiraMyFiltersResult> {
+    const failedSources: JiraMyFiltersResult['failedSources'] = [];
+    let favourites: JiraFilter[] = [];
+    let owned: JiraFilter[] = [];
+
+    if (this.failFilterSource === 'favourites' || this.failFilterSource === 'both') {
+      failedSources.push('favourites');
+    } else {
+      favourites = loadFixture<JiraFilter[]>('filters-favourite.json');
+    }
+
+    if (this.failFilterSource === 'owned' || this.failFilterSource === 'both') {
+      failedSources.push('owned');
+    } else {
+      owned = loadFixture<JiraFilter[]>('filters-owned.json');
+    }
+
+    const seen = new Set<string>();
+    const filters: JiraFilter[] = [];
+    for (const f of [...favourites, ...owned]) {
+      if (!seen.has(f.id)) {
+        seen.add(f.id);
+        filters.push(f);
+      }
+    }
+
+    return { filters, failedSources };
+  }
+
+  async getActiveSprintForBoard(boardId: number): Promise<{ id: number; name: string } | null> {
+    const fixtureByBoard: Record<number, string> = {
+      1: 'board-sprints-one-active.json',
+      2: 'board-sprints-no-active.json',
+      3: 'board-sprints-multiple-active.json',
+    };
+    const filename = fixtureByBoard[boardId];
+    if (!filename) return null;
+    const sprints = loadFixture<Array<{ id: number; name: string; state: string }>>(filename);
+    const active = sprints.filter((s) => s.state === 'active');
+    if (active.length !== 1) return null;
+    return { id: active[0].id, name: active[0].name };
+  }
 }

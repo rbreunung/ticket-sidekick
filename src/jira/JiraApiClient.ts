@@ -6,6 +6,7 @@ import type {
   JiraFieldMeta,
   JiraFilter,
   JiraIssue,
+  JiraMyFiltersResult,
   JiraProject,
   JiraProjectStatus,
   JiraRemoteLink,
@@ -493,6 +494,79 @@ export class JiraApiClient implements IJiraClient {
         return [];
       }
       throw err;
+    }
+  }
+
+  /**
+   * Favourite filters (`GET /filter/favourite`) plus filters owned by the current user. There
+   * is no dedicated "owned filters" endpoint on either DC or Cloud, so ownership is expressed
+   * as a `/filter/search` scoped to the current user's owner identifier — DC: username
+   * (`owner=`), Cloud: `accountId` (`accountId=`), mirroring getTeamByName()'s DC/Cloud
+   * branching. Each source is fetched independently: one failing does not suppress the
+   * other's result (R10), but a genuine auth failure (401) still rethrows rather than being
+   * reported as a mere "source failed".
+   */
+  async getMyFilters(): Promise<JiraMyFiltersResult> {
+    const failedSources: JiraMyFiltersResult['failedSources'] = [];
+    let favourites: JiraFilter[] = [];
+    let owned: JiraFilter[] = [];
+
+    try {
+      favourites = await this.request<JiraFilter[]>('/filter/favourite');
+    } catch (err) {
+      if (isAuthError(err)) throw err;
+      failedSources.push('favourites');
+      this.onDiag?.('warn', 'Failed to fetch favourite filters', { error: err instanceof Error ? err.message : String(err) });
+    }
+
+    try {
+      owned = await this.getOwnedFilters();
+    } catch (err) {
+      if (isAuthError(err)) throw err;
+      failedSources.push('owned');
+      this.onDiag?.('warn', 'Failed to fetch owned filters', { error: err instanceof Error ? err.message : String(err) });
+    }
+
+    const seen = new Set<string>();
+    const filters: JiraFilter[] = [];
+    for (const f of [...favourites, ...owned]) {
+      if (!seen.has(f.id)) {
+        seen.add(f.id);
+        filters.push(f);
+      }
+    }
+
+    return { filters, failedSources };
+  }
+
+  private async getOwnedFilters(): Promise<JiraFilter[]> {
+    const user = await this.getCurrentUser();
+    let qs: string;
+    if (this.authType === 'cloud') {
+      if (!user.accountId) return [];
+      qs = `accountId=${encodeURIComponent(user.accountId)}`;
+    } else {
+      if (!user.name) return [];
+      qs = `owner=${encodeURIComponent(user.name)}`;
+    }
+    const data = await this.request<{ values: JiraFilter[] }>(`/filter/search?${qs}&expand=jql&maxResults=50`);
+    return data.values;
+  }
+
+  async getActiveSprintForBoard(boardId: number): Promise<{ id: number; name: string } | null> {
+    try {
+      const sprints = await this.agileRequest<{ values: Array<{ id: number; name: string; state: string }> }>(
+        `/board/${boardId}/sprint?state=active,future`,
+      );
+      const activeSprints = sprints.values.filter((s) => s.state === 'active');
+      if (activeSprints.length !== 1) return null;
+      return { id: activeSprints[0].id, name: activeSprints[0].name };
+    } catch (err) {
+      // Kanban (and other non-Scrum) boards reject sprint queries — treat as "no active sprint".
+      // An auth failure must surface rather than silently yield null.
+      if (isAuthError(err)) throw err;
+      this.onDiag?.('warn', `Board ${boardId} skipped (non-Scrum) while resolving active sprint`, { boardId });
+      return null;
     }
   }
 

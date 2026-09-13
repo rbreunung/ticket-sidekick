@@ -119,6 +119,15 @@ export interface JiraSprintCandidate {
   state: string;
 }
 
+/** Which of the two `getMyFilters()` sources failed to fetch — used to tell the caller which
+ * half of the combined list (if any) is missing rather than silently returning a partial list. */
+export type JiraFilterSource = 'favourites' | 'owned';
+
+export interface JiraMyFiltersResult {
+  filters: JiraFilter[];
+  failedSources: JiraFilterSource[];
+}
+
 export interface JiraEditMetaField {
   schema: { type: string; items?: string };
   allowedValues?: Array<{ id?: string; name?: string; value?: string }>;
@@ -150,4 +159,11 @@ export interface IJiraClient {
   findSprints(projectKey: string, query: string): Promise<JiraSprintCandidate[]>;
   uploadAttachment(issueKey: string, filename: string, contentType: string, contentBytes: string): Promise<void>;
   getRemoteLinks(issueKey: string): Promise<JiraRemoteLink[]>;
+  /** Favourite filters plus filters owned by the current user, deduped by `id`. Each source is
+   * fetched independently — one failing does not suppress the other's result; `failedSources`
+   * names which source(s) failed (empty when both succeed). */
+  getMyFilters(): Promise<JiraMyFiltersResult>;
+  /** The single active sprint on a Scrum board, or `null` when there are zero or more than one
+   * (never guesses which one). Tolerates a non-Scrum board by returning `null`. */
+  getActiveSprintForBoard(boardId: number): Promise<{ id: number; name: string } | null>;
 }
