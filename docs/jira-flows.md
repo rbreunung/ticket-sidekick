@@ -115,6 +115,10 @@ Execution streams one line per ticket (subtasks first), then a summary. Failures
 
 `@jira` can generate a reusable `.jira-templates.json` template from a reference ticket's template-shaped fields, or from a project's required-fields metadata when no reference ticket is given, reviewed as an include/exclude list and saved on confirmation with an offer to create a first ticket from it — see [`docs/plans/2026-08-30-1135-feat-template-generation-from-ticket-plan.md`](plans/2026-08-30-1135-feat-template-generation-from-ticket-plan.md) and [`src/participant/jira/templateGenerationHandler.ts`](../src/participant/jira/templateGenerationHandler.ts).
 
+## Filter discovery
+
+`@jira` can list and run the user's own favourite + owned Jira filters (`show my filters`) without naming one — zero results says so, exactly one runs directly, more than one opens a numbered pick-list (`ListedFiltersSession`); a partial fetch failure is called out above the list rather than shown as a complete one. The greeting response's "Show my filters" chip invokes this same intent. See `handleListMyFilters`/`runResolvedFilterJql` in `JiraParticipant.ts` and `ListedFiltersSession`/`parseListedFiltersSelection` in `sessionState.ts`. The same listing and fixVersion/sprint/assignee narrowing are also exposed to Agent Mode as `jira_listMyFilters`/`jira_searchByFilter` — see [`docs/onboarding.md`](onboarding.md#read-tools).
+
 ## Jira sessions
 
 Each session below is looked up by its `workspaceState` key; liveness is checked by round-tripping a `kind` through `ChatResult.metadata.jiraSession` (read by `getActiveJiraSession()` in `ticketContext.ts`), with no visible marker in the rendered response — see `JiraSessionContinuity` in `sessionState.ts`. This replaced the former HTML-comment-tag mechanism (a visible `<!-- jira:TAG -->` matched against the last rendered response) for every session below.
@@ -124,7 +128,10 @@ Each session below is looked up by its `workspaceState` key; liveness is checked
 | `ResolutionSelectionSession` | `jira.session.resolutionSelection` | metadata — `jiraSession.kinds: ['resolution-selection']` |
 | `TransitionBatchSession` | `jira.session.transitionReview` | metadata — `jiraSession.kinds: ['transition-review']` |
 | `GuidedTransitionSession` | `jira.session.guidedTransition` | metadata — `jiraSession.kinds: ['guided-transition']` |
+| `MultiTicketTransitionSession` | `jira.session.multiTransition` | metadata — `jiraSession.kinds: ['multi-transition']` |
 | `FilterSelectionSession` | `jira.session.filterSelection` | metadata — `jiraSession.kinds: ['selecting-filter']` |
+| `ConstraintAmbiguitySession` | `jira.session.constraintAmbiguity` | metadata — `jiraSession.kinds: ['selecting-constraint-match']` |
+| `ListedFiltersSession` | `jira.session.listedFilters` | metadata — `jiraSession.kinds: ['listing-filters']` |
 | `BulkUpdateReviewSession` | `jira.session.bulkUpdateReview` | metadata — `jiraSession.kinds: ['bulk-update-review']` |
 | `SearchResultSession` | `jira.session.searchResult` | _(no marker — background session, overwritten on each search)_ |
 | `CreateSelectionSession` | `jira.session.creatingSelection` | metadata — `jiraSession.kinds: ['selecting-create-option']` |
@@ -152,7 +159,7 @@ Each session below is looked up by its `workspaceState` key; liveness is checked
 | `TemplateGenerationOfferCreateSession` | `jira.session.templateGenOfferCreate` | metadata — `jiraSession.kinds: ['template-gen-offer-create']` |
 | `TemplateGenerationAwaitSummarySession` | `jira.session.templateGenAwaitSummary` | metadata — `jiraSession.kinds: ['template-gen-await-summary']` |
 
-Detection order in the Jira handler: resolution selection → transition review → guided transition → filter selection → bulk-update-review → combined template/issue-type selection → shared issue-type ask (R6) → creation → content → more-comments → check command → load-skipped → email content (comment-attach) → batch email template selection → batch email review → veracode template selection → veracode review → Waltz template selection → Waltz review → template-gen await-name (R2) → template-gen type pick → template-gen await-free-type (R3) → template-gen review → template-gen collision → template-gen offer-create → template-gen await-summary → comment list → greeting/empty-prompt check → intent parse.
+Detection order in the Jira handler: resolution selection → transition review → guided transition → multi-transition → filter selection → selecting-constraint-match → listing-filters → bulk-update-review → combined template/issue-type selection → shared issue-type ask (R6) → creation → content → more-comments → check command → load-skipped → email content (comment-attach) → batch email template selection → batch email review → veracode template selection → veracode review → Waltz template selection → Waltz review → template-gen await-name (R2) → template-gen type pick → template-gen await-free-type (R3) → template-gen review → template-gen collision → template-gen offer-create → template-gen await-summary → comment list → greeting/empty-prompt check → intent parse.
 
 The shared issue-type ask (`AwaitIssueTypeSession`, R6/KTD4) replaces `resolveIssueTypeOrPrompt()`'s
 former `showInputBox` for every flow that resolves an issue type before creating a ticket —

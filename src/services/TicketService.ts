@@ -1,4 +1,4 @@
-import type { IJiraClient, JiraAttachment, JiraComment, JiraEditMetaField, JiraFieldMeta, JiraFilter, JiraIssue, JiraIssueLink, JiraIssueType, JiraRemoteLink, JiraSearchResult, JiraSprintCandidate } from '../jira/IJiraClient';
+import type { IJiraClient, JiraAttachment, JiraComment, JiraEditMetaField, JiraFieldMeta, JiraFilter, JiraIssue, JiraIssueLink, JiraIssueType, JiraMyFiltersResult, JiraRemoteLink, JiraSearchResult, JiraSprintCandidate } from '../jira/IJiraClient';
 import type { DiagLogger } from '../utils/diagTypes';
 import { formatJiraBody } from '../utils/markdownFormatter';
 import { formatFileSize } from '../utils/attachmentEligibility';
@@ -597,6 +597,14 @@ export class TicketService {
 
   async searchFiltersByName(name: string): Promise<JiraFilter[]> {
     return this.client.searchFiltersByName(name);
+  }
+
+  async getMyFilters(): Promise<JiraMyFiltersResult> {
+    return this.client.getMyFilters();
+  }
+
+  async getActiveSprintForBoard(boardId: number): Promise<{ id: number; name: string } | null> {
+    return this.client.getActiveSprintForBoard(boardId);
   }
 
   /** `knownFields`, when the caller already fetched `getFieldMeta()` for another reason, avoids

@@ -35,12 +35,22 @@ never a raw `JiraApiError`.
 | `jira_getComments` | Fetch a ticket's comments, most recent first | `ticketKey` | `maxResults` (default 20) |
 | `jira_listTemplates` | List the templates in `.jira-templates.json` | — | — |
 | `jira_discoverWorkflow` | Sample and cache a project/issue type's status-transition graph | `projectKey`, `issueType` | — |
+| `jira_listMyFilters` | List the user's favourite and owned Jira saved filters (deduped) | — | — |
+| `jira_searchByFilter` | Run a saved filter by id or name, optionally narrowed by fixVersion/sprint/assignee | one of `filterId`, `filterName` | `fixVersion`, `sprint`, `assignee` |
 
 `jira_listTemplates` returns an empty list — not an error — when the
 workspace has no `.jira-templates.json`. `jira_discoverWorkflow` writes to
 the same `.jira-workflow-cache.json` the chat `@jira discover workflow`
 command does, so a workflow discovered via a tool call also benefits
-`jira_transitionTicket`'s multi-hop lookups (and vice versa).
+`jira_transitionTicket`'s multi-hop lookups (and vice versa). `jira_listMyFilters`
+and `jira_searchByFilter` share the same `TicketService.getMyFilters()`/
+constraint-resolution logic (`resolveNamedConstraints()` in `sessionState.ts`)
+that `@jira`'s "show my filters" and filter-search chat flows use (see
+[`docs/jira-flows.md`](jira-flows.md)) — but unlike those flows, neither tool
+ever opens an interactive pick-list: an ambiguous filter name or an ambiguous
+fixVersion/sprint/assignee match is returned as a plain-text candidate list
+instead, since a tool call carries no session memory to resume a pick
+against (KTD6).
 
 ### Write tools
 

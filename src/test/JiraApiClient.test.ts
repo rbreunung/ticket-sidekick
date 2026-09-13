@@ -773,4 +773,127 @@ describe('JiraApiClient', () => {
       expect(calls.some(u => u.includes('/board?'))).toBe(false);
     });
   });
+
+  // Code-review followup: getMyFilters/getOwnedFilters/getActiveSprintForBoard were previously
+  // exercised only through TicketService+MockJiraClient, which independently duplicates the same
+  // dedup/failure logic — a bug in the real implementation here would never be caught. These tests
+  // exercise the production JiraApiClient directly via a mocked fetch.
+  describe('getMyFilters', () => {
+    const favourite = { id: '1', name: 'Favourite Filter', jql: 'project = PROJ' };
+    const owned = { id: '2', name: 'Owned Filter', jql: 'project = PROJ' };
+    const overlapping = { id: '1', name: 'Favourite Filter', jql: 'project = PROJ' };
+
+    it('dedupes by id across favourites and owned, deduped union — no failedSources on success', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/filter/favourite')) {
+          return Promise.resolve({ ok: true, headers: { get: () => 'application/json' }, json: () => Promise.resolve([favourite, overlapping]) });
+        }
+        if (url.includes('/myself')) {
+          return Promise.resolve({ ok: true, headers: { get: () => 'application/json' }, json: () => Promise.resolve({ name: 'jdoe' }) });
+        }
+        if (url.includes('/filter/search')) {
+          return Promise.resolve({ ok: true, headers: { get: () => 'application/json' }, json: () => Promise.resolve({ values: [owned] }) });
+        }
+        throw new Error(`unexpected url ${url}`);
+      }));
+      const client = new JiraApiClient(BASE_CONFIG);
+      const result = await client.getMyFilters();
+      expect(result.filters.map(f => f.id).sort()).toEqual(['1', '2']);
+      expect(result.failedSources).toEqual([]);
+    });
+
+    it('DC uses owner=<username>; Cloud uses accountId=<accountId>', async () => {
+      const dcCalls: string[] = [];
+      vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+        dcCalls.push(url);
+        if (url.includes('/myself')) return Promise.resolve({ ok: true, headers: { get: () => 'application/json' }, json: () => Promise.resolve({ name: 'jdoe' }) });
+        if (url.includes('/filter/favourite')) return Promise.resolve({ ok: true, headers: { get: () => 'application/json' }, json: () => Promise.resolve([]) });
+        return Promise.resolve({ ok: true, headers: { get: () => 'application/json' }, json: () => Promise.resolve({ values: [] }) });
+      }));
+      await new JiraApiClient(BASE_CONFIG).getMyFilters();
+      expect(dcCalls.some(u => u.includes('/filter/search') && u.includes('owner=jdoe'))).toBe(true);
+
+      const cloudCalls: string[] = [];
+      vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+        cloudCalls.push(url);
+        if (url.includes('/myself')) return Promise.resolve({ ok: true, headers: { get: () => 'application/json' }, json: () => Promise.resolve({ accountId: 'acc-1' }) });
+        if (url.includes('/filter/favourite')) return Promise.resolve({ ok: true, headers: { get: () => 'application/json' }, json: () => Promise.resolve([]) });
+        return Promise.resolve({ ok: true, headers: { get: () => 'application/json' }, json: () => Promise.resolve({ values: [] }) });
+      }));
+      await new JiraApiClient({ ...BASE_CONFIG, authType: 'cloud' }).getMyFilters();
+      expect(cloudCalls.some(u => u.includes('/filter/search') && u.includes('accountId=acc-1'))).toBe(true);
+    });
+
+    it('one source failing does not suppress the other — failedSources names it', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/filter/favourite')) return Promise.resolve({ ok: false, status: 500, statusText: 'Server Error', headers: { get: () => 'application/json' }, json: () => Promise.resolve({}) });
+        if (url.includes('/myself')) return Promise.resolve({ ok: true, headers: { get: () => 'application/json' }, json: () => Promise.resolve({ name: 'jdoe' }) });
+        return Promise.resolve({ ok: true, headers: { get: () => 'application/json' }, json: () => Promise.resolve({ values: [owned] }) });
+      }));
+      const result = await new JiraApiClient(BASE_CONFIG).getMyFilters();
+      expect(result.failedSources).toEqual(['favourites']);
+      expect(result.filters).toEqual([owned]);
+    });
+
+    it('both sources failing surfaces both failures with an empty filter list, never throws', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve({
+        ok: false, status: 500, statusText: 'Server Error', headers: { get: () => 'application/json' }, json: () => Promise.resolve({}),
+      })));
+      const result = await new JiraApiClient(BASE_CONFIG).getMyFilters();
+      expect(result.filters).toEqual([]);
+      expect(result.failedSources.sort()).toEqual(['favourites', 'owned']);
+    });
+
+    it('an auth failure on either source rethrows rather than being reported as failedSources', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/filter/favourite')) return Promise.resolve({ ok: false, status: 401, statusText: 'Unauthorized', headers: { get: () => 'application/json' }, json: () => Promise.resolve({}) });
+        return Promise.resolve({ ok: true, headers: { get: () => 'application/json' }, json: () => Promise.resolve({ name: 'jdoe' }) });
+      }));
+      await expect(new JiraApiClient(BASE_CONFIG).getMyFilters()).rejects.toThrow();
+    });
+  });
+
+  describe('getActiveSprintForBoard', () => {
+    it('returns the single active sprint on the board', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve({
+        ok: true, headers: { get: () => 'application/json' },
+        json: () => Promise.resolve({ values: [{ id: 5, name: 'Sprint 5', state: 'active' }, { id: 6, name: 'Sprint 6', state: 'future' }] }),
+      })));
+      const result = await new JiraApiClient(BASE_CONFIG).getActiveSprintForBoard(1);
+      expect(result).toEqual({ id: 5, name: 'Sprint 5' });
+    });
+
+    it('returns null when zero sprints are active', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve({
+        ok: true, headers: { get: () => 'application/json' },
+        json: () => Promise.resolve({ values: [{ id: 6, name: 'Sprint 6', state: 'future' }] }),
+      })));
+      const result = await new JiraApiClient(BASE_CONFIG).getActiveSprintForBoard(1);
+      expect(result).toBeNull();
+    });
+
+    it('returns null when more than one sprint is active — never guesses', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve({
+        ok: true, headers: { get: () => 'application/json' },
+        json: () => Promise.resolve({ values: [{ id: 5, name: 'Sprint 5', state: 'active' }, { id: 7, name: 'Sprint 7', state: 'active' }] }),
+      })));
+      const result = await new JiraApiClient(BASE_CONFIG).getActiveSprintForBoard(1);
+      expect(result).toBeNull();
+    });
+
+    it('tolerates a non-Scrum board (query rejected) by returning null, not throwing', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve({
+        ok: false, status: 400, statusText: 'Bad Request', headers: { get: () => 'application/json' }, json: () => Promise.resolve({}),
+      })));
+      const result = await new JiraApiClient(BASE_CONFIG).getActiveSprintForBoard(1);
+      expect(result).toBeNull();
+    });
+
+    it('rethrows a genuine auth failure rather than treating it as non-Scrum tolerance', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve({
+        ok: false, status: 401, statusText: 'Unauthorized', headers: { get: () => 'application/json' }, json: () => Promise.resolve({}),
+      })));
+      await expect(new JiraApiClient(BASE_CONFIG).getActiveSprintForBoard(1)).rejects.toThrow();
+    });
+  });
 });

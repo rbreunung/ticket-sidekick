@@ -12,12 +12,14 @@ export type Operation =
   | 'updateField'
   | 'showFields'
   | 'searchJql'
+  | 'listMyFilters'
   | 'validateFields'
   | 'createTicket'
   | 'discoverWorkflow'
   | 'runCleanup'
   | 'transition'
   | 'bulkTransition'
+  | 'multiTicketTransition'
   | 'bulkUpdateField'
   | 'loadTicket'
   | 'spellCheck'
@@ -53,6 +55,17 @@ export interface ParsedIntent {
   filterId: string | null;
   filterName: string | null;
   useMyTeamJql: boolean;
+  // U4/R4-R6: a named fixVersion/sprint/assignee constraint to AND onto a filter's JQL (filterId/
+  // filterName) or, with no filter reference at all, onto the previous search/filter run's JQL
+  // (R5's bare follow-up narrowing — resolved against `SearchResultSession`, not a filter). These
+  // are new fields, not overloads of `fixVersion`/`assignee` above, which mean different things
+  // elsewhere (runCleanup's fixVersion filter string; createTicket's assignee-to-set). Distinct
+  // from `jql`/`useMyTeamJql`: extracted alongside them, never folded into free-text JQL, so
+  // JiraParticipant.ts can resolve+disambiguate each one against real Jira data (R11) instead of
+  // the LLM guessing a literal JQL clause for it.
+  constraintFixVersion: string | null;
+  constraintSprint: string | null;
+  constraintAssignee: string | null;
   targetStatus: string | null;
   bulkFieldName: string | null;
   bulkFieldValue: string | null;
@@ -63,7 +76,7 @@ export interface ParsedIntent {
 }
 
 export const INTENT_PROMPT = `Parse this Jira command and respond with ONLY a JSON object. No markdown, no explanation.
-Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|"addComment"|"updateField"|"showFields"|"searchJql"|"validateFields"|"createTicket"|"discoverWorkflow"|"runCleanup"|"transition"|"bulkTransition"|"bulkUpdateField"|"loadTicket"|"spellCheck"|"createFromEmail"|"addEmailComment"|"importVeracode"|"importWaltzReport"|"generateTemplate","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"assignee":string|null,"components":string|null,"description":string|null,"comment":string|null,"commentQuery":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"fieldName":string|null,"fieldValue":string|null,"arrayOp":"set"|"add"|"remove","scope":"single"|"bulk"|null,"jql":string|null,"filterId":string|null,"filterName":string|null,"useMyTeamJql":boolean,"targetStatus":string|null,"bulkFieldName":string|null,"bulkFieldValue":string|null,"cleanupRuleName":string|null,"fixVersion":string|null,"resolution":string|null,"templateName":string|null}
+Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|"addComment"|"updateField"|"showFields"|"searchJql"|"listMyFilters"|"validateFields"|"createTicket"|"discoverWorkflow"|"runCleanup"|"transition"|"bulkTransition"|"multiTicketTransition"|"bulkUpdateField"|"loadTicket"|"spellCheck"|"createFromEmail"|"addEmailComment"|"importVeracode"|"importWaltzReport"|"generateTemplate","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"assignee":string|null,"components":string|null,"description":string|null,"comment":string|null,"commentQuery":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"fieldName":string|null,"fieldValue":string|null,"arrayOp":"set"|"add"|"remove","scope":"single"|"bulk"|null,"jql":string|null,"filterId":string|null,"filterName":string|null,"useMyTeamJql":boolean,"constraintFixVersion":string|null,"constraintSprint":string|null,"constraintAssignee":string|null,"targetStatus":string|null,"bulkFieldName":string|null,"bulkFieldValue":string|null,"cleanupRuleName":string|null,"fixVersion":string|null,"resolution":string|null,"templateName":string|null}
 - getTicket: show, display, look up a specific ticket; returns all non-null fields, description, and one-line comment summaries
 - summarizeTicket: summarise, summarize, tl;dr, give me an overview; produces a prose paragraph covering the ticket and its comments together
 - showComments: show, list, display all comments in full; shows the actual comment bodies numbered; use when user wants to read the comment text rather than a summary
@@ -72,11 +85,15 @@ Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|
 - updateField: set, change, update a field on a ticket; use fieldName (human-readable field name or ID) and fieldValue (raw value string, comma-separated for arrays); arrayOp is "set" by default, "add" when the user says "add X to field", "remove" when the user says "remove X from field"; scope is "single" when an explicit ticket key is given, "bulk" when user says "for all of them"/"for these tickets", null to resolve from context; for description content instructions use contentSource instead
 - showFields: list all available fields with IDs and current values; "show fields", "what fields does this ticket have", "list fields on PROJ-123"
 - searchJql: find, search, list tickets; review multiple tickets against criteria; if the user provides literal JQL (contains field operators like =, !=, IN, ~) use it verbatim in jql; otherwise translate natural language to valid Jira JQL — common patterns: "my tickets"/"assigned to me"/"my open tickets" → assignee = currentUser() AND resolution is NULL ORDER BY updated DESC; "open"/"unresolved" → resolution is NULL; "in progress" → status = "In Progress"; issue type by name → issuetype = Bug; project → project = KEY; if user references a saved filter by numeric id (e.g. "filter 12345") set filterId to that id and jql to null; if user references a filter by name (e.g. "from filter 'My open bugs'") set filterName to that name and jql to null; if user mentions "my team" or "our team" set useMyTeamJql to true and put only the non-team conditions in jql (e.g. "open team bugs" → useMyTeamJql:true, jql:"issuetype = Bug AND resolution is NULL") — omit the team filter itself, that is injected from settings; useMyTeamJql defaults to false
+  - constraintFixVersion/constraintSprint/constraintAssignee: when the SAME message also names a fixVersion, sprint, or assignee to narrow the filter/search by (e.g. "filter 12345 for fixVersion 3.2", "from filter 'My open bugs' in sprint 'Sprint 5'", "my filters assigned to jdoe"), extract the raw name into the matching field — do NOT fold it into jql, filterId, or filterName, and do NOT translate it into a JQL clause yourself; these are resolved and disambiguated against real Jira data separately. assigneeConstraint accepts "me"/"myself" same as elsewhere. All three default to null; only set the ones actually named. This combining is limited to exactly these three constraint types — other phrasing alongside a filter reference stays in jql (or is ignored if it doesn't fit) rather than being invented as a fourth constraint field.
+  - Bare follow-up narrowing: if the message names ONLY one of these three constraints (no filter reference, no other new search criteria, e.g. just "now only in sprint 'Sprint 5'" or "for fixVersion 3.2" as a follow-up to a prior search), still set operation to searchJql with the matching constraint field set and jql/filterId/filterName left null — this narrows the previous search result rather than starting a new one. This includes the exact phrases "refine to my tickets" (constraintAssignee: "me") and "refine to sprint '<name>'" (constraintSprint: "<name>") — the literal wording of this feature's own suggested reply chips
+- listMyFilters: list, show, or run the user's own saved Jira filters (favourites and filters they own); triggered by "show my filters", "list my filters", "my filters", "my saved filters", "show me my filters" — distinct from searchJql's filterId/filterName (which name one specific filter already known to the user); use this when the user wants to see or pick from the set of filters they have, not run one specific named/numbered filter
 - validateFields: check, validate required fields on a ticket
 - createTicket: create, open, add a new ticket/issue/bug/story/task; description is any additional body content the user provided beyond the summary (e.g. code blocks, steps to reproduce, specifications) — null if no extra content; assignee is the person to assign the ticket to ("me"/"myself" for the current user, or a name/email) — null if not mentioned; components is a comma-separated string of component names if mentioned — null if not mentioned
 - discoverWorkflow: discover or refresh the workflow graph for a project and issue type; projectKey and issueType are required
 - transition: move/close/transition a single ticket to a target status; targetStatus is the destination state name; resolution is the resolution name if the user specifies one (e.g. "with resolution Not a Bug") — null otherwise; use when the user refers to one ticket (explicit key or resolved from context) — NOT when they say "them", "these tickets", "all of them"
-- bulkTransition: transition/move/close/resolve "them" or "these tickets" or "all of them" to a status; only valid when a prior search result is available; targetStatus is the destination state name
+- bulkTransition: transition/move/close/resolve "them" or "these tickets" or "all of them" to a KNOWN, EXPLICITLY NAMED status; only valid when a prior search result is available; targetStatus is the destination state name
+- multiTicketTransition: the user wants to transition multiple tickets from a prior search/filter result but has NOT named a target status — triggered by the exact phrase "transition these tickets" (this feature's own suggested reply chip) or equivalent phrasing with no status named (e.g. "transition these", "guide me through transitioning these tickets", "move all of these somewhere"); opens a guided picker showing only the statuses reachable by every ticket in the result. Do NOT use this when a target status is named in the same message — use bulkTransition instead in that case.
 - bulkUpdateField: set/update/change a field on "them" or "these tickets"; only valid when a prior search result is available; bulkFieldName is the field name the user gave, bulkFieldValue is the value string
 - runCleanup: bulk-close or bulk-transition ALL tickets of a type in a project; triggered by "close all", "run cleanup", or "close PROJECT ISSUETYPE" where PROJECT is a project key and ISSUETYPE is an issue type name (not a ticket key like PROJ-123); projectKey and issueType are extracted from the prompt; cleanupRuleName is the quoted rule name if given; fixVersion is the complete string between the quotes after the word "in" — capture every word inside the quotes verbatim (e.g. in "Release 3.2" → "Release 3.2"; in "My Version has Spaces" → "My Version has Spaces"); examples: "@jira close VSJI Bug", "@jira run cleanup 'Close released bugs'", "@jira close BILLING bugs in 'Release 3.2'", "@jira run cleanup 'Close bugs' in 'My Version has Spaces'"
 - loadTicket: download the full ticket context (description, all comments, attachments) into .jira-context/{key}/ in the workspace root; triggered by "load", "fetch context", "download ticket", "load context for"

@@ -1,0 +1,12 @@
+[
+  {
+    "id": "10001",
+    "name": "My open bugs",
+    "jql": "assignee = currentUser() AND issuetype = Bug AND status != Done"
+  },
+  {
+    "id": "10003",
+    "name": "Sprint Backlog",
+    "jql": "sprint in openSprints()"
+  }
+]

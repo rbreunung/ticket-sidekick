@@ -1,4 +1,4 @@
-import type { JiraComment, JiraFieldMeta, JiraFilter, JiraIssueType, JiraSprintCandidate, JiraTransition } from '../jira/IJiraClient';
+import type { IJiraClient, JiraComment, JiraFieldMeta, JiraFilter, JiraFilterSource, JiraIssueType, JiraSprintCandidate, JiraTransition } from '../jira/IJiraClient';
 import { formatJiraBody } from '../utils/markdownFormatter';
 import type { VeracodeFlaw, VeracodeReviewRow } from '../utils/veracodeReport';
 import type { WaltzComponent, WaltzReviewRow } from '../utils/waltzReport';
@@ -481,6 +481,59 @@ export function formatPartialTransitionFailure(
     `not its original status — check its current state before retrying.`;
 }
 
+// ---------------------------------------------------------------------------------------------
+// U6/R9: "Transition these…" chip — a multi-ticket guided transition offered on a search/filter
+// result where every ticket shares the same project AND issue type. Unlike GuidedTransitionSession
+// above (one ticket, its own current status, its own transition metadata), this flow's status
+// options are the INTERSECTION of every qualifying ticket's own direct transition targets — every
+// choice offered is guaranteed to apply to the whole result, per the plan's deliberate
+// intersection-over-union decision. Once a status is picked, this flow hands off entirely to the
+// *existing* resolution-selection / transition-review sessions (the same ones bulkTransition's own
+// known-target-status path already uses via buildAndStreamTransitionBatch in JiraParticipant.ts)
+// rather than re-implementing its own resolution-pick and confirm steps — that shared helper's
+// review screen already lists every affected ticket + its current status (R9's confirm-step
+// requirement) and already tolerates tickets at different current statuses. There is likewise no
+// 'pick-path' step: every status in `statusOptions` is by construction a direct transition target
+// for every ticket, so there is never a multi-hop route to choose among.
+// ---------------------------------------------------------------------------------------------
+
+export interface MultiTicketTransitionSession {
+  tickets: { key: string; currentStatus: string }[];
+  issueType: string;
+  step: 'pick-status';
+  statusOptions: string[];
+}
+
+/**
+ * U6/R9: the multi-ticket transition chip's status intersection — every status name that is a
+ * *direct* transition target for every ticket in the result. `perTicketTransitionNames[i]` is one
+ * ticket's own list of direct-transition target names (`transitions.map(t => t.to.name)`, fetched
+ * live by the caller). Order follows the first ticket's own transition order (arbitrary but
+ * stable); each ticket's own list is de-duplicated by name first so a ticket with two transitions
+ * to the same status name can't inflate the result. An empty input, or any ticket with an empty
+ * transition list, yields an empty result — there is nothing in common to offer.
+ */
+export function computeCommonTransitionStatuses(perTicketTransitionNames: string[][]): string[] {
+  if (perTicketTransitionNames.length === 0) return [];
+  const [first, ...rest] = perTicketTransitionNames;
+  const restSets = rest.map((names) => new Set(names));
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const name of first) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    if (restSets.every((s) => s.has(name))) result.push(name);
+  }
+  return result;
+}
+
+/** R9's confirm-step guarantee, applied here too: every affected ticket key + its current status,
+ * listed explicitly before the target status is even asked about — since the status list on offer
+ * came from an intersection the user hasn't seen ticket-by-ticket yet. */
+export function buildMultiTicketTransitionStatusPickIntro(tickets: { key: string; currentStatus: string }[], baseUrl?: string): string {
+  return tickets.map((t) => `${formatKeyLink(t.key, baseUrl)} (${t.currentStatus})`).join(', ');
+}
+
 // Defensive sanitizer over LLM history text (llmHelpers.ts): no code path emits HTML-comment
 // markers anymore since the R13 metadata migration, but history turns from pre-migration
 // versions may still carry them — strip before that text is fed back into an LLM prompt.
@@ -582,9 +635,23 @@ export function parseCommentIndex(reply: string, maxIndex: number): number | 'in
   return 'invalid';
 }
 
+/** U4/R4: a named fixVersion/sprint/assignee constraint extracted alongside a filter reference (or
+ * a `listMyFilters` pick) that hasn't been resolved yet — carried across a filter-name-ambiguity
+ * detour (FilterSelectionSession/ListedFiltersSession) so the constraint is still applied once the
+ * filter itself is chosen. All three are optional/independent; `null` and `undefined` are both
+ * "not named" (ParsedIntent fields are `string | null`). */
+export interface PendingSearchConstraints {
+  fixVersion?: string | null;
+  sprint?: string | null;
+  assignee?: string | null;
+}
+
 export interface FilterSelectionSession {
   filters: JiraFilter[];
   originalPrompt: string;
+  // U4/R4: set only when the triggering message also named a fixVersion/sprint/assignee
+  // constraint — resolved after the filter itself is picked (see resolveConstraintsAndSearch).
+  pendingConstraints?: PendingSearchConstraints;
 }
 
 // Intentionally excluded from the `JiraSessionContinuity` metadata migration: this session is
@@ -593,6 +660,14 @@ export interface FilterSelectionSession {
 export interface SearchResultSession {
   ticketKeys: string[];
   jql: string;
+  // U5/R7-R8: per-ticket project/issue-type metadata, populated only by the plain `searchJql`
+  // path (the only writer that needs it, since it's also the only one that computes refine-chip
+  // eligibility) — used to decide whether every ticket in the result shares one project (R8's
+  // sprint-refine-chip precondition). Optional: every other writer of this session (filter runs,
+  // R5's bare-constraint narrowing) keeps compiling and behaving unchanged without populating it,
+  // and `ticketKeys` stays the one field `bulkTransition` and the rest of this file's existing
+  // readers rely on.
+  tickets?: { key: string; projectKey: string | null; issueType: string }[];
 }
 
 export interface BulkUpdateReviewSession {
@@ -698,6 +773,23 @@ export function parseFilterSelection(reply: string, filters: JiraFilter[]): Jira
   return 'invalid';
 }
 
+// U3 (favourite/filter search): "show my filters"'s numbered pick-list session — parallel to
+// FilterSelectionSession (which is reached via a specific filterId/filterName match), but reached
+// via getMyFilters()'s combined favourites+owned listing instead of a name/id search. No
+// `originalPrompt` field (FilterSelectionSession's copy of it is unused by any caller today) —
+// this session only ever needs the filter list itself to resolve a pick.
+export interface ListedFiltersSession {
+  filters: JiraFilter[];
+}
+
+/** Resolves a reply to `listMyFilters`'s numbered pick-list the same way `parseFilterSelection`
+ * resolves `FilterSelectionSession`'s — delegating to it directly so both sessions share the same
+ * exact-match-before-cancellation-word ordering (a filter literally named "Stop" or "Cancel" must
+ * still be selectable by exact name; see parseFilterSelection's own doc comment). */
+export function parseListedFiltersSelection(reply: string, session: ListedFiltersSession): JiraFilter | 'cancel' | 'invalid' {
+  return parseFilterSelection(reply, session.filters);
+}
+
 export interface LoadSkippedSession {
   ticketKey: string;
   skipped: Array<{
@@ -787,6 +879,259 @@ export function formatIssueTypeInlinePhrase(issueType: string): string {
 export function buildTeamJql(teamJql: string, extraJql: string | null): string {
   const extra = extraJql ? ` AND (${extraJql})` : ' AND resolution is NULL';
   return `(${teamJql})${extra}`;
+}
+
+/**
+ * Already-resolved constraint values to AND onto a base JQL string. Resolving a human-typed
+ * name (a fixVersion name, a sprint name, an assignee's display name) to this shape — including
+ * disambiguating a name that matches multiple candidates — is a different unit's job; this type
+ * only carries the resolved value.
+ *
+ * - `fixVersion`: the version's name (e.g. "Release 3.2"), matched with `fixVersion = "<name>"`.
+ * - `sprint`: the sprint's *name*, not its numeric id — chosen for consistency with `fixVersion`
+ *   and `assignee` (both name-based) and because callers resolve a sprint from natural-language
+ *   text the same way they resolve a fixVersion; matched with `Sprint = "<name>"`.
+ * - `assignee`: an account identifier/display name, or the literal string `"me"`, which maps to
+ *   `assignee = currentUser()` — the same mapping `INTENT_PROMPT`'s "my tickets" guidance already
+ *   documents for the LLM-facing JQL translation.
+ */
+export interface JqlConstraints {
+  fixVersion?: string;
+  sprint?: string;
+  assignee?: string;
+}
+
+// Quotes a JQL string literal, escaping backslashes and double quotes so a constraint value
+// (which may originate from an LLM's own inference, not just human-typed chat text) cannot
+// terminate its clause early and inject additional JQL. Backslashes are escaped first so an
+// escaped quote's own backslash isn't re-escaped.
+function quoteJqlValue(value: string): string {
+  const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return `"${escaped}"`;
+}
+
+/**
+ * ANDs a fixVersion/sprint/assignee constraint set onto a base JQL string, generalizing
+ * `buildTeamJql`'s `(base) AND (extra)` wrapping pattern to any number of resolved constraints.
+ * Every value is quoted/escaped via `quoteJqlValue` before interpolation. Zero constraints
+ * provided returns `baseJql` unchanged.
+ */
+export function buildConstraintJql(baseJql: string, constraints: JqlConstraints): string {
+  const clauses: string[] = [];
+
+  if (constraints.fixVersion) {
+    clauses.push(`fixVersion = ${quoteJqlValue(constraints.fixVersion)}`);
+  }
+  if (constraints.sprint) {
+    clauses.push(`Sprint = ${quoteJqlValue(constraints.sprint)}`);
+  }
+  if (constraints.assignee) {
+    clauses.push(
+      constraints.assignee === 'me' ? 'assignee = currentUser()' : `assignee = ${quoteJqlValue(constraints.assignee)}`,
+    );
+  }
+
+  if (clauses.length === 0) {
+    return baseJql;
+  }
+  return `(${baseJql}) AND (${clauses.join(' AND ')})`;
+}
+
+/**
+ * U4/R11: a single resolved-JQL-value candidate offered in the ambiguous-match pick-list — `label`
+ * is what's shown/matched against a typed reply, `value` is what actually gets ANDed onto the JQL
+ * via `buildConstraintJql` once chosen (usually the same string, but e.g. a sprint candidate's
+ * label can carry its state — "Sprint 5 (active)" — while `value` stays the bare sprint name
+ * `buildConstraintJql` expects).
+ */
+export interface ConstraintMatchOption {
+  label: string;
+  value: string;
+}
+
+/**
+ * U4/R11: ONE ambiguous-match pick-list session, parameterized by `kind` rather than three
+ * separate session types — the picker behavior (numbered/exact-name reply, cancel) is identical
+ * across fixVersion/sprint/assignee. `baseJql`/`jqlLabel` are the filter's (or prior search's) own
+ * JQL/label the resolved value eventually gets ANDed onto; `resolvedConstraints` carries whatever
+ * earlier constraint(s) in the same message already resolved before this ambiguity was hit;
+ * `remainingConstraints` carries whichever named constraint(s) still need resolving after this pick
+ * is made (e.g. a message naming both a fixVersion and a sprint, where the fixVersion resolved
+ * cleanly but the sprint name was ambiguous — this session's `kind` is 'sprint', and
+ * `remainingConstraints` is empty since sprint was the last one to resolve).
+ */
+export interface ConstraintAmbiguitySession {
+  kind: 'fixVersion' | 'sprint' | 'assignee';
+  options: ConstraintMatchOption[];
+  baseJql: string;
+  jqlLabel: string;
+  resolvedConstraints: JqlConstraints;
+  remainingConstraints: PendingSearchConstraints;
+}
+
+/** Resolves a reply to a `ConstraintAmbiguitySession`'s pick-list the same way `parseFilterSelection`
+ * resolves `FilterSelectionSession`'s — an exact (case-insensitive) label match wins over the
+ * generic cancellation word list (so a candidate literally named "Stop" or "Cancel" stays
+ * selectable by name), then falls back to a 1-based numeric index. */
+export function parseConstraintMatchSelection(
+  reply: string,
+  options: ConstraintMatchOption[],
+): ConstraintMatchOption | 'cancel' | 'invalid' {
+  const trimmed = reply.trim();
+  const byLabel = options.find(o => o.label.toLowerCase() === trimmed.toLowerCase());
+  if (byLabel) return byLabel;
+  if (isCancellation(reply)) return 'cancel';
+  const byIndex = trimmed.match(/^(\d+)$/);
+  if (byIndex) {
+    const n = parseInt(byIndex[1], 10);
+    if (n >= 1 && n <= options.length) return options[n - 1];
+    return 'invalid';
+  }
+  return 'invalid';
+}
+
+/**
+ * U4/R11 step 1: extracts a single scoping project key from a filter's (or prior search's) own
+ * JQL, so a named fixVersion/sprint constraint can be resolved against that one project's versions
+ * or sprints. Deliberately conservative — never guesses:
+ * - `project in (...)` is explicit multi-project scoping (or could be a single-element list that
+ *   still reads as "not necessarily one project" from the JQL author's intent) — always null.
+ * - No `project = ...` clause at all — null.
+ * - A quoted (`project = "PROJ"`) or bare (`project = PROJ`) value both match; the key is
+ *   upper-cased since Jira project keys are conventionally upper-case but a filter's JQL could have
+ *   been typed either way.
+ *
+ * This is a plain substring/regex scan, not a JQL parser — a project key embedded inside a string
+ * literal elsewhere in the JQL (e.g. `summary ~ "project = FOO"`) would be a false positive, but
+ * that shape is vanishingly unlikely in a real saved filter and not worth a full JQL grammar here.
+ */
+export function extractProjectKeyFromJql(jql: string): string | null {
+  if (/\bproject\s+in\s*\(/i.test(jql)) return null;
+  const match = jql.match(/\bproject\s*=\s*"?([A-Za-z][A-Za-z0-9]*)"?/i);
+  return match ? match[1].toUpperCase() : null;
+}
+
+/**
+ * U7: outcome of `resolveNamedConstraints()` below. `'ambiguous'` carries `resolvedSoFar` (any
+ * earlier constraint in the same call that already resolved cleanly) and `remaining` (whichever
+ * named constraint(s) still haven't been attempted) so a caller with session memory (the chat
+ * flow) can present a pick-list and resume exactly where resolution left off; a caller without
+ * session memory (a Language Model tool, R11) instead reports the candidates as plain text and
+ * stops — it never guesses and never opens an interactive pick.
+ */
+export type ConstraintResolutionResult =
+  | { kind: 'resolved'; constraints: JqlConstraints }
+  | { kind: 'ambiguous'; constraintKind: 'fixVersion' | 'sprint' | 'assignee'; options: ConstraintMatchOption[]; resolvedSoFar: JqlConstraints; remaining: PendingSearchConstraints }
+  | { kind: 'notFound'; message: string }
+  | { kind: 'noProjectScope'; message: string };
+
+/**
+ * U7: extracted from `JiraParticipant.ts`'s `resolveConstraintsAndSearch()` (R3 — one
+ * implementation, not two) — resolves any named fixVersion/sprint/assignee constraint against
+ * live Jira data via `jiraClient` alone (no `TicketService` needed: `findSprints` is a thin
+ * pass-through on `IJiraClient` already). fixVersion and sprint both need a single scoping
+ * project key extracted from `baseJql` first; zero matches or no single-project scope is reported
+ * without resolving anything; exactly one match resolves that constraint and moves to the next;
+ * more than one returns `'ambiguous'` immediately (no guessing, no partial commit to that
+ * constraint). `alreadyResolved` carries forward whatever earlier constraint(s) already resolved
+ * before a prior ambiguity was hit — the chat flow's resume-after-pick path passes this in;
+ * `jira_searchByFilter` (a tool, no session memory) never does.
+ */
+export async function resolveNamedConstraints(
+  baseJql: string,
+  named: PendingSearchConstraints,
+  jiraClient: IJiraClient,
+  alreadyResolved: JqlConstraints = {},
+): Promise<ConstraintResolutionResult> {
+  const resolved: JqlConstraints = { ...alreadyResolved };
+
+  let projectKey: string | null = null;
+  if (named.fixVersion || named.sprint) {
+    projectKey = extractProjectKeyFromJql(baseJql);
+    if (!projectKey) {
+      return {
+        kind: 'noProjectScope',
+        message:
+          `Can't determine a single project from this filter's JQL to resolve the ${named.fixVersion ? 'fix version' : 'sprint'} ` +
+          `— it must scope to exactly one project (e.g. \`project = PROJ\`).`,
+      };
+    }
+  }
+
+  if (named.fixVersion) {
+    const project = await jiraClient.getProject(projectKey!);
+    const needle = named.fixVersion.toLowerCase();
+    const matches = (project.versions ?? []).filter(v => v.name.toLowerCase().includes(needle));
+    if (matches.length === 0) {
+      return { kind: 'notFound', message: `No fix version matching "${named.fixVersion}" found in **${projectKey}**.` };
+    } else if (matches.length === 1) {
+      resolved.fixVersion = matches[0].name;
+    } else {
+      const options = matches.map(v => ({ label: v.name, value: v.name }));
+      const remaining: PendingSearchConstraints = { sprint: named.sprint, assignee: named.assignee };
+      return { kind: 'ambiguous', constraintKind: 'fixVersion', options, resolvedSoFar: resolved, remaining };
+    }
+  }
+
+  if (named.sprint) {
+    const candidates = await jiraClient.findSprints(projectKey!, named.sprint);
+    if (candidates.length === 0) {
+      return { kind: 'notFound', message: `No sprint matching "${named.sprint}" found in **${projectKey}**.` };
+    } else if (candidates.length === 1) {
+      resolved.sprint = candidates[0].name;
+    } else {
+      const options = candidates.map(c => ({ label: `${c.name} (${c.state})`, value: c.name }));
+      const remaining: PendingSearchConstraints = { assignee: named.assignee };
+      return { kind: 'ambiguous', constraintKind: 'sprint', options, resolvedSoFar: resolved, remaining };
+    }
+  }
+
+  if (named.assignee) {
+    if (['me', 'myself', 'i'].includes(named.assignee.toLowerCase().trim())) {
+      resolved.assignee = 'me';
+    } else {
+      const users = await jiraClient.findUser(named.assignee);
+      if (users.length === 0) {
+        return { kind: 'notFound', message: `No user found matching "${named.assignee}".` };
+      } else if (users.length === 1) {
+        const u = users[0];
+        resolved.assignee = u.name ?? u.accountId ?? u.displayName;
+      } else {
+        const options = users.map(u => ({ label: u.displayName, value: u.name ?? u.accountId ?? u.displayName }));
+        return { kind: 'ambiguous', constraintKind: 'assignee', options, resolvedSoFar: resolved, remaining: {} };
+      }
+    }
+  }
+
+  return { kind: 'resolved', constraints: resolved };
+}
+
+/** R10: the partial-fetch-failure note shared by the chat "show my filters" flow
+ * (`handleListMyFilters` in `JiraParticipant.ts`) and this tool-facing formatter, so the two
+ * surfaces can't drift on wording. Empty string when both sources succeeded. */
+export function buildFilterFailureNote(failedSources: JiraFilterSource[]): string {
+  return failedSources.length > 0
+    ? `_Could not fetch your ${failedSources.join(' and ')} filter(s) — showing partial results._\n\n`
+    : '';
+}
+
+/** Renders a `JiraFilter[]` as a "- **name** (id: id)" bullet list, via the shared `formatBulletList`. */
+export function formatFilterCandidateList(filters: JiraFilter[]): string {
+  return formatBulletList(filters.map(f => `**${f.name}** (id: ${f.id})`));
+}
+
+/**
+ * U7: `jira_listMyFilters`'s plain-text formatting of `TicketService.getMyFilters()`'s result —
+ * mirrors `handleListMyFilters()`'s chat wording (the same failure note, the same "none found"
+ * message) so the tool and the chat flow never drift apart (R3), minus the numbered pick-list
+ * (a tool has no session memory to resume a pick against — it just lists every filter as text).
+ */
+export function formatMyFiltersList(filters: JiraFilter[], failedSources: JiraFilterSource[]): string {
+  const failureNote = buildFilterFailureNote(failedSources);
+  if (filters.length === 0) {
+    return `${failureNote}No favourite or owned filters found.`;
+  }
+  return `${failureNote}Your filters:\n\n${formatFilterCandidateList(filters)}`;
 }
 
 /**
@@ -1552,8 +1897,9 @@ export function buildDownloadAttachmentConfirmation(ticketKey: string, filename:
 }
 
 /** Renders `items` as a `- ` bulleted list, one per line — shared by every result message
- * below that lists plain strings or pre-formatted per-item text. */
-function formatBulletList(items: string[]): string {
+ * below that lists plain strings or pre-formatted per-item text. Exported so `jiraTools.ts`'s
+ * ambiguous-match text results use the same shape instead of a second hand-rolled join. */
+export function formatBulletList(items: string[]): string {
   return items.map(item => `- ${item}`).join('\n');
 }
 
@@ -1666,9 +2012,27 @@ export type JiraFollowupState =
   // (KTD4) are the loaded ticket's own values, read once from the already-fetched issue, so the
   // "Discover workflow" chip below never needs a re-fetch.
   | { kind: 'loadedTicket'; ticketKey: string; projectKey: string; issueType: string; justDid?: Operation }
+  // U5/R7-R8: a plain `searchJql` result (search or single-filter run). "Refine to my tickets"
+  // (R7) is unconditional, so this case needs no field for it. "Refine to current sprint" (R8)
+  // is conditional on every ticket sharing one project AND `ticketSidekick.jira.sprintBoardId`
+  // resolving to a single active sprint — all of that resolution is async (project uniformity
+  // from fetched tickets, `TicketService.getActiveSprintForBoard`), so `JiraParticipant.ts` does
+  // it BEFORE constructing this state and hands this pure function only the answer: the resolved
+  // sprint's name when eligible, `undefined` otherwise — eligibility and the name can't diverge,
+  // so there is no separate boolean to keep in sync with it.
+  // U6/R9: "Transition these…" chip eligibility — every ticket in the result shares one project
+  // AND one issue type (computed synchronously in JiraParticipant.ts from `tickets[].projectKey`/
+  // `.issueType`, same as the sprint check above). No name to carry (unlike sprintName) — the chip's
+  // prompt text is fixed, the actual status options are computed only once the chip is clicked.
+  | { kind: 'searchResults'; sprintName?: string; transitionChipEligible: boolean }
   | { kind: 'none' };
 
 const JIRA_MAX_FOLLOWUPS = 3;
+// R2: the greeting's "Show my filters" chip is a static, always-present entry, not one of
+// KTD14's 2-3 example prompts — it doesn't compete with the branch-key chip for a slot the way
+// two dynamically-generated examples would. One extra slot keeps both present instead of R2
+// silently losing to KTD14's cap whenever a branch key also resolves.
+const GREETING_MAX_FOLLOWUPS = 4;
 
 /**
  * R6/KTD14: 2-3 example prompts, phrased as literal next messages a user could send, for a
@@ -1688,7 +2052,12 @@ export function computeJiraFollowups(state: JiraFollowupState): FollowupSuggesti
       if (state.branchKey) {
         chips.push({ prompt: `show me ${state.branchKey}`, label: `Show me ${state.branchKey}` });
       }
-      return chips.slice(0, JIRA_MAX_FOLLOWUPS);
+      // R2: static chip, appended last — it invokes the listing intent rather than fetching
+      // filters on every greeting (a greeting never touches the network today, and this chip
+      // keeps it that way). Appended after the branch-key chip so the cap (below) favors the
+      // existing "Show me {key}" suggestion over this one when both would otherwise fit.
+      chips.push({ prompt: 'show my filters', label: 'Show my filters' });
+      return chips.slice(0, GREETING_MAX_FOLLOWUPS);
     }
     case 'fallback': {
       // R1/R4: the comment chip is gone; same branch-key rule as greeting for the ticket chip.
@@ -1728,6 +2097,28 @@ export function computeJiraFollowups(state: JiraFollowupState): FollowupSuggesti
       }
       return chips.slice(0, JIRA_MAX_FOLLOWUPS);
     }
+    case 'searchResults': {
+      // R7: always present, no eligibility check — narrowing to the current user's own tickets
+      // is always a valid refinement of any search/filter result.
+      const chips: FollowupSuggestion[] = [
+        { prompt: 'refine to my tickets', label: 'Refine to my tickets' },
+      ];
+      // R8: only when JiraParticipant.ts already resolved a single eligible active sprint — the
+      // chip's prompt names that sprint literally (the LLM intent parser can't know its name),
+      // so there is nothing to offer when it isn't eligible.
+      if (state.sprintName) {
+        chips.push({
+          prompt: `refine to sprint '${state.sprintName}'`,
+          label: `Refine to sprint "${state.sprintName}"`,
+        });
+      }
+      // U6/R9: only when every ticket in the result shares one project AND one issue type —
+      // the exact phrase this feature's own intent routing recognizes (see llmHelpers.ts).
+      if (state.transitionChipEligible) {
+        chips.push({ prompt: 'transition these tickets', label: 'Transition these…' });
+      }
+      return chips.slice(0, JIRA_MAX_FOLLOWUPS);
+    }
     case 'none':
       return [];
   }
@@ -1762,7 +2153,10 @@ export type JiraSessionKind =
   | 'resolution-selection'
   | 'transition-review'
   | 'guided-transition'
+  | 'multi-transition'
   | 'selecting-filter'
+  | 'listing-filters'
+  | 'selecting-constraint-match'
   | 'bulk-update-review'
   | 'sprint-selection'
   | 'field-selection'

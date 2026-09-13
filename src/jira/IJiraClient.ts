@@ -45,6 +45,10 @@ export interface JiraIssue {
     summary: string;
     description: unknown; // v3: Atlassian Document Format (ADF) object; v2: plain string
     status: { name: string };
+    // U5: requested unconditionally by `searchJql`'s `baseFields` so a search-result session can
+    // record each ticket's issue type without a second fetch (used for R8's sprint-refine-chip
+    // eligibility check). Optional since older fixtures/tests predate this field.
+    issuetype?: { name: string };
     assignee: JiraUser | null;
     reporter: JiraUser | null;
     priority: { name: string } | null;
@@ -82,11 +86,22 @@ export interface JiraIssueType {
   subtask: boolean;
 }
 
+export interface JiraProjectVersion {
+  id: string;
+  name: string;
+  released?: boolean;
+  archived?: boolean;
+}
+
 export interface JiraProject {
   id: string;
   key: string;
   name: string;
   issueTypes: JiraIssueType[];
+  // U4: the real `GET /project/{key}` v2 response already includes this array; only the type was
+  // missing. Optional since MockJiraClient's fixture-backed callers never set it, and older
+  // fixtures/tests are unaffected.
+  versions?: JiraProjectVersion[];
 }
 
 export interface JiraCreatedIssue {
@@ -117,6 +132,15 @@ export interface JiraSprintCandidate {
   id: number;
   name: string;
   state: string;
+}
+
+/** Which of the two `getMyFilters()` sources failed to fetch — used to tell the caller which
+ * half of the combined list (if any) is missing rather than silently returning a partial list. */
+export type JiraFilterSource = 'favourites' | 'owned';
+
+export interface JiraMyFiltersResult {
+  filters: JiraFilter[];
+  failedSources: JiraFilterSource[];
 }
 
 export interface JiraEditMetaField {
@@ -150,4 +174,11 @@ export interface IJiraClient {
   findSprints(projectKey: string, query: string): Promise<JiraSprintCandidate[]>;
   uploadAttachment(issueKey: string, filename: string, contentType: string, contentBytes: string): Promise<void>;
   getRemoteLinks(issueKey: string): Promise<JiraRemoteLink[]>;
+  /** Favourite filters plus filters owned by the current user, deduped by `id`. Each source is
+   * fetched independently — one failing does not suppress the other's result; `failedSources`
+   * names which source(s) failed (empty when both succeed). */
+  getMyFilters(): Promise<JiraMyFiltersResult>;
+  /** The single active sprint on a Scrum board, or `null` when there are zero or more than one
+   * (never guesses which one). Tolerates a non-Scrum board by returning `null`. */
+  getActiveSprintForBoard(boardId: number): Promise<{ id: number; name: string } | null>;
 }

@@ -701,6 +701,59 @@ describe('TicketService filter methods', () => {
       expect(filters).toEqual([]);
     });
   });
+
+  describe('getMyFilters', () => {
+    it('returns the deduped union of favourites and owned filters when both succeed', async () => {
+      const result = await service.getMyFilters();
+      expect(result.failedSources).toEqual([]);
+      const ids = result.filters.map((f) => f.id);
+      // 10001 is present in both fixtures — must appear only once.
+      expect(ids).toEqual(['10001', '10003', '10004']);
+    });
+
+    it('still returns favourites when the owned-filter fetch fails', async () => {
+      client.failFilterSource = 'owned';
+      const result = await service.getMyFilters();
+      expect(result.failedSources).toEqual(['owned']);
+      expect(result.filters.map((f) => f.id)).toEqual(['10001', '10003']);
+    });
+
+    it('still returns owned filters when the favourites fetch fails', async () => {
+      client.failFilterSource = 'favourites';
+      const result = await service.getMyFilters();
+      expect(result.failedSources).toEqual(['favourites']);
+      expect(result.filters.map((f) => f.id)).toEqual(['10001', '10004']);
+    });
+
+    it('surfaces both failures (not swallowed) when both sources fail', async () => {
+      client.failFilterSource = 'both';
+      const result = await service.getMyFilters();
+      expect(result.failedSources).toEqual(['favourites', 'owned']);
+      expect(result.filters).toEqual([]);
+    });
+  });
+
+  describe('getActiveSprintForBoard', () => {
+    it('returns the one active sprint on a Scrum board', async () => {
+      const sprint = await service.getActiveSprintForBoard(1);
+      expect(sprint).toEqual({ id: 42, name: 'Sprint 42' });
+    });
+
+    it('returns null when the board has zero active sprints', async () => {
+      const sprint = await service.getActiveSprintForBoard(2);
+      expect(sprint).toBeNull();
+    });
+
+    it('returns null when the board has more than one active sprint (never guesses)', async () => {
+      const sprint = await service.getActiveSprintForBoard(3);
+      expect(sprint).toBeNull();
+    });
+
+    it('returns null for an unknown/non-Scrum board', async () => {
+      const sprint = await service.getActiveSprintForBoard(999);
+      expect(sprint).toBeNull();
+    });
+  });
 });
 
 describe('TicketService field resolution', () => {

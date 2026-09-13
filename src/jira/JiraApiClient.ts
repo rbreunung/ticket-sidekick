@@ -6,6 +6,7 @@ import type {
   JiraFieldMeta,
   JiraFilter,
   JiraIssue,
+  JiraMyFiltersResult,
   JiraProject,
   JiraProjectStatus,
   JiraRemoteLink,
@@ -226,7 +227,10 @@ export class JiraApiClient implements IJiraClient {
   }
 
   async searchJql(jql: string, maxResults = 20, startAt?: number, extraFields: string[] = []): Promise<JiraSearchResult> {
-    const baseFields = ['summary', 'status', 'assignee', 'priority', 'labels', 'fixVersions', 'reporter', 'subtasks', 'parent'];
+    // U5: 'issuetype' added unconditionally (same convention as the other always-requested
+    // fields here) so search-result sessions can record each ticket's issue type/project for
+    // R8's sprint-refine-chip eligibility check without a second fetch.
+    const baseFields = ['summary', 'status', 'assignee', 'priority', 'labels', 'fixVersions', 'reporter', 'subtasks', 'parent', 'issuetype'];
     const fields = [...baseFields, ...extraFields.filter(f => !baseFields.includes(f))];
     let qs = `jql=${encodeURIComponent(jql)}&maxResults=${maxResults}&${fields.map(f => `fields=${encodeURIComponent(f)}`).join('&')}`;
     if (startAt !== undefined) qs += `&startAt=${startAt}`;
@@ -493,6 +497,91 @@ export class JiraApiClient implements IJiraClient {
         return [];
       }
       throw err;
+    }
+  }
+
+  /**
+   * Favourite filters (`GET /filter/favourite`) plus filters owned by the current user. There
+   * is no dedicated "owned filters" endpoint on either DC or Cloud, so ownership is expressed
+   * as a `/filter/search` scoped to the current user's owner identifier — DC: username
+   * (`owner=`), Cloud: `accountId` (`accountId=`). Each source is fetched concurrently and
+   * independently: one failing does not suppress the other's result (R10), but a genuine auth
+   * failure (401) still rethrows rather than being reported as a mere "source failed".
+   */
+  async getMyFilters(): Promise<JiraMyFiltersResult> {
+    const failedSources: JiraMyFiltersResult['failedSources'] = [];
+    let favourites: JiraFilter[] = [];
+    let owned: JiraFilter[] = [];
+
+    // KTD1: the two fetches are independent, so they run concurrently rather than one after
+    // the other — Promise.allSettled preserves the existing per-source failure isolation
+    // (one failing doesn't suppress the other's result).
+    const [favouritesResult, ownedResult] = await Promise.allSettled([
+      this.request<JiraFilter[]>('/filter/favourite'),
+      this.getOwnedFilters(),
+    ]);
+    // Auth-error precedence matches the original sequential order (favourites checked first)
+    // for deterministic behavior when both fail with an auth error.
+    if (favouritesResult.status === 'rejected' && isAuthError(favouritesResult.reason)) throw favouritesResult.reason;
+    if (ownedResult.status === 'rejected' && isAuthError(ownedResult.reason)) throw ownedResult.reason;
+
+    if (favouritesResult.status === 'fulfilled') {
+      favourites = favouritesResult.value;
+    } else {
+      failedSources.push('favourites');
+      this.onDiag?.('warn', 'Failed to fetch favourite filters', { error: favouritesResult.reason instanceof Error ? favouritesResult.reason.message : String(favouritesResult.reason) });
+    }
+    if (ownedResult.status === 'fulfilled') {
+      owned = ownedResult.value;
+    } else {
+      failedSources.push('owned');
+      this.onDiag?.('warn', 'Failed to fetch owned filters', { error: ownedResult.reason instanceof Error ? ownedResult.reason.message : String(ownedResult.reason) });
+    }
+
+    const seen = new Set<string>();
+    const filters: JiraFilter[] = [];
+    for (const f of [...favourites, ...owned]) {
+      if (!seen.has(f.id)) {
+        seen.add(f.id);
+        filters.push(f);
+      }
+    }
+
+    return { filters, failedSources };
+  }
+
+  private async getOwnedFilters(): Promise<JiraFilter[]> {
+    const user = await this.getCurrentUser();
+    let qs: string;
+    if (this.authType === 'cloud') {
+      // Throw rather than return [] — the current user's own accountId being absent means
+      // ownership can't be determined, not "the user owns zero filters". getMyFilters()'s
+      // Promise.allSettled records this as a genuine 'owned' fetch failure (R10) instead of
+      // silently reporting an empty-but-successful result.
+      if (!user.accountId) throw new Error('Could not determine current user accountId for owned-filter lookup.');
+      qs = `accountId=${encodeURIComponent(user.accountId)}`;
+    } else {
+      if (!user.name) throw new Error('Could not determine current user name for owned-filter lookup.');
+      qs = `owner=${encodeURIComponent(user.name)}`;
+    }
+    const data = await this.request<{ values: JiraFilter[] }>(`/filter/search?${qs}&expand=jql&maxResults=50`);
+    return data.values;
+  }
+
+  async getActiveSprintForBoard(boardId: number): Promise<{ id: number; name: string } | null> {
+    try {
+      const sprints = await this.agileRequest<{ values: Array<{ id: number; name: string; state: string }> }>(
+        `/board/${boardId}/sprint?state=active,future`,
+      );
+      const activeSprints = sprints.values.filter((s) => s.state === 'active');
+      if (activeSprints.length !== 1) return null;
+      return { id: activeSprints[0].id, name: activeSprints[0].name };
+    } catch (err) {
+      // Kanban (and other non-Scrum) boards reject sprint queries — treat as "no active sprint".
+      // An auth failure must surface rather than silently yield null.
+      if (isAuthError(err)) throw err;
+      this.onDiag?.('warn', `Board ${boardId} skipped (non-Scrum) while resolving active sprint`, { boardId });
+      return null;
     }
   }
 
