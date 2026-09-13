@@ -530,8 +530,8 @@ export function computeCommonTransitionStatuses(perTicketTransitionNames: string
 /** R9's confirm-step guarantee, applied here too: every affected ticket key + its current status,
  * listed explicitly before the target status is even asked about — since the status list on offer
  * came from an intersection the user hasn't seen ticket-by-ticket yet. */
-export function buildMultiTicketTransitionStatusPickIntro(tickets: { key: string; currentStatus: string }[]): string {
-  return tickets.map((t) => `**${t.key}** (${t.currentStatus})`).join(', ');
+export function buildMultiTicketTransitionStatusPickIntro(tickets: { key: string; currentStatus: string }[], baseUrl?: string): string {
+  return tickets.map((t) => `${formatKeyLink(t.key, baseUrl)} (${t.currentStatus})`).join(', ');
 }
 
 // Defensive sanitizer over LLM history text (llmHelpers.ts): no code path emits HTML-comment
@@ -1106,12 +1106,6 @@ export async function resolveNamedConstraints(
   return { kind: 'resolved', constraints: resolved };
 }
 
-/**
- * U7: `jira_listMyFilters`'s plain-text formatting of `TicketService.getMyFilters()`'s result —
- * mirrors `handleListMyFilters()`'s chat wording (the same failure note, the same "none found"
- * message) so the tool and the chat flow never drift apart (R3), minus the numbered pick-list
- * (a tool has no session memory to resume a pick against — it just lists every filter as text).
- */
 /** R10: the partial-fetch-failure note shared by the chat "show my filters" flow
  * (`handleListMyFilters` in `JiraParticipant.ts`) and this tool-facing formatter, so the two
  * surfaces can't drift on wording. Empty string when both sources succeeded. */
@@ -1126,6 +1120,12 @@ export function formatFilterCandidateList(filters: JiraFilter[]): string {
   return formatBulletList(filters.map(f => `**${f.name}** (id: ${f.id})`));
 }
 
+/**
+ * U7: `jira_listMyFilters`'s plain-text formatting of `TicketService.getMyFilters()`'s result —
+ * mirrors `handleListMyFilters()`'s chat wording (the same failure note, the same "none found"
+ * message) so the tool and the chat flow never drift apart (R3), minus the numbered pick-list
+ * (a tool has no session memory to resume a pick against — it just lists every filter as text).
+ */
 export function formatMyFiltersList(filters: JiraFilter[], failedSources: JiraFilterSource[]): string {
   const failureNote = buildFilterFailureNote(failedSources);
   if (filters.length === 0) {

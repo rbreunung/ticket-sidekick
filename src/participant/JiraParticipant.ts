@@ -3,7 +3,7 @@ import { JiraApiClient } from '../jira/JiraApiClient';
 import { ConfigService } from '../services/ConfigService';
 import type { JiraConfig } from '../services/ConfigService';
 import { TicketService, renderFieldValue, formatKeyLink, PartialTransitionError } from '../services/TicketService';
-import type { IJiraClient, JiraFieldMeta, JiraFilter, JiraSprintCandidate } from '../jira/IJiraClient';
+import type { IJiraClient, JiraFieldMeta, JiraFilter, JiraSprintCandidate, JiraIssue } from '../jira/IJiraClient';
 import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { tokenStatus } from '../utils/diagUtils';
@@ -95,11 +95,44 @@ async function resolveTemplateByName(name: string | null, stream: vscode.ChatRes
 
 const LISTED_FILTERS_SESSION_KEY = 'jira.session.listedFilters';
 
+// U5/U6 (R7-R9): computes a search result's refine/transition chip eligibility — every ticket's
+// project+issue type (from data already fetched, no extra round trip) and, when they share one
+// project, whether a configured sprint board resolves a single active sprint. Shared by every
+// path that can produce a `SearchResultSession` (a plain search, a filter run, and a filter run
+// combined with a constraint) so all three carry the same chips, not just a bare search — code
+// review flagged that only the plain-search path had this before it was extracted here.
+async function computeSearchResultFollowup(
+  issues: JiraIssue[],
+  ticketService: TicketService,
+  config: JiraConfig,
+): Promise<{ tickets: NonNullable<SearchResultSession['tickets']> | undefined; followupState: JiraFollowupState }> {
+  let sprintName: string | undefined;
+  let transitionChipEligible = false;
+  let tickets: NonNullable<SearchResultSession['tickets']> | undefined;
+  if (issues.length > 0) {
+    tickets = issues.map(i => ({
+      key: i.key,
+      projectKey: extractProjectKeyFromTicketKey(i.key),
+      issueType: i.fields.issuetype?.name ?? '',
+    }));
+    const projectKeys = new Set(tickets.map(t => t.projectKey));
+    const sameProjectKey = projectKeys.size === 1 ? [...projectKeys][0] : null;
+    if (sameProjectKey && config.sprintBoardId) {
+      const activeSprint = await ticketService.getActiveSprintForBoard(config.sprintBoardId);
+      if (activeSprint) sprintName = activeSprint.name;
+    }
+    const issueTypes = new Set(tickets.map(t => t.issueType));
+    transitionChipEligible = Boolean(sameProjectKey) && issueTypes.size === 1 && tickets.every(t => t.issueType !== '');
+  }
+  return { tickets, followupState: { kind: 'searchResults', sprintName, transitionChipEligible } };
+}
+
 // U3 (favourite/filter search): runs an already-resolved filter's JQL exactly the way `searchJql`'s
-// own filterId/filterName resolution does (stores the search-result session, resolves search-field
-// metadata only when configured, streams the trusted-markdown result) — shared by `listMyFilters`'s
-// single-match path and its numbered-pick-list resume, so both behave identically to the existing
-// filter-run flow rather than each hand-rolling their own copy.
+// own filterId/filterName resolution does (stores the search-result session with the same R7-R9
+// chip-eligibility metadata a plain search gets, resolves search-field metadata only when
+// configured, streams the trusted-markdown result) — shared by `listMyFilters`'s single-match path,
+// its numbered-pick-list resume, the filter-name-ambiguity resume, and the constraint-combine flow,
+// so all of them behave identically to the plain-search flow rather than each hand-rolling a copy.
 async function runResolvedFilterJql(
   jql: string,
   label: string,
@@ -108,15 +141,17 @@ async function runResolvedFilterJql(
   ws: vscode.Memento,
   stream: vscode.ChatResponseStream,
   prefixNote = '',
-): Promise<void> {
+): Promise<{ metadata: { jiraFollowup: JiraFollowupState; jiraSession: { kinds: JiraSessionKind[] } } }> {
   const raw = await ticketService.searchTicketsRaw(jql);
+  const { tickets, followupState } = await computeSearchResultFollowup(raw.issues, ticketService, config);
   if (raw.issues.length > 0) {
-    const searchSession: SearchResultSession = { ticketKeys: raw.issues.map(i => i.key), jql };
+    const searchSession: SearchResultSession = { ticketKeys: raw.issues.map(i => i.key), jql, tickets };
     await ws.update('jira.session.searchResult', searchSession);
   }
   const searchFieldMeta = config.searchFields.length > 0 ? await ticketService.getFieldMeta() : [];
   const searchResult = prefixNote + label + await ticketService.searchTickets(jql, config.baseUrl, config.searchFields, searchFieldMeta);
   stream.markdown(trustedChatMarkdown(searchResult));
+  return { metadata: { jiraFollowup: followupState, jiraSession: { kinds: [] } } };
 }
 
 const CONSTRAINT_AMBIGUITY_SESSION_KEY = 'jira.session.constraintAmbiguity';
@@ -179,7 +214,7 @@ async function resolveConstraintsAndSearch(
       );
     case 'resolved': {
       const finalJql = buildConstraintJql(baseJql, result.constraints);
-      await runResolvedFilterJql(finalJql, jqlLabel, ticketService, config, ws, stream);
+      return await runResolvedFilterJql(finalJql, jqlLabel, ticketService, config, ws, stream);
     }
   }
 }
@@ -202,8 +237,7 @@ async function handleListMyFilters(
     return;
   }
   if (filters.length === 1) {
-    await runResolvedFilterJql(filters[0].jql, `_Using filter: **${filters[0].name}**_\n\n`, ticketService, config, ws, stream, failureNote);
-    return;
+    return await runResolvedFilterJql(filters[0].jql, `_Using filter: **${filters[0].name}**_\n\n`, ticketService, config, ws, stream, failureNote);
   }
   const session: ListedFiltersSession = { filters };
   await ws.update(LISTED_FILTERS_SESSION_KEY, session);
@@ -626,12 +660,13 @@ async function streamMultiTransitionStatusPick(
   session: MultiTicketTransitionSession,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
+  baseUrl?: string,
   invalid = false,
 ): Promise<vscode.ChatResult> {
   await ws.update(MULTI_TRANSITION_SESSION_KEY, session);
   const list = session.statusOptions.map((s, i) => `${i + 1}. ${buildChatCommandLink(s, '@jira', String(i + 1))}`).join('\n');
   const prefix = invalid ? "Didn't understand that. " : '';
-  const ticketIntro = buildMultiTicketTransitionStatusPickIntro(session.tickets);
+  const ticketIntro = buildMultiTicketTransitionStatusPickIntro(session.tickets, baseUrl);
   stream.markdown(trustedChatMarkdown(
     `${prefix}These ${session.tickets.length} tickets — ${ticketIntro} — can all move directly to one of these statuses:\n\n${list}\n\n` +
     `Reply with the number or name, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
@@ -650,6 +685,7 @@ async function startMultiTicketTransition(
   jiraClient: IJiraClient,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
+  baseUrl?: string,
 ): Promise<string | vscode.ChatResult> {
   if (!searchSession.tickets || searchSession.tickets.length === 0) {
     return 'No previous search results to act on. Run a search first.';
@@ -679,7 +715,7 @@ async function startMultiTicketTransition(
     step: 'pick-status',
     statusOptions: commonStatuses,
   };
-  return await streamMultiTransitionStatusPick(session, stream, ws);
+  return await streamMultiTransitionStatusPick(session, stream, ws, baseUrl);
 }
 
 /** Continues the "Transition these…" flow on the user's status pick — the only step this session
@@ -700,7 +736,7 @@ async function continueMultiTicketTransition(
     stream.markdown('_Cancelled — no changes made._');
     return { metadata: { jiraSession: { kinds: [] } } };
   }
-  if (pick === 'invalid') return await streamMultiTransitionStatusPick(session, stream, ws, true);
+  if (pick === 'invalid') return await streamMultiTransitionStatusPick(session, stream, ws, config.baseUrl, true);
 
   await ws.update(MULTI_TRANSITION_SESSION_KEY, undefined);
   stream.markdown('_Building transition paths…_\n\n');
@@ -929,12 +965,7 @@ export function createJiraParticipant(
               jiraClient, ticketService, config, ws, stream,
             );
           }
-          const raw = await ticketService.searchTicketsRaw(choice.jql);
-          if (raw.issues.length > 0) {
-            await ws.update('jira.session.searchResult', { ticketKeys: raw.issues.map(i => i.key), jql: choice.jql } as SearchResultSession);
-          }
-          const result = await ticketService.searchTickets(choice.jql);
-          stream.markdown(`_Using filter: **${choice.name}**_\n\n${result}`);
+          return await runResolvedFilterJql(choice.jql, `_Using filter: **${choice.name}**_\n\n`, ticketService, config, ws, stream);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logDiag('jira.participant', 'error', message, {});
@@ -997,7 +1028,7 @@ export function createJiraParticipant(
           return;
         }
         try {
-          await runResolvedFilterJql(choice.jql, `_Using filter: **${choice.name}**_\n\n`, ticketService, config, ws, stream);
+          return await runResolvedFilterJql(choice.jql, `_Using filter: **${choice.name}**_\n\n`, ticketService, config, ws, stream);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logDiag('jira.participant', 'error', message, {});
@@ -1979,33 +2010,12 @@ export function createJiraParticipant(
           }
 
           const raw = await ticketService.searchTicketsRaw(resolvedJql);
-          // U5/R8: sprint-refine-chip eligibility — every ticket must resolve to the same
-          // project AND a sprint board must be configured with a single resolvable active
-          // sprint on it. Both checks are async, so they happen here, before constructing the
-          // pure `JiraFollowupState` below — deliberately no multi-board discovery/fallback.
-          let sprintName: string | undefined;
-          // U6/R9: "Transition these…" chip eligibility — every ticket shares one project AND
-          // one issue type. Computed alongside the sprint check above, from the same `tickets`
-          // array, since it needs no extra async lookup of its own.
-          let transitionChipEligible = false;
+          // R7-R9 chip eligibility — computed by the same shared helper `runResolvedFilterJql`
+          // uses, so a filter-derived result gets identical chips to a plain search.
+          const { tickets, followupState: searchFollowupState } = await computeSearchResultFollowup(raw.issues, ticketService, config);
           if (raw.issues.length > 0) {
-            const tickets = raw.issues.map(i => ({
-              key: i.key,
-              projectKey: extractProjectKeyFromTicketKey(i.key),
-              issueType: i.fields.issuetype?.name ?? '',
-            }));
             const searchSession: SearchResultSession = { ticketKeys: raw.issues.map(i => i.key), jql: resolvedJql, tickets };
             await ws.update('jira.session.searchResult', searchSession);
-            const projectKeys = new Set(tickets.map(t => t.projectKey));
-            const sameProjectKey = projectKeys.size === 1 ? [...projectKeys][0] : null;
-            if (sameProjectKey && config.sprintBoardId) {
-              const activeSprint = await ticketService.getActiveSprintForBoard(config.sprintBoardId);
-              if (activeSprint) {
-                sprintName = activeSprint.name;
-              }
-            }
-            const issueTypes = new Set(tickets.map(t => t.issueType));
-            transitionChipEligible = Boolean(sameProjectKey) && issueTypes.size === 1 && tickets.every(t => t.issueType !== '');
           }
           const searchFieldMeta = config.searchFields.length > 0 ? await ticketService.getFieldMeta() : [];
           const searchResult = jqlLabel + await ticketService.searchTickets(resolvedJql, config.baseUrl, config.searchFields, searchFieldMeta);
@@ -2015,7 +2025,6 @@ export function createJiraParticipant(
           // anything ticket-key-specific for this case anyway — but it does now carry its own
           // `jiraFollowup` metadata (R7/R8's refine chips) instead of returning bare.
           stream.markdown(trustedChatMarkdown(searchResult));
-          const searchFollowupState: JiraFollowupState = { kind: 'searchResults', sprintName, transitionChipEligible };
           return { metadata: { jiraFollowup: searchFollowupState, jiraSession: { kinds: [] } } };
         }
         case 'transition': {
@@ -2086,7 +2095,7 @@ export function createJiraParticipant(
             result = 'No previous search results to act on. Run a search first.';
             break;
           }
-          const outcome = await startMultiTicketTransition(searchSession, jiraClient, stream, ws);
+          const outcome = await startMultiTicketTransition(searchSession, jiraClient, stream, ws, config.baseUrl);
           if (typeof outcome === 'string') {
             result = outcome;
             break;

@@ -554,10 +554,14 @@ export class JiraApiClient implements IJiraClient {
     const user = await this.getCurrentUser();
     let qs: string;
     if (this.authType === 'cloud') {
-      if (!user.accountId) return [];
+      // Throw rather than return [] — the current user's own accountId being absent means
+      // ownership can't be determined, not "the user owns zero filters". getMyFilters()'s
+      // Promise.allSettled records this as a genuine 'owned' fetch failure (R10) instead of
+      // silently reporting an empty-but-successful result.
+      if (!user.accountId) throw new Error('Could not determine current user accountId for owned-filter lookup.');
       qs = `accountId=${encodeURIComponent(user.accountId)}`;
     } else {
-      if (!user.name) return [];
+      if (!user.name) throw new Error('Could not determine current user name for owned-filter lookup.');
       qs = `owner=${encodeURIComponent(user.name)}`;
     }
     const data = await this.request<{ values: JiraFilter[] }>(`/filter/search?${qs}&expand=jql&maxResults=50`);

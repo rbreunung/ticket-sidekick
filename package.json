@@ -328,7 +328,11 @@
               "type": "string",
               "description": "Narrow results to this assignee's display name, username, or the literal 'me' for the current user."
             }
-          }
+          },
+          "anyOf": [
+            { "required": ["filterId"] },
+            { "required": ["filterName"] }
+          ]
         }
       },
       {
