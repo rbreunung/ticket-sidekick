@@ -277,6 +277,61 @@
         }
       },
       {
+        "name": "jira_listMyFilters",
+        "displayName": "List My Jira Filters",
+        "modelDescription": "Lists the current user's favourite and owned Jira saved filters (deduped), each with its name and id. Call this before jira_searchByFilter when the user refers to 'my filters' or a filter by name without knowing its exact spelling or id.",
+        "userDescription": "List your favourite and owned Jira saved filters.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraListMyFilters",
+        "icon": "$(filter)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "jira_searchByFilter",
+        "displayName": "Search Jira By Filter",
+        "modelDescription": "Runs a saved Jira filter (by id or name), optionally narrowed to a fixVersion, sprint, and/or assignee. Only these three constraint types are supported — never pass any other narrowing criterion here; for anything else use jira_searchTickets with hand-written JQL instead. If the filter name matches more than one saved filter, or a named fixVersion/sprint/assignee matches more than one candidate, no search is run — the tool instead returns the candidates as text for the caller to disambiguate with a follow-up call.",
+        "userDescription": "Run a saved Jira filter, optionally narrowed by fix version, sprint, or assignee.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraSearchByFilter",
+        "icon": "$(filter)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "filterId": {
+              "type": "string",
+              "description": "Numeric id of a saved Jira filter. Prefer this over filterName when the id is already known (e.g. from jira_listMyFilters)."
+            },
+            "filterName": {
+              "type": "string",
+              "description": "Name of a saved Jira filter to search for and run. Ambiguous names return candidates instead of running a search."
+            },
+            "fixVersion": {
+              "type": "string",
+              "description": "Narrow results to this fix version (substring match against the project's versions). The filter's JQL must scope to exactly one project."
+            },
+            "sprint": {
+              "type": "string",
+              "description": "Narrow results to this sprint by name. The filter's JQL must scope to exactly one project."
+            },
+            "assignee": {
+              "type": "string",
+              "description": "Narrow results to this assignee's display name, username, or the literal 'me' for the current user."
+            }
+          }
+        }
+      },
+      {
         "name": "jira_addComment",
         "displayName": "Add Jira Comment",
         "modelDescription": "Adds a comment to a Jira ticket. This writes to Jira — the user is asked to confirm the exact comment text before it is posted.",

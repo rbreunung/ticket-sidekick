@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { renderReviewTable, buildJiraNotConfiguredMessage, buildChatCommandLink, neutralizeMarkdownLinks, isGreetingOrEmpty, computeJiraFollowups, withLastTicket, buildConstraintJql, type ReviewTableColumn, type JiraFollowupState } from '../participant/sessionState';
 import {
   parseConstraintMatchSelection, extractProjectKeyFromJql, type ConstraintMatchOption,
+  resolveNamedConstraints, formatMyFiltersList,
 } from '../participant/sessionState';
+import { MockJiraClient } from './mocks/MockJiraClient';
 import {
   buildGuidedTransitionStatusOptions, parseGuidedTransitionStatusPick, findGuidedDirectTransition,
   parseGuidedTransitionPathPick, formatTransitionPathOption, parseGuidedTransitionResolutionPick,
@@ -678,5 +680,110 @@ describe('extractProjectKeyFromJql (U4/R11 step 1)', () => {
 
   it('returns null for a multi-project "project in (...)" clause', () => {
     expect(extractProjectKeyFromJql('project in (A, B) AND resolution is EMPTY')).toBeNull();
+  });
+});
+
+describe('resolveNamedConstraints (U7 — shared by the chat flow and jira_searchByFilter)', () => {
+  const baseJql = 'project = PROJ AND status = Open';
+
+  it('resolves a single fixVersion match', async () => {
+    const client = new MockJiraClient();
+    client.getProject = async () => ({
+      id: '1', key: 'PROJ', name: 'Sample Project', issueTypes: [],
+      versions: [{ id: 'v1', name: 'Release 3.2' }, { id: 'v2', name: 'Release 4.0' }],
+    });
+    const result = await resolveNamedConstraints(baseJql, { fixVersion: '3.2' }, client);
+    expect(result).toEqual({ kind: 'resolved', constraints: { fixVersion: 'Release 3.2' } });
+  });
+
+  it('reports ambiguous fixVersion matches without guessing, carrying the remaining named constraints forward', async () => {
+    const client = new MockJiraClient();
+    client.getProject = async () => ({
+      id: '1', key: 'PROJ', name: 'Sample Project', issueTypes: [],
+      versions: [{ id: 'v1', name: 'Release 3.2' }, { id: 'v2', name: 'Release 3.3' }],
+    });
+    const result = await resolveNamedConstraints(baseJql, { fixVersion: 'Release', sprint: 'Sprint 42' }, client);
+    expect(result.kind).toBe('ambiguous');
+    if (result.kind === 'ambiguous') {
+      expect(result.constraintKind).toBe('fixVersion');
+      expect(result.options.map(o => o.value)).toEqual(['Release 3.2', 'Release 3.3']);
+      expect(result.remaining).toEqual({ sprint: 'Sprint 42', assignee: undefined });
+      expect(result.resolvedSoFar).toEqual({});
+    }
+  });
+
+  it('reports a clear not-found signal for a fixVersion with zero matches', async () => {
+    const client = new MockJiraClient();
+    client.getProject = async () => ({ id: '1', key: 'PROJ', name: 'Sample Project', issueTypes: [], versions: [{ id: 'v1', name: 'Release 3.2' }] });
+    const result = await resolveNamedConstraints(baseJql, { fixVersion: 'nonexistent' }, client);
+    expect(result).toEqual({ kind: 'notFound', message: 'No fix version matching "nonexistent" found in **PROJ**.' });
+  });
+
+  it('resolves a single sprint match (fixture has exactly one "Sprint 42")', async () => {
+    const client = new MockJiraClient();
+    const result = await resolveNamedConstraints(baseJql, { sprint: 'Sprint 42' }, client);
+    expect(result).toEqual({ kind: 'resolved', constraints: { sprint: 'Sprint 42' } });
+  });
+
+  it('reports ambiguous sprint matches without guessing', async () => {
+    const client = new MockJiraClient();
+    const result = await resolveNamedConstraints(baseJql, { sprint: 'Sprint' }, client);
+    expect(result.kind).toBe('ambiguous');
+    if (result.kind === 'ambiguous') {
+      expect(result.constraintKind).toBe('sprint');
+      // fixture's findSprints() only returns active/future sprints matching "Sprint"
+      expect(result.options.map(o => o.value)).toEqual(['Sprint 42', 'Sprint 43']);
+      expect(result.remaining).toEqual({ assignee: undefined });
+    }
+  });
+
+  it('reports a clear not-found signal for a sprint with zero matches', async () => {
+    const client = new MockJiraClient();
+    const result = await resolveNamedConstraints(baseJql, { sprint: 'nonexistent-xyz' }, client);
+    expect(result).toEqual({ kind: 'notFound', message: 'No sprint matching "nonexistent-xyz" found in **PROJ**.' });
+  });
+
+  it('maps the "me" literal to the assignee sentinel without a user lookup', async () => {
+    const client = new MockJiraClient();
+    const result = await resolveNamedConstraints(baseJql, { assignee: 'me' }, client);
+    expect(result).toEqual({ kind: 'resolved', constraints: { assignee: 'me' } });
+  });
+
+  it('resolves a single assignee match by name', async () => {
+    const client = new MockJiraClient();
+    const result = await resolveNamedConstraints(baseJql, { assignee: 'jane' }, client);
+    expect(result).toEqual({ kind: 'resolved', constraints: { assignee: 'abc123' } });
+  });
+
+  it('reports "no project scope" when the base JQL does not scope to a single project', async () => {
+    const client = new MockJiraClient();
+    const result = await resolveNamedConstraints('assignee = currentUser()', { fixVersion: '3.2' }, client);
+    expect(result.kind).toBe('noProjectScope');
+  });
+
+  it('carries alreadyResolved constraints forward into the resolved result', async () => {
+    const client = new MockJiraClient();
+    const result = await resolveNamedConstraints(baseJql, { assignee: 'me' }, client, { fixVersion: 'Release 3.2' });
+    expect(result).toEqual({ kind: 'resolved', constraints: { fixVersion: 'Release 3.2', assignee: 'me' } });
+  });
+});
+
+describe('formatMyFiltersList (U7)', () => {
+  it('formats multiple filters as a list', () => {
+    const text = formatMyFiltersList([{ id: '1', name: 'My open bugs', jql: 'x' }, { id: '2', name: 'Owned filter', jql: 'y' }], []);
+    expect(text).toContain('My open bugs');
+    expect(text).toContain('Owned filter');
+    expect(text).toContain('(id: 1)');
+    expect(text).toContain('(id: 2)');
+  });
+
+  it('includes a failure note when failedSources is non-empty', () => {
+    const text = formatMyFiltersList([{ id: '1', name: 'My open bugs', jql: 'x' }], ['favourites']);
+    expect(text).toContain('Could not fetch your favourites filter(s)');
+  });
+
+  it('reports a clear "none found" message for zero filters', () => {
+    const text = formatMyFiltersList([], []);
+    expect(text).toBe('No favourite or owned filters found.');
   });
 });

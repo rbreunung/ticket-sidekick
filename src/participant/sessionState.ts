@@ -1,4 +1,4 @@
-import type { JiraComment, JiraFieldMeta, JiraFilter, JiraIssueType, JiraSprintCandidate, JiraTransition } from '../jira/IJiraClient';
+import type { IJiraClient, JiraComment, JiraFieldMeta, JiraFilter, JiraFilterSource, JiraIssueType, JiraSprintCandidate, JiraTransition } from '../jira/IJiraClient';
 import { formatJiraBody } from '../utils/markdownFormatter';
 import type { VeracodeFlaw, VeracodeReviewRow } from '../utils/veracodeReport';
 import type { WaltzComponent, WaltzReviewRow } from '../utils/waltzReport';
@@ -1009,6 +1009,118 @@ export function extractProjectKeyFromJql(jql: string): string | null {
   if (/\bproject\s+in\s*\(/i.test(jql)) return null;
   const match = jql.match(/\bproject\s*=\s*"?([A-Za-z][A-Za-z0-9]*)"?/i);
   return match ? match[1].toUpperCase() : null;
+}
+
+/**
+ * U7: outcome of `resolveNamedConstraints()` below. `'ambiguous'` carries `resolvedSoFar` (any
+ * earlier constraint in the same call that already resolved cleanly) and `remaining` (whichever
+ * named constraint(s) still haven't been attempted) so a caller with session memory (the chat
+ * flow) can present a pick-list and resume exactly where resolution left off; a caller without
+ * session memory (a Language Model tool, R11) instead reports the candidates as plain text and
+ * stops — it never guesses and never opens an interactive pick.
+ */
+export type ConstraintResolutionResult =
+  | { kind: 'resolved'; constraints: JqlConstraints }
+  | { kind: 'ambiguous'; constraintKind: 'fixVersion' | 'sprint' | 'assignee'; options: ConstraintMatchOption[]; resolvedSoFar: JqlConstraints; remaining: PendingSearchConstraints }
+  | { kind: 'notFound'; message: string }
+  | { kind: 'noProjectScope'; message: string };
+
+/**
+ * U7: extracted from `JiraParticipant.ts`'s `resolveConstraintsAndSearch()` (R3 — one
+ * implementation, not two) — resolves any named fixVersion/sprint/assignee constraint against
+ * live Jira data via `jiraClient` alone (no `TicketService` needed: `findSprints` is a thin
+ * pass-through on `IJiraClient` already). fixVersion and sprint both need a single scoping
+ * project key extracted from `baseJql` first; zero matches or no single-project scope is reported
+ * without resolving anything; exactly one match resolves that constraint and moves to the next;
+ * more than one returns `'ambiguous'` immediately (no guessing, no partial commit to that
+ * constraint). `alreadyResolved` carries forward whatever earlier constraint(s) already resolved
+ * before a prior ambiguity was hit — the chat flow's resume-after-pick path passes this in;
+ * `jira_searchByFilter` (a tool, no session memory) never does.
+ */
+export async function resolveNamedConstraints(
+  baseJql: string,
+  named: PendingSearchConstraints,
+  jiraClient: IJiraClient,
+  alreadyResolved: JqlConstraints = {},
+): Promise<ConstraintResolutionResult> {
+  const resolved: JqlConstraints = { ...alreadyResolved };
+
+  let projectKey: string | null = null;
+  if (named.fixVersion || named.sprint) {
+    projectKey = extractProjectKeyFromJql(baseJql);
+    if (!projectKey) {
+      return {
+        kind: 'noProjectScope',
+        message:
+          `Can't determine a single project from this filter's JQL to resolve the ${named.fixVersion ? 'fix version' : 'sprint'} ` +
+          `— it must scope to exactly one project (e.g. \`project = PROJ\`).`,
+      };
+    }
+  }
+
+  if (named.fixVersion) {
+    const project = await jiraClient.getProject(projectKey!);
+    const needle = named.fixVersion.toLowerCase();
+    const matches = (project.versions ?? []).filter(v => v.name.toLowerCase().includes(needle));
+    if (matches.length === 0) {
+      return { kind: 'notFound', message: `No fix version matching "${named.fixVersion}" found in **${projectKey}**.` };
+    } else if (matches.length === 1) {
+      resolved.fixVersion = matches[0].name;
+    } else {
+      const options = matches.map(v => ({ label: v.name, value: v.name }));
+      const remaining: PendingSearchConstraints = { sprint: named.sprint, assignee: named.assignee };
+      return { kind: 'ambiguous', constraintKind: 'fixVersion', options, resolvedSoFar: resolved, remaining };
+    }
+  }
+
+  if (named.sprint) {
+    const candidates = await jiraClient.findSprints(projectKey!, named.sprint);
+    if (candidates.length === 0) {
+      return { kind: 'notFound', message: `No sprint matching "${named.sprint}" found in **${projectKey}**.` };
+    } else if (candidates.length === 1) {
+      resolved.sprint = candidates[0].name;
+    } else {
+      const options = candidates.map(c => ({ label: `${c.name} (${c.state})`, value: c.name }));
+      const remaining: PendingSearchConstraints = { assignee: named.assignee };
+      return { kind: 'ambiguous', constraintKind: 'sprint', options, resolvedSoFar: resolved, remaining };
+    }
+  }
+
+  if (named.assignee) {
+    if (['me', 'myself', 'i'].includes(named.assignee.toLowerCase().trim())) {
+      resolved.assignee = 'me';
+    } else {
+      const users = await jiraClient.findUser(named.assignee);
+      if (users.length === 0) {
+        return { kind: 'notFound', message: `No user found matching "${named.assignee}".` };
+      } else if (users.length === 1) {
+        const u = users[0];
+        resolved.assignee = u.name ?? u.accountId ?? u.displayName;
+      } else {
+        const options = users.map(u => ({ label: u.displayName, value: u.name ?? u.accountId ?? u.displayName }));
+        return { kind: 'ambiguous', constraintKind: 'assignee', options, resolvedSoFar: resolved, remaining: {} };
+      }
+    }
+  }
+
+  return { kind: 'resolved', constraints: resolved };
+}
+
+/**
+ * U7: `jira_listMyFilters`'s plain-text formatting of `TicketService.getMyFilters()`'s result —
+ * mirrors `handleListMyFilters()`'s chat wording (the same failure note, the same "none found"
+ * message) so the tool and the chat flow never drift apart (R3), minus the numbered pick-list
+ * (a tool has no session memory to resume a pick against — it just lists every filter as text).
+ */
+export function formatMyFiltersList(filters: JiraFilter[], failedSources: JiraFilterSource[]): string {
+  const failureNote = failedSources.length > 0
+    ? `_Could not fetch your ${failedSources.join(' and ')} filter(s) — showing partial results._\n\n`
+    : '';
+  if (filters.length === 0) {
+    return `${failureNote}No favourite or owned filters found.`;
+  }
+  const list = filters.map(f => `- **${f.name}** (id: ${f.id})`).join('\n');
+  return `${failureNote}Your filters:\n\n${list}`;
 }
 
 /**

@@ -12,6 +12,7 @@ import { type CreationSession, type ContentSession, type MoreCommentsSession, ty
 import {
   type ConstraintAmbiguitySession, type ConstraintMatchOption, type PendingSearchConstraints,
   type JqlConstraints, buildConstraintJql, parseConstraintMatchSelection, extractProjectKeyFromJql,
+  resolveNamedConstraints,
 } from './sessionState';
 import {
   type GuidedTransitionSession,
@@ -164,70 +165,23 @@ async function resolveConstraintsAndSearch(
   stream: vscode.ChatResponseStream,
   alreadyResolved: JqlConstraints = {},
 ): Promise<{ metadata: { jiraSession: { kinds: JiraSessionKind[] } } } | void> {
-  const resolved: JqlConstraints = { ...alreadyResolved };
-
-  let projectKey: string | null = null;
-  if (named.fixVersion || named.sprint) {
-    projectKey = extractProjectKeyFromJql(baseJql);
-    if (!projectKey) {
-      stream.markdown(
-        `Can't determine a single project from this filter's JQL to resolve the ${named.fixVersion ? 'fix version' : 'sprint'} ` +
-        `— it must scope to exactly one project (e.g. \`project = PROJ\`).`,
+  // U7: the actual resolution decisions live in the shared, vscode-free resolveNamedConstraints()
+  // (sessionState.ts) — this function only translates its result into streaming/session behavior.
+  const result = await resolveNamedConstraints(baseJql, named, jiraClient, alreadyResolved);
+  switch (result.kind) {
+    case 'noProjectScope':
+    case 'notFound':
+      stream.markdown(result.message);
+      return;
+    case 'ambiguous':
+      return await presentConstraintAmbiguity(
+        result.constraintKind, result.options, baseJql, jqlLabel, result.resolvedSoFar, result.remaining, ws, stream,
       );
-      return;
+    case 'resolved': {
+      const finalJql = buildConstraintJql(baseJql, result.constraints);
+      await runResolvedFilterJql(finalJql, jqlLabel, ticketService, config, ws, stream);
     }
   }
-
-  if (named.fixVersion) {
-    const project = await jiraClient.getProject(projectKey!);
-    const needle = named.fixVersion.toLowerCase();
-    const matches = (project.versions ?? []).filter(v => v.name.toLowerCase().includes(needle));
-    if (matches.length === 0) {
-      stream.markdown(`No fix version matching "${named.fixVersion}" found in **${projectKey}**.`);
-      return;
-    } else if (matches.length === 1) {
-      resolved.fixVersion = matches[0].name;
-    } else {
-      const options = matches.map(v => ({ label: v.name, value: v.name }));
-      const rest: PendingSearchConstraints = { sprint: named.sprint, assignee: named.assignee };
-      return await presentConstraintAmbiguity('fixVersion', options, baseJql, jqlLabel, resolved, rest, ws, stream);
-    }
-  }
-
-  if (named.sprint) {
-    const candidates = await ticketService.findSprints(projectKey!, named.sprint);
-    if (candidates.length === 0) {
-      stream.markdown(`No sprint matching "${named.sprint}" found in **${projectKey}**.`);
-      return;
-    } else if (candidates.length === 1) {
-      resolved.sprint = candidates[0].name;
-    } else {
-      const options = candidates.map(c => ({ label: `${c.name} (${c.state})`, value: c.name }));
-      const rest: PendingSearchConstraints = { assignee: named.assignee };
-      return await presentConstraintAmbiguity('sprint', options, baseJql, jqlLabel, resolved, rest, ws, stream);
-    }
-  }
-
-  if (named.assignee) {
-    if (['me', 'myself', 'i'].includes(named.assignee.toLowerCase().trim())) {
-      resolved.assignee = 'me';
-    } else {
-      const users = await jiraClient.findUser(named.assignee);
-      if (users.length === 0) {
-        stream.markdown(`No user found matching "${named.assignee}".`);
-        return;
-      } else if (users.length === 1) {
-        const u = users[0];
-        resolved.assignee = u.name ?? u.accountId ?? u.displayName;
-      } else {
-        const options = users.map(u => ({ label: u.displayName, value: u.name ?? u.accountId ?? u.displayName }));
-        return await presentConstraintAmbiguity('assignee', options, baseJql, jqlLabel, resolved, {}, ws, stream);
-      }
-    }
-  }
-
-  const finalJql = buildConstraintJql(baseJql, resolved);
-  await runResolvedFilterJql(finalJql, jqlLabel, ticketService, config, ws, stream);
 }
 
 // U3 (R1/R2/R3/R10): `listMyFilters` intent handler — lists the user's favourite+owned filters

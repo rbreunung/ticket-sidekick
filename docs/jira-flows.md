@@ -117,7 +117,7 @@ Execution streams one line per ticket (subtasks first), then a summary. Failures
 
 ## Filter discovery
 
-`@jira` can list and run the user's own favourite + owned Jira filters (`show my filters`) without naming one — zero results says so, exactly one runs directly, more than one opens a numbered pick-list (`ListedFiltersSession`); a partial fetch failure is called out above the list rather than shown as a complete one. The greeting response's "Show my filters" chip invokes this same intent. See `handleListMyFilters`/`runResolvedFilterJql` in `JiraParticipant.ts` and `ListedFiltersSession`/`parseListedFiltersSelection` in `sessionState.ts`.
+`@jira` can list and run the user's own favourite + owned Jira filters (`show my filters`) without naming one — zero results says so, exactly one runs directly, more than one opens a numbered pick-list (`ListedFiltersSession`); a partial fetch failure is called out above the list rather than shown as a complete one. The greeting response's "Show my filters" chip invokes this same intent. See `handleListMyFilters`/`runResolvedFilterJql` in `JiraParticipant.ts` and `ListedFiltersSession`/`parseListedFiltersSelection` in `sessionState.ts`. The same listing and fixVersion/sprint/assignee narrowing are also exposed to Agent Mode as `jira_listMyFilters`/`jira_searchByFilter` — see [`docs/onboarding.md`](onboarding.md#read-tools).
 
 ## Jira sessions
 
