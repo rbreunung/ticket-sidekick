@@ -4,7 +4,7 @@ vi.mock('vscode', () => ({
   window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
 }));
 
-import { isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseSkipInput, applyTicketToggle, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, resolveTemplateIssueType, formatIssueTypeOptionLabel, formatIssueTypeInlinePhrase, NO_ISSUE_TYPE, buildImportReviewTable, parseReviewInput, applyReviewToggle, VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION, buildBulkUpdateReviewTable, buildBulkUpdateReviewMessage, applyBulkUpdateToggle, type VeracodeReviewRow, type BulkUpdateReviewRow } from '../participant/sessionState';
+import { isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseSkipInput, applyTicketToggle, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseListedFiltersSelection, type ListedFiltersSession, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, resolveTemplateIssueType, formatIssueTypeOptionLabel, formatIssueTypeInlinePhrase, NO_ISSUE_TYPE, buildImportReviewTable, parseReviewInput, applyReviewToggle, VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION, buildBulkUpdateReviewTable, buildBulkUpdateReviewMessage, applyBulkUpdateToggle, type VeracodeReviewRow, type BulkUpdateReviewRow } from '../participant/sessionState';
 import type { WaltzReviewRow } from '../utils/waltzReport';
 import { isPointerPrompt } from '../participant/jira/llmHelpers';
 import type { TransitionBatchTicket } from '../participant/sessionState';
@@ -567,6 +567,51 @@ describe('parseFilterSelection', () => {
     ];
     expect(parseFilterSelection('Stop', collidingFilters)).toEqual(collidingFilters[0]);
     expect(parseFilterSelection('stop', collidingFilters)).toEqual(collidingFilters[0]);
+  });
+});
+
+// U3: listMyFilters' numbered pick-list session — parseListedFiltersSelection delegates straight
+// to parseFilterSelection, so these tests mirror parseFilterSelection's own suite above but go
+// through the ListedFiltersSession-shaped entry point the participant actually calls.
+describe('parseListedFiltersSelection', () => {
+  const filters = [
+    { id: '10001', name: 'My favourites bugs', jql: 'assignee = currentUser() AND status != Done' },
+    { id: '10002', name: 'Owned tasks', jql: 'reporter = currentUser() AND issuetype = Task' },
+    { id: '10003', name: 'Team backlog', jql: 'project = PROJ AND status = Backlog' },
+  ];
+  const session: ListedFiltersSession = { filters };
+
+  it('resolves an exact-name match', () => {
+    expect(parseListedFiltersSelection('My favourites bugs', session)).toEqual(filters[0]);
+    expect(parseListedFiltersSelection('team backlog', session)).toEqual(filters[2]);
+  });
+
+  it('resolves a numeric-index reply', () => {
+    expect(parseListedFiltersSelection('2', session)).toEqual(filters[1]);
+  });
+
+  it('returns invalid for an unrecognized reply, matching parseFilterSelection', () => {
+    expect(parseListedFiltersSelection('something else', session)).toBe('invalid');
+    expect(parseListedFiltersSelection('0', session)).toBe('invalid');
+    expect(parseListedFiltersSelection('4', session)).toBe('invalid');
+  });
+
+  it('returns cancel for a cancellation word', () => {
+    expect(parseListedFiltersSelection('cancel', session)).toBe('cancel');
+  });
+
+  it('selects a filter literally named a cancellation word by exact name — regression for the ' +
+    'cancel-word-list-swallows-domain-name-collision bug class', () => {
+    const collidingSession: ListedFiltersSession = {
+      filters: [
+        { id: '10001', name: 'Stop', jql: 'status = Blocked' },
+        { id: '10002', name: 'Cancel', jql: 'status = Cancelled' },
+        { id: '10003', name: 'Owned tasks', jql: 'reporter = currentUser() AND issuetype = Task' },
+      ],
+    };
+    expect(parseListedFiltersSelection('Stop', collidingSession)).toEqual(collidingSession.filters[0]);
+    expect(parseListedFiltersSelection('stop', collidingSession)).toEqual(collidingSession.filters[0]);
+    expect(parseListedFiltersSelection('Cancel', collidingSession)).toEqual(collidingSession.filters[1]);
   });
 });
 

@@ -1,18 +1,28 @@
 import * as vscode from 'vscode';
 import { JiraApiClient } from '../jira/JiraApiClient';
 import { ConfigService } from '../services/ConfigService';
+import type { JiraConfig } from '../services/ConfigService';
 import { TicketService, renderFieldValue, formatKeyLink, PartialTransitionError } from '../services/TicketService';
-import type { IJiraClient, JiraFieldMeta, JiraFilter, JiraSprintCandidate } from '../jira/IJiraClient';
+import type { IJiraClient, JiraFieldMeta, JiraFilter, JiraSprintCandidate, JiraIssue } from '../jira/IJiraClient';
 import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { tokenStatus } from '../utils/diagUtils';
 import { logDiag } from '../utils/diagLog';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, type JiraFollowupState, type JiraSessionKind, isConfirmation, isCancellation, isGreetingOrEmpty, computeJiraFollowups, pickEmailOption, parseSkipInput, applyTicketToggle, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, applyBulkUpdateToggle, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewMessage } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type ListedFiltersSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, type JiraFollowupState, type JiraSessionKind, isConfirmation, isCancellation, isGreetingOrEmpty, computeJiraFollowups, buildFilterFailureNote, pickEmailOption, parseSkipInput, applyTicketToggle, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseListedFiltersSelection, parseBulkUpdateReview, applyBulkUpdateToggle, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewMessage } from './sessionState';
+import {
+  type ConstraintAmbiguitySession, type ConstraintMatchOption, type PendingSearchConstraints,
+  type JqlConstraints, buildConstraintJql, parseConstraintMatchSelection, extractProjectKeyFromJql,
+  resolveNamedConstraints,
+} from './sessionState';
 import {
   type GuidedTransitionSession,
   buildGuidedTransitionStatusOptions, parseGuidedTransitionStatusPick, findGuidedDirectTransition,
   parseGuidedTransitionPathPick, formatTransitionPathOption, parseGuidedTransitionResolutionPick,
   buildGuidedTransitionConfirmSummary, extractProjectKeyFromTicketKey, formatPartialTransitionFailure,
+} from './sessionState';
+import {
+  type MultiTicketTransitionSession,
+  computeCommonTransitionStatuses, buildMultiTicketTransitionStatusPickIntro,
 } from './sessionState';
 import { findPath, findAllPaths, loadWorkflowCache, resolveAndApplyTransition, findRepresentativeTicket } from '../services/WorkflowService';
 import type { CachedTransition, WorkflowGraph } from '../services/WorkflowService';
@@ -81,6 +91,161 @@ async function resolveTemplateByName(name: string | null, stream: vscode.ChatRes
     stream.markdown(`_Warning: template "${name}" is no longer available — proceeding without its default fields._\n\n`);
   }
   return found;
+}
+
+const LISTED_FILTERS_SESSION_KEY = 'jira.session.listedFilters';
+
+// U5/U6 (R7-R9): computes a search result's refine/transition chip eligibility — every ticket's
+// project+issue type (from data already fetched, no extra round trip) and, when they share one
+// project, whether a configured sprint board resolves a single active sprint. Shared by every
+// path that can produce a `SearchResultSession` (a plain search, a filter run, and a filter run
+// combined with a constraint) so all three carry the same chips, not just a bare search — code
+// review flagged that only the plain-search path had this before it was extracted here.
+async function computeSearchResultFollowup(
+  issues: JiraIssue[],
+  ticketService: TicketService,
+  config: JiraConfig,
+): Promise<{ tickets: NonNullable<SearchResultSession['tickets']> | undefined; followupState: JiraFollowupState }> {
+  let sprintName: string | undefined;
+  let transitionChipEligible = false;
+  let tickets: NonNullable<SearchResultSession['tickets']> | undefined;
+  if (issues.length > 0) {
+    tickets = issues.map(i => ({
+      key: i.key,
+      projectKey: extractProjectKeyFromTicketKey(i.key),
+      issueType: i.fields.issuetype?.name ?? '',
+    }));
+    const projectKeys = new Set(tickets.map(t => t.projectKey));
+    const sameProjectKey = projectKeys.size === 1 ? [...projectKeys][0] : null;
+    if (sameProjectKey && config.sprintBoardId) {
+      const activeSprint = await ticketService.getActiveSprintForBoard(config.sprintBoardId);
+      if (activeSprint) sprintName = activeSprint.name;
+    }
+    const issueTypes = new Set(tickets.map(t => t.issueType));
+    transitionChipEligible = Boolean(sameProjectKey) && issueTypes.size === 1 && tickets.every(t => t.issueType !== '');
+  }
+  return { tickets, followupState: { kind: 'searchResults', sprintName, transitionChipEligible } };
+}
+
+// U3 (favourite/filter search): runs an already-resolved filter's JQL exactly the way `searchJql`'s
+// own filterId/filterName resolution does (stores the search-result session with the same R7-R9
+// chip-eligibility metadata a plain search gets, resolves search-field metadata only when
+// configured, streams the trusted-markdown result) — shared by `listMyFilters`'s single-match path,
+// its numbered-pick-list resume, the filter-name-ambiguity resume, and the constraint-combine flow,
+// so all of them behave identically to the plain-search flow rather than each hand-rolling a copy.
+async function runResolvedFilterJql(
+  jql: string,
+  label: string,
+  ticketService: TicketService,
+  config: JiraConfig,
+  ws: vscode.Memento,
+  stream: vscode.ChatResponseStream,
+  prefixNote = '',
+): Promise<{ metadata: { jiraFollowup: JiraFollowupState; jiraSession: { kinds: JiraSessionKind[] } } }> {
+  const raw = await ticketService.searchTicketsRaw(jql);
+  const { tickets, followupState } = await computeSearchResultFollowup(raw.issues, ticketService, config);
+  if (raw.issues.length > 0) {
+    const searchSession: SearchResultSession = { ticketKeys: raw.issues.map(i => i.key), jql, tickets };
+    await ws.update('jira.session.searchResult', searchSession);
+  }
+  const searchFieldMeta = config.searchFields.length > 0 ? await ticketService.getFieldMeta() : [];
+  const searchResult = prefixNote + label + await ticketService.searchTickets(jql, config.baseUrl, config.searchFields, searchFieldMeta);
+  stream.markdown(trustedChatMarkdown(searchResult));
+  return { metadata: { jiraFollowup: followupState, jiraSession: { kinds: [] } } };
+}
+
+const CONSTRAINT_AMBIGUITY_SESSION_KEY = 'jira.session.constraintAmbiguity';
+
+/** U4/R11: renders the numbered pick-list for an ambiguous fixVersion/sprint/assignee match and
+ * persists the session so the next turn's reply resolves it — shared by every resolution step in
+ * `resolveConstraintsAndSearch()` below. */
+async function presentConstraintAmbiguity(
+  kind: ConstraintAmbiguitySession['kind'],
+  options: ConstraintMatchOption[],
+  baseJql: string,
+  jqlLabel: string,
+  resolvedConstraints: JqlConstraints,
+  remainingConstraints: PendingSearchConstraints,
+  ws: vscode.Memento,
+  stream: vscode.ChatResponseStream,
+): Promise<{ metadata: { jiraSession: { kinds: JiraSessionKind[] } } }> {
+  const session: ConstraintAmbiguitySession = { kind, options, baseJql, jqlLabel, resolvedConstraints, remainingConstraints };
+  await ws.update(CONSTRAINT_AMBIGUITY_SESSION_KEY, session);
+  const kindLabel = kind === 'fixVersion' ? 'fix version' : kind;
+  const list = options.map((o, i) => `${i + 1}. ${buildChatCommandLink(o.label, '@jira', String(i + 1))}`).join('\n');
+  stream.markdown(trustedChatMarkdown(
+    `Multiple ${kindLabel} matches:\n\n${list}\n\nWhich one? Reply with the number or name, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+  ));
+  return { metadata: { jiraSession: { kinds: ['selecting-constraint-match'] } } };
+}
+
+/**
+ * U4/R4-R11: resolves any named fixVersion/sprint/assignee constraint against real Jira data —
+ * fixVersion and sprint both need a single scoping project key extracted from `baseJql` (step 1,
+ * R11); zero matches is reported and the search never runs; exactly one match proceeds; more than
+ * one detours to `presentConstraintAmbiguity()`. Once every named constraint resolves, the
+ * accumulated values are ANDed onto `baseJql` via `buildConstraintJql()` and the search runs via
+ * `runResolvedFilterJql()`. `alreadyResolved` carries forward whatever earlier constraint(s) in the
+ * same message already resolved before a prior ambiguity was hit — see the
+ * 'selecting-constraint-match' resume block below.
+ */
+async function resolveConstraintsAndSearch(
+  baseJql: string,
+  jqlLabel: string,
+  named: PendingSearchConstraints,
+  jiraClient: IJiraClient,
+  ticketService: TicketService,
+  config: JiraConfig,
+  ws: vscode.Memento,
+  stream: vscode.ChatResponseStream,
+  alreadyResolved: JqlConstraints = {},
+): Promise<{ metadata: { jiraSession: { kinds: JiraSessionKind[] } } } | void> {
+  // U7: the actual resolution decisions live in the shared, vscode-free resolveNamedConstraints()
+  // (sessionState.ts) — this function only translates its result into streaming/session behavior.
+  const result = await resolveNamedConstraints(baseJql, named, jiraClient, alreadyResolved);
+  switch (result.kind) {
+    case 'noProjectScope':
+    case 'notFound':
+      stream.markdown(result.message);
+      return;
+    case 'ambiguous':
+      return await presentConstraintAmbiguity(
+        result.constraintKind, result.options, baseJql, jqlLabel, result.resolvedSoFar, result.remaining, ws, stream,
+      );
+    case 'resolved': {
+      const finalJql = buildConstraintJql(baseJql, result.constraints);
+      return await runResolvedFilterJql(finalJql, jqlLabel, ticketService, config, ws, stream);
+    }
+  }
+}
+
+// U3 (R1/R2/R3/R10): `listMyFilters` intent handler — lists the user's favourite+owned filters
+// (deduped by TicketService.getMyFilters()) and either runs the single match directly, offers a
+// numbered pick-list for multiple matches, or reports "none found" for zero, always surfacing a
+// partial-fetch-failure note first when getMyFilters() reports one (R10) rather than silently
+// showing an incomplete list as complete.
+async function handleListMyFilters(
+  ticketService: TicketService,
+  config: JiraConfig,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+): Promise<{ metadata: { jiraSession: { kinds: JiraSessionKind[] } } } | void> {
+  const { filters, failedSources } = await ticketService.getMyFilters();
+  const failureNote = buildFilterFailureNote(failedSources);
+  if (filters.length === 0) {
+    stream.markdown(failureNote + 'No favourite or owned filters found.');
+    return;
+  }
+  if (filters.length === 1) {
+    return await runResolvedFilterJql(filters[0].jql, `_Using filter: **${filters[0].name}**_\n\n`, ticketService, config, ws, stream, failureNote);
+  }
+  const session: ListedFiltersSession = { filters };
+  await ws.update(LISTED_FILTERS_SESSION_KEY, session);
+  const list = filters.map((f, i) => `${i + 1}. ${buildChatCommandLink(f.name, '@jira', String(i + 1))}`).join('\n');
+  stream.markdown(trustedChatMarkdown(
+    `${failureNote}Your filters:\n\n${list}\n\nWhich one? Reply with the number or name, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+  ));
+  return { metadata: { jiraSession: { kinds: ['listing-filters'] } } };
 }
 
 // Shared by the three comment-listing sites (getTicket / showComments / getComments) that offer to
@@ -378,6 +543,221 @@ async function continueGuidedTransition(
   return guidedTransitionLoadedTicketResult(session.ticketKey, session.projectKey, session.issueType);
 }
 
+/**
+ * U6: shared per-ticket path-building + subtask + resolution-pick + review-screen flow. Extracted
+ * from `bulkTransition`'s original inline body (which already had exactly this shape for a KNOWN
+ * target status) so it can also be reused by the new "Transition these…" flow's final apply step,
+ * which only differs in HOW its target status was chosen (a picked common status vs. one named
+ * directly in the prompt) — everything from here on is identical: fetch each ticket's current
+ * status + direct transitions, build a single-level `WorkflowGraph` per ticket, `findPath` its
+ * direct route (skipping any ticket with none — a warning, not fatal), do the same for subtasks,
+ * enrich configured `cleanupFields` via one batched `parent in (...)` search, then either ask for a
+ * resolution (closing target) or go straight to the transition review screen — which lists every
+ * affected ticket key and its current status (the "From" column), satisfying R9's confirm-step
+ * requirement for free.
+ */
+async function buildAndStreamTransitionBatch(
+  ticketKeys: string[],
+  targetStatus: string,
+  issueType: string,
+  jiraClient: IJiraClient,
+  ticketService: TicketService,
+  config: JiraConfig,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  headerLabel: string,
+): Promise<vscode.ChatResult> {
+  const cleanupFieldMeta = config.cleanupFields.length > 0 ? await ticketService.getFieldMeta() : [];
+  const tickets: TransitionBatchTicket[] = [];
+  for (const key of ticketKeys) {
+    const issue = await jiraClient.getIssue(key);
+    const transitions = await jiraClient.getTransitions(key);
+    // Build a single-level graph from the ticket's current available transitions
+    const graph: WorkflowGraph = {
+      [issue.fields.status.name]: transitions.map(t => ({ id: t.id, name: t.name, to: t.to.name })),
+    };
+    const currentStatus = issue.fields.status.name;
+    const path = findPath(graph, currentStatus, targetStatus);
+    if (path === null) {
+      stream.markdown(`_Warning: no direct transition from **${currentStatus}** to **${targetStatus}** for ${key} — skipping. Use a workflow cache for multi-hop paths._\n\n`);
+      continue;
+    }
+    const subtasks: TransitionSubtask[] = [];
+    for (const s of (issue.fields.subtasks ?? [])) {
+      const subTransitions = await jiraClient.getTransitions(s.key);
+      const subGraph: WorkflowGraph = {
+        [s.fields.status.name]: subTransitions.map(t => ({ id: t.id, name: t.name, to: t.to.name })),
+      };
+      const subPath = findPath(subGraph, s.fields.status.name, targetStatus);
+      if (subPath) subtasks.push({ key: s.key, summary: s.fields.summary, currentStatus: s.fields.status.name, transitionPath: subPath, included: true });
+    }
+    tickets.push({
+      key, summary: issue.fields.summary, currentStatus, transitionPath: path, subtasks,
+      extra: extractExtraFields(issue.fields, config.cleanupFields),
+      included: true,
+    });
+  }
+  if (tickets.length === 0) {
+    stream.markdown(`No tickets could be transitioned to **${targetStatus}** — all were either already there or have no direct path.`);
+    return { metadata: { jiraSession: { kinds: [] } } };
+  }
+  // Subtasks come from the parent's embedded `fields.subtasks`, which only carries
+  // key/summary/status regardless of what fields the parent was fetched with (KTD3) — a
+  // batched `parent in (...)` search gets their real cleanupFields values in one call.
+  if (config.cleanupFields.length > 0) {
+    const parentKeys = tickets.filter((t) => t.subtasks.length > 0).map((t) => t.key);
+    if (parentKeys.length > 0) {
+      const subJql = `parent in (${parentKeys.map((k) => `"${k}"`).join(', ')})`;
+      const subResult = await ticketService.searchTicketsRaw(subJql, 250, config.cleanupFields);
+      const extraByKey = new Map(subResult.issues.map((s) => [s.key, extractExtraFields(s.fields, config.cleanupFields)]));
+      for (const t of tickets) {
+        for (const s of t.subtasks) s.extra = extraByKey.get(s.key);
+      }
+    }
+  }
+  const CLOSED_STATES = new Set(['done', 'closed', 'resolved', 'cancelled', 'canceled']);
+  if (CLOSED_STATES.has(targetStatus.toLowerCase())) {
+    const resolutions = await jiraClient.getResolutions();
+    if (resolutions.length > 0) {
+      const resSession: ResolutionSelectionSession = {
+        resolutionOptions: resolutions.map(r => r.name),
+        tickets,
+        ruleName: undefined,
+        issueType,
+        targetState: targetStatus,
+        fieldIds: config.cleanupFields,
+        fieldMeta: cleanupFieldMeta,
+      };
+      await ws.update('jira.session.resolutionSelection', resSession);
+      // Keep this clickable, matching every other numbered pick-list in this file.
+      const list = resolutions.map((r, i) => `${i + 1}. ${buildChatCommandLink(r.name, '@jira', String(i + 1))}`).join('\n');
+      stream.markdown(trustedChatMarkdown(
+        `Which resolution should be set when transitioning to **${targetStatus}**?\n\n${list}\n\nReply with the name or number, or ${buildChatCommandLink('none', '@jira', 'none')} to skip setting a resolution.`,
+      ));
+      return { metadata: { jiraSession: { kinds: ['resolution-selection'] } } };
+    }
+  }
+  const batchSession: TransitionBatchSession = {
+    tickets, resolution: undefined, ruleName: undefined, issueType,
+    fieldIds: config.cleanupFields, fieldMeta: cleanupFieldMeta,
+  };
+  return await streamReviewScreen(batchSession, stream, ws, headerLabel, config.baseUrl);
+}
+
+// ---------------------------------------------------------------------------------------------
+// U6/R9: "Transition these…" multi-ticket guided transition flow. Triggered by the exact chip
+// phrase "transition these tickets" (see llmHelpers.ts's multiTicketTransition intent) on a
+// search/filter result where every ticket shares one project AND one issue type. Computes the
+// status intersection across every qualifying ticket's own direct transitions (never a union —
+// every offered choice must apply to the whole result), then hands off to
+// buildAndStreamTransitionBatch above once a status is picked, exactly like bulkTransition's own
+// known-target-status path.
+// ---------------------------------------------------------------------------------------------
+
+const MULTI_TRANSITION_SESSION_KEY = 'jira.session.multiTransition';
+
+async function streamMultiTransitionStatusPick(
+  session: MultiTicketTransitionSession,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  baseUrl?: string,
+  invalid = false,
+): Promise<vscode.ChatResult> {
+  await ws.update(MULTI_TRANSITION_SESSION_KEY, session);
+  const list = session.statusOptions.map((s, i) => `${i + 1}. ${buildChatCommandLink(s, '@jira', String(i + 1))}`).join('\n');
+  const prefix = invalid ? "Didn't understand that. " : '';
+  const ticketIntro = buildMultiTicketTransitionStatusPickIntro(session.tickets, baseUrl);
+  stream.markdown(trustedChatMarkdown(
+    `${prefix}These ${session.tickets.length} tickets — ${ticketIntro} — can all move directly to one of these statuses:\n\n${list}\n\n` +
+    `Reply with the number or name, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+  ));
+  return { metadata: { jiraSession: { kinds: ['multi-transition'] } } };
+}
+
+/**
+ * Starts the "Transition these…" flow: fetches every qualifying ticket's current status and
+ * direct transitions, computes the status intersection, and either opens the picker or reports
+ * plainly that no common status exists (pointing at a typed bulk transition instead — R9's
+ * required fallback when the intersection is empty, no picker opens).
+ */
+async function startMultiTicketTransition(
+  searchSession: SearchResultSession,
+  jiraClient: IJiraClient,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  baseUrl?: string,
+): Promise<string | vscode.ChatResult> {
+  if (!searchSession.tickets || searchSession.tickets.length === 0) {
+    return 'No previous search results to act on. Run a search first.';
+  }
+  stream.markdown('_Checking available transitions…_\n\n');
+  const perTicket: { key: string; currentStatus: string; transitionNames: string[] }[] = [];
+  for (const t of searchSession.tickets) {
+    // A per-ticket fetch failure (e.g. deleted after the search ran) skips that ticket rather
+    // than aborting the whole intersection — it's then also absent from the final apply set,
+    // matching bulkTransition's own tolerance of a ticket it can't act on.
+    try {
+      const issue = await jiraClient.getIssue(t.key);
+      const transitions = await jiraClient.getTransitions(t.key);
+      perTicket.push({
+        key: t.key,
+        currentStatus: issue.fields.status.name,
+        transitionNames: transitions.map((tr) => tr.to.name),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logDiag('jira.participant', 'warn', `Skipping ${t.key} in multi-ticket transition — fetch failed`, { key: t.key, error: message });
+      stream.markdown(`_Warning: couldn't fetch **${t.key}** — skipping it._\n\n`);
+    }
+  }
+  if (perTicket.length === 0) {
+    return 'None of these tickets could be checked for available transitions.';
+  }
+  const commonStatuses = computeCommonTransitionStatuses(perTicket.map((t) => t.transitionNames));
+  if (commonStatuses.length === 0) {
+    return (
+      `These ${perTicket.length} tickets have no status they can all move to directly — there is no common ` +
+      `next status across the whole result. Try a typed bulk transition instead (e.g. "transition them to Done"), ` +
+      `which tolerates tickets at different current statuses individually and skips any that have no path.`
+    );
+  }
+  const session: MultiTicketTransitionSession = {
+    tickets: perTicket.map(({ key, currentStatus }) => ({ key, currentStatus })),
+    issueType: searchSession.tickets[0].issueType,
+    step: 'pick-status',
+    statusOptions: commonStatuses,
+  };
+  return await streamMultiTransitionStatusPick(session, stream, ws, baseUrl);
+}
+
+/** Continues the "Transition these…" flow on the user's status pick — the only step this session
+ * owns itself; once a status is chosen, control hands off to buildAndStreamTransitionBatch, which
+ * may itself open a resolution-selection session before finally reaching the review screen. */
+async function continueMultiTicketTransition(
+  session: MultiTicketTransitionSession,
+  reply: string,
+  jiraClient: IJiraClient,
+  ticketService: TicketService,
+  config: JiraConfig,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+): Promise<vscode.ChatResult> {
+  const pick = parseGuidedTransitionStatusPick(reply, session.statusOptions);
+  if (pick === 'cancel') {
+    await ws.update(MULTI_TRANSITION_SESSION_KEY, undefined);
+    stream.markdown('_Cancelled — no changes made._');
+    return { metadata: { jiraSession: { kinds: [] } } };
+  }
+  if (pick === 'invalid') return await streamMultiTransitionStatusPick(session, stream, ws, config.baseUrl, true);
+
+  await ws.update(MULTI_TRANSITION_SESSION_KEY, undefined);
+  stream.markdown('_Building transition paths…_\n\n');
+  return await buildAndStreamTransitionBatch(
+    session.tickets.map((t) => t.key), pick, session.issueType, jiraClient, ticketService, config, stream, ws,
+    `**Transition ${session.tickets.length} tickets → ${pick}**`,
+  );
+}
+
 export function createJiraParticipant(
   context: vscode.ExtensionContext,
   configService: ConfigService,
@@ -555,6 +935,22 @@ export function createJiraParticipant(
       }
     }
 
+    // U6/R9: multi-ticket transition ("Transition these…") — user replied with a status pick.
+    // See continueMultiTicketTransition above.
+    if (getActiveJiraSession(chatContext)?.kinds.includes('multi-transition')) {
+      const session = ws.get<MultiTicketTransitionSession>(MULTI_TRANSITION_SESSION_KEY);
+      if (session) {
+        try {
+          return await continueMultiTicketTransition(session, request.prompt, jiraClient, ticketService, config, stream, ws);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          logDiag('jira.participant', 'error', message, {});
+          stream.markdown(message);
+        }
+        return;
+      }
+    }
+
     // Filter selection — user replied with their filter choice
     if (getActiveJiraSession(chatContext)?.kinds.includes('selecting-filter')) {
       const selSession = ws.get<FilterSelectionSession>('jira.session.filterSelection');
@@ -573,12 +969,78 @@ export function createJiraParticipant(
           return;
         }
         try {
-          const raw = await ticketService.searchTicketsRaw(choice.jql);
-          if (raw.issues.length > 0) {
-            await ws.update('jira.session.searchResult', { ticketKeys: raw.issues.map(i => i.key), jql: choice.jql } as SearchResultSession);
+          // U4/R4: a constraint named alongside the ambiguous filter reference is resolved now
+          // that the filter itself is picked, instead of running the plain search below.
+          if (selSession.pendingConstraints) {
+            return await resolveConstraintsAndSearch(
+              choice.jql, `_Using filter: **${choice.name}**_\n\n`, selSession.pendingConstraints,
+              jiraClient, ticketService, config, ws, stream,
+            );
           }
-          const result = await ticketService.searchTickets(choice.jql);
-          stream.markdown(`_Using filter: **${choice.name}**_\n\n${result}`);
+          return await runResolvedFilterJql(choice.jql, `_Using filter: **${choice.name}**_\n\n`, ticketService, config, ws, stream);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          logDiag('jira.participant', 'error', message, {});
+          stream.markdown(message);
+        }
+        return;
+      }
+    }
+
+    // U4/R11: ambiguous fixVersion/sprint/assignee match — user replied with their pick.
+    if (getActiveJiraSession(chatContext)?.kinds.includes('selecting-constraint-match')) {
+      const caSession = ws.get<ConstraintAmbiguitySession>(CONSTRAINT_AMBIGUITY_SESSION_KEY);
+      if (caSession) {
+        const choice = parseConstraintMatchSelection(request.prompt, caSession.options);
+        if (choice === 'invalid') {
+          const kindLabel = caSession.kind === 'fixVersion' ? 'fix version' : caSession.kind;
+          const list = caSession.options.map((o, i) => `${i + 1}. ${buildChatCommandLink(o.label, '@jira', String(i + 1))}`).join('\n');
+          stream.markdown(trustedChatMarkdown(
+            `Please choose a ${kindLabel}:\n\n${list}\n\nReply with the number or name, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+          ));
+          return { metadata: { jiraSession: { kinds: ['selecting-constraint-match'] } } };
+        }
+        await ws.update(CONSTRAINT_AMBIGUITY_SESSION_KEY, undefined);
+        if (choice === 'cancel') {
+          stream.markdown('_Cancelled._');
+          return;
+        }
+        const resolvedConstraints: JqlConstraints = { ...caSession.resolvedConstraints, [caSession.kind]: choice.value };
+        try {
+          return await resolveConstraintsAndSearch(
+            caSession.baseJql, caSession.jqlLabel, caSession.remainingConstraints,
+            jiraClient, ticketService, config, ws, stream, resolvedConstraints,
+          );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          logDiag('jira.participant', 'error', message, {});
+          stream.markdown(message);
+        }
+        return;
+      }
+    }
+
+    // U3: "show my filters" numbered pick-list — user replied with their filter choice. Parallel
+    // to the 'selecting-filter' block above, but reached via getMyFilters()'s combined list
+    // instead of a filterId/filterName search.
+    if (getActiveJiraSession(chatContext)?.kinds.includes('listing-filters')) {
+      const listedSession = ws.get<ListedFiltersSession>(LISTED_FILTERS_SESSION_KEY);
+      if (listedSession) {
+        const choice = parseListedFiltersSelection(request.prompt, listedSession);
+        if (choice === 'invalid') {
+          const list = listedSession.filters.map((f, i) => `${i + 1}. ${buildChatCommandLink(f.name, '@jira', String(i + 1))}`).join('\n');
+          stream.markdown(trustedChatMarkdown(
+            `Please choose a filter:\n\n${list}\n\nReply with the number or name, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+          ));
+          return { metadata: { jiraSession: { kinds: ['listing-filters'] } } };
+        }
+        await ws.update(LISTED_FILTERS_SESSION_KEY, undefined);
+        if (choice === 'cancel') {
+          stream.markdown('_Cancelled._');
+          return;
+        }
+        try {
+          return await runResolvedFilterJql(choice.jql, `_Using filter: **${choice.name}**_\n\n`, ticketService, config, ws, stream);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logDiag('jira.participant', 'error', message, {});
@@ -1289,8 +1751,19 @@ export function createJiraParticipant(
       return;
     }
 
+    if (intent.operation === 'listMyFilters') {
+      try {
+        return await handleListMyFilters(ticketService, config, stream, ws);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logDiag('jira.participant', 'error', message, {});
+        stream.markdown(message);
+      }
+      return;
+    }
+
     let ticketKey = intent.ticketKey;
-    if (!ticketKey && intent.operation !== 'searchJql' && intent.operation !== 'bulkTransition' && intent.operation !== 'bulkUpdateField') {
+    if (!ticketKey && intent.operation !== 'searchJql' && intent.operation !== 'bulkTransition' && intent.operation !== 'multiTicketTransition' && intent.operation !== 'bulkUpdateField') {
       ticketKey = resolveTicketFromBranch();
       if (ticketKey) {
         stream.markdown(`_Using ticket **${ticketKey}** from current branch._\n\n`);
@@ -1490,6 +1963,12 @@ export function createJiraParticipant(
         case 'searchJql': {
           let resolvedJql: string;
           let jqlLabel = '';
+          // U4/R4-R6: a named fixVersion/sprint/assignee constraint extracted alongside (or, for
+          // R5's bare follow-up narrowing, instead of) a filter/jql reference in this same message.
+          const namedConstraints: PendingSearchConstraints = {
+            fixVersion: intent.constraintFixVersion, sprint: intent.constraintSprint, assignee: intent.constraintAssignee,
+          };
+          const hasNamedConstraint = Boolean(namedConstraints.fixVersion || namedConstraints.sprint || namedConstraints.assignee);
           if (intent.filterId) {
             const filter = await ticketService.getFilterById(intent.filterId);
             resolvedJql = filter.jql;
@@ -1503,7 +1982,12 @@ export function createJiraParticipant(
               resolvedJql = filters[0].jql;
               jqlLabel = `_Using filter: **${filters[0].name}**_\n\n`;
             } else {
-              const session: FilterSelectionSession = { filters, originalPrompt: request.prompt };
+              // U4/R4: carry the named constraint(s) forward so they're resolved once the filter
+              // name itself is disambiguated (see the 'selecting-filter' resume block).
+              const session: FilterSelectionSession = {
+                filters, originalPrompt: request.prompt,
+                pendingConstraints: hasNamedConstraint ? namedConstraints : undefined,
+              };
               await ws.update('jira.session.filterSelection', session);
               const list = filters.map((f, i) => `${i + 1}. ${buildChatCommandLink(f.name, '@jira', String(i + 1))}`).join('\n');
               stream.markdown(trustedChatMarkdown(
@@ -1520,12 +2004,29 @@ export function createJiraParticipant(
             }
             resolvedJql = buildTeamJql(teamJql, intent.jql);
             jqlLabel = `_Using team JQL_\n\n`;
+          } else if (hasNamedConstraint && !intent.jql) {
+            // R5: a bare follow-up naming only a constraint — narrow the previous search/filter
+            // run instead of starting a new one.
+            const priorSearch = ws.get<SearchResultSession>('jira.session.searchResult');
+            if (!priorSearch) {
+              result = 'No previous search to narrow — run a search or filter first.';
+              break;
+            }
+            resolvedJql = priorSearch.jql;
           } else {
             resolvedJql = intent.jql ?? request.prompt;
           }
+
+          if (hasNamedConstraint) {
+            return await resolveConstraintsAndSearch(resolvedJql, jqlLabel, namedConstraints, jiraClient, ticketService, config, ws, stream);
+          }
+
           const raw = await ticketService.searchTicketsRaw(resolvedJql);
+          // R7-R9 chip eligibility — computed by the same shared helper `runResolvedFilterJql`
+          // uses, so a filter-derived result gets identical chips to a plain search.
+          const { tickets, followupState: searchFollowupState } = await computeSearchResultFollowup(raw.issues, ticketService, config);
           if (raw.issues.length > 0) {
-            const searchSession: SearchResultSession = { ticketKeys: raw.issues.map(i => i.key), jql: resolvedJql };
+            const searchSession: SearchResultSession = { ticketKeys: raw.issues.map(i => i.key), jql: resolvedJql, tickets };
             await ws.update('jira.session.searchResult', searchSession);
           }
           const searchFieldMeta = config.searchFields.length > 0 ? await ticketService.getFieldMeta() : [];
@@ -1533,10 +2034,10 @@ export function createJiraParticipant(
           // U5/R9: the search-results table's Actions column can contain real command links
           // (view/load), so this response needs the trusted-markdown gate the shared tail below
           // doesn't apply. searchJql doesn't set `ticketKey`, so that shared tail wouldn't do
-          // anything for this case anyway (no follow-up-chip metadata) — return directly instead
-          // of widening the shared `result: string` variable's type for every other case.
+          // anything ticket-key-specific for this case anyway — but it does now carry its own
+          // `jiraFollowup` metadata (R7/R8's refine chips) instead of returning bare.
           stream.markdown(trustedChatMarkdown(searchResult));
-          return;
+          return { metadata: { jiraFollowup: searchFollowupState, jiraSession: { kinds: [] } } };
         }
         case 'transition': {
           if (!intent.targetStatus) {
@@ -1595,82 +2096,23 @@ export function createJiraParticipant(
           }
           const targetStatus = intent.targetStatus;
           stream.markdown(`_Building transition paths…_\n\n`);
-          const cleanupFieldMeta = config.cleanupFields.length > 0 ? await ticketService.getFieldMeta() : [];
-          const tickets: TransitionBatchTicket[] = [];
-          for (const key of searchSession.ticketKeys) {
-            const issue = await jiraClient.getIssue(key);
-            const transitions = await jiraClient.getTransitions(key);
-            // Build a single-level graph from the ticket's current available transitions
-            const graph: WorkflowGraph = {
-              [issue.fields.status.name]: transitions.map(t => ({ id: t.id, name: t.name, to: t.to.name })),
-            };
-            const currentStatus = issue.fields.status.name;
-            const path = findPath(graph, currentStatus, targetStatus);
-            if (path === null) {
-              stream.markdown(`_Warning: no direct transition from **${currentStatus}** to **${targetStatus}** for ${key} — skipping. Use a workflow cache for multi-hop paths._\n\n`);
-              continue;
-            }
-            const subtasks: TransitionSubtask[] = [];
-            for (const s of (issue.fields.subtasks ?? [])) {
-              const subTransitions = await jiraClient.getTransitions(s.key);
-              const subGraph: WorkflowGraph = {
-                [s.fields.status.name]: subTransitions.map(t => ({ id: t.id, name: t.name, to: t.to.name })),
-              };
-              const subPath = findPath(subGraph, s.fields.status.name, targetStatus);
-              if (subPath) subtasks.push({ key: s.key, summary: s.fields.summary, currentStatus: s.fields.status.name, transitionPath: subPath, included: true });
-            }
-            tickets.push({
-              key, summary: issue.fields.summary, currentStatus, transitionPath: path, subtasks,
-              extra: extractExtraFields(issue.fields, config.cleanupFields),
-              included: true,
-            });
-          }
-          if (tickets.length === 0) {
-            result = `No tickets could be transitioned to **${targetStatus}** — all were either already there or have no direct path.`;
+          return await buildAndStreamTransitionBatch(
+            searchSession.ticketKeys, targetStatus, intent.issueType ?? '', jiraClient, ticketService, config, stream, ws,
+            `**Bulk transition → ${targetStatus}**`,
+          );
+        }
+        case 'multiTicketTransition': {
+          const searchSession = ws.get<SearchResultSession>('jira.session.searchResult');
+          if (!searchSession) {
+            result = 'No previous search results to act on. Run a search first.';
             break;
           }
-          // Subtasks come from the parent's embedded `fields.subtasks`, which only carries
-          // key/summary/status regardless of what fields the parent was fetched with (KTD3) — a
-          // batched `parent in (...)` search gets their real cleanupFields values in one call.
-          if (config.cleanupFields.length > 0) {
-            const parentKeys = tickets.filter((t) => t.subtasks.length > 0).map((t) => t.key);
-            if (parentKeys.length > 0) {
-              const subJql = `parent in (${parentKeys.map((k) => `"${k}"`).join(', ')})`;
-              const subResult = await ticketService.searchTicketsRaw(subJql, 250, config.cleanupFields);
-              const extraByKey = new Map(subResult.issues.map((s) => [s.key, extractExtraFields(s.fields, config.cleanupFields)]));
-              for (const t of tickets) {
-                for (const s of t.subtasks) s.extra = extraByKey.get(s.key);
-              }
-            }
+          const outcome = await startMultiTicketTransition(searchSession, jiraClient, stream, ws, config.baseUrl);
+          if (typeof outcome === 'string') {
+            result = outcome;
+            break;
           }
-          const CLOSED_STATES = new Set(['done', 'closed', 'resolved', 'cancelled', 'canceled']);
-          if (CLOSED_STATES.has(targetStatus.toLowerCase())) {
-            const resolutions = await jiraClient.getResolutions();
-            if (resolutions.length > 0) {
-              const resSession: ResolutionSelectionSession = {
-                resolutionOptions: resolutions.map(r => r.name),
-                tickets,
-                ruleName: undefined,
-                issueType: intent.issueType ?? '',
-                targetState: targetStatus,
-                fieldIds: config.cleanupFields,
-                fieldMeta: cleanupFieldMeta,
-              };
-              await ws.update('jira.session.resolutionSelection', resSession);
-              // Code-review fix: mirror the retry branch above (line ~195) and cleanupHandler.ts's
-              // equivalent — this initial prompt had drifted to plain, non-clickable text.
-              const list = resolutions.map((r, i) => `${i + 1}. ${buildChatCommandLink(r.name, '@jira', String(i + 1))}`).join('\n');
-              stream.markdown(trustedChatMarkdown(
-                `Which resolution should be set when transitioning to **${targetStatus}**?\n\n${list}\n\nReply with the name or number, or ${buildChatCommandLink('none', '@jira', 'none')} to skip setting a resolution.`,
-              ));
-              return { metadata: { jiraSession: { kinds: ['resolution-selection'] } } };
-            }
-          }
-          const batchSession: TransitionBatchSession = {
-            tickets, resolution: undefined, ruleName: undefined, issueType: intent.issueType ?? '',
-            fieldIds: config.cleanupFields, fieldMeta: cleanupFieldMeta,
-          };
-          return await streamReviewScreen(batchSession, stream, ws, `**Bulk transition → ${targetStatus}**`, config.baseUrl);
+          return outcome;
         }
         case 'bulkUpdateField': {
           const searchSession = ws.get<SearchResultSession>('jira.session.searchResult');

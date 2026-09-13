@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { JiraApiClient } from '../jira/JiraApiClient';
+import type { JiraFilter } from '../jira/IJiraClient';
 import { ConfigService, type JiraConfig } from '../services/ConfigService';
 import { TicketService, renderFieldValue } from '../services/TicketService';
 import { TemplateService } from '../templates/TemplateService';
@@ -25,6 +26,12 @@ import {
   formatIssueTypeOptionsMessage,
   formatTemplateListMessage,
   formatWorkflowDiscoveryMessage,
+  formatMyFiltersList,
+  formatFilterCandidateList,
+  formatBulletList,
+  resolveNamedConstraints,
+  buildConstraintJql,
+  type PendingSearchConstraints,
 } from '../participant/sessionState';
 
 // ---------------------------------------------------------------------------------------------
@@ -279,6 +286,130 @@ class DiscoverWorkflowTool implements vscode.LanguageModelTool<DiscoverWorkflowI
       const message = err instanceof Error ? err.message : String(err);
       logDiag('jira.tools', 'error', `jira_discoverWorkflow failed — ${projectKey}/${issueType}`, { projectKey, issueType, error: message });
       return textResult(`Could not discover workflow: ${message}`);
+    }
+  }
+}
+
+// inputSchema is `{ type: 'object', properties: {} }` — no fields to declare.
+type ListMyFiltersInput = Record<string, never>;
+
+/** U7/R1: `jira_listMyFilters` — the read-only tool equivalent of `@jira`'s "show my filters"
+ * chat flow (`handleListMyFilters` in `JiraParticipant.ts`). Unlike that flow, this never opens
+ * a numbered pick-list (KTD6: tools carry no session memory to resume one against) — it just
+ * lists every favourite/owned filter as plain text via the shared `formatMyFiltersList()`
+ * (sessionState.ts), so the calling model can pick a name/id to pass to `jira_searchByFilter`. */
+class ListMyFiltersTool implements vscode.LanguageModelTool<ListMyFiltersInput> {
+  constructor(private readonly configService: ConfigService) {}
+
+  async prepareInvocation(): Promise<vscode.PreparedToolInvocation> {
+    return { invocationMessage: 'Listing your Jira filters…' };
+  }
+
+  async invoke(): Promise<vscode.LanguageModelToolResult> {
+    const ctx = await tryGetConfiguredContext(this.configService);
+    if (isNotConfiguredResult(ctx)) return ctx;
+    const { ticketService } = ctx;
+
+    try {
+      const { filters, failedSources } = await ticketService.getMyFilters();
+      return textResult(formatMyFiltersList(filters, failedSources));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logDiag('jira.tools', 'error', 'jira_listMyFilters failed', { error: message });
+      return textResult(`Could not list filters: ${message}`);
+    }
+  }
+}
+
+interface SearchByFilterInput {
+  filterId?: string;
+  filterName?: string;
+  fixVersion?: string;
+  sprint?: string;
+  assignee?: string;
+}
+
+/** U7/R4/R6/R11: `jira_searchByFilter` — resolves a saved filter (by id or name) and, when a
+ * fixVersion/sprint/assignee is given, narrows it via the same `resolveNamedConstraints()`
+ * (sessionState.ts) the chat flow's `resolveConstraintsAndSearch()` uses (R3). R6 is enforced by
+ * this tool's input schema itself (`package.json`) declaring only those three constraint
+ * properties — there is no way to pass any other narrowing criterion. R11: an ambiguous filter
+ * name OR an ambiguous constraint match returns the candidates as plain text and never runs the
+ * search — this tool has no session memory to resume an interactive pick against (KTD6), unlike
+ * the chat flow's numbered pick-list. */
+class SearchByFilterTool implements vscode.LanguageModelTool<SearchByFilterInput> {
+  constructor(private readonly configService: ConfigService) {}
+
+  async prepareInvocation(
+    options: vscode.LanguageModelToolInvocationPrepareOptions<SearchByFilterInput>,
+  ): Promise<vscode.PreparedToolInvocation> {
+    const label = options.input.filterName || options.input.filterId || '(unknown filter)';
+    return { invocationMessage: `Running filter ${label}…` };
+  }
+
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<SearchByFilterInput>): Promise<vscode.LanguageModelToolResult> {
+    const filterId = options.input.filterId?.trim() || undefined;
+    const filterName = options.input.filterName?.trim() || undefined;
+    const fixVersion = options.input.fixVersion?.trim() || undefined;
+    const sprint = options.input.sprint?.trim() || undefined;
+    const assignee = options.input.assignee?.trim() || undefined;
+    if (!filterId && !filterName) return textResult('A filterId or filterName is required.');
+
+    const ctx = await tryGetConfiguredContext(this.configService);
+    if (isNotConfiguredResult(ctx)) return ctx;
+    const { config, jiraClient, ticketService } = ctx;
+
+    let filter: JiraFilter;
+    try {
+      if (filterId) {
+        filter = await ticketService.getFilterById(filterId);
+      } else {
+        const filters = await ticketService.searchFiltersByName(filterName!);
+        if (filters.length === 0) return textResult(`No saved filters found matching "${filterName}".`);
+        if (filters.length > 1) {
+          return textResult(`Multiple filters match "${filterName}":\n\n${formatFilterCandidateList(filters)}\n\nCall again with a specific filterId, or a more exact filterName.`);
+        }
+        filter = filters[0];
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logDiag('jira.tools', 'error', 'jira_searchByFilter failed to resolve filter', { filterId, filterName, error: message });
+      return textResult(`Could not resolve filter: ${message}`);
+    }
+
+    let finalJql = filter.jql;
+    const namedConstraints: PendingSearchConstraints = { fixVersion, sprint, assignee };
+    if (fixVersion || sprint || assignee) {
+      try {
+        const resolution = await resolveNamedConstraints(filter.jql, namedConstraints, jiraClient);
+        switch (resolution.kind) {
+          case 'noProjectScope':
+          case 'notFound':
+            return textResult(resolution.message);
+          case 'ambiguous': {
+            const kindLabel = resolution.constraintKind === 'fixVersion' ? 'fix version' : resolution.constraintKind;
+            const list = formatBulletList(resolution.options.map(o => o.label));
+            return textResult(`Multiple ${kindLabel} matches for filter "${filter.name}":\n\n${list}\n\nCall again with a more exact ${kindLabel} value.`);
+          }
+          case 'resolved':
+            finalJql = buildConstraintJql(filter.jql, resolution.constraints);
+            break;
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logDiag('jira.tools', 'error', 'jira_searchByFilter failed to resolve constraints', { filterId, filterName, error: message });
+        return textResult(`Could not resolve the given fixVersion/sprint/assignee: ${message}`);
+      }
+    }
+
+    try {
+      const fieldMeta = config.searchFields.length > 0 ? await ticketService.getFieldMeta() : [];
+      const text = await ticketService.searchTickets(finalJql, config.baseUrl, config.searchFields, fieldMeta);
+      return textResult(`_Using filter: **${filter.name}**_\n\n${text}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logDiag('jira.tools', 'error', 'jira_searchByFilter search failed', { jql: finalJql, error: message });
+      return textResult(`Search failed: ${message}`);
     }
   }
 }
@@ -805,6 +936,8 @@ export function registerJiraTools(context: vscode.ExtensionContext, configServic
     vscode.lm.registerTool('jira_getComments', new GetCommentsTool(configService)),
     vscode.lm.registerTool('jira_listTemplates', new ListTemplatesTool(configService)),
     vscode.lm.registerTool('jira_discoverWorkflow', new DiscoverWorkflowTool(configService)),
+    vscode.lm.registerTool('jira_listMyFilters', new ListMyFiltersTool(configService)),
+    vscode.lm.registerTool('jira_searchByFilter', new SearchByFilterTool(configService)),
     vscode.lm.registerTool('jira_addComment', new AddCommentTool(configService)),
     vscode.lm.registerTool('jira_updateField', new UpdateFieldTool(configService)),
     vscode.lm.registerTool('jira_createTicket', new CreateTicketTool(configService)),
