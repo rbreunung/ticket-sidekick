@@ -6,7 +6,7 @@ import {
 import {
   buildGuidedTransitionStatusOptions, parseGuidedTransitionStatusPick, findGuidedDirectTransition,
   parseGuidedTransitionPathPick, formatTransitionPathOption, parseGuidedTransitionResolutionPick,
-  buildGuidedTransitionConfirmSummary,
+  buildGuidedTransitionConfirmSummary, computeCommonTransitionStatuses,
 } from '../participant/sessionState';
 import type { JiraTransition } from '../jira/IJiraClient';
 import type { CachedTransition, WorkflowGraph } from '../services/WorkflowService';
@@ -326,7 +326,7 @@ describe('computeJiraFollowups', () => {
   // U5/R7-R8: search/filter result refine chips.
   describe('searchResults', () => {
     it('offers both "refine to my tickets" and "refine to current sprint" when the result is single-project and a sprint is eligible', () => {
-      const state: JiraFollowupState = { kind: 'searchResults', sprintChipEligible: true, sprintName: 'Sprint 24' };
+      const state: JiraFollowupState = { kind: 'searchResults', sprintChipEligible: true, sprintName: 'Sprint 24', transitionChipEligible: false };
 
       const chips = computeJiraFollowups(state);
 
@@ -336,7 +336,7 @@ describe('computeJiraFollowups', () => {
     });
 
     it('offers only "refine to my tickets" when the result spans multiple projects (sprint chip not eligible)', () => {
-      const state: JiraFollowupState = { kind: 'searchResults', sprintChipEligible: false };
+      const state: JiraFollowupState = { kind: 'searchResults', sprintChipEligible: false, transitionChipEligible: false };
 
       const chips = computeJiraFollowups(state);
 
@@ -344,7 +344,7 @@ describe('computeJiraFollowups', () => {
     });
 
     it('offers only "refine to my tickets" when single-project but no sprint board is configured or no active sprint resolves', () => {
-      const state: JiraFollowupState = { kind: 'searchResults', sprintChipEligible: false, sprintName: undefined };
+      const state: JiraFollowupState = { kind: 'searchResults', sprintChipEligible: false, sprintName: undefined, transitionChipEligible: false };
 
       const chips = computeJiraFollowups(state);
 
@@ -353,10 +353,27 @@ describe('computeJiraFollowups', () => {
     });
 
     it('"refine to my tickets" is always present, unconditionally, regardless of eligibility', () => {
-      expect(computeJiraFollowups({ kind: 'searchResults', sprintChipEligible: true, sprintName: 'X' })
+      expect(computeJiraFollowups({ kind: 'searchResults', sprintChipEligible: true, sprintName: 'X', transitionChipEligible: false })
         .some((c) => c.prompt === 'refine to my tickets')).toBe(true);
-      expect(computeJiraFollowups({ kind: 'searchResults', sprintChipEligible: false })
+      expect(computeJiraFollowups({ kind: 'searchResults', sprintChipEligible: false, transitionChipEligible: false })
         .some((c) => c.prompt === 'refine to my tickets')).toBe(true);
+    });
+
+    // U6/R9: "Transition these…" chip.
+    it('offers the "Transition these…" chip when transitionChipEligible', () => {
+      const state: JiraFollowupState = { kind: 'searchResults', sprintChipEligible: false, transitionChipEligible: true };
+
+      const chips = computeJiraFollowups(state);
+
+      expect(chips.some((c) => c.prompt === 'transition these tickets')).toBe(true);
+    });
+
+    it('omits the "Transition these…" chip when not transitionChipEligible', () => {
+      const state: JiraFollowupState = { kind: 'searchResults', sprintChipEligible: false, transitionChipEligible: false };
+
+      const chips = computeJiraFollowups(state);
+
+      expect(chips.some((c) => c.prompt === 'transition these tickets')).toBe(false);
     });
   });
 });
@@ -428,6 +445,42 @@ describe('findGuidedDirectTransition', () => {
 
   it('returns undefined when no direct transition matches', () => {
     expect(findGuidedDirectTransition(transitions, 'Blocked')).toBeUndefined();
+  });
+});
+
+// U6/R9: multi-ticket transition chip's status intersection. The status-pick parser itself is
+// `parseGuidedTransitionStatusPick` (reused verbatim, already covered above) — nothing new to
+// test there.
+describe('computeCommonTransitionStatuses', () => {
+  it('returns the intersection when two tickets have overlapping transitions', () => {
+    const result = computeCommonTransitionStatuses([
+      ['In Progress', 'Blocked', 'Done'],
+      ['Done', 'Blocked'],
+    ]);
+
+    expect(result.sort()).toEqual(['Blocked', 'Done']);
+  });
+
+  it('returns an empty array when two tickets have no common transition', () => {
+    const result = computeCommonTransitionStatuses([
+      ['In Progress'],
+      ['Done'],
+    ]);
+
+    expect(result).toEqual([]);
+  });
+
+  it('de-duplicates a single ticket\'s own repeated transition target', () => {
+    const result = computeCommonTransitionStatuses([
+      ['Done', 'Done'],
+      ['Done'],
+    ]);
+
+    expect(result).toEqual(['Done']);
+  });
+
+  it('returns an empty array for empty input', () => {
+    expect(computeCommonTransitionStatuses([])).toEqual([]);
   });
 });
 

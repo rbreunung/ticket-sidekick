@@ -481,6 +481,59 @@ export function formatPartialTransitionFailure(
     `not its original status — check its current state before retrying.`;
 }
 
+// ---------------------------------------------------------------------------------------------
+// U6/R9: "Transition these…" chip — a multi-ticket guided transition offered on a search/filter
+// result where every ticket shares the same project AND issue type. Unlike GuidedTransitionSession
+// above (one ticket, its own current status, its own transition metadata), this flow's status
+// options are the INTERSECTION of every qualifying ticket's own direct transition targets — every
+// choice offered is guaranteed to apply to the whole result, per the plan's deliberate
+// intersection-over-union decision. Once a status is picked, this flow hands off entirely to the
+// *existing* resolution-selection / transition-review sessions (the same ones bulkTransition's own
+// known-target-status path already uses via buildAndStreamTransitionBatch in JiraParticipant.ts)
+// rather than re-implementing its own resolution-pick and confirm steps — that shared helper's
+// review screen already lists every affected ticket + its current status (R9's confirm-step
+// requirement) and already tolerates tickets at different current statuses. There is likewise no
+// 'pick-path' step: every status in `statusOptions` is by construction a direct transition target
+// for every ticket, so there is never a multi-hop route to choose among.
+// ---------------------------------------------------------------------------------------------
+
+export interface MultiTicketTransitionSession {
+  tickets: { key: string; currentStatus: string }[];
+  issueType: string;
+  step: 'pick-status';
+  statusOptions: string[];
+}
+
+/**
+ * U6/R9: the multi-ticket transition chip's status intersection — every status name that is a
+ * *direct* transition target for every ticket in the result. `perTicketTransitionNames[i]` is one
+ * ticket's own list of direct-transition target names (`transitions.map(t => t.to.name)`, fetched
+ * live by the caller). Order follows the first ticket's own transition order (arbitrary but
+ * stable); each ticket's own list is de-duplicated by name first so a ticket with two transitions
+ * to the same status name can't inflate the result. An empty input, or any ticket with an empty
+ * transition list, yields an empty result — there is nothing in common to offer.
+ */
+export function computeCommonTransitionStatuses(perTicketTransitionNames: string[][]): string[] {
+  if (perTicketTransitionNames.length === 0) return [];
+  const [first, ...rest] = perTicketTransitionNames;
+  const restSets = rest.map((names) => new Set(names));
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const name of first) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    if (restSets.every((s) => s.has(name))) result.push(name);
+  }
+  return result;
+}
+
+/** R9's confirm-step guarantee, applied here too: every affected ticket key + its current status,
+ * listed explicitly before the target status is even asked about — since the status list on offer
+ * came from an intersection the user hasn't seen ticket-by-ticket yet. */
+export function buildMultiTicketTransitionStatusPickIntro(tickets: { key: string; currentStatus: string }[]): string {
+  return tickets.map((t) => `**${t.key}** (${t.currentStatus})`).join(', ');
+}
+
 // Defensive sanitizer over LLM history text (llmHelpers.ts): no code path emits HTML-comment
 // markers anymore since the R13 metadata migration, but history turns from pre-migration
 // versions may still carry them — strip before that text is fed back into an LLM prompt.
@@ -1844,7 +1897,11 @@ export type JiraFollowupState =
   // sprint's name when eligible, omitted otherwise. `sprintChipEligible` and `sprintName` are
   // deliberately two fields (rather than folding eligibility into "is sprintName set") so a test
   // can express "eligible but name missing" as the invalid state it would be — see test scenarios.
-  | { kind: 'searchResults'; sprintChipEligible: boolean; sprintName?: string }
+  // U6/R9: "Transition these…" chip eligibility — every ticket in the result shares one project
+  // AND one issue type (computed synchronously in JiraParticipant.ts from `tickets[].projectKey`/
+  // `.issueType`, same as the sprint check above). No name to carry (unlike sprintName) — the chip's
+  // prompt text is fixed, the actual status options are computed only once the chip is clicked.
+  | { kind: 'searchResults'; sprintChipEligible: boolean; sprintName?: string; transitionChipEligible: boolean }
   | { kind: 'none' };
 
 const JIRA_MAX_FOLLOWUPS = 3;
@@ -1932,6 +1989,11 @@ export function computeJiraFollowups(state: JiraFollowupState): FollowupSuggesti
           label: `Refine to sprint "${state.sprintName}"`,
         });
       }
+      // U6/R9: only when every ticket in the result shares one project AND one issue type —
+      // the exact phrase this feature's own intent routing recognizes (see llmHelpers.ts).
+      if (state.transitionChipEligible) {
+        chips.push({ prompt: 'transition these tickets', label: 'Transition these…' });
+      }
       return chips.slice(0, JIRA_MAX_FOLLOWUPS);
     }
     case 'none':
@@ -1968,6 +2030,7 @@ export type JiraSessionKind =
   | 'resolution-selection'
   | 'transition-review'
   | 'guided-transition'
+  | 'multi-transition'
   | 'selecting-filter'
   | 'listing-filters'
   | 'selecting-constraint-match'
