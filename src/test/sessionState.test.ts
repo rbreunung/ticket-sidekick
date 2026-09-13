@@ -212,10 +212,10 @@ describe('isGreetingOrEmpty', () => {
 });
 
 describe('computeJiraFollowups', () => {
-  it('returns exactly 2 chips for a greeting with no resolvable branch key', () => {
+  it('returns exactly 3 chips for a greeting with no resolvable branch key, including "Show my filters"', () => {
     const chips = computeJiraFollowups({ kind: 'greeting' });
 
-    expect(chips.length).toBe(2);
+    expect(chips.length).toBe(3);
     for (const chip of chips) {
       expect(chip.prompt.length).toBeGreaterThan(0);
     }
@@ -223,14 +223,17 @@ describe('computeJiraFollowups', () => {
     expect(chips.some((c) => /comment/i.test(c.prompt))).toBe(false);
     // R4/AE3: never a fabricated placeholder ticket key.
     expect(chips.some((c) => c.prompt.includes('PROJ-123'))).toBe(false);
+    // R2: the static "show my filters" chip.
+    expect(chips.some((c) => c.prompt === 'show my filters')).toBe(true);
   });
 
-  it('returns 3 chips for a greeting with a resolved branch key, including "show me {key}"', () => {
+  it('shows 4 chips for a greeting with a resolved branch key, keeping both "show me {key}" and "show my filters"', () => {
     const chips = computeJiraFollowups({ kind: 'greeting', branchKey: 'PROJ-123' });
 
-    expect(chips.length).toBe(3);
+    expect(chips.length).toBe(4);
     expect(chips.some((c) => /show me proj-123/i.test(c.prompt))).toBe(true);
-    expect(chips.length).toBeLessThanOrEqual(3);
+    // R2: the static filters chip must never lose its slot to the branch-key chip.
+    expect(chips.some((c) => c.prompt === 'show my filters')).toBe(true);
   });
 
   it('returns exactly 1 chip for the unclassifiable-prompt fallback with no resolvable branch key', () => {

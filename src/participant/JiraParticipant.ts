@@ -1,13 +1,14 @@
 import * as vscode from 'vscode';
 import { JiraApiClient } from '../jira/JiraApiClient';
 import { ConfigService } from '../services/ConfigService';
+import type { JiraConfig } from '../services/ConfigService';
 import { TicketService, renderFieldValue, formatKeyLink, PartialTransitionError } from '../services/TicketService';
 import type { IJiraClient, JiraFieldMeta, JiraFilter, JiraSprintCandidate } from '../jira/IJiraClient';
 import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { tokenStatus } from '../utils/diagUtils';
 import { logDiag } from '../utils/diagLog';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, type JiraFollowupState, type JiraSessionKind, isConfirmation, isCancellation, isGreetingOrEmpty, computeJiraFollowups, pickEmailOption, parseSkipInput, applyTicketToggle, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseBulkUpdateReview, applyBulkUpdateToggle, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewMessage } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type ListedFiltersSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, type JiraFollowupState, type JiraSessionKind, isConfirmation, isCancellation, isGreetingOrEmpty, computeJiraFollowups, pickEmailOption, parseSkipInput, applyTicketToggle, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseListedFiltersSelection, parseBulkUpdateReview, applyBulkUpdateToggle, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewMessage } from './sessionState';
 import {
   type GuidedTransitionSession,
   buildGuidedTransitionStatusOptions, parseGuidedTransitionStatusPick, findGuidedDirectTransition,
@@ -81,6 +82,64 @@ async function resolveTemplateByName(name: string | null, stream: vscode.ChatRes
     stream.markdown(`_Warning: template "${name}" is no longer available — proceeding without its default fields._\n\n`);
   }
   return found;
+}
+
+const LISTED_FILTERS_SESSION_KEY = 'jira.session.listedFilters';
+
+// U3 (favourite/filter search): runs an already-resolved filter's JQL exactly the way `searchJql`'s
+// own filterId/filterName resolution does (stores the search-result session, resolves search-field
+// metadata only when configured, streams the trusted-markdown result) — shared by `listMyFilters`'s
+// single-match path and its numbered-pick-list resume, so both behave identically to the existing
+// filter-run flow rather than each hand-rolling their own copy.
+async function runResolvedFilterJql(
+  jql: string,
+  label: string,
+  ticketService: TicketService,
+  config: JiraConfig,
+  ws: vscode.Memento,
+  stream: vscode.ChatResponseStream,
+  prefixNote = '',
+): Promise<void> {
+  const raw = await ticketService.searchTicketsRaw(jql);
+  if (raw.issues.length > 0) {
+    const searchSession: SearchResultSession = { ticketKeys: raw.issues.map(i => i.key), jql };
+    await ws.update('jira.session.searchResult', searchSession);
+  }
+  const searchFieldMeta = config.searchFields.length > 0 ? await ticketService.getFieldMeta() : [];
+  const searchResult = prefixNote + label + await ticketService.searchTickets(jql, config.baseUrl, config.searchFields, searchFieldMeta);
+  stream.markdown(trustedChatMarkdown(searchResult));
+}
+
+// U3 (R1/R2/R3/R10): `listMyFilters` intent handler — lists the user's favourite+owned filters
+// (deduped by TicketService.getMyFilters()) and either runs the single match directly, offers a
+// numbered pick-list for multiple matches, or reports "none found" for zero, always surfacing a
+// partial-fetch-failure note first when getMyFilters() reports one (R10) rather than silently
+// showing an incomplete list as complete.
+async function handleListMyFilters(
+  ticketService: TicketService,
+  config: JiraConfig,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+): Promise<{ metadata: { jiraSession: { kinds: JiraSessionKind[] } } } | void> {
+  const { filters, failedSources } = await ticketService.getMyFilters();
+  const failureNote = failedSources.length > 0
+    ? `_Could not fetch your ${failedSources.join(' and ')} filter(s) — showing partial results._\n\n`
+    : '';
+  if (filters.length === 0) {
+    stream.markdown(failureNote + 'No favourite or owned filters found.');
+    return;
+  }
+  if (filters.length === 1) {
+    await runResolvedFilterJql(filters[0].jql, `_Using filter: **${filters[0].name}**_\n\n`, ticketService, config, ws, stream, failureNote);
+    return;
+  }
+  const session: ListedFiltersSession = { filters };
+  await ws.update(LISTED_FILTERS_SESSION_KEY, session);
+  const list = filters.map((f, i) => `${i + 1}. ${buildChatCommandLink(f.name, '@jira', String(i + 1))}`).join('\n');
+  stream.markdown(trustedChatMarkdown(
+    `${failureNote}Your filters:\n\n${list}\n\nWhich one? Reply with the number or name, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+  ));
+  return { metadata: { jiraSession: { kinds: ['listing-filters'] } } };
 }
 
 // Shared by the three comment-listing sites (getTicket / showComments / getComments) that offer to
@@ -579,6 +638,36 @@ export function createJiraParticipant(
           }
           const result = await ticketService.searchTickets(choice.jql);
           stream.markdown(`_Using filter: **${choice.name}**_\n\n${result}`);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          logDiag('jira.participant', 'error', message, {});
+          stream.markdown(message);
+        }
+        return;
+      }
+    }
+
+    // U3: "show my filters" numbered pick-list — user replied with their filter choice. Parallel
+    // to the 'selecting-filter' block above, but reached via getMyFilters()'s combined list
+    // instead of a filterId/filterName search.
+    if (getActiveJiraSession(chatContext)?.kinds.includes('listing-filters')) {
+      const listedSession = ws.get<ListedFiltersSession>(LISTED_FILTERS_SESSION_KEY);
+      if (listedSession) {
+        const choice = parseListedFiltersSelection(request.prompt, listedSession);
+        if (choice === 'invalid') {
+          const list = listedSession.filters.map((f, i) => `${i + 1}. ${buildChatCommandLink(f.name, '@jira', String(i + 1))}`).join('\n');
+          stream.markdown(trustedChatMarkdown(
+            `Please choose a filter:\n\n${list}\n\nReply with the number or name, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+          ));
+          return { metadata: { jiraSession: { kinds: ['listing-filters'] } } };
+        }
+        await ws.update(LISTED_FILTERS_SESSION_KEY, undefined);
+        if (choice === 'cancel') {
+          stream.markdown('_Cancelled._');
+          return;
+        }
+        try {
+          await runResolvedFilterJql(choice.jql, `_Using filter: **${choice.name}**_\n\n`, ticketService, config, ws, stream);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logDiag('jira.participant', 'error', message, {});
@@ -1281,6 +1370,17 @@ export function createJiraParticipant(
           projectKeyHint: intent.projectKey,
           issueTypeHint: intent.issueType,
         });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logDiag('jira.participant', 'error', message, {});
+        stream.markdown(message);
+      }
+      return;
+    }
+
+    if (intent.operation === 'listMyFilters') {
+      try {
+        return await handleListMyFilters(ticketService, config, stream, ws);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         logDiag('jira.participant', 'error', message, {});

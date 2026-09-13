@@ -115,6 +115,10 @@ Execution streams one line per ticket (subtasks first), then a summary. Failures
 
 `@jira` can generate a reusable `.jira-templates.json` template from a reference ticket's template-shaped fields, or from a project's required-fields metadata when no reference ticket is given, reviewed as an include/exclude list and saved on confirmation with an offer to create a first ticket from it — see [`docs/plans/2026-08-30-1135-feat-template-generation-from-ticket-plan.md`](plans/2026-08-30-1135-feat-template-generation-from-ticket-plan.md) and [`src/participant/jira/templateGenerationHandler.ts`](../src/participant/jira/templateGenerationHandler.ts).
 
+## Filter discovery
+
+`@jira` can list and run the user's own favourite + owned Jira filters (`show my filters`) without naming one — zero results says so, exactly one runs directly, more than one opens a numbered pick-list (`ListedFiltersSession`); a partial fetch failure is called out above the list rather than shown as a complete one. The greeting response's "Show my filters" chip invokes this same intent. See `handleListMyFilters`/`runResolvedFilterJql` in `JiraParticipant.ts` and `ListedFiltersSession`/`parseListedFiltersSelection` in `sessionState.ts`.
+
 ## Jira sessions
 
 Each session below is looked up by its `workspaceState` key; liveness is checked by round-tripping a `kind` through `ChatResult.metadata.jiraSession` (read by `getActiveJiraSession()` in `ticketContext.ts`), with no visible marker in the rendered response — see `JiraSessionContinuity` in `sessionState.ts`. This replaced the former HTML-comment-tag mechanism (a visible `<!-- jira:TAG -->` matched against the last rendered response) for every session below.
@@ -125,6 +129,7 @@ Each session below is looked up by its `workspaceState` key; liveness is checked
 | `TransitionBatchSession` | `jira.session.transitionReview` | metadata — `jiraSession.kinds: ['transition-review']` |
 | `GuidedTransitionSession` | `jira.session.guidedTransition` | metadata — `jiraSession.kinds: ['guided-transition']` |
 | `FilterSelectionSession` | `jira.session.filterSelection` | metadata — `jiraSession.kinds: ['selecting-filter']` |
+| `ListedFiltersSession` | `jira.session.listedFilters` | metadata — `jiraSession.kinds: ['listing-filters']` |
 | `BulkUpdateReviewSession` | `jira.session.bulkUpdateReview` | metadata — `jiraSession.kinds: ['bulk-update-review']` |
 | `SearchResultSession` | `jira.session.searchResult` | _(no marker — background session, overwritten on each search)_ |
 | `CreateSelectionSession` | `jira.session.creatingSelection` | metadata — `jiraSession.kinds: ['selecting-create-option']` |

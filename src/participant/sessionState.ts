@@ -698,6 +698,23 @@ export function parseFilterSelection(reply: string, filters: JiraFilter[]): Jira
   return 'invalid';
 }
 
+// U3 (favourite/filter search): "show my filters"'s numbered pick-list session — parallel to
+// FilterSelectionSession (which is reached via a specific filterId/filterName match), but reached
+// via getMyFilters()'s combined favourites+owned listing instead of a name/id search. No
+// `originalPrompt` field (FilterSelectionSession's copy of it is unused by any caller today) —
+// this session only ever needs the filter list itself to resolve a pick.
+export interface ListedFiltersSession {
+  filters: JiraFilter[];
+}
+
+/** Resolves a reply to `listMyFilters`'s numbered pick-list the same way `parseFilterSelection`
+ * resolves `FilterSelectionSession`'s — delegating to it directly so both sessions share the same
+ * exact-match-before-cancellation-word ordering (a filter literally named "Stop" or "Cancel" must
+ * still be selectable by exact name; see parseFilterSelection's own doc comment). */
+export function parseListedFiltersSelection(reply: string, session: ListedFiltersSession): JiraFilter | 'cancel' | 'invalid' {
+  return parseFilterSelection(reply, session.filters);
+}
+
 export interface LoadSkippedSession {
   ticketKey: string;
   skipped: Array<{
@@ -1725,6 +1742,11 @@ export type JiraFollowupState =
   | { kind: 'none' };
 
 const JIRA_MAX_FOLLOWUPS = 3;
+// R2: the greeting's "Show my filters" chip is a static, always-present entry, not one of
+// KTD14's 2-3 example prompts — it doesn't compete with the branch-key chip for a slot the way
+// two dynamically-generated examples would. One extra slot keeps both present instead of R2
+// silently losing to KTD14's cap whenever a branch key also resolves.
+const GREETING_MAX_FOLLOWUPS = 4;
 
 /**
  * R6/KTD14: 2-3 example prompts, phrased as literal next messages a user could send, for a
@@ -1744,7 +1766,12 @@ export function computeJiraFollowups(state: JiraFollowupState): FollowupSuggesti
       if (state.branchKey) {
         chips.push({ prompt: `show me ${state.branchKey}`, label: `Show me ${state.branchKey}` });
       }
-      return chips.slice(0, JIRA_MAX_FOLLOWUPS);
+      // R2: static chip, appended last — it invokes the listing intent rather than fetching
+      // filters on every greeting (a greeting never touches the network today, and this chip
+      // keeps it that way). Appended after the branch-key chip so the cap (below) favors the
+      // existing "Show me {key}" suggestion over this one when both would otherwise fit.
+      chips.push({ prompt: 'show my filters', label: 'Show my filters' });
+      return chips.slice(0, GREETING_MAX_FOLLOWUPS);
     }
     case 'fallback': {
       // R1/R4: the comment chip is gone; same branch-key rule as greeting for the ticket chip.
@@ -1819,6 +1846,7 @@ export type JiraSessionKind =
   | 'transition-review'
   | 'guided-transition'
   | 'selecting-filter'
+  | 'listing-filters'
   | 'bulk-update-review'
   | 'sprint-selection'
   | 'field-selection'
