@@ -10,6 +10,10 @@ import { tokenStatus } from '../utils/diagUtils';
 import { logDiag } from '../utils/diagLog';
 import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type ListedFiltersSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, type JiraFollowupState, type JiraSessionKind, isConfirmation, isCancellation, isGreetingOrEmpty, computeJiraFollowups, pickEmailOption, parseSkipInput, applyTicketToggle, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseListedFiltersSelection, parseBulkUpdateReview, applyBulkUpdateToggle, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewMessage } from './sessionState';
 import {
+  type ConstraintAmbiguitySession, type ConstraintMatchOption, type PendingSearchConstraints,
+  type JqlConstraints, buildConstraintJql, parseConstraintMatchSelection, extractProjectKeyFromJql,
+} from './sessionState';
+import {
   type GuidedTransitionSession,
   buildGuidedTransitionStatusOptions, parseGuidedTransitionStatusPick, findGuidedDirectTransition,
   parseGuidedTransitionPathPick, formatTransitionPathOption, parseGuidedTransitionResolutionPick,
@@ -108,6 +112,118 @@ async function runResolvedFilterJql(
   const searchFieldMeta = config.searchFields.length > 0 ? await ticketService.getFieldMeta() : [];
   const searchResult = prefixNote + label + await ticketService.searchTickets(jql, config.baseUrl, config.searchFields, searchFieldMeta);
   stream.markdown(trustedChatMarkdown(searchResult));
+}
+
+const CONSTRAINT_AMBIGUITY_SESSION_KEY = 'jira.session.constraintAmbiguity';
+
+/** U4/R11: renders the numbered pick-list for an ambiguous fixVersion/sprint/assignee match and
+ * persists the session so the next turn's reply resolves it — shared by every resolution step in
+ * `resolveConstraintsAndSearch()` below. */
+async function presentConstraintAmbiguity(
+  kind: ConstraintAmbiguitySession['kind'],
+  options: ConstraintMatchOption[],
+  baseJql: string,
+  jqlLabel: string,
+  resolvedConstraints: JqlConstraints,
+  remainingConstraints: PendingSearchConstraints,
+  ws: vscode.Memento,
+  stream: vscode.ChatResponseStream,
+): Promise<{ metadata: { jiraSession: { kinds: JiraSessionKind[] } } }> {
+  const session: ConstraintAmbiguitySession = { kind, options, baseJql, jqlLabel, resolvedConstraints, remainingConstraints };
+  await ws.update(CONSTRAINT_AMBIGUITY_SESSION_KEY, session);
+  const kindLabel = kind === 'fixVersion' ? 'fix version' : kind;
+  const list = options.map((o, i) => `${i + 1}. ${buildChatCommandLink(o.label, '@jira', String(i + 1))}`).join('\n');
+  stream.markdown(trustedChatMarkdown(
+    `Multiple ${kindLabel} matches:\n\n${list}\n\nWhich one? Reply with the number or name, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+  ));
+  return { metadata: { jiraSession: { kinds: ['selecting-constraint-match'] } } };
+}
+
+/**
+ * U4/R4-R11: resolves any named fixVersion/sprint/assignee constraint against real Jira data —
+ * fixVersion and sprint both need a single scoping project key extracted from `baseJql` (step 1,
+ * R11); zero matches is reported and the search never runs; exactly one match proceeds; more than
+ * one detours to `presentConstraintAmbiguity()`. Once every named constraint resolves, the
+ * accumulated values are ANDed onto `baseJql` via `buildConstraintJql()` and the search runs via
+ * `runResolvedFilterJql()`. `alreadyResolved` carries forward whatever earlier constraint(s) in the
+ * same message already resolved before a prior ambiguity was hit — see the
+ * 'selecting-constraint-match' resume block below.
+ */
+async function resolveConstraintsAndSearch(
+  baseJql: string,
+  jqlLabel: string,
+  named: PendingSearchConstraints,
+  jiraClient: IJiraClient,
+  ticketService: TicketService,
+  config: JiraConfig,
+  ws: vscode.Memento,
+  stream: vscode.ChatResponseStream,
+  alreadyResolved: JqlConstraints = {},
+): Promise<{ metadata: { jiraSession: { kinds: JiraSessionKind[] } } } | void> {
+  const resolved: JqlConstraints = { ...alreadyResolved };
+
+  let projectKey: string | null = null;
+  if (named.fixVersion || named.sprint) {
+    projectKey = extractProjectKeyFromJql(baseJql);
+    if (!projectKey) {
+      stream.markdown(
+        `Can't determine a single project from this filter's JQL to resolve the ${named.fixVersion ? 'fix version' : 'sprint'} ` +
+        `— it must scope to exactly one project (e.g. \`project = PROJ\`).`,
+      );
+      return;
+    }
+  }
+
+  if (named.fixVersion) {
+    const project = await jiraClient.getProject(projectKey!);
+    const needle = named.fixVersion.toLowerCase();
+    const matches = (project.versions ?? []).filter(v => v.name.toLowerCase().includes(needle));
+    if (matches.length === 0) {
+      stream.markdown(`No fix version matching "${named.fixVersion}" found in **${projectKey}**.`);
+      return;
+    } else if (matches.length === 1) {
+      resolved.fixVersion = matches[0].name;
+    } else {
+      const options = matches.map(v => ({ label: v.name, value: v.name }));
+      const rest: PendingSearchConstraints = { sprint: named.sprint, assignee: named.assignee };
+      return await presentConstraintAmbiguity('fixVersion', options, baseJql, jqlLabel, resolved, rest, ws, stream);
+    }
+  }
+
+  if (named.sprint) {
+    const candidates = await ticketService.findSprints(projectKey!, named.sprint);
+    if (candidates.length === 0) {
+      stream.markdown(`No sprint matching "${named.sprint}" found in **${projectKey}**.`);
+      return;
+    } else if (candidates.length === 1) {
+      resolved.sprint = candidates[0].name;
+    } else {
+      const options = candidates.map(c => ({ label: `${c.name} (${c.state})`, value: c.name }));
+      const rest: PendingSearchConstraints = { assignee: named.assignee };
+      return await presentConstraintAmbiguity('sprint', options, baseJql, jqlLabel, resolved, rest, ws, stream);
+    }
+  }
+
+  if (named.assignee) {
+    if (['me', 'myself', 'i'].includes(named.assignee.toLowerCase().trim())) {
+      resolved.assignee = 'me';
+    } else {
+      const users = await jiraClient.findUser(named.assignee);
+      if (users.length === 0) {
+        stream.markdown(`No user found matching "${named.assignee}".`);
+        return;
+      } else if (users.length === 1) {
+        const u = users[0];
+        resolved.assignee = u.name ?? u.accountId ?? u.displayName;
+      } else {
+        const options = users.map(u => ({ label: u.displayName, value: u.name ?? u.accountId ?? u.displayName }));
+        return await presentConstraintAmbiguity('assignee', options, baseJql, jqlLabel, resolved, {}, ws, stream);
+      }
+    }
+  }
+
+  const finalJql = buildConstraintJql(baseJql, resolved);
+  await runResolvedFilterJql(finalJql, jqlLabel, ticketService, config, ws, stream);
 }
 
 // U3 (R1/R2/R3/R10): `listMyFilters` intent handler — lists the user's favourite+owned filters
@@ -632,12 +748,53 @@ export function createJiraParticipant(
           return;
         }
         try {
+          // U4/R4: a constraint named alongside the ambiguous filter reference is resolved now
+          // that the filter itself is picked, instead of running the plain search below.
+          if (selSession.pendingConstraints) {
+            return await resolveConstraintsAndSearch(
+              choice.jql, `_Using filter: **${choice.name}**_\n\n`, selSession.pendingConstraints,
+              jiraClient, ticketService, config, ws, stream,
+            );
+          }
           const raw = await ticketService.searchTicketsRaw(choice.jql);
           if (raw.issues.length > 0) {
             await ws.update('jira.session.searchResult', { ticketKeys: raw.issues.map(i => i.key), jql: choice.jql } as SearchResultSession);
           }
           const result = await ticketService.searchTickets(choice.jql);
           stream.markdown(`_Using filter: **${choice.name}**_\n\n${result}`);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          logDiag('jira.participant', 'error', message, {});
+          stream.markdown(message);
+        }
+        return;
+      }
+    }
+
+    // U4/R11: ambiguous fixVersion/sprint/assignee match — user replied with their pick.
+    if (getActiveJiraSession(chatContext)?.kinds.includes('selecting-constraint-match')) {
+      const caSession = ws.get<ConstraintAmbiguitySession>(CONSTRAINT_AMBIGUITY_SESSION_KEY);
+      if (caSession) {
+        const choice = parseConstraintMatchSelection(request.prompt, caSession.options);
+        if (choice === 'invalid') {
+          const kindLabel = caSession.kind === 'fixVersion' ? 'fix version' : caSession.kind;
+          const list = caSession.options.map((o, i) => `${i + 1}. ${buildChatCommandLink(o.label, '@jira', String(i + 1))}`).join('\n');
+          stream.markdown(trustedChatMarkdown(
+            `Please choose a ${kindLabel}:\n\n${list}\n\nReply with the number or name, or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
+          ));
+          return { metadata: { jiraSession: { kinds: ['selecting-constraint-match'] } } };
+        }
+        await ws.update(CONSTRAINT_AMBIGUITY_SESSION_KEY, undefined);
+        if (choice === 'cancel') {
+          stream.markdown('_Cancelled._');
+          return;
+        }
+        const resolvedConstraints: JqlConstraints = { ...caSession.resolvedConstraints, [caSession.kind]: choice.value };
+        try {
+          return await resolveConstraintsAndSearch(
+            caSession.baseJql, caSession.jqlLabel, caSession.remainingConstraints,
+            jiraClient, ticketService, config, ws, stream, resolvedConstraints,
+          );
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logDiag('jira.participant', 'error', message, {});
@@ -1590,6 +1747,12 @@ export function createJiraParticipant(
         case 'searchJql': {
           let resolvedJql: string;
           let jqlLabel = '';
+          // U4/R4-R6: a named fixVersion/sprint/assignee constraint extracted alongside (or, for
+          // R5's bare follow-up narrowing, instead of) a filter/jql reference in this same message.
+          const namedConstraints: PendingSearchConstraints = {
+            fixVersion: intent.constraintFixVersion, sprint: intent.constraintSprint, assignee: intent.constraintAssignee,
+          };
+          const hasNamedConstraint = Boolean(namedConstraints.fixVersion || namedConstraints.sprint || namedConstraints.assignee);
           if (intent.filterId) {
             const filter = await ticketService.getFilterById(intent.filterId);
             resolvedJql = filter.jql;
@@ -1603,7 +1766,12 @@ export function createJiraParticipant(
               resolvedJql = filters[0].jql;
               jqlLabel = `_Using filter: **${filters[0].name}**_\n\n`;
             } else {
-              const session: FilterSelectionSession = { filters, originalPrompt: request.prompt };
+              // U4/R4: carry the named constraint(s) forward so they're resolved once the filter
+              // name itself is disambiguated (see the 'selecting-filter' resume block).
+              const session: FilterSelectionSession = {
+                filters, originalPrompt: request.prompt,
+                pendingConstraints: hasNamedConstraint ? namedConstraints : undefined,
+              };
               await ws.update('jira.session.filterSelection', session);
               const list = filters.map((f, i) => `${i + 1}. ${buildChatCommandLink(f.name, '@jira', String(i + 1))}`).join('\n');
               stream.markdown(trustedChatMarkdown(
@@ -1620,9 +1788,23 @@ export function createJiraParticipant(
             }
             resolvedJql = buildTeamJql(teamJql, intent.jql);
             jqlLabel = `_Using team JQL_\n\n`;
+          } else if (hasNamedConstraint && !intent.jql) {
+            // R5: a bare follow-up naming only a constraint — narrow the previous search/filter
+            // run instead of starting a new one.
+            const priorSearch = ws.get<SearchResultSession>('jira.session.searchResult');
+            if (!priorSearch) {
+              result = 'No previous search to narrow — run a search or filter first.';
+              break;
+            }
+            resolvedJql = priorSearch.jql;
           } else {
             resolvedJql = intent.jql ?? request.prompt;
           }
+
+          if (hasNamedConstraint) {
+            return await resolveConstraintsAndSearch(resolvedJql, jqlLabel, namedConstraints, jiraClient, ticketService, config, ws, stream);
+          }
+
           const raw = await ticketService.searchTicketsRaw(resolvedJql);
           if (raw.issues.length > 0) {
             const searchSession: SearchResultSession = { ticketKeys: raw.issues.map(i => i.key), jql: resolvedJql };

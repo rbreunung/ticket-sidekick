@@ -82,11 +82,22 @@ export interface JiraIssueType {
   subtask: boolean;
 }
 
+export interface JiraProjectVersion {
+  id: string;
+  name: string;
+  released?: boolean;
+  archived?: boolean;
+}
+
 export interface JiraProject {
   id: string;
   key: string;
   name: string;
   issueTypes: JiraIssueType[];
+  // U4: the real `GET /project/{key}` v2 response already includes this array; only the type was
+  // missing. Optional since MockJiraClient's fixture-backed callers never set it, and older
+  // fixtures/tests are unaffected.
+  versions?: JiraProjectVersion[];
 }
 
 export interface JiraCreatedIssue {

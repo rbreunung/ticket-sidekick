@@ -582,9 +582,23 @@ export function parseCommentIndex(reply: string, maxIndex: number): number | 'in
   return 'invalid';
 }
 
+/** U4/R4: a named fixVersion/sprint/assignee constraint extracted alongside a filter reference (or
+ * a `listMyFilters` pick) that hasn't been resolved yet — carried across a filter-name-ambiguity
+ * detour (FilterSelectionSession/ListedFiltersSession) so the constraint is still applied once the
+ * filter itself is chosen. All three are optional/independent; `null` and `undefined` are both
+ * "not named" (ParsedIntent fields are `string | null`). */
+export interface PendingSearchConstraints {
+  fixVersion?: string | null;
+  sprint?: string | null;
+  assignee?: string | null;
+}
+
 export interface FilterSelectionSession {
   filters: JiraFilter[];
   originalPrompt: string;
+  // U4/R4: set only when the triggering message also named a fixVersion/sprint/assignee
+  // constraint — resolved after the filter itself is picked (see resolveConstraintsAndSearch).
+  pendingConstraints?: PendingSearchConstraints;
 }
 
 // Intentionally excluded from the `JiraSessionContinuity` metadata migration: this session is
@@ -860,6 +874,80 @@ export function buildConstraintJql(baseJql: string, constraints: JqlConstraints)
     return baseJql;
   }
   return `(${baseJql}) AND (${clauses.join(' AND ')})`;
+}
+
+/**
+ * U4/R11: a single resolved-JQL-value candidate offered in the ambiguous-match pick-list — `label`
+ * is what's shown/matched against a typed reply, `value` is what actually gets ANDed onto the JQL
+ * via `buildConstraintJql` once chosen (usually the same string, but e.g. a sprint candidate's
+ * label can carry its state — "Sprint 5 (active)" — while `value` stays the bare sprint name
+ * `buildConstraintJql` expects).
+ */
+export interface ConstraintMatchOption {
+  label: string;
+  value: string;
+}
+
+/**
+ * U4/R11: ONE ambiguous-match pick-list session, parameterized by `kind` rather than three
+ * separate session types — the picker behavior (numbered/exact-name reply, cancel) is identical
+ * across fixVersion/sprint/assignee. `baseJql`/`jqlLabel` are the filter's (or prior search's) own
+ * JQL/label the resolved value eventually gets ANDed onto; `resolvedConstraints` carries whatever
+ * earlier constraint(s) in the same message already resolved before this ambiguity was hit;
+ * `remainingConstraints` carries whichever named constraint(s) still need resolving after this pick
+ * is made (e.g. a message naming both a fixVersion and a sprint, where the fixVersion resolved
+ * cleanly but the sprint name was ambiguous — this session's `kind` is 'sprint', and
+ * `remainingConstraints` is empty since sprint was the last one to resolve).
+ */
+export interface ConstraintAmbiguitySession {
+  kind: 'fixVersion' | 'sprint' | 'assignee';
+  options: ConstraintMatchOption[];
+  baseJql: string;
+  jqlLabel: string;
+  resolvedConstraints: JqlConstraints;
+  remainingConstraints: PendingSearchConstraints;
+}
+
+/** Resolves a reply to a `ConstraintAmbiguitySession`'s pick-list the same way `parseFilterSelection`
+ * resolves `FilterSelectionSession`'s — an exact (case-insensitive) label match wins over the
+ * generic cancellation word list (so a candidate literally named "Stop" or "Cancel" stays
+ * selectable by name), then falls back to a 1-based numeric index. */
+export function parseConstraintMatchSelection(
+  reply: string,
+  options: ConstraintMatchOption[],
+): ConstraintMatchOption | 'cancel' | 'invalid' {
+  const trimmed = reply.trim();
+  const byLabel = options.find(o => o.label.toLowerCase() === trimmed.toLowerCase());
+  if (byLabel) return byLabel;
+  if (isCancellation(reply)) return 'cancel';
+  const byIndex = trimmed.match(/^(\d+)$/);
+  if (byIndex) {
+    const n = parseInt(byIndex[1], 10);
+    if (n >= 1 && n <= options.length) return options[n - 1];
+    return 'invalid';
+  }
+  return 'invalid';
+}
+
+/**
+ * U4/R11 step 1: extracts a single scoping project key from a filter's (or prior search's) own
+ * JQL, so a named fixVersion/sprint constraint can be resolved against that one project's versions
+ * or sprints. Deliberately conservative — never guesses:
+ * - `project in (...)` is explicit multi-project scoping (or could be a single-element list that
+ *   still reads as "not necessarily one project" from the JQL author's intent) — always null.
+ * - No `project = ...` clause at all — null.
+ * - A quoted (`project = "PROJ"`) or bare (`project = PROJ`) value both match; the key is
+ *   upper-cased since Jira project keys are conventionally upper-case but a filter's JQL could have
+ *   been typed either way.
+ *
+ * This is a plain substring/regex scan, not a JQL parser — a project key embedded inside a string
+ * literal elsewhere in the JQL (e.g. `summary ~ "project = FOO"`) would be a false positive, but
+ * that shape is vanishingly unlikely in a real saved filter and not worth a full JQL grammar here.
+ */
+export function extractProjectKeyFromJql(jql: string): string | null {
+  if (/\bproject\s+in\s*\(/i.test(jql)) return null;
+  const match = jql.match(/\bproject\s*=\s*"?([A-Za-z][A-Za-z0-9]*)"?/i);
+  return match ? match[1].toUpperCase() : null;
 }
 
 /**
@@ -1847,6 +1935,7 @@ export type JiraSessionKind =
   | 'guided-transition'
   | 'selecting-filter'
   | 'listing-filters'
+  | 'selecting-constraint-match'
   | 'bulk-update-review'
   | 'sprint-selection'
   | 'field-selection'

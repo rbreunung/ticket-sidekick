@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { renderReviewTable, buildJiraNotConfiguredMessage, buildChatCommandLink, neutralizeMarkdownLinks, isGreetingOrEmpty, computeJiraFollowups, withLastTicket, buildConstraintJql, type ReviewTableColumn, type JiraFollowupState } from '../participant/sessionState';
 import {
+  parseConstraintMatchSelection, extractProjectKeyFromJql, type ConstraintMatchOption,
+} from '../participant/sessionState';
+import {
   buildGuidedTransitionStatusOptions, parseGuidedTransitionStatusPick, findGuidedDirectTransition,
   parseGuidedTransitionPathPick, formatTransitionPathOption, parseGuidedTransitionResolutionPick,
   buildGuidedTransitionConfirmSummary,
@@ -528,5 +531,62 @@ describe('buildConstraintJql', () => {
   it('escapes a backslash in a constraint value instead of interpolating it raw', () => {
     const result = buildConstraintJql('filter = 12345', { assignee: 'dom\\jdoe' });
     expect(result).toBe('(filter = 12345) AND (assignee = "dom\\\\jdoe")');
+  });
+});
+
+describe('parseConstraintMatchSelection (U4/R11 — generic across constraint kinds)', () => {
+  const fixVersionOptions: ConstraintMatchOption[] = [
+    { label: 'Release 3.2', value: 'Release 3.2' },
+    { label: 'Release 3.2.1', value: 'Release 3.2.1' },
+  ];
+  const assigneeOptions: ConstraintMatchOption[] = [
+    { label: 'Jane Doe', value: 'jdoe' },
+    { label: 'John Doe', value: 'jdoe2' },
+  ];
+
+  it('resolves an exact-name reply for a fixVersion ambiguity', () => {
+    expect(parseConstraintMatchSelection('Release 3.2.1', fixVersionOptions)).toEqual(fixVersionOptions[1]);
+  });
+
+  it('resolves a numeric-index reply for a fixVersion ambiguity', () => {
+    expect(parseConstraintMatchSelection('1', fixVersionOptions)).toEqual(fixVersionOptions[0]);
+  });
+
+  it('resolves an exact-name reply for an assignee ambiguity', () => {
+    expect(parseConstraintMatchSelection('John Doe', assigneeOptions)).toEqual(assigneeOptions[1]);
+  });
+
+  it('resolves a numeric-index reply for an assignee ambiguity', () => {
+    expect(parseConstraintMatchSelection('2', assigneeOptions)).toEqual(assigneeOptions[1]);
+  });
+
+  it('reports cancel on a cancellation word', () => {
+    expect(parseConstraintMatchSelection('cancel', fixVersionOptions)).toBe('cancel');
+  });
+
+  it('reports invalid on an out-of-range index', () => {
+    expect(parseConstraintMatchSelection('9', fixVersionOptions)).toBe('invalid');
+  });
+
+  it('reports invalid on unrecognized text', () => {
+    expect(parseConstraintMatchSelection('nonsense', fixVersionOptions)).toBe('invalid');
+  });
+});
+
+describe('extractProjectKeyFromJql (U4/R11 step 1)', () => {
+  it('extracts a project key from a quoted project clause', () => {
+    expect(extractProjectKeyFromJql('project = "PROJ" AND resolution is EMPTY')).toBe('PROJ');
+  });
+
+  it('extracts a project key from an unquoted project clause', () => {
+    expect(extractProjectKeyFromJql('project = PROJ AND status = Open')).toBe('PROJ');
+  });
+
+  it('returns null when there is no project clause at all', () => {
+    expect(extractProjectKeyFromJql('assignee = currentUser() AND resolution is NULL')).toBeNull();
+  });
+
+  it('returns null for a multi-project "project in (...)" clause', () => {
+    expect(extractProjectKeyFromJql('project in (A, B) AND resolution is EMPTY')).toBeNull();
   });
 });
