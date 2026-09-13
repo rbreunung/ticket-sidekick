@@ -8,7 +8,7 @@ import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { tokenStatus } from '../utils/diagUtils';
 import { logDiag } from '../utils/diagLog';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type ListedFiltersSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, type JiraFollowupState, type JiraSessionKind, isConfirmation, isCancellation, isGreetingOrEmpty, computeJiraFollowups, pickEmailOption, parseSkipInput, applyTicketToggle, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseListedFiltersSelection, parseBulkUpdateReview, applyBulkUpdateToggle, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewMessage } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type ListedFiltersSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, type JiraFollowupState, type JiraSessionKind, isConfirmation, isCancellation, isGreetingOrEmpty, computeJiraFollowups, buildFilterFailureNote, pickEmailOption, parseSkipInput, applyTicketToggle, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseListedFiltersSelection, parseBulkUpdateReview, applyBulkUpdateToggle, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewMessage } from './sessionState';
 import {
   type ConstraintAmbiguitySession, type ConstraintMatchOption, type PendingSearchConstraints,
   type JqlConstraints, buildConstraintJql, parseConstraintMatchSelection, extractProjectKeyFromJql,
@@ -196,9 +196,7 @@ async function handleListMyFilters(
   ws: vscode.Memento,
 ): Promise<{ metadata: { jiraSession: { kinds: JiraSessionKind[] } } } | void> {
   const { filters, failedSources } = await ticketService.getMyFilters();
-  const failureNote = failedSources.length > 0
-    ? `_Could not fetch your ${failedSources.join(' and ')} filter(s) — showing partial results._\n\n`
-    : '';
+  const failureNote = buildFilterFailureNote(failedSources);
   if (filters.length === 0) {
     stream.markdown(failureNote + 'No favourite or owned filters found.');
     return;
@@ -597,8 +595,7 @@ async function buildAndStreamTransitionBatch(
         fieldMeta: cleanupFieldMeta,
       };
       await ws.update('jira.session.resolutionSelection', resSession);
-      // Code-review fix: mirror the retry branch above and cleanupHandler.ts's equivalent — this
-      // initial prompt had drifted to plain, non-clickable text.
+      // Keep this clickable, matching every other numbered pick-list in this file.
       const list = resolutions.map((r, i) => `${i + 1}. ${buildChatCommandLink(r.name, '@jira', String(i + 1))}`).join('\n');
       stream.markdown(trustedChatMarkdown(
         `Which resolution should be set when transitioning to **${targetStatus}**?\n\n${list}\n\nReply with the name or number, or ${buildChatCommandLink('none', '@jira', 'none')} to skip setting a resolution.`,
@@ -1986,7 +1983,6 @@ export function createJiraParticipant(
           // project AND a sprint board must be configured with a single resolvable active
           // sprint on it. Both checks are async, so they happen here, before constructing the
           // pure `JiraFollowupState` below — deliberately no multi-board discovery/fallback.
-          let sprintChipEligible = false;
           let sprintName: string | undefined;
           // U6/R9: "Transition these…" chip eligibility — every ticket shares one project AND
           // one issue type. Computed alongside the sprint check above, from the same `tickets`
@@ -2005,7 +2001,6 @@ export function createJiraParticipant(
             if (sameProjectKey && config.sprintBoardId) {
               const activeSprint = await ticketService.getActiveSprintForBoard(config.sprintBoardId);
               if (activeSprint) {
-                sprintChipEligible = true;
                 sprintName = activeSprint.name;
               }
             }
@@ -2020,7 +2015,7 @@ export function createJiraParticipant(
           // anything ticket-key-specific for this case anyway — but it does now carry its own
           // `jiraFollowup` metadata (R7/R8's refine chips) instead of returning bare.
           stream.markdown(trustedChatMarkdown(searchResult));
-          const searchFollowupState: JiraFollowupState = { kind: 'searchResults', sprintChipEligible, sprintName, transitionChipEligible };
+          const searchFollowupState: JiraFollowupState = { kind: 'searchResults', sprintName, transitionChipEligible };
           return { metadata: { jiraFollowup: searchFollowupState, jiraSession: { kinds: [] } } };
         }
         case 'transition': {

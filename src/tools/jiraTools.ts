@@ -27,6 +27,8 @@ import {
   formatTemplateListMessage,
   formatWorkflowDiscoveryMessage,
   formatMyFiltersList,
+  formatFilterCandidateList,
+  formatBulletList,
   resolveNamedConstraints,
   buildConstraintJql,
   type PendingSearchConstraints,
@@ -365,8 +367,7 @@ class SearchByFilterTool implements vscode.LanguageModelTool<SearchByFilterInput
         const filters = await ticketService.searchFiltersByName(filterName!);
         if (filters.length === 0) return textResult(`No saved filters found matching "${filterName}".`);
         if (filters.length > 1) {
-          const list = filters.map(f => `- **${f.name}** (id: ${f.id})`).join('\n');
-          return textResult(`Multiple filters match "${filterName}":\n\n${list}\n\nCall again with a specific filterId, or a more exact filterName.`);
+          return textResult(`Multiple filters match "${filterName}":\n\n${formatFilterCandidateList(filters)}\n\nCall again with a specific filterId, or a more exact filterName.`);
         }
         filter = filters[0];
       }
@@ -387,7 +388,7 @@ class SearchByFilterTool implements vscode.LanguageModelTool<SearchByFilterInput
             return textResult(resolution.message);
           case 'ambiguous': {
             const kindLabel = resolution.constraintKind === 'fixVersion' ? 'fix version' : resolution.constraintKind;
-            const list = resolution.options.map(o => `- ${o.label}`).join('\n');
+            const list = formatBulletList(resolution.options.map(o => o.label));
             return textResult(`Multiple ${kindLabel} matches for filter "${filter.name}":\n\n${list}\n\nCall again with a more exact ${kindLabel} value.`);
           }
           case 'resolved':

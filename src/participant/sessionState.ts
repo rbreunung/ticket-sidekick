@@ -1112,15 +1112,26 @@ export async function resolveNamedConstraints(
  * message) so the tool and the chat flow never drift apart (R3), minus the numbered pick-list
  * (a tool has no session memory to resume a pick against — it just lists every filter as text).
  */
-export function formatMyFiltersList(filters: JiraFilter[], failedSources: JiraFilterSource[]): string {
-  const failureNote = failedSources.length > 0
+/** R10: the partial-fetch-failure note shared by the chat "show my filters" flow
+ * (`handleListMyFilters` in `JiraParticipant.ts`) and this tool-facing formatter, so the two
+ * surfaces can't drift on wording. Empty string when both sources succeeded. */
+export function buildFilterFailureNote(failedSources: JiraFilterSource[]): string {
+  return failedSources.length > 0
     ? `_Could not fetch your ${failedSources.join(' and ')} filter(s) — showing partial results._\n\n`
     : '';
+}
+
+/** Renders a `JiraFilter[]` as a "- **name** (id: id)" bullet list, via the shared `formatBulletList`. */
+export function formatFilterCandidateList(filters: JiraFilter[]): string {
+  return formatBulletList(filters.map(f => `**${f.name}** (id: ${f.id})`));
+}
+
+export function formatMyFiltersList(filters: JiraFilter[], failedSources: JiraFilterSource[]): string {
+  const failureNote = buildFilterFailureNote(failedSources);
   if (filters.length === 0) {
     return `${failureNote}No favourite or owned filters found.`;
   }
-  const list = filters.map(f => `- **${f.name}** (id: ${f.id})`).join('\n');
-  return `${failureNote}Your filters:\n\n${list}`;
+  return `${failureNote}Your filters:\n\n${formatFilterCandidateList(filters)}`;
 }
 
 /**
@@ -1886,8 +1897,9 @@ export function buildDownloadAttachmentConfirmation(ticketKey: string, filename:
 }
 
 /** Renders `items` as a `- ` bulleted list, one per line — shared by every result message
- * below that lists plain strings or pre-formatted per-item text. */
-function formatBulletList(items: string[]): string {
+ * below that lists plain strings or pre-formatted per-item text. Exported so `jiraTools.ts`'s
+ * ambiguous-match text results use the same shape instead of a second hand-rolled join. */
+export function formatBulletList(items: string[]): string {
   return items.map(item => `- ${item}`).join('\n');
 }
 
@@ -2006,14 +2018,13 @@ export type JiraFollowupState =
   // resolving to a single active sprint — all of that resolution is async (project uniformity
   // from fetched tickets, `TicketService.getActiveSprintForBoard`), so `JiraParticipant.ts` does
   // it BEFORE constructing this state and hands this pure function only the answer: the resolved
-  // sprint's name when eligible, omitted otherwise. `sprintChipEligible` and `sprintName` are
-  // deliberately two fields (rather than folding eligibility into "is sprintName set") so a test
-  // can express "eligible but name missing" as the invalid state it would be — see test scenarios.
+  // sprint's name when eligible, `undefined` otherwise — eligibility and the name can't diverge,
+  // so there is no separate boolean to keep in sync with it.
   // U6/R9: "Transition these…" chip eligibility — every ticket in the result shares one project
   // AND one issue type (computed synchronously in JiraParticipant.ts from `tickets[].projectKey`/
   // `.issueType`, same as the sprint check above). No name to carry (unlike sprintName) — the chip's
   // prompt text is fixed, the actual status options are computed only once the chip is clicked.
-  | { kind: 'searchResults'; sprintChipEligible: boolean; sprintName?: string; transitionChipEligible: boolean }
+  | { kind: 'searchResults'; sprintName?: string; transitionChipEligible: boolean }
   | { kind: 'none' };
 
 const JIRA_MAX_FOLLOWUPS = 3;
@@ -2095,7 +2106,7 @@ export function computeJiraFollowups(state: JiraFollowupState): FollowupSuggesti
       // R8: only when JiraParticipant.ts already resolved a single eligible active sprint — the
       // chip's prompt names that sprint literally (the LLM intent parser can't know its name),
       // so there is nothing to offer when it isn't eligible.
-      if (state.sprintChipEligible && state.sprintName) {
+      if (state.sprintName) {
         chips.push({
           prompt: `refine to sprint '${state.sprintName}'`,
           label: `Refine to sprint "${state.sprintName}"`,

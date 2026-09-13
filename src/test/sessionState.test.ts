@@ -328,7 +328,7 @@ describe('computeJiraFollowups', () => {
   // U5/R7-R8: search/filter result refine chips.
   describe('searchResults', () => {
     it('offers both "refine to my tickets" and "refine to current sprint" when the result is single-project and a sprint is eligible', () => {
-      const state: JiraFollowupState = { kind: 'searchResults', sprintChipEligible: true, sprintName: 'Sprint 24', transitionChipEligible: false };
+      const state: JiraFollowupState = { kind: 'searchResults', sprintName: 'Sprint 24', transitionChipEligible: false };
 
       const chips = computeJiraFollowups(state);
 
@@ -338,7 +338,7 @@ describe('computeJiraFollowups', () => {
     });
 
     it('offers only "refine to my tickets" when the result spans multiple projects (sprint chip not eligible)', () => {
-      const state: JiraFollowupState = { kind: 'searchResults', sprintChipEligible: false, transitionChipEligible: false };
+      const state: JiraFollowupState = { kind: 'searchResults', transitionChipEligible: false };
 
       const chips = computeJiraFollowups(state);
 
@@ -346,7 +346,7 @@ describe('computeJiraFollowups', () => {
     });
 
     it('offers only "refine to my tickets" when single-project but no sprint board is configured or no active sprint resolves', () => {
-      const state: JiraFollowupState = { kind: 'searchResults', sprintChipEligible: false, sprintName: undefined, transitionChipEligible: false };
+      const state: JiraFollowupState = { kind: 'searchResults', sprintName: undefined, transitionChipEligible: false };
 
       const chips = computeJiraFollowups(state);
 
@@ -355,15 +355,15 @@ describe('computeJiraFollowups', () => {
     });
 
     it('"refine to my tickets" is always present, unconditionally, regardless of eligibility', () => {
-      expect(computeJiraFollowups({ kind: 'searchResults', sprintChipEligible: true, sprintName: 'X', transitionChipEligible: false })
+      expect(computeJiraFollowups({ kind: 'searchResults', sprintName: 'X', transitionChipEligible: false })
         .some((c) => c.prompt === 'refine to my tickets')).toBe(true);
-      expect(computeJiraFollowups({ kind: 'searchResults', sprintChipEligible: false, transitionChipEligible: false })
+      expect(computeJiraFollowups({ kind: 'searchResults', transitionChipEligible: false })
         .some((c) => c.prompt === 'refine to my tickets')).toBe(true);
     });
 
     // U6/R9: "Transition these…" chip.
     it('offers the "Transition these…" chip when transitionChipEligible', () => {
-      const state: JiraFollowupState = { kind: 'searchResults', sprintChipEligible: false, transitionChipEligible: true };
+      const state: JiraFollowupState = { kind: 'searchResults', transitionChipEligible: true };
 
       const chips = computeJiraFollowups(state);
 
@@ -371,7 +371,7 @@ describe('computeJiraFollowups', () => {
     });
 
     it('omits the "Transition these…" chip when not transitionChipEligible', () => {
-      const state: JiraFollowupState = { kind: 'searchResults', sprintChipEligible: false, transitionChipEligible: false };
+      const state: JiraFollowupState = { kind: 'searchResults', transitionChipEligible: false };
 
       const chips = computeJiraFollowups(state);
 

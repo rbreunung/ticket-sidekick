@@ -504,30 +504,38 @@ export class JiraApiClient implements IJiraClient {
    * Favourite filters (`GET /filter/favourite`) plus filters owned by the current user. There
    * is no dedicated "owned filters" endpoint on either DC or Cloud, so ownership is expressed
    * as a `/filter/search` scoped to the current user's owner identifier — DC: username
-   * (`owner=`), Cloud: `accountId` (`accountId=`), mirroring getTeamByName()'s DC/Cloud
-   * branching. Each source is fetched independently: one failing does not suppress the
-   * other's result (R10), but a genuine auth failure (401) still rethrows rather than being
-   * reported as a mere "source failed".
+   * (`owner=`), Cloud: `accountId` (`accountId=`). Each source is fetched concurrently and
+   * independently: one failing does not suppress the other's result (R10), but a genuine auth
+   * failure (401) still rethrows rather than being reported as a mere "source failed".
    */
   async getMyFilters(): Promise<JiraMyFiltersResult> {
     const failedSources: JiraMyFiltersResult['failedSources'] = [];
     let favourites: JiraFilter[] = [];
     let owned: JiraFilter[] = [];
 
-    try {
-      favourites = await this.request<JiraFilter[]>('/filter/favourite');
-    } catch (err) {
-      if (isAuthError(err)) throw err;
-      failedSources.push('favourites');
-      this.onDiag?.('warn', 'Failed to fetch favourite filters', { error: err instanceof Error ? err.message : String(err) });
-    }
+    // KTD1: the two fetches are independent, so they run concurrently rather than one after
+    // the other — Promise.allSettled preserves the existing per-source failure isolation
+    // (one failing doesn't suppress the other's result).
+    const [favouritesResult, ownedResult] = await Promise.allSettled([
+      this.request<JiraFilter[]>('/filter/favourite'),
+      this.getOwnedFilters(),
+    ]);
+    // Auth-error precedence matches the original sequential order (favourites checked first)
+    // for deterministic behavior when both fail with an auth error.
+    if (favouritesResult.status === 'rejected' && isAuthError(favouritesResult.reason)) throw favouritesResult.reason;
+    if (ownedResult.status === 'rejected' && isAuthError(ownedResult.reason)) throw ownedResult.reason;
 
-    try {
-      owned = await this.getOwnedFilters();
-    } catch (err) {
-      if (isAuthError(err)) throw err;
+    if (favouritesResult.status === 'fulfilled') {
+      favourites = favouritesResult.value;
+    } else {
+      failedSources.push('favourites');
+      this.onDiag?.('warn', 'Failed to fetch favourite filters', { error: favouritesResult.reason instanceof Error ? favouritesResult.reason.message : String(favouritesResult.reason) });
+    }
+    if (ownedResult.status === 'fulfilled') {
+      owned = ownedResult.value;
+    } else {
       failedSources.push('owned');
-      this.onDiag?.('warn', 'Failed to fetch owned filters', { error: err instanceof Error ? err.message : String(err) });
+      this.onDiag?.('warn', 'Failed to fetch owned filters', { error: ownedResult.reason instanceof Error ? ownedResult.reason.message : String(ownedResult.reason) });
     }
 
     const seen = new Set<string>();
