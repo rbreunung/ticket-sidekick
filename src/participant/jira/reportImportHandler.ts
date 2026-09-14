@@ -71,8 +71,12 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   };
   // KTD2: dedup is optional — an importer with no dedup key (email) omits all three, and the
   // "already ticketed" search step is skipped entirely instead of run and found empty.
-  searchLabelOf?: (item: TItem) => string; // the full label value searched for in the dedup JQL
-  dedupKeyOf?: (item: TItem) => string; // the key looked up in the dedup map (may differ from searchLabelOf)
+  // U2/R11: both return one candidate value *per member* of the item — a folded Veracode group
+  // returns one label/key per flaw it contains, so a match on any one of them counts as
+  // already-ticketed; a single-item importer (Waltz) just returns a one-element array (no
+  // behavior change there).
+  searchLabelOf?: (item: TItem) => string[]; // every label value searched for in the dedup JQL
+  dedupKeyOf?: (item: TItem) => string[]; // every key looked up in the dedup map (may differ from searchLabelOf)
   labelToDedupKey?: (label: string) => string | null;
   buildRowFields: (item: TItem, templateLabels: string[]) => Omit<TRow, keyof ReviewRowBase>;
   reviewColumns: ReviewTableColumn<TRow>[];
@@ -374,7 +378,9 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
     // outcome, surfaced instead via the failedChunks/totalChunks check below, which reuses this
     // same user-facing warning for the total-coverage-loss case.
     try {
-      const searchLabels = session.items.map(descriptor.searchLabelOf);
+      // U2/R11: flattens across every item's own multiple candidate labels (a folded Veracode
+      // group contributes one label per member flaw) so every member flaw's label is searched for.
+      const searchLabels = session.items.flatMap(descriptor.searchLabelOf);
       const result = await findAlreadyTicketed(
         searchLabels,
         DEFAULT_DEDUP_CHUNK_SIZE,
@@ -406,8 +412,9 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
   // Already-ticketed rows are never capped. Re-running the import after this batch completes
   // surfaces the next BATCH_LIMIT new candidates for free, since the ones just created are now
   // dedup-matched. (When there is no dedup key, dedupMap is always empty and every item is "new".)
-  const dedupKeyOf = descriptor.dedupKeyOf ?? (() => '');
-  const capped = capNewRows(session.items, BATCH_LIMIT, item => dedupMap.has(dedupKeyOf(item)));
+  const dedupKeyOf = descriptor.dedupKeyOf ?? (() => []);
+  // U2/R11: a folded group is already-ticketed as soon as ANY one of its candidate keys matches.
+  const capped = capNewRows(session.items, BATCH_LIMIT, item => dedupKeyOf(item).some(key => dedupMap.has(key)));
   const rows = buildReviewRows<TItem, TRow>(
     capped.included,
     dedupMap,

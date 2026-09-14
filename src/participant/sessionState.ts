@@ -1223,7 +1223,9 @@ export interface ImportTemplateSelectionSession<TItem> {
   schemaVersion: number;
 }
 
-export type VeracodeTemplateSelectionSession = ImportTemplateSelectionSession<VeracodeFlaw>;
+// U2: items are folded groups (R9) — one or more flaws sharing a source file + line — not
+// individual flaws; VeracodeFlaw[] is one group, so `items` here is really VeracodeFlaw[][].
+export type VeracodeTemplateSelectionSession = ImportTemplateSelectionSession<VeracodeFlaw[]>;
 export type WaltzTemplateSelectionSession = ImportTemplateSelectionSession<WaltzComponent>;
 export type EmailTemplateSelectionSession = ImportTemplateSelectionSession<EmailImportItem>;
 

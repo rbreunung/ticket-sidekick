@@ -3,7 +3,8 @@ import * as fs from 'fs';
 import type { TicketService } from '../../services/TicketService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import {
-  parseVeracodeReport, filterFlaws, buildSummary, buildDescriptionWiki, buildLabels, severityLabel,
+  parseVeracodeReport, filterFlaws, severityLabel, groupFlawsByLocation,
+  buildGroupSummary, buildGroupDescriptionWiki, buildGroupLabels,
   type VeracodeFlaw, type VeracodeReviewRow,
 } from '../../utils/veracodeReport';
 import type { VeracodeTemplateSelectionSession, VeracodeReviewSession } from '../sessionState';
@@ -43,18 +44,24 @@ function getVeracodeConfig(): { minSeverity: number; includeStatuses: string[]; 
   };
 }
 
-async function readAndFilterVeracodeFile(filePath: string): Promise<VeracodeFlaw[]> {
+// U2: folds immediately after parse+filter — before dedup ever runs (KTD1) — so every downstream
+// step (dedup search, review-row building, ticket creation) operates on folded groups
+// (VeracodeFlaw[], one or more flaws sharing a source file + line, R9) rather than individual
+// flaws. A flaw with no location (missing sourceFile/line) never folds with anything and comes
+// back as its own singleton group — see groupFlawsByLocation()'s own doc comment.
+async function readAndFilterVeracodeFile(filePath: string): Promise<VeracodeFlaw[][]> {
   // parseVeracodeReport() itself also re-checks size + rejects DOCTYPE/ENTITY (defense in depth,
   // and it's the single source of truth used by the pure unit tests too) — both checks share the
   // same resolved maxReportBytes so they agree with each other and with the user's setting.
   const { maxReportBytes, ...filterConfig } = getVeracodeConfig();
-  return readAndFilterReport(
+  const flaws = await readAndFilterReport(
     filePath,
     fp => fs.promises.readFile(fp, 'utf-8'),
     raw => parseVeracodeReport(raw, maxReportBytes),
     flaws => filterFlaws(flaws, filterConfig),
     maxReportBytes,
   );
+  return groupFlawsByLocation(flaws);
 }
 
 // U5: the `veracode` label every Veracode-imported ticket carries (alongside its
@@ -92,7 +99,7 @@ export function buildVeracodeActiveFlawPredicate(
   };
 }
 
-const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw, VeracodeReviewRow> = {
+const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewRow> = {
   descriptorKind: 'veracode',
   scope: 'jira.veracode',
   importLabel: 'Veracode',
@@ -108,20 +115,26 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw, VeracodeReviewRow
     templateSelection: 'jira.session.veracodeTemplateSelection',
     review: 'jira.session.veracodeReview',
   },
-  searchLabelOf: flaw => `veracode-issue-${flaw.issueId}`,
-  dedupKeyOf: flaw => flaw.issueId,
+  // U2/R11: one label/key per member flaw in the folded group — a match on any one of them
+  // (an already-ticketed single flaw from a prior, unfolded run, say) counts the whole group as
+  // already-ticketed.
+  searchLabelOf: group => group.map(flaw => `veracode-issue-${flaw.issueId}`),
+  dedupKeyOf: group => group.map(flaw => flaw.issueId),
   labelToDedupKey: veracodeLabelToIssueId,
-  buildRowFields: (flaw, templateLabels) => ({
-    issueId: flaw.issueId,
-    severity: flaw.severity,
-    severityLabelText: severityLabel(flaw.severity),
-    cweId: flaw.cweId,
-    summary: buildSummary(flaw),
-    labels: buildLabels(flaw, templateLabels),
-    descriptionWiki: buildDescriptionWiki(flaw),
-  }),
+  buildRowFields: (group, templateLabels) => {
+    const first = group[0];
+    return {
+      issueIds: group.map(flaw => flaw.issueId),
+      severity: first.severity,
+      severityLabelText: severityLabel(first.severity),
+      cweId: first.cweId,
+      summary: buildGroupSummary(group),
+      labels: buildGroupLabels(group, templateLabels),
+      descriptionWiki: buildGroupDescriptionWiki(group),
+    };
+  },
   reviewColumns: VERACODE_REVIEW_COLUMNS,
-  itemRefFor: row => `Flaw ${row.issueId}`,
+  itemRefFor: row => `Flaw ${row.issueIds.join(', ')}`,
   buildTicketFields: (row, additionalFields) => ({
     summary: row.summary,
     fields: { ...additionalFields, labels: row.labels, description: row.descriptionWiki },
@@ -140,13 +153,16 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw, VeracodeReviewRow
 // reportImportHandler.ts (R1) — names/signatures unchanged from before this consolidation so
 // extension.ts and JiraParticipant.ts need no call-site changes.
 
+// Signature unchanged (still takes raw, unfolded flaws) — extension.ts's command-triggered entry
+// point (registerReportImportCommand's `parse`/`filter` produce VeracodeFlaw[], not groups) calls
+// this directly, so folding happens here rather than requiring that call site to change too.
 export async function buildVeracodeTemplateSession(
   flaws: VeracodeFlaw[],
   fileName: string,
   projectKey: string,
   jiraClient: IJiraClient,
 ): Promise<VeracodeTemplateSelectionSession> {
-  return buildImportTemplateSession(flaws, fileName, projectKey, jiraClient, veracodeDescriptor);
+  return buildImportTemplateSession(groupFlawsByLocation(flaws), fileName, projectKey, jiraClient, veracodeDescriptor);
 }
 
 // Entry point for the "importVeracode" operation. Handles both invocation paths:

@@ -108,8 +108,10 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent, WaltzReviewRow> = 
     templateSelection: 'jira.session.waltzTemplateSelection',
     review: 'jira.session.waltzReview',
   },
-  searchLabelOf: component => sanitizeComponentLabel(component.nameVersion),
-  dedupKeyOf: component => sanitizeComponentLabel(component.nameVersion),
+  // U2: Waltz stays single-key — one component maps to exactly one label/dedup key, wrapped in a
+  // one-element array to satisfy the (now folding-aware) descriptor contract. No behavior change.
+  searchLabelOf: component => [sanitizeComponentLabel(component.nameVersion)],
+  dedupKeyOf: component => [sanitizeComponentLabel(component.nameVersion)],
   labelToDedupKey: waltzLabelToDedupKey,
   buildRowFields: (component, templateLabels) => ({
     nameVersion: component.nameVersion,

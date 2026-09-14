@@ -323,22 +323,39 @@ interface ReviewRowShape {
 }
 
 /**
+ * Looks up a matching ticket key across every candidate dedup key an item carries — a folded
+ * Veracode group's `dedupKeyOf` returns one key per member flaw (R11), and a match on *any* of
+ * them counts as already-ticketed. Single-key importers (Waltz) just pass a one-element array, so
+ * this is a pure superset of the old single-key lookup. First matching key wins (stable, since a
+ * given item's key order is caller-determined and doesn't change between calls).
+ */
+function findExistingTicketKey(dedupMap: Map<string, string>, keys: string[]): string | null {
+  for (const key of keys) {
+    const ticketKey = dedupMap.get(key);
+    if (ticketKey) return ticketKey;
+  }
+  return null;
+}
+
+/**
  * Builds review rows from raw parsed items, assigning the shared id-numbering scheme (new
  * candidates numbered '1'..'N' in source order, already-ticketed ones 'A1'..'Am' in source order).
- * `dedupKeyOf` maps an item to the key looked up in `dedupMap`; `rowBuilder` supplies the
- * importer-specific row fields (everything beyond id/existingTicketKey/included).
+ * `dedupKeyOf` maps an item to *every* candidate key looked up in `dedupMap` (R11: a folded group
+ * matches as already-ticketed as soon as any one of its member flaws' keys does — a single-key
+ * importer just returns a one-element array); `rowBuilder` supplies the importer-specific row
+ * fields (everything beyond id/existingTicketKey/included).
  */
 export function buildReviewRows<TItem, TRow extends ReviewRowShape>(
   items: TItem[],
   dedupMap: Map<string, string>,
-  dedupKeyOf: (item: TItem) => string,
+  dedupKeyOf: (item: TItem) => string[],
   rowBuilder: (item: TItem) => Omit<TRow, keyof ReviewRowShape>,
 ): TRow[] {
   const rows: TRow[] = [];
   let newIndex = 0;
   let ticketedIndex = 0;
   for (const item of items) {
-    const existingTicketKey = dedupMap.get(dedupKeyOf(item)) ?? null;
+    const existingTicketKey = findExistingTicketKey(dedupMap, dedupKeyOf(item));
     const base: ReviewRowShape = {
       id: existingTicketKey ? `A${++ticketedIndex}` : `${++newIndex}`,
       existingTicketKey,

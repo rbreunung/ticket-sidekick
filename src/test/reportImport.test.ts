@@ -277,7 +277,7 @@ describe('buildReviewRows', () => {
     ];
     const dedupMap = new Map([['beta', 'PROJ-501'], ['delta', 'PROJ-502']]);
 
-    const rows = buildReviewRows<Item, Row>(items, dedupMap, item => item.label, item => ({ label: item.label }));
+    const rows = buildReviewRows<Item, Row>(items, dedupMap, item => [item.label], item => ({ label: item.label }));
 
     expect(rows.map(r => ({ id: r.id, existingTicketKey: r.existingTicketKey, included: r.included }))).toEqual([
       { id: '1', existingTicketKey: null, included: true },
@@ -289,8 +289,33 @@ describe('buildReviewRows', () => {
   });
 
   it('returns an empty array for empty input', () => {
-    const rows = buildReviewRows<Item, Row>([], new Map(), item => item.label, item => ({ label: item.label }));
+    const rows = buildReviewRows<Item, Row>([], new Map(), item => [item.label], item => ({ label: item.label }));
     expect(rows).toEqual([]);
+  });
+
+  // U2/R11: multi-key dedupKeyOf — a folded group's own multiple candidate keys (one per member
+  // flaw), not just a single-item's one label.
+  describe('multi-key dedupKeyOf (folded groups, R11)', () => {
+    interface Group { id: string; keys: string[] }
+    interface GroupRow { id: string; existingTicketKey: string | null; included: boolean; keys: string[] }
+
+    it('treats a group as already-ticketed when only one of its member keys matches', () => {
+      const groups: Group[] = [{ id: 'g1', keys: ['issue-1', 'issue-2', 'issue-3'] }];
+      const dedupMap = new Map([['issue-2', 'PROJ-900']]); // only the 2nd of 3 member keys matches
+
+      const rows = buildReviewRows<Group, GroupRow>(groups, dedupMap, g => g.keys, g => ({ keys: g.keys }));
+
+      expect(rows).toEqual([{ id: 'A1', existingTicketKey: 'PROJ-900', included: false, keys: ['issue-1', 'issue-2', 'issue-3'] }]);
+    });
+
+    it('treats a group as new when none of its member keys match', () => {
+      const groups: Group[] = [{ id: 'g1', keys: ['issue-1', 'issue-2', 'issue-3'] }];
+      const dedupMap = new Map([['issue-99', 'PROJ-900']]); // matches nothing in this group
+
+      const rows = buildReviewRows<Group, GroupRow>(groups, dedupMap, g => g.keys, g => ({ keys: g.keys }));
+
+      expect(rows).toEqual([{ id: '1', existingTicketKey: null, included: true, keys: ['issue-1', 'issue-2', 'issue-3'] }]);
+    });
   });
 });
 
