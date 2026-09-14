@@ -245,13 +245,140 @@ export function buildLabels(flaw: VeracodeFlaw, templateLabels: string[] = []): 
   return [...new Set([...own, ...templateLabels])];
 }
 
+// --- Folding (grouping same-line flaws) ---------------------------------------------------------
+//
+// R9/R12: flaws sharing a source file + line number fold into one review row / one ticket,
+// regardless of CWE or category, UNLESS either sourceFile or line is missing — a flaw with no
+// location never folds with anything, even another flaw that also lacks a location (each such flaw
+// stays its own singleton group, never grouped with another missing-location flaw either).
+
+// The `::` separator between the path and file segments is required: bare concatenation (the
+// pattern fullSourcePath() uses for *display*, where a collision is only cosmetic) lets two flaws
+// in genuinely different locations produce the same key — e.g. path `src/foo/` + file `bar.js`
+// versus path `src/foo/bar.` + file `js` both concatenate to `src/foo/bar.js`, but with `::`
+// inserted between path and file they key as `src/foo/::bar.js:10` and `src/foo/bar.::js:10`
+// respectively, which differ.
+function groupKey(flaw: VeracodeFlaw): string | null {
+  if (flaw.sourceFile == null || flaw.line == null) return null;
+  return `${flaw.sourceFilePath ?? ''}::${flaw.sourceFile}:${flaw.line}`;
+}
+
+/**
+ * Groups flaws that share a source file + line number (R9). A flaw missing either field is never
+ * folded with another flaw (R12) — including another flaw that also lacks a location — so it
+ * always comes back as its own singleton group. Group order follows first-occurrence order of each
+ * group's first member in the input; members within a group keep their relative input order.
+ */
+export function groupFlawsByLocation(flaws: VeracodeFlaw[]): VeracodeFlaw[][] {
+  const groups: VeracodeFlaw[][] = [];
+  const keyToGroup = new Map<string, VeracodeFlaw[]>();
+  for (const flaw of flaws) {
+    const key = groupKey(flaw);
+    if (key === null) {
+      groups.push([flaw]);
+      continue;
+    }
+    const existing = keyToGroup.get(key);
+    if (existing) {
+      existing.push(flaw);
+    } else {
+      const group = [flaw];
+      keyToGroup.set(key, group);
+      groups.push(group);
+    }
+  }
+  return groups;
+}
+
+/**
+ * Group-aware label builder (R10): unions every member flaw's own `buildLabels()` output (so one
+ * `veracode-issue-<id>` per folded flaw, one `cwe-<id>` per distinct CWE among them — a repeated
+ * CWE across members contributes only one label since both the per-flaw call and the outer `Set`
+ * dedupe), then merges in template labels and dedupes again.
+ */
+export function buildGroupLabels(group: VeracodeFlaw[], templateLabels: string[] = []): string[] {
+  const own = new Set<string>();
+  for (const flaw of group) {
+    for (const label of buildLabels(flaw)) own.add(label);
+  }
+  return [...new Set([...own, ...templateLabels])];
+}
+
+/**
+ * Group-aware summary builder. A singleton group renders identically to `buildSummary()`. A
+ * multi-flaw group lists every folded issue id, keeps the (shared) file:line location, uses the
+ * first member's short label, and notes how many additional flaws are folded in.
+ */
+export function buildGroupSummary(group: VeracodeFlaw[]): string {
+  const first = group[0];
+  if (group.length === 1) return buildSummary(first);
+  const ref = fileRef(first);
+  const lineSuffix = first.line != null ? `:${first.line}` : '';
+  const shortLabel = deriveShortLabel(first.categoryName, first.cweName);
+  const ids = group.map(f => f.issueId).join(', ');
+  return `${ids} - ${ref}${lineSuffix} - ${shortLabel} (+${group.length - 1} more)`;
+}
+
+/**
+ * Group-aware description builder (R10): hoists the shared file+line `### Location` once (all
+ * members share it by construction — see `groupKey()`), then renders each folded flaw's own
+ * severity/CWE/description/recommendation under its own `### Issue <id>` heading. Every untrusted
+ * field is routed through the same `sanitizeCellText()`/`sanitizeStandaloneLine()` sanitizers
+ * `buildDescriptionWiki()` uses — no raw string concatenation bypasses either sanitizer layer — and
+ * the combined Markdown is converted once via `markdownToJiraWiki()` at the end, same as the
+ * single-flaw path.
+ */
+export function buildGroupDescriptionWiki(group: VeracodeFlaw[]): string {
+  const first = group[0];
+  const lines: string[] = [];
+
+  lines.push('### Location');
+  lines.push(`Module: ${sanitizeCellText(first.module)}`);
+  const path = fullSourcePath(first);
+  if (path) lines.push(`File: ${path}${first.line != null ? `:${first.line}` : ''}`);
+  lines.push('');
+
+  for (const flaw of group) {
+    lines.push(`### Issue ${flaw.issueId}`);
+    lines.push('');
+
+    lines.push('#### Severity');
+    lines.push(`${severityLabel(flaw.severity)} (${flaw.severity})`);
+    lines.push('');
+
+    if (flaw.cweId) {
+      lines.push('#### CWE');
+      const link = `[CWE-${flaw.cweId}](https://cwe.mitre.org/data/definitions/${flaw.cweId}.html)`;
+      lines.push(`${link}${flaw.cweName ? ` — ${sanitizeCellText(flaw.cweName)}` : ''}`);
+      lines.push('');
+    }
+
+    if (flaw.functionPrototype) {
+      lines.push(`Function: ${sanitizeCellText(flaw.functionPrototype)}`);
+      lines.push('');
+    }
+
+    lines.push('#### Description');
+    lines.push(sanitizeStandaloneLine(flaw.description));
+    lines.push('');
+
+    if (flaw.recommendation) {
+      lines.push('#### Recommendation');
+      lines.push(sanitizeStandaloneLine(flaw.recommendation));
+      lines.push('');
+    }
+  }
+
+  return markdownToJiraWiki(lines.join('\n'));
+}
+
 // Lives here (rather than in sessionState.ts, where the other session-related types live) so that
 // reportImportHandler.ts's shared buildReviewRows() can produce it directly without a type-only
 // circular import between this file and sessionState.ts. sessionState.ts re-exports the type for
 // callers that expect it there.
 export interface VeracodeReviewRow {
   id: string; // '1'..'N' new candidates, 'A1'..'Am' already-ticketed
-  issueId: string;
+  issueIds: string[]; // one or more folded Veracode issue ids (R9/R10) — a non-folded row has length 1
   severity: number;
   severityLabelText: string;
   cweId: string | null;
