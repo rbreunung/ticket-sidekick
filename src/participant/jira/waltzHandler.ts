@@ -57,6 +57,41 @@ async function readAndFilterWaltzFile(filePath: string): Promise<WaltzComponent[
   );
 }
 
+// U5: the `oss-dependency` label every Waltz-imported ticket carries (alongside its own
+// `oss-dep-...` component label) — reportImport.ts's findStaleTickets() searches on this to find
+// open tickets whose component has disappeared from the current report. Not yet wired into the
+// chat flow (that's U6); exported here so that later unit can call findStaleTickets() with the
+// right marker label without duplicating it.
+export const WALTZ_STALE_MARKER_LABEL = 'oss-dependency';
+
+// Reused directly by the descriptor's own labelToDedupKey below (dedup search) and by
+// findStaleTickets()'s labelToDedupKey (stale search, U6) so both parse the identical
+// `oss-dep-...` label shape sanitizeComponentLabel() produces, from one implementation.
+function waltzLabelToDedupKey(label: string): string | null {
+  return label.startsWith('oss-dep-') ? label : null;
+}
+
+/**
+ * Builds the "is this component still active" predicate findStaleTickets() needs (U5's R5). A
+ * component is active when it's present in the *raw* parsed report (before the
+ * minVulnRating/includeRemediationActions filter that decides what gets a *new* ticket — R5 says
+ * "absent from the current Waltz report") with a remediationAction that still matches
+ * `includeRemediationActions`. Deliberately ignores minVulnRating: R5 only mentions remediation
+ * action, so a component that dropped below the rating floor but is still open does not make its
+ * ticket stale.
+ */
+export function buildWaltzActiveComponentPredicate(
+  rawComponents: WaltzComponent[],
+  includeRemediationActions: string[],
+): (dedupKey: string) => boolean {
+  const allowedActions = new Set(includeRemediationActions.map(a => a.trim()));
+  const actionByKey = new Map(rawComponents.map(c => [sanitizeComponentLabel(c.nameVersion), (c.remediationAction ?? '').trim()] as const));
+  return (dedupKey: string) => {
+    const action = actionByKey.get(dedupKey);
+    return action !== undefined && allowedActions.has(action);
+  };
+}
+
 const waltzDescriptor: ReportImportDescriptor<WaltzComponent, WaltzReviewRow> = {
   descriptorKind: 'waltz',
   scope: 'jira.waltz',
@@ -75,7 +110,7 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent, WaltzReviewRow> = 
   },
   searchLabelOf: component => sanitizeComponentLabel(component.nameVersion),
   dedupKeyOf: component => sanitizeComponentLabel(component.nameVersion),
-  labelToDedupKey: label => (label.startsWith('oss-dep-') ? label : null),
+  labelToDedupKey: waltzLabelToDedupKey,
   buildRowFields: (component, templateLabels) => ({
     nameVersion: component.nameVersion,
     maxVulnRating: component.maxVulnRating,

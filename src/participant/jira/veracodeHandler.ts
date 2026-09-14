@@ -57,6 +57,41 @@ async function readAndFilterVeracodeFile(filePath: string): Promise<VeracodeFlaw
   );
 }
 
+// U5: the `veracode` label every Veracode-imported ticket carries (alongside its
+// `veracode-issue-<id>` marker label(s)) — reportImport.ts's findStaleTickets() searches on this to
+// find open tickets whose finding(s) have disappeared from the current report. Not yet wired into
+// the chat flow (that's U6); exported here so that later unit can call findStaleTickets() with the
+// right marker label without duplicating it.
+export const VERACODE_STALE_MARKER_LABEL = 'veracode';
+
+// Extracted so the descriptor's own labelToDedupKey (dedup search) and findStaleTickets()'s
+// labelToDedupKey (stale search, U6) parse the identical `veracode-issue-<id>` label shape from one
+// implementation instead of two copies that could drift apart.
+export function veracodeLabelToIssueId(label: string): string | null {
+  const match = label.match(/^veracode-issue-(\d+)$/);
+  return match ? match[1] : null;
+}
+
+/**
+ * Builds the "is this flaw id still active" predicate findStaleTickets() needs (U5's R2/R3). A
+ * flaw id is active when it's present in the *raw* parsed report (before the
+ * minSeverity/includeRemediationStatuses filter that decides what gets a *new* ticket — R2 says
+ * "absent from the raw parsed report") with a remediationStatus that still matches
+ * `includeStatuses`. Deliberately ignores minSeverity: R2 only mentions remediation status, so a
+ * flaw that dropped below the severity floor but is still open does not make its ticket stale.
+ */
+export function buildVeracodeActiveFlawPredicate(
+  rawFlaws: VeracodeFlaw[],
+  includeStatuses: string[],
+): (issueId: string) => boolean {
+  const statusSet = new Set(includeStatuses.map(s => s.toLowerCase()));
+  const statusById = new Map(rawFlaws.map(f => [f.issueId, f.remediationStatus] as const));
+  return (issueId: string) => {
+    const status = statusById.get(issueId);
+    return status !== undefined && statusSet.has(status.toLowerCase());
+  };
+}
+
 const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw, VeracodeReviewRow> = {
   descriptorKind: 'veracode',
   scope: 'jira.veracode',
@@ -75,10 +110,7 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw, VeracodeReviewRow
   },
   searchLabelOf: flaw => `veracode-issue-${flaw.issueId}`,
   dedupKeyOf: flaw => flaw.issueId,
-  labelToDedupKey: label => {
-    const match = label.match(/^veracode-issue-(\d+)$/);
-    return match ? match[1] : null;
-  },
+  labelToDedupKey: veracodeLabelToIssueId,
   buildRowFields: (flaw, templateLabels) => ({
     issueId: flaw.issueId,
     severity: flaw.severity,

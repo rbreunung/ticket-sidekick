@@ -136,6 +136,90 @@ export async function findAlreadyTicketed(
   return { map, failedChunks, totalChunks: chunks.length };
 }
 
+/** One open ticket found stale by {@link findStaleTickets}. `ids` are the marker-id dedup keys
+ * (e.g. Veracode flaw ids, or Waltz's `oss-dep-...` component label) extracted from its labels —
+ * every one of them turned out inactive, which is what made the ticket stale. */
+export interface StaleTicketMatch {
+  key: string;
+  ids: string[];
+}
+
+export interface FindStaleTicketsResult {
+  stale: StaleTicketMatch[];
+  /** Server-reported total match count (falls back to the checked-page length when the search
+   * result carries no `total`), so a caller can report "N found" even when truncated. */
+  totalFound: number;
+  /** True when more than `BATCH_LIMIT` open tickets matched — only the first `BATCH_LIMIT` were
+   * checked, mirroring `handleRunCleanup`'s cap-at-50-with-warning shape (cleanupHandler.ts). */
+  truncated: boolean;
+  /** True when `search` rejected — `stale` is then always `[]` (not "genuinely zero stale
+   * tickets") and the caller should tell the user staleness could not be checked, mirroring
+   * `findAlreadyTicketed`'s failedChunks/totalChunks distinction for the single-query case here. */
+  searchFailed: boolean;
+}
+
+/**
+ * Builds the JQL for U5's reverse stale-ticket search: open tickets in `projectKey` carrying the
+ * importer's marker label (`veracode` / `oss-dependency`).
+ */
+export function buildStaleSearchJql(projectKey: string, markerLabel: string): string {
+  return `project = ${projectKey} AND resolution is EMPTY AND labels = "${markerLabel}"`;
+}
+
+/**
+ * R1/R5: finds open tickets whose finding(s) are gone from the current report or excluded by the
+ * importer's own remediation filter. Runs one search (marker-label + `resolution is EMPTY`,
+ * capped at `BATCH_LIMIT` — R1's "found N, showing first 50" shape, mirroring
+ * `handleRunCleanup`'s analogous query in cleanupHandler.ts) rather than the chunked multi-query
+ * shape `findAlreadyTicketed` uses for dedup, since this search is a single label/project filter,
+ * not a large OR-list of dedup keys.
+ *
+ * For each candidate ticket, `labelToDedupKey` extracts every marker-id label it carries (e.g.
+ * `veracode-issue-<id>` -> `<id>`, or Waltz's `oss-dep-...` label passed through as-is) and
+ * `isActive` decides whether each one still matches a current, non-excluded finding. A ticket is
+ * stale only when NONE of its ids are active (R2/R5's "any active keeps it non-stale" rule,
+ * mirroring R11's folded-group rule). A ticket that matched the search but carries no
+ * marker-id label at all is left alone rather than vacuously flagged stale — there's nothing to
+ * compare against, and flagging it risks closing a ticket that only happens to share the marker
+ * label.
+ *
+ * Never rejects — like `findAlreadyTicketed`, a failed search degrades to an empty `stale` list
+ * plus `searchFailed: true` (logged via `onDiag`) rather than throwing and aborting the rest of
+ * the import.
+ */
+export async function findStaleTickets(
+  projectKey: string,
+  markerLabel: string,
+  search: (jql: string, maxResults: number) => Promise<{ issues: JqlIssueLike[]; total?: number; isLast?: boolean }>,
+  labelToDedupKey: (label: string) => string | null,
+  isActive: (dedupKey: string) => boolean,
+  onDiag?: DiagLogger,
+): Promise<FindStaleTicketsResult> {
+  const jql = buildStaleSearchJql(projectKey, markerLabel);
+  let result: { issues: JqlIssueLike[]; total?: number; isLast?: boolean };
+  try {
+    result = await search(jql, BATCH_LIMIT);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    onDiag?.('warn', 'Stale-ticket search failed — could not check for stale tickets', { error: message });
+    return { stale: [], totalFound: 0, truncated: false, searchFailed: true };
+  }
+
+  const candidates = result.issues.slice(0, BATCH_LIMIT);
+  const truncated = (result.total ?? 0) > BATCH_LIMIT || result.isLast === false;
+
+  const stale: StaleTicketMatch[] = [];
+  for (const issue of candidates) {
+    const ids = (issue.fields.labels ?? [])
+      .map(labelToDedupKey)
+      .filter((id): id is string => id !== null);
+    if (ids.length === 0) continue; // nothing to compare — see doc comment above
+    if (!ids.some(isActive)) stale.push({ key: issue.key, ids });
+  }
+
+  return { stale, totalFound: result.total ?? candidates.length, truncated, searchFailed: false };
+}
+
 export interface CapNewRowsResult<TItem> {
   included: TItem[];
   totalNewMatched: number;

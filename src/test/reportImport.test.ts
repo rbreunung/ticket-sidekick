@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   chunkStrings, buildDedupJql, extractDedupMap, findAlreadyTicketed, capNewRows, buildReviewRows,
-  sanitizeCellText, sanitizeStandaloneLine, resolveMaxReportBytes,
+  sanitizeCellText, sanitizeStandaloneLine, resolveMaxReportBytes, findStaleTickets, buildStaleSearchJql,
   type JqlIssueLike,
 } from '../utils/reportImport';
 
@@ -291,5 +291,144 @@ describe('buildReviewRows', () => {
   it('returns an empty array for empty input', () => {
     const rows = buildReviewRows<Item, Row>([], new Map(), item => item.label, item => ({ label: item.label }));
     expect(rows).toEqual([]);
+  });
+});
+
+describe('buildStaleSearchJql', () => {
+  it('builds the open-tickets-carrying-marker-label search JQL', () => {
+    expect(buildStaleSearchJql('PROJ', 'veracode')).toBe(
+      'project = PROJ AND resolution is EMPTY AND labels = "veracode"',
+    );
+  });
+});
+
+describe('findStaleTickets', () => {
+  // Mirrors the Veracode label shape (`veracode-issue-<id>`) for these importer-agnostic tests.
+  const labelToDedupKey = (label: string) => {
+    const match = label.match(/^veracode-issue-(\d+)$/);
+    return match ? match[1] : null;
+  };
+
+  it('flags a single-flaw ticket stale when its flaw id is absent from the current report', async () => {
+    const search = vi.fn().mockResolvedValue({
+      issues: [{ key: 'PROJ-1', fields: { labels: ['veracode', 'veracode-issue-101'] } }],
+      total: 1,
+      isLast: true,
+    });
+    const isActive = () => false; // id 101 not present at all
+
+    const result = await findStaleTickets('PROJ', 'veracode', search, labelToDedupKey, isActive);
+
+    expect(result.stale).toEqual([{ key: 'PROJ-1', ids: ['101'] }]);
+    expect(result.searchFailed).toBe(false);
+    expect(result.truncated).toBe(false);
+    expect(search).toHaveBeenCalledWith(buildStaleSearchJql('PROJ', 'veracode'), expect.any(Number));
+  });
+
+  it('flags a single-flaw ticket stale when its flaw id is present but no longer matches the remediation-status filter', async () => {
+    const search = vi.fn().mockResolvedValue({
+      issues: [{ key: 'PROJ-2', fields: { labels: ['veracode', 'veracode-issue-202'] } }],
+      total: 1,
+      isLast: true,
+    });
+    // id 202 exists in the report but its status has moved outside includeRemediationStatuses
+    const isActive = (id: string) => id !== '202';
+
+    const result = await findStaleTickets('PROJ', 'veracode', search, labelToDedupKey, isActive);
+
+    expect(result.stale).toEqual([{ key: 'PROJ-2', ids: ['202'] }]);
+  });
+
+  it('does not flag a folded (multi-id) ticket stale when at least one of its ids is still active', async () => {
+    const search = vi.fn().mockResolvedValue({
+      issues: [{
+        key: 'PROJ-3',
+        fields: { labels: ['veracode', 'veracode-issue-301', 'veracode-issue-302', 'veracode-issue-303'] },
+      }],
+      total: 1,
+      isLast: true,
+    });
+    // 302 is still active; 301/303 are gone — the ANY-active-keeps-non-stale rule (mirrors R11)
+    const isActive = (id: string) => id === '302';
+
+    const result = await findStaleTickets('PROJ', 'veracode', search, labelToDedupKey, isActive);
+
+    expect(result.stale).toEqual([]);
+  });
+
+  it('flags a folded ticket stale only once every one of its ids is gone', async () => {
+    const search = vi.fn().mockResolvedValue({
+      issues: [{
+        key: 'PROJ-4',
+        fields: { labels: ['veracode', 'veracode-issue-401', 'veracode-issue-402'] },
+      }],
+      total: 1,
+      isLast: true,
+    });
+    const isActive = () => false;
+
+    const result = await findStaleTickets('PROJ', 'veracode', search, labelToDedupKey, isActive);
+
+    expect(result.stale).toEqual([{ key: 'PROJ-4', ids: ['401', '402'] }]);
+  });
+
+  it('leaves a matched ticket alone (not stale) when it carries no extractable marker-id label', async () => {
+    const search = vi.fn().mockResolvedValue({
+      issues: [{ key: 'PROJ-5', fields: { labels: ['veracode'] } }],
+      total: 1,
+      isLast: true,
+    });
+    const isActive = () => false;
+
+    const result = await findStaleTickets('PROJ', 'veracode', search, labelToDedupKey, isActive);
+
+    expect(result.stale).toEqual([]);
+  });
+
+  it('surfaces truncation (more than 50 matching open tickets) instead of silently checking only the first 50', async () => {
+    const issues = Array.from({ length: 50 }, (_, i) => ({
+      key: `PROJ-${i}`,
+      fields: { labels: [`veracode-issue-${i}`] },
+    }));
+    const search = vi.fn().mockResolvedValue({ issues, total: 73, isLast: false });
+    const isActive = () => false;
+
+    const result = await findStaleTickets('PROJ', 'veracode', search, labelToDedupKey, isActive);
+
+    expect(result.truncated).toBe(true);
+    expect(result.totalFound).toBe(73);
+    expect(result.stale).toHaveLength(50); // still processes the first 50 rather than dropping coverage
+  });
+
+  it('degrades gracefully with a warning instead of throwing when the search rejects (mirrors findAlreadyTicketed)', async () => {
+    const search = vi.fn().mockRejectedValue(new Error('search unavailable'));
+    const onDiag = vi.fn();
+    const isActive = () => false;
+
+    const result = await findStaleTickets('PROJ', 'veracode', search, labelToDedupKey, isActive, onDiag);
+
+    expect(result.searchFailed).toBe(true);
+    expect(result.stale).toEqual([]);
+    expect(onDiag).toHaveBeenCalledWith(
+      'warn',
+      expect.stringContaining('could not check for stale tickets'),
+      expect.objectContaining({ error: expect.stringContaining('search unavailable') }),
+    );
+  });
+
+  it('mirrors the Waltz case: a component present but excluded by includeRemediationActions is flagged stale', async () => {
+    const waltzLabelToDedupKey = (label: string) => (label.startsWith('oss-dep-') ? label : null);
+    const search = vi.fn().mockResolvedValue({
+      issues: [{ key: 'PROJ-9', fields: { labels: ['oss-dependency', 'oss-dep-example-lib-1-2-3-abc123'] } }],
+      total: 1,
+      isLast: true,
+    });
+    // Component still present in the report, but its remediationAction no longer matches the
+    // configured includeRemediationActions set — active-finding predicate returns false.
+    const isActive = () => false;
+
+    const result = await findStaleTickets('PROJ', 'oss-dependency', search, waltzLabelToDedupKey, isActive);
+
+    expect(result.stale).toEqual([{ key: 'PROJ-9', ids: ['oss-dep-example-lib-1-2-3-abc123'] }]);
   });
 });
