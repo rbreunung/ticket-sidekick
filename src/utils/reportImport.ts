@@ -220,40 +220,13 @@ export async function findStaleTickets(
   return { stale, totalFound: result.total ?? candidates.length, truncated, searchFailed: false };
 }
 
-export interface CapNewRowsResult<TItem> {
-  included: TItem[];
-  totalNewMatched: number;
-  droppedOverCap: number;
-}
-
-/**
- * Caps "new" (not-yet-ticketed) items at `batchLimit` *before* the (expensive) row-building step —
- * R7/AE4. Already-ticketed items (per `isAlreadyTicketed`) are always included, never capped.
- * `totalNewMatched` records the true count of new items the report matched, so the review screen
- * can state how many more exist beyond what's shown and that re-running the import picks them up
- * (the already-created tickets become dedup matches on the next run, for free).
- */
-export function capNewRows<TItem>(
-  items: TItem[],
-  batchLimit: number,
-  isAlreadyTicketed: (item: TItem) => boolean,
-): CapNewRowsResult<TItem> {
-  const included: TItem[] = [];
-  let totalNewMatched = 0;
-  let newSeen = 0;
-  for (const item of items) {
-    if (isAlreadyTicketed(item)) {
-      included.push(item); // already-ticketed — always included, never capped
-      continue;
-    }
-    totalNewMatched++;
-    if (newSeen < batchLimit) {
-      included.push(item);
-      newSeen++;
-    }
-  }
-  return { included, totalNewMatched, droppedOverCap: totalNewMatched - newSeen };
-}
+// U4: the pre-build "new" cap (`capNewRows`) that used to run here before review rows were built at
+// all was removed — the review screen now pages through every matched "new" candidate instead of
+// silently dropping the remainder of a run (see `buildReviewPage`/`ReviewSession` in
+// sessionState.ts). Lightweight row fields still build eagerly for every candidate; an importer
+// whose full ticket description is expensive (Veracode's folded-group description) defers that
+// part to ticket-creation time instead, which is what actually avoids the wasted-work concern
+// `capNewRows` used to guard against.
 
 // Every value threaded through this function originates in externally-sourced report data (Waltz
 // .xlsx cells, and — from a later unit onward — Veracode XML attributes) that gets interpolated

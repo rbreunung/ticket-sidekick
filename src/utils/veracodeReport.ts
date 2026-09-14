@@ -384,7 +384,12 @@ export interface VeracodeReviewRow {
   cweId: string | null;
   summary: string;
   labels: string[];
-  descriptionWiki: string;
+  // U4/R6-R7: the folded group itself, kept so the full ticket description — expensive to build
+  // (markdownToJiraWiki() across every member flaw's own description/recommendation/CWE) — is
+  // built lazily via buildGroupDescriptionWiki() only for a row the user actually confirms into
+  // creation (veracodeHandler.ts's buildTicketFields), rather than eagerly for every "new"
+  // candidate the report matched, most of which a paged review screen never even shows.
+  sourceGroup: VeracodeFlaw[];
   existingTicketKey: string | null;
   included: boolean; // whether this row will be (re)created if the batch runs
 }

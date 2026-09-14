@@ -1212,7 +1212,10 @@ export function neutralizeMarkdownLinks(value: string): string {
 // persisted) session render incorrectly if fed straight to the current code. A session written by
 // a build that predates this field entirely reads as `undefined`, which isSessionExpired() also
 // treats as expired — see AE7.
-export const CURRENT_SESSION_SCHEMA_VERSION = 2;
+// U4: bumped 2 -> 3 for the pageable-review-session shape change (ReviewSession<TRow> gained
+// `allRows`/`page`, dropped `totalNewMatched`) — an in-flight pre-upgrade ReviewSession would
+// otherwise render with `allRows`/`page` both `undefined`, not a graceful "please re-run" message.
+export const CURRENT_SESSION_SCHEMA_VERSION = 3;
 
 export interface ImportTemplateSelectionSession<TItem> {
   reportFileName: string;
@@ -1275,11 +1278,22 @@ export interface ReviewSession<TRow> {
   issueType: string;
   templateName: string | null;
   additionalFields: Record<string, unknown>; // resolved template fields (labels merged in per-row already)
+  // U4/R6: every candidate row the report matched, in source order, unpaged — both "already
+  // ticketed" and "new" rows live here (built eagerly from lightweight per-item fields; an
+  // importer whose full ticket description is expensive to build, e.g. Veracode's folded-group
+  // description, defers that part to creation time instead of pre-building it into this array —
+  // see veracodeHandler.ts's descriptor). The paging source of truth: buildReviewPage() re-derives
+  // `rows` from this on every page change, which is what makes a "new" row's toggle page-local
+  // (R7) — see applyReviewSessionToggle()'s own doc comment.
+  allRows: TRow[];
+  // The currently DISPLAYED page: every "already ticketed" row (always shown in full, R8 — never
+  // paged) plus the current page's slice of "new" rows (BATCH_LIMIT per page, defaulted to
+  // included). executeImportBatch's existing included-filter-then-slice logic reads this directly
+  // and is otherwise untouched by paging (R7's "confirming from whichever page is currently
+  // visible creates that page's included rows").
   rows: TRow[];
-  // Total new (not-yet-ticketed) items the report matched, before any BATCH_LIMIT cap the importer
-  // applies before building `rows`. Harmless as absent/undefined for an importer that doesn't cap —
-  // buildImportReviewTable() only renders the "more matched" note when it's given and exceeds rows shown.
-  totalNewMatched?: number;
+  // 0-based index into the "new" rows only — see buildReviewPage().
+  page: number;
   schemaVersion: number;
 }
 
@@ -1301,6 +1315,91 @@ export function isSessionExpired(session: { schemaVersion?: number } | null | un
 
 export const SESSION_EXPIRED_MESSAGE =
   '_This import session was started before a Ticket Sidekick update and can no longer be continued — please re-run the import._';
+
+// ---------------------------------------------------------------------------------------------
+// U4: pageable review-session "New" section (R6-R8). `allRows` (the full, unpaged candidate set)
+// is the source of truth; `buildReviewPage()` slices out one page's worth of "new" rows plus every
+// "already ticketed" row (never paged, R8) any time the visible page needs to change. Kept
+// separate from `buildImportReviewTable()`'s own rendering below so the slicing logic is
+// independently testable.
+// ---------------------------------------------------------------------------------------------
+
+export interface ReviewPage<TRow extends ReviewRowBase> {
+  rows: TRow[];
+  page: number; // clamped 0-based page actually returned
+  totalPages: number;
+}
+
+/**
+ * Slices a review session's full candidate set (`allRows`) into one displayable page: every
+ * "already ticketed" row (R8 — shown in full regardless of page) plus one `BATCH_LIMIT`-sized page
+ * of "new" rows, selected by `page` (0-based, clamped into `[0, totalPages - 1]` — an out-of-range
+ * request, e.g. `next` from the last page or a `page <n>` beyond the end, lands on the nearest
+ * valid page rather than erroring). `totalPages` is always at least 1, even when there are zero
+ * "new" rows, so a caller never divides by / indexes a zero-page result.
+ *
+ * Deliberately re-derives `rows` fresh from `allRows` every time rather than mutating in place —
+ * `allRows` itself is never touched here, which is what makes a "new" row's toggle page-local
+ * (R7): a toggle applied only to a page's returned `rows` (see `applyReviewSessionToggle()`)
+ * evaporates the next time this function re-slices that page from `allRows`.
+ */
+export function buildReviewPage<TRow extends ReviewRowBase>(allRows: TRow[], page: number): ReviewPage<TRow> {
+  const ticketed = allRows.filter(r => r.existingTicketKey !== null);
+  const fresh = allRows.filter(r => r.existingTicketKey === null);
+  const totalPages = Math.max(1, Math.ceil(fresh.length / BATCH_LIMIT));
+  const clampedPage = Math.min(Math.max(page, 0), totalPages - 1);
+  const start = clampedPage * BATCH_LIMIT;
+  return { rows: [...ticketed, ...fresh.slice(start, start + BATCH_LIMIT)], page: clampedPage, totalPages };
+}
+
+export type ReviewPageNav =
+  | { kind: 'next' }
+  | { kind: 'prev' }
+  | { kind: 'goto'; page: number }; // 0-based
+
+/**
+ * U4/R6: recognizes a page-navigation reply — `next`/`prev`/`page <n>`, case-insensitive, plus the
+ * `next page`/`prev page`/`previous`/`previous page` variants — ahead of `parseReviewInput`'s own
+ * toggle/ok/cancel parsing. The caller checks this FIRST: none of these strings collide with
+ * `isConfirmation`/`isCancellation`'s word lists or with a numeric row-id toggle, so falling
+ * through to `parseReviewInput` for anything this returns `null` for is always safe. `page <n>`
+ * takes a 1-based page number (as typed or clicked); the returned `page` is 0-based to match
+ * `buildReviewPage`'s indexing directly.
+ */
+export function parseReviewPageNav(reply: string): ReviewPageNav | null {
+  const normalized = reply.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (normalized === 'next' || normalized === 'next page') return { kind: 'next' };
+  if (normalized === 'prev' || normalized === 'previous' || normalized === 'prev page' || normalized === 'previous page') {
+    return { kind: 'prev' };
+  }
+  const match = normalized.match(/^page (\d+)$/);
+  if (match) return { kind: 'goto', page: parseInt(match[1], 10) - 1 };
+  return null;
+}
+
+/**
+ * U4/R7-R8: applies a toggle reply's row ids to the currently-visible `rows` (identical to
+ * `applyReviewToggle`) AND, for any toggled row that is "already ticketed", mirrors the same flip
+ * into `allRows` — that section is shown in full on every page (R8), so its toggle state must
+ * survive a later page-navigation recompute (`buildReviewPage` always re-derives `rows` from
+ * `allRows`). A toggled "new"/fresh row is deliberately left untouched in `allRows`: R7's per-page
+ * reset relies on `allRows` staying at its default-included state for "new" rows, so a page
+ * revisited later always renders with every row back to its default-included state.
+ */
+export function applyReviewSessionToggle<TRow extends ReviewRowBase>(
+  rows: TRow[],
+  allRows: TRow[],
+  ids: string[],
+): { rows: TRow[]; allRows: TRow[] } {
+  const newRows = applyReviewToggle(rows, ids);
+  const idSet = new Set(ids);
+  const newAllRows = allRows.map(r => {
+    if (r.existingTicketKey === null || !idSet.has(r.id)) return r;
+    const updated = newRows.find(nr => nr.id === r.id);
+    return updated ? { ...r, included: updated.included } : r;
+  });
+  return { rows: newRows, allRows: newAllRows };
+}
 
 export interface ReviewTableColumn<TRow> {
   header: string;
@@ -1346,9 +1445,10 @@ const REVIEW_BATCH_LIMIT = BATCH_LIMIT;
 export function buildImportReviewTable<TRow extends ReviewRowBase>(
   rows: TRow[],
   baseUrl: string | undefined,
-  totalNewMatched: number | undefined,
+  page: number, // 0-based current page among "new" rows — see buildReviewPage()
+  totalPages: number,
   columns: ReviewTableColumn<TRow>[],
-  itemNoun: string, // e.g. 'flaw(s)' or 'component(s)' — used in summary/truncation lines
+  itemNoun: string, // e.g. 'flaw(s)' or 'component(s)' — used in summary/page lines
 ): string {
   const ticketed = rows.filter(r => r.existingTicketKey !== null);
   const fresh = rows.filter(r => r.existingTicketKey === null);
@@ -1385,15 +1485,13 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
   }
   lines.push('');
 
-  // Row-count truncation note: an importer that caps "new" rows before they ever reach this table
-  // (e.g. Waltz's BATCH_LIMIT) would otherwise silently drop the remainder with no signal. Surfacing
-  // the true total here, plus how to get the rest, closes that gap — and reuses the existing dedup
-  // mechanism as the "resume" path (re-running after this batch completes surfaces the next batch of
-  // new candidates, since the ones just created are now dedup-matched).
-  if (totalNewMatched !== undefined && totalNewMatched > fresh.length) {
+  // U4: replaces the old pre-cap "N more matched, re-run" note — the "New" section now covers
+  // every matched candidate via paging, not a fixed pre-built batch, so the signal a user needs is
+  // which page they're on and how to move, not "how many more exist beyond this run."
+  if (totalPages > 1) {
     lines.push(
-      `_${totalNewMatched - fresh.length} more matched ${itemNoun} not shown — re-run the import after ` +
-      `this batch completes; already-created tickets are automatically skipped next time._`,
+      `_Page ${page + 1} of ${totalPages}._ Reply ${buildChatCommandLink('next', '@jira', 'next')} / ` +
+      `${buildChatCommandLink('prev', '@jira', 'prev')} or \`page <n>\` to navigate.`,
     );
     lines.push('');
   }

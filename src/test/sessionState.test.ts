@@ -12,10 +12,30 @@ import {
 } from '../participant/sessionState';
 import type { JiraTransition } from '../jira/IJiraClient';
 import type { CachedTransition, WorkflowGraph } from '../services/WorkflowService';
+import {
+  buildReviewPage, parseReviewPageNav, applyReviewSessionToggle, type ReviewRowBase,
+} from '../participant/sessionState';
 
 interface Widget {
   name: string;
   qty: number;
+}
+
+// U4: minimal ReviewRowBase-shaped row for the pageable-review-session tests below.
+interface PageRow extends ReviewRowBase {
+  id: string;
+  existingTicketKey: string | null;
+  included: boolean;
+}
+
+function makeFreshRows(count: number, startAt = 1): PageRow[] {
+  return Array.from({ length: count }, (_, i) => ({
+    id: String(startAt + i), existingTicketKey: null, included: true,
+  }));
+}
+
+function makeTicketedRow(id: string, existingTicketKey: string): PageRow {
+  return { id, existingTicketKey, included: false };
 }
 
 const WIDGET_COLUMNS: ReviewTableColumn<Widget>[] = [
@@ -785,5 +805,139 @@ describe('formatMyFiltersList (U7)', () => {
   it('reports a clear "none found" message for zero filters', () => {
     const text = formatMyFiltersList([], []);
     expect(text).toBe('No favourite or owned filters found.');
+  });
+});
+
+// U4: the pageable review session's core slicing/navigation/toggle-persistence primitives.
+describe('buildReviewPage (U4/R6-R8)', () => {
+  it('returns everything on one page when the "new" set is at or under BATCH_LIMIT (50)', () => {
+    const allRows = makeFreshRows(50);
+    const result = buildReviewPage(allRows, 0);
+    expect(result.rows).toHaveLength(50);
+    expect(result.page).toBe(0);
+    expect(result.totalPages).toBe(1);
+  });
+
+  it('splits a "new" set larger than BATCH_LIMIT into multiple pages of up to 50 rows each', () => {
+    const allRows = makeFreshRows(120);
+    const first = buildReviewPage(allRows, 0);
+    expect(first.rows).toHaveLength(50);
+    expect(first.rows.map(r => r.id)).toEqual(Array.from({ length: 50 }, (_, i) => String(i + 1)));
+    expect(first.totalPages).toBe(3);
+
+    const second = buildReviewPage(allRows, 1);
+    expect(second.rows).toHaveLength(50);
+    expect(second.rows[0].id).toBe('51');
+
+    const third = buildReviewPage(allRows, 2);
+    expect(third.rows).toHaveLength(20); // remainder
+    expect(third.rows[0].id).toBe('101');
+  });
+
+  it('always shows every "already ticketed" row in full, on every page, never counted toward paging', () => {
+    const allRows = [makeTicketedRow('A1', 'PROJ-1'), ...makeFreshRows(60), makeTicketedRow('A2', 'PROJ-2')];
+    const first = buildReviewPage(allRows, 0);
+    const second = buildReviewPage(allRows, 1);
+    expect(first.rows.filter(r => r.existingTicketKey !== null).map(r => r.id)).toEqual(['A1', 'A2']);
+    expect(second.rows.filter(r => r.existingTicketKey !== null).map(r => r.id)).toEqual(['A1', 'A2']);
+    expect(first.totalPages).toBe(2); // 60 "new" rows -> 2 pages, unaffected by the 2 ticketed rows
+  });
+
+  it('clamps a negative page request up to page 0', () => {
+    const result = buildReviewPage(makeFreshRows(120), -5);
+    expect(result.page).toBe(0);
+  });
+
+  it('clamps an out-of-range page request down to the last valid page', () => {
+    const result = buildReviewPage(makeFreshRows(120), 99);
+    expect(result.page).toBe(2); // 3 pages total, 0-based last is 2
+    expect(result.rows).toHaveLength(20);
+  });
+
+  it('reports exactly one page (never zero) when there are no "new" rows at all', () => {
+    const result = buildReviewPage([makeTicketedRow('A1', 'PROJ-1')], 0);
+    expect(result.totalPages).toBe(1);
+    expect(result.rows).toEqual([makeTicketedRow('A1', 'PROJ-1')]);
+  });
+});
+
+describe('parseReviewPageNav (U4/R6)', () => {
+  it('recognizes "next" and "prev"', () => {
+    expect(parseReviewPageNav('next')).toEqual({ kind: 'next' });
+    expect(parseReviewPageNav('prev')).toEqual({ kind: 'prev' });
+  });
+
+  it('recognizes case-insensitively and trims surrounding whitespace', () => {
+    expect(parseReviewPageNav('  NEXT  ')).toEqual({ kind: 'next' });
+    expect(parseReviewPageNav('Prev')).toEqual({ kind: 'prev' });
+  });
+
+  it('recognizes the "next page"/"prev page"/"previous"/"previous page" variants', () => {
+    expect(parseReviewPageNav('next page')).toEqual({ kind: 'next' });
+    expect(parseReviewPageNav('prev page')).toEqual({ kind: 'prev' });
+    expect(parseReviewPageNav('previous')).toEqual({ kind: 'prev' });
+    expect(parseReviewPageNav('previous page')).toEqual({ kind: 'prev' });
+  });
+
+  it('recognizes "page <n>", converting the 1-based typed number to a 0-based page index', () => {
+    expect(parseReviewPageNav('page 3')).toEqual({ kind: 'goto', page: 2 });
+    expect(parseReviewPageNav('PAGE 1')).toEqual({ kind: 'goto', page: 0 });
+    expect(parseReviewPageNav('page   7')).toEqual({ kind: 'goto', page: 6 }); // collapses extra whitespace
+  });
+
+  it('returns null for anything else, including a bare row-id number and ordinary toggle/confirm replies', () => {
+    expect(parseReviewPageNav('2')).toBeNull();
+    expect(parseReviewPageNav('A1')).toBeNull();
+    expect(parseReviewPageNav('post it')).toBeNull();
+    expect(parseReviewPageNav('cancel')).toBeNull();
+    expect(parseReviewPageNav('pages')).toBeNull();
+    expect(parseReviewPageNav('page')).toBeNull();
+    expect(parseReviewPageNav('')).toBeNull();
+  });
+});
+
+describe('applyReviewSessionToggle (U4/R7-R8)', () => {
+  it('toggles the given ids on the visible page rows, same as applyReviewToggle', () => {
+    const rows = makeFreshRows(3); // ids '1'..'3', all included
+    const result = applyReviewSessionToggle(rows, rows, ['2']);
+    expect(result.rows.find(r => r.id === '2')!.included).toBe(false);
+    expect(result.rows.find(r => r.id === '1')!.included).toBe(true);
+  });
+
+  it('mirrors an "already ticketed" row\'s toggle into allRows so it survives a page-navigation recompute', () => {
+    const ticketed = makeTicketedRow('A1', 'PROJ-1');
+    const allRows = [ticketed, ...makeFreshRows(60)];
+    const page0 = buildReviewPage(allRows, 0);
+
+    const toggled = applyReviewSessionToggle(page0.rows, allRows, ['A1']);
+    expect(toggled.rows.find(r => r.id === 'A1')!.included).toBe(true);
+    expect(toggled.allRows.find(r => r.id === 'A1')!.included).toBe(true);
+
+    // Navigate away and back — buildReviewPage re-derives `rows` from the updated allRows, so the
+    // ticketed-row toggle must still be visible (R8: "already ticketed" is shown in full, unaffected).
+    const page1 = buildReviewPage(toggled.allRows, 1);
+    const backToPage0 = buildReviewPage(toggled.allRows, 0);
+    expect(page1.rows.find(r => r.id === 'A1')!.included).toBe(true);
+    expect(backToPage0.rows.find(r => r.id === 'A1')!.included).toBe(true);
+  });
+
+  it('does NOT mirror a "new" row\'s toggle into allRows — a page revisited later resets to default-included (R7)', () => {
+    const allRows = makeFreshRows(60);
+    const page0 = buildReviewPage(allRows, 0);
+
+    const toggled = applyReviewSessionToggle(page0.rows, allRows, ['3']); // exclude row '3' on page 0
+    expect(toggled.rows.find(r => r.id === '3')!.included).toBe(false); // visible immediately
+    expect(toggled.allRows.find(r => r.id === '3')!.included).toBe(true); // NOT written back
+
+    // Page away and back to page 0 — the toggle is gone, row '3' is included again (page-local reset).
+    const backToPage0 = buildReviewPage(toggled.allRows, 0);
+    expect(backToPage0.rows.find(r => r.id === '3')!.included).toBe(true);
+  });
+
+  it('leaves rows not mentioned in ids untouched', () => {
+    const rows = makeFreshRows(3);
+    const result = applyReviewSessionToggle(rows, rows, ['2']);
+    expect(result.rows.find(r => r.id === '1')!.included).toBe(true);
+    expect(result.rows.find(r => r.id === '3')!.included).toBe(true);
   });
 });

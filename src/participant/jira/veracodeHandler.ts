@@ -130,14 +130,17 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
       cweId: first.cweId,
       summary: buildGroupSummary(group),
       labels: buildGroupLabels(group, templateLabels),
-      descriptionWiki: buildGroupDescriptionWiki(group),
+      // U4/R6-R7: no eager buildGroupDescriptionWiki() call here — the group is kept on the row
+      // instead, and the full description is built just-in-time in buildTicketFields below, only
+      // for a row the user actually confirms into creation.
+      sourceGroup: group,
     };
   },
   reviewColumns: VERACODE_REVIEW_COLUMNS,
   itemRefFor: row => `Flaw ${row.issueIds.join(', ')}`,
   buildTicketFields: (row, additionalFields) => ({
     summary: row.summary,
-    fields: { ...additionalFields, labels: row.labels, description: row.descriptionWiki },
+    fields: { ...additionalFields, labels: row.labels, description: buildGroupDescriptionWiki(row.sourceGroup) },
   }),
   // KTD9: this pop-up previously lived only in extension.ts's own (pre-consolidation) duplicate of
   // this flow; wiring it through the descriptor keeps it alive for both the command-triggered and

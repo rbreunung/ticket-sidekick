@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
-  chunkStrings, buildDedupJql, extractDedupMap, findAlreadyTicketed, capNewRows, buildReviewRows,
+  chunkStrings, buildDedupJql, extractDedupMap, findAlreadyTicketed, buildReviewRows,
   sanitizeCellText, sanitizeStandaloneLine, resolveMaxReportBytes, findStaleTickets, buildStaleSearchJql,
   type JqlIssueLike,
 } from '../utils/reportImport';
@@ -220,47 +220,6 @@ describe('findAlreadyTicketed', () => {
     expect(result.map.size).toBe(0);
     expect(result.failedChunks).toBe(0);
     expect(result.totalChunks).toBe(2);
-  });
-});
-
-describe('capNewRows', () => {
-  interface Item { key: string; ticketed: boolean }
-  const isAlreadyTicketed = (item: Item) => item.ticketed;
-
-  it('does not drop anything when new items are exactly at the limit', () => {
-    const items: Item[] = Array.from({ length: 5 }, (_, i) => ({ key: `n${i}`, ticketed: false }));
-    const result = capNewRows(items, 5, isAlreadyTicketed);
-    expect(result.included).toHaveLength(5);
-    expect(result.totalNewMatched).toBe(5);
-    expect(result.droppedOverCap).toBe(0);
-  });
-
-  it('drops exactly one item when one over the limit, and totalNewMatched reflects the true count', () => {
-    const items: Item[] = Array.from({ length: 6 }, (_, i) => ({ key: `n${i}`, ticketed: false }));
-    const result = capNewRows(items, 5, isAlreadyTicketed);
-    expect(result.included).toHaveLength(5);
-    expect(result.totalNewMatched).toBe(6);
-    expect(result.droppedOverCap).toBe(1);
-  });
-
-  it('reports no truncation when well under the limit', () => {
-    const items: Item[] = Array.from({ length: 2 }, (_, i) => ({ key: `n${i}`, ticketed: false }));
-    const result = capNewRows(items, 50, isAlreadyTicketed);
-    expect(result.included).toHaveLength(2);
-    expect(result.totalNewMatched).toBe(2);
-    expect(result.droppedOverCap).toBe(0);
-  });
-
-  it('always includes already-ticketed items without counting them toward the cap', () => {
-    const items: Item[] = [
-      { key: 'ticketed-1', ticketed: true },
-      ...Array.from({ length: 3 }, (_, i) => ({ key: `n${i}`, ticketed: false })),
-      { key: 'ticketed-2', ticketed: true },
-    ];
-    const result = capNewRows(items, 3, isAlreadyTicketed);
-    expect(result.included.map(i => i.key)).toEqual(['ticketed-1', 'n0', 'n1', 'n2', 'ticketed-2']);
-    expect(result.totalNewMatched).toBe(3);
-    expect(result.droppedOverCap).toBe(0);
   });
 });
 

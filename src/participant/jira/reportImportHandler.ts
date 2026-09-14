@@ -17,11 +17,12 @@ import type { IJiraClient } from '../../jira/IJiraClient';
 import { TemplateService } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
 import {
-  MAX_REPORT_BYTES, BATCH_LIMIT, DEFAULT_DEDUP_CHUNK_SIZE, findAlreadyTicketed, capNewRows, buildReviewRows,
+  MAX_REPORT_BYTES, BATCH_LIMIT, DEFAULT_DEDUP_CHUNK_SIZE, findAlreadyTicketed, buildReviewRows,
   buildDedupJql, type JqlIssueLike,
 } from '../../utils/reportImport';
 import {
-  isCancellation, pickEmailOption, buildImportReviewTable, parseReviewInput, applyReviewToggle,
+  isCancellation, pickEmailOption, buildImportReviewTable, parseReviewInput, parseReviewPageNav,
+  buildReviewPage, applyReviewSessionToggle,
   CURRENT_SESSION_SCHEMA_VERSION, isSessionExpired, SESSION_EXPIRED_MESSAGE,
   NO_ISSUE_TYPE, resolveTemplateIssueType, formatIssueTypeOptionLabel, buildChatCommandLink,
   type ImportTemplateSelectionSession, type ReviewSession, type ReviewTableColumn, type ReviewRowBase,
@@ -405,30 +406,29 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
     }
   }
 
-  // Cap "new" (not-yet-ticketed) items at BATCH_LIMIT *before* building full review rows —
-  // buildReviewRows()/buildDescriptionWiki() does real work per row (sorting, Markdown-table
-  // rendering, a full markdownToJiraWiki() pass), so filtering after the fact would build and then
-  // discard that work for every excess "new" item on a report larger than one run's worth.
-  // Already-ticketed rows are never capped. Re-running the import after this batch completes
-  // surfaces the next BATCH_LIMIT new candidates for free, since the ones just created are now
-  // dedup-matched. (When there is no dedup key, dedupMap is always empty and every item is "new".)
+  // U4: every matched item gets its lightweight row fields built eagerly (severity/CWE/summary/
+  // labels) — no pre-build cap here anymore. The review screen pages through the full "new" set
+  // instead of silently dropping the remainder of a run (buildReviewPage below); an importer whose
+  // full ticket description is expensive to build (Veracode's folded-group description) defers
+  // that part to ticket-creation time via its own buildTicketFields, rather than paying the cost
+  // here for every candidate the user may never confirm.
   const dedupKeyOf = descriptor.dedupKeyOf ?? (() => []);
-  // U2/R11: a folded group is already-ticketed as soon as ANY one of its candidate keys matches.
-  const capped = capNewRows(session.items, BATCH_LIMIT, item => dedupKeyOf(item).some(key => dedupMap.has(key)));
-  const rows = buildReviewRows<TItem, TRow>(
-    capped.included,
+  const allRows = buildReviewRows<TItem, TRow>(
+    session.items,
     dedupMap,
     dedupKeyOf,
     item => descriptor.buildRowFields(item, templateLabels),
   );
+  const initialPage = buildReviewPage(allRows, 0);
 
   const reviewSession: ReviewSession<TRow> = {
     projectKey: session.projectKey,
     issueType,
     templateName,
     additionalFields,
-    rows,
-    totalNewMatched: capped.totalNewMatched,
+    allRows,
+    rows: initialPage.rows,
+    page: initialPage.page,
     schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
   };
   return streamImportReview(reviewSession, stream, ws, descriptor, baseUrl);
@@ -442,12 +442,16 @@ export async function streamImportReview<TItem, TRow extends ReviewRowBase>(
   baseUrl?: string,
 ): Promise<vscode.ChatResult> {
   await ws.update(descriptor.sessionKeys.review, session);
+  // U4: re-derives total page count from `allRows` on every render (cheap — two filters, no
+  // per-row rebuild work) rather than trusting a possibly-stale stored value, so the "Page X of Y"
+  // line always agrees with the row set actually being shown.
+  const { totalPages } = buildReviewPage(session.allRows, session.page);
   // U6: the table's own Include? column is now a per-row toggle command-link (R8), so this whole
   // response must be trust-gated (KTD5) — every row's own field content going through it is
   // neutralized against markdown-link injection at its source (VERACODE_REVIEW_COLUMNS,
   // WALTZ_REVIEW_COLUMNS, EMAIL_REVIEW_COLUMNS in sessionState.ts/emailHandler.ts).
   stream.markdown(trustedChatMarkdown(
-    buildImportReviewTable(session.rows, baseUrl, session.totalNewMatched, descriptor.reviewColumns, descriptor.itemNoun),
+    buildImportReviewTable(session.rows, baseUrl, session.page, totalPages, descriptor.reviewColumns, descriptor.itemNoun),
   ));
   return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
 }
@@ -461,6 +465,22 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
   descriptor: ReportImportDescriptor<TItem, TRow>,
   baseUrl?: string,
 ): Promise<vscode.ChatResult | void> {
+  // U4/R6: page-navigation replies are checked ahead of parseReviewInput — none of the strings
+  // they match collide with its toggle/ok/cancel parsing (see parseReviewPageNav's own doc
+  // comment), so this never intercepts a real toggle/confirm/cancel reply.
+  const pageNav = parseReviewPageNav(reply);
+  if (pageNav) {
+    const current = buildReviewPage(session.allRows, session.page);
+    const targetPage =
+      pageNav.kind === 'next' ? current.page + 1 :
+      pageNav.kind === 'prev' ? current.page - 1 :
+      pageNav.page;
+    const nextPage = buildReviewPage(session.allRows, targetPage);
+    session.rows = nextPage.rows;
+    session.page = nextPage.page;
+    return streamImportReview(session, stream, ws, descriptor, baseUrl);
+  }
+
   const rowIds = session.rows.map(r => r.id);
   const decision = parseReviewInput(reply, rowIds);
 
@@ -477,7 +497,12 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
     return;
   }
   if (decision.action === 'toggle') {
-    session.rows = applyReviewToggle(session.rows, decision.ids);
+    // U4/R7-R8: a toggled "already ticketed" row is mirrored into `allRows` so it survives a later
+    // page-navigation recompute (that section is shown in full on every page); a toggled "new" row
+    // is deliberately left page-local — see applyReviewSessionToggle's own doc comment.
+    const toggled = applyReviewSessionToggle(session.rows, session.allRows, decision.ids);
+    session.rows = toggled.rows;
+    session.allRows = toggled.allRows;
     return streamImportReview(session, stream, ws, descriptor, baseUrl);
   }
   if (decision.action === 'setValue') {
@@ -505,11 +530,12 @@ export async function executeImportBatch<TItem, TRow extends ReviewRowBase>(
 ): Promise<void> {
   const includedRows = session.rows.filter(r => r.included);
   const toCreate = includedRows.slice(0, BATCH_LIMIT);
-  // "New" rows are already pre-capped at BATCH_LIMIT before the session is built (see
-  // handleImportTemplateSelection above), but a user can still toggle extra already-ticketed rows
-  // back to "re-create", pushing the included count past the cap at execution time — droppedOverCap
-  // reflects that real slicing outcome directly, rather than re-deriving it from a signal that
-  // doesn't actually track whether *this* slice dropped anything.
+  // U4: `session.rows` is already at most one page (BATCH_LIMIT "new" rows, see buildReviewPage)
+  // plus every "already ticketed" row — so this slice is normally a no-op. A user can still toggle
+  // extra already-ticketed rows back to "re-create" on top of a full page, pushing the included
+  // count past BATCH_LIMIT at execution time — droppedOverCap reflects that real slicing outcome
+  // directly, rather than re-deriving it from a signal that doesn't actually track whether *this*
+  // slice dropped anything.
   const droppedOverCap = includedRows.length - toCreate.length;
   const excludedByUser = session.rows.filter(r => !r.included && r.existingTicketKey === null).length;
   const alreadyTicketedSkipped = session.rows.filter(r => !r.included && r.existingTicketKey !== null).length;
