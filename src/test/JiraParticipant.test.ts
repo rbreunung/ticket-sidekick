@@ -990,19 +990,19 @@ describe('buildTeamJql', () => {
 
 const sampleRows: VeracodeReviewRow[] = [
   {
-    id: 'A1', issueId: '10102', severity: 4, severityLabelText: 'High', cweId: '798',
+    id: 'A1', issueIds: ['10102'], severity: 4, severityLabelText: 'High', cweId: '798',
     summary: '10102 - ExampleFtpClient.java:41 - Credentials Management',
     labels: ['veracode', 'veracode-issue-10102', 'cwe-798'], descriptionWiki: 'h3. Severity\nHigh (4)',
     existingTicketKey: 'PROJ-501', included: false,
   },
   {
-    id: '1', issueId: '10101', severity: 5, severityLabelText: 'Very High', cweId: '89',
+    id: '1', issueIds: ['10101'], severity: 5, severityLabelText: 'Very High', cweId: '89',
     summary: '10101 - ExampleOrderDao.java:88 - SQL Injection',
     labels: ['veracode', 'veracode-issue-10101', 'cwe-89'], descriptionWiki: 'h3. Severity\nVery High (5)',
     existingTicketKey: null, included: true,
   },
   {
-    id: '2', issueId: '10103', severity: 4, severityLabelText: 'High', cweId: '798',
+    id: '2', issueIds: ['10103'], severity: 4, severityLabelText: 'High', cweId: '798',
     summary: '10103 - ExampleApp.war - Credentials Management',
     labels: ['veracode', 'veracode-issue-10103', 'cwe-798'], descriptionWiki: 'h3. Severity\nHigh (4)',
     existingTicketKey: null, included: true,
