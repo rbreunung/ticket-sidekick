@@ -13,24 +13,39 @@ import {
   handleImportTemplateSelection, handleImportReviewReply, continueAfterImportIssueType,
   type ReportImportDescriptor,
 } from './reportImportHandler';
+import { resolveMaxReportBytes } from '../../utils/reportImport';
 import type { AwaitIssueTypeResume } from '../sessionState';
 import { sessionWasSuperseded } from './ticketContext';
 
-function getWaltzConfig(): { minVulnRating: string; includeRemediationActions: string[] } {
+// Bounds match ticketSidekick.waltz.maxReportSizeMB's package.json declaration (default 50, range
+// 1-200 MB) — single source of truth for the default kept there; these are duplicated here only as
+// the numeric bounds resolveMaxReportBytes() needs, since package.json isn't importable.
+const DEFAULT_MAX_REPORT_SIZE_MB = 50;
+const MIN_MAX_REPORT_SIZE_MB = 1;
+const MAX_MAX_REPORT_SIZE_MB = 200;
+
+function getWaltzConfig(): { minVulnRating: string; includeRemediationActions: string[]; maxReportBytes: number } {
   const cfg = vscode.workspace.getConfiguration('ticketSidekick');
   return {
     minVulnRating: cfg.get<string>('waltz.minVulnRating') ?? 'High',
     includeRemediationActions: cfg.get<string[]>('waltz.includeRemediationActions') ?? ['', 'Remediate'],
+    maxReportBytes: resolveMaxReportBytes(
+      cfg.get<number>('waltz.maxReportSizeMB'), DEFAULT_MAX_REPORT_SIZE_MB, MIN_MAX_REPORT_SIZE_MB, MAX_MAX_REPORT_SIZE_MB,
+    ),
   };
 }
 
 async function readAndFilterWaltzFile(filePath: string): Promise<WaltzComponent[]> {
-  // parseWaltzReport() itself also re-checks size (single source of truth used by the pure unit tests too).
+  // parseWaltzReport() itself also re-checks size (single source of truth used by the pure unit
+  // tests too) — both checks share the same resolved maxReportBytes so they agree with each other
+  // and with the user's setting.
+  const { maxReportBytes, ...filterConfig } = getWaltzConfig();
   return readAndFilterReport(
     filePath,
     fp => fs.promises.readFile(fp),
-    raw => parseWaltzReport(raw),
-    components => filterComponents(components, getWaltzConfig()),
+    raw => parseWaltzReport(raw, maxReportBytes),
+    components => filterComponents(components, filterConfig),
+    maxReportBytes,
   );
 }
 

@@ -13,7 +13,7 @@ import { buildWaltzTemplateSession } from './participant/jira/waltzHandler';
 import {
   checkEmailBatchCaps, buildEmailTemplateSession, parseEmlFiles, describeEmailFileSelection, EMAIL_TEMPLATE_SESSION_KEY,
 } from './participant/jira/emailHandler';
-import { MAX_REPORT_BYTES } from './utils/reportImport';
+import { resolveMaxReportBytes } from './utils/reportImport';
 import { readAndFilterReport } from './participant/jira/reportImportHandler';
 import { logDiag } from './utils/diagLog';
 import type { IJiraClient } from './jira/IJiraClient';
@@ -31,12 +31,18 @@ interface ReportImportCommandDescriptor<TRaw, TItem> {
   fileExtensions: string[];
   filePickerTitle: string;
   readContent: (filePath: string) => Promise<TRaw>;
-  parse: (raw: TRaw) => TItem[] | Promise<TItem[]>;
+  // Takes the resolved byte limit so the importer's own defense-in-depth re-check (inside
+  // parseVeracodeReport/parseWaltzReport) agrees with the outer stat check below instead of
+  // silently staying on the 20 MB default.
+  parse: (raw: TRaw, maxBytes: number) => TItem[] | Promise<TItem[]>;
   filter: (items: TItem[]) => TItem[];
   noMatchMessage: string;
   buildTemplateSession: (items: TItem[], fileName: string, projectKey: string, jiraClient: IJiraClient) => Promise<unknown>;
   sessionKey: string;
   chatQuery: string;
+  // Resolved fresh per invocation (not at registration time) so a setting the user just changed
+  // takes effect on the next import.
+  getMaxReportBytes: () => number;
 }
 
 function registerReportImportCommand<TRaw, TItem>(
@@ -70,6 +76,7 @@ function registerReportImportCommand<TRaw, TItem>(
     // that could have thrown — that's what lets the outer catch tell the two apart without string-
     // matching the thrown error. Preserves the three distinct pre-refactor messages (read failure /
     // parse failure / size-cap) exactly.
+    const maxReportBytes = descriptor.getMaxReportBytes();
     let readOrParseFailed = false;
     let items: TItem[];
     try {
@@ -88,7 +95,7 @@ function registerReportImportCommand<TRaw, TItem>(
         },
         async raw => {
           try {
-            const parsed = await descriptor.parse(raw);
+            const parsed = await descriptor.parse(raw, maxReportBytes);
             return descriptor.filter(parsed);
           } catch (err) {
             readOrParseFailed = true;
@@ -101,10 +108,11 @@ function registerReportImportCommand<TRaw, TItem>(
         // filter already applied above (inside the wrapped parse step, so parse+filter failures share
         // the same "Could not parse …" message exactly as before the refactor) — identity here.
         parsedItems => parsedItems,
+        maxReportBytes,
       );
     } catch {
       if (!readOrParseFailed) {
-        vscode.window.showErrorMessage(`Ticket Sidekick: Report exceeds the ${MAX_REPORT_BYTES / (1024 * 1024)} MB size limit.`);
+        vscode.window.showErrorMessage(`Ticket Sidekick: Report exceeds the ${maxReportBytes / (1024 * 1024)} MB size limit.`);
       }
       return;
     }
@@ -288,7 +296,7 @@ export function activate(context: vscode.ExtensionContext): void {
       fileExtensions: ['xml'],
       filePickerTitle: 'Select Veracode Detailed Report (.xml)',
       readContent: reportPath => fs.promises.readFile(reportPath, 'utf-8'),
-      parse: raw => parseVeracodeReport(raw),
+      parse: (raw, maxBytes) => parseVeracodeReport(raw, maxBytes),
       filter: allFlaws => {
         const veracodeCfg = vscode.workspace.getConfiguration('ticketSidekick');
         return filterFlaws(allFlaws, {
@@ -302,6 +310,9 @@ export function activate(context: vscode.ExtensionContext): void {
       buildTemplateSession: buildVeracodeTemplateSession,
       sessionKey: 'jira.session.veracodeTemplateSelection',
       chatQuery: '@jira import veracode report',
+      getMaxReportBytes: () => resolveMaxReportBytes(
+        vscode.workspace.getConfiguration('ticketSidekick').get<number>('veracode.maxReportSizeMB'), 50, 1, 200,
+      ),
     }),
   );
 
@@ -312,7 +323,7 @@ export function activate(context: vscode.ExtensionContext): void {
       fileExtensions: ['xlsx'],
       filePickerTitle: 'Select OSS Report (.xlsx)',
       readContent: reportPath => fs.promises.readFile(reportPath),
-      parse: raw => parseWaltzReport(raw),
+      parse: (raw, maxBytes) => parseWaltzReport(raw, maxBytes),
       filter: allComponents => {
         const waltzCfg = vscode.workspace.getConfiguration('ticketSidekick');
         return filterComponents(allComponents, {
@@ -323,6 +334,9 @@ export function activate(context: vscode.ExtensionContext): void {
       noMatchMessage:
         'Ticket Sidekick: No components in this report matched your current rating/remediation filters ' +
         '(ticketSidekick.waltz.minVulnRating / ticketSidekick.waltz.includeRemediationActions).',
+      getMaxReportBytes: () => resolveMaxReportBytes(
+        vscode.workspace.getConfiguration('ticketSidekick').get<number>('waltz.maxReportSizeMB'), 50, 1, 200,
+      ),
       buildTemplateSession: buildWaltzTemplateSession,
       sessionKey: 'jira.session.waltzTemplateSelection',
       chatQuery: '@jira import oss report',
