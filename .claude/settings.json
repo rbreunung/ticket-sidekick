@@ -1,0 +1,10 @@
+{
+  "extraKnownMarketplaces": {
+    "compound-engineering-marketplace": {
+      "source": { "source": "github", "repo": "EveryInc/compound-engineering-plugin" }
+    }
+  },
+  "enabledPlugins": {
+    "compound-engineering@compound-engineering-marketplace": true
+  }
+}
