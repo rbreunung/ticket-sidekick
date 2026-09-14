@@ -148,7 +148,9 @@ const IMPORT_SESSION_KINDS: Record<ReportImportDescriptor<unknown, ReviewRowBase
  * Shared read+parse+filter orchestration (stat + size cap, then parse + filter). The two importers
  * differ only in how the file is read (utf-8 string for Veracode's XML, Buffer for Waltz's xlsx) and
  * in their own parse/filter functions — those differences are supplied by the caller, not
- * re-implemented here.
+ * re-implemented here. Returns both the filtered `items` and the pre-filter `rawItems` (`parse()`'s
+ * own output) directly — callers that need the raw, unfiltered set (U6's stale-check predicate) no
+ * longer need to smuggle it out of the `filter` callback via a mutable outer variable.
  */
 export async function readAndFilterReport<TRaw, TItem>(
   filePath: string,
@@ -156,14 +158,14 @@ export async function readAndFilterReport<TRaw, TItem>(
   parse: (raw: TRaw) => TItem[] | Promise<TItem[]>,
   filter: (items: TItem[]) => TItem[],
   maxBytes: number = MAX_REPORT_BYTES,
-): Promise<TItem[]> {
+): Promise<{ items: TItem[]; rawItems: TItem[] }> {
   const stat = await fs.promises.stat(filePath);
   if (stat.size > maxBytes) {
     throw new Error(`File exceeds the ${maxBytes / (1024 * 1024)} MB size limit.`);
   }
   const raw = await readContent(filePath);
-  const items = await parse(raw);
-  return filter(items);
+  const rawItems = await parse(raw);
+  return { items: filter(rawItems), rawItems };
 }
 
 // Chat-only entry point's own file picker. Single-file only — callable only by handleImportReport()
@@ -484,15 +486,18 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
         const result = await ticketService.searchTicketsRaw(jql, maxResults);
         // Captured as a side effect of the search findStaleTickets() already runs — searchJql's
         // baseFields always include summary/status/issuetype (see JiraApiClient.ts), so this needs
-        // no second fetch keyed by the returned stale keys.
+        // no second fetch keyed by the returned stale keys. `JiraIssue.fields` already types these
+        // (issuetype is optional for older fixtures only), so no cast is needed to read them.
         for (const issue of result.issues) {
           issueDetails.set(issue.key, {
-            summary: String((issue.fields as { summary?: unknown }).summary ?? ''),
-            currentStatus: (issue.fields as { status?: { name: string } }).status?.name ?? '',
-            issueType: (issue.fields as { issuetype?: { name: string } }).issuetype?.name ?? '',
+            summary: issue.fields.summary,
+            currentStatus: issue.fields.status.name,
+            issueType: issue.fields.issuetype?.name ?? '',
           });
         }
-        return result as { issues: JqlIssueLike[]; total?: number; isLast?: boolean };
+        // JiraIssue[] structurally satisfies JqlIssueLike[] (a strict subset of fields), so no
+        // narrowing cast is needed on the return either.
+        return result;
       },
       descriptor.stale.labelToDedupKey,
       descriptor.stale.buildActivePredicate(session.rawItems ?? []),

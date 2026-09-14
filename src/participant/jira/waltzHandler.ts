@@ -49,18 +49,17 @@ async function readAndFilterWaltzFile(filePath: string): Promise<{ items: WaltzC
   // tests too) — both checks share the same resolved maxReportBytes so they agree with each other
   // and with the user's setting.
   const { maxReportBytes, ...filterConfig } = getWaltzConfig();
-  // U6: captures the raw, unfiltered parsed components (before minVulnRating/includeRemediationActions)
-  // as a side effect of readAndFilterReport's own filter step — buildWaltzActiveComponentPredicate
-  // needs these, not the filtered set filterComponents() produces.
-  let rawComponents: WaltzComponent[] = [];
-  const items = await readAndFilterReport(
+  // U6: buildWaltzActiveComponentPredicate needs the raw, unfiltered components (before
+  // minVulnRating/includeRemediationActions) — readAndFilterReport returns them directly as
+  // `rawItems` alongside the filtered set, no closure capture needed.
+  const { items, rawItems } = await readAndFilterReport(
     filePath,
     fp => fs.promises.readFile(fp),
     raw => parseWaltzReport(raw, maxReportBytes),
-    components => { rawComponents = components; return filterComponents(components, filterConfig); },
+    components => filterComponents(components, filterConfig),
     maxReportBytes,
   );
-  return { items, rawItems: rawComponents };
+  return { items, rawItems };
 }
 
 // U5: the `oss-dependency` label every Waltz-imported ticket carries (alongside its own

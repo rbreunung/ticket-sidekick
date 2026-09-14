@@ -8,6 +8,10 @@
 // duplicated. R9: only what Veracode and Waltz need today is here — no speculative generality.
 import type { DiagLogger } from './diagTypes';
 import { TRIGGER_CHARS_PATTERN } from './markdownToJiraWiki';
+// Type-only import: erased at compile time (no runtime `require`), so this does not create the
+// circular *runtime* import that sessionState.ts's own value import of this file (BATCH_LIMIT,
+// sanitizeCellText) would otherwise raise — only a value/side-effect import can cycle.
+import type { ReviewRowBase } from '../participant/sessionState';
 
 // Single source of truth for both importers (KTD4). Both currently hardcode the identical values
 // (20 MB / 50 tickets per run) independently; consuming these from here instead of the local
@@ -289,19 +293,6 @@ export function sanitizeStandaloneLine(value: string): string {
   return `: ${sanitizeCellText(value)}`;
 }
 
-// Kept structurally identical to sessionState.ts's ReviewRowBase (this file stays vscode-free and
-// can't import from sessionState.ts without a circular import — sessionState.ts already imports
-// this file — so the shape is duplicated rather than shared). Any field added to ReviewRowBase must
-// be mirrored here too, or buildReviewRows()'s `Omit<TRow, keyof ReviewRowShape>` parameter type
-// below silently diverges from ReportImportDescriptor.buildRowFields()'s `Omit<TRow, keyof
-// ReviewRowBase>` return type and every call site fails to typecheck (U3 hit this).
-interface ReviewRowShape {
-  id: string; // '1'..'N' new candidates, 'A1'..'Am' already-ticketed
-  existingTicketKey: string | null;
-  included: boolean; // whether this row will be (re)created if the batch runs
-  updatedExisting?: boolean; // U3/R13: see ReviewRowBase's own doc comment
-}
-
 /**
  * Looks up a matching ticket key across every candidate dedup key an item carries — a folded
  * Veracode group's `dedupKeyOf` returns one key per member flaw (R11), and a match on *any* of
@@ -325,18 +316,18 @@ function findExistingTicketKey(dedupMap: Map<string, string>, keys: string[]): s
  * importer just returns a one-element array); `rowBuilder` supplies the importer-specific row
  * fields (everything beyond id/existingTicketKey/included).
  */
-export function buildReviewRows<TItem, TRow extends ReviewRowShape>(
+export function buildReviewRows<TItem, TRow extends ReviewRowBase>(
   items: TItem[],
   dedupMap: Map<string, string>,
   dedupKeyOf: (item: TItem) => string[],
-  rowBuilder: (item: TItem) => Omit<TRow, keyof ReviewRowShape>,
+  rowBuilder: (item: TItem) => Omit<TRow, keyof ReviewRowBase>,
 ): TRow[] {
   const rows: TRow[] = [];
   let newIndex = 0;
   let ticketedIndex = 0;
   for (const item of items) {
     const existingTicketKey = findExistingTicketKey(dedupMap, dedupKeyOf(item));
-    const base: ReviewRowShape = {
+    const base: ReviewRowBase = {
       id: existingTicketKey ? `A${++ticketedIndex}` : `${++newIndex}`,
       existingTicketKey,
       included: existingTicketKey === null,

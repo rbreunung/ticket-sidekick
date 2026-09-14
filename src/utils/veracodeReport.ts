@@ -199,22 +199,43 @@ function fullSourcePath(flaw: VeracodeFlaw): string | null {
 // unsanitized: issueId and cweId are already validated purely-numeric at parse time (ISSUE_ID_PATTERN
 // / CWE_ID_PATTERN) and severity is a locally-computed number, so none of the three can carry a
 // markdown-trigger character to begin with.
-export function buildDescriptionWiki(flaw: VeracodeFlaw): string {
-  const lines: string[] = [];
-
-  lines.push('### Severity');
+// Shared by buildDescriptionWiki()/buildGroupDescriptionWiki()/buildNewFindingsCommentWiki() — the
+// Severity/CWE/Description/Recommendation blocks render identically in all three (only the heading
+// level and which optional sections are included differ; the Location/Function layout around them
+// does not, so that part stays inline per caller rather than being forced into a shared shape).
+// The link text/URL are built entirely from the already-numeric-validated cweId, so no
+// sanitization is needed there; cweName sits after it on the same line (mid-line, not standalone),
+// so a bare sanitizeCellText() is the correct sanitizer for it.
+function pushSeverityAndCwe(lines: string[], flaw: VeracodeFlaw, headingPrefix: string): void {
+  lines.push(`${headingPrefix} Severity`);
   lines.push(`${severityLabel(flaw.severity)} (${flaw.severity})`);
   lines.push('');
 
   if (flaw.cweId) {
-    lines.push('### CWE');
-    // The link text/URL are built entirely from the already-numeric-validated cweId, so no
-    // sanitization is needed there; cweName sits after it on the same line (mid-line, not
-    // standalone), so a bare sanitizeCellText() is the correct sanitizer for it.
+    lines.push(`${headingPrefix} CWE`);
     const link = `[CWE-${flaw.cweId}](https://cwe.mitre.org/data/definitions/${flaw.cweId}.html)`;
     lines.push(`${link}${flaw.cweName ? ` — ${sanitizeCellText(flaw.cweName)}` : ''}`);
     lines.push('');
   }
+}
+
+function pushDescription(lines: string[], flaw: VeracodeFlaw, headingPrefix: string): void {
+  lines.push(`${headingPrefix} Description`);
+  lines.push(sanitizeStandaloneLine(flaw.description));
+  lines.push('');
+}
+
+function pushRecommendation(lines: string[], flaw: VeracodeFlaw, headingPrefix: string): void {
+  if (!flaw.recommendation) return;
+  lines.push(`${headingPrefix} Recommendation`);
+  lines.push(sanitizeStandaloneLine(flaw.recommendation));
+  lines.push('');
+}
+
+export function buildDescriptionWiki(flaw: VeracodeFlaw): string {
+  const lines: string[] = [];
+
+  pushSeverityAndCwe(lines, flaw, '###');
 
   lines.push('### Location');
   lines.push(`Module: ${sanitizeCellText(flaw.module)}`);
@@ -223,15 +244,8 @@ export function buildDescriptionWiki(flaw: VeracodeFlaw): string {
   if (flaw.functionPrototype) lines.push(`Function: ${sanitizeCellText(flaw.functionPrototype)}`);
   lines.push('');
 
-  lines.push('### Description');
-  lines.push(sanitizeStandaloneLine(flaw.description));
-  lines.push('');
-
-  if (flaw.recommendation) {
-    lines.push('### Recommendation');
-    lines.push(sanitizeStandaloneLine(flaw.recommendation));
-    lines.push('');
-  }
+  pushDescription(lines, flaw, '###');
+  pushRecommendation(lines, flaw, '###');
 
   lines.push('### Veracode Issue ID');
   lines.push(flaw.issueId);
@@ -342,31 +356,15 @@ export function buildGroupDescriptionWiki(group: VeracodeFlaw[]): string {
     lines.push(`### Issue ${flaw.issueId}`);
     lines.push('');
 
-    lines.push('#### Severity');
-    lines.push(`${severityLabel(flaw.severity)} (${flaw.severity})`);
-    lines.push('');
-
-    if (flaw.cweId) {
-      lines.push('#### CWE');
-      const link = `[CWE-${flaw.cweId}](https://cwe.mitre.org/data/definitions/${flaw.cweId}.html)`;
-      lines.push(`${link}${flaw.cweName ? ` — ${sanitizeCellText(flaw.cweName)}` : ''}`);
-      lines.push('');
-    }
+    pushSeverityAndCwe(lines, flaw, '####');
 
     if (flaw.functionPrototype) {
       lines.push(`Function: ${sanitizeCellText(flaw.functionPrototype)}`);
       lines.push('');
     }
 
-    lines.push('#### Description');
-    lines.push(sanitizeStandaloneLine(flaw.description));
-    lines.push('');
-
-    if (flaw.recommendation) {
-      lines.push('#### Recommendation');
-      lines.push(sanitizeStandaloneLine(flaw.recommendation));
-      lines.push('');
-    }
+    pushDescription(lines, flaw, '####');
+    pushRecommendation(lines, flaw, '####');
   }
 
   return markdownToJiraWiki(lines.join('\n'));
@@ -395,20 +393,8 @@ export function buildNewFindingsCommentWiki(newFlaws: VeracodeFlaw[]): string {
     lines.push(`### Issue ${flaw.issueId}`);
     lines.push('');
 
-    lines.push('#### Severity');
-    lines.push(`${severityLabel(flaw.severity)} (${flaw.severity})`);
-    lines.push('');
-
-    if (flaw.cweId) {
-      lines.push('#### CWE');
-      const link = `[CWE-${flaw.cweId}](https://cwe.mitre.org/data/definitions/${flaw.cweId}.html)`;
-      lines.push(`${link}${flaw.cweName ? ` — ${sanitizeCellText(flaw.cweName)}` : ''}`);
-      lines.push('');
-    }
-
-    lines.push('#### Description');
-    lines.push(sanitizeStandaloneLine(flaw.description));
-    lines.push('');
+    pushSeverityAndCwe(lines, flaw, '####');
+    pushDescription(lines, flaw, '####');
   }
 
   return markdownToJiraWiki(lines.join('\n'));

@@ -1657,8 +1657,9 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
 // U6: full-ticket-key vocabulary (e.g. `PROJ-123`) for the Stale section's own toggle replies —
 // deliberately disjoint from the New/Already-ticketed sections' `"1".."N"`/`"A1".."Am"` row-id
 // tokens (a ticket key always contains a hyphen; a row id never does) and from U4's `next`/`prev`/
-// `page <n>` page-nav tokens (none of those match this pattern either).
-const STALE_TICKET_KEY_PATTERN = /^[A-Z][A-Z0-9]+-\d+$/;
+// `page <n>` page-nav tokens (none of those match this pattern either). Reuses `TICKET_KEY_TOKEN`
+// (branchParser.ts's `TICKET_ID_PATTERN`, anchored) rather than a third independently-typed copy
+// of the Jira ticket-key shape.
 
 /**
  * Recognizes a reply as one or more ticket-key toggles for the Stale section — checked in
@@ -1678,7 +1679,7 @@ export function parseStaleTicketToggle(reply: string, stale: ReviewSessionStale)
   const matched: string[] = [];
   for (const token of tokens) {
     const upper = token.toUpperCase();
-    if (STALE_TICKET_KEY_PATTERN.test(upper) && knownKeys.has(upper)) matched.push(knownKeys.get(upper)!);
+    if (TICKET_KEY_TOKEN.test(upper) && knownKeys.has(upper)) matched.push(knownKeys.get(upper)!);
   }
   return matched.length > 0 ? matched : null;
 }

@@ -55,15 +55,14 @@ async function readAndFilterVeracodeFile(filePath: string): Promise<{ items: Ver
   // and it's the single source of truth used by the pure unit tests too) — both checks share the
   // same resolved maxReportBytes so they agree with each other and with the user's setting.
   const { maxReportBytes, ...filterConfig } = getVeracodeConfig();
-  // U6: captures the raw, unfiltered parsed flaws (before minSeverity/includeRemediationStatuses)
-  // as a side effect of readAndFilterReport's own filter step — buildVeracodeActiveFlawPredicate
-  // needs these, not the filtered/folded set filterFlaws()/groupFlawsByLocation() produce.
-  let rawFlaws: VeracodeFlaw[] = [];
-  const filtered = await readAndFilterReport(
+  // U6: buildVeracodeActiveFlawPredicate needs the raw, unfiltered flaws (before
+  // minSeverity/includeRemediationStatuses) — readAndFilterReport returns them directly as
+  // `rawItems` alongside the filtered/folded set, no closure capture needed.
+  const { items: filtered, rawItems: rawFlaws } = await readAndFilterReport(
     filePath,
     fp => fs.promises.readFile(fp, 'utf-8'),
     raw => parseVeracodeReport(raw, maxReportBytes),
-    flaws => { rawFlaws = flaws; return filterFlaws(flaws, filterConfig); },
+    flaws => filterFlaws(flaws, filterConfig),
     maxReportBytes,
   );
   return { items: groupFlawsByLocation(filtered), rawItems: rawFlaws };

@@ -88,7 +88,12 @@ function registerReportImportCommand<TRaw, TItem>(
     // readAndFilterVeracodeFile/readAndFilterWaltzFile now capture for the chat-only entry point.
     let rawParsedItems: TItem[] = [];
     try {
-      items = await readAndFilterReport<TRaw, TItem>(
+      // readAndFilterReport now returns { items, rawItems } directly, but its `rawItems` here would
+      // just be the already-filtered value (the wrapped parse step below applies descriptor.filter
+      // itself, so the outer `filter` param is identity — see its own comment) — this function keeps
+      // its own `rawParsedItems` closure capture above, taken before descriptor.filter runs, since
+      // that's the genuinely pre-filter set the stale-check predicate needs.
+      ({ items } = await readAndFilterReport<TRaw, TItem>(
         reportPath,
         async filePath => {
           try {
@@ -118,7 +123,7 @@ function registerReportImportCommand<TRaw, TItem>(
         // the same "Could not parse …" message exactly as before the refactor) — identity here.
         parsedItems => parsedItems,
         maxReportBytes,
-      );
+      ));
     } catch {
       if (!readOrParseFailed) {
         vscode.window.showErrorMessage(`Ticket Sidekick: Report exceeds the ${maxReportBytes / (1024 * 1024)} MB size limit.`);
