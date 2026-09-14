@@ -50,7 +50,7 @@ This repo already externalizes deferred-scope signal well in prose — `CLAUDE.m
 
 - R1. A central register file records every consciously-deferred known limitation as a single entry carrying: the limitation's description or a pointer to where it's documented, the date found, a severity, and the reason it wasn't resolved immediately.
 - R2. *(Retired — a fixed revisit-by-date default no longer applies; entries carry severity instead, per the Key Decision above.)*
-- R3. At launch, the register is seeded with seven entries: the two existing known-limitation notes in `docs/report-import.md` (the Veracode data-path gap, the Waltz single-fixture schema-drift gap); the four still-open items from the 2026-08-20 technical-debt ideation run — Waltz's parse-timeout lacking real cancellation, no independent-producer sentinel `.xlsx` fixture, no `@jira` token/context budget parity with `@bitbucket`, and the render-safety plan's deferred macro-injection verification; and the denylist-sanitizer-exhaustiveness watch item on `sanitizeCellText()`/`markdownToJiraWiki()` named in `docs/solutions/security-issues/waltz-oss-report-markdown-injection-in-jira-wiki-converter.md`'s Prevention section — a second, independent case of the same decay pattern this register exists to close, surfaced during planning research.
+- R3. At launch, the register is seeded with seven entries: the two existing known-limitation notes in `docs/report-import.md` (the Veracode data-path gap, the Waltz single-fixture schema-drift gap); the four still-open items from the 2026-08-20 technical-debt ideation run — Waltz's parse-timeout lacking real cancellation, no independent-producer sentinel `.xlsx` fixture, no `@jira` token/context budget parity with `@bitbucket`, and the render-safety plan's deferred macro-injection verification (`docs/plans/2026-08-14-001-fix-jira-wiki-render-safety-plan.md`, KTD3 / its Verification Contract's deferred manual check); and the denylist-sanitizer-exhaustiveness watch item on `sanitizeCellText()`/`markdownToJiraWiki()` named in `docs/solutions/security-issues/waltz-oss-report-markdown-injection-in-jira-wiki-converter.md`'s Prevention section — a second, independent case of the same decay pattern this register exists to close, surfaced during planning research.
 - R4. A new consciously-deferred limitation discovered after launch is added to the register at the time it's identified, with a severity assigned at registration, following a documented convention — the register is a living list, not a one-time snapshot.
 
 **Check-in mechanism**
@@ -112,6 +112,7 @@ flowchart TB
 - `src/participant/jira/contentHandler.ts` compared with `src/participant/BitbucketParticipant.ts`'s `contextBudgetRatio` usage — confirms the `@jira` token-budget-parity item seeded at R3 is still open.
 - Commit `5686646` (2026-09-11, `fix(jira): propagate ChatResult from email/report-import dispatch branches`) — confirms the bug in `docs/issues/create_from_email-2026-09-11.md` is already fixed; that issue doc is now stale and worth cleaning up, separately from this plan.
 - `docs/solutions/security-issues/waltz-oss-report-markdown-injection-in-jira-wiki-converter.md` and its successor `docs/solutions/security-issues/jira-native-wiki-trigger-neutralization-in-shared-markdown-converter.md` — a second, independent precedent of a predicted-but-unfixed risk decaying into a real vulnerability; source of R3's seventh seed row, added during planning research.
+- `docs/plans/2026-08-14-001-fix-jira-wiki-render-safety-plan.md` — source of R3's sixth seed row (KL6); its Dependencies/Assumptions and KTD3 name the deferred, non-blocking manual check of whether Jira's own renderer re-interprets wiki-markup trigger sequences inside `{{monospace}}`/`{code}`/`{noformat}` macros.
 
 ---
 
@@ -128,6 +129,7 @@ flowchart TB
 - KTD5. **Missing or unreadable register file is reported distinctly from an empty register.** If `docs/known-limitations.md` doesn't exist, or can't be parsed at all, when a firing is accepted, the Routine reports that specific condition rather than folding it into R7's "no active entries" message — so the maintainer can always tell "nothing to review" apart from "something is wrong with the file itself." Not session-settled: the safer default given this feature's whole purpose is not letting a gap decay unnoticed. Governs R6, R7.
 - KTD6. **Routine cadence: recurring monthly cron, not exact 30-day steps.** Implements the "recurring, self-sustaining schedule" Key Decision as a standard cron-style Routine evaluated on a monthly cadence (drifting a few days from a literal 30-day step depending on the month), rather than a self-rescheduling one-shot chain. Governs R5.
 - KTD7. **Won't-Fix Log row shape.** A row carries: the original `KL<N>` ID, description/pointer, found date, severity, the won't-fix reason, and the date it was declined. Append-only — the Routine never edits or removes a Won't-Fix Log row. Instantiates the durable-won't-fix-log Key Decision. Governs R6.
+- KTD8. **Session mode and persistence: fresh session per firing, with an explicit commit-and-push step.** Not session-settled — resolves a gap `ce-doc-review`'s adversarial pass found: without a defined path back into git, KTD3's batch write could be lost or invisible to the next firing's "fresh read." The Routine spawns a fresh session on each firing rather than self-binding to one persistent session — the register file, not conversation history, is the durable state, so nothing is gained by accumulating months of session context. Each accepted firing's prompt: pulls the tracked branch's current `docs/known-limitations.md` before reading, so KTD3's batch write never applies on top of stale content; after the walkthrough, commits the updated file — naming which `KL<N>` IDs were fixed, won't-fixed, or left unchanged — and pushes directly to the branch (a solo-maintainer docs update needs no PR). A push failure (e.g. a conflicting concurrent edit) is reported explicitly in that firing's summary rather than silently discarding the session's decisions. Governs R5, R6.
 
 ## Implementation Units
 
@@ -155,7 +157,7 @@ flowchart TB
 - **Files:**
   - `docs/known-limitations.md` (modify)
 - **Approach:**
-  1. One row per seed item, each citing its source with a repo-relative pointer: `KL1` Veracode data-path gap (`docs/report-import.md:55-58`); `KL2` Waltz single-fixture schema-drift gap (`docs/report-import.md:76-78`); `KL3` Waltz parse-timeout lacking real cancellation (`src/utils/waltzReport.ts:220-233`); `KL4` no independent-producer sentinel fixture (`scripts/fixtures/build-waltz-report-fixture.mjs`); `KL5` no `@jira` token/context budget parity (`src/participant/jira/contentHandler.ts` vs. `src/participant/BitbucketParticipant.ts`); `KL6` render-safety plan's deferred macro-injection verification; `KL7` denylist-sanitizer-exhaustiveness watch item (`docs/solutions/security-issues/waltz-oss-report-markdown-injection-in-jira-wiki-converter.md`).
+  1. One row per seed item, each citing its source with a repo-relative pointer: `KL1` Veracode data-path gap (`docs/report-import.md:55-58`); `KL2` Waltz single-fixture schema-drift gap (`docs/report-import.md:76-78`); `KL3` Waltz parse-timeout lacking real cancellation (`src/utils/waltzReport.ts:220-233`); `KL4` no independent-producer sentinel fixture (`scripts/fixtures/build-waltz-report-fixture.mjs`); `KL5` no `@jira` token/context budget parity (`src/participant/jira/contentHandler.ts` vs. `src/participant/BitbucketParticipant.ts`); `KL6` render-safety plan's deferred macro-injection verification (`docs/plans/2026-08-14-001-fix-jira-wiki-render-safety-plan.md`, KTD3 / its deferred manual check); `KL7` denylist-sanitizer-exhaustiveness watch item (`docs/solutions/security-issues/waltz-oss-report-markdown-injection-in-jira-wiki-converter.md`).
   2. Found date: the date this unit ships.
   3. Severity: propose one per entry at implementation time — `KL3`, `KL4`, `KL7` lean High (each is security- or resource-exhaustion-adjacent per its own source doc's framing); `KL1`, `KL2`, `KL5`, `KL6` lean Medium. This is a judgment call left to the implementer, not fixed by this plan.
 - **Test scenarios:** Test expectation: none -- pure documentation content.
@@ -175,7 +177,7 @@ flowchart TB
 ### U4. Set up the scheduled Routine
 
 - **Goal:** A recurring Routine that fires roughly monthly (KTD6), checks in with the maintainer, and walks the severity-sorted register per R5–R7.
-- **Requirements:** R5, R6, R7 (KTD3, KTD4, KTD5, KTD6).
+- **Requirements:** R5, R6, R7 (KTD3, KTD4, KTD5, KTD6, KTD8).
 - **Dependencies:** U1, U3.
 - **Files:** none — this unit configures a Routine external to the repo (Claude Code's scheduled-trigger mechanism), not a source file. Note this explicitly at implementation time so it isn't mistaken for a missed file.
 - **Approach:**
@@ -186,7 +188,7 @@ flowchart TB
   5. If the Active Register has no rows, reports that and ends (R7).
   6. Otherwise, best-effort-repairs any malformed row (KTD4), presents every row sorted High → Medium → Low, and lets the maintainer choose fix-now / won't-fix / leave-unchanged independently per row.
   7. For a won't-fix choice, appends a row to `## Won't-Fix Log` (KTD7) before removing it from the Active Register.
-  8. Writes every change from that firing back to the file once, after the walkthrough ends (KTD3).
+  8. Writes every change from that firing back to the file once, after the walkthrough ends (KTD3), then commits and pushes it directly to the tracked branch (KTD8), reporting explicitly if the push fails.
 - **Execution note:** Routine/prompt configuration, not application code — verify with a manual trigger fire (not the schedule) once U1 and U3 land.
 - **Test scenarios** (manual verification; no test framework applies to prompt configuration):
   - Register holds one Medium-severity entry only; firing accepted → entry is presented; choosing leave-unchanged leaves it present and unchanged afterward. Covers AE3.
@@ -198,13 +200,15 @@ flowchart TB
   - A row is missing its severity → the Routine defaults it to Medium, includes it in that firing's presentation, and the repaired value is written back.
   - The register file is missing (deleted before a firing) → the Routine reports it as missing/unreadable, distinct from "no active entries" (KTD5), rather than erroring silently.
   - A firing is interrupted after resolving one of several presented entries, before the walkthrough ends → at the next firing, none of the interrupted session's in-progress decisions appear (expected under KTD3's batch model — confirms the accepted trade-off rather than a silent partial write).
+  - A firing resolves at least one entry → the batch write is followed by a commit and push to the tracked branch (KTD8); a fresh `git log`/`git show` on that branch shows the change, and a second firing started afterward reads the updated file rather than the pre-firing state.
 - **Verification:** every scenario above behaves as described on a manual fire; the Routine's stored prompt names the file path and points at `## Convention` rather than restating fields inline.
 
 ## Risks & Dependencies
 
 - **Batch-write trade-off (accepted, KTD3).** An interrupted check-in loses that session's in-progress decisions; they simply re-present at the next firing. This is a deliberate simplicity-over-robustness choice, not an oversight.
-- **The Routine lives outside this repo's git history.** Its schedule and stored prompt are Claude Code account/environment state, not a committed file. If this environment or account access changes, the Routine may need to be recreated; `docs/known-limitations.md` itself is unaffected and remains the source of truth for the register's content.
+- **The Routine lives outside this repo's git history.** Its schedule and stored prompt are Claude Code account/environment state, not a committed file. If this environment or account access changes, the Routine may need to be recreated; `docs/known-limitations.md` itself is unaffected and remains the source of truth for the register's content — provided each firing actually commits and pushes its changes per KTD8, rather than leaving them in a container that gets reclaimed.
 - **No schema-check tooling exists in this repo for a hand-edited Markdown table** (confirmed by repo research: no lint/validation script covers any `docs/*.md` file today). A malformed row is possible from manual edits; KTD4's best-effort repair mitigates this but doesn't eliminate it.
+- **The Goal Capsule's Objective describes what the mechanism offers, not a guarantee against indefinite non-review.** Because declining a firing is a legitimate outcome with no escalation (Key Decisions; Scope Boundaries), a maintainer who declines every firing never sees the register's contents — the Routine only guarantees a recurring, undeclined-by-default *ask*, not that any limitation actually gets looked at. This is the accepted consequence of those settled decisions, not a defect to fix.
 
 ## Verification Contract
 
