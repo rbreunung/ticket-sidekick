@@ -45,6 +45,13 @@ below with the next unused `KL<N>` ID and a severity.
 
 | ID | Description / Pointer | Found | Severity | Reason |
 | --- | --- | --- | --- | --- |
+| KL1 | Veracode data-path trace not shown in tickets — `docs/report-import.md:55-58` | 2026-09-14 | Medium | Full data-path support needs the Findings REST API instead of the Detailed Report XML; out of scope for the importer as built. |
+| KL2 | Waltz schema validated against a single real export — `docs/report-import.md:76-78` | 2026-09-14 | Medium | No second real export was available to validate against at ship time; already caused one production bug (see `docs/solutions/integration-issues/waltz-oss-report-unzip-failure-on-real-world-xlsx.md`). |
+| KL3 | Waltz parse-timeout stops waiting but doesn't cancel the parse itself — `src/utils/waltzReport.ts:220-233` | 2026-09-14 | High | The real fix (a `worker_thread` that can be terminated) is a genuine chunk of work; not yet justified without evidence it has fired for a real user. |
+| KL4 | No independent-producer sentinel `.xlsx` fixture — `scripts/fixtures/build-waltz-report-fixture.mjs` | 2026-09-14 | High | Needs a real anonymized export or a different toolchain's writer; acquisition effort, not code, and not yet done. |
+| KL5 | `@jira` has no token/context budget cap, unlike `@bitbucket`'s `contextBudgetRatio` — `src/participant/jira/contentHandler.ts` vs. `src/participant/BitbucketParticipant.ts` | 2026-09-14 | Medium | The fix already exists on the Bitbucket side; porting it is a real but modest change not yet scheduled. |
+| KL6 | Jira's own renderer re-interpreting wiki trigger sequences inside `{{monospace}}`/`{code}`/`{noformat}` macros is unverified against a live instance — `docs/plans/2026-08-14-001-fix-jira-wiki-render-safety-plan.md`, KTD3 | 2026-09-14 | Medium | Needs a real or sandbox Jira instance to test against; deferred as a one-time manual check at ship time. |
+| KL7 | Denylist sanitizers (`sanitizeCellText()`/`markdownToJiraWiki()`) will silently stop being exhaustive if Jira ever gains new macro syntax — `docs/solutions/security-issues/waltz-oss-report-markdown-injection-in-jira-wiki-converter.md` | 2026-09-14 | High | No enumeration-completeness check exists; already caused one real vulnerability when the character set was under-enumerated once. |
 
 ## Won't-Fix Log
 
