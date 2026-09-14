@@ -20,9 +20,11 @@ import { sessionWasSuperseded } from './ticketContext';
 // Bounds match ticketSidekick.veracode.maxReportSizeMB's package.json declaration (default 50,
 // range 1-200 MB) — single source of truth for the default kept there; these are duplicated here
 // only as the numeric bounds resolveMaxReportBytes() needs, since package.json isn't importable.
-const DEFAULT_MAX_REPORT_SIZE_MB = 50;
-const MIN_MAX_REPORT_SIZE_MB = 1;
-const MAX_MAX_REPORT_SIZE_MB = 200;
+// Exported so extension.ts's command-palette entry point resolves the same setting the same way,
+// rather than re-typing the bounds and risking the two entry points drifting apart.
+export const DEFAULT_MAX_REPORT_SIZE_MB = 50;
+export const MIN_MAX_REPORT_SIZE_MB = 1;
+export const MAX_MAX_REPORT_SIZE_MB = 200;
 
 function getVeracodeConfig(): { minSeverity: number; includeStatuses: string[]; maxReportBytes: number } {
   const cfg = vscode.workspace.getConfiguration('ticketSidekick');
