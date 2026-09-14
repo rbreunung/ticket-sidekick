@@ -26,6 +26,21 @@ export const MAX_EMAIL_BATCH_BYTES = 150 * 1024 * 1024; // 150 MB total per batc
 export const DEFAULT_DEDUP_CHUNK_SIZE = 40; // keeps generated JQL well under Jira's practical query-length limits
 
 /**
+ * Turns a configured `ticketSidekick.<x>.maxReportSizeMB`/`maxBatchSizeMB` setting value into a
+ * validated byte limit — the single source of truth every config-reading call site (extension.ts's
+ * two command registrations, veracodeHandler.ts, waltzHandler.ts, emailHandler.ts) uses instead of
+ * re-implementing the same range check four times. A non-finite value or one outside
+ * `[minMB, maxMB]` falls back to `defaultMB` rather than disabling the cap or throwing — a user
+ * typo in settings.json must never leave an import unbounded.
+ */
+export function resolveMaxReportBytes(configuredMB: unknown, defaultMB: number, minMB: number, maxMB: number): number {
+  const mb = typeof configuredMB === 'number' && Number.isFinite(configuredMB) && configuredMB >= minMB && configuredMB <= maxMB
+    ? configuredMB
+    : defaultMB;
+  return mb * 1024 * 1024;
+}
+
+/**
  * Splits `items` into chunks of at most `chunkSize`, preserving order. Generalized from the
  * byte-identical `chunkIssueIds`/`chunkComponentLabels` each importer had (they differed only in
  * parameter naming).
