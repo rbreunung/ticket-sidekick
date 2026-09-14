@@ -27,9 +27,12 @@ export interface WaltzComponent {
 export const MAX_REPORT_BYTES = SHARED_MAX_REPORT_BYTES;
 const REQUIRED_SHEET = 'ComponentRemediations';
 
-export function assertSafeWaltzReportSize(buffer: Buffer): void {
-  if (buffer.length > MAX_REPORT_BYTES) {
-    throw new Error(`OSS report exceeds the ${MAX_REPORT_BYTES / (1024 * 1024)} MB size limit.`);
+// `maxBytes` defaults to the shared constant so every existing single-argument call (including the
+// pure unit tests) keeps working unchanged; a configured caller (waltzHandler.ts, extension.ts)
+// passes its own resolved limit explicitly.
+export function assertSafeWaltzReportSize(buffer: Buffer, maxBytes: number = MAX_REPORT_BYTES): void {
+  if (buffer.length > maxBytes) {
+    throw new Error(`OSS report exceeds the ${maxBytes / (1024 * 1024)} MB size limit.`);
   }
 }
 
@@ -222,11 +225,11 @@ const PARSE_TIMEOUT_MS = 15_000; // hard ceiling so a pathological file (e.g. a 
 // memory or hanging the extension host. Bounds wall-clock time, not memory directly, but a
 // hung/thrashing parse is exactly what this catches.
 
-export async function parseWaltzReport(buffer: Buffer): Promise<WaltzComponent[]> {
+export async function parseWaltzReport(buffer: Buffer, maxBytes: number = MAX_REPORT_BYTES): Promise<WaltzComponent[]> {
   let timeoutHandle: ReturnType<typeof setTimeout>;
   try {
     return await Promise.race([
-      parseWaltzReportInner(buffer),
+      parseWaltzReportInner(buffer, maxBytes),
       new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(
           () => reject(new Error(`OSS report parsing exceeded ${PARSE_TIMEOUT_MS / 1000}s — the file may be malformed or unusually large.`)),
@@ -239,8 +242,8 @@ export async function parseWaltzReport(buffer: Buffer): Promise<WaltzComponent[]
   }
 }
 
-async function parseWaltzReportInner(buffer: Buffer): Promise<WaltzComponent[]> {
-  assertSafeWaltzReportSize(buffer);
+async function parseWaltzReportInner(buffer: Buffer, maxBytes: number): Promise<WaltzComponent[]> {
+  assertSafeWaltzReportSize(buffer, maxBytes);
 
   // Unzip once — loadWaltzWorkbook() is the only step that can throw a "Could not read OSS
   // report" (ZIP-level) error; everything below reads from the already-parsed workbook in memory.

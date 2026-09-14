@@ -112,10 +112,11 @@ export async function readAndFilterReport<TRaw, TItem>(
   readContent: (filePath: string) => Promise<TRaw>,
   parse: (raw: TRaw) => TItem[] | Promise<TItem[]>,
   filter: (items: TItem[]) => TItem[],
+  maxBytes: number = MAX_REPORT_BYTES,
 ): Promise<TItem[]> {
   const stat = await fs.promises.stat(filePath);
-  if (stat.size > MAX_REPORT_BYTES) {
-    throw new Error(`File exceeds the ${MAX_REPORT_BYTES / (1024 * 1024)} MB size limit.`);
+  if (stat.size > maxBytes) {
+    throw new Error(`File exceeds the ${maxBytes / (1024 * 1024)} MB size limit.`);
   }
   const raw = await readContent(filePath);
   const items = await parse(raw);

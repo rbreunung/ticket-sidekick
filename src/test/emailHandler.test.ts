@@ -272,6 +272,41 @@ describe('checkEmailBatchCaps', () => {
     expect(result).toContain('150 MB');
     vi.restoreAllMocks();
   });
+
+  it('passes a batch that would exceed the default cap when maxBatchSizeMB is raised', async () => {
+    vi.spyOn(fs.promises, 'stat').mockResolvedValue({ size: 100 * 1024 * 1024 } as never);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValueOnce({
+      get: (key: string, defaultVal?: unknown) => (key === 'email.maxBatchSizeMB' ? 250 : defaultVal ?? null),
+    } as never);
+    const uris = [{ fsPath: 'a.eml' }, { fsPath: 'b.eml' }] as vscode.Uri[];
+    const result = await checkEmailBatchCaps(uris);
+    expect(result).toBeNull();
+    vi.restoreAllMocks();
+  });
+
+  it('rejects a batch under the default cap when maxBatchSizeMB is lowered, reporting the lowered limit', async () => {
+    vi.spyOn(fs.promises, 'stat').mockResolvedValue({ size: 30 * 1024 * 1024 } as never);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValueOnce({
+      get: (key: string, defaultVal?: unknown) => (key === 'email.maxBatchSizeMB' ? 50 : defaultVal ?? null),
+    } as never);
+    const uris = [{ fsPath: 'a.eml' }, { fsPath: 'b.eml' }] as vscode.Uri[];
+    const result = await checkEmailBatchCaps(uris);
+    expect(result).toContain('60.0 MB');
+    expect(result).toContain('batch limit is 50 MB');
+    vi.restoreAllMocks();
+  });
+
+  it('falls back to the 150 MB default when maxBatchSizeMB is out of range', async () => {
+    vi.spyOn(fs.promises, 'stat').mockResolvedValue({ size: 100 * 1024 * 1024 } as never);
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValueOnce({
+      get: (key: string, defaultVal?: unknown) => (key === 'email.maxBatchSizeMB' ? 0 : defaultVal ?? null),
+    } as never);
+    const uris = [{ fsPath: 'a.eml' }, { fsPath: 'b.eml' }] as vscode.Uri[];
+    const result = await checkEmailBatchCaps(uris);
+    expect(result).toContain('200.0 MB');
+    expect(result).toContain('batch limit is 150 MB');
+    vi.restoreAllMocks();
+  });
 });
 
 describe('handleCreateFromEmail (batch, U1-U3)', () => {

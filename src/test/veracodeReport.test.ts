@@ -115,6 +115,17 @@ describe('assertSafeVeracodeXml', () => {
   it('accepts a normal, small, well-formed document', () => {
     expect(() => assertSafeVeracodeXml(fixture('sample-report.xml'))).not.toThrow();
   });
+
+  it('accepts a document under the default 20 MB cap but over a smaller custom maxBytes at the default only', () => {
+    const twentyFiveMb = '<detailedreport>' + 'x'.repeat(25 * 1024 * 1024) + '</detailedreport>';
+    expect(() => assertSafeVeracodeXml(twentyFiveMb)).toThrow(/size limit/i);
+    expect(() => assertSafeVeracodeXml(twentyFiveMb, 50 * 1024 * 1024)).not.toThrow();
+  });
+
+  it('rejects a document over a custom maxBytes, reporting that custom limit in the message', () => {
+    const tenMb = '<detailedreport>' + 'x'.repeat(10 * 1024 * 1024) + '</detailedreport>';
+    expect(() => assertSafeVeracodeXml(tenMb, 5 * 1024 * 1024)).toThrow(/5 MB size limit/);
+  });
 });
 
 describe('filterFlaws', () => {

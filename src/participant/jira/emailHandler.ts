@@ -6,7 +6,7 @@ import type { TicketService } from '../../services/TicketService';
 import type { ConfigService } from '../../services/ConfigService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import { markdownToJiraWiki } from '../../utils/markdownToJiraWiki';
-import { sanitizeCellText, BATCH_LIMIT, MAX_EMAIL_BATCH_BYTES } from '../../utils/reportImport';
+import { sanitizeCellText, BATCH_LIMIT, resolveMaxReportBytes } from '../../utils/reportImport';
 import { parseEmlFile, type EmailImportItem, type EmailReviewRow } from '../../utils/emlParser';
 import type {
   EmailContentSession, AwaitIssueTypeResume, EmailTemplateSelectionSession, EmailReviewSession, ReviewTableColumn,
@@ -107,6 +107,20 @@ const emailDescriptor: ReportImportDescriptor<EmailImportItem, EmailReviewRow> =
   },
 };
 
+// Bounds match ticketSidekick.email.maxBatchSizeMB's package.json declaration (default 150, range
+// 1-500 MB) — single source of truth for the default kept there; these are duplicated here only as
+// the numeric bounds resolveMaxReportBytes() needs, since package.json isn't importable.
+const DEFAULT_MAX_BATCH_SIZE_MB = 150;
+const MIN_MAX_BATCH_SIZE_MB = 1;
+const MAX_MAX_BATCH_SIZE_MB = 500;
+
+function getEmailMaxBatchBytes(): number {
+  const cfg = vscode.workspace.getConfiguration('ticketSidekick');
+  return resolveMaxReportBytes(
+    cfg.get<number>('email.maxBatchSizeMB'), DEFAULT_MAX_BATCH_SIZE_MB, MIN_MAX_BATCH_SIZE_MB, MAX_MAX_BATCH_SIZE_MB,
+  );
+}
+
 // Checks the file-count cap (KTD6) and the aggregate attachment-byte cap (KTD7) for a set of
 // selected .eml files, before any file is read. Returns an error message to show the user, or null
 // when both caps are satisfied. Shared by every entry point's file picker (chat and Command Palette)
@@ -121,9 +135,10 @@ export async function checkEmailBatchCaps(uris: vscode.Uri[]): Promise<string | 
     fs.promises.stat(uri.fsPath).then(stat => stat.size).catch(() => 0), // a stat failure surfaces properly below, when the file is actually read and parsed
   ));
   const totalBytes = sizes.reduce((sum, size) => sum + size, 0);
-  if (totalBytes > MAX_EMAIL_BATCH_BYTES) {
+  const maxBatchBytes = getEmailMaxBatchBytes();
+  if (totalBytes > maxBatchBytes) {
     const totalMb = (totalBytes / (1024 * 1024)).toFixed(1);
-    const capMb = MAX_EMAIL_BATCH_BYTES / (1024 * 1024);
+    const capMb = maxBatchBytes / (1024 * 1024);
     return `Selected files total ${totalMb} MB — the batch limit is ${capMb} MB. Select fewer or smaller files and try again.`;
   }
   return null;

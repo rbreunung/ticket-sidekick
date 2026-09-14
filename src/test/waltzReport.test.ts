@@ -71,6 +71,16 @@ describe('assertSafeWaltzReportSize', () => {
   it('accepts a normal, small file', () => {
     expect(() => assertSafeWaltzReportSize(fixtureBuffer('sample-report.xlsx'))).not.toThrow();
   });
+
+  it('accepts a buffer over the default 20 MB cap when given a larger custom maxBytes', () => {
+    const twentyFiveMb = Buffer.alloc(25 * 1024 * 1024);
+    expect(() => assertSafeWaltzReportSize(twentyFiveMb)).toThrow(/size limit/i);
+    expect(() => assertSafeWaltzReportSize(twentyFiveMb, 50 * 1024 * 1024)).not.toThrow();
+  });
+
+  it('rejects a buffer over a custom maxBytes, reporting that custom limit in the message', () => {
+    expect(() => assertSafeWaltzReportSize(Buffer.alloc(10 * 1024 * 1024), 5 * 1024 * 1024)).toThrow(/5 MB size limit/);
+  });
 });
 
 describe('filterComponents', () => {

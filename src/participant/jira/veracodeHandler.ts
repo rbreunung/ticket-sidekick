@@ -13,25 +13,47 @@ import {
   handleImportTemplateSelection, handleImportReviewReply, continueAfterImportIssueType,
   type ReportImportDescriptor,
 } from './reportImportHandler';
+import { resolveMaxReportBytes } from '../../utils/reportImport';
 import type { AwaitIssueTypeResume } from '../sessionState';
 import { sessionWasSuperseded } from './ticketContext';
 
-function getVeracodeConfig(): { minSeverity: number; includeStatuses: string[] } {
+// Bounds match ticketSidekick.veracode.maxReportSizeMB's package.json declaration (default 50,
+// range 1-200 MB) — single source of truth for the default kept there; these are duplicated here
+// only as the numeric bounds resolveMaxReportBytes() needs, since package.json isn't importable.
+const DEFAULT_MAX_REPORT_SIZE_MB = 50;
+const MIN_MAX_REPORT_SIZE_MB = 1;
+const MAX_MAX_REPORT_SIZE_MB = 200;
+
+// Exported so extension.ts's command-palette entry point resolves ticketSidekick.veracode.maxReportSizeMB
+// exactly the same way as the @jira chat entry point below, rather than re-deriving the bounds and
+// risking the two entry points drifting apart.
+export function getVeracodeMaxReportBytes(): number {
+  const cfg = vscode.workspace.getConfiguration('ticketSidekick');
+  return resolveMaxReportBytes(
+    cfg.get<number>('veracode.maxReportSizeMB'), DEFAULT_MAX_REPORT_SIZE_MB, MIN_MAX_REPORT_SIZE_MB, MAX_MAX_REPORT_SIZE_MB,
+  );
+}
+
+function getVeracodeConfig(): { minSeverity: number; includeStatuses: string[]; maxReportBytes: number } {
   const cfg = vscode.workspace.getConfiguration('ticketSidekick');
   return {
     minSeverity: cfg.get<number>('veracode.minSeverity') ?? 4,
     includeStatuses: cfg.get<string[]>('veracode.includeRemediationStatuses') ?? ['New', 'Open', 'Reopened'],
+    maxReportBytes: getVeracodeMaxReportBytes(),
   };
 }
 
 async function readAndFilterVeracodeFile(filePath: string): Promise<VeracodeFlaw[]> {
   // parseVeracodeReport() itself also re-checks size + rejects DOCTYPE/ENTITY (defense in depth,
-  // and it's the single source of truth used by the pure unit tests too).
+  // and it's the single source of truth used by the pure unit tests too) — both checks share the
+  // same resolved maxReportBytes so they agree with each other and with the user's setting.
+  const { maxReportBytes, ...filterConfig } = getVeracodeConfig();
   return readAndFilterReport(
     filePath,
     fp => fs.promises.readFile(fp, 'utf-8'),
-    raw => parseVeracodeReport(raw),
-    flaws => filterFlaws(flaws, getVeracodeConfig()),
+    raw => parseVeracodeReport(raw, maxReportBytes),
+    flaws => filterFlaws(flaws, filterConfig),
+    maxReportBytes,
   );
 }
 

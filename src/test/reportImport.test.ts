@@ -1,9 +1,31 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   chunkStrings, buildDedupJql, extractDedupMap, findAlreadyTicketed, capNewRows, buildReviewRows,
-  sanitizeCellText, sanitizeStandaloneLine,
+  sanitizeCellText, sanitizeStandaloneLine, resolveMaxReportBytes,
   type JqlIssueLike,
 } from '../utils/reportImport';
+
+describe('resolveMaxReportBytes', () => {
+  it('returns the default in bytes when given undefined', () => {
+    expect(resolveMaxReportBytes(undefined, 50, 1, 200)).toBe(50 * 1024 * 1024);
+  });
+
+  it('returns the default in bytes when given a non-numeric value', () => {
+    expect(resolveMaxReportBytes('50' as unknown, 50, 1, 200)).toBe(50 * 1024 * 1024);
+  });
+
+  it('returns the default in bytes when given a value below the minimum', () => {
+    expect(resolveMaxReportBytes(0, 50, 1, 200)).toBe(50 * 1024 * 1024);
+  });
+
+  it('returns the default in bytes when given a value above the maximum', () => {
+    expect(resolveMaxReportBytes(500, 50, 1, 200)).toBe(50 * 1024 * 1024);
+  });
+
+  it('returns the configured value in bytes when it is a valid in-range number', () => {
+    expect(resolveMaxReportBytes(75, 50, 1, 200)).toBe(75 * 1024 * 1024);
+  });
+});
 
 describe('sanitizeCellText', () => {
   it('flattens embedded newlines to a space so a value cannot start a new line the converter re-parses as structure', () => {

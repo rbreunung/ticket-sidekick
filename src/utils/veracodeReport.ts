@@ -34,9 +34,12 @@ export const MAX_REPORT_BYTES = SHARED_MAX_REPORT_BYTES;
 
 // Defense-in-depth: fast-xml-parser does not resolve external entities, but we
 // reject DOCTYPE/ENTITY declarations outright so a malicious file is never even parsed.
-export function assertSafeVeracodeXml(raw: string): void {
-  if (Buffer.byteLength(raw, 'utf8') > MAX_REPORT_BYTES) {
-    throw new Error(`Veracode report exceeds the ${MAX_REPORT_BYTES / (1024 * 1024)} MB size limit.`);
+// `maxBytes` defaults to the shared constant so every existing single-argument call (including the
+// pure unit tests) keeps working unchanged; a configured caller (veracodeHandler.ts, extension.ts)
+// passes its own resolved limit explicitly.
+export function assertSafeVeracodeXml(raw: string, maxBytes: number = MAX_REPORT_BYTES): void {
+  if (Buffer.byteLength(raw, 'utf8') > maxBytes) {
+    throw new Error(`Veracode report exceeds the ${maxBytes / (1024 * 1024)} MB size limit.`);
   }
   if (/<!DOCTYPE/i.test(raw) || /<!ENTITY/i.test(raw)) {
     throw new Error('Veracode report contains a DOCTYPE/ENTITY declaration and was rejected for security reasons.');
@@ -71,8 +74,8 @@ function extractRecommendation(recommendations: unknown): string | null {
   return paras.length > 0 ? paras.join('\n\n') : null;
 }
 
-export function parseVeracodeReport(xml: string): VeracodeFlaw[] {
-  assertSafeVeracodeXml(xml);
+export function parseVeracodeReport(xml: string, maxBytes: number = MAX_REPORT_BYTES): VeracodeFlaw[] {
+  assertSafeVeracodeXml(xml, maxBytes);
 
   const parser = new XMLParser({
     ignoreAttributes: false,
