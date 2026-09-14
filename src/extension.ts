@@ -7,19 +7,9 @@ import { createJiraParticipant } from './participant/JiraParticipant';
 import { createBitbucketParticipant } from './participant/BitbucketParticipant';
 import { JiraApiClient } from './jira/JiraApiClient';
 import { parseVeracodeReport, filterFlaws } from './utils/veracodeReport';
-import {
-  buildVeracodeTemplateSession,
-  DEFAULT_MAX_REPORT_SIZE_MB as VERACODE_DEFAULT_MAX_REPORT_SIZE_MB,
-  MIN_MAX_REPORT_SIZE_MB as VERACODE_MIN_MAX_REPORT_SIZE_MB,
-  MAX_MAX_REPORT_SIZE_MB as VERACODE_MAX_MAX_REPORT_SIZE_MB,
-} from './participant/jira/veracodeHandler';
+import { buildVeracodeTemplateSession, getVeracodeMaxReportBytes } from './participant/jira/veracodeHandler';
 import { parseWaltzReport, filterComponents } from './utils/waltzReport';
-import {
-  buildWaltzTemplateSession,
-  DEFAULT_MAX_REPORT_SIZE_MB as WALTZ_DEFAULT_MAX_REPORT_SIZE_MB,
-  MIN_MAX_REPORT_SIZE_MB as WALTZ_MIN_MAX_REPORT_SIZE_MB,
-  MAX_MAX_REPORT_SIZE_MB as WALTZ_MAX_MAX_REPORT_SIZE_MB,
-} from './participant/jira/waltzHandler';
+import { buildWaltzTemplateSession, getWaltzMaxReportBytes } from './participant/jira/waltzHandler';
 import {
   checkEmailBatchCaps, buildEmailTemplateSession, parseEmlFiles, describeEmailFileSelection, EMAIL_TEMPLATE_SESSION_KEY,
 } from './participant/jira/emailHandler';
@@ -320,10 +310,7 @@ export function activate(context: vscode.ExtensionContext): void {
       buildTemplateSession: buildVeracodeTemplateSession,
       sessionKey: 'jira.session.veracodeTemplateSelection',
       chatQuery: '@jira import veracode report',
-      getMaxReportBytes: () => resolveMaxReportBytes(
-        vscode.workspace.getConfiguration('ticketSidekick').get<number>('veracode.maxReportSizeMB'),
-        VERACODE_DEFAULT_MAX_REPORT_SIZE_MB, VERACODE_MIN_MAX_REPORT_SIZE_MB, VERACODE_MAX_MAX_REPORT_SIZE_MB,
-      ),
+      getMaxReportBytes: getVeracodeMaxReportBytes,
     }),
   );
 
@@ -345,10 +332,7 @@ export function activate(context: vscode.ExtensionContext): void {
       noMatchMessage:
         'Ticket Sidekick: No components in this report matched your current rating/remediation filters ' +
         '(ticketSidekick.waltz.minVulnRating / ticketSidekick.waltz.includeRemediationActions).',
-      getMaxReportBytes: () => resolveMaxReportBytes(
-        vscode.workspace.getConfiguration('ticketSidekick').get<number>('waltz.maxReportSizeMB'),
-        WALTZ_DEFAULT_MAX_REPORT_SIZE_MB, WALTZ_MIN_MAX_REPORT_SIZE_MB, WALTZ_MAX_MAX_REPORT_SIZE_MB,
-      ),
+      getMaxReportBytes: getWaltzMaxReportBytes,
       buildTemplateSession: buildWaltzTemplateSession,
       sessionKey: 'jira.session.waltzTemplateSelection',
       chatQuery: '@jira import oss report',
