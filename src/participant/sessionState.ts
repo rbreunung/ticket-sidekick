@@ -1218,7 +1218,9 @@ export function neutralizeMarkdownLinks(value: string): string {
 // U6: bumped 3 -> 4 for the stale-ticket review section (ReviewSession<TRow> gained `staleTickets`)
 // — same rationale, an in-flight pre-upgrade session must not render a stale section from
 // `undefined`.
-export const CURRENT_SESSION_SCHEMA_VERSION = 4;
+// U3: bumped 4 -> 5 for the "update existing tickets" bulk action (ReviewRowBase gained the
+// optional `updatedExisting` per-row indicator) — same rationale as U6's bump.
+export const CURRENT_SESSION_SCHEMA_VERSION = 5;
 
 export interface ImportTemplateSelectionSession<TItem> {
   reportFileName: string;
@@ -1282,6 +1284,12 @@ export interface ReviewRowBase {
   id: string; // '1'..'N' new candidates, 'A1'..'Am' already-ticketed
   existingTicketKey: string | null;
   included: boolean; // whether this row will be (re)created if the batch runs
+  // U3/R13: set once "update existing tickets" (executeUpdateExistingTickets in
+  // reportImportHandler.ts) has added this row's missing label(s) + summarizing comment to its
+  // ticket — a per-row "synced" indicator the review table renders in the Already-ticketed
+  // section's "Updated?" column. Undefined/false for every row until that action runs; never set
+  // by any other code path (toggling, paging, creation all leave it untouched).
+  updatedExisting?: boolean;
 }
 
 export interface ReviewSession<TRow> {
@@ -1484,6 +1492,36 @@ export function applyReviewSessionToggle<TRow extends ReviewRowBase>(
   return { rows: newRows, allRows: newAllRows };
 }
 
+/**
+ * U3/R13: "update existing tickets" reply keyword — a distinct outcome from `ok`/`cancel`/`toggle`/
+ * a page-nav token (U4)/a stale-ticket-key toggle (U6), checked in the same order
+ * `handleImportReviewReply` already threads those through. Case-insensitive exact match only (no
+ * fuzzy/partial matching) — deliberately narrow so it can never collide with a row-id toggle list
+ * or any other reply shape.
+ */
+export function isUpdateExistingTicketsReply(reply: string): boolean {
+  return reply.trim().toLowerCase() === 'update existing tickets';
+}
+
+/**
+ * U3/R13: mirrors a just-completed "update existing tickets" run's outcome (`updatedKeys` — the
+ * ticket keys that actually got a new label + comment this run) into both `rows` and `allRows` by
+ * setting `updatedExisting: true` on every row whose `existingTicketKey` is in that set — same
+ * shape as `applyReviewSessionToggle`'s dual-array mirroring, since the Already-ticketed section is
+ * always shown in full (R8) and must survive a later page-navigation recompute. Pure so it's
+ * independently testable; the caller (`executeUpdateExistingTickets` in reportImportHandler.ts)
+ * only computes `updatedKeys`, never mutates rows itself.
+ */
+export function markRowsUpdatedExisting<TRow extends ReviewRowBase>(
+  rows: TRow[],
+  allRows: TRow[],
+  updatedKeys: Set<string>,
+): { rows: TRow[]; allRows: TRow[] } {
+  const mark = (r: TRow): TRow =>
+    r.existingTicketKey !== null && updatedKeys.has(r.existingTicketKey) ? { ...r, updatedExisting: true } : r;
+  return { rows: rows.map(mark), allRows: allRows.map(mark) };
+}
+
 export interface ReviewTableColumn<TRow> {
   header: string;
   accessor: (row: TRow) => string;
@@ -1532,6 +1570,10 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
   totalPages: number,
   columns: ReviewTableColumn<TRow>[],
   itemNoun: string, // e.g. 'flaw(s)' or 'component(s)' — used in summary/page lines
+  // U3/R13: opt-in only — set by streamImportReview() when the importer's own descriptor configures
+  // `updateExisting` (Veracode; Waltz/email omit it and this stays false, so neither the "Updated?"
+  // column nor the reply hint ever appears for them).
+  supportsUpdateExisting = false,
 ): string {
   const ticketed = rows.filter(r => r.existingTicketKey !== null);
   const fresh = rows.filter(r => r.existingTicketKey === null);
@@ -1548,6 +1590,11 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
       idColumn,
       ...columns,
       { header: 'Ticket', accessor: (r) => formatKeyLink(r.existingTicketKey!, baseUrl) },
+      // U3/R13: shows whether "update existing tickets" already synced this row's new finding(s)
+      // onto its ticket this session — set by markRowsUpdatedExisting() after that action runs.
+      ...(supportsUpdateExisting
+        ? [{ header: 'Updated?', accessor: (r: TRow) => (r.updatedExisting ? '✓ synced' : '') } as ReviewTableColumn<TRow>]
+        : []),
       { header: 'Include?', accessor: (r) => buildChatCommandLink(r.included ? '✓ re-create' : '_excluded_', '@jira', r.id) },
     ];
     lines.push('### Already ticketed');
@@ -1587,6 +1634,17 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
     lines.push('');
     lines.push(`_Only the first ${REVIEW_BATCH_LIMIT} included rows will be created this run — re-run the import afterward for the remainder._`);
   }
+  // U3/R13: offered independently of, and not requiring, a "post it" confirm on the New/Stale
+  // sections (governing decision) — only shown when the importer supports it AND there's at least
+  // one already-ticketed row it could apply to.
+  if (supportsUpdateExisting && ticketed.length > 0) {
+    lines.push('');
+    lines.push(
+      `Reply ${buildChatCommandLink('update existing tickets', '@jira', 'update existing tickets')} to add any missing ` +
+      `label + a summarizing comment to every already-ticketed row above with a new finding not yet reflected on its ticket.`,
+    );
+  }
+
   lines.push('');
   lines.push(
     `Reply ${buildChatCommandLink('Post it', '@jira', 'post it')} to proceed, ` +

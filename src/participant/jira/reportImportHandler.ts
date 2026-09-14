@@ -24,6 +24,7 @@ import {
   isCancellation, pickEmailOption, buildImportReviewTable, buildStaleReviewSection,
   parseReviewInput, parseReviewPageNav, parseStaleTicketToggle, applyStaleTicketToggle,
   parseResolutionSelection, buildReviewPage, applyReviewSessionToggle,
+  isUpdateExistingTicketsReply, markRowsUpdatedExisting,
   CURRENT_SESSION_SCHEMA_VERSION, isSessionExpired, SESSION_EXPIRED_MESSAGE,
   NO_ISSUE_TYPE, resolveTemplateIssueType, formatIssueTypeOptionLabel, buildChatCommandLink,
   type ImportTemplateSelectionSession, type ReviewSession, type ReviewTableColumn, type ReviewRowBase,
@@ -113,6 +114,23 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
     markerLabel: string;
     labelToDedupKey: (label: string) => string | null;
     buildActivePredicate: (rawItems: unknown[]) => (dedupKey: string) => boolean;
+  };
+  // U3: optional "update existing tickets" bulk action (R13) — an importer with no folded-group/
+  // multi-id concept (Waltz, email — each item maps to exactly one ticket, so there is never a
+  // "new finding on an already-ticketed line" case) omits this and the reply keyword/table column/
+  // footer hint never appear for it, exactly like `stale` above. Only Veracode configures it today.
+  updateExisting?: {
+    // Every candidate id this row's finding group covers (e.g. a folded Veracode group's member
+    // flaw ids) — the full set, not just the new ones; executeUpdateExistingTickets() diffs this
+    // against the ticket's own current labels to find what's missing.
+    idsOf: (row: TRow) => string[];
+    // Maps one id to the Jira label that represents it on a ticket (e.g. `veracode-issue-<id>`).
+    labelOf: (id: string) => string;
+    // Builds the summarizing comment body for only the ids newly added this run (`newIds` — a
+    // subset of idsOf(row), not the row's whole group) as Markdown converted to Jira wiki markup —
+    // see buildNewFindingsCommentWiki()'s own doc comment for the sanitize-then-convert contract
+    // this MUST follow (addComment() sends its body to Jira verbatim, no sanitization of its own).
+    buildCommentWiki: (row: TRow, newIds: string[]) => string;
   };
 }
 
@@ -598,7 +616,10 @@ export async function streamImportReview<TItem, TRow extends ReviewRowBase>(
   // WALTZ_REVIEW_COLUMNS, EMAIL_REVIEW_COLUMNS in sessionState.ts/emailHandler.ts).
   const staleSection = session.staleTickets ? '\n\n' + buildStaleReviewSection(session.staleTickets, baseUrl) : '';
   stream.markdown(trustedChatMarkdown(
-    buildImportReviewTable(session.rows, baseUrl, session.page, totalPages, descriptor.reviewColumns, descriptor.itemNoun) + staleSection,
+    buildImportReviewTable(
+      session.rows, baseUrl, session.page, totalPages, descriptor.reviewColumns, descriptor.itemNoun,
+      Boolean(descriptor.updateExisting),
+    ) + staleSection,
   ));
   return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
 }
@@ -638,6 +659,17 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
       session.staleTickets = applyStaleTicketToggle(session.staleTickets, staleKeys);
       return streamImportReview(session, stream, ws, descriptor, baseUrl);
     }
+  }
+
+  // U3/R13: "update existing tickets" — checked after page-nav (U4) and the stale-ticket-key toggle
+  // (U6), before the New/Already-ticketed sections' own row-id toggle parsing (its exact-match-only
+  // vocabulary can't collide with either). Gated on descriptor.updateExisting so an importer that
+  // doesn't configure it (Waltz, email) never runs this — this action is independent of, and does
+  // not require, a "post it" confirm on the New/Stale sections (governing decision), so it neither
+  // clears the review session nor short-circuits the rest of this function's flow on other replies.
+  if (descriptor.updateExisting && isUpdateExistingTicketsReply(reply)) {
+    const updated = await executeUpdateExistingTickets(session, ticketService, stream, descriptor, baseUrl);
+    return streamImportReview(updated, stream, ws, descriptor, baseUrl);
   }
 
   const rowIds = session.rows.map(r => r.id);
@@ -785,4 +817,83 @@ export async function executeImportBatch<TItem, TRow extends ReviewRowBase>(
     );
     stream.markdown(staleSummary);
   }
+}
+
+/**
+ * U3/R13: "update existing tickets" — walks every Already-ticketed row in `session.allRows` (the
+ * full, unpaged candidate set — NOT `session.rows`, since that section is always shown in full per
+ * R8 but this action must cover every already-ticketed row the report matched, not just whichever
+ * page happens to be visible) and, for each one whose finding group has an id not yet reflected on
+ * its ticket's labels, adds the missing `label(s)` + a summarizing comment (via
+ * `TicketService.addMissingLabels` — the read-merge-write step — then `addComment`).
+ *
+ * Idempotency (R13): `addMissingLabels` itself is the idempotency check — it returns an empty array
+ * when every candidate label is already present, and this loop treats that as "skip" (no comment
+ * posted, no second write) rather than re-deriving "already covered" from anything cached in the
+ * session. A per-row failure is caught, logged, and reported without aborting the rest of the batch
+ * (mirrors executeImportBatch's per-row try/catch).
+ *
+ * Deliberately does NOT clear the review session or gate on "post it" — this reply is independent
+ * of, and does not require, a confirm on the New/Stale sections (governing decision). Returns the
+ * session with `updatedExisting` mirrored onto every row this run actually updated
+ * (markRowsUpdatedExisting), for the caller to re-render.
+ */
+export async function executeUpdateExistingTickets<TItem, TRow extends ReviewRowBase>(
+  session: ReviewSession<TRow>,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+  baseUrl?: string,
+): Promise<ReviewSession<TRow>> {
+  const cfg = descriptor.updateExisting;
+  if (!cfg) return session; // defensive only — callers already gate on descriptor.updateExisting
+
+  const ticketedRows = session.allRows.filter(r => r.existingTicketKey !== null);
+  if (ticketedRows.length === 0) {
+    stream.markdown('_No already-ticketed rows to update._\n\n');
+    return session;
+  }
+
+  stream.markdown(`_Checking ${ticketedRows.length} already-ticketed row(s) for new findings…_\n\n`);
+  let updated = 0;
+  let skipped = 0;
+  let failed = 0;
+  const updatedKeys = new Set<string>();
+
+  for (const row of ticketedRows) {
+    const ticketKey = row.existingTicketKey!;
+    try {
+      const ids = cfg.idsOf(row);
+      const labelsToAdd = ids.map(cfg.labelOf);
+      const addedLabels = await ticketService.addMissingLabels(ticketKey, labelsToAdd);
+      if (addedLabels.length === 0) {
+        skipped++;
+        continue;
+      }
+      // labelOf is expected to be injective (each id maps to its own distinct label) — recovering
+      // which ids were newly added from which labels came back added, rather than requiring the
+      // descriptor to also supply an inverse mapping function.
+      const addedLabelSet = new Set(addedLabels);
+      const newIds = ids.filter(id => addedLabelSet.has(cfg.labelOf(id)));
+      await ticketService.addComment(ticketKey, cfg.buildCommentWiki(row, newIds), baseUrl);
+      stream.markdown(`✓ ${formatKeyLink(ticketKey, baseUrl)} — ${newIds.length} new finding(s) added\n\n`);
+      updated++;
+      updatedKeys.add(ticketKey);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logDiag(descriptor.scope, 'error', `Update existing ticket failed — ${ticketKey}`, { issueKey: ticketKey, error: message });
+      stream.markdown(`✗ ${formatKeyLink(ticketKey, baseUrl)} — ${message}\n\n`);
+      failed++;
+    }
+  }
+
+  logDiag(
+    descriptor.scope, failed > 0 ? 'warn' : 'info',
+    `${descriptor.importLabel} update-existing-tickets complete — ${updated} updated, ${skipped} already up to date, ${failed} failed`,
+    { updated, skipped, failed },
+  );
+  stream.markdown(`${updated} ticket(s) updated, ${skipped} already up to date, ${failed} failed.\n\n`);
+
+  const marked = markRowsUpdatedExisting(session.rows, session.allRows, updatedKeys);
+  return { ...session, rows: marked.rows, allRows: marked.allRows };
 }

@@ -16,6 +16,9 @@ import {
   buildReviewPage, parseReviewPageNav, applyReviewSessionToggle, type ReviewRowBase,
 } from '../participant/sessionState';
 import {
+  isUpdateExistingTicketsReply, markRowsUpdatedExisting, buildImportReviewTable,
+} from '../participant/sessionState';
+import {
   parseStaleTicketToggle, applyStaleTicketToggle, buildStaleReviewSection,
   type ReviewSessionStale, type TransitionBatchTicket,
 } from '../participant/sessionState';
@@ -943,6 +946,89 @@ describe('applyReviewSessionToggle (U4/R7-R8)', () => {
     const result = applyReviewSessionToggle(rows, rows, ['2']);
     expect(result.rows.find(r => r.id === '1')!.included).toBe(true);
     expect(result.rows.find(r => r.id === '3')!.included).toBe(true);
+  });
+});
+
+// U3: "update existing tickets" reply keyword + per-row "synced" bookkeeping (R13).
+describe('isUpdateExistingTicketsReply (U3/R13)', () => {
+  it('recognizes the exact reply, case-insensitively, trimmed', () => {
+    expect(isUpdateExistingTicketsReply('update existing tickets')).toBe(true);
+    expect(isUpdateExistingTicketsReply('UPDATE EXISTING TICKETS')).toBe(true);
+    expect(isUpdateExistingTicketsReply('  update existing tickets  ')).toBe(true);
+  });
+
+  it('does not match a row-id toggle, a page-nav token, or a stale-ticket-key reply', () => {
+    expect(isUpdateExistingTicketsReply('2')).toBe(false);
+    expect(isUpdateExistingTicketsReply('A1')).toBe(false);
+    expect(isUpdateExistingTicketsReply('next')).toBe(false);
+    expect(isUpdateExistingTicketsReply('PROJ-123')).toBe(false);
+    expect(isUpdateExistingTicketsReply('post it')).toBe(false);
+    expect(isUpdateExistingTicketsReply('cancel')).toBe(false);
+  });
+
+  it('does not fuzzy-match a partial or extended phrase', () => {
+    expect(isUpdateExistingTicketsReply('update existing')).toBe(false);
+    expect(isUpdateExistingTicketsReply('please update existing tickets now')).toBe(false);
+  });
+});
+
+describe('markRowsUpdatedExisting (U3/R13)', () => {
+  it('sets updatedExisting on every row (in both rows and allRows) whose ticket key is in the update set', () => {
+    const ticketed = makeTicketedRow('A1', 'PROJ-1');
+    const allRows = [ticketed, ...makeFreshRows(3)];
+    const result = markRowsUpdatedExisting(allRows, allRows, new Set(['PROJ-1']));
+
+    expect(result.rows.find(r => r.id === 'A1')!.updatedExisting).toBe(true);
+    expect(result.allRows.find(r => r.id === 'A1')!.updatedExisting).toBe(true);
+  });
+
+  it('leaves every other row untouched, including a "new" row with no existingTicketKey', () => {
+    const ticketed = makeTicketedRow('A1', 'PROJ-1');
+    const rows = [ticketed, ...makeFreshRows(2)];
+    const result = markRowsUpdatedExisting(rows, rows, new Set(['PROJ-1']));
+
+    expect(result.rows.find(r => r.id === '1')!.updatedExisting).toBeUndefined();
+    expect(result.rows.find(r => r.id === '2')!.updatedExisting).toBeUndefined();
+  });
+
+  it('is a no-op when the update set is empty', () => {
+    const ticketed = makeTicketedRow('A1', 'PROJ-1');
+    const rows = [ticketed];
+    const result = markRowsUpdatedExisting(rows, rows, new Set());
+    expect(result.rows[0].updatedExisting).toBeUndefined();
+  });
+});
+
+describe('buildImportReviewTable — "Updated?" column + reply hint (U3/R13)', () => {
+  it('omits the "Updated?" column and the reply hint when supportsUpdateExisting is false (default)', () => {
+    const rows = [makeTicketedRow('A1', 'PROJ-1'), ...makeFreshRows(1)];
+    const text = buildImportReviewTable(rows, undefined, 0, 1, [], 'item(s)');
+    expect(text).not.toContain('Updated?');
+    expect(text).not.toContain('update existing tickets');
+  });
+
+  it('shows the "Updated?" column and reply hint when supportsUpdateExisting is true and there is an already-ticketed row', () => {
+    const rows = [makeTicketedRow('A1', 'PROJ-1'), ...makeFreshRows(1)];
+    const text = buildImportReviewTable(rows, undefined, 0, 1, [], 'item(s)', true);
+    expect(text).toContain('Updated?');
+    expect(text).toContain('update existing tickets');
+  });
+
+  it('renders "✓ synced" only for a row whose updatedExisting flag is set', () => {
+    const updatedRow = { ...makeTicketedRow('A1', 'PROJ-1'), updatedExisting: true };
+    const rows = [updatedRow, makeTicketedRow('A2', 'PROJ-2')];
+    const text = buildImportReviewTable(rows, undefined, 0, 1, [], 'item(s)', true);
+    const lines = text.split('\n');
+    const a1Line = lines.find(l => l.includes('PROJ-1'))!;
+    const a2Line = lines.find(l => l.includes('PROJ-2'))!;
+    expect(a1Line).toContain('✓ synced');
+    expect(a2Line).not.toContain('✓ synced');
+  });
+
+  it('omits the reply hint (even with supportsUpdateExisting) when there are no already-ticketed rows', () => {
+    const rows = makeFreshRows(2);
+    const text = buildImportReviewTable(rows, undefined, 0, 1, [], 'item(s)', true);
+    expect(text).not.toContain('update existing tickets');
   });
 });
 

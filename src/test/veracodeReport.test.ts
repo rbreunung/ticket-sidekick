@@ -5,6 +5,7 @@ import { parseVeracodeReport, filterFlaws, assertSafeVeracodeXml } from '../util
 import { deriveShortLabel, buildSummary, buildDescriptionWiki, buildLabels } from '../utils/veracodeReport';
 import {
   groupFlawsByLocation, buildGroupLabels, buildGroupDescriptionWiki, buildGroupSummary,
+  buildNewFindingsCommentWiki,
   type VeracodeFlaw,
 } from '../utils/veracodeReport';
 
@@ -548,6 +549,55 @@ describe('buildGroupDescriptionWiki', () => {
     const wiki = buildGroupDescriptionWiki([a]);
     expect(wiki).toContain('h3. Issue 1');
     expect(wiki).toContain('h4. Severity');
+  });
+});
+
+describe('buildNewFindingsCommentWiki (U3/R13)', () => {
+  it('renders one "Issue <id>" section per newly-added flaw with its severity, CWE, and description', () => {
+    const a = makeFlaw({ issueId: '1', severity: 5, cweId: '89', cweName: 'SQL Injection', description: 'Untrusted input reaches a query.' });
+    const wiki = buildNewFindingsCommentWiki([a]);
+
+    expect(wiki).toContain('h3. Issue 1');
+    expect(wiki).toContain('h4. Severity\nVery High (5)');
+    expect(wiki).toContain('[CWE-89|https://cwe.mitre.org/data/definitions/89.html]');
+    expect(wiki).toContain(': Untrusted input reaches a query.');
+    // No Location section — the ticket the comment is posted to already carries it.
+    expect(wiki).not.toContain('Location');
+  });
+
+  it('renders one section per flaw when multiple new ids are given', () => {
+    const a = makeFlaw({ issueId: '1' });
+    const b = makeFlaw({ issueId: '2' });
+    const wiki = buildNewFindingsCommentWiki([a, b]);
+    expect(wiki).toContain('h3. Issue 1');
+    expect(wiki).toContain('h3. Issue 2');
+  });
+
+  it('omits the CWE section for a flaw with no cweId', () => {
+    const a = makeFlaw({ issueId: '1', cweId: null });
+    const wiki = buildNewFindingsCommentWiki([a]);
+    expect(wiki).not.toContain('h4. CWE');
+  });
+
+  it('renders nothing but the intro line for an empty list', () => {
+    const wiki = buildNewFindingsCommentWiki([]);
+    expect(wiki).not.toContain('h3. Issue');
+  });
+
+  it('a crafted description containing a Jira-native markup trigger cannot survive into the comment body', () => {
+    const payload = 'Injected\n# Fake Heading\n| a | b |\n[click me](http://evil.example) *bold* ~~strike~~'
+      + '\n-struck- +underline+ ^super^ ??cite?? {quote}FAKE{quote} !http://evil.example/t.gif!';
+    const a = makeFlaw({ issueId: '1', cweName: `Evil | a | b | [click me](http://evil.example)`, description: payload });
+    const wiki = buildNewFindingsCommentWiki([a]);
+
+    expect(wiki).not.toContain('h1. Fake Heading');
+    expect(wiki).not.toContain('||a||b||');
+    expect(wiki).not.toContain('[click me|http://evil.example]');
+    expect(wiki).not.toContain('*bold*');
+    expect(wiki).not.toContain('~~strike~~');
+    expect(wiki).not.toContain('-strike-');
+    expect(wiki).not.toContain('{quote}');
+    expect(wiki).not.toMatch(/[+^?{}!]/);
   });
 });
 

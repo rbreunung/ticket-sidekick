@@ -406,6 +406,29 @@ export class TicketService {
     return `comment added to ${formatKeyLink(issueKey, baseUrl)}.`;
   }
 
+  /**
+   * U3/R13: read-merge-write label update for the report-import "update existing tickets" bulk
+   * action — neither a bare `updateField('labels', …)` call (would need every existing label
+   * re-typed as a comma string) nor `buildArrayValue()` (built for allowed-value/edit-meta-backed
+   * fields, an unnecessary extra `getEditMeta` round-trip for a plain-string field like labels) is
+   * the right tool for an additive, idempotent change here — see the governing decision in the U3
+   * plan. Reads the ticket's current labels, appends whichever of `labelsToAdd` aren't already
+   * present, and writes the full merged array back in one `updateIssue` call. Returns exactly the
+   * labels that were newly added (in `labelsToAdd`'s own order) — an empty array means every one was
+   * already present, and the caller skips the write AND the follow-up comment entirely for full
+   * idempotency (R13: running this twice against an unchanged ticket must not repost the comment).
+   */
+  async addMissingLabels(issueKey: string, labelsToAdd: string[]): Promise<string[]> {
+    const issue = await this.client.getIssue(issueKey);
+    const current = issue.fields.labels ?? [];
+    const currentSet = new Set(current);
+    const missing = labelsToAdd.filter(l => !currentSet.has(l));
+    if (missing.length === 0) return [];
+    await this.client.updateIssue(issueKey, { labels: [...current, ...missing] });
+    this.onDiag?.('info', `Labels updated — ${issueKey}`, { issueKey, added: missing });
+    return missing;
+  }
+
   async uploadAttachment(issueKey: string, filename: string, contentType: string, contentBytes: string): Promise<void> {
     return this.client.uploadAttachment(issueKey, filename, contentType, contentBytes);
   }

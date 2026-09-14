@@ -48,9 +48,9 @@ import { loadWorkflowCache, findPath } from '../services/WorkflowService';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService } from '../services/TicketService';
 import { TemplateService } from '../templates/TemplateService';
-import type { VeracodeFlaw } from '../utils/veracodeReport';
+import type { VeracodeFlaw, VeracodeReviewRow } from '../utils/veracodeReport';
 import type { WaltzReviewRow } from '../utils/waltzReport';
-import type { JiraSearchResult } from '../jira/IJiraClient';
+import type { JiraSearchResult, JiraIssue } from '../jira/IJiraClient';
 
 interface TestItem {
   ref: string;
@@ -568,6 +568,176 @@ describe('Veracode review rows — lazy description build (U4/R6-R7)', () => {
       // empty/placeholder string.
       expect(call.additionalFields?.description).toEqual(expect.stringContaining('Severity'));
     }
+  });
+});
+
+// U3/R13: "update existing tickets" bulk action — a distinct reply keyword that walks every
+// Already-ticketed row (from allRows, not the currently-paged rows) and, for each with a flaw id
+// not yet reflected on its ticket's labels, adds the missing veracode-issue-<id> label(s) + a
+// summarizing comment via the real Veracode descriptor (veracodeHandler.ts).
+describe('"update existing tickets" bulk action (U3/R13)', () => {
+  function makeFlaw(issueId: string, overrides: Partial<VeracodeFlaw> = {}): VeracodeFlaw {
+    return {
+      issueId, severity: 4, categoryName: 'Category', cweId: '89', cweName: 'SQL Injection',
+      description: 'Untrusted input reaches a query.', recommendation: null,
+      module: 'app.jar', sourceFile: 'App.java', sourceFilePath: 'src/main/java/App.java',
+      line: 42, scope: null, functionPrototype: null, remediationStatus: 'New',
+      ...overrides,
+    };
+  }
+
+  function makeRow(id: string, ticketKey: string | null, group: VeracodeFlaw[]): VeracodeReviewRow {
+    const first = group[0];
+    return {
+      id, issueIds: group.map(f => f.issueId), severity: first.severity, severityLabelText: 'High',
+      cweId: first.cweId, summary: `Summary ${id}`, labels: [], sourceGroup: group,
+      existingTicketKey: ticketKey, included: ticketKey === null,
+    };
+  }
+
+  function makeIssue(key: string, labels: string[]): JiraIssue {
+    return { id: '1', key, fields: { labels } as JiraIssue['fields'] };
+  }
+
+  function makeReviewSession(allRows: VeracodeReviewRow[], rows: VeracodeReviewRow[] = allRows): import('../participant/sessionState').VeracodeReviewSession {
+    return {
+      projectKey: 'PROJ', issueType: 'Bug', templateName: null, additionalFields: {},
+      allRows, rows, page: 0, schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
+    };
+  }
+
+  // A stateful label store, updated by updateIssue, so getIssue reflects a prior write — needed
+  // for the idempotency test to see the *result* of the first run on the second run.
+  function wireStatefulLabels(client: MockJiraClient, initial: Record<string, string[]>) {
+    const labelsByKey: Record<string, string[]> = { ...initial };
+    client.getIssue = async (key: string) => makeIssue(key, labelsByKey[key] ?? []);
+    client.updateIssue = async (key: string, fields: Record<string, unknown>) => {
+      client.updateIssueCalls.push({ issueKey: key, fields });
+      if (Array.isArray(fields.labels)) labelsByKey[key] = fields.labels as string[];
+    };
+    return labelsByKey;
+  }
+
+  it("adds a missing flaw id's label and posts a summarizing comment for a row with a new finding", async () => {
+    const client = new MockJiraClient();
+    wireStatefulLabels(client, { 'PROJ-1': ['veracode', 'veracode-issue-101'] });
+    const ticketService = new TicketService(client);
+    const group = [makeFlaw('101'), makeFlaw('102')];
+    const session = makeReviewSession([makeRow('A1', 'PROJ-1', group)]);
+    const ws = makeMockWs();
+
+    await handleVeracodeReviewReply('update existing tickets', session, ticketService, mockStream() as never, ws as never);
+
+    expect(client.updateIssueCalls).toHaveLength(1);
+    expect(client.updateIssueCalls[0].fields.labels).toEqual(['veracode', 'veracode-issue-101', 'veracode-issue-102']);
+    expect(client.addCommentCalls).toHaveLength(1);
+    expect(client.addCommentCalls[0].issueKey).toBe('PROJ-1');
+    expect(client.addCommentCalls[0].body).toContain('Issue 102');
+    // Only the newly-added flaw is summarized, not the whole group.
+    expect(client.addCommentCalls[0].body).not.toContain('Issue 101');
+  });
+
+  it('running the action twice against an unchanged ticket posts no second comment and leaves labels unchanged (idempotency)', async () => {
+    const client = new MockJiraClient();
+    wireStatefulLabels(client, { 'PROJ-1': ['veracode', 'veracode-issue-101'] });
+    const ticketService = new TicketService(client);
+    const group = [makeFlaw('101'), makeFlaw('102')];
+    const session = makeReviewSession([makeRow('A1', 'PROJ-1', group)]);
+    const ws = makeMockWs();
+
+    await handleVeracodeReviewReply('update existing tickets', session, ticketService, mockStream() as never, ws as never);
+    const persisted = ws.store['jira.session.veracodeReview'] as import('../participant/sessionState').VeracodeReviewSession;
+    await handleVeracodeReviewReply('update existing tickets', persisted, ticketService, mockStream() as never, ws as never);
+
+    expect(client.updateIssueCalls).toHaveLength(1);
+    expect(client.addCommentCalls).toHaveLength(1);
+  });
+
+  it('skips a row entirely — no label write, no comment — once its ticket already carries every id its group covers', async () => {
+    const client = new MockJiraClient();
+    wireStatefulLabels(client, { 'PROJ-2': ['veracode-issue-201', 'veracode-issue-202'] });
+    const ticketService = new TicketService(client);
+    const group = [makeFlaw('201'), makeFlaw('202')];
+    const session = makeReviewSession([makeRow('A1', 'PROJ-2', group)]);
+    const ws = makeMockWs();
+
+    await handleVeracodeReviewReply('update existing tickets', session, ticketService, mockStream() as never, ws as never);
+
+    expect(client.updateIssueCalls).toHaveLength(0);
+    expect(client.addCommentCalls).toHaveLength(0);
+  });
+
+  it('a per-row failure (comment post fails) is reported without aborting the rest of the batch', async () => {
+    const client = new MockJiraClient();
+    wireStatefulLabels(client, { 'PROJ-3': [], 'PROJ-4': [] });
+    client.addComment = async (issueKey: string, body: string) => {
+      if (issueKey === 'PROJ-3') throw new Error('Comment post failed');
+      client.addCommentCalls.push({ issueKey, body });
+    };
+    const ticketService = new TicketService(client);
+    const session = makeReviewSession([
+      makeRow('A1', 'PROJ-3', [makeFlaw('301')]),
+      makeRow('A2', 'PROJ-4', [makeFlaw('401')]),
+    ]);
+    const stream = mockStream();
+    const ws = makeMockWs();
+
+    await handleVeracodeReviewReply('update existing tickets', session, ticketService, stream as never, ws as never);
+
+    // PROJ-4 still got its label + comment despite PROJ-3's failure.
+    expect(client.addCommentCalls).toHaveLength(1);
+    expect(client.addCommentCalls[0].issueKey).toBe('PROJ-4');
+    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls
+      .map((c: unknown[]) => markdownText(c[0])).join('\n');
+    expect(text).toContain('✗');
+    expect(text).toContain('PROJ-3');
+  });
+
+  it('processes every already-ticketed row in allRows, not just the currently-visible page\'s rows', async () => {
+    const client = new MockJiraClient();
+    wireStatefulLabels(client, { 'PROJ-5': [] });
+    const ticketService = new TicketService(client);
+    const row = makeRow('A1', 'PROJ-5', [makeFlaw('501')]);
+    // `rows` (the visible page) does NOT include the already-ticketed row — simulates it having
+    // scrolled off whichever page is currently shown; `allRows` (the full candidate set) does.
+    const session = makeReviewSession([row], []);
+    const ws = makeMockWs();
+
+    await handleVeracodeReviewReply('update existing tickets', session, ticketService, mockStream() as never, ws as never);
+
+    expect(client.addCommentCalls).toHaveLength(1);
+    expect(client.addCommentCalls[0].issueKey).toBe('PROJ-5');
+  });
+
+  it('a crafted flaw description containing a Jira-native markup trigger cannot survive into the posted comment body', async () => {
+    const client = new MockJiraClient();
+    wireStatefulLabels(client, { 'PROJ-6': [] });
+    const ticketService = new TicketService(client);
+    const evilFlaw = makeFlaw('601', { description: 'Injected !http://evil.example/t.gif! description' });
+    const session = makeReviewSession([makeRow('A1', 'PROJ-6', [evilFlaw])]);
+    const ws = makeMockWs();
+
+    await handleVeracodeReviewReply('update existing tickets', session, ticketService, mockStream() as never, ws as never);
+
+    expect(client.addCommentCalls[0].body).not.toContain('!http://evil.example/t.gif!');
+    expect(client.addCommentCalls[0].body).not.toMatch(/!/);
+  });
+
+  it('re-rendering the review after the action shows "✓ synced" for the updated row and keeps the session alive (no "post it" required)', async () => {
+    const client = new MockJiraClient();
+    wireStatefulLabels(client, { 'PROJ-7': [] });
+    const ticketService = new TicketService(client);
+    const session = makeReviewSession([makeRow('A1', 'PROJ-7', [makeFlaw('701')])]);
+    const ws = makeMockWs();
+    const stream = mockStream();
+
+    await handleVeracodeReviewReply('update existing tickets', session, ticketService, stream as never, ws as never);
+
+    // The review session is still parked (not cleared) — this action doesn't require/imply "post it".
+    expect(ws.store['jira.session.veracodeReview']).toBeDefined();
+    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls
+      .map((c: unknown[]) => markdownText(c[0])).join('\n');
+    expect(text).toContain('✓ synced');
   });
 });
 

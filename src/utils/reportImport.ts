@@ -289,10 +289,17 @@ export function sanitizeStandaloneLine(value: string): string {
   return `: ${sanitizeCellText(value)}`;
 }
 
+// Kept structurally identical to sessionState.ts's ReviewRowBase (this file stays vscode-free and
+// can't import from sessionState.ts without a circular import — sessionState.ts already imports
+// this file — so the shape is duplicated rather than shared). Any field added to ReviewRowBase must
+// be mirrored here too, or buildReviewRows()'s `Omit<TRow, keyof ReviewRowShape>` parameter type
+// below silently diverges from ReportImportDescriptor.buildRowFields()'s `Omit<TRow, keyof
+// ReviewRowBase>` return type and every call site fails to typecheck (U3 hit this).
 interface ReviewRowShape {
   id: string; // '1'..'N' new candidates, 'A1'..'Am' already-ticketed
   existingTicketKey: string | null;
   included: boolean; // whether this row will be (re)created if the batch runs
+  updatedExisting?: boolean; // U3/R13: see ReviewRowBase's own doc comment
 }
 
 /**

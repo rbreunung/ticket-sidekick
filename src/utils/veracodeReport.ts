@@ -372,6 +372,48 @@ export function buildGroupDescriptionWiki(group: VeracodeFlaw[]): string {
   return markdownToJiraWiki(lines.join('\n'));
 }
 
+/**
+ * U3/R13: "update existing tickets"' summarizing-comment body — one `### Issue <id>` block per
+ * newly-added flaw (severity, CWE, description; no `### Location` — the ticket the comment is
+ * posted to already carries it). Same sanitize-then-convert-once pattern as
+ * `buildGroupDescriptionWiki()`: every untrusted field routed through `sanitizeCellText()`/
+ * `sanitizeStandaloneLine()`, the whole thing authored as Markdown and converted via
+ * `markdownToJiraWiki()` exactly once at the end — `addComment()` sends its `body` argument to Jira
+ * verbatim with no sanitization of its own, so this function is the only thing standing between a
+ * crafted report field and a live Jira-wiki-markup injection in the posted comment (see
+ * `docs/solutions/security-issues/` for the prior history of exactly this vulnerability shape).
+ * `newFlaws` is expected to be the subset of a group's members whose id was actually newly added
+ * this run — the caller (reportImportHandler.ts's `executeUpdateExistingTickets`) is responsible
+ * for that filtering; this function itself renders whatever it's given.
+ */
+export function buildNewFindingsCommentWiki(newFlaws: VeracodeFlaw[]): string {
+  const lines: string[] = [];
+  lines.push(`New finding(s) detected on this line since the ticket was created:`);
+  lines.push('');
+
+  for (const flaw of newFlaws) {
+    lines.push(`### Issue ${flaw.issueId}`);
+    lines.push('');
+
+    lines.push('#### Severity');
+    lines.push(`${severityLabel(flaw.severity)} (${flaw.severity})`);
+    lines.push('');
+
+    if (flaw.cweId) {
+      lines.push('#### CWE');
+      const link = `[CWE-${flaw.cweId}](https://cwe.mitre.org/data/definitions/${flaw.cweId}.html)`;
+      lines.push(`${link}${flaw.cweName ? ` — ${sanitizeCellText(flaw.cweName)}` : ''}`);
+      lines.push('');
+    }
+
+    lines.push('#### Description');
+    lines.push(sanitizeStandaloneLine(flaw.description));
+    lines.push('');
+  }
+
+  return markdownToJiraWiki(lines.join('\n'));
+}
+
 // Lives here (rather than in sessionState.ts, where the other session-related types live) so that
 // reportImportHandler.ts's shared buildReviewRows() can produce it directly without a type-only
 // circular import between this file and sessionState.ts. sessionState.ts re-exports the type for

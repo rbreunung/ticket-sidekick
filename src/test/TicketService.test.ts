@@ -1051,6 +1051,51 @@ describe('TicketService.bulkUpdateField', () => {
   });
 });
 
+describe('TicketService.addMissingLabels (U3/R13 read-merge-write)', () => {
+  let client: MockJiraClient;
+  let service: TicketService;
+
+  beforeEach(() => {
+    client = new MockJiraClient();
+    service = new TicketService(client);
+  });
+
+  function issue(labels: string[]): JiraIssue {
+    return { id: '1', key: 'PROJ-1', fields: { labels } as JiraIssue['fields'] };
+  }
+
+  it('appends only the missing labels, preserving the ticket\'s existing ones', async () => {
+    client.getIssue = async () => issue(['veracode', 'veracode-issue-101']);
+
+    const added = await service.addMissingLabels('PROJ-1', ['veracode-issue-101', 'veracode-issue-102']);
+
+    expect(added).toEqual(['veracode-issue-102']);
+    expect(client.updateIssueCalls).toHaveLength(1);
+    expect(client.updateIssueCalls[0]).toEqual({
+      issueKey: 'PROJ-1',
+      fields: { labels: ['veracode', 'veracode-issue-101', 'veracode-issue-102'] },
+    });
+  });
+
+  it('is a no-op — no write at all — when every candidate label is already present', async () => {
+    client.getIssue = async () => issue(['veracode-issue-101', 'veracode-issue-102']);
+
+    const added = await service.addMissingLabels('PROJ-1', ['veracode-issue-101', 'veracode-issue-102']);
+
+    expect(added).toEqual([]);
+    expect(client.updateIssueCalls).toHaveLength(0);
+  });
+
+  it('handles a ticket with no labels at all', async () => {
+    client.getIssue = async () => issue([]);
+
+    const added = await service.addMissingLabels('PROJ-1', ['veracode-issue-201']);
+
+    expect(added).toEqual(['veracode-issue-201']);
+    expect(client.updateIssueCalls[0].fields).toEqual({ labels: ['veracode-issue-201'] });
+  });
+});
+
 describe('TicketService findSprints', () => {
   let client: MockJiraClient;
   let service: TicketService;

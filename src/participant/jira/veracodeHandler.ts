@@ -4,7 +4,7 @@ import type { TicketService } from '../../services/TicketService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import {
   parseVeracodeReport, filterFlaws, severityLabel, groupFlawsByLocation,
-  buildGroupSummary, buildGroupDescriptionWiki, buildGroupLabels,
+  buildGroupSummary, buildGroupDescriptionWiki, buildGroupLabels, buildNewFindingsCommentWiki,
   type VeracodeFlaw, type VeracodeReviewRow,
 } from '../../utils/veracodeReport';
 import type { VeracodeTemplateSelectionSession, VeracodeReviewSession, StaleResolutionAskSession } from '../sessionState';
@@ -162,6 +162,14 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
     markerLabel: VERACODE_STALE_MARKER_LABEL,
     labelToDedupKey: veracodeLabelToIssueId,
     buildActivePredicate: rawItems => buildVeracodeActiveFlawPredicate(rawItems as VeracodeFlaw[], getVeracodeConfig().includeStatuses),
+  },
+  // U3/R13: "update existing tickets" — only Veracode folds multiple flaws onto one row (R9), so
+  // only Veracode can ever have "a finding not yet reflected on its ticket" (Waltz/email omit this
+  // entirely — see ReportImportDescriptor.updateExisting's own doc comment).
+  updateExisting: {
+    idsOf: row => row.issueIds,
+    labelOf: id => `veracode-issue-${id}`,
+    buildCommentWiki: (row, newIds) => buildNewFindingsCommentWiki(row.sourceGroup.filter(flaw => newIds.includes(flaw.issueId))),
   },
 };
 
