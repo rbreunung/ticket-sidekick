@@ -12,14 +12,11 @@ import { TRIGGER_CHARS_PATTERN } from './markdownToJiraWiki';
 // Single source of truth for both importers (KTD4). Both currently hardcode the identical values
 // (20 MB / 50 tickets per run) independently; consuming these from here instead of the local
 // copies is a later unit's job (extension.ts + both handler files).
-export const MAX_REPORT_BYTES = 20 * 1024 * 1024; // 20 MB
+export const MAX_REPORT_BYTES = 20 * 1024 * 1024; // 20 MB — default-parameter fallback for the
+// pure size-check/parse functions below (veracodeReport.ts/waltzReport.ts/reportImportHandler.ts);
+// each config-reading call site now resolves its own configured value via resolveMaxReportBytes()
+// instead of reading this constant directly.
 export const BATCH_LIMIT = 50;
-
-// Batch email import (KTD7): a per-file report size cap doesn't bound a multi-file batch's total
-// in-memory attachment payload — this caps the sum of selected .eml file sizes, checked before any
-// file is read, so a large batch with sizable attachments can't hold hundreds of MB of base64
-// content in memory before the review screen even renders.
-export const MAX_EMAIL_BATCH_BYTES = 150 * 1024 * 1024; // 150 MB total per batch
 
 // Exported so callers that need to pass the value explicitly (e.g. findAlreadyTicketed) use this
 // single source of truth instead of an independently-declared local copy of "40".
