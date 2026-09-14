@@ -829,6 +829,13 @@
             "type": "boolean",
             "default": false,
             "description": "Delete the .eml file automatically after the Jira ticket is created."
+          },
+          "ticketSidekick.email.maxBatchSizeMB": {
+            "type": "number",
+            "default": 150,
+            "minimum": 1,
+            "maximum": 500,
+            "description": "Maximum total size, in MB, of a selected .eml batch. Raise this if your email batch import is rejected for exceeding the size limit."
           }
         }
       },
@@ -854,6 +861,13 @@
               "Reopened"
             ],
             "description": "Veracode remediation_status values to include when importing a Detailed Report (e.g. exclude 'Fixed' or 'Mitigated'). Valid values: Cannot Reproduce, Fixed, Mitigated, New, Open, Potential False Positive, Remediated by User, Reopened, Reviewed - No Action Taken."
+          },
+          "ticketSidekick.veracode.maxReportSizeMB": {
+            "type": "number",
+            "default": 50,
+            "minimum": 1,
+            "maximum": 200,
+            "description": "Maximum size, in MB, of a Veracode Detailed Report XML file. Raise this if your report is rejected for exceeding the size limit."
           }
         }
       },
@@ -882,6 +896,13 @@
               "Remediate"
             ],
             "description": "Remediation Action values to include when importing an OSS report (empty string means the column was blank). Components with any other action (e.g. 'Risk capture') are excluded by default."
+          },
+          "ticketSidekick.waltz.maxReportSizeMB": {
+            "type": "number",
+            "default": 50,
+            "minimum": 1,
+            "maximum": 200,
+            "description": "Maximum size, in MB, of an OSS Report .xlsx file. Raise this if your report is rejected for exceeding the size limit."
           }
         }
       }
