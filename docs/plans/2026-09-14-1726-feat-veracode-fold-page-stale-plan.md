@@ -68,7 +68,7 @@ The shared Veracode/Waltz report-import flow (`reportImportHandler.ts`) gains th
 
 - F1. **Import run, end to end.**
   - **Trigger:** user runs `@jira import veracode report` (or resumes an in-progress session).
-  - **Steps:** parse + filter the report → dedup search against the current flaws (existing behavior) → reverse stale search across the project's open tickets (R1) → build review rows, folding same-line flaws (R9) → render three sections in order — Already ticketed, New (page 1 of R6-R7), Stale (R3) — then wait for the user to page, toggle, confirm, or reply "update existing tickets" (R13).
+  - **Steps:** parse + filter the report → fold same-line Veracode flaws (R9) → dedup search against the current flaws, multi-key for folded groups (existing behavior, extended per R11) → reverse stale search across the project's open tickets (R1) → build review rows → for each stale-ticket group whose matched `cleanupRules` entry needs a resolution, ask and wait for a reply before rendering (KTD14/KTD15) → render three sections in order — Already ticketed, New (page 1 of R6-R7), Stale (R3) — then wait for the user to page, toggle, confirm, or reply "update existing tickets" (R13).
   - **Outcome:** included New rows create tickets; included Stale rows transition; "update existing tickets" applies R13's label+comment update to every qualifying Already-ticketed row, independent of the other two outcomes.
   - **Covered by:** R1, R3, R6, R9, R13.
 - F2. **Paging the New section.**
@@ -126,15 +126,16 @@ The shared Veracode/Waltz report-import flow (`reportImportHandler.ts`) gains th
 - KTD3. **"Update existing tickets" is a distinct reply keyword**, parsed alongside "post it"/"cancel"/a toggle list/a page command, that walks every Already-ticketed row shown that run with a finding not yet reflected on its ticket and applies R13's label+comment update to each — independent of, and not requiring, a "post it" confirm on the New/Stale sections. (session-settled: user-directed — instantiates the Product Contract's R13 Key Decision as a review-screen reply option, chosen over a separate `@jira` command decoupled from any particular import run.) Governs R13.
 - KTD4. **R13's label update is read-merge-write**: fetch the ticket's current labels, append the missing `veracode-issue-<id>` if absent, then write the full merged array — per the Sources note above, neither a bare `updateField('labels', …)` call nor `buildArrayValue()` is safe for an additive change to a plain-string field. Governs R13.
 - KTD5. **Lightweight row fields build eagerly for every "new" candidate; the full ticket description builds lazily**, only for a row the user actually confirms into creation — avoids a full Markdown-to-wiki conversion for candidates that may never be paged to. (session-settled: user-approved — chosen over building every description eagerly: avoids wasted work on a large report where most candidates are never paged to or created.) Governs R6, R7.
-- KTD6. **Page-navigation replies use an unambiguous keyword syntax** (`page <n>`, `next`/`next page`, `prev`/`previous page`) that never overlaps a bare numeric row-id toggle; a bare number always resolves as today's toggle, so an off-page row stays toggleable by number without paging to it. Governs R6.
+- KTD6. **Page-navigation replies use an unambiguous keyword syntax** (`page <n>`, `next`/`next page`, `prev`/`previous page`) that never overlaps a bare numeric row-id toggle. A bare number toggles only a row id present on the *currently visible* page; a number matching a row on a different page is unrecognized, the same as any other unmatched token — this keeps toggling consistent with R7's per-page default-included reset (a toggle that could reach a page not currently shown would have no defined lifetime once that page is later rendered fresh). Governs R6, R7.
 - KTD7. **`session.rows` keeps meaning "the visible page's rows"** so `executeImportBatch`'s existing included-filter-then-slice logic needs no rewrite; a separate field holds the full uncapped candidate set plus the current page index for navigation. Governs R6, R7.
 - KTD8. **The "N more matched, re-run" message is replaced by page-position wording** ("Page X of Y") once paging exists; the per-confirm `BATCH_LIMIT`-tickets-per-run cap and its message are unchanged — a different concern (how many of the visible page's included rows get created this run). Governs R6.
 - KTD9. **`CURRENT_SESSION_SCHEMA_VERSION` is bumped** so an in-flight, pre-upgrade review session expires cleanly via the existing `isSessionExpired` mechanism instead of rendering with fields it predates. Governs R6, R9.
-- KTD10. **The reverse stale-ticket search is scoped to the current import's project**, chunked and JQL-built the same way as the existing dedup search (`chunkStrings`/`buildDedupJql`) over the importer's marker label (`veracode` / `oss-dependency`) with `resolution is EMPTY`, and fault-tolerant per chunk like `findAlreadyTicketed`. Governs R1, R5.
+- KTD10. **The reverse stale-ticket search is scoped to the current import's project**, JQL-built the same way as the existing dedup search (`buildDedupJql`'s pattern) over the importer's marker label (`veracode` / `oss-dependency`) with `resolution is EMPTY`. Unlike the dedup search — which chunks a *list of labels being searched for* — this query has exactly one marker label, so the scaling axis is the *number of matching open tickets*, not the search input. It must not silently lose coverage past one search page: mirror `cleanupHandler.ts`'s structurally identical `resolution is EMPTY` query (`handleRunCleanup`, `src/participant/jira/cleanupHandler.ts:157-169`), which caps at 50 results and shows an explicit "found N — showing first 50" warning rather than paginating further. Governs R1, R5.
 - KTD11. **Stale tickets render as a third, structurally separate review section**, shaped like `cleanupHandler.ts`'s `TransitionBatchTicket` rather than `ReviewRowBase`, toggled by full ticket-key tokens — a vocabulary that never collides with the New/Already-ticketed sections' `"1".."N"`/`"A1".."Am"` row-id tokens. Governs R3.
 - KTD12. **One "post it" reply drives both ticket creation and stale-ticket transition** — the review session carries an optional stale-tickets list alongside its rows, and on confirm the handler runs the existing creation batch, then a transition pass reusing `cleanupHandler.ts`'s per-ticket transition-path/resolution logic rather than re-implementing it. (session-settled: user-approved — chosen over a separate confirm step for stale-ticket transitions: simpler for the user, review everything once, reply once.) Governs R3, R4.
 - KTD13. **A stale ticket with no matching `cleanupRules` entry is still shown**, excluded-by-default with a note, rather than omitted — the finding really is gone, so hiding it would undercut R1's purpose — but it is not offered as a toggle, since there is no transition path to run. (session-settled: user-approved — chosen over hiding it entirely: transparency about a finding that's genuinely gone, even when nothing can close it from here yet.) Governs R4.
 - KTD14. **Stale tickets are grouped by issue type within the project**, mirroring `cleanupHandler.ts`'s one-rule-per-request assumption; a resolution prompt, when a matched rule needs one, runs once per distinct group before the merged review screen renders, not once per ticket. Governs R4.
+- KTD15. **The chained per-group resolution-ask reuses the existing park-ask-resume pattern** (`AwaitIssueTypeResume`/`AwaitIssueTypeSession`, `resolveIssueTypeOrPrompt()` in `src/participant/jira/ticketContext.ts:84`) already used to detour the import flow for the issue-type ask: each pending resolution group parks the in-progress import state (template selection, parsed items) behind a typed resume kind, asks, and resumes into the next group's ask or the final review render once answered — not a new, bespoke queueing mechanism. Governs R4.
 
 ### High-Level Technical Design
 
@@ -170,12 +171,12 @@ flowchart TB
 
 ### System-Wide Impact
 
-The reverse stale-ticket search (KTD10) adds project-scoped Jira label search calls to every Veracode/Waltz import run, beyond the dedup search already there — bounded by the same chunking/fault-tolerance pattern, so the added load is proportional to project size, not report size. R13's bulk update adds a get-labels + update-labels + add-comment call per qualifying ticket, but only when the user explicitly triggers it (F3), not on every run.
+The reverse stale-ticket search (KTD10) adds one project-scoped Jira label search call to every Veracode/Waltz import run, beyond the dedup search already there — capped the same way `cleanupHandler.ts`'s analogous query is capped, so the added load is bounded regardless of project size. R13's bulk update adds a get-labels + update-labels + add-comment call per qualifying ticket, but only when the user explicitly triggers it (F3), not on every run.
 
 ### Risks & Dependencies
 
 - R13's label update is read-then-write, not atomic (KTD4) — a concurrent edit to the same ticket's labels between the read and the write could be overwritten. Same risk profile as the codebase's existing bulk field-update flow; not a new exposure.
-- R4 and R13 both depend on a project having a configured `cleanupRules` entry to offer a transition or, for R13, none — R13 has no such dependency (label/comment writes don't need a workflow rule); only R4 is limited when a rule is missing, per KTD13's excluded-with-note handling.
+- R4 depends on a project having a configured `cleanupRules` entry to offer a transition — R13 has no such dependency (label/comment writes don't need a workflow rule); only R4 is limited when a rule is missing, per KTD13's excluded-with-note handling.
 - Holding the full "new" candidate set in session state (KTD5/KTD7) scales with report size even with lazy descriptions; acceptable at the volumes these reports produce today (per Sources, `MAX_REPORT_BYTES` already bounds the input), revisit if real-world reports grow past the low thousands of matched flaws.
 
 ---
@@ -191,7 +192,7 @@ The reverse stale-ticket search (KTD10) adds project-scoped Jira label search ca
   - `src/utils/veracodeReport.ts` — add a grouping function and group-aware `buildLabels`/`buildDescriptionWiki`/`buildSummary` variants; extend `VeracodeReviewRow` to carry `issueIds: string[]` (or equivalent) instead of a single `issueId`.
   - `src/test/veracodeReport.test.ts` — new test coverage.
 - **Approach:**
-  1. Add a pure grouping function keyed on `` `${sourceFilePath ?? ''}${sourceFile}:${line}` ``, only applied when both `sourceFile` and `line` are non-null (R12).
+  1. Add a pure grouping function keyed on `` `${sourceFilePath ?? ''}::${sourceFile}:${line}` `` — the `::` separator between path and file segments is required: bare concatenation (the pattern `fullSourcePath()` already uses for *display*, where a collision is only cosmetic) lets two flaws in genuinely different locations produce the same key, e.g. path `src/foo/` + file `bar.js` versus path `src/foo/bar.` + file `js`. Only applied when both `sourceFile` and `line` are non-null (R12).
   2. Build the group's labels by unioning each flaw's own `buildLabels()` output and deduping (mirrors the existing per-flaw dedup in `buildLabels`).
   3. Build the group's description by combining each flaw's severity/CWE/description/recommendation under its own issue id, hoisting the shared file+line `### Location` once (per KTD1).
   4. Route every combined field through the existing `sanitizeCellText()`/`sanitizeStandaloneLine()` sanitizers before the combined Markdown reaches `markdownToJiraWiki()` — do not hand-build a shortcut string join that bypasses either sanitizer layer (see the wiki-injection precedent in the Sources note below).
@@ -228,7 +229,7 @@ The reverse stale-ticket search (KTD10) adds project-scoped Jira label search ca
 
 - **Goal:** A single reply on the review screen adds the missing label and a summarizing comment to every Already-ticketed row with a finding not yet reflected on its ticket.
 - **Requirements:** R13.
-- **Dependencies:** U1, U2 (needs a folded row's multi-issue-id shape to know what "not yet reflected" means).
+- **Dependencies:** U1, U2 (needs a folded row's multi-issue-id shape to know what "not yet reflected" means); coordinates with U4 and U6 on the shared `ReviewSession<TRow>` shape, since all three touch it.
 - **Files:**
   - `src/participant/sessionState.ts` — recognize the "update existing tickets" reply alongside the existing `parseReviewInput` outcomes; render a per-row indicator when a row was updated this way.
   - `src/participant/jira/reportImportHandler.ts` — the execution function: walk qualifying Already-ticketed rows, call `TicketService` per row.
@@ -237,21 +238,22 @@ The reverse stale-ticket search (KTD10) adds project-scoped Jira label search ca
 - **Approach:**
   1. Add a new reply outcome (distinct from `ok`/`cancel`/`toggle`/`setValue`) recognized before falling through to the existing toggle-list parsing.
   2. For each Already-ticketed row whose group has a flaw id not yet in the ticket's labels: read current labels, append the missing id(s), write the merged array, then post the summarizing comment (KTD4). Skip a row entirely once its labels already contain every id its group covers (idempotency, AE4).
-  3. Report a per-row/summary count of tickets updated, mirroring the existing per-item progress-line convention in `executeImportBatch`.
+  3. Build the comment body the same way U1 builds a folded description: route every untrusted flaw field (severity label, CWE name, description) through `sanitizeCellText()`/`sanitizeStandaloneLine()` and author it as Markdown converted once via `markdownToJiraWiki()` before calling `TicketService.addComment()` — `addComment()` sends its `body` argument to Jira verbatim with no sanitization of its own, so skipping this step reopens the same wiki-markup-injection class already fixed twice in this codebase (see the Sources note on `sanitizeCellText()`/`sanitizeStandaloneLine()`).
+  4. Report a per-row/summary count of tickets updated, mirroring the existing per-item progress-line convention in `executeImportBatch`.
 - **Patterns to follow:** `executeImportBatch`'s per-item try/catch-and-report loop in `src/participant/jira/reportImportHandler.ts`; the existing `addComment`/`updateField` signatures in `TicketService.ts`.
 - **Test scenarios:**
   - A ticket missing one of its group's flaw ids gets that id added to its labels and a comment posted. Covers AE3, AE4.
   - Running the action twice in a row against an unchanged ticket posts no second comment and leaves labels unchanged (idempotency). Covers AE4.
   - A ticket that already has every id its group covers is skipped entirely (no API calls).
   - A per-row failure (e.g. the comment post fails) is reported without aborting the rest of the batch, mirroring `executeImportBatch`'s existing per-row error handling.
-  - The reply works regardless of which page of the New section is currently visible, and regardless of New/Stale toggle state.
+  - A crafted flaw `description` containing a Jira-native markup trigger (e.g. `!url!`) cannot survive into the posted comment body — the sanitizer/converter pipeline neutralizes it the same way `buildDescriptionWiki()` already does.
 - **Verification:** unit tests above pass; `npm run compile` passes with the new reply-outcome type.
 
 ### U4. Pageable review session for the New section
 
 - **Goal:** The New section holds every matched "new" candidate and can be paged, rather than pre-capping at `BATCH_LIMIT` before the session is built.
 - **Requirements:** R6, R7, R8.
-- **Dependencies:** none (independent of U1-U3; touches the same session type as U3, so land after or coordinate on merge).
+- **Dependencies:** none (independent of U1-U3; touches the same `ReviewSession<TRow>` shape as U3 and U6, so land after or coordinate on merge).
 - **Files:**
   - `src/participant/sessionState.ts` — `ReviewSession<TRow>` gains a full-candidate-set field and a page index; `buildImportReviewTable` renders one page plus "Page X of Y"; a page-navigation reply parser sits ahead of `parseReviewInput`.
   - `src/utils/reportImport.ts` — rework or remove the pre-build `capNewRows` cap; keep dedup/`findAlreadyTicketed` untouched (orthogonal to paging, confirmed in research).
@@ -260,13 +262,13 @@ The reverse stale-ticket search (KTD10) adds project-scoped Jira label search ca
 - **Approach:**
   1. Build every "new" candidate's lightweight fields (severity, CWE, summary, labels) eagerly; defer the full description build to creation time (KTD5) — see U5's note on where the deferred build call lives for Veracode's folded groups vs. Waltz's single components.
   2. `session.rows` continues to mean "the currently visible page" so `executeImportBatch`'s existing included-filter-then-slice logic is untouched (KTD7); a new field holds the full candidate list and current page index.
-  3. Recognize `page <n>` / `next` / `prev` (KTD6) ahead of the existing toggle/ok/cancel parsing; a bare number is always a toggle, never a page jump.
+  3. Recognize `page <n>` / `next` / `prev` (KTD6) ahead of the existing toggle/ok/cancel parsing; a bare number is always a toggle attempt, never a page jump, but only succeeds when it matches a row id on the currently visible page (KTD6) — a number matching an off-page row is unrecognized input, not a silent no-op toggle.
   4. Replace the "N more matched, re-run" message with "Page X of Y" (KTD8); keep the `BATCH_LIMIT`-per-run creation cap message as-is.
   5. Bump `CURRENT_SESSION_SCHEMA_VERSION` so an in-flight pre-upgrade session expires via the existing mechanism (KTD9).
 - **Patterns to follow:** the existing `isSessionExpired`/`CURRENT_SESSION_SCHEMA_VERSION` convention; `applyReviewToggle`'s pure-function shape for any new page-slice helper.
 - **Test scenarios:**
   - Paging to a page and confirming creates only that page's included rows, discarding any earlier page's toggles. Covers AE5.
-  - A bare numeric reply always toggles the matching row id, even when that row is on a different page than the one currently shown.
+  - A bare numeric reply toggles the matching row id only when that row is on the currently visible page; a number matching a row on a different page is treated as unrecognized input, not a silent toggle.
   - `page 3`/`next`/`prev` navigate correctly at the first, a middle, and the last page, including out-of-range requests.
   - A session stored under the previous schema version renders as expired rather than rendering with missing fields.
   - Waltz's New section pages identically to Veracode's (R8), using the same shared code path.
@@ -282,16 +284,17 @@ The reverse stale-ticket search (KTD10) adds project-scoped Jira label search ca
   - `src/participant/jira/veracodeHandler.ts`, `src/participant/jira/waltzHandler.ts` — supply the marker label (`veracode` / `oss-dependency`) and active-finding predicate (R2's absent-or-filtered-out rule, and its Waltz mirror using `includeRemediationActions`).
   - `src/test/reportImport.test.ts` — new test coverage.
 - **Approach:**
-  1. Search the project (chunked, `resolution is EMPTY` + the marker label) for candidate tickets, reusing `chunkStrings`/`buildDedupJql`'s pattern and `findAlreadyTicketed`'s fault-tolerance-per-chunk shape (KTD10).
+  1. Search the project (`resolution is EMPTY` + the marker label) for candidate tickets, capped at 50 results with the same "found N — showing first 50" warning `cleanupHandler.ts`'s analogous query already gives when truncated (KTD10) — do not silently drop coverage past one page.
   2. For each candidate ticket, extract its `veracode-issue-<id>` (or Waltz dedup-key) labels and check each against the current report via the caller-supplied active-finding predicate; a ticket is stale only when none of its ids are still active (mirrors R11's "any active keeps it non-stale" rule for folded groups).
   3. Veracode's predicate: a flaw id is active if it's present in the raw parsed report with a `remediationStatus` matching `includeRemediationStatuses`. Waltz's predicate: a component is active if present and matching `includeRemediationActions`.
-- **Patterns to follow:** `findAlreadyTicketed`'s chunked, fault-tolerant search shape in `src/utils/reportImport.ts` — this is a reverse instance of the same problem shape (project-wide label search vs. per-chunk dedup search), so structure it as a sibling function, not a copy-pasted variant.
+- **Patterns to follow:** `handleRunCleanup`'s single-query, cap-at-50-with-warning shape in `src/participant/jira/cleanupHandler.ts:157-169` for the search itself; `findAlreadyTicketed`'s fault-tolerant-on-failure shape in `src/utils/reportImport.ts` for handling a failed search without discarding results already in hand.
 - **Test scenarios:**
   - A single-flaw ticket whose flaw id is absent from the raw report is flagged stale.
   - A single-flaw ticket whose flaw id is present but has a `remediationStatus` outside `includeRemediationStatuses` is flagged stale. Covers AE1.
   - A folded (multi-id) ticket with at least one still-active id is not flagged stale, even when its other ids are gone. Covers AE2.
   - A Waltz ticket whose component is present but excluded by `includeRemediationActions` is flagged stale, mirroring the Veracode case.
-  - A failed search chunk degrades gracefully (partial results, not a thrown error), matching `findAlreadyTicketed`'s existing behavior.
+  - A project with more than 50 matching open tickets surfaces the same truncation warning `cleanupHandler.ts`'s analogous query gives, rather than silently checking only the first 50.
+  - A failed search reports a warning and degrades to "could not check for stale tickets" rather than throwing and aborting the rest of the import, matching the graceful-degradation convention `findAlreadyTicketed` already uses on a search failure.
 - **Verification:** `reportImport.test.ts` covers the predicate and search shape for both importers' marker labels.
 
 ### U6. Stale-ticket review section and bulk transition
@@ -303,9 +306,10 @@ The reverse stale-ticket search (KTD10) adds project-scoped Jira label search ca
   - `src/participant/sessionState.ts` — render the Stale section using the `TransitionBatchTicket` shape and ticket-key toggle vocabulary (KTD11); an excluded-with-note row for a ticket with no matching `cleanupRules` entry (KTD13).
   - `src/participant/jira/reportImportHandler.ts` — `ReviewSession<TRow>` gains an optional stale-tickets field; `handleImportReviewReply`'s confirm path runs the existing creation batch then a transition pass.
   - `src/participant/jira/cleanupHandler.ts` — extract the per-ticket transition-path/resolution logic into a form `reportImportHandler.ts` can call, rather than duplicating it.
+  - `src/participant/jira/ticketContext.ts` — extend `AwaitIssueTypeResume`'s resume-kind union (or add a sibling resume type) for the chained per-group resolution ask (KTD15).
   - `src/test/reportImportHandler.test.ts`, `src/test/cleanupHandler.test.ts` — new/updated test coverage.
 - **Approach:**
-  1. Group stale tickets by issue type within the project (KTD14); for each group matching a `cleanupRules` entry that needs a resolution, run the existing resolution-ask once per group before the merged review screen renders.
+  1. Group stale tickets by issue type within the project (KTD14); for each group matching a `cleanupRules` entry that needs a resolution, chain the existing resolution-ask once per group before the merged review screen renders, reusing the park-ask-resume pattern `resolveIssueTypeOrPrompt()`/`AwaitIssueTypeResume` already provides (KTD15) rather than inventing a new queueing mechanism.
   2. Build each stale ticket as a `TransitionBatchTicket` with `included: false` by default (R3's unselected-by-default, a deliberate divergence from cleanup's own `included: true` default — see the Sources note above).
   3. A ticket whose project+issue-type has no matching rule renders excluded, with a note, and is not offered as a toggle (KTD13).
   4. On "post it", run the existing ticket-creation batch, then transition every included stale ticket via the extracted per-ticket logic from `cleanupHandler.ts` (KTD12) — reuse, not reimplementation.
@@ -317,6 +321,7 @@ The reverse stale-ticket search (KTD10) adds project-scoped Jira label search ca
   - Two stale tickets under different issue types each get their own resolution-ask, run once per group, not once per ticket.
   - One "post it" reply both creates included New rows and transitions included Stale tickets in the same run.
   - A ticket-key toggle reply (e.g. `PROJ-123`) never collides with a New/Already-ticketed row-id toggle (e.g. `2`, `A1`).
+  - The "update existing tickets" reply (U3) works regardless of which page of the New section is currently visible, and regardless of New/Stale toggle state — an integration scenario that needs U3, U4, and U6's session-shape fields all present.
 - **Verification:** unit tests above pass; the mixed create+transition confirm path is covered end to end in `reportImportHandler.test.ts`'s generic-descriptor style.
 
 ### U7. Documentation updates
