@@ -102,10 +102,6 @@ flowchart TB
 - Assumes the Routine reads the register file fresh on each firing rather than needing its contents embedded in the Routine definition itself.
 - Assumes the ~30-day cadence runs as a recurring, monthly-ish schedule (see Key Decision above), which may drift a few days depending on the month.
 
-### Outstanding Questions
-
-- **Deferred to Planning:** Exact register file path, its internal layout (table columns/sections), and the severity scale's exact levels.
-
 ### Sources / Research
 
 - `docs/ideation/2026-08-20-open-technical-debt-ideation.html` — the prior ideation run this brainstorm re-verified against current code and drew its R3 seed list from.
@@ -120,3 +116,112 @@ flowchart TB
 ---
 
 **Product Contract preservation:** changed R3, AE4, R6 — planning research (`learnings-researcher`) surfaced a second, independent precedent of this register's motivating failure pattern beyond the Problem Frame's Waltz example; the user confirmed adding it as a seventh seed row rather than leaving R3 at the six items settled during brainstorming. Separately, `spec-flow-analyzer` found that R6's original "convert to won't-fix and remove" gave a permanent decision no durable record, indistinguishable a month later from "never registered"; the user confirmed logging the decision before removal rather than treating deletion itself as the record. Further changed: during Phase 5.1.5 scoping-synthesis dialogue, the user redirected the core check-in mechanism from an automatic revisit-by-date model (R2, and the original R6/R7) to severity-based entries with manual, priority-driven check-ins — no date drives what surfaces, every active entry is shown at every accepted firing sorted by severity, and "leave unchanged" is a first-class outcome alongside fix-now and won't-fix. R2 is retired; R1, R6, R7, Key Decisions, Actors, Key Flows, Acceptance Examples, and Dependencies were rewritten to match.
+
+---
+
+## Planning Contract
+
+- KTD1. **File path and internal layout.** The combined file lives at `docs/known-limitations.md`, sibling to the repo's other domain docs (`docs/report-import.md`, `docs/jira-flows.md`). Top to bottom: a `## Convention` section (what qualifies as an entry, required fields, the severity scale, how the Routine uses the file), a `## Active Register` table, and a `## Won't-Fix Log` table. Matches this repo's established domain-doc shape (H1 → intro → H2 sections) confirmed by repo research. Instantiates the "single central file" and "one combined file" Key Decisions (Governs R1, R5).
+- KTD2. **Entry ID scheme.** Each Active Register row carries a stable `KL<N>` ID (next unused number; never reused; gaps after removal are fine), mirroring the `R<N>`/`U<N>` convention already used throughout `docs/plans/`. A Won't-Fix Log row keeps its original `KL<N>` for traceability. Lets the Routine and the maintainer refer to a specific entry unambiguously during a check-in. Governs R1, R6.
+- KTD3. **Write persistence: batched at the end of a check-in.** (session-settled: user-directed — chosen over persisting each decision immediately: the maintainer accepted that an interrupted check-in can lose that session's in-progress decisions, preferring the simpler batch-write model over per-decision writes.) The Routine collects every fix-now/won't-fix outcome during the walkthrough and writes them to the file once, after the maintainer has gone through every presented entry. Governs R6. See Risks & Dependencies for the accepted trade-off this carries.
+- KTD4. **Malformed entry handling: best-effort auto-repair.** (session-settled: user-directed — chosen over flagging-and-skipping or halting the firing: the maintainer wants a malformed entry fixed automatically wherever a reasonable interpretation exists.) A missing or invalid severity defaults to Medium; a missing or malformed found-date is set to today's date; a missing description/reason is included in that entry's presentation with an inline "description missing" note rather than silently dropped. A row that cannot be parsed as an entry at all (no extractable ID or description) is skipped, and that firing's summary names how many rows were skipped this way so nothing vanishes unnoticed. Repairs are included in that firing's presentation and written back as part of KTD3's batch write. Governs R6.
+- KTD5. **Missing or unreadable register file is reported distinctly from an empty register.** If `docs/known-limitations.md` doesn't exist, or can't be parsed at all, when a firing is accepted, the Routine reports that specific condition rather than folding it into R7's "no active entries" message — so the maintainer can always tell "nothing to review" apart from "something is wrong with the file itself." Not session-settled: the safer default given this feature's whole purpose is not letting a gap decay unnoticed. Governs R6, R7.
+- KTD6. **Routine cadence: recurring monthly cron, not exact 30-day steps.** Implements the "recurring, self-sustaining schedule" Key Decision as a standard cron-style Routine evaluated on a monthly cadence (drifting a few days from a literal 30-day step depending on the month), rather than a self-rescheduling one-shot chain. Governs R5.
+- KTD7. **Won't-Fix Log row shape.** A row carries: the original `KL<N>` ID, description/pointer, found date, severity, the won't-fix reason, and the date it was declined. Append-only — the Routine never edits or removes a Won't-Fix Log row. Instantiates the durable-won't-fix-log Key Decision. Governs R6.
+
+## Implementation Units
+
+### U1. Create the combined register file
+
+- **Goal:** Create `docs/known-limitations.md` with the Convention section and empty Active Register / Won't-Fix Log tables.
+- **Requirements:** R1, R4 (KTD1, KTD2, KTD7).
+- **Dependencies:** none.
+- **Files:**
+  - `docs/known-limitations.md` (new)
+- **Approach:**
+  1. H1 title, one-paragraph intro (what the register is, per the Summary).
+  2. `## Convention` — states: what qualifies as an entry (consciously deferred, not every known limitation, per the Product Contract's Key Decision); required fields (`KL<N>` ID, description/pointer, found date, severity, reason); the severity scale (High / Medium / Low); a one-line note that the scheduled Routine reads this file on each accepted check-in and writes back any fix-now/won't-fix decisions after the walkthrough (KTD3).
+  3. `## Active Register` — table columns: ID, Description / Pointer, Found, Severity, Reason.
+  4. `## Won't-Fix Log` — table columns: ID, Description / Pointer, Found, Severity, Reason, Declined (KTD7).
+- **Patterns to follow:** the domain-doc shape used by `docs/report-import.md` and `docs/jira-flows.md` (H1 → intro → H2 sections, cross-linked from `CLAUDE.md`); the `R1.`/`U1.` plain-ID-prefix convention used throughout `docs/plans/*.md`, adapted to `KL<N>`.
+- **Test scenarios:** Test expectation: none -- pure documentation content, no executable logic.
+- **Verification:** the file exists at the stated path; both tables are present with the stated columns and are empty; the Convention section states the severity scale and the register's qualification rule.
+
+### U2. Seed the register with the seven entries
+
+- **Goal:** Populate the Active Register with `KL1`–`KL7` per R3.
+- **Requirements:** R1, R3, AE4.
+- **Dependencies:** U1.
+- **Files:**
+  - `docs/known-limitations.md` (modify)
+- **Approach:**
+  1. One row per seed item, each citing its source with a repo-relative pointer: `KL1` Veracode data-path gap (`docs/report-import.md:55-58`); `KL2` Waltz single-fixture schema-drift gap (`docs/report-import.md:76-78`); `KL3` Waltz parse-timeout lacking real cancellation (`src/utils/waltzReport.ts:220-233`); `KL4` no independent-producer sentinel fixture (`scripts/fixtures/build-waltz-report-fixture.mjs`); `KL5` no `@jira` token/context budget parity (`src/participant/jira/contentHandler.ts` vs. `src/participant/BitbucketParticipant.ts`); `KL6` render-safety plan's deferred macro-injection verification; `KL7` denylist-sanitizer-exhaustiveness watch item (`docs/solutions/security-issues/waltz-oss-report-markdown-injection-in-jira-wiki-converter.md`).
+  2. Found date: the date this unit ships.
+  3. Severity: propose one per entry at implementation time — `KL3`, `KL4`, `KL7` lean High (each is security- or resource-exhaustion-adjacent per its own source doc's framing); `KL1`, `KL2`, `KL5`, `KL6` lean Medium. This is a judgment call left to the implementer, not fixed by this plan.
+- **Test scenarios:** Test expectation: none -- pure documentation content.
+- **Verification:** exactly seven rows exist in the Active Register, matching R3's list (AE4); each row's pointer resolves to a real, currently-existing file or section.
+
+### U3. Add the CLAUDE.md pointer
+
+- **Goal:** A one-line pointer and link to the register, following `CLAUDE.md`'s own "Where documentation belongs" convention.
+- **Requirements:** R1 (discoverability); the single-central-file Key Decision.
+- **Dependencies:** U1.
+- **Files:**
+  - `CLAUDE.md` (modify)
+- **Approach:** Add a short paragraph near the existing `## Documented Solutions` section naming the register's purpose and linking `docs/known-limitations.md`, matching that section's one-line-plus-link shape.
+- **Test scenarios:** Test expectation: none -- documentation-only change.
+- **Verification:** `CLAUDE.md` contains a working relative link to `docs/known-limitations.md`.
+
+### U4. Set up the scheduled Routine
+
+- **Goal:** A recurring Routine that fires roughly monthly (KTD6), checks in with the maintainer, and walks the severity-sorted register per R5–R7.
+- **Requirements:** R5, R6, R7 (KTD3, KTD4, KTD5, KTD6).
+- **Dependencies:** U1, U3.
+- **Files:** none — this unit configures a Routine external to the repo (Claude Code's scheduled-trigger mechanism), not a source file. Note this explicitly at implementation time so it isn't mistaken for a missed file.
+- **Approach:**
+  1. Create a recurring trigger, monthly cadence (KTD6), bound to fire into a session in this repo's environment.
+  2. Its stored prompt: asks whether to check now; on decline, ends with no further action.
+  3. On accept: opens `docs/known-limitations.md`, reads `## Convention` for the current fields/severity scale rather than assuming them, then reads `## Active Register`.
+  4. If the file is missing or unreadable, reports that distinctly (KTD5) and ends.
+  5. If the Active Register has no rows, reports that and ends (R7).
+  6. Otherwise, best-effort-repairs any malformed row (KTD4), presents every row sorted High → Medium → Low, and lets the maintainer choose fix-now / won't-fix / leave-unchanged independently per row.
+  7. For a won't-fix choice, appends a row to `## Won't-Fix Log` (KTD7) before removing it from the Active Register.
+  8. Writes every change from that firing back to the file once, after the walkthrough ends (KTD3).
+- **Execution note:** Routine/prompt configuration, not application code — verify with a manual trigger fire (not the schedule) once U1 and U3 land.
+- **Test scenarios** (manual verification; no test framework applies to prompt configuration):
+  - Register holds one Medium-severity entry only; firing accepted → entry is presented; choosing leave-unchanged leaves it present and unchanged afterward. Covers AE3.
+  - Register empty; firing accepted → reports empty, nothing presented. Covers AE1.
+  - Firing declined → nothing read, nothing presented. Covers AE2.
+  - Register holds several entries; fix-now chosen on one → only that entry is removed; all others (including any left-unchanged) are unaffected.
+  - Won't-fix chosen on one entry → it appears in the Won't-Fix Log with its original ID, reason, and today's date, and is removed from the Active Register.
+  - Register holds one entry each of High, Medium, and Low → presented in that order.
+  - A row is missing its severity → the Routine defaults it to Medium, includes it in that firing's presentation, and the repaired value is written back.
+  - The register file is missing (deleted before a firing) → the Routine reports it as missing/unreadable, distinct from "no active entries" (KTD5), rather than erroring silently.
+  - A firing is interrupted after resolving one of several presented entries, before the walkthrough ends → at the next firing, none of the interrupted session's in-progress decisions appear (expected under KTD3's batch model — confirms the accepted trade-off rather than a silent partial write).
+- **Verification:** every scenario above behaves as described on a manual fire; the Routine's stored prompt names the file path and points at `## Convention` rather than restating fields inline.
+
+## Risks & Dependencies
+
+- **Batch-write trade-off (accepted, KTD3).** An interrupted check-in loses that session's in-progress decisions; they simply re-present at the next firing. This is a deliberate simplicity-over-robustness choice, not an oversight.
+- **The Routine lives outside this repo's git history.** Its schedule and stored prompt are Claude Code account/environment state, not a committed file. If this environment or account access changes, the Routine may need to be recreated; `docs/known-limitations.md` itself is unaffected and remains the source of truth for the register's content.
+- **No schema-check tooling exists in this repo for a hand-edited Markdown table** (confirmed by repo research: no lint/validation script covers any `docs/*.md` file today). A malformed row is possible from manual edits; KTD4's best-effort repair mitigates this but doesn't eliminate it.
+
+## Verification Contract
+
+This plan adds no TypeScript source — verification is manual, per each unit's **Verification** field and U4's **Test scenarios**, run by manually firing the Routine rather than waiting for its schedule.
+
+| Check | Command / Method | Applies to |
+|---|---|---|
+| No regression in existing suite | `npm test` | Sanity check — no source files are touched by this plan |
+| Type check unaffected | `npm run compile` | Sanity check — no source files are touched by this plan |
+| Register file structure | Manual read of `docs/known-limitations.md` | U1, U2 |
+| CLAUDE.md link resolves | Manual click-through | U3 |
+| Routine behavior | Manual trigger fire against each U4 scenario | U4 |
+
+## Definition of Done
+
+- `docs/known-limitations.md` exists with `## Convention`, `## Active Register` (seven seeded rows, `KL1`–`KL7`), and an empty `## Won't-Fix Log`.
+- `CLAUDE.md` links to `docs/known-limitations.md`.
+- A recurring Routine exists on a monthly cadence and every U4 test scenario passes on a manual fire.
+- `npm test` and `npm run compile` remain green.
+- No experimental or abandoned content left in the diff.
