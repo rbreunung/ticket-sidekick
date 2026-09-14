@@ -37,7 +37,11 @@ interface ReportImportCommandDescriptor<TRaw, TItem> {
   parse: (raw: TRaw, maxBytes: number) => TItem[] | Promise<TItem[]>;
   filter: (items: TItem[]) => TItem[];
   noMatchMessage: string;
-  buildTemplateSession: (items: TItem[], fileName: string, projectKey: string, jiraClient: IJiraClient) => Promise<unknown>;
+  // U6: `rawItems` (the parsed, pre-`filter` items) is optional so a caller with no stale-check
+  // concept can ignore it — passed through when present so buildVeracodeTemplateSession/
+  // buildWaltzTemplateSession can build the stale-check's "is this finding still active" predicate
+  // from the *unfiltered* report instead of degrading to the already-filtered set.
+  buildTemplateSession: (items: TItem[], fileName: string, projectKey: string, jiraClient: IJiraClient, rawItems?: TItem[]) => Promise<unknown>;
   sessionKey: string;
   chatQuery: string;
   // Resolved fresh per invocation (not at registration time) so a setting the user just changed
@@ -79,6 +83,10 @@ function registerReportImportCommand<TRaw, TItem>(
     const maxReportBytes = descriptor.getMaxReportBytes();
     let readOrParseFailed = false;
     let items: TItem[];
+    // U6: the raw, unfiltered parse() output — captured here (before descriptor.filter runs) so it
+    // can be passed to buildTemplateSession for the stale-check predicate, mirroring what
+    // readAndFilterVeracodeFile/readAndFilterWaltzFile now capture for the chat-only entry point.
+    let rawParsedItems: TItem[] = [];
     try {
       items = await readAndFilterReport<TRaw, TItem>(
         reportPath,
@@ -96,6 +104,7 @@ function registerReportImportCommand<TRaw, TItem>(
         async raw => {
           try {
             const parsed = await descriptor.parse(raw, maxReportBytes);
+            rawParsedItems = parsed;
             return descriptor.filter(parsed);
           } catch (err) {
             readOrParseFailed = true;
@@ -141,7 +150,7 @@ function registerReportImportCommand<TRaw, TItem>(
       onDiag: (level, message, details) => logDiag('jira.apiClient', level, message, details),
     });
 
-    const session = await descriptor.buildTemplateSession(items, path.basename(reportPath), projectKey, jiraClient);
+    const session = await descriptor.buildTemplateSession(items, path.basename(reportPath), projectKey, jiraClient, rawParsedItems);
 
     await context.workspaceState.update(descriptor.sessionKey, session);
     await vscode.commands.executeCommand('workbench.action.chat.open', { query: descriptor.chatQuery });

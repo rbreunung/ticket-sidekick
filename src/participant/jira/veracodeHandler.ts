@@ -7,11 +7,12 @@ import {
   buildGroupSummary, buildGroupDescriptionWiki, buildGroupLabels,
   type VeracodeFlaw, type VeracodeReviewRow,
 } from '../../utils/veracodeReport';
-import type { VeracodeTemplateSelectionSession, VeracodeReviewSession } from '../sessionState';
+import type { VeracodeTemplateSelectionSession, VeracodeReviewSession, StaleResolutionAskSession } from '../sessionState';
 import { VERACODE_REVIEW_COLUMNS } from '../sessionState';
 import {
   readAndFilterReport, buildImportTemplateSession, handleImportReport,
   handleImportTemplateSelection, handleImportReviewReply, continueAfterImportIssueType,
+  continueAfterStaleResolution,
   type ReportImportDescriptor,
 } from './reportImportHandler';
 import { resolveMaxReportBytes } from '../../utils/reportImport';
@@ -49,19 +50,23 @@ function getVeracodeConfig(): { minSeverity: number; includeStatuses: string[]; 
 // (VeracodeFlaw[], one or more flaws sharing a source file + line, R9) rather than individual
 // flaws. A flaw with no location (missing sourceFile/line) never folds with anything and comes
 // back as its own singleton group — see groupFlawsByLocation()'s own doc comment.
-async function readAndFilterVeracodeFile(filePath: string): Promise<VeracodeFlaw[][]> {
+async function readAndFilterVeracodeFile(filePath: string): Promise<{ items: VeracodeFlaw[][]; rawItems: VeracodeFlaw[] }> {
   // parseVeracodeReport() itself also re-checks size + rejects DOCTYPE/ENTITY (defense in depth,
   // and it's the single source of truth used by the pure unit tests too) — both checks share the
   // same resolved maxReportBytes so they agree with each other and with the user's setting.
   const { maxReportBytes, ...filterConfig } = getVeracodeConfig();
-  const flaws = await readAndFilterReport(
+  // U6: captures the raw, unfiltered parsed flaws (before minSeverity/includeRemediationStatuses)
+  // as a side effect of readAndFilterReport's own filter step — buildVeracodeActiveFlawPredicate
+  // needs these, not the filtered/folded set filterFlaws()/groupFlawsByLocation() produce.
+  let rawFlaws: VeracodeFlaw[] = [];
+  const filtered = await readAndFilterReport(
     filePath,
     fp => fs.promises.readFile(fp, 'utf-8'),
     raw => parseVeracodeReport(raw, maxReportBytes),
-    flaws => filterFlaws(flaws, filterConfig),
+    flaws => { rawFlaws = flaws; return filterFlaws(flaws, filterConfig); },
     maxReportBytes,
   );
-  return groupFlawsByLocation(flaws);
+  return { items: groupFlawsByLocation(filtered), rawItems: rawFlaws };
 }
 
 // U5: the `veracode` label every Veracode-imported ticket carries (alongside its
@@ -150,6 +155,14 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
       `Ticket Sidekick: Could not fetch issue types for ${projectKey} — you'll be asked to type it. ${message}`,
     );
   },
+  // U6: wires reportImportHandler.ts's reverse stale-ticket check up to U5's own marker
+  // label/predicate builder — rawItems here is always what readAndFilterVeracodeFile's rawItems
+  // (or extension.ts's own captured pre-filter parse) produced: individual, unfiltered VeracodeFlaw[].
+  stale: {
+    markerLabel: VERACODE_STALE_MARKER_LABEL,
+    labelToDedupKey: veracodeLabelToIssueId,
+    buildActivePredicate: rawItems => buildVeracodeActiveFlawPredicate(rawItems as VeracodeFlaw[], getVeracodeConfig().includeStatuses),
+  },
 };
 
 // The exported functions below are thin wrappers around the shared implementations in
@@ -164,8 +177,13 @@ export async function buildVeracodeTemplateSession(
   fileName: string,
   projectKey: string,
   jiraClient: IJiraClient,
+  // U6: the *raw, unfiltered* flaws (pre minSeverity/includeRemediationStatuses) — extension.ts's
+  // command-triggered entry point now captures these itself (see its own `parse` step) and passes
+  // them through; defaults to `flaws` (already filtered) for any other caller, which degrades the
+  // stale check gracefully rather than crashing (a filtered-out flaw would just look "inactive").
+  rawFlaws: VeracodeFlaw[] = flaws,
 ): Promise<VeracodeTemplateSelectionSession> {
-  return buildImportTemplateSession(groupFlawsByLocation(flaws), fileName, projectKey, jiraClient, veracodeDescriptor);
+  return buildImportTemplateSession(groupFlawsByLocation(flaws), fileName, projectKey, jiraClient, veracodeDescriptor, rawFlaws);
 }
 
 // Entry point for the "importVeracode" operation. Handles both invocation paths:
@@ -229,4 +247,16 @@ export async function handleVeracodeReviewReply(
   baseUrl?: string,
 ): Promise<vscode.ChatResult | void> {
   return handleImportReviewReply(reply, session, ticketService, stream, ws, veracodeDescriptor, baseUrl);
+}
+
+// U6: resumes a Veracode stale-ticket batch's chained per-issue-type-group resolution ask
+// (JiraParticipant.ts's router, mirroring handleVeracodeAwaitIssueType above).
+export async function handleVeracodeStaleResolution(
+  reply: string,
+  ask: StaleResolutionAskSession,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  baseUrl?: string,
+): Promise<vscode.ChatResult | void> {
+  return continueAfterStaleResolution(reply, ask, stream, ws, veracodeDescriptor, baseUrl);
 }

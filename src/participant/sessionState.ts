@@ -1215,12 +1215,23 @@ export function neutralizeMarkdownLinks(value: string): string {
 // U4: bumped 2 -> 3 for the pageable-review-session shape change (ReviewSession<TRow> gained
 // `allRows`/`page`, dropped `totalNewMatched`) — an in-flight pre-upgrade ReviewSession would
 // otherwise render with `allRows`/`page` both `undefined`, not a graceful "please re-run" message.
-export const CURRENT_SESSION_SCHEMA_VERSION = 3;
+// U6: bumped 3 -> 4 for the stale-ticket review section (ReviewSession<TRow> gained `staleTickets`)
+// — same rationale, an in-flight pre-upgrade session must not render a stale section from
+// `undefined`.
+export const CURRENT_SESSION_SCHEMA_VERSION = 4;
 
 export interface ImportTemplateSelectionSession<TItem> {
   reportFileName: string;
   projectKey: string;
   items: TItem[]; // already filtered by the importer's own config (severity/rating, status/action, etc.)
+  // U6: the *raw, unfiltered* parsed items (before the importer's own minSeverity/status-style
+  // filter) — needed to build the "is this finding still active" predicate the stale-ticket check
+  // requires (reportImportHandler.ts's `continueAfterImportIssueType`). `unknown[]` rather than a
+  // second generic parameter: Veracode's raw items (individual pre-fold flaws) are a different
+  // shape than `TItem` (folded groups), so the importer's own descriptor.stale.buildActivePredicate
+  // casts this back to its real type — see ReportImportDescriptor's own doc comment. Absent/empty
+  // for importers with no stale-check concept (email).
+  rawItems?: unknown[];
   availableTemplates: Array<{ name: string; issueType: string }>;
   availableIssueTypes: string[];
   schemaVersion: number;
@@ -1294,12 +1305,84 @@ export interface ReviewSession<TRow> {
   rows: TRow[];
   // 0-based index into the "new" rows only — see buildReviewPage().
   page: number;
+  // U6: open tickets whose finding(s) have disappeared from this report/reverse search — a third
+  // review section, transitioned on confirm via cleanupHandler.ts's shared transition logic
+  // (`transitionTickets`). Absent for importers with no stale-check concept (email, which has no
+  // dedup/marker-label concept either — see ReportImportDescriptor's optional `stale` field).
+  staleTickets?: ReviewSessionStale;
   schemaVersion: number;
 }
 
 export type VeracodeReviewSession = ReviewSession<VeracodeReviewRow>;
 export type WaltzReviewSession = ReviewSession<WaltzReviewRow>;
 export type EmailReviewSession = ReviewSession<EmailReviewRow>;
+
+// ---------------------------------------------------------------------------------------------
+// U6: stale-ticket review section — open tickets whose finding(s) are gone from the current
+// report/reverse search (`reportImport.ts`'s `findStaleTickets`), grouped by issue type so each
+// group can share one resolution ask before the merged review screen renders (KTD10-15's "chain
+// the ask once per group, not once per ticket" rule). `cleanupHandler.ts`'s `buildStaleTicketGroups`
+// builds these; `reportImportHandler.ts` chains the ask and renders the result via
+// `buildStaleReviewSection` below.
+// ---------------------------------------------------------------------------------------------
+
+/** One issue-type group of stale tickets, resolution already chosen (or intentionally skipped —
+ * `undefined`) — ready to render/transition. Every ticket defaults `included: false` (R3: nothing
+ * transitions without an explicit choice, unlike `cleanupHandler.ts`'s own `included: true`
+ * default). */
+export interface StaleTicketGroup {
+  issueType: string;
+  ruleName: string | undefined;
+  targetState: string;
+  resolution: string | undefined;
+  tickets: TransitionBatchTicket[];
+}
+
+/** A stale ticket whose project+issue-type has no matching `cleanupRules` entry (or, degenerately,
+ * no valid transition path from its current status) — shown per the session-settled governing
+ * decision, but never offered a toggle since there is no transition to run. */
+export interface IneligibleStaleTicket {
+  key: string;
+  summary: string;
+  currentStatus: string;
+  note: string;
+}
+
+/** One issue-type group still awaiting its own resolution pick before the merged review screen can
+ * render — mirrors `StaleTicketGroup` minus the already-chosen `resolution`, plus the option list
+ * to present (`cleanupHandler.ts`'s `buildStaleTicketGroups` only populates this when the group's
+ * rule needs one — the same "closed-like target state needs a resolution" check
+ * `handleRunCleanup` already makes). */
+export interface StaleResolutionPendingGroup {
+  issueType: string;
+  ruleName: string | undefined;
+  targetState: string;
+  resolutionOptions: string[];
+  tickets: TransitionBatchTicket[];
+}
+
+export interface ReviewSessionStale {
+  groups: StaleTicketGroup[];
+  ineligible: IneligibleStaleTicket[];
+}
+
+/** Sibling to `AwaitIssueTypeSession` (ticketContext.ts) — same one-key ask/resume shape, but for
+ * the chained per-issue-type-group resolution pick a stale-ticket batch may need before the merged
+ * review screen renders. Kept as its own session type rather than a new `AwaitIssueTypeResume` kind
+ * because its ask is a numbered resolution pick (mirrors `ResolutionSelectionSession`/
+ * cleanupHandler.ts's own ask, `parseResolutionSelection`), not the generic free-text prompt
+ * `streamAwaitIssueType` renders — and its "empty reply" re-prompt text would otherwise have to
+ * become resume-kind-aware. `reviewSession` is the review session as built so far (rows, dedup —
+ * everything except `staleTickets`), parked until every pending group is resolved.
+ */
+export interface StaleResolutionAskSession {
+  descriptorKind: 'veracode' | 'waltz'; // email has no stale-check concept — never reaches this ask
+  pendingGroups: StaleResolutionPendingGroup[]; // [0] is the group currently being asked about
+  resolvedGroups: StaleTicketGroup[]; // accumulated as each group's ask resolves
+  ineligible: IneligibleStaleTicket[];
+  reviewSession: VeracodeReviewSession | WaltzReviewSession;
+  schemaVersion: number;
+}
 
 /**
  * A stored session written before `schemaVersion` existed (reads back as `undefined`) — or by an
@@ -1511,6 +1594,104 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
   );
 
   return lines.join('\n');
+}
+
+// U6: full-ticket-key vocabulary (e.g. `PROJ-123`) for the Stale section's own toggle replies —
+// deliberately disjoint from the New/Already-ticketed sections' `"1".."N"`/`"A1".."Am"` row-id
+// tokens (a ticket key always contains a hyphen; a row id never does) and from U4's `next`/`prev`/
+// `page <n>` page-nav tokens (none of those match this pattern either).
+const STALE_TICKET_KEY_PATTERN = /^[A-Z][A-Z0-9]+-\d+$/;
+
+/**
+ * Recognizes a reply as one or more ticket-key toggles for the Stale section — checked in
+ * `handleImportReviewReply` AFTER page-nav (U4) and BEFORE the New/Already-ticketed sections' own
+ * row-id toggle parsing (`parseReviewInput`), so a ticket key never collides with either
+ * vocabulary. Only matches ELIGIBLE stale tickets (present in `stale.groups`) — an ineligible one
+ * (R4: no matching cleanup rule, never offered a toggle) is never toggle-matched even if named,
+ * falling through as an unrecognized reply like any other. Returns the matched tickets' own keys
+ * (real casing, not the reply's) so `applyStaleTicketToggle` can flip them directly; `null` when no
+ * token in the reply names an eligible stale ticket at all — the caller then falls through to
+ * `parseReviewInput`.
+ */
+export function parseStaleTicketToggle(reply: string, stale: ReviewSessionStale): string[] | null {
+  const tokens = reply.trim().split(/[\s,]+/).filter(Boolean);
+  const knownKeys = new Map<string, string>(); // UPPERCASE -> real key
+  for (const g of stale.groups) for (const t of g.tickets) knownKeys.set(t.key.toUpperCase(), t.key);
+  const matched: string[] = [];
+  for (const token of tokens) {
+    const upper = token.toUpperCase();
+    if (STALE_TICKET_KEY_PATTERN.test(upper) && knownKeys.has(upper)) matched.push(knownKeys.get(upper)!);
+  }
+  return matched.length > 0 ? matched : null;
+}
+
+/** Flips `included` for every stale ticket (across every group) whose key is in `keys` — pure so
+ * it's independently testable, mirroring `applyTicketToggle`'s per-key flip for the cleanup batch. */
+export function applyStaleTicketToggle(stale: ReviewSessionStale, keys: string[]): ReviewSessionStale {
+  const toggleSet = new Set(keys.map(k => k.toUpperCase()));
+  return {
+    ...stale,
+    groups: stale.groups.map(g => ({
+      ...g,
+      tickets: g.tickets.map(t => (toggleSet.has(t.key.toUpperCase()) ? { ...t, included: !t.included } : t)),
+    })),
+  };
+}
+
+/**
+ * Renders the Stale review section — one combined table spanning every group's eligible tickets
+ * (R3's toggle, positive "will transition when checked" framing per R8/R9's existing convention)
+ * plus every ineligible ticket (R4: shown, excluded, no toggle offered — just its note). Returns
+ * `''` when there is nothing to show, so callers can unconditionally append this to the New/
+ * Already-ticketed table without an extra emptiness check of their own.
+ */
+export function buildStaleReviewSection(stale: ReviewSessionStale, baseUrl?: string): string {
+  const anyEligible = stale.groups.some(g => g.tickets.length > 0);
+  if (!anyEligible && stale.ineligible.length === 0) return '';
+
+  interface StaleRow {
+    key: string;
+    summary: string;
+    currentStatus: string;
+    to: string;
+    resolution: string;
+    toggleCell: string;
+  }
+  const rows: StaleRow[] = [];
+  for (const group of stale.groups) {
+    for (const t of group.tickets) {
+      rows.push({
+        key: formatKeyLink(t.key, baseUrl),
+        summary: neutralizeMarkdownLinks(t.summary),
+        currentStatus: t.currentStatus,
+        to: group.targetState,
+        resolution: group.resolution ?? '',
+        toggleCell: buildChatCommandLink(t.included ? '✓' : '_excluded_', '@jira', t.key),
+      });
+    }
+  }
+  for (const t of stale.ineligible) {
+    rows.push({
+      key: formatKeyLink(t.key, baseUrl),
+      summary: neutralizeMarkdownLinks(t.summary),
+      currentStatus: t.currentStatus,
+      to: '—',
+      resolution: '',
+      toggleCell: `_excluded — ${neutralizeMarkdownLinks(t.note)}_`,
+    });
+  }
+
+  const columns: ReviewTableColumn<StaleRow>[] = [
+    { header: 'Key', accessor: r => r.key },
+    { header: 'Summary', accessor: r => r.summary },
+    { header: 'Status', accessor: r => r.currentStatus },
+    { header: '→ To', accessor: r => r.to },
+    { header: 'Resolution', accessor: r => r.resolution },
+    { header: 'Transition?', accessor: r => r.toggleCell },
+  ];
+
+  return `### Stale — no longer active, may be closed\n${renderReviewTable(columns, rows)}\n\n` +
+    'Reply with a stale ticket\'s key (e.g. `PROJ-123`) to toggle it.';
 }
 
 export interface BulkUpdateReviewRow {
@@ -2262,6 +2443,7 @@ export type JiraSessionKind =
   | 'field-selection'
   | 'field-update-preview'
   | 'await-issue-type'
+  | 'stale-resolution-selection'
   | 'veracode-template'
   | 'veracode-review'
   | 'waltz-template'

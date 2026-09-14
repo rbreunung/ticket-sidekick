@@ -15,6 +15,10 @@ import type { CachedTransition, WorkflowGraph } from '../services/WorkflowServic
 import {
   buildReviewPage, parseReviewPageNav, applyReviewSessionToggle, type ReviewRowBase,
 } from '../participant/sessionState';
+import {
+  parseStaleTicketToggle, applyStaleTicketToggle, buildStaleReviewSection,
+  type ReviewSessionStale, type TransitionBatchTicket,
+} from '../participant/sessionState';
 
 interface Widget {
   name: string;
@@ -939,5 +943,102 @@ describe('applyReviewSessionToggle (U4/R7-R8)', () => {
     const result = applyReviewSessionToggle(rows, rows, ['2']);
     expect(result.rows.find(r => r.id === '1')!.included).toBe(true);
     expect(result.rows.find(r => r.id === '3')!.included).toBe(true);
+  });
+});
+
+// U6: Stale review section — toggle-reply parsing/application and the rendered table.
+describe('Stale-ticket review section (U6)', () => {
+  const dummyPath = [{ id: '1', name: 'Go', to: 'Done' }];
+
+  function makeStaleTicket(key: string, included = false): TransitionBatchTicket {
+    return {
+      key, summary: `Summary for ${key}`, currentStatus: 'Open',
+      transitionPath: dummyPath, subtasks: [], included,
+    };
+  }
+
+  function makeStale(overrides: Partial<ReviewSessionStale> = {}): ReviewSessionStale {
+    return {
+      groups: [{ issueType: 'Bug', ruleName: 'close-bugs', targetState: 'Done', resolution: 'Fixed', tickets: [makeStaleTicket('PROJ-1')] }],
+      ineligible: [],
+      ...overrides,
+    };
+  }
+
+  describe('parseStaleTicketToggle', () => {
+    it('recognizes a full ticket-key reply naming an eligible stale ticket', () => {
+      expect(parseStaleTicketToggle('PROJ-1', makeStale())).toEqual(['PROJ-1']);
+    });
+
+    it('is case-insensitive but returns the ticket\'s real-cased key', () => {
+      expect(parseStaleTicketToggle('proj-1', makeStale())).toEqual(['PROJ-1']);
+    });
+
+    it('matches multiple ticket keys in one reply', () => {
+      const stale = makeStale({
+        groups: [{ issueType: 'Bug', ruleName: undefined, targetState: 'Done', resolution: undefined, tickets: [makeStaleTicket('PROJ-1'), makeStaleTicket('PROJ-2')] }],
+      });
+      expect(parseStaleTicketToggle('PROJ-1 PROJ-2', stale)).toEqual(['PROJ-1', 'PROJ-2']);
+    });
+
+    it('never matches a row-id token (bare numeric "2" or already-ticketed "A1") — disjoint vocabulary', () => {
+      expect(parseStaleTicketToggle('2', makeStale())).toBeNull();
+      expect(parseStaleTicketToggle('A1', makeStale())).toBeNull();
+    });
+
+    it('never matches U4\'s page-nav tokens', () => {
+      expect(parseStaleTicketToggle('next', makeStale())).toBeNull();
+      expect(parseStaleTicketToggle('prev', makeStale())).toBeNull();
+      expect(parseStaleTicketToggle('page 2', makeStale())).toBeNull();
+    });
+
+    it('never matches an ineligible ticket\'s key — R4: not offered a toggle', () => {
+      const stale = makeStale({
+        groups: [],
+        ineligible: [{ key: 'PROJ-9', summary: 'x', currentStatus: 'Open', note: 'no cleanup rule configured' }],
+      });
+      expect(parseStaleTicketToggle('PROJ-9', stale)).toBeNull();
+    });
+
+    it('returns null for an unrelated reply', () => {
+      expect(parseStaleTicketToggle('post it', makeStale())).toBeNull();
+      expect(parseStaleTicketToggle('cancel', makeStale())).toBeNull();
+    });
+  });
+
+  describe('applyStaleTicketToggle', () => {
+    it('flips included for the named ticket across groups', () => {
+      const stale = makeStale();
+      const toggled = applyStaleTicketToggle(stale, ['PROJ-1']);
+      expect(toggled.groups[0].tickets[0].included).toBe(true);
+      // Original untouched (pure).
+      expect(stale.groups[0].tickets[0].included).toBe(false);
+    });
+
+    it('leaves tickets not named untouched', () => {
+      const stale = makeStale({
+        groups: [{ issueType: 'Bug', ruleName: undefined, targetState: 'Done', resolution: undefined, tickets: [makeStaleTicket('PROJ-1'), makeStaleTicket('PROJ-2', true)] }],
+      });
+      const toggled = applyStaleTicketToggle(stale, ['PROJ-1']);
+      expect(toggled.groups[0].tickets[0].included).toBe(true);
+      expect(toggled.groups[0].tickets[1].included).toBe(true); // was already true, untouched
+    });
+  });
+
+  describe('buildStaleReviewSection', () => {
+    it('renders eligible tickets with a positive toggle link and the ineligible note for others', () => {
+      const stale = makeStale({
+        ineligible: [{ key: 'PROJ-9', summary: 'Old finding', currentStatus: 'Open', note: 'no cleanup rule configured for PROJ/Task' }],
+      });
+      const rendered = buildStaleReviewSection(stale);
+      expect(rendered).toContain('PROJ-1');
+      expect(rendered).toContain('PROJ-9');
+      expect(rendered).toContain('no cleanup rule configured for PROJ/Task');
+      expect(rendered).toContain('Stale');
+    });
+
+    it('returns an empty string when there is nothing to show', () => {
+      expect(buildStaleReviewSection({ groups: [], ineligible: [] })).toBe('');
+    });
   });
 });

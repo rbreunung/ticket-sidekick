@@ -6,11 +6,12 @@ import {
   parseWaltzReport, filterComponents, sanitizeComponentLabel, buildSummary, buildLabels, buildDescriptionWiki,
   type WaltzComponent, type WaltzReviewRow,
 } from '../../utils/waltzReport';
-import type { WaltzTemplateSelectionSession, WaltzReviewSession } from '../sessionState';
+import type { WaltzTemplateSelectionSession, WaltzReviewSession, StaleResolutionAskSession } from '../sessionState';
 import { WALTZ_REVIEW_COLUMNS } from '../sessionState';
 import {
   readAndFilterReport, buildImportTemplateSession, handleImportReport,
   handleImportTemplateSelection, handleImportReviewReply, continueAfterImportIssueType,
+  continueAfterStaleResolution,
   type ReportImportDescriptor,
 } from './reportImportHandler';
 import { resolveMaxReportBytes } from '../../utils/reportImport';
@@ -43,18 +44,23 @@ function getWaltzConfig(): { minVulnRating: string; includeRemediationActions: s
   };
 }
 
-async function readAndFilterWaltzFile(filePath: string): Promise<WaltzComponent[]> {
+async function readAndFilterWaltzFile(filePath: string): Promise<{ items: WaltzComponent[]; rawItems: WaltzComponent[] }> {
   // parseWaltzReport() itself also re-checks size (single source of truth used by the pure unit
   // tests too) — both checks share the same resolved maxReportBytes so they agree with each other
   // and with the user's setting.
   const { maxReportBytes, ...filterConfig } = getWaltzConfig();
-  return readAndFilterReport(
+  // U6: captures the raw, unfiltered parsed components (before minVulnRating/includeRemediationActions)
+  // as a side effect of readAndFilterReport's own filter step — buildWaltzActiveComponentPredicate
+  // needs these, not the filtered set filterComponents() produces.
+  let rawComponents: WaltzComponent[] = [];
+  const items = await readAndFilterReport(
     filePath,
     fp => fs.promises.readFile(fp),
     raw => parseWaltzReport(raw, maxReportBytes),
-    components => filterComponents(components, filterConfig),
+    components => { rawComponents = components; return filterComponents(components, filterConfig); },
     maxReportBytes,
   );
+  return { items, rawItems: rawComponents };
 }
 
 // U5: the `oss-dependency` label every Waltz-imported ticket carries (alongside its own
@@ -128,6 +134,14 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent, WaltzReviewRow> = 
   }),
   // Waltz has no issue-type-fetch-failure pop-up today — omitting onIssueTypeFetchFailed keeps that
   // path log-only, matching current behavior (KTD9).
+  // U6: wires reportImportHandler.ts's reverse stale-ticket check up to U5's own marker
+  // label/predicate builder — rawItems here is always what readAndFilterWaltzFile's rawItems (or
+  // extension.ts's own captured pre-filter parse) produced: unfiltered WaltzComponent[].
+  stale: {
+    markerLabel: WALTZ_STALE_MARKER_LABEL,
+    labelToDedupKey: waltzLabelToDedupKey,
+    buildActivePredicate: rawItems => buildWaltzActiveComponentPredicate(rawItems as WaltzComponent[], getWaltzConfig().includeRemediationActions),
+  },
 };
 
 // The exported functions below are thin wrappers around the shared implementations in
@@ -139,8 +153,13 @@ export async function buildWaltzTemplateSession(
   fileName: string,
   projectKey: string,
   jiraClient: IJiraClient,
+  // U6: the *raw, unfiltered* components (pre minVulnRating/includeRemediationActions) —
+  // extension.ts's command-triggered entry point now captures these itself and passes them
+  // through; defaults to `components` (already filtered) for any other caller, which degrades the
+  // stale check gracefully rather than crashing.
+  rawComponents: WaltzComponent[] = components,
 ): Promise<WaltzTemplateSelectionSession> {
-  return buildImportTemplateSession(components, fileName, projectKey, jiraClient, waltzDescriptor);
+  return buildImportTemplateSession(components, fileName, projectKey, jiraClient, waltzDescriptor, rawComponents);
 }
 
 // Entry point for the "importWaltzReport" operation. Handles both invocation paths:
@@ -204,4 +223,16 @@ export async function handleWaltzReviewReply(
   baseUrl?: string,
 ): Promise<vscode.ChatResult | void> {
   return handleImportReviewReply(reply, session, ticketService, stream, ws, waltzDescriptor, baseUrl);
+}
+
+// U6: resumes a Waltz stale-ticket batch's chained per-issue-type-group resolution ask
+// (JiraParticipant.ts's router, mirroring handleWaltzAwaitIssueType above).
+export async function handleWaltzStaleResolution(
+  reply: string,
+  ask: StaleResolutionAskSession,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  baseUrl?: string,
+): Promise<vscode.ChatResult | void> {
+  return continueAfterStaleResolution(reply, ask, stream, ws, waltzDescriptor, baseUrl);
 }

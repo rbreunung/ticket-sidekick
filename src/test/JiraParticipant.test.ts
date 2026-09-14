@@ -1332,8 +1332,8 @@ describe('isSessionExpired (schemaVersion shape guard — AE7)', () => {
     expect(isSessionExpired(null)).toBe(false);
   });
 
-  it('treats a session persisted with the pre-fix schemaVersion (1) as expired after the bump to 3 — a stale TemplateGenerationTypePickSession (old string[] availableIssueTypes shape) never reaches the new {id, name}[] parsing', () => {
-    expect(CURRENT_SESSION_SCHEMA_VERSION).toBe(3);
+  it('treats a session persisted with the pre-fix schemaVersion (1) as expired after the bump to 4 (U6: stale-ticket review section) — a stale TemplateGenerationTypePickSession (old string[] availableIssueTypes shape) never reaches the new {id, name}[] parsing', () => {
+    expect(CURRENT_SESSION_SCHEMA_VERSION).toBe(4);
     expect(isSessionExpired({ schemaVersion: 1 })).toBe(true);
   });
 

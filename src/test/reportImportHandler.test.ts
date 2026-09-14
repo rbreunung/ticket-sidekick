@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('vscode', () => ({
   workspace: {
@@ -20,6 +20,14 @@ vi.mock('../templates/TemplateService', () => ({
   })),
 }));
 
+// U6: buildStaleTicketGroups (cleanupHandler.ts, called transitively via continueAfterImportIssueType)
+// reads the cached workflow graph — mocked the same way cleanupHandler.test.ts mocks it, so each
+// U6 test controls its own graph/path instead of touching the real on-disk cache.
+vi.mock('../services/WorkflowService', () => ({
+  loadWorkflowCache: vi.fn(),
+  findPath: vi.fn(),
+}));
+
 import * as vscode from 'vscode';
 import {
   buildImportTemplateSession, streamImportTemplateSelection, handleImportTemplateSelection,
@@ -36,6 +44,7 @@ import {
   type WaltzTemplateSelectionSession, type AwaitIssueTypeResume, type VeracodeReviewSession, type WaltzReviewSession,
 } from '../participant/sessionState';
 import { AWAIT_ISSUE_TYPE_SESSION_KEY } from '../participant/jira/ticketContext';
+import { loadWorkflowCache, findPath } from '../services/WorkflowService';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService } from '../services/TicketService';
 import { TemplateService } from '../templates/TemplateService';
@@ -591,5 +600,240 @@ describe('handleWaltzReviewReply — paging via the same shared code path as Ver
     expect(session.rows).toHaveLength(20);
     const text = markdownText((stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0]);
     expect(text).toContain('Page 2 of 2');
+  });
+});
+
+// U6: Stale-ticket review section + transition, exercised end to end through the generic test
+// descriptor (the shared code path both Veracode's and Waltz's real descriptors reuse).
+describe('Stale-ticket review + transition (U6)', () => {
+  let client: MockJiraClient;
+  let ticketService: TicketService;
+
+  const dummyPath = [{ id: '1', name: 'Go', to: 'Done' }];
+
+  // The test descriptor's own marker scheme: a batch's marker label is 'test-marker'; a candidate's
+  // own id rides on a 'test-id-<id>' label (mirrors veracodeLabelToIssueId/waltzLabelToDedupKey's
+  // shape without pulling in either importer's real regex).
+  function makeStaleIssue(key: string, issueType: string, ids: string[], status = 'Open') {
+    return {
+      key,
+      fields: {
+        summary: `Summary for ${key}`,
+        status: { name: status },
+        issuetype: { name: issueType },
+        labels: ['test-marker', ...ids.map(id => `test-id-${id}`)],
+      },
+    };
+  }
+
+  function makeStaleDescriptor(activeIds: string[] = []): ReportImportDescriptor<TestItem, TestRow> {
+    const activeSet = new Set(activeIds);
+    return {
+      ...descriptor,
+      stale: {
+        markerLabel: 'test-marker',
+        labelToDedupKey: (label) => {
+          const m = label.match(/^test-id-(.+)$/);
+          return m ? m[1] : null;
+        },
+        buildActivePredicate: () => (id: string) => activeSet.has(id),
+      },
+    };
+  }
+
+  // Routes ticketService.searchTicketsRaw by JQL shape: the dedup search ("labels in (...)") always
+  // comes back empty (these tests focus on the stale section, not dedup) and the stale search
+  // ("labels = \"test-marker\"") returns whatever candidates the test supplies.
+  function mockSearches(staleIssues: ReturnType<typeof makeStaleIssue>[] = []): ReturnType<typeof vi.spyOn> {
+    return vi.spyOn(ticketService, 'searchTicketsRaw').mockImplementation(async (jql: string) => {
+      if (jql.includes('labels in (')) return { issues: [], total: 0 };
+      if (jql.includes('labels = "test-marker"')) return { issues: staleIssues as never, total: staleIssues.length, isLast: true };
+      return { issues: [], total: 0 };
+    });
+  }
+
+  beforeEach(() => {
+    client = new MockJiraClient();
+    ticketService = new TicketService(client);
+    (vscode.workspace as { workspaceFolders?: unknown }).workspaceFolders = [{ uri: { fsPath: '/workspace' } }];
+    vi.mocked(loadWorkflowCache).mockReturnValue({
+      PROJ: {
+        Bug: { discovered: '2024-01-01', graph: { Open: [{ id: '1', name: 'Go', to: 'Done' }], Done: [] } },
+        Task: { discovered: '2024-01-01', graph: { Open: [{ id: '1', name: 'Go', to: 'Done' }], Done: [] } },
+      },
+    });
+    vi.mocked(findPath).mockReturnValue(dummyPath);
+  });
+
+  afterEach(() => {
+    (vscode.workspace as { workspaceFolders?: unknown }).workspaceFolders = undefined;
+  });
+
+  it("a stale ticket toggled included transitions to its rule's target state with its rule's resolution on confirm", async () => {
+    vi.mocked(TemplateService).mockImplementation(() => ({
+      loadTemplates: vi.fn().mockReturnValue({
+        templates: [],
+        cleanupRules: [{ name: 'close-bugs', project: 'PROJ', issueType: 'Bug', targetState: 'Done', resolution: 'Fixed' }],
+      }),
+    }) as never);
+    mockSearches([makeStaleIssue('PROJ-1', 'Bug', ['1'])]);
+    const templateSession = makeSession({ items: [], availableIssueTypes: ['Bug'] });
+    const ws = makeMockWs();
+
+    await continueAfterImportIssueType('Bug', null, templateSession, client, ticketService, mockStream() as never, ws as never, makeStaleDescriptor());
+    const reviewSession = ws.store[descriptor.sessionKeys.review] as ReviewSession<TestRow>;
+    expect(reviewSession.staleTickets?.groups[0].tickets[0].included).toBe(false); // R3 default
+
+    await handleImportReviewReply('PROJ-1', reviewSession, ticketService, mockStream() as never, ws as never, makeStaleDescriptor());
+    expect(reviewSession.staleTickets?.groups[0].tickets[0].included).toBe(true);
+
+    await handleImportReviewReply('post it', reviewSession, ticketService, mockStream() as never, ws as never, makeStaleDescriptor());
+
+    expect(client.executeTransitionCalls).toHaveLength(1);
+    expect(client.executeTransitionCalls[0]).toMatchObject({ issueKey: 'PROJ-1', fields: { resolution: { name: 'Fixed' } } });
+  });
+
+  it('a stale ticket left at its default (unselected) does not transition on confirm', async () => {
+    vi.mocked(TemplateService).mockImplementation(() => ({
+      loadTemplates: vi.fn().mockReturnValue({
+        templates: [],
+        cleanupRules: [{ name: 'close-bugs', project: 'PROJ', issueType: 'Bug', targetState: 'Done', resolution: 'Fixed' }],
+      }),
+    }) as never);
+    mockSearches([makeStaleIssue('PROJ-1', 'Bug', ['1'])]);
+    const templateSession = makeSession({ items: [], availableIssueTypes: ['Bug'] });
+    const ws = makeMockWs();
+
+    await continueAfterImportIssueType('Bug', null, templateSession, client, ticketService, mockStream() as never, ws as never, makeStaleDescriptor());
+    const reviewSession = ws.store[descriptor.sessionKeys.review] as ReviewSession<TestRow>;
+
+    await handleImportReviewReply('post it', reviewSession, ticketService, mockStream() as never, ws as never, makeStaleDescriptor());
+
+    expect(client.executeTransitionCalls).toHaveLength(0);
+  });
+
+  it('a stale ticket with no matching cleanupRules entry renders excluded with a note and cannot be toggled in', async () => {
+    vi.mocked(TemplateService).mockImplementation(() => ({
+      loadTemplates: vi.fn().mockReturnValue({ templates: [], cleanupRules: [] }),
+    }) as never);
+    mockSearches([makeStaleIssue('PROJ-2', 'Bug', ['2'])]);
+    const templateSession = makeSession({ items: [], availableIssueTypes: ['Bug'] });
+    const ws = makeMockWs();
+    const staleDescriptor = makeStaleDescriptor();
+
+    await continueAfterImportIssueType('Bug', null, templateSession, client, ticketService, mockStream() as never, ws as never, staleDescriptor);
+    const reviewSession = ws.store[descriptor.sessionKeys.review] as ReviewSession<TestRow>;
+    expect(reviewSession.staleTickets?.groups).toEqual([]);
+    expect(reviewSession.staleTickets?.ineligible[0]).toMatchObject({ key: 'PROJ-2' });
+    expect(reviewSession.staleTickets?.ineligible[0].note).toContain('no cleanup rule configured');
+
+    const stream = mockStream();
+    await handleImportReviewReply('PROJ-2', reviewSession, ticketService, stream as never, ws as never, staleDescriptor);
+    const text = markdownText((stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0]);
+    expect(text).toContain("Didn't understand that");
+  });
+
+  it("two stale tickets under different issue types each get their own resolution-ask, run once per group, not once per ticket", async () => {
+    vi.mocked(TemplateService).mockImplementation(() => ({
+      loadTemplates: vi.fn().mockReturnValue({
+        templates: [],
+        cleanupRules: [
+          { name: 'close-bugs', project: 'PROJ', issueType: 'Bug', targetState: 'Done' },
+          { name: 'close-tasks', project: 'PROJ', issueType: 'Task', targetState: 'Done' },
+        ],
+      }),
+    }) as never);
+    mockSearches([
+      makeStaleIssue('PROJ-1', 'Bug', ['1']),
+      makeStaleIssue('PROJ-2', 'Bug', ['2']),
+      makeStaleIssue('PROJ-3', 'Task', ['3']),
+      makeStaleIssue('PROJ-4', 'Task', ['4']),
+    ]);
+    const templateSession = makeSession({ items: [], availableIssueTypes: ['Bug'] });
+    const ws = makeMockWs();
+    const staleDescriptor = makeStaleDescriptor();
+
+    const stream1 = mockStream();
+    await continueAfterImportIssueType('Bug', null, templateSession, client, ticketService, stream1 as never, ws as never, staleDescriptor);
+    const text1 = markdownText((stream1.markdown as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0]);
+    expect(text1).toContain('**2** stale **Bug**'); // one ask for the whole 2-ticket Bug group
+
+    const ask1 = ws.store['jira.session.staleResolution'] as never as { pendingGroups: Array<{ issueType: string }> };
+    expect(ask1.pendingGroups).toHaveLength(2); // Bug group still pending (being asked), Task group queued
+
+    const { continueAfterStaleResolution } = await import('../participant/jira/reportImportHandler');
+    const stream2 = mockStream();
+    await continueAfterStaleResolution('Fixed', ask1 as never, stream2 as never, ws as never, staleDescriptor);
+    const text2 = markdownText((stream2.markdown as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0]);
+    expect(text2).toContain('**2** stale **Task**'); // one ask for the whole 2-ticket Task group, not 4 asks total
+
+    const ask2 = ws.store['jira.session.staleResolution'] as never as { pendingGroups: unknown[] };
+    expect(ask2.pendingGroups).toHaveLength(1);
+
+    const stream3 = mockStream();
+    await continueAfterStaleResolution("Won't Fix", ask2 as never, stream3 as never, ws as never, staleDescriptor);
+
+    const reviewSession = ws.store[descriptor.sessionKeys.review] as ReviewSession<TestRow>;
+    expect(reviewSession.staleTickets?.groups).toHaveLength(2);
+    expect(reviewSession.staleTickets?.groups.find(g => g.issueType === 'Bug')?.resolution).toBe('Fixed');
+    expect(reviewSession.staleTickets?.groups.find(g => g.issueType === 'Task')?.resolution).toBe("Won't Fix");
+    expect(reviewSession.staleTickets?.groups.flatMap(g => g.tickets)).toHaveLength(4);
+  });
+
+  it('one "post it" reply both creates included New rows and transitions included Stale tickets in the same run', async () => {
+    vi.mocked(TemplateService).mockImplementation(() => ({
+      loadTemplates: vi.fn().mockReturnValue({
+        templates: [],
+        cleanupRules: [{ name: 'close-bugs', project: 'PROJ', issueType: 'Bug', targetState: 'Done', resolution: 'Fixed' }],
+      }),
+    }) as never);
+    mockSearches([makeStaleIssue('PROJ-1', 'Bug', ['1'])]);
+    const templateSession = makeSession({ items: [{ ref: 'new-1' }], availableIssueTypes: ['Bug'] });
+    const ws = makeMockWs();
+    const staleDescriptor = makeStaleDescriptor();
+
+    await continueAfterImportIssueType('Bug', null, templateSession, client, ticketService, mockStream() as never, ws as never, staleDescriptor);
+    const reviewSession = ws.store[descriptor.sessionKeys.review] as ReviewSession<TestRow>;
+    expect(reviewSession.rows.some(r => r.id === '1')).toBe(true); // the new row is present and included by default
+
+    await handleImportReviewReply('PROJ-1', reviewSession, ticketService, mockStream() as never, ws as never, staleDescriptor);
+    await handleImportReviewReply('post it', reviewSession, ticketService, mockStream() as never, ws as never, staleDescriptor);
+
+    expect(client.createIssueCalls).toHaveLength(1);
+    expect(client.executeTransitionCalls.some(c => c.issueKey === 'PROJ-1')).toBe(true);
+  });
+
+  it('a ticket-key toggle reply never collides with a New/Already-ticketed row-id toggle or a page-nav token', async () => {
+    vi.mocked(TemplateService).mockImplementation(() => ({
+      loadTemplates: vi.fn().mockReturnValue({
+        templates: [],
+        cleanupRules: [{ name: 'close-bugs', project: 'PROJ', issueType: 'Bug', targetState: 'Done', resolution: 'Fixed' }],
+      }),
+    }) as never);
+    mockSearches([makeStaleIssue('PROJ-123', 'Bug', ['1'])]);
+    const templateSession = makeSession({ items: [{ ref: '2' }], availableIssueTypes: ['Bug'] });
+    const ws = makeMockWs();
+    const staleDescriptor = makeStaleDescriptor();
+
+    await continueAfterImportIssueType('Bug', null, templateSession, client, ticketService, mockStream() as never, ws as never, staleDescriptor);
+    const reviewSession = ws.store[descriptor.sessionKeys.review] as ReviewSession<TestRow>;
+    const newRowId = reviewSession.rows.find(r => r.existingTicketKey === null)!.id; // "1"
+
+    // A bare row-id reply toggles only the New row, never the stale ticket.
+    await handleImportReviewReply(newRowId, reviewSession, ticketService, mockStream() as never, ws as never, staleDescriptor);
+    expect(reviewSession.rows.find(r => r.id === newRowId)!.included).toBe(false);
+    expect(reviewSession.staleTickets?.groups[0].tickets[0].included).toBe(false); // untouched
+
+    // A page-nav token is recognized as navigation, not a stale toggle — it never touches stale
+    // state (whether it happens to reset the "new" row's own page-local toggle, per R7, is a
+    // separate, orthogonal behavior this test isn't about).
+    await handleImportReviewReply('next', reviewSession, ticketService, mockStream() as never, ws as never, staleDescriptor);
+    expect(reviewSession.staleTickets?.groups[0].tickets[0].included).toBe(false); // still untouched by "next"
+
+    // The full ticket-key reply toggles only the stale ticket, never a New row.
+    const rowIncludedBeforeKeyToggle = reviewSession.rows.find(r => r.id === newRowId)!.included;
+    await handleImportReviewReply('PROJ-123', reviewSession, ticketService, mockStream() as never, ws as never, staleDescriptor);
+    expect(reviewSession.staleTickets?.groups[0].tickets[0].included).toBe(true);
+    expect(reviewSession.rows.find(r => r.id === newRowId)!.included).toBe(rowIncludedBeforeKeyToggle); // untouched by the ticket-key reply
   });
 });

@@ -18,17 +18,21 @@ import { TemplateService } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
 import {
   MAX_REPORT_BYTES, BATCH_LIMIT, DEFAULT_DEDUP_CHUNK_SIZE, findAlreadyTicketed, buildReviewRows,
-  buildDedupJql, type JqlIssueLike,
+  buildDedupJql, findStaleTickets, type JqlIssueLike,
 } from '../../utils/reportImport';
 import {
-  isCancellation, pickEmailOption, buildImportReviewTable, parseReviewInput, parseReviewPageNav,
-  buildReviewPage, applyReviewSessionToggle,
+  isCancellation, pickEmailOption, buildImportReviewTable, buildStaleReviewSection,
+  parseReviewInput, parseReviewPageNav, parseStaleTicketToggle, applyStaleTicketToggle,
+  parseResolutionSelection, buildReviewPage, applyReviewSessionToggle,
   CURRENT_SESSION_SCHEMA_VERSION, isSessionExpired, SESSION_EXPIRED_MESSAGE,
   NO_ISSUE_TYPE, resolveTemplateIssueType, formatIssueTypeOptionLabel, buildChatCommandLink,
   type ImportTemplateSelectionSession, type ReviewSession, type ReviewTableColumn, type ReviewRowBase,
   type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession, type JiraSessionKind,
+  type VeracodeReviewSession, type WaltzReviewSession, type StaleResolutionAskSession,
+  type StaleTicketGroup,
 } from '../sessionState';
-import { resolveProjectKey, resolveIssueTypeOrPrompt, sessionWasSuperseded } from './ticketContext';
+import { resolveProjectKey, resolveIssueTypeOrPrompt, sessionWasSuperseded, STALE_RESOLUTION_SESSION_KEY } from './ticketContext';
+import { buildStaleTicketGroups, transitionTickets } from './cleanupHandler';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 
 export interface ReportImportRow extends ReviewRowBase {
@@ -65,7 +69,11 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   // omits all three rather than supplying values nothing would ever invoke.
   fileFilter?: { label: string; extensions: string[] };
   filePickerTitle?: string;
-  parseAndFilter?: (filePath: string) => Promise<TItem[]>; // readAndFilterXFile — encoding-aware per importer
+  // readAndFilterXFile — encoding-aware per importer. U6: also returns the *raw, unfiltered* parsed
+  // items (`rawItems`) alongside the filtered `items` — needed by `descriptor.stale.buildActivePredicate`
+  // below. `unknown[]` rather than a second generic parameter: Veracode's raw items (individual
+  // pre-fold flaws) are a different shape than `TItem` (folded groups) — see ImportTemplateSelectionSession.rawItems.
+  parseAndFilter?: (filePath: string) => Promise<{ items: TItem[]; rawItems: unknown[] }>;
   sessionKeys: {
     templateSelection: string;
     review: string;
@@ -94,6 +102,18 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   // showWarningMessage on that path survives being driven through this shared builder. Waltz/email
   // omit it (or could pass a log-only callback) since they have no such warning today.
   onIssueTypeFetchFailed?: (message: string, projectKey: string) => void;
+  // U6: optional reverse stale-ticket check (findStaleTickets, R1/R5) — an importer with no
+  // marker-label concept (email) omits this and the stale section/ask never runs for it.
+  // `buildActivePredicate` receives the batch's raw, unfiltered items (see
+  // ImportTemplateSelectionSession.rawItems) and returns the "is this marker id still active"
+  // predicate findStaleTickets() needs; the importer's own handler file (veracodeHandler.ts/
+  // waltzHandler.ts) casts `rawItems` back to its real type before delegating to
+  // buildVeracodeActiveFlawPredicate/buildWaltzActiveComponentPredicate.
+  stale?: {
+    markerLabel: string;
+    labelToDedupKey: (label: string) => string | null;
+    buildActivePredicate: (rawItems: unknown[]) => (dedupKey: string) => boolean;
+  };
 }
 
 // U4: maps each importer's `descriptorKind` to its two JiraSessionKind literals — replaces the
@@ -134,7 +154,7 @@ export async function readAndFilterReport<TRaw, TItem>(
 async function openReportFilePicker<TItem, TRow extends ReviewRowBase>(
   stream: vscode.ChatResponseStream,
   descriptor: ReportImportDescriptor<TItem, TRow>,
-): Promise<{ items: TItem[]; fileName: string } | null> {
+): Promise<{ items: TItem[]; rawItems: unknown[]; fileName: string } | null> {
   const uris = await vscode.window.showOpenDialog({
     canSelectMany: false,
     filters: { [descriptor.fileFilter!.label]: descriptor.fileFilter!.extensions },
@@ -144,8 +164,8 @@ async function openReportFilePicker<TItem, TRow extends ReviewRowBase>(
   if (!uris || uris.length === 0) return null;
 
   try {
-    const items = await descriptor.parseAndFilter!(uris[0].fsPath);
-    return { items, fileName: path.basename(uris[0].fsPath) };
+    const { items, rawItems } = await descriptor.parseAndFilter!(uris[0].fsPath);
+    return { items, rawItems, fileName: path.basename(uris[0].fsPath) };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logDiag(descriptor.scope, 'error', `Could not import report — ${uris[0].fsPath}`, { path: uris[0].fsPath, error: message });
@@ -160,6 +180,7 @@ export async function buildImportTemplateSession<TItem, TRow extends ReviewRowBa
   projectKey: string,
   jiraClient: IJiraClient,
   descriptor: ReportImportDescriptor<TItem, TRow>,
+  rawItems: unknown[] = [],
 ): Promise<ImportTemplateSelectionSession<TItem>> {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
@@ -192,6 +213,7 @@ export async function buildImportTemplateSession<TItem, TRow extends ReviewRowBa
     reportFileName: fileName,
     projectKey,
     items,
+    rawItems,
     availableTemplates,
     availableIssueTypes: issueTypes.length > 0 ? issueTypes : [NO_ISSUE_TYPE],
     schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
@@ -264,7 +286,7 @@ export async function handleImportReport<TItem, TRow extends ReviewRowBase>(
     return;
   }
 
-  const session = await buildImportTemplateSession(picked.items, picked.fileName, projectKey, jiraClient, descriptor);
+  const session = await buildImportTemplateSession(picked.items, picked.fileName, projectKey, jiraClient, descriptor, picked.rawItems);
   return streamImportTemplateSelection(session, stream, ws, descriptor);
 }
 
@@ -421,7 +443,7 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
   );
   const initialPage = buildReviewPage(allRows, 0);
 
-  const reviewSession: ReviewSession<TRow> = {
+  let reviewSession: ReviewSession<TRow> = {
     projectKey: session.projectKey,
     issueType,
     templateName,
@@ -431,6 +453,130 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
     page: initialPage.page,
     schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
   };
+
+  // U6/R1/R5: reverse stale-ticket check — an importer with no marker-label concept (email) omits
+  // `descriptor.stale` and this whole block is skipped, exactly like the dedup block above.
+  if (descriptor.stale) {
+    stream.markdown('_Checking for stale tickets…_\n\n');
+    const issueDetails = new Map<string, { summary: string; currentStatus: string; issueType: string }>();
+    const staleResult = await findStaleTickets(
+      session.projectKey,
+      descriptor.stale.markerLabel,
+      async (jql, maxResults) => {
+        const result = await ticketService.searchTicketsRaw(jql, maxResults);
+        // Captured as a side effect of the search findStaleTickets() already runs — searchJql's
+        // baseFields always include summary/status/issuetype (see JiraApiClient.ts), so this needs
+        // no second fetch keyed by the returned stale keys.
+        for (const issue of result.issues) {
+          issueDetails.set(issue.key, {
+            summary: String((issue.fields as { summary?: unknown }).summary ?? ''),
+            currentStatus: (issue.fields as { status?: { name: string } }).status?.name ?? '',
+            issueType: (issue.fields as { issuetype?: { name: string } }).issuetype?.name ?? '',
+          });
+        }
+        return result as { issues: JqlIssueLike[]; total?: number; isLast?: boolean };
+      },
+      descriptor.stale.labelToDedupKey,
+      descriptor.stale.buildActivePredicate(session.rawItems ?? []),
+      (level, message, details) => logDiag(descriptor.scope, level, message, details),
+    );
+
+    if (staleResult.searchFailed) {
+      stream.markdown('_Warning: could not check for stale tickets — proceeding without a stale-ticket section._\n\n');
+    } else if (staleResult.stale.length > 0) {
+      if (staleResult.truncated) {
+        stream.markdown(`_Found ${staleResult.totalFound} possibly-stale ticket(s) — showing the first ${staleResult.stale.length}._\n\n`);
+      }
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+      const grouped = await buildStaleTicketGroups(staleResult.stale, issueDetails, session.projectKey, jiraClient, workspaceRoot);
+
+      if (grouped.pendingGroups.length > 0) {
+        // R1/KTD15: descriptorKind is always 'veracode'/'waltz' here — email never sets
+        // descriptor.stale, so this branch is unreachable for it (erasure cast mirrors the one a
+        // few lines up for AwaitIssueTypeResume's own resumeSession).
+        const ask: StaleResolutionAskSession = {
+          descriptorKind: descriptor.descriptorKind as 'veracode' | 'waltz',
+          pendingGroups: grouped.pendingGroups,
+          resolvedGroups: grouped.resolvedGroups,
+          ineligible: grouped.ineligible,
+          reviewSession: reviewSession as unknown as VeracodeReviewSession | WaltzReviewSession,
+          schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
+        };
+        return streamStaleResolutionAsk(ask, stream, ws);
+      }
+
+      reviewSession = { ...reviewSession, staleTickets: { groups: grouped.resolvedGroups, ineligible: grouped.ineligible } };
+    }
+  }
+
+  return streamImportReview(reviewSession, stream, ws, descriptor, baseUrl);
+}
+
+/**
+ * U6: streams the stale-ticket batch's chained per-issue-type-group resolution ask — one group at a
+ * time (`ask.pendingGroups[0]`), mirroring `ResolutionSelectionSession`/cleanupHandler.ts's own
+ * numbered resolution pick (not the generic free-text `streamAwaitIssueType` prompt — see
+ * `StaleResolutionAskSession`'s own doc comment in sessionState.ts for why).
+ */
+export async function streamStaleResolutionAsk(
+  ask: StaleResolutionAskSession,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+): Promise<vscode.ChatResult> {
+  await ws.update(STALE_RESOLUTION_SESSION_KEY, ask);
+  const group = ask.pendingGroups[0];
+  const list = group.resolutionOptions.map((r, i) => `${i + 1}. ${buildChatCommandLink(r, '@jira', String(i + 1))}`).join('\n');
+  stream.markdown(trustedChatMarkdown(
+    `**${group.tickets.length}** stale **${group.issueType}** ticket(s) can move to **${group.targetState}** — ` +
+    `which resolution should be set?\n\n${list}\n\n` +
+    `Reply with the name or number, or ${buildChatCommandLink('None', '@jira', 'none')} to skip setting a resolution.`,
+  ));
+  return { metadata: { jiraSession: { kinds: ['stale-resolution-selection'] } } };
+}
+
+/**
+ * Continues the chained stale-resolution ask once a reply for the currently-asked group comes in —
+ * either re-prompting the same group (invalid reply), moving on to the next pending group, or (once
+ * every group is resolved) merging the accumulated `staleTickets` into the parked review session and
+ * streaming the merged review screen (KTD10-15's "chain the ask once per group, not once per
+ * ticket" rule).
+ */
+export async function continueAfterStaleResolution<TItem, TRow extends ReviewRowBase>(
+  reply: string,
+  ask: StaleResolutionAskSession,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+  baseUrl?: string,
+): Promise<vscode.ChatResult | void> {
+  // Mirrors handleVeracodeAwaitIssueType/handleWaltzAwaitIssueType's own guard: a second, independent
+  // import may have started (and claimed the template-selection session key) while this ask was open.
+  if (sessionWasSuperseded(ws, descriptor.sessionKeys.templateSelection)) {
+    await ws.update(STALE_RESOLUTION_SESSION_KEY, undefined);
+    stream.markdown('_A newer import was started while this one was waiting for a resolution — cancelled to avoid creating a stale batch._');
+    return;
+  }
+
+  const group = ask.pendingGroups[0];
+  const choice = parseResolutionSelection(reply, group.resolutionOptions);
+  if (choice === 'invalid') {
+    return streamStaleResolutionAsk(ask, stream, ws);
+  }
+
+  const resolvedGroups: StaleTicketGroup[] = [
+    ...ask.resolvedGroups,
+    { issueType: group.issueType, ruleName: group.ruleName, targetState: group.targetState, resolution: choice ?? undefined, tickets: group.tickets },
+  ];
+  const remainingPending = ask.pendingGroups.slice(1);
+  if (remainingPending.length > 0) {
+    return streamStaleResolutionAsk({ ...ask, pendingGroups: remainingPending, resolvedGroups }, stream, ws);
+  }
+
+  await ws.update(STALE_RESOLUTION_SESSION_KEY, undefined);
+  const reviewSession = {
+    ...ask.reviewSession,
+    staleTickets: { groups: resolvedGroups, ineligible: ask.ineligible },
+  } as unknown as ReviewSession<TRow>;
   return streamImportReview(reviewSession, stream, ws, descriptor, baseUrl);
 }
 
@@ -450,8 +596,9 @@ export async function streamImportReview<TItem, TRow extends ReviewRowBase>(
   // response must be trust-gated (KTD5) — every row's own field content going through it is
   // neutralized against markdown-link injection at its source (VERACODE_REVIEW_COLUMNS,
   // WALTZ_REVIEW_COLUMNS, EMAIL_REVIEW_COLUMNS in sessionState.ts/emailHandler.ts).
+  const staleSection = session.staleTickets ? '\n\n' + buildStaleReviewSection(session.staleTickets, baseUrl) : '';
   stream.markdown(trustedChatMarkdown(
-    buildImportReviewTable(session.rows, baseUrl, session.page, totalPages, descriptor.reviewColumns, descriptor.itemNoun),
+    buildImportReviewTable(session.rows, baseUrl, session.page, totalPages, descriptor.reviewColumns, descriptor.itemNoun) + staleSection,
   ));
   return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
 }
@@ -479,6 +626,18 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
     session.rows = nextPage.rows;
     session.page = nextPage.page;
     return streamImportReview(session, stream, ws, descriptor, baseUrl);
+  }
+
+  // U6/R5-R6: a stale-ticket-key toggle (e.g. `PROJ-123`) is checked next — after page-nav, before
+  // the New/Already-ticketed sections' own row-id toggle parsing — so its disjoint vocabulary
+  // (always hyphenated; row ids never are) is recognized first rather than falling through to
+  // parseReviewInput's "didn't understand" path. See parseStaleTicketToggle's own doc comment.
+  if (session.staleTickets) {
+    const staleKeys = parseStaleTicketToggle(reply, session.staleTickets);
+    if (staleKeys) {
+      session.staleTickets = applyStaleTicketToggle(session.staleTickets, staleKeys);
+      return streamImportReview(session, stream, ws, descriptor, baseUrl);
+    }
   }
 
   const rowIds = session.rows.map(r => r.id);
@@ -540,52 +699,90 @@ export async function executeImportBatch<TItem, TRow extends ReviewRowBase>(
   const excludedByUser = session.rows.filter(r => !r.included && r.existingTicketKey === null).length;
   const alreadyTicketedSkipped = session.rows.filter(r => !r.included && r.existingTicketKey !== null).length;
 
-  if (toCreate.length === 0) {
+  // U6: one "post it" reply runs both the creation batch and the stale-ticket transition pass, so
+  // an empty New/Already-ticketed selection must not short-circuit past an included stale ticket.
+  const staleGroups = session.staleTickets?.groups ?? [];
+  const includedStaleCount = staleGroups.reduce((n, g) => n + g.tickets.filter(t => t.included).length, 0);
+
+  if (toCreate.length === 0 && includedStaleCount === 0) {
     stream.markdown('_Nothing selected — no tickets were created._');
     return;
   }
 
-  stream.markdown(`_Creating ${toCreate.length} ticket(s)…_\n\n`);
   let created = 0;
   let failed = 0;
 
-  for (const row of toCreate) {
-    const { summary: ticketSummary, fields } = descriptor.buildTicketFields(row, session.additionalFields);
-    try {
-      const createdTicket = await ticketService.createTicket(session.projectKey, ticketSummary, session.issueType, fields, baseUrl);
-      const keyRef = formatKeyLink(createdTicket.key, baseUrl);
-      stream.markdown(`✓ ${keyRef} — ${ticketSummary}\n\n`);
-      created++;
-      // KTD4: optional per-row post-creation work (email uses this for attachment upload). A
-      // rejection is shown as a warning but never fails the row — the ticket already exists.
-      if (descriptor.afterCreate) {
-        try {
-          await descriptor.afterCreate(row, createdTicket.key, ticketService);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          logDiag(descriptor.scope, 'warn', `Post-creation step failed — ${createdTicket.key}`, { issueKey: createdTicket.key, error: message });
-          stream.markdown(`_Warning: ${message}_\n\n`);
+  if (toCreate.length > 0) {
+    stream.markdown(`_Creating ${toCreate.length} ticket(s)…_\n\n`);
+
+    for (const row of toCreate) {
+      const { summary: ticketSummary, fields } = descriptor.buildTicketFields(row, session.additionalFields);
+      try {
+        const createdTicket = await ticketService.createTicket(session.projectKey, ticketSummary, session.issueType, fields, baseUrl);
+        const keyRef = formatKeyLink(createdTicket.key, baseUrl);
+        stream.markdown(`✓ ${keyRef} — ${ticketSummary}\n\n`);
+        created++;
+        // KTD4: optional per-row post-creation work (email uses this for attachment upload). A
+        // rejection is shown as a warning but never fails the row — the ticket already exists.
+        if (descriptor.afterCreate) {
+          try {
+            await descriptor.afterCreate(row, createdTicket.key, ticketService);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            logDiag(descriptor.scope, 'warn', `Post-creation step failed — ${createdTicket.key}`, { issueKey: createdTicket.key, error: message });
+            stream.markdown(`_Warning: ${message}_\n\n`);
+          }
         }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const ref = descriptor.itemRefFor(row);
+        logDiag(descriptor.scope, 'error', `Ticket creation failed — ${ref}`, { ref, error: message });
+        stream.markdown(`✗ ${ref} — ${message}\n\n`);
+        failed++;
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      const ref = descriptor.itemRefFor(row);
-      logDiag(descriptor.scope, 'error', `Ticket creation failed — ${ref}`, { ref, error: message });
-      stream.markdown(`✗ ${ref} — ${message}\n\n`);
-      failed++;
     }
+
+    const total = session.rows.length;
+    let summary =
+      `${total} ${descriptor.itemNoun} reviewed — **${created}** created, ${failed} failed, ` +
+      `${excludedByUser} excluded by you, ${alreadyTicketedSkipped} already ticketed (skipped).`;
+    if (droppedOverCap > 0) {
+      summary += `\n\n_${droppedOverCap} included ${descriptor.itemNoun} were not created — capped at ${BATCH_LIMIT} tickets per run. ` +
+        `Re-run the import to process the remainder (already-created tickets are automatically skipped)._`;
+    }
+    logDiag(descriptor.scope, failed > 0 ? 'warn' : 'info', `${descriptor.importLabel} import complete — ${created} created, ${failed} failed`, {
+      total, created, failed, excludedByUser, alreadyTicketedSkipped,
+    });
+    stream.markdown(summary);
   }
 
-  const total = session.rows.length;
-  let summary =
-    `${total} ${descriptor.itemNoun} reviewed — **${created}** created, ${failed} failed, ` +
-    `${excludedByUser} excluded by you, ${alreadyTicketedSkipped} already ticketed (skipped).`;
-  if (droppedOverCap > 0) {
-    summary += `\n\n_${droppedOverCap} included ${descriptor.itemNoun} were not created — capped at ${BATCH_LIMIT} tickets per run. ` +
-      `Re-run the import to process the remainder (already-created tickets are automatically skipped)._`;
+  // U6/R4/KTD10-15: transition every included stale ticket, one group at a time (each group carries
+  // its own already-chosen resolution) — reuses cleanupHandler.ts's transitionTickets() rather than
+  // re-implementing the per-ticket transition logic.
+  if (includedStaleCount > 0) {
+    stream.markdown(`\n\n_Transitioning ${includedStaleCount} stale ticket(s)…_\n\n`);
+    let staleTransitioned = 0;
+    let staleFailed = 0;
+    let staleSkipped = 0;
+    const staleFailures: Array<{ key: string; reason: string }> = [];
+    for (const group of staleGroups) {
+      const result = await transitionTickets(group.tickets, ticketService, group.resolution, descriptor.scope);
+      staleTransitioned += result.transitioned;
+      staleFailed += result.failed;
+      staleSkipped += result.skipped;
+      staleFailures.push(...result.failures);
+    }
+    const staleProcessed = staleTransitioned + staleFailed + staleSkipped;
+    let staleSummary =
+      `${staleProcessed} stale ticket(s) processed — **${staleTransitioned}** transitioned, ${staleFailed} failed, ${staleSkipped} skipped.`;
+    if (staleFailures.length > 0) {
+      staleSummary += '\n\n' + staleFailures.map(f => `✗ ${f.key} — ${f.reason}`).join('\n');
+      staleSummary += '\n\nIf caused by a workflow gap, run `@jira discover workflow` to refresh the cache.';
+    }
+    logDiag(descriptor.scope, staleFailed > 0 ? 'warn' : 'info',
+      `${descriptor.importLabel} stale-ticket transition complete — ${staleTransitioned} transitioned, ${staleFailed} failed, ${staleSkipped} skipped`,
+      { staleTransitioned, staleFailed, staleSkipped },
+    );
+    stream.markdown(staleSummary);
   }
-  logDiag(descriptor.scope, failed > 0 ? 'warn' : 'info', `${descriptor.importLabel} import complete — ${created} created, ${failed} failed`, {
-    total, created, failed, excludedByUser, alreadyTicketedSkipped,
-  });
-  stream.markdown(summary);
 }
