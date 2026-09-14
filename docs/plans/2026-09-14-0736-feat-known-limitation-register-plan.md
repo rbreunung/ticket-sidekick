@@ -42,6 +42,7 @@ This repo already externalizes deferred-scope signal well in prose — `CLAUDE.m
 - **A permanent won't-fix decision is logged durably before its entry is removed from the register.** (session-settled: user-directed — chosen over treating the register's git history as the record: a durable log makes the decision and its reason discoverable without archaeology, so a limitation already declined isn't re-registered from scratch later.) Governs R6.
 - **One combined file holds the convention notes, the live register, and the won't-fix log — not three separate files.** (session-settled: user-directed — chosen over splitting them: one file for the Routine's prompt to reference, and no risk of the pieces drifting apart.) Governs R1, R5.
 - **The Routine's ~30-day cadence runs as a recurring, self-sustaining schedule, not an exact self-rescheduling chain.** (session-settled: user-directed — a recurring schedule keeps firing on its own; a self-rescheduling chain is more precise but a single missed reschedule step would silently end all future check-ins.) Governs R5.
+- **Severity uses a fixed three-level scale — High / Medium / Low.** (session-settled: user-directed — chosen over a more granular numeric scale: matches how the maintainer eyeballs priority during a check-in, with an obvious sort order and no calibration needed between adjacent levels.) Governs R1.
 
 ### Requirements
 
@@ -97,7 +98,6 @@ flowchart TB
 
 ### Dependencies / Assumptions
 
-- Assumes severity uses a small fixed scale (e.g. High / Medium / Low); the exact levels and how they're assigned are decided during planning.
 - Assumes the combined file's internal structure (table columns, section layout) is decided during planning — this plan states required fields, not layout.
 - Assumes the Routine reads the register file fresh on each firing rather than needing its contents embedded in the Routine definition itself.
 - Assumes the ~30-day cadence runs as a recurring, monthly-ish schedule (see Key Decision above), which may drift a few days depending on the month.
