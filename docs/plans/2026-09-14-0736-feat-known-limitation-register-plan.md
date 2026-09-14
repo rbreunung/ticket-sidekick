@@ -39,6 +39,8 @@ This repo already externalizes deferred-scope signal well in prose — `CLAUDE.m
 - **Revisit-by date defaults to a fixed interval per entry, not a per-item judgment call.** (session-settled: user-directed — simple and predictable, no case-by-case decision needed at write time.) Governs R2. The exact interval was not confirmed by the user; see Assumptions.
 - **The register launches seeded with today's full known-open-item list, not only the items already written as prose.** (session-settled: user-directed — chosen over seeding only the already-documented `CLAUDE.md`/`docs/report-import.md` limitations, so the register launches already covering the complete list this scoping conversation surfaced.) Governs R3.
 - **The Routine's stored prompt points at a stable convention doc describing the register, rather than embedding the register's file path and fields directly.** (session-settled: user-directed — chosen over embedding those details in the prompt itself: a later format or path change then only touches the convention doc, never the Routine's own stored prompt.) Governs R5.
+- **R3's seed list includes a seventh entry — a denylist-sanitizer-exhaustiveness watch item — surfaced by planning research.** (session-settled: user-directed — chosen over leaving the six items settled during brainstorming: it's a second, independent instance of this register's exact motivating failure pattern already present in this repo's own history, and leaving it out would undercut the register on day one.) Governs R3.
+- **A permanent won't-fix decision is logged durably before its entry is removed from the register.** (session-settled: user-directed — chosen over treating the register's git history as the record: a durable log makes the decision and its reason discoverable without archaeology, so a limitation already declined isn't re-registered from scratch later.) Governs R6.
 
 ### Requirements
 
@@ -52,7 +54,7 @@ This repo already externalizes deferred-scope signal well in prose — `CLAUDE.m
 **Revisit mechanism**
 
 - R5. A scheduled Routine fires every 30 days. Each firing first asks whether to proceed with a check; declining ends that firing with no further action, and the Routine fires again at its next scheduled interval regardless of how the previous firing was answered. The Routine's stored prompt references a short, stable convention doc describing the register's location and fields rather than embedding them directly, so a later change to either only requires updating that doc.
-- R6. When the maintainer accepts a firing's check, the Routine reads the register and, for every entry whose revisit-by date has passed, presents it and requires exactly one of: mark it fixed and remove it from the register, push its revisit-by date out with a new reason, or convert it to a permanent won't-fix and remove it from the register.
+- R6. When the maintainer accepts a firing's check, the Routine reads the register and, for every entry whose revisit-by date has passed, presents it and requires exactly one of: mark it fixed and remove it from the register, push its revisit-by date out with a new reason, or convert it to a permanent won't-fix — recorded in a durable won't-fix log before the entry is removed from the register, so the decision and its reason survive the deletion.
 - R7. A firing that finds no due entries reports that and ends without prompting further action.
 
 ```mermaid
@@ -117,4 +119,4 @@ flowchart TB
 
 ---
 
-**Product Contract preservation:** changed R3, AE4 — planning research (`learnings-researcher`) surfaced a second, independent precedent of this register's motivating failure pattern beyond the Problem Frame's Waltz example; the user confirmed adding it as a seventh seed row rather than leaving R3 at the six items settled during brainstorming.
+**Product Contract preservation:** changed R3, AE4, R6 — planning research (`learnings-researcher`) surfaced a second, independent precedent of this register's motivating failure pattern beyond the Problem Frame's Waltz example; the user confirmed adding it as a seventh seed row rather than leaving R3 at the six items settled during brainstorming. Separately, `spec-flow-analyzer` found that R6's original "convert to won't-fix and remove" gave a permanent decision no durable record, indistinguishable a month later from "never registered"; the user confirmed logging the decision before removal rather than treating deletion itself as the record.
