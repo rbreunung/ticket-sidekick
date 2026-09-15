@@ -17,6 +17,7 @@ import {
 } from '../participant/sessionState';
 import {
   isUpdateExistingTicketsReply, markRowsUpdatedExisting, buildImportReviewTable,
+  parseBulkNewRowReply, applyBulkNewRowSet,
 } from '../participant/sessionState';
 import {
   parseStaleTicketToggle, applyStaleTicketToggle, buildStaleReviewSection,
@@ -48,6 +49,11 @@ function makeTicketedRow(id: string, existingTicketKey: string): PageRow {
 const WIDGET_COLUMNS: ReviewTableColumn<Widget>[] = [
   { header: 'Name', accessor: (w) => w.name },
   { header: 'Qty', accessor: (w) => String(w.qty) },
+];
+
+// A second, non-default column set to prove the bulk links render for any importer's columns (R5).
+const WALTZ_TEST_COLUMNS: ReviewTableColumn<PageRow>[] = [
+  { header: 'Component', accessor: (r) => `component-${r.id}` },
 ];
 
 describe('renderReviewTable', () => {
@@ -996,6 +1002,102 @@ describe('markRowsUpdatedExisting (U3/R13)', () => {
     const rows = [ticketed];
     const result = markRowsUpdatedExisting(rows, rows, new Set());
     expect(result.rows[0].updatedExisting).toBeUndefined();
+  });
+});
+
+describe('parseBulkNewRowReply (review-table toggle-all)', () => {
+  it('recognizes "include all" case-insensitively, trimmed', () => {
+    expect(parseBulkNewRowReply('include all')).toBe(true);
+    expect(parseBulkNewRowReply('INCLUDE ALL')).toBe(true);
+    expect(parseBulkNewRowReply('  include all  ')).toBe(true);
+  });
+
+  it('recognizes "exclude all" case-insensitively, trimmed', () => {
+    expect(parseBulkNewRowReply('exclude all')).toBe(false);
+    expect(parseBulkNewRowReply('EXCLUDE ALL')).toBe(false);
+    expect(parseBulkNewRowReply('  Exclude All  ')).toBe(false);
+  });
+
+  it('returns null for every existing reply vocabulary (no false positives)', () => {
+    expect(parseBulkNewRowReply('2 4')).toBeNull(); // row-id toggle list
+    expect(parseBulkNewRowReply('A1')).toBeNull(); // already-ticketed row id
+    expect(parseBulkNewRowReply('next')).toBeNull(); // page-nav
+    expect(parseBulkNewRowReply('prev')).toBeNull();
+    expect(parseBulkNewRowReply('page 2')).toBeNull();
+    expect(parseBulkNewRowReply('post it')).toBeNull(); // confirmation
+    expect(parseBulkNewRowReply('cancel')).toBeNull(); // cancellation
+    expect(parseBulkNewRowReply('PROJ-123')).toBeNull(); // stale-ticket key
+    expect(parseBulkNewRowReply('update existing tickets')).toBeNull();
+  });
+
+  it('returns null for partial or extended phrases', () => {
+    expect(parseBulkNewRowReply('include')).toBeNull();
+    expect(parseBulkNewRowReply('all')).toBeNull();
+    expect(parseBulkNewRowReply('exclude')).toBeNull();
+    expect(parseBulkNewRowReply('include all rows')).toBeNull();
+    expect(parseBulkNewRowReply('please exclude all now')).toBeNull();
+    expect(parseBulkNewRowReply('')).toBeNull();
+  });
+});
+
+describe('applyBulkNewRowSet (review-table toggle-all)', () => {
+  it('sets included: true on every New row and leaves already-ticketed rows unchanged', () => {
+    const ticketed = { ...makeTicketedRow('A1', 'PROJ-1'), included: true }; // re-create, must stay
+    const rows = [ticketed, ...makeFreshRows(3).map(r => ({ ...r, included: false }))];
+    const result = applyBulkNewRowSet(rows, true);
+
+    expect(result.filter(r => r.existingTicketKey === null).every(r => r.included)).toBe(true);
+    expect(result.find(r => r.id === 'A1')!.included).toBe(true); // untouched
+  });
+
+  it('sets included: false on every New row and leaves already-ticketed rows unchanged (AE2)', () => {
+    const ticketed = makeTicketedRow('A1', 'PROJ-1'); // excluded, must stay excluded
+    const rows = [ticketed, ...makeFreshRows(3)]; // all included by default
+    const result = applyBulkNewRowSet(rows, false);
+
+    expect(result.filter(r => r.existingTicketKey === null).every(r => !r.included)).toBe(true);
+    expect(result.find(r => r.id === 'A1')!.included).toBe(false); // untouched
+  });
+
+  it('does not mutate the input array', () => {
+    const rows = makeFreshRows(2);
+    applyBulkNewRowSet(rows, false);
+    expect(rows.every(r => r.included)).toBe(true);
+  });
+
+  it('is a no-op on a page with zero New rows (only already-ticketed rows, all untouched)', () => {
+    const ticketed = makeTicketedRow('A1', 'PROJ-1');
+    const result = applyBulkNewRowSet([ticketed], true);
+    expect(result).toEqual([ticketed]);
+  });
+});
+
+describe('buildImportReviewTable — "Include all" / "Exclude all" links (review-table toggle-all)', () => {
+  it('renders both bulk links when New rows exist, each resubmitting its exact token', () => {
+    const rows = [makeTicketedRow('A1', 'PROJ-1'), ...makeFreshRows(2)];
+    const text = buildImportReviewTable(rows, undefined, 0, 1, [], 'item(s)');
+
+    expect(text).toContain('Include all');
+    expect(text).toContain('Exclude all');
+    // The link's command payload carries the exact reply token the handler parses.
+    expect(decodeURIComponent(text)).toContain('"@jira include all"');
+    expect(decodeURIComponent(text)).toContain('"@jira exclude all"');
+  });
+
+  it('renders neither bulk link when there are no New rows (all already ticketed)', () => {
+    const rows = [makeTicketedRow('A1', 'PROJ-1'), makeTicketedRow('A2', 'PROJ-2')];
+    const text = buildImportReviewTable(rows, undefined, 0, 1, [], 'item(s)');
+
+    expect(text).not.toContain('Include all');
+    expect(text).not.toContain('Exclude all');
+  });
+
+  it('renders the bulk links for the Waltz column set too (shared renderer — R5)', () => {
+    const rows = makeFreshRows(2);
+    const text = buildImportReviewTable(rows, undefined, 0, 1, WALTZ_TEST_COLUMNS, 'component(s)');
+
+    expect(text).toContain('Include all');
+    expect(text).toContain('Exclude all');
   });
 });
 

@@ -1504,6 +1504,35 @@ export function isUpdateExistingTicketsReply(reply: string): boolean {
 }
 
 /**
+ * "Include all" / "Exclude all" bulk-reply keyword for the review table's New section — a distinct
+ * outcome from `ok`/`cancel`/a row-id toggle/a page-nav token (U4)/a stale-ticket-key toggle (U6),
+ * checked in the same order `handleImportReviewReply` already threads those through. Returns
+ * `true` for "include all", `false` for "exclude all", and `null` when the reply is not a bulk
+ * New-row action at all — the caller then falls through to its existing parsing unchanged.
+ * Case-insensitive exact match only (no fuzzy/partial matching) — deliberately narrow so it can
+ * never collide with a row-id toggle list, a page-nav token, a stale-ticket key, or any other
+ * reply shape (verified disjoint from every existing vocabulary).
+ */
+export function parseBulkNewRowReply(reply: string): boolean | null {
+  const normalized = reply.trim().toLowerCase();
+  if (normalized === 'include all') return true;
+  if (normalized === 'exclude all') return false;
+  return null;
+}
+
+/**
+ * Sets `included` to `value` on every "new" row (`existingTicketKey === null`) in the passed page
+ * array — the bulk counterpart of `applyReviewToggle`'s per-row flip. Already-ticketed rows are
+ * left untouched (R4). Operates on the passed page array only and never touches `allRows`, exactly
+ * matching how a per-row New toggle is page-local: navigating away from a page and back re-derives
+ * it from `allRows`, which still holds the default-included state (R3). Pure so it's independently
+ * testable; the caller (`handleImportReviewReply`) only assigns the result to `session.rows`.
+ */
+export function applyBulkNewRowSet<TRow extends ReviewRowBase>(rows: TRow[], value: boolean): TRow[] {
+  return rows.map(r => (r.existingTicketKey === null ? { ...r, included: value } : r));
+}
+
+/**
  * U3/R13: mirrors a just-completed "update existing tickets" run's outcome (`updatedKeys` — the
  * ticket keys that actually got a new label + comment this run) into both `rows` and `allRows` by
  * setting `updatedExisting: true` on every row whose `existingTicketKey` is in that set — same
@@ -1612,6 +1641,14 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
       { header: 'Include?', accessor: (r) => buildChatCommandLink(r.included ? '✓' : '_excluded_', '@jira', r.id) },
     ];
     lines.push(renderReviewTable(freshColumns, fresh));
+    // Bulk New-row controls — set every New row on this page in one action. Rendered inside the
+    // New section (not the shared footer) so they read as scoped to these rows, and only when at
+    // least one New row exists (with none they'd be no-ops). Labels and command text are static,
+    // so no extra sanitization beyond the table's existing trustedChatMarkdown gate.
+    lines.push(
+      `Reply ${buildChatCommandLink('Include all', '@jira', 'include all')} / ` +
+      `${buildChatCommandLink('Exclude all', '@jira', 'exclude all')} to set every New row on this page.`,
+    );
   }
   lines.push('');
 

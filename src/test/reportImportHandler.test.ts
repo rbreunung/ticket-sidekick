@@ -529,6 +529,77 @@ describe('handleImportReviewReply — paging (U4/R6-R8)', () => {
   });
 });
 
+describe('handleImportReviewReply — bulk include/exclude (toggle-all)', () => {
+  let client: MockJiraClient;
+  let ticketService: TicketService;
+
+  beforeEach(() => {
+    client = new MockJiraClient();
+    ticketService = new TicketService(client);
+  });
+
+  it('"exclude all" sets every New row on the current page to excluded, leaving other pages untouched', async () => {
+    const ws = makeMockWs();
+    const items: TestItem[] = Array.from({ length: 60 }, (_, i) => ({ ref: String(i + 1) }));
+    const templateSession = makeSession({ items, availableIssueTypes: ['Bug'] });
+    await continueAfterImportIssueType('Bug', null, templateSession, client, ticketService, mockStream() as never, ws as never, descriptor);
+    const session = ws.store[descriptor.sessionKeys.review] as ReviewSession<TestRow>;
+
+    await handleImportReviewReply('exclude all', session, ticketService, mockStream() as never, ws as never, descriptor);
+
+    expect(session.rows.every(r => !r.included)).toBe(true);
+    // Off-page row is unaffected — bulk set is page-local, matching a per-row New toggle (R3).
+    expect(session.allRows.find(r => r.id === '51')!.included).toBe(true);
+  });
+
+  it('"include all" sets every New row on the current page to included', async () => {
+    const ws = makeMockWs();
+    const items: TestItem[] = Array.from({ length: 5 }, (_, i) => ({ ref: String(i + 1) }));
+    const templateSession = makeSession({ items, availableIssueTypes: ['Bug'] });
+    await continueAfterImportIssueType('Bug', null, templateSession, client, ticketService, mockStream() as never, ws as never, descriptor);
+    const session = ws.store[descriptor.sessionKeys.review] as ReviewSession<TestRow>;
+
+    await handleImportReviewReply('3', session, ticketService, mockStream() as never, ws as never, descriptor);
+    expect(session.rows.find(r => r.id === '3')!.included).toBe(false);
+
+    await handleImportReviewReply('include all', session, ticketService, mockStream() as never, ws as never, descriptor);
+
+    expect(session.rows.every(r => r.included)).toBe(true);
+  });
+
+  it('"exclude all" leaves an already-ticketed row untouched (R4)', async () => {
+    vi.spyOn(ticketService, 'searchTicketsRaw').mockResolvedValue({
+      issues: [{ key: 'PROJ-999', fields: { labels: ['test-1'] } }],
+      total: 1, isLast: true,
+    } as unknown as JiraSearchResult);
+    const items: TestItem[] = Array.from({ length: 3 }, (_, i) => ({ ref: String(i + 1) }));
+    const templateSession = makeSession({ items, availableIssueTypes: ['Bug'] });
+    const ws = makeMockWs();
+    await continueAfterImportIssueType('Bug', null, templateSession, client, ticketService, mockStream() as never, ws as never, descriptor);
+    const session = ws.store[descriptor.sessionKeys.review] as ReviewSession<TestRow>;
+    expect(session.rows.find(r => r.existingTicketKey !== null)!.id).toBe('A1');
+
+    await handleImportReviewReply('exclude all', session, ticketService, mockStream() as never, ws as never, descriptor);
+
+    expect(session.rows.filter(r => r.existingTicketKey === null).every(r => !r.included)).toBe(true);
+    expect(session.rows.find(r => r.id === 'A1')!.included).toBe(false); // already-ticketed default, untouched
+  });
+
+  it('re-renders the review screen after a bulk action, reflecting the updated count', async () => {
+    const ws = makeMockWs();
+    const items: TestItem[] = Array.from({ length: 3 }, (_, i) => ({ ref: String(i + 1) }));
+    const templateSession = makeSession({ items, availableIssueTypes: ['Bug'] });
+    await continueAfterImportIssueType('Bug', null, templateSession, client, ticketService, mockStream() as never, ws as never, descriptor);
+    const session = ws.store[descriptor.sessionKeys.review] as ReviewSession<TestRow>;
+    const stream = mockStream();
+
+    await handleImportReviewReply('exclude all', session, ticketService, stream as never, ws as never, descriptor);
+
+    const text = markdownText((stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0]);
+    expect(text).toContain('**0** ticket(s) will be created.');
+  });
+});
+
 describe('Veracode review rows — lazy description build (U4/R6-R7)', () => {
   function makeFlaw(issueId: string, overrides: Partial<VeracodeFlaw> = {}): VeracodeFlaw {
     return {
