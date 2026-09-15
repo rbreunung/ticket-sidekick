@@ -1,3 +1,16 @@
+## [0.6.6] - 2026-09-15
+
+## What's Changed
+* feat(jira): find, combine, and act on saved filters from chat
+* docs(solutions): learn filter-derived search results missed refine/transition chips
+* fix: make Veracode/Waltz/email import size limits configurable
+* feat(report-import): fold, page, and reconcile Veracode/Waltz findings
+* feat: add known-limitation register with monthly severity check-in
+* feat(report-import): add bulk include/exclude controls to review table
+
+
+**Full Changelog**: https://github.com/rbreunung/ticket-sidekick/compare/0.6.1...0.6.6
+
 ## [0.6.1] - 2026-09-11
 
 ## What's Changed
