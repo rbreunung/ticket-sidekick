@@ -1212,18 +1212,36 @@ export function neutralizeMarkdownLinks(value: string): string {
 // persisted) session render incorrectly if fed straight to the current code. A session written by
 // a build that predates this field entirely reads as `undefined`, which isSessionExpired() also
 // treats as expired — see AE7.
-export const CURRENT_SESSION_SCHEMA_VERSION = 2;
+// U4: bumped 2 -> 3 for the pageable-review-session shape change (ReviewSession<TRow> gained
+// `allRows`/`page`, dropped `totalNewMatched`) — an in-flight pre-upgrade ReviewSession would
+// otherwise render with `allRows`/`page` both `undefined`, not a graceful "please re-run" message.
+// U6: bumped 3 -> 4 for the stale-ticket review section (ReviewSession<TRow> gained `staleTickets`)
+// — same rationale, an in-flight pre-upgrade session must not render a stale section from
+// `undefined`.
+// U3: bumped 4 -> 5 for the "update existing tickets" bulk action (ReviewRowBase gained the
+// optional `updatedExisting` per-row indicator) — same rationale as U6's bump.
+export const CURRENT_SESSION_SCHEMA_VERSION = 5;
 
 export interface ImportTemplateSelectionSession<TItem> {
   reportFileName: string;
   projectKey: string;
   items: TItem[]; // already filtered by the importer's own config (severity/rating, status/action, etc.)
+  // U6: the *raw, unfiltered* parsed items (before the importer's own minSeverity/status-style
+  // filter) — needed to build the "is this finding still active" predicate the stale-ticket check
+  // requires (reportImportHandler.ts's `continueAfterImportIssueType`). `unknown[]` rather than a
+  // second generic parameter: Veracode's raw items (individual pre-fold flaws) are a different
+  // shape than `TItem` (folded groups), so the importer's own descriptor.stale.buildActivePredicate
+  // casts this back to its real type — see ReportImportDescriptor's own doc comment. Absent/empty
+  // for importers with no stale-check concept (email).
+  rawItems?: unknown[];
   availableTemplates: Array<{ name: string; issueType: string }>;
   availableIssueTypes: string[];
   schemaVersion: number;
 }
 
-export type VeracodeTemplateSelectionSession = ImportTemplateSelectionSession<VeracodeFlaw>;
+// U2: items are folded groups (R9) — one or more flaws sharing a source file + line — not
+// individual flaws; VeracodeFlaw[] is one group, so `items` here is really VeracodeFlaw[][].
+export type VeracodeTemplateSelectionSession = ImportTemplateSelectionSession<VeracodeFlaw[]>;
 export type WaltzTemplateSelectionSession = ImportTemplateSelectionSession<WaltzComponent>;
 export type EmailTemplateSelectionSession = ImportTemplateSelectionSession<EmailImportItem>;
 
@@ -1266,6 +1284,12 @@ export interface ReviewRowBase {
   id: string; // '1'..'N' new candidates, 'A1'..'Am' already-ticketed
   existingTicketKey: string | null;
   included: boolean; // whether this row will be (re)created if the batch runs
+  // U3/R13: set once "update existing tickets" (executeUpdateExistingTickets in
+  // reportImportHandler.ts) has added this row's missing label(s) + summarizing comment to its
+  // ticket — a per-row "synced" indicator the review table renders in the Already-ticketed
+  // section's "Updated?" column. Undefined/false for every row until that action runs; never set
+  // by any other code path (toggling, paging, creation all leave it untouched).
+  updatedExisting?: boolean;
 }
 
 export interface ReviewSession<TRow> {
@@ -1273,17 +1297,100 @@ export interface ReviewSession<TRow> {
   issueType: string;
   templateName: string | null;
   additionalFields: Record<string, unknown>; // resolved template fields (labels merged in per-row already)
+  // U4/R6: every candidate row the report matched, in source order, unpaged — both "already
+  // ticketed" and "new" rows live here (built eagerly from lightweight per-item fields; an
+  // importer whose full ticket description is expensive to build, e.g. Veracode's folded-group
+  // description, defers that part to creation time instead of pre-building it into this array —
+  // see veracodeHandler.ts's descriptor). The paging source of truth: buildReviewPage() re-derives
+  // `rows` from this on every page change, which is what makes a "new" row's toggle page-local
+  // (R7) — see applyReviewSessionToggle()'s own doc comment.
+  allRows: TRow[];
+  // The currently DISPLAYED page: every "already ticketed" row (always shown in full, R8 — never
+  // paged) plus the current page's slice of "new" rows (BATCH_LIMIT per page, defaulted to
+  // included). executeImportBatch's existing included-filter-then-slice logic reads this directly
+  // and is otherwise untouched by paging (R7's "confirming from whichever page is currently
+  // visible creates that page's included rows").
   rows: TRow[];
-  // Total new (not-yet-ticketed) items the report matched, before any BATCH_LIMIT cap the importer
-  // applies before building `rows`. Harmless as absent/undefined for an importer that doesn't cap —
-  // buildImportReviewTable() only renders the "more matched" note when it's given and exceeds rows shown.
-  totalNewMatched?: number;
+  // 0-based index into the "new" rows only — see buildReviewPage().
+  page: number;
+  // U6: open tickets whose finding(s) have disappeared from this report/reverse search — a third
+  // review section, transitioned on confirm via cleanupHandler.ts's shared transition logic
+  // (`transitionTickets`). Absent for importers with no stale-check concept (email, which has no
+  // dedup/marker-label concept either — see ReportImportDescriptor's optional `stale` field).
+  staleTickets?: ReviewSessionStale;
   schemaVersion: number;
 }
 
 export type VeracodeReviewSession = ReviewSession<VeracodeReviewRow>;
 export type WaltzReviewSession = ReviewSession<WaltzReviewRow>;
 export type EmailReviewSession = ReviewSession<EmailReviewRow>;
+
+// ---------------------------------------------------------------------------------------------
+// U6: stale-ticket review section — open tickets whose finding(s) are gone from the current
+// report/reverse search (`reportImport.ts`'s `findStaleTickets`), grouped by issue type so each
+// group can share one resolution ask before the merged review screen renders (KTD10-15's "chain
+// the ask once per group, not once per ticket" rule). `cleanupHandler.ts`'s `buildStaleTicketGroups`
+// builds these; `reportImportHandler.ts` chains the ask and renders the result via
+// `buildStaleReviewSection` below.
+// ---------------------------------------------------------------------------------------------
+
+/** One issue-type group of stale tickets, resolution already chosen (or intentionally skipped —
+ * `undefined`) — ready to render/transition. Every ticket defaults `included: false` (R3: nothing
+ * transitions without an explicit choice, unlike `cleanupHandler.ts`'s own `included: true`
+ * default). */
+export interface StaleTicketGroup {
+  issueType: string;
+  ruleName: string | undefined;
+  targetState: string;
+  resolution: string | undefined;
+  tickets: TransitionBatchTicket[];
+}
+
+/** A stale ticket whose project+issue-type has no matching `cleanupRules` entry (or, degenerately,
+ * no valid transition path from its current status) — shown per the session-settled governing
+ * decision, but never offered a toggle since there is no transition to run. */
+export interface IneligibleStaleTicket {
+  key: string;
+  summary: string;
+  currentStatus: string;
+  note: string;
+}
+
+/** One issue-type group still awaiting its own resolution pick before the merged review screen can
+ * render — mirrors `StaleTicketGroup` minus the already-chosen `resolution`, plus the option list
+ * to present (`cleanupHandler.ts`'s `buildStaleTicketGroups` only populates this when the group's
+ * rule needs one — the same "closed-like target state needs a resolution" check
+ * `handleRunCleanup` already makes). */
+export interface StaleResolutionPendingGroup {
+  issueType: string;
+  ruleName: string | undefined;
+  targetState: string;
+  resolutionOptions: string[];
+  tickets: TransitionBatchTicket[];
+}
+
+export interface ReviewSessionStale {
+  groups: StaleTicketGroup[];
+  ineligible: IneligibleStaleTicket[];
+}
+
+/** Sibling to `AwaitIssueTypeSession` (ticketContext.ts) — same one-key ask/resume shape, but for
+ * the chained per-issue-type-group resolution pick a stale-ticket batch may need before the merged
+ * review screen renders. Kept as its own session type rather than a new `AwaitIssueTypeResume` kind
+ * because its ask is a numbered resolution pick (mirrors `ResolutionSelectionSession`/
+ * cleanupHandler.ts's own ask, `parseResolutionSelection`), not the generic free-text prompt
+ * `streamAwaitIssueType` renders — and its "empty reply" re-prompt text would otherwise have to
+ * become resume-kind-aware. `reviewSession` is the review session as built so far (rows, dedup —
+ * everything except `staleTickets`), parked until every pending group is resolved.
+ */
+export interface StaleResolutionAskSession {
+  descriptorKind: 'veracode' | 'waltz'; // email has no stale-check concept — never reaches this ask
+  pendingGroups: StaleResolutionPendingGroup[]; // [0] is the group currently being asked about
+  resolvedGroups: StaleTicketGroup[]; // accumulated as each group's ask resolves
+  ineligible: IneligibleStaleTicket[];
+  reviewSession: VeracodeReviewSession | WaltzReviewSession;
+  schemaVersion: number;
+}
 
 /**
  * A stored session written before `schemaVersion` existed (reads back as `undefined`) — or by an
@@ -1299,6 +1406,121 @@ export function isSessionExpired(session: { schemaVersion?: number } | null | un
 
 export const SESSION_EXPIRED_MESSAGE =
   '_This import session was started before a Ticket Sidekick update and can no longer be continued — please re-run the import._';
+
+// ---------------------------------------------------------------------------------------------
+// U4: pageable review-session "New" section (R6-R8). `allRows` (the full, unpaged candidate set)
+// is the source of truth; `buildReviewPage()` slices out one page's worth of "new" rows plus every
+// "already ticketed" row (never paged, R8) any time the visible page needs to change. Kept
+// separate from `buildImportReviewTable()`'s own rendering below so the slicing logic is
+// independently testable.
+// ---------------------------------------------------------------------------------------------
+
+export interface ReviewPage<TRow extends ReviewRowBase> {
+  rows: TRow[];
+  page: number; // clamped 0-based page actually returned
+  totalPages: number;
+}
+
+/**
+ * Slices a review session's full candidate set (`allRows`) into one displayable page: every
+ * "already ticketed" row (R8 — shown in full regardless of page) plus one `BATCH_LIMIT`-sized page
+ * of "new" rows, selected by `page` (0-based, clamped into `[0, totalPages - 1]` — an out-of-range
+ * request, e.g. `next` from the last page or a `page <n>` beyond the end, lands on the nearest
+ * valid page rather than erroring). `totalPages` is always at least 1, even when there are zero
+ * "new" rows, so a caller never divides by / indexes a zero-page result.
+ *
+ * Deliberately re-derives `rows` fresh from `allRows` every time rather than mutating in place —
+ * `allRows` itself is never touched here, which is what makes a "new" row's toggle page-local
+ * (R7): a toggle applied only to a page's returned `rows` (see `applyReviewSessionToggle()`)
+ * evaporates the next time this function re-slices that page from `allRows`.
+ */
+export function buildReviewPage<TRow extends ReviewRowBase>(allRows: TRow[], page: number): ReviewPage<TRow> {
+  const ticketed = allRows.filter(r => r.existingTicketKey !== null);
+  const fresh = allRows.filter(r => r.existingTicketKey === null);
+  const totalPages = Math.max(1, Math.ceil(fresh.length / BATCH_LIMIT));
+  const clampedPage = Math.min(Math.max(page, 0), totalPages - 1);
+  const start = clampedPage * BATCH_LIMIT;
+  return { rows: [...ticketed, ...fresh.slice(start, start + BATCH_LIMIT)], page: clampedPage, totalPages };
+}
+
+export type ReviewPageNav =
+  | { kind: 'next' }
+  | { kind: 'prev' }
+  | { kind: 'goto'; page: number }; // 0-based
+
+/**
+ * U4/R6: recognizes a page-navigation reply — `next`/`prev`/`page <n>`, case-insensitive, plus the
+ * `next page`/`prev page`/`previous`/`previous page` variants — ahead of `parseReviewInput`'s own
+ * toggle/ok/cancel parsing. The caller checks this FIRST: none of these strings collide with
+ * `isConfirmation`/`isCancellation`'s word lists or with a numeric row-id toggle, so falling
+ * through to `parseReviewInput` for anything this returns `null` for is always safe. `page <n>`
+ * takes a 1-based page number (as typed or clicked); the returned `page` is 0-based to match
+ * `buildReviewPage`'s indexing directly.
+ */
+export function parseReviewPageNav(reply: string): ReviewPageNav | null {
+  const normalized = reply.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (normalized === 'next' || normalized === 'next page') return { kind: 'next' };
+  if (normalized === 'prev' || normalized === 'previous' || normalized === 'prev page' || normalized === 'previous page') {
+    return { kind: 'prev' };
+  }
+  const match = normalized.match(/^page (\d+)$/);
+  if (match) return { kind: 'goto', page: parseInt(match[1], 10) - 1 };
+  return null;
+}
+
+/**
+ * U4/R7-R8: applies a toggle reply's row ids to the currently-visible `rows` (identical to
+ * `applyReviewToggle`) AND, for any toggled row that is "already ticketed", mirrors the same flip
+ * into `allRows` — that section is shown in full on every page (R8), so its toggle state must
+ * survive a later page-navigation recompute (`buildReviewPage` always re-derives `rows` from
+ * `allRows`). A toggled "new"/fresh row is deliberately left untouched in `allRows`: R7's per-page
+ * reset relies on `allRows` staying at its default-included state for "new" rows, so a page
+ * revisited later always renders with every row back to its default-included state.
+ */
+export function applyReviewSessionToggle<TRow extends ReviewRowBase>(
+  rows: TRow[],
+  allRows: TRow[],
+  ids: string[],
+): { rows: TRow[]; allRows: TRow[] } {
+  const newRows = applyReviewToggle(rows, ids);
+  const idSet = new Set(ids);
+  const newAllRows = allRows.map(r => {
+    if (r.existingTicketKey === null || !idSet.has(r.id)) return r;
+    const updated = newRows.find(nr => nr.id === r.id);
+    return updated ? { ...r, included: updated.included } : r;
+  });
+  return { rows: newRows, allRows: newAllRows };
+}
+
+/**
+ * U3/R13: "update existing tickets" reply keyword — a distinct outcome from `ok`/`cancel`/`toggle`/
+ * a page-nav token (U4)/a stale-ticket-key toggle (U6), checked in the same order
+ * `handleImportReviewReply` already threads those through. Case-insensitive exact match only (no
+ * fuzzy/partial matching) — deliberately narrow so it can never collide with a row-id toggle list
+ * or any other reply shape.
+ */
+export function isUpdateExistingTicketsReply(reply: string): boolean {
+  return reply.trim().toLowerCase() === 'update existing tickets';
+}
+
+/**
+ * U3/R13: mirrors a just-completed "update existing tickets" run's outcome (`updatedKeys` — the
+ * ticket keys that actually got a new label + comment this run) into both `rows` and `allRows` by
+ * setting `updatedExisting: true` on every row whose `existingTicketKey` is in that set — same
+ * shape as `applyReviewSessionToggle`'s dual-array mirroring, since the Already-ticketed section is
+ * always shown in full (R8) and must survive a later page-navigation recompute. Pure so it's
+ * independently testable; the caller (`executeUpdateExistingTickets` in reportImportHandler.ts)
+ * only computes `updatedKeys`, never mutates rows itself.
+ */
+export function markRowsUpdatedExisting<TRow extends ReviewRowBase>(
+  rows: TRow[],
+  allRows: TRow[],
+  updatedKeys: Set<string>,
+): { rows: TRow[]; allRows: TRow[] } {
+  const mark = (r: TRow): TRow =>
+    r.existingTicketKey !== null && updatedKeys.has(r.existingTicketKey) ? { ...r, updatedExisting: true } : r;
+  return { rows: rows.map(mark), allRows: allRows.map(mark) };
+}
 
 export interface ReviewTableColumn<TRow> {
   header: string;
@@ -1344,9 +1566,14 @@ const REVIEW_BATCH_LIMIT = BATCH_LIMIT;
 export function buildImportReviewTable<TRow extends ReviewRowBase>(
   rows: TRow[],
   baseUrl: string | undefined,
-  totalNewMatched: number | undefined,
+  page: number, // 0-based current page among "new" rows — see buildReviewPage()
+  totalPages: number,
   columns: ReviewTableColumn<TRow>[],
-  itemNoun: string, // e.g. 'flaw(s)' or 'component(s)' — used in summary/truncation lines
+  itemNoun: string, // e.g. 'flaw(s)' or 'component(s)' — used in summary/page lines
+  // U3/R13: opt-in only — set by streamImportReview() when the importer's own descriptor configures
+  // `updateExisting` (Veracode; Waltz/email omit it and this stays false, so neither the "Updated?"
+  // column nor the reply hint ever appears for them).
+  supportsUpdateExisting = false,
 ): string {
   const ticketed = rows.filter(r => r.existingTicketKey !== null);
   const fresh = rows.filter(r => r.existingTicketKey === null);
@@ -1363,6 +1590,11 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
       idColumn,
       ...columns,
       { header: 'Ticket', accessor: (r) => formatKeyLink(r.existingTicketKey!, baseUrl) },
+      // U3/R13: shows whether "update existing tickets" already synced this row's new finding(s)
+      // onto its ticket this session — set by markRowsUpdatedExisting() after that action runs.
+      ...(supportsUpdateExisting
+        ? [{ header: 'Updated?', accessor: (r: TRow) => (r.updatedExisting ? '✓ synced' : '') } as ReviewTableColumn<TRow>]
+        : []),
       { header: 'Include?', accessor: (r) => buildChatCommandLink(r.included ? '✓ re-create' : '_excluded_', '@jira', r.id) },
     ];
     lines.push('### Already ticketed');
@@ -1383,15 +1615,13 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
   }
   lines.push('');
 
-  // Row-count truncation note: an importer that caps "new" rows before they ever reach this table
-  // (e.g. Waltz's BATCH_LIMIT) would otherwise silently drop the remainder with no signal. Surfacing
-  // the true total here, plus how to get the rest, closes that gap — and reuses the existing dedup
-  // mechanism as the "resume" path (re-running after this batch completes surfaces the next batch of
-  // new candidates, since the ones just created are now dedup-matched).
-  if (totalNewMatched !== undefined && totalNewMatched > fresh.length) {
+  // U4: replaces the old pre-cap "N more matched, re-run" note — the "New" section now covers
+  // every matched candidate via paging, not a fixed pre-built batch, so the signal a user needs is
+  // which page they're on and how to move, not "how many more exist beyond this run."
+  if (totalPages > 1) {
     lines.push(
-      `_${totalNewMatched - fresh.length} more matched ${itemNoun} not shown — re-run the import after ` +
-      `this batch completes; already-created tickets are automatically skipped next time._`,
+      `_Page ${page + 1} of ${totalPages}._ Reply ${buildChatCommandLink('next', '@jira', 'next')} / ` +
+      `${buildChatCommandLink('prev', '@jira', 'prev')} or \`page <n>\` to navigate.`,
     );
     lines.push('');
   }
@@ -1404,6 +1634,17 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
     lines.push('');
     lines.push(`_Only the first ${REVIEW_BATCH_LIMIT} included rows will be created this run — re-run the import afterward for the remainder._`);
   }
+  // U3/R13: offered independently of, and not requiring, a "post it" confirm on the New/Stale
+  // sections (governing decision) — only shown when the importer supports it AND there's at least
+  // one already-ticketed row it could apply to.
+  if (supportsUpdateExisting && ticketed.length > 0) {
+    lines.push('');
+    lines.push(
+      `Reply ${buildChatCommandLink('update existing tickets', '@jira', 'update existing tickets')} to add any missing ` +
+      `label + a summarizing comment to every already-ticketed row above with a new finding not yet reflected on its ticket.`,
+    );
+  }
+
   lines.push('');
   lines.push(
     `Reply ${buildChatCommandLink('Post it', '@jira', 'post it')} to proceed, ` +
@@ -1411,6 +1652,123 @@ export function buildImportReviewTable<TRow extends ReviewRowBase>(
   );
 
   return lines.join('\n');
+}
+
+// U6: full-ticket-key vocabulary (e.g. `PROJ-123`) for the Stale section's own toggle replies —
+// deliberately disjoint from the New/Already-ticketed sections' `"1".."N"`/`"A1".."Am"` row-id
+// tokens (a ticket key always contains a hyphen; a row id never does) and from U4's `next`/`prev`/
+// `page <n>` page-nav tokens (none of those match this pattern either). Reuses `TICKET_KEY_TOKEN`
+// (branchParser.ts's `TICKET_ID_PATTERN`, anchored) rather than a third independently-typed copy
+// of the Jira ticket-key shape.
+
+/** Result of {@link parseStaleTicketToggle}: the matched stale-ticket keys plus whatever tokens in
+ * the reply weren't stale-ticket keys, rejoined as a string — code-review fix: a reply mixing a
+ * stale-ticket-key token with New/Already-ticketed row-id tokens (e.g. `PROJ-123 3 7`) used to have
+ * the row-id tokens silently discarded once any stale-key token matched, so an excluded row stayed
+ * included and got created. The caller now re-parses `remainder` with `parseReviewInput` instead of
+ * returning immediately. */
+export interface StaleTicketToggleResult {
+  matched: string[];
+  remainder: string;
+}
+
+/**
+ * Recognizes a reply as one or more ticket-key toggles for the Stale section — checked in
+ * `handleImportReviewReply` AFTER page-nav (U4) and BEFORE the New/Already-ticketed sections' own
+ * row-id toggle parsing (`parseReviewInput`), so a ticket key never collides with either
+ * vocabulary. Only matches ELIGIBLE stale tickets (present in `stale.groups`) — an ineligible one
+ * (R4: no matching cleanup rule, never offered a toggle) is never toggle-matched even if named,
+ * falling through as an unrecognized reply like any other. Returns the matched tickets' own keys
+ * (real casing, not the reply's) so `applyStaleTicketToggle` can flip them directly, plus every
+ * other token in the reply (untouched, in original order) as `remainder` so a mixed reply's
+ * non-stale-key tokens (row-id toggles, `post it`, `cancel`, ...) are never silently dropped;
+ * `null` when no token in the reply names an eligible stale ticket at all — the caller then falls
+ * through to `parseReviewInput` with the whole original reply.
+ */
+export function parseStaleTicketToggle(reply: string, stale: ReviewSessionStale): StaleTicketToggleResult | null {
+  const tokens = reply.trim().split(/[\s,]+/).filter(Boolean);
+  const knownKeys = new Map<string, string>(); // UPPERCASE -> real key
+  for (const g of stale.groups) for (const t of g.tickets) knownKeys.set(t.key.toUpperCase(), t.key);
+  const matched: string[] = [];
+  const remainderTokens: string[] = [];
+  for (const token of tokens) {
+    const upper = token.toUpperCase();
+    if (TICKET_KEY_TOKEN.test(upper) && knownKeys.has(upper)) {
+      matched.push(knownKeys.get(upper)!);
+    } else {
+      remainderTokens.push(token);
+    }
+  }
+  return matched.length > 0 ? { matched, remainder: remainderTokens.join(' ') } : null;
+}
+
+/** Flips `included` for every stale ticket (across every group) whose key is in `keys` — pure so
+ * it's independently testable, mirroring `applyTicketToggle`'s per-key flip for the cleanup batch. */
+export function applyStaleTicketToggle(stale: ReviewSessionStale, keys: string[]): ReviewSessionStale {
+  const toggleSet = new Set(keys.map(k => k.toUpperCase()));
+  return {
+    ...stale,
+    groups: stale.groups.map(g => ({
+      ...g,
+      tickets: g.tickets.map(t => (toggleSet.has(t.key.toUpperCase()) ? { ...t, included: !t.included } : t)),
+    })),
+  };
+}
+
+/**
+ * Renders the Stale review section — one combined table spanning every group's eligible tickets
+ * (R3's toggle, positive "will transition when checked" framing per R8/R9's existing convention)
+ * plus every ineligible ticket (R4: shown, excluded, no toggle offered — just its note). Returns
+ * `''` when there is nothing to show, so callers can unconditionally append this to the New/
+ * Already-ticketed table without an extra emptiness check of their own.
+ */
+export function buildStaleReviewSection(stale: ReviewSessionStale, baseUrl?: string): string {
+  const anyEligible = stale.groups.some(g => g.tickets.length > 0);
+  if (!anyEligible && stale.ineligible.length === 0) return '';
+
+  interface StaleRow {
+    key: string;
+    summary: string;
+    currentStatus: string;
+    to: string;
+    resolution: string;
+    toggleCell: string;
+  }
+  const rows: StaleRow[] = [];
+  for (const group of stale.groups) {
+    for (const t of group.tickets) {
+      rows.push({
+        key: formatKeyLink(t.key, baseUrl),
+        summary: neutralizeMarkdownLinks(t.summary),
+        currentStatus: t.currentStatus,
+        to: group.targetState,
+        resolution: group.resolution ?? '',
+        toggleCell: buildChatCommandLink(t.included ? '✓' : '_excluded_', '@jira', t.key),
+      });
+    }
+  }
+  for (const t of stale.ineligible) {
+    rows.push({
+      key: formatKeyLink(t.key, baseUrl),
+      summary: neutralizeMarkdownLinks(t.summary),
+      currentStatus: t.currentStatus,
+      to: '—',
+      resolution: '',
+      toggleCell: `_excluded — ${neutralizeMarkdownLinks(t.note)}_`,
+    });
+  }
+
+  const columns: ReviewTableColumn<StaleRow>[] = [
+    { header: 'Key', accessor: r => r.key },
+    { header: 'Summary', accessor: r => r.summary },
+    { header: 'Status', accessor: r => r.currentStatus },
+    { header: '→ To', accessor: r => r.to },
+    { header: 'Resolution', accessor: r => r.resolution },
+    { header: 'Transition?', accessor: r => r.toggleCell },
+  ];
+
+  return `### Stale — no longer active, may be closed\n${renderReviewTable(columns, rows)}\n\n` +
+    'Reply with a stale ticket\'s key (e.g. `PROJ-123`) to toggle it.';
 }
 
 export interface BulkUpdateReviewRow {
@@ -2162,6 +2520,7 @@ export type JiraSessionKind =
   | 'field-selection'
   | 'field-update-preview'
   | 'await-issue-type'
+  | 'stale-resolution-selection'
   | 'veracode-template'
   | 'veracode-review'
   | 'waltz-template'

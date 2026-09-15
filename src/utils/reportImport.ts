@@ -8,6 +8,10 @@
 // duplicated. R9: only what Veracode and Waltz need today is here — no speculative generality.
 import type { DiagLogger } from './diagTypes';
 import { TRIGGER_CHARS_PATTERN } from './markdownToJiraWiki';
+// Type-only import: erased at compile time (no runtime `require`), so this does not create the
+// circular *runtime* import that sessionState.ts's own value import of this file (BATCH_LIMIT,
+// sanitizeCellText) would otherwise raise — only a value/side-effect import can cycle.
+import type { ReviewRowBase } from '../participant/sessionState';
 
 // Single source of truth for both importers (KTD4). Both currently hardcode the identical values
 // (20 MB / 50 tickets per run) independently; consuming these from here instead of the local
@@ -136,40 +140,97 @@ export async function findAlreadyTicketed(
   return { map, failedChunks, totalChunks: chunks.length };
 }
 
-export interface CapNewRowsResult<TItem> {
-  included: TItem[];
-  totalNewMatched: number;
-  droppedOverCap: number;
+/** One open ticket found stale by {@link findStaleTickets}. `ids` are the marker-id dedup keys
+ * (e.g. Veracode flaw ids, or Waltz's `oss-dep-...` component label) extracted from its labels —
+ * every one of them turned out inactive, which is what made the ticket stale. */
+export interface StaleTicketMatch {
+  key: string;
+  ids: string[];
+}
+
+export interface FindStaleTicketsResult {
+  stale: StaleTicketMatch[];
+  /** Server-reported total match count (falls back to the checked-page length when the search
+   * result carries no `total`), so a caller can report "N found" even when truncated. */
+  totalFound: number;
+  /** True when more than `BATCH_LIMIT` open tickets matched — only the first `BATCH_LIMIT` were
+   * checked, mirroring `handleRunCleanup`'s cap-at-50-with-warning shape (cleanupHandler.ts). */
+  truncated: boolean;
+  /** True when `search` rejected — `stale` is then always `[]` (not "genuinely zero stale
+   * tickets") and the caller should tell the user staleness could not be checked, mirroring
+   * `findAlreadyTicketed`'s failedChunks/totalChunks distinction for the single-query case here. */
+  searchFailed: boolean;
 }
 
 /**
- * Caps "new" (not-yet-ticketed) items at `batchLimit` *before* the (expensive) row-building step —
- * R7/AE4. Already-ticketed items (per `isAlreadyTicketed`) are always included, never capped.
- * `totalNewMatched` records the true count of new items the report matched, so the review screen
- * can state how many more exist beyond what's shown and that re-running the import picks them up
- * (the already-created tickets become dedup matches on the next run, for free).
+ * Builds the JQL for U5's reverse stale-ticket search: open tickets in `projectKey` carrying the
+ * importer's marker label (`veracode` / `oss-dependency`).
  */
-export function capNewRows<TItem>(
-  items: TItem[],
-  batchLimit: number,
-  isAlreadyTicketed: (item: TItem) => boolean,
-): CapNewRowsResult<TItem> {
-  const included: TItem[] = [];
-  let totalNewMatched = 0;
-  let newSeen = 0;
-  for (const item of items) {
-    if (isAlreadyTicketed(item)) {
-      included.push(item); // already-ticketed — always included, never capped
-      continue;
-    }
-    totalNewMatched++;
-    if (newSeen < batchLimit) {
-      included.push(item);
-      newSeen++;
-    }
-  }
-  return { included, totalNewMatched, droppedOverCap: totalNewMatched - newSeen };
+export function buildStaleSearchJql(projectKey: string, markerLabel: string): string {
+  return `project = ${projectKey} AND resolution is EMPTY AND labels = "${markerLabel}"`;
 }
+
+/**
+ * R1/R5: finds open tickets whose finding(s) are gone from the current report or excluded by the
+ * importer's own remediation filter. Runs one search (marker-label + `resolution is EMPTY`,
+ * capped at `BATCH_LIMIT` — R1's "found N, showing first 50" shape, mirroring
+ * `handleRunCleanup`'s analogous query in cleanupHandler.ts) rather than the chunked multi-query
+ * shape `findAlreadyTicketed` uses for dedup, since this search is a single label/project filter,
+ * not a large OR-list of dedup keys.
+ *
+ * For each candidate ticket, `labelToDedupKey` extracts every marker-id label it carries (e.g.
+ * `veracode-issue-<id>` -> `<id>`, or Waltz's `oss-dep-...` label passed through as-is) and
+ * `isActive` decides whether each one still matches a current, non-excluded finding. A ticket is
+ * stale only when NONE of its ids are active (R2/R5's "any active keeps it non-stale" rule,
+ * mirroring R11's folded-group rule). A ticket that matched the search but carries no
+ * marker-id label at all is left alone rather than vacuously flagged stale — there's nothing to
+ * compare against, and flagging it risks closing a ticket that only happens to share the marker
+ * label.
+ *
+ * Never rejects — like `findAlreadyTicketed`, a failed search degrades to an empty `stale` list
+ * plus `searchFailed: true` (logged via `onDiag`) rather than throwing and aborting the rest of
+ * the import.
+ */
+export async function findStaleTickets(
+  projectKey: string,
+  markerLabel: string,
+  search: (jql: string, maxResults: number) => Promise<{ issues: JqlIssueLike[]; total?: number; isLast?: boolean }>,
+  labelToDedupKey: (label: string) => string | null,
+  isActive: (dedupKey: string) => boolean,
+  onDiag?: DiagLogger,
+): Promise<FindStaleTicketsResult> {
+  const jql = buildStaleSearchJql(projectKey, markerLabel);
+  let result: { issues: JqlIssueLike[]; total?: number; isLast?: boolean };
+  try {
+    result = await search(jql, BATCH_LIMIT);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    onDiag?.('warn', 'Stale-ticket search failed — could not check for stale tickets', { error: message });
+    return { stale: [], totalFound: 0, truncated: false, searchFailed: true };
+  }
+
+  const candidates = result.issues.slice(0, BATCH_LIMIT);
+  const truncated = (result.total ?? 0) > BATCH_LIMIT || result.isLast === false;
+
+  const stale: StaleTicketMatch[] = [];
+  for (const issue of candidates) {
+    const ids = (issue.fields.labels ?? [])
+      .map(labelToDedupKey)
+      .filter((id): id is string => id !== null);
+    if (ids.length === 0) continue; // nothing to compare — see doc comment above
+    if (!ids.some(isActive)) stale.push({ key: issue.key, ids });
+  }
+
+  return { stale, totalFound: result.total ?? candidates.length, truncated, searchFailed: false };
+}
+
+// U4: the pre-build "new" cap (`capNewRows`) that used to run here before review rows were built at
+// all was removed — the review screen now pages through every matched "new" candidate instead of
+// silently dropping the remainder of a run (see `buildReviewPage`/`ReviewSession` in
+// sessionState.ts). Lightweight row fields still build eagerly for every candidate; an importer
+// whose full ticket description is expensive (Veracode's folded-group description) defers that
+// part to ticket-creation time instead, which is what actually avoids the wasted-work concern
+// `capNewRows` used to guard against.
 
 // Every value threaded through this function originates in externally-sourced report data (Waltz
 // .xlsx cells, and — from a later unit onward — Veracode XML attributes) that gets interpolated
@@ -232,30 +293,41 @@ export function sanitizeStandaloneLine(value: string): string {
   return `: ${sanitizeCellText(value)}`;
 }
 
-interface ReviewRowShape {
-  id: string; // '1'..'N' new candidates, 'A1'..'Am' already-ticketed
-  existingTicketKey: string | null;
-  included: boolean; // whether this row will be (re)created if the batch runs
+/**
+ * Looks up a matching ticket key across every candidate dedup key an item carries — a folded
+ * Veracode group's `dedupKeyOf` returns one key per member flaw (R11), and a match on *any* of
+ * them counts as already-ticketed. Single-key importers (Waltz) just pass a one-element array, so
+ * this is a pure superset of the old single-key lookup. First matching key wins (stable, since a
+ * given item's key order is caller-determined and doesn't change between calls).
+ */
+function findExistingTicketKey(dedupMap: Map<string, string>, keys: string[]): string | null {
+  for (const key of keys) {
+    const ticketKey = dedupMap.get(key);
+    if (ticketKey) return ticketKey;
+  }
+  return null;
 }
 
 /**
  * Builds review rows from raw parsed items, assigning the shared id-numbering scheme (new
  * candidates numbered '1'..'N' in source order, already-ticketed ones 'A1'..'Am' in source order).
- * `dedupKeyOf` maps an item to the key looked up in `dedupMap`; `rowBuilder` supplies the
- * importer-specific row fields (everything beyond id/existingTicketKey/included).
+ * `dedupKeyOf` maps an item to *every* candidate key looked up in `dedupMap` (R11: a folded group
+ * matches as already-ticketed as soon as any one of its member flaws' keys does — a single-key
+ * importer just returns a one-element array); `rowBuilder` supplies the importer-specific row
+ * fields (everything beyond id/existingTicketKey/included).
  */
-export function buildReviewRows<TItem, TRow extends ReviewRowShape>(
+export function buildReviewRows<TItem, TRow extends ReviewRowBase>(
   items: TItem[],
   dedupMap: Map<string, string>,
-  dedupKeyOf: (item: TItem) => string,
-  rowBuilder: (item: TItem) => Omit<TRow, keyof ReviewRowShape>,
+  dedupKeyOf: (item: TItem) => string[],
+  rowBuilder: (item: TItem) => Omit<TRow, keyof ReviewRowBase>,
 ): TRow[] {
   const rows: TRow[] = [];
   let newIndex = 0;
   let ticketedIndex = 0;
   for (const item of items) {
-    const existingTicketKey = dedupMap.get(dedupKeyOf(item)) ?? null;
-    const base: ReviewRowShape = {
+    const existingTicketKey = findExistingTicketKey(dedupMap, dedupKeyOf(item));
+    const base: ReviewRowBase = {
       id: existingTicketKey ? `A${++ticketedIndex}` : `${++newIndex}`,
       existingTicketKey,
       included: existingTicketKey === null,

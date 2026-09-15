@@ -6,11 +6,12 @@ import {
   parseWaltzReport, filterComponents, sanitizeComponentLabel, buildSummary, buildLabels, buildDescriptionWiki,
   type WaltzComponent, type WaltzReviewRow,
 } from '../../utils/waltzReport';
-import type { WaltzTemplateSelectionSession, WaltzReviewSession } from '../sessionState';
+import type { WaltzTemplateSelectionSession, WaltzReviewSession, StaleResolutionAskSession } from '../sessionState';
 import { WALTZ_REVIEW_COLUMNS } from '../sessionState';
 import {
   readAndFilterReport, buildImportTemplateSession, handleImportReport,
   handleImportTemplateSelection, handleImportReviewReply, continueAfterImportIssueType,
+  continueAfterStaleResolution,
   type ReportImportDescriptor,
 } from './reportImportHandler';
 import { resolveMaxReportBytes } from '../../utils/reportImport';
@@ -43,18 +44,57 @@ function getWaltzConfig(): { minVulnRating: string; includeRemediationActions: s
   };
 }
 
-async function readAndFilterWaltzFile(filePath: string): Promise<WaltzComponent[]> {
+async function readAndFilterWaltzFile(filePath: string): Promise<{ items: WaltzComponent[]; rawItems: WaltzComponent[] }> {
   // parseWaltzReport() itself also re-checks size (single source of truth used by the pure unit
   // tests too) — both checks share the same resolved maxReportBytes so they agree with each other
   // and with the user's setting.
   const { maxReportBytes, ...filterConfig } = getWaltzConfig();
-  return readAndFilterReport(
+  // U6: buildWaltzActiveComponentPredicate needs the raw, unfiltered components (before
+  // minVulnRating/includeRemediationActions) — readAndFilterReport returns them directly as
+  // `rawItems` alongside the filtered set, no closure capture needed.
+  const { items, rawItems } = await readAndFilterReport(
     filePath,
     fp => fs.promises.readFile(fp),
     raw => parseWaltzReport(raw, maxReportBytes),
     components => filterComponents(components, filterConfig),
     maxReportBytes,
   );
+  return { items, rawItems };
+}
+
+// U5: the `oss-dependency` label every Waltz-imported ticket carries (alongside its own
+// `oss-dep-...` component label) — reportImport.ts's findStaleTickets() searches on this to find
+// open tickets whose component has disappeared from the current report. Not yet wired into the
+// chat flow (that's U6); exported here so that later unit can call findStaleTickets() with the
+// right marker label without duplicating it.
+export const WALTZ_STALE_MARKER_LABEL = 'oss-dependency';
+
+// Reused directly by the descriptor's own labelToDedupKey below (dedup search) and by
+// findStaleTickets()'s labelToDedupKey (stale search, U6) so both parse the identical
+// `oss-dep-...` label shape sanitizeComponentLabel() produces, from one implementation.
+function waltzLabelToDedupKey(label: string): string | null {
+  return label.startsWith('oss-dep-') ? label : null;
+}
+
+/**
+ * Builds the "is this component still active" predicate findStaleTickets() needs (U5's R5). A
+ * component is active when it's present in the *raw* parsed report (before the
+ * minVulnRating/includeRemediationActions filter that decides what gets a *new* ticket — R5 says
+ * "absent from the current Waltz report") with a remediationAction that still matches
+ * `includeRemediationActions`. Deliberately ignores minVulnRating: R5 only mentions remediation
+ * action, so a component that dropped below the rating floor but is still open does not make its
+ * ticket stale.
+ */
+export function buildWaltzActiveComponentPredicate(
+  rawComponents: WaltzComponent[],
+  includeRemediationActions: string[],
+): (dedupKey: string) => boolean {
+  const allowedActions = new Set(includeRemediationActions.map(a => a.trim()));
+  const actionByKey = new Map(rawComponents.map(c => [sanitizeComponentLabel(c.nameVersion), (c.remediationAction ?? '').trim()] as const));
+  return (dedupKey: string) => {
+    const action = actionByKey.get(dedupKey);
+    return action !== undefined && allowedActions.has(action);
+  };
 }
 
 const waltzDescriptor: ReportImportDescriptor<WaltzComponent, WaltzReviewRow> = {
@@ -73,9 +113,11 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent, WaltzReviewRow> = 
     templateSelection: 'jira.session.waltzTemplateSelection',
     review: 'jira.session.waltzReview',
   },
-  searchLabelOf: component => sanitizeComponentLabel(component.nameVersion),
-  dedupKeyOf: component => sanitizeComponentLabel(component.nameVersion),
-  labelToDedupKey: label => (label.startsWith('oss-dep-') ? label : null),
+  // U2: Waltz stays single-key — one component maps to exactly one label/dedup key, wrapped in a
+  // one-element array to satisfy the (now folding-aware) descriptor contract. No behavior change.
+  searchLabelOf: component => [sanitizeComponentLabel(component.nameVersion)],
+  dedupKeyOf: component => [sanitizeComponentLabel(component.nameVersion)],
+  labelToDedupKey: waltzLabelToDedupKey,
   buildRowFields: (component, templateLabels) => ({
     nameVersion: component.nameVersion,
     maxVulnRating: component.maxVulnRating,
@@ -91,6 +133,14 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent, WaltzReviewRow> = 
   }),
   // Waltz has no issue-type-fetch-failure pop-up today — omitting onIssueTypeFetchFailed keeps that
   // path log-only, matching current behavior (KTD9).
+  // U6: wires reportImportHandler.ts's reverse stale-ticket check up to U5's own marker
+  // label/predicate builder — rawItems here is always what readAndFilterWaltzFile's rawItems (or
+  // extension.ts's own captured pre-filter parse) produced: unfiltered WaltzComponent[].
+  stale: {
+    markerLabel: WALTZ_STALE_MARKER_LABEL,
+    labelToDedupKey: waltzLabelToDedupKey,
+    buildActivePredicate: rawItems => buildWaltzActiveComponentPredicate(rawItems as WaltzComponent[], getWaltzConfig().includeRemediationActions),
+  },
 };
 
 // The exported functions below are thin wrappers around the shared implementations in
@@ -102,8 +152,13 @@ export async function buildWaltzTemplateSession(
   fileName: string,
   projectKey: string,
   jiraClient: IJiraClient,
+  // U6: the *raw, unfiltered* components (pre minVulnRating/includeRemediationActions) —
+  // extension.ts's command-triggered entry point now captures these itself and passes them
+  // through; defaults to `components` (already filtered) for any other caller, which degrades the
+  // stale check gracefully rather than crashing.
+  rawComponents: WaltzComponent[] = components,
 ): Promise<WaltzTemplateSelectionSession> {
-  return buildImportTemplateSession(components, fileName, projectKey, jiraClient, waltzDescriptor);
+  return buildImportTemplateSession(components, fileName, projectKey, jiraClient, waltzDescriptor, rawComponents);
 }
 
 // Entry point for the "importWaltzReport" operation. Handles both invocation paths:
@@ -167,4 +222,16 @@ export async function handleWaltzReviewReply(
   baseUrl?: string,
 ): Promise<vscode.ChatResult | void> {
   return handleImportReviewReply(reply, session, ticketService, stream, ws, waltzDescriptor, baseUrl);
+}
+
+// U6: resumes a Waltz stale-ticket batch's chained per-issue-type-group resolution ask
+// (JiraParticipant.ts's router, mirroring handleWaltzAwaitIssueType above).
+export async function handleWaltzStaleResolution(
+  reply: string,
+  ask: StaleResolutionAskSession,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  baseUrl?: string,
+): Promise<vscode.ChatResult | void> {
+  return continueAfterStaleResolution(reply, ask, stream, ws, waltzDescriptor, baseUrl);
 }

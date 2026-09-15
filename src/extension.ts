@@ -37,7 +37,11 @@ interface ReportImportCommandDescriptor<TRaw, TItem> {
   parse: (raw: TRaw, maxBytes: number) => TItem[] | Promise<TItem[]>;
   filter: (items: TItem[]) => TItem[];
   noMatchMessage: string;
-  buildTemplateSession: (items: TItem[], fileName: string, projectKey: string, jiraClient: IJiraClient) => Promise<unknown>;
+  // U6: `rawItems` (the parsed, pre-`filter` items) is optional so a caller with no stale-check
+  // concept can ignore it — passed through when present so buildVeracodeTemplateSession/
+  // buildWaltzTemplateSession can build the stale-check's "is this finding still active" predicate
+  // from the *unfiltered* report instead of degrading to the already-filtered set.
+  buildTemplateSession: (items: TItem[], fileName: string, projectKey: string, jiraClient: IJiraClient, rawItems?: TItem[]) => Promise<unknown>;
   sessionKey: string;
   chatQuery: string;
   // Resolved fresh per invocation (not at registration time) so a setting the user just changed
@@ -79,8 +83,17 @@ function registerReportImportCommand<TRaw, TItem>(
     const maxReportBytes = descriptor.getMaxReportBytes();
     let readOrParseFailed = false;
     let items: TItem[];
+    // U6: the raw, unfiltered parse() output — captured here (before descriptor.filter runs) so it
+    // can be passed to buildTemplateSession for the stale-check predicate, mirroring what
+    // readAndFilterVeracodeFile/readAndFilterWaltzFile now capture for the chat-only entry point.
+    let rawParsedItems: TItem[] = [];
     try {
-      items = await readAndFilterReport<TRaw, TItem>(
+      // readAndFilterReport now returns { items, rawItems } directly, but its `rawItems` here would
+      // just be the already-filtered value (the wrapped parse step below applies descriptor.filter
+      // itself, so the outer `filter` param is identity — see its own comment) — this function keeps
+      // its own `rawParsedItems` closure capture above, taken before descriptor.filter runs, since
+      // that's the genuinely pre-filter set the stale-check predicate needs.
+      ({ items } = await readAndFilterReport<TRaw, TItem>(
         reportPath,
         async filePath => {
           try {
@@ -96,6 +109,7 @@ function registerReportImportCommand<TRaw, TItem>(
         async raw => {
           try {
             const parsed = await descriptor.parse(raw, maxReportBytes);
+            rawParsedItems = parsed;
             return descriptor.filter(parsed);
           } catch (err) {
             readOrParseFailed = true;
@@ -109,7 +123,7 @@ function registerReportImportCommand<TRaw, TItem>(
         // the same "Could not parse …" message exactly as before the refactor) — identity here.
         parsedItems => parsedItems,
         maxReportBytes,
-      );
+      ));
     } catch {
       if (!readOrParseFailed) {
         vscode.window.showErrorMessage(`Ticket Sidekick: Report exceeds the ${maxReportBytes / (1024 * 1024)} MB size limit.`);
@@ -141,7 +155,7 @@ function registerReportImportCommand<TRaw, TItem>(
       onDiag: (level, message, details) => logDiag('jira.apiClient', level, message, details),
     });
 
-    const session = await descriptor.buildTemplateSession(items, path.basename(reportPath), projectKey, jiraClient);
+    const session = await descriptor.buildTemplateSession(items, path.basename(reportPath), projectKey, jiraClient, rawParsedItems);
 
     await context.workspaceState.update(descriptor.sessionKey, session);
     await vscode.commands.executeCommand('workbench.action.chat.open', { query: descriptor.chatQuery });

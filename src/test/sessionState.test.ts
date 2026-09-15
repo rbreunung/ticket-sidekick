@@ -12,10 +12,37 @@ import {
 } from '../participant/sessionState';
 import type { JiraTransition } from '../jira/IJiraClient';
 import type { CachedTransition, WorkflowGraph } from '../services/WorkflowService';
+import {
+  buildReviewPage, parseReviewPageNav, applyReviewSessionToggle, type ReviewRowBase,
+} from '../participant/sessionState';
+import {
+  isUpdateExistingTicketsReply, markRowsUpdatedExisting, buildImportReviewTable,
+} from '../participant/sessionState';
+import {
+  parseStaleTicketToggle, applyStaleTicketToggle, buildStaleReviewSection,
+  type ReviewSessionStale, type TransitionBatchTicket,
+} from '../participant/sessionState';
 
 interface Widget {
   name: string;
   qty: number;
+}
+
+// U4: minimal ReviewRowBase-shaped row for the pageable-review-session tests below.
+interface PageRow extends ReviewRowBase {
+  id: string;
+  existingTicketKey: string | null;
+  included: boolean;
+}
+
+function makeFreshRows(count: number, startAt = 1): PageRow[] {
+  return Array.from({ length: count }, (_, i) => ({
+    id: String(startAt + i), existingTicketKey: null, included: true,
+  }));
+}
+
+function makeTicketedRow(id: string, existingTicketKey: string): PageRow {
+  return { id, existingTicketKey, included: false };
 }
 
 const WIDGET_COLUMNS: ReviewTableColumn<Widget>[] = [
@@ -785,5 +812,326 @@ describe('formatMyFiltersList (U7)', () => {
   it('reports a clear "none found" message for zero filters', () => {
     const text = formatMyFiltersList([], []);
     expect(text).toBe('No favourite or owned filters found.');
+  });
+});
+
+// U4: the pageable review session's core slicing/navigation/toggle-persistence primitives.
+describe('buildReviewPage (U4/R6-R8)', () => {
+  it('returns everything on one page when the "new" set is at or under BATCH_LIMIT (50)', () => {
+    const allRows = makeFreshRows(50);
+    const result = buildReviewPage(allRows, 0);
+    expect(result.rows).toHaveLength(50);
+    expect(result.page).toBe(0);
+    expect(result.totalPages).toBe(1);
+  });
+
+  it('splits a "new" set larger than BATCH_LIMIT into multiple pages of up to 50 rows each', () => {
+    const allRows = makeFreshRows(120);
+    const first = buildReviewPage(allRows, 0);
+    expect(first.rows).toHaveLength(50);
+    expect(first.rows.map(r => r.id)).toEqual(Array.from({ length: 50 }, (_, i) => String(i + 1)));
+    expect(first.totalPages).toBe(3);
+
+    const second = buildReviewPage(allRows, 1);
+    expect(second.rows).toHaveLength(50);
+    expect(second.rows[0].id).toBe('51');
+
+    const third = buildReviewPage(allRows, 2);
+    expect(third.rows).toHaveLength(20); // remainder
+    expect(third.rows[0].id).toBe('101');
+  });
+
+  it('always shows every "already ticketed" row in full, on every page, never counted toward paging', () => {
+    const allRows = [makeTicketedRow('A1', 'PROJ-1'), ...makeFreshRows(60), makeTicketedRow('A2', 'PROJ-2')];
+    const first = buildReviewPage(allRows, 0);
+    const second = buildReviewPage(allRows, 1);
+    expect(first.rows.filter(r => r.existingTicketKey !== null).map(r => r.id)).toEqual(['A1', 'A2']);
+    expect(second.rows.filter(r => r.existingTicketKey !== null).map(r => r.id)).toEqual(['A1', 'A2']);
+    expect(first.totalPages).toBe(2); // 60 "new" rows -> 2 pages, unaffected by the 2 ticketed rows
+  });
+
+  it('clamps a negative page request up to page 0', () => {
+    const result = buildReviewPage(makeFreshRows(120), -5);
+    expect(result.page).toBe(0);
+  });
+
+  it('clamps an out-of-range page request down to the last valid page', () => {
+    const result = buildReviewPage(makeFreshRows(120), 99);
+    expect(result.page).toBe(2); // 3 pages total, 0-based last is 2
+    expect(result.rows).toHaveLength(20);
+  });
+
+  it('reports exactly one page (never zero) when there are no "new" rows at all', () => {
+    const result = buildReviewPage([makeTicketedRow('A1', 'PROJ-1')], 0);
+    expect(result.totalPages).toBe(1);
+    expect(result.rows).toEqual([makeTicketedRow('A1', 'PROJ-1')]);
+  });
+});
+
+describe('parseReviewPageNav (U4/R6)', () => {
+  it('recognizes "next" and "prev"', () => {
+    expect(parseReviewPageNav('next')).toEqual({ kind: 'next' });
+    expect(parseReviewPageNav('prev')).toEqual({ kind: 'prev' });
+  });
+
+  it('recognizes case-insensitively and trims surrounding whitespace', () => {
+    expect(parseReviewPageNav('  NEXT  ')).toEqual({ kind: 'next' });
+    expect(parseReviewPageNav('Prev')).toEqual({ kind: 'prev' });
+  });
+
+  it('recognizes the "next page"/"prev page"/"previous"/"previous page" variants', () => {
+    expect(parseReviewPageNav('next page')).toEqual({ kind: 'next' });
+    expect(parseReviewPageNav('prev page')).toEqual({ kind: 'prev' });
+    expect(parseReviewPageNav('previous')).toEqual({ kind: 'prev' });
+    expect(parseReviewPageNav('previous page')).toEqual({ kind: 'prev' });
+  });
+
+  it('recognizes "page <n>", converting the 1-based typed number to a 0-based page index', () => {
+    expect(parseReviewPageNav('page 3')).toEqual({ kind: 'goto', page: 2 });
+    expect(parseReviewPageNav('PAGE 1')).toEqual({ kind: 'goto', page: 0 });
+    expect(parseReviewPageNav('page   7')).toEqual({ kind: 'goto', page: 6 }); // collapses extra whitespace
+  });
+
+  it('returns null for anything else, including a bare row-id number and ordinary toggle/confirm replies', () => {
+    expect(parseReviewPageNav('2')).toBeNull();
+    expect(parseReviewPageNav('A1')).toBeNull();
+    expect(parseReviewPageNav('post it')).toBeNull();
+    expect(parseReviewPageNav('cancel')).toBeNull();
+    expect(parseReviewPageNav('pages')).toBeNull();
+    expect(parseReviewPageNav('page')).toBeNull();
+    expect(parseReviewPageNav('')).toBeNull();
+  });
+});
+
+describe('applyReviewSessionToggle (U4/R7-R8)', () => {
+  it('toggles the given ids on the visible page rows, same as applyReviewToggle', () => {
+    const rows = makeFreshRows(3); // ids '1'..'3', all included
+    const result = applyReviewSessionToggle(rows, rows, ['2']);
+    expect(result.rows.find(r => r.id === '2')!.included).toBe(false);
+    expect(result.rows.find(r => r.id === '1')!.included).toBe(true);
+  });
+
+  it('mirrors an "already ticketed" row\'s toggle into allRows so it survives a page-navigation recompute', () => {
+    const ticketed = makeTicketedRow('A1', 'PROJ-1');
+    const allRows = [ticketed, ...makeFreshRows(60)];
+    const page0 = buildReviewPage(allRows, 0);
+
+    const toggled = applyReviewSessionToggle(page0.rows, allRows, ['A1']);
+    expect(toggled.rows.find(r => r.id === 'A1')!.included).toBe(true);
+    expect(toggled.allRows.find(r => r.id === 'A1')!.included).toBe(true);
+
+    // Navigate away and back — buildReviewPage re-derives `rows` from the updated allRows, so the
+    // ticketed-row toggle must still be visible (R8: "already ticketed" is shown in full, unaffected).
+    const page1 = buildReviewPage(toggled.allRows, 1);
+    const backToPage0 = buildReviewPage(toggled.allRows, 0);
+    expect(page1.rows.find(r => r.id === 'A1')!.included).toBe(true);
+    expect(backToPage0.rows.find(r => r.id === 'A1')!.included).toBe(true);
+  });
+
+  it('does NOT mirror a "new" row\'s toggle into allRows — a page revisited later resets to default-included (R7)', () => {
+    const allRows = makeFreshRows(60);
+    const page0 = buildReviewPage(allRows, 0);
+
+    const toggled = applyReviewSessionToggle(page0.rows, allRows, ['3']); // exclude row '3' on page 0
+    expect(toggled.rows.find(r => r.id === '3')!.included).toBe(false); // visible immediately
+    expect(toggled.allRows.find(r => r.id === '3')!.included).toBe(true); // NOT written back
+
+    // Page away and back to page 0 — the toggle is gone, row '3' is included again (page-local reset).
+    const backToPage0 = buildReviewPage(toggled.allRows, 0);
+    expect(backToPage0.rows.find(r => r.id === '3')!.included).toBe(true);
+  });
+
+  it('leaves rows not mentioned in ids untouched', () => {
+    const rows = makeFreshRows(3);
+    const result = applyReviewSessionToggle(rows, rows, ['2']);
+    expect(result.rows.find(r => r.id === '1')!.included).toBe(true);
+    expect(result.rows.find(r => r.id === '3')!.included).toBe(true);
+  });
+});
+
+// U3: "update existing tickets" reply keyword + per-row "synced" bookkeeping (R13).
+describe('isUpdateExistingTicketsReply (U3/R13)', () => {
+  it('recognizes the exact reply, case-insensitively, trimmed', () => {
+    expect(isUpdateExistingTicketsReply('update existing tickets')).toBe(true);
+    expect(isUpdateExistingTicketsReply('UPDATE EXISTING TICKETS')).toBe(true);
+    expect(isUpdateExistingTicketsReply('  update existing tickets  ')).toBe(true);
+  });
+
+  it('does not match a row-id toggle, a page-nav token, or a stale-ticket-key reply', () => {
+    expect(isUpdateExistingTicketsReply('2')).toBe(false);
+    expect(isUpdateExistingTicketsReply('A1')).toBe(false);
+    expect(isUpdateExistingTicketsReply('next')).toBe(false);
+    expect(isUpdateExistingTicketsReply('PROJ-123')).toBe(false);
+    expect(isUpdateExistingTicketsReply('post it')).toBe(false);
+    expect(isUpdateExistingTicketsReply('cancel')).toBe(false);
+  });
+
+  it('does not fuzzy-match a partial or extended phrase', () => {
+    expect(isUpdateExistingTicketsReply('update existing')).toBe(false);
+    expect(isUpdateExistingTicketsReply('please update existing tickets now')).toBe(false);
+  });
+});
+
+describe('markRowsUpdatedExisting (U3/R13)', () => {
+  it('sets updatedExisting on every row (in both rows and allRows) whose ticket key is in the update set', () => {
+    const ticketed = makeTicketedRow('A1', 'PROJ-1');
+    const allRows = [ticketed, ...makeFreshRows(3)];
+    const result = markRowsUpdatedExisting(allRows, allRows, new Set(['PROJ-1']));
+
+    expect(result.rows.find(r => r.id === 'A1')!.updatedExisting).toBe(true);
+    expect(result.allRows.find(r => r.id === 'A1')!.updatedExisting).toBe(true);
+  });
+
+  it('leaves every other row untouched, including a "new" row with no existingTicketKey', () => {
+    const ticketed = makeTicketedRow('A1', 'PROJ-1');
+    const rows = [ticketed, ...makeFreshRows(2)];
+    const result = markRowsUpdatedExisting(rows, rows, new Set(['PROJ-1']));
+
+    expect(result.rows.find(r => r.id === '1')!.updatedExisting).toBeUndefined();
+    expect(result.rows.find(r => r.id === '2')!.updatedExisting).toBeUndefined();
+  });
+
+  it('is a no-op when the update set is empty', () => {
+    const ticketed = makeTicketedRow('A1', 'PROJ-1');
+    const rows = [ticketed];
+    const result = markRowsUpdatedExisting(rows, rows, new Set());
+    expect(result.rows[0].updatedExisting).toBeUndefined();
+  });
+});
+
+describe('buildImportReviewTable — "Updated?" column + reply hint (U3/R13)', () => {
+  it('omits the "Updated?" column and the reply hint when supportsUpdateExisting is false (default)', () => {
+    const rows = [makeTicketedRow('A1', 'PROJ-1'), ...makeFreshRows(1)];
+    const text = buildImportReviewTable(rows, undefined, 0, 1, [], 'item(s)');
+    expect(text).not.toContain('Updated?');
+    expect(text).not.toContain('update existing tickets');
+  });
+
+  it('shows the "Updated?" column and reply hint when supportsUpdateExisting is true and there is an already-ticketed row', () => {
+    const rows = [makeTicketedRow('A1', 'PROJ-1'), ...makeFreshRows(1)];
+    const text = buildImportReviewTable(rows, undefined, 0, 1, [], 'item(s)', true);
+    expect(text).toContain('Updated?');
+    expect(text).toContain('update existing tickets');
+  });
+
+  it('renders "✓ synced" only for a row whose updatedExisting flag is set', () => {
+    const updatedRow = { ...makeTicketedRow('A1', 'PROJ-1'), updatedExisting: true };
+    const rows = [updatedRow, makeTicketedRow('A2', 'PROJ-2')];
+    const text = buildImportReviewTable(rows, undefined, 0, 1, [], 'item(s)', true);
+    const lines = text.split('\n');
+    const a1Line = lines.find(l => l.includes('PROJ-1'))!;
+    const a2Line = lines.find(l => l.includes('PROJ-2'))!;
+    expect(a1Line).toContain('✓ synced');
+    expect(a2Line).not.toContain('✓ synced');
+  });
+
+  it('omits the reply hint (even with supportsUpdateExisting) when there are no already-ticketed rows', () => {
+    const rows = makeFreshRows(2);
+    const text = buildImportReviewTable(rows, undefined, 0, 1, [], 'item(s)', true);
+    expect(text).not.toContain('update existing tickets');
+  });
+});
+
+// U6: Stale review section — toggle-reply parsing/application and the rendered table.
+describe('Stale-ticket review section (U6)', () => {
+  const dummyPath = [{ id: '1', name: 'Go', to: 'Done' }];
+
+  function makeStaleTicket(key: string, included = false): TransitionBatchTicket {
+    return {
+      key, summary: `Summary for ${key}`, currentStatus: 'Open',
+      transitionPath: dummyPath, subtasks: [], included,
+    };
+  }
+
+  function makeStale(overrides: Partial<ReviewSessionStale> = {}): ReviewSessionStale {
+    return {
+      groups: [{ issueType: 'Bug', ruleName: 'close-bugs', targetState: 'Done', resolution: 'Fixed', tickets: [makeStaleTicket('PROJ-1')] }],
+      ineligible: [],
+      ...overrides,
+    };
+  }
+
+  describe('parseStaleTicketToggle', () => {
+    it('recognizes a full ticket-key reply naming an eligible stale ticket', () => {
+      expect(parseStaleTicketToggle('PROJ-1', makeStale())).toEqual({ matched: ['PROJ-1'], remainder: '' });
+    });
+
+    it('is case-insensitive but returns the ticket\'s real-cased key', () => {
+      expect(parseStaleTicketToggle('proj-1', makeStale())).toEqual({ matched: ['PROJ-1'], remainder: '' });
+    });
+
+    it('matches multiple ticket keys in one reply', () => {
+      const stale = makeStale({
+        groups: [{ issueType: 'Bug', ruleName: undefined, targetState: 'Done', resolution: undefined, tickets: [makeStaleTicket('PROJ-1'), makeStaleTicket('PROJ-2')] }],
+      });
+      expect(parseStaleTicketToggle('PROJ-1 PROJ-2', stale)).toEqual({ matched: ['PROJ-1', 'PROJ-2'], remainder: '' });
+    });
+
+    // Code-review fix regression test: a reply mixing a stale-ticket-key token with other tokens
+    // (row-id toggles, `post it`, ...) must preserve those other tokens in `remainder` rather than
+    // silently discarding them — the caller re-parses `remainder` instead of returning immediately.
+    it('preserves non-stale-key tokens as remainder for a mixed reply', () => {
+      expect(parseStaleTicketToggle('PROJ-1 3 7', makeStale())).toEqual({ matched: ['PROJ-1'], remainder: '3 7' });
+    });
+
+    it('never matches a row-id token (bare numeric "2" or already-ticketed "A1") — disjoint vocabulary', () => {
+      expect(parseStaleTicketToggle('2', makeStale())).toBeNull();
+      expect(parseStaleTicketToggle('A1', makeStale())).toBeNull();
+    });
+
+    it('never matches U4\'s page-nav tokens', () => {
+      expect(parseStaleTicketToggle('next', makeStale())).toBeNull();
+      expect(parseStaleTicketToggle('prev', makeStale())).toBeNull();
+      expect(parseStaleTicketToggle('page 2', makeStale())).toBeNull();
+    });
+
+    it('never matches an ineligible ticket\'s key — R4: not offered a toggle', () => {
+      const stale = makeStale({
+        groups: [],
+        ineligible: [{ key: 'PROJ-9', summary: 'x', currentStatus: 'Open', note: 'no cleanup rule configured' }],
+      });
+      expect(parseStaleTicketToggle('PROJ-9', stale)).toBeNull();
+    });
+
+    it('returns null for an unrelated reply', () => {
+      expect(parseStaleTicketToggle('post it', makeStale())).toBeNull();
+      expect(parseStaleTicketToggle('cancel', makeStale())).toBeNull();
+    });
+  });
+
+  describe('applyStaleTicketToggle', () => {
+    it('flips included for the named ticket across groups', () => {
+      const stale = makeStale();
+      const toggled = applyStaleTicketToggle(stale, ['PROJ-1']);
+      expect(toggled.groups[0].tickets[0].included).toBe(true);
+      // Original untouched (pure).
+      expect(stale.groups[0].tickets[0].included).toBe(false);
+    });
+
+    it('leaves tickets not named untouched', () => {
+      const stale = makeStale({
+        groups: [{ issueType: 'Bug', ruleName: undefined, targetState: 'Done', resolution: undefined, tickets: [makeStaleTicket('PROJ-1'), makeStaleTicket('PROJ-2', true)] }],
+      });
+      const toggled = applyStaleTicketToggle(stale, ['PROJ-1']);
+      expect(toggled.groups[0].tickets[0].included).toBe(true);
+      expect(toggled.groups[0].tickets[1].included).toBe(true); // was already true, untouched
+    });
+  });
+
+  describe('buildStaleReviewSection', () => {
+    it('renders eligible tickets with a positive toggle link and the ineligible note for others', () => {
+      const stale = makeStale({
+        ineligible: [{ key: 'PROJ-9', summary: 'Old finding', currentStatus: 'Open', note: 'no cleanup rule configured for PROJ/Task' }],
+      });
+      const rendered = buildStaleReviewSection(stale);
+      expect(rendered).toContain('PROJ-1');
+      expect(rendered).toContain('PROJ-9');
+      expect(rendered).toContain('no cleanup rule configured for PROJ/Task');
+      expect(rendered).toContain('Stale');
+    });
+
+    it('returns an empty string when there is nothing to show', () => {
+      expect(buildStaleReviewSection({ groups: [], ineligible: [] })).toBe('');
+    });
   });
 });

@@ -199,22 +199,43 @@ function fullSourcePath(flaw: VeracodeFlaw): string | null {
 // unsanitized: issueId and cweId are already validated purely-numeric at parse time (ISSUE_ID_PATTERN
 // / CWE_ID_PATTERN) and severity is a locally-computed number, so none of the three can carry a
 // markdown-trigger character to begin with.
-export function buildDescriptionWiki(flaw: VeracodeFlaw): string {
-  const lines: string[] = [];
-
-  lines.push('### Severity');
+// Shared by buildDescriptionWiki()/buildGroupDescriptionWiki()/buildNewFindingsCommentWiki() — the
+// Severity/CWE/Description/Recommendation blocks render identically in all three (only the heading
+// level and which optional sections are included differ; the Location/Function layout around them
+// does not, so that part stays inline per caller rather than being forced into a shared shape).
+// The link text/URL are built entirely from the already-numeric-validated cweId, so no
+// sanitization is needed there; cweName sits after it on the same line (mid-line, not standalone),
+// so a bare sanitizeCellText() is the correct sanitizer for it.
+function pushSeverityAndCwe(lines: string[], flaw: VeracodeFlaw, headingPrefix: string): void {
+  lines.push(`${headingPrefix} Severity`);
   lines.push(`${severityLabel(flaw.severity)} (${flaw.severity})`);
   lines.push('');
 
   if (flaw.cweId) {
-    lines.push('### CWE');
-    // The link text/URL are built entirely from the already-numeric-validated cweId, so no
-    // sanitization is needed there; cweName sits after it on the same line (mid-line, not
-    // standalone), so a bare sanitizeCellText() is the correct sanitizer for it.
+    lines.push(`${headingPrefix} CWE`);
     const link = `[CWE-${flaw.cweId}](https://cwe.mitre.org/data/definitions/${flaw.cweId}.html)`;
     lines.push(`${link}${flaw.cweName ? ` — ${sanitizeCellText(flaw.cweName)}` : ''}`);
     lines.push('');
   }
+}
+
+function pushDescription(lines: string[], flaw: VeracodeFlaw, headingPrefix: string): void {
+  lines.push(`${headingPrefix} Description`);
+  lines.push(sanitizeStandaloneLine(flaw.description));
+  lines.push('');
+}
+
+function pushRecommendation(lines: string[], flaw: VeracodeFlaw, headingPrefix: string): void {
+  if (!flaw.recommendation) return;
+  lines.push(`${headingPrefix} Recommendation`);
+  lines.push(sanitizeStandaloneLine(flaw.recommendation));
+  lines.push('');
+}
+
+export function buildDescriptionWiki(flaw: VeracodeFlaw): string {
+  const lines: string[] = [];
+
+  pushSeverityAndCwe(lines, flaw, '###');
 
   lines.push('### Location');
   lines.push(`Module: ${sanitizeCellText(flaw.module)}`);
@@ -223,15 +244,8 @@ export function buildDescriptionWiki(flaw: VeracodeFlaw): string {
   if (flaw.functionPrototype) lines.push(`Function: ${sanitizeCellText(flaw.functionPrototype)}`);
   lines.push('');
 
-  lines.push('### Description');
-  lines.push(sanitizeStandaloneLine(flaw.description));
-  lines.push('');
-
-  if (flaw.recommendation) {
-    lines.push('### Recommendation');
-    lines.push(sanitizeStandaloneLine(flaw.recommendation));
-    lines.push('');
-  }
+  pushDescription(lines, flaw, '###');
+  pushRecommendation(lines, flaw, '###');
 
   lines.push('### Veracode Issue ID');
   lines.push(flaw.issueId);
@@ -245,19 +259,165 @@ export function buildLabels(flaw: VeracodeFlaw, templateLabels: string[] = []): 
   return [...new Set([...own, ...templateLabels])];
 }
 
+// --- Folding (grouping same-line flaws) ---------------------------------------------------------
+//
+// R9/R12: flaws sharing a source file + line number fold into one review row / one ticket,
+// regardless of CWE or category, UNLESS either sourceFile or line is missing — a flaw with no
+// location never folds with anything, even another flaw that also lacks a location (each such flaw
+// stays its own singleton group, never grouped with another missing-location flaw either).
+
+// The `::` separator between the path and file segments is required: bare concatenation (the
+// pattern fullSourcePath() uses for *display*, where a collision is only cosmetic) lets two flaws
+// in genuinely different locations produce the same key — e.g. path `src/foo/` + file `bar.js`
+// versus path `src/foo/bar.` + file `js` both concatenate to `src/foo/bar.js`, but with `::`
+// inserted between path and file they key as `src/foo/::bar.js:10` and `src/foo/bar.::js:10`
+// respectively, which differ.
+function groupKey(flaw: VeracodeFlaw): string | null {
+  if (flaw.sourceFile == null || flaw.line == null) return null;
+  return `${flaw.sourceFilePath ?? ''}::${flaw.sourceFile}:${flaw.line}`;
+}
+
+/**
+ * Groups flaws that share a source file + line number (R9). A flaw missing either field is never
+ * folded with another flaw (R12) — including another flaw that also lacks a location — so it
+ * always comes back as its own singleton group. Group order follows first-occurrence order of each
+ * group's first member in the input; members within a group keep their relative input order.
+ */
+export function groupFlawsByLocation(flaws: VeracodeFlaw[]): VeracodeFlaw[][] {
+  const groups: VeracodeFlaw[][] = [];
+  const keyToGroup = new Map<string, VeracodeFlaw[]>();
+  for (const flaw of flaws) {
+    const key = groupKey(flaw);
+    if (key === null) {
+      groups.push([flaw]);
+      continue;
+    }
+    const existing = keyToGroup.get(key);
+    if (existing) {
+      existing.push(flaw);
+    } else {
+      const group = [flaw];
+      keyToGroup.set(key, group);
+      groups.push(group);
+    }
+  }
+  return groups;
+}
+
+/**
+ * Group-aware label builder (R10): unions every member flaw's own `buildLabels()` output (so one
+ * `veracode-issue-<id>` per folded flaw, one `cwe-<id>` per distinct CWE among them — a repeated
+ * CWE across members contributes only one label since both the per-flaw call and the outer `Set`
+ * dedupe), then merges in template labels and dedupes again.
+ */
+export function buildGroupLabels(group: VeracodeFlaw[], templateLabels: string[] = []): string[] {
+  const own = new Set<string>();
+  for (const flaw of group) {
+    for (const label of buildLabels(flaw)) own.add(label);
+  }
+  return [...new Set([...own, ...templateLabels])];
+}
+
+/**
+ * Group-aware summary builder. A singleton group renders identically to `buildSummary()`. A
+ * multi-flaw group lists every folded issue id, keeps the (shared) file:line location, uses the
+ * first member's short label, and notes how many additional flaws are folded in.
+ */
+export function buildGroupSummary(group: VeracodeFlaw[]): string {
+  const first = group[0];
+  if (group.length === 1) return buildSummary(first);
+  const ref = fileRef(first);
+  const lineSuffix = first.line != null ? `:${first.line}` : '';
+  const shortLabel = deriveShortLabel(first.categoryName, first.cweName);
+  const ids = group.map(f => f.issueId).join(', ');
+  return `${ids} - ${ref}${lineSuffix} - ${shortLabel} (+${group.length - 1} more)`;
+}
+
+/**
+ * Group-aware description builder (R10): hoists the shared file+line `### Location` once (all
+ * members share it by construction — see `groupKey()`), then renders each folded flaw's own
+ * severity/CWE/description/recommendation under its own `### Issue <id>` heading. Every untrusted
+ * field is routed through the same `sanitizeCellText()`/`sanitizeStandaloneLine()` sanitizers
+ * `buildDescriptionWiki()` uses — no raw string concatenation bypasses either sanitizer layer — and
+ * the combined Markdown is converted once via `markdownToJiraWiki()` at the end, same as the
+ * single-flaw path.
+ */
+export function buildGroupDescriptionWiki(group: VeracodeFlaw[]): string {
+  const first = group[0];
+  const lines: string[] = [];
+
+  lines.push('### Location');
+  lines.push(`Module: ${sanitizeCellText(first.module)}`);
+  const path = fullSourcePath(first);
+  if (path) lines.push(`File: ${path}${first.line != null ? `:${first.line}` : ''}`);
+  lines.push('');
+
+  for (const flaw of group) {
+    lines.push(`### Issue ${flaw.issueId}`);
+    lines.push('');
+
+    pushSeverityAndCwe(lines, flaw, '####');
+
+    if (flaw.functionPrototype) {
+      lines.push(`Function: ${sanitizeCellText(flaw.functionPrototype)}`);
+      lines.push('');
+    }
+
+    pushDescription(lines, flaw, '####');
+    pushRecommendation(lines, flaw, '####');
+  }
+
+  return markdownToJiraWiki(lines.join('\n'));
+}
+
+/**
+ * U3/R13: "update existing tickets"' summarizing-comment body — one `### Issue <id>` block per
+ * newly-added flaw (severity, CWE, description; no `### Location` — the ticket the comment is
+ * posted to already carries it). Same sanitize-then-convert-once pattern as
+ * `buildGroupDescriptionWiki()`: every untrusted field routed through `sanitizeCellText()`/
+ * `sanitizeStandaloneLine()`, the whole thing authored as Markdown and converted via
+ * `markdownToJiraWiki()` exactly once at the end — `addComment()` sends its `body` argument to Jira
+ * verbatim with no sanitization of its own, so this function is the only thing standing between a
+ * crafted report field and a live Jira-wiki-markup injection in the posted comment (see
+ * `docs/solutions/security-issues/` for the prior history of exactly this vulnerability shape).
+ * `newFlaws` is expected to be the subset of a group's members whose id was actually newly added
+ * this run — the caller (reportImportHandler.ts's `executeUpdateExistingTickets`) is responsible
+ * for that filtering; this function itself renders whatever it's given.
+ */
+export function buildNewFindingsCommentWiki(newFlaws: VeracodeFlaw[]): string {
+  const lines: string[] = [];
+  lines.push(`New finding(s) detected on this line since the ticket was created:`);
+  lines.push('');
+
+  for (const flaw of newFlaws) {
+    lines.push(`### Issue ${flaw.issueId}`);
+    lines.push('');
+
+    pushSeverityAndCwe(lines, flaw, '####');
+    pushDescription(lines, flaw, '####');
+  }
+
+  return markdownToJiraWiki(lines.join('\n'));
+}
+
 // Lives here (rather than in sessionState.ts, where the other session-related types live) so that
 // reportImportHandler.ts's shared buildReviewRows() can produce it directly without a type-only
 // circular import between this file and sessionState.ts. sessionState.ts re-exports the type for
 // callers that expect it there.
 export interface VeracodeReviewRow {
   id: string; // '1'..'N' new candidates, 'A1'..'Am' already-ticketed
-  issueId: string;
+  issueIds: string[]; // one or more folded Veracode issue ids (R9/R10) — a non-folded row has length 1
   severity: number;
   severityLabelText: string;
   cweId: string | null;
   summary: string;
   labels: string[];
-  descriptionWiki: string;
+  // U4/R6-R7: the folded group itself, kept so the full ticket description — expensive to build
+  // (markdownToJiraWiki() across every member flaw's own description/recommendation/CWE) — is
+  // built lazily via buildGroupDescriptionWiki() only for a row the user actually confirms into
+  // creation (veracodeHandler.ts's buildTicketFields), rather than eagerly for every "new"
+  // candidate the report matched, most of which a paged review screen never even shows.
+  sourceGroup: VeracodeFlaw[];
   existingTicketKey: string | null;
   included: boolean; // whether this row will be (re)created if the batch runs
 }

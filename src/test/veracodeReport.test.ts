@@ -3,6 +3,11 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { parseVeracodeReport, filterFlaws, assertSafeVeracodeXml } from '../utils/veracodeReport';
 import { deriveShortLabel, buildSummary, buildDescriptionWiki, buildLabels } from '../utils/veracodeReport';
+import {
+  groupFlawsByLocation, buildGroupLabels, buildGroupDescriptionWiki, buildGroupSummary,
+  buildNewFindingsCommentWiki,
+  type VeracodeFlaw,
+} from '../utils/veracodeReport';
 
 const fixture = (name: string) =>
   readFileSync(join(__dirname, 'fixtures', 'veracode', name), 'utf-8');
@@ -365,3 +370,250 @@ describe('buildLabels', () => {
 // chunkIssueIds/buildDedupJql/extractDedupMap/buildReviewRows were Veracode-local wrappers around
 // the shared primitives in reportImport.ts; they've been removed now that veracodeHandler.ts calls
 // those shared primitives directly (KTD2) — see reportImport.test.ts for their tests.
+
+// U1 — folding same-line flaws into a single grouped ticket. `makeFlaw` builds a full VeracodeFlaw
+// with sensible defaults so each test only needs to override the fields it cares about (rather than
+// relying on fixture XML, which can't easily express the missing-location / multi-CWE-at-one-line
+// cases these tests need).
+function makeFlaw(overrides: Partial<VeracodeFlaw> & { issueId: string }): VeracodeFlaw {
+  return {
+    severity: 4,
+    categoryName: 'SQL Injection',
+    cweId: '89',
+    cweName: "Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
+    description: 'Some description.',
+    recommendation: 'Some recommendation.',
+    module: 'ExampleApp.war',
+    sourceFile: 'ExampleOrderDao.java',
+    sourceFilePath: 'com/example/webapp/dao/',
+    line: 88,
+    scope: null,
+    functionPrototype: null,
+    remediationStatus: 'New',
+    ...overrides,
+  };
+}
+
+describe('groupFlawsByLocation', () => {
+  it('folds two flaws sharing the same source file and line into one group, regardless of CWE or category', () => {
+    const a = makeFlaw({
+      issueId: '1', cweId: '89', categoryName: 'SQL Injection',
+    });
+    const b = makeFlaw({
+      issueId: '2', cweId: '79', categoryName: 'Cross-Site Scripting',
+    });
+    const groups = groupFlawsByLocation([a, b]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].map(f => f.issueId)).toEqual(['1', '2']);
+  });
+
+  it('does not fold flaws at the same line in different files', () => {
+    const a = makeFlaw({ issueId: '1', sourceFile: 'Foo.java', line: 10 });
+    const b = makeFlaw({ issueId: '2', sourceFile: 'Bar.java', line: 10 });
+    const groups = groupFlawsByLocation([a, b]);
+    expect(groups).toHaveLength(2);
+  });
+
+  it('never folds a flaw with a null sourceFile, even with an otherwise-identical line in another flaw', () => {
+    const a = makeFlaw({ issueId: '1', sourceFile: null, line: 10 });
+    const b = makeFlaw({ issueId: '2', sourceFile: null, line: 10 });
+    const groups = groupFlawsByLocation([a, b]);
+    // Both lack a source file, so neither folds with the other OR with itself-in-spirit — each stays
+    // its own singleton group.
+    expect(groups).toHaveLength(2);
+    expect(groups.every(g => g.length === 1)).toBe(true);
+  });
+
+  it('never folds a flaw with a null line, even with an otherwise-identical source file in another flaw', () => {
+    const a = makeFlaw({ issueId: '1', sourceFile: 'Foo.java', line: null });
+    const b = makeFlaw({ issueId: '2', sourceFile: 'Foo.java', line: null });
+    const groups = groupFlawsByLocation([a, b]);
+    expect(groups).toHaveLength(2);
+    expect(groups.every(g => g.length === 1)).toBe(true);
+  });
+
+  it('does not fold two flaws whose sourceFilePath+sourceFile concatenation collides without the "::" separator', () => {
+    // Naive concatenation (sourceFilePath + sourceFile) would produce the identical string
+    // "src/foo/bar.js" for both of these, even though the path/file split is genuinely different.
+    const a = makeFlaw({ issueId: '1', sourceFilePath: 'src/foo/', sourceFile: 'bar.js', line: 10 });
+    const b = makeFlaw({ issueId: '2', sourceFilePath: 'src/foo/bar.', sourceFile: 'js', line: 10 });
+    const groups = groupFlawsByLocation([a, b]);
+    expect(groups).toHaveLength(2);
+  });
+
+  it('preserves first-occurrence group order and in-group member order across a mixed list', () => {
+    const a1 = makeFlaw({ issueId: '1', sourceFile: 'A.java', line: 1 });
+    const b1 = makeFlaw({ issueId: '2', sourceFile: 'B.java', line: 2 });
+    const a2 = makeFlaw({ issueId: '3', sourceFile: 'A.java', line: 1 });
+    const groups = groupFlawsByLocation([a1, b1, a2]);
+    expect(groups).toHaveLength(2);
+    expect(groups[0].map(f => f.issueId)).toEqual(['1', '3']);
+    expect(groups[1].map(f => f.issueId)).toEqual(['2']);
+  });
+});
+
+describe('buildGroupLabels', () => {
+  it('unions veracode-issue-<id> for every folded flaw', () => {
+    const a = makeFlaw({ issueId: '1', cweId: '89' });
+    const b = makeFlaw({ issueId: '2', cweId: '89' });
+    const labels = buildGroupLabels([a, b]);
+    expect(labels).toContain('veracode-issue-1');
+    expect(labels).toContain('veracode-issue-2');
+  });
+
+  it('contributes one cwe-<id> label per distinct CWE among the group, deduping a repeated CWE', () => {
+    const a = makeFlaw({ issueId: '1', cweId: '89' });
+    const b = makeFlaw({ issueId: '2', cweId: '89' }); // same CWE as a — should not duplicate
+    const c = makeFlaw({ issueId: '3', cweId: '79' }); // distinct CWE — should add its own label
+    const labels = buildGroupLabels([a, b, c]);
+    expect(labels.filter(l => l === 'cwe-89')).toHaveLength(1);
+    expect(labels).toContain('cwe-79');
+  });
+
+  it('merges in template labels and de-duplicates', () => {
+    const a = makeFlaw({ issueId: '1', cweId: '89' });
+    const b = makeFlaw({ issueId: '2', cweId: '79' });
+    const labels = buildGroupLabels([a, b], ['security', 'veracode']);
+    expect(labels).toEqual(['veracode', 'veracode-issue-1', 'cwe-89', 'veracode-issue-2', 'cwe-79', 'security']);
+  });
+
+  it('a flaw missing a CWE contributes no cwe-<id> label but its issue id still appears', () => {
+    const a = makeFlaw({ issueId: '1', cweId: null });
+    const b = makeFlaw({ issueId: '2', cweId: '89' });
+    const labels = buildGroupLabels([a, b]);
+    expect(labels).toContain('veracode-issue-1');
+    expect(labels).toContain('cwe-89');
+    expect(labels.filter(l => l.startsWith('cwe-'))).toEqual(['cwe-89']);
+  });
+});
+
+describe('buildGroupDescriptionWiki', () => {
+  it("combines both flaws' sections (severity, CWE, description, recommendation) under their own issue heading, hoisting the shared location once", () => {
+    const a = makeFlaw({
+      issueId: '1', severity: 5, cweId: '89', description: 'First flaw description.', recommendation: 'First recommendation.',
+    });
+    const b = makeFlaw({
+      issueId: '2', severity: 3, cweId: '79', description: 'Second flaw description.', recommendation: 'Second recommendation.',
+    });
+    const wiki = buildGroupDescriptionWiki([a, b]);
+
+    // Location hoisted once (both flaws share module/sourceFile/line via makeFlaw defaults).
+    expect(wiki.match(/h3\. Location/g)).toHaveLength(1);
+    expect(wiki).toContain('File: com/example/webapp/dao/ExampleOrderDao.java:88');
+
+    // Each flaw gets its own issue section with its own severity/CWE/description/recommendation.
+    expect(wiki).toContain('h3. Issue 1');
+    expect(wiki).toContain('h4. Severity\nVery High (5)');
+    expect(wiki).toContain('[CWE-89|https://cwe.mitre.org/data/definitions/89.html]');
+    expect(wiki).toContain(': First flaw description.');
+    expect(wiki).toContain(': First recommendation.');
+
+    expect(wiki).toContain('h3. Issue 2');
+    expect(wiki).toContain('h4. Severity\nMedium (3)');
+    expect(wiki).toContain('[CWE-79|https://cwe.mitre.org/data/definitions/79.html]');
+    expect(wiki).toContain(': Second flaw description.');
+    expect(wiki).toContain(': Second recommendation.');
+  });
+
+  it('omits the Recommendation and CWE sections for a folded flaw missing that data, independently per flaw', () => {
+    const a = makeFlaw({ issueId: '1', cweId: '89', recommendation: 'Has a recommendation.' });
+    const b = makeFlaw({ issueId: '2', cweId: null, recommendation: null });
+    const wiki = buildGroupDescriptionWiki([a, b]);
+    // Issue 1 keeps its recommendation and CWE; Issue 2 has neither.
+    const issue2Section = wiki.split('h3. Issue 2')[1];
+    expect(issue2Section).not.toContain('h4. CWE');
+    expect(issue2Section).not.toContain('h4. Recommendation');
+  });
+
+  it('routes every untrusted field (module, description, recommendation) in a folded group through the existing sanitizers, never a raw concatenation bypass', () => {
+    const payload = 'Injected\n# Fake Heading\n| a | b |\n[click me](http://evil.example) *bold* ~~strike~~'
+      + '\n-struck- +underline+ ^super^ ??cite?? {quote}FAKE{quote} !http://evil.example/t.gif!';
+    const a = makeFlaw({
+      issueId: '1', module: `Evil | a | b | [click me](http://evil.example) *bold*`, description: payload, recommendation: payload,
+    });
+    const b = makeFlaw({ issueId: '2', description: 'clean' });
+    const wiki = buildGroupDescriptionWiki([a, b]);
+
+    expect(wiki).not.toContain('h1. Fake Heading');
+    expect(wiki).not.toContain('||a||b||');
+    expect(wiki).not.toContain('[click me|http://evil.example]');
+    expect(wiki).not.toContain('*bold*');
+    expect(wiki).not.toContain('~~strike~~');
+    expect(wiki).not.toContain('-strike-');
+    expect(wiki).not.toContain('{quote}');
+    expect(wiki).not.toMatch(/[+^?{}!]/);
+  });
+
+  it('a single-member group still renders correctly (folding is a superset of the unfolded case)', () => {
+    const a = makeFlaw({ issueId: '1' });
+    const wiki = buildGroupDescriptionWiki([a]);
+    expect(wiki).toContain('h3. Issue 1');
+    expect(wiki).toContain('h4. Severity');
+  });
+});
+
+describe('buildNewFindingsCommentWiki (U3/R13)', () => {
+  it('renders one "Issue <id>" section per newly-added flaw with its severity, CWE, and description', () => {
+    const a = makeFlaw({ issueId: '1', severity: 5, cweId: '89', cweName: 'SQL Injection', description: 'Untrusted input reaches a query.' });
+    const wiki = buildNewFindingsCommentWiki([a]);
+
+    expect(wiki).toContain('h3. Issue 1');
+    expect(wiki).toContain('h4. Severity\nVery High (5)');
+    expect(wiki).toContain('[CWE-89|https://cwe.mitre.org/data/definitions/89.html]');
+    expect(wiki).toContain(': Untrusted input reaches a query.');
+    // No Location section — the ticket the comment is posted to already carries it.
+    expect(wiki).not.toContain('Location');
+  });
+
+  it('renders one section per flaw when multiple new ids are given', () => {
+    const a = makeFlaw({ issueId: '1' });
+    const b = makeFlaw({ issueId: '2' });
+    const wiki = buildNewFindingsCommentWiki([a, b]);
+    expect(wiki).toContain('h3. Issue 1');
+    expect(wiki).toContain('h3. Issue 2');
+  });
+
+  it('omits the CWE section for a flaw with no cweId', () => {
+    const a = makeFlaw({ issueId: '1', cweId: null });
+    const wiki = buildNewFindingsCommentWiki([a]);
+    expect(wiki).not.toContain('h4. CWE');
+  });
+
+  it('renders nothing but the intro line for an empty list', () => {
+    const wiki = buildNewFindingsCommentWiki([]);
+    expect(wiki).not.toContain('h3. Issue');
+  });
+
+  it('a crafted description containing a Jira-native markup trigger cannot survive into the comment body', () => {
+    const payload = 'Injected\n# Fake Heading\n| a | b |\n[click me](http://evil.example) *bold* ~~strike~~'
+      + '\n-struck- +underline+ ^super^ ??cite?? {quote}FAKE{quote} !http://evil.example/t.gif!';
+    const a = makeFlaw({ issueId: '1', cweName: `Evil | a | b | [click me](http://evil.example)`, description: payload });
+    const wiki = buildNewFindingsCommentWiki([a]);
+
+    expect(wiki).not.toContain('h1. Fake Heading');
+    expect(wiki).not.toContain('||a||b||');
+    expect(wiki).not.toContain('[click me|http://evil.example]');
+    expect(wiki).not.toContain('*bold*');
+    expect(wiki).not.toContain('~~strike~~');
+    expect(wiki).not.toContain('-strike-');
+    expect(wiki).not.toContain('{quote}');
+    expect(wiki).not.toMatch(/[+^?{}!]/);
+  });
+});
+
+describe('buildGroupSummary', () => {
+  it('matches buildSummary() exactly for a singleton group', () => {
+    const a = makeFlaw({ issueId: '1' });
+    expect(buildGroupSummary([a])).toBe(buildSummary(a));
+  });
+
+  it('lists every folded issue id and notes how many additional flaws are folded in', () => {
+    const a = makeFlaw({ issueId: '1', sourceFile: 'Foo.java', line: 42, categoryName: 'SQL Injection', cweName: null });
+    const b = makeFlaw({ issueId: '2', sourceFile: 'Foo.java', line: 42, categoryName: 'SQL Injection', cweName: null });
+    const c = makeFlaw({ issueId: '3', sourceFile: 'Foo.java', line: 42, categoryName: 'SQL Injection', cweName: null });
+    const summary = buildGroupSummary([a, b, c]);
+    expect(summary).toContain('1, 2, 3');
+    expect(summary).toContain('Foo.java:42');
+    expect(summary).toContain('(+2 more)');
+  });
+});

@@ -62,11 +62,14 @@ import type {
   TemplateGenerationReviewSession, TemplateGenerationCollisionSession,
   TemplateGenerationOfferCreateSession, TemplateGenerationAwaitSummarySession,
 } from './sessionState';
-import { AWAIT_ISSUE_TYPE_SESSION_KEY } from './jira/ticketContext';
-import { parseAwaitFreeTextReply, type AwaitIssueTypeSession, buildChatCommandLink, neutralizeMarkdownLinks, withLastTicket } from './sessionState';
+import { AWAIT_ISSUE_TYPE_SESSION_KEY, STALE_RESOLUTION_SESSION_KEY } from './jira/ticketContext';
+import {
+  parseAwaitFreeTextReply, type AwaitIssueTypeSession, buildChatCommandLink, neutralizeMarkdownLinks, withLastTicket,
+  type StaleResolutionAskSession,
+} from './sessionState';
 import { trustedChatMarkdown } from '../utils/chatMarkdown';
-import { handleVeracodeAwaitIssueType } from './jira/veracodeHandler';
-import { handleWaltzAwaitIssueType } from './jira/waltzHandler';
+import { handleVeracodeAwaitIssueType, handleVeracodeStaleResolution } from './jira/veracodeHandler';
+import { handleWaltzAwaitIssueType, handleWaltzStaleResolution } from './jira/waltzHandler';
 import { handleEmailAwaitIssueType } from './jira/emailHandler';
 
 // Shared by the combined template/issue-type selection block and the R6/KTD4 issue-type
@@ -1167,6 +1170,31 @@ export function createJiraParticipant(
           stream.markdown(message);
         }
         return awaitResult;
+      }
+    }
+
+    // U6: stale-ticket batch's own chained per-issue-type-group resolution ask — sibling to the
+    // shared issue-type ask above, but a numbered resolution pick (mirrors 'resolution-selection'
+    // below) rather than a free-text prompt. See StaleResolutionAskSession's own doc comment.
+    if (getActiveJiraSession(chatContext)?.kinds.includes('stale-resolution-selection')) {
+      const ask = ws.get<StaleResolutionAskSession>(STALE_RESOLUTION_SESSION_KEY);
+      if (ask) {
+        if (isSessionExpired(ask)) {
+          await ws.update(STALE_RESOLUTION_SESSION_KEY, undefined);
+          stream.markdown(SESSION_EXPIRED_MESSAGE);
+          return;
+        }
+        try {
+          if (ask.descriptorKind === 'veracode') {
+            return await handleVeracodeStaleResolution(request.prompt, ask, stream, ws, config.baseUrl);
+          }
+          return await handleWaltzStaleResolution(request.prompt, ask, stream, ws, config.baseUrl);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          logDiag('jira.participant', 'error', message, {});
+          stream.markdown(message);
+        }
+        return;
       }
     }
 
