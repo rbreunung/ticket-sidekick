@@ -206,6 +206,14 @@ in documented areas.
 concepts) with project-specific meaning. Relevant when orienting to the
 codebase or discussing domain concepts.
 
+## Known-Limitation Register
+
+[`docs/known-limitations.md`](docs/known-limitations.md) — consciously-deferred
+known limitations, each with a severity, checked periodically by a scheduled
+Routine rather than left to decay unnoticed. Relevant before adding a new
+"known limitation" note elsewhere, and before declaring a real fix for one
+already tracked there.
+
 ## Where documentation belongs
 
 New multi-step feature-flow detail belongs in the relevant domain doc —
