@@ -91,7 +91,7 @@ npm run compile   # TypeScript type check
 npm run test:e2e  # @vscode/test-electron participant tests (requires VS Code)
 ```
 
-Node.js is managed by **Volta** — use `~/.volta/bin/npm` if `npm` isn't on your PATH (e.g. in scripts or terminals that don't load the shell profile).
+Node.js is installed system-wide — use plain `npm` from your PATH. (Volta was previously used but has been removed; do not reference `~/.volta/bin/npm`.)
 
 **`npm test` must be green before every commit.** Run `npm run compile` to catch TypeScript errors first.
 
