@@ -24,7 +24,7 @@ import {
   isCancellation, pickEmailOption, buildImportReviewTable, buildStaleReviewSection,
   parseReviewInput, parseReviewPageNav, parseStaleTicketToggle, applyStaleTicketToggle,
   parseResolutionSelection, buildReviewPage, applyReviewSessionToggle,
-  isUpdateExistingTicketsReply, markRowsUpdatedExisting,
+  isUpdateExistingTicketsReply, markRowsUpdatedExisting, parseBulkNewRowReply, applyBulkNewRowSet,
   CURRENT_SESSION_SCHEMA_VERSION, isSessionExpired, SESSION_EXPIRED_MESSAGE,
   NO_ISSUE_TYPE, resolveTemplateIssueType, formatIssueTypeOptionLabel, buildChatCommandLink,
   type ImportTemplateSelectionSession, type ReviewSession, type ReviewTableColumn, type ReviewRowBase,
@@ -710,6 +710,18 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
   if (descriptor.updateExisting && isUpdateExistingTicketsReply(reply)) {
     const updated = await executeUpdateExistingTickets(session, ticketService, stream, descriptor, baseUrl);
     return streamImportReview(updated, stream, ws, descriptor, baseUrl);
+  }
+
+  // "Include all" / "Exclude all" — bulk-set every New row on the current page. Checked after
+  // page-nav (U4), the stale-ticket-key toggle (U6), and "update existing tickets" (U3/R13),
+  // before the row-id toggle parsing — its exact-match-only vocabulary can't collide with any of
+  // them (see parseBulkNewRowReply's own doc comment). Applies to `session.rows` only, never
+  // `allRows`, so it stays page-local exactly like a per-row New toggle. Not gated on any
+  // descriptor field — available to all three importers (shared renderer).
+  const bulkNewRow = parseBulkNewRowReply(reply);
+  if (bulkNewRow !== null) {
+    session.rows = applyBulkNewRowSet(session.rows, bulkNewRow);
+    return streamImportReview(session, stream, ws, descriptor, baseUrl);
   }
 
   const rowIds = session.rows.map(r => r.id);
