@@ -667,7 +667,7 @@ describe('"update existing tickets" bulk action (U3/R13)', () => {
     expect(client.addCommentCalls).toHaveLength(0);
   });
 
-  it('a per-row failure (comment post fails) is reported without aborting the rest of the batch', async () => {
+  it('a per-row failure (comment post fails) is reported without aborting the rest of the batch, and the already-committed label write is not reported as a total failure', async () => {
     const client = new MockJiraClient();
     wireStatefulLabels(client, { 'PROJ-3': [], 'PROJ-4': [] });
     client.addComment = async (issueKey: string, body: string) => {
@@ -687,10 +687,16 @@ describe('"update existing tickets" bulk action (U3/R13)', () => {
     // PROJ-4 still got its label + comment despite PROJ-3's failure.
     expect(client.addCommentCalls).toHaveLength(1);
     expect(client.addCommentCalls[0].issueKey).toBe('PROJ-4');
+    // Code-review fix: addMissingLabels() already committed PROJ-3's label write before addComment()
+    // failed — that write is not undone, and the failure is reported distinctly (⚠, not ✗) so the
+    // response doesn't read as if nothing happened to PROJ-3.
+    expect(client.updateIssueCalls.map(c => c.issueKey)).toContain('PROJ-3');
     const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls
       .map((c: unknown[]) => markdownText(c[0])).join('\n');
-    expect(text).toContain('✗');
+    expect(text).toContain('⚠');
+    expect(text).not.toContain('✗');
     expect(text).toContain('PROJ-3');
+    expect(text).toContain('label-only (comment failed)');
   });
 
   it('processes every already-ticketed row in allRows, not just the currently-visible page\'s rows', async () => {
@@ -1005,5 +1011,82 @@ describe('Stale-ticket review + transition (U6)', () => {
     await handleImportReviewReply('PROJ-123', reviewSession, ticketService, mockStream() as never, ws as never, staleDescriptor);
     expect(reviewSession.staleTickets?.groups[0].tickets[0].included).toBe(true);
     expect(reviewSession.rows.find(r => r.id === newRowId)!.included).toBe(rowIncludedBeforeKeyToggle); // untouched by the ticket-key reply
+  });
+
+  // Code-review fix regression test: a reply mixing a stale-ticket-key token with a row-id token in
+  // one message used to apply only the stale toggle and silently drop the row-id toggle — since a
+  // New row defaults to included:true, the row the user believed they'd excluded still got created.
+  it('a mixed reply combining a stale-ticket-key token with a row-id token applies both toggles', async () => {
+    vi.mocked(TemplateService).mockImplementation(() => ({
+      loadTemplates: vi.fn().mockReturnValue({
+        templates: [],
+        cleanupRules: [{ name: 'close-bugs', project: 'PROJ', issueType: 'Bug', targetState: 'Done', resolution: 'Fixed' }],
+      }),
+    }) as never);
+    mockSearches([makeStaleIssue('PROJ-123', 'Bug', ['1'])]);
+    const templateSession = makeSession({ items: [{ ref: '2' }], availableIssueTypes: ['Bug'] });
+    const ws = makeMockWs();
+    const staleDescriptor = makeStaleDescriptor();
+
+    await continueAfterImportIssueType('Bug', null, templateSession, client, ticketService, mockStream() as never, ws as never, staleDescriptor);
+    const reviewSession = ws.store[descriptor.sessionKeys.review] as ReviewSession<TestRow>;
+    const newRowId = reviewSession.rows.find(r => r.existingTicketKey === null)!.id; // "1", included by default
+
+    await handleImportReviewReply(`PROJ-123 ${newRowId}`, reviewSession, ticketService, mockStream() as never, ws as never, staleDescriptor);
+
+    expect(reviewSession.staleTickets?.groups[0].tickets[0].included).toBe(true); // stale toggle applied
+    expect(reviewSession.rows.find(r => r.id === newRowId)!.included).toBe(false); // row-id toggle also applied, not dropped
+  });
+
+  // Code-review fix regression test: the truncation-coverage warning used to be nested inside
+  // `stale.length > 0`, so it silently never rendered when a truncated search's checked candidates
+  // all turned out non-stale — defeating KTD10's "must not silently lose coverage" guarantee.
+  it('the truncation-coverage warning renders even when none of the checked candidates turned out stale', async () => {
+    vi.mocked(TemplateService).mockImplementation(() => ({
+      loadTemplates: vi.fn().mockReturnValue({ templates: [], cleanupRules: [] }),
+    }) as never);
+    vi.spyOn(ticketService, 'searchTicketsRaw').mockImplementation(async (jql: string) => {
+      if (jql.includes('labels in (')) return { issues: [], total: 0 };
+      if (jql.includes('labels = "test-marker"')) {
+        // The one checked candidate is still active (not stale), but the search itself hit the cap.
+        return { issues: [makeStaleIssue('PROJ-1', 'Bug', ['1'])], total: 200, isLast: false };
+      }
+      return { issues: [], total: 0 };
+    });
+    const staleDescriptor = makeStaleDescriptor(['1']); // '1' active -> PROJ-1 is not stale
+    const templateSession = makeSession({ items: [], availableIssueTypes: ['Bug'] });
+    const stream = mockStream();
+    const ws = makeMockWs();
+
+    await continueAfterImportIssueType('Bug', null, templateSession, client, ticketService, stream as never, ws as never, staleDescriptor);
+
+    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
+    expect(text).toContain('Checked the first');
+    expect(text).toContain('200');
+  });
+
+  // Code-review fix regression test: buildStaleTicketGroups() (and the synchronous
+  // TemplateService.loadTemplates() it calls internally) had no guard, unlike the dedup-search
+  // block right above it — a throw here used to propagate out and discard the whole in-progress
+  // review instead of degrading gracefully.
+  it('a failure inside buildStaleTicketGroups (e.g. a malformed templates file) degrades gracefully instead of discarding the whole review', async () => {
+    vi.mocked(TemplateService).mockImplementation(() => ({
+      loadTemplates: vi.fn().mockImplementation(() => { throw new Error('Malformed .jira-templates.json'); }),
+    }) as never);
+    mockSearches([makeStaleIssue('PROJ-1', 'Bug', ['1'])]);
+    const templateSession = makeSession({ items: [{ ref: '2' }], availableIssueTypes: ['Bug'] });
+    const stream = mockStream();
+    const ws = makeMockWs();
+    const staleDescriptor = makeStaleDescriptor();
+
+    await continueAfterImportIssueType('Bug', null, templateSession, client, ticketService, stream as never, ws as never, staleDescriptor);
+
+    // The review session survived and was rendered/persisted — not discarded by the throw.
+    const reviewSession = ws.store[descriptor.sessionKeys.review] as ReviewSession<TestRow> | undefined;
+    expect(reviewSession).toBeDefined();
+    expect(reviewSession!.staleTickets).toBeUndefined();
+
+    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => markdownText(c[0])).join('\n');
+    expect(text).toContain('could not check for stale tickets');
   });
 });

@@ -506,29 +506,55 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
 
     if (staleResult.searchFailed) {
       stream.markdown('_Warning: could not check for stale tickets — proceeding without a stale-ticket section._\n\n');
-    } else if (staleResult.stale.length > 0) {
+    } else {
+      // Code-review fix: hoisted out of the `stale.length > 0` branch below — this must render
+      // whenever the search was truncated, independent of how many of the checked tickets turned
+      // out stale, or KTD10's "must not silently lose coverage past one search page" guarantee is
+      // defeated on any project with >BATCH_LIMIT open marker-labeled tickets where none of the
+      // checked ones happen to be stale. Wording fixed too: `totalFound` is the total open
+      // marker-labeled ticket count the search matched, not a stale count.
       if (staleResult.truncated) {
-        stream.markdown(`_Found ${staleResult.totalFound} possibly-stale ticket(s) — showing the first ${staleResult.stale.length}._\n\n`);
+        stream.markdown(
+          `_Checked the first ${BATCH_LIMIT} of ${staleResult.totalFound} ticket(s) carrying the stale-check label` +
+          ` — ${staleResult.stale.length} looked stale, but coverage may be incomplete._\n\n`,
+        );
       }
-      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-      const grouped = await buildStaleTicketGroups(staleResult.stale, issueDetails, session.projectKey, jiraClient, workspaceRoot);
+      if (staleResult.stale.length > 0) {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+        // Code-review fix: buildStaleTicketGroups() (and the synchronous
+        // TemplateService.loadTemplates() it calls internally) had no guard here, unlike the
+        // dedup-search block above — a transient failure (auth blip, network timeout, malformed
+        // templates file) would propagate past the point where the prior template-selection
+        // session was already cleared and discard the whole in-progress review (the dedup work,
+        // the folded rows, the page the user was on). Degrade the same way
+        // `staleResult.searchFailed` already does instead of throwing.
+        try {
+          const grouped = await buildStaleTicketGroups(staleResult.stale, issueDetails, session.projectKey, jiraClient, workspaceRoot);
 
-      if (grouped.pendingGroups.length > 0) {
-        // R1/KTD15: descriptorKind is always 'veracode'/'waltz' here — email never sets
-        // descriptor.stale, so this branch is unreachable for it (erasure cast mirrors the one a
-        // few lines up for AwaitIssueTypeResume's own resumeSession).
-        const ask: StaleResolutionAskSession = {
-          descriptorKind: descriptor.descriptorKind as 'veracode' | 'waltz',
-          pendingGroups: grouped.pendingGroups,
-          resolvedGroups: grouped.resolvedGroups,
-          ineligible: grouped.ineligible,
-          reviewSession: reviewSession as unknown as VeracodeReviewSession | WaltzReviewSession,
-          schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
-        };
-        return streamStaleResolutionAsk(ask, stream, ws);
+          if (grouped.pendingGroups.length > 0) {
+            // R1/KTD15: descriptorKind is always 'veracode'/'waltz' here — email never sets
+            // descriptor.stale, so this branch is unreachable for it (erasure cast mirrors the one a
+            // few lines up for AwaitIssueTypeResume's own resumeSession).
+            const ask: StaleResolutionAskSession = {
+              descriptorKind: descriptor.descriptorKind as 'veracode' | 'waltz',
+              pendingGroups: grouped.pendingGroups,
+              resolvedGroups: grouped.resolvedGroups,
+              ineligible: grouped.ineligible,
+              reviewSession: reviewSession as unknown as VeracodeReviewSession | WaltzReviewSession,
+              schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
+            };
+            return streamStaleResolutionAsk(ask, stream, ws);
+          }
+
+          reviewSession = { ...reviewSession, staleTickets: { groups: grouped.resolvedGroups, ineligible: grouped.ineligible } };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          logDiag(descriptor.scope, 'warn', 'Could not check for stale tickets — proceeding without a stale-ticket section', {
+            projectKey: session.projectKey, error: message,
+          });
+          stream.markdown('_Warning: could not check for stale tickets — proceeding without a stale-ticket section._\n\n');
+        }
       }
-
-      reviewSession = { ...reviewSession, staleTickets: { groups: grouped.resolvedGroups, ineligible: grouped.ineligible } };
     }
   }
 
@@ -658,11 +684,20 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
   // the New/Already-ticketed sections' own row-id toggle parsing — so its disjoint vocabulary
   // (always hyphenated; row ids never are) is recognized first rather than falling through to
   // parseReviewInput's "didn't understand" path. See parseStaleTicketToggle's own doc comment.
+  //
+  // Code-review fix: a reply mixing a stale-ticket-key token with other tokens (row-id toggles,
+  // `post it`, `cancel`, ...) used to return here immediately once any stale key matched, silently
+  // dropping every other token — an excluded New row stayed included (default `included: true`)
+  // and still got created. Applying the stale toggle no longer short-circuits: any non-stale-key
+  // tokens continue on to the ordinary parsing below as `reply`.
   if (session.staleTickets) {
-    const staleKeys = parseStaleTicketToggle(reply, session.staleTickets);
-    if (staleKeys) {
-      session.staleTickets = applyStaleTicketToggle(session.staleTickets, staleKeys);
-      return streamImportReview(session, stream, ws, descriptor, baseUrl);
+    const staleToggle = parseStaleTicketToggle(reply, session.staleTickets);
+    if (staleToggle) {
+      session.staleTickets = applyStaleTicketToggle(session.staleTickets, staleToggle.matched);
+      if (staleToggle.remainder.trim().length === 0) {
+        return streamImportReview(session, stream, ws, descriptor, baseUrl);
+      }
+      reply = staleToggle.remainder;
     }
   }
 
@@ -863,24 +898,40 @@ export async function executeUpdateExistingTickets<TItem, TRow extends ReviewRow
   let updated = 0;
   let skipped = 0;
   let failed = 0;
+  let commentFailed = 0;
   const updatedKeys = new Set<string>();
 
-  for (const row of ticketedRows) {
+  async function updateOneRow(row: TRow): Promise<void> {
     const ticketKey = row.existingTicketKey!;
     try {
-      const ids = cfg.idsOf(row);
-      const labelsToAdd = ids.map(cfg.labelOf);
+      const ids = cfg!.idsOf(row);
+      const labelsToAdd = ids.map(cfg!.labelOf);
       const addedLabels = await ticketService.addMissingLabels(ticketKey, labelsToAdd);
       if (addedLabels.length === 0) {
         skipped++;
-        continue;
+        return;
       }
       // labelOf is expected to be injective (each id maps to its own distinct label) — recovering
       // which ids were newly added from which labels came back added, rather than requiring the
       // descriptor to also supply an inverse mapping function.
       const addedLabelSet = new Set(addedLabels);
-      const newIds = ids.filter(id => addedLabelSet.has(cfg.labelOf(id)));
-      await ticketService.addComment(ticketKey, cfg.buildCommentWiki(row, newIds), baseUrl);
+      const newIds = ids.filter(id => addedLabelSet.has(cfg!.labelOf(id)));
+      // Code-review fix: addMissingLabels() above has already committed its write — and is also
+      // this row's own idempotency check (see this function's own doc comment) — so a failure in
+      // addComment() below is NOT "nothing happened": a re-run will find the labels already
+      // present, silently skip this row, and never retry the comment. Give that its own try/catch,
+      // message, and counter instead of letting it fall into the generic ✗/failed branch, which
+      // would read as if the whole update never took effect.
+      try {
+        await ticketService.addComment(ticketKey, cfg!.buildCommentWiki(row, newIds), baseUrl);
+      } catch (commentErr) {
+        const message = commentErr instanceof Error ? commentErr.message : String(commentErr);
+        logDiag(descriptor.scope, 'warn', `Labels updated but comment failed — ${ticketKey}`, { issueKey: ticketKey, error: message });
+        stream.markdown(`⚠ ${formatKeyLink(ticketKey, baseUrl)} — labels updated but the summary comment could not be posted: ${message}\n\n`);
+        commentFailed++;
+        updatedKeys.add(ticketKey); // the labels did change — reflect that in the row's "Updated?" marker
+        return;
+      }
       stream.markdown(`✓ ${formatKeyLink(ticketKey, baseUrl)} — ${newIds.length} new finding(s) added\n\n`);
       updated++;
       updatedKeys.add(ticketKey);
@@ -892,12 +943,28 @@ export async function executeUpdateExistingTickets<TItem, TRow extends ReviewRow
     }
   }
 
+  // Code-review fix: process rows in bounded-concurrency batches instead of one sequential
+  // await-chain per row — a report with a few hundred already-ticketed rows (the New path is
+  // already tested at 120) used to turn one "update existing tickets" reply into that many
+  // sequential HTTP round trips (a GET + a conditional PUT + a POST each). Each row's own
+  // try/catch above is unchanged, so per-row outcomes/counts stay the same; only their emission
+  // order does (rows within a batch settle in whatever order their requests complete).
+  const UPDATE_EXISTING_CONCURRENCY = 8;
+  for (let i = 0; i < ticketedRows.length; i += UPDATE_EXISTING_CONCURRENCY) {
+    const batch = ticketedRows.slice(i, i + UPDATE_EXISTING_CONCURRENCY);
+    await Promise.all(batch.map(row => updateOneRow(row)));
+  }
+
   logDiag(
-    descriptor.scope, failed > 0 ? 'warn' : 'info',
-    `${descriptor.importLabel} update-existing-tickets complete — ${updated} updated, ${skipped} already up to date, ${failed} failed`,
-    { updated, skipped, failed },
+    descriptor.scope, (failed > 0 || commentFailed > 0) ? 'warn' : 'info',
+    `${descriptor.importLabel} update-existing-tickets complete — ${updated} updated, ${skipped} already up to date, ${commentFailed} label-only (comment failed), ${failed} failed`,
+    { updated, skipped, commentFailed, failed },
   );
-  stream.markdown(`${updated} ticket(s) updated, ${skipped} already up to date, ${failed} failed.\n\n`);
+  stream.markdown(
+    `${updated} ticket(s) updated, ${skipped} already up to date` +
+    (commentFailed > 0 ? `, ${commentFailed} label-only (comment failed)` : '') +
+    `, ${failed} failed.\n\n`,
+  );
 
   const marked = markRowsUpdatedExisting(session.rows, session.allRows, updatedKeys);
   return { ...session, rows: marked.rows, allRows: marked.allRows };

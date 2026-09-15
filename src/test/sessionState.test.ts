@@ -1053,18 +1053,25 @@ describe('Stale-ticket review section (U6)', () => {
 
   describe('parseStaleTicketToggle', () => {
     it('recognizes a full ticket-key reply naming an eligible stale ticket', () => {
-      expect(parseStaleTicketToggle('PROJ-1', makeStale())).toEqual(['PROJ-1']);
+      expect(parseStaleTicketToggle('PROJ-1', makeStale())).toEqual({ matched: ['PROJ-1'], remainder: '' });
     });
 
     it('is case-insensitive but returns the ticket\'s real-cased key', () => {
-      expect(parseStaleTicketToggle('proj-1', makeStale())).toEqual(['PROJ-1']);
+      expect(parseStaleTicketToggle('proj-1', makeStale())).toEqual({ matched: ['PROJ-1'], remainder: '' });
     });
 
     it('matches multiple ticket keys in one reply', () => {
       const stale = makeStale({
         groups: [{ issueType: 'Bug', ruleName: undefined, targetState: 'Done', resolution: undefined, tickets: [makeStaleTicket('PROJ-1'), makeStaleTicket('PROJ-2')] }],
       });
-      expect(parseStaleTicketToggle('PROJ-1 PROJ-2', stale)).toEqual(['PROJ-1', 'PROJ-2']);
+      expect(parseStaleTicketToggle('PROJ-1 PROJ-2', stale)).toEqual({ matched: ['PROJ-1', 'PROJ-2'], remainder: '' });
+    });
+
+    // Code-review fix regression test: a reply mixing a stale-ticket-key token with other tokens
+    // (row-id toggles, `post it`, ...) must preserve those other tokens in `remainder` rather than
+    // silently discarding them — the caller re-parses `remainder` instead of returning immediately.
+    it('preserves non-stale-key tokens as remainder for a mixed reply', () => {
+      expect(parseStaleTicketToggle('PROJ-1 3 7', makeStale())).toEqual({ matched: ['PROJ-1'], remainder: '3 7' });
     });
 
     it('never matches a row-id token (bare numeric "2" or already-ticketed "A1") — disjoint vocabulary', () => {
