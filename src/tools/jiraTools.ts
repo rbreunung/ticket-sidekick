@@ -12,7 +12,7 @@ import { attachmentsDirFor, ensureJiraContextGitignored, loadTicketToWorkspace }
 import { logDiag } from '../utils/diagLog';
 import { isSafeFilename, isSafePathSegment } from './pathSafety';
 import { RecentCallGuard, fingerprint } from './recentCallGuard';
-import { ATTACHMENT_SIZE_LIMIT, findAttachmentByFilename, formatFileSize } from '../utils/attachmentEligibility';
+import { ATTACHMENT_SIZE_LIMIT, findAttachmentByFilename, formatFileSize, inferContentType } from '../utils/attachmentEligibility';
 import {
   buildJiraNotConfiguredMessage,
   formatCommentsInFull,
@@ -927,29 +927,6 @@ class DownloadAttachmentTool implements vscode.LanguageModelTool<DownloadAttachm
       return textResult(`Could not download ${filename} from ${ticketKey}: ${message}`);
     }
   }
-}
-
-// KTD2/KTD5 (upload-attachment-to-ticket plan): no MIME header exists for a local file the way
-// email attachments carry one (see emlParser.ts's `att.mimeType ?? 'application/octet-stream'`),
-// so a local file's Content-Type is inferred from its extension instead, with the same generic
-// fallback. Covers the extensions `attachmentEligibility.ts`'s `DOWNLOADABLE_EXTENSIONS` already
-// treats as known document/text/archive types.
-const CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
-  '.txt': 'text/plain', '.log': 'text/plain', '.md': 'text/markdown', '.csv': 'text/csv',
-  '.html': 'text/html', '.css': 'text/css', '.xml': 'application/xml', '.json': 'application/json',
-  '.yaml': 'application/x-yaml', '.yml': 'application/x-yaml',
-  '.pdf': 'application/pdf', '.doc': 'application/msword',
-  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  '.xls': 'application/vnd.ms-excel',
-  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  '.ppt': 'application/vnd.ms-powerpoint',
-  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
-  '.zip': 'application/zip', '.gz': 'application/gzip', '.tar': 'application/x-tar',
-};
-
-function inferContentType(filePath: string): string {
-  return CONTENT_TYPE_BY_EXTENSION[path.extname(filePath).toLowerCase()] ?? 'application/octet-stream';
 }
 
 interface UploadAttachmentInput {

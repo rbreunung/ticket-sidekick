@@ -20,6 +20,31 @@ export const DOWNLOADABLE_EXTENSIONS = new Set([
 ]);
 export const ATTACHMENT_SIZE_LIMIT = 100 * 1024 * 1024;
 
+// upload-attachment-to-ticket plan (U2/U3): a local file being uploaded (chat flow or
+// jira_uploadAttachment) has no declared MIME type the way an email attachment does (see
+// emlParser.ts's `att.mimeType ?? 'application/octet-stream'`), so its Content-Type is inferred
+// from its extension instead, with the same generic fallback. Covers the extensions
+// `DOWNLOADABLE_EXTENSIONS` above already treats as known document/text/archive types. Shared by
+// both upload entry points so they never drift on what a given extension maps to.
+const CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
+  '.txt': 'text/plain', '.log': 'text/plain', '.md': 'text/markdown', '.csv': 'text/csv',
+  '.html': 'text/html', '.css': 'text/css', '.xml': 'application/xml', '.json': 'application/json',
+  '.yaml': 'application/x-yaml', '.yml': 'application/x-yaml',
+  '.pdf': 'application/pdf', '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.ppt': 'application/vnd.ms-powerpoint',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+  '.zip': 'application/zip', '.gz': 'application/gzip', '.tar': 'application/x-tar',
+};
+
+export function inferContentType(filename: string): string {
+  const ext = filename.includes('.') ? ('.' + filename.split('.').pop()!.toLowerCase()) : '';
+  return CONTENT_TYPE_BY_EXTENSION[ext] ?? 'application/octet-stream';
+}
+
 /** Sorts a ticket's attachments into what the default load path downloads automatically
  * vs. skips: oversized files (over `ATTACHMENT_SIZE_LIMIT`) are skipped regardless of type;
  * otherwise text/image MIME types and known extensions (`DOWNLOADABLE_EXTENSIONS`) download,

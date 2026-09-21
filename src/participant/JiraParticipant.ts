@@ -71,6 +71,8 @@ import { trustedChatMarkdown } from '../utils/chatMarkdown';
 import { handleVeracodeAwaitIssueType, handleVeracodeStaleResolution } from './jira/veracodeHandler';
 import { handleWaltzAwaitIssueType, handleWaltzStaleResolution } from './jira/waltzHandler';
 import { handleEmailAwaitIssueType } from './jira/emailHandler';
+import { handleUploadAttachment, handleUploadReviewReply, handleAwaitUploadTicketReply, UPLOAD_REVIEW_SESSION_KEY, AWAIT_UPLOAD_TICKET_SESSION_KEY } from './jira/uploadHandler';
+import type { UploadReviewSession, AwaitUploadTicketSession } from './sessionState';
 
 // Shared by the combined template/issue-type selection block and the R6/KTD4 issue-type
 // chat-ask's 'create' resume branch — both need to re-look-up a picked template by name (a
@@ -1670,6 +1672,22 @@ export function createJiraParticipant(
       }
     }
 
+    // Upload review — user replied confirm/cancel/other to the pre-upload confirmation (R6).
+    if (getActiveJiraSession(chatContext)?.kinds.includes('upload-review')) {
+      const session = ws.get<UploadReviewSession>(UPLOAD_REVIEW_SESSION_KEY);
+      if (session) {
+        return await handleUploadReviewReply(request.prompt, session, ticketService, stream, ws);
+      }
+    }
+
+    // Upload — awaiting an explicit ticket key (R5/KTD4), a plain free-text ask.
+    if (getActiveJiraSession(chatContext)?.kinds.includes('await-upload-ticket')) {
+      const session = ws.get<AwaitUploadTicketSession>(AWAIT_UPLOAD_TICKET_SESSION_KEY);
+      if (session) {
+        return await handleAwaitUploadTicketReply(request.prompt, session, stream, ws);
+      }
+    }
+
     // U5/R9: an empty invocation or an obvious greeting/help-shaped prompt is detected before
     // it's ever handed to the LLM intent parser — but only after every multi-turn session-tag
     // branch above has already had its chance to claim the turn (same ordering rule U4's
@@ -1782,6 +1800,19 @@ export function createJiraParticipant(
     if (intent.operation === 'listMyFilters') {
       try {
         return await handleListMyFilters(ticketService, config, stream, ws);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logDiag('jira.participant', 'error', message, {});
+        stream.markdown(message);
+      }
+      return;
+    }
+
+    // uploadAttachment has its own file/ticket resolution (R1-R5) — it must not go through the
+    // generic branch-then-last-ticket-then-ask fallback below, which has no concept of a file.
+    if (intent.operation === 'uploadAttachment') {
+      try {
+        return await handleUploadAttachment(request, chatContext, stream, ws, intent);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         logDiag('jira.participant', 'error', message, {});
