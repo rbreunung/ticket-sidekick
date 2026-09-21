@@ -36,14 +36,14 @@ execution: code
 
 **Chat flow (`@jira` upload)**
 
-- R1. When the user asks in chat to upload a file to a ticket, the flow resolves the target file from a file reference attached to the chat message, or, if none is attached, the file currently open and active in the editor.
-- R2. If no file resolves from a chat attachment or the active editor, and no absolute or relative path was given in the message, the flow opens a native multi-select file picker.
-- R3. When the user explicitly names an absolute or relative file path in the message, the flow uses that path directly, without consulting the chat attachment or active editor.
+- R1. When the user explicitly names an absolute or relative file path in the message, the flow uses that path directly. Otherwise, it resolves the target file(s) from any file references attached to the chat message — all of them, treated as a batch per R8, not just the first — or, if none is attached, the file currently open and active in the editor.
+- R2. If no file resolves from an explicit path, a chat attachment, or the active editor, the flow opens a native multi-select file picker.
+- R3. An explicit path named in the message (R1) always wins — the flow never consults the chat attachment or active editor when one is present.
 - R4. The flow resolves the target ticket key by checking, in order: an explicit ticket key in the message text; a ticket key embedded in the resolved file's name; the ticket last referenced in the current chat session.
 - R5. If no ticket key resolves from any source in R4, the flow asks the user explicitly which ticket to use rather than guessing.
 - R6. Before uploading, the flow shows a confirmation naming the file name(s), size(s), and target ticket, and proceeds only after the user confirms.
 - R7. A file the flow uploads must be at or under the existing 25 MB attachment size limit (`MAX_ATTACHMENT_BYTES`); an oversized file is rejected before upload with a message naming the file and the limit.
-- R8. When multiple files are selected via the picker, the flow uploads each to the same resolved ticket and reports per-file success or failure.
+- R8. When multiple files are selected via the picker or attached to the chat message, the flow uploads each to the same resolved ticket and reports per-file success or failure.
 
 **Language Model tool (`jira_uploadAttachment`)**
 
@@ -155,7 +155,7 @@ execution: code
   - `src/test/uploadHandler.test.ts` (handler-level cases, mocking `vscode` inline per `emailHandler.test.ts`'s precedent)
   - `src/test/JiraParticipant.test.ts` (intent-parsing cases for the new operation)
 - **Approach:**
-  1. File resolution order: a file reference on `request.references` (chat-attached file) → `vscode.window.activeTextEditor`'s document URI → an absolute/relative path found in `request.prompt`, resolved against the workspace root → `vscode.window.showOpenDialog({ canSelectMany: true })` when none of the above resolve (R1-R3; Covers AE2).
+  1. File resolution order (R1-R3; Covers AE2): an absolute/relative path found in `request.prompt` — the same `filePath` `llmHelpers.ts` already extracts via LLM intent parsing, not a second independent extractor — wins outright per R3. Only when no path is given: all file references on `request.references` (every chat-attached file, not just the first — R8) → else `vscode.window.activeTextEditor`'s document URI → else `vscode.window.showOpenDialog({ canSelectMany: true })`.
   2. Resolve the ticket via `resolveTicketKeyForUpload(request.prompt, resolvedFilename, parseLastTicketFromContext(context))` (U1). No match: build an `AwaitUploadTicketSession` from the already-resolved file(s), store it, ask in chat, and return `{ metadata: { jiraSession: { kinds: ['await-upload-ticket'] } } }` (KTD4).
   3. Read each resolved file's bytes (`vscode.workspace.fs.readFile`); if any file exceeds `MAX_ATTACHMENT_BYTES`, reject the whole batch before building a session, naming the oversized file(s) (R7; Covers AE1).
   4. Build the `UploadReviewSession`, store it, stream `buildUploadConfirmationMessage`, return `{ metadata: { jiraSession: { kinds: ['upload-review'] } } }` (KTD3).
@@ -164,14 +164,16 @@ execution: code
 - **Technical design (directional):**
   ```
   handleUploadAttachment(request, stream, ctx):
-    file = fromChatReference(request) ?? fromActiveEditor() ?? fromExplicitPath(request.prompt) ?? await pickFiles()
-    if !file: return
-    ticket = resolveTicketKeyForUpload(request.prompt, file.name, lastTicketKey(ctx))
-    if !ticket: return askForTicket(file)   // KTD4
-    return reviewAndConfirm(ticket, file)   // KTD3
+    files = fromExplicitPath(request.prompt) ?? fromChatReferences(request) ?? fromActiveEditor() ?? await pickFiles()
+    if !files: return
+    ticket = resolveTicketKeyForUpload(request.prompt, files[0].name, lastTicketKey(ctx))
+    if !ticket: return askForTicket(files)   // KTD4
+    return reviewAndConfirm(ticket, files)   // KTD3
   ```
 - **Test scenarios:**
   - No chat reference, no active editor, no path in the prompt: `showOpenDialog` is invoked with `canSelectMany: true`. Covers AE2.
+  - An explicit path in the prompt and an unrelated file open in the active editor: the explicit path wins, per R3.
+  - Two files attached to the chat message (`request.references` has two entries): both are resolved and carried into the `UploadReviewSession`, not just the first — per R1/R8.
   - A resolved file over 25 MB: the batch is rejected before a session is stored, naming the file and the limit. Covers AE1.
   - Three files resolved via the picker, all within the limit: `UploadReviewSession` carries all three; confirming uploads each and reports per-file outcomes. Covers AE4.
   - A resolved file with no ticket key anywhere: an `AwaitUploadTicketSession` is created and the chat asks explicitly, uploading nothing yet. Covers AE3.
