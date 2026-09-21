@@ -974,16 +974,20 @@ class UploadAttachmentTool implements vscode.LanguageModelTool<UploadAttachmentI
     if (!isSafePathSegment(ticketKey)) return textResult(`"${ticketKey}" is not a valid ticket key.`);
     if (!filePath) return textResult('A file path is required, e.g. report.pdf.');
 
+    // Reads directly rather than stat-then-read (code-review fix): a separate existence/size
+    // check before the read is a TOCTOU gap (the file could change or disappear in between) and
+    // costs a second filesystem round-trip for no benefit — the bytes this read returns are the
+    // same bytes uploaded below.
     const resolvedPath = this.resolvePath(filePath);
-    let stats: fs.Stats;
+    let bytes: Buffer;
     try {
-      stats = await fs.promises.stat(resolvedPath);
-    } catch {
-      return textResult(`"${filePath}" does not exist.`);
+      bytes = await fs.promises.readFile(resolvedPath);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      return textResult(code === 'EISDIR' ? `"${filePath}" is not a file.` : `"${filePath}" does not exist.`);
     }
-    if (!stats.isFile()) return textResult(`"${filePath}" is not a file.`);
-    if (stats.size > MAX_ATTACHMENT_BYTES) {
-      return textResult(`"${filePath}" is ${formatFileSize(stats.size)}, over the 25 MB size limit — not uploaded.`);
+    if (bytes.byteLength > MAX_ATTACHMENT_BYTES) {
+      return textResult(`"${filePath}" is ${formatFileSize(bytes.byteLength)}, over the 25 MB size limit — not uploaded.`);
     }
 
     const dupeKey = fingerprint(ticketKey, resolvedPath);
@@ -999,7 +1003,6 @@ class UploadAttachmentTool implements vscode.LanguageModelTool<UploadAttachmentI
     const { ticketService } = ctx;
 
     try {
-      const bytes = await fs.promises.readFile(resolvedPath);
       const filename = path.basename(resolvedPath);
       await ticketService.uploadAttachment(ticketKey, filename, inferContentType(filename), bytes.toString('base64'));
       logDiag('jira.tools', 'info', `Uploaded attachment — ${ticketKey}/${filename}`, { ticketKey, filename });

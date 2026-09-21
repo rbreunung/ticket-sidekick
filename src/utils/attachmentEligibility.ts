@@ -40,9 +40,14 @@ const CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
   '.zip': 'application/zip', '.gz': 'application/gzip', '.tar': 'application/x-tar',
 };
 
+/** Shared by `inferContentType` and `classifyAttachmentEligibility` so the two extension-based
+ * lookups below never derive "the extension" two different ways. */
+function extensionOf(filename: string): string {
+  return filename.includes('.') ? ('.' + filename.split('.').pop()!.toLowerCase()) : '';
+}
+
 export function inferContentType(filename: string): string {
-  const ext = filename.includes('.') ? ('.' + filename.split('.').pop()!.toLowerCase()) : '';
-  return CONTENT_TYPE_BY_EXTENSION[ext] ?? 'application/octet-stream';
+  return CONTENT_TYPE_BY_EXTENSION[extensionOf(filename)] ?? 'application/octet-stream';
 }
 
 /** Sorts a ticket's attachments into what the default load path downloads automatically
@@ -56,8 +61,7 @@ export function classifyAttachmentEligibility(
   const toSkip: JiraAttachment[] = [];
   for (const att of attachments) {
     if (att.size > ATTACHMENT_SIZE_LIMIT) { toSkip.push(att); continue; }
-    const ext = att.filename.includes('.') ? ('.' + att.filename.split('.').pop()!.toLowerCase()) : '';
-    const eligible = att.mimeType.startsWith('text/') || att.mimeType.startsWith('image/') || DOWNLOADABLE_EXTENSIONS.has(ext);
+    const eligible = att.mimeType.startsWith('text/') || att.mimeType.startsWith('image/') || DOWNLOADABLE_EXTENSIONS.has(extensionOf(att.filename));
     (eligible ? toDownload : toSkip).push(att);
   }
   return { toDownload, toSkip };

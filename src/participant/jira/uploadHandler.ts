@@ -64,18 +64,26 @@ async function resolveSourceUris(explicitFilePath: string | null, request: vscod
  * built if any file exceeds `MAX_ATTACHMENT_BYTES` or can't be read (AE1). Returns `null` on
  * rejection — the caller has already streamed the reason. */
 async function readPendingFiles(uris: vscode.Uri[], stream: vscode.ChatResponseStream): Promise<PendingUploadFile[] | null> {
+  // Reads run concurrently (code-review fix) — each file is an independent local read, so a
+  // multi-file batch (picker or multiple chat attachments, R8) doesn't wait on them one at a time.
+  const reads = await Promise.all(uris.map(async (uri) => {
+    const name = path.basename(uri.fsPath);
+    try {
+      return { name, bytes: await vscode.workspace.fs.readFile(uri) };
+    } catch (err) {
+      return { name, error: err instanceof Error ? err.message : String(err) };
+    }
+  }));
+
+  const failed = reads.find((r): r is { name: string; error: string } => 'error' in r);
+  if (failed) {
+    stream.markdown(`_Could not read "${failed.name}": ${failed.error}_`);
+    return null;
+  }
+
   const files: PendingUploadFile[] = [];
   const oversized: string[] = [];
-  for (const uri of uris) {
-    const name = path.basename(uri.fsPath);
-    let bytes: Uint8Array;
-    try {
-      bytes = await vscode.workspace.fs.readFile(uri);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      stream.markdown(`_Could not read "${name}": ${message}_`);
-      return null;
-    }
+  for (const { name, bytes } of reads as Array<{ name: string; bytes: Uint8Array }>) {
     if (bytes.byteLength > MAX_ATTACHMENT_BYTES) {
       oversized.push(`${name} (${formatFileSize(bytes.byteLength)})`);
       continue;
