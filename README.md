@@ -9,6 +9,8 @@ Two independent GitHub Copilot Chat participants — use one or both:
 
 Neither participant requires the other to be configured.
 
+Every core operation is also exposed as a GitHub Copilot **Agent Mode** tool (`jira_*`, `bitbucket_*`), so an agent can create tickets, update fields, review PRs, and more without the user typing `@jira`/`@bitbucket` at all — see [`docs/onboarding.md`](docs/onboarding.md) for the full tool list and how confirmation works.
+
 ---
 
 ## @jira — Jira
@@ -85,6 +87,7 @@ Open GitHub Copilot Chat and use `@jira`:
 | `@jira create from email` | Create a Jira ticket from an imported `.eml` file |
 | `@jira import veracode report` | Create Jira tickets from a Veracode Detailed Report XML export |
 | `@jira generate a template from PROJ-123 called "Billing Bug"` | Generate a reusable `.jira-templates.json` template from a reference ticket's fields — reviewed and confirmed before saving |
+| `@jira upload the report to PROJ-123` | Attach one or more local files to a ticket — shows a confirmation before uploading |
 
 ### Reading tickets
 
@@ -262,6 +265,38 @@ If you provide explicit literal text the preview is skipped and the comment is p
 ```
 
 The plugin infers which mode to use from your phrasing — `"write"`, `"draft"`, `"summarize"`, `"based on our discussion"`, and similar phrases trigger generation. Quoted text or direct statements post literally.
+
+### Uploading attachments
+
+Attach one or more local files to a ticket directly from chat:
+
+```text
+@jira upload the report to PROJ-123
+@jira upload screenshot.png
+```
+
+The file is resolved in this order:
+
+1. An explicit path in your prompt (workspace-relative or absolute)
+2. A file attached to the chat message (all attachments, if you attach more than one)
+3. Your active editor's file
+4. A multi-select file picker, if none of the above apply
+
+The ticket is resolved the same way as everywhere else: a key in your prompt, then a key embedded in the filename, then the last ticket referenced in the session — if none of those match, the plugin asks which ticket before continuing.
+
+Before anything uploads, a confirmation lists every file (name, size, full source path) and the target ticket:
+
+```text
+Upload the following to PROJ-123?
+
+- **report.pdf** (2.1 MB) — `/Users/jane/Downloads/report.pdf`
+
+Confirm · Cancel
+```
+
+Reply **"confirm"** to upload, **"cancel"** to discard. Each file reports its own success or failure — one failed upload in a batch doesn't stop the rest. Files over the 25 MB limit are rejected up front with a clear message and nothing is uploaded.
+
+For security, an explicit path you type must resolve inside your home directory and may not pass through a dotfile or dot-directory segment (e.g. `~/.ssh`, `~/.aws`) — files attached via the chat picker or your active editor aren't affected by this restriction.
 
 ### Transitions and bulk cleanup
 

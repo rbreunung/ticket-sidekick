@@ -70,6 +70,7 @@ dialog, is the real safety boundary.
 | `jira_transitionTicket` | Move a ticket to a target status | `ticketKey`, `targetStatus` | `resolution` |
 | `jira_loadTicket` | Download a ticket's description, comments, and attachments into `.jira-context/<key>/` | `ticketKey` | — |
 | `jira_downloadAttachment` | Download one named attachment into `.jira-context/<key>/attachments/`, bypassing `jira_loadTicket`'s eligibility filter | `ticketKey`, `filename` | — |
+| `jira_uploadAttachment` | Upload a local file as an attachment on a ticket | `ticketKey`, `filePath` | — |
 
 `fieldName` for `jira_updateField` accepts: `summary`, `description`,
 `priority`, `assignee`, `labels`, `components`, `fix version` — the same
@@ -92,15 +93,21 @@ LLM-supplied rather than typed by a human into chat:
   containing `/`, `\`, or `..`, since these values are interpolated
   unencoded into `JiraApiClient`/`BitbucketApiClient` request URLs and a
   crafted value could otherwise redirect a request to an unintended
-  endpoint on the same host.
+  endpoint on the same host. `jira_uploadAttachment`'s `filePath` is
+  additionally checked with `isAllowedUploadPath()`, which requires the
+  resolved, symlink-followed path to sit inside the user's home directory
+  and contain no dotfile/dotdir segment (e.g. `~/.ssh`, `~/.aws`) — an
+  LLM-supplied path is otherwise a way to read and exfiltrate an arbitrary
+  local file via a Jira attachment.
 - **Duplicate-write guard** ([`src/tools/recentCallGuard.ts`](../src/tools/recentCallGuard.ts)):
-  `jira_createTicket`, `jira_addComment`, and `bitbucket_postComment` each
-  create a new artifact per call rather than converging on an idempotent
-  end state, so a retried or looped Agent Mode call with identical inputs
-  is fingerprinted and skipped for one minute rather than creating a
-  duplicate ticket/comment. A call that fails (not-configured, a template
-  error, an API error) releases its claim immediately, so a genuine retry
-  after a real failure is never mistaken for a duplicate.
+  `jira_createTicket`, `jira_addComment`, `jira_uploadAttachment`, and
+  `bitbucket_postComment` each create a new artifact per call rather than
+  converging on an idempotent end state, so a retried or looped Agent Mode
+  call with identical inputs is fingerprinted and skipped for one minute
+  rather than creating a duplicate ticket/comment/attachment. A call that
+  fails (not-configured, a template error, an API error) releases its claim
+  immediately, so a genuine retry after a real failure is never mistaken for
+  a duplicate.
   `jira_loadTicket` and `jira_downloadAttachment` deliberately skip this
   guard: a repeat call overwrites the same file(s) on disk rather than
   creating a new artifact, so there is nothing to de-duplicate.
