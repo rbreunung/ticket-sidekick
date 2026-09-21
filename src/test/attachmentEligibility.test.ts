@@ -1,6 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { ATTACHMENT_SIZE_LIMIT, classifyAttachmentEligibility, dedupeByLatestFilename, findAttachmentByFilename, formatFileSize } from '../utils/attachmentEligibility';
+import { ATTACHMENT_SIZE_LIMIT, classifyAttachmentEligibility, dedupeByLatestFilename, findAttachmentByFilename, formatFileSize, inferContentType } from '../utils/attachmentEligibility';
 import type { JiraAttachment } from '../jira/IJiraClient';
+
+describe('inferContentType', () => {
+  it('maps a known extension to its MIME type', () => {
+    expect(inferContentType('report.pdf')).toBe('application/pdf');
+  });
+
+  it('is case-insensitive on the extension', () => {
+    expect(inferContentType('REPORT.PDF')).toBe('application/pdf');
+  });
+
+  it('falls back to application/octet-stream for an unknown extension', () => {
+    expect(inferContentType('archive.xyz')).toBe('application/octet-stream');
+  });
+
+  it('falls back to application/octet-stream for a file with no extension', () => {
+    expect(inferContentType('README')).toBe('application/octet-stream');
+  });
+});
 
 function makeAttachment(overrides: Partial<JiraAttachment>): JiraAttachment {
   return {

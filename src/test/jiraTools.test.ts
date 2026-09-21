@@ -10,6 +10,7 @@ import {
   buildDownloadAttachmentConfirmation,
   buildAttachmentNotFoundMessage,
   buildDownloadAttachmentResultMessage,
+  buildUploadAttachmentConfirmation,
   formatIssueTypeOptionsMessage,
   formatTemplateListMessage,
   formatWorkflowDiscoveryMessage,
@@ -122,6 +123,27 @@ describe('jira_downloadAttachment result message (R9/R10, KTD5)', () => {
     const message = buildDownloadAttachmentResultMessage('VSJI-38', 'report.log', 2);
     expect(message).toMatch(/share that filename/);
     expect(message).toMatch(/most recently created/);
+  });
+});
+
+describe('jira_uploadAttachment confirmation (R10: names ticket, file, and size)', () => {
+  it('names the ticket, file path, and size', () => {
+    const confirmation = buildUploadAttachmentConfirmation('VSJI-38', '/workspace/report.pdf', 2_097_152);
+    expect(confirmation.title).toContain('VSJI-38');
+    expect(confirmation.message).toContain('VSJI-38');
+    expect(confirmation.message).toContain('/workspace/report.pdf');
+    expect(confirmation.message).toContain('2.0 MB');
+  });
+});
+
+describe('jira_uploadAttachment tool registration (R9)', () => {
+  it('is declared under contributes.languageModelTools with ticketKey and filePath inputs', () => {
+    const pkg = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf-8'));
+    const tool = pkg.contributes.languageModelTools.find((t: { name: string }) => t.name === 'jira_uploadAttachment');
+    expect(tool).toBeDefined();
+    expect(tool.inputSchema.required).toEqual(['ticketKey', 'filePath']);
+    expect(tool.inputSchema.properties).toHaveProperty('ticketKey');
+    expect(tool.inputSchema.properties).toHaveProperty('filePath');
   });
 });
 

@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
-import { JiraApiClient } from '../jira/JiraApiClient';
+import * as fs from 'fs';
+import * as path from 'path';
+import { JiraApiClient, MAX_ATTACHMENT_BYTES } from '../jira/JiraApiClient';
 import type { JiraFilter } from '../jira/IJiraClient';
 import { ConfigService, type JiraConfig } from '../services/ConfigService';
 import { TicketService, renderFieldValue } from '../services/TicketService';
@@ -8,9 +10,9 @@ import { FieldResolver } from '../templates/FieldResolver';
 import { discoverAndCacheWorkflow, resolveAndApplyTransition } from '../services/WorkflowService';
 import { attachmentsDirFor, ensureJiraContextGitignored, loadTicketToWorkspace } from '../participant/jira/loadHandler';
 import { logDiag } from '../utils/diagLog';
-import { isSafeFilename, isSafePathSegment } from './pathSafety';
+import { isAllowedUploadPath, isSafeFilename, isSafePathSegment } from './pathSafety';
 import { RecentCallGuard, fingerprint } from './recentCallGuard';
-import { ATTACHMENT_SIZE_LIMIT, findAttachmentByFilename, formatFileSize } from '../utils/attachmentEligibility';
+import { ATTACHMENT_SIZE_LIMIT, findAttachmentByFilename, formatFileSize, inferContentType } from '../utils/attachmentEligibility';
 import {
   buildJiraNotConfiguredMessage,
   formatCommentsInFull,
@@ -23,6 +25,7 @@ import {
   buildDownloadAttachmentConfirmation,
   buildAttachmentNotFoundMessage,
   buildDownloadAttachmentResultMessage,
+  buildUploadAttachmentConfirmation,
   formatIssueTypeOptionsMessage,
   formatTemplateListMessage,
   formatWorkflowDiscoveryMessage,
@@ -926,6 +929,100 @@ class DownloadAttachmentTool implements vscode.LanguageModelTool<DownloadAttachm
   }
 }
 
+interface UploadAttachmentInput {
+  ticketKey: string;
+  filePath: string;
+}
+
+/** `jira_uploadAttachment` — the Agent Mode counterpart to the `@jira upload` chat flow
+ * (upload-attachment-to-ticket plan). KTD5: takes a fully explicit `filePath` (workspace-relative
+ * or absolute) with no auto-resolution and no picker — matching every other `jira_*` tool's
+ * statelessness (KTD6 above). KTD7: uses a `RecentCallGuard` like `AddCommentTool`/`CreateTicketTool`,
+ * since Jira does not dedupe attachments by filename (see `findAttachmentByFilename`'s doc comment
+ * in `attachmentEligibility.ts`) — a retried call would otherwise create a duplicate attachment. */
+class UploadAttachmentTool implements vscode.LanguageModelTool<UploadAttachmentInput> {
+  private readonly recentCalls = new RecentCallGuard();
+
+  constructor(private readonly configService: ConfigService) {}
+
+  private resolvePath(filePath: string): string {
+    return path.isAbsolute(filePath) ? filePath : path.join(currentWorkspaceRoot(), filePath);
+  }
+
+  async prepareInvocation(
+    options: vscode.LanguageModelToolInvocationPrepareOptions<UploadAttachmentInput>,
+  ): Promise<vscode.PreparedToolInvocation> {
+    const { ticketKey, filePath } = options.input;
+    let size: number | null = null;
+    try {
+      if (filePath) size = (await fs.promises.stat(this.resolvePath(filePath))).size;
+    } catch {
+      // Keep size null — see UpdateFieldTool's prepareInvocation for the same rationale: this is a
+      // best-effort preview, invoke() re-validates existence and size for real regardless.
+    }
+    const confirmation = buildUploadAttachmentConfirmation(ticketKey || '(unknown ticket)', filePath || '(unknown file)', size);
+    return {
+      invocationMessage: `Uploading ${filePath} to ${ticketKey}…`,
+      confirmationMessages: confirmation,
+    };
+  }
+
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<UploadAttachmentInput>): Promise<vscode.LanguageModelToolResult> {
+    const ticketKey = options.input.ticketKey?.trim();
+    const filePath = options.input.filePath?.trim();
+    if (!ticketKey) return textResult('A ticket key is required, e.g. PROJ-123.');
+    if (!isSafePathSegment(ticketKey)) return textResult(`"${ticketKey}" is not a valid ticket key.`);
+    if (!filePath) return textResult('A file path is required, e.g. report.pdf.');
+
+    // Reads directly rather than stat-then-read (code-review fix): a separate existence/size
+    // check before the read is a TOCTOU gap (the file could change or disappear in between) and
+    // costs a second filesystem round-trip for no benefit — the bytes this read returns are the
+    // same bytes uploaded below.
+    const resolvedPath = this.resolvePath(filePath);
+    // Security fix (code-review P0): an LLM-supplied filePath is untrusted — restrict it to the
+    // user's home directory, excluding dotfile/dotdir segments (~/.ssh, ~/.aws, ...), so a
+    // prompt-injected tool call can't exfiltrate an arbitrary file the process can read. See
+    // pathSafety.ts's isAllowedUploadPath doc comment for the full rationale.
+    if (!isAllowedUploadPath(resolvedPath)) {
+      return textResult(`"${filePath}" is outside the allowed upload area — only files under your home directory (excluding dotfiles/dotfolders) can be uploaded.`);
+    }
+    let bytes: Buffer;
+    try {
+      bytes = await fs.promises.readFile(resolvedPath);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      return textResult(code === 'EISDIR' ? `"${filePath}" is not a file.` : `"${filePath}" does not exist.`);
+    }
+    if (bytes.byteLength > MAX_ATTACHMENT_BYTES) {
+      return textResult(`"${filePath}" is ${formatFileSize(bytes.byteLength)}, over the 25 MB size limit — not uploaded.`);
+    }
+
+    const dupeKey = fingerprint(ticketKey, resolvedPath);
+    if (!this.recentCalls.claim(dupeKey)) {
+      return textResult(`Skipped: an identical upload to ${ticketKey} was just made in the last minute. If this is intentional, wait before retrying.`);
+    }
+
+    const ctx = await tryGetConfiguredContext(this.configService);
+    if (isNotConfiguredResult(ctx)) {
+      this.recentCalls.release(dupeKey); // not a real attempt — don't block a real retry
+      return ctx;
+    }
+    const { ticketService } = ctx;
+
+    try {
+      const filename = path.basename(resolvedPath);
+      await ticketService.uploadAttachment(ticketKey, filename, inferContentType(filename), bytes.toString('base64'));
+      logDiag('jira.tools', 'info', `Uploaded attachment — ${ticketKey}/${filename}`, { ticketKey, filename });
+      return textResult(`Uploaded "${filename}" to ${ticketKey}.`);
+    } catch (err) {
+      this.recentCalls.release(dupeKey); // the upload didn't actually happen — a retry isn't a duplicate
+      const message = err instanceof Error ? err.message : String(err);
+      logDiag('jira.tools', 'error', `jira_uploadAttachment failed — ${ticketKey}/${filePath}`, { ticketKey, filePath, error: message });
+      return textResult(`Could not upload ${filePath} to ${ticketKey}: ${message}`);
+    }
+  }
+}
+
 /** Registers every `jira_*` Language Model tool with VS Code (matching the `name`s declared under
  * `contributes.languageModelTools` in package.json) and ties their disposal to the extension's
  * lifecycle via `context.subscriptions`. Called once from `activate()` in `extension.ts`. */
@@ -944,5 +1041,6 @@ export function registerJiraTools(context: vscode.ExtensionContext, configServic
     vscode.lm.registerTool('jira_transitionTicket', new TransitionTicketTool(configService)),
     vscode.lm.registerTool('jira_loadTicket', new LoadTicketTool(configService)),
     vscode.lm.registerTool('jira_downloadAttachment', new DownloadAttachmentTool(configService)),
+    vscode.lm.registerTool('jira_uploadAttachment', new UploadAttachmentTool(configService)),
   );
 }
