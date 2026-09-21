@@ -35,7 +35,7 @@ execution: code
 **README structure**
 
 - R1. `README.md` retains, for both `@jira` and `@bitbucket`: the project intro, quickstart, prerequisites, setup, and core commands — a first-time reader reaches a working first command (e.g. `@jira check`, `@bitbucket <pr-url>`) without leaving the file.
-- R2. `README.md` moves its deep-reference material to new pages under `docs/manual/`, replacing each moved section with a short pointer sentence and a link at the point it previously occupied. Deep-reference material includes: templates and cleanup-rule examples/fields (`README.md:485-735`), the settings reference for both participants (`README.md:735-815`, `README.md:999-1038`), the PR-review walkthrough plus follow-ups/posting-comments and token-usage tuning (`README.md:889-998`, `README.md:1039-1070` — split around the nested Bitbucket settings-reference subsection), and the three report-import flows — email, Veracode, Waltz (`README.md:375-485`).
+- R2. `README.md` moves its deep-reference material to new pages under `docs/manual/`, replacing each moved section with a short pointer sentence and a link at the point it previously occupied. Deep-reference material includes: templates and cleanup-rule examples/fields (`README.md:485-735`), the settings reference for both participants (`README.md:735-815`, `README.md:998-1037`), the PR-review walkthrough plus follow-ups/posting-comments and token-usage tuning (`README.md:889-997`, `README.md:1038-1070` — split around the nested Bitbucket settings-reference subsection), and the three report-import flows — email, Veracode, Waltz (`README.md:375-485`).
 
 **Manual pages**
 
@@ -106,7 +106,7 @@ docs/manual/
   - `docs/manual/bitbucket-pr-review.md` (new)
   - `docs/manual/report-imports.md` (new)
 - **Approach:**
-  1. For each of the four content blocks — templates/cleanup (`README.md:485-735`), settings reference for both participants (`README.md:735-815`, `README.md:999-1038`), PR review + follow-ups + token usage (`README.md:889-998`, `README.md:1039-1070` — split around the nested Bitbucket settings-reference subsection, extracted separately into `settings-reference.md`), report imports (`README.md:375-485`) — cut the block's existing markdown verbatim into its new file.
+  1. For each of the four content blocks — templates/cleanup (`README.md:485-735`), settings reference for both participants (`README.md:735-815`, `README.md:998-1037`), PR review + follow-ups + token usage (`README.md:889-997`, `README.md:1038-1070` — split around the nested Bitbucket settings-reference subsection, extracted separately into `settings-reference.md`), report imports (`README.md:375-485`) — cut the block's existing markdown verbatim into its new file.
   2. Give each new page a top-level `#` heading and one lead-in sentence naming which participant(s) it covers and when to read it, since a manual page may be opened with no README context above it. Demote the source's existing headings one level where needed so each file's own heading hierarchy stays coherent.
   3. Do not paraphrase, drop examples, or shorten tables/code fences during the move (KTD2) — content should read identically to its README original, just relocated.
 - **Test scenarios:** Test expectation: none -- pure content relocation, no application behavior.
