@@ -10,7 +10,7 @@ import { FieldResolver } from '../templates/FieldResolver';
 import { discoverAndCacheWorkflow, resolveAndApplyTransition } from '../services/WorkflowService';
 import { attachmentsDirFor, ensureJiraContextGitignored, loadTicketToWorkspace } from '../participant/jira/loadHandler';
 import { logDiag } from '../utils/diagLog';
-import { isSafeFilename, isSafePathSegment } from './pathSafety';
+import { isAllowedUploadPath, isSafeFilename, isSafePathSegment } from './pathSafety';
 import { RecentCallGuard, fingerprint } from './recentCallGuard';
 import { ATTACHMENT_SIZE_LIMIT, findAttachmentByFilename, formatFileSize, inferContentType } from '../utils/attachmentEligibility';
 import {
@@ -979,6 +979,13 @@ class UploadAttachmentTool implements vscode.LanguageModelTool<UploadAttachmentI
     // costs a second filesystem round-trip for no benefit — the bytes this read returns are the
     // same bytes uploaded below.
     const resolvedPath = this.resolvePath(filePath);
+    // Security fix (code-review P0): an LLM-supplied filePath is untrusted — restrict it to the
+    // user's home directory, excluding dotfile/dotdir segments (~/.ssh, ~/.aws, ...), so a
+    // prompt-injected tool call can't exfiltrate an arbitrary file the process can read. See
+    // pathSafety.ts's isAllowedUploadPath doc comment for the full rationale.
+    if (!isAllowedUploadPath(resolvedPath)) {
+      return textResult(`"${filePath}" is outside the allowed upload area — only files under your home directory (excluding dotfiles/dotfolders) can be uploaded.`);
+    }
     let bytes: Buffer;
     try {
       bytes = await fs.promises.readFile(resolvedPath);

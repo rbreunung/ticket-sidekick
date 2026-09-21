@@ -33,7 +33,12 @@ vi.mock('vscode', () => {
   };
 });
 
+vi.mock('../tools/pathSafety', () => ({
+  isAllowedUploadPath: vi.fn(() => true),
+}));
+
 import * as vscode from 'vscode';
+import { isAllowedUploadPath } from '../tools/pathSafety';
 import {
   resolveTicketKeyForUpload,
   buildUploadConfirmationMessage,
@@ -83,6 +88,7 @@ beforeEach(() => {
   vi.mocked(vscode.workspace.fs.readFile).mockReset();
   vi.mocked(vscode.window.showOpenDialog).mockReset();
   (vscode.window as { activeTextEditor?: unknown }).activeTextEditor = undefined;
+  vi.mocked(isAllowedUploadPath).mockReset().mockReturnValue(true);
 });
 
 describe('resolveTicketKeyForUpload', () => {
@@ -184,6 +190,25 @@ describe('handleUploadAttachment — file resolution (R1-R3, AE2)', () => {
 
     const session = ws.update.mock.calls.find((c) => c[0] === 'jira.session.uploadReview')?.[1] as UploadReviewSession;
     expect(session.files.map((f) => f.name)).toEqual(['a.pdf', 'b.pdf']);
+  });
+});
+
+describe('handleUploadAttachment — explicit path restriction (security fix: code-review P1)', () => {
+  it('rejects an explicit path outside the allowed upload area and stores no session', async () => {
+    vi.mocked(isAllowedUploadPath).mockReturnValue(false);
+    const stream = mockStream();
+    const ws = mockWs();
+
+    const result = await handleUploadAttachment(
+      makeRequest({ prompt: 'upload ../../.ssh/id_rsa to PROJ-123' }),
+      nullContext, stream as never, ws as never,
+      makeIntent({ filePath: '../../.ssh/id_rsa' }),
+    );
+
+    expect(result).toBeUndefined();
+    expect(markdownText(stream.markdown.mock.calls[0][0])).toMatch(/outside the allowed upload area/);
+    expect(vscode.workspace.fs.readFile).not.toHaveBeenCalled();
+    expect(ws.update).not.toHaveBeenCalled();
   });
 });
 

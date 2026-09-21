@@ -14,6 +14,7 @@ import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import { parseLastTicketFromContext } from './ticketContext';
 import type { ParsedIntent } from './llmHelpers';
 import { RecentCallGuard, fingerprint } from '../../tools/recentCallGuard';
+import { isAllowedUploadPath } from '../../tools/pathSafety';
 
 // upload-attachment-to-ticket plan (U2): `@jira upload` chat flow. See docs/jira-flows.md for the
 // session-type summary.
@@ -49,11 +50,21 @@ function collectReferenceUris(refs: readonly vscode.ChatPromptReference[]): vsco
 /** R1-R3: an explicit path always wins; otherwise every chat-attached file, then the active
  * editor, then the multi-select file picker. Returns `null` when the picker was cancelled or
  * nothing was selected — the caller does nothing further in that case, matching
- * `emailHandler.ts`'s `pickAndParseEmlFiles()` precedent. */
-async function resolveSourceUris(explicitFilePath: string | null, request: vscode.ChatRequest): Promise<vscode.Uri[] | null> {
+ * `emailHandler.ts`'s `pickAndParseEmlFiles()` precedent.
+ *
+ * Security fix (code-review P1): an explicit path is free text typed into chat, so — like
+ * `jira_uploadAttachment`'s LLM-supplied `filePath` (see `pathSafety.ts`'s `isAllowedUploadPath`
+ * doc comment) — it's restricted to the user's home directory, excluding dotfile/dotdir segments.
+ * File-picker, active-editor, and chat-attachment-reference paths below are human-UI-driven and
+ * not reachable via prompt text, so they're left unrestricted. */
+async function resolveSourceUris(explicitFilePath: string | null, request: vscode.ChatRequest, stream: vscode.ChatResponseStream): Promise<vscode.Uri[] | null> {
   if (explicitFilePath) {
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
     const resolved = path.isAbsolute(explicitFilePath) ? explicitFilePath : path.join(workspaceRoot, explicitFilePath);
+    if (!isAllowedUploadPath(resolved)) {
+      stream.markdown(`_"${explicitFilePath}" is outside the allowed upload area — only files under your home directory (excluding dotfiles/dotfolders) can be uploaded._`);
+      return null;
+    }
     return [vscode.Uri.file(resolved)];
   }
 
@@ -137,7 +148,7 @@ export async function handleUploadAttachment(
   ws: vscode.Memento,
   intent: ParsedIntent,
 ): Promise<vscode.ChatResult | void> {
-  const uris = await resolveSourceUris(intent.filePath, request);
+  const uris = await resolveSourceUris(intent.filePath, request, stream);
   if (!uris) return;
 
   const files = await readPendingFiles(uris, stream);
