@@ -2164,6 +2164,11 @@ export interface PendingUploadFile {
   size: number;
   contentType: string;
   base64Content: string;
+  // Code-review fix: the full resolved local path this file was read from, shown on the
+  // confirmation (buildUploadConfirmationMessage) so a user approving an upload can see exactly
+  // where the file came from — `name` alone (a bare basename) hides an unexpected source
+  // location, e.g. a path resolved from outside the workspace.
+  sourcePath: string;
 }
 
 /** R6/KTD3: the pre-upload confirmation, mirroring `TransitionBatchSession`'s confirm/cancel
@@ -2200,9 +2205,9 @@ export function resolveTicketKeyForUpload(
  * `isConfirmation()`/`isCancellation()` (KTD3: no new confirm/cancel vocabulary). */
 export function buildUploadConfirmationMessage(
   ticketKey: string,
-  files: Array<{ name: string; size: number }>,
+  files: Array<{ name: string; size: number; sourcePath: string }>,
 ): string {
-  const fileLines = files.map((f) => `- **${f.name}** (${formatFileSize(f.size)})`).join('\n');
+  const fileLines = files.map((f) => `- **${f.name}** (${formatFileSize(f.size)}) — \`${f.sourcePath}\``).join('\n');
   const confirm = buildChatCommandLink('Confirm', '@jira', 'confirm');
   const cancel = buildChatCommandLink('Cancel', '@jira', 'cancel');
   return `Upload the following to **${ticketKey}**?\n\n${fileLines}\n\n${confirm} · ${cancel}`;

@@ -13,12 +13,20 @@ import {
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import { parseLastTicketFromContext } from './ticketContext';
 import type { ParsedIntent } from './llmHelpers';
+import { RecentCallGuard, fingerprint } from '../../tools/recentCallGuard';
 
 // upload-attachment-to-ticket plan (U2): `@jira upload` chat flow. See docs/jira-flows.md for the
 // session-type summary.
 
 export const UPLOAD_REVIEW_SESSION_KEY = 'jira.session.uploadReview';
 export const AWAIT_UPLOAD_TICKET_SESSION_KEY = 'jira.session.awaitUploadTicket';
+
+// Code-review fix: Jira does not dedupe attachments by filename (see `findAttachmentByFilename`'s
+// doc comment in attachmentEligibility.ts), so a double-submitted "confirm" reply — a double
+// click on the rendered link, or two chat turns dispatched before the first completes — would
+// otherwise upload every file twice. Mirrors `jira_uploadAttachment`'s own `RecentCallGuard` use
+// for the same non-idempotent-write reason (KTD7 in jiraTools.ts).
+const recentUploadConfirms = new RecentCallGuard();
 
 /** R1-R3: collects every attached-file reference on the current chat message (a `vscode.Uri`
  * directly, or the `uri` of a `vscode.Location`), deduped by string form — `request.references`
@@ -69,7 +77,7 @@ async function readPendingFiles(uris: vscode.Uri[], stream: vscode.ChatResponseS
   const reads = await Promise.all(uris.map(async (uri) => {
     const name = path.basename(uri.fsPath);
     try {
-      return { name, bytes: await vscode.workspace.fs.readFile(uri) };
+      return { name, sourcePath: uri.fsPath, bytes: await vscode.workspace.fs.readFile(uri) };
     } catch (err) {
       return { name, error: err instanceof Error ? err.message : String(err) };
     }
@@ -83,13 +91,14 @@ async function readPendingFiles(uris: vscode.Uri[], stream: vscode.ChatResponseS
 
   const files: PendingUploadFile[] = [];
   const oversized: string[] = [];
-  for (const { name, bytes } of reads as Array<{ name: string; bytes: Uint8Array }>) {
+  for (const { name, sourcePath, bytes } of reads as Array<{ name: string; sourcePath: string; bytes: Uint8Array }>) {
     if (bytes.byteLength > MAX_ATTACHMENT_BYTES) {
       oversized.push(`${name} (${formatFileSize(bytes.byteLength)})`);
       continue;
     }
     files.push({
       name,
+      sourcePath,
       size: bytes.byteLength,
       contentType: inferContentType(name),
       base64Content: Buffer.from(bytes).toString('base64'),
@@ -163,6 +172,11 @@ export async function handleUploadReviewReply(
   if (!isConfirmation(reply)) {
     stream.markdown(trustedChatMarkdown(buildUploadConfirmationMessage(session.ticketKey, session.files)));
     return { metadata: { jiraSession: { kinds: ['upload-review'] } } };
+  }
+
+  const dupeKey = fingerprint(session.ticketKey, ...session.files.map((f) => f.name));
+  if (!recentUploadConfirms.claim(dupeKey)) {
+    return; // a duplicate confirm for the same batch — already uploading or just uploaded, say nothing new
   }
 
   await ws.update(UPLOAD_REVIEW_SESSION_KEY, undefined);

@@ -1673,9 +1673,15 @@ export function createJiraParticipant(
     }
 
     // Upload review — user replied confirm/cancel/other to the pre-upload confirmation (R6).
+    // Code-review fix: AE7 schemaVersion guard, matching every sibling session below.
     if (getActiveJiraSession(chatContext)?.kinds.includes('upload-review')) {
       const session = ws.get<UploadReviewSession>(UPLOAD_REVIEW_SESSION_KEY);
       if (session) {
+        if (isSessionExpired(session)) {
+          await ws.update(UPLOAD_REVIEW_SESSION_KEY, undefined);
+          stream.markdown(SESSION_EXPIRED_MESSAGE);
+          return;
+        }
         return await handleUploadReviewReply(request.prompt, session, ticketService, stream, ws);
       }
     }
@@ -1684,6 +1690,11 @@ export function createJiraParticipant(
     if (getActiveJiraSession(chatContext)?.kinds.includes('await-upload-ticket')) {
       const session = ws.get<AwaitUploadTicketSession>(AWAIT_UPLOAD_TICKET_SESSION_KEY);
       if (session) {
+        if (isSessionExpired(session)) {
+          await ws.update(AWAIT_UPLOAD_TICKET_SESSION_KEY, undefined);
+          stream.markdown(SESSION_EXPIRED_MESSAGE);
+          return;
+        }
         return await handleAwaitUploadTicketReply(request.prompt, session, stream, ws);
       }
     }

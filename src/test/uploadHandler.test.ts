@@ -109,17 +109,18 @@ describe('resolveTicketKeyForUpload', () => {
 
 describe('buildUploadConfirmationMessage', () => {
   it('renders a single file with its size and the target ticket', () => {
-    const message = buildUploadConfirmationMessage('PROJ-123', [{ name: 'report.pdf', size: 2_097_152 }]);
+    const message = buildUploadConfirmationMessage('PROJ-123', [{ name: 'report.pdf', size: 2_097_152, sourcePath: '/workspace/report.pdf' }]);
     expect(message).toContain('PROJ-123');
     expect(message).toContain('report.pdf');
     expect(message).toContain('2.0 MB');
+    expect(message).toContain('/workspace/report.pdf');
   });
 
   it('renders one line per file for multiple files', () => {
     const message = buildUploadConfirmationMessage('PROJ-123', [
-      { name: 'a.pdf', size: 1024 },
-      { name: 'b.pdf', size: 2048 },
-      { name: 'c.pdf', size: 4096 },
+      { name: 'a.pdf', size: 1024, sourcePath: '/workspace/a.pdf' },
+      { name: 'b.pdf', size: 2048, sourcePath: '/workspace/b.pdf' },
+      { name: 'c.pdf', size: 4096, sourcePath: '/workspace/c.pdf' },
     ]);
     expect(message).toContain('a.pdf');
     expect(message).toContain('b.pdf');
@@ -201,6 +202,21 @@ describe('handleUploadAttachment — size limit (R7, AE1)', () => {
     expect(markdownText(stream.markdown.mock.calls[0][0])).toMatch(/25 MB limit/);
     expect(ws.update).not.toHaveBeenCalled();
   });
+
+  it('reports a read failure by name and stores no session', async () => {
+    vi.mocked(vscode.workspace.fs.readFile).mockRejectedValue(new Error('EACCES: permission denied'));
+    const stream = mockStream();
+    const ws = mockWs();
+
+    await handleUploadAttachment(
+      makeRequest({ prompt: 'upload report.pdf to PROJ-123' }),
+      nullContext, stream as never, ws as never,
+      makeIntent({ filePath: 'report.pdf' }),
+    );
+
+    expect(markdownText(stream.markdown.mock.calls[0][0])).toBe('_Could not read "report.pdf": EACCES: permission denied_');
+    expect(ws.update).not.toHaveBeenCalled();
+  });
 });
 
 describe('handleUploadAttachment — ticket resolution (R4/R5, AE3)', () => {
@@ -226,7 +242,7 @@ describe('handleUploadReviewReply (R6, R8)', () => {
   function makeSession(overrides: Partial<UploadReviewSession> = {}): UploadReviewSession {
     return {
       ticketKey: 'PROJ-123',
-      files: [{ name: 'report.pdf', size: 1024, contentType: 'application/pdf', base64Content: 'aGVsbG8=' }],
+      files: [{ name: 'report.pdf', sourcePath: '/workspace/report.pdf', size: 1024, contentType: 'application/pdf', base64Content: 'aGVsbG8=' }],
       schemaVersion: 5,
       ...overrides,
     };
@@ -239,8 +255,8 @@ describe('handleUploadReviewReply (R6, R8)', () => {
     const ws = mockWs();
     const session = makeSession({
       files: [
-        { name: 'a.pdf', size: 1024, contentType: 'application/pdf', base64Content: 'aGVsbG8=' },
-        { name: 'b.pdf', size: 1024, contentType: 'application/pdf', base64Content: 'aGVsbG8=' },
+        { name: 'a.pdf', sourcePath: '/workspace/a.pdf', size: 1024, contentType: 'application/pdf', base64Content: 'aGVsbG8=' },
+        { name: 'b.pdf', sourcePath: '/workspace/b.pdf', size: 1024, contentType: 'application/pdf', base64Content: 'aGVsbG8=' },
       ],
     });
 
@@ -275,12 +291,48 @@ describe('handleUploadReviewReply (R6, R8)', () => {
     expect(ws.update).not.toHaveBeenCalled();
     expect(result).toEqual({ metadata: { jiraSession: { kinds: ['upload-review'] } } });
   });
+
+  it('reports one file failing without blocking the rest of the batch', async () => {
+    const client = new MockJiraClient();
+    client.uploadAttachment = async (issueKey: string, filename: string) => {
+      if (filename === 'bad.pdf') throw new Error('network error');
+    };
+    const ticketService = new TicketService(client);
+    const stream = mockStream();
+    const ws = mockWs();
+    const session = makeSession({
+      ticketKey: 'PROJ-500',
+      files: [
+        { name: 'good.pdf', sourcePath: '/workspace/good.pdf', size: 1024, contentType: 'application/pdf', base64Content: 'aGVsbG8=' },
+        { name: 'bad.pdf', sourcePath: '/workspace/bad.pdf', size: 1024, contentType: 'application/pdf', base64Content: 'aGVsbG8=' },
+      ],
+    });
+
+    await handleUploadReviewReply('confirm', session, ticketService, stream as never, ws as never);
+
+    const message = markdownText(stream.markdown.mock.calls.at(-1)?.[0]);
+    expect(message).toMatch(/good\.pdf.*uploaded/);
+    expect(message).toMatch(/bad\.pdf.*failed.*network error/s);
+  });
+
+  it('skips a duplicate confirm for the same batch rather than uploading twice', async () => {
+    const client = new MockJiraClient();
+    const ticketService = new TicketService(client);
+    const stream = mockStream();
+    const ws = mockWs();
+    const session = makeSession({ ticketKey: 'DEDUPE-1', files: [{ name: 'once.pdf', sourcePath: '/workspace/once.pdf', size: 1024, contentType: 'application/pdf', base64Content: 'aGVsbG8=' }] });
+
+    await handleUploadReviewReply('confirm', session, ticketService, stream as never, ws as never);
+    await handleUploadReviewReply('confirm', session, ticketService, stream as never, ws as never);
+
+    expect(client.uploadAttachmentCalls).toHaveLength(1);
+  });
 });
 
 describe('handleAwaitUploadTicketReply (R5/KTD4)', () => {
   function makeAwaitSession(): AwaitUploadTicketSession {
     return {
-      files: [{ name: 'report.pdf', size: 1024, contentType: 'application/pdf', base64Content: 'aGVsbG8=' }],
+      files: [{ name: 'report.pdf', sourcePath: '/workspace/report.pdf', size: 1024, contentType: 'application/pdf', base64Content: 'aGVsbG8=' }],
       schemaVersion: 5,
     };
   }
