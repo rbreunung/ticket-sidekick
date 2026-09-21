@@ -2360,6 +2360,17 @@ export function buildDownloadAttachmentConfirmation(ticketKey: string, filename:
   };
 }
 
+/** Confirmation for `jira_uploadAttachment` — names the ticket, file path, and size (R10). `size`
+ * is `null` when it couldn't be read at confirmation time (e.g. the path doesn't exist yet); the
+ * confirmation still renders, `invoke()` re-validates existence and size independently (KTD1). */
+export function buildUploadAttachmentConfirmation(ticketKey: string, filePath: string, size: number | null): ToolConfirmation {
+  const sizeNote = size !== null ? ` (${formatFileSize(size)})` : '';
+  return {
+    title: `Upload ${filePath} to ${ticketKey}`,
+    message: `Upload \`${filePath}\`${sizeNote} as an attachment to **${ticketKey}**.`,
+  };
+}
+
 /** Renders `items` as a `- ` bulleted list, one per line — shared by every result message
  * below that lists plain strings or pre-formatted per-item text. Exported so `jiraTools.ts`'s
  * ambiguous-match text results use the same shape instead of a second hand-rolled join. */

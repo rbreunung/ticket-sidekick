@@ -540,6 +540,36 @@
         }
       },
       {
+        "name": "jira_uploadAttachment",
+        "displayName": "Upload Jira Attachment",
+        "modelDescription": "Uploads one local file as an attachment to a Jira ticket. Takes an explicit ticket key and file path — it never guesses which ticket or file to use. The path may be workspace-relative or absolute. The user is asked to confirm the ticket, file, and size before it is uploaded. Rejects a file over 25 MB before attempting the upload. To attach several files, call this tool once per file.",
+        "userDescription": "Upload a local file as an attachment to a Jira ticket.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraUploadAttachment",
+        "icon": "$(cloud-upload)",
+        "when": "ticketSidekick.jiraCredentialsSet",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "Jira ticket key, e.g. PROJ-123"
+            },
+            "filePath": {
+              "type": "string",
+              "description": "Workspace-relative or absolute path to the local file to upload, e.g. report.pdf or /Users/me/Downloads/report.pdf"
+            }
+          },
+          "required": [
+            "ticketKey",
+            "filePath"
+          ]
+        }
+      },
+      {
         "name": "bitbucket_getPullRequest",
         "displayName": "Get Bitbucket Pull Request",
         "modelDescription": "Fetches a Bitbucket pull request's title, description, author, target branch, and source commit hash.",
