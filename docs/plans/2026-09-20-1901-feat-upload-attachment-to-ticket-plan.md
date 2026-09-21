@@ -14,7 +14,9 @@ execution: code
 
 - **Objective:** A user working in `@jira` chat can get a local file attached to a ticket by asking in natural language, without attaching the wrong file or exceeding a realistic size limit; an AI agent in Copilot Agent Mode can do the same by calling a tool with an explicit ticket and file path.
 - **Product authority:** Resolved through user dialogue in this brainstorm session (all Key Decisions below are session-settled, user-directed).
-- **Open blockers:** None — see Outstanding Questions for items deferred to planning rather than blocking it.
+- **Open blockers:** None.
+
+---
 
 ## Product Contract
 
@@ -85,16 +87,151 @@ execution: code
 - True large-file upload (multi-GB, streamed or chunked) is out of scope — the existing 25 MB cap applies everywhere.
 - Detecting or adapting to a Jira instance's own (possibly lower) configured attachment limit is out of scope; Jira's own rejection surfaces through today's existing error handling.
 
-### Outstanding Questions
-
-**Deferred to Planning:**
-- Exact mechanism for asking the user which ticket to use when none resolves (a typed free-text reply vs. a clickable follow-up, matching the multi-turn session patterns already in `sessionState.ts`).
-- How `jira_uploadAttachment`'s `filePath` input is validated and resolved (workspace-relative vs. absolute), and which existing `pathSafety.ts` helper(s) apply to it.
-- Exact intent-classification wording/triggers (e.g. "upload", "attach") to add to the existing LLM intent parser (`llmHelpers.ts`).
+**Product Contract preservation:** unchanged. Its former Outstanding Questions (ask-mechanism, `filePath` validation, intent-classification wording) are resolved below as KTD4, KTD5, and Unit U2's Approach, respectively.
 
 ### Sources / Research
 
 - `src/utils/attachmentEligibility.ts` — existing attachment-size and filename-matching helpers (`ATTACHMENT_SIZE_LIMIT`, `findAttachmentByFilename`, `formatFileSize`) that a download-side counterpart to this upload flow already establishes patterns for.
 - `src/jira/JiraApiClient.ts` — existing `uploadAttachment()`, `MAX_ATTACHMENT_BYTES` (25 MB), `assertAttachmentWithinLimit()`, and `buildFileContentDisposition()`, currently only reachable via the email-import flow.
-- `src/tools/jiraTools.ts` — existing `jira_*` Language Model tool pattern (KTD1 confirmation-independent re-validation, KTD6 statelessness) that `jira_uploadAttachment` follows.
+- `src/tools/jiraTools.ts` — existing `jira_*` Language Model tool pattern (its own code-comment KTD1: confirmation-independent re-validation; KTD6: statelessness) that `jira_uploadAttachment` follows.
 - `src/participant/jira/ticketContext.ts` — `parseLastTicketFromContext()`, the existing last-referenced-ticket session mechanism reused for ticket resolution (R4).
+- `src/participant/jira/emailHandler.ts` and `src/participant/jira/cleanupHandler.ts` — existing multi-select `showOpenDialog` picker usage and `workspaceState`-backed review-session (confirm/cancel `buildChatCommandLink`) patterns this plan's chat flow reuses.
+- `src/test/emailHandler.test.ts` — precedent for Vitest-testing a `vscode`-importing handler file via an inline `vi.mock('vscode', ...)`, reused for this plan's handler tests.
+
+---
+
+## Planning Contract
+
+### Key Technical Decisions
+
+- KTD1. **Reuse `extractTicketId` (`src/utils/branchParser.ts`) for ticket-key detection in message text and filenames.** The codebase already has one canonical `[A-Z][A-Z0-9]+-\d+` matcher (used today for branch names); a second hand-rolled regex would drift from it. Governs R4.
+- KTD2. **Reuse `MAX_ATTACHMENT_BYTES` and `formatFileSize` (`src/jira/JiraApiClient.ts`, `src/utils/attachmentEligibility.ts`) as the single size-limit source for both the chat flow and the tool.** Avoids a second, divergent 25 MB constant. Governs R7, R11.
+- KTD3. **The pre-upload confirmation is a new `UploadReviewSession` stored in `workspaceState`, mirroring `TransitionBatchSession`'s confirm/cancel `buildChatCommandLink` pattern (`cleanupHandler.ts`).** VS Code's native tool-confirmation dialog only exists for Language Model tool calls, not natural-language chat turns, so the chat flow needs its own session-backed confirmation. Governs R6.
+- KTD4. **When no ticket resolves (R5), the flow asks via a plain free-text follow-up (`AwaitUploadTicketSession`), mirroring `AwaitIssueTypeSession` (`ticketContext.ts`) rather than a clickable list.** A ticket key is open-ended input, not a bounded option set, so a numbered pick-list doesn't fit. Resolves the Product Contract's former ask-mechanism question. Governs R5.
+- KTD5. **`jira_uploadAttachment`'s `filePath` needs no new path-safety helper.** Unlike `ticketKey` (interpolated into a REST URL segment, guarded by `isSafePathSegment`), `filePath` is read directly via `vscode.workspace.fs.readFile` and never interpolated into a URL; the outgoing attachment filename is already sanitized by `buildFileContentDisposition()`. `invoke()` validates only existence, that it is a regular file, and the size cap. Resolves the Product Contract's former `filePath`-validation question. Governs R9, R11.
+- KTD6. **New per-flow handler file `src/participant/jira/uploadHandler.ts`**, matching the existing one-file-per-flow convention (`emailHandler.ts`, `cleanupHandler.ts`, `loadHandler.ts`). Governs R1-R8.
+- KTD7. **`jira_uploadAttachment` uses a `RecentCallGuard`, like `jira_addComment`/`jira_createTicket`.** Jira does not dedupe attachments by filename (per `findAttachmentByFilename`'s doc comment), so a retried Agent Mode call with identical input would otherwise create a duplicate attachment with no reconciliation. Governs R9, R12.
+
+### Assumptions
+
+- `request.references` (VS Code's chat-attached-file mechanism) is read the same way for a dragged/`#file:`-attached file regardless of file type — no per-type handling is needed for R1.
+- `TicketService.uploadAttachment()`'s existing signature (`issueKey, filename, contentType, contentBytes`) needs no change; `contentType` is inferred from the file extension with a generic `application/octet-stream` fallback, matching how `emlParser.ts`'s attachment parsing already infers it for email attachments.
+
+---
+
+## Implementation Units
+
+### U1. Pure ticket resolution and upload session types
+
+- **Goal:** Add the reusable, Vitest-testable pieces the chat flow and its confirmation depend on — ticket-key resolution ordering, confirmation/result message formatters, and the new session types.
+- **Requirements:** R4, R5, R6, R7, R8. KTD1, KTD2.
+- **Dependencies:** None.
+- **Files:**
+  - `src/participant/sessionState.ts` (add `UploadReviewSession`, `AwaitUploadTicketSession` types; extend `JiraSessionContinuity['kinds']` with `'upload-review'` and `'await-upload-ticket'`; add `resolveTicketKeyForUpload()`, `buildUploadConfirmationMessage()`, `buildUploadResultMessage()`)
+  - `src/test/uploadHandler.test.ts` (new — pure-helper cases; also houses U2's handler tests)
+- **Approach:**
+  1. `resolveTicketKeyForUpload(promptText, resolvedFilename, lastTicketKey)` checks, via `extractTicketId` (KTD1), the prompt text, then the filename, then falls back to `lastTicketKey`; returns the first match or `null` (R4).
+  2. `UploadReviewSession` carries `ticketKey`, `schemaVersion`, and pending files as `{ name, size, contentType, base64Content }[]`.
+  3. `AwaitUploadTicketSession` carries the same pending-files shape without a `ticketKey`, for the R5 ask-explicitly path.
+  4. `buildUploadConfirmationMessage(ticketKey, files)` renders one line per file with `formatFileSize` (KTD2) plus Confirm/Cancel `buildChatCommandLink`s (R6).
+  5. `buildUploadResultMessage(ticketKey, results: { name, ok, error? }[])` renders per-file success/failure (R8).
+- **Test scenarios:**
+  - `resolveTicketKeyForUpload`: a ticket key in the prompt text wins over one in the filename and over `lastTicketKey`.
+  - No key in text, a key in the filename: filename wins over `lastTicketKey`.
+  - No key in text, filename, or `lastTicketKey`: returns `null`. Covers AE3.
+  - `buildUploadConfirmationMessage`: single file renders name, size, and ticket; three files render one line each. Covers AE4.
+  - `buildUploadResultMessage`: a mixed success/failure result set renders each file's own outcome. Covers AE4.
+- **Verification:** `npm test` passes the new cases; `npm run compile` is clean.
+
+### U2. Chat upload flow (`uploadHandler.ts`) and intent routing
+
+- **Goal:** Implement the `@jira` upload flow end-to-end — file/ticket resolution, the review-session confirmation, execution, and its two resume paths — wired through a new `uploadAttachment` intent operation.
+- **Requirements:** R1, R2, R3, R4, R5, R6, R7, R8. KTD3, KTD4, KTD6.
+- **Dependencies:** U1.
+- **Files:**
+  - `src/participant/jira/uploadHandler.ts` (new)
+  - `src/participant/jira/llmHelpers.ts` (add `'uploadAttachment'` to `Operation`; extend `INTENT_PROMPT` and `ParsedIntent` with an optional `filePath` field)
+  - `src/participant/JiraParticipant.ts` (route the `uploadAttachment` operation to `handleUploadAttachment`; route resumed `upload-review` confirm/cancel replies and `await-upload-ticket` replies to their handlers)
+  - `src/test/uploadHandler.test.ts` (handler-level cases, mocking `vscode` inline per `emailHandler.test.ts`'s precedent)
+  - `src/test/JiraParticipant.test.ts` (intent-parsing cases for the new operation)
+- **Approach:**
+  1. File resolution order: a file reference on `request.references` (chat-attached file) → `vscode.window.activeTextEditor`'s document URI → an absolute/relative path found in `request.prompt`, resolved against the workspace root → `vscode.window.showOpenDialog({ canSelectMany: true })` when none of the above resolve (R1-R3; Covers AE2).
+  2. Resolve the ticket via `resolveTicketKeyForUpload(request.prompt, resolvedFilename, parseLastTicketFromContext(context))` (U1). No match: build an `AwaitUploadTicketSession` from the already-resolved file(s), store it, ask in chat, and return `{ metadata: { jiraSession: { kinds: ['await-upload-ticket'] } } }` (KTD4).
+  3. Read each resolved file's bytes (`vscode.workspace.fs.readFile`); if any file exceeds `MAX_ATTACHMENT_BYTES`, reject the whole batch before building a session, naming the oversized file(s) (R7; Covers AE1).
+  4. Build the `UploadReviewSession`, store it, stream `buildUploadConfirmationMessage`, return `{ metadata: { jiraSession: { kinds: ['upload-review'] } } }` (KTD3).
+  5. On a confirm reply: call `ticketService.uploadAttachment(ticketKey, name, contentType, base64Content)` per file sequentially, collect per-file outcomes, stream `buildUploadResultMessage` (R8). On a cancel reply: clear the session and acknowledge.
+  6. On an `await-upload-ticket` reply: parse the reply for a ticket key via the same `extractTicketId` check, then continue at step 3 with the previously resolved files.
+- **Technical design (directional):**
+  ```
+  handleUploadAttachment(request, stream, ctx):
+    file = fromChatReference(request) ?? fromActiveEditor() ?? fromExplicitPath(request.prompt) ?? await pickFiles()
+    if !file: return
+    ticket = resolveTicketKeyForUpload(request.prompt, file.name, lastTicketKey(ctx))
+    if !ticket: return askForTicket(file)   // KTD4
+    return reviewAndConfirm(ticket, file)   // KTD3
+  ```
+- **Test scenarios:**
+  - No chat reference, no active editor, no path in the prompt: `showOpenDialog` is invoked with `canSelectMany: true`. Covers AE2.
+  - A resolved file over 25 MB: the batch is rejected before a session is stored, naming the file and the limit. Covers AE1.
+  - Three files resolved via the picker, all within the limit: `UploadReviewSession` carries all three; confirming uploads each and reports per-file outcomes. Covers AE4.
+  - A resolved file with no ticket key anywhere: an `AwaitUploadTicketSession` is created and the chat asks explicitly, uploading nothing yet. Covers AE3.
+  - Confirm reply on a stored `UploadReviewSession`: `ticketService.uploadAttachment` is called once per pending file with the right arguments.
+  - Cancel reply on a stored `UploadReviewSession`: no upload call happens and the session is cleared.
+  - `llmHelpers.ts`/`JiraParticipant.test.ts`: prompt "upload the report to PROJ-123" parses to `operation: 'uploadAttachment'`, `ticketKey: 'PROJ-123'`.
+  - `llmHelpers.ts`/`JiraParticipant.test.ts`: prompt "upload report.pdf" (no ticket key) parses with `ticketKey: null`, `filePath: 'report.pdf'`.
+- **Verification:** `npm test` passes all cases above; `npm run compile` is clean. A manual Extension Development Host pass exercises the real file picker and active-editor resolution end-to-end (per CLAUDE.md's Testing section: real `vscode` UI interaction beyond what the inline mock covers is checked manually).
+
+### U3. `jira_uploadAttachment` Language Model tool
+
+- **Goal:** Add the Agent Mode tool counterpart with fully explicit inputs, following the existing `jira_*` write-tool pattern.
+- **Requirements:** R9, R10, R11, R12. KTD2, KTD5, KTD7.
+- **Dependencies:** None (independent of U1/U2 — reuses `TicketService.uploadAttachment` directly, not the chat session types).
+- **Files:**
+  - `src/tools/jiraTools.ts` (add `UploadAttachmentTool` class; register `jira_uploadAttachment` in `registerJiraTools()`)
+  - `src/participant/sessionState.ts` (add `buildUploadAttachmentConfirmation(ticketKey, filePath, size)`)
+  - `package.json` (add the `jira_uploadAttachment` entry under `contributes.languageModelTools`, mirroring `jira_downloadAttachment`'s shape)
+  - `src/test/jiraTools.test.ts` (new tool's cases)
+- **Approach:**
+  1. `prepareInvocation()` best-effort-stats the file (existence, size) the same way `UpdateFieldTool`/`TransitionTicketTool` best-effort-fetch current state — never throws — and calls `buildUploadAttachmentConfirmation` (R10).
+  2. `invoke()` re-validates independently (KTD1 in `jiraTools.ts`'s own header comment): non-empty `ticketKey` validated with `isSafePathSegment`, non-empty `filePath`, the file exists and is a regular file, and its size is at or under `MAX_ATTACHMENT_BYTES` (KTD2, KTD5) — reject before any Jira call.
+  3. Claim a `RecentCallGuard` fingerprint on `(ticketKey, filePath)` before uploading (KTD7); release it on a validation failure or a failed upload, same pattern as `AddCommentTool`.
+  4. On success, call `ticketService.uploadAttachment(ticketKey, path.basename(filePath), inferredContentType, base64Content)` and return a short confirmation text naming the ticket and filename.
+- **Test scenarios:**
+  - Missing `ticketKey` or `filePath`: `invoke()` returns a validation message and uploads nothing. Covers AE5.
+  - An unsafe `ticketKey` (contains `/`): rejected by `isSafePathSegment` before any Jira call.
+  - A `filePath` that does not exist: `invoke()` returns a not-found message and uploads nothing.
+  - A `filePath` over 25 MB: rejected before upload, naming the limit. Covers AE1.
+  - A valid `ticketKey` and `filePath` within the limit: `TicketService.uploadAttachment` is called once with the expected arguments (via `MockJiraClient`'s `uploadAttachmentCalls`).
+  - A repeated identical call within the guard window: the second call is skipped as a likely duplicate, matching `AddCommentTool`'s existing dedup message shape.
+- **Verification:** `npm test` passes all cases above; `npm run compile` is clean.
+
+### U4. Documentation
+
+- **Goal:** Keep `CLAUDE.md` and `docs/jira-flows.md` in sync with the new flow and file, per the "Adding a new Jira operation" checklist and "Where documentation belongs."
+- **Requirements:** None directly — process requirement from `CLAUDE.md` itself.
+- **Dependencies:** U2, U3.
+- **Files:**
+  - `CLAUDE.md` (add `src/participant/jira/uploadHandler.ts` to the Key Files table)
+  - `docs/jira-flows.md` (one-line summary of the upload flow plus a link, per "Where documentation belongs")
+- **Approach:** Mirror the existing one-line-per-file style already used for `emailHandler.ts`/`cleanupHandler.ts` in `CLAUDE.md`'s table; add the upload flow's one-liner to `docs/jira-flows.md` without duplicating flow prose there (full detail stays in this plan and the code).
+- **Test scenarios:** Test expectation: none — documentation only.
+- **Verification:** A reviewer can find the new file and flow from `CLAUDE.md`/`docs/jira-flows.md` alone.
+
+---
+
+## Verification Contract
+
+| Command | Applicability | Gate |
+|---|---|---|
+| `npm run compile` | All units | TypeScript type check must pass with no errors |
+| `npm test` | U1, U2, U3 | All new and existing Vitest cases pass |
+| Manual Extension Development Host check | U2 | File picker, active-editor resolution, and an end-to-end upload against `MockJiraClient` or a real ticket behave as specified (CLAUDE.md: `vscode`-importing UI interaction beyond the inline mock is checked manually, not by `npm run test:e2e`, which this repo does not run in CI) |
+
+---
+
+## Definition of Done
+
+- All Implementation Units (U1-U4) are complete and their test scenarios pass.
+- `npm run compile` and `npm test` are green.
+- `docs/jira-flows.md` and `CLAUDE.md`'s Key Files table reference the new upload flow and file (U4).
+- No dead-end or experimental code from abandoned approaches remains in the diff.
