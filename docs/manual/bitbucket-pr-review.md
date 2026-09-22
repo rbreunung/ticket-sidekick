@@ -109,7 +109,7 @@ focus on the security impact only
 add that this affects all authenticated endpoints
 ```
 
-> **Note (Bitbucket Cloud):** Posting comments requires the **Pull requests: Write** scope on your App Password. See the setup section above.
+> **Note (Bitbucket Cloud):** Posting comments requires the **Pull requests: Write** scope on your App Password. See [Store your Bitbucket credentials](../../README.md#3-store-your-bitbucket-credentials) in the main README.
 
 ## Reducing token usage on large PRs
 
