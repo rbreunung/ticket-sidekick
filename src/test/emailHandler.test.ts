@@ -528,6 +528,29 @@ describe('batch email creation (U3/U4, via the shared reportImportHandler flow)'
     expect(summaryLine).toContain('Email One');
   });
 
+  it('AE1 (overview hub): an email batch opens straight on the New screen with Done, "ok" creates, and "done" ends it', async () => {
+    const templateSession = makeTemplateSession();
+    const ws = makeMockWs();
+    const first = mockStream();
+    await handleEmailTemplateSelection('1', templateSession, client, ticketService, first as never, ws as never);
+    const firstText = markdownText((first.markdown as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0]);
+    expect(firstText).toContain('### New — will create');
+    expect(firstText).not.toContain('### Import results'); // no overview for a single group
+    expect(firstText).not.toContain('Back to overview');
+    expect(decodeURIComponent(firstText)).toContain('"@jira done"');
+
+    const reviewSession = ws.store['jira.session.emailReview'];
+    const second = mockStream();
+    await handleEmailReviewReply('ok', reviewSession as never, ticketService, second as never, ws as never);
+    expect(client.createIssueCalls).toHaveLength(2);
+    expect(markdownText((second.markdown as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0])).toContain('No new emails left to create');
+
+    const third = mockStream();
+    await handleEmailReviewReply('done', ws.store['jira.session.emailReview'] as never, ticketService, third as never, ws as never);
+    expect(ws.store['jira.session.emailReview']).toBeUndefined();
+    expect(markdownText((third.markdown as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0])).toContain('**2** created');
+  });
+
   it('excluding a row on the review screen keeps it out of the created batch (Covers AE2)', async () => {
     const templateSession = makeTemplateSession();
     const ws = makeMockWs();

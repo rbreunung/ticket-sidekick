@@ -1221,7 +1221,7 @@ export function neutralizeMarkdownLinks(value: string): string {
 // `undefined`.
 // U3: bumped 4 -> 5 for the "update existing tickets" bulk action (ReviewRowBase gained the
 // optional `updatedExisting` per-row indicator) — same rationale as U6's bump.
-export const CURRENT_SESSION_SCHEMA_VERSION = 5;
+export const CURRENT_SESSION_SCHEMA_VERSION = 6;
 
 export interface ImportTemplateSelectionSession<TItem> {
   reportFileName: string;
@@ -1291,6 +1291,36 @@ export interface ReviewRowBase {
   // section's "Updated?" column. Undefined/false for every row until that action runs; never set
   // by any other code path (toggling, paging, creation all leave it untouched).
   updatedExisting?: boolean;
+  // Overview-hub KTD5: set at row-build time (buildReviewRows) on an already-ticketed row whose
+  // finding group has at least one dedup key no found ticket carries yet — i.e. a newer finding on
+  // an already-ticketed line. Drives the Already-ticketed screen's "Update N tickets" count without
+  // any extra Jira call; cleared once "update tickets" finds the ticket up to date.
+  hasUnsyncedFindings?: boolean;
+  // Overview-hub KTD4: the key of the fresh ticket a "re-create tickets" action created for this
+  // already-ticketed row — the row stays listed, shows this key, and is no longer toggleable.
+  recreatedKey?: string;
+}
+
+/** Which screen of a report-import review is showing (overview-hub KTD1). */
+export type ImportReviewView = 'overview' | 'new' | 'ticketed' | 'stale';
+
+/** The three result groups an import can produce; also the per-group screen names. */
+export type ImportResultGroup = 'new' | 'ticketed' | 'stale';
+
+/** Per-group action outcomes accumulated over one import session (R2, R3). */
+export interface ImportOutcomes {
+  created: number;
+  createFailed: number;
+  recreated: number;
+  recreateFailed: number;
+  updated: number;
+  updateFailed: number;
+  closed: number;
+  closeFailed: number;
+}
+
+export function emptyImportOutcomes(): ImportOutcomes {
+  return { created: 0, createFailed: 0, recreated: 0, recreateFailed: 0, updated: 0, updateFailed: 0, closed: 0, closeFailed: 0 };
 }
 
 export interface ReviewSession<TRow> {
@@ -1308,7 +1338,7 @@ export interface ReviewSession<TRow> {
   allRows: TRow[];
   // The currently DISPLAYED page: every "already ticketed" row (always shown in full, R8 — never
   // paged) plus the current page's slice of "new" rows (BATCH_LIMIT per page, defaulted to
-  // included). executeImportBatch's existing included-filter-then-slice logic reads this directly
+  // included). createNewRows reads this page's included new rows directly
   // and is otherwise untouched by paging (R7's "confirming from whichever page is currently
   // visible creates that page's included rows").
   rows: TRow[];
@@ -1319,6 +1349,15 @@ export interface ReviewSession<TRow> {
   // (`transitionTickets`). Absent for importers with no stale-check concept (email, which has no
   // dedup/marker-label concept either — see ReportImportDescriptor's optional `stale` field).
   staleTickets?: ReviewSessionStale;
+  // Overview-hub KTD1/KTD7: the screen currently shown, the result groups that had rows when the
+  // session was built (fixed for the session's life — R1's listing basis), whether exactly one
+  // group had rows (then there is no overview, R4), and the accumulated action outcomes (R2).
+  // Optional only so a caller-built session (tests, older call sites) can be normalized by
+  // ensureImportViewState(); every session the handler persists carries all four.
+  view?: ImportReviewView;
+  groups?: ImportResultGroup[];
+  singleGroup?: boolean;
+  outcomes?: ImportOutcomes;
   schemaVersion: number;
 }
 
@@ -1332,7 +1371,7 @@ export type EmailReviewSession = ReviewSession<EmailReviewRow>;
 // group can share one resolution ask before the merged review screen renders (KTD10-15's "chain
 // the ask once per group, not once per ticket" rule). `cleanupHandler.ts`'s `buildStaleTicketGroups`
 // builds these; `reportImportHandler.ts` chains the ask and renders the result via
-// `buildStaleReviewSection` below.
+// `buildStaleGroupScreen` below.
 // ---------------------------------------------------------------------------------------------
 
 /** One issue-type group of stale tickets, resolution already chosen (or intentionally skipped —
@@ -1345,6 +1384,11 @@ export interface StaleTicketGroup {
   targetState: string;
   resolution: string | undefined;
   tickets: TransitionBatchTicket[];
+  // Overview-hub KTD6: present only while this group's resolution question is still unanswered —
+  // the options the question offers. The question is asked only after "close tickets" and only for
+  // groups with a selected ticket; answering (including "none") removes this field, so a group is
+  // never asked twice.
+  resolutionOptions?: string[];
 }
 
 /** A stale ticket whose project+issue-type has no matching `cleanupRules` entry (or, degenerately,
@@ -1373,6 +1417,9 @@ export interface StaleResolutionPendingGroup {
 export interface ReviewSessionStale {
   groups: StaleTicketGroup[];
   ineligible: IneligibleStaleTicket[];
+  // Overview-hub KTD3: tickets a "close tickets" action already transitioned — shown as closed, no
+  // longer toggleable, and never transitioned again.
+  closedKeys?: string[];
 }
 
 /** Sibling to `AwaitIssueTypeSession` (ticketContext.ts) — same one-key ask/resume shape, but for
@@ -1412,7 +1459,7 @@ export const SESSION_EXPIRED_MESSAGE =
 // U4: pageable review-session "New" section (R6-R8). `allRows` (the full, unpaged candidate set)
 // is the source of truth; `buildReviewPage()` slices out one page's worth of "new" rows plus every
 // "already ticketed" row (never paged, R8) any time the visible page needs to change. Kept
-// separate from `buildImportReviewTable()`'s own rendering below so the slicing logic is
+// separate from the screen renderers below (`buildNewGroupScreen()`) so the slicing logic is
 // independently testable.
 // ---------------------------------------------------------------------------------------------
 
@@ -1459,7 +1506,7 @@ export type ReviewPageNav =
  * `buildReviewPage`'s indexing directly.
  */
 export function parseReviewPageNav(reply: string): ReviewPageNav | null {
-  const normalized = reply.trim().toLowerCase().replace(/\s+/g, ' ');
+  const normalized = normalizeReply(reply);
   if (normalized === 'next' || normalized === 'next page') return { kind: 'next' };
   if (normalized === 'prev' || normalized === 'previous' || normalized === 'prev page' || normalized === 'previous page') {
     return { kind: 'prev' };
@@ -1491,17 +1538,6 @@ export function applyReviewSessionToggle<TRow extends ReviewRowBase>(
     return updated ? { ...r, included: updated.included } : r;
   });
   return { rows: newRows, allRows: newAllRows };
-}
-
-/**
- * U3/R13: "update existing tickets" reply keyword — a distinct outcome from `ok`/`cancel`/`toggle`/
- * a page-nav token (U4)/a stale-ticket-key toggle (U6), checked in the same order
- * `handleImportReviewReply` already threads those through. Case-insensitive exact match only (no
- * fuzzy/partial matching) — deliberately narrow so it can never collide with a row-id toggle list
- * or any other reply shape.
- */
-export function isUpdateExistingTicketsReply(reply: string): boolean {
-  return reply.trim().toLowerCase() === 'update existing tickets';
 }
 
 /**
@@ -1590,106 +1626,472 @@ export const WALTZ_REVIEW_COLUMNS: ReviewTableColumn<WaltzReviewRow>[] = [
   { header: 'Rating', accessor: (r) => r.maxVulnRating },
 ];
 
-// Aliased locally rather than threading BATCH_LIMIT through as an extra buildImportReviewTable param.
-const REVIEW_BATCH_LIMIT = BATCH_LIMIT;
+// ---------------------------------------------------------------------------------------------
+// Overview hub (docs/plans/2026-09-23-1400-feat-report-import-overview-hub-plan.md): an import's
+// results are split into up to three groups — New, Already ticketed, Stale — shown first as an
+// overview, then one group per screen, each with its own reply vocabulary and its own action(s).
+// Nothing is created, updated, re-created or closed except by an action chosen inside its group
+// (R11). Everything below is pure (no vscode) so the renderers and parsers are Vitest-covered.
+// ---------------------------------------------------------------------------------------------
 
-export function buildImportReviewTable<TRow extends ReviewRowBase>(
-  rows: TRow[],
-  baseUrl: string | undefined,
-  page: number, // 0-based current page among "new" rows — see buildReviewPage()
-  totalPages: number,
-  columns: ReviewTableColumn<TRow>[],
-  itemNoun: string, // e.g. 'flaw(s)' or 'component(s)' — used in summary/page lines
-  // U3/R13: opt-in only — set by streamImportReview() when the importer's own descriptor configures
-  // `updateExisting` (Veracode; Waltz/email omit it and this stays false, so neither the "Updated?"
-  // column nor the reply hint ever appears for them).
-  supportsUpdateExisting = false,
-): string {
-  const ticketed = rows.filter(r => r.existingTicketKey !== null);
-  const fresh = rows.filter(r => r.existingTicketKey === null);
-  const lines: string[] = [];
-  const idColumn: ReviewTableColumn<TRow> = { header: '#', accessor: (r) => r.id };
-  const pluralBare = itemNoun.replace('(s)', 's'); // 'component(s)' -> 'components'
+/** Exact-match command words (KTD2). Chosen disjoint from isConfirmation()/isCancellation(), from
+ * row ids (digits, `A<n>`) and ticket keys (always hyphenated), and from page-nav/bulk tokens. */
+export const IMPORT_COMMANDS = {
+  openNew: 'open new',
+  openTicketed: 'open already ticketed',
+  openStale: 'open stale',
+  done: 'done',
+  back: 'back',
+  create: 'create tickets',
+  update: 'update tickets',
+  recreate: 're-create tickets',
+  close: 'close tickets',
+} as const;
 
-  // R8: the Include? cell is itself the toggle — clicking it resubmits the row's own id, which
-  // parseReviewInput already parses as a toggle reply (same text a typed "2 4"/"A1" list uses), so
-  // no new parser logic is needed (Risks section). R9: always the positive "will (re-)create when
-  // checked" framing, never a negative "Skip" column.
-  if (ticketed.length > 0) {
-    const ticketedColumns: ReviewTableColumn<TRow>[] = [
-      idColumn,
-      ...columns,
-      { header: 'Ticket', accessor: (r) => formatKeyLink(r.existingTicketKey!, baseUrl) },
-      // U3/R13: shows whether "update existing tickets" already synced this row's new finding(s)
-      // onto its ticket this session — set by markRowsUpdatedExisting() after that action runs.
-      ...(supportsUpdateExisting
-        ? [{ header: 'Updated?', accessor: (r: TRow) => (r.updatedExisting ? '✓ synced' : '') } as ReviewTableColumn<TRow>]
-        : []),
-      { header: 'Include?', accessor: (r) => buildChatCommandLink(r.included ? '✓ re-create' : '_excluded_', '@jira', r.id) },
-    ];
-    lines.push('### Already ticketed');
-    lines.push(renderReviewTable(ticketedColumns, ticketed));
-    lines.push('');
+// Pre-overview-hub spelling of the update action — still accepted on the Already-ticketed screen so
+// a user (or a clicked link in an older transcript) typing the old words is not rejected.
+const LEGACY_UPDATE_COMMAND = 'update existing tickets';
+
+/** The result groups that have at least one row — the basis for R1 (evaluated once, at build). */
+export function computeImportResultGroups<TRow extends ReviewRowBase>(
+  allRows: TRow[],
+  stale?: ReviewSessionStale,
+): ImportResultGroup[] {
+  const groups: ImportResultGroup[] = [];
+  if (allRows.some(r => r.existingTicketKey === null)) groups.push('new');
+  if (allRows.some(r => r.existingTicketKey !== null)) groups.push('ticketed');
+  if (stale && (stale.groups.some(g => g.tickets.length > 0) || stale.ineligible.length > 0)) groups.push('stale');
+  return groups;
+}
+
+/**
+ * KTD7: fixes the session's groups, single-group flag and initial view once, when the session is
+ * built. Exactly one group (or none) → that group opens directly with "Done" and there is no
+ * overview (R4); two or three → the overview comes first (R1).
+ */
+export function initImportViewState<TRow extends ReviewRowBase>(session: ReviewSession<TRow>): ReviewSession<TRow> {
+  const groups = computeImportResultGroups(session.allRows, session.staleTickets);
+  const singleGroup = groups.length <= 1;
+  const view: ImportReviewView = singleGroup ? (groups[0] ?? 'new') : 'overview';
+  return { ...session, groups, singleGroup, view, outcomes: emptyImportOutcomes() };
+}
+
+/** Fills in view state for a session built without it (e.g. by a test or an older call site). */
+export function ensureImportViewState<TRow extends ReviewRowBase>(session: ReviewSession<TRow>): ReviewSession<TRow> {
+  if (session.view !== undefined && session.groups !== undefined && session.singleGroup !== undefined && session.outcomes !== undefined) {
+    return session;
+  }
+  const initial = initImportViewState(session);
+  return {
+    ...session,
+    view: session.view ?? initial.view,
+    groups: session.groups ?? initial.groups,
+    singleGroup: session.singleGroup ?? initial.singleGroup,
+    outcomes: session.outcomes ?? initial.outcomes,
+  };
+}
+
+/** Live per-group counts the screens and parsers share. */
+export interface ImportGroupCounts {
+  newRemaining: number; // every not-yet-created new row, across all pages
+  newIncludedOnPage: number; // what "Create N tickets" would create now
+  ticketedTotal: number;
+  ticketedOpen: number; // already-ticketed rows not re-created yet — still worth opening the screen for
+  updatable: number; // already-ticketed rows with a finding their ticket does not carry yet
+  recreatable: number; // already-ticketed rows toggled on for re-creation, not re-created yet
+  staleOpen: number; // eligible stale tickets not closed yet
+  staleSelected: number; // what "Close N tickets" would close now
+  staleIneligible: number;
+}
+
+export function countImportGroups<TRow extends ReviewRowBase>(session: ReviewSession<TRow>): ImportGroupCounts {
+  const ticketed = session.allRows.filter(r => r.existingTicketKey !== null);
+  const closed = new Set(session.staleTickets?.closedKeys ?? []);
+  const staleTickets = (session.staleTickets?.groups ?? []).flatMap(g => g.tickets).filter(t => !closed.has(t.key));
+  return {
+    newRemaining: session.allRows.filter(r => r.existingTicketKey === null).length,
+    newIncludedOnPage: session.rows.filter(r => r.existingTicketKey === null && r.included).length,
+    ticketedTotal: ticketed.length,
+    ticketedOpen: ticketed.filter(r => !r.recreatedKey).length,
+    updatable: ticketed.filter(r => r.hasUnsyncedFindings && !r.updatedExisting && !r.recreatedKey).length,
+    recreatable: ticketed.filter(r => r.included && !r.recreatedKey).length,
+    staleOpen: staleTickets.length,
+    staleSelected: staleTickets.filter(t => t.included).length,
+    staleIneligible: session.staleTickets?.ineligible.length ?? 0,
+  };
+}
+
+export interface ImportScreenOptions {
+  baseUrl?: string;
+  itemNoun: string; // e.g. 'flaw(s)' — pluralized for display
+  supportsUpdateExisting: boolean; // R16: only Veracode configures the update action
+}
+
+function pluralNoun(itemNoun: string): string {
+  return itemNoun.replace('(s)', 's'); // 'component(s)' -> 'components'
+}
+
+function countedNoun(count: number, itemNoun: string): string {
+  return `${count} ${count === 1 ? itemNoun.replace('(s)', '') : pluralNoun(itemNoun)}`;
+}
+
+function cmdLink(label: string, command: string): string {
+  return buildChatCommandLink(label, '@jira', command);
+}
+
+/** "Back to overview" normally; "Done" when the import has a single group and no overview (R4). */
+function groupScreenExitLine(singleGroup: boolean): string {
+  return singleGroup
+    ? `Reply ${cmdLink('Done', IMPORT_COMMANDS.done)} when you are finished with this import.`
+    : `Reply ${cmdLink('Back to overview', IMPORT_COMMANDS.back)} to see the other results.`;
+}
+
+/**
+ * R1/R2/R3/R15: the overview — one line per group that had rows when the session was built, with
+ * its count, what already happened to it, and an "open" link while it still has something to act
+ * on. A fully handled group stays listed with its outcome and no link.
+ */
+export function buildImportOverview<TRow extends ReviewRowBase>(session: ReviewSession<TRow>, opts: ImportScreenOptions): string {
+  const s = ensureImportViewState(session);
+  const c = countImportGroups(s);
+  const o = s.outcomes!;
+  const lines: string[] = ['### Import results', ''];
+
+  for (const group of s.groups!) {
+    const parts: string[] = [];
+    let link = '';
+    if (group === 'new') {
+      if (o.created > 0) parts.push(`${o.created} created`);
+      if (o.createFailed > 0) parts.push(`${o.createFailed} failed`);
+      parts.push(o.created > 0 || o.createFailed > 0 ? `${c.newRemaining} left` : countedNoun(c.newRemaining, opts.itemNoun));
+      if (c.newRemaining > 0) link = cmdLink('Review & create', IMPORT_COMMANDS.openNew);
+      lines.push(`- **New** — ${parts.join(' · ')}${link ? ` — ${link}` : ''}`);
+    } else if (group === 'ticketed') {
+      parts.push(countedNoun(c.ticketedTotal, opts.itemNoun));
+      if (opts.supportsUpdateExisting && c.updatable > 0) parts.push(`${c.updatable} with new findings`);
+      if (o.updated > 0) parts.push(`${o.updated} updated`);
+      if (o.recreated > 0) parts.push(`${o.recreated} re-created`);
+      if (o.updateFailed + o.recreateFailed > 0) parts.push(`${o.updateFailed + o.recreateFailed} failed`);
+      if (c.ticketedOpen > 0) link = cmdLink('Review', IMPORT_COMMANDS.openTicketed);
+      lines.push(`- **Already ticketed** — ${parts.join(' · ')}${link ? ` — ${link}` : ''}`);
+    } else {
+      parts.push(`${c.staleOpen} open`);
+      if (c.staleIneligible > 0) parts.push(`${c.staleIneligible} without a cleanup rule`);
+      if (o.closed > 0) parts.push(`${o.closed} closed`);
+      if (o.closeFailed > 0) parts.push(`${o.closeFailed} failed`);
+      if (c.staleOpen > 0 || c.staleIneligible > 0) link = cmdLink('Review & close', IMPORT_COMMANDS.openStale);
+      lines.push(`- **Stale tickets** (finding no longer in the report) — ${parts.join(' · ')}${link ? ` — ${link}` : ''}`);
+    }
   }
 
-  lines.push('### New — will create');
-  if (fresh.length === 0) {
-    lines.push(`_All matching ${pluralBare} already have a ticket._`);
-  } else {
-    const freshColumns: ReviewTableColumn<TRow>[] = [
-      idColumn,
-      ...columns,
-      { header: 'Include?', accessor: (r) => buildChatCommandLink(r.included ? '✓' : '_excluded_', '@jira', r.id) },
-    ];
-    lines.push(renderReviewTable(freshColumns, fresh));
-    // Bulk New-row controls — set every New row on this page in one action. Rendered inside the
-    // New section (not the shared footer) so they read as scoped to these rows, and only when at
-    // least one New row exists (with none they'd be no-ops). Labels and command text are static,
-    // so no extra sanitization beyond the table's existing trustedChatMarkdown gate.
-    lines.push(
-      `Reply ${buildChatCommandLink('Include all', '@jira', 'include all')} / ` +
-      `${buildChatCommandLink('Exclude all', '@jira', 'exclude all')} to set every New row on this page.`,
-    );
-  }
   lines.push('');
+  lines.push('_Open a group to review it. Nothing is created, updated or closed until you choose an action inside that group._');
+  lines.push('');
+  lines.push(`Reply ${cmdLink('Done', IMPORT_COMMANDS.done)} to finish this import.`);
+  return lines.join('\n');
+}
 
-  // U4: replaces the old pre-cap "N more matched, re-run" note — the "New" section now covers
-  // every matched candidate via paging, not a fixed pre-built batch, so the signal a user needs is
-  // which page they're on and how to move, not "how many more exist beyond this run."
+/** R5/R7: the New group — table, per-row toggles, include/exclude all, paging, "Create N tickets". */
+export function buildNewGroupScreen<TRow extends ReviewRowBase>(
+  session: ReviewSession<TRow>,
+  columns: ReviewTableColumn<TRow>[],
+  opts: ImportScreenOptions,
+): string {
+  const s = ensureImportViewState(session);
+  const fresh = s.rows.filter(r => r.existingTicketKey === null);
+  const { totalPages } = buildReviewPage(s.allRows, s.page);
+  const lines: string[] = ['### New — will create'];
+
+  if (fresh.length === 0) {
+    lines.push(`_No new ${pluralNoun(opts.itemNoun)} left to create._`);
+    lines.push('');
+    lines.push(groupScreenExitLine(s.singleGroup!));
+    return lines.join('\n');
+  }
+
+  const freshColumns: ReviewTableColumn<TRow>[] = [
+    { header: '#', accessor: (r) => r.id },
+    ...columns,
+    { header: 'Include?', accessor: (r) => cmdLink(r.included ? '✓' : '_excluded_', r.id) },
+  ];
+  lines.push(renderReviewTable(freshColumns, fresh));
+  lines.push(
+    `Reply ${cmdLink('Include all', 'include all')} / ${cmdLink('Exclude all', 'exclude all')} to set every row on this page.`,
+  );
+  lines.push('');
   if (totalPages > 1) {
     lines.push(
-      `_Page ${page + 1} of ${totalPages}._ Reply ${buildChatCommandLink('next', '@jira', 'next')} / ` +
-      `${buildChatCommandLink('prev', '@jira', 'prev')} or \`page <n>\` to navigate.`,
+      `_Page ${s.page + 1} of ${totalPages}._ Reply ${cmdLink('next', 'next')} / ${cmdLink('prev', 'prev')} or \`page <n>\` to navigate.`,
     );
     lines.push('');
   }
-
-  const willCreate = rows.filter(r => r.included).length;
-  lines.push(`**${willCreate}** ticket(s) will be created.`);
-  // Defensive backstop: "new" rows may already be capped upstream, but a user can still toggle extra
-  // "already ticketed" rows back to "re-create", so this can still fire even with an upstream cap.
-  if (willCreate > REVIEW_BATCH_LIMIT) {
-    lines.push('');
-    lines.push(`_Only the first ${REVIEW_BATCH_LIMIT} included rows will be created this run — re-run the import afterward for the remainder._`);
-  }
-  // U3/R13: offered independently of, and not requiring, a "post it" confirm on the New/Stale
-  // sections (governing decision) — only shown when the importer supports it AND there's at least
-  // one already-ticketed row it could apply to.
-  if (supportsUpdateExisting && ticketed.length > 0) {
-    lines.push('');
-    lines.push(
-      `Reply ${buildChatCommandLink('update existing tickets', '@jira', 'update existing tickets')} to add any missing ` +
-      `label + a summarizing comment to every already-ticketed row above with a new finding not yet reflected on its ticket.`,
-    );
-  }
-
+  const n = fresh.filter(r => r.included).length;
+  lines.push(`**${n}** ticket(s) will be created.`);
   lines.push('');
   lines.push(
-    `Reply ${buildChatCommandLink('Post it', '@jira', 'post it')} to proceed, ` +
-    `${buildChatCommandLink('Cancel', '@jira', 'cancel')} to cancel, or a list of ids to toggle (e.g. \`2 4\` or \`A1\`).`,
+    (n > 0 ? `Reply ${cmdLink(`Create ${n} tickets`, IMPORT_COMMANDS.create)} to create them, or ` : 'Reply ') +
+    'a list of row numbers to toggle (e.g. `2 4`).',
   );
-
+  lines.push(groupScreenExitLine(s.singleGroup!));
   return lines.join('\n');
+}
+
+/** R5/R8/R16: the Already-ticketed group — "Update N tickets" (where supported) and "Re-create N". */
+export function buildTicketedGroupScreen<TRow extends ReviewRowBase>(
+  session: ReviewSession<TRow>,
+  columns: ReviewTableColumn<TRow>[],
+  opts: ImportScreenOptions,
+): string {
+  const s = ensureImportViewState(session);
+  const ticketed = s.allRows.filter(r => r.existingTicketKey !== null);
+  const c = countImportGroups(s);
+  const lines: string[] = ['### Already ticketed'];
+
+  const ticketedColumns: ReviewTableColumn<TRow>[] = [
+    { header: '#', accessor: (r) => r.id },
+    ...columns,
+    { header: 'Ticket', accessor: (r) => formatKeyLink(r.existingTicketKey!, opts.baseUrl) },
+    ...(opts.supportsUpdateExisting
+      ? [{
+        header: 'Updated?',
+        accessor: (r: TRow) => (r.updatedExisting ? '✓ synced' : r.hasUnsyncedFindings ? 'new finding' : ''),
+      } as ReviewTableColumn<TRow>]
+      : []),
+    {
+      header: 'Re-create?',
+      accessor: (r) => (r.recreatedKey
+        ? `re-created as ${formatKeyLink(r.recreatedKey, opts.baseUrl)}`
+        : cmdLink(r.included ? '✓ re-create' : '_no_', r.id)),
+    },
+  ];
+  lines.push(renderReviewTable(ticketedColumns, ticketed));
+  lines.push('');
+
+  if (opts.supportsUpdateExisting) {
+    lines.push(c.updatable > 0
+      ? `Reply ${cmdLink(`Update ${c.updatable} tickets`, IMPORT_COMMANDS.update)} to add each new finding's label and a summarizing comment to its existing ticket.`
+      : '_Every already-ticketed row is up to date — nothing to update._');
+  }
+  lines.push(c.recreatable > 0
+    ? `Reply ${cmdLink(`Re-create ${c.recreatable} tickets`, IMPORT_COMMANDS.recreate)} to create a fresh ticket for each row marked ✓ re-create.`
+    : 'Re-create 0 tickets — reply a row id (e.g. `A1`) to mark it for a fresh ticket.');
+  if (c.recreatable > BATCH_LIMIT) {
+    lines.push(`_Only the first ${BATCH_LIMIT} marked rows will be re-created per action._`);
+  }
+  lines.push(groupScreenExitLine(s.singleGroup!));
+  return lines.join('\n');
+}
+
+/** R5/R9: the Stale group — per-ticket toggles (off by default) and "Close N tickets". */
+export function buildStaleGroupScreen<TRow extends ReviewRowBase>(session: ReviewSession<TRow>, opts: ImportScreenOptions): string {
+  const s = ensureImportViewState(session);
+  const stale: ReviewSessionStale = s.staleTickets ?? { groups: [], ineligible: [] };
+  const closed = new Set(stale.closedKeys ?? []);
+  const c = countImportGroups(s);
+
+  interface StaleRow {
+    key: string;
+    summary: string;
+    currentStatus: string;
+    to: string;
+    resolution: string;
+    toggleCell: string;
+  }
+  const rows: StaleRow[] = [];
+  for (const group of stale.groups) {
+    for (const t of group.tickets) {
+      rows.push({
+        key: formatKeyLink(t.key, opts.baseUrl),
+        summary: neutralizeMarkdownLinks(t.summary),
+        currentStatus: t.currentStatus,
+        to: group.targetState,
+        resolution: group.resolutionOptions ? '_asked on close_' : (group.resolution ?? ''),
+        toggleCell: closed.has(t.key) ? '✓ closed' : cmdLink(t.included ? '✓ close' : '_no_', t.key),
+      });
+    }
+  }
+  for (const t of stale.ineligible) {
+    rows.push({
+      key: formatKeyLink(t.key, opts.baseUrl),
+      summary: neutralizeMarkdownLinks(t.summary),
+      currentStatus: t.currentStatus,
+      to: '—',
+      resolution: '',
+      toggleCell: `_excluded — ${neutralizeMarkdownLinks(t.note)}_`,
+    });
+  }
+
+  const columns: ReviewTableColumn<StaleRow>[] = [
+    { header: 'Key', accessor: r => r.key },
+    { header: 'Summary', accessor: r => r.summary },
+    { header: 'Status', accessor: r => r.currentStatus },
+    { header: '→ To', accessor: r => r.to },
+    { header: 'Resolution', accessor: r => r.resolution },
+    { header: 'Close?', accessor: r => r.toggleCell },
+  ];
+
+  const lines: string[] = ['### Stale — no longer in the report, may be closed'];
+  lines.push(renderReviewTable(columns, rows));
+  lines.push('');
+  if (c.staleOpen > 0) {
+    lines.push(c.staleSelected > 0
+      ? `Reply ${cmdLink(`Close ${c.staleSelected} tickets`, IMPORT_COMMANDS.close)} to transition the tickets marked ✓ close.`
+      : 'Close 0 tickets — reply a ticket key (e.g. `PROJ-123`) to mark it for closing.');
+  }
+  lines.push(groupScreenExitLine(s.singleGroup!));
+  return lines.join('\n');
+}
+
+/** Renders whichever screen the session's `view` names. */
+export function buildImportScreen<TRow extends ReviewRowBase>(
+  session: ReviewSession<TRow>,
+  columns: ReviewTableColumn<TRow>[],
+  opts: ImportScreenOptions,
+): string {
+  const s = ensureImportViewState(session);
+  switch (s.view) {
+    case 'new': return buildNewGroupScreen(s, columns, opts);
+    case 'ticketed': return buildTicketedGroupScreen(s, columns, opts);
+    case 'stale': return buildStaleGroupScreen(s, opts);
+    default: return buildImportOverview(s, opts);
+  }
+}
+
+/** What a reply on the current import screen asks for (KTD2). */
+export type ImportReplyAction =
+  | { kind: 'open'; view: ImportResultGroup }
+  | { kind: 'done' }
+  | { kind: 'back' }
+  | { kind: 'create' }
+  | { kind: 'update' }
+  | { kind: 'recreate' }
+  | { kind: 'close' }
+  | { kind: 'pageNav'; nav: ReviewPageNav }
+  | { kind: 'bulk'; include: boolean }
+  | { kind: 'toggleRows'; ids: string[] }
+  | { kind: 'toggleStale'; keys: string[] }
+  | { kind: 'invalid' };
+
+export interface ImportReplyContext {
+  singleGroup: boolean;
+  groups: ImportResultGroup[];
+  newRowIds: string[]; // ids of the new rows on the visible page
+  ticketedRowIds: string[]; // ids of already-ticketed rows that can still be toggled
+  stale?: ReviewSessionStale;
+  supportsUpdateExisting: boolean;
+}
+
+function normalizeReply(reply: string): string {
+  return reply.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/** Every token must be one of `ids` (case-insensitive) — a stray token makes the reply invalid
+ * rather than half-applied, so a token from another screen's vocabulary is never acted on (R6). */
+function parseStrictRowToggle(reply: string, ids: string[]): string[] | null {
+  const tokens = reply.trim().split(/[\s,]+/).filter(Boolean);
+  if (tokens.length === 0) return null;
+  const byLower = new Map(ids.map(id => [id.toLowerCase(), id]));
+  const matched: string[] = [];
+  for (const token of tokens) {
+    const found = byLower.get(token.toLowerCase());
+    if (!found) return null;
+    matched.push(found);
+  }
+  return matched;
+}
+
+export function parseOverviewReply(reply: string, ctx: ImportReplyContext): ImportReplyAction {
+  const n = normalizeReply(reply);
+  if (n === IMPORT_COMMANDS.done || isCancellation(reply)) return { kind: 'done' };
+  if (n === IMPORT_COMMANDS.openNew && ctx.groups.includes('new')) return { kind: 'open', view: 'new' };
+  if (n === IMPORT_COMMANDS.openTicketed && ctx.groups.includes('ticketed')) return { kind: 'open', view: 'ticketed' };
+  if (n === IMPORT_COMMANDS.openStale && ctx.groups.includes('stale')) return { kind: 'open', view: 'stale' };
+  return { kind: 'invalid' };
+}
+
+/** Shared by every group screen: back/done and cancellation words (KTD2). */
+function parseGroupExit(reply: string, ctx: ImportReplyContext): ImportReplyAction | null {
+  const n = normalizeReply(reply);
+  if (n === IMPORT_COMMANDS.done) return ctx.singleGroup ? { kind: 'done' } : { kind: 'back' };
+  if (n === IMPORT_COMMANDS.back || isCancellation(reply)) return ctx.singleGroup ? { kind: 'done' } : { kind: 'back' };
+  return null;
+}
+
+export function parseNewGroupReply(reply: string, ctx: ImportReplyContext): ImportReplyAction {
+  const n = normalizeReply(reply);
+  if (n === IMPORT_COMMANDS.create || isConfirmation(reply)) return { kind: 'create' };
+  const exit = parseGroupExit(reply, ctx);
+  if (exit) return exit;
+  const nav = parseReviewPageNav(reply);
+  if (nav) return { kind: 'pageNav', nav };
+  const bulk = parseBulkNewRowReply(reply);
+  if (bulk !== null) return { kind: 'bulk', include: bulk };
+  const ids = parseStrictRowToggle(reply, ctx.newRowIds);
+  return ids ? { kind: 'toggleRows', ids } : { kind: 'invalid' };
+}
+
+export function parseTicketedGroupReply(reply: string, ctx: ImportReplyContext): ImportReplyAction {
+  const n = normalizeReply(reply);
+  if (n === IMPORT_COMMANDS.recreate) return { kind: 'recreate' };
+  if (n === IMPORT_COMMANDS.update || n === LEGACY_UPDATE_COMMAND) {
+    return ctx.supportsUpdateExisting ? { kind: 'update' } : { kind: 'invalid' };
+  }
+  const exit = parseGroupExit(reply, ctx);
+  if (exit) return exit;
+  const ids = parseStrictRowToggle(reply, ctx.ticketedRowIds);
+  return ids ? { kind: 'toggleRows', ids } : { kind: 'invalid' };
+}
+
+export function parseStaleGroupReply(reply: string, ctx: ImportReplyContext): ImportReplyAction {
+  const n = normalizeReply(reply);
+  if (n === IMPORT_COMMANDS.close || isConfirmation(reply)) return { kind: 'close' };
+  const exit = parseGroupExit(reply, ctx);
+  if (exit) return exit;
+  if (!ctx.stale) return { kind: 'invalid' };
+  const toggle = parseStaleTicketToggle(reply, ctx.stale);
+  // A reply mixing a ticket key with anything else is rejected whole rather than half-applied.
+  if (!toggle || toggle.remainder.trim().length > 0) return { kind: 'invalid' };
+  return { kind: 'toggleStale', keys: toggle.matched };
+}
+
+/** Parses a reply against the vocabulary of the screen currently shown — and only that one (R6). */
+export function parseImportReviewReply(view: ImportReviewView, reply: string, ctx: ImportReplyContext): ImportReplyAction {
+  switch (view) {
+    case 'new': return parseNewGroupReply(reply, ctx);
+    case 'ticketed': return parseTicketedGroupReply(reply, ctx);
+    case 'stale': return parseStaleGroupReply(reply, ctx);
+    default: return parseOverviewReply(reply, ctx);
+  }
+}
+
+/** One-line reminder of what the current screen accepts, for the "didn't understand" reply. */
+export function describeImportReplyVocabulary(view: ImportReviewView, ctx: ImportReplyContext): string {
+  const exit = ctx.singleGroup ? '`done`' : '`back`';
+  switch (view) {
+    case 'new':
+      return `On this screen you can reply \`create tickets\`, row numbers to toggle (e.g. \`2 4\`), \`include all\` / \`exclude all\`, \`next\` / \`prev\`, or ${exit}.`;
+    case 'ticketed':
+      return `On this screen you can reply ${ctx.supportsUpdateExisting ? '`update tickets`, ' : ''}\`re-create tickets\`, row ids to toggle (e.g. \`A1\`), or ${exit}.`;
+    case 'stale':
+      return `On this screen you can reply \`close tickets\`, a stale ticket's key to toggle it (e.g. \`PROJ-123\`), or ${exit}.`;
+    default: {
+      const opens = ctx.groups.map(g => `\`${g === 'new' ? IMPORT_COMMANDS.openNew : g === 'ticketed' ? IMPORT_COMMANDS.openTicketed : IMPORT_COMMANDS.openStale}\``);
+      return `On the overview you can reply ${[...opens, '`done`'].join(', ')}.`;
+    }
+  }
+}
+
+/** Import summary streamed on "done" (R3), from the session's accumulated outcomes. */
+export function buildImportDoneSummary(outcomes: ImportOutcomes): string {
+  const parts = [
+    `**${outcomes.created}** created`,
+    `${outcomes.recreated} re-created`,
+    `${outcomes.updated} updated`,
+    `${outcomes.closed} closed`,
+  ];
+  const failed = outcomes.createFailed + outcomes.recreateFailed + outcomes.updateFailed + outcomes.closeFailed;
+  if (failed > 0) parts.push(`${failed} failed`);
+  return `Import finished — ${parts.join(', ')}.`;
 }
 
 // U6: full-ticket-key vocabulary (e.g. `PROJ-123`) for the Stale section's own toggle replies —
@@ -1726,7 +2128,10 @@ export interface StaleTicketToggleResult {
 export function parseStaleTicketToggle(reply: string, stale: ReviewSessionStale): StaleTicketToggleResult | null {
   const tokens = reply.trim().split(/[\s,]+/).filter(Boolean);
   const knownKeys = new Map<string, string>(); // UPPERCASE -> real key
-  for (const g of stale.groups) for (const t of g.tickets) knownKeys.set(t.key.toUpperCase(), t.key);
+  const closed = new Set((stale.closedKeys ?? []).map(k => k.toUpperCase()));
+  for (const g of stale.groups) {
+    for (const t of g.tickets) if (!closed.has(t.key.toUpperCase())) knownKeys.set(t.key.toUpperCase(), t.key);
+  }
   const matched: string[] = [];
   const remainderTokens: string[] = [];
   for (const token of tokens) {
@@ -1751,62 +2156,6 @@ export function applyStaleTicketToggle(stale: ReviewSessionStale, keys: string[]
       tickets: g.tickets.map(t => (toggleSet.has(t.key.toUpperCase()) ? { ...t, included: !t.included } : t)),
     })),
   };
-}
-
-/**
- * Renders the Stale review section — one combined table spanning every group's eligible tickets
- * (R3's toggle, positive "will transition when checked" framing per R8/R9's existing convention)
- * plus every ineligible ticket (R4: shown, excluded, no toggle offered — just its note). Returns
- * `''` when there is nothing to show, so callers can unconditionally append this to the New/
- * Already-ticketed table without an extra emptiness check of their own.
- */
-export function buildStaleReviewSection(stale: ReviewSessionStale, baseUrl?: string): string {
-  const anyEligible = stale.groups.some(g => g.tickets.length > 0);
-  if (!anyEligible && stale.ineligible.length === 0) return '';
-
-  interface StaleRow {
-    key: string;
-    summary: string;
-    currentStatus: string;
-    to: string;
-    resolution: string;
-    toggleCell: string;
-  }
-  const rows: StaleRow[] = [];
-  for (const group of stale.groups) {
-    for (const t of group.tickets) {
-      rows.push({
-        key: formatKeyLink(t.key, baseUrl),
-        summary: neutralizeMarkdownLinks(t.summary),
-        currentStatus: t.currentStatus,
-        to: group.targetState,
-        resolution: group.resolution ?? '',
-        toggleCell: buildChatCommandLink(t.included ? '✓' : '_excluded_', '@jira', t.key),
-      });
-    }
-  }
-  for (const t of stale.ineligible) {
-    rows.push({
-      key: formatKeyLink(t.key, baseUrl),
-      summary: neutralizeMarkdownLinks(t.summary),
-      currentStatus: t.currentStatus,
-      to: '—',
-      resolution: '',
-      toggleCell: `_excluded — ${neutralizeMarkdownLinks(t.note)}_`,
-    });
-  }
-
-  const columns: ReviewTableColumn<StaleRow>[] = [
-    { header: 'Key', accessor: r => r.key },
-    { header: 'Summary', accessor: r => r.summary },
-    { header: 'Status', accessor: r => r.currentStatus },
-    { header: '→ To', accessor: r => r.to },
-    { header: 'Resolution', accessor: r => r.resolution },
-    { header: 'Transition?', accessor: r => r.toggleCell },
-  ];
-
-  return `### Stale — no longer active, may be closed\n${renderReviewTable(columns, rows)}\n\n` +
-    'Reply with a stale ticket\'s key (e.g. `PROJ-123`) to toggle it.';
 }
 
 export interface BulkUpdateReviewRow {

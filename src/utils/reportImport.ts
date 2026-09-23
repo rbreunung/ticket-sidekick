@@ -326,12 +326,16 @@ export function buildReviewRows<TItem, TRow extends ReviewRowBase>(
   let newIndex = 0;
   let ticketedIndex = 0;
   for (const item of items) {
-    const existingTicketKey = findExistingTicketKey(dedupMap, dedupKeyOf(item));
+    const keys = dedupKeyOf(item);
+    const existingTicketKey = findExistingTicketKey(dedupMap, keys);
     const base: ReviewRowBase = {
       id: existingTicketKey ? `A${++ticketedIndex}` : `${++newIndex}`,
       existingTicketKey,
       included: existingTicketKey === null,
     };
+    // Overview-hub KTD5: an already-ticketed row with a key no found ticket carries yet has a newer
+    // finding its ticket does not reflect — counted by the Already-ticketed screen's "Update N".
+    if (existingTicketKey && keys.some(k => !dedupMap.has(k))) base.hasUnsyncedFindings = true;
     rows.push({ ...base, ...rowBuilder(item) } as TRow);
   }
   return rows;

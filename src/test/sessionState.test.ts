@@ -16,11 +16,15 @@ import {
   buildReviewPage, parseReviewPageNav, applyReviewSessionToggle, type ReviewRowBase,
 } from '../participant/sessionState';
 import {
-  isUpdateExistingTicketsReply, markRowsUpdatedExisting, buildImportReviewTable,
-  parseBulkNewRowReply, applyBulkNewRowSet,
+  markRowsUpdatedExisting, parseBulkNewRowReply, applyBulkNewRowSet,
+  buildImportOverview, buildNewGroupScreen, buildTicketedGroupScreen, buildStaleGroupScreen,
+  initImportViewState, ensureImportViewState, computeImportResultGroups, emptyImportOutcomes, buildImportDoneSummary,
+  parseOverviewReply, parseNewGroupReply, parseTicketedGroupReply, parseStaleGroupReply, IMPORT_COMMANDS,
+  isConfirmation, isCancellation,
+  type ReviewSession, type ImportReplyContext,
 } from '../participant/sessionState';
 import {
-  parseStaleTicketToggle, applyStaleTicketToggle, buildStaleReviewSection,
+  parseStaleTicketToggle, applyStaleTicketToggle,
   type ReviewSessionStale, type TransitionBatchTicket,
 } from '../participant/sessionState';
 
@@ -955,28 +959,7 @@ describe('applyReviewSessionToggle (U4/R7-R8)', () => {
   });
 });
 
-// U3: "update existing tickets" reply keyword + per-row "synced" bookkeeping (R13).
-describe('isUpdateExistingTicketsReply (U3/R13)', () => {
-  it('recognizes the exact reply, case-insensitively, trimmed', () => {
-    expect(isUpdateExistingTicketsReply('update existing tickets')).toBe(true);
-    expect(isUpdateExistingTicketsReply('UPDATE EXISTING TICKETS')).toBe(true);
-    expect(isUpdateExistingTicketsReply('  update existing tickets  ')).toBe(true);
-  });
-
-  it('does not match a row-id toggle, a page-nav token, or a stale-ticket-key reply', () => {
-    expect(isUpdateExistingTicketsReply('2')).toBe(false);
-    expect(isUpdateExistingTicketsReply('A1')).toBe(false);
-    expect(isUpdateExistingTicketsReply('next')).toBe(false);
-    expect(isUpdateExistingTicketsReply('PROJ-123')).toBe(false);
-    expect(isUpdateExistingTicketsReply('post it')).toBe(false);
-    expect(isUpdateExistingTicketsReply('cancel')).toBe(false);
-  });
-
-  it('does not fuzzy-match a partial or extended phrase', () => {
-    expect(isUpdateExistingTicketsReply('update existing')).toBe(false);
-    expect(isUpdateExistingTicketsReply('please update existing tickets now')).toBe(false);
-  });
-});
+// U3: per-row "synced" bookkeeping for "update tickets" (R13).
 
 describe('markRowsUpdatedExisting (U3/R13)', () => {
   it('sets updatedExisting on every row (in both rows and allRows) whose ticket key is in the update set', () => {
@@ -1072,10 +1055,19 @@ describe('applyBulkNewRowSet (review-table toggle-all)', () => {
   });
 });
 
-describe('buildImportReviewTable — "Include all" / "Exclude all" links (review-table toggle-all)', () => {
+function screenSession(allRows: PageRow[], extra: Partial<ReviewSession<PageRow>> = {}): ReviewSession<PageRow> {
+  const page = buildReviewPage(allRows, 0);
+  return initImportViewState({
+    projectKey: 'PROJ', issueType: 'Bug', templateName: null, additionalFields: {},
+    allRows, rows: page.rows, page: page.page, schemaVersion: 6, ...extra,
+  });
+}
+
+const itemOpts = { itemNoun: 'item(s)', supportsUpdateExisting: false };
+
+describe('New screen — "Include all" / "Exclude all" links (review-table toggle-all)', () => {
   it('renders both bulk links when New rows exist, each resubmitting its exact token', () => {
-    const rows = [makeTicketedRow('A1', 'PROJ-1'), ...makeFreshRows(2)];
-    const text = buildImportReviewTable(rows, undefined, 0, 1, [], 'item(s)');
+    const text = buildNewGroupScreen(screenSession([makeTicketedRow('A1', 'PROJ-1'), ...makeFreshRows(2)]), [], itemOpts);
 
     expect(text).toContain('Include all');
     expect(text).toContain('Exclude all');
@@ -1084,53 +1076,238 @@ describe('buildImportReviewTable — "Include all" / "Exclude all" links (review
     expect(decodeURIComponent(text)).toContain('"@jira exclude all"');
   });
 
-  it('renders neither bulk link when there are no New rows (all already ticketed)', () => {
-    const rows = [makeTicketedRow('A1', 'PROJ-1'), makeTicketedRow('A2', 'PROJ-2')];
-    const text = buildImportReviewTable(rows, undefined, 0, 1, [], 'item(s)');
+  it('renders neither bulk link, and says so, when every new row has been created', () => {
+    const text = buildNewGroupScreen(screenSession([makeTicketedRow('A1', 'PROJ-1')]), [], itemOpts);
 
     expect(text).not.toContain('Include all');
-    expect(text).not.toContain('Exclude all');
+    expect(text).toContain('_No new items left to create._');
   });
 
   it('renders the bulk links for the Waltz column set too (shared renderer — R5)', () => {
-    const rows = makeFreshRows(2);
-    const text = buildImportReviewTable(rows, undefined, 0, 1, WALTZ_TEST_COLUMNS, 'component(s)');
+    const text = buildNewGroupScreen(screenSession(makeFreshRows(2)), WALTZ_TEST_COLUMNS, { ...itemOpts, itemNoun: 'component(s)' });
 
     expect(text).toContain('Include all');
     expect(text).toContain('Exclude all');
   });
+
+  it('counts only the rows still included on the visible page in "Create N tickets"', () => {
+    const session = screenSession(makeFreshRows(3));
+    session.rows = session.rows.map(r => (r.id === '2' ? { ...r, included: false } : r));
+    const text = buildNewGroupScreen(session, [], itemOpts);
+    expect(text).toContain('**2** ticket(s) will be created.');
+    expect(decodeURIComponent(text)).toContain('[Create 2 tickets]');
+  });
 });
 
-describe('buildImportReviewTable — "Updated?" column + reply hint (U3/R13)', () => {
-  it('omits the "Updated?" column and the reply hint when supportsUpdateExisting is false (default)', () => {
-    const rows = [makeTicketedRow('A1', 'PROJ-1'), ...makeFreshRows(1)];
-    const text = buildImportReviewTable(rows, undefined, 0, 1, [], 'item(s)');
+describe('Already-ticketed screen — "Updated?" column and actions (U3/R13, R8, R16)', () => {
+  it('omits the "Updated?" column and the update action when the importer does not support it (Waltz)', () => {
+    const rows = [{ ...makeTicketedRow('A1', 'PROJ-1'), hasUnsyncedFindings: true }, ...makeFreshRows(1)];
+    const text = buildTicketedGroupScreen(screenSession(rows), [], itemOpts);
     expect(text).not.toContain('Updated?');
-    expect(text).not.toContain('update existing tickets');
+    expect(text).not.toContain('update tickets');
   });
 
-  it('shows the "Updated?" column and reply hint when supportsUpdateExisting is true and there is an already-ticketed row', () => {
-    const rows = [makeTicketedRow('A1', 'PROJ-1'), ...makeFreshRows(1)];
-    const text = buildImportReviewTable(rows, undefined, 0, 1, [], 'item(s)', true);
+  it('offers "Update N tickets" counting only rows with a finding their ticket lacks', () => {
+    const rows = [
+      { ...makeTicketedRow('A1', 'PROJ-1'), hasUnsyncedFindings: true },
+      { ...makeTicketedRow('A2', 'PROJ-2'), hasUnsyncedFindings: true },
+      makeTicketedRow('A3', 'PROJ-3'),
+    ];
+    const text = buildTicketedGroupScreen(screenSession(rows), [], { ...itemOpts, supportsUpdateExisting: true });
     expect(text).toContain('Updated?');
-    expect(text).toContain('update existing tickets');
+    expect(decodeURIComponent(text)).toContain('[Update 2 tickets]');
+    expect(decodeURIComponent(text)).toContain('"@jira update tickets"');
+  });
+
+  it('says every row is up to date instead of offering "Update 0 tickets"', () => {
+    const text = buildTicketedGroupScreen(screenSession([makeTicketedRow('A1', 'PROJ-1')]), [], { ...itemOpts, supportsUpdateExisting: true });
+    expect(text).not.toContain('"@jira update tickets"');
+    expect(text).toContain('up to date');
   });
 
   it('renders "✓ synced" only for a row whose updatedExisting flag is set', () => {
-    const updatedRow = { ...makeTicketedRow('A1', 'PROJ-1'), updatedExisting: true };
-    const rows = [updatedRow, makeTicketedRow('A2', 'PROJ-2')];
-    const text = buildImportReviewTable(rows, undefined, 0, 1, [], 'item(s)', true);
+    const rows = [{ ...makeTicketedRow('A1', 'PROJ-1'), updatedExisting: true }, makeTicketedRow('A2', 'PROJ-2')];
+    const text = buildTicketedGroupScreen(screenSession(rows), [], { ...itemOpts, supportsUpdateExisting: true });
     const lines = text.split('\n');
-    const a1Line = lines.find(l => l.includes('PROJ-1'))!;
-    const a2Line = lines.find(l => l.includes('PROJ-2'))!;
-    expect(a1Line).toContain('✓ synced');
-    expect(a2Line).not.toContain('✓ synced');
+    expect(lines.find(l => l.includes('PROJ-1'))!).toContain('✓ synced');
+    expect(lines.find(l => l.includes('PROJ-2'))!).not.toContain('✓ synced');
   });
 
-  it('omits the reply hint (even with supportsUpdateExisting) when there are no already-ticketed rows', () => {
-    const rows = makeFreshRows(2);
-    const text = buildImportReviewTable(rows, undefined, 0, 1, [], 'item(s)', true);
-    expect(text).not.toContain('update existing tickets');
+  it('shows "Re-create 0" until a row is toggled on, then "Re-create 1"; a re-created row shows its new key and no toggle', () => {
+    const rows = [makeTicketedRow('A1', 'PROJ-1'), makeTicketedRow('A2', 'PROJ-2')];
+    expect(buildTicketedGroupScreen(screenSession(rows), [], itemOpts)).toContain('Re-create 0 tickets');
+
+    const toggled = [{ ...rows[0], included: true }, { ...rows[1], recreatedKey: 'PROJ-77', included: false }];
+    const text = buildTicketedGroupScreen(screenSession(toggled), [], itemOpts);
+    expect(decodeURIComponent(text)).toContain('[Re-create 1 tickets]');
+    const a2Line = text.split('\n').find(l => l.includes('PROJ-2'))!;
+    expect(a2Line).toContain('re-created as PROJ-77');
+    expect(decodeURIComponent(a2Line)).not.toContain('"@jira A2"');
+  });
+});
+
+describe('Overview screen (R1, R2, R3, R15)', () => {
+  const staleWithTicket: ReviewSessionStale = {
+    groups: [{ issueType: 'Bug', ruleName: 'r', targetState: 'Done', resolution: 'Fixed', tickets: [{
+      key: 'SEC-7', summary: 's', currentStatus: 'Open', transitionPath: [], subtasks: [], included: false,
+    }] }],
+    ineligible: [],
+  };
+
+  it('lists New, Already ticketed and Stale with counts, open links and a Done link — and no "Post it"', () => {
+    const session = screenSession([makeTicketedRow('A1', 'PROJ-1'), ...makeFreshRows(12)], { staleTickets: staleWithTicket });
+    const text = buildImportOverview(session, itemOpts);
+    expect(text).toContain('**New** — 12 items');
+    expect(text).toContain('**Already ticketed** — 1 item');
+    expect(text).toContain('**Stale tickets**');
+    expect(decodeURIComponent(text)).toContain('"@jira open new"');
+    expect(decodeURIComponent(text)).toContain('"@jira open already ticketed"');
+    expect(decodeURIComponent(text)).toContain('"@jira open stale"');
+    expect(decodeURIComponent(text)).toContain('"@jira done"');
+    expect(text.toLowerCase()).not.toContain('post it');
+  });
+
+  it('shows progress after a partial create ("50 created · 12 left")', () => {
+    const session = screenSession([makeTicketedRow('A1', 'PROJ-1'), ...makeFreshRows(12)]);
+    session.outcomes = { ...session.outcomes!, created: 50 };
+    expect(buildImportOverview(session, itemOpts)).toContain('50 created · 12 left');
+  });
+
+  it('omits a group that had no rows when the import was built', () => {
+    const text = buildImportOverview(screenSession([makeTicketedRow('A1', 'PROJ-1'), ...makeFreshRows(2)]), itemOpts);
+    expect(text).not.toContain('Stale');
+  });
+
+  it('keeps New listed with its outcome and no open link once every new row is created', () => {
+    const session = screenSession([makeTicketedRow('A1', 'PROJ-1'), ...makeFreshRows(12)]);
+    session.allRows = session.allRows.filter(r => r.existingTicketKey !== null);
+    session.rows = session.allRows;
+    session.outcomes = { ...session.outcomes!, created: 12 };
+    const text = buildImportOverview(session, itemOpts);
+    expect(text).toContain('**New** — 12 created · 0 left');
+    expect(decodeURIComponent(text)).not.toContain('"@jira open new"');
+  });
+});
+
+describe('Import view state (KTD1, KTD7)', () => {
+  const staleOnlyIneligible: ReviewSessionStale = {
+    groups: [], ineligible: [{ key: 'PROJ-9', summary: 'x', currentStatus: 'Open', note: 'no rule' }],
+  };
+
+  it('New only → a single group that opens directly on the New screen', () => {
+    const s = screenSession(makeFreshRows(3));
+    expect(s.groups).toEqual(['new']);
+    expect(s.singleGroup).toBe(true);
+    expect(s.view).toBe('new');
+  });
+
+  it('New + Stale → the overview comes first', () => {
+    const s = screenSession(makeFreshRows(1), { staleTickets: staleOnlyIneligible });
+    expect(s.groups).toEqual(['new', 'stale']);
+    expect(s.singleGroup).toBe(false);
+    expect(s.view).toBe('overview');
+  });
+
+  it('Already ticketed only → opens directly on that screen', () => {
+    const s = screenSession([makeTicketedRow('A1', 'PROJ-1')]);
+    expect(s.view).toBe('ticketed');
+    expect(s.singleGroup).toBe(true);
+  });
+
+  it('a Stale group with only tickets lacking a cleanup rule still counts as a group', () => {
+    expect(computeImportResultGroups([], staleOnlyIneligible)).toEqual(['stale']);
+  });
+
+  it('ensureImportViewState fills in a caller-built session without overwriting an explicit view', () => {
+    const bare: ReviewSession<PageRow> = {
+      projectKey: 'PROJ', issueType: 'Bug', templateName: null, additionalFields: {},
+      allRows: makeFreshRows(1), rows: makeFreshRows(1), page: 0, schemaVersion: 6, view: 'overview',
+    };
+    const filled = ensureImportViewState(bare);
+    expect(filled.view).toBe('overview');
+    expect(filled.singleGroup).toBe(true);
+    expect(filled.outcomes).toEqual(emptyImportOutcomes());
+  });
+
+  it('buildImportDoneSummary reports every outcome and any failures', () => {
+    expect(buildImportDoneSummary({ ...emptyImportOutcomes(), created: 3, closed: 1, createFailed: 1 }))
+      .toBe('Import finished — **3** created, 0 re-created, 0 updated, 1 closed, 1 failed.');
+  });
+});
+
+describe('Per-screen reply parsing (KTD2, R6)', () => {
+  const stale: ReviewSessionStale = {
+    groups: [{ issueType: 'Bug', ruleName: 'r', targetState: 'Done', resolution: 'Fixed', tickets: [{
+      key: 'SEC-7', summary: 's', currentStatus: 'Open', transitionPath: [], subtasks: [], included: false,
+    }] }],
+    ineligible: [],
+  };
+  const ctx: ImportReplyContext = {
+    singleGroup: false, groups: ['new', 'ticketed', 'stale'],
+    newRowIds: ['1', '2', '3'], ticketedRowIds: ['A1', 'A2'], stale, supportsUpdateExisting: true,
+  };
+
+  it('overview: open links, done, cancellation, and nothing else', () => {
+    expect(parseOverviewReply('open stale', ctx)).toEqual({ kind: 'open', view: 'stale' });
+    expect(parseOverviewReply('Open Already  Ticketed', ctx)).toEqual({ kind: 'open', view: 'ticketed' });
+    expect(parseOverviewReply('DONE', ctx)).toEqual({ kind: 'done' });
+    expect(parseOverviewReply('cancel', ctx)).toEqual({ kind: 'done' });
+    expect(parseOverviewReply('3', ctx)).toEqual({ kind: 'invalid' });
+    expect(parseOverviewReply('post it', ctx)).toEqual({ kind: 'invalid' });
+    expect(parseOverviewReply('open stale', { ...ctx, groups: ['new'] })).toEqual({ kind: 'invalid' });
+  });
+
+  it('New: confirmation words create; row ids, bulk and page words work; other screens\' tokens do not (AE2)', () => {
+    expect(parseNewGroupReply('ok', ctx)).toEqual({ kind: 'create' });
+    expect(parseNewGroupReply('post it', ctx)).toEqual({ kind: 'create' });
+    expect(parseNewGroupReply('create tickets', ctx)).toEqual({ kind: 'create' });
+    expect(parseNewGroupReply('2 3', ctx)).toEqual({ kind: 'toggleRows', ids: ['2', '3'] });
+    expect(parseNewGroupReply('next', ctx)).toEqual({ kind: 'pageNav', nav: { kind: 'next' } });
+    expect(parseNewGroupReply('exclude all', ctx)).toEqual({ kind: 'bulk', include: false });
+    expect(parseNewGroupReply('A1', ctx)).toEqual({ kind: 'invalid' });
+    expect(parseNewGroupReply('SEC-7', ctx)).toEqual({ kind: 'invalid' });
+    expect(parseNewGroupReply('2 A1', ctx)).toEqual({ kind: 'invalid' }); // never half-applied
+    expect(parseNewGroupReply('back', ctx)).toEqual({ kind: 'back' });
+    expect(parseNewGroupReply('skip', ctx)).toEqual({ kind: 'back' }); // a cancellation word
+  });
+
+  it('New under a single group: back/cancel/done all end the import', () => {
+    const single = { ...ctx, singleGroup: true };
+    expect(parseNewGroupReply('done', single)).toEqual({ kind: 'done' });
+    expect(parseNewGroupReply('cancel', single)).toEqual({ kind: 'done' });
+  });
+
+  it('Already ticketed: update / re-create / A-ids; confirmation words are rejected (two actions)', () => {
+    expect(parseTicketedGroupReply('A1', ctx)).toEqual({ kind: 'toggleRows', ids: ['A1'] });
+    expect(parseTicketedGroupReply('update tickets', ctx)).toEqual({ kind: 'update' });
+    expect(parseTicketedGroupReply('update existing tickets', ctx)).toEqual({ kind: 'update' });
+    expect(parseTicketedGroupReply('re-create tickets', ctx)).toEqual({ kind: 'recreate' });
+    expect(parseTicketedGroupReply('ok', ctx)).toEqual({ kind: 'invalid' });
+    expect(parseTicketedGroupReply('3', ctx)).toEqual({ kind: 'invalid' });
+    expect(parseTicketedGroupReply('update tickets', { ...ctx, supportsUpdateExisting: false })).toEqual({ kind: 'invalid' });
+  });
+
+  it('Stale: ticket keys toggle, confirmation words close, row ids are rejected', () => {
+    expect(parseStaleGroupReply('SEC-7', ctx)).toEqual({ kind: 'toggleStale', keys: ['SEC-7'] });
+    expect(parseStaleGroupReply('ok', ctx)).toEqual({ kind: 'close' });
+    expect(parseStaleGroupReply('close tickets', ctx)).toEqual({ kind: 'close' });
+    expect(parseStaleGroupReply('A1', ctx)).toEqual({ kind: 'invalid' });
+    expect(parseStaleGroupReply('SEC-7 3', ctx)).toEqual({ kind: 'invalid' }); // mixed reply rejected whole
+  });
+
+  it('a closed stale ticket can no longer be toggled', () => {
+    expect(parseStaleGroupReply('SEC-7', { ...ctx, stale: { ...stale, closedKeys: ['SEC-7'] } })).toEqual({ kind: 'invalid' });
+  });
+
+  it('no command word is a confirmation/cancellation word, a row id, or a ticket key', () => {
+    for (const word of Object.values(IMPORT_COMMANDS)) {
+      expect(isConfirmation(word)).toBe(false);
+      expect(isCancellation(word)).toBe(false);
+      expect(/^\d+$|^a\d+$/i.test(word)).toBe(false);
+      expect(/^[A-Z][A-Z0-9]+-\d+$/i.test(word)).toBe(false);
+      expect(parseReviewPageNav(word)).toBeNull();
+      expect(parseBulkNewRowReply(word)).toBeNull();
+    }
   });
 });
 
@@ -1220,20 +1397,44 @@ describe('Stale-ticket review section (U6)', () => {
     });
   });
 
-  describe('buildStaleReviewSection', () => {
+  describe('buildStaleGroupScreen', () => {
+    function staleSession(stale: ReviewSessionStale): ReviewSession<ReviewRowBase> {
+      return initImportViewState({
+        projectKey: 'PROJ', issueType: 'Bug', templateName: null, additionalFields: {},
+        allRows: [], rows: [], page: 0, schemaVersion: 6, staleTickets: stale,
+      });
+    }
+
     it('renders eligible tickets with a positive toggle link and the ineligible note for others', () => {
       const stale = makeStale({
         ineligible: [{ key: 'PROJ-9', summary: 'Old finding', currentStatus: 'Open', note: 'no cleanup rule configured for PROJ/Task' }],
       });
-      const rendered = buildStaleReviewSection(stale);
+      const rendered = buildStaleGroupScreen(staleSession(stale), { itemNoun: 'item(s)', supportsUpdateExisting: false });
       expect(rendered).toContain('PROJ-1');
       expect(rendered).toContain('PROJ-9');
       expect(rendered).toContain('no cleanup rule configured for PROJ/Task');
       expect(rendered).toContain('Stale');
+      expect(rendered).toContain('Close 0 tickets');
+      expect(decodeURIComponent(rendered)).toContain('"@jira done"'); // stale is the only group
     });
 
-    it('returns an empty string when there is nothing to show', () => {
-      expect(buildStaleReviewSection({ groups: [], ineligible: [] })).toBe('');
+    it('offers "Close N tickets" for selected tickets and shows closed ones without a toggle', () => {
+      const stale = makeStale({
+        groups: [{ issueType: 'Bug', ruleName: undefined, targetState: 'Done', resolution: undefined, tickets: [makeStaleTicket('PROJ-1', true), makeStaleTicket('PROJ-2', true)] }],
+        closedKeys: ['PROJ-2'],
+      });
+      const rendered = buildStaleGroupScreen(staleSession(stale), { itemNoun: 'item(s)', supportsUpdateExisting: false });
+      expect(decodeURIComponent(rendered)).toContain('[Close 1 tickets]');
+      const p2 = rendered.split('\n').find(l => l.includes('PROJ-2'))!;
+      expect(p2).toContain('✓ closed');
+      expect(decodeURIComponent(p2)).not.toContain('"@jira PROJ-2"');
+    });
+
+    it('marks a group whose resolution is still unanswered as "asked on close"', () => {
+      const stale = makeStale({
+        groups: [{ issueType: 'Bug', ruleName: undefined, targetState: 'Done', resolution: undefined, resolutionOptions: ['Fixed'], tickets: [makeStaleTicket('PROJ-1')] }],
+      });
+      expect(buildStaleGroupScreen(staleSession(stale), { itemNoun: 'item(s)', supportsUpdateExisting: false })).toContain('_asked on close_');
     });
   });
 });

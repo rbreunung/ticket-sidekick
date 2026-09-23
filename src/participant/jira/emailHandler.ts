@@ -25,7 +25,7 @@ import {
 // The dedup fields are omitted — email has no per-item dedup concept (KTD2) — and buildTicketFields/
 // afterCreate supply email's own ticket-field-building and attachment-upload step.
 // Subject/attachment filenames are untrusted, email-derived content — this table's whole output is
-// trust-gated (KTD5, U6) once it carries the per-row toggle links (buildImportReviewTable), so both
+// trust-gated (KTD5, U6) once it carries the per-row toggle links (buildNewGroupScreen), so both
 // go through neutralizeMarkdownLinks() (see its own doc comment in sessionState.ts).
 const EMAIL_REVIEW_COLUMNS: ReviewTableColumn<EmailReviewRow>[] = [
   { header: 'Subject', accessor: row => neutralizeMarkdownLinks(row.subject) },
@@ -68,8 +68,8 @@ const emailDescriptor: ReportImportDescriptor<EmailImportItem, EmailReviewRow> =
   }),
   // KTD4: uploads the row's attachments after ticket creation, then honors the existing
   // email.deleteEmlAfterImport setting — same two steps finishEmailTicket() used to run inline,
-  // now driven through executeImportBatch's shared per-row hook. A thrown error here is caught by
-  // executeImportBatch and shown as a warning; the ticket itself is already created by that point.
+  // now driven through the shared per-row creation hook (createNewRows). A thrown error here is caught by
+  // that shared creation step and shown as a warning; the ticket itself is already created by that point.
   afterCreate: async (row, issueKey, ticketService) => {
     let uploaded = 0;
     const failures: string[] = [];

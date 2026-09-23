@@ -1188,9 +1188,9 @@ export function createJiraParticipant(
         }
         try {
           if (ask.descriptorKind === 'veracode') {
-            return await handleVeracodeStaleResolution(request.prompt, ask, stream, ws, config.baseUrl);
+            return await handleVeracodeStaleResolution(request.prompt, ask, ticketService, stream, ws, config.baseUrl);
           }
-          return await handleWaltzStaleResolution(request.prompt, ask, stream, ws, config.baseUrl);
+          return await handleWaltzStaleResolution(request.prompt, ask, ticketService, stream, ws, config.baseUrl);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logDiag('jira.participant', 'error', message, {});

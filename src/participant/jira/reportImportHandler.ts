@@ -21,10 +21,12 @@ import {
   buildDedupJql, findStaleTickets, type JqlIssueLike,
 } from '../../utils/reportImport';
 import {
-  isCancellation, pickEmailOption, buildImportReviewTable, buildStaleReviewSection,
-  parseReviewInput, parseReviewPageNav, parseStaleTicketToggle, applyStaleTicketToggle,
+  isCancellation, pickEmailOption, applyStaleTicketToggle,
   parseResolutionSelection, buildReviewPage, applyReviewSessionToggle,
-  isUpdateExistingTicketsReply, markRowsUpdatedExisting, parseBulkNewRowReply, applyBulkNewRowSet,
+  markRowsUpdatedExisting, applyBulkNewRowSet,
+  buildImportScreen, parseImportReviewReply, describeImportReplyVocabulary, buildImportDoneSummary,
+  initImportViewState, ensureImportViewState, emptyImportOutcomes,
+  type ImportReplyContext, type ImportScreenOptions,
   CURRENT_SESSION_SCHEMA_VERSION, isSessionExpired, SESSION_EXPIRED_MESSAGE,
   NO_ISSUE_TYPE, resolveTemplateIssueType, formatIssueTypeOptionLabel, buildChatCommandLink,
   type ImportTemplateSelectionSession, type ReviewSession, type ReviewTableColumn, type ReviewRowBase,
@@ -96,7 +98,7 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   // `labels`/`descriptionWiki` concept (email) never needs those fields at all.
   buildTicketFields: (row: TRow, additionalFields: Record<string, unknown>) => { summary: string; fields: Record<string, unknown> };
   // KTD4: optional per-row work after a ticket is created (email uses this for attachment upload).
-  // A rejection is caught by executeImportBatch and shown as a warning — it never fails the row,
+  // A rejection is caught by the shared creation step (createNewRows/recreateTicketedRows) and shown as a warning — it never fails the row,
   // since the ticket already exists by the time this runs.
   afterCreate?: (row: TRow, issueKey: string, ticketService: TicketService) => Promise<void>;
   // KTD9: optional UI-notify callback for issue-type-fetch failure, so Veracode's user-visible
@@ -531,22 +533,13 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
         try {
           const grouped = await buildStaleTicketGroups(staleResult.stale, issueDetails, session.projectKey, jiraClient, workspaceRoot);
 
-          if (grouped.pendingGroups.length > 0) {
-            // R1/KTD15: descriptorKind is always 'veracode'/'waltz' here — email never sets
-            // descriptor.stale, so this branch is unreachable for it (erasure cast mirrors the one a
-            // few lines up for AwaitIssueTypeResume's own resumeSession).
-            const ask: StaleResolutionAskSession = {
-              descriptorKind: descriptor.descriptorKind as 'veracode' | 'waltz',
-              pendingGroups: grouped.pendingGroups,
-              resolvedGroups: grouped.resolvedGroups,
-              ineligible: grouped.ineligible,
-              reviewSession: reviewSession as unknown as VeracodeReviewSession | WaltzReviewSession,
-              schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
-            };
-            return streamStaleResolutionAsk(ask, stream, ws);
-          }
-
-          reviewSession = { ...reviewSession, staleTickets: { groups: grouped.resolvedGroups, ineligible: grouped.ineligible } };
+          // Overview-hub KTD6: a group whose rule still needs a resolution is NOT asked about here —
+          // it keeps its options and is asked only if the user later closes one of its tickets.
+          const awaitingResolution: StaleTicketGroup[] = grouped.pendingGroups.map(g => ({ ...g, resolution: undefined }));
+          reviewSession = {
+            ...reviewSession,
+            staleTickets: { groups: [...grouped.resolvedGroups, ...awaitingResolution], ineligible: grouped.ineligible },
+          };
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logDiag(descriptor.scope, 'warn', 'Could not check for stale tickets — proceeding without a stale-ticket section', {
@@ -558,14 +551,15 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
     }
   }
 
-  return streamImportReview(reviewSession, stream, ws, descriptor, baseUrl);
+  return streamImportReview(initImportViewState(reviewSession), stream, ws, descriptor, baseUrl);
 }
 
 /**
  * U6: streams the stale-ticket batch's chained per-issue-type-group resolution ask — one group at a
  * time (`ask.pendingGroups[0]`), mirroring `ResolutionSelectionSession`/cleanupHandler.ts's own
  * numbered resolution pick (not the generic free-text `streamAwaitIssueType` prompt — see
- * `StaleResolutionAskSession`'s own doc comment in sessionState.ts for why).
+ * `StaleResolutionAskSession`'s own doc comment in sessionState.ts for why). Overview-hub KTD6:
+ * only ever started by "close tickets" on the Stale screen, for groups with a selected ticket.
  */
 export async function streamStaleResolutionAsk(
   ask: StaleResolutionAskSession,
@@ -574,11 +568,13 @@ export async function streamStaleResolutionAsk(
 ): Promise<vscode.ChatResult> {
   await ws.update(STALE_RESOLUTION_SESSION_KEY, ask);
   const group = ask.pendingGroups[0];
+  const selected = group.tickets.filter(t => t.included).length;
   const list = group.resolutionOptions.map((r, i) => `${i + 1}. ${buildChatCommandLink(r, '@jira', String(i + 1))}`).join('\n');
   stream.markdown(trustedChatMarkdown(
-    `**${group.tickets.length}** stale **${group.issueType}** ticket(s) can move to **${group.targetState}** — ` +
+    `**${selected}** stale **${group.issueType}** ticket(s) will move to **${group.targetState}** — ` +
     `which resolution should be set?\n\n${list}\n\n` +
-    `Reply with the name or number, or ${buildChatCommandLink('None', '@jira', 'none')} to skip setting a resolution.`,
+    `Reply with the name or number, ${buildChatCommandLink('None', '@jira', 'none')} to skip setting a resolution, ` +
+    `or ${buildChatCommandLink('Back', '@jira', 'back')} to return to the stale tickets without closing any.`,
   ));
   return { metadata: { jiraSession: { kinds: ['stale-resolution-selection'] } } };
 }
@@ -586,9 +582,9 @@ export async function streamStaleResolutionAsk(
 /**
  * Continues the chained stale-resolution ask once a reply for the currently-asked group comes in —
  * either re-prompting the same group (invalid reply), moving on to the next pending group, or (once
- * every group is resolved) merging the accumulated `staleTickets` into the parked review session and
- * streaming the merged review screen (KTD10-15's "chain the ask once per group, not once per
- * ticket" rule).
+ * every asked group is answered) recording the answers on the parked review session, running the
+ * selected tickets' transitions, and returning to the overview (overview-hub KTD6 / R9). A group
+ * answered once — including with "none" — is never asked again.
  */
 export async function continueAfterStaleResolution<TItem, TRow extends ReviewRowBase>(
   reply: string,
@@ -596,14 +592,26 @@ export async function continueAfterStaleResolution<TItem, TRow extends ReviewRow
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
   descriptor: ReportImportDescriptor<TItem, TRow>,
+  ticketService: TicketService,
   baseUrl?: string,
 ): Promise<vscode.ChatResult | void> {
   // Mirrors handleVeracodeAwaitIssueType/handleWaltzAwaitIssueType's own guard: a second, independent
   // import may have started (and claimed the template-selection session key) while this ask was open.
   if (sessionWasSuperseded(ws, descriptor.sessionKeys.templateSelection)) {
     await ws.update(STALE_RESOLUTION_SESSION_KEY, undefined);
-    stream.markdown('_A newer import was started while this one was waiting for a resolution — cancelled to avoid creating a stale batch._');
+    stream.markdown('_A newer import was started while this one was waiting for a resolution — cancelled to avoid closing tickets from a stale batch._');
     return;
+  }
+
+  // Code-review fix: the question now sits between "close tickets" and the transitions, so it needs
+  // a way out. "back" or a cancellation word (other than "skip", which here means "no resolution",
+  // same as "none") returns to the Stale screen with nothing transitioned and no answer recorded.
+  const normalizedReply = reply.trim().toLowerCase();
+  if (normalizedReply === 'back' || (isCancellation(reply) && normalizedReply !== 'skip')) {
+    await ws.update(STALE_RESOLUTION_SESSION_KEY, undefined);
+    stream.markdown('_No stale tickets were closed._\n\n');
+    const parked = ensureImportViewState(ask.reviewSession as unknown as ReviewSession<TRow>);
+    return streamImportReview({ ...parked, view: 'stale' }, stream, ws, descriptor, baseUrl);
   }
 
   const group = ask.pendingGroups[0];
@@ -622,11 +630,34 @@ export async function continueAfterStaleResolution<TItem, TRow extends ReviewRow
   }
 
   await ws.update(STALE_RESOLUTION_SESSION_KEY, undefined);
-  const reviewSession = {
-    ...ask.reviewSession,
-    staleTickets: { groups: resolvedGroups, ineligible: ask.ineligible },
-  } as unknown as ReviewSession<TRow>;
-  return streamImportReview(reviewSession, stream, ws, descriptor, baseUrl);
+  const parked = ensureImportViewState(ask.reviewSession as unknown as ReviewSession<TRow>);
+  const answered = new Map(resolvedGroups.map(g => [staleGroupId(g), g.resolution]));
+  let session: ReviewSession<TRow> = {
+    ...parked,
+    staleTickets: parked.staleTickets && {
+      ...parked.staleTickets,
+      groups: parked.staleTickets.groups.map(g => {
+        if (!answered.has(staleGroupId(g))) return g;
+        const { resolutionOptions: _asked, ...rest } = g;
+        return { ...rest, resolution: answered.get(staleGroupId(g)) };
+      }),
+    },
+  };
+  session = await runStaleTransitions(session, ticketService, stream, descriptor);
+  return streamImportReview(afterGroupAction(session), stream, ws, descriptor, baseUrl);
+}
+
+function staleGroupId(g: { issueType: string; targetState: string }): string {
+  return `${g.issueType}\u0000${g.targetState}`;
+}
+
+function screenOptions<TItem, TRow extends ReviewRowBase>(descriptor: ReportImportDescriptor<TItem, TRow>, baseUrl?: string): ImportScreenOptions {
+  return { baseUrl, itemNoun: descriptor.itemNoun, supportsUpdateExisting: Boolean(descriptor.updateExisting) };
+}
+
+/** R10: after a group action, back to the overview — or the same group when there is no overview. */
+function afterGroupAction<TRow extends ReviewRowBase>(session: ReviewSession<TRow>): ReviewSession<TRow> {
+  return session.singleGroup ? session : { ...session, view: 'overview' };
 }
 
 export async function streamImportReview<TItem, TRow extends ReviewRowBase>(
@@ -636,27 +667,245 @@ export async function streamImportReview<TItem, TRow extends ReviewRowBase>(
   descriptor: ReportImportDescriptor<TItem, TRow>,
   baseUrl?: string,
 ): Promise<vscode.ChatResult> {
-  await ws.update(descriptor.sessionKeys.review, session);
-  // U4: re-derives total page count from `allRows` on every render (cheap — two filters, no
-  // per-row rebuild work) rather than trusting a possibly-stale stored value, so the "Page X of Y"
-  // line always agrees with the row set actually being shown.
-  const { totalPages } = buildReviewPage(session.allRows, session.page);
-  // U6: the table's own Include? column is now a per-row toggle command-link (R8), so this whole
-  // response must be trust-gated (KTD5) — every row's own field content going through it is
-  // neutralized against markdown-link injection at its source (VERACODE_REVIEW_COLUMNS,
-  // WALTZ_REVIEW_COLUMNS, EMAIL_REVIEW_COLUMNS in sessionState.ts/emailHandler.ts).
-  const staleSection = session.staleTickets ? '\n\n' + buildStaleReviewSection(session.staleTickets, baseUrl) : '';
-  stream.markdown(trustedChatMarkdown(
-    buildImportReviewTable(
-      session.rows, baseUrl, session.page, totalPages, descriptor.reviewColumns, descriptor.itemNoun,
-      Boolean(descriptor.updateExisting),
-    ) + staleSection,
-  ));
+  const current = ensureImportViewState(session);
+  await ws.update(descriptor.sessionKeys.review, current);
+  // Every screen carries command links (row toggles, group links, actions), so the whole response
+  // is trust-gated (KTD5) — every row's own field content is neutralized against markdown-link
+  // injection at its source (VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, EMAIL_REVIEW_COLUMNS,
+  // and the stale screen's own summary cells).
+  stream.markdown(trustedChatMarkdown(buildImportScreen(current, descriptor.reviewColumns, screenOptions(descriptor, baseUrl))));
   return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
 }
 
+/**
+ * Overview-hub dispatch (KTD2): a reply is parsed against the vocabulary of the screen currently
+ * shown — and only that screen (R6) — then applied. Toggles and page moves re-render the same
+ * screen; "open …" / "back" switch screens; each group action runs on its own (R11) and returns to
+ * the overview (R10); "done" (or cancelling on the overview) ends the import with a summary (R3).
+ */
 export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>(
   reply: string,
+  incoming: ReviewSession<TRow>,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+  baseUrl?: string,
+): Promise<vscode.ChatResult | void> {
+  // A newer import claimed the template-selection key since this review was built (e.g. a
+  // command-palette import that writes its session with no chat turn) — never act on this one.
+  if (sessionWasSuperseded(ws, descriptor.sessionKeys.templateSelection)) {
+    await ws.update(descriptor.sessionKeys.review, undefined);
+    stream.markdown('_A newer import was started — this review was closed without creating, updating or closing anything further._');
+    return;
+  }
+
+  // Callers (and tests) hold on to the session object they passed in, so state changes are applied
+  // to it in place as well as persisted.
+  const session = incoming;
+  Object.assign(session, ensureImportViewState(session));
+  const view = session.view!;
+  const ctx: ImportReplyContext = {
+    singleGroup: session.singleGroup!,
+    groups: session.groups!,
+    newRowIds: session.rows.filter(r => r.existingTicketKey === null).map(r => r.id),
+    ticketedRowIds: session.allRows.filter(r => r.existingTicketKey !== null && !r.recreatedKey).map(r => r.id),
+    stale: session.staleTickets,
+    supportsUpdateExisting: Boolean(descriptor.updateExisting),
+  };
+  const action = parseImportReviewReply(view, reply, ctx);
+  const rerender = () => streamImportReview(session, stream, ws, descriptor, baseUrl);
+
+  switch (action.kind) {
+    case 'invalid':
+      stream.markdown(trustedChatMarkdown(`Didn't understand that. ${describeImportReplyVocabulary(view, ctx)}`));
+      return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
+    case 'open':
+      session.view = action.view;
+      return rerender();
+    case 'back':
+      session.view = 'overview';
+      return rerender();
+    case 'done': {
+      await ws.update(descriptor.sessionKeys.review, undefined);
+      const outcomes = session.outcomes!;
+      logDiag(descriptor.scope, 'info', `${descriptor.importLabel} import finished`, { ...outcomes });
+      stream.markdown(buildImportDoneSummary(outcomes));
+      return;
+    }
+    case 'pageNav': {
+      const current = buildReviewPage(session.allRows, session.page);
+      const target = action.nav.kind === 'next' ? current.page + 1 : action.nav.kind === 'prev' ? current.page - 1 : action.nav.page;
+      const next = buildReviewPage(session.allRows, target);
+      session.rows = next.rows;
+      session.page = next.page;
+      return rerender();
+    }
+    case 'bulk':
+      session.rows = applyBulkNewRowSet(session.rows, action.include);
+      return rerender();
+    case 'toggleRows': {
+      // An already-ticketed toggle is mirrored into allRows so it survives paging; a new-row
+      // toggle stays page-local (applyReviewSessionToggle's own contract).
+      const toggled = applyReviewSessionToggle(session.rows, session.allRows, action.ids);
+      session.rows = toggled.rows;
+      session.allRows = toggled.allRows;
+      return rerender();
+    }
+    case 'toggleStale':
+      session.staleTickets = applyStaleTicketToggle(session.staleTickets!, action.keys);
+      return rerender();
+    case 'create':
+      Object.assign(session, afterGroupAction(await createNewRows(session, ticketService, stream, descriptor, baseUrl)));
+      return rerender();
+    case 'recreate':
+      Object.assign(session, afterGroupAction(await recreateTicketedRows(session, ticketService, stream, descriptor, baseUrl)));
+      return rerender();
+    case 'update':
+      Object.assign(session, afterGroupAction(await executeUpdateExistingTickets(session, ticketService, stream, descriptor, baseUrl)));
+      return rerender();
+    case 'close':
+      return closeStaleTickets(session, ticketService, stream, ws, descriptor, baseUrl);
+  }
+}
+
+async function createOne<TItem, TRow extends ReviewRowBase>(
+  row: TRow,
+  session: ReviewSession<TRow>,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+  baseUrl?: string,
+): Promise<string | null> {
+  const { summary: ticketSummary, fields } = descriptor.buildTicketFields(row, session.additionalFields);
+  try {
+    const createdTicket = await ticketService.createTicket(session.projectKey, ticketSummary, session.issueType, fields, baseUrl);
+    stream.markdown(`✓ ${formatKeyLink(createdTicket.key, baseUrl)} — ${ticketSummary}\n\n`);
+    // KTD4 (import consolidation): optional per-row post-creation work (email uses this for
+    // attachment upload). A rejection is shown as a warning but never fails the row — the ticket
+    // already exists.
+    if (descriptor.afterCreate) {
+      try {
+        await descriptor.afterCreate(row, createdTicket.key, ticketService);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logDiag(descriptor.scope, 'warn', `Post-creation step failed — ${createdTicket.key}`, { issueKey: createdTicket.key, error: message });
+        stream.markdown(`_Warning: ${message}_\n\n`);
+      }
+    }
+    return createdTicket.key;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const ref = descriptor.itemRefFor(row);
+    logDiag(descriptor.scope, 'error', `Ticket creation failed — ${ref}`, { ref, error: message });
+    stream.markdown(`✗ ${ref} — ${message}\n\n`);
+    return null;
+  }
+}
+
+/**
+ * R7/R13/R15 (KTD3/KTD4): creates the included new rows on the visible page — at most
+ * `BATCH_LIMIT`, which one page never exceeds. Rows excluded on this page are first written into
+ * `allRows` so they stay excluded afterwards; successfully created rows then leave `allRows`, so a
+ * repeated "create tickets" can never create them twice. Failed rows stay, still included.
+ */
+export async function createNewRows<TItem, TRow extends ReviewRowBase>(
+  session: ReviewSession<TRow>,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+  baseUrl?: string,
+): Promise<ReviewSession<TRow>> {
+  const pageFresh = session.rows.filter(r => r.existingTicketKey === null);
+  const toCreate = pageFresh.filter(r => r.included).slice(0, BATCH_LIMIT);
+  const excludedIds = new Set(pageFresh.filter(r => !r.included).map(r => r.id));
+  if (toCreate.length === 0) {
+    stream.markdown('_Nothing selected — no tickets were created._\n\n');
+    return session;
+  }
+
+  stream.markdown(`_Creating ${toCreate.length} ticket(s)…_\n\n`);
+  const createdIds = new Set<string>();
+  let failed = 0;
+  for (const row of toCreate) {
+    const key = await createOne(row, session, ticketService, stream, descriptor, baseUrl);
+    if (key) createdIds.add(row.id); else failed++;
+  }
+
+  const created = createdIds.size;
+  stream.markdown(
+    `${pageFresh.length} ${descriptor.itemNoun} on this page — **${created}** created, ${failed} failed, ${excludedIds.size} excluded by you.\n\n`,
+  );
+  logDiag(descriptor.scope, failed > 0 ? 'warn' : 'info', `${descriptor.importLabel} import — ${created} created, ${failed} failed`, {
+    created, failed, excludedByUser: excludedIds.size,
+  });
+
+  const allRows = session.allRows
+    .filter(r => !(r.existingTicketKey === null && createdIds.has(r.id)))
+    .map(r => (r.existingTicketKey === null && excludedIds.has(r.id) ? { ...r, included: false } : r));
+  const page = buildReviewPage(allRows, session.page);
+  const outcomes = session.outcomes ?? emptyImportOutcomes();
+  return {
+    ...session,
+    allRows,
+    rows: page.rows,
+    page: page.page,
+    outcomes: { ...outcomes, created: outcomes.created + created, createFailed: outcomes.createFailed + failed },
+  };
+}
+
+/**
+ * R8/R13 (KTD3/KTD4): creates a fresh ticket for every already-ticketed row the user toggled on —
+ * at most `BATCH_LIMIT` per action. A re-created row keeps its place, records the new key and is
+ * no longer toggleable, so a repeated action creates nothing twice.
+ */
+export async function recreateTicketedRows<TItem, TRow extends ReviewRowBase>(
+  session: ReviewSession<TRow>,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+  baseUrl?: string,
+): Promise<ReviewSession<TRow>> {
+  const candidates = session.allRows.filter(r => r.existingTicketKey !== null && r.included && !r.recreatedKey);
+  const toCreate = candidates.slice(0, BATCH_LIMIT);
+  if (toCreate.length === 0) {
+    stream.markdown('_Nothing selected — no tickets were re-created._\n\n');
+    return session;
+  }
+
+  stream.markdown(`_Re-creating ${toCreate.length} ticket(s)…_\n\n`);
+  const newKeyById = new Map<string, string>();
+  let failed = 0;
+  for (const row of toCreate) {
+    const key = await createOne(row, session, ticketService, stream, descriptor, baseUrl);
+    if (key) newKeyById.set(row.id, key); else failed++;
+  }
+  const recreated = newKeyById.size;
+  let summary = `**${recreated}** re-created, ${failed} failed.`;
+  if (candidates.length > toCreate.length) {
+    summary += ` _${candidates.length - toCreate.length} marked row(s) were not re-created — capped at ${BATCH_LIMIT} per action; reply \`re-create tickets\` again for the rest._`;
+  }
+  stream.markdown(`${summary}\n\n`);
+  logDiag(descriptor.scope, failed > 0 ? 'warn' : 'info', `${descriptor.importLabel} import — ${recreated} re-created, ${failed} failed`, { recreated, failed });
+
+  const mark = (r: TRow): TRow => (newKeyById.has(r.id) && r.existingTicketKey !== null
+    ? { ...r, recreatedKey: newKeyById.get(r.id), included: false }
+    : r);
+  const outcomes = session.outcomes ?? emptyImportOutcomes();
+  return {
+    ...session,
+    allRows: session.allRows.map(mark),
+    rows: session.rows.map(mark),
+    outcomes: { ...outcomes, recreated: outcomes.recreated + recreated, recreateFailed: outcomes.recreateFailed + failed },
+  };
+}
+
+/**
+ * R9 (KTD6): "close tickets" on the Stale screen. Groups with a selected ticket whose resolution is
+ * still unanswered are asked first (chained, one question per group, never repeated); otherwise
+ * the selected tickets transition right away and the overview returns.
+ */
+async function closeStaleTickets<TItem, TRow extends ReviewRowBase>(
   session: ReviewSession<TRow>,
   ticketService: TicketService,
   stream: vscode.ChatResponseStream,
@@ -664,230 +913,101 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
   descriptor: ReportImportDescriptor<TItem, TRow>,
   baseUrl?: string,
 ): Promise<vscode.ChatResult | void> {
-  // U4/R6: page-navigation replies are checked ahead of parseReviewInput — none of the strings
-  // they match collide with its toggle/ok/cancel parsing (see parseReviewPageNav's own doc
-  // comment), so this never intercepts a real toggle/confirm/cancel reply.
-  const pageNav = parseReviewPageNav(reply);
-  if (pageNav) {
-    const current = buildReviewPage(session.allRows, session.page);
-    const targetPage =
-      pageNav.kind === 'next' ? current.page + 1 :
-      pageNav.kind === 'prev' ? current.page - 1 :
-      pageNav.page;
-    const nextPage = buildReviewPage(session.allRows, targetPage);
-    session.rows = nextPage.rows;
-    session.page = nextPage.page;
+  const stale = session.staleTickets;
+  const closed = new Set(stale?.closedKeys ?? []);
+  const withSelection = (stale?.groups ?? []).filter(g => g.tickets.some(t => t.included && !closed.has(t.key)));
+  if (withSelection.length === 0) {
+    stream.markdown('_Nothing selected — no stale tickets were closed._\n\n');
     return streamImportReview(session, stream, ws, descriptor, baseUrl);
   }
 
-  // U6/R5-R6: a stale-ticket-key toggle (e.g. `PROJ-123`) is checked next — after page-nav, before
-  // the New/Already-ticketed sections' own row-id toggle parsing — so its disjoint vocabulary
-  // (always hyphenated; row ids never are) is recognized first rather than falling through to
-  // parseReviewInput's "didn't understand" path. See parseStaleTicketToggle's own doc comment.
-  //
-  // Code-review fix: a reply mixing a stale-ticket-key token with other tokens (row-id toggles,
-  // `post it`, `cancel`, ...) used to return here immediately once any stale key matched, silently
-  // dropping every other token — an excluded New row stayed included (default `included: true`)
-  // and still got created. Applying the stale toggle no longer short-circuits: any non-stale-key
-  // tokens continue on to the ordinary parsing below as `reply`.
-  if (session.staleTickets) {
-    const staleToggle = parseStaleTicketToggle(reply, session.staleTickets);
-    if (staleToggle) {
-      session.staleTickets = applyStaleTicketToggle(session.staleTickets, staleToggle.matched);
-      if (staleToggle.remainder.trim().length === 0) {
-        return streamImportReview(session, stream, ws, descriptor, baseUrl);
-      }
-      reply = staleToggle.remainder;
-    }
+  const needsAnswer = withSelection.filter(g => g.resolutionOptions !== undefined);
+  if (needsAnswer.length > 0) {
+    await ws.update(descriptor.sessionKeys.review, session);
+    // descriptorKind is always 'veracode'/'waltz' here — email never sets descriptor.stale, so it
+    // never has a Stale group (erasure cast mirrors the one for AwaitIssueTypeResume's session).
+    const ask: StaleResolutionAskSession = {
+      descriptorKind: descriptor.descriptorKind as 'veracode' | 'waltz',
+      pendingGroups: needsAnswer.map(g => ({
+        issueType: g.issueType,
+        ruleName: g.ruleName,
+        targetState: g.targetState,
+        resolutionOptions: g.resolutionOptions!,
+        tickets: g.tickets.filter(t => !closed.has(t.key)),
+      })),
+      resolvedGroups: [],
+      ineligible: stale!.ineligible,
+      reviewSession: session as unknown as VeracodeReviewSession | WaltzReviewSession,
+      schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
+    };
+    return streamStaleResolutionAsk(ask, stream, ws);
   }
 
-  // U3/R13: "update existing tickets" — checked after page-nav (U4) and the stale-ticket-key toggle
-  // (U6), before the New/Already-ticketed sections' own row-id toggle parsing (its exact-match-only
-  // vocabulary can't collide with either). Gated on descriptor.updateExisting so an importer that
-  // doesn't configure it (Waltz, email) never runs this — this action is independent of, and does
-  // not require, a "post it" confirm on the New/Stale sections (governing decision), so it neither
-  // clears the review session nor short-circuits the rest of this function's flow on other replies.
-  if (descriptor.updateExisting && isUpdateExistingTicketsReply(reply)) {
-    const updated = await executeUpdateExistingTickets(session, ticketService, stream, descriptor, baseUrl);
-    return streamImportReview(updated, stream, ws, descriptor, baseUrl);
-  }
-
-  // "Include all" / "Exclude all" — bulk-set every New row on the current page. Checked after
-  // page-nav (U4), the stale-ticket-key toggle (U6), and "update existing tickets" (U3/R13),
-  // before the row-id toggle parsing — its exact-match-only vocabulary can't collide with any of
-  // them (see parseBulkNewRowReply's own doc comment). Applies to `session.rows` only, never
-  // `allRows`, so it stays page-local exactly like a per-row New toggle. Not gated on any
-  // descriptor field — available to all three importers (shared renderer).
-  const bulkNewRow = parseBulkNewRowReply(reply);
-  if (bulkNewRow !== null) {
-    session.rows = applyBulkNewRowSet(session.rows, bulkNewRow);
-    return streamImportReview(session, stream, ws, descriptor, baseUrl);
-  }
-
-  const rowIds = session.rows.map(r => r.id);
-  const decision = parseReviewInput(reply, rowIds);
-
-  if (decision.action === 'invalid') {
-    stream.markdown(trustedChatMarkdown(
-      `Didn't understand that. Reply ${buildChatCommandLink('Post it', '@jira', 'post it')} to proceed, ` +
-      `${buildChatCommandLink('Cancel', '@jira', 'cancel')} to cancel, or a list of ids to toggle (e.g. \`2 4\` or \`A1\`).`,
-    ));
-    return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
-  }
-  if (decision.action === 'cancel') {
-    await ws.update(descriptor.sessionKeys.review, undefined);
-    stream.markdown('_Cancelled — no tickets were created._');
-    return;
-  }
-  if (decision.action === 'toggle') {
-    // U4/R7-R8: a toggled "already ticketed" row is mirrored into `allRows` so it survives a later
-    // page-navigation recompute (that section is shown in full on every page); a toggled "new" row
-    // is deliberately left page-local — see applyReviewSessionToggle's own doc comment.
-    const toggled = applyReviewSessionToggle(session.rows, session.allRows, decision.ids);
-    session.rows = toggled.rows;
-    session.allRows = toggled.allRows;
-    return streamImportReview(session, stream, ws, descriptor, baseUrl);
-  }
-  if (decision.action === 'setValue') {
-    // This review has no per-row value to set — parseReviewInput's `<id>=<value>` form exists
-    // for the template-generation flow, not this one. Treat it the same as an unrecognized
-    // reply rather than falling through to 'ok', which would silently confirm the batch.
-    stream.markdown(trustedChatMarkdown(
-      `Didn't understand that. Reply ${buildChatCommandLink('Post it', '@jira', 'post it')} to proceed, ` +
-      `${buildChatCommandLink('Cancel', '@jira', 'cancel')} to cancel, or a list of ids to toggle (e.g. \`2 4\` or \`A1\`).`,
-    ));
-    return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
-  }
-
-  // decision.action === 'ok'
-  await ws.update(descriptor.sessionKeys.review, undefined);
-  await executeImportBatch(session, ticketService, stream, descriptor, baseUrl);
+  const updated = await runStaleTransitions(session, ticketService, stream, descriptor);
+  Object.assign(session, afterGroupAction(updated));
+  return streamImportReview(session, stream, ws, descriptor, baseUrl);
 }
 
-export async function executeImportBatch<TItem, TRow extends ReviewRowBase>(
+/**
+ * Transitions every selected, not-yet-closed stale ticket through cleanupHandler.ts's shared
+ * `transitionTickets()` (each group with its own resolution), then marks the successfully
+ * transitioned ones closed so they are never transitioned again (KTD3).
+ */
+async function runStaleTransitions<TItem, TRow extends ReviewRowBase>(
   session: ReviewSession<TRow>,
   ticketService: TicketService,
   stream: vscode.ChatResponseStream,
   descriptor: ReportImportDescriptor<TItem, TRow>,
-  baseUrl?: string,
-): Promise<void> {
-  const includedRows = session.rows.filter(r => r.included);
-  const toCreate = includedRows.slice(0, BATCH_LIMIT);
-  // U4: `session.rows` is already at most one page (BATCH_LIMIT "new" rows, see buildReviewPage)
-  // plus every "already ticketed" row — so this slice is normally a no-op. A user can still toggle
-  // extra already-ticketed rows back to "re-create" on top of a full page, pushing the included
-  // count past BATCH_LIMIT at execution time — droppedOverCap reflects that real slicing outcome
-  // directly, rather than re-deriving it from a signal that doesn't actually track whether *this*
-  // slice dropped anything.
-  const droppedOverCap = includedRows.length - toCreate.length;
-  const excludedByUser = session.rows.filter(r => !r.included && r.existingTicketKey === null).length;
-  const alreadyTicketedSkipped = session.rows.filter(r => !r.included && r.existingTicketKey !== null).length;
+): Promise<ReviewSession<TRow>> {
+  const stale = session.staleTickets;
+  if (!stale) return session;
+  const closed = new Set(stale.closedKeys ?? []);
+  const selectedCount = stale.groups.reduce((n, g) => n + g.tickets.filter(t => t.included && !closed.has(t.key)).length, 0);
+  stream.markdown(`_Transitioning ${selectedCount} stale ticket(s)…_\n\n`);
 
-  // U6: one "post it" reply runs both the creation batch and the stale-ticket transition pass, so
-  // an empty New/Already-ticketed selection must not short-circuit past an included stale ticket.
-  const staleGroups = session.staleTickets?.groups ?? [];
-  const includedStaleCount = staleGroups.reduce((n, g) => n + g.tickets.filter(t => t.included).length, 0);
-
-  if (toCreate.length === 0 && includedStaleCount === 0) {
-    stream.markdown('_Nothing selected — no tickets were created._');
-    return;
+  const failures: Array<{ key: string; reason: string }> = [];
+  const newlyClosed: string[] = [];
+  for (const group of stale.groups) {
+    const selected = group.tickets.filter(t => t.included && !closed.has(t.key));
+    if (selected.length === 0) continue;
+    const result = await transitionTickets(selected, ticketService, group.resolution, descriptor.scope);
+    failures.push(...result.failures);
+    const failedKeys = new Set(result.failures.map(f => f.key));
+    for (const t of selected) if (!failedKeys.has(t.key)) newlyClosed.push(t.key);
   }
 
-  let created = 0;
-  let failed = 0;
-
-  if (toCreate.length > 0) {
-    stream.markdown(`_Creating ${toCreate.length} ticket(s)…_\n\n`);
-
-    for (const row of toCreate) {
-      const { summary: ticketSummary, fields } = descriptor.buildTicketFields(row, session.additionalFields);
-      try {
-        const createdTicket = await ticketService.createTicket(session.projectKey, ticketSummary, session.issueType, fields, baseUrl);
-        const keyRef = formatKeyLink(createdTicket.key, baseUrl);
-        stream.markdown(`✓ ${keyRef} — ${ticketSummary}\n\n`);
-        created++;
-        // KTD4: optional per-row post-creation work (email uses this for attachment upload). A
-        // rejection is shown as a warning but never fails the row — the ticket already exists.
-        if (descriptor.afterCreate) {
-          try {
-            await descriptor.afterCreate(row, createdTicket.key, ticketService);
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            logDiag(descriptor.scope, 'warn', `Post-creation step failed — ${createdTicket.key}`, { issueKey: createdTicket.key, error: message });
-            stream.markdown(`_Warning: ${message}_\n\n`);
-          }
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        const ref = descriptor.itemRefFor(row);
-        logDiag(descriptor.scope, 'error', `Ticket creation failed — ${ref}`, { ref, error: message });
-        stream.markdown(`✗ ${ref} — ${message}\n\n`);
-        failed++;
-      }
-    }
-
-    const total = session.rows.length;
-    let summary =
-      `${total} ${descriptor.itemNoun} reviewed — **${created}** created, ${failed} failed, ` +
-      `${excludedByUser} excluded by you, ${alreadyTicketedSkipped} already ticketed (skipped).`;
-    if (droppedOverCap > 0) {
-      summary += `\n\n_${droppedOverCap} included ${descriptor.itemNoun} were not created — capped at ${BATCH_LIMIT} tickets per run. ` +
-        `Re-run the import to process the remainder (already-created tickets are automatically skipped)._`;
-    }
-    logDiag(descriptor.scope, failed > 0 ? 'warn' : 'info', `${descriptor.importLabel} import complete — ${created} created, ${failed} failed`, {
-      total, created, failed, excludedByUser, alreadyTicketedSkipped,
-    });
-    stream.markdown(summary);
+  const failedTickets = selectedCount - newlyClosed.length;
+  let summary = `**${newlyClosed.length}** stale ticket(s) closed, ${failedTickets} failed.`;
+  if (failures.length > 0) {
+    summary += '\n\n' + failures.map(f => `✗ ${f.key} — ${f.reason}`).join('\n');
+    summary += '\n\nIf caused by a workflow gap, run `@jira discover workflow` to refresh the cache.';
   }
+  stream.markdown(`${summary}\n\n`);
+  logDiag(descriptor.scope, failures.length > 0 ? 'warn' : 'info',
+    `${descriptor.importLabel} stale-ticket close — ${newlyClosed.length} closed, ${failedTickets} failed`,
+    { closed: newlyClosed.length, failed: failedTickets },
+  );
 
-  // U6/R4/KTD10-15: transition every included stale ticket, one group at a time (each group carries
-  // its own already-chosen resolution) — reuses cleanupHandler.ts's transitionTickets() rather than
-  // re-implementing the per-ticket transition logic.
-  if (includedStaleCount > 0) {
-    stream.markdown(`\n\n_Transitioning ${includedStaleCount} stale ticket(s)…_\n\n`);
-    let staleTransitioned = 0;
-    let staleFailed = 0;
-    let staleSkipped = 0;
-    const staleFailures: Array<{ key: string; reason: string }> = [];
-    for (const group of staleGroups) {
-      const result = await transitionTickets(group.tickets, ticketService, group.resolution, descriptor.scope);
-      staleTransitioned += result.transitioned;
-      staleFailed += result.failed;
-      staleSkipped += result.skipped;
-      staleFailures.push(...result.failures);
-    }
-    const staleProcessed = staleTransitioned + staleFailed + staleSkipped;
-    let staleSummary =
-      `${staleProcessed} stale ticket(s) processed — **${staleTransitioned}** transitioned, ${staleFailed} failed, ${staleSkipped} skipped.`;
-    if (staleFailures.length > 0) {
-      staleSummary += '\n\n' + staleFailures.map(f => `✗ ${f.key} — ${f.reason}`).join('\n');
-      staleSummary += '\n\nIf caused by a workflow gap, run `@jira discover workflow` to refresh the cache.';
-    }
-    logDiag(descriptor.scope, staleFailed > 0 ? 'warn' : 'info',
-      `${descriptor.importLabel} stale-ticket transition complete — ${staleTransitioned} transitioned, ${staleFailed} failed, ${staleSkipped} skipped`,
-      { staleTransitioned, staleFailed, staleSkipped },
-    );
-    stream.markdown(staleSummary);
-  }
+  const outcomes = session.outcomes ?? emptyImportOutcomes();
+  return {
+    ...session,
+    staleTickets: { ...stale, closedKeys: [...closed, ...newlyClosed] },
+    outcomes: { ...outcomes, closed: outcomes.closed + newlyClosed.length, closeFailed: outcomes.closeFailed + failedTickets },
+  };
 }
 
 /**
- * U3/R13: "update existing tickets" — walks every Already-ticketed row in `session.allRows` (the
- * full, unpaged candidate set — NOT `session.rows`, since that section is always shown in full per
- * R8 but this action must cover every already-ticketed row the report matched, not just whichever
- * page happens to be visible) and, for each one whose finding group has an id not yet reflected on
- * its ticket's labels, adds the missing `label(s)` + a summarizing comment (via
+ * U3/R13 + overview-hub KTD5: "update tickets" — walks every already-ticketed row in
+ * `session.allRows` flagged with a finding its ticket does not carry yet (not just the visible
+ * page) and adds the missing `label(s)` + a summarizing comment (via
  * `TicketService.addMissingLabels` — the read-merge-write step — then `addComment`).
  *
  * Idempotency (R13): `addMissingLabels` itself is the idempotency check — it returns an empty array
- * when every candidate label is already present, and this loop treats that as "skip" (no comment
- * posted, no second write) rather than re-deriving "already covered" from anything cached in the
- * session. A per-row failure is caught, logged, and reported without aborting the rest of the batch
- * (mirrors executeImportBatch's per-row try/catch).
+ * when every candidate label is already present, and this loop treats that as "up to date" (no
+ * comment posted, no second write) and clears the row's flag so "Update N" stops counting it. A
+ * per-row failure is caught, logged, and reported without aborting the rest of the batch.
  *
- * Deliberately does NOT clear the review session or gate on "post it" — this reply is independent
- * of, and does not require, a confirm on the New/Stale sections (governing decision). Returns the
- * session with `updatedExisting` mirrored onto every row this run actually updated
+ * Returns the session with `updatedExisting` mirrored onto every row this run actually updated
  * (markRowsUpdatedExisting), for the caller to re-render.
  */
 export async function executeUpdateExistingTickets<TItem, TRow extends ReviewRowBase>(
@@ -898,20 +1018,21 @@ export async function executeUpdateExistingTickets<TItem, TRow extends ReviewRow
   baseUrl?: string,
 ): Promise<ReviewSession<TRow>> {
   const cfg = descriptor.updateExisting;
-  if (!cfg) return session; // defensive only — callers already gate on descriptor.updateExisting
+  if (!cfg) return session; // defensive only — the parser rejects "update tickets" without it
 
-  const ticketedRows = session.allRows.filter(r => r.existingTicketKey !== null);
+  const ticketedRows = session.allRows.filter(r => r.existingTicketKey !== null && r.hasUnsyncedFindings && !r.updatedExisting && !r.recreatedKey);
   if (ticketedRows.length === 0) {
-    stream.markdown('_No already-ticketed rows to update._\n\n');
+    stream.markdown('_No already-ticketed rows have new findings to add._\n\n');
     return session;
   }
 
-  stream.markdown(`_Checking ${ticketedRows.length} already-ticketed row(s) for new findings…_\n\n`);
+  stream.markdown(`_Updating ${ticketedRows.length} already-ticketed row(s) with new findings…_\n\n`);
   let updated = 0;
   let skipped = 0;
   let failed = 0;
   let commentFailed = 0;
   const updatedKeys = new Set<string>();
+  const upToDateKeys = new Set<string>();
 
   async function updateOneRow(row: TRow): Promise<void> {
     const ticketKey = row.existingTicketKey!;
@@ -921,6 +1042,7 @@ export async function executeUpdateExistingTickets<TItem, TRow extends ReviewRow
       const addedLabels = await ticketService.addMissingLabels(ticketKey, labelsToAdd);
       if (addedLabels.length === 0) {
         skipped++;
+        upToDateKeys.add(ticketKey);
         return;
       }
       // labelOf is expected to be injective (each id maps to its own distinct label) — recovering
@@ -929,11 +1051,10 @@ export async function executeUpdateExistingTickets<TItem, TRow extends ReviewRow
       const addedLabelSet = new Set(addedLabels);
       const newIds = ids.filter(id => addedLabelSet.has(cfg!.labelOf(id)));
       // Code-review fix: addMissingLabels() above has already committed its write — and is also
-      // this row's own idempotency check (see this function's own doc comment) — so a failure in
-      // addComment() below is NOT "nothing happened": a re-run will find the labels already
-      // present, silently skip this row, and never retry the comment. Give that its own try/catch,
-      // message, and counter instead of letting it fall into the generic ✗/failed branch, which
-      // would read as if the whole update never took effect.
+      // this row's own idempotency check — so a failure in addComment() below is NOT "nothing
+      // happened": a re-run will find the labels already present, silently skip this row, and
+      // never retry the comment. Give that its own try/catch, message, and counter instead of
+      // letting it fall into the generic ✗/failed branch.
       try {
         await ticketService.addComment(ticketKey, cfg!.buildCommentWiki(row, newIds), baseUrl);
       } catch (commentErr) {
@@ -955,12 +1076,10 @@ export async function executeUpdateExistingTickets<TItem, TRow extends ReviewRow
     }
   }
 
-  // Code-review fix: process rows in bounded-concurrency batches instead of one sequential
-  // await-chain per row — a report with a few hundred already-ticketed rows (the New path is
-  // already tested at 120) used to turn one "update existing tickets" reply into that many
-  // sequential HTTP round trips (a GET + a conditional PUT + a POST each). Each row's own
-  // try/catch above is unchanged, so per-row outcomes/counts stay the same; only their emission
-  // order does (rows within a batch settle in whatever order their requests complete).
+  // Code-review fix: bounded-concurrency batches instead of one sequential await-chain per row — a
+  // report with a few hundred already-ticketed rows would otherwise turn one reply into that many
+  // sequential HTTP round trips. Each row's own try/catch above keeps per-row outcomes the same;
+  // only their emission order depends on which requests complete first.
   const UPDATE_EXISTING_CONCURRENCY = 8;
   for (let i = 0; i < ticketedRows.length; i += UPDATE_EXISTING_CONCURRENCY) {
     const batch = ticketedRows.slice(i, i + UPDATE_EXISTING_CONCURRENCY);
@@ -979,5 +1098,13 @@ export async function executeUpdateExistingTickets<TItem, TRow extends ReviewRow
   );
 
   const marked = markRowsUpdatedExisting(session.rows, session.allRows, updatedKeys);
-  return { ...session, rows: marked.rows, allRows: marked.allRows };
+  const clearUpToDate = (r: TRow): TRow =>
+    (r.existingTicketKey !== null && upToDateKeys.has(r.existingTicketKey) ? { ...r, hasUnsyncedFindings: false } : r);
+  const outcomes = session.outcomes ?? emptyImportOutcomes();
+  return {
+    ...session,
+    rows: marked.rows.map(clearUpToDate),
+    allRows: marked.allRows.map(clearUpToDate),
+    outcomes: { ...outcomes, updated: outcomes.updated + updated + commentFailed, updateFailed: outcomes.updateFailed + failed },
+  };
 }
