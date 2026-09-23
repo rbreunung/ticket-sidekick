@@ -1506,7 +1506,7 @@ export type ReviewPageNav =
  * `buildReviewPage`'s indexing directly.
  */
 export function parseReviewPageNav(reply: string): ReviewPageNav | null {
-  const normalized = reply.trim().toLowerCase().replace(/\s+/g, ' ');
+  const normalized = normalizeReply(reply);
   if (normalized === 'next' || normalized === 'next page') return { kind: 'next' };
   if (normalized === 'prev' || normalized === 'previous' || normalized === 'prev page' || normalized === 'previous page') {
     return { kind: 'prev' };
@@ -1696,6 +1696,7 @@ export interface ImportGroupCounts {
   newRemaining: number; // every not-yet-created new row, across all pages
   newIncludedOnPage: number; // what "Create N tickets" would create now
   ticketedTotal: number;
+  ticketedOpen: number; // already-ticketed rows not re-created yet — still worth opening the screen for
   updatable: number; // already-ticketed rows with a finding their ticket does not carry yet
   recreatable: number; // already-ticketed rows toggled on for re-creation, not re-created yet
   staleOpen: number; // eligible stale tickets not closed yet
@@ -1711,6 +1712,7 @@ export function countImportGroups<TRow extends ReviewRowBase>(session: ReviewSes
     newRemaining: session.allRows.filter(r => r.existingTicketKey === null).length,
     newIncludedOnPage: session.rows.filter(r => r.existingTicketKey === null && r.included).length,
     ticketedTotal: ticketed.length,
+    ticketedOpen: ticketed.filter(r => !r.recreatedKey).length,
     updatable: ticketed.filter(r => r.hasUnsyncedFindings && !r.updatedExisting && !r.recreatedKey).length,
     recreatable: ticketed.filter(r => r.included && !r.recreatedKey).length,
     staleOpen: staleTickets.length,
@@ -1770,7 +1772,7 @@ export function buildImportOverview<TRow extends ReviewRowBase>(session: ReviewS
       if (o.updated > 0) parts.push(`${o.updated} updated`);
       if (o.recreated > 0) parts.push(`${o.recreated} re-created`);
       if (o.updateFailed + o.recreateFailed > 0) parts.push(`${o.updateFailed + o.recreateFailed} failed`);
-      if (s.allRows.some(r => r.existingTicketKey !== null && !r.recreatedKey)) link = cmdLink('Review', IMPORT_COMMANDS.openTicketed);
+      if (c.ticketedOpen > 0) link = cmdLink('Review', IMPORT_COMMANDS.openTicketed);
       lines.push(`- **Already ticketed** — ${parts.join(' · ')}${link ? ` — ${link}` : ''}`);
     } else {
       parts.push(`${c.staleOpen} open`);
@@ -1810,7 +1812,7 @@ export function buildNewGroupScreen<TRow extends ReviewRowBase>(
   const freshColumns: ReviewTableColumn<TRow>[] = [
     { header: '#', accessor: (r) => r.id },
     ...columns,
-    { header: 'Include?', accessor: (r) => buildChatCommandLink(r.included ? '✓' : '_excluded_', '@jira', r.id) },
+    { header: 'Include?', accessor: (r) => cmdLink(r.included ? '✓' : '_excluded_', r.id) },
   ];
   lines.push(renderReviewTable(freshColumns, fresh));
   lines.push(
@@ -1859,7 +1861,7 @@ export function buildTicketedGroupScreen<TRow extends ReviewRowBase>(
       header: 'Re-create?',
       accessor: (r) => (r.recreatedKey
         ? `re-created as ${formatKeyLink(r.recreatedKey, opts.baseUrl)}`
-        : buildChatCommandLink(r.included ? '✓ re-create' : '_no_', '@jira', r.id)),
+        : cmdLink(r.included ? '✓ re-create' : '_no_', r.id)),
     },
   ];
   lines.push(renderReviewTable(ticketedColumns, ticketed));
@@ -1904,7 +1906,7 @@ export function buildStaleGroupScreen<TRow extends ReviewRowBase>(session: Revie
         currentStatus: t.currentStatus,
         to: group.targetState,
         resolution: group.resolutionOptions ? '_asked on close_' : (group.resolution ?? ''),
-        toggleCell: closed.has(t.key) ? '✓ closed' : buildChatCommandLink(t.included ? '✓ close' : '_no_', '@jira', t.key),
+        toggleCell: closed.has(t.key) ? '✓ closed' : cmdLink(t.included ? '✓ close' : '_no_', t.key),
       });
     }
   }
@@ -1988,9 +1990,10 @@ function normalizeReply(reply: string): string {
 function parseStrictRowToggle(reply: string, ids: string[]): string[] | null {
   const tokens = reply.trim().split(/[\s,]+/).filter(Boolean);
   if (tokens.length === 0) return null;
+  const byLower = new Map(ids.map(id => [id.toLowerCase(), id]));
   const matched: string[] = [];
   for (const token of tokens) {
-    const found = ids.find(id => id.toLowerCase() === token.toLowerCase());
+    const found = byLower.get(token.toLowerCase());
     if (!found) return null;
     matched.push(found);
   }

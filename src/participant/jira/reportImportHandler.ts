@@ -535,14 +535,7 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
 
           // Overview-hub KTD6: a group whose rule still needs a resolution is NOT asked about here —
           // it keeps its options and is asked only if the user later closes one of its tickets.
-          const awaitingResolution: StaleTicketGroup[] = grouped.pendingGroups.map(g => ({
-            issueType: g.issueType,
-            ruleName: g.ruleName,
-            targetState: g.targetState,
-            resolution: undefined,
-            resolutionOptions: g.resolutionOptions,
-            tickets: g.tickets,
-          }));
+          const awaitingResolution: StaleTicketGroup[] = grouped.pendingGroups.map(g => ({ ...g, resolution: undefined }));
           reviewSession = {
             ...reviewSession,
             staleTickets: { groups: [...grouped.resolvedGroups, ...awaitingResolution], ineligible: grouped.ineligible },
