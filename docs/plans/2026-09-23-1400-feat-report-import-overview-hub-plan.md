@@ -214,7 +214,7 @@ U1 → U2 → U3 → U4 → U5 → U6. U2 and U3 are independent of each other o
 - `src/test/sessionState.test.ts`
 
 **Approach:**
-1. The overview lists each group with rows (count, clickable `open …` link, outcome text from the session counters) plus a `Done` link.
+1. The overview lists each group that had rows when the session was built (R1 read at build time, same basis as KTD7), with its count, outcome text from the session counters, and a clickable `open …` link while it still has actionable rows. A group whose rows are all handled stays listed with its outcome and no link (R15). A `Done` link ends the list.
 2. The New screen keeps today's table, include/exclude-all links and page line. It adds a `Create N tickets` link, where N is the included rows on the page, and `Back to overview` (or `Done` under `singleGroup`).
 3. The Already-ticketed screen keeps today's table and "Updated?" column. It shows `Update N tickets` only when the importer supports it and N > 0 (KTD5, R16). `Re-create N` reflects toggled rows. Re-created rows show their new key without a toggle.
 4. The Stale screen keeps today's ticket rows, ineligible notes and ticket-key toggles, and adds `Close N tickets`.
@@ -225,6 +225,7 @@ U1 → U2 → U3 → U4 → U5 → U6. U2 and U3 are independent of each other o
 - Overview with New 12, Already ticketed 4, Stale 2 lists three `open` links and a `Done` link, and no "Post it" text anywhere.
 - Overview after 50 of 62 New rows were created shows "50 created · 12 left".
 - Overview omits a group with zero rows at build time.
+- After all New rows are created, the overview still lists New with its outcome ("12 created") and no `open new` link.
 - The New screen under `singleGroup` shows `Done` and no `Back to overview`.
 - New screen `Create N` equals included rows on the visible page after an exclude.
 - Veracode Already-ticketed screen with two flagged rows shows `Update 2 tickets`. With none flagged, the Update link is absent.
@@ -269,7 +270,7 @@ U1 → U2 → U3 → U4 → U5 → U6. U2 and U3 are independent of each other o
 2. `handleImportReviewReply` calls the current view's parser and applies the action. Toggles and page moves re-render the same view. `open …` / `back` switch views. Actions run, update counters, then render the overview (or the single group).
 3. `createNewRows` persists the page's exclusions into `allRows`, removes successfully created rows, and recomputes the page (KTD4).
 4. `recreateTicketedRows` marks rows with their new key.
-5. `done` (or overview cancellation) clears the session and streams one summary of the outcome counters, logged via `logDiag(descriptor.scope, …)`.
+5. `done` (or overview cancellation) clears the session and streams one summary of the outcome counters, logged via `logDiag(descriptor.scope, …)`. The old "Cancelled — no tickets were created" message is removed for report imports, because the summary already reports zero when nothing ran.
 6. Add a `sessionWasSuperseded(ws, descriptor.sessionKeys.templateSelection)` guard at the top of `handleImportReviewReply` that clears the review session and streams the "newer import was started" message, reusing the stale-ask guard's wording.
 
 **Execution note:** Start by rewriting the existing "Stale-ticket review + transition" and paging handler tests against the new views, so the behavior shift is visible before the code moves.
