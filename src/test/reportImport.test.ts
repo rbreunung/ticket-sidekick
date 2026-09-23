@@ -264,7 +264,21 @@ describe('buildReviewRows', () => {
 
       const rows = buildReviewRows<Group, GroupRow>(groups, dedupMap, g => g.keys, g => ({ keys: g.keys }));
 
-      expect(rows).toEqual([{ id: 'A1', existingTicketKey: 'PROJ-900', included: false, keys: ['issue-1', 'issue-2', 'issue-3'] }]);
+      // Two of the three member keys have no ticket label yet — a newer finding on this line, so the
+      // row is flagged for the Already-ticketed screen's "Update N tickets" (overview-hub KTD5).
+      expect(rows).toEqual([{
+        id: 'A1', existingTicketKey: 'PROJ-900', included: false, hasUnsyncedFindings: true, keys: ['issue-1', 'issue-2', 'issue-3'],
+      }]);
+    });
+
+    it('does not flag an already-ticketed group whose every member key is already on a ticket', () => {
+      const groups: Group[] = [{ id: 'g1', keys: ['issue-1', 'issue-2'] }];
+      const dedupMap = new Map([['issue-1', 'PROJ-900'], ['issue-2', 'PROJ-900']]);
+
+      const rows = buildReviewRows<Group, GroupRow>(groups, dedupMap, g => g.keys, g => ({ keys: g.keys }));
+
+      expect(rows[0].existingTicketKey).toBe('PROJ-900');
+      expect(rows[0].hasUnsyncedFindings).toBeUndefined();
     });
 
     it('treats a group as new when none of its member keys match', () => {

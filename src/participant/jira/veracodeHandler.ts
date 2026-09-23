@@ -261,9 +261,10 @@ export async function handleVeracodeReviewReply(
 export async function handleVeracodeStaleResolution(
   reply: string,
   ask: StaleResolutionAskSession,
+  ticketService: TicketService,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
   baseUrl?: string,
 ): Promise<vscode.ChatResult | void> {
-  return continueAfterStaleResolution(reply, ask, stream, ws, veracodeDescriptor, baseUrl);
+  return continueAfterStaleResolution(reply, ask, stream, ws, veracodeDescriptor, ticketService, baseUrl);
 }

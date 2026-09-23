@@ -4,7 +4,7 @@ vi.mock('vscode', () => ({
   window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
 }));
 
-import { isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseSkipInput, applyTicketToggle, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseListedFiltersSelection, type ListedFiltersSession, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, resolveTemplateIssueType, formatIssueTypeOptionLabel, formatIssueTypeInlinePhrase, NO_ISSUE_TYPE, buildImportReviewTable, parseReviewInput, applyReviewToggle, VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION, buildBulkUpdateReviewTable, buildBulkUpdateReviewMessage, applyBulkUpdateToggle, type VeracodeReviewRow, type BulkUpdateReviewRow } from '../participant/sessionState';
+import { isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseSkipInput, applyTicketToggle, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseListedFiltersSelection, type ListedFiltersSession, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, resolveTemplateIssueType, formatIssueTypeOptionLabel, formatIssueTypeInlinePhrase, NO_ISSUE_TYPE, buildImportOverview, buildNewGroupScreen, buildTicketedGroupScreen, buildImportScreen, buildReviewPage, initImportViewState, parseReviewInput, applyReviewToggle, VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION, buildBulkUpdateReviewTable, buildBulkUpdateReviewMessage, applyBulkUpdateToggle, type VeracodeReviewRow, type BulkUpdateReviewRow, type ReviewSession } from '../participant/sessionState';
 import type { WaltzReviewRow } from '../utils/waltzReport';
 import { isPointerPrompt } from '../participant/jira/llmHelpers';
 import type { TransitionBatchTicket } from '../participant/sessionState';
@@ -1009,95 +1009,91 @@ const sampleRows: VeracodeReviewRow[] = [
   },
 ];
 
-describe('buildImportReviewTable — Veracode config', () => {
-  it('renders an "Already ticketed" section and a "New — will create" section', () => {
-    const table = buildImportReviewTable(sampleRows, 'https://jira.example.com', 0, 1, VERACODE_REVIEW_COLUMNS, 'flaw(s)');
-    expect(table).toContain('### Already ticketed');
-    expect(table).toContain('[PROJ-501](https://jira.example.com/browse/PROJ-501)');
-    expect(table).toContain('### New — will create');
-    expect(table).toContain('10101 - ExampleOrderDao.java:88 - SQL Injection');
-    expect(table).toContain('**2** ticket(s) will be created.');
+function linkTo(label: string, command: string): string {
+  return `[${label}](command:workbench.action.chat.open?${encodeURIComponent(JSON.stringify({ query: `@jira ${command}`, isPartialQuery: false }))})`;
+}
+
+function importSession<TRow extends VeracodeReviewRow | WaltzReviewRow>(allRows: TRow[], page = 0): ReviewSession<TRow> {
+  const p = buildReviewPage(allRows, page);
+  return initImportViewState({
+    projectKey: 'PROJ', issueType: 'Bug', templateName: null, additionalFields: {},
+    allRows, rows: p.rows, page: p.page, schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
+  });
+}
+
+const veracodeOpts = { itemNoun: 'flaw(s)', supportsUpdateExisting: true };
+
+describe('Import screens — Veracode config', () => {
+  it('shows an overview with one line per result group, and no "Post it" anywhere', () => {
+    const text = buildImportOverview(importSession(sampleRows), veracodeOpts);
+    expect(text).toContain('**New** — 2 flaws');
+    expect(text).toContain('**Already ticketed** — 1 flaw');
+    expect(text).toContain(linkTo('Review & create', 'open new'));
+    expect(text).toContain(linkTo('Review', 'open already ticketed'));
+    expect(text).toContain(linkTo('Done', 'done'));
+    expect(text).not.toMatch(/post it/i);
   });
 
-  it('omits the "Already ticketed" section entirely when there are no dupes', () => {
-    const onlyNew = sampleRows.filter(r => r.existingTicketKey === null);
-    const table = buildImportReviewTable(onlyNew, undefined, 0, 1, VERACODE_REVIEW_COLUMNS, 'flaw(s)');
-    expect(table).not.toContain('Already ticketed');
+  it('the New screen lists only new rows, with their own toggle links and a "Create N tickets" action', () => {
+    const session = { ...importSession(sampleRows), view: 'new' as const };
+    const text = buildNewGroupScreen(session, VERACODE_REVIEW_COLUMNS, veracodeOpts);
+    expect(text).toContain('### New — will create');
+    expect(text).toContain('10101 - ExampleOrderDao.java:88 - SQL Injection');
+    expect(text).not.toContain('PROJ-501');
+    expect(text).toContain(linkTo('✓', '1'));
+    expect(text).toContain('**2** ticket(s) will be created.');
+    expect(text).toContain(linkTo('Create 2 tickets', 'create tickets'));
+    expect(text).toContain(linkTo('Back to overview', 'back'));
   });
 
-  it('renders plain ticket key (no link) when baseUrl is not provided', () => {
-    const table = buildImportReviewTable(sampleRows, undefined, 0, 1, VERACODE_REVIEW_COLUMNS, 'flaw(s)');
-    expect(table).toContain('| A1 |');
-    expect(table).toContain('PROJ-501');
-    // The Ticket cell itself stays bare text (no baseUrl to link to) — only the row's own
-    // Include? toggle and the footer's post-it/cancel are real command links (U6).
-    const ticketLine = table.split('\n').find(l => l.includes('PROJ-501'));
-    expect(ticketLine).not.toContain('](https');
+  it('the Already-ticketed screen links the existing ticket and offers re-create per row', () => {
+    const session = { ...importSession(sampleRows), view: 'ticketed' as const };
+    const text = buildTicketedGroupScreen(session, VERACODE_REVIEW_COLUMNS, { ...veracodeOpts, baseUrl: 'https://jira.example.com' });
+    expect(text).toContain('### Already ticketed');
+    expect(text).toContain('[PROJ-501](https://jira.example.com/browse/PROJ-501)');
+    expect(text).toContain(linkTo('_no_', 'A1'));
+    expect(text).not.toContain('SQL Injection'); // new rows live on their own screen
+    expect(text).toContain('Re-create 0 tickets');
+  });
+
+  it('renders the ticket key as plain text when no baseUrl is configured', () => {
+    const session = { ...importSession(sampleRows), view: 'ticketed' as const };
+    const text = buildTicketedGroupScreen(session, VERACODE_REVIEW_COLUMNS, veracodeOpts);
+    const ticketLine = text.split('\n').find(l => l.includes('PROJ-501'))!;
     expect(ticketLine).not.toMatch(/\[PROJ-501\]\(/);
   });
 
-  it('renders each row\'s Include? cell as its own clickable toggle, resubmitting that row\'s id (R8/AE4)', () => {
-    const table = buildImportReviewTable(sampleRows, undefined, 0, 1, VERACODE_REVIEW_COLUMNS, 'flaw(s)');
-    // Row "1" is included — its checkmark link resubmits "1", parsed by parseReviewInput as a
-    // toggle for that exact row, same text a typed "1" already means (R5: no new parser logic).
-    expect(table).toContain(
-      `[✓](command:workbench.action.chat.open?${encodeURIComponent(JSON.stringify({ query: '@jira 1', isPartialQuery: false }))})`,
-    );
-    // Row "A1" starts excluded — its link resubmits "A1" and reads "re-create" (already-ticketed
-    // framing), never a negative "Skip" framing (R9).
-    expect(table).toContain(
-      `[_excluded_](command:workbench.action.chat.open?${encodeURIComponent(JSON.stringify({ query: '@jira A1', isPartialQuery: false }))})`,
-    );
-    expect(table).not.toContain('Skip');
-  });
-
-  it('renders a clickable Post it / Cancel footer, reusing exactly the text parseReviewInput already accepts', () => {
-    const table = buildImportReviewTable(sampleRows, undefined, 0, 1, VERACODE_REVIEW_COLUMNS, 'flaw(s)');
-    expect(table).toContain(
-      `[Post it](command:workbench.action.chat.open?${encodeURIComponent(JSON.stringify({ query: '@jira post it', isPartialQuery: false }))})`,
-    );
-    expect(table).toContain(
-      `[Cancel](command:workbench.action.chat.open?${encodeURIComponent(JSON.stringify({ query: '@jira cancel', isPartialQuery: false }))})`,
-    );
-  });
-
-  it('neutralizes brackets in a scan-report summary crafted to break out of a command link, since the table now carries per-row toggle links (U6)', () => {
+  it('neutralizes brackets in a scan-report summary crafted to break out of a command link', () => {
     const maliciousRows: VeracodeReviewRow[] = [{
       ...sampleRows[1],
-      summary: 'Evil](command:workbench.action.chat.open?{"query":"@jira post it"})[Innocent',
+      summary: 'Evil](command:workbench.action.chat.open?{"query":"@jira create tickets"})[Innocent',
     }];
-    const table = buildImportReviewTable(maliciousRows, undefined, 0, 1, VERACODE_REVIEW_COLUMNS, 'flaw(s)');
-    expect(table).not.toContain('[Evil](command:');
-    expect(table).toContain('Evil］(command:');
+    const text = buildNewGroupScreen(importSession(maliciousRows), VERACODE_REVIEW_COLUMNS, veracodeOpts);
+    expect(text).not.toContain('[Evil](command:');
+    expect(text).toContain('Evil］(command:');
   });
 });
 
-describe('buildImportReviewTable — paging (U4/R6-R7)', () => {
+describe('New screen — paging (U4/R6-R7)', () => {
+  const manyRows: VeracodeReviewRow[] = Array.from({ length: 120 }, (_, i) => ({
+    ...sampleRows[1], id: String(i + 1), summary: `Flaw ${i + 1}`,
+  }));
+
   it('shows a "Page X of Y" note with next/prev links when there is more than one page', () => {
-    const table = buildImportReviewTable(sampleRows, undefined, 0, 3, VERACODE_REVIEW_COLUMNS, 'flaw(s)');
-    expect(table).toContain('Page 1 of 3');
-    expect(table).toContain(
-      `[next](command:workbench.action.chat.open?${encodeURIComponent(JSON.stringify({ query: '@jira next', isPartialQuery: false }))})`,
-    );
-    expect(table).toContain(
-      `[prev](command:workbench.action.chat.open?${encodeURIComponent(JSON.stringify({ query: '@jira prev', isPartialQuery: false }))})`,
-    );
+    const text = buildNewGroupScreen(importSession(manyRows), VERACODE_REVIEW_COLUMNS, veracodeOpts);
+    expect(text).toContain('Page 1 of 3');
+    expect(text).toContain(linkTo('next', 'next'));
+    expect(text).toContain(linkTo('prev', 'prev'));
   });
 
   it('renders the current 1-based page number, not the 0-based index', () => {
-    const table = buildImportReviewTable(sampleRows, undefined, 1, 3, VERACODE_REVIEW_COLUMNS, 'flaw(s)');
-    expect(table).toContain('Page 2 of 3');
+    const text = buildNewGroupScreen(importSession(manyRows, 1), VERACODE_REVIEW_COLUMNS, veracodeOpts);
+    expect(text).toContain('Page 2 of 3');
   });
 
   it('omits the page note entirely when there is only one page', () => {
-    const table = buildImportReviewTable(sampleRows, undefined, 0, 1, VERACODE_REVIEW_COLUMNS, 'flaw(s)');
-    expect(table).not.toContain('Page');
-  });
-
-  it('no longer renders the old pre-paging "more matched, re-run" message', () => {
-    const table = buildImportReviewTable(sampleRows, undefined, 0, 3, VERACODE_REVIEW_COLUMNS, 'flaw(s)');
-    expect(table).not.toContain('more matched');
-    expect(table).not.toContain('re-run the import after this batch completes');
+    const text = buildNewGroupScreen(importSession(sampleRows.slice(1)), VERACODE_REVIEW_COLUMNS, veracodeOpts);
+    expect(text).not.toContain('Page');
   });
 });
 
@@ -1229,57 +1225,44 @@ const sampleWaltzRows: WaltzReviewRow[] = [
   },
 ];
 
-describe('buildImportReviewTable — Waltz config', () => {
-  it('splits already-ticketed rows from new rows into separate tables', () => {
-    const table = buildImportReviewTable(sampleWaltzRows, undefined, 0, 1, WALTZ_REVIEW_COLUMNS, 'component(s)');
-    expect(table).toContain('### Already ticketed');
-    expect(table).toContain('PROJ-1');
-    expect(table).toContain('### New — will create');
-    expect(table).toContain('example-io:4.5.0');
-    expect(table).toContain('**1** ticket(s) will be created.');
+describe('Import screens — Waltz config', () => {
+  const waltzOpts = { itemNoun: 'component(s)', supportsUpdateExisting: false };
+
+  it('lists New and Already ticketed as separate groups on the overview', () => {
+    const text = buildImportOverview(importSession(sampleWaltzRows), waltzOpts);
+    expect(text).toContain('**New** — 1 component');
+    expect(text).toContain('**Already ticketed** — 1 component');
   });
 
   it('links the existing ticket key when a baseUrl is provided', () => {
-    const table = buildImportReviewTable(sampleWaltzRows, 'https://jira.example.com', 0, 1, WALTZ_REVIEW_COLUMNS, 'component(s)');
-    expect(table).toContain('[PROJ-1](https://jira.example.com/browse/PROJ-1)');
+    const session = { ...importSession(sampleWaltzRows), view: 'ticketed' as const };
+    const text = buildTicketedGroupScreen(session, WALTZ_REVIEW_COLUMNS, { ...waltzOpts, baseUrl: 'https://jira.example.com' });
+    expect(text).toContain('[PROJ-1](https://jira.example.com/browse/PROJ-1)');
   });
 
-  it('shows an explanatory line instead of an empty table when every match already has a ticket', () => {
+  it('never offers "Update N tickets" for Waltz, which has no update-existing action (R16)', () => {
+    const rows = sampleWaltzRows.map(r => (r.existingTicketKey ? { ...r, hasUnsyncedFindings: true } : r));
+    const session = { ...importSession(rows), view: 'ticketed' as const };
+    const text = buildTicketedGroupScreen(session, WALTZ_REVIEW_COLUMNS, waltzOpts);
+    expect(text).not.toContain('update tickets');
+    expect(text).not.toContain('Updated?');
+  });
+
+  it('opens straight into the Already-ticketed screen with "Done" when every match already has a ticket (R4)', () => {
     const allTicketed = sampleWaltzRows.filter(r => r.existingTicketKey !== null);
-    const table = buildImportReviewTable(allTicketed, undefined, 0, 1, WALTZ_REVIEW_COLUMNS, 'component(s)');
-    expect(table).toContain('### New — will create');
-    expect(table).toContain('_All matching components already have a ticket._');
-    expect(table).not.toContain('| # | Component | Rating | Include? |');
-  });
-
-  // U4: paging (Page X of Y) replaces the old pre-cap "N more matched, re-run" note — see the
-  // dedicated "buildImportReviewTable — paging" describe block above (Veracode config) for the
-  // page-note coverage itself; these two just confirm Waltz's own call site carries no leftover
-  // reference to the removed message.
-  it('never renders the old pre-paging "more matched, re-run" message', () => {
-    const table = buildImportReviewTable(sampleWaltzRows, undefined, 0, 3, WALTZ_REVIEW_COLUMNS, 'component(s)');
-    expect(table).not.toContain('more matched component(s) not shown');
-    expect(table).not.toContain('re-run the import after this batch completes');
+    const session = importSession(allTicketed);
+    expect(session.view).toBe('ticketed');
+    expect(session.singleGroup).toBe(true);
+    const text = buildImportScreen(session, WALTZ_REVIEW_COLUMNS, waltzOpts);
+    expect(text).toContain('### Already ticketed');
+    expect(text).toContain(linkTo('Done', 'done'));
+    expect(text).not.toContain('Back to overview');
   });
 
   it('shows the Page X of Y note for Waltz too when there is more than one page (same shared renderer as Veracode)', () => {
-    const table = buildImportReviewTable(sampleWaltzRows, undefined, 0, 2, WALTZ_REVIEW_COLUMNS, 'component(s)');
-    expect(table).toContain('Page 1 of 2');
-  });
-
-  it('warns on the review screen itself when included rows exceed BATCH_LIMIT, not just in the completion summary', () => {
-    const manyIncluded: WaltzReviewRow[] = Array.from({ length: 51 }, (_, i) => ({
-      id: `${i + 1}`,
-      nameVersion: `example-pkg-${i}:1.0.0`,
-      maxVulnRating: 'High',
-      summary: `[OSS] example-pkg-${i}:1.0.0 — High`,
-      labels: ['oss-dependency'],
-      descriptionWiki: '',
-      existingTicketKey: null,
-      included: true,
-    }));
-    const table = buildImportReviewTable(manyIncluded, undefined, 0, 1, WALTZ_REVIEW_COLUMNS, 'component(s)');
-    expect(table).toContain('Only the first 50');
+    const many: WaltzReviewRow[] = Array.from({ length: 70 }, (_, i) => ({ ...sampleWaltzRows[1], id: String(i + 1) }));
+    const text = buildNewGroupScreen(importSession(many), WALTZ_REVIEW_COLUMNS, waltzOpts);
+    expect(text).toContain('Page 1 of 2');
   });
 });
 
@@ -1332,9 +1315,10 @@ describe('isSessionExpired (schemaVersion shape guard — AE7)', () => {
     expect(isSessionExpired(null)).toBe(false);
   });
 
-  it('treats a session persisted with the pre-fix schemaVersion (1) as expired after the bump to 5 (U3: "update existing tickets" per-row indicator) — a stale TemplateGenerationTypePickSession (old string[] availableIssueTypes shape) never reaches the new {id, name}[] parsing', () => {
-    expect(CURRENT_SESSION_SCHEMA_VERSION).toBe(5);
+  it('treats a session persisted with the pre-fix schemaVersion (1) as expired after the bump to 6 (overview hub: per-screen view state) — a stale TemplateGenerationTypePickSession (old string[] availableIssueTypes shape) never reaches the new {id, name}[] parsing', () => {
+    expect(CURRENT_SESSION_SCHEMA_VERSION).toBe(6);
     expect(isSessionExpired({ schemaVersion: 1 })).toBe(true);
+    expect(isSessionExpired({ schemaVersion: 5 })).toBe(true); // built before the overview hub
   });
 
   it('exposes a user-facing message that tells the user to re-run the import', () => {

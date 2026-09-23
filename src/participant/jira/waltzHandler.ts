@@ -229,9 +229,10 @@ export async function handleWaltzReviewReply(
 export async function handleWaltzStaleResolution(
   reply: string,
   ask: StaleResolutionAskSession,
+  ticketService: TicketService,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
   baseUrl?: string,
 ): Promise<vscode.ChatResult | void> {
-  return continueAfterStaleResolution(reply, ask, stream, ws, waltzDescriptor, baseUrl);
+  return continueAfterStaleResolution(reply, ask, stream, ws, waltzDescriptor, ticketService, baseUrl);
 }
