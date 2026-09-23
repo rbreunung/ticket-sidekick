@@ -573,7 +573,8 @@ export async function streamStaleResolutionAsk(
   stream.markdown(trustedChatMarkdown(
     `**${selected}** stale **${group.issueType}** ticket(s) will move to **${group.targetState}** — ` +
     `which resolution should be set?\n\n${list}\n\n` +
-    `Reply with the name or number, or ${buildChatCommandLink('None', '@jira', 'none')} to skip setting a resolution.`,
+    `Reply with the name or number, ${buildChatCommandLink('None', '@jira', 'none')} to skip setting a resolution, ` +
+    `or ${buildChatCommandLink('Back', '@jira', 'back')} to return to the stale tickets without closing any.`,
   ));
   return { metadata: { jiraSession: { kinds: ['stale-resolution-selection'] } } };
 }
@@ -600,6 +601,17 @@ export async function continueAfterStaleResolution<TItem, TRow extends ReviewRow
     await ws.update(STALE_RESOLUTION_SESSION_KEY, undefined);
     stream.markdown('_A newer import was started while this one was waiting for a resolution — cancelled to avoid closing tickets from a stale batch._');
     return;
+  }
+
+  // Code-review fix: the question now sits between "close tickets" and the transitions, so it needs
+  // a way out. "back" or a cancellation word (other than "skip", which here means "no resolution",
+  // same as "none") returns to the Stale screen with nothing transitioned and no answer recorded.
+  const normalizedReply = reply.trim().toLowerCase();
+  if (normalizedReply === 'back' || (isCancellation(reply) && normalizedReply !== 'skip')) {
+    await ws.update(STALE_RESOLUTION_SESSION_KEY, undefined);
+    stream.markdown('_No stale tickets were closed._\n\n');
+    const parked = ensureImportViewState(ask.reviewSession as unknown as ReviewSession<TRow>);
+    return streamImportReview({ ...parked, view: 'stale' }, stream, ws, descriptor, baseUrl);
   }
 
   const group = ask.pendingGroups[0];
@@ -1008,7 +1020,7 @@ export async function executeUpdateExistingTickets<TItem, TRow extends ReviewRow
   const cfg = descriptor.updateExisting;
   if (!cfg) return session; // defensive only — the parser rejects "update tickets" without it
 
-  const ticketedRows = session.allRows.filter(r => r.existingTicketKey !== null && r.hasUnsyncedFindings && !r.updatedExisting);
+  const ticketedRows = session.allRows.filter(r => r.existingTicketKey !== null && r.hasUnsyncedFindings && !r.updatedExisting && !r.recreatedKey);
   if (ticketedRows.length === 0) {
     stream.markdown('_No already-ticketed rows have new findings to add._\n\n');
     return session;

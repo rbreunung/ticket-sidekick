@@ -1048,6 +1048,39 @@ describe('Stale-ticket review + transition (U6)', () => {
     expect(client.executeTransitionCalls.map(c => c.issueKey)).toContain('PROJ-2');
   });
 
+  it('"back" or "cancel" on the resolution question returns to the Stale screen without closing anything; "skip" still means no resolution', async () => {
+    vi.mocked(TemplateService).mockImplementation(() => ({
+      loadTemplates: vi.fn().mockReturnValue({
+        templates: [], cleanupRules: [{ name: 'close-bugs', project: 'PROJ', issueType: 'Bug', targetState: 'Done' }],
+      }),
+    }) as never);
+    mockSearches([makeStaleIssue('PROJ-1', 'Bug', ['1'])]);
+    const ws = makeMockWs();
+    const staleDescriptor = makeStaleDescriptor();
+    await continueAfterImportIssueType('Bug', null, makeSession({ items: [], availableIssueTypes: ['Bug'] }), client, ticketService, mockStream() as never, ws as never, staleDescriptor);
+    const session = ws.store[descriptor.sessionKeys.review] as ReviewSession<TestRow>;
+    const { continueAfterStaleResolution } = await import('../participant/jira/reportImportHandler');
+
+    // Select the ticket, close, then back out of the resolution question.
+    await handleImportReviewReply('PROJ-1', session, ticketService, mockStream() as never, ws as never, staleDescriptor);
+    const fresh = session;
+    await handleImportReviewReply('close tickets', fresh, ticketService, mockStream() as never, ws as never, staleDescriptor);
+    const stream = mockStream();
+    await continueAfterStaleResolution('back', ws.store['jira.session.staleResolution'] as never, stream as never, ws as never, staleDescriptor, ticketService);
+    expect(client.executeTransitionCalls).toHaveLength(0);
+    expect(ws.store['jira.session.staleResolution']).toBeUndefined();
+    expect(markdownText((stream.markdown as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0])).toContain('### Stale');
+
+    await handleImportReviewReply('close tickets', ws.store[descriptor.sessionKeys.review] as never, ticketService, mockStream() as never, ws as never, staleDescriptor);
+    await continueAfterStaleResolution('cancel', ws.store['jira.session.staleResolution'] as never, mockStream() as never, ws as never, staleDescriptor, ticketService);
+    expect(client.executeTransitionCalls).toHaveLength(0);
+
+    await handleImportReviewReply('close tickets', ws.store[descriptor.sessionKeys.review] as never, ticketService, mockStream() as never, ws as never, staleDescriptor);
+    await continueAfterStaleResolution('skip', ws.store['jira.session.staleResolution'] as never, mockStream() as never, ws as never, staleDescriptor, ticketService);
+    expect(client.executeTransitionCalls.map(c => c.issueKey)).toEqual(['PROJ-1']);
+    expect(client.executeTransitionCalls[0].fields).toBeUndefined();
+  });
+
   it('a group answered "none" transitions without a resolution and is never asked again', async () => {
     vi.mocked(TemplateService).mockImplementation(() => ({
       loadTemplates: vi.fn().mockReturnValue({
@@ -1328,6 +1361,26 @@ describe('Overview hub — per-group actions (R7, R8, R10, R13, R15, R16)', () =
     expect(markdownText((stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain("Didn't understand that");
     await handleImportReviewReply('re-create tickets', session, ticketService, mockStream() as never, ws as never, descriptor);
     expect(client.createIssueCalls).toHaveLength(1);
+  });
+
+  it('"re-create tickets" then "update tickets" on the same row never updates the ticket that was just replaced', async () => {
+    const ws = makeMockWs();
+    const session = await buildSession(3, ws, ['1', '2']);
+    session.allRows = session.allRows.map(r => (r.existingTicketKey ? { ...r, hasUnsyncedFindings: true } : r));
+    const updateDescriptor: ReportImportDescriptor<TestItem, TestRow> = {
+      ...descriptor,
+      updateExisting: { idsOf: row => [row.ref], labelOf: id => `test-${id}`, buildCommentWiki: () => 'c' },
+    };
+    const addMissing = vi.spyOn(ticketService, 'addMissingLabels').mockResolvedValue(['x']);
+    vi.spyOn(ticketService, 'addComment').mockResolvedValue(undefined as never);
+
+    await handleImportReviewReply('open already ticketed', session, ticketService, mockStream() as never, ws as never, updateDescriptor);
+    await handleImportReviewReply('A2', session, ticketService, mockStream() as never, ws as never, updateDescriptor);
+    await handleImportReviewReply('re-create tickets', session, ticketService, mockStream() as never, ws as never, updateDescriptor);
+    await handleImportReviewReply('open already ticketed', session, ticketService, mockStream() as never, ws as never, updateDescriptor);
+    await handleImportReviewReply('update tickets', session, ticketService, mockStream() as never, ws as never, updateDescriptor);
+
+    expect(addMissing.mock.calls.map(c => c[0])).toEqual(['PROJ-900']); // A1 only; A2 (PROJ-901) was re-created
   });
 
   it('an import whose only rows are already ticketed opens straight into that screen with "Done" (R4)', async () => {
