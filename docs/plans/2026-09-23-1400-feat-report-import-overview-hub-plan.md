@@ -126,7 +126,7 @@ flowchart TB
 
 ### Key Technical Decisions
 
-- KTD1. **One review session per import, with a `view` field.** The existing `ReviewSession` gains the screen currently shown (`overview`, `new`, `ticketed`, `stale`), a fixed `singleGroup` flag, and per-group outcome counters. Session keys and `JiraSessionKind` values (`veracode-review`, `waltz-review`, `email-review`) stay the same, so `src/participant/JiraParticipant.ts` routing does not change. `CURRENT_SESSION_SCHEMA_VERSION` goes from 5 to 6, so a session stored by the old build expires through the existing `isSessionExpired()` guard instead of being read with the new shape. Implements the overview-hub Key Decision (governs R1–R5, R10); inherits its label. (session-settled: user-directed — chosen over guided sequential steps and a single screen with per-section actions: the user wants free choice of group and order.)
+- KTD1. **One review session per import, with a `view` field.** The existing `ReviewSession` gains the screen currently shown (`overview`, `new`, `ticketed`, `stale`), a fixed `singleGroup` flag, and per-group outcome counters. Session keys and `JiraSessionKind` values (`veracode-review`, `waltz-review`, `email-review`) stay the same, so `src/participant/JiraParticipant.ts` keeps its session-kind routing. Only the stale-resolution branch's call gains a `ticketService` argument (U5). `CURRENT_SESSION_SCHEMA_VERSION` goes from 5 to 6, so a session stored by the old build expires through the existing `isSessionExpired()` guard instead of being read with the new shape. Implements the overview-hub Key Decision (governs R1–R5, R10); inherits its label. (session-settled: user-directed — chosen over guided sequential steps and a single screen with per-section actions: the user wants free choice of group and order.)
 - KTD2. **Replies are parsed per view, in a fixed order, with exact-match command words.** Each view has its own pure parser. Tokens outside that view's vocabulary produce a view-specific "didn't understand" message listing what this screen accepts (R6).
   - Overview: `open new`, `open already ticketed`, `open stale`, `done`. Cancellation words (`isCancellation()`) end the import the same way as `done`.
   - All group screens: `back` returns to the overview. Cancellation words also return to the overview without running anything. Under `singleGroup`, `back` is not offered and `done` / cancellation end the import.
@@ -134,10 +134,10 @@ flowchart TB
   - Already ticketed: `A<n>` toggles, `update tickets` (Veracode only, R16), `re-create tickets`. Confirmation words are rejected here because there are two actions.
   - Stale: ticket-key toggles (existing `parseStaleTicketToggle`), `close tickets`. Confirmation words alias to `close tickets`.
   - None of the new command words appear in `isConfirmation()` / `isCancellation()`, and none can be a row id (digits, `A<n>`) or ticket key (always hyphenated). A unit test pins this disjointness.
-- KTD3. **The combined batch is split into three per-group actions.** `executeImportBatch` becomes `createNewRows` (included rows on the visible New page), `recreateTicketedRows` (toggled Already-ticketed rows) and `closeStaleTickets` (selected stale tickets). Each action is capped at `BATCH_LIMIT` (R13), reuses today's per-row try/catch and progress lines, updates the session's outcome counters and re-renders the overview (or the single group, R10). The session is no longer cleared on an action. It is cleared only on `done`, overview cancellation, or a superseding import.
-- KTD4. **Created New rows are removed from `allRows`; re-created rows stay but are marked.** After `createNewRows`, successfully created rows leave `allRows`, and `buildReviewPage` re-derives the page, so a repeated `create tickets` cannot create duplicates (R15). A re-created Already-ticketed row keeps its place, shows the new key, and is no longer toggleable.
+- KTD3. **The combined batch is split into three per-group actions.** `executeImportBatch` becomes `createNewRows` (included rows on the visible New page), `recreateTicketedRows` (toggled Already-ticketed rows) and `closeStaleTickets` (selected stale tickets). Each action is capped at `BATCH_LIMIT` (R13), reuses today's per-row try/catch and progress lines, updates the session's outcome counters and re-renders the overview (or the single group, R10). The session is no longer cleared on an action. It is cleared only on `done`, overview cancellation, or a superseding import (detected by a `sessionWasSuperseded()` guard at the top of `handleImportReviewReply`, mirroring the existing issue-type and stale-ask guards). After `closeStaleTickets`, each successfully transitioned ticket is marked closed: it has no toggle and is excluded from `Close N`, mirroring KTD4's re-created-row marking.
+- KTD4. **Created New rows are removed from `allRows`; re-created rows stay but are marked.** Before re-deriving, the visible page's `included: false` states are written into `allRows`, so rows the user excluded stay excluded. Then successfully created rows leave `allRows` and `buildReviewPage` re-derives the page, so a repeated `create tickets` cannot create duplicates (R15). A re-created Already-ticketed row keeps its place, shows the new key, and is no longer toggleable.
 - KTD5. **The "Update N" count comes from the dedup map at row-build time.** `buildReviewRows` sets a per-row flag when at least one of the row's dedup keys is missing from the dedup map (a folded group whose newer finding has no ticket label yet). N counts flagged rows not already marked `updatedExisting`. `executeUpdateExistingTickets` walks only flagged rows. `addMissingLabels()` stays the idempotency check. No extra Jira calls are needed to show N.
-- KTD6. **Stale resolution is deferred until `close tickets`.** `continueAfterImportIssueType` no longer starts the resolution ask. It stores every eligible stale group in `staleTickets`, keeping the group's `resolutionOptions` where a resolution is still needed. On `close tickets`, only groups with at least one selected ticket and no resolution chosen are asked, through the existing `StaleResolutionAskSession` chain. Its parked `reviewSession` is the live session, and once the last group resolves the transitions run and the overview renders. Implements the stale Key Decision (governs R9); inherits its label. (session-settled: user-approved — chosen over keeping the ask before the overview: asking before the user saw any results was part of the confusion.)
+- KTD6. **Stale resolution is deferred until `close tickets`.** `continueAfterImportIssueType` no longer starts the resolution ask. It stores every eligible stale group in `staleTickets`, keeping the group's `resolutionOptions` where a resolution is still needed. Each group records whether its resolution was answered (an answer of `none` counts as answered), so it is never asked twice. On `close tickets`, only groups with at least one selected ticket and no answered resolution are asked, through the existing `StaleResolutionAskSession` chain. Its parked `reviewSession` is the live session, and once the last group resolves the transitions run and the overview renders. Implements the stale Key Decision (governs R9); inherits its label. (session-settled: user-approved — chosen over keeping the ask before the overview: asking before the user saw any results was part of the confusion.)
 - KTD7. **`singleGroup` is decided once, when the session is built.** It is true when exactly one of New, Already ticketed and Stale (eligible plus ineligible tickets) has rows at build time. The initial view is then that group. The flag never flips mid-import, so a Veracode import whose New rows are all created does not suddenly grow an overview.
 - KTD8. **Screen renderers are pure functions in `sessionState.ts`.** `buildImportOverview`, `buildNewGroupScreen`, `buildTicketedGroupScreen` and `buildStaleGroupScreen` replace `buildImportReviewTable` + `buildStaleReviewSection`, reusing `renderReviewTable`, `buildChatCommandLink` and each importer's `reviewColumns`. They stay vscode-free so Vitest covers them, and output still goes through `trustedChatMarkdown()`.
 
@@ -267,20 +267,21 @@ U1 → U2 → U3 → U4 → U5 → U6. U2 and U3 are independent of each other o
 **Approach:**
 1. After `continueAfterImportIssueType` builds rows, compute the initial view (U1 helper) and render.
 2. `handleImportReviewReply` calls the current view's parser and applies the action. Toggles and page moves re-render the same view. `open …` / `back` switch views. Actions run, update counters, then render the overview (or the single group).
-3. `createNewRows` removes successfully created rows from `allRows` and recomputes the page (KTD4).
+3. `createNewRows` persists the page's exclusions into `allRows`, removes successfully created rows, and recomputes the page (KTD4).
 4. `recreateTicketedRows` marks rows with their new key.
 5. `done` (or overview cancellation) clears the session and streams one summary of the outcome counters, logged via `logDiag(descriptor.scope, …)`.
-6. The superseded-import guard stays as it is.
+6. Add a `sessionWasSuperseded(ws, descriptor.sessionKeys.templateSelection)` guard at the top of `handleImportReviewReply` that clears the review session and streams the "newer import was started" message, reusing the stale-ask guard's wording.
 
 **Execution note:** Start by rewriting the existing "Stale-ticket review + transition" and paging handler tests against the new views, so the behavior shift is visible before the code moves.
 **Patterns to follow:** existing `executeImportBatch` per-row loop and messages, `executeUpdateExistingTickets` bounded concurrency, `IMPORT_SESSION_KINDS` metadata return.
 **Test scenarios:**
 - Covers F1. Veracode import with new, ticketed and stale rows → first response is the overview. `open stale`, toggle, `close tickets` → the ticket transitions and the overview shows "1 closed". `open new`, `create tickets` → tickets created, overview updated. `done` → summary lists created and closed, and the session is cleared.
-- Covers AE1. Email batch → first response is the New screen with `Done`. `ok` creates the included emails and re-shows the New screen, now empty. `done` ends the import.
+- Covers AE1. Email batch → first response is the New screen with `Done`. `ok` creates the included emails and re-shows the New screen, which lists only the emails the user excluded, still excluded. `done` ends the import.
 - Covers AE2. On the New screen, reply `A1` → nothing toggled or created, "didn't understand" lists the New vocabulary.
 - Covers AE4. Veracode with three ticketed rows, two flagged → `update tickets` calls `addMissingLabels` only for the two flagged tickets, and `createTicket` is never called.
 - Covers AE5. 62 new rows → `create tickets` on page 1 creates 50. The overview reads "50 created · 12 left". `open new` shows the 12 remaining rows on page 1.
 - Repeating `create tickets` right after a successful create does not re-create the same rows.
+- Excluding row 3, then `create tickets`: row 3 stays in the New table, still excluded, and is not counted in `Create N`.
 - `re-create tickets` with `A2` toggled creates exactly one ticket and marks A2 with the new key. A second `re-create tickets` creates nothing.
 - A per-row `createTicket` failure is reported with ✗, counted as failed, and the row stays in the New table.
 - Waltz import with ticketed rows → `update tickets` on the Already-ticketed screen is rejected as not understood (R16).
@@ -297,13 +298,14 @@ U1 → U2 → U3 → U4 → U5 → U6. U2 and U3 are independent of each other o
 **Files:**
 - `src/participant/jira/reportImportHandler.ts` (`continueAfterImportIssueType` stale block, `continueAfterStaleResolution`, new `closeStaleTickets`)
 - `src/participant/sessionState.ts` (`StaleResolutionAskSession` carries the live review session)
+- `src/participant/JiraParticipant.ts` (stale-resolution-selection branch passes `ticketService`), `src/participant/jira/veracodeHandler.ts` and `src/participant/jira/waltzHandler.ts` (`handleVeracodeStaleResolution` / `handleWaltzStaleResolution` thread `ticketService` into `continueAfterStaleResolution`)
 - `src/participant/jira/cleanupHandler.ts` (only if `buildStaleTicketGroups`' pending/resolved split needs merging into one list; its logic stays)
 - `src/test/reportImportHandler.test.ts`
 
 **Approach:**
 1. At session build, merge pending and resolved groups into `staleTickets.groups`, keeping `resolutionOptions` on groups still needing one.
 2. On `close tickets`, collect groups with at least one selected ticket. If any of them still need a resolution, start the existing chained ask with only those groups.
-3. When the last group resolves, run `transitionTickets` for the selected tickets, update the counters, and render the overview.
+3. When the last group resolves, run `transitionTickets` (with the threaded `ticketService`) for the selected tickets, mark transitioned tickets closed, update the counters, and render the overview.
 4. Groups without selected tickets are never asked.
 
 **Patterns to follow:** existing `streamStaleResolutionAsk` / `continueAfterStaleResolution` chain and its supersession guard. `transitionTickets` reuse.
@@ -311,7 +313,8 @@ U1 → U2 → U3 → U4 → U5 → U6. U2 and U3 are independent of each other o
 - Covers AE3. Stale groups needing a resolution, the user opens Stale and goes `back` → no resolution question is streamed, and the import still renders the overview first.
 - Selecting tickets from two issue-type groups where only one needs a resolution → one question asked. After answering, both groups' selected tickets transition.
 - `close tickets` with nothing selected → "nothing selected" message and no transitions.
-- Answering `none` to the resolution question transitions without a resolution (existing behavior kept).
+- Answering `none` to the resolution question transitions without a resolution (existing behavior kept). A later `close tickets` for that group does not ask again.
+- A second `close tickets` after a successful close transitions nothing again, and the closed tickets show as closed with no toggle.
 - A transition failure is listed with ✗ and the workflow hint, and counted in the overview outcome.
 
 **Verification:** Stale tests pass. The first response of any stale-bearing import is never a resolution question.
