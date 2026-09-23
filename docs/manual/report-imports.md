@@ -81,7 +81,7 @@ Each ticket is labeled `veracode`, `veracode-issue-<id>`, and `cwe-<id>` (plus a
 | `ticketSidekick.veracode.minSeverity` | `4` | Minimum severity (0–5) included by default |
 | `ticketSidekick.veracode.includeRemediationStatuses` | `["New", "Open", "Reopened"]` | Remediation statuses included by default |
 
-Only `<staticflaws>` are imported (dynamic/manual analysis findings are out of scope). A batch creates at most 50 tickets per run — re-run the import to process the remainder of a larger report.
+Only `<staticflaws>` are imported (dynamic/manual analysis findings are out of scope). Each **Create N tickets** creates at most 50 tickets (one page) — reply `next` on the New screen and create again for the remainder of a larger report.
 
 ### Reviewing an import
 
@@ -120,4 +120,4 @@ Each ticket is labeled `oss-dependency` and a sanitized, collision-safe version 
 | `ticketSidekick.waltz.minVulnRating` | `High` | Minimum "Max Vuln Rating" (Low/Medium/High/Critical) included by default |
 | `ticketSidekick.waltz.includeRemediationActions` | `["", "Remediate"]` | Remediation Action values included by default (empty string means the column was blank) |
 
-A batch creates at most 50 tickets per run — re-run the import afterward to process the remainder of a larger report; already-created tickets are automatically skipped next time via the dedup check.
+Each **Create N tickets** creates at most 50 tickets (one page) — reply `next` on the New screen and create again for the remainder. If you re-run the import later, already-created tickets are automatically skipped via the dedup check.
