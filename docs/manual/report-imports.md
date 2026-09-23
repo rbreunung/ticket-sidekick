@@ -61,7 +61,7 @@ Export a Detailed Report XML from Veracode, then:
 1. Run **Command Palette → Ticket Sidekick: Create Jira tickets from Veracode report (.xml)**
 2. Select the `.xml` file
 3. Pick a template or issue type in the `@jira` chat
-4. Review the flaw list — already-ticketed flaws are shown separately and excluded by default; reply with row numbers to toggle inclusion/exclusion, or **ok** to proceed
+4. Review the results (see [Reviewing an import](#reviewing-an-import) below) — new flaws, flaws that already have a ticket, and stale tickets each get their own screen and their own action
 5. Tickets are created one per flaw, with severity, CWE (linked to the public CWE definition), file/line location, the flaw's own description, and the category's remediation recommendation
 
 You can also trigger the import from the chat directly:
@@ -83,6 +83,16 @@ Each ticket is labeled `veracode`, `veracode-issue-<id>`, and `cwe-<id>` (plus a
 
 Only `<staticflaws>` are imported (dynamic/manual analysis findings are out of scope). A batch creates at most 50 tickets per run — re-run the import to process the remainder of a larger report.
 
+### Reviewing an import
+
+When an import finds more than one kind of result, `@jira` first shows an **overview** listing each group with its count:
+
+- **New** — findings without a ticket yet. Open it to toggle rows (reply row numbers, `include all` / `exclude all`, `next` / `prev` for more pages) and reply **Create N tickets** (or **ok**) to create the included rows on the visible page.
+- **Already ticketed** — findings that already have a ticket. For Veracode, **Update N tickets** adds a newer finding on the same line to its existing ticket (label + comment). Toggle a row (e.g. `A1`) and reply **Re-create N tickets** to create a fresh ticket anyway.
+- **Stale tickets** — open tickets whose finding is no longer in the report. Toggle a ticket by its key (e.g. `PROJ-123`) and reply **Close N tickets** (or **ok**). If the closing rule needs a resolution, you are asked for it at that point.
+
+Each screen only understands its own replies, and each action only affects its own group — nothing is created, updated or closed until you choose that group's action. Reply **Back to overview** to switch groups and **Done** to finish; the overview keeps track of what you already did (e.g. "50 created · 12 left"). When an import has only one kind of result (always the case for email batches), that screen opens directly and offers **Done** instead of an overview.
+
 ## Create Jira tickets from an OSS report (.xlsx)
 
 Export an "OSS Report" from Waltz (or a compatible SCA tool) as `.xlsx`, then:
@@ -90,7 +100,7 @@ Export an "OSS Report" from Waltz (or a compatible SCA tool) as `.xlsx`, then:
 1. Run **Command Palette → Ticket Sidekick: Create Jira tickets from OSS report (.xlsx)**
 2. Select the `.xlsx` file
 3. Pick a template or issue type in the `@jira` chat
-4. Review the component list — already-ticketed components are shown separately and excluded by default; reply with row numbers to toggle inclusion/exclusion, or **ok** to proceed
+4. Review the results (see [Reviewing an import](#reviewing-an-import) below), the same way as a Veracode import
 5. Tickets are created one per component, with the max vulnerability rating, the single most critical CVE up front, affected artifact paths, and a table of known vulnerabilities
 
 You can also trigger the import from the chat directly:
