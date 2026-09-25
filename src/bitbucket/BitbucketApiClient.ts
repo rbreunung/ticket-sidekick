@@ -88,6 +88,13 @@ function summarizeDcChangesShape(page: unknown): string {
     + ` nextPageStart=${String(page.nextPageStart)} types={${[...types].map(([t, n]) => `${t}:${n}`).join(',')}} srcPath=${withSrcPath}`;
 }
 
+/** Encode each path segment (preserving '/' separators) so spaces, '#', '?', and non-ASCII
+ * characters cannot break the request URL. */
+const encodePathSegments = (path: string): string => path.split('/').map(encodeURIComponent).join('/');
+
+const dcContextQuery = (contextLines?: number): string =>
+  typeof contextLines === 'number' && contextLines >= 0 ? `&contextLines=${Math.floor(contextLines)}` : '';
+
 const dcFilePath = (file: DcFileDiff): string | undefined => file.destination?.toString ?? file.source?.toString;
 
 function dcHasTruncation(response: DcDiffResponse): boolean {
@@ -305,14 +312,10 @@ export class BitbucketApiClient implements IBitbucketClient {
     if (this.authType === 'cloud') {
       return { raw: await this.getPullRequestDiff(project, repo, prId, contextLines), truncated: false, cutFiles: [] };
     }
-    const ctx = typeof contextLines === 'number' && contextLines >= 0 ? `&contextLines=${Math.floor(contextLines)}` : '';
-    const data = await this.dcRequest<unknown>(`/projects/${project}/repos/${repo}/pull-requests/${prId}/diff?withComments=false${ctx}`);
-    this.logDcShape('PR diff', summarizeDcDiffShape(data), { project, repo, prId });
-    if (!isRecord(data) || !Array.isArray(data.diffs)) {
-      const keys = isRecord(data) ? Object.keys(data).join(', ') : typeof data;
-      throw new BitbucketApiError(`Unexpected Data Center diff response — no diffs array (keys: ${keys})`, 200, `pull-requests/${prId}/diff`);
-    }
-    const response = data as unknown as DcDiffResponse;
+    const response = await this.fetchDcDiff(
+      `/projects/${project}/repos/${repo}/pull-requests/${prId}/diff?withComments=false${dcContextQuery(contextLines)}`,
+      'PR diff', { project, repo, prId },
+    );
     const cutFiles: DiffCoverage['cutFiles'] = [];
     for (const file of response.diffs) {
       const path = dcFilePath(file);
@@ -344,24 +347,11 @@ export class BitbucketApiClient implements IBitbucketClient {
       const section = whole.split(/(?=^diff --git )/m).find((part) => part.startsWith('diff --git ') && part.includes(` b/${path}\n`));
       return { raw: section ?? '', truncated: false };
     }
-    const encPath = path.split('/').map(encodeURIComponent).join('/');
-    const ctx = typeof contextLines === 'number' && contextLines >= 0 ? `&contextLines=${Math.floor(contextLines)}` : '';
     const src = srcPath ? `&srcPath=${encodeURIComponent(srcPath)}` : '';
-    let data: unknown;
-    try {
-      data = await this.dcRequest<unknown>(`/projects/${project}/repos/${repo}/pull-requests/${prId}/diff/${encPath}?withComments=false${ctx}${src}`);
-    } catch (err) {
-      this.onDiag?.('warn', `Data Center response shape — per-file diff ${path}: request failed`, {
-        project, repo, prId, path, status: err instanceof BitbucketApiError ? err.status : undefined,
-      });
-      throw err;
-    }
-    this.logDcShape(`per-file diff ${path}`, summarizeDcDiffShape(data), { project, repo, prId, path });
-    if (!isRecord(data) || !Array.isArray(data.diffs)) {
-      const keys = isRecord(data) ? Object.keys(data).join(', ') : typeof data;
-      throw new BitbucketApiError(`Unexpected Data Center per-file diff response for ${path} (keys: ${keys})`, 200, `diff/${path}`);
-    }
-    const response = data as unknown as DcDiffResponse;
+    const response = await this.fetchDcDiff(
+      `/projects/${project}/repos/${repo}/pull-requests/${prId}/diff/${encodePathSegments(path)}?withComments=false${dcContextQuery(contextLines)}${src}`,
+      `per-file diff ${path}`, { project, repo, prId, path },
+    );
     return { raw: dcDiffToUnified(response), truncated: dcHasTruncation(response) };
   }
 
@@ -380,6 +370,28 @@ export class BitbucketApiClient implements IBitbucketClient {
     return changes;
   }
 
+  /**
+   * Fetch a Data Center diff response, log its content-free shape (R25) — or the failed request's
+   * status — and check it has a `diffs` array before anything parses it.
+   */
+  private async fetchDcDiff(path: string, label: string, details: Record<string, unknown>): Promise<DcDiffResponse> {
+    let data: unknown;
+    try {
+      data = await this.dcRequest<unknown>(path);
+    } catch (err) {
+      this.onDiag?.('warn', `Data Center response shape — ${label}: request failed`, {
+        ...details, status: err instanceof BitbucketApiError ? err.status : undefined,
+      });
+      throw err;
+    }
+    this.logDcShape(label, summarizeDcDiffShape(data), details);
+    if (!isRecord(data) || !Array.isArray(data.diffs)) {
+      const keys = isRecord(data) ? Object.keys(data).join(', ') : typeof data;
+      throw new BitbucketApiError(`Unexpected Data Center ${label} response — no diffs array (keys: ${keys})`, 200, path);
+    }
+    return data as unknown as DcDiffResponse;
+  }
+
   private logDcShape(label: string, summary: string, details: Record<string, unknown>): void {
     this.onDiag?.('info', `Data Center response shape — ${label}: status=200 ${summary}`, details);
   }
@@ -387,7 +399,7 @@ export class BitbucketApiClient implements IBitbucketClient {
   async getFileContent(project: string, repo: string, path: string, commitHash: string): Promise<string> {
     // Encode each path segment (preserving '/' separators) and the commit hash so spaces,
     // '#', '?', and non-ASCII characters cannot break the request or corrupt the query.
-    const encPath = path.split('/').map(encodeURIComponent).join('/');
+    const encPath = encodePathSegments(path);
     const encCommit = encodeURIComponent(commitHash);
     if (this.authType === 'cloud') {
       return this.cloudRequestText(`/repositories/${project}/${repo}/src/${encCommit}/${encPath}`);

@@ -372,7 +372,7 @@ async function runPersonaPassesForChunk(params: {
 }): Promise<{
   findings: Array<Omit<ReviewFinding, 'id'>>;
   rawCount: number;
-  anchorDropped: number;
+  droppedOutsidePr: number;
   inputChars: number;
   outputChars: number;
   anyFailed: boolean;
@@ -380,7 +380,7 @@ async function runPersonaPassesForChunk(params: {
   const { personas, chunk, batchNum, totalBatches, pr, service, extraInstructions, request, token, runTag, batchStatus, logReview, stream } = params;
   let findings: Array<Omit<ReviewFinding, 'id'>> = [];
   let rawCount = 0;
-  let anchorDropped = 0;
+  let droppedOutsidePr = 0;
   let inputChars = 0;
   let outputChars = 0;
   let anyFailed = false;
@@ -427,9 +427,10 @@ async function runPersonaPassesForChunk(params: {
         continue;
       }
       const { findings: batchFindings, truncated } = await parseReviewResponse(batch.result!);
-      let { findings: resolved } = resolveFindingAnchors(batchFindings, batch.items);
+      const pass1Resolved = resolveFindingAnchors(batchFindings, batch.items);
+      let resolved = pass1Resolved.findings;
       rawCount += batchFindings.length;
-      anchorDropped += batchFindings.length - resolved.length;
+      droppedOutsidePr += pass1Resolved.droppedOutsidePr;
       if (truncated) {
         stream.markdown(`_⚠ ${persona.displayName} pass reply was cut off (batch ${batchNum}) — recovering the rest._\n\n`);
         try {
@@ -440,10 +441,10 @@ async function runPersonaPassesForChunk(params: {
           });
           inputChars += cont.promptChars;
           outputChars += cont.responseChars;
-          const { findings: contResolved } = resolveFindingAnchors(cont.reply.findings as Array<Omit<ReviewFinding, 'id'>>, batch.items);
+          const contResolved = resolveFindingAnchors(cont.reply.findings as Array<Omit<ReviewFinding, 'id'>>, batch.items);
           rawCount += cont.reply.findings.length;
-          anchorDropped += cont.reply.findings.length - contResolved.length;
-          resolved = [...resolved, ...contResolved];
+          droppedOutsidePr += contResolved.droppedOutsidePr;
+          resolved = [...resolved, ...contResolved.findings];
         } catch (err) {
           anyFailed = true;
           logReview('warn', `${persona.displayName} continuation failed — batch ${batchNum}`, { batch: batchNum, error: err instanceof Error ? err.message : String(err) });
@@ -457,7 +458,7 @@ async function runPersonaPassesForChunk(params: {
     }
   }
 
-  return { findings, rawCount, anchorDropped, inputChars, outputChars, anyFailed };
+  return { findings, rawCount, droppedOutsidePr, inputChars, outputChars, anyFailed };
 }
 
 /** Token budget per review call: `modelContextTokens` setting → model API → fallback, × `contextBudgetRatio`. */
@@ -811,7 +812,7 @@ export function createBitbucketParticipant(
           tally.inputChars += personaResult.inputChars;
           tally.outputChars += personaResult.outputChars;
           tally.raw += personaResult.rawCount;
-          tally.droppedOutsidePr += personaResult.anchorDropped;
+          tally.droppedOutsidePr += personaResult.droppedOutsidePr;
           if (personaResult.anyFailed) tally.anyBatchFailed = true;
           allFindings = allFindings.concat(personaResult.findings);
         }
@@ -1448,7 +1449,7 @@ export function createBitbucketParticipant(
           totalInputChars += personaResult.inputChars;
           totalOutputChars += personaResult.outputChars;
           rawFindingsTotal += personaResult.rawCount;
-          droppedOutsidePrTotal += personaResult.anchorDropped;
+          droppedOutsidePrTotal += personaResult.droppedOutsidePr;
           if (personaResult.anyFailed) anyBatchFailed = true;
           chunkFindings = chunkFindings.concat(personaResult.findings);
         }
@@ -1663,7 +1664,7 @@ export function createBitbucketParticipant(
             totalInputChars += personaResult.inputChars;
             totalOutputChars += personaResult.outputChars;
             rawFindingsTotal += personaResult.rawCount;
-            droppedOutsidePrTotal += personaResult.anchorDropped;
+            droppedOutsidePrTotal += personaResult.droppedOutsidePr;
             if (personaResult.anyFailed) anyBatchFailed = true;
             allFindings = allFindings.concat(personaResult.findings);
           }
