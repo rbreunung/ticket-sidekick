@@ -51,6 +51,10 @@ export interface ReviewFinding {
   sources?: SourceTag[];
   /** Numbered diff hunk around the anchor, stored so follow-up answers see the real code. */
   diffHunk?: string;
+  /** R13: the model's quoted `anchorCode` matched no diff line even after tolerant matching. The
+   * finding is kept but carries no line, renders muted as "location unverified", and can only be
+   * posted to the activity feed. */
+  locationUnverified?: true;
   /** Transient model-output fields, consumed by resolveFindingAnchors and then dropped. */
   anchorCode?: string;
   relatedCode?: string[];
@@ -831,21 +835,49 @@ type LocatedAnchor =
   | { line: number; lineType: 'ADDED' | 'CONTEXT'; fileType: 'TO' }
   | { line: number; lineType: 'REMOVED'; fileType: 'FROM' };
 
+const collapseWhitespace = (text: string): string => text.trim().replace(/\s+/g, ' ');
+
+/** Tier-3 needle: drop a copied `L<n>` gutter and then a single leading diff marker. */
+const stripGutterAndMarker = (text: string): string =>
+  text.trim().replace(/^L\d+\s+/, '').replace(/^[+\- ]/, '');
+
 /**
- * Locate a finding's quoted source line (`anchorCode`) in the diff and derive its
- * TRUE line number from the match — the model's own number is never trusted as a
- * source of truth. Matching is whitespace-trimmed so a line quoted from a Pass-2
- * full file still matches the diff line.
+ * Locate a finding's quoted source line (`anchorCode`) in the diff and derive its TRUE line number
+ * from the match — the model's own number is never trusted as a source of truth. Matching runs in
+ * tiers and the first tier with any match wins (KTD7, R12):
+ * 1. exact text, trimmed;
+ * 2. whitespace-collapsed (tabs vs spaces, doubled spaces);
+ * 3. whitespace-collapsed after removing a copied `L<n>` gutter and a leading diff marker.
+ * Tier 1 runs first so a line whose real content starts with a marker-like character
+ * (e.g. a YAML `- name: x`) still matches exactly.
  *
  * - exactly one match → that line.
  * - multiple matches (e.g. `return null;` repeated) → the one nearest `hintLine`
  *   (the model's advisory number, used only as a tiebreaker); with no hint, the
  *   first non-removed match (prefer new code) else the first.
- * - no match → null (caller drops the finding: unverifiable).
+ * - no match → null (the caller keeps the finding as location unverified).
  */
 export function locateAnchor(diff: string, anchorCode: string, hintLine?: number): LocatedAnchor | null {
   const needle = anchorCode.trim();
   if (!needle) return null;
+  const tiers: Array<(content: string) => boolean> = [
+    (content) => content.trim() === needle,
+    (content) => collapseWhitespace(content) === collapseWhitespace(needle),
+  ];
+  const stripped = collapseWhitespace(stripGutterAndMarker(needle));
+  if (stripped) tiers.push((content) => collapseWhitespace(content) === stripped);
+
+  for (const matchesContent of tiers) {
+    const matches = collectAnchorMatches(diff, matchesContent);
+    if (matches.length === 0) continue;
+    if (matches.length === 1) return matches[0];
+    if (hintLine === undefined) return matches.find((m) => m.lineType !== 'REMOVED') ?? matches[0];
+    return matches.reduce((best, m) => (Math.abs(m.line - hintLine) < Math.abs(best.line - hintLine) ? m : best));
+  }
+  return null;
+}
+
+function collectAnchorMatches(diff: string, matchesContent: (content: string) => boolean): LocatedAnchor[] {
   let fromLine = 0, toLine = 0, active = false;
   const matches: LocatedAnchor[] = [];
   for (const raw of diff.split('\n')) {
@@ -854,31 +886,29 @@ export function locateAnchor(diff: string, anchorCode: string, hintLine?: number
     if (!active) continue;
     if (raw.startsWith('diff ') || raw.startsWith('index ') || raw.startsWith('--- ') || raw.startsWith('+++ ') || raw.startsWith('\\')) continue;
     if (raw.startsWith('+')) {
-      if (raw.slice(1).trim() === needle) matches.push({ line: toLine, lineType: 'ADDED', fileType: 'TO' });
+      if (matchesContent(raw.slice(1))) matches.push({ line: toLine, lineType: 'ADDED', fileType: 'TO' });
       toLine++;
     } else if (raw.startsWith('-')) {
-      if (raw.slice(1).trim() === needle) matches.push({ line: fromLine, lineType: 'REMOVED', fileType: 'FROM' });
+      if (matchesContent(raw.slice(1))) matches.push({ line: fromLine, lineType: 'REMOVED', fileType: 'FROM' });
       fromLine++;
     } else if (raw.startsWith(' ')) {
-      if (raw.slice(1).trim() === needle) matches.push({ line: toLine, lineType: 'CONTEXT', fileType: 'TO' });
+      if (matchesContent(raw.slice(1))) matches.push({ line: toLine, lineType: 'CONTEXT', fileType: 'TO' });
       fromLine++; toLine++;
     }
   }
-  if (matches.length === 0) return null;
-  if (matches.length === 1) return matches[0];
-  if (hintLine === undefined) return matches.find((m) => m.lineType !== 'REMOVED') ?? matches[0];
-  return matches.reduce((best, m) => (Math.abs(m.line - hintLine) < Math.abs(best.line - hintLine) ? m : best));
+  return matches;
 }
 
 const provenanceOf = (lineType: 'ADDED' | 'CONTEXT' | 'REMOVED'): 'new' | 'existing' | 'removed' =>
   lineType === 'ADDED' ? 'new' : lineType === 'REMOVED' ? 'removed' : 'existing';
 
 /**
- * Return the numbered diff hunk whose new-file range covers `line`, with the file
- * header, so a follow-up answer can reason about the real surrounding code. Returns
- * undefined when no hunk covers the line.
+ * Return the numbered diff hunk whose range covers `line`, with the file header, so a follow-up
+ * answer can reason about the real surrounding code. A `REMOVED` line is numbered on the old side,
+ * so it is matched against each hunk's old-file range (R21); every other line against the new-file
+ * range. Returns undefined when no hunk covers the line.
  */
-export function extractHunkAround(diff: string, line: number): string | undefined {
+export function extractHunkAround(diff: string, line: number, lineType?: 'ADDED' | 'CONTEXT' | 'REMOVED'): string | undefined {
   const lines = diff.split('\n');
   const headerEnd = lines.findIndex((l) => /^@@ /.test(l));
   if (headerEnd === -1) return undefined;
@@ -888,7 +918,9 @@ export function extractHunkAround(diff: string, line: number): string | undefine
   for (let h = 0; h < hunkStarts.length; h++) {
     const start = hunkStarts[h];
     const end = h + 1 < hunkStarts.length ? hunkStarts[h + 1] : lines.length;
-    const m = lines[start].match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+    const m = lineType === 'REMOVED'
+      ? lines[start].match(/^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/)
+      : lines[start].match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
     if (!m) continue;
     const startLine = parseInt(m[1], 10);
     const span = m[2] !== undefined ? parseInt(m[2], 10) : 1;
@@ -1039,43 +1071,80 @@ export function dedupeFindings(
       bucket.push(f);
     }
   }
-  return order.flatMap((k) => byKey.get(k)!);
+  const deduped = order.flatMap((k) => byKey.get(k)!);
+  // KTD7: an unverified finding is redundant when another pass located the same issue in the same file.
+  return deduped.filter((f) => !f.locationUnverified || !deduped.some(
+    (other) => other !== f && !other.locationUnverified && other.line !== undefined
+      && other.file === f.file && sameMeaning(other, f),
+  ));
+}
+
+/**
+ * Resolve a finding's file to a path in the diff (KTD7): exact match first; then the path with a
+ * `./`, `a/`, `b/` or leading `/` removed; then a unique suffix match (`api.ts` → `src/api.ts` when
+ * exactly one diff file ends that way). Undefined when the path names no file in the diff.
+ */
+function resolveDiffPath(file: string, diffs: FileDiff[]): string | undefined {
+  const paths = [...new Set(diffs.map((d) => d.path))];
+  if (paths.includes(file)) return file;
+  const normalised = file.trim().replace(/^\.\//, '').replace(/^[ab]\//, '').replace(/^\/+/, '');
+  if (paths.includes(normalised)) return normalised;
+  if (!normalised) return undefined;
+  const bySuffix = paths.filter((p) => p.endsWith(`/${normalised}`));
+  return bySuffix.length === 1 ? bySuffix[0] : undefined;
 }
 
 /**
  * Quote-and-locate self-correction (the trust boundary for line numbers).
- * For each finding the model returned with an `anchorCode`, locate it in the
- * matching file diff and set the VERIFIED `line` / `lineType` / `fileType` /
- * `provenance` from the match. Findings whose `anchorCode` can't be located are
- * dropped (strict — the only deletion in the pipeline). Findings with no
- * `anchorCode` are file-level observations: kept, but with no line/provenance.
+ * For each finding the model returned, resolve its file to a diff path, locate its `anchorCode` in
+ * every diff piece for that path, and set the VERIFIED `line` / `lineType` / `fileType` /
+ * `provenance` from the match. The outcomes:
+ * - located → verified line and the numbered hunk around it;
+ * - no `anchorCode` → a file-level observation: kept, with no line or provenance;
+ * - `anchorCode` not locatable → kept as `locationUnverified`, with no line (R13);
+ * - file names nothing in the diff → dropped and counted in `droppedOutsidePr` (R14).
  */
 export function resolveFindingAnchors(
   findings: Array<Omit<ReviewFinding, 'id'>>,
   diffs: FileDiff[],
-): Array<Omit<ReviewFinding, 'id'>> {
+): { findings: Array<Omit<ReviewFinding, 'id'>>; droppedOutsidePr: number } {
   const out: Array<Omit<ReviewFinding, 'id'>> = [];
+  let droppedOutsidePr = 0;
   for (const f of findings) {
     const { anchorCode, relatedCode, ...rest } = f;
+    const path = typeof rest.file === 'string' ? resolveDiffPath(rest.file, diffs) : undefined;
+    if (!path) { droppedOutsidePr++; continue; }
     if (typeof anchorCode !== 'string' || anchorCode.trim() === '') {
-      out.push(rest); // file-level finding: no specific line claimed
+      out.push({ ...rest, file: path }); // file-level finding: no specific line claimed
       continue;
     }
-    const fileDiff = diffs.find((d) => d.path === rest.file);
-    if (!fileDiff) continue; // claims a line in a file we have no diff for → unverifiable → drop
-    const located = locateAnchor(fileDiff.diff, anchorCode, typeof rest.line === 'number' ? rest.line : undefined);
-    if (!located) continue; // strict: unlocatable → drop
+    const hint = typeof rest.line === 'number' ? rest.line : undefined;
+    let best: { located: LocatedAnchor; diff: string } | undefined;
+    for (const piece of diffs.filter((d) => d.path === path)) {
+      const located = locateAnchor(piece.diff, anchorCode, hint);
+      if (!located) continue;
+      if (!best || (hint !== undefined && Math.abs(located.line - hint) < Math.abs(best.located.line - hint))) {
+        best = { located, diff: piece.diff };
+      }
+    }
+    if (!best) {
+      const { line: _line, lineType: _lineType, fileType: _fileType, provenance: _provenance, ...unanchored } = rest;
+      out.push({ ...unanchored, file: path, locationUnverified: true });
+      continue;
+    }
+    const { located, diff } = best;
     const relatedLines: number[] = [];
     if (Array.isArray(relatedCode)) {
       for (const rc of relatedCode) {
         if (typeof rc !== 'string') continue;
-        const r = locateAnchor(fileDiff.diff, rc, located.line);
+        const r = locateAnchor(diff, rc, located.line);
         if (r && r.line !== located.line && !relatedLines.includes(r.line)) relatedLines.push(r.line);
       }
     }
-    const diffHunk = extractHunkAround(fileDiff.diff, located.line);
+    const diffHunk = extractHunkAround(diff, located.line, located.lineType);
     out.push({
       ...rest,
+      file: path,
       line: located.line,
       lineType: located.lineType,
       fileType: located.fileType,
@@ -1084,7 +1153,26 @@ export function resolveFindingAnchors(
       ...(diffHunk ? { diffHunk } : {}),
     });
   }
-  return out;
+  return { findings: out, droppedOutsidePr };
+}
+
+/**
+ * R14: one line telling the user how many findings the pipeline dropped, so "No issues found"
+ * never stands alone after findings were discarded. Undefined when nothing was dropped.
+ */
+export function formatDroppedFindingsNotice(counts: { outsidePr: number; critic: number }): string | undefined {
+  const parts: string[] = [];
+  if (counts.outsidePr > 0) {
+    parts.push(counts.outsidePr === 1
+      ? '1 finding was dropped because it named a file outside this PR'
+      : `${counts.outsidePr} findings were dropped because they named files outside this PR`);
+  }
+  if (counts.critic > 0) {
+    parts.push(counts.critic === 1
+      ? '1 finding was dropped by the critic as unverifiable'
+      : `${counts.critic} findings were dropped by the critic as unverifiable`);
+  }
+  return parts.length > 0 ? `_${parts.join('; ')}._` : undefined;
 }
 
 /**

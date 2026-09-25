@@ -12,7 +12,7 @@ import {
   buildTruncationEvent, formatRecoveryDecision, formatStructuredRunRecord,
   formatContinuationMessage, createAttemptTracker,
   resolveReviewMode, deriveCriticEnabled,
-  aggregateRecommendedPersonas, ALL_PERSONA_IDS, formatSourceConfidence,
+  aggregateRecommendedPersonas, ALL_PERSONA_IDS, formatSourceConfidence, formatDroppedFindingsNotice,
 } from '../participant/reviewSessionState';
 import type { ReviewFinding, SourceTag } from '../participant/reviewSessionState';
 import { PrReviewService, PERSONAS } from '../services/PrReviewService';
@@ -1351,6 +1351,26 @@ describe('extractHunkAround', () => {
   it('returns undefined when no hunk covers the line', () => {
     expect(extractHunkAround(diff, 999)).toBeUndefined();
   });
+
+  // R21: a removed line is numbered on the old side, so its hunk is found by the old-file range.
+  it('finds the hunk for a removed line by its old-file number', () => {
+    const removed = [
+      'diff --git a/f.ts b/f.ts', '--- a/f.ts', '+++ b/f.ts',
+      '@@ -1,2 +1,1 @@', ' a', '-gone',
+      '@@ -80,2 +79,1 @@', ' x', '-removedLater',
+    ].join('\n');
+    const hunk = extractHunkAround(removed, 81, 'REMOVED');
+    expect(hunk).toContain('@@ -80,2 +79,1 @@');
+    expect(hunk).toContain('-removedLater');
+  });
+
+  it('attaches the removed-line hunk to a finding anchored on a removed line', () => {
+    const findings = [{ file: 'src/api.ts', anchorCode: 'const url = OLD_URL;',
+      severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
+    const [r] = resolveFindingAnchors(findings, [{ path: 'src/api.ts', diff: SAMPLE_DIFF }]).findings;
+    expect(r.lineType).toBe('REMOVED');
+    expect(r.diffHunk).toContain('-  const url = OLD_URL;');
+  });
 });
 
 describe('parseCriticKeep', () => {
@@ -2169,6 +2189,50 @@ describe('numberDiffLines', () => {
   });
 });
 
+describe('location-unverified findings (R13, R14)', () => {
+  const base = { severity: 'warning' as const, description: 'D', recommendation: 'Use a parameterised query' };
+
+  it('drops an unverified finding when a verified same-meaning finding exists for the same file', () => {
+    const merged = dedupeFindings([
+      { ...base, file: 'src/a.ts', title: 'SQL injection in lookup', locationUnverified: true },
+      { ...base, file: 'src/a.ts', line: 12, lineType: 'ADDED', title: 'SQL injection in lookup' },
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].line).toBe(12);
+  });
+
+  it('keeps an unverified finding whose verified look-alike is in a different file', () => {
+    const merged = dedupeFindings([
+      { ...base, file: 'src/a.ts', title: 'SQL injection in lookup', locationUnverified: true },
+      { ...base, file: 'src/b.ts', line: 12, lineType: 'ADDED', title: 'SQL injection in lookup' },
+    ]);
+    expect(merged).toHaveLength(2);
+  });
+
+  it('renders an unverified finding with "(location unverified)", no line and muted confidence', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const pr: BitbucketPR = { id: 1, title: 'T', description: '', author: { displayName: 'A', emailAddress: '' }, targetBranch: 'main', fromCommitHash: 'x' };
+    const { markdown } = service.formatReview([
+      { id: 1, ...base, file: 'src/a.ts', title: 'Race', confidence: 0.9, locationUnverified: true },
+    ], pr, 1);
+    expect(markdown).toContain('src/a.ts (location unverified)');
+    expect(markdown).not.toMatch(/L\d/);
+    expect(markdown).toContain('general · 0.9');
+    expect(markdown).not.toContain('**0.9**');
+  });
+
+  // AE8: "No issues found" is never shown alone after findings were dropped.
+  it('formats a dropped-findings notice naming each count', () => {
+    expect(formatDroppedFindingsNotice({ outsidePr: 3, critic: 0 })).toBe(
+      '_3 findings were dropped because they named files outside this PR._',
+    );
+    expect(formatDroppedFindingsNotice({ outsidePr: 1, critic: 2 })).toBe(
+      '_1 finding was dropped because it named a file outside this PR; 2 findings were dropped by the critic as unverifiable._',
+    );
+    expect(formatDroppedFindingsNotice({ outsidePr: 0, critic: 0 })).toBeUndefined();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // locateAnchor
 // ---------------------------------------------------------------------------
@@ -2188,6 +2252,21 @@ describe('locateAnchor', () => {
 
   it('ignores leading/trailing whitespace when matching', () => {
     expect(locateAnchor(SAMPLE_DIFF, '   const timeout = 5000;   ')?.line).toBe(12);
+  });
+
+  it('matches when the quoted line collapses internal whitespace (tabs vs spaces)', () => {
+    const tabbed = 'diff --git a/g.go b/g.go\n--- a/g.go\n+++ b/g.go\n@@ -1,1 +1,2 @@\n \tif (x) {\n+\t\treturn  foo(a, b);';
+    expect(locateAnchor(tabbed, 'return foo(a, b);')).toEqual({ line: 2, lineType: 'ADDED', fileType: 'TO' });
+  });
+
+  it('matches when the quoted line still carries the L<n> gutter and diff marker', () => {
+    expect(locateAnchor(SAMPLE_DIFF, 'L12 +  const timeout = 5000;')?.line).toBe(12);
+    expect(locateAnchor(SAMPLE_DIFF, '+  const timeout = 5000;')?.line).toBe(12);
+  });
+
+  it('matches a YAML list line exactly without stripping its leading dash', () => {
+    const yaml = 'diff --git a/c.yml b/c.yml\n--- a/c.yml\n+++ b/c.yml\n@@ -1,1 +1,2 @@\n steps:\n+- name: build';
+    expect(locateAnchor(yaml, '- name: build')).toEqual({ line: 2, lineType: 'ADDED', fileType: 'TO' });
   });
 
   it('returns null when the text is nowhere in the diff', () => {
@@ -2223,7 +2302,7 @@ describe('resolveFindingAnchors', () => {
   it('sets a verified line and provenance "new" for an added-line anchor', () => {
     const findings = [{ file: 'src/api.ts', anchorCode: 'const timeout = 5000;', line: 99 /* wrong */,
       severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
-    const [r] = resolveFindingAnchors(findings, diffs);
+    const [r] = resolveFindingAnchors(findings, diffs).findings;
     expect(r.line).toBe(12);          // code-derived, not the model's 99
     expect(r.lineType).toBe('ADDED');
     expect(r.provenance).toBe('new');
@@ -2233,19 +2312,26 @@ describe('resolveFindingAnchors', () => {
   it('tags a context-line anchor as provenance "existing"', () => {
     const findings = [{ file: 'src/api.ts', anchorCode: 'function connect() {',
       severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
-    expect(resolveFindingAnchors(findings, diffs)[0].provenance).toBe('existing');
+    expect(resolveFindingAnchors(findings, diffs).findings[0].provenance).toBe('existing');
   });
 
-  it('drops a finding whose anchorCode cannot be located (strict)', () => {
-    const findings = [{ file: 'src/api.ts', anchorCode: 'this line does not exist',
+  // AE7 / R13: an unlocatable anchor keeps the finding, demoted to "location unverified".
+  it('keeps a finding whose anchorCode cannot be located, marked location unverified with no line', () => {
+    const findings = [{ file: 'src/api.ts', anchorCode: 'this line does not exist', line: 12,
       severity: 'critical' as const, title: 'T', description: 'D', recommendation: 'R' }];
-    expect(resolveFindingAnchors(findings, diffs)).toHaveLength(0);
+    const { findings: out, droppedOutsidePr } = resolveFindingAnchors(findings, diffs);
+    expect(out).toHaveLength(1);
+    expect(out[0].locationUnverified).toBe(true);
+    expect(out[0].line).toBeUndefined();
+    expect(out[0].provenance).toBeUndefined();
+    expect(out[0]).not.toHaveProperty('anchorCode');
+    expect(droppedOutsidePr).toBe(0);
   });
 
   it('keeps a file-level finding (no anchorCode) without a line or provenance', () => {
     const findings = [{ file: 'src/api.ts',
       severity: 'suggestion' as const, title: 'Missing header', description: 'D', recommendation: 'R' }];
-    const [r] = resolveFindingAnchors(findings, diffs);
+    const [r] = resolveFindingAnchors(findings, diffs).findings;
     expect(r.line).toBeUndefined();
     expect(r.provenance).toBeUndefined();
   });
@@ -2254,15 +2340,63 @@ describe('resolveFindingAnchors', () => {
     const findings = [{ file: 'src/api.ts', anchorCode: 'const timeout = 5000;',
       relatedCode: ['const url = NEW_URL;'],
       severity: 'warning' as const, title: 'builds up', description: 'D', recommendation: 'R' }];
-    const [r] = resolveFindingAnchors(findings, diffs);
+    const [r] = resolveFindingAnchors(findings, diffs).findings;
     expect(r.line).toBe(12);
     expect(r.relatedLines).toEqual([11]);
   });
 
-  it('drops a finding that anchors into a file with no diff present', () => {
+  it('drops and counts a finding that names a file outside the PR', () => {
     const findings = [{ file: 'src/other.ts', anchorCode: 'const timeout = 5000;',
       severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
-    expect(resolveFindingAnchors(findings, diffs)).toHaveLength(0);
+    const { findings: out, droppedOutsidePr } = resolveFindingAnchors(findings, diffs);
+    expect(out).toHaveLength(0);
+    expect(droppedOutsidePr).toBe(1);
+  });
+
+  it('drops and counts a file-level finding that names a file outside the PR', () => {
+    const findings = [{ file: 'src/other.ts', severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
+    expect(resolveFindingAnchors(findings, diffs).droppedOutsidePr).toBe(1);
+  });
+
+  it.each(['./src/api.ts', 'a/src/api.ts', 'b/src/api.ts', '/src/api.ts'])(
+    'normalises the path spelling %s to the diff path',
+    (file) => {
+      const findings = [{ file, anchorCode: 'const timeout = 5000;',
+        severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
+      const [r] = resolveFindingAnchors(findings, diffs).findings;
+      expect(r.file).toBe('src/api.ts');
+      expect(r.line).toBe(12);
+    },
+  );
+
+  it('resolves a bare file name when exactly one diff file ends with it', () => {
+    const findings = [{ file: 'api.ts', anchorCode: 'const timeout = 5000;',
+      severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
+    const [r] = resolveFindingAnchors(findings, diffs).findings;
+    expect(r.file).toBe('src/api.ts');
+    expect(r.line).toBe(12);
+  });
+
+  it('does not guess a bare file name that matches two diff files', () => {
+    const two = [{ path: 'src/api.ts', diff: SAMPLE_DIFF }, { path: 'lib/api.ts', diff: SAMPLE_DIFF.replace(/src\/api/g, 'lib/api') }];
+    const findings = [{ file: 'api.ts', anchorCode: 'const timeout = 5000;',
+      severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
+    const { findings: out, droppedOutsidePr } = resolveFindingAnchors(findings, two);
+    expect(out).toHaveLength(0);
+    expect(droppedOutsidePr).toBe(1);
+  });
+
+  it('finds an anchor in the second piece of a file split across two diff pieces', () => {
+    const header = 'diff --git a/src/big.ts b/src/big.ts\n--- a/src/big.ts\n+++ b/src/big.ts';
+    const pieces = [
+      { path: 'src/big.ts', diff: `${header}\n@@ -1,1 +1,2 @@\n first\n+second` },
+      { path: 'src/big.ts', diff: `${header}\n@@ -90,1 +91,2 @@\n ninety\n+const late = 1;` },
+    ];
+    const findings = [{ file: 'src/big.ts', anchorCode: 'const late = 1;',
+      severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
+    const [r] = resolveFindingAnchors(findings, pieces).findings;
+    expect(r.line).toBe(92);
+    expect(r.diffHunk).toContain('L92 +const late = 1;');
   });
 });
 
@@ -2285,8 +2419,8 @@ describe('persona pass merge (U3)', () => {
     const securityRaw = [{ file: 'src/api.ts', anchorCode: 'const timeout = 5000;',
       severity: 'critical' as const, title: 'Missing auth check', description: 'D', recommendation: 'R' }];
 
-    const standardResolved = resolveFindingAnchors(standardRaw, diffs);
-    const securityResolved = resolveFindingAnchors(securityRaw, diffs);
+    const standardResolved = resolveFindingAnchors(standardRaw, diffs).findings;
+    const securityResolved = resolveFindingAnchors(securityRaw, diffs).findings;
     const merged = dedupeFindings([...standardResolved, ...securityResolved]);
 
     expect(merged).toHaveLength(2);
@@ -2301,8 +2435,8 @@ describe('persona pass merge (U3)', () => {
     const securityRaw = [{ file: 'src/api.ts', anchorCode: 'const timeout = 5000;',
       severity: 'critical' as const, confidence: 0.9, title: 'insecure default', description: 'D', recommendation: 'R' }];
 
-    const standardResolved = resolveFindingAnchors(standardRaw, diffs);
-    const securityResolved = resolveFindingAnchors(securityRaw, diffs);
+    const standardResolved = resolveFindingAnchors(standardRaw, diffs).findings;
+    const securityResolved = resolveFindingAnchors(securityRaw, diffs).findings;
     const merged = dedupeFindings([...standardResolved, ...securityResolved]);
 
     expect(merged).toHaveLength(1);
@@ -2310,19 +2444,20 @@ describe('persona pass merge (U3)', () => {
     expect(merged[0].confidence).toBe(0.9);
   });
 
-  it('drops an anchor-unlocatable persona finding the same way an unlocatable standard finding is dropped', () => {
+  it('keeps an anchor-unlocatable persona finding as location unverified, the same as a standard finding', () => {
     const standardRaw = [{ file: 'src/api.ts', anchorCode: 'const url = NEW_URL;',
       severity: 'warning' as const, title: 'Hardcoded URL', description: 'D', recommendation: 'R' }];
     const personaRaw = [{ file: 'src/api.ts', anchorCode: 'this line does not exist',
       severity: 'critical' as const, title: 'Unverifiable finding', description: 'D', recommendation: 'R' }];
 
-    const standardResolved = resolveFindingAnchors(standardRaw, diffs);
-    const personaResolved = resolveFindingAnchors(personaRaw, diffs);
-    expect(personaResolved).toHaveLength(0);
+    const standardResolved = resolveFindingAnchors(standardRaw, diffs).findings;
+    const personaResolved = resolveFindingAnchors(personaRaw, diffs).findings;
+    expect(personaResolved).toHaveLength(1);
+    expect(personaResolved[0].locationUnverified).toBe(true);
 
     const merged = dedupeFindings([...standardResolved, ...personaResolved]);
-    expect(merged).toHaveLength(1);
-    expect(merged[0].title).toBe('Hardcoded URL');
+    expect(merged).toHaveLength(2);
+    expect(merged.find((f) => f.title === 'Unverifiable finding')?.locationUnverified).toBe(true);
   });
 
   it('a transient failure on a persona call\'s first attempt succeeds on retry via withEasierRetry, same as pass1', async () => {

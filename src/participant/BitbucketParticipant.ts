@@ -357,7 +357,7 @@ async function runPersonaPassesForChunk(params: {
         continue;
       }
       const { findings: batchFindings } = await parseReviewResponse(batch.result!);
-      const resolved = resolveFindingAnchors(batchFindings, batch.items);
+      const { findings: resolved } = resolveFindingAnchors(batchFindings, batch.items);
       rawCount += batchFindings.length;
       anchorDropped += batchFindings.length - resolved.length;
       // KTD4: stamp each persona-pass finding with its persona's id so the Source column and the
@@ -1118,7 +1118,7 @@ export function createBitbucketParticipant(
           // would count raw findings a later pass fully discards, inflating the funnel's
           // "raw" total past what any downstream stage could ever have seen.
           let batchRawCount = findings.length;
-          let batchFindings = resolveFindingAnchors(findings, batch.items);
+          let batchFindings = resolveFindingAnchors(findings, batch.items).findings;
 
           if (truncated) {
             // R4: the one event in the pipeline that previously threw nothing and
@@ -1174,7 +1174,7 @@ export function createBitbucketParticipant(
                 }
                 const contCombined = [...findings, ...cont.findings];
                 batchRawCount = contCombined.length;
-                batchFindings = resolveFindingAnchors(contCombined, batch.items);
+                batchFindings = resolveFindingAnchors(contCombined, batch.items).findings;
               } catch (err) {
                 anyBatchFailed = true;
                 logReview('warn', `Continuation pass failed — batch ${i + 1}`, { batch: i + 1, error: err instanceof Error ? err.message : String(err) });
@@ -1222,7 +1222,7 @@ export function createBitbucketParticipant(
                   stream.markdown(`_⚠ LLM response truncated (batch ${i + 1} pass 2) — review may be incomplete._\n\n`);
                 }
                 batchRawCount = pass2.findings.length;
-                batchFindings = resolveFindingAnchors(pass2.findings, batch.items);
+                batchFindings = resolveFindingAnchors(pass2.findings, batch.items).findings;
               }
             } catch (err) {
               anyBatchFailed = true;

@@ -382,10 +382,11 @@ export class PrReviewService {
       const heading = `**#${f.id}** ${severityIcon(f.severity)}${prov ? ' ' + prov : ''}${related}${loc ? ` · L${loc}` : ''} ${title}`;
       findingHeadings.push({ id: f.id, heading });
       // KTD5: formatSourceConfidence mutes (non-bold) the confidence cell when below the threshold.
-      const confidenceCell = formatSourceConfidence(f, confidenceThreshold);
+      // R13: a location-unverified finding is always muted, whatever its confidence.
+      const confidenceCell = formatSourceConfidence(f, f.locationUnverified ? Infinity : confidenceThreshold);
       // Code-review fix: fold the line number into the "File · Line" cell so the column actually
       // carries what its own header promises — previously it held only the file path.
-      const fileCell = `${file}${loc ? `:L${loc}` : ''}`;
+      const fileCell = f.locationUnverified ? `${file} (location unverified)` : `${file}${loc ? `:L${loc}` : ''}`;
       return [
         `| ${fileCell} | ${prov || '—'} | ${heading} | ${recommendation} | ${confidenceCell} |`,
       ];
