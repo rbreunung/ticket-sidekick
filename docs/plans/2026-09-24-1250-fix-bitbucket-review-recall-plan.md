@@ -62,6 +62,7 @@ The full list, with file and line evidence and probe results, is in Sources.
 - **The smaller chunk cap applies to `deep` and `quick` too.** (session-settled: user-directed — chosen over exempting `deep` or `quick`: one rule, with the cost shown in the token estimate.) Governs R15.
 - **Recall is proven by recorded-reply tests, one per failure shape.** (session-settled: user-directed — chosen over also building a planted-bug PR reviewed by a live model: deterministic and runs in CI.) See Success Criteria.
 - **Truncated Data Center diffs are recovered, not only disclosed.** (session-settled: user-directed — chosen over "disclose only": full coverage on large PRs is worth the extra calls.) Governs R17.
+- **Data Center responses log a content-free shape summary.** (session-settled: user-directed — added by the user, over relying on test fixtures alone, because the response format could not be verified during planning.) Governs R25.
 
 ### Requirements
 
@@ -107,6 +108,14 @@ The full list, with file and line evidence and probe results, is in Sources.
 **Diff intake**
 
 - R17. When Bitbucket Data Center marks a PR diff as truncated, each cut file's diff is fetched on its own and reviewed. If a single file's diff is still cut, the review states that the file was reviewed partially.
+- R25. Every Data Center diff, changes-list and per-file diff response writes a one-line shape summary to the "Ticket Sidekick" output channel, so a response format that differs from the plan's assumptions can be diagnosed from a user's log. The summary covers:
+  - top-level keys
+  - every `truncated` flag found and at which level (response, file, hunk, segment, line)
+  - file, hunk and segment counts
+  - per-file source and destination presence
+  - the HTTP status of each recovery call
+
+  It never includes code, file contents or diff lines.
 
 **Follow-ups and smart-mode resume**
 
@@ -202,7 +211,7 @@ Audit findings, all verified against HEAD `ff4ceda`. Probe results came from run
 
 ## Planning Contract
 
-**Product Contract preservation:** meaning and IDs unchanged. The Goal Capsule gained Means, stop conditions, an execution profile and who finishes. Outstanding Questions were resolved in place by KTD3 and KTD5–KTD8. Scope Boundaries gained "Deferred to Follow-Up Work".
+**Product Contract preservation:** changed: R25 added (Data Center response shape logging), at the user's request after planning. The other R-IDs keep their meaning and numbering. The Goal Capsule gained Means, stop conditions, an execution profile and who finishes. Outstanding Questions were resolved in place by KTD3 and KTD5–KTD8. Scope Boundaries gained "Deferred to Follow-Up Work".
 
 ### Key Technical Decisions
 
@@ -581,7 +590,7 @@ The parsing, anchor, prompt and budget helpers (U1–U5) come first because they
 
 **Goal:** Large Data Center PRs are reviewed in full, or the review says which file stayed partial.
 
-**Requirements:** R17.
+**Requirements:** R17, R25.
 
 **Dependencies:** U6, U7.
 
@@ -596,8 +605,10 @@ The parsing, anchor, prompt and budget helpers (U1–U5) come first because they
 - At intake, the cut files are re-fetched one at a time and their diffs replace the cut entries before chunking.
 - Files still cut are carried to the completion step as "reviewed partially".
 - Recovery fetches go through `fetchWithRetry` like every other GET.
+- A per-file fetch for a renamed or deleted file passes the source path, so those files are not reported as not reviewed just because the destination path is missing.
+- R25's shape summary comes from a pure summariser next to `dcDiffToUnified` in `src/bitbucket/BitbucketApiClient.ts`. It reads only keys, flags, counts and path presence, and never line text. It is emitted through the client's existing `onDiag` hook, so it reaches the output channel with the rest of the diagnostics timeline.
 
-**Execution note:** before finalising the Data Center parsing, capture three real responses from the developer's server as fixtures: one truncated PR diff, one page of the PR's changes list, and one per-file diff. If their shape contradicts the assumption, stop per the Goal Capsule.
+**Execution note:** if the developer can provide real responses (one truncated PR diff, one page of the PR's changes list, one per-file diff), use them as fixtures. If their shape contradicts the assumption, stop per the Goal Capsule. Otherwise build the fixtures from the assumed shape, record the unverified shape in `docs/known-limitations.md`, and rely on R25's logging to catch a mismatch in real use.
 
 **Test scenarios:**
 - Covers AE9. A Data Center diff marked truncated that lists 40 files, with a changes list of 55 → 15 per-file calls, all 55 files reviewed, no partial notice.
@@ -606,6 +617,9 @@ The parsing, anchor, prompt and budget helpers (U1–U5) come first because they
 - Cloud → no per-file calls, and coverage reports no cut files.
 - `dcDiffToUnified` output for a non-truncated response → byte-identical to today.
 - A per-file fetch that fails → that file is named as not reviewed, and the rest of the review continues.
+- A renamed file that is cut → the per-file request carries its source path.
+- The shape summary for a truncated response → it names the response-level and file-level `truncated` flags and the file, hunk and segment counts, and contains no diff line text.
+- The shape summary for a response with an unexpected top-level key and no `diffs` array → it lists the actual keys instead of throwing, and the review falls back to naming affected files as not reviewed.
 
 **Verification:** `bitbucket_getPullRequestDiff` tool tests are unchanged and green.
 
@@ -707,8 +721,8 @@ The parsing, anchor, prompt and budget helpers (U1–U5) come first because they
 
 ## Definition of Done
 
-- R1–R24 each trace to a merged unit, and every AE is covered by a named test.
+- R1–R25 each trace to a merged unit, and every AE is covered by a named test.
 - `npm run compile` and `npm test` are green on the final commit, matching CI (`.github/workflows/ci.yml`).
-- The Data Center fixtures in U9 come from a real server response, or the assumption is recorded as still unverified in `docs/known-limitations.md`.
+- The Data Center fixtures in U9 come from a real server response, or the assumption is recorded as still unverified in `docs/known-limitations.md`. Either way, the R25 shape summary is emitted for every Data Center diff response.
 - No abandoned-attempt code, commented-out blocks or unused exports remain in the diff. That includes the old parser functions, if they are no longer referenced.
 - `docs/review-process.md` and `CONCEPTS.md` match the shipped behaviour.
