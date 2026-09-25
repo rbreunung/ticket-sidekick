@@ -42,6 +42,22 @@ export class PartialLmResponseError extends Error {
   }
 }
 
+/**
+ * Thrown from inside a retried review call when the model's reply contains nothing review-shaped
+ * (empty, or prose with no usable JSON). Parsing runs inside the retry wrapper, so this is retried
+ * and split like a provider error instead of aborting the whole review (KTD3).
+ */
+export class UnparseableReplyError extends Error {
+  readonly code = 'Unparseable';
+  readonly rawReply: string;
+
+  constructor(rawReply: string) {
+    super(rawReply.trim() ? 'model reply contained no usable JSON' : 'model returned an empty reply');
+    this.name = 'UnparseableReplyError';
+    this.rawReply = rawReply;
+  }
+}
+
 const NON_RETRYABLE_CODES = new Set(['NoPermissions', 'Blocked', 'NotFound']);
 
 /**
@@ -56,6 +72,7 @@ const NON_RETRYABLE_CODES = new Set(['NoPermissions', 'Blocked', 'NotFound']);
  */
 export function isTransientLmError(err: unknown): boolean {
   if (err instanceof PartialLmResponseError) return true;
+  if (err instanceof UnparseableReplyError) return true;
   if (!(err instanceof Error)) return false;
   if (err.message.toLowerCase().includes('no choices')) return true;
   const code = (err as { code?: unknown }).code;

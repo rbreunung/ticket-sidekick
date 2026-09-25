@@ -17,7 +17,7 @@ The state of a Component for which a prior import already created a matching Jir
 ## Bitbucket Review
 
 ### Findings funnel
-The ordered stages a raw LLM finding passes through before appearing in final review output — cross-batch dedup (a finding surfaced in more than one chunk collapsed to one), anchor verification (unlocatable quotes dropped), confidence folding (below-threshold findings folded into the collapsed section, not removed), and, in deep mode, critic confirmation. "Funnel" refers to this sequence of stages and the per-stage counts it produces, not to any single filter. Logged as one summary line at the end of every review (see `docs/review-process.md`).
+The ordered stages a raw LLM finding passes through before appearing in final review output — dedup (the same issue surfaced by more than one chunk or pass collapsed to one), outside-PR drops (a finding naming a file that isn't in the PR diff), Pass 2 retractions (a first-pass finding the whole-file second pass explicitly retracted), and, in deep mode, critic confirmation. A finding whose quoted line can't be located is not dropped: it stays in the final count as *location unverified*, and the funnel reports how many. "Funnel" refers to this sequence of stages and the per-stage counts it produces, not to any single filter. Logged as one summary line at the end of every review (see `docs/review-process.md`).
 
 ## Template Generation
 

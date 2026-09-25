@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { isTransientLmError, withLmRetry, withEasierRetry, PartialLmResponseError } from '../utils/lmRetry';
+import { isTransientLmError, withLmRetry, withEasierRetry, PartialLmResponseError, UnparseableReplyError } from '../utils/lmRetry';
 
 const noopSleep = async () => {};
 
@@ -10,6 +10,11 @@ function lmError(message: string, code?: string): Error {
 }
 
 describe('isTransientLmError', () => {
+  it('treats an unparseable model reply as transient, so it is retried like a provider error', () => {
+    expect(isTransientLmError(new UnparseableReplyError('No issues here.'))).toBe(true);
+    expect(isTransientLmError(new UnparseableReplyError(''))).toBe(true);
+  });
+
   it('is true for a "no choices" message', () => {
     expect(isTransientLmError(new Error('Response contained no choices.'))).toBe(true);
   });

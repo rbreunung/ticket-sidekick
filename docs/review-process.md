@@ -15,26 +15,29 @@ The code lives in:
 
 ```mermaid
 flowchart TD
-    A[PR URL in prompt] --> B[getPullRequest + getPullRequestDiff<br/>contextLines = reviewContextLines, default 12]
-    B --> C[parseDiff → FileDiff per file]
+    A[PR URL in prompt] --> B[getPullRequest + getPullRequestDiffWithCoverage<br/>contextLines = reviewContextLines, default 12]
+    B --> B2{Data Center cut<br/>the diff short?}
+    B2 -- yes --> B3[fetch each cut file on its own<br/>getPullRequestFileDiff]
+    B2 -- no --> C
+    B3 --> C[parseDiff → FileDiff per file]
     C --> D[drop no-hunk files + reviewExcludePatterns]
-    D --> E[buildAdaptiveChunks<br/>pack to token budget]
+    D --> E[buildAdaptiveChunks<br/>pack to min of token budget and 24k cap]
     E --> F{for each chunk}
     F --> G[buildPrompt<br/>numberDiffLines render-only + grounding rules<br/>smart mode also asks for recommendedPersonas]
-    G --> H[LLM pass 1 → NDJSON findings + additionalFilesNeeded]
-    H --> I[resolveFindingAnchors<br/>locate anchorCode → verified line + provenance]
-    I --> J{truncated?}
-    J -- yes --> K[continuation pass on uncovered files]
-    J -- no --> L{additionalFilesNeeded<br/>and not quick?}
-    L -- yes --> M[budget-aware Pass 2<br/>cross-chunk file cache, smallest-first]
+    G --> H[LLM pass 1 → parseReviewReply<br/>unreadable reply retried like a provider error]
+    H --> I[resolveFindingAnchors<br/>tolerant locate → verified line, or location unverified]
+    I --> J{cut off mid-object?}
+    J -- yes --> K[continuation over the whole batch<br/>lists findings already reported]
+    J -- no --> L
+    K --> L{additionalFilesNeeded<br/>and not quick?}
+    L -- yes --> M[budget-aware Pass 2<br/>sees Pass 1 findings + context files<br/>adds findings or retracts by number]
     L -- no --> N
-    K --> N
     M --> N[chunk findings]
     N --> DP{deep mode?}
     DP -- yes --> PP[persona passes, inline<br/>buildPersonaPrompt × 4, this chunk]
     DP -- no --> O
     PP --> O{deep mode?}
-    O -- yes --> P[critic pass<br/>buildCriticPrompt → parseCriticKeep → drop unverified]
+    O -- yes --> P[critic pass, same context files as Pass 2<br/>buildCriticPrompt → parseCriticKeep → drop unverified]
     O -- no --> Q
     P --> Q[concat into allFindings]
     Q --> F
@@ -44,10 +47,9 @@ flowchart TD
     AGG --> USB{hasUsableSignal?}
     USB -- no --> FB[askSmartFallbackChoice<br/>SmartFallbackSession → next turn]
     USB -- yes --> PP2[phase 2: persona passes<br/>selected personas × every chunk<br/>runPersonaPassesForChunk]
-    PP2 --> R[dedupeFindings<br/>file + line + title]
-    R --> S[number findings 1..N]
-    S --> T[formatReview<br/>three severity tables, muted low-confidence]
-    T --> U[store ReviewSession in workspaceState]
+    PP2 --> R[completeReview<br/>dedupeFindings → number 1..N]
+    R --> T[formatReview<br/>three severity tables, muted low-confidence<br/>and location-unverified rows]
+    T --> U[store ReviewSession with the reviewed diff]
 ```
 
 Smart mode's persona passes never run inside the per-chunk loop above — they need the
@@ -67,12 +69,38 @@ reported to the user; the review returns early if every file is excluded.
 The token budget resolves in order: the `modelContextTokens` setting, then
 `request.model.maxInputTokens` (VS Code LM API), then a `60 000` fallback —
 multiplied by `contextBudgetRatio` (default `0.7`). `buildAdaptiveChunks`
-packs files into chunks against that budget, estimating each file's cost as
-`1500 + 50×files + ceil(diff.length/4)` tokens. A single file whose diff
-exceeds the per-file budget is first split along `@@` hunk boundaries (each
-sub-diff keeping the file header) so an oversized file is reviewed across
-several calls instead of blowing the context; a file with one giant hunk
-can't be subdivided and is sent as-is.
+packs files into chunks against the smaller of that budget and a fixed
+`REVIEW_CHUNK_TOKEN_CAP` of 24 000 estimated tokens, estimating each file's
+cost as `1500 + 50×files + ceil(diff.length/4)` tokens. The cap exists
+because the model's *reply* is what gets divided across a chunk's files: a
+window-sized chunk on a large-window model left each file only a sliver of
+the answer. The room the cap frees up is what Pass 2 and the critic use for
+context files. A single file whose diff exceeds the per-file budget is first
+split along `@@` hunk boundaries (each sub-diff keeping the file header) so
+an oversized file is reviewed across several calls instead of blowing the
+context; a file with one giant hunk can't be subdivided and is sent as-is.
+
+### Data Center truncated diffs
+
+Bitbucket Data Center stops sending a PR diff past a server limit (about
+10 000 lines by default). `getPullRequestDiffWithCoverage` reports which
+files that cut: entries with a `truncated` flag on the file, a hunk or a
+segment, plus — when the response itself is marked truncated — every path in
+the PR's paged `changes` list that the response left out entirely. If the
+changes list can't be fetched, the review goes ahead with the cut files it
+already knows about. The review then fetches each cut file on its own with
+`getPullRequestFileDiff` (passing the source path for a moved file), skipping
+files that `reviewExcludePatterns` would drop anyway, and reviews it with the
+rest. A file the server still cuts is named as *reviewed partially*; one that
+can't be fetched is named as *not reviewed*. Cloud never reports cut files.
+
+Every Data Center diff, changes-list and per-file response writes a one-line,
+content-free shape summary to the output channel (`Data Center response
+shape — …`: top-level keys, each `truncated` flag and its level, file/hunk/
+segment/line counts, source/destination presence). It never includes code.
+The response shape was built from documentation rather than a captured
+response (`docs/known-limitations.md`, KL10), so this line is what shows a
+mismatch in a user's log.
 
 ## The line-number trust boundary
 
@@ -104,17 +132,23 @@ math — `parseDiff`, `resolveLineType`, `locateAnchor`, `splitFileDiff` — wal
 raw diff with its own `@@`-anchored counters, so the visible gutter cannot break
 parsing.
 
-## Filtering: only two hard drops
+## Filtering: what can remove a finding
 
-Four steps can remove a finding; only two delete outright. This protects
-recall — a review never looks empty because filters stacked up.
+A finding leaves the review only as a duplicate, for naming a file outside
+the PR, by an explicit Pass 2 retraction, or by the critic. Every other
+doubt keeps the finding visible. This protects recall — a review never looks
+empty because filters stacked up, and whenever findings were dropped the
+review says how many in one line above the tables
+(`formatDroppedFindingsNotice`).
 
 | Step | When | Effect |
 | --- | --- | --- |
-| Cross-batch dedup (`dedupeFindings`) | always | **drop** the weaker of two findings keyed by file + verified line + normalized title (the stronger by severity, then confidence, survives) |
-| Anchor locate (`resolveFindingAnchors`) | always | **drop** if `anchorCode` is unlocatable in the diff (unverifiable) |
+| Dedup (`dedupeFindings`) | always | **merge** two findings on the same file + verified line with the same meaning (the stronger severity survives); a location-unverified finding is also dropped when another pass located a finding with the same title in the same file |
+| Path resolution (`resolveFindingAnchors`) | always | **drop and count** a finding whose file names nothing in the diff, after trying `./`, `a/`, `b/`, leading `/` and a unique suffix match |
+| Anchor locate (`resolveFindingAnchors`) | always | locate `anchorCode` in tiers — exact, whitespace-collapsed, then with a copied `L<n>` gutter or diff marker removed; when nothing matches, **keep** the finding as *location unverified*: no line, muted, activity-feed only when posted |
 | Confidence (`formatReview`, `confidenceThreshold`) | always | **mute** (render the confidence cell non-bold) if `confidence < threshold` — never deleted, always shown in its severity table |
-| Critic (`buildCriticPrompt` + `parseCriticKeep`) | deep mode only | **drop** findings the verification pass can't confirm; fail-open if its reply is unparseable |
+| Pass 2 retraction (`mergePass2Findings`) | standard, smart, deep | **drop** a Pass 1 finding only when Pass 2 names its number in the meta line's `retract` list |
+| Critic (`buildCriticPrompt` + `parseCriticKeep`) | deep mode only | **drop** findings the verification pass can't confirm; an unreadable verdict (no JSON, or an index outside 1..N) keeps the batch's findings unverified, with a notice |
 
 Persona-pass findings (smart/deep) are not a separate filtering stage — they
 flow through the exact same two hard drops as standard-pass findings (anchor
@@ -122,10 +156,11 @@ locate, and critic in deep mode), then merge into `allFindings` alongside
 the standard pass's findings before the shared dedup/confidence/format steps
 run once over the combined set.
 
-Fixed order: `parse → number(render) → LLM → locate+classify (drop only if
-unlocatable) → confidence fold → [deep: critic] → merge chunks → dedup → format`.
-The end-of-review findings funnel (below) reports these same stages — cross-batch
-dedup, anchor, confidence, critic — in that conceptual order regardless of the
+Fixed order: `parse → number(render) → LLM → locate+classify (drop only for
+a file outside the PR) → [truncated: continuation] → [Pass 2 refine] →
+[deep: critic] → merge chunks → dedup → format`.
+The end-of-review findings funnel (below) reports these same stages — dedup,
+outside-PR drops, Pass 2 retractions, critic — in that conceptual order regardless of the
 pipeline's actual per-chunk execution order, since it's a summary of where
 findings went, not a step-by-step trace.
 
@@ -142,6 +177,44 @@ fails standalone after its tries is skipped and reported — it does not
 abort the rest of the review. `dedupeFindings` → `formatReview` →
 `ReviewSession` always run on whatever was collected, even after partial
 failures, so follow-ups keep working.
+
+### Reading replies
+
+Every review reply goes through `parseReviewReply`, which accepts one object
+per line (the requested NDJSON), pretty-printed multi-line objects, a JSON
+array, a `{"findings":[…]}` wrapper (its sibling meta keys included), and
+any of those inside a code fence. A reply is *truncated* only when it stops
+inside an unbalanced object or array; a reply that ends cleanly without its
+trailing meta line is complete, not truncated, and stays eligible for Pass 2.
+
+Parsing runs inside the retried call: a reply with nothing review-shaped
+(empty, or prose with no usable JSON) throws `UnparseableReplyError`, which
+the retry layer treats as transient. So a bad reply is retried and split like
+a provider error, and after its tries only that batch's files are reported as
+not reviewed — it never aborts the review.
+
+### Truncation continuation
+
+A cut-off reply — from Pass 1 or a persona pass — gets one continuation call.
+Findings arrive ordered by severity, not by file, so no file can be proven
+finished: the continuation re-reviews the whole batch, lists the findings
+already reported, and asks only for new ones. Duplicates are merged by the
+review-wide dedup.
+
+### Pass 2 refines Pass 1
+
+When the model asks for files outside the diff, Pass 2 re-reviews the batch
+with those files rendered in a *Context files (not part of this diff)*
+section and with Pass 1's findings as a numbered list. It may add findings,
+and it retracts a Pass 1 finding only by naming its number in the meta
+line's `retract` list; to correct a finding's severity or wording it retracts
+the number and reports the corrected version. These instructions sit outside
+the untrusted-content fence; only the numbered list sits inside it. Every Pass 1 finding it doesn't retract is kept
+(`mergePass2Findings`), so a Pass 2 reply cut off before its meta line, or a
+failed Pass 2, can never lose a Pass 1 finding. In `deep` mode the critic
+judges each chunk with the same context files Pass 2 used, in both rounds.
+A context file that doesn't fit the remaining budget is skipped and logged,
+never admitted over budget.
 
 ### Always-on diagnostic timeline
 
@@ -180,8 +253,9 @@ the retry/split algorithm.
 
 At the end of every review, one findings-funnel summary line reports counts
 at each stage from the table above — raw findings from LLM responses,
-deduped as cross-batch duplicate, dropped by anchor verification, and
-(deep mode) dropped by critic — down to the final count shown. There is no
+deduped as duplicate, dropped as outside the PR, retracted by Pass 2, and
+(deep mode) dropped by critic — down to the final count shown, with how many
+of those are location unverified. There is no
 "folded by confidence" stage: every finding lands in a severity table, so
 `final` is the total finding count shown (KTD5/KTD6). Persona-pass findings
 (smart/deep) fold into that same `raw`
@@ -364,12 +438,20 @@ pass, all per chunk.
 After a review, `ReviewSession` is stored in `workspaceState` with the findings,
 each carrying its numbered `diffHunk`. A follow-up question (`#3`, or a free-text
 match) feeds that hunk into the follow-up prompt so the answer reasons about the
-real code instead of reconstructing it from the finding text. The session also
+real code instead of reconstructing it from the finding text (a finding on a
+removed line gets the hunk around that removed line). The session also
 persists the upfront `question` (see "Upfront question" above), if one was
-asked, so it keeps informing follow-up answers.
+asked, and every follow-up prompt includes it, so it keeps informing
+follow-up answers.
 
-`#N <question>` answers use `FOLLOW_UP_PROMPT_PREFIX` plus the finding's own
-detail and `diffHunk`. `#N` where `N` doesn't exist gets a friendly "Finding #N
+`#N <question>` answers are built by `buildFindingFollowUpPrompt`: the PR's
+title and description, the upfront question, and the finding's own detail
+and `diffHunk`. A free-text question is first matched to a finding by the
+model; `parseFindingMatchReply` reads `2`, `#2`, `Finding 2` or `2.` as
+finding 2, and "none" as a general PR question. A message counts as "add to
+review" only when it asks to add or post findings *to the review*
+(`add … to (the) review`); a question that merely mentions both words is
+answered. `#N` where `N` doesn't exist gets a friendly "Finding #N
 not found. The review has findings #1–#M." message. `c` / `cancel` / etc.
 (`isCancellation`) clears the session and shows "Review session ended."
 without carrying the session forward, so no further follow-ups fire until a
@@ -389,15 +471,16 @@ neutralized first via `neutralizeMarkdownLinks()`, since the composed output
 is streamed as a trusted `vscode.MarkdownString` once those links are woven
 in — see `docs/jira-flows.md`'s "Clickable replies" for why.
 
-The session also stores `rawDiff` — the full unified diff, distinct from any
-single finding's `diffHunk` — bounded to the token budget before it's saved
-(`rawDiffTruncated` records whether that write-time cut happened). A generic
-follow-up (no `#N`, and no match against an existing finding) now draws on this
-stored diff via `buildDiffAwarePrompt`, which combines PR metadata, all findings,
-and the diff itself, re-bounded to a freshly-computed token budget at read time.
-If the diff was truncated — either when originally stored or again at follow-up
-time — a note to that effect is included in the prompt so the model knows its
-view may be incomplete. Sessions without a stored `rawDiff` (e.g. from before this
+The session also stores `rawDiff` — the diff of the reviewed files, distinct
+from any single finding's `diffHunk` — built by `buildStoredReviewDiff`:
+excluded and binary files are left out, a split file's pieces stay together,
+files with findings come first, and whole files are dropped to fit the token
+budget, never cut mid-way (`rawDiffOmittedFiles` names them). A generic
+follow-up (no `#N`, and no match against an existing finding) draws on this
+stored diff via `buildDiffAwarePrompt`, which combines PR metadata, the
+upfront question, all findings, and the diff itself, re-bounded at read time
+by dropping whole files again. The prompt names every omitted file so the
+model knows its view is incomplete. Sessions without a stored `rawDiff` (e.g. from before this
 feature) keep falling back to the old findings-only prompt.
 
 `ReviewSession` is looked up under the `workspaceState` key `bitbucket.session.review`
@@ -420,17 +503,20 @@ narrower multi-turn session that only fires mid-`smart`-mode-review — not
 after one has completed. It's created when phase 1's aggregation step (`aggregateRecommendedPersonas`)
 finds no usable persona recommendation from any chunk: rather than guessing,
 the handler stores the PR reference, the fetched diffs, the chunk boundaries,
-and phase 1's already-numbered findings, then asks the user to reply **all**
+phase 1's already-numbered findings, the upfront question and phase 1's
+counters and failure state, then asks the user to reply **all**
 (run all four persona passes) or **standard** (skip straight to formatting
 phase 1's findings). The next turn's reply resumes via
 `resumeSmartReviewPhase2`, which — having none of the original review's local
 state in scope — rebuilds its own client/service/`runTag`, runs phase 2 (or
 skips it, for "standard") over the stored chunks with `runPersonaPassesForChunk`
-(the same helper the main flow's phase 2 and deep mode's inline passes use),
-merges the result with the stored phase 1 findings, dedupes, formats, streams
-the completed review, and finally stores a normal `ReviewSession` so ordinary
-follow-ups (`#N`, "add to review", etc.) work on it exactly as they would
-after any other review.
+(the same helper the main flow's phase 2 and deep mode's inline passes use,
+with the same upfront question), merges the result with the stored phase 1
+findings, and finishes through `completeReview` — the same completion step
+the main flow uses. So a resumed review shows the partial-failure banner,
+dropped-findings notice, token estimate and follow-up chips, and stores a
+normal `ReviewSession` with the reviewed diff, exactly like an uninterrupted
+review.
 
 ## Settings that shape the run
 
@@ -439,7 +525,7 @@ after any other review.
 | `ticketSidekick.bitbucket.reviewContextLines` | 12 | context lines around each hunk |
 | `ticketSidekick.bitbucket.confidenceThreshold` | 0.7 | below → muted (non-bold) confidence cell, not folded |
 | `ticketSidekick.bitbucket.reviewMode` | standard | default depth (`standard` \| `quick` \| `smart` \| `deep`) — `smart`/`deep` are also selectable per-review via the `review smart`/`review deep` prompt keyword, same as `quick` already was |
-| `ticketSidekick.bitbucket.contextBudgetRatio` | 0.7 | fraction of context window per chunk |
+| `ticketSidekick.bitbucket.contextBudgetRatio` | 0.7 | fraction of the context window for a review call's prompt; chunks are further capped at 24 000 estimated tokens |
 | `ticketSidekick.bitbucket.modelContextTokens` | (model API) | token budget override |
 | `ticketSidekick.bitbucket.reviewExcludePatterns` | `[]` | globs skipped before review |
 

@@ -1,18 +1,18 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
-  parsePrUrl, parseDiff, extractJsonObject, extractPartialFindings, parseNdjsonFindings,
+  parsePrUrl, parseDiff, extractJsonObject, parseReviewReply,
   langFromPath, buildAdaptiveChunks,
   resolveLineType, annotateWithLineTypes, hasPrUrl,
   numberDiffLines, locateAnchor, resolveFindingAnchors,
-  estimateChunkTokens, selectFilesWithinBudget, MAX_CONTEXT_FILES_PER_BATCH,
+  estimateChunkTokens, selectFilesWithinBudget, MAX_CONTEXT_FILES_PER_BATCH, REVIEW_CHUNK_TOKEN_CAP,
   parseCriticKeep, parseCriticAdditionalFiles, dedupeFindings, extractHunkAround,
-  parseFollowUpIntent, buildPrContextPrompt, buildDiffAwarePrompt,
+  parseFollowUpIntent, buildPrContextPrompt, buildDiffAwarePrompt, buildFindingFollowUpPrompt, parseFindingMatchReply, buildStoredReviewDiff,
   parseUpfrontQuestion, stripUpfrontQuestion,
   formatCallLine, formatFindingsFunnel, buildRunTag,
   buildTruncationEvent, formatRecoveryDecision, formatStructuredRunRecord,
   formatContinuationMessage, createAttemptTracker,
   resolveReviewMode, deriveCriticEnabled,
-  aggregateRecommendedPersonas, ALL_PERSONA_IDS, formatSourceConfidence,
+  aggregateRecommendedPersonas, ALL_PERSONA_IDS, formatSourceConfidence, formatDroppedFindingsNotice, mergePass2Findings,
 } from '../participant/reviewSessionState';
 import type { ReviewFinding, SourceTag } from '../participant/reviewSessionState';
 import { PrReviewService, PERSONAS } from '../services/PrReviewService';
@@ -253,15 +253,103 @@ describe('PrReviewService.buildPrompt', () => {
     expect(prompt).toContain('const x = 1;');
   });
 
-  it('omits full content for files not in the fileContents map', () => {
-    const client = new MockBitbucketClient();
-    const service = new PrReviewService(client);
-    const contents = new Map([['src/other.ts', 'unrelated']]);
+  // AE4 / R6: a fetched context file that is not in the diff must actually reach the model.
+  it('renders a fetched file that is not in the diff in its own context-files section', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const contents = new Map([['src/util.ts', 'export const helper = () => 42;']]);
 
     const prompt = service.buildPrompt(pr, fileDiffs, contents);
 
-    expect(prompt).toContain('src/foo.ts');
-    expect(prompt).not.toContain('Full content');
+    expect(prompt).toContain('Context files (not part of this diff)');
+    expect(prompt).toContain('### Context file: src/util.ts');
+    expect(prompt).toContain('export const helper = () => 42;');
+    expect(prompt).toContain('second-pass review');
+    const fenceStart = prompt.indexOf('«UNTRUSTED-CONTENT»');
+    expect(prompt.indexOf('export const helper')).toBeGreaterThan(fenceStart);
+  });
+
+  it('renders a diff file\'s full content once, next to its diff, not again as a context file', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const contents = new Map([['src/foo.ts', 'const x = 1;\nconst y = 2;']]);
+    const prompt = service.buildPrompt(pr, fileDiffs, contents);
+    expect(prompt.split('const y = 2;')).toHaveLength(2);
+    expect(prompt).not.toContain('### Context file: src/foo.ts');
+  });
+
+  it('adds no second-pass note when no context content is rendered', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const prompt = service.buildPrompt(pr, fileDiffs, new Map());
+    expect(prompt).not.toContain('second-pass review');
+  });
+
+  // R7 / KTD5: Pass 2 sees Pass 1's findings and how to retract one.
+  it('lists prior findings as a numbered list with the retract instruction for Pass 2', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const prior = [
+      { file: 'src/foo.ts', line: 1, severity: 'warning' as const, title: 'Unused const', description: 'x is unused', recommendation: 'Remove it' },
+      { file: 'src/foo.ts', severity: 'suggestion' as const, title: 'Naming', description: 'x is vague', recommendation: 'Rename' },
+    ];
+    const prompt = service.buildPrompt(pr, fileDiffs, new Map([['src/util.ts', 'u']]), undefined, false, { priorFindings: prior });
+    expect(prompt).toContain('[1] (warning) src/foo.ts:L1 — Unused const');
+    expect(prompt).toContain('[2] (suggestion) src/foo.ts — Naming');
+    expect(prompt).toContain('"retract"');
+  });
+
+  // KTD4: a continuation lists what was already reported and asks only for new findings.
+  it('lists already-reported findings for a continuation and asks only for new ones', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const reported = [{ file: 'src/foo.ts', line: 1, severity: 'warning' as const, title: 'Unused const', description: 'd', recommendation: 'r' }];
+    const prompt = service.buildPrompt(pr, fileDiffs, undefined, undefined, false, { alreadyReported: reported });
+    expect(prompt).toContain('Already reported');
+    expect(prompt).toContain('src/foo.ts:L1 — Unused const');
+    expect(prompt).toMatch(/only findings that are NOT in the already-reported list/i);
+  });
+
+  // Instructions the model must follow sit outside the «UNTRUSTED-CONTENT» fence; only the
+  // numbered findings lists sit inside it.
+  it('places the retract and continuation instructions before «UNTRUSTED-CONTENT», and the numbered findings lists after it', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const prior = [{ file: 'src/foo.ts', line: 1, severity: 'warning' as const, title: 'Unused const', description: 'x is unused', recommendation: 'Remove it' }];
+    const reported = [{ file: 'src/bar.ts', line: 2, severity: 'suggestion' as const, title: 'Naming', description: 'd', recommendation: 'r' }];
+    const prompt = service.buildPrompt(pr, fileDiffs, new Map([['src/util.ts', 'u']]), undefined, false, {
+      priorFindings: prior, alreadyReported: reported,
+    });
+
+    const fenceStart = prompt.indexOf('«UNTRUSTED-CONTENT»');
+    expect(fenceStart).toBeGreaterThan(-1);
+
+    // Instructions live before the fence.
+    const retractInstructionIdx = prompt.indexOf('retract its number and report the corrected version');
+    const continuationInstructionIdx = prompt.indexOf('do not repeat them');
+    expect(retractInstructionIdx).toBeGreaterThan(-1);
+    expect(continuationInstructionIdx).toBeGreaterThan(-1);
+    expect(retractInstructionIdx).toBeLessThan(fenceStart);
+    expect(continuationInstructionIdx).toBeLessThan(fenceStart);
+    expect(prompt).toContain('"retract"');
+    expect(prompt.indexOf('"retract"')).toBeLessThan(fenceStart);
+    expect(prompt).toMatch(/only findings that are NOT in the already-reported list/i);
+    expect(prompt.search(/only findings that are NOT in the already-reported list/i)).toBeLessThan(fenceStart);
+
+    // The numbered findings lists themselves, under their data labels, live inside the fence.
+    const priorLabelIdx = prompt.indexOf('First-pass findings (numbered):');
+    const alreadyReportedLabelIdx = prompt.indexOf('Already reported for these files:');
+    const findingLineIdx = prompt.indexOf('[1] (warning) src/foo.ts:L1 — Unused const');
+    const reportedLineIdx = prompt.indexOf('[1] (suggestion) src/bar.ts:L2 — Naming');
+    expect(priorLabelIdx).toBeGreaterThan(fenceStart);
+    expect(alreadyReportedLabelIdx).toBeGreaterThan(fenceStart);
+    expect(findingLineIdx).toBeGreaterThan(fenceStart);
+    expect(reportedLineIdx).toBeGreaterThan(fenceStart);
+  });
+
+  // R16: one consistent set of limits and guidance that asks for every real issue.
+  it('uses one code-example limit, asks for every real issue, and requires the meta line even with no findings', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const prompt = service.buildPrompt(pr, fileDiffs);
+    expect(prompt).not.toContain('3–15 lines');
+    expect(prompt).not.toMatch(/short list of verified issues is better/);
+    expect(prompt).toMatch(/Report every real issue/);
+    expect(prompt).toMatch(/If there are no findings, output only the meta line/);
+    expect(prompt).toContain(`Maximum ${MAX_CONTEXT_FILES_PER_BATCH} files`);
   });
 
   it('includes grounding rules in every prompt', () => {
@@ -924,7 +1012,20 @@ describe('parseFollowUpIntent', () => {
       expect(parseFollowUpIntent('add #2 #2 to review')).toMatchObject({ kind: 'add', targets: [2], note: '' });
     });
 
-    it('treats "add all to review" as targets: all', () => {
+    // R20 / AE10: a question that mentions "review" and "add" is answered, not turned into a comment preview.
+  it('answers a question that mentions review before add', () => {
+    expect(parseFollowUpIntent('Can you review whether #2 would add latency?')).toMatchObject({ kind: 'explain', findingRef: 2 });
+  });
+
+  it('treats a polite request to add a finding to the review as add', () => {
+    expect(parseFollowUpIntent('Can you add #2 to the review?')).toMatchObject({ kind: 'add', targets: [2] });
+  });
+
+  it('treats "post #1 to the review" as add', () => {
+    expect(parseFollowUpIntent('post #1 to the review')).toMatchObject({ kind: 'add', targets: [1] });
+  });
+
+  it('treats "add all to review" as targets: all', () => {
       expect(parseFollowUpIntent('add all to review')).toMatchObject({ kind: 'add', targets: 'all', note: '' });
     });
 
@@ -948,6 +1049,12 @@ describe('parseFollowUpIntent', () => {
       const result = parseFollowUpIntent('#2, #3 add to review — urgent');
       expect(result).toMatchObject({ kind: 'add', targets: [2, 3] });
       expect((result as { note: string }).note).toContain('urgent');
+    });
+
+    it('treats "add #2 to PR review" as add, with no "PR" left in the note', () => {
+      const result = parseFollowUpIntent('add #2 to PR review');
+      expect(result).toMatchObject({ kind: 'add', targets: [2] });
+      expect((result as { note: string }).note).not.toMatch(/\bPR\b/i);
     });
   });
 
@@ -1128,6 +1235,30 @@ describe('buildAdaptiveChunks', () => {
     expect(combined).toContain('@@ -1,1');
     expect(combined).toContain('@@ -100,1');
     expect(combined).toContain('@@ -200,1');
+  });
+
+  // R15 / KTD6: chunks never exceed the fixed ceiling, however large the model's window.
+  it('caps every chunk at REVIEW_CHUNK_TOKEN_CAP even with a very large budget', () => {
+    // 60 files × (50 + 1000) tokens ≈ 63k tokens of diff, budget of a 128k-window model.
+    const diffs = Array.from({ length: 60 }, (_, i) => makeDiff(`f${i}.ts`, 4000));
+    const chunks = buildAdaptiveChunks(diffs, 89_600);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) expect(estimateChunkTokens(chunk)).toBeLessThanOrEqual(REVIEW_CHUNK_TOKEN_CAP);
+    expect(chunks.flat()).toHaveLength(60);
+  });
+
+  it('lets a budget below the cap govern chunk size, as before', () => {
+    const diffs = [makeDiff('a.ts', 400), makeDiff('b.ts', 400)];
+    expect(buildAdaptiveChunks(diffs, 1700)).toHaveLength(2);
+  });
+
+  it('splits a file above the cap along hunk boundaries even when the budget is larger', () => {
+    const header = 'diff --git a/big.ts b/big.ts\n--- a/big.ts\n+++ b/big.ts\n';
+    const hunk = (n: number) => `@@ -${n},1 +${n},1 @@\n+${'y'.repeat(40_000)}\n`;
+    const diff = header + hunk(1) + hunk(100) + hunk(200) + hunk(300);
+    const chunks = buildAdaptiveChunks([{ path: 'big.ts', diff }], 89_600);
+    expect(chunks.flat().length).toBeGreaterThan(1);
+    for (const chunk of chunks) expect(estimateChunkTokens(chunk)).toBeLessThanOrEqual(REVIEW_CHUNK_TOKEN_CAP);
   });
 
   it('does not split a file that has only one hunk (cannot subdivide further)', () => {
@@ -1351,23 +1482,65 @@ describe('extractHunkAround', () => {
   it('returns undefined when no hunk covers the line', () => {
     expect(extractHunkAround(diff, 999)).toBeUndefined();
   });
+
+  // R21: a removed line is numbered on the old side, so its hunk is found by the old-file range.
+  it('finds the hunk for a removed line by its old-file number', () => {
+    const removed = [
+      'diff --git a/f.ts b/f.ts', '--- a/f.ts', '+++ b/f.ts',
+      '@@ -1,2 +1,1 @@', ' a', '-gone',
+      '@@ -80,2 +79,1 @@', ' x', '-removedLater',
+    ].join('\n');
+    const hunk = extractHunkAround(removed, 81, 'REMOVED');
+    expect(hunk).toContain('@@ -80,2 +79,1 @@');
+    expect(hunk).toContain('-removedLater');
+  });
+
+  it('attaches the removed-line hunk to a finding anchored on a removed line', () => {
+    const findings = [{ file: 'src/api.ts', anchorCode: 'const url = OLD_URL;',
+      severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
+    const [r] = resolveFindingAnchors(findings, [{ path: 'src/api.ts', diff: SAMPLE_DIFF }]).findings;
+    expect(r.lineType).toBe('REMOVED');
+    expect(r.diffHunk).toContain('-  const url = OLD_URL;');
+  });
 });
 
 describe('parseCriticKeep', () => {
   it('returns the kept indices from a verdict object', () => {
-    expect([...parseCriticKeep('{"keep":[1,3]}', 4)].sort()).toEqual([1, 3]);
+    expect([...parseCriticKeep('{"keep":[1,3]}', 4)!].sort()).toEqual([1, 3]);
   });
 
   it('returns an empty set when the critic keeps nothing', () => {
-    expect(parseCriticKeep('{"keep":[]}', 3).size).toBe(0);
+    expect(parseCriticKeep('{"keep":[]}', 3)!.size).toBe(0);
   });
 
-  it('fails open (keeps all) when the response is unparseable', () => {
-    expect([...parseCriticKeep('the model rambled', 3)].sort()).toEqual([1, 2, 3]);
+  it('reports an unreadable verdict (null) when the response has no JSON, so the caller keeps all', () => {
+    expect(parseCriticKeep('the model rambled', 3)).toBeNull();
   });
 
   it('extracts the verdict even with surrounding prose', () => {
-    expect([...parseCriticKeep('Here is my verdict: {"keep":[2]} done', 3)]).toEqual([2]);
+    expect([...parseCriticKeep('Here is my verdict: {"keep":[2]} done', 3)!]).toEqual([2]);
+  });
+
+  // AE6 / R11: numeric strings are read as numbers rather than silently dropping every finding.
+  it('reads numeric-string indices as numbers', () => {
+    expect([...parseCriticKeep('{"keep":["1","2"]}', 3)!].sort()).toEqual([1, 2]);
+  });
+
+  // AE6 / R11: a 0-based verdict would keep the wrong findings, so it is unreadable instead.
+  it('treats an out-of-range index (0-based numbering) as unreadable', () => {
+    expect(parseCriticKeep('{"keep":[0,1]}', 2)).toBeNull();
+  });
+
+  it('treats an index above the finding count as unreadable', () => {
+    expect(parseCriticKeep('{"keep":[1,4]}', 3)).toBeNull();
+  });
+
+  it('treats a non-numeric entry as unreadable', () => {
+    expect(parseCriticKeep('{"keep":[1,"x"]}', 3)).toBeNull();
+  });
+
+  it('treats a verdict with no keep array as unreadable', () => {
+    expect(parseCriticKeep('{"additionalFilesNeeded":[]}', 3)).toBeNull();
   });
 });
 
@@ -1446,6 +1619,20 @@ describe('PrReviewService.buildCriticPrompt', () => {
     expect(prompt).toContain('a requested file may be missing if it did not fit');
   });
 
+  it('renders a critic-requested file that is not in the diff', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const findings = [
+      { file: 'src/a.ts', line: 5, severity: 'critical' as const, title: 'SQLi', description: 'concat', recommendation: 'params' },
+    ];
+    const prompt = service.buildCriticPrompt(
+      pr, [{ path: 'src/a.ts', diff: '@@ -1 +5 @@\n+const x = q(sql);' }], findings, undefined,
+      new Map([['src/db.ts', 'export function q(s: string) { return s; }']]),
+    );
+    expect(prompt).toContain('### Context file: src/db.ts');
+    expect(prompt).toContain('export function q(s: string)');
+    expect(prompt).toContain('Contents of the requested file(s) that fit the available context budget');
+  });
+
   it('omits the context note when fileContents is empty or absent', () => {
     const service = new PrReviewService(new MockBitbucketClient());
     const findings = [
@@ -1486,31 +1673,35 @@ describe('selectFilesWithinBudget', () => {
   const file = (path: string, chars: number) => ({ path, content: 'x'.repeat(chars) });
 
   it('includes all files when the budget is ample', () => {
-    const result = selectFilesWithinBudget([file('a.ts', 40), file('b.ts', 40)], 1000);
-    expect([...result.keys()].sort()).toEqual(['a.ts', 'b.ts']);
+    const { selected, skipped } = selectFilesWithinBudget([file('a.ts', 40), file('b.ts', 40)], 1000);
+    expect([...selected.keys()].sort()).toEqual(['a.ts', 'b.ts']);
+    expect(skipped).toEqual([]);
   });
 
   it('packs smallest-first so one huge file cannot starve the rest', () => {
     // budget 30 tokens: huge.ts ≈ 250 tokens, small.ts ≈ 5 tokens.
-    const result = selectFilesWithinBudget([file('huge.ts', 1000), file('small.ts', 20)], 30);
-    expect(result.has('small.ts')).toBe(true);
-    expect(result.has('huge.ts')).toBe(false);
+    const { selected, skipped } = selectFilesWithinBudget([file('huge.ts', 1000), file('small.ts', 20)], 30);
+    expect(selected.has('small.ts')).toBe(true);
+    expect(selected.has('huge.ts')).toBe(false);
+    expect(skipped).toEqual(['huge.ts']);
   });
 
-  it('always includes at least one file even if it exceeds the budget', () => {
-    const result = selectFilesWithinBudget([file('only.ts', 4000)], 1);
-    expect(result.size).toBe(1);
-    expect(result.has('only.ts')).toBe(true);
+  // R9: a context file larger than the whole remaining budget is skipped, never admitted.
+  it('skips and reports a file that exceeds the budget, even when it is the only one', () => {
+    const { selected, skipped } = selectFilesWithinBudget([file('only.ts', 4000)], 1);
+    expect(selected.size).toBe(0);
+    expect(skipped).toEqual(['only.ts']);
   });
 
   it('never exceeds the per-batch safety ceiling', () => {
     const many = Array.from({ length: MAX_CONTEXT_FILES_PER_BATCH + 10 }, (_, i) => file(`f${i}.ts`, 4));
-    const result = selectFilesWithinBudget(many, 1_000_000);
-    expect(result.size).toBe(MAX_CONTEXT_FILES_PER_BATCH);
+    const { selected, skipped } = selectFilesWithinBudget(many, 1_000_000);
+    expect(selected.size).toBe(MAX_CONTEXT_FILES_PER_BATCH);
+    expect(skipped).toHaveLength(10);
   });
 
-  it('returns an empty map for no entries', () => {
-    expect(selectFilesWithinBudget([], 1000).size).toBe(0);
+  it('returns an empty selection for no entries', () => {
+    expect(selectFilesWithinBudget([], 1000).selected.size).toBe(0);
   });
 });
 
@@ -1522,44 +1713,10 @@ describe('estimateChunkTokens', () => {
   });
 });
 
-describe('extractPartialFindings', () => {
-  const finding1 = { file: 'src/a.ts', severity: 'warning', title: 'Issue A', description: 'desc a', recommendation: 'rec a' };
-  const finding2 = { file: 'src/b.ts', severity: 'critical', title: 'Issue B', description: 'desc b', recommendation: 'rec b' };
-
-  it('returns all findings from a complete response', () => {
-    const raw = JSON.stringify({ findings: [finding1, finding2], additionalFilesNeeded: [] });
-    const result = extractPartialFindings(raw);
-    expect(result).toHaveLength(2);
-    expect(result[0]).toMatchObject(finding1);
-    expect(result[1]).toMatchObject(finding2);
-  });
-
-  it('returns only complete findings when response is truncated mid-last-finding', () => {
-    const complete = JSON.stringify(finding1);
-    const truncated = JSON.stringify(finding2).slice(0, 30);
-    const raw = `{"findings":[${complete},${truncated}`;
-    const result = extractPartialFindings(raw);
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject(finding1);
-  });
-
-  it('returns empty array when truncated before any complete finding', () => {
-    const raw = '{"findings":[{"file":"src/a.ts","severity":"war';
-    expect(extractPartialFindings(raw)).toEqual([]);
-  });
-
-  it('returns empty array when no findings key present', () => {
-    expect(extractPartialFindings('{"additionalFilesNeeded":[]}')).toEqual([]);
-  });
-
-  it('returns empty array for empty findings array', () => {
-    expect(extractPartialFindings('{"findings":[]}')).toEqual([]);
-  });
-});
-
-describe('parseNdjsonFindings', () => {
+describe('parseReviewReply', () => {
   const f1 = { file: 'src/a.ts', severity: 'critical', title: 'T1', description: 'D1', recommendation: 'R1' };
   const f2 = { file: 'src/b.ts', severity: 'warning', title: 'T2', description: 'D2', recommendation: 'R2' };
+  const f3 = { file: 'src/c.ts', severity: 'suggestion', title: 'T3', description: 'D3', recommendation: 'R3' };
 
   it('parses a complete NDJSON response', () => {
     const raw = [
@@ -1567,103 +1724,212 @@ describe('parseNdjsonFindings', () => {
       JSON.stringify(f2),
       '{"additionalFilesNeeded":["src/c.ts"]}',
     ].join('\n');
-    const result = parseNdjsonFindings(raw);
+    const result = parseReviewReply(raw);
     expect(result.findings).toHaveLength(2);
     expect(result.findings[0]).toMatchObject(f1);
     expect(result.findings[1]).toMatchObject(f2);
     expect(result.additionalFilesNeeded).toEqual(['src/c.ts']);
     expect(result.hasMetaLine).toBe(true);
+    expect(result.hasJson).toBe(true);
     expect(result.truncated).toBe(false);
     expect(result.danglingTail).toBeUndefined();
   });
 
-  it('recovers findings when meta line is absent (truncated)', () => {
-    const raw = [JSON.stringify(f1), JSON.stringify(f2)].join('\n');
-    const result = parseNdjsonFindings(raw);
-    expect(result.findings).toHaveLength(2);
+  // AE2 / R4: a reply that ends cleanly without the trailing meta line is complete, not truncated.
+  it('treats a reply without the meta line as complete, not truncated', () => {
+    const raw = [JSON.stringify(f1), JSON.stringify(f2), JSON.stringify(f3)].join('\n');
+    const result = parseReviewReply(raw);
+    expect(result.findings).toHaveLength(3);
     expect(result.hasMetaLine).toBe(false);
-    expect(result.truncated).toBe(true);
-    // Cut on a line boundary: nothing was lost mid-line, so there is no tail.
+    expect(result.truncated).toBe(false);
     expect(result.danglingTail).toBeUndefined();
   });
 
-  it('returns the un-parsed dangling tail when the response is cut mid-line', () => {
+  it('flags truncation and keeps the dangling tail when the reply is cut mid-line', () => {
     const incomplete = JSON.stringify(f2).slice(0, 30);
     const raw = JSON.stringify(f1) + '\n' + incomplete;
-    const result = parseNdjsonFindings(raw);
+    const result = parseReviewReply(raw);
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]).toMatchObject(f1);
-    expect(result.hasMetaLine).toBe(false);
     expect(result.truncated).toBe(true);
     expect(result.danglingTail).toBe(incomplete);
   });
 
-  it('returns empty findings and no truncation for empty raw', () => {
-    const result = parseNdjsonFindings('');
+  it('reports no JSON for an empty reply', () => {
+    const result = parseReviewReply('');
     expect(result.findings).toHaveLength(0);
-    expect(result.hasMetaLine).toBe(false);
+    expect(result.hasJson).toBe(false);
     expect(result.truncated).toBe(false);
-    expect(result.danglingTail).toBeUndefined();
   });
 
-  it('does not treat old single-object JSON format as a meta line', () => {
-    const raw = JSON.stringify({ findings: [f1], additionalFilesNeeded: [] });
-    const result = parseNdjsonFindings(raw);
+  it('reports no JSON for a prose-only reply', () => {
+    const result = parseReviewReply('No issues found in these files.');
     expect(result.findings).toHaveLength(0);
-    expect(result.hasMetaLine).toBe(false);
-    expect(result.truncated).toBe(true);
-    // The line parsed fine (it is just not a finding) — it is not a cut-off tail.
-    expect(result.danglingTail).toBeUndefined();
+    expect(result.hasJson).toBe(false);
+    expect(result.truncated).toBe(false);
   });
 
-  it('ignores incomplete last line without throwing', () => {
-    const incomplete = JSON.stringify(f2).slice(0, 20);
-    const raw = JSON.stringify(f1) + '\n' + incomplete + '\n{"additionalFilesNeeded":[]}';
-    const result = parseNdjsonFindings(raw);
+  it('ignores prose containing balanced braces that are not JSON', () => {
+    const result = parseReviewReply('The function foo() { return 1; } looks fine.');
+    expect(result.findings).toHaveLength(0);
+    expect(result.hasJson).toBe(false);
+  });
+
+  it('unpacks a single-object {"findings":[…]} wrapper and reads its sibling meta keys', () => {
+    const raw = JSON.stringify({ findings: [f1], additionalFilesNeeded: ['src/x.ts'], recommendedPersonas: ['security'] });
+    const result = parseReviewReply(raw);
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]).toMatchObject(f1);
+    expect(result.additionalFilesNeeded).toEqual(['src/x.ts']);
+    expect(result.recommendedPersonas).toEqual(['security']);
     expect(result.hasMetaLine).toBe(true);
     expect(result.truncated).toBe(false);
-    // A meta line completed the response, so the mid-stream garbage is not a truncation tail.
+  });
+
+  it('unpacks a wrapper inside a ```json fence', () => {
+    const raw = '```json\n' + JSON.stringify({ findings: [f1, f2] }, null, 2) + '\n```';
+    const result = parseReviewReply(raw);
+    expect(result.findings).toHaveLength(2);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('parses NDJSON inside a fence with prose before and after', () => {
+    const raw = 'Here are the findings:\n```\n' + JSON.stringify(f1) + '\n{"additionalFilesNeeded":[]}\n```\nHope this helps.';
+    const result = parseReviewReply(raw);
+    expect(result.findings).toHaveLength(1);
+    expect(result.hasMetaLine).toBe(true);
+  });
+
+  // AE3 / R3: pretty-printed multi-line objects must not parse as zero findings.
+  it('parses pretty-printed multi-line finding objects and a pretty-printed meta object', () => {
+    const raw = [JSON.stringify(f1, null, 2), JSON.stringify(f2, null, 2), JSON.stringify({ additionalFilesNeeded: ['src/y.ts'] }, null, 2)].join('\n');
+    const result = parseReviewReply(raw);
+    expect(result.findings).toHaveLength(2);
+    expect(result.findings[1]).toMatchObject(f2);
+    expect(result.additionalFilesNeeded).toEqual(['src/y.ts']);
+    expect(result.hasMetaLine).toBe(true);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('parses a one-line JSON array of findings', () => {
+    const result = parseReviewReply(JSON.stringify([f1, f2]));
+    expect(result.findings).toHaveLength(2);
+    expect(result.truncated).toBe(false);
+  });
+
+  // #5: a bare `[]` "no findings" reply must read as usable JSON, not as unparseable prose —
+  // otherwise BitbucketParticipant's assertReadableReply treats a clean empty reply as unreadable
+  // and retries/splits it.
+  it('reads a bare "[]" as usable JSON with no findings, not truncated', () => {
+    const result = parseReviewReply('[]');
+    expect(result.findings).toHaveLength(0);
+    expect(result.hasJson).toBe(true);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('reads a fenced "```json\\n[]\\n```" as usable JSON with no findings, not truncated', () => {
+    const result = parseReviewReply('```json\n[]\n```');
+    expect(result.findings).toHaveLength(0);
+    expect(result.hasJson).toBe(true);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('recovers the complete findings of a wrapper cut inside its third finding', () => {
+    const raw = `{"findings":[${JSON.stringify(f1)},${JSON.stringify(f2)},${JSON.stringify(f3).slice(0, 25)}`;
+    const result = parseReviewReply(raw);
+    expect(result.findings).toHaveLength(2);
+    expect(result.findings[0]).toMatchObject(f1);
+    expect(result.findings[1]).toMatchObject(f2);
+    expect(result.truncated).toBe(true);
+    expect(result.hasJson).toBe(true);
+  });
+
+  it('recovers the complete findings of a pretty-printed array cut mid-element', () => {
+    const full = JSON.stringify([f1, f2], null, 2);
+    const raw = full.slice(0, full.lastIndexOf('"D2"'));
+    const result = parseReviewReply(raw);
+    expect(result.findings).toHaveLength(1);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('returns no findings when a wrapper is cut before any complete finding', () => {
+    const result = parseReviewReply('{"findings":[{"file":"src/a.ts","severity":"war');
+    expect(result.findings).toHaveLength(0);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('keeps findings around an incomplete line that a later meta line completes', () => {
+    const incomplete = JSON.stringify(f2).slice(0, 20);
+    const raw = JSON.stringify(f1) + '\n' + incomplete + '\n{"additionalFilesNeeded":[]}';
+    const result = parseReviewReply(raw);
+    expect(result.findings).toHaveLength(1);
+    expect(result.hasMetaLine).toBe(true);
+    expect(result.truncated).toBe(false);
     expect(result.danglingTail).toBeUndefined();
   });
 
-  // P0 regression (U7/KTD2): the old "exactly one key" meta-line check would have
-  // rejected this combined trailer (two keys) and silently misclassified it — widen
-  // the check to "every key present is a known meta key" instead.
-  it('parses a combined additionalFilesNeeded + recommendedPersonas trailer as one meta line (P0 regression)', () => {
-    const raw = [
-      JSON.stringify(f1),
-      '{"additionalFilesNeeded":["a.ts"],"recommendedPersonas":["security"]}',
-    ].join('\n');
-    const result = parseNdjsonFindings(raw);
-    expect(result.findings).toHaveLength(1);
+  it('parses a combined additionalFilesNeeded + recommendedPersonas trailer as one meta line', () => {
+    const raw = [JSON.stringify(f1), '{"additionalFilesNeeded":["a.ts"],"recommendedPersonas":["security"]}'].join('\n');
+    const result = parseReviewReply(raw);
     expect(result.hasMetaLine).toBe(true);
     expect(result.additionalFilesNeeded).toEqual(['a.ts']);
     expect(result.recommendedPersonas).toEqual(['security']);
+  });
+
+  it('defaults recommendedPersonas and retract to empty arrays when the trailer omits them', () => {
+    const result = parseReviewReply([JSON.stringify(f1), '{"additionalFilesNeeded":["a.ts"]}'].join('\n'));
+    expect(result.recommendedPersonas).toEqual([]);
+    expect(result.retract).toEqual([]);
+  });
+
+  // #2: the tie-break between the per-line reading and the balanced-value scan now compares, in
+  // order, more findings / has a meta line / not truncated / hasJson, before falling back to the
+  // per-line reading. All three cases below tie on findings count (0 or equal), so the meta-line
+  // comparison must decide — the balanced-value scan is the only reading that recovered the meta.
+  it('reads a pretty-printed zero-findings reply with a meta line as complete, not truncated', () => {
+    const raw = JSON.stringify({ findings: [], additionalFilesNeeded: ['src/a.ts'] }, null, 2);
+    const result = parseReviewReply(raw);
+    expect(result.findings).toHaveLength(0);
+    expect(result.additionalFilesNeeded).toEqual(['src/a.ts']);
+    expect(result.hasMetaLine).toBe(true);
     expect(result.truncated).toBe(false);
   });
 
-  it('parses a recommendedPersonas-only trailer (additionalFilesNeeded omitted) as a meta line', () => {
-    const raw = [JSON.stringify(f1), '{"recommendedPersonas":["performance","reliability"]}'].join('\n');
-    const result = parseNdjsonFindings(raw);
-    expect(result.hasMetaLine).toBe(true);
-    expect(result.recommendedPersonas).toEqual(['performance', 'reliability']);
-    expect(result.additionalFilesNeeded).toEqual([]);
+  it('reads a pretty-printed {"findings":[]} wrapper with no sibling meta as complete, not truncated', () => {
+    const raw = JSON.stringify({ findings: [] }, null, 2);
+    const result = parseReviewReply(raw);
+    expect(result.findings).toHaveLength(0);
+    expect(result.hasJson).toBe(true);
+    expect(result.truncated).toBe(false);
   });
 
-  it('still rejects a plain findings-shaped object as the meta line (has "file", not a known meta key)', () => {
-    const raw = [JSON.stringify(f1), JSON.stringify(f2)].join('\n');
-    const result = parseNdjsonFindings(raw);
+  it('keeps the meta line and retract list from a pretty-printed trailer after NDJSON findings, and reports not truncated', () => {
+    const raw = [JSON.stringify(f1), JSON.stringify({ additionalFilesNeeded: [], retract: [1] }, null, 2)].join('\n');
+    const result = parseReviewReply(raw);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]).toMatchObject(f1);
+    expect(result.hasMetaLine).toBe(true);
+    expect(result.retract).toEqual([1]);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('parses retract indices from the meta line and ignores non-integers', () => {
+    const result = parseReviewReply([JSON.stringify(f1), '{"additionalFilesNeeded":[],"retract":[2,"x",1.5,3]}'].join('\n'));
+    expect(result.hasMetaLine).toBe(true);
+    expect(result.retract).toEqual([2, 3]);
+  });
+
+  it('does not treat an object with an unknown key as the meta line', () => {
+    const result = parseReviewReply([JSON.stringify(f1), '{"additionalFilesNeeded":[],"note":"x"}'].join('\n'));
     expect(result.hasMetaLine).toBe(false);
-    expect(result.recommendedPersonas).toEqual([]);
+    expect(result.findings).toHaveLength(1);
   });
 
-  it('defaults recommendedPersonas to an empty array when the trailer omits it entirely', () => {
-    const raw = [JSON.stringify(f1), '{"additionalFilesNeeded":["a.ts"]}'].join('\n');
-    const result = parseNdjsonFindings(raw);
-    expect(result.hasMetaLine).toBe(true);
-    expect(result.recommendedPersonas).toEqual([]);
+  it('keeps a finding whose description contains braces inside a string', () => {
+    const f = { ...f1, description: 'uses {curly} and } stray braces {' };
+    const result = parseReviewReply(JSON.stringify(f, null, 2));
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]).toMatchObject(f);
   });
 });
 
@@ -1809,57 +2075,70 @@ describe('formatRecoveryDecision', () => {
 });
 
 describe('formatFindingsFunnel', () => {
-  it('reconciles raw against the sum of every stage plus final (including cross-batch dedup)', () => {
+  it('reconciles raw against the sum of every stage plus final', () => {
     const counts = {
       raw: 20,
       dedupedCrossBatch: 3,
-      droppedByAnchor: 4,
+      droppedOutsidePr: 2,
+      retractedByPass2: 2,
       droppedByCritic: 2,
       final: 11,
+      unverified: 1,
     };
-    // KTD6: no foldedByConfidence stage — raw = dedupedCrossBatch + droppedByAnchor + (droppedByCritic ?? 0) + final.
+    // raw = deduped + dropped outside PR + retracted by Pass 2 + (critic ?? 0) + final. `unverified`
+    // is a subset of `final`, not a separate stage.
     expect(
-      counts.dedupedCrossBatch + counts.droppedByAnchor + counts.droppedByCritic + counts.final,
+      counts.dedupedCrossBatch + counts.droppedOutsidePr + counts.retractedByPass2 + counts.droppedByCritic + counts.final,
     ).toBe(counts.raw);
 
     const summary = formatFindingsFunnel(counts);
     expect(summary).toContain('raw 20');
-    expect(summary).toContain('deduped as cross-batch duplicate: 3');
-    expect(summary).toContain('dropped by anchor verification: 4');
-    expect(summary).not.toContain('folded by confidence');
+    expect(summary).toContain('deduped as duplicate: 3');
+    expect(summary).toContain('dropped as outside the PR: 2');
+    expect(summary).toContain('retracted by Pass 2: 2');
     expect(summary).toContain('dropped by critic: 2');
-    expect(summary).toContain('final: 11');
+    expect(summary).toContain('final: 11 (1 location unverified)');
+    expect(summary).not.toContain('anchor verification');
   });
 
   it('omits the critic line outside deep mode', () => {
     const summary = formatFindingsFunnel({
-      raw: 10, dedupedCrossBatch: 1, droppedByAnchor: 2, final: 4,
+      raw: 10, dedupedCrossBatch: 1, droppedOutsidePr: 2, retractedByPass2: 0, final: 7, unverified: 0,
     });
     expect(summary).not.toContain('critic');
+    expect(summary).toContain('final: 7');
+    expect(summary).not.toContain('location unverified');
   });
 
-  it('KTD6: folds persona-pass findings into the same raw count as the standard pass, with no separate persona stage', () => {
-    // Simulates a deep/smart run: the standard pass's raw findings plus all four persona
-    // passes' raw findings are summed into one `raw` before the funnel ever sees them —
-    // exactly what BitbucketParticipant.ts's `rawFindingsTotal` accumulator does across
-    // both the per-chunk standard-pass tally and every `runPersonaPassesForChunk` result.
-    const standardPassRaw = 6;
-    const personaPassesRaw = 2 + 1 + 3 + 0; // security, performance, reliability, maintainability
-    const counts = {
-      raw: standardPassRaw + personaPassesRaw,
-      dedupedCrossBatch: 2,
-      droppedByAnchor: 1,
-      droppedByCritic: 2,
-      final: 7,
-    };
-    expect(counts.raw).toBe(12);
-
-    const summary = formatFindingsFunnel(counts);
-    // No persona-specific stage or label appears — persona findings are invisible in the
-    // funnel shape, only inflating the same `raw` count a standard-only run would produce.
+  it('folds persona-pass findings into the same raw count as the standard pass, with no separate persona stage', () => {
+    const summary = formatFindingsFunnel({
+      raw: 12, dedupedCrossBatch: 2, droppedOutsidePr: 1, retractedByPass2: 0, droppedByCritic: 2, final: 7, unverified: 0,
+    });
     expect(summary).toContain('raw 12');
     expect(summary).not.toMatch(/security|performance|reliability|maintainability|persona/i);
-    expect(summary.split('\n')).toHaveLength(5); // header + 3 stage lines + critic + final — KTD6 dropped the fold stage
+  });
+});
+
+describe('mergePass2Findings (KTD5)', () => {
+  const f = (title: string) => ({ file: 'src/a.ts', severity: 'warning' as const, title, description: 'D', recommendation: 'R' });
+
+  it('drops explicitly retracted Pass 1 findings and adds Pass 2 findings', () => {
+    const result = mergePass2Findings([f('a'), f('b')], [f('c')], [2]);
+    expect(result.findings.map((x) => x.title)).toEqual(['a', 'c']);
+    expect(result.retracted).toBe(1);
+    expect(result.invalidRetractions).toEqual([]);
+  });
+
+  it('keeps every Pass 1 finding when Pass 2 retracts nothing', () => {
+    const result = mergePass2Findings([f('a'), f('b')], [], []);
+    expect(result.findings.map((x) => x.title)).toEqual(['a', 'b']);
+    expect(result.retracted).toBe(0);
+  });
+
+  it('ignores a retraction index that names no Pass 1 finding', () => {
+    const result = mergePass2Findings([f('a'), f('b')], [f('c')], [7, 0]);
+    expect(result.findings.map((x) => x.title)).toEqual(['a', 'b', 'c']);
+    expect(result.invalidRetractions).toEqual([7, 0]);
   });
 });
 
@@ -1891,14 +2170,12 @@ describe('formatContinuationMessage', () => {
   it('states what the count means instead of reading as a sequential resume', () => {
     const message = formatContinuationMessage(3);
     expect(message).not.toContain('resum');
-    expect(message).toContain('3 files had no findings in the truncated response');
-    expect(message).toContain('reviewing them now');
+    expect(message).toContain('re-checking 3 files for anything not yet reported');
   });
 
-  it('uses singular wording for a single uncovered file', () => {
+  it('uses singular wording for a single file', () => {
     const message = formatContinuationMessage(1);
-    expect(message).toContain('1 file had no findings in the truncated response');
-    expect(message).toContain('reviewing it now');
+    expect(message).toContain('re-checking 1 file for anything not yet reported');
   });
 });
 
@@ -2120,6 +2397,71 @@ describe('numberDiffLines', () => {
   });
 });
 
+describe('location-unverified findings (R13, R14)', () => {
+  const base = { severity: 'warning' as const, description: 'D', recommendation: 'Use a parameterised query' };
+
+  it('drops an unverified finding when a verified same-meaning finding exists for the same file', () => {
+    const merged = dedupeFindings([
+      { ...base, file: 'src/a.ts', title: 'SQL injection in lookup', locationUnverified: true },
+      { ...base, file: 'src/a.ts', line: 12, lineType: 'ADDED', title: 'SQL injection in lookup' },
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].line).toBe(12);
+  });
+
+  it('keeps an unverified finding whose verified look-alike is in a different file', () => {
+    const merged = dedupeFindings([
+      { ...base, file: 'src/a.ts', title: 'SQL injection in lookup', locationUnverified: true },
+      { ...base, file: 'src/b.ts', line: 12, lineType: 'ADDED', title: 'SQL injection in lookup' },
+    ]);
+    expect(merged).toHaveLength(2);
+  });
+
+  // #7: recall over precision — a merely *similar* title in the same file must not drop the
+  // unverified finding, since it may well be a genuinely different issue (sameMeaning's fuzzy
+  // 0.25 Jaccard gate would have merged these; the exact-normalized-title rule must not).
+  it('keeps an unverified finding when a verified finding in the same file has only a similar (not identical) title', () => {
+    const merged = dedupeFindings([
+      { ...base, file: 'src/a.ts', title: 'Missing null check on user', locationUnverified: true },
+      { ...base, file: 'src/a.ts', line: 12, lineType: 'ADDED', title: 'Missing null check on response' },
+    ]);
+    expect(merged).toHaveLength(2);
+    expect(merged.some((m) => m.locationUnverified)).toBe(true);
+  });
+
+  it('drops an unverified finding when a verified finding in the same file has the exact same normalized title (case/whitespace-insensitive)', () => {
+    const merged = dedupeFindings([
+      { ...base, file: 'src/a.ts', title: '  SQL Injection in lookup ', locationUnverified: true },
+      { ...base, file: 'src/a.ts', line: 12, lineType: 'ADDED', title: 'sql injection in lookup' },
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].line).toBe(12);
+  });
+
+  it('renders an unverified finding with "(location unverified)", no line and muted confidence', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const pr: BitbucketPR = { id: 1, title: 'T', description: '', author: { displayName: 'A', emailAddress: '' }, targetBranch: 'main', fromCommitHash: 'x' };
+    const { markdown } = service.formatReview([
+      { id: 1, ...base, file: 'src/a.ts', title: 'Race', confidence: 0.9, locationUnverified: true },
+    ], pr, 1);
+    expect(markdown).toContain('src/a.ts (location unverified)');
+    expect(markdown).not.toMatch(/L\d/);
+    expect(markdown).toContain('general · 0.9');
+    expect(markdown).not.toContain('**0.9**');
+  });
+
+  // AE8: "No issues found" is never shown alone after findings were dropped.
+  it('formats a dropped-findings notice naming each count', () => {
+    expect(formatDroppedFindingsNotice({ outsidePr: 3, critic: 0 })).toBe(
+      '_3 findings were dropped because they named files outside this PR._',
+    );
+    expect(formatDroppedFindingsNotice({ outsidePr: 1, critic: 2 })).toBe(
+      '_1 finding was dropped because it named a file outside this PR; 2 findings were dropped by the critic as unverifiable._',
+    );
+    expect(formatDroppedFindingsNotice({ outsidePr: 0, critic: 0 })).toBeUndefined();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // locateAnchor
 // ---------------------------------------------------------------------------
@@ -2139,6 +2481,21 @@ describe('locateAnchor', () => {
 
   it('ignores leading/trailing whitespace when matching', () => {
     expect(locateAnchor(SAMPLE_DIFF, '   const timeout = 5000;   ')?.line).toBe(12);
+  });
+
+  it('matches when the quoted line collapses internal whitespace (tabs vs spaces)', () => {
+    const tabbed = 'diff --git a/g.go b/g.go\n--- a/g.go\n+++ b/g.go\n@@ -1,1 +1,2 @@\n \tif (x) {\n+\t\treturn  foo(a, b);';
+    expect(locateAnchor(tabbed, 'return foo(a, b);')).toEqual({ line: 2, lineType: 'ADDED', fileType: 'TO' });
+  });
+
+  it('matches when the quoted line still carries the L<n> gutter and diff marker', () => {
+    expect(locateAnchor(SAMPLE_DIFF, 'L12 +  const timeout = 5000;')?.line).toBe(12);
+    expect(locateAnchor(SAMPLE_DIFF, '+  const timeout = 5000;')?.line).toBe(12);
+  });
+
+  it('matches a YAML list line exactly without stripping its leading dash', () => {
+    const yaml = 'diff --git a/c.yml b/c.yml\n--- a/c.yml\n+++ b/c.yml\n@@ -1,1 +1,2 @@\n steps:\n+- name: build';
+    expect(locateAnchor(yaml, '- name: build')).toEqual({ line: 2, lineType: 'ADDED', fileType: 'TO' });
   });
 
   it('returns null when the text is nowhere in the diff', () => {
@@ -2174,7 +2531,7 @@ describe('resolveFindingAnchors', () => {
   it('sets a verified line and provenance "new" for an added-line anchor', () => {
     const findings = [{ file: 'src/api.ts', anchorCode: 'const timeout = 5000;', line: 99 /* wrong */,
       severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
-    const [r] = resolveFindingAnchors(findings, diffs);
+    const [r] = resolveFindingAnchors(findings, diffs).findings;
     expect(r.line).toBe(12);          // code-derived, not the model's 99
     expect(r.lineType).toBe('ADDED');
     expect(r.provenance).toBe('new');
@@ -2184,19 +2541,26 @@ describe('resolveFindingAnchors', () => {
   it('tags a context-line anchor as provenance "existing"', () => {
     const findings = [{ file: 'src/api.ts', anchorCode: 'function connect() {',
       severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
-    expect(resolveFindingAnchors(findings, diffs)[0].provenance).toBe('existing');
+    expect(resolveFindingAnchors(findings, diffs).findings[0].provenance).toBe('existing');
   });
 
-  it('drops a finding whose anchorCode cannot be located (strict)', () => {
-    const findings = [{ file: 'src/api.ts', anchorCode: 'this line does not exist',
+  // AE7 / R13: an unlocatable anchor keeps the finding, demoted to "location unverified".
+  it('keeps a finding whose anchorCode cannot be located, marked location unverified with no line', () => {
+    const findings = [{ file: 'src/api.ts', anchorCode: 'this line does not exist', line: 12,
       severity: 'critical' as const, title: 'T', description: 'D', recommendation: 'R' }];
-    expect(resolveFindingAnchors(findings, diffs)).toHaveLength(0);
+    const { findings: out, droppedOutsidePr } = resolveFindingAnchors(findings, diffs);
+    expect(out).toHaveLength(1);
+    expect(out[0].locationUnverified).toBe(true);
+    expect(out[0].line).toBeUndefined();
+    expect(out[0].provenance).toBeUndefined();
+    expect(out[0]).not.toHaveProperty('anchorCode');
+    expect(droppedOutsidePr).toBe(0);
   });
 
   it('keeps a file-level finding (no anchorCode) without a line or provenance', () => {
     const findings = [{ file: 'src/api.ts',
       severity: 'suggestion' as const, title: 'Missing header', description: 'D', recommendation: 'R' }];
-    const [r] = resolveFindingAnchors(findings, diffs);
+    const [r] = resolveFindingAnchors(findings, diffs).findings;
     expect(r.line).toBeUndefined();
     expect(r.provenance).toBeUndefined();
   });
@@ -2205,15 +2569,63 @@ describe('resolveFindingAnchors', () => {
     const findings = [{ file: 'src/api.ts', anchorCode: 'const timeout = 5000;',
       relatedCode: ['const url = NEW_URL;'],
       severity: 'warning' as const, title: 'builds up', description: 'D', recommendation: 'R' }];
-    const [r] = resolveFindingAnchors(findings, diffs);
+    const [r] = resolveFindingAnchors(findings, diffs).findings;
     expect(r.line).toBe(12);
     expect(r.relatedLines).toEqual([11]);
   });
 
-  it('drops a finding that anchors into a file with no diff present', () => {
+  it('drops and counts a finding that names a file outside the PR', () => {
     const findings = [{ file: 'src/other.ts', anchorCode: 'const timeout = 5000;',
       severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
-    expect(resolveFindingAnchors(findings, diffs)).toHaveLength(0);
+    const { findings: out, droppedOutsidePr } = resolveFindingAnchors(findings, diffs);
+    expect(out).toHaveLength(0);
+    expect(droppedOutsidePr).toBe(1);
+  });
+
+  it('drops and counts a file-level finding that names a file outside the PR', () => {
+    const findings = [{ file: 'src/other.ts', severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
+    expect(resolveFindingAnchors(findings, diffs).droppedOutsidePr).toBe(1);
+  });
+
+  it.each(['./src/api.ts', 'a/src/api.ts', 'b/src/api.ts', '/src/api.ts'])(
+    'normalises the path spelling %s to the diff path',
+    (file) => {
+      const findings = [{ file, anchorCode: 'const timeout = 5000;',
+        severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
+      const [r] = resolveFindingAnchors(findings, diffs).findings;
+      expect(r.file).toBe('src/api.ts');
+      expect(r.line).toBe(12);
+    },
+  );
+
+  it('resolves a bare file name when exactly one diff file ends with it', () => {
+    const findings = [{ file: 'api.ts', anchorCode: 'const timeout = 5000;',
+      severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
+    const [r] = resolveFindingAnchors(findings, diffs).findings;
+    expect(r.file).toBe('src/api.ts');
+    expect(r.line).toBe(12);
+  });
+
+  it('does not guess a bare file name that matches two diff files', () => {
+    const two = [{ path: 'src/api.ts', diff: SAMPLE_DIFF }, { path: 'lib/api.ts', diff: SAMPLE_DIFF.replace(/src\/api/g, 'lib/api') }];
+    const findings = [{ file: 'api.ts', anchorCode: 'const timeout = 5000;',
+      severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
+    const { findings: out, droppedOutsidePr } = resolveFindingAnchors(findings, two);
+    expect(out).toHaveLength(0);
+    expect(droppedOutsidePr).toBe(1);
+  });
+
+  it('finds an anchor in the second piece of a file split across two diff pieces', () => {
+    const header = 'diff --git a/src/big.ts b/src/big.ts\n--- a/src/big.ts\n+++ b/src/big.ts';
+    const pieces = [
+      { path: 'src/big.ts', diff: `${header}\n@@ -1,1 +1,2 @@\n first\n+second` },
+      { path: 'src/big.ts', diff: `${header}\n@@ -90,1 +91,2 @@\n ninety\n+const late = 1;` },
+    ];
+    const findings = [{ file: 'src/big.ts', anchorCode: 'const late = 1;',
+      severity: 'warning' as const, title: 'T', description: 'D', recommendation: 'R' }];
+    const [r] = resolveFindingAnchors(findings, pieces).findings;
+    expect(r.line).toBe(92);
+    expect(r.diffHunk).toContain('L92 +const late = 1;');
   });
 });
 
@@ -2236,8 +2648,8 @@ describe('persona pass merge (U3)', () => {
     const securityRaw = [{ file: 'src/api.ts', anchorCode: 'const timeout = 5000;',
       severity: 'critical' as const, title: 'Missing auth check', description: 'D', recommendation: 'R' }];
 
-    const standardResolved = resolveFindingAnchors(standardRaw, diffs);
-    const securityResolved = resolveFindingAnchors(securityRaw, diffs);
+    const standardResolved = resolveFindingAnchors(standardRaw, diffs).findings;
+    const securityResolved = resolveFindingAnchors(securityRaw, diffs).findings;
     const merged = dedupeFindings([...standardResolved, ...securityResolved]);
 
     expect(merged).toHaveLength(2);
@@ -2252,8 +2664,8 @@ describe('persona pass merge (U3)', () => {
     const securityRaw = [{ file: 'src/api.ts', anchorCode: 'const timeout = 5000;',
       severity: 'critical' as const, confidence: 0.9, title: 'insecure default', description: 'D', recommendation: 'R' }];
 
-    const standardResolved = resolveFindingAnchors(standardRaw, diffs);
-    const securityResolved = resolveFindingAnchors(securityRaw, diffs);
+    const standardResolved = resolveFindingAnchors(standardRaw, diffs).findings;
+    const securityResolved = resolveFindingAnchors(securityRaw, diffs).findings;
     const merged = dedupeFindings([...standardResolved, ...securityResolved]);
 
     expect(merged).toHaveLength(1);
@@ -2261,19 +2673,20 @@ describe('persona pass merge (U3)', () => {
     expect(merged[0].confidence).toBe(0.9);
   });
 
-  it('drops an anchor-unlocatable persona finding the same way an unlocatable standard finding is dropped', () => {
+  it('keeps an anchor-unlocatable persona finding as location unverified, the same as a standard finding', () => {
     const standardRaw = [{ file: 'src/api.ts', anchorCode: 'const url = NEW_URL;',
       severity: 'warning' as const, title: 'Hardcoded URL', description: 'D', recommendation: 'R' }];
     const personaRaw = [{ file: 'src/api.ts', anchorCode: 'this line does not exist',
       severity: 'critical' as const, title: 'Unverifiable finding', description: 'D', recommendation: 'R' }];
 
-    const standardResolved = resolveFindingAnchors(standardRaw, diffs);
-    const personaResolved = resolveFindingAnchors(personaRaw, diffs);
-    expect(personaResolved).toHaveLength(0);
+    const standardResolved = resolveFindingAnchors(standardRaw, diffs).findings;
+    const personaResolved = resolveFindingAnchors(personaRaw, diffs).findings;
+    expect(personaResolved).toHaveLength(1);
+    expect(personaResolved[0].locationUnverified).toBe(true);
 
     const merged = dedupeFindings([...standardResolved, ...personaResolved]);
-    expect(merged).toHaveLength(1);
-    expect(merged[0].title).toBe('Hardcoded URL');
+    expect(merged).toHaveLength(2);
+    expect(merged.find((f) => f.title === 'Unverifiable finding')?.locationUnverified).toBe(true);
   });
 
   it('a transient failure on a persona call\'s first attempt succeeds on retry via withEasierRetry, same as pass1', async () => {
@@ -2450,6 +2863,84 @@ describe('buildPrContextPrompt', () => {
   });
 });
 
+describe('follow-up context (U10)', () => {
+  const finding: ReviewFinding = {
+    id: 3, file: 'src/db.ts', line: 42, relatedLines: [40], severity: 'critical', title: 'SQL injection',
+    description: 'Unsanitised input.', recommendation: 'Use params', diffHunk: '@@ -40,3 +40,3 @@\nL42 +q(sql)',
+  };
+  const session = {
+    prTitle: 'Add OAuth support', prDescription: 'Adds token refresh.', upfrontQuestion: 'Does this break concurrent writes?',
+  };
+
+  // R18
+  it('builds a #N follow-up prompt with the PR title, description, upfront question and the finding\'s code', () => {
+    const prompt = buildFindingFollowUpPrompt(session, finding, 'why is this critical?');
+    expect(prompt).toContain('Add OAuth support');
+    expect(prompt).toContain('Adds token refresh.');
+    expect(prompt).toContain('Does this break concurrent writes?');
+    expect(prompt).toContain('File: src/db.ts, Line: 42');
+    expect(prompt).toContain('Related lines: L40');
+    expect(prompt).toContain('«UNTRUSTED-CONTENT»\n@@ -40,3 +40,3 @@');
+    expect(prompt).toContain("Developer's question: why is this critical?");
+  });
+
+  it('builds a #N follow-up prompt without optional context when the session has none', () => {
+    const prompt = buildFindingFollowUpPrompt({ prTitle: 'T' }, { ...finding, diffHunk: undefined }, 'q');
+    expect(prompt).not.toContain('undefined');
+    expect(prompt).not.toContain('UNTRUSTED-CONTENT');
+  });
+
+  it('includes the upfront question in the findings-only PR prompt', () => {
+    expect(buildPrContextPrompt({ ...session, findings: [] }, 'q')).toContain('Does this break concurrent writes?');
+  });
+
+  // R19 / AE10
+  it.each([['2', 2], ['#2', 2], ['Finding 2', 2], ['2.', 2], ['Finding #2 — the SQL issue', 2], ['The matching finding is #2.', 2]])(
+    'reads the matched finding number from %j',
+    (reply, expected) => { expect(parseFindingMatchReply(reply)).toBe(expected); },
+  );
+
+  it('reads "none" as no match', () => {
+    expect(parseFindingMatchReply('none')).toBeUndefined();
+    expect(parseFindingMatchReply('No matching finding.')).toBeUndefined();
+  });
+
+  it('reads "None of the 3 findings match" as no match, not finding 3', () => {
+    expect(parseFindingMatchReply('None of the 3 findings match')).toBeUndefined();
+  });
+
+  it('does not guess a finding from a bare number in free prose', () => {
+    expect(parseFindingMatchReply('I think 3 or 4')).toBeUndefined();
+  });
+
+  // R22
+  it('stores only reviewed files, files with findings first, dropping whole files to fit', () => {
+    const diffs = [
+      { path: 'src/a.ts', diff: 'diff --git a/src/a.ts b/src/a.ts\n+' + 'a'.repeat(50) + '\n' },
+      { path: 'src/b.ts', diff: 'diff --git a/src/b.ts b/src/b.ts\n+' + 'b'.repeat(50) + '\n' },
+      { path: 'src/c.ts', diff: 'diff --git a/src/c.ts b/src/c.ts\n+' + 'c'.repeat(50) + '\n' },
+    ];
+    const stored = buildStoredReviewDiff(diffs, [{ file: 'src/c.ts' }], diffs[0].diff.length * 2 + 5);
+    expect(stored.rawDiff.startsWith('diff --git a/src/c.ts')).toBe(true);
+    expect(stored.rawDiff).toContain('diff --git a/src/a.ts');
+    expect(stored.rawDiff).not.toContain('diff --git a/src/b.ts');
+    expect(stored.truncated).toBe(true);
+    expect(stored.omittedFiles).toEqual(['src/b.ts']);
+  });
+
+  it('keeps the pieces of a split file together', () => {
+    const diffs = [
+      { path: 'src/big.ts', diff: 'diff --git a/src/big.ts b/src/big.ts\n@@ -1 +1 @@\n+one\n' },
+      { path: 'src/other.ts', diff: 'diff --git a/src/other.ts b/src/other.ts\n+x\n' },
+      { path: 'src/big.ts', diff: 'diff --git a/src/big.ts b/src/big.ts\n@@ -90 +90 @@\n+two\n' },
+    ];
+    const stored = buildStoredReviewDiff(diffs, [], 100_000);
+    expect(stored.rawDiff.indexOf('+two')).toBeLessThan(stored.rawDiff.indexOf('src/other.ts'));
+    expect(stored.truncated).toBe(false);
+    expect(stored.omittedFiles).toEqual([]);
+  });
+});
+
 describe('buildDiffAwarePrompt', () => {
   it('includes raw diff when present', () => {
     const session = {
@@ -2465,18 +2956,29 @@ describe('buildDiffAwarePrompt', () => {
     expect(out).toContain('Question: Did I regress?');
   });
 
-  it('truncates the diff to maxDiffChars and notes the truncation', () => {
+  // R22: a follow-up never gets a diff cut mid-file — whole files are dropped, and named.
+  it('drops whole files to fit maxDiffChars and names the omitted ones', () => {
+    const first = 'diff --git a/a.ts b/a.ts\n+' + 'x'.repeat(40) + '\n';
+    const second = 'diff --git a/b.ts b/b.ts\n+' + 'y'.repeat(40) + '\n';
+    const session = { prTitle: 'Test', prDescription: '', changedFiles: [], findings: [], rawDiff: first + second };
+    const out = buildDiffAwarePrompt(session as any, 'Did I regress?', first.length + 5);
+    expect(out).toContain('x'.repeat(40));
+    expect(out).not.toContain('y'.repeat(40));
+    expect(out).toMatch(/omitted.*b\.ts/i);
+  });
+
+  it('names files already omitted when the diff was stored', () => {
     const session = {
-      prTitle: 'Test',
-      prDescription: '',
-      changedFiles: [],
-      findings: [],
-      rawDiff: 'x'.repeat(100),
+      prTitle: 'Test', prDescription: '', changedFiles: [], findings: [],
+      rawDiff: 'diff --git a/a.ts b/a.ts', rawDiffTruncated: true, rawDiffOmittedFiles: ['src/big.ts'],
     };
-    const out = buildDiffAwarePrompt(session as any, 'Did I regress?', 20);
-    expect(out).toContain('x'.repeat(20));
-    expect(out).not.toContain('x'.repeat(21));
-    expect(out).toContain('truncated, showing 20 of 100 chars');
+    expect(buildDiffAwarePrompt(session as any, 'q', 10000)).toMatch(/omitted.*src\/big\.ts/i);
+  });
+
+  // R18
+  it('includes the review\'s upfront question', () => {
+    const session = { prTitle: 'T', findings: [], rawDiff: 'diff --git a/x b/x', upfrontQuestion: 'Does this break concurrent writes?' };
+    expect(buildDiffAwarePrompt(session as any, 'q')).toContain('Does this break concurrent writes?');
   });
 
   it('notes write-time truncation even when the stored diff itself is not re-truncated at read time', () => {

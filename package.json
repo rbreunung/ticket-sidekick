@@ -809,7 +809,7 @@
             "default": 0.7,
             "minimum": 0.1,
             "maximum": 0.9,
-            "description": "Fraction of the model's context window to use per review chunk (0.1–0.9, default 0.7). The remaining 30% is reserved for the model's output. Lower this value if you see context-limit errors during reviews."
+            "description": "Fraction of the model's context window a review call's prompt may use (0.1–0.9, default 0.7); review chunks are additionally capped at about 24,000 tokens so each file gets a real share of the model's answer. The rest of the window is left for the model's output. Lower this value if you see context-limit errors during reviews."
           },
           "ticketSidekick.bitbucket.reviewMode": {
             "type": "string",
