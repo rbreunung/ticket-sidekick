@@ -4,7 +4,7 @@ import {
   langFromPath, buildAdaptiveChunks,
   resolveLineType, annotateWithLineTypes, hasPrUrl,
   numberDiffLines, locateAnchor, resolveFindingAnchors,
-  estimateChunkTokens, selectFilesWithinBudget, MAX_CONTEXT_FILES_PER_BATCH,
+  estimateChunkTokens, selectFilesWithinBudget, MAX_CONTEXT_FILES_PER_BATCH, REVIEW_CHUNK_TOKEN_CAP,
   parseCriticKeep, parseCriticAdditionalFiles, dedupeFindings, extractHunkAround,
   parseFollowUpIntent, buildPrContextPrompt, buildDiffAwarePrompt,
   parseUpfrontQuestion, stripUpfrontQuestion,
@@ -1182,6 +1182,30 @@ describe('buildAdaptiveChunks', () => {
     expect(combined).toContain('@@ -200,1');
   });
 
+  // R15 / KTD6: chunks never exceed the fixed ceiling, however large the model's window.
+  it('caps every chunk at REVIEW_CHUNK_TOKEN_CAP even with a very large budget', () => {
+    // 60 files × (50 + 1000) tokens ≈ 63k tokens of diff, budget of a 128k-window model.
+    const diffs = Array.from({ length: 60 }, (_, i) => makeDiff(`f${i}.ts`, 4000));
+    const chunks = buildAdaptiveChunks(diffs, 89_600);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) expect(estimateChunkTokens(chunk)).toBeLessThanOrEqual(REVIEW_CHUNK_TOKEN_CAP);
+    expect(chunks.flat()).toHaveLength(60);
+  });
+
+  it('lets a budget below the cap govern chunk size, as before', () => {
+    const diffs = [makeDiff('a.ts', 400), makeDiff('b.ts', 400)];
+    expect(buildAdaptiveChunks(diffs, 1700)).toHaveLength(2);
+  });
+
+  it('splits a file above the cap along hunk boundaries even when the budget is larger', () => {
+    const header = 'diff --git a/big.ts b/big.ts\n--- a/big.ts\n+++ b/big.ts\n';
+    const hunk = (n: number) => `@@ -${n},1 +${n},1 @@\n+${'y'.repeat(40_000)}\n`;
+    const diff = header + hunk(1) + hunk(100) + hunk(200) + hunk(300);
+    const chunks = buildAdaptiveChunks([{ path: 'big.ts', diff }], 89_600);
+    expect(chunks.flat().length).toBeGreaterThan(1);
+    for (const chunk of chunks) expect(estimateChunkTokens(chunk)).toBeLessThanOrEqual(REVIEW_CHUNK_TOKEN_CAP);
+  });
+
   it('does not split a file that has only one hunk (cannot subdivide further)', () => {
     const diff = 'diff --git a/one.ts b/one.ts\n--- a/one.ts\n+++ b/one.ts\n@@ -1,1 +1,1 @@\n+' + 'z'.repeat(40000) + '\n';
     const chunks = buildAdaptiveChunks([{ path: 'one.ts', diff }], 4000);
@@ -1594,31 +1618,35 @@ describe('selectFilesWithinBudget', () => {
   const file = (path: string, chars: number) => ({ path, content: 'x'.repeat(chars) });
 
   it('includes all files when the budget is ample', () => {
-    const result = selectFilesWithinBudget([file('a.ts', 40), file('b.ts', 40)], 1000);
-    expect([...result.keys()].sort()).toEqual(['a.ts', 'b.ts']);
+    const { selected, skipped } = selectFilesWithinBudget([file('a.ts', 40), file('b.ts', 40)], 1000);
+    expect([...selected.keys()].sort()).toEqual(['a.ts', 'b.ts']);
+    expect(skipped).toEqual([]);
   });
 
   it('packs smallest-first so one huge file cannot starve the rest', () => {
     // budget 30 tokens: huge.ts ≈ 250 tokens, small.ts ≈ 5 tokens.
-    const result = selectFilesWithinBudget([file('huge.ts', 1000), file('small.ts', 20)], 30);
-    expect(result.has('small.ts')).toBe(true);
-    expect(result.has('huge.ts')).toBe(false);
+    const { selected, skipped } = selectFilesWithinBudget([file('huge.ts', 1000), file('small.ts', 20)], 30);
+    expect(selected.has('small.ts')).toBe(true);
+    expect(selected.has('huge.ts')).toBe(false);
+    expect(skipped).toEqual(['huge.ts']);
   });
 
-  it('always includes at least one file even if it exceeds the budget', () => {
-    const result = selectFilesWithinBudget([file('only.ts', 4000)], 1);
-    expect(result.size).toBe(1);
-    expect(result.has('only.ts')).toBe(true);
+  // R9: a context file larger than the whole remaining budget is skipped, never admitted.
+  it('skips and reports a file that exceeds the budget, even when it is the only one', () => {
+    const { selected, skipped } = selectFilesWithinBudget([file('only.ts', 4000)], 1);
+    expect(selected.size).toBe(0);
+    expect(skipped).toEqual(['only.ts']);
   });
 
   it('never exceeds the per-batch safety ceiling', () => {
     const many = Array.from({ length: MAX_CONTEXT_FILES_PER_BATCH + 10 }, (_, i) => file(`f${i}.ts`, 4));
-    const result = selectFilesWithinBudget(many, 1_000_000);
-    expect(result.size).toBe(MAX_CONTEXT_FILES_PER_BATCH);
+    const { selected, skipped } = selectFilesWithinBudget(many, 1_000_000);
+    expect(selected.size).toBe(MAX_CONTEXT_FILES_PER_BATCH);
+    expect(skipped).toHaveLength(10);
   });
 
-  it('returns an empty map for no entries', () => {
-    expect(selectFilesWithinBudget([], 1000).size).toBe(0);
+  it('returns an empty selection for no entries', () => {
+    expect(selectFilesWithinBudget([], 1000).selected.size).toBe(0);
   });
 });
 

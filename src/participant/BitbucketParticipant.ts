@@ -272,7 +272,13 @@ async function fetchAndBudgetContextFiles(params: {
     .filter((p) => fetchedFileCache.has(p))
     .map((p) => ({ path: p, content: fetchedFileCache.get(p)! }));
   const contentBudget = Math.max(0, tokenBudget - estimateChunkTokens(budgetAgainst));
-  return selectFilesWithinBudget(requestedEntries, contentBudget);
+  const { selected, skipped } = selectFilesWithinBudget(requestedEntries, contentBudget);
+  if (skipped.length > 0) {
+    logReview('info', `${logLabel} — ${skipped.length} file(s) skipped, over the context budget — batch ${batchNum}`, {
+      batch: batchNum, skipped, contentBudgetTokens: contentBudget,
+    });
+  }
+  return selected;
 }
 
 /**

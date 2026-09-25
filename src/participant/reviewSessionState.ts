@@ -1232,6 +1232,14 @@ export function langFromPath(filePath: string): string {
 const CHUNK_FIXED_OVERHEAD = 1500;
 const CHUNK_FILE_OVERHEAD = 50;
 
+/**
+ * KTD6/R15: fixed ceiling on one review call's estimated prompt tokens, whatever the model's input
+ * window. The model's *output* is what gets divided across a chunk's files, and a window-sized chunk
+ * leaves each file only a sliver of the reply — so chunks are capped, and the room freed up is what
+ * Pass 2 and critic context files use. VS Code's LM API exposes no output limit, so this is a constant.
+ */
+export const REVIEW_CHUNK_TOKEN_CAP = 24_000;
+
 const estimateFileTokens = (diff: string): number => CHUNK_FILE_OVERHEAD + Math.ceil(diff.length / 4);
 
 /**
@@ -1289,27 +1297,30 @@ export function estimateChunkTokens(diffs: FileDiff[]): number {
 export const MAX_CONTEXT_FILES_PER_BATCH = 25;
 
 /**
- * Choose which fetched context files to include in a Pass-2 prompt: smallest-first
- * by estimated tokens until the remaining content budget is exhausted, capped by
- * MAX_CONTEXT_FILES_PER_BATCH. Smallest-first means one huge file can't starve the
- * rest. Returns the selected subset as a path→content map.
+ * Choose which fetched context files to include in a Pass-2 or critic prompt: smallest-first by
+ * estimated tokens until the remaining content budget is exhausted, capped by
+ * MAX_CONTEXT_FILES_PER_BATCH. Smallest-first means one huge file can't starve the rest. A file that
+ * doesn't fit is skipped — never admitted over budget (R9) — and its path returned in `skipped`.
  */
 export function selectFilesWithinBudget(
   entries: Array<{ path: string; content: string }>,
   contentBudgetTokens: number,
-): Map<string, string> {
+): { selected: Map<string, string>; skipped: string[] } {
   const sized = entries
     .map((e) => ({ ...e, tokens: Math.ceil(e.content.length / 4) }))
     .sort((a, b) => a.tokens - b.tokens);
   const selected = new Map<string, string>();
+  const skipped: string[] = [];
   let used = 0;
   for (const e of sized) {
-    if (selected.size >= MAX_CONTEXT_FILES_PER_BATCH) break;
-    if (selected.size > 0 && used + e.tokens > contentBudgetTokens) continue; // skip; a smaller one may still fit
+    if (selected.size >= MAX_CONTEXT_FILES_PER_BATCH || used + e.tokens > contentBudgetTokens) {
+      skipped.push(e.path);
+      continue;
+    }
     selected.set(e.path, e.content);
     used += e.tokens;
   }
-  return selected;
+  return { selected, skipped };
 }
 
 /**
@@ -1598,8 +1609,9 @@ export function computeBitbucketFollowups(state: BitbucketFollowupState): Bitbuc
   }
 }
 
-export function buildAdaptiveChunks(diffs: FileDiff[], tokenBudget: number): FileDiff[][] {
+export function buildAdaptiveChunks(diffs: FileDiff[], contextTokenBudget: number): FileDiff[][] {
   if (diffs.length === 0) return [];
+  const tokenBudget = Math.min(contextTokenBudget, REVIEW_CHUNK_TOKEN_CAP);
   // A file must share a chunk with the fixed overhead, so its own budget is what remains.
   const maxFileTokens = tokenBudget - CHUNK_FIXED_OVERHEAD;
   const expanded = maxFileTokens > 0
