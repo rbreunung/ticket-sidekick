@@ -105,6 +105,24 @@ export interface SmartFallbackSession {
   chunks: FileDiff[][];
   /** Findings phase 1's standard pass already collected, merged with phase 2's persona findings on resume. */
   phase1Findings: ReviewFinding[];
+  /** R23: the review's focus question, so resumed persona passes and follow-ups keep it. */
+  upfrontQuestion?: string;
+  /** R23: phase 1's funnel counters and failure state, so the resumed review reports them. */
+  phase1Tally?: ReviewTally;
+}
+
+/** Running counters for one review, reported by the shared completion step (KTD10). */
+export interface ReviewTally {
+  raw: number;
+  /** Duplicates already collapsed before this point (a smart review deduped phase 1 before asking). */
+  dedupedEarlier: number;
+  droppedOutsidePr: number;
+  retractedByPass2: number;
+  /** Present only when the critic ran (deep mode). */
+  droppedByCritic?: number;
+  anyBatchFailed: boolean;
+  inputChars: number;
+  outputChars: number;
 }
 
 /**

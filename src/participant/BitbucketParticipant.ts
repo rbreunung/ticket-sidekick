@@ -52,6 +52,7 @@ import {
   type SmartFallbackSession,
   type ParsedReviewReply,
   type ReviewPass,
+  type ReviewTally,
 } from './reviewSessionState';
 import { isConfirmation, isCancellation, isGreetingOrEmpty } from './sessionState';
 import { generateContent } from './jira/llmHelpers';
@@ -459,6 +460,18 @@ async function runPersonaPassesForChunk(params: {
   return { findings, rawCount, anchorDropped, inputChars, outputChars, anyFailed };
 }
 
+/** Token budget per review call: `modelContextTokens` setting → model API → fallback, × `contextBudgetRatio`. */
+function resolveTokenBudget(
+  config: BitbucketConfig,
+  model: vscode.LanguageModelChat,
+): { tokenBudget: number; resolvedContextTokens: number; budgetRatio: number } {
+  const resolvedContextTokens = config.modelContextTokens
+    ?? (model as unknown as { maxInputTokens?: number }).maxInputTokens
+    ?? 60000;
+  const budgetRatio = config.contextBudgetRatio ?? 0.7;
+  return { tokenBudget: Math.floor(resolvedContextTokens * budgetRatio), resolvedContextTokens, budgetRatio };
+}
+
 async function handleCheck(
   stream: vscode.ChatResponseStream,
   config: BitbucketConfig,
@@ -641,19 +654,97 @@ export function createBitbucketParticipant(
       return { metadata: { bitbucketSession: { kinds: ['review-session'] } } };
     };
 
-    // U4/R7: smart-mode selection-failure fallback — entry point U7 calls once persona-recommendation
-    // aggregation finds no usable signal from any chunk. Stores a SmartFallbackSession (PR reference,
-    // fetched diff, chunk boundaries, phase 1's collected findings) and asks the user to choose between
-    // running all four persona passes or continuing with the standard pass only. Metadata-tagged the
-    // same way ReviewSession/BitbucketCommentPreviewSession are, so the next turn's detection (below)
-    // can find it.
-    const askSmartFallbackChoice = async (
-      pr: { prTitle: string; prUrl: string; project: string; repo: string; prId: number },
-      diffs: FileDiff[],
-      chunks: FileDiff[][],
-      phase1Findings: ReviewFinding[],
-    ): Promise<vscode.ChatResult> => {
-      const fallbackSession: SmartFallbackSession = { ...pr, diffs, chunks, phase1Findings };
+    /**
+     * KTD10: the one completion step every finished review goes through — the main review and the
+     * smart-fallback resume alike — so the two can't drift apart: dedup, number, format, funnel,
+     * partial-failure banner, dropped-findings notice, token estimate, stored session and chips.
+     */
+    const completeReview = async (params: {
+      pr: BitbucketPR;
+      ref: { prUrl: string; project: string; repo: string; prId: number };
+      runTag: string;
+      service: PrReviewService;
+      logReview: (level: 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>) => void;
+      allFindings: Array<Omit<ReviewFinding, 'id'>>;
+      fileDiffs: FileDiff[];
+      batchCount: number;
+      tally: ReviewTally;
+      tokenBudget: number;
+      upfrontQuestion?: string;
+      /** R7 (opt-in): the buffered per-call lines for the fenced structured record. */
+      structuredRecord?: { configLine: string; lines: string[] };
+    }): Promise<vscode.ChatResult> => {
+      const { pr, ref, runTag, service, logReview, allFindings, fileDiffs, batchCount, tally, tokenBudget, upfrontQuestion } = params;
+      // Collapse the same issue surfacing in multiple batches before numbering.
+      const deduped = dedupeFindings(allFindings);
+      const numbered = deduped.map((f, idx) => ({ ...f, id: idx + 1 }));
+      const reviewResult = service.formatReview(numbered, pr, fileDiffs.length, config.confidenceThreshold);
+      logReview('info', `PR review completed — ${numbered.length} finding(s)`, {
+        project: ref.project, repo: ref.repo, prId: ref.prId,
+        findingCount: numbered.length, fileCount: fileDiffs.length, batchCount, anyBatchFailed: tally.anyBatchFailed,
+      });
+
+      // R6: findings funnel — where findings dropped and by which stage. KTD5/KTD6: no confidence
+      // fold — every finding lands in a severity table, so `final` is the total finding count shown.
+      const funnelSummary = formatFindingsFunnel({
+        raw: tally.raw,
+        dedupedCrossBatch: tally.dedupedEarlier + allFindings.length - deduped.length,
+        droppedOutsidePr: tally.droppedOutsidePr,
+        retractedByPass2: tally.retractedByPass2,
+        final: reviewResult.primaryCount,
+        unverified: numbered.filter((f) => f.locationUnverified).length,
+        ...(tally.droppedByCritic !== undefined ? { droppedByCritic: tally.droppedByCritic } : {}),
+      });
+      logReview('info', funnelSummary);
+
+      // R7 (opt-in): one fenced structured record for the whole run. logDiag truncates any single
+      // `message` at MAX_STRING_LENGTH (500 chars), and this record is explicitly uncapped, so it's
+      // logged one already-short line at a time instead of as one long message.
+      if (params.structuredRecord) {
+        for (const line of formatStructuredRunRecord({
+          runTag, configLine: params.structuredRecord.configLine, lines: params.structuredRecord.lines, funnel: funnelSummary,
+        }).split('\n')) {
+          logDiag('bitbucket.review', 'info', line);
+        }
+      }
+      if (tally.anyBatchFailed) {
+        stream.markdown(`_⚠ Some batches had failures after retrying — showing partial results. See the "Ticket Sidekick" output channel for details._\n\n`);
+      }
+      const droppedNotice = formatDroppedFindingsNotice({ outsidePr: tally.droppedOutsidePr, critic: tally.droppedByCritic ?? 0 });
+      if (droppedNotice) stream.markdown(`${droppedNotice}\n\n`);
+      stream.markdown(trustedChatMarkdown(composeReviewOutput(reviewResult)));
+      const reviewTokenEst = Math.ceil((tally.inputChars + tally.outputChars) / 4);
+      stream.markdown(`\n\n_~${reviewTokenEst.toLocaleString()} estimated tokens · budget ${tokenBudget.toLocaleString()}_`);
+
+      const storedDiff = buildStoredReviewDiff(fileDiffs, numbered, tokenBudget * 4);
+      await ws.update('bitbucket.session.review', {
+        prTitle: pr.title,
+        prUrl: ref.prUrl,
+        project: ref.project,
+        repo: ref.repo,
+        prId: ref.prId,
+        findings: numbered,
+        prDescription: pr.description,
+        changedFiles: fileDiffs.map(d => ({ path: d.path, ...(d.deleted ? { deleted: true } : {}) })),
+        upfrontQuestion,
+        rawDiff: storedDiff.rawDiff,
+        rawDiffTruncated: storedDiff.truncated,
+        rawDiffOmittedFiles: storedDiff.omittedFiles,
+      } satisfies ReviewSession);
+      // U7/KTD9: the Bitbucket Getting-Started walkthrough's "first PR review" step completes on
+      // this context key — set only at a real review completion, never on an aborted run.
+      await vscode.commands.executeCommand('setContext', 'ticketSidekick.firstReviewCompleted', true);
+      // R6: "after a PR review: add findings to review, ask about a finding" — the follow-up chips.
+      const reviewState: BitbucketFollowupState = { kind: 'reviewCompleted', findingCount: numbered.length };
+      // bitbucketSession makes this review the active ReviewSession on the next turn.
+      return { metadata: { bitbucketFollowup: reviewState, bitbucketSession: { kinds: ['review-session'] } } };
+    };
+
+    // U4/R7: smart-mode selection-failure fallback — called once persona-recommendation aggregation
+    // finds no usable signal from any chunk. Stores a SmartFallbackSession (PR reference, fetched
+    // diff, chunk boundaries, phase 1's findings, focus question and counters) and asks the user to
+    // choose between running all four persona passes or continuing with the standard pass only.
+    const askSmartFallbackChoice = async (fallbackSession: SmartFallbackSession): Promise<vscode.ChatResult> => {
       await ws.update('bitbucket.session.smartFallback', fallbackSession);
       stream.markdown(trustedChatMarkdown(
         `_Smart mode couldn't determine a persona recommendation for this PR from any diff chunk._\n\n` +
@@ -663,13 +754,11 @@ export function createBitbucketParticipant(
       return { metadata: { bitbucketSession: { kinds: ['smart-fallback-session'] } } };
     };
 
-    // U7: resumes a smart-mode review whose fallback question (R7/AE3) fired — the user
-    // has now chosen `all` or `standard`. Runs phase 2 (persona passes, reusing the same
-    // shared helper the main flow's phase 2 uses) over `session.chunks` for the chosen
-    // personas, merges with `session.phase1Findings`, dedupes, formats, and streams —
-    // completing the review the same way a normal (non-fallback) run does. This turn has
-    // none of the main handler's try-block-local state (`service`/`runTag`/`logReview`/
-    // `pr`), so it builds its own, mirroring `postAndReport`'s pattern above.
+    // U7/R23: resumes a smart-mode review whose fallback question fired — the user has now chosen
+    // `all` or `standard`. Runs phase 2 over `session.chunks` with the same focus question the
+    // original review had, then finishes through the shared completion step, exactly like an
+    // uninterrupted review. This turn has none of the main handler's local state in scope, so it
+    // rebuilds its own client/service/runTag.
     const resumeSmartReviewPhase2 = async (
       session: SmartFallbackSession,
       chosenPersonas: PersonaId[],
@@ -694,7 +783,15 @@ export function createBitbucketParticipant(
       const logReview = (level: 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>): void => {
         logDiag('bitbucket.review', level, message, details);
       };
-      const extraInstructions = config.reviewInstructions ?? '';
+      const extraInstructions = [config.reviewInstructions, session.upfrontQuestion].filter(Boolean).join('\n\n');
+      const { tokenBudget } = resolveTokenBudget(config, request.model);
+      // Sessions stored before R23 carry no tally; start from phase 1's finding count rather than fail.
+      const tally: ReviewTally = {
+        ...(session.phase1Tally ?? {
+          raw: session.phase1Findings.length, dedupedEarlier: 0, droppedOutsidePr: 0, retractedByPass2: 0,
+          anyBatchFailed: false, inputChars: 0, outputChars: 0,
+        }),
+      };
 
       try {
         const pr = await client.getPullRequest(session.project, session.repo, session.prId);
@@ -705,37 +802,26 @@ export function createBitbucketParticipant(
         );
 
         const selectedPersonas = PERSONAS.filter((p) => chosenPersonas.includes(p.id));
-        if (selectedPersonas.length > 0) {
-          for (let i = 0; i < session.chunks.length; i++) {
-            const chunk = session.chunks[i];
-            const batchStatus = session.chunks.length > 1 ? `Batch ${i + 1}/${session.chunks.length}` : 'Analysing';
-            const personaResult = await runPersonaPassesForChunk({
-              personas: selectedPersonas, chunk, batchNum: i + 1, totalBatches: session.chunks.length,
-              pr, service, extraInstructions, request, token, runTag, batchStatus, logReview, stream,
-            });
-            allFindings = allFindings.concat(personaResult.findings);
-          }
+        for (let i = 0; i < session.chunks.length && selectedPersonas.length > 0; i++) {
+          const batchStatus = session.chunks.length > 1 ? `Batch ${i + 1}/${session.chunks.length}` : 'Analysing';
+          const personaResult = await runPersonaPassesForChunk({
+            personas: selectedPersonas, chunk: session.chunks[i], batchNum: i + 1, totalBatches: session.chunks.length,
+            pr, service, extraInstructions, request, token, runTag, batchStatus, logReview, stream,
+          });
+          tally.inputChars += personaResult.inputChars;
+          tally.outputChars += personaResult.outputChars;
+          tally.raw += personaResult.rawCount;
+          tally.droppedOutsidePr += personaResult.anchorDropped;
+          if (personaResult.anyFailed) tally.anyBatchFailed = true;
+          allFindings = allFindings.concat(personaResult.findings);
         }
 
-        const deduped = dedupeFindings(allFindings);
-        const numbered = deduped.map((f, idx) => ({ ...f, id: idx + 1 }));
-        const reviewResult = service.formatReview(numbered, pr, session.diffs.length, config.confidenceThreshold);
-        logReview('info', `Smart-fallback resume completed — ${numbered.length} finding(s)`, {
-          runTag, findingCount: numbered.length, chosenPersonas,
+        logReview('info', `Smart-fallback resume — ${selectedPersonas.length} persona pass(es) run`, { runTag, chosenPersonas });
+        return await completeReview({
+          pr, ref: { prUrl: session.prUrl, project: session.project, repo: session.repo, prId: session.prId },
+          runTag, service, logReview, allFindings, fileDiffs: session.diffs, batchCount: session.chunks.length,
+          tally, tokenBudget, upfrontQuestion: session.upfrontQuestion,
         });
-        stream.markdown(trustedChatMarkdown(composeReviewOutput(reviewResult)));
-
-        await ws.update('bitbucket.session.review', {
-          prTitle: session.prTitle,
-          prUrl: session.prUrl,
-          project: session.project,
-          repo: session.repo,
-          prId: session.prId,
-          findings: numbered,
-          prDescription: pr.description,
-          changedFiles: session.diffs.map((d) => ({ path: d.path, ...(d.deleted ? { deleted: true } : {}) })),
-        } satisfies ReviewSession);
-        return { metadata: { bitbucketSession: { kinds: ['review-session'] } } };
       } catch (err) {
         logDiag('bitbucket.review', 'error', `Smart-fallback resume failed — [${runTag}]`, {
           runTag, error: err instanceof Error ? err.message : String(err),
@@ -876,11 +962,7 @@ export function createBitbucketParticipant(
 
           if (!finding) {
             // General PR-level question — no specific finding matched
-            const resolvedContextTokens = config.modelContextTokens
-              ?? (request.model as unknown as { maxInputTokens?: number }).maxInputTokens
-              ?? 60000;
-            const budgetRatio = config.contextBudgetRatio ?? 0.7;
-            const tokenBudget = Math.floor(resolvedContextTokens * budgetRatio);
+            const { tokenBudget } = resolveTokenBudget(config, request.model);
             const prContextPrompt = session.rawDiff
               ? buildDiffAwarePrompt(session, intent.question, tokenBudget * 4)
               : buildPrContextPrompt(session, intent.question);
@@ -992,11 +1074,7 @@ export function createBitbucketParticipant(
       const extraInstructions = [config.reviewInstructions, upfrontQuestion].filter(Boolean).join('\n\n');
 
       // Resolve token budget: user setting → model API → safe fallback
-      const resolvedContextTokens = config.modelContextTokens
-        ?? (request.model as unknown as { maxInputTokens?: number }).maxInputTokens
-        ?? 60000;
-      const budgetRatio = config.contextBudgetRatio ?? 0.7;
-      const tokenBudget = Math.floor(resolvedContextTokens * budgetRatio);
+      const { tokenBudget, resolvedContextTokens, budgetRatio } = resolveTokenBudget(config, request.model);
 
       // R3: one opening line recording the effective run configuration, so a
       // misconfigured token budget/ratio is visible without re-running the review.
@@ -1552,10 +1630,15 @@ export function createBitbucketParticipant(
           const phase1Deduped = dedupeFindings(allFindings);
           const phase1Numbered = phase1Deduped.map((f, idx) => ({ ...f, id: idx + 1 }));
           logReview('info', 'Smart mode: no usable persona recommendation from any chunk — asking user', { runTag });
-          return askSmartFallbackChoice(
-            { prTitle: pr.title, prUrl: prUrlMatch[0], project: parsed.project, repo: parsed.repo, prId: parsed.prId },
-            fileDiffs, chunks, phase1Numbered,
-          );
+          return askSmartFallbackChoice({
+            prTitle: pr.title, prUrl: prUrlMatch[0], project: parsed.project, repo: parsed.repo, prId: parsed.prId,
+            diffs: fileDiffs, chunks, phase1Findings: phase1Numbered, upfrontQuestion,
+            phase1Tally: {
+              raw: rawFindingsTotal, dedupedEarlier: allFindings.length - phase1Deduped.length,
+              droppedOutsidePr: droppedOutsidePrTotal, retractedByPass2: retractedByPass2Total,
+              anyBatchFailed, inputChars: totalInputChars, outputChars: totalOutputChars,
+            },
+          });
         }
 
         const selectedPersonas = PERSONAS.filter((p) => selected.includes(p.id));
@@ -1587,83 +1670,17 @@ export function createBitbucketParticipant(
         }
       }
 
-      // Collapse the same issue surfacing in multiple batches before numbering.
-      const deduped = dedupeFindings(allFindings);
-      const dedupedCrossBatch = allFindings.length - deduped.length;
-      const numbered = deduped.map((f, idx) => ({ ...f, id: idx + 1 }));
-      const reviewResult = service.formatReview(
-        numbered, pr, fileDiffs.length, config.confidenceThreshold,
-      );
-      const { primaryCount, lowCount } = reviewResult;
-      logReview('info', `PR review completed — ${numbered.length} finding(s)`, {
-        project: parsed.project, repo: parsed.repo, prId: parsed.prId,
-        findingCount: numbered.length, fileCount: fileDiffs.length, batchCount: chunks.length, anyBatchFailed,
+      return await completeReview({
+        pr, ref: { prUrl: prUrlMatch[0], project: parsed.project, repo: parsed.repo, prId: parsed.prId },
+        runTag, service, logReview, allFindings, fileDiffs, batchCount: chunks.length,
+        tally: {
+          raw: rawFindingsTotal, dedupedEarlier: 0, droppedOutsidePr: droppedOutsidePrTotal,
+          retractedByPass2: retractedByPass2Total, ...(criticEnabled ? { droppedByCritic: criticDroppedTotal } : {}),
+          anyBatchFailed, inputChars: totalInputChars, outputChars: totalOutputChars,
+        },
+        tokenBudget, upfrontQuestion,
+        ...(detailedDiagnostics ? { structuredRecord: { configLine, lines: recordedLines } } : {}),
       });
-
-      // R6: findings funnel — where findings dropped and by which stage.
-      const funnelCounts = {
-        raw: rawFindingsTotal,
-        dedupedCrossBatch,
-        droppedOutsidePr: droppedOutsidePrTotal,
-        retractedByPass2: retractedByPass2Total,
-        // KTD5/KTD6: no confidence fold — every finding lands in a severity table, so `final` is the
-        // total finding count shown and there is no `foldedByConfidence` stage.
-        final: primaryCount,
-        unverified: numbered.filter((f) => f.locationUnverified).length,
-        ...(criticEnabled ? { droppedByCritic: criticDroppedTotal } : {}),
-      };
-      const funnelSummary = formatFindingsFunnel(funnelCounts);
-      logReview('info', funnelSummary);
-
-      // R7 (opt-in): one fenced structured record for the whole run. logDiag truncates
-      // any single `message` at MAX_STRING_LENGTH (500 chars) — fine for every other
-      // call in this file, but this record is explicitly uncapped and scales with call
-      // count (Scope Boundaries), so it's logged one already-short line at a time
-      // instead of as one long message that would silently truncate mid-record.
-      if (detailedDiagnostics) {
-        for (const line of formatStructuredRunRecord({
-          runTag, configLine, lines: recordedLines, funnel: funnelSummary,
-        }).split('\n')) {
-          logDiag('bitbucket.review', 'info', line);
-        }
-      }
-      if (anyBatchFailed) {
-        stream.markdown(`_⚠ Some batches had failures after retrying — showing partial results. See the "Ticket Sidekick" output channel for details._\n\n`);
-      }
-      const droppedNotice = formatDroppedFindingsNotice({ outsidePr: droppedOutsidePrTotal, critic: criticDroppedTotal });
-      if (droppedNotice) stream.markdown(`${droppedNotice}\n\n`);
-      stream.markdown(trustedChatMarkdown(composeReviewOutput(reviewResult)));
-      const reviewTokenEst = Math.ceil((totalInputChars + totalOutputChars) / 4);
-      stream.markdown(`\n\n_~${reviewTokenEst.toLocaleString()} estimated tokens · budget ${tokenBudget.toLocaleString()}_`);
-
-      const storedDiff = buildStoredReviewDiff(fileDiffs, numbered, tokenBudget * 4);
-
-      await ws.update('bitbucket.session.review', {
-        prTitle: pr.title,
-        prUrl: prUrlMatch[0],
-        project: parsed.project,
-        repo: parsed.repo,
-        prId: parsed.prId,
-        findings: numbered,
-        prDescription: pr.description,
-        changedFiles: fileDiffs.map(d => ({ path: d.path, ...(d.deleted ? { deleted: true } : {}) })),
-        upfrontQuestion,
-        rawDiff: storedDiff.rawDiff,
-        rawDiffTruncated: storedDiff.truncated,
-        rawDiffOmittedFiles: storedDiff.omittedFiles,
-      } satisfies ReviewSession);
-      // U7/KTD9: the Bitbucket Getting-Started walkthrough's "first PR review" step completes
-      // on this context key — set only here, at the real review-completion success path (never
-      // on an aborted/failed run, which throws out to the catch block below before reaching
-      // this line), colocated with U5's own real-success marker (`reviewState`) right below.
-      await vscode.commands.executeCommand('setContext', 'ticketSidekick.firstReviewCompleted', true);
-      // R6: "after a PR review: add findings to review, ask about a finding" — the flagship
-      // example the plan names for follow-up chips.
-      const reviewState: BitbucketFollowupState = { kind: 'reviewCompleted', findingCount: numbered.length };
-      // R1/R3/U4: also carries bitbucketSession so this fresh review is itself detected as an
-      // active ReviewSession on the next turn — mirrors postAndReport/resumeSmartReviewPhase2
-      // above, which set the same session kind when they complete a review from a detour.
-      return { metadata: { bitbucketFollowup: reviewState, bitbucketSession: { kinds: ['review-session'] } } };
     } catch (err) {
       // KTD9: name the last stage reached, so this is distinguishable from a run that
       // silently never got here (e.g. a channel-write failure) — the funnel's absence

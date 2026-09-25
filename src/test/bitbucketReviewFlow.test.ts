@@ -540,3 +540,48 @@ describe('follow-ups keep the review\'s context (U10)', () => {
     expect(session.rawDiff).not.toContain('README.md');
   });
 });
+
+describe('a resumed smart review finishes like an uninterrupted one (U11)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  // A phase-1 reply with no meta line gives smart mode no persona signal, so it asks the user.
+  const noSignalReply = findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'SQL injection', 'critical');
+
+  // AE11 / R23
+  it('carries the upfront question into the resumed persona passes and stores the diff for follow-ups', async () => {
+    const harness = createHarness({ reviewMode: 'smart' });
+    const first = await harness.turn(`${PR_URL} -- does this break concurrent writes?`, [noSignalReply]);
+    expect(first.text).toContain('couldn\'t determine a persona recommendation');
+
+    const resumed = await harness.turn('all', (prompt) => (prompt.includes('lens ONLY') ? META_LINE : 'unexpected'), [sessionTurn(first.result)]);
+    const personaPrompts = harness.prompts.filter((p) => p.includes('lens ONLY'));
+    expect(personaPrompts).toHaveLength(4);
+    for (const p of personaPrompts) expect(p).toContain('does this break concurrent writes?');
+    expect(resumed.text).toContain('SQL injection');
+    expect(resumed.text).toMatch(/estimated tokens/);
+    expect(resumed.result).toMatchObject({
+      metadata: { bitbucketFollowup: { kind: 'reviewCompleted' }, bitbucketSession: { kinds: ['review-session'] } },
+    });
+
+    const session = harness.workspaceState.get('bitbucket.session.review') as { rawDiff?: string; upfrontQuestion?: string };
+    expect(session.upfrontQuestion).toBe('does this break concurrent writes?');
+    expect(session.rawDiff).toContain('src/auth/login.ts');
+  });
+
+  it('shows the partial-failure banner after resuming when phase 1 had a failed batch', async () => {
+    const harness = createHarness({ reviewMode: 'smart', modelContextTokens: 3_000, contextBudgetRatio: 1 });
+    harness.client.rawDiff = makeDiff([
+      { path: 'src/f1.ts', lines: bulkyLines('One') },
+      { path: 'src/f2.ts', lines: bulkyLines('Two') },
+    ]);
+    const first = await harness.turn(PR_URL, (prompt) => (prompt.includes('### File: src/f1.ts')
+      ? transientError()
+      : findingLine('src/f2.ts', 'const TwoValue = computeTwo();', 'Issue in Two')));
+    expect(first.text).toContain('couldn\'t determine a persona recommendation');
+
+    const resumed = await harness.turn('standard', [], [sessionTurn(first.result)]);
+    expect(resumed.text).toContain('Some batches had failures after retrying');
+    expect(resumed.text).toContain('Issue in Two');
+  });
+});
