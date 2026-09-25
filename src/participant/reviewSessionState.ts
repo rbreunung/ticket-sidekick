@@ -444,86 +444,173 @@ export function parseDiff(raw: string): FileDiff[] {
 // depends on the other. Re-exported here to keep existing import sites unchanged.
 export { extractJsonObject } from '../utils/extractJsonObject';
 
-export function extractPartialFindings(raw: string): Array<Record<string, unknown>> {
-  const arrayIdx = raw.indexOf('"findings":[');
-  if (arrayIdx === -1) return [];
-  let i = raw.indexOf('[', arrayIdx) + 1;
-  const results: Array<Record<string, unknown>> = [];
-  while (i < raw.length) {
-    while (i < raw.length && /\s/.test(raw[i])) i++;
-    if (i >= raw.length || raw[i] !== '{') break;
-    let depth = 0, inStr = false, esc = false, j = i;
-    for (; j < raw.length; j++) {
-      const ch = raw[j];
-      if (esc) { esc = false; continue; }
-      if (inStr && ch === '\\') { esc = true; continue; }
-      if (ch === '"') { inStr = !inStr; continue; }
-      if (!inStr) { if (ch === '{') depth++; else if (ch === '}' && --depth === 0) break; }
-    }
-    if (depth !== 0) break;
-    try { results.push(JSON.parse(raw.slice(i, j + 1))); } catch { break; }
-    i = j + 1;
-    while (i < raw.length && (raw[i] === ',' || /\s/.test(raw[i]))) i++;
-  }
-  return results;
-}
+/** The only keys a meta (trailer) object may carry. An object whose every key is one of these is
+ * read as the reply's meta line; a `{"findings":[…]}` wrapper's sibling keys from this set are read
+ * as meta too. `retract` is Pass 2's explicit retraction list (KTD5). */
+const REPLY_META_KEYS = new Set(['additionalFilesNeeded', 'recommendedPersonas', 'retract']);
 
-/** The only keys a meta (trailer) line may carry — KTD2 widens the `additionalFilesNeeded`-only
- * check to "every key present is one of these", so the combined additionalFilesNeeded +
- * recommendedPersonas trailer smart mode emits still parses as one meta line. */
-const NDJSON_META_KEYS = new Set(['additionalFilesNeeded', 'recommendedPersonas']);
-
-export function parseNdjsonFindings(raw: string): {
+export interface ParsedReviewReply {
   findings: Array<Record<string, unknown>>;
   additionalFilesNeeded: string[];
-  /** KTD2: persona ids the standard pass recommends for this chunk — only ever populated
-   * when the prompt requested it (smart mode's phase-1 call); empty array when the trailer
-   * carried no such key (either the model omitted it, or the call didn't request it). */
+  /** Persona ids the standard pass recommends for this chunk — only ever requested by smart mode's
+   * phase-1 call; empty when the meta carried no such key. */
   recommendedPersonas: string[];
+  /** 1-based indices of prior (Pass 1) findings that Pass 2 explicitly retracts. Only ever read from
+   * a parsed meta object, so a reply cut before its meta line retracts nothing (KTD5). */
+  retract: number[];
   hasMetaLine: boolean;
+  /** True when anything review-shaped was recognized — a finding, a `findings` wrapper, or a meta
+   * object. False for an empty reply or prose with no usable JSON (KTD3: an unparseable reply). */
+  hasJson: boolean;
+  /** True only when the reply stops inside an unbalanced JSON object or array (R4). A reply that ends
+   * cleanly without its meta line is complete, not truncated. */
   truncated: boolean;
-  /** The un-parsed text of the last line, when the response was cut off mid-line
-   * (that line starts with `{` but fails to parse) and no later line parsed
-   * successfully. Undefined when the response ends cleanly on a line boundary,
-   * or when a mid-stream parse failure is followed by a line that does parse. */
+  /** The un-parsed text the reply was cut off in, when `truncated`. */
   danglingTail?: string;
-} {
-  const findings: Array<Record<string, unknown>> = [];
-  let additionalFilesNeeded: string[] = [];
-  let recommendedPersonas: string[] = [];
-  let hasMetaLine = false;
-  let danglingTail: string | undefined;
-  for (const line of raw.split('\n')) {
-    const t = line.trim();
-    if (!t.startsWith('{')) continue;
-    try {
-      const obj = JSON.parse(t) as Record<string, unknown>;
-      danglingTail = undefined; // this line parsed — any earlier failure was not the tail
-      const keys = Object.keys(obj);
-      const isMetaLine =
-        keys.length > 0 &&
-        keys.every((k) => NDJSON_META_KEYS.has(k)) &&
-        (obj.additionalFilesNeeded === undefined || Array.isArray(obj.additionalFilesNeeded)) &&
-        (obj.recommendedPersonas === undefined || Array.isArray(obj.recommendedPersonas));
-      if (isMetaLine) {
-        if (Array.isArray(obj.additionalFilesNeeded)) additionalFilesNeeded = obj.additionalFilesNeeded as string[];
-        if (Array.isArray(obj.recommendedPersonas)) recommendedPersonas = obj.recommendedPersonas as string[];
-        hasMetaLine = true;
-      } else if (typeof obj.file === 'string') {
-        findings.push(obj);
+}
+
+type ReplyAccumulator = Omit<ParsedReviewReply, 'truncated' | 'danglingTail'>;
+
+const emptyReply = (): ReplyAccumulator => ({
+  findings: [], additionalFilesNeeded: [], recommendedPersonas: [], retract: [], hasMetaLine: false, hasJson: false,
+});
+
+function readReplyMeta(obj: Record<string, unknown>, acc: ReplyAccumulator): void {
+  let sawMeta = false;
+  if (Array.isArray(obj.additionalFilesNeeded)) {
+    acc.additionalFilesNeeded = obj.additionalFilesNeeded.filter((p): p is string => typeof p === 'string');
+    sawMeta = true;
+  }
+  if (Array.isArray(obj.recommendedPersonas)) {
+    acc.recommendedPersonas = obj.recommendedPersonas.filter((p): p is string => typeof p === 'string');
+    sawMeta = true;
+  }
+  if (Array.isArray(obj.retract)) {
+    acc.retract = obj.retract.filter((n): n is number => Number.isInteger(n));
+    sawMeta = true;
+  }
+  if (sawMeta) { acc.hasMetaLine = true; acc.hasJson = true; }
+}
+
+const isReplyMetaObject = (obj: Record<string, unknown>): boolean => {
+  const keys = Object.keys(obj);
+  return keys.length > 0 && keys.every((k) => REPLY_META_KEYS.has(k) && Array.isArray(obj[k]));
+};
+
+/** Fold one parsed JSON value into the accumulator: arrays are flattened, a `{"findings":[…]}`
+ * wrapper is unpacked (its sibling meta keys included), a meta object sets the meta fields, and an
+ * object with a string `file` is a finding. Anything else is ignored. */
+function absorbReplyValue(value: unknown, acc: ReplyAccumulator): void {
+  if (Array.isArray(value)) {
+    for (const v of value) absorbReplyValue(v, acc);
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  const obj = value as Record<string, unknown>;
+  if (Array.isArray(obj.findings)) {
+    acc.hasJson = true;
+    for (const f of obj.findings) absorbReplyValue(f, acc);
+    readReplyMeta(obj, acc);
+    return;
+  }
+  if (isReplyMetaObject(obj)) { readReplyMeta(obj, acc); return; }
+  if (typeof obj.file === 'string') { acc.findings.push(obj); acc.hasJson = true; }
+}
+
+/** Index just past the value opened at `start`, or -1 when it never closes (string/escape aware). */
+function matchBracket(text: string, start: number): number {
+  let depth = 0, inStr = false, esc = false;
+  for (let j = start; j < text.length; j++) {
+    const ch = text[j];
+    if (esc) { esc = false; continue; }
+    if (inStr) { if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === '{' || ch === '[') depth++;
+    else if ((ch === '}' || ch === ']') && --depth === 0) return j + 1;
+  }
+  return -1;
+}
+
+/** Balanced-value scan for replies that aren't one-object-per-line (pretty-printed objects, arrays,
+ * wrappers). At the root, prose between values is skipped; inside a value that never closes, the
+ * scan descends (string-aware) to keep every complete element before the cut. */
+function scanReplyValues(text: string, acc: ReplyAccumulator, insideJson: boolean): { truncated: boolean; tail?: string } {
+  let truncated = false;
+  let tail: string | undefined;
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (insideJson && ch === '"') {
+      const end = matchStringEnd(text, i);
+      if (end === -1) break;
+      i = end;
+      continue;
+    }
+    if (ch !== '{' && ch !== '[') { i++; continue; }
+    const end = matchBracket(text, i);
+    if (end !== -1) {
+      try {
+        absorbReplyValue(JSON.parse(text.slice(i, end)), acc);
+        i = end;
+      } catch {
+        i++; // balanced but not JSON (e.g. a code snippet in prose) — look inside it instead
       }
+      continue;
+    }
+    // Never closes. Only JSON-looking text counts as a cut-off reply, so a stray "{" in prose doesn't.
+    if (insideJson || /^[{[]\s*["{[]/.test(text.slice(i))) {
+      truncated = true;
+      tail ??= text.slice(i).trim();
+      scanReplyValues(text.slice(i + 1), acc, true);
+    }
+    break;
+  }
+  return { truncated, ...(tail !== undefined ? { tail } : {}) };
+}
+
+function matchStringEnd(text: string, start: number): number {
+  for (let j = start + 1; j < text.length; j++) {
+    if (text[j] === '\\') { j++; continue; }
+    if (text[j] === '"') return j + 1;
+  }
+  return -1;
+}
+
+/**
+ * Parse a review-pass reply into findings and meta, tolerating every common shape (KTD2, R3, R4):
+ * one object per line (the requested NDJSON), pretty-printed multi-line objects, a JSON array, a
+ * `{"findings":[…]}` wrapper, and any of those inside a code fence. Two readings run and the one
+ * that recovers more findings wins (ties go to the per-line reading):
+ * - per line — robust to a garbled line in the middle of an otherwise good NDJSON reply;
+ * - balanced-value scan — handles values spanning several lines, and keeps the complete elements of
+ *   an array or wrapper that was cut off.
+ * `truncated` means the reply stopped inside an object or array; a missing meta line is not truncation.
+ */
+export function parseReviewReply(raw: string): ParsedReviewReply {
+  const text = raw.split('\n').filter((line) => !/^\s*```\w*\s*$/.test(line)).join('\n');
+
+  const byLine = emptyReply();
+  let lineTail: string | undefined;
+  for (const line of text.split('\n')) {
+    const t = line.trim();
+    if (!t.startsWith('{') && !t.startsWith('[')) continue;
+    try {
+      absorbReplyValue(JSON.parse(t), byLine);
+      lineTail = undefined; // this line parsed — any earlier failure was not the tail
     } catch {
-      danglingTail = t; // incomplete last line — kept only if nothing later parses
+      lineTail = t; // kept only if nothing later parses
     }
   }
-  return {
-    findings,
-    additionalFilesNeeded,
-    recommendedPersonas,
-    hasMetaLine,
-    truncated: !hasMetaLine && (findings.length > 0 || raw.trim().length > 0),
-    ...(danglingTail !== undefined ? { danglingTail } : {}),
-  };
+
+  const byScan = emptyReply();
+  const scan = scanReplyValues(text, byScan, false);
+
+  const lineWins = byLine.findings.length > byScan.findings.length
+    || (byLine.findings.length === byScan.findings.length && (byLine.hasJson || !scan.truncated));
+  if (lineWins) {
+    return { ...byLine, truncated: lineTail !== undefined, ...(lineTail !== undefined ? { danglingTail: lineTail } : {}) };
+  }
+  return { ...byScan, truncated: scan.truncated, ...(scan.tail !== undefined ? { danglingTail: scan.tail } : {}) };
 }
 
 /**
@@ -1150,7 +1237,7 @@ export const RAW_PREVIEW_CHARS = 300;
  * Builds R4's truncation-event diagnostic (message + details) for a pass-1 (or
  * continuation/pass-2) response that came back cut off before its final meta
  * line — the one event in the pipeline that previously threw nothing and
- * logged nothing. `danglingTail` (from `parseNdjsonFindings`) is preferred for
+ * logged nothing. `danglingTail` (from `parseReviewReply`) is preferred for
  * the raw preview when present, since it's the actual cut-off text rather than
  * the whole response; either way the preview takes the LAST `RAW_PREVIEW_CHARS`
  * characters — the point where the model stopped is what's diagnostic, not the

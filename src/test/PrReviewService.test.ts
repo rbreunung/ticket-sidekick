@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
-  parsePrUrl, parseDiff, extractJsonObject, extractPartialFindings, parseNdjsonFindings,
+  parsePrUrl, parseDiff, extractJsonObject, parseReviewReply,
   langFromPath, buildAdaptiveChunks,
   resolveLineType, annotateWithLineTypes, hasPrUrl,
   numberDiffLines, locateAnchor, resolveFindingAnchors,
@@ -1522,44 +1522,10 @@ describe('estimateChunkTokens', () => {
   });
 });
 
-describe('extractPartialFindings', () => {
-  const finding1 = { file: 'src/a.ts', severity: 'warning', title: 'Issue A', description: 'desc a', recommendation: 'rec a' };
-  const finding2 = { file: 'src/b.ts', severity: 'critical', title: 'Issue B', description: 'desc b', recommendation: 'rec b' };
-
-  it('returns all findings from a complete response', () => {
-    const raw = JSON.stringify({ findings: [finding1, finding2], additionalFilesNeeded: [] });
-    const result = extractPartialFindings(raw);
-    expect(result).toHaveLength(2);
-    expect(result[0]).toMatchObject(finding1);
-    expect(result[1]).toMatchObject(finding2);
-  });
-
-  it('returns only complete findings when response is truncated mid-last-finding', () => {
-    const complete = JSON.stringify(finding1);
-    const truncated = JSON.stringify(finding2).slice(0, 30);
-    const raw = `{"findings":[${complete},${truncated}`;
-    const result = extractPartialFindings(raw);
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject(finding1);
-  });
-
-  it('returns empty array when truncated before any complete finding', () => {
-    const raw = '{"findings":[{"file":"src/a.ts","severity":"war';
-    expect(extractPartialFindings(raw)).toEqual([]);
-  });
-
-  it('returns empty array when no findings key present', () => {
-    expect(extractPartialFindings('{"additionalFilesNeeded":[]}')).toEqual([]);
-  });
-
-  it('returns empty array for empty findings array', () => {
-    expect(extractPartialFindings('{"findings":[]}')).toEqual([]);
-  });
-});
-
-describe('parseNdjsonFindings', () => {
+describe('parseReviewReply', () => {
   const f1 = { file: 'src/a.ts', severity: 'critical', title: 'T1', description: 'D1', recommendation: 'R1' };
   const f2 = { file: 'src/b.ts', severity: 'warning', title: 'T2', description: 'D2', recommendation: 'R2' };
+  const f3 = { file: 'src/c.ts', severity: 'suggestion', title: 'T3', description: 'D3', recommendation: 'R3' };
 
   it('parses a complete NDJSON response', () => {
     const raw = [
@@ -1567,103 +1533,164 @@ describe('parseNdjsonFindings', () => {
       JSON.stringify(f2),
       '{"additionalFilesNeeded":["src/c.ts"]}',
     ].join('\n');
-    const result = parseNdjsonFindings(raw);
+    const result = parseReviewReply(raw);
     expect(result.findings).toHaveLength(2);
     expect(result.findings[0]).toMatchObject(f1);
     expect(result.findings[1]).toMatchObject(f2);
     expect(result.additionalFilesNeeded).toEqual(['src/c.ts']);
     expect(result.hasMetaLine).toBe(true);
+    expect(result.hasJson).toBe(true);
     expect(result.truncated).toBe(false);
     expect(result.danglingTail).toBeUndefined();
   });
 
-  it('recovers findings when meta line is absent (truncated)', () => {
-    const raw = [JSON.stringify(f1), JSON.stringify(f2)].join('\n');
-    const result = parseNdjsonFindings(raw);
-    expect(result.findings).toHaveLength(2);
+  // AE2 / R4: a reply that ends cleanly without the trailing meta line is complete, not truncated.
+  it('treats a reply without the meta line as complete, not truncated', () => {
+    const raw = [JSON.stringify(f1), JSON.stringify(f2), JSON.stringify(f3)].join('\n');
+    const result = parseReviewReply(raw);
+    expect(result.findings).toHaveLength(3);
     expect(result.hasMetaLine).toBe(false);
-    expect(result.truncated).toBe(true);
-    // Cut on a line boundary: nothing was lost mid-line, so there is no tail.
+    expect(result.truncated).toBe(false);
     expect(result.danglingTail).toBeUndefined();
   });
 
-  it('returns the un-parsed dangling tail when the response is cut mid-line', () => {
+  it('flags truncation and keeps the dangling tail when the reply is cut mid-line', () => {
     const incomplete = JSON.stringify(f2).slice(0, 30);
     const raw = JSON.stringify(f1) + '\n' + incomplete;
-    const result = parseNdjsonFindings(raw);
+    const result = parseReviewReply(raw);
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]).toMatchObject(f1);
-    expect(result.hasMetaLine).toBe(false);
     expect(result.truncated).toBe(true);
     expect(result.danglingTail).toBe(incomplete);
   });
 
-  it('returns empty findings and no truncation for empty raw', () => {
-    const result = parseNdjsonFindings('');
+  it('reports no JSON for an empty reply', () => {
+    const result = parseReviewReply('');
     expect(result.findings).toHaveLength(0);
-    expect(result.hasMetaLine).toBe(false);
+    expect(result.hasJson).toBe(false);
     expect(result.truncated).toBe(false);
-    expect(result.danglingTail).toBeUndefined();
   });
 
-  it('does not treat old single-object JSON format as a meta line', () => {
-    const raw = JSON.stringify({ findings: [f1], additionalFilesNeeded: [] });
-    const result = parseNdjsonFindings(raw);
+  it('reports no JSON for a prose-only reply', () => {
+    const result = parseReviewReply('No issues found in these files.');
     expect(result.findings).toHaveLength(0);
-    expect(result.hasMetaLine).toBe(false);
-    expect(result.truncated).toBe(true);
-    // The line parsed fine (it is just not a finding) — it is not a cut-off tail.
-    expect(result.danglingTail).toBeUndefined();
+    expect(result.hasJson).toBe(false);
+    expect(result.truncated).toBe(false);
   });
 
-  it('ignores incomplete last line without throwing', () => {
-    const incomplete = JSON.stringify(f2).slice(0, 20);
-    const raw = JSON.stringify(f1) + '\n' + incomplete + '\n{"additionalFilesNeeded":[]}';
-    const result = parseNdjsonFindings(raw);
+  it('ignores prose containing balanced braces that are not JSON', () => {
+    const result = parseReviewReply('The function foo() { return 1; } looks fine.');
+    expect(result.findings).toHaveLength(0);
+    expect(result.hasJson).toBe(false);
+  });
+
+  it('unpacks a single-object {"findings":[…]} wrapper and reads its sibling meta keys', () => {
+    const raw = JSON.stringify({ findings: [f1], additionalFilesNeeded: ['src/x.ts'], recommendedPersonas: ['security'] });
+    const result = parseReviewReply(raw);
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]).toMatchObject(f1);
+    expect(result.additionalFilesNeeded).toEqual(['src/x.ts']);
+    expect(result.recommendedPersonas).toEqual(['security']);
     expect(result.hasMetaLine).toBe(true);
     expect(result.truncated).toBe(false);
-    // A meta line completed the response, so the mid-stream garbage is not a truncation tail.
+  });
+
+  it('unpacks a wrapper inside a ```json fence', () => {
+    const raw = '```json\n' + JSON.stringify({ findings: [f1, f2] }, null, 2) + '\n```';
+    const result = parseReviewReply(raw);
+    expect(result.findings).toHaveLength(2);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('parses NDJSON inside a fence with prose before and after', () => {
+    const raw = 'Here are the findings:\n```\n' + JSON.stringify(f1) + '\n{"additionalFilesNeeded":[]}\n```\nHope this helps.';
+    const result = parseReviewReply(raw);
+    expect(result.findings).toHaveLength(1);
+    expect(result.hasMetaLine).toBe(true);
+  });
+
+  // AE3 / R3: pretty-printed multi-line objects must not parse as zero findings.
+  it('parses pretty-printed multi-line finding objects and a pretty-printed meta object', () => {
+    const raw = [JSON.stringify(f1, null, 2), JSON.stringify(f2, null, 2), JSON.stringify({ additionalFilesNeeded: ['src/y.ts'] }, null, 2)].join('\n');
+    const result = parseReviewReply(raw);
+    expect(result.findings).toHaveLength(2);
+    expect(result.findings[1]).toMatchObject(f2);
+    expect(result.additionalFilesNeeded).toEqual(['src/y.ts']);
+    expect(result.hasMetaLine).toBe(true);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('parses a one-line JSON array of findings', () => {
+    const result = parseReviewReply(JSON.stringify([f1, f2]));
+    expect(result.findings).toHaveLength(2);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('recovers the complete findings of a wrapper cut inside its third finding', () => {
+    const raw = `{"findings":[${JSON.stringify(f1)},${JSON.stringify(f2)},${JSON.stringify(f3).slice(0, 25)}`;
+    const result = parseReviewReply(raw);
+    expect(result.findings).toHaveLength(2);
+    expect(result.findings[0]).toMatchObject(f1);
+    expect(result.findings[1]).toMatchObject(f2);
+    expect(result.truncated).toBe(true);
+    expect(result.hasJson).toBe(true);
+  });
+
+  it('recovers the complete findings of a pretty-printed array cut mid-element', () => {
+    const full = JSON.stringify([f1, f2], null, 2);
+    const raw = full.slice(0, full.lastIndexOf('"D2"'));
+    const result = parseReviewReply(raw);
+    expect(result.findings).toHaveLength(1);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('returns no findings when a wrapper is cut before any complete finding', () => {
+    const result = parseReviewReply('{"findings":[{"file":"src/a.ts","severity":"war');
+    expect(result.findings).toHaveLength(0);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('keeps findings around an incomplete line that a later meta line completes', () => {
+    const incomplete = JSON.stringify(f2).slice(0, 20);
+    const raw = JSON.stringify(f1) + '\n' + incomplete + '\n{"additionalFilesNeeded":[]}';
+    const result = parseReviewReply(raw);
+    expect(result.findings).toHaveLength(1);
+    expect(result.hasMetaLine).toBe(true);
+    expect(result.truncated).toBe(false);
     expect(result.danglingTail).toBeUndefined();
   });
 
-  // P0 regression (U7/KTD2): the old "exactly one key" meta-line check would have
-  // rejected this combined trailer (two keys) and silently misclassified it — widen
-  // the check to "every key present is a known meta key" instead.
-  it('parses a combined additionalFilesNeeded + recommendedPersonas trailer as one meta line (P0 regression)', () => {
-    const raw = [
-      JSON.stringify(f1),
-      '{"additionalFilesNeeded":["a.ts"],"recommendedPersonas":["security"]}',
-    ].join('\n');
-    const result = parseNdjsonFindings(raw);
-    expect(result.findings).toHaveLength(1);
+  it('parses a combined additionalFilesNeeded + recommendedPersonas trailer as one meta line', () => {
+    const raw = [JSON.stringify(f1), '{"additionalFilesNeeded":["a.ts"],"recommendedPersonas":["security"]}'].join('\n');
+    const result = parseReviewReply(raw);
     expect(result.hasMetaLine).toBe(true);
     expect(result.additionalFilesNeeded).toEqual(['a.ts']);
     expect(result.recommendedPersonas).toEqual(['security']);
-    expect(result.truncated).toBe(false);
   });
 
-  it('parses a recommendedPersonas-only trailer (additionalFilesNeeded omitted) as a meta line', () => {
-    const raw = [JSON.stringify(f1), '{"recommendedPersonas":["performance","reliability"]}'].join('\n');
-    const result = parseNdjsonFindings(raw);
+  it('defaults recommendedPersonas and retract to empty arrays when the trailer omits them', () => {
+    const result = parseReviewReply([JSON.stringify(f1), '{"additionalFilesNeeded":["a.ts"]}'].join('\n'));
+    expect(result.recommendedPersonas).toEqual([]);
+    expect(result.retract).toEqual([]);
+  });
+
+  it('parses retract indices from the meta line and ignores non-integers', () => {
+    const result = parseReviewReply([JSON.stringify(f1), '{"additionalFilesNeeded":[],"retract":[2,"x",1.5,3]}'].join('\n'));
     expect(result.hasMetaLine).toBe(true);
-    expect(result.recommendedPersonas).toEqual(['performance', 'reliability']);
-    expect(result.additionalFilesNeeded).toEqual([]);
+    expect(result.retract).toEqual([2, 3]);
   });
 
-  it('still rejects a plain findings-shaped object as the meta line (has "file", not a known meta key)', () => {
-    const raw = [JSON.stringify(f1), JSON.stringify(f2)].join('\n');
-    const result = parseNdjsonFindings(raw);
+  it('does not treat an object with an unknown key as the meta line', () => {
+    const result = parseReviewReply([JSON.stringify(f1), '{"additionalFilesNeeded":[],"note":"x"}'].join('\n'));
     expect(result.hasMetaLine).toBe(false);
-    expect(result.recommendedPersonas).toEqual([]);
+    expect(result.findings).toHaveLength(1);
   });
 
-  it('defaults recommendedPersonas to an empty array when the trailer omits it entirely', () => {
-    const raw = [JSON.stringify(f1), '{"additionalFilesNeeded":["a.ts"]}'].join('\n');
-    const result = parseNdjsonFindings(raw);
-    expect(result.hasMetaLine).toBe(true);
-    expect(result.recommendedPersonas).toEqual([]);
+  it('keeps a finding whose description contains braces inside a string', () => {
+    const f = { ...f1, description: 'uses {curly} and } stray braces {' };
+    const result = parseReviewReply(JSON.stringify(f, null, 2));
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]).toMatchObject(f);
   });
 });
 

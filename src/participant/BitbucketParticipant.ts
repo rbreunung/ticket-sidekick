@@ -13,8 +13,7 @@ import {
   buildPrContextPrompt,
   buildDiffAwarePrompt,
   extractJsonObject,
-  extractPartialFindings,
-  parseNdjsonFindings,
+  parseReviewReply,
   buildAdaptiveChunks,
   resolveFindingAnchors,
   estimateChunkTokens,
@@ -209,53 +208,26 @@ async function parseReviewResponse(raw: string): Promise<{
   findings: Array<Omit<ReviewFinding, 'id'>>;
   additionalFilesNeeded: string[];
   truncated?: true;
-  /** Present only for the primary NDJSON path — the shape U4's truncation event needs,
-   * carried through so a truncation branch doesn't have to re-parse `raw` a second time. */
+  /** The shape U4's truncation event needs, carried through so a truncation branch doesn't
+   * have to re-parse `raw` a second time. */
   hasMetaLine?: boolean;
   danglingTail?: string;
   /** U7/KTD2: persona ids the standard pass recommended for this chunk — only meaningful
-   * (and only ever requested) for smart mode's phase-1 call. Undefined for every other
-   * caller/parse path (legacy JSON, partial recovery) since they never ask for the field. */
+   * (and only ever requested) for smart mode's phase-1 call. */
   recommendedPersonas?: string[];
 }> {
-  // Primary: NDJSON format
-  const ndjson = parseNdjsonFindings(raw);
-  if (ndjson.findings.length > 0 || ndjson.hasMetaLine) {
-    return {
-      findings: ndjson.findings as Array<Omit<ReviewFinding, 'id'>>,
-      additionalFilesNeeded: ndjson.additionalFilesNeeded,
-      hasMetaLine: ndjson.hasMetaLine,
-      recommendedPersonas: ndjson.recommendedPersonas,
-      ...(ndjson.danglingTail !== undefined ? { danglingTail: ndjson.danglingTail } : {}),
-      ...(ndjson.truncated ? { truncated: true } : {}),
-    };
+  const reply = parseReviewReply(raw);
+  if (!reply.hasJson && !reply.truncated) {
+    throw new Error(`LLM returned no JSON for review.\n\nRaw (first 600):\n${raw.slice(0, 600) || '(empty)'}`);
   }
-  // Legacy fallback: single JSON object (model ignored NDJSON instruction)
-  const jsonText = extractJsonObject(raw);
-  if (jsonText) {
-    try {
-      const parsed = JSON.parse(jsonText);
-      return {
-        findings: Array.isArray(parsed.findings) ? parsed.findings : [],
-        additionalFilesNeeded: Array.isArray(parsed.additionalFilesNeeded) ? parsed.additionalFilesNeeded : [],
-      };
-    } catch (err) {
-      throw new Error(
-        `LLM returned malformed JSON: ${err instanceof Error ? err.message : String(err)}\n\nExtracted:\n${jsonText.slice(0, 400)}`,
-      );
-    }
-  }
-  // Partial recovery: bracket-counted findings from truncated JSON
-  const partial = extractPartialFindings(raw);
-  if (partial.length > 0) {
-    return { findings: partial as Array<Omit<ReviewFinding, 'id'>>, additionalFilesNeeded: [], truncated: true };
-  }
-  const looksLikeJson = raw.trimStart().startsWith('{');
-  throw new Error(
-    looksLikeJson
-      ? `LLM response was truncated before completing. Try lowering 'contextBudgetRatio' (e.g. 0.5) or use '@bitbucket review quick <url>'.\n\nRaw (first 600):\n${raw.slice(0, 600)}`
-      : `LLM returned no JSON for review.\n\nRaw (first 600):\n${raw.slice(0, 600) || '(empty)'}`,
-  );
+  return {
+    findings: reply.findings as Array<Omit<ReviewFinding, 'id'>>,
+    additionalFilesNeeded: reply.additionalFilesNeeded,
+    hasMetaLine: reply.hasMetaLine,
+    recommendedPersonas: reply.recommendedPersonas,
+    ...(reply.danglingTail !== undefined ? { danglingTail: reply.danglingTail } : {}),
+    ...(reply.truncated ? { truncated: true as const } : {}),
+  };
 }
 
 function splitFilesInHalf(items: FileDiff[]): [FileDiff[], FileDiff[]] {
@@ -358,7 +330,7 @@ async function runPersonaPassesForChunk(params: {
         inputChars += prompt.length;
         const raw = await callLLMOnceWithProgress(prompt, request.model, token, batchStatus);
         outputChars += raw.length;
-        const status = parseNdjsonFindings(raw).truncated ? 'truncated' : 'ok';
+        const status = parseReviewReply(raw).truncated ? 'truncated' : 'ok';
         logReview('info', formatCallLine({
           runTag, pass: persona.id, batch: batchNum, totalBatches, attempt,
           itemCount: files.length, promptChars: prompt.length, responseChars: raw.length,
@@ -1099,7 +1071,7 @@ export function createBitbucketParticipant(
             totalInputChars += prompt.length;
             const raw = await callLLMOnceWithProgress(prompt, request.model, token, batchStatus);
             totalOutputChars += raw.length;
-            const status = parseNdjsonFindings(raw).truncated ? 'truncated' : 'ok';
+            const status = parseReviewReply(raw).truncated ? 'truncated' : 'ok';
             logReview('info', formatCallLine({
               runTag, pass: 'pass1', batch: i + 1, totalBatches: chunks.length, attempt,
               itemCount: files.length, promptChars: prompt.length, responseChars: raw.length,
