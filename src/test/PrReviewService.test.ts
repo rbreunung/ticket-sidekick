@@ -2054,14 +2054,12 @@ describe('formatContinuationMessage', () => {
   it('states what the count means instead of reading as a sequential resume', () => {
     const message = formatContinuationMessage(3);
     expect(message).not.toContain('resum');
-    expect(message).toContain('3 files had no findings in the truncated response');
-    expect(message).toContain('reviewing them now');
+    expect(message).toContain('re-checking 3 files for anything not yet reported');
   });
 
-  it('uses singular wording for a single uncovered file', () => {
+  it('uses singular wording for a single file', () => {
     const message = formatContinuationMessage(1);
-    expect(message).toContain('1 file had no findings in the truncated response');
-    expect(message).toContain('reviewing it now');
+    expect(message).toContain('re-checking 1 file for anything not yet reported');
   });
 });
 

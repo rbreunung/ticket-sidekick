@@ -45,13 +45,15 @@ import {
   type BitbucketSessionContinuity,
   type FileDiff,
   type SmartFallbackSession,
+  type ParsedReviewReply,
+  type ReviewPass,
 } from './reviewSessionState';
 import { isConfirmation, isCancellation, isGreetingOrEmpty } from './sessionState';
 import { generateContent } from './jira/llmHelpers';
 import { trustedChatMarkdown } from '../utils/chatMarkdown';
 import { tokenStatus } from '../utils/diagUtils';
 import { validateBaseUrl } from '../services/configValidation';
-import { withLmRetry, withEasierRetry, isTransientLmError, PartialLmResponseError } from '../utils/lmRetry';
+import { withLmRetry, withEasierRetry, isTransientLmError, PartialLmResponseError, UnparseableReplyError } from '../utils/lmRetry';
 import { logDiag } from '../utils/diagLog';
 import { sanitizeDetails } from '../utils/logRedaction';
 import {
@@ -161,14 +163,17 @@ async function callLLM(
   contextLabel: string,
   onChunk?: (totalChars: number) => void,
   diag?: CallDiagHooks,
+  validateReply?: (raw: string) => void,
 ): Promise<string> {
   let attempt = 0;
   let attemptStart = 0;
   const raw = await withLmRetry(
-    () => {
+    async () => {
       attempt++;
       attemptStart = Date.now();
-      return callLLMOnce(prompt, model, token, onChunk);
+      const reply = await callLLMOnce(prompt, model, token, onChunk);
+      validateReply?.(reply);
+      return reply;
     },
     {
       onAttemptFailed: (a, err) => {
@@ -194,13 +199,24 @@ async function callLLMWithProgress(
   statusMessage: string,
   contextLabel: string,
   diag?: CallDiagHooks,
+  validateReply?: (raw: string) => void,
 ): Promise<string> {
   return vscode.window.withProgress(
     { location: vscode.ProgressLocation.Window, title: 'Ticket Sidekick' },
     (progress) => callLLM(prompt, model, token, contextLabel, (chars) => {
       progress.report({ message: `${statusMessage} · ${chars.toLocaleString()} chars…` });
-    }, diag),
+    }, diag, validateReply),
   );
+}
+
+/**
+ * KTD3: runs inside every retried review call, so a reply with nothing review-shaped (empty, or
+ * prose with no usable JSON) is retried and split like a provider error instead of aborting the
+ * whole review. A cut-off reply is not unreadable — the continuation pass recovers it.
+ */
+function assertReadableReply(raw: string): void {
+  const reply = parseReviewReply(raw);
+  if (!reply.hasJson && !reply.truncated) throw new UnparseableReplyError(raw);
 }
 
 async function parseReviewResponse(raw: string): Promise<{
@@ -282,6 +298,52 @@ async function fetchAndBudgetContextFiles(params: {
 }
 
 /**
+ * KTD4/R5: one continuation call after a cut-off reply. Findings are ordered by severity, not by
+ * file, so no file can be proven finished — the continuation re-reviews the whole batch and lists
+ * what was already reported, asking only for findings not on that list. Throws when the call fails
+ * after its retries; the caller keeps what the cut-off reply already produced.
+ */
+async function runContinuation(params: {
+  pass: ReviewPass;
+  files: FileDiff[];
+  alreadyReported: Array<Omit<ReviewFinding, 'id'>>;
+  buildPrompt: (alreadyReported: Array<Omit<ReviewFinding, 'id'>>) => string;
+  batchNum: number;
+  totalBatches: number;
+  batchStatus: string;
+  runTag: string;
+  request: vscode.ChatRequest;
+  token: vscode.CancellationToken;
+  logReview: (level: 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>) => void;
+  stream: vscode.ChatResponseStream;
+}): Promise<{ reply: ParsedReviewReply; promptChars: number; responseChars: number }> {
+  const { pass, files, alreadyReported, buildPrompt, batchNum, totalBatches, batchStatus, runTag, request, token, logReview, stream } = params;
+  logReview('info', formatRecoveryDecision(runTag, { kind: 'continuation', batch: batchNum, totalBatches, fileCount: files.length }));
+  stream.markdown(formatContinuationMessage(files.length));
+  const prompt = buildPrompt(alreadyReported);
+  const attemptOut: CallAttemptOut = { attempt: 0, durationMs: 0 };
+  const raw = await callLLMWithProgress(
+    prompt, request.model, token, `${batchStatus} continuation`,
+    `${pass} continuation batch ${batchNum}/${totalBatches}`,
+    {
+      attemptOut,
+      onAttemptError: (attempt, durationMs, errorCode) => logReview('error', formatCallLine({
+        runTag, pass, batch: batchNum, totalBatches, attempt,
+        itemCount: files.length, promptChars: prompt.length, durationMs, status: 'error', errorCode,
+      })),
+    },
+    assertReadableReply,
+  );
+  const reply = parseReviewReply(raw);
+  logReview('info', formatCallLine({
+    runTag, pass, batch: batchNum, totalBatches, attempt: attemptOut.attempt,
+    itemCount: files.length, promptChars: prompt.length, responseChars: raw.length,
+    durationMs: attemptOut.durationMs, status: reply.truncated ? 'truncated' : 'ok',
+  }));
+  return { reply, promptChars: prompt.length, responseChars: raw.length };
+}
+
+/**
  * U3/U7: run one persona lens pass per active persona over a single chunk's files —
  * the identical withEasierRetry → callLLMOnceWithProgress → resolveFindingAnchors
  * sequence pass1 uses, logged with `pass: '<persona-id>'`. Extracted into a standalone
@@ -335,6 +397,7 @@ async function runPersonaPassesForChunk(params: {
         inputChars += prompt.length;
         const raw = await callLLMOnceWithProgress(prompt, request.model, token, batchStatus);
         outputChars += raw.length;
+        assertReadableReply(raw);
         const status = parseReviewReply(raw).truncated ? 'truncated' : 'ok';
         logReview('info', formatCallLine({
           runTag, pass: persona.id, batch: batchNum, totalBatches, attempt,
@@ -362,10 +425,30 @@ async function runPersonaPassesForChunk(params: {
         stream.markdown(`_⚠ ${persona.displayName} pass — batch ${batchNum} — could not review ${filePaths} after retrying: ${describeFailure(batch.error)}_\n\n`);
         continue;
       }
-      const { findings: batchFindings } = await parseReviewResponse(batch.result!);
-      const { findings: resolved } = resolveFindingAnchors(batchFindings, batch.items);
+      const { findings: batchFindings, truncated } = await parseReviewResponse(batch.result!);
+      let { findings: resolved } = resolveFindingAnchors(batchFindings, batch.items);
       rawCount += batchFindings.length;
       anchorDropped += batchFindings.length - resolved.length;
+      if (truncated) {
+        stream.markdown(`_⚠ ${persona.displayName} pass reply was cut off (batch ${batchNum}) — recovering the rest._\n\n`);
+        try {
+          const cont = await runContinuation({
+            pass: persona.id, files: batch.items, alreadyReported: resolved,
+            buildPrompt: (reported) => service.buildPersonaPrompt(persona, pr, batch.items, undefined, extraInstructions, { alreadyReported: reported }),
+            batchNum, totalBatches, batchStatus, runTag, request, token, logReview, stream,
+          });
+          inputChars += cont.promptChars;
+          outputChars += cont.responseChars;
+          const { findings: contResolved } = resolveFindingAnchors(cont.reply.findings as Array<Omit<ReviewFinding, 'id'>>, batch.items);
+          rawCount += cont.reply.findings.length;
+          anchorDropped += cont.reply.findings.length - contResolved.length;
+          resolved = [...resolved, ...contResolved];
+        } catch (err) {
+          anyFailed = true;
+          logReview('warn', `${persona.displayName} continuation failed — batch ${batchNum}`, { batch: batchNum, error: err instanceof Error ? err.message : String(err) });
+          stream.markdown(`_⚠ ${persona.displayName} continuation failed (batch ${batchNum}) — keeping findings from the cut-off reply. ${describeFailure(err)}_\n\n`);
+        }
+      }
       // KTD4: stamp each persona-pass finding with its persona's id so the Source column and the
       // dedup corroboration bump can both rely on `sources` always being a real, populated array.
       // This is the single seam where pass identity is known.
@@ -1076,6 +1159,7 @@ export function createBitbucketParticipant(
             totalInputChars += prompt.length;
             const raw = await callLLMOnceWithProgress(prompt, request.model, token, batchStatus);
             totalOutputChars += raw.length;
+            assertReadableReply(raw);
             const status = parseReviewReply(raw).truncated ? 'truncated' : 'ok';
             logReview('info', formatCallLine({
               runTag, pass: 'pass1', batch: i + 1, totalBatches: chunks.length, attempt,
@@ -1126,77 +1210,55 @@ export function createBitbucketParticipant(
           let batchRawCount = findings.length;
           let batchFindings = resolveFindingAnchors(findings, batch.items).findings;
 
+          let filesNeeded = additionalFilesNeeded;
           if (truncated) {
             // R4: the one event in the pipeline that previously threw nothing and
-            // logged nothing — record what came back before recovering. Reuses the
-            // NDJSON shape parseReviewResponse already parsed above, rather than
-            // re-parsing `batch.result!` a second time.
+            // logged nothing — record what came back before recovering.
             const coveredPaths = new Set(findings.map(f => f.file));
-            const uncoveredFiles = batch.items.filter(d => !coveredPaths.has(d.path));
             const truncationEvent = buildTruncationEvent({
               runTag, batch: i + 1, totalBatches: chunks.length, raw: batch.result!,
               parsedFindingsCount: findings.length, hasMetaLine: hasMetaLine ?? false,
               danglingTail,
-              coveredFiles: [...coveredPaths], uncoveredFiles: uncoveredFiles.map((d) => d.path),
+              coveredFiles: [...coveredPaths],
+              uncoveredFiles: batch.items.filter(d => !coveredPaths.has(d.path)).map((d) => d.path),
             });
             logReview('warn', truncationEvent.message, truncationEvent.details);
-
-            stream.markdown(`_⚠ LLM response truncated (batch ${i + 1}) — recovering partial findings._\n\n`);
-            if (uncoveredFiles.length > 0) {
-              logReview('info', formatRecoveryDecision(runTag, {
-                kind: 'continuation', batch: i + 1, totalBatches: chunks.length, fileCount: uncoveredFiles.length,
-              }));
-              stream.markdown(formatContinuationMessage(uncoveredFiles.length));
-              try {
-                const continuationNote = 'Continuation pass — the previous response was truncated. Review ONLY the files provided below.';
-                const contInstructions = continuationNote + (extraInstructions ? '\n' + extraInstructions : '');
-                const contPrompt = service.buildPrompt(pr, uncoveredFiles, undefined, contInstructions, resolvedMode === 'smart');
-                totalInputChars += contPrompt.length;
-                const contAttempt: CallAttemptOut = { attempt: 0, durationMs: 0 };
-                const contRaw = await callLLMWithProgress(
-                  contPrompt, request.model, token, `${batchStatus} continuation`,
-                  `continuation batch ${i + 1}/${chunks.length}`,
-                  {
-                    attemptOut: contAttempt,
-                    onAttemptError: (attempt, durationMs, errorCode) => logReview('error', formatCallLine({
-                      runTag, pass: 'continuation', batch: i + 1, totalBatches: chunks.length, attempt,
-                      itemCount: uncoveredFiles.length, promptChars: contPrompt.length, durationMs, status: 'error', errorCode,
-                    })),
-                  },
-                );
-                totalOutputChars += contRaw.length;
-                const cont = await parseReviewResponse(contRaw);
-                logReview('info', formatCallLine({
-                  runTag, pass: 'continuation', batch: i + 1, totalBatches: chunks.length, attempt: contAttempt.attempt,
-                  itemCount: uncoveredFiles.length, promptChars: contPrompt.length, responseChars: contRaw.length,
-                  durationMs: contAttempt.durationMs, status: cont.truncated ? 'truncated' : 'ok',
-                }));
-                // Pass1's own trailer never parsed for a truncated response (truncated is
-                // defined as !hasMetaLine), so the continuation's trailer is this chunk's
-                // only chance to contribute a smart-mode persona recommendation.
-                if (resolvedMode === 'smart' && cont.hasMetaLine) {
-                  chunkPersonaUsable = true;
-                  for (const p of cont.recommendedPersonas ?? []) chunkRecPersonas.add(p);
-                }
-                const contCombined = [...findings, ...cont.findings];
-                batchRawCount = contCombined.length;
-                batchFindings = resolveFindingAnchors(contCombined, batch.items).findings;
-              } catch (err) {
-                anyBatchFailed = true;
-                logReview('warn', `Continuation pass failed — batch ${i + 1}`, { batch: i + 1, error: err instanceof Error ? err.message : String(err) });
-                stream.markdown(`_⚠ Continuation pass failed (batch ${i + 1}) — keeping findings from the truncated response. ${describeFailure(err)}_\n\n`);
+            stream.markdown(`_⚠ LLM response truncated (batch ${i + 1}) — recovering the rest._\n\n`);
+            try {
+              const cont = await runContinuation({
+                pass: 'continuation', files: batch.items, alreadyReported: batchFindings,
+                buildPrompt: (reported) => service.buildPrompt(
+                  pr, batch.items, undefined, extraInstructions, resolvedMode === 'smart', { alreadyReported: reported },
+                ),
+                batchNum: i + 1, totalBatches: chunks.length, batchStatus, runTag, request, token, logReview, stream,
+              });
+              totalInputChars += cont.promptChars;
+              totalOutputChars += cont.responseChars;
+              // The cut-off reply never reached its meta line, so the continuation's is this
+              // batch's only chance to contribute a smart-mode persona recommendation.
+              if (resolvedMode === 'smart' && cont.reply.hasMetaLine) {
+                chunkPersonaUsable = true;
+                for (const p of cont.reply.recommendedPersonas) chunkRecPersonas.add(p);
               }
+              filesNeeded = [...new Set([...filesNeeded, ...cont.reply.additionalFilesNeeded])];
+              const contRaw = cont.reply.findings as Array<Omit<ReviewFinding, 'id'>>;
+              batchRawCount += contRaw.length;
+              batchFindings = [...batchFindings, ...resolveFindingAnchors(contRaw, batch.items).findings];
+            } catch (err) {
+              anyBatchFailed = true;
+              logReview('warn', `Continuation pass failed — batch ${i + 1}`, { batch: i + 1, error: err instanceof Error ? err.message : String(err) });
+              stream.markdown(`_⚠ Continuation pass failed (batch ${i + 1}) — keeping findings from the truncated response. ${describeFailure(err)}_\n\n`);
             }
           }
 
-          if (reviewMode !== 'quick' && !truncated && additionalFilesNeeded.length > 0) {
+          if (reviewMode !== 'quick' && filesNeeded.length > 0) {
             try {
               // Fetch only files not already pulled in an earlier batch (cross-chunk cache),
               // bounded by a high per-batch ceiling — no longer a flat 5. A large PR pulls
               // many context files across its batches, each fetched at most once. Include as
               // many requested files as fit this chunk's remaining budget, smallest-first.
               const extraContents = await fetchAndBudgetContextFiles({
-                requestedFiles: additionalFilesNeeded, fetchedFileCache, service,
+                requestedFiles: filesNeeded, fetchedFileCache, service,
                 project: parsed.project, repo: parsed.repo, commitHash: pr.fromCommitHash,
                 tokenBudget, budgetAgainst: batch.items,
                 fetchMessage: (n) => `_Fetching ${n} context file${n !== 1 ? 's' : ''}${chunks.length > 1 ? ` (batch ${i + 1})` : ''}…_\n\n`,

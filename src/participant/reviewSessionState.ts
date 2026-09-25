@@ -1531,10 +1531,10 @@ export function formatStructuredRunRecord(params: {
  * being reviewed — instead of reading as a sequential resume (the "13-vs-14"
  * confusion this plan's Problem Frame documents).
  */
-export function formatContinuationMessage(uncoveredFileCount: number): string {
+export function formatContinuationMessage(fileCount: number): string {
   return (
-    `_${uncoveredFileCount} file${uncoveredFileCount !== 1 ? 's' : ''} had no findings in the truncated ` +
-    `response — reviewing ${uncoveredFileCount !== 1 ? 'them' : 'it'} now…_\n\n`
+    `_The reply was cut off — re-checking ${fileCount} file${fileCount !== 1 ? 's' : ''} ` +
+    `for anything not yet reported…_\n\n`
   );
 }
 
