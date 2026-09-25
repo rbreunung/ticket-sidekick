@@ -157,6 +157,14 @@ function bulkyLines(tag: string): string[] {
 
 const isPersonaPrompt = (prompt: string, lens: string): boolean => prompt.includes(`through a ${lens} lens ONLY`);
 const isCriticPrompt = (prompt: string): boolean => prompt.includes('You are verifying the findings of a code review');
+const isPass2Prompt = (prompt: string): boolean => prompt.includes('This is a second-pass review');
+
+/** A critic verdict keeping every candidate finding listed in the prompt. */
+function keepAll(prompt: string): string {
+  const section = prompt.slice(prompt.indexOf('Candidate findings:'), prompt.indexOf('Diff (untrusted'));
+  const indices = [...section.matchAll(/^\[(\d+)\]/gm)].map((m) => Number(m[1]));
+  return JSON.stringify({ keep: indices, additionalFilesNeeded: [] });
+}
 
 // The `bitbucket-diff.json` fixture's added lines, usable as anchors.
 const LOGIN_ANCHOR = 'const user = await db.query(`SELECT * FROM users WHERE username = ${username}`);';
@@ -299,5 +307,127 @@ describe('a bad reply never sinks the review (U7)', () => {
     expect(securityPrompts).toHaveLength(2);
     expect(securityPrompts[1]).toContain('Injection risk');
     expect(text).toContain('Token readable by scripts');
+  });
+});
+
+describe('Pass 2 refines Pass 1, and the critic sees the same context (U8)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const pass1WithRequest = [
+    findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'SQL injection', 'critical'),
+    findingLine('src/auth/tokenStore.ts', TOKEN_ANCHOR, 'Token in localStorage'),
+    '{"additionalFilesNeeded":["src/util.ts"]}',
+  ].join('\n');
+  const pass2NewFinding = findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'Username not validated');
+
+  function sessionTitles(harness: ReturnType<typeof createHarness>): string[] {
+    return (harness.workspaceState.get('bitbucket.session.review') as { findings: Array<{ title: string }> }).findings.map((f) => f.title);
+  }
+
+  // AE4 / R6 / R7
+  it('gives Pass 2 the fetched file and Pass 1\'s findings, then applies its retraction and addition', async () => {
+    const harness = createHarness();
+    harness.client.fileContents.set('src/util.ts', 'export const sanitize = (s: string) => s;');
+    const { text } = await harness.turn(PR_URL, (prompt) => (isPass2Prompt(prompt)
+      ? [pass2NewFinding, '{"additionalFilesNeeded":[],"retract":[2]}'].join('\n')
+      : pass1WithRequest));
+
+    const pass2Prompt = harness.prompts.find(isPass2Prompt)!;
+    expect(pass2Prompt).toContain('export const sanitize = (s: string) => s;');
+    expect(pass2Prompt).toContain('SQL injection');
+    expect(pass2Prompt).toContain('Token in localStorage');
+    expect(sessionTitles(harness).sort()).toEqual(['SQL injection', 'Username not validated']);
+    expect(text).not.toContain('Token in localStorage');
+  });
+
+  // AE5 / R8
+  it('keeps every Pass 1 finding when the Pass 2 reply is cut off before its meta line', async () => {
+    const harness = createHarness();
+    harness.client.fileContents.set('src/util.ts', 'export const x = 1;');
+    await harness.turn(PR_URL, (prompt) => {
+      if (prompt.includes('Already reported')) return META_LINE;
+      if (isPass2Prompt(prompt)) return [pass2NewFinding, '{"file":"src/auth/lo'].join('\n');
+      return pass1WithRequest;
+    });
+
+    expect(sessionTitles(harness).sort()).toEqual(['SQL injection', 'Token in localStorage', 'Username not validated']);
+  });
+
+  it('keeps Pass 1 findings with a notice when Pass 2 fails on every try', async () => {
+    const harness = createHarness();
+    harness.client.fileContents.set('src/util.ts', 'export const x = 1;');
+    const { text } = await harness.turn(PR_URL, (prompt) => (isPass2Prompt(prompt) ? transientError() : pass1WithRequest));
+
+    expect(text).toContain('Pass 2 (whole-file context) failed');
+    expect(sessionTitles(harness).sort()).toEqual(['SQL injection', 'Token in localStorage']);
+  });
+
+  it('ignores a retraction index that names no Pass 1 finding', async () => {
+    const harness = createHarness();
+    harness.client.fileContents.set('src/util.ts', 'export const x = 1;');
+    await harness.turn(PR_URL, (prompt) => (isPass2Prompt(prompt)
+      ? '{"additionalFilesNeeded":[],"retract":[7]}'
+      : pass1WithRequest));
+
+    expect(sessionTitles(harness).sort()).toEqual(['SQL injection', 'Token in localStorage']);
+  });
+
+  // R10
+  it('shows the deep-mode critic the file Pass 2 used', async () => {
+    const harness = createHarness({ reviewMode: 'deep' });
+    harness.client.fileContents.set('src/util.ts', 'export const criticCanSeeThis = true;');
+    await harness.turn(PR_URL, (prompt) => {
+      if (isCriticPrompt(prompt)) return keepAll(prompt);
+      if (prompt.includes('lens ONLY')) return META_LINE;
+      if (isPass2Prompt(prompt)) return META_LINE;
+      return pass1WithRequest;
+    });
+
+    const criticPrompt = harness.prompts.find(isCriticPrompt)!;
+    expect(criticPrompt).toContain('export const criticCanSeeThis = true;');
+  });
+
+  it('gives critic round 2 both the Pass 2 file and the file the critic asked for', async () => {
+    const harness = createHarness({ reviewMode: 'deep' });
+    harness.client.fileContents.set('src/util.ts', 'export const fromPass2 = true;');
+    harness.client.fileContents.set('src/db.ts', 'export const fromCritic = true;');
+    await harness.turn(PR_URL, (prompt) => {
+      if (isCriticPrompt(prompt)) {
+        return prompt.includes('final verification round')
+          ? keepAll(prompt)
+          : '{"keep":[1,2],"additionalFilesNeeded":["src/db.ts"]}';
+      }
+      if (prompt.includes('lens ONLY') || isPass2Prompt(prompt)) return META_LINE;
+      return pass1WithRequest;
+    });
+
+    const round2 = harness.prompts.find((p) => isCriticPrompt(p) && p.includes('final verification round'))!;
+    expect(round2).toContain('export const fromPass2 = true;');
+    expect(round2).toContain('export const fromCritic = true;');
+  });
+
+  // AE6 at handler level
+  it('keeps findings unverified with a notice when the critic verdict is 0-based', async () => {
+    const harness = createHarness({ reviewMode: 'deep' });
+    const { text } = await harness.turn(PR_URL, (prompt) => {
+      if (isCriticPrompt(prompt)) return '{"keep":[0,1]}';
+      if (prompt.includes('lens ONLY')) return META_LINE;
+      return [findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'SQL injection', 'critical'), findingLine('src/auth/tokenStore.ts', TOKEN_ANCHOR, 'Token in localStorage'), META_LINE].join('\n');
+    });
+
+    expect(text).toContain('unreadable verdict');
+    expect(sessionTitles(harness).sort()).toEqual(['SQL injection', 'Token in localStorage']);
+  });
+
+  // AE8 / R14
+  it('says how many findings were dropped when every finding named a file outside the PR', async () => {
+    const harness = createHarness();
+    const { text } = await harness.turn(PR_URL, [
+      [findingLine('src/invented.ts', 'x();', 'Ghost issue'), findingLine('lib/nowhere.ts', 'y();', 'Another ghost'), META_LINE].join('\n'),
+    ]);
+
+    expect(text).toContain('No issues found');
+    expect(text).toContain('2 findings were dropped because they named files outside this PR');
   });
 });

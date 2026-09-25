@@ -12,7 +12,7 @@ import {
   buildTruncationEvent, formatRecoveryDecision, formatStructuredRunRecord,
   formatContinuationMessage, createAttemptTracker,
   resolveReviewMode, deriveCriticEnabled,
-  aggregateRecommendedPersonas, ALL_PERSONA_IDS, formatSourceConfidence, formatDroppedFindingsNotice,
+  aggregateRecommendedPersonas, ALL_PERSONA_IDS, formatSourceConfidence, formatDroppedFindingsNotice, mergePass2Findings,
 } from '../participant/reviewSessionState';
 import type { ReviewFinding, SourceTag } from '../participant/reviewSessionState';
 import { PrReviewService, PERSONAS } from '../services/PrReviewService';
@@ -1972,57 +1972,70 @@ describe('formatRecoveryDecision', () => {
 });
 
 describe('formatFindingsFunnel', () => {
-  it('reconciles raw against the sum of every stage plus final (including cross-batch dedup)', () => {
+  it('reconciles raw against the sum of every stage plus final', () => {
     const counts = {
       raw: 20,
       dedupedCrossBatch: 3,
-      droppedByAnchor: 4,
+      droppedOutsidePr: 2,
+      retractedByPass2: 2,
       droppedByCritic: 2,
       final: 11,
+      unverified: 1,
     };
-    // KTD6: no foldedByConfidence stage — raw = dedupedCrossBatch + droppedByAnchor + (droppedByCritic ?? 0) + final.
+    // raw = deduped + dropped outside PR + retracted by Pass 2 + (critic ?? 0) + final. `unverified`
+    // is a subset of `final`, not a separate stage.
     expect(
-      counts.dedupedCrossBatch + counts.droppedByAnchor + counts.droppedByCritic + counts.final,
+      counts.dedupedCrossBatch + counts.droppedOutsidePr + counts.retractedByPass2 + counts.droppedByCritic + counts.final,
     ).toBe(counts.raw);
 
     const summary = formatFindingsFunnel(counts);
     expect(summary).toContain('raw 20');
-    expect(summary).toContain('deduped as cross-batch duplicate: 3');
-    expect(summary).toContain('dropped by anchor verification: 4');
-    expect(summary).not.toContain('folded by confidence');
+    expect(summary).toContain('deduped as duplicate: 3');
+    expect(summary).toContain('dropped as outside the PR: 2');
+    expect(summary).toContain('retracted by Pass 2: 2');
     expect(summary).toContain('dropped by critic: 2');
-    expect(summary).toContain('final: 11');
+    expect(summary).toContain('final: 11 (1 location unverified)');
+    expect(summary).not.toContain('anchor verification');
   });
 
   it('omits the critic line outside deep mode', () => {
     const summary = formatFindingsFunnel({
-      raw: 10, dedupedCrossBatch: 1, droppedByAnchor: 2, final: 4,
+      raw: 10, dedupedCrossBatch: 1, droppedOutsidePr: 2, retractedByPass2: 0, final: 7, unverified: 0,
     });
     expect(summary).not.toContain('critic');
+    expect(summary).toContain('final: 7');
+    expect(summary).not.toContain('location unverified');
   });
 
-  it('KTD6: folds persona-pass findings into the same raw count as the standard pass, with no separate persona stage', () => {
-    // Simulates a deep/smart run: the standard pass's raw findings plus all four persona
-    // passes' raw findings are summed into one `raw` before the funnel ever sees them —
-    // exactly what BitbucketParticipant.ts's `rawFindingsTotal` accumulator does across
-    // both the per-chunk standard-pass tally and every `runPersonaPassesForChunk` result.
-    const standardPassRaw = 6;
-    const personaPassesRaw = 2 + 1 + 3 + 0; // security, performance, reliability, maintainability
-    const counts = {
-      raw: standardPassRaw + personaPassesRaw,
-      dedupedCrossBatch: 2,
-      droppedByAnchor: 1,
-      droppedByCritic: 2,
-      final: 7,
-    };
-    expect(counts.raw).toBe(12);
-
-    const summary = formatFindingsFunnel(counts);
-    // No persona-specific stage or label appears — persona findings are invisible in the
-    // funnel shape, only inflating the same `raw` count a standard-only run would produce.
+  it('folds persona-pass findings into the same raw count as the standard pass, with no separate persona stage', () => {
+    const summary = formatFindingsFunnel({
+      raw: 12, dedupedCrossBatch: 2, droppedOutsidePr: 1, retractedByPass2: 0, droppedByCritic: 2, final: 7, unverified: 0,
+    });
     expect(summary).toContain('raw 12');
     expect(summary).not.toMatch(/security|performance|reliability|maintainability|persona/i);
-    expect(summary.split('\n')).toHaveLength(5); // header + 3 stage lines + critic + final — KTD6 dropped the fold stage
+  });
+});
+
+describe('mergePass2Findings (KTD5)', () => {
+  const f = (title: string) => ({ file: 'src/a.ts', severity: 'warning' as const, title, description: 'D', recommendation: 'R' });
+
+  it('drops explicitly retracted Pass 1 findings and adds Pass 2 findings', () => {
+    const result = mergePass2Findings([f('a'), f('b')], [f('c')], [2]);
+    expect(result.findings.map((x) => x.title)).toEqual(['a', 'c']);
+    expect(result.retracted).toBe(1);
+    expect(result.invalidRetractions).toEqual([]);
+  });
+
+  it('keeps every Pass 1 finding when Pass 2 retracts nothing', () => {
+    const result = mergePass2Findings([f('a'), f('b')], [], []);
+    expect(result.findings.map((x) => x.title)).toEqual(['a', 'b']);
+    expect(result.retracted).toBe(0);
+  });
+
+  it('ignores a retraction index that names no Pass 1 finding', () => {
+    const result = mergePass2Findings([f('a'), f('b')], [f('c')], [7, 0]);
+    expect(result.findings.map((x) => x.title)).toEqual(['a', 'b', 'c']);
+    expect(result.invalidRetractions).toEqual([7, 0]);
   });
 });
 

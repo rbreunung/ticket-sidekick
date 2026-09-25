@@ -28,6 +28,8 @@ import {
   formatFindingsFunnel,
   formatStructuredRunRecord,
   formatContinuationMessage,
+  formatDroppedFindingsNotice,
+  mergePass2Findings,
   RAW_PREVIEW_CHARS,
   createAttemptTracker,
   computeBitbucketFollowups,
@@ -1060,7 +1062,8 @@ export function createBitbucketParticipant(
       // double-counted a batch's original findings whenever continuation or pass2
       // superseded them.
       let rawFindingsTotal = 0;
-      let anchorDroppedTotal = 0;
+      let droppedOutsidePrTotal = 0;
+      let retractedByPass2Total = 0;
       let criticDroppedTotal = 0;
 
       if (upfrontQuestion) {
@@ -1181,6 +1184,8 @@ export function createBitbucketParticipant(
         );
 
         let chunkFindings: Array<Omit<ReviewFinding, 'id'>> = [];
+        // R10: context files Pass 2 used anywhere in this chunk — the critic judges with the same ones.
+        const chunkContextPaths = new Set<string>();
         // U7/R4: smart mode's phase-1 recommendation signal for this chunk — usable once
         // any batch's trailer parsed (hasMetaLine), unioning recommendedPersonas across
         // batches (a chunk split by retry-halving may answer in more than one batch).
@@ -1208,7 +1213,10 @@ export function createBitbucketParticipant(
           // would count raw findings a later pass fully discards, inflating the funnel's
           // "raw" total past what any downstream stage could ever have seen.
           let batchRawCount = findings.length;
-          let batchFindings = resolveFindingAnchors(findings, batch.items).findings;
+          const pass1Resolved = resolveFindingAnchors(findings, batch.items);
+          let batchOutsidePr = pass1Resolved.droppedOutsidePr;
+          let batchRetracted = 0;
+          let batchFindings = pass1Resolved.findings;
 
           let filesNeeded = additionalFilesNeeded;
           if (truncated) {
@@ -1242,8 +1250,10 @@ export function createBitbucketParticipant(
               }
               filesNeeded = [...new Set([...filesNeeded, ...cont.reply.additionalFilesNeeded])];
               const contRaw = cont.reply.findings as Array<Omit<ReviewFinding, 'id'>>;
+              const contResolved = resolveFindingAnchors(contRaw, batch.items);
               batchRawCount += contRaw.length;
-              batchFindings = [...batchFindings, ...resolveFindingAnchors(contRaw, batch.items).findings];
+              batchOutsidePr += contResolved.droppedOutsidePr;
+              batchFindings = [...batchFindings, ...contResolved.findings];
             } catch (err) {
               anyBatchFailed = true;
               logReview('warn', `Continuation pass failed — batch ${i + 1}`, { batch: i + 1, error: err instanceof Error ? err.message : String(err) });
@@ -1265,7 +1275,11 @@ export function createBitbucketParticipant(
                 logLabel: 'Additional context files fetched', batchNum: i + 1, logReview, stream,
               });
               if (extraContents.size > 0) {
-                const pass2Prompt = service.buildPrompt(pr, batch.items, extraContents, extraInstructions);
+                for (const path of extraContents.keys()) chunkContextPaths.add(path);
+                // KTD5: Pass 2 sees Pass 1's findings and refines them rather than replacing them.
+                const pass2Prompt = service.buildPrompt(
+                  pr, batch.items, extraContents, extraInstructions, false, { priorFindings: batchFindings },
+                );
                 totalInputChars += pass2Prompt.length;
                 const pass2Attempt: CallAttemptOut = { attempt: 0, durationMs: 0 };
                 const pass2Raw = await callLLMWithProgress(
@@ -1278,30 +1292,42 @@ export function createBitbucketParticipant(
                       itemCount: batch.items.length, promptChars: pass2Prompt.length, durationMs, status: 'error', errorCode,
                     })),
                   },
+                  assertReadableReply,
                 );
                 totalOutputChars += pass2Raw.length;
-                const pass2 = await parseReviewResponse(pass2Raw);
+                const pass2 = parseReviewReply(pass2Raw);
                 logReview('info', formatCallLine({
                   runTag, pass: 'pass2', batch: i + 1, totalBatches: chunks.length, attempt: pass2Attempt.attempt,
                   itemCount: batch.items.length, promptChars: pass2Prompt.length, responseChars: pass2Raw.length,
                   durationMs: pass2Attempt.durationMs, status: pass2.truncated ? 'truncated' : 'ok',
                 }));
                 if (pass2.truncated) {
-                  stream.markdown(`_⚠ LLM response truncated (batch ${i + 1} pass 2) — review may be incomplete._\n\n`);
+                  stream.markdown(`_⚠ LLM response truncated (batch ${i + 1} pass 2) — keeping the first-pass findings plus what Pass 2 returned._\n\n`);
                 }
-                batchRawCount = pass2.findings.length;
-                batchFindings = resolveFindingAnchors(pass2.findings, batch.items).findings;
+                const pass2Raw2 = pass2.findings as Array<Omit<ReviewFinding, 'id'>>;
+                const pass2Resolved = resolveFindingAnchors(pass2Raw2, batch.items);
+                const merged = mergePass2Findings(batchFindings, pass2Resolved.findings, pass2.retract);
+                if (merged.invalidRetractions.length > 0) {
+                  logReview('warn', `Pass 2 retracted unknown finding number(s) — ignored — batch ${i + 1}`, {
+                    batch: i + 1, invalidRetractions: merged.invalidRetractions, pass1Count: batchFindings.length,
+                  });
+                }
+                batchRawCount += pass2Raw2.length;
+                batchOutsidePr += pass2Resolved.droppedOutsidePr;
+                batchRetracted += merged.retracted;
+                batchFindings = merged.findings;
               }
             } catch (err) {
               anyBatchFailed = true;
               logReview('warn', `Pass 2 (whole-file context) failed — batch ${i + 1}`, { batch: i + 1, error: err instanceof Error ? err.message : String(err) });
-              stream.markdown(`_⚠ Pass 2 (whole-file context) failed (batch ${i + 1}) — keeping findings from the diff-only pass. ${describeFailure(err)}_\n\n`);
+              stream.markdown(`_⚠ Pass 2 (whole-file context) failed (batch ${i + 1}) — keeping the first-pass findings. ${describeFailure(err)}_\n\n`);
             }
           }
 
-          // Tally once, on whichever raw/resolved pair actually settled above.
+          // Tally once per batch, after continuation and Pass 2 have settled.
           rawFindingsTotal += batchRawCount;
-          anchorDroppedTotal += batchRawCount - batchFindings.length;
+          droppedOutsidePrTotal += batchOutsidePr;
+          retractedByPass2Total += batchRetracted;
           // KTD4: stamp standard-pass (phase 1) findings with the literal 'general' tag so they
           // carry an explicit `sources` array like persona findings — `'general'` is a real
           // SourceTag that participates in the dedup sources union, not just a display fallback.
@@ -1325,7 +1351,7 @@ export function createBitbucketParticipant(
           totalInputChars += personaResult.inputChars;
           totalOutputChars += personaResult.outputChars;
           rawFindingsTotal += personaResult.rawCount;
-          anchorDroppedTotal += personaResult.anchorDropped;
+          droppedOutsidePrTotal += personaResult.anchorDropped;
           if (personaResult.anyFailed) anyBatchFailed = true;
           chunkFindings = chunkFindings.concat(personaResult.findings);
         }
@@ -1342,7 +1368,14 @@ export function createBitbucketParticipant(
               const attempt = criticTracker.start(findingsSubset);
               const referencedPaths = new Set(findingsSubset.map((f) => f.file));
               const relevantDiffs = chunk.filter((d) => referencedPaths.has(d.path));
-              const prompt = service.buildCriticPrompt(pr, relevantDiffs, findingsSubset, extraInstructions);
+              // R10: judge with the same context files Pass 2 used for this chunk.
+              const { selected: criticContext } = selectFilesWithinBudget(
+                [...chunkContextPaths].filter((p) => fetchedFileCache.has(p)).map((p) => ({ path: p, content: fetchedFileCache.get(p)! })),
+                Math.max(0, tokenBudget - estimateChunkTokens(relevantDiffs)),
+              );
+              const prompt = service.buildCriticPrompt(
+                pr, relevantDiffs, findingsSubset, extraInstructions, criticContext.size > 0 ? criticContext : undefined,
+              );
               criticPromptChars = prompt.length;
               totalInputChars += prompt.length;
               const raw = await callLLMOnceWithProgress(prompt, request.model, token, `${batchStatus} verifying`);
@@ -1389,8 +1422,9 @@ export function createBitbucketParticipant(
               try {
                 const referencedPaths = new Set(batch.items.map((f) => f.file));
                 const relevantDiffs = chunk.filter((d) => referencedPaths.has(d.path));
+                // Round 2 keeps Pass 2's context alongside the newly requested files (R10).
                 const extraContents = await fetchAndBudgetContextFiles({
-                  requestedFiles, fetchedFileCache, service,
+                  requestedFiles: [...new Set([...chunkContextPaths, ...requestedFiles])], fetchedFileCache, service,
                   project: parsed.project, repo: parsed.repo, commitHash: pr.fromCommitHash,
                   tokenBudget, budgetAgainst: relevantDiffs,
                   fetchMessage: (n) => `_Fetching ${n} context file${n !== 1 ? 's' : ''} for critic verification (batch ${i + 1})…_\n\n`,
@@ -1527,7 +1561,7 @@ export function createBitbucketParticipant(
             totalInputChars += personaResult.inputChars;
             totalOutputChars += personaResult.outputChars;
             rawFindingsTotal += personaResult.rawCount;
-            anchorDroppedTotal += personaResult.anchorDropped;
+            droppedOutsidePrTotal += personaResult.anchorDropped;
             if (personaResult.anyFailed) anyBatchFailed = true;
             allFindings = allFindings.concat(personaResult.findings);
           }
@@ -1551,10 +1585,12 @@ export function createBitbucketParticipant(
       const funnelCounts = {
         raw: rawFindingsTotal,
         dedupedCrossBatch,
-        droppedByAnchor: anchorDroppedTotal,
+        droppedOutsidePr: droppedOutsidePrTotal,
+        retractedByPass2: retractedByPass2Total,
         // KTD5/KTD6: no confidence fold — every finding lands in a severity table, so `final` is the
         // total finding count shown and there is no `foldedByConfidence` stage.
         final: primaryCount,
+        unverified: numbered.filter((f) => f.locationUnverified).length,
         ...(criticEnabled ? { droppedByCritic: criticDroppedTotal } : {}),
       };
       const funnelSummary = formatFindingsFunnel(funnelCounts);
@@ -1575,6 +1611,8 @@ export function createBitbucketParticipant(
       if (anyBatchFailed) {
         stream.markdown(`_⚠ Some batches had failures after retrying — showing partial results. See the "Ticket Sidekick" output channel for details._\n\n`);
       }
+      const droppedNotice = formatDroppedFindingsNotice({ outsidePr: droppedOutsidePrTotal, critic: criticDroppedTotal });
+      if (droppedNotice) stream.markdown(`${droppedNotice}\n\n`);
       stream.markdown(trustedChatMarkdown(composeReviewOutput(reviewResult)));
       const reviewTokenEst = Math.ceil((totalInputChars + totalOutputChars) / 4);
       stream.markdown(`\n\n_~${reviewTokenEst.toLocaleString()} estimated tokens · budget ${tokenBudget.toLocaleString()}_`);

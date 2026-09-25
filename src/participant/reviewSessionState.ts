@@ -1478,23 +1478,48 @@ export function formatCallLine(info: CallLineInfo): string {
 export interface FindingsFunnelCounts {
   raw: number;
   dedupedCrossBatch: number;
-  droppedByAnchor: number;
+  /** Findings naming a file outside the PR (R14). */
+  droppedOutsidePr: number;
+  /** Pass 1 findings Pass 2 explicitly retracted (KTD5). */
+  retractedByPass2: number;
   droppedByCritic?: number;
   final: number;
+  /** How many of `final` are kept as location unverified (R13) — a subset, not a stage. */
+  unverified: number;
 }
 
 /** Renders R6's end-of-review findings funnel summary. Pure so it stays Vitest-covered. */
 export function formatFindingsFunnel(counts: FindingsFunnelCounts): string {
   const lines = [
     `Findings funnel — raw ${counts.raw}`,
-    `-> deduped as cross-batch duplicate: ${counts.dedupedCrossBatch}`,
-    `-> dropped by anchor verification: ${counts.droppedByAnchor}`,
+    `-> deduped as duplicate: ${counts.dedupedCrossBatch}`,
+    `-> dropped as outside the PR: ${counts.droppedOutsidePr}`,
+    `-> retracted by Pass 2: ${counts.retractedByPass2}`,
   ];
   if (counts.droppedByCritic !== undefined) {
     lines.push(`-> dropped by critic: ${counts.droppedByCritic}`);
   }
-  lines.push(`-> final: ${counts.final}`);
+  lines.push(`-> final: ${counts.final}${counts.unverified > 0 ? ` (${counts.unverified} location unverified)` : ''}`);
   return lines.join('\n');
+}
+
+/**
+ * KTD5/R7/R8: Pass 2 refines Pass 1 instead of replacing it. The batch keeps every Pass 1 finding
+ * Pass 2 did not explicitly retract (by 1-based index), plus Pass 2's own findings; duplicates are
+ * left for the review-wide dedup. Out-of-range retraction indices are ignored and returned.
+ */
+export function mergePass2Findings<F>(
+  pass1: F[],
+  pass2: F[],
+  retract: number[],
+): { findings: F[]; retracted: number; invalidRetractions: number[] } {
+  const invalidRetractions = retract.filter((n) => n < 1 || n > pass1.length);
+  const retracted = new Set(retract.filter((n) => n >= 1 && n <= pass1.length));
+  return {
+    findings: [...pass1.filter((_, i) => !retracted.has(i + 1)), ...pass2],
+    retracted: retracted.size,
+    invalidRetractions,
+  };
 }
 
 /**
