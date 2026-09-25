@@ -305,6 +305,42 @@ describe('PrReviewService.buildPrompt', () => {
     expect(prompt).toMatch(/only findings that are NOT in the already-reported list/i);
   });
 
+  // Instructions the model must follow sit outside the «UNTRUSTED-CONTENT» fence; only the
+  // numbered findings lists sit inside it.
+  it('places the retract and continuation instructions before «UNTRUSTED-CONTENT», and the numbered findings lists after it', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const prior = [{ file: 'src/foo.ts', line: 1, severity: 'warning' as const, title: 'Unused const', description: 'x is unused', recommendation: 'Remove it' }];
+    const reported = [{ file: 'src/bar.ts', line: 2, severity: 'suggestion' as const, title: 'Naming', description: 'd', recommendation: 'r' }];
+    const prompt = service.buildPrompt(pr, fileDiffs, new Map([['src/util.ts', 'u']]), undefined, false, {
+      priorFindings: prior, alreadyReported: reported,
+    });
+
+    const fenceStart = prompt.indexOf('«UNTRUSTED-CONTENT»');
+    expect(fenceStart).toBeGreaterThan(-1);
+
+    // Instructions live before the fence.
+    const retractInstructionIdx = prompt.indexOf('retract its number and report the corrected version');
+    const continuationInstructionIdx = prompt.indexOf('do not repeat them');
+    expect(retractInstructionIdx).toBeGreaterThan(-1);
+    expect(continuationInstructionIdx).toBeGreaterThan(-1);
+    expect(retractInstructionIdx).toBeLessThan(fenceStart);
+    expect(continuationInstructionIdx).toBeLessThan(fenceStart);
+    expect(prompt).toContain('"retract"');
+    expect(prompt.indexOf('"retract"')).toBeLessThan(fenceStart);
+    expect(prompt).toMatch(/only findings that are NOT in the already-reported list/i);
+    expect(prompt.search(/only findings that are NOT in the already-reported list/i)).toBeLessThan(fenceStart);
+
+    // The numbered findings lists themselves, under their data labels, live inside the fence.
+    const priorLabelIdx = prompt.indexOf('First-pass findings (numbered):');
+    const alreadyReportedLabelIdx = prompt.indexOf('Already reported for these files:');
+    const findingLineIdx = prompt.indexOf('[1] (warning) src/foo.ts:L1 — Unused const');
+    const reportedLineIdx = prompt.indexOf('[1] (suggestion) src/bar.ts:L2 — Naming');
+    expect(priorLabelIdx).toBeGreaterThan(fenceStart);
+    expect(alreadyReportedLabelIdx).toBeGreaterThan(fenceStart);
+    expect(findingLineIdx).toBeGreaterThan(fenceStart);
+    expect(reportedLineIdx).toBeGreaterThan(fenceStart);
+  });
+
   // R16: one consistent set of limits and guidance that asks for every real issue.
   it('uses one code-example limit, asks for every real issue, and requires the meta line even with no findings', () => {
     const service = new PrReviewService(new MockBitbucketClient());
@@ -1013,6 +1049,12 @@ describe('parseFollowUpIntent', () => {
       const result = parseFollowUpIntent('#2, #3 add to review — urgent');
       expect(result).toMatchObject({ kind: 'add', targets: [2, 3] });
       expect((result as { note: string }).note).toContain('urgent');
+    });
+
+    it('treats "add #2 to PR review" as add, with no "PR" left in the note', () => {
+      const result = parseFollowUpIntent('add #2 to PR review');
+      expect(result).toMatchObject({ kind: 'add', targets: [2] });
+      expect((result as { note: string }).note).not.toMatch(/\bPR\b/i);
     });
   });
 
@@ -1775,6 +1817,23 @@ describe('parseReviewReply', () => {
     expect(result.truncated).toBe(false);
   });
 
+  // #5: a bare `[]` "no findings" reply must read as usable JSON, not as unparseable prose —
+  // otherwise BitbucketParticipant's assertReadableReply treats a clean empty reply as unreadable
+  // and retries/splits it.
+  it('reads a bare "[]" as usable JSON with no findings, not truncated', () => {
+    const result = parseReviewReply('[]');
+    expect(result.findings).toHaveLength(0);
+    expect(result.hasJson).toBe(true);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('reads a fenced "```json\\n[]\\n```" as usable JSON with no findings, not truncated', () => {
+    const result = parseReviewReply('```json\n[]\n```');
+    expect(result.findings).toHaveLength(0);
+    expect(result.hasJson).toBe(true);
+    expect(result.truncated).toBe(false);
+  });
+
   it('recovers the complete findings of a wrapper cut inside its third finding', () => {
     const raw = `{"findings":[${JSON.stringify(f1)},${JSON.stringify(f2)},${JSON.stringify(f3).slice(0, 25)}`;
     const result = parseReviewReply(raw);
@@ -1821,6 +1880,37 @@ describe('parseReviewReply', () => {
     const result = parseReviewReply([JSON.stringify(f1), '{"additionalFilesNeeded":["a.ts"]}'].join('\n'));
     expect(result.recommendedPersonas).toEqual([]);
     expect(result.retract).toEqual([]);
+  });
+
+  // #2: the tie-break between the per-line reading and the balanced-value scan now compares, in
+  // order, more findings / has a meta line / not truncated / hasJson, before falling back to the
+  // per-line reading. All three cases below tie on findings count (0 or equal), so the meta-line
+  // comparison must decide — the balanced-value scan is the only reading that recovered the meta.
+  it('reads a pretty-printed zero-findings reply with a meta line as complete, not truncated', () => {
+    const raw = JSON.stringify({ findings: [], additionalFilesNeeded: ['src/a.ts'] }, null, 2);
+    const result = parseReviewReply(raw);
+    expect(result.findings).toHaveLength(0);
+    expect(result.additionalFilesNeeded).toEqual(['src/a.ts']);
+    expect(result.hasMetaLine).toBe(true);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('reads a pretty-printed {"findings":[]} wrapper with no sibling meta as complete, not truncated', () => {
+    const raw = JSON.stringify({ findings: [] }, null, 2);
+    const result = parseReviewReply(raw);
+    expect(result.findings).toHaveLength(0);
+    expect(result.hasJson).toBe(true);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('keeps the meta line and retract list from a pretty-printed trailer after NDJSON findings, and reports not truncated', () => {
+    const raw = [JSON.stringify(f1), JSON.stringify({ additionalFilesNeeded: [], retract: [1] }, null, 2)].join('\n');
+    const result = parseReviewReply(raw);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]).toMatchObject(f1);
+    expect(result.hasMetaLine).toBe(true);
+    expect(result.retract).toEqual([1]);
+    expect(result.truncated).toBe(false);
   });
 
   it('parses retract indices from the meta line and ignores non-integers', () => {
@@ -2327,6 +2417,27 @@ describe('location-unverified findings (R13, R14)', () => {
     expect(merged).toHaveLength(2);
   });
 
+  // #7: recall over precision — a merely *similar* title in the same file must not drop the
+  // unverified finding, since it may well be a genuinely different issue (sameMeaning's fuzzy
+  // 0.25 Jaccard gate would have merged these; the exact-normalized-title rule must not).
+  it('keeps an unverified finding when a verified finding in the same file has only a similar (not identical) title', () => {
+    const merged = dedupeFindings([
+      { ...base, file: 'src/a.ts', title: 'Missing null check on user', locationUnverified: true },
+      { ...base, file: 'src/a.ts', line: 12, lineType: 'ADDED', title: 'Missing null check on response' },
+    ]);
+    expect(merged).toHaveLength(2);
+    expect(merged.some((m) => m.locationUnverified)).toBe(true);
+  });
+
+  it('drops an unverified finding when a verified finding in the same file has the exact same normalized title (case/whitespace-insensitive)', () => {
+    const merged = dedupeFindings([
+      { ...base, file: 'src/a.ts', title: '  SQL Injection in lookup ', locationUnverified: true },
+      { ...base, file: 'src/a.ts', line: 12, lineType: 'ADDED', title: 'sql injection in lookup' },
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].line).toBe(12);
+  });
+
   it('renders an unverified finding with "(location unverified)", no line and muted confidence', () => {
     const service = new PrReviewService(new MockBitbucketClient());
     const pr: BitbucketPR = { id: 1, title: 'T', description: '', author: { displayName: 'A', emailAddress: '' }, targetBranch: 'main', fromCommitHash: 'x' };
@@ -2784,7 +2895,7 @@ describe('follow-up context (U10)', () => {
   });
 
   // R19 / AE10
-  it.each([['2', 2], ['#2', 2], ['Finding 2', 2], ['2.', 2], ['Finding #2 — the SQL issue', 2], ['I think 3 or 4', 3]])(
+  it.each([['2', 2], ['#2', 2], ['Finding 2', 2], ['2.', 2], ['Finding #2 — the SQL issue', 2], ['The matching finding is #2.', 2]])(
     'reads the matched finding number from %j',
     (reply, expected) => { expect(parseFindingMatchReply(reply)).toBe(expected); },
   );
@@ -2792,6 +2903,14 @@ describe('follow-up context (U10)', () => {
   it('reads "none" as no match', () => {
     expect(parseFindingMatchReply('none')).toBeUndefined();
     expect(parseFindingMatchReply('No matching finding.')).toBeUndefined();
+  });
+
+  it('reads "None of the 3 findings match" as no match, not finding 3', () => {
+    expect(parseFindingMatchReply('None of the 3 findings match')).toBeUndefined();
+  });
+
+  it('does not guess a finding from a bare number in free prose', () => {
+    expect(parseFindingMatchReply('I think 3 or 4')).toBeUndefined();
   });
 
   // R22

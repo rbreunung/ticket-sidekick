@@ -185,6 +185,66 @@ describe('Data Center diff coverage and recovery (U9, R17, R25)', () => {
     expect(fileDiff.raw).toContain('+++ b/src/new name.ts');
   });
 
+  it('reports a file whose only truncated flag is at hunk/segment level', async () => {
+    const hunkTruncated = {
+      source: { toString: 'src/c.ts' }, destination: { toString: 'src/c.ts' },
+      hunks: [{ sourceLine: 1, sourceSpan: 1, destinationLine: 1, destinationSpan: 2, truncated: true, segments: [
+        { type: 'CONTEXT', lines: [{ line: 'x' }] },
+      ] }],
+    };
+    const segmentTruncated = {
+      source: { toString: 'src/d.ts' }, destination: { toString: 'src/d.ts' },
+      hunks: [{ sourceLine: 1, sourceSpan: 1, destinationLine: 1, destinationSpan: 2, segments: [
+        { type: 'CONTEXT', lines: [{ line: 'x' }], truncated: true },
+      ] }],
+    };
+    vi.stubGlobal('fetch', routeFetch([
+      [/\/pull-requests\/42\/diff\?/, { diffs: [dcFile('src/a.ts'), hunkTruncated, segmentTruncated] }],
+    ]));
+    const coverage = await new BitbucketApiClient(DC_CONFIG).getPullRequestDiffWithCoverage('PROJ', 'repo', 42, 12);
+    expect(coverage.cutFiles).toEqual([{ path: 'src/c.ts' }, { path: 'src/d.ts' }]);
+  });
+
+  it('carries srcPath for a file-level-truncated rename, without a changes-list call', async () => {
+    const renamedTruncated = {
+      source: { toString: 'src/old.ts' }, destination: { toString: 'src/new.ts' }, truncated: true,
+    };
+    const f = routeFetch([
+      [/\/pull-requests\/42\/diff\?/, { diffs: [dcFile('src/a.ts'), renamedTruncated] }],
+    ]);
+    vi.stubGlobal('fetch', f);
+    const coverage = await new BitbucketApiClient(DC_CONFIG).getPullRequestDiffWithCoverage('PROJ', 'repo', 42, 12);
+    expect(coverage.cutFiles).toEqual([{ path: 'src/new.ts', srcPath: 'src/old.ts' }]);
+    expect(f).toHaveBeenCalledTimes(1); // response.truncated is not set, so no changes-list fallback
+  });
+
+  it('keeps the file-level cutFiles and truncated:true when the changes-list request fails', async () => {
+    const onDiag = vi.fn();
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => {
+      if (/\/changes\?/.test(url)) {
+        return { ok: false, status: 500, statusText: 'Error', headers: { get: () => 'application/json' }, text: () => Promise.resolve('') };
+      }
+      if (/\/pull-requests\/42\/diff\?/.test(url)) {
+        const body = { diffs: [dcFile('src/a.ts'), dcFile('src/b.ts', { truncated: true })], truncated: true };
+        return {
+          ok: true, status: 200,
+          headers: { get: (h: string) => (h === 'content-type' ? 'application/json' : null) },
+          json: () => Promise.resolve(body),
+          text: () => Promise.resolve(JSON.stringify(body)),
+        };
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }));
+    const client = new BitbucketApiClient({ ...DC_CONFIG, onDiag });
+    const coverage = await client.getPullRequestDiffWithCoverage('PROJ', 'repo', 42, 12);
+    expect(coverage.truncated).toBe(true);
+    expect(coverage.cutFiles).toEqual([{ path: 'src/b.ts' }]);
+    expect(onDiag).toHaveBeenCalledWith(
+      'warn', expect.stringContaining('PR changes list'),
+      expect.objectContaining({ status: 500 }),
+    );
+  });
+
   it('reports no cut files and makes one request on Cloud', async () => {
     const f = textFetch('diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -1 +1 @@\n+y\n');
     vi.stubGlobal('fetch', f);

@@ -1151,18 +1151,25 @@ export function createBitbucketParticipant(
       // Apply exclusion patterns before chunking
       let fileDiffs = parseDiff(coverage.raw);
 
+      const excludePatterns = config.reviewExcludePatterns ?? [];
+
       // R17: Data Center cuts very large diffs short. Fetch each cut file on its own and put its
-      // diff in place of whatever part of it (if any) made it into the PR diff.
-      if (coverage.cutFiles.length > 0) {
+      // diff in place of whatever part of it (if any) made it into the PR diff. A cut file matching
+      // `excludePatterns` is dropped below anyway, so it is neither fetched nor warned about.
+      const cutFilesToRecover = coverage.cutFiles.filter(
+        (cut) => !excludePatterns.some((p) => minimatch(cut.path, p, { matchBase: true })),
+      );
+      if (cutFilesToRecover.length > 0) {
         lastStage = 'recovering cut files';
-        const n = coverage.cutFiles.length;
+        const n = cutFilesToRecover.length;
         stream.markdown(`_The server cut this PR's diff short — fetching ${n} file${n !== 1 ? 's' : ''} individually…_\n\n`);
         logReview('warn', `PR diff truncated by the server — recovering ${n} file(s)`, {
-          runTag, cutFiles: coverage.cutFiles.map((c) => c.path),
+          runTag, cutFiles: cutFilesToRecover.map((c) => c.path),
         });
         const partial: string[] = [];
         const unrecovered: string[] = [];
-        for (const cut of coverage.cutFiles) {
+        for (const cut of cutFilesToRecover) {
+          if (token.isCancellationRequested) break;
           try {
             const recovered = await client.getPullRequestFileDiff(
               parsed.project, parsed.repo, parsed.prId, cut.path, config.reviewContextLines, cut.srcPath,
@@ -1192,7 +1199,6 @@ export function createBitbucketParticipant(
         stream.markdown(`_${noHunkCount} file${noHunkCount !== 1 ? 's' : ''} with no textual diff (binary, rename, or mode-only) skipped._\n\n`);
       }
 
-      const excludePatterns = config.reviewExcludePatterns ?? [];
       let excludedCount = 0;
       if (excludePatterns.length > 0) {
         const before = fileDiffs.length;

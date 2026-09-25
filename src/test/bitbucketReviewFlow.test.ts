@@ -486,6 +486,23 @@ describe('Data Center diff recovery (U9)', () => {
     await harness.turn(PR_URL, reviewEachFile);
     expect(harness.client.getPullRequestFileDiffCalls).toEqual([]);
   });
+
+  // #4: a cut file matching reviewExcludePatterns must never be re-fetched or named
+  // in a recovery warning — it's dropped by the exclusion filter regardless.
+  it('skips a cut file matching reviewExcludePatterns without fetching or warning about it', async () => {
+    const harness = createHarness({ reviewExcludePatterns: ['*.lock'] });
+    harness.client.rawDiff = fileDiff(1);
+    harness.client.cutFiles = [{ path: 'src/f2.lock' }, { path: 'src/f3.ts' }];
+    harness.client.perFileDiffs.set('src/f3.ts', { raw: fileDiff(3), truncated: false });
+    const { text } = await harness.turn(PR_URL, reviewEachFile);
+
+    expect(harness.client.getPullRequestFileDiffCalls.map((c) => c.path)).toEqual(['src/f3.ts']);
+    expect(text).not.toContain('src/f2.lock');
+    expect(text).not.toContain('not reviewed');
+    expect(text).not.toContain('reviewed partially');
+    expect(text).toContain('Issue in f1');
+    expect(text).toContain('Issue in f3');
+  });
 });
 
 describe('follow-ups keep the review\'s context (U10)', () => {

@@ -94,7 +94,7 @@ Push selected findings back to Bitbucket as PR comments:
 @bitbucket #1 add to review this is blocking merge
 ```
 
-The numbers and `add to review` keywords can appear in any order. `add all to review` selects every finding at once. Any extra text (after stripping the command keywords) becomes a brief reviewer note appended to each comment.
+The `#N` references can appear anywhere in the message, but `add`/`post` must come before `to review` (`to the review` and `to PR review` also work). `add all to review` selects every finding at once. Any extra text (after stripping the command keywords) becomes a brief reviewer note appended to each comment.
 
 **Before posting, the plugin shows a preview** of each comment's exact text along with where it will land:
 

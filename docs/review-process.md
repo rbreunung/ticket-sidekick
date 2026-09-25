@@ -84,13 +84,15 @@ context; a file with one giant hunk can't be subdivided and is sent as-is.
 
 Bitbucket Data Center stops sending a PR diff past a server limit (about
 10 000 lines by default). `getPullRequestDiffWithCoverage` reports which
-files that cut: entries the response marks `truncated`, plus — when the
-response itself is marked truncated — every path in the PR's paged
-`changes` list that the response left out entirely. The review then fetches
-each cut file on its own with `getPullRequestFileDiff` (passing the source
-path for a moved file) and reviews it with the rest. A file the server still
-cuts is named as *reviewed partially*; one that can't be fetched is named as
-*not reviewed*. Cloud never reports cut files.
+files that cut: entries with a `truncated` flag on the file, a hunk or a
+segment, plus — when the response itself is marked truncated — every path in
+the PR's paged `changes` list that the response left out entirely. If the
+changes list can't be fetched, the review goes ahead with the cut files it
+already knows about. The review then fetches each cut file on its own with
+`getPullRequestFileDiff` (passing the source path for a moved file), skipping
+files that `reviewExcludePatterns` would drop anyway, and reviews it with the
+rest. A file the server still cuts is named as *reviewed partially*; one that
+can't be fetched is named as *not reviewed*. Cloud never reports cut files.
 
 Every Data Center diff, changes-list and per-file response writes a one-line,
 content-free shape summary to the output channel (`Data Center response
@@ -141,7 +143,7 @@ review says how many in one line above the tables
 
 | Step | When | Effect |
 | --- | --- | --- |
-| Dedup (`dedupeFindings`) | always | **merge** two findings on the same file + verified line with the same meaning (the stronger severity survives); a location-unverified finding is also dropped when another pass located the same issue in the same file |
+| Dedup (`dedupeFindings`) | always | **merge** two findings on the same file + verified line with the same meaning (the stronger severity survives); a location-unverified finding is also dropped when another pass located a finding with the same title in the same file |
 | Path resolution (`resolveFindingAnchors`) | always | **drop and count** a finding whose file names nothing in the diff, after trying `./`, `a/`, `b/`, leading `/` and a unique suffix match |
 | Anchor locate (`resolveFindingAnchors`) | always | locate `anchorCode` in tiers — exact, whitespace-collapsed, then with a copied `L<n>` gutter or diff marker removed; when nothing matches, **keep** the finding as *location unverified*: no line, muted, activity-feed only when posted |
 | Confidence (`formatReview`, `confidenceThreshold`) | always | **mute** (render the confidence cell non-bold) if `confidence < threshold` — never deleted, always shown in its severity table |
@@ -205,7 +207,9 @@ When the model asks for files outside the diff, Pass 2 re-reviews the batch
 with those files rendered in a *Context files (not part of this diff)*
 section and with Pass 1's findings as a numbered list. It may add findings,
 and it retracts a Pass 1 finding only by naming its number in the meta
-line's `retract` list. Every Pass 1 finding it doesn't retract is kept
+line's `retract` list; to correct a finding's severity or wording it retracts
+the number and reports the corrected version. These instructions sit outside
+the untrusted-content fence; only the numbered list sits inside it. Every Pass 1 finding it doesn't retract is kept
 (`mergePass2Findings`), so a Pass 2 reply cut off before its meta line, or a
 failed Pass 2, can never lose a Pass 1 finding. In `deep` mode the critic
 judges each chunk with the same context files Pass 2 used, in both rounds.

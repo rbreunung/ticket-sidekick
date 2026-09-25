@@ -97,9 +97,15 @@ const dcContextQuery = (contextLines?: number): string =>
 
 const dcFilePath = (file: DcFileDiff): string | undefined => file.destination?.toString ?? file.source?.toString;
 
+/** True when a single file's diff was cut at any level — file, hunk, or segment. Shared by the
+ * per-file cutFiles detection and dcHasTruncation so the two checks cannot drift. */
+function dcFileHasTruncation(file: DcFileDiff): boolean {
+  return file.truncated === true
+    || (file.hunks ?? []).some((h) => h.truncated === true || h.segments.some((s) => s.truncated === true));
+}
+
 function dcHasTruncation(response: DcDiffResponse): boolean {
-  return response.truncated === true || response.diffs.some((f) => f.truncated === true
-    || (f.hunks ?? []).some((h) => h.truncated === true || h.segments.some((s) => s.truncated === true)));
+  return response.truncated === true || response.diffs.some((f) => dcFileHasTruncation(f));
 }
 
 export function dcDiffToUnified(response: DcDiffResponse): string {
@@ -319,16 +325,28 @@ export class BitbucketApiClient implements IBitbucketClient {
     const cutFiles: DiffCoverage['cutFiles'] = [];
     for (const file of response.diffs) {
       const path = dcFilePath(file);
-      if (path && file.truncated === true) cutFiles.push({ path });
+      if (path && dcFileHasTruncation(file)) {
+        const src = file.source?.toString;
+        cutFiles.push(src && file.destination?.toString && src !== path ? { path, srcPath: src } : { path });
+      }
     }
     if (response.truncated === true) {
       const present = new Set(response.diffs.flatMap((f) => [f.destination?.toString, f.source?.toString])
         .filter((p): p is string => typeof p === 'string'));
-      for (const change of await this.getPullRequestChanges(project, repo, prId)) {
-        const path = change.path?.toString;
-        if (!path || present.has(path) || cutFiles.some((c) => c.path === path)) continue;
-        const srcPath = change.srcPath?.toString;
-        cutFiles.push(srcPath && srcPath !== path ? { path, srcPath } : { path });
+      try {
+        for (const change of await this.getPullRequestChanges(project, repo, prId)) {
+          const path = change.path?.toString;
+          if (!path || present.has(path) || cutFiles.some((c) => c.path === path)) continue;
+          const srcPath = change.srcPath?.toString;
+          cutFiles.push(srcPath && srcPath !== path ? { path, srcPath } : { path });
+        }
+      } catch (err) {
+        // A failed changes-list request (e.g. an un-retried 500) must not abort the whole review —
+        // fall back to the file-level cutFiles already collected. `truncated` stays true below since
+        // response.truncated is true regardless.
+        this.onDiag?.('warn', 'Data Center response shape — PR changes list: request failed', {
+          project, repo, prId, status: err instanceof BitbucketApiError ? err.status : undefined,
+        });
       }
     }
     return { raw: dcDiffToUnified(response), truncated: response.truncated === true || cutFiles.length > 0, cutFiles };

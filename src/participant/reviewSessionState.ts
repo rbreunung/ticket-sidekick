@@ -526,6 +526,8 @@ const isReplyMetaObject = (obj: Record<string, unknown>): boolean => {
  * object with a string `file` is a finding. Anything else is ignored. */
 function absorbReplyValue(value: unknown, acc: ReplyAccumulator): void {
   if (Array.isArray(value)) {
+    // A bare `[]` is a readable "no findings" reply, not an unparseable one (KTD3).
+    acc.hasJson = true;
     for (const v of value) absorbReplyValue(v, acc);
     return;
   }
@@ -603,11 +605,13 @@ function matchStringEnd(text: string, start: number): number {
 /**
  * Parse a review-pass reply into findings and meta, tolerating every common shape (KTD2, R3, R4):
  * one object per line (the requested NDJSON), pretty-printed multi-line objects, a JSON array, a
- * `{"findings":[…]}` wrapper, and any of those inside a code fence. Two readings run and the one
- * that recovers more findings wins (ties go to the per-line reading):
+ * `{"findings":[…]}` wrapper, and any of those inside a code fence. Two readings run and one is
+ * chosen by comparing, in order: more findings; then has a meta line; then not truncated; then
+ * has usable JSON; remaining ties go to the per-line reading:
  * - per line — robust to a garbled line in the middle of an otherwise good NDJSON reply;
  * - balanced-value scan — handles values spanning several lines, and keeps the complete elements of
- *   an array or wrapper that was cut off.
+ *   an array or wrapper that was cut off (including a pretty-printed meta object the per-line
+ *   reading can't parse a line at a time).
  * `truncated` means the reply stopped inside an object or array; a missing meta line is not truncation.
  */
 export function parseReviewReply(raw: string): ParsedReviewReply {
@@ -629,8 +633,16 @@ export function parseReviewReply(raw: string): ParsedReviewReply {
   const byScan = emptyReply();
   const scan = scanReplyValues(text, byScan, false);
 
-  const lineWins = byLine.findings.length > byScan.findings.length
-    || (byLine.findings.length === byScan.findings.length && (byLine.hasJson || !scan.truncated));
+  const byLineTruncated = lineTail !== undefined;
+  const lineWins = byLine.findings.length !== byScan.findings.length
+    ? byLine.findings.length > byScan.findings.length
+    : byLine.hasMetaLine !== byScan.hasMetaLine
+      ? byLine.hasMetaLine
+      : byLineTruncated !== scan.truncated
+        ? !byLineTruncated
+        : byLine.hasJson !== byScan.hasJson
+          ? byLine.hasJson
+          : true;
   if (lineWins) {
     return { ...byLine, truncated: lineTail !== undefined, ...(lineTail !== undefined ? { danglingTail: lineTail } : {}) };
   }
@@ -673,7 +685,8 @@ function resolveByIds(ids: number[], findings: ReviewFinding[]): ReviewFinding[]
 export function parseFollowUpIntent(message: string): FollowUpIntent {
   // R20: only a request to add/post findings *to the review* is an add — a question that merely
   // mentions both words ("can you review whether #2 would add latency?") is answered instead.
-  if (/\b(?:add|post)\b.*?\bto\s+(?:the\s+)?review\b/i.test(message)) {
+  // "to PR review" (an optional "pr" before "review") counts too, e.g. "add #2 to PR review".
+  if (/\b(?:add|post)\b.*?\bto\s+(?:the\s+)?(?:pr\s+)?review\b/i.test(message)) {
     const numberMatches = [...message.matchAll(/#(\d+)/g)];
     const hasAll = /\ball\b/i.test(message);
     const targets: number[] | 'all' =
@@ -682,6 +695,8 @@ export function parseFollowUpIntent(message: string): FollowUpIntent {
         : 'all';
     const note = message
       .replace(/#\d+/g, '')
+      // Strip the whole phrase first so "PR" from "to PR review" doesn't leak into the note.
+      .replace(/\bto\s+(?:the\s+)?(?:pr\s+)?review\b/gi, '')
       .replace(/\b(?:can|could|would|will) you\b/gi, '')
       .replace(/\badd\b|\bpost\b|\band\b|\bto\b|\bthe\b|\breview\b|\ball\b|\bfindings?\b|\bplease\b/gi, '')
       .replace(/[,;—–?]+/g, '')
@@ -842,9 +857,13 @@ export function buildFindingFollowUpPrompt(
   return lines.join('\n');
 }
 
-/** R19: the finding number the matcher model named — `2`, `#2`, `Finding 2`, `2.` — or undefined for "none". */
+/** R19: the finding number the matcher model named — `2`, `#2`, `Finding 2`, `2.` — or undefined for
+ * "none". A reply leading with "none"/"no" is a no-match even when it mentions a number
+ * ("None of the 3 findings match"). */
 export function parseFindingMatchReply(reply: string): number | undefined {
-  const m = reply.match(/#?\s*(\d+)/);
+  const trimmed = reply.trim();
+  if (/^\W*no(ne)?\b/i.test(trimmed)) return undefined;
+  const m = trimmed.match(/^\W*(?:finding\s*)?#?\s*(\d+)\b/i) ?? trimmed.match(/(?:#|\bfinding\s*#?)\s*(\d+)\b/i);
   return m ? parseInt(m[1], 10) : undefined;
 }
 
@@ -1178,10 +1197,13 @@ export function dedupeFindings(
     }
   }
   const deduped = order.flatMap((k) => byKey.get(k)!);
-  // KTD7: an unverified finding is redundant when another pass located the same issue in the same file.
+  // KTD7: an unverified finding is dropped only when a located finding in the same file has the same
+  // normalized title. A merely similar title may be a different issue ("…on user" vs "…on response"),
+  // and a near-duplicate row is better than a lost finding.
+  const normalizeTitle = (t: string) => t.trim().toLowerCase().replace(/\s+/g, ' ');
   return deduped.filter((f) => !f.locationUnverified || !deduped.some(
     (other) => other !== f && !other.locationUnverified && other.line !== undefined
-      && other.file === f.file && sameMeaning(other, f),
+      && other.file === f.file && normalizeTitle(other.title) === normalizeTitle(f.title),
   ));
 }
 
