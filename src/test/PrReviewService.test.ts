@@ -1355,19 +1355,41 @@ describe('extractHunkAround', () => {
 
 describe('parseCriticKeep', () => {
   it('returns the kept indices from a verdict object', () => {
-    expect([...parseCriticKeep('{"keep":[1,3]}', 4)].sort()).toEqual([1, 3]);
+    expect([...parseCriticKeep('{"keep":[1,3]}', 4)!].sort()).toEqual([1, 3]);
   });
 
   it('returns an empty set when the critic keeps nothing', () => {
-    expect(parseCriticKeep('{"keep":[]}', 3).size).toBe(0);
+    expect(parseCriticKeep('{"keep":[]}', 3)!.size).toBe(0);
   });
 
-  it('fails open (keeps all) when the response is unparseable', () => {
-    expect([...parseCriticKeep('the model rambled', 3)].sort()).toEqual([1, 2, 3]);
+  it('reports an unreadable verdict (null) when the response has no JSON, so the caller keeps all', () => {
+    expect(parseCriticKeep('the model rambled', 3)).toBeNull();
   });
 
   it('extracts the verdict even with surrounding prose', () => {
-    expect([...parseCriticKeep('Here is my verdict: {"keep":[2]} done', 3)]).toEqual([2]);
+    expect([...parseCriticKeep('Here is my verdict: {"keep":[2]} done', 3)!]).toEqual([2]);
+  });
+
+  // AE6 / R11: numeric strings are read as numbers rather than silently dropping every finding.
+  it('reads numeric-string indices as numbers', () => {
+    expect([...parseCriticKeep('{"keep":["1","2"]}', 3)!].sort()).toEqual([1, 2]);
+  });
+
+  // AE6 / R11: a 0-based verdict would keep the wrong findings, so it is unreadable instead.
+  it('treats an out-of-range index (0-based numbering) as unreadable', () => {
+    expect(parseCriticKeep('{"keep":[0,1]}', 2)).toBeNull();
+  });
+
+  it('treats an index above the finding count as unreadable', () => {
+    expect(parseCriticKeep('{"keep":[1,4]}', 3)).toBeNull();
+  });
+
+  it('treats a non-numeric entry as unreadable', () => {
+    expect(parseCriticKeep('{"keep":[1,"x"]}', 3)).toBeNull();
+  });
+
+  it('treats a verdict with no keep array as unreadable', () => {
+    expect(parseCriticKeep('{"additionalFilesNeeded":[]}', 3)).toBeNull();
   });
 });
 

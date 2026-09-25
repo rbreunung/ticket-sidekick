@@ -1088,21 +1088,29 @@ export function resolveFindingAnchors(
 }
 
 /**
- * Parse a critic verdict (`{"keep":[1,3]}`) into the set of 1-based finding indices
- * to keep. Fail-open: if the response can't be parsed, keep everything — a critic
- * parse error must never silently wipe a whole review.
+ * Parse a critic verdict (`{"keep":[1,3]}`) into the set of 1-based finding indices to keep.
+ * Numeric strings are read as numbers. Returns `null` when the verdict is unreadable — no JSON,
+ * no `keep` array, a non-numeric entry, or an index outside 1..count (e.g. 0-based numbering) —
+ * so the caller keeps every finding unverified instead of dropping or mis-keeping them (R11).
+ * An empty `keep` array is a legitimate "every finding is wrong" verdict and returns an empty set.
  */
-export function parseCriticKeep(raw: string, count: number): Set<number> {
-  const all = new Set<number>(Array.from({ length: count }, (_, i) => i + 1));
+export function parseCriticKeep(raw: string, count: number): Set<number> | null {
   const json = extractJsonObject(raw);
-  if (!json) return all;
+  if (!json) return null;
+  let keep: unknown;
   try {
-    const obj = JSON.parse(json) as { keep?: unknown };
-    if (Array.isArray(obj.keep)) {
-      return new Set(obj.keep.filter((n): n is number => Number.isInteger(n)));
-    }
-  } catch { /* fall through to fail-open */ }
-  return all;
+    keep = (JSON.parse(json) as { keep?: unknown }).keep;
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(keep)) return null;
+  const kept = new Set<number>();
+  for (const entry of keep) {
+    const n = typeof entry === 'string' && /^\s*\d+\s*$/.test(entry) ? Number(entry) : entry;
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > count) return null;
+    kept.add(n);
+  }
+  return kept;
 }
 
 /**

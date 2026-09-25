@@ -12,7 +12,6 @@ import {
   stripUpfrontQuestion,
   buildPrContextPrompt,
   buildDiffAwarePrompt,
-  extractJsonObject,
   parseReviewReply,
   buildAdaptiveChunks,
   resolveFindingAnchors,
@@ -1353,12 +1352,9 @@ export function createBitbucketParticipant(
                     },
                   );
                   totalOutputChars += round2Raw.length;
-                  // Only trust round 2 when it actually parses. A successful-but-garbled
-                  // reply must not silently replace round 1's real keep decision with
-                  // parseCriticKeep's fail-open "keep everything" default — that would
-                  // contradict the fail-soft fallback below, which only triggers on a
-                  // thrown exception, not on a reply that came back but made no sense.
-                  if (extractJsonObject(round2Raw)) {
+                  // Only trust round 2 when its verdict is readable. A successful-but-garbled
+                  // reply must not replace round 1's real keep decision with an unreadable one.
+                  if (parseCriticKeep(round2Raw, batch.items.length) !== null) {
                     criticRaw = round2Raw;
                     logReview('info', formatCallLine({
                       runTag, pass: 'critic-r2', batch: i + 1, totalBatches: chunks.length, attempt: round2Attempt.attempt,
@@ -1366,7 +1362,7 @@ export function createBitbucketParticipant(
                       durationMs: round2Attempt.durationMs, status: 'ok',
                     }));
                   } else {
-                    logReview('warn', `Critic round 2 returned no parseable JSON — keeping round 1's decision — batch ${i + 1}`, {
+                    logReview('warn', `Critic round 2 returned no readable verdict — keeping round 1's decision — batch ${i + 1}`, {
                       batch: i + 1, responseChars: round2Raw.length,
                     });
                   }
@@ -1380,6 +1376,18 @@ export function createBitbucketParticipant(
             }
 
             const keep = parseCriticKeep(criticRaw, batch.items.length);
+            if (keep === null) {
+              // R11: an unreadable verdict must neither wipe nor mis-keep findings — keep them all, unverified.
+              anyBatchFailed = true;
+              logReview('warn', `Critic verdict unreadable — keeping ${batch.items.length} finding(s) unverified — batch ${i + 1}`, {
+                batch: i + 1, responseChars: criticRaw.length,
+              });
+              stream.markdown(
+                `_⚠ Critic verification for batch ${i + 1} returned an unreadable verdict — keeping ${batch.items.length} finding${batch.items.length !== 1 ? 's' : ''} unverified._\n\n`,
+              );
+              verified.push(...batch.items);
+              continue;
+            }
             batch.items.forEach((f, idx) => {
               if (keep.has(idx + 1)) verified.push(f);
               else droppedByCritic++;
