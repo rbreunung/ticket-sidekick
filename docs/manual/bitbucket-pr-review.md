@@ -17,8 +17,8 @@ The plugin:
 
 1. Fetches PR metadata and the full unified diff
 2. Applies any configured `reviewExcludePatterns` to skip files before analysis
-3. Splits the changed files into chunks sized to fill the model's actual context window — a 140-file PR on Claude Sonnet typically needs only 2 LLM calls
-4. For each chunk: sends a structured diff-only prompt and, if the LLM requests additional context files, fetches up to 5 and re-analyses (two-pass review); the second pass is skipped in `quick` mode
+3. Splits the changed files into chunks sized to the model's context window, capped at about 24 000 tokens per call so every file gets a real share of the model's answer — large PRs take more calls in exchange for depth
+4. For each chunk: sends a structured diff-only prompt and, if the LLM requests additional context files, fetches them (as many as fit) and runs a second pass that sees both those files and the first pass's findings — it can add findings or retract one, and keeps the rest; the second pass is skipped in `quick` mode
 5. Merges all findings across chunks and streams a single structured report ordered by file, with numbered findings and severity badges
 
 > **Deleted files are reviewed** — removing a validation or error-handling block can be just as risky as adding code. Files with no textual diff (binary, pure renames, or mode-only changes) are skipped and reported in the chat.
@@ -113,7 +113,7 @@ add that this affects all authenticated endpoints
 
 ## Reducing token usage on large PRs
 
-The reviewer automatically packs as many files as possible into each LLM call based on the model's actual context window. On Claude Sonnet (200k tokens) a 140-file PR typically needs only 2 LLM calls instead of 14.
+The reviewer packs files into each LLM call up to the smaller of the model's context budget and about 24 000 tokens. The cap trades a few more calls on large PRs for a more thorough review of each file, and leaves room for the second pass's context files.
 
 **Quick mode** — skips the second LLM pass (diffs only, no additional file context):
 
