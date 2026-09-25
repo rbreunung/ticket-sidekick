@@ -1,24 +1,99 @@
-import type { BitbucketAuthType, BitbucketCommentResult, BitbucketPR, BitbucketUser, IBitbucketClient, InlineAnchor } from './IBitbucketClient';
+import type { BitbucketAuthType, BitbucketCommentResult, BitbucketPR, BitbucketUser, DiffCoverage, IBitbucketClient, InlineAnchor, PullRequestFileDiff } from './IBitbucketClient';
 import { fetchWithRetry } from '../utils/fetchWithRetry';
 import { BitbucketApiError } from '../utils/apiError';
 import type { DiagLogger } from '../utils/diagTypes';
 
 export { BitbucketApiError } from '../utils/apiError';
 
-// Bitbucket Data Center /pull-requests/{id}/diff response shape (API 1.0)
+// Bitbucket Data Center /pull-requests/{id}/diff response shape (API 1.0). The `truncated` flags
+// mark where the server cut a large diff short; their exact placement is not verified against a
+// live server, which is why every response also logs a content-free shape summary (R25).
 interface DcDiffLine { line: string; truncated?: boolean; }
-interface DcDiffSegment { type: 'ADDED' | 'REMOVED' | 'CONTEXT'; lines: DcDiffLine[]; }
+interface DcDiffSegment { type: 'ADDED' | 'REMOVED' | 'CONTEXT'; lines: DcDiffLine[]; truncated?: boolean; }
 interface DcDiffHunk {
   sourceLine: number; sourceSpan: number;
   destinationLine: number; destinationSpan: number;
   segments: DcDiffSegment[];
+  truncated?: boolean;
 }
 interface DcFileDiff {
   source: { toString: string } | null;
   destination: { toString: string } | null;
   hunks?: DcDiffHunk[];
+  truncated?: boolean;
 }
-interface DcDiffResponse { diffs: DcFileDiff[]; }
+interface DcDiffResponse { diffs: DcFileDiff[]; truncated?: boolean; }
+
+// /pull-requests/{id}/changes page (API 1.0) — the PR's full changed-path list.
+interface DcChange { path?: { toString?: string }; srcPath?: { toString?: string }; type?: string; }
+interface DcChangesPage { values?: DcChange[]; isLastPage?: boolean; nextPageStart?: number; }
+
+/** Safety bound on changes-list pages (1000 paths each). */
+const MAX_CHANGES_PAGES = 20;
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/**
+ * R25: a content-free, one-line description of a Data Center diff response — top-level keys, every
+ * `truncated` flag and the level it sits at, file/hunk/segment/line counts, and per-file
+ * source/destination presence. Never reads line text, so it is safe to write to the output channel.
+ * Never throws: an unexpected shape is described, not parsed.
+ */
+export function summarizeDcDiffShape(response: unknown): string {
+  if (!isRecord(response)) return `not an object (${Array.isArray(response) ? 'array' : typeof response})`;
+  const keys = `keys=[${Object.keys(response).join(',')}]`;
+  if (!Array.isArray(response.diffs)) return `${keys} no diffs array`;
+  let hunks = 0, segments = 0, lines = 0;
+  const flagged = { files: 0, hunks: 0, segments: 0, lines: 0 };
+  const presence = { both: 0, srcOnly: 0, dstOnly: 0 };
+  for (const file of response.diffs as unknown[]) {
+    if (!isRecord(file)) continue;
+    if (file.truncated === true) flagged.files++;
+    const hasSrc = isRecord(file.source), hasDst = isRecord(file.destination);
+    if (hasSrc && hasDst) presence.both++; else if (hasSrc) presence.srcOnly++; else if (hasDst) presence.dstOnly++;
+    for (const hunk of Array.isArray(file.hunks) ? file.hunks : []) {
+      hunks++;
+      if (isRecord(hunk) && hunk.truncated === true) flagged.hunks++;
+      for (const segment of isRecord(hunk) && Array.isArray(hunk.segments) ? hunk.segments : []) {
+        segments++;
+        if (isRecord(segment) && segment.truncated === true) flagged.segments++;
+        for (const line of isRecord(segment) && Array.isArray(segment.lines) ? segment.lines : []) {
+          lines++;
+          if (isRecord(line) && line.truncated === true) flagged.lines++;
+        }
+      }
+    }
+  }
+  const truncatedLevels = [
+    response.truncated === true ? 'response' : '',
+    `files=${flagged.files} hunks=${flagged.hunks} segments=${flagged.segments} lines=${flagged.lines}`,
+  ].filter(Boolean).join(' ');
+  return `${keys} truncated: ${truncatedLevels} | counts: files=${response.diffs.length} hunks=${hunks} segments=${segments} lines=${lines}`
+    + ` | paths: src+dst=${presence.both} src-only=${presence.srcOnly} dst-only=${presence.dstOnly}`;
+}
+
+/** R25: the same kind of content-free summary for one page of the changes list. */
+function summarizeDcChangesShape(page: unknown): string {
+  if (!isRecord(page)) return `not an object (${typeof page})`;
+  const values = Array.isArray(page.values) ? page.values : undefined;
+  const types = new Map<string, number>();
+  let withSrcPath = 0;
+  for (const v of values ?? []) {
+    if (!isRecord(v)) continue;
+    const t = typeof v.type === 'string' ? v.type : '?';
+    types.set(t, (types.get(t) ?? 0) + 1);
+    if (isRecord(v.srcPath)) withSrcPath++;
+  }
+  return `keys=[${Object.keys(page).join(',')}] values=${values ? values.length : 'missing'} isLastPage=${String(page.isLastPage)}`
+    + ` nextPageStart=${String(page.nextPageStart)} types={${[...types].map(([t, n]) => `${t}:${n}`).join(',')}} srcPath=${withSrcPath}`;
+}
+
+const dcFilePath = (file: DcFileDiff): string | undefined => file.destination?.toString ?? file.source?.toString;
+
+function dcHasTruncation(response: DcDiffResponse): boolean {
+  return response.truncated === true || response.diffs.some((f) => f.truncated === true
+    || (f.hunks ?? []).some((h) => h.truncated === true || h.segments.some((s) => s.truncated === true)));
+}
 
 export function dcDiffToUnified(response: DcDiffResponse): string {
   return response.diffs.map((fileDiff) => {
@@ -224,6 +299,89 @@ export class BitbucketApiClient implements IBitbucketClient {
       `/projects/${project}/repos/${repo}/pull-requests/${prId}/diff?withComments=false${ctxQuery}`,
     );
     return dcDiffToUnified(data);
+  }
+
+  async getPullRequestDiffWithCoverage(project: string, repo: string, prId: number, contextLines?: number): Promise<DiffCoverage> {
+    if (this.authType === 'cloud') {
+      return { raw: await this.getPullRequestDiff(project, repo, prId, contextLines), truncated: false, cutFiles: [] };
+    }
+    const ctx = typeof contextLines === 'number' && contextLines >= 0 ? `&contextLines=${Math.floor(contextLines)}` : '';
+    const data = await this.dcRequest<unknown>(`/projects/${project}/repos/${repo}/pull-requests/${prId}/diff?withComments=false${ctx}`);
+    this.logDcShape('PR diff', summarizeDcDiffShape(data), { project, repo, prId });
+    if (!isRecord(data) || !Array.isArray(data.diffs)) {
+      const keys = isRecord(data) ? Object.keys(data).join(', ') : typeof data;
+      throw new BitbucketApiError(`Unexpected Data Center diff response — no diffs array (keys: ${keys})`, 200, `pull-requests/${prId}/diff`);
+    }
+    const response = data as unknown as DcDiffResponse;
+    const cutFiles: DiffCoverage['cutFiles'] = [];
+    for (const file of response.diffs) {
+      const path = dcFilePath(file);
+      if (path && file.truncated === true) cutFiles.push({ path });
+    }
+    if (response.truncated === true) {
+      const present = new Set(response.diffs.flatMap((f) => [f.destination?.toString, f.source?.toString])
+        .filter((p): p is string => typeof p === 'string'));
+      for (const change of await this.getPullRequestChanges(project, repo, prId)) {
+        const path = change.path?.toString;
+        if (!path || present.has(path) || cutFiles.some((c) => c.path === path)) continue;
+        const srcPath = change.srcPath?.toString;
+        cutFiles.push(srcPath && srcPath !== path ? { path, srcPath } : { path });
+      }
+    }
+    return { raw: dcDiffToUnified(response), truncated: response.truncated === true || cutFiles.length > 0, cutFiles };
+  }
+
+  async getPullRequestFileDiff(
+    project: string,
+    repo: string,
+    prId: number,
+    path: string,
+    contextLines?: number,
+    srcPath?: string,
+  ): Promise<PullRequestFileDiff> {
+    if (this.authType === 'cloud') {
+      const whole = await this.getPullRequestDiff(project, repo, prId, contextLines);
+      const section = whole.split(/(?=^diff --git )/m).find((part) => part.startsWith('diff --git ') && part.includes(` b/${path}\n`));
+      return { raw: section ?? '', truncated: false };
+    }
+    const encPath = path.split('/').map(encodeURIComponent).join('/');
+    const ctx = typeof contextLines === 'number' && contextLines >= 0 ? `&contextLines=${Math.floor(contextLines)}` : '';
+    const src = srcPath ? `&srcPath=${encodeURIComponent(srcPath)}` : '';
+    let data: unknown;
+    try {
+      data = await this.dcRequest<unknown>(`/projects/${project}/repos/${repo}/pull-requests/${prId}/diff/${encPath}?withComments=false${ctx}${src}`);
+    } catch (err) {
+      this.onDiag?.('warn', `Data Center response shape — per-file diff ${path}: request failed`, {
+        project, repo, prId, path, status: err instanceof BitbucketApiError ? err.status : undefined,
+      });
+      throw err;
+    }
+    this.logDcShape(`per-file diff ${path}`, summarizeDcDiffShape(data), { project, repo, prId, path });
+    if (!isRecord(data) || !Array.isArray(data.diffs)) {
+      const keys = isRecord(data) ? Object.keys(data).join(', ') : typeof data;
+      throw new BitbucketApiError(`Unexpected Data Center per-file diff response for ${path} (keys: ${keys})`, 200, `diff/${path}`);
+    }
+    const response = data as unknown as DcDiffResponse;
+    return { raw: dcDiffToUnified(response), truncated: dcHasTruncation(response) };
+  }
+
+  /** Every changed path in the PR, from the paged Data Center changes list. */
+  private async getPullRequestChanges(project: string, repo: string, prId: number): Promise<DcChange[]> {
+    const changes: DcChange[] = [];
+    let start = 0;
+    for (let page = 0; page < MAX_CHANGES_PAGES; page++) {
+      const data = await this.dcRequest<unknown>(`/projects/${project}/repos/${repo}/pull-requests/${prId}/changes?limit=1000&start=${start}`);
+      this.logDcShape(`changes page ${page + 1}`, summarizeDcChangesShape(data), { project, repo, prId });
+      const body = (isRecord(data) ? data : {}) as DcChangesPage;
+      changes.push(...(Array.isArray(body.values) ? body.values : []));
+      if (body.isLastPage !== false || typeof body.nextPageStart !== 'number') break;
+      start = body.nextPageStart;
+    }
+    return changes;
+  }
+
+  private logDcShape(label: string, summary: string, details: Record<string, unknown>): void {
+    this.onDiag?.('info', `Data Center response shape — ${label}: status=200 ${summary}`, details);
   }
 
   async getFileContent(project: string, repo: string, path: string, commitHash: string): Promise<string> {

@@ -431,3 +431,59 @@ describe('Pass 2 refines Pass 1, and the critic sees the same context (U8)', () 
     expect(text).toContain('2 findings were dropped because they named files outside this PR');
   });
 });
+
+describe('Data Center diff recovery (U9)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const fileLines = (n: number) => [`const value${n} = read${n}();`];
+  const fileDiff = (n: number) => makeDiff([{ path: `src/f${n}.ts`, lines: fileLines(n) }]);
+  const reviewEachFile = (prompt: string): string => {
+    const lines = [...prompt.matchAll(/### File: src\/f(\d+)\.ts/g)]
+      .map((m) => findingLine(`src/f${m[1]}.ts`, `const value${m[1]} = read${m[1]}();`, `Issue in f${m[1]}`));
+    return [...lines, META_LINE].join('\n');
+  };
+
+  // AE9 / R17
+  it('fetches each cut file on its own and reviews every file', async () => {
+    const harness = createHarness();
+    harness.client.rawDiff = [1, 2, 3].map(fileDiff).join('');
+    harness.client.cutFiles = [{ path: 'src/f4.ts' }, { path: 'src/f5.ts' }];
+    harness.client.perFileDiffs.set('src/f4.ts', { raw: fileDiff(4), truncated: false });
+    harness.client.perFileDiffs.set('src/f5.ts', { raw: fileDiff(5), truncated: false });
+    const { text } = await harness.turn(PR_URL, reviewEachFile);
+
+    expect(harness.client.getPullRequestFileDiffCalls.map((c) => c.path)).toEqual(['src/f4.ts', 'src/f5.ts']);
+    for (const n of [1, 2, 3, 4, 5]) expect(text).toContain(`Issue in f${n}`);
+    expect(text).not.toContain('reviewed partially');
+  });
+
+  it('names a file that is still cut after its own fetch as reviewed partially', async () => {
+    const harness = createHarness();
+    harness.client.rawDiff = fileDiff(1);
+    harness.client.cutFiles = [{ path: 'src/f2.ts' }];
+    harness.client.perFileDiffs.set('src/f2.ts', { raw: fileDiff(2), truncated: true });
+    const { text } = await harness.turn(PR_URL, reviewEachFile);
+
+    expect(text).toContain('src/f2.ts');
+    expect(text).toContain('reviewed partially');
+    expect(text).toContain('Issue in f2');
+  });
+
+  it('names a file whose own fetch fails as not reviewed, and reviews the rest', async () => {
+    const harness = createHarness();
+    harness.client.rawDiff = fileDiff(1);
+    harness.client.cutFiles = [{ path: 'src/f2.ts' }];
+    const { text } = await harness.turn(PR_URL, reviewEachFile);
+
+    expect(text).toMatch(/src\/f2\.ts.*not reviewed/);
+    expect(text).toContain('Issue in f1');
+  });
+
+  it('makes no per-file calls for a complete diff', async () => {
+    const harness = createHarness();
+    harness.client.rawDiff = fileDiff(1);
+    await harness.turn(PR_URL, reviewEachFile);
+    expect(harness.client.getPullRequestFileDiffCalls).toEqual([]);
+  });
+});

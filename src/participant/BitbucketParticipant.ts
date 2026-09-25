@@ -1081,10 +1081,45 @@ export function createBitbucketParticipant(
       });
       // Widen surrounding context (default 12) so the reviewer sees the enclosing code,
       // not just the changed lines. Applies in quick mode too — only Pass 2 is skipped there.
-      const rawDiff = await client.getPullRequestDiff(parsed.project, parsed.repo, parsed.prId, config.reviewContextLines);
+      const coverage = await client.getPullRequestDiffWithCoverage(parsed.project, parsed.repo, parsed.prId, config.reviewContextLines);
+      let rawDiff = coverage.raw;
 
       // Apply exclusion patterns before chunking
       let fileDiffs = parseDiff(rawDiff);
+
+      // R17: Data Center cuts very large diffs short. Fetch each cut file on its own and put its
+      // diff in place of whatever part of it (if any) made it into the PR diff.
+      if (coverage.cutFiles.length > 0) {
+        lastStage = 'recovering cut files';
+        const n = coverage.cutFiles.length;
+        stream.markdown(`_The server cut this PR's diff short — fetching ${n} file${n !== 1 ? 's' : ''} individually…_\n\n`);
+        logReview('warn', `PR diff truncated by the server — recovering ${n} file(s)`, {
+          runTag, cutFiles: coverage.cutFiles.map((c) => c.path),
+        });
+        const partial: string[] = [];
+        const unrecovered: string[] = [];
+        for (const cut of coverage.cutFiles) {
+          try {
+            const recovered = await client.getPullRequestFileDiff(
+              parsed.project, parsed.repo, parsed.prId, cut.path, config.reviewContextLines, cut.srcPath,
+            );
+            const pieces = parseDiff(recovered.raw);
+            if (pieces.length === 0) throw new Error('the server returned no diff for this file');
+            fileDiffs = [...fileDiffs.filter((d) => d.path !== cut.path), ...pieces];
+            rawDiff += recovered.raw;
+            if (recovered.truncated) partial.push(cut.path);
+          } catch (err) {
+            unrecovered.push(cut.path);
+            logReview('warn', `Could not fetch cut file ${cut.path}`, { runTag, path: cut.path, error: err instanceof Error ? err.message : String(err) });
+          }
+        }
+        if (partial.length > 0) {
+          stream.markdown(`_⚠ Still cut short by the server, reviewed partially: ${partial.join(', ')}._\n\n`);
+        }
+        if (unrecovered.length > 0) {
+          stream.markdown(`_⚠ ${unrecovered.join(', ')} could not be fetched and ${unrecovered.length === 1 ? 'was' : 'were'} not reviewed._\n\n`);
+        }
+      }
 
       // Files with no hunks carry no reviewable text (binary, pure rename, or mode-only).
       // Deletions DO have hunks (removed lines), so they pass this filter and are reviewed.
