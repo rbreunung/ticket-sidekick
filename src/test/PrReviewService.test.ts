@@ -6,7 +6,7 @@ import {
   numberDiffLines, locateAnchor, resolveFindingAnchors,
   estimateChunkTokens, selectFilesWithinBudget, MAX_CONTEXT_FILES_PER_BATCH, REVIEW_CHUNK_TOKEN_CAP,
   parseCriticKeep, parseCriticAdditionalFiles, dedupeFindings, extractHunkAround,
-  parseFollowUpIntent, buildPrContextPrompt, buildDiffAwarePrompt,
+  parseFollowUpIntent, buildPrContextPrompt, buildDiffAwarePrompt, buildFindingFollowUpPrompt, parseFindingMatchReply, buildStoredReviewDiff,
   parseUpfrontQuestion, stripUpfrontQuestion,
   formatCallLine, formatFindingsFunnel, buildRunTag,
   buildTruncationEvent, formatRecoveryDecision, formatStructuredRunRecord,
@@ -976,7 +976,20 @@ describe('parseFollowUpIntent', () => {
       expect(parseFollowUpIntent('add #2 #2 to review')).toMatchObject({ kind: 'add', targets: [2], note: '' });
     });
 
-    it('treats "add all to review" as targets: all', () => {
+    // R20 / AE10: a question that mentions "review" and "add" is answered, not turned into a comment preview.
+  it('answers a question that mentions review before add', () => {
+    expect(parseFollowUpIntent('Can you review whether #2 would add latency?')).toMatchObject({ kind: 'explain', findingRef: 2 });
+  });
+
+  it('treats a polite request to add a finding to the review as add', () => {
+    expect(parseFollowUpIntent('Can you add #2 to the review?')).toMatchObject({ kind: 'add', targets: [2] });
+  });
+
+  it('treats "post #1 to the review" as add', () => {
+    expect(parseFollowUpIntent('post #1 to the review')).toMatchObject({ kind: 'add', targets: [1] });
+  });
+
+  it('treats "add all to review" as targets: all', () => {
       expect(parseFollowUpIntent('add all to review')).toMatchObject({ kind: 'add', targets: 'all', note: '' });
     });
 
@@ -2739,6 +2752,76 @@ describe('buildPrContextPrompt', () => {
   });
 });
 
+describe('follow-up context (U10)', () => {
+  const finding: ReviewFinding = {
+    id: 3, file: 'src/db.ts', line: 42, relatedLines: [40], severity: 'critical', title: 'SQL injection',
+    description: 'Unsanitised input.', recommendation: 'Use params', diffHunk: '@@ -40,3 +40,3 @@\nL42 +q(sql)',
+  };
+  const session = {
+    prTitle: 'Add OAuth support', prDescription: 'Adds token refresh.', upfrontQuestion: 'Does this break concurrent writes?',
+  };
+
+  // R18
+  it('builds a #N follow-up prompt with the PR title, description, upfront question and the finding\'s code', () => {
+    const prompt = buildFindingFollowUpPrompt(session, finding, 'why is this critical?');
+    expect(prompt).toContain('Add OAuth support');
+    expect(prompt).toContain('Adds token refresh.');
+    expect(prompt).toContain('Does this break concurrent writes?');
+    expect(prompt).toContain('File: src/db.ts, Line: 42');
+    expect(prompt).toContain('Related lines: L40');
+    expect(prompt).toContain('«UNTRUSTED-CONTENT»\n@@ -40,3 +40,3 @@');
+    expect(prompt).toContain("Developer's question: why is this critical?");
+  });
+
+  it('builds a #N follow-up prompt without optional context when the session has none', () => {
+    const prompt = buildFindingFollowUpPrompt({ prTitle: 'T' }, { ...finding, diffHunk: undefined }, 'q');
+    expect(prompt).not.toContain('undefined');
+    expect(prompt).not.toContain('UNTRUSTED-CONTENT');
+  });
+
+  it('includes the upfront question in the findings-only PR prompt', () => {
+    expect(buildPrContextPrompt({ ...session, findings: [] }, 'q')).toContain('Does this break concurrent writes?');
+  });
+
+  // R19 / AE10
+  it.each([['2', 2], ['#2', 2], ['Finding 2', 2], ['2.', 2], ['Finding #2 — the SQL issue', 2], ['I think 3 or 4', 3]])(
+    'reads the matched finding number from %j',
+    (reply, expected) => { expect(parseFindingMatchReply(reply)).toBe(expected); },
+  );
+
+  it('reads "none" as no match', () => {
+    expect(parseFindingMatchReply('none')).toBeUndefined();
+    expect(parseFindingMatchReply('No matching finding.')).toBeUndefined();
+  });
+
+  // R22
+  it('stores only reviewed files, files with findings first, dropping whole files to fit', () => {
+    const diffs = [
+      { path: 'src/a.ts', diff: 'diff --git a/src/a.ts b/src/a.ts\n+' + 'a'.repeat(50) + '\n' },
+      { path: 'src/b.ts', diff: 'diff --git a/src/b.ts b/src/b.ts\n+' + 'b'.repeat(50) + '\n' },
+      { path: 'src/c.ts', diff: 'diff --git a/src/c.ts b/src/c.ts\n+' + 'c'.repeat(50) + '\n' },
+    ];
+    const stored = buildStoredReviewDiff(diffs, [{ file: 'src/c.ts' }], diffs[0].diff.length * 2 + 5);
+    expect(stored.rawDiff.startsWith('diff --git a/src/c.ts')).toBe(true);
+    expect(stored.rawDiff).toContain('diff --git a/src/a.ts');
+    expect(stored.rawDiff).not.toContain('diff --git a/src/b.ts');
+    expect(stored.truncated).toBe(true);
+    expect(stored.omittedFiles).toEqual(['src/b.ts']);
+  });
+
+  it('keeps the pieces of a split file together', () => {
+    const diffs = [
+      { path: 'src/big.ts', diff: 'diff --git a/src/big.ts b/src/big.ts\n@@ -1 +1 @@\n+one\n' },
+      { path: 'src/other.ts', diff: 'diff --git a/src/other.ts b/src/other.ts\n+x\n' },
+      { path: 'src/big.ts', diff: 'diff --git a/src/big.ts b/src/big.ts\n@@ -90 +90 @@\n+two\n' },
+    ];
+    const stored = buildStoredReviewDiff(diffs, [], 100_000);
+    expect(stored.rawDiff.indexOf('+two')).toBeLessThan(stored.rawDiff.indexOf('src/other.ts'));
+    expect(stored.truncated).toBe(false);
+    expect(stored.omittedFiles).toEqual([]);
+  });
+});
+
 describe('buildDiffAwarePrompt', () => {
   it('includes raw diff when present', () => {
     const session = {
@@ -2754,18 +2837,29 @@ describe('buildDiffAwarePrompt', () => {
     expect(out).toContain('Question: Did I regress?');
   });
 
-  it('truncates the diff to maxDiffChars and notes the truncation', () => {
+  // R22: a follow-up never gets a diff cut mid-file — whole files are dropped, and named.
+  it('drops whole files to fit maxDiffChars and names the omitted ones', () => {
+    const first = 'diff --git a/a.ts b/a.ts\n+' + 'x'.repeat(40) + '\n';
+    const second = 'diff --git a/b.ts b/b.ts\n+' + 'y'.repeat(40) + '\n';
+    const session = { prTitle: 'Test', prDescription: '', changedFiles: [], findings: [], rawDiff: first + second };
+    const out = buildDiffAwarePrompt(session as any, 'Did I regress?', first.length + 5);
+    expect(out).toContain('x'.repeat(40));
+    expect(out).not.toContain('y'.repeat(40));
+    expect(out).toMatch(/omitted.*b\.ts/i);
+  });
+
+  it('names files already omitted when the diff was stored', () => {
     const session = {
-      prTitle: 'Test',
-      prDescription: '',
-      changedFiles: [],
-      findings: [],
-      rawDiff: 'x'.repeat(100),
+      prTitle: 'Test', prDescription: '', changedFiles: [], findings: [],
+      rawDiff: 'diff --git a/a.ts b/a.ts', rawDiffTruncated: true, rawDiffOmittedFiles: ['src/big.ts'],
     };
-    const out = buildDiffAwarePrompt(session as any, 'Did I regress?', 20);
-    expect(out).toContain('x'.repeat(20));
-    expect(out).not.toContain('x'.repeat(21));
-    expect(out).toContain('truncated, showing 20 of 100 chars');
+    expect(buildDiffAwarePrompt(session as any, 'q', 10000)).toMatch(/omitted.*src\/big\.ts/i);
+  });
+
+  // R18
+  it('includes the review\'s upfront question', () => {
+    const session = { prTitle: 'T', findings: [], rawDiff: 'diff --git a/x b/x', upfrontQuestion: 'Does this break concurrent writes?' };
+    expect(buildDiffAwarePrompt(session as any, 'q')).toContain('Does this break concurrent writes?');
   });
 
   it('notes write-time truncation even when the stored diff itself is not re-truncated at read time', () => {

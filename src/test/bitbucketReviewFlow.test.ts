@@ -487,3 +487,56 @@ describe('Data Center diff recovery (U9)', () => {
     expect(harness.client.getPullRequestFileDiffCalls).toEqual([]);
   });
 });
+
+describe('follow-ups keep the review\'s context (U10)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const reviewReply = [findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'SQL injection', 'critical'), META_LINE].join('\n');
+
+  // R18
+  it('gives a #N follow-up the upfront question and the PR description', async () => {
+    const harness = createHarness();
+    const first = await harness.turn(`${PR_URL} -- does this break concurrent writes?`, [reviewReply]);
+    await harness.turn('#1 why is this critical?', ['Because the query is built from input.'], [sessionTurn(first.result)]);
+
+    const followUp = harness.prompts.at(-1)!;
+    expect(followUp).toContain('does this break concurrent writes?');
+    expect(followUp).toContain('Implements OAuth 2.0 login with Google.');
+    expect(followUp).toContain('Title: SQL injection');
+  });
+
+  // R19 / AE10
+  it('explains the finding the matcher names as "#1"', async () => {
+    const harness = createHarness();
+    const first = await harness.turn(PR_URL, [reviewReply]);
+    const { text } = await harness.turn('tell me more about the query problem', ['#1', 'It concatenates input.'], [sessionTurn(first.result)]);
+
+    expect(text).toContain('Finding #1 — SQL injection');
+    expect(text).toContain('It concatenates input.');
+  });
+
+  // R20 / AE10
+  it('answers a question that mentions review and add instead of opening a comment preview', async () => {
+    const harness = createHarness();
+    const first = await harness.turn(PR_URL, [reviewReply]);
+    const { text } = await harness.turn('Can you review whether #1 would add latency?', ['No noticeable latency.'], [sessionTurn(first.result)]);
+
+    expect(text).toContain('No noticeable latency.');
+    expect(text).not.toContain('Preview:');
+  });
+
+  // R22
+  it('stores only the reviewed files\' diff for later follow-ups', async () => {
+    const harness = createHarness({ reviewExcludePatterns: ['*.md'] });
+    harness.client.rawDiff = makeDiff([
+      { path: 'src/app.ts', lines: ['const app = start();'] },
+      { path: 'README.md', lines: ['# Docs'] },
+    ]);
+    await harness.turn(PR_URL, [META_LINE]);
+
+    const session = harness.workspaceState.get('bitbucket.session.review') as { rawDiff: string };
+    expect(session.rawDiff).toContain('src/app.ts');
+    expect(session.rawDiff).not.toContain('README.md');
+  });
+});
