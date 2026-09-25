@@ -253,15 +253,67 @@ describe('PrReviewService.buildPrompt', () => {
     expect(prompt).toContain('const x = 1;');
   });
 
-  it('omits full content for files not in the fileContents map', () => {
-    const client = new MockBitbucketClient();
-    const service = new PrReviewService(client);
-    const contents = new Map([['src/other.ts', 'unrelated']]);
+  // AE4 / R6: a fetched context file that is not in the diff must actually reach the model.
+  it('renders a fetched file that is not in the diff in its own context-files section', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const contents = new Map([['src/util.ts', 'export const helper = () => 42;']]);
 
     const prompt = service.buildPrompt(pr, fileDiffs, contents);
 
-    expect(prompt).toContain('src/foo.ts');
-    expect(prompt).not.toContain('Full content');
+    expect(prompt).toContain('Context files (not part of this diff)');
+    expect(prompt).toContain('### Context file: src/util.ts');
+    expect(prompt).toContain('export const helper = () => 42;');
+    expect(prompt).toContain('second-pass review');
+    const fenceStart = prompt.indexOf('«UNTRUSTED-CONTENT»');
+    expect(prompt.indexOf('export const helper')).toBeGreaterThan(fenceStart);
+  });
+
+  it('renders a diff file\'s full content once, next to its diff, not again as a context file', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const contents = new Map([['src/foo.ts', 'const x = 1;\nconst y = 2;']]);
+    const prompt = service.buildPrompt(pr, fileDiffs, contents);
+    expect(prompt.split('const y = 2;')).toHaveLength(2);
+    expect(prompt).not.toContain('### Context file: src/foo.ts');
+  });
+
+  it('adds no second-pass note when no context content is rendered', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const prompt = service.buildPrompt(pr, fileDiffs, new Map());
+    expect(prompt).not.toContain('second-pass review');
+  });
+
+  // R7 / KTD5: Pass 2 sees Pass 1's findings and how to retract one.
+  it('lists prior findings as a numbered list with the retract instruction for Pass 2', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const prior = [
+      { file: 'src/foo.ts', line: 1, severity: 'warning' as const, title: 'Unused const', description: 'x is unused', recommendation: 'Remove it' },
+      { file: 'src/foo.ts', severity: 'suggestion' as const, title: 'Naming', description: 'x is vague', recommendation: 'Rename' },
+    ];
+    const prompt = service.buildPrompt(pr, fileDiffs, new Map([['src/util.ts', 'u']]), undefined, false, { priorFindings: prior });
+    expect(prompt).toContain('[1] (warning) src/foo.ts:L1 — Unused const');
+    expect(prompt).toContain('[2] (suggestion) src/foo.ts — Naming');
+    expect(prompt).toContain('"retract"');
+  });
+
+  // KTD4: a continuation lists what was already reported and asks only for new findings.
+  it('lists already-reported findings for a continuation and asks only for new ones', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const reported = [{ file: 'src/foo.ts', line: 1, severity: 'warning' as const, title: 'Unused const', description: 'd', recommendation: 'r' }];
+    const prompt = service.buildPrompt(pr, fileDiffs, undefined, undefined, false, { alreadyReported: reported });
+    expect(prompt).toContain('Already reported');
+    expect(prompt).toContain('src/foo.ts:L1 — Unused const');
+    expect(prompt).toMatch(/only findings that are NOT in the already-reported list/i);
+  });
+
+  // R16: one consistent set of limits and guidance that asks for every real issue.
+  it('uses one code-example limit, asks for every real issue, and requires the meta line even with no findings', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const prompt = service.buildPrompt(pr, fileDiffs);
+    expect(prompt).not.toContain('3–15 lines');
+    expect(prompt).not.toMatch(/short list of verified issues is better/);
+    expect(prompt).toMatch(/Report every real issue/);
+    expect(prompt).toMatch(/If there are no findings, output only the meta line/);
+    expect(prompt).toContain(`Maximum ${MAX_CONTEXT_FILES_PER_BATCH} files`);
   });
 
   it('includes grounding rules in every prompt', () => {
@@ -1486,6 +1538,20 @@ describe('PrReviewService.buildCriticPrompt', () => {
     );
     expect(prompt).not.toContain('Full contents');
     expect(prompt).toContain('a requested file may be missing if it did not fit');
+  });
+
+  it('renders a critic-requested file that is not in the diff', () => {
+    const service = new PrReviewService(new MockBitbucketClient());
+    const findings = [
+      { file: 'src/a.ts', line: 5, severity: 'critical' as const, title: 'SQLi', description: 'concat', recommendation: 'params' },
+    ];
+    const prompt = service.buildCriticPrompt(
+      pr, [{ path: 'src/a.ts', diff: '@@ -1 +5 @@\n+const x = q(sql);' }], findings, undefined,
+      new Map([['src/db.ts', 'export function q(s: string) { return s; }']]),
+    );
+    expect(prompt).toContain('### Context file: src/db.ts');
+    expect(prompt).toContain('export function q(s: string)');
+    expect(prompt).toContain('Contents of the requested file(s) that fit the available context budget');
   });
 
   it('omits the context note when fileContents is empty or absent', () => {
