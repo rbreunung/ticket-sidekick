@@ -217,7 +217,7 @@ Audit findings, all verified against HEAD `ff4ceda`. Probe results came from run
   - a finding when it has a string `file`
   - a meta line when every key is one of `additionalFilesNeeded`, `recommendedPersonas` or `retract`
 
-  A reply is *truncated* only when it ends inside an unbalanced object or array. A missing meta line is not truncation (R4). `hasMetaLine` stays as its own signal: smart mode still reads it, and it is the only source of Pass 2 retractions.
+  A reply is *truncated* only when it ends inside an unbalanced object or array. When the unbalanced value is a top-level array, or the `findings` array of a wrapper, the scanner descends into it and keeps each complete element object, as `extractPartialFindings` does today. A missing meta line is not truncation (R4). `hasMetaLine` stays as its own signal: smart mode still reads it, and it is the only source of Pass 2 retractions.
 - KTD3. **A reply with no readable JSON value throws an unparseable-reply error inside the retried call, and the retry layer treats that error as transient.** Parsing moves into the call closure that `withEasierRetry` / `withLmRetry` already wrap, so bad replies get the same retries, split and per-batch failure reporting as provider errors (R1, R2). A prose "no issues" reply is not special-cased: guessing intent from prose risks hiding real prose findings. The prompts instead state that a reply with no findings must still emit the meta line (R16).
 - KTD4. **After a truncated reply, one continuation call re-reviews the whole batch and lists the findings already reported (file, line, title), asking only for findings not on the list.** Findings are ordered by severity, not by file, so no file can be proven finished. `dedupeFindings` removes overlaps. This applies to Pass 1 and persona passes, with at most one continuation per batch and pass (R5).
 - KTD5. **Pass 2 shows Pass 1's findings as a numbered list, and retractions travel only on the meta line as `"retract":[n,…]`.** The merge for the batch is: Pass 1 findings minus explicit retractions, plus Pass 2's findings, then deduped. The rules around it:
@@ -239,7 +239,7 @@ Audit findings, all verified against HEAD `ff4ceda`. Probe results came from run
 
   All of this applies to R12 and R13.
 - KTD8. **Data Center recovery uses two new `IBitbucketClient` methods, and the existing `getPullRequestDiff` is unchanged.** The existing method keeps serving the `bitbucket_getPullRequestDiff` Language Model tool.
-  - One new method returns the unified diff plus coverage: the files cut and whether the response was truncated.
+  - One new method returns the unified diff plus coverage: the files cut and whether the response was truncated. A truncated Data Center response omits files after the cut entirely. So when the response is truncated, this method also lists every changed path from the paged `.../pull-requests/{id}/changes` endpoint. It reports as cut both the paths missing from the response and the entries marked truncated.
   - The other fetches one file's PR diff (Data Center: `.../pull-requests/{id}/diff/{path}` with `contextLines`) and reports whether that file is still cut.
   - Cloud always reports no cut files.
   - The shape of the truncation flags is an assumption (see Assumptions), verified in U9 against a real server response.
@@ -355,6 +355,7 @@ The parsing, anchor, prompt and budget helpers (U1–U5) come first because they
 - `{"findings":[…]}` wrapper, inside a ```json fence → findings unpacked.
 - NDJSON inside a fence with prose before and after → findings parsed, prose ignored.
 - The last finding cut mid-string → earlier findings kept, `truncated: true`, `danglingTail` set.
+- A `{"findings":[…]}` wrapper cut inside its third finding → two findings, `truncated: true` (not "no JSON").
 - Prose only ("No issues found.") → zero values found, flagged as no JSON.
 - An empty string → flagged as no JSON.
 - Meta line with `retract: [2]` → retract parsed; a meta line with an unknown key is not treated as meta.
@@ -560,7 +561,7 @@ The parsing, anchor, prompt and budget helpers (U1–U5) come first because they
 **Approach:**
 1. Keep each batch's selected context map.
 2. Pass it to Pass 2 with Pass 1's resolved findings.
-3. Merge per KTD5, then union the chunk's maps (budget-selected again) into the critic's round 1 prompt.
+3. Merge per KTD5, then union the chunk's maps (budget-selected again) into the critic's round 1 prompt. Critic round 2 carries that same map plus the newly requested files, selected together against the same budget.
 4. Critic "unparseable" from U2 keeps the findings unverified.
 5. Emit the R14 dropped-count line from the combined counts. Critic drops keep their existing per-batch line.
 
@@ -570,6 +571,7 @@ The parsing, anchor, prompt and budget helpers (U1–U5) come first because they
 - A Pass 2 call that fails on every try → Pass 1 findings kept, with the existing notice.
 - A retraction index of 7 with two findings → ignored and logged.
 - Deep mode where Pass 2 fetched `src/util.ts` → the critic prompt contains `src/util.ts`.
+- Deep mode where Pass 2 fetched `src/util.ts` and the critic requests another file → the round-2 critic prompt contains both.
 - Covers AE6 (handler level). A critic reply `{"keep":[0,1]}` → all kept, with a notice.
 - Covers AE8. Every finding names a file outside the PR → "No issues found" plus a dropped-count line.
 
@@ -595,10 +597,10 @@ The parsing, anchor, prompt and budget helpers (U1–U5) come first because they
 - Files still cut are carried to the completion step as "reviewed partially".
 - Recovery fetches go through `fetchWithRetry` like every other GET.
 
-**Execution note:** before finalising the Data Center parsing, capture one real truncated PR-diff response and one per-file response from the developer's server as fixtures. If their shape contradicts the assumption, stop per the Goal Capsule.
+**Execution note:** before finalising the Data Center parsing, capture three real responses from the developer's server as fixtures: one truncated PR diff, one page of the PR's changes list, and one per-file diff. If their shape contradicts the assumption, stop per the Goal Capsule.
 
 **Test scenarios:**
-- Covers AE9. A Data Center diff marked truncated with files 41–55 cut → 15 per-file calls, all 55 files reviewed, no partial notice.
+- Covers AE9. A Data Center diff marked truncated that lists 40 files, with a changes list of 55 → 15 per-file calls, all 55 files reviewed, no partial notice.
 - One of those files still cut on re-fetch → that file is named as reviewed partially.
 - A non-truncated Data Center diff → no per-file calls.
 - Cloud → no per-file calls, and coverage reports no cut files.
