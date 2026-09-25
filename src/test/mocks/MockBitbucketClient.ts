@@ -12,6 +12,10 @@ export class MockBitbucketClient implements IBitbucketClient {
   public getPullRequestDiffCalls: Array<{ project: string; repo: string; prId: number; contextLines?: number }> = [];
   public addPrCommentCalls: Array<{ project: string; repo: string; prId: number; text: string; inline?: InlineAnchor }> = [];
   public addPrCommentError: Error | null = null;
+  /** Per-test override for the PR diff; the `bitbucket-diff.json` fixture when unset. */
+  public rawDiff: string | undefined;
+  /** Per-test file contents by path; the `bitbucket-file.json` fixture for any path not listed. */
+  public fileContents = new Map<string, string>();
 
   async getCurrentUser(): Promise<BitbucketUser> {
     return { displayName: 'Jane Smith', emailAddress: 'jane.smith@example.com' };
@@ -23,12 +27,15 @@ export class MockBitbucketClient implements IBitbucketClient {
 
   async getPullRequestDiff(project: string, repo: string, prId: number, contextLines?: number): Promise<string> {
     this.getPullRequestDiffCalls.push({ project, repo, prId, contextLines });
+    if (this.rawDiff !== undefined) return this.rawDiff;
     const fixture = loadFixture<{ raw: string }>('bitbucket-diff.json');
     return fixture.raw;
   }
 
   async getFileContent(project: string, repo: string, path: string, commitHash: string): Promise<string> {
     this.getFileContentCalls.push({ project, repo, path, commitHash });
+    const override = this.fileContents.get(path);
+    if (override !== undefined) return override;
     const fixture = loadFixture<{ content: string }>('bitbucket-file.json');
     return fixture.content;
   }
