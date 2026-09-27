@@ -1156,6 +1156,31 @@ describe('Stale-ticket review + close with a picked target', () => {
     expect(client.executeTransitionCalls).toHaveLength(0);
   });
 
+  it('when every selected ticket is skipped, the run transitions nothing and says why for each', async () => {
+    withRules([{ name: 'verify-bugs', project: 'PROJ', issueType: 'Bug', targetState: 'Verification' }]);
+    const ws = makeMockWs();
+    await importStale([makeStaleIssue('PROJ-2', 'Bug', ['2'], 'Done')], ws);
+    await reply('PROJ-2', ws);
+    await reply('close tickets', ws);
+
+    const done = await reply('verify-bugs', ws);
+
+    expect(client.executeTransitionCalls).toHaveLength(0);
+    expect(done).toContain('**0** stale ticket(s) transitioned to **Verification**, 0 failed, 1 skipped.');
+    expect(done).toContain('PROJ-2 skipped — no path found from Done to Verification');
+  });
+
+  it('the overview counts tickets that cannot be closed without blaming a missing cleanup rule', async () => {
+    const ws = makeMockWs();
+    mockSearches([makeStaleIssue('PROJ-1', 'Bug', ['1']), makeStaleIssue('PROJ-2', 'Task', ['2'])]);
+    const stream = mockStream();
+    await continueAfterImportIssueType('Bug', null, makeSession({ items: [{ ref: 'n-1' }], availableIssueTypes: ['Bug'] }), client, ticketService, stream as never, ws as never, makeStaleDescriptor());
+
+    const overview = markdownText((stream.markdown as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0]);
+    expect(overview).toContain('1 not closable (no discovered workflow)');
+    expect(overview).not.toContain('cleanup rule');
+  });
+
   it('a second "close tickets" never re-transitions a ticket that was already transitioned', async () => {
     const ws = makeMockWs();
     await importStale([makeStaleIssue('PROJ-1', 'Bug', ['1'])], ws);

@@ -1828,7 +1828,7 @@ export function buildImportOverview<TRow extends ReviewRowBase>(session: ReviewS
       lines.push(`- **Already ticketed** — ${parts.join(' · ')}${link ? ` — ${link}` : ''}`);
     } else {
       parts.push(`${c.staleOpen} open`);
-      if (c.staleIneligible > 0) parts.push(`${c.staleIneligible} without a cleanup rule`);
+      if (c.staleIneligible > 0) parts.push(`${c.staleIneligible} not closable (no discovered workflow)`);
       if (o.closed > 0) parts.push(`${o.closed} closed`);
       if (o.closeFailed > 0) parts.push(`${o.closeFailed} failed`);
       if (c.staleOpen > 0 || c.staleIneligible > 0) link = cmdLink('Review & close', IMPORT_COMMANDS.openStale);
@@ -2197,18 +2197,22 @@ export function formatStaleTargetOption(option: StaleTargetOption): string {
 }
 
 /** Target-pick reply: a number, a plain status name, a rule name or its full label; `back` or a
- * cancellation word goes back to the Stale screen (R5). */
+ * cancellation word goes back to the Stale screen (R5). Offered options are matched first, so a
+ * workflow status literally named like a cancel word ("Cancelled", "Stop") stays pickable — see
+ * docs/solutions/logic-errors/confirm-cancel-word-list-broadening-swallows-domain-name-collisions.md. */
 export function parseStaleTargetPick(reply: string, options: StaleTargetOption[]): StaleTargetOption | 'back' | 'invalid' {
-  if (isBackOrCancellation(reply)) return 'back';
-  return pickByNumberOrName(reply, options, formatStaleTargetOption)
-    ?? options.find(o => o.kind === 'rule' && o.ruleName.toLowerCase() === reply.trim().toLowerCase())
-    ?? 'invalid';
+  const picked = pickByNumberOrName(reply, options, formatStaleTargetOption)
+    ?? options.find(o => o.kind === 'rule' && o.ruleName.toLowerCase() === reply.trim().toLowerCase());
+  if (picked) return picked;
+  return isBackOrCancellation(reply) ? 'back' : 'invalid';
 }
 
-/** R12: which issue type to close now, when the selection spans several. */
+/** R12: which issue type to close now, when the selection spans several. Offered issue types are
+ * matched before `back`/cancellation words, as in parseStaleTargetPick. */
 export function parseStaleIssueTypePick(reply: string, issueTypes: string[]): string | 'back' | 'invalid' {
-  if (isBackOrCancellation(reply)) return 'back';
-  return pickByNumberOrName(reply, issueTypes, (t) => t) ?? 'invalid';
+  const picked = pickByNumberOrName(reply, issueTypes, (t) => t);
+  if (picked) return picked;
+  return isBackOrCancellation(reply) ? 'back' : 'invalid';
 }
 
 /** Result of {@link parseStaleTicketToggle}: the matched stale-ticket keys plus whatever tokens in

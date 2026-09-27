@@ -1518,6 +1518,12 @@ describe('parseStaleTargetPick', () => {
     expect(parseStaleTargetPick('cancel', options)).toBe('back');
   });
 
+  it('picks an offered status whose name is also a cancel word instead of going back', () => {
+    const withCancelled: StaleTargetOption[] = [...options, { kind: 'status', status: 'Cancelled' }];
+    expect(parseStaleTargetPick('Cancelled', withCancelled)).toEqual({ kind: 'status', status: 'Cancelled' });
+    expect(parseStaleTargetPick('cancel', withCancelled)).toBe('back');
+  });
+
   it('reports an unknown reply as invalid', () => {
     expect(parseStaleTargetPick('Archived', options)).toBe('invalid');
     expect(parseStaleTargetPick('9', options)).toBe('invalid');
@@ -1530,6 +1536,10 @@ describe('parseStaleIssueTypePick', () => {
   it('picks by number or case-insensitive name', () => {
     expect(parseStaleIssueTypePick('2', types)).toBe('Vulnerability');
     expect(parseStaleIssueTypePick('bug', types)).toBe('Bug');
+  });
+
+  it('picks an issue type whose name is also a cancel word instead of going back', () => {
+    expect(parseStaleIssueTypePick('Stop', ['Bug', 'Stop'])).toBe('Stop');
   });
 
   it('goes back on back or cancel, and rejects an unknown type', () => {
