@@ -444,6 +444,24 @@ persists the upfront `question` (see "Upfront question" above), if one was
 asked, and every follow-up prompt includes it, so it keeps informing
 follow-up answers.
 
+**Copy for Teams.** `copy`, `copy for teams`, `share` or `copy #1 #3` (and the
+"Copy for Teams" chip, whose prompt is `copy for teams`) puts the review on the
+clipboard as plain text via `vscode.env.clipboard.writeText` — nothing is posted
+anywhere. `parseFollowUpIntent` checks for it first, and only accepts a message
+that is the command alone (filler words like `all`, `review`, `for teams` and
+`#N` references), so a question that mentions copying is still answered. The
+text comes from `formatReviewForSharing` over the stored `ReviewSession` (never
+the rendered chat): a header with PR number, title, author, target branch and
+bare URL, then Critical / Warning / Suggestion groups in the same order as the
+chat tables, one block per finding. It is plain text on purpose — extensions
+can only write plain text to the clipboard, and Teams does not render pasted
+Markdown — so finding text is copied verbatim apart from collapsed whitespace
+and removed control characters, without the chat renderer's link
+neutralization. Low-confidence (below `confidenceThreshold`) and
+location-unverified findings carry a marker. An unknown `#N` gets the same
+"Finding #N not found" answer as `add … to review` and copies nothing; every
+outcome keeps the review session active.
+
 `#N <question>` answers are built by `buildFindingFollowUpPrompt`: the PR's
 title and description, the upfront question, and the finding's own detail
 and `diffHunk`. A free-text question is first matched to a finding by the
@@ -532,6 +550,7 @@ review.
 ## Onboarding: follow-up chips and greeting detection
 
 Follow-up suggestion chips after a completed review (add findings to
-review, explain finding #1), and greeting/empty-prompt detection ahead of
+review, explain finding #1, Copy for Teams — the only chip when a review found
+nothing), and greeting/empty-prompt detection ahead of
 the "Point me at a PR to review" guidance, are documented in
 [`docs/onboarding.md`](onboarding.md#follow-up-suggestion-chips-greeting-detection-and-the-unclassifiable-prompt-fallback).

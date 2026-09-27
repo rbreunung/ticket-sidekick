@@ -74,6 +74,10 @@ export interface ReviewSession {
   rawDiffTruncated?: boolean;
   /** R22: reviewed files left out of `rawDiff` to fit the budget, named in follow-up prompts. */
   rawDiffOmittedFiles?: string[];
+  /** PR author's display name, for the "Copy for Teams" header. Absent on sessions saved before it existed. */
+  prAuthor?: string;
+  /** PR target branch, for the "Copy for Teams" header. Absent on sessions saved before it existed. */
+  prTargetBranch?: string;
 }
 
 export interface BitbucketCommentPreviewSession {
@@ -298,6 +302,87 @@ export function formatSourceConfidence(finding: Pick<ReviewFinding, 'sources' | 
  */
 export function sanitizeGfmCellText(value: string): string {
   return value.replace(/\r\n|\r|\n/g, ' ').replace(/\|/g, '/');
+}
+
+const SHARE_SEVERITY_ORDER: Array<ReviewFinding['severity']> = ['critical', 'warning', 'suggestion'];
+
+function shareSeverityIcon(severity: ReviewFinding['severity']): string {
+  return severity === 'critical' ? '🔴' : severity === 'warning' ? '🟡' : '🔵';
+}
+
+/** KTD5: untrusted text is copied verbatim except that line breaks and whitespace runs collapse to
+ * one space and control characters are removed, so each finding stays one readable block. Nothing
+ * is neutralized — the fullwidth brackets `neutralizeMarkdownLinks` adds protect the trusted chat
+ * renderer and would only be noise in pasted plain text. */
+function normalizeShareText(value: string): string {
+  return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function countFindings(n: number): string {
+  return `${n} finding${n !== 1 ? 's' : ''}`;
+}
+
+/**
+ * "Copy for Teams": the review as one plain-text block for pasting into a chat that does not
+ * render Markdown. Built from the stored session, never from the rendered chat response, and
+ * grouped/ordered the same way `PrReviewService.formatReview()` renders its tables (KTD1).
+ * `targets` limits the output to those finding ids (unknown ids are the caller's to reject);
+ * a low-confidence marker uses the same threshold semantics as `formatSourceConfidence` (KTD6).
+ */
+export function formatReviewForSharing(
+  session: Pick<ReviewSession, 'prId' | 'prTitle' | 'prUrl' | 'prAuthor' | 'prTargetBranch' | 'findings'>,
+  options: { targets?: number[]; confidenceThreshold?: number } = {},
+): { text: string; copiedCount: number; totalCount: number; countLabel: string } {
+  const threshold = options.confidenceThreshold ?? 0.7;
+  const totalCount = session.findings.length;
+  const selected = options.targets
+    ? session.findings.filter((f) => options.targets!.includes(f.id))
+    : session.findings;
+  const copiedCount = selected.length;
+
+  const byLine = [
+    session.prAuthor ? `by ${normalizeShareText(session.prAuthor)}` : '',
+    session.prAuthor && session.prTargetBranch ? ` → ${normalizeShareText(session.prTargetBranch)}` : '',
+  ].join('');
+  // "2 of 7 findings" for a selection, "7 findings" for the whole review — also the chat confirmation's wording.
+  const countLabel = options.targets ? `${copiedCount} of ${countFindings(totalCount)}` : countFindings(copiedCount);
+  const header = [
+    `PR #${session.prId} — ${normalizeShareText(session.prTitle)}`,
+    byLine ? `${byLine} · ${countLabel}` : countLabel,
+    session.prUrl,
+  ].join('\n');
+
+  if (copiedCount === 0) {
+    return { text: `${header}\n\nNo issues found.`, copiedCount, totalCount, countLabel };
+  }
+
+  const block = (f: ReviewFinding): string => {
+    const file = normalizeShareText(f.file);
+    const location = f.locationUnverified ? `${file} (location unverified)` : `${file}${f.line ? `:L${f.line}` : ''}`;
+    const lines = [
+      `#${f.id} ${shareSeverityIcon(f.severity)} ${location} — ${normalizeShareText(f.title)}`,
+      `   Recommendation: ${normalizeShareText(f.recommendation)}`,
+    ];
+    if (typeof f.confidence === 'number' && f.confidence < threshold) lines.push('   (low confidence)');
+    return lines.join('\n');
+  };
+
+  const groups = SHARE_SEVERITY_ORDER.flatMap((severity) => {
+    const rows = selected
+      .map((f, idx) => ({ f, idx }))
+      .filter(({ f }) => f.severity === severity)
+      .sort((a, b) => {
+        const ca = typeof a.f.confidence === 'number' ? a.f.confidence : -Infinity;
+        const cb = typeof b.f.confidence === 'number' ? b.f.confidence : -Infinity;
+        return cb - ca || a.idx - b.idx;
+      })
+      .map(({ f }) => f);
+    if (rows.length === 0) return [];
+    const label = severity.charAt(0).toUpperCase() + severity.slice(1);
+    return [`${shareSeverityIcon(severity)} ${label} (${rows.length})`, ...rows.map(block)];
+  });
+
+  return { text: `${header}\n\n${groups.join('\n\n')}`, copiedCount, totalCount, countLabel };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -674,6 +759,7 @@ export function aggregateRecommendedPersonas(
 }
 
 export type FollowUpIntent =
+  | { kind: 'copy'; targets: number[] | 'all' }
   | { kind: 'add'; targets: number[] | 'all'; note: string }
   | { kind: 'explain'; findingRef: number | null; question: string };
 
@@ -682,7 +768,32 @@ function resolveByIds(ids: number[], findings: ReviewFinding[]): ReviewFinding[]
   return findings.filter((f) => idSet.has(f.id));
 }
 
+/** Words a copy command may carry besides `copy`/`share` and `#N` references (KTD2). */
+const COPY_FILLER_WORDS = new Set(['for', 'to', 'teams', 'all', 'the', 'finding', 'findings', 'review', 'please']);
+
+/**
+ * "Copy for Teams" (KTD2): a strict whole-message command — `copy`/`share`, then only filler words
+ * and `#N` references — so a question that merely mentions copying ("can you copy the logic from
+ * #2?") is answered as a question instead of being swallowed by a keyword match.
+ */
+function parseCopyCommand(message: string): FollowUpIntent | undefined {
+  const words = message.trim().replace(/[,.!]+/g, ' ').split(/\s+/).filter(Boolean);
+  if (words.length === 0 || !/^(?:copy|share)$/i.test(words[0])) return undefined;
+  const numbers: number[] = [];
+  let hasAll = false;
+  for (const word of words.slice(1)) {
+    const ref = /^#(\d+)$/.exec(word);
+    if (ref) numbers.push(parseInt(ref[1], 10));
+    else if (COPY_FILLER_WORDS.has(word.toLowerCase())) hasAll ||= word.toLowerCase() === 'all';
+    else return undefined;
+  }
+  return { kind: 'copy', targets: numbers.length > 0 && !hasAll ? [...new Set(numbers)] : 'all' };
+}
+
 export function parseFollowUpIntent(message: string): FollowUpIntent {
+  const copy = parseCopyCommand(message);
+  if (copy) return copy;
+
   // R20: only a request to add/post findings *to the review* is an add — a question that merely
   // mentions both words ("can you review whether #2 would add latency?") is answered instead.
   // "to PR review" (an optional "pr" before "review") counts too, e.g. "add #2 to PR review".
@@ -1748,16 +1859,20 @@ export function computeBitbucketFollowups(state: BitbucketFollowupState): Bitbuc
       return [
         { prompt: 'check', label: 'Check my connection' },
       ];
-    case 'reviewCompleted':
+    case 'reviewCompleted': {
+      // KTD7: sharing works for every review — "No issues found" is worth sharing too.
+      const copyChip = { prompt: 'copy for teams', label: 'Copy for Teams' };
       if (state.findingCount === 0) {
         // R10: no one-click "ask a question" follow-up — a real Q&A flow needs its own
         // review, and asking a question is relevant mid-review, not as a post-review chip.
-        return [];
+        return [copyChip];
       }
       return [
         { prompt: 'add all findings to review', label: 'Add findings to review' },
         { prompt: 'explain finding #1', label: 'Explain finding #1' },
+        copyChip,
       ].slice(0, BITBUCKET_MAX_FOLLOWUPS);
+    }
     case 'none':
       return [];
   }

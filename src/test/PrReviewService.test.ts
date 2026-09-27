@@ -991,6 +991,35 @@ describe('dcDiffToUnified', () => {
 
 
 describe('parseFollowUpIntent', () => {
+  describe('copy intent', () => {
+    it.each(['copy', 'Copy for Teams', 'copy all', 'share', 'copy to teams', 'copy the review', 'copy all findings for Teams'])(
+      'reads "%s" as a request to copy the whole review',
+      (message) => {
+        expect(parseFollowUpIntent(message)).toEqual({ kind: 'copy', targets: 'all' });
+      },
+    );
+
+    it('copies only the referenced findings, in the order given', () => {
+      expect(parseFollowUpIntent('copy #1 #3')).toEqual({ kind: 'copy', targets: [1, 3] });
+      expect(parseFollowUpIntent('copy #3, #1')).toEqual({ kind: 'copy', targets: [3, 1] });
+      expect(parseFollowUpIntent('copy #2 #2')).toEqual({ kind: 'copy', targets: [2] });
+    });
+
+    it('copies everything when "all" is given alongside numbers, like add', () => {
+      expect(parseFollowUpIntent('copy all #2')).toEqual({ kind: 'copy', targets: 'all' });
+    });
+
+    it('answers a question that merely mentions copying', () => {
+      expect(parseFollowUpIntent('can you copy the logic from #2?')).toMatchObject({ kind: 'explain', findingRef: 2 });
+      expect(parseFollowUpIntent('copy this to the review')).toMatchObject({ kind: 'explain' });
+    });
+
+    it('leaves add and #N questions unchanged', () => {
+      expect(parseFollowUpIntent('add #1 to review')).toMatchObject({ kind: 'add', targets: [1] });
+      expect(parseFollowUpIntent('#2 is this real?')).toMatchObject({ kind: 'explain', findingRef: 2 });
+    });
+  });
+
   describe('add intent', () => {
     it('detects numbers placed before "to review"', () => {
       expect(parseFollowUpIntent('add #1 #2 #3 #4 to review')).toMatchObject({ kind: 'add', targets: [1, 2, 3, 4], note: '' });

@@ -85,6 +85,15 @@ To exit the review session, reply `c` or `cancel`:
 c
 ```
 
+Share the review in a Microsoft Teams chat (or anywhere else) — click the **Copy for Teams** chip after a review, or type:
+
+```text
+@bitbucket copy
+@bitbucket copy #1 #3
+```
+
+This puts the review on your clipboard as plain text: the PR title, author, target branch and link, then every finding grouped under Critical / Warning / Suggestion with its file and line, title and recommendation. Paste it into any Teams chat — there are no Markdown tables or links that Teams would show as raw symbols. `copy #1 #3` copies only those findings. Low-confidence and location-unverified findings are marked, not left out. Nothing is sent anywhere; the text only goes to your clipboard.
+
 Push selected findings back to Bitbucket as PR comments:
 
 ```text
