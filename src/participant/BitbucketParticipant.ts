@@ -929,10 +929,7 @@ export function createBitbucketParticipant(
               return reviewSessionResult;
             }
             logDiag('bitbucket.share', 'info', 'Review copied to the clipboard', { copiedCount: share.copiedCount, totalCount: share.totalCount });
-            const count = targets
-              ? `${share.copiedCount} of ${share.totalCount} finding${share.totalCount !== 1 ? 's' : ''}`
-              : `${share.copiedCount} finding${share.copiedCount !== 1 ? 's' : ''}`;
-            stream.markdown(`_Copied ${count} to the clipboard — paste into a Teams chat._`);
+            stream.markdown(`_Copied ${share.countLabel} to the clipboard — paste into a Teams chat._`);
             return reviewSessionResult;
           }
 

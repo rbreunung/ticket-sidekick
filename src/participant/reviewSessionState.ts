@@ -332,7 +332,7 @@ function countFindings(n: number): string {
 export function formatReviewForSharing(
   session: Pick<ReviewSession, 'prId' | 'prTitle' | 'prUrl' | 'prAuthor' | 'prTargetBranch' | 'findings'>,
   options: { targets?: number[]; confidenceThreshold?: number } = {},
-): { text: string; copiedCount: number; totalCount: number } {
+): { text: string; copiedCount: number; totalCount: number; countLabel: string } {
   const threshold = options.confidenceThreshold ?? 0.7;
   const totalCount = session.findings.length;
   const selected = options.targets
@@ -344,15 +344,16 @@ export function formatReviewForSharing(
     session.prAuthor ? `by ${normalizeShareText(session.prAuthor)}` : '',
     session.prAuthor && session.prTargetBranch ? ` → ${normalizeShareText(session.prTargetBranch)}` : '',
   ].join('');
-  const count = options.targets ? `${copiedCount} of ${countFindings(totalCount)}` : countFindings(copiedCount);
+  // "2 of 7 findings" for a selection, "7 findings" for the whole review — also the chat confirmation's wording.
+  const countLabel = options.targets ? `${copiedCount} of ${countFindings(totalCount)}` : countFindings(copiedCount);
   const header = [
     `PR #${session.prId} — ${normalizeShareText(session.prTitle)}`,
-    byLine ? `${byLine} · ${count}` : count,
+    byLine ? `${byLine} · ${countLabel}` : countLabel,
     session.prUrl,
   ].join('\n');
 
   if (copiedCount === 0) {
-    return { text: `${header}\n\nNo issues found.`, copiedCount, totalCount };
+    return { text: `${header}\n\nNo issues found.`, copiedCount, totalCount, countLabel };
   }
 
   const block = (f: ReviewFinding): string => {
@@ -381,7 +382,7 @@ export function formatReviewForSharing(
     return [`${shareSeverityIcon(severity)} ${label} (${rows.length})`, ...rows.map(block)];
   });
 
-  return { text: `${header}\n\n${groups.join('\n\n')}`, copiedCount, totalCount };
+  return { text: `${header}\n\n${groups.join('\n\n')}`, copiedCount, totalCount, countLabel };
 }
 
 // ---------------------------------------------------------------------------------------------
