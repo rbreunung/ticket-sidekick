@@ -25,6 +25,7 @@ import {
   parseResolutionSelection, buildReviewPage,
   buildStaleTargetOptions, formatStaleTargetOption, parseStaleTargetPick, parseStaleIssueTypePick,
   selectedStaleIssueTypes, staleTargetState, staleTargetNeedsResolution, planStaleTransitions,
+  selectedOpenStaleTickets, isBackOrCancellation,
   type StaleTargetOption, applyReviewSessionToggle,
   markRowsUpdatedExisting, applyBulkNewRowSet,
   buildImportScreen, parseImportReviewReply, describeImportReplyVocabulary, buildImportDoneSummary,
@@ -586,9 +587,8 @@ export async function streamStaleCloseStep(
 
 function selectedCount(close: StaleCloseSession): number {
   const stale = close.reviewSession.staleTickets;
-  const done = new Set(stale?.closedKeys ?? []);
   const group = stale?.groups.find(g => g.issueType === close.issueType);
-  return group ? group.tickets.filter(t => t.included && !done.has(t.key)).length : 0;
+  return group ? selectedOpenStaleTickets(group, stale!.closedKeys).length : 0;
 }
 
 /**
@@ -642,8 +642,7 @@ export async function continueStaleClose<TItem, TRow extends ReviewRowBase>(
   }
 
   // pick-resolution: "skip" here means "no resolution" (same as "none"), not "go back".
-  const normalized = reply.trim().toLowerCase();
-  if (normalized === 'back' || (isCancellation(reply) && normalized !== 'skip')) return backToStale();
+  if (isBackOrCancellation(reply) && reply.trim().toLowerCase() !== 'skip') return backToStale();
   const choice = parseResolutionSelection(reply, parked.staleTickets?.resolutionOptions ?? []);
   if (choice === 'invalid') return streamStaleCloseStep(close, stream, ws, invalid);
   await ws.update(STALE_RESOLUTION_SESSION_KEY, undefined);
@@ -660,9 +659,8 @@ async function startTargetPick<TItem, TRow extends ReviewRowBase>(
   baseUrl?: string,
 ): Promise<vscode.ChatResult> {
   const stale = session.staleTickets!;
-  const done = new Set(stale.closedKeys ?? []);
   const group = stale.groups.find(g => g.issueType === issueType)!;
-  const selectedStatuses = group.tickets.filter(t => t.included && !done.has(t.key)).map(t => t.currentStatus);
+  const selectedStatuses = selectedOpenStaleTickets(group, stale.closedKeys).map(t => t.currentStatus);
   const targetOptions = buildStaleTargetOptions(group.rules, group.graph, selectedStatuses);
   if (targetOptions.length === 0) {
     // Plan review fix: an empty pick list would strand the user on a question with nothing to pick.

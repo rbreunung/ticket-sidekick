@@ -580,6 +580,12 @@ export function isCancellation(text: string): boolean {
   return CANCELLATIONS.has(normalized);
 }
 
+/** `back` or any isCancellation() word — the stale close's "return to the Stale screen" reply.
+ * isCancellation() itself leaves out `back`, which other flows use as a navigation command. */
+export function isBackOrCancellation(text: string): boolean {
+  return text.trim().toLowerCase() === 'back' || isCancellation(text);
+}
+
 /** KTD3: unlike isCancellation()'s broad word list (which treats a literal "stop" as
  * cancellation), the template-generation flow's R2/R3 chat-asks (a template name, a free-text
  * issue type) recognize only an explicit "(c)" reply as cancellation, checked before any other
@@ -1435,11 +1441,16 @@ export interface StaleCloseSession {
 // stale-ticket close below.
 export const CLOSED_LIKE_STATES = new Set(['done', 'resolved', 'closed', "won't fix"]);
 
+/** A group's tickets that are selected and not yet transitioned by an earlier close run. */
+export function selectedOpenStaleTickets(group: StaleTicketGroup, closedKeys: string[] = []): TransitionBatchTicket[] {
+  const done = new Set(closedKeys);
+  return group.tickets.filter(t => t.included && !done.has(t.key));
+}
+
 /** R12: the issue types that have at least one selected, not-yet-transitioned stale ticket, in
  * group order. */
 export function selectedStaleIssueTypes(stale: ReviewSessionStale): string[] {
-  const done = new Set(stale.closedKeys ?? []);
-  return stale.groups.filter(g => g.tickets.some(t => t.included && !done.has(t.key))).map(g => g.issueType);
+  return stale.groups.filter(g => selectedOpenStaleTickets(g, stale.closedKeys).length > 0).map(g => g.issueType);
 }
 
 export function staleTargetState(option: StaleTargetOption): string {
@@ -1464,11 +1475,9 @@ export function planStaleTransitions(
   targetState: string,
   closedKeys: string[] = [],
 ): { runnable: TransitionBatchTicket[]; skipped: Array<{ key: string; reason: string }> } {
-  const done = new Set(closedKeys);
   const runnable: TransitionBatchTicket[] = [];
   const skipped: Array<{ key: string; reason: string }> = [];
-  for (const t of group.tickets) {
-    if (!t.included || done.has(t.key)) continue;
+  for (const t of selectedOpenStaleTickets(group, closedKeys)) {
     if (t.currentStatus.toLowerCase() === targetState.toLowerCase()) {
       skipped.push({ key: t.key, reason: `already in ${targetState}` });
       continue;
@@ -2190,7 +2199,7 @@ export function formatStaleTargetOption(option: StaleTargetOption): string {
 /** Target-pick reply: a number, a plain status name, a rule name or its full label; `back` or a
  * cancellation word goes back to the Stale screen (R5). */
 export function parseStaleTargetPick(reply: string, options: StaleTargetOption[]): StaleTargetOption | 'back' | 'invalid' {
-  if (reply.trim().toLowerCase() === 'back' || isCancellation(reply)) return 'back';
+  if (isBackOrCancellation(reply)) return 'back';
   return pickByNumberOrName(reply, options, formatStaleTargetOption)
     ?? options.find(o => o.kind === 'rule' && o.ruleName.toLowerCase() === reply.trim().toLowerCase())
     ?? 'invalid';
@@ -2198,7 +2207,7 @@ export function parseStaleTargetPick(reply: string, options: StaleTargetOption[]
 
 /** R12: which issue type to close now, when the selection spans several. */
 export function parseStaleIssueTypePick(reply: string, issueTypes: string[]): string | 'back' | 'invalid' {
-  if (reply.trim().toLowerCase() === 'back' || isCancellation(reply)) return 'back';
+  if (isBackOrCancellation(reply)) return 'back';
   return pickByNumberOrName(reply, issueTypes, (t) => t) ?? 'invalid';
 }
 
