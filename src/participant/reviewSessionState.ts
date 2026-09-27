@@ -74,6 +74,10 @@ export interface ReviewSession {
   rawDiffTruncated?: boolean;
   /** R22: reviewed files left out of `rawDiff` to fit the budget, named in follow-up prompts. */
   rawDiffOmittedFiles?: string[];
+  /** PR author's display name, for the "Copy for Teams" header. Absent on sessions saved before it existed. */
+  prAuthor?: string;
+  /** PR target branch, for the "Copy for Teams" header. Absent on sessions saved before it existed. */
+  prTargetBranch?: string;
 }
 
 export interface BitbucketCommentPreviewSession {
@@ -298,6 +302,86 @@ export function formatSourceConfidence(finding: Pick<ReviewFinding, 'sources' | 
  */
 export function sanitizeGfmCellText(value: string): string {
   return value.replace(/\r\n|\r|\n/g, ' ').replace(/\|/g, '/');
+}
+
+const SHARE_SEVERITY_ORDER: Array<ReviewFinding['severity']> = ['critical', 'warning', 'suggestion'];
+
+function shareSeverityIcon(severity: ReviewFinding['severity']): string {
+  return severity === 'critical' ? '🔴' : severity === 'warning' ? '🟡' : '🔵';
+}
+
+/** KTD5: untrusted text is copied verbatim except that line breaks and whitespace runs collapse to
+ * one space and control characters are removed, so each finding stays one readable block. Nothing
+ * is neutralized — the fullwidth brackets `neutralizeMarkdownLinks` adds protect the trusted chat
+ * renderer and would only be noise in pasted plain text. */
+function normalizeShareText(value: string): string {
+  return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function countFindings(n: number): string {
+  return `${n} finding${n !== 1 ? 's' : ''}`;
+}
+
+/**
+ * "Copy for Teams": the review as one plain-text block for pasting into a chat that does not
+ * render Markdown. Built from the stored session, never from the rendered chat response, and
+ * grouped/ordered the same way `PrReviewService.formatReview()` renders its tables (KTD1).
+ * `targets` limits the output to those finding ids (unknown ids are the caller's to reject);
+ * a low-confidence marker uses the same threshold semantics as `formatSourceConfidence` (KTD6).
+ */
+export function formatReviewForSharing(
+  session: Pick<ReviewSession, 'prId' | 'prTitle' | 'prUrl' | 'prAuthor' | 'prTargetBranch' | 'findings'>,
+  options: { targets?: number[]; confidenceThreshold?: number } = {},
+): { text: string; copiedCount: number; totalCount: number } {
+  const threshold = options.confidenceThreshold ?? 0.7;
+  const totalCount = session.findings.length;
+  const selected = options.targets
+    ? session.findings.filter((f) => options.targets!.includes(f.id))
+    : session.findings;
+  const copiedCount = selected.length;
+
+  const byLine = [
+    session.prAuthor ? `by ${normalizeShareText(session.prAuthor)}` : '',
+    session.prAuthor && session.prTargetBranch ? ` → ${normalizeShareText(session.prTargetBranch)}` : '',
+  ].join('');
+  const count = options.targets ? `${copiedCount} of ${countFindings(totalCount)}` : countFindings(copiedCount);
+  const header = [
+    `PR #${session.prId} — ${normalizeShareText(session.prTitle)}`,
+    byLine ? `${byLine} · ${count}` : count,
+    session.prUrl,
+  ].join('\n');
+
+  if (copiedCount === 0) {
+    return { text: `${header}\n\nNo issues found.`, copiedCount, totalCount };
+  }
+
+  const block = (f: ReviewFinding): string => {
+    const file = normalizeShareText(f.file);
+    const location = f.locationUnverified ? `${file} (location unverified)` : `${file}${f.line ? `:L${f.line}` : ''}`;
+    const lines = [
+      `#${f.id} ${shareSeverityIcon(f.severity)} ${location} — ${normalizeShareText(f.title)}`,
+      `   Recommendation: ${normalizeShareText(f.recommendation)}`,
+    ];
+    if (typeof f.confidence === 'number' && f.confidence < threshold) lines.push('   (low confidence)');
+    return lines.join('\n');
+  };
+
+  const groups = SHARE_SEVERITY_ORDER.flatMap((severity) => {
+    const rows = selected
+      .map((f, idx) => ({ f, idx }))
+      .filter(({ f }) => f.severity === severity)
+      .sort((a, b) => {
+        const ca = typeof a.f.confidence === 'number' ? a.f.confidence : -Infinity;
+        const cb = typeof b.f.confidence === 'number' ? b.f.confidence : -Infinity;
+        return cb - ca || a.idx - b.idx;
+      })
+      .map(({ f }) => f);
+    if (rows.length === 0) return [];
+    const label = severity.charAt(0).toUpperCase() + severity.slice(1);
+    return [`${shareSeverityIcon(severity)} ${label} (${rows.length})`, ...rows.map(block)];
+  });
+
+  return { text: `${header}\n\n${groups.join('\n\n')}`, copiedCount, totalCount };
 }
 
 // ---------------------------------------------------------------------------------------------
