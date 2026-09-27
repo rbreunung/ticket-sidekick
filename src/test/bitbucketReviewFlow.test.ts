@@ -8,6 +8,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const h = vi.hoisted(() => ({
   handler: undefined as undefined | ((...args: unknown[]) => Promise<unknown>),
   client: undefined as unknown,
+  /** What the last `vscode.env.clipboard.writeText` call wrote, or undefined when nothing was written. */
+  clipboard: undefined as string | undefined,
+  /** When set, the clipboard write rejects with this error. */
+  clipboardError: undefined as Error | undefined,
 }));
 
 vi.mock('vscode', () => {
@@ -38,6 +42,14 @@ vi.mock('vscode', () => {
     },
     ProgressLocation: { Window: 10 },
     commands: { executeCommand: async () => undefined },
+    env: {
+      clipboard: {
+        writeText: async (text: string) => {
+          if (h.clipboardError) throw h.clipboardError;
+          h.clipboard = text;
+        },
+      },
+    },
     ChatResponseTurn,
     ChatRequestTurn,
     MarkdownString,
@@ -76,6 +88,8 @@ interface Harness {
 function createHarness(config: Partial<BitbucketConfig> = {}): Harness {
   const client = new MockBitbucketClient();
   h.client = client;
+  h.clipboard = undefined;
+  h.clipboardError = undefined;
   const workspaceState = new Map<string, unknown>();
   const prompts: string[] = [];
   const fullConfig = {
@@ -600,5 +614,95 @@ describe('a resumed smart review finishes like an uninterrupted one (U11)', () =
     const resumed = await harness.turn('standard', [], [sessionTurn(first.result)]);
     expect(resumed.text).toContain('Some batches had failures after retrying');
     expect(resumed.text).toContain('Issue in Two');
+  });
+});
+
+describe('Copy for Teams', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const TWO_FINDINGS = [
+    findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'SQL injection', 'critical'),
+    findingLine('src/auth/tokenStore.ts', "localStorage.setItem('auth_token', token);", 'Token kept in localStorage', 'warning'),
+    META_LINE,
+  ].join('\n');
+
+  async function reviewed(harness: Harness): Promise<unknown> {
+    const { result } = await harness.turn(PR_URL, [TWO_FINDINGS]);
+    return result;
+  }
+
+  it('stores the PR author and target branch with the review session', async () => {
+    const harness = createHarness();
+    await reviewed(harness);
+
+    const session = harness.workspaceState.get('bitbucket.session.review') as { prAuthor?: string; prTargetBranch?: string };
+    expect(session.prAuthor).toBe('Jane Smith');
+    expect(session.prTargetBranch).toBe('main');
+  });
+
+  it('copies the whole review from the chip prompt and keeps the session alive', async () => {
+    const harness = createHarness();
+    const review = await reviewed(harness);
+
+    const { text, result } = await harness.turn('copy for teams', [], [sessionTurn(review)]);
+
+    expect(h.clipboard).toBeDefined();
+    const lines = h.clipboard!.split('\n');
+    expect(lines[0]).toBe('PR #42 — Add OAuth login flow');
+    expect(lines[1]).toBe('by Jane Smith → main · 2 findings');
+    expect(lines[2]).toBe(PR_URL);
+    expect(h.clipboard).toContain('🔴 Critical (1)');
+    expect(h.clipboard).toContain('🟡 Warning (1)');
+    expect(text).toContain('Copied 2 findings');
+    expect(text).toContain('Teams');
+    expect(result).toMatchObject({ metadata: { bitbucketSession: { kinds: ['review-session'] } } });
+
+    // The session still answers a follow-up after the copy.
+    const followUp = await harness.turn('#1 is this exploitable?', ['Yes, through the login form.'], [sessionTurn(result)]);
+    expect(followUp.text).toContain('Yes, through the login form.');
+  });
+
+  it('copies only the findings asked for', async () => {
+    const harness = createHarness();
+    const review = await reviewed(harness);
+
+    const { text } = await harness.turn('copy #2', [], [sessionTurn(review)]);
+
+    expect(h.clipboard).toContain('1 of 2 findings');
+    expect(h.clipboard).toContain('Token kept in localStorage');
+    expect(h.clipboard).not.toContain('SQL injection');
+    expect(text).toContain('Copied 1 of 2 findings');
+  });
+
+  it('copies nothing and names the valid range when a finding number does not exist', async () => {
+    const harness = createHarness();
+    const review = await reviewed(harness);
+
+    const { text, result } = await harness.turn('copy #9', [], [sessionTurn(review)]);
+
+    expect(h.clipboard).toBeUndefined();
+    expect(text).toContain('Finding #9 not found. The review has findings #1–#2.');
+    expect(result).toMatchObject({ metadata: { bitbucketSession: { kinds: ['review-session'] } } });
+  });
+
+  it('reports a failed clipboard write and keeps the session alive', async () => {
+    const harness = createHarness();
+    const review = await reviewed(harness);
+    h.clipboardError = new Error('clipboard unavailable');
+
+    const { text, result } = await harness.turn('copy', [], [sessionTurn(review)]);
+
+    expect(text).toContain('Could not copy the review');
+    expect(result).toMatchObject({ metadata: { bitbucketSession: { kinds: ['review-session'] } } });
+  });
+
+  it('does not copy once the user has moved on from the review', async () => {
+    const harness = createHarness();
+    await reviewed(harness);
+
+    await harness.turn('copy', []);
+
+    expect(h.clipboard).toBeUndefined();
   });
 });

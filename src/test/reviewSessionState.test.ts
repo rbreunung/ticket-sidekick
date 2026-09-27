@@ -147,12 +147,19 @@ describe('computeBitbucketFollowups', () => {
     expect(chips.some((c) => /explain/i.test(c.prompt) || /explain/i.test(c.label ?? ''))).toBe(true);
   });
 
-  it('returns no chips when the review found nothing (R10: no "ask a question" replacement)', () => {
+  it('offers "Copy for Teams" as the third chip after a review with findings', () => {
+    const chips = computeBitbucketFollowups({ kind: 'reviewCompleted', findingCount: 3 });
+
+    expect(chips).toHaveLength(3);
+    expect(chips[2]).toEqual({ prompt: 'copy for teams', label: 'Copy for Teams' });
+  });
+
+  it('offers only "Copy for Teams" when the review found nothing (R10: no "ask a question" replacement)', () => {
     const state: BitbucketFollowupState = { kind: 'reviewCompleted', findingCount: 0 };
 
     const chips = computeBitbucketFollowups(state);
 
-    expect(chips).toEqual([]);
+    expect(chips).toEqual([{ prompt: 'copy for teams', label: 'Copy for Teams' }]);
   });
 
   it('returns no chips when there is no prior operation state', () => {

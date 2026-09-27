@@ -758,6 +758,7 @@ export function aggregateRecommendedPersonas(
 }
 
 export type FollowUpIntent =
+  | { kind: 'copy'; targets: number[] | 'all' }
   | { kind: 'add'; targets: number[] | 'all'; note: string }
   | { kind: 'explain'; findingRef: number | null; question: string };
 
@@ -766,7 +767,32 @@ function resolveByIds(ids: number[], findings: ReviewFinding[]): ReviewFinding[]
   return findings.filter((f) => idSet.has(f.id));
 }
 
+/** Words a copy command may carry besides `copy`/`share` and `#N` references (KTD2). */
+const COPY_FILLER_WORDS = new Set(['for', 'to', 'teams', 'all', 'the', 'finding', 'findings', 'review', 'please']);
+
+/**
+ * "Copy for Teams" (KTD2): a strict whole-message command — `copy`/`share`, then only filler words
+ * and `#N` references — so a question that merely mentions copying ("can you copy the logic from
+ * #2?") is answered as a question instead of being swallowed by a keyword match.
+ */
+function parseCopyCommand(message: string): FollowUpIntent | undefined {
+  const words = message.trim().replace(/[,.!]+/g, ' ').split(/\s+/).filter(Boolean);
+  if (words.length === 0 || !/^(?:copy|share)$/i.test(words[0])) return undefined;
+  const numbers: number[] = [];
+  let hasAll = false;
+  for (const word of words.slice(1)) {
+    const ref = /^#(\d+)$/.exec(word);
+    if (ref) numbers.push(parseInt(ref[1], 10));
+    else if (COPY_FILLER_WORDS.has(word.toLowerCase())) hasAll ||= word.toLowerCase() === 'all';
+    else return undefined;
+  }
+  return { kind: 'copy', targets: numbers.length > 0 && !hasAll ? [...new Set(numbers)] : 'all' };
+}
+
 export function parseFollowUpIntent(message: string): FollowUpIntent {
+  const copy = parseCopyCommand(message);
+  if (copy) return copy;
+
   // R20: only a request to add/post findings *to the review* is an add — a question that merely
   // mentions both words ("can you review whether #2 would add latency?") is answered instead.
   // "to PR review" (an optional "pr" before "review") counts too, e.g. "add #2 to PR review".
@@ -1832,16 +1858,20 @@ export function computeBitbucketFollowups(state: BitbucketFollowupState): Bitbuc
       return [
         { prompt: 'check', label: 'Check my connection' },
       ];
-    case 'reviewCompleted':
+    case 'reviewCompleted': {
+      // KTD7: sharing works for every review — "No issues found" is worth sharing too.
+      const copyChip = { prompt: 'copy for teams', label: 'Copy for Teams' };
       if (state.findingCount === 0) {
         // R10: no one-click "ask a question" follow-up — a real Q&A flow needs its own
         // review, and asking a question is relevant mid-review, not as a post-review chip.
-        return [];
+        return [copyChip];
       }
       return [
         { prompt: 'add all findings to review', label: 'Add findings to review' },
         { prompt: 'explain finding #1', label: 'Explain finding #1' },
+        copyChip,
       ].slice(0, BITBUCKET_MAX_FOLLOWUPS);
+    }
     case 'none':
       return [];
   }

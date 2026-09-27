@@ -8,6 +8,7 @@ import {
   parsePrUrl,
   parseDiff,
   parseFollowUpIntent,
+  formatReviewForSharing,
   parseUpfrontQuestion,
   stripUpfrontQuestion,
   buildPrContextPrompt,
@@ -731,6 +732,8 @@ export function createBitbucketParticipant(
         rawDiff: storedDiff.rawDiff,
         rawDiffTruncated: storedDiff.truncated,
         rawDiffOmittedFiles: storedDiff.omittedFiles,
+        prAuthor: pr.author.displayName,
+        prTargetBranch: pr.targetBranch,
       } satisfies ReviewSession);
       // U7/KTD9: the Bitbucket Getting-Started walkthrough's "first PR review" step completes on
       // this context key — set only at a real review completion, never on an aborted run.
@@ -906,6 +909,32 @@ export function createBitbucketParticipant(
 
         try {
           const intent = parseFollowUpIntent(prompt);
+
+          if (intent.kind === 'copy') {
+            // "Copy for Teams": plain text on the local clipboard only (R9) — nothing is posted.
+            const targets = intent.targets === 'all' ? undefined : intent.targets;
+            const unknownRef = targets?.find((id) => !session.findings.some((f) => f.id === id));
+            if (unknownRef !== undefined) {
+              stream.markdown(
+                `_Finding #${unknownRef} not found. The review has findings #1–#${session.findings.length}._`,
+              );
+              return reviewSessionResult;
+            }
+            const share = formatReviewForSharing(session, { targets, confidenceThreshold: config.confidenceThreshold });
+            try {
+              await vscode.env.clipboard.writeText(share.text);
+            } catch (err) {
+              logDiag('bitbucket.share', 'error', 'Copying the review to the clipboard failed', { error: err instanceof Error ? err.message : String(err) });
+              stream.markdown(`**Could not copy the review:** ${err instanceof Error ? err.message : String(err)}`);
+              return reviewSessionResult;
+            }
+            logDiag('bitbucket.share', 'info', 'Review copied to the clipboard', { copiedCount: share.copiedCount, totalCount: share.totalCount });
+            const count = targets
+              ? `${share.copiedCount} of ${share.totalCount} finding${share.totalCount !== 1 ? 's' : ''}`
+              : `${share.copiedCount} finding${share.copiedCount !== 1 ? 's' : ''}`;
+            stream.markdown(`_Copied ${count} to the clipboard — paste into a Teams chat._`);
+            return reviewSessionResult;
+          }
 
           if (intent.kind === 'add') {
             if (!session.project || !session.repo || !session.prId) {
