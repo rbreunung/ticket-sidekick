@@ -7,16 +7,12 @@ import { TemplateService } from '../../templates/TemplateService';
 import type { CleanupRule } from '../../templates/TemplateService';
 import type {
   TransitionBatchSession, TransitionBatchTicket, ResolutionSelectionSession,
-  StaleTicketGroup, StaleResolutionPendingGroup, IneligibleStaleTicket,
+  StaleTicketGroup, IneligibleStaleTicket,
 } from '../sessionState';
-import { buildReviewTable, parseResolutionSelection, parseSkipInput, buildChatCommandLink } from '../sessionState';
+import { buildReviewTable, parseResolutionSelection, parseSkipInput, buildChatCommandLink, CLOSED_LIKE_STATES } from '../sessionState';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import type { ParsedIntent } from './llmHelpers';
 import type { StaleTicketMatch } from '../../utils/reportImport';
-
-// Shared across handleRunCleanup and buildStaleTicketGroups (U6) — a target state in this set needs
-// an explicit resolution picked before transitioning, mirroring Jira's own "resolved-ish" statuses.
-const CLOSED_LIKE_STATES = new Set(['done', 'resolved', 'closed', "won't fix"]);
 
 /** Reads each configured `cleanupFields` ID off an issue's `fields` into a ticket/subtask's `.extra` bag. */
 export function extractExtraFields(fields: Record<string, unknown>, fieldIds: string[]): Record<string, unknown> | undefined {
@@ -298,29 +294,25 @@ export async function handleRunCleanup(
 }
 
 export interface StaleGroupBuildResult {
-  /** Groups whose rule needs a resolution the group hasn't been given yet — chained through the
-   * resolution ask (`reportImportHandler.ts`'s `streamStaleResolutionAsk`), one per group. */
-  pendingGroups: StaleResolutionPendingGroup[];
-  /** Groups that need no ask — either the rule already names a resolution, or the target state
-   * isn't closed-like at all — ready to render/transition as-is. */
-  resolvedGroups: StaleTicketGroup[];
+  groups: StaleTicketGroup[];
   ineligible: IneligibleStaleTicket[];
+  /** The instance's resolution names for the close-time resolution question — empty when there are
+   * none, when no group is eligible, or when the fetch failed (the close then never asks). */
+  resolutionOptions: string[];
 }
 
 /**
- * U6/KTD10-15: groups `findStaleTickets()`'s matches by issue type, matches each group against
- * `cleanupRules` (`project` + `issueType`, mirroring `handleRunCleanup`'s own one-rule-per-request
- * lookup), and resolves each matched group's transition path via the cached workflow graph — the
- * same `loadWorkflowCache`/`findPath` machinery `handleRunCleanup` uses. `issueDetails` supplies
- * each candidate's summary/status/issue type (the caller already has these from the stale search's
- * own result — see reportImportHandler.ts — so this function needs no extra fetch of its own).
+ * Groups `findStaleTickets()`'s matches by issue type and captures, per group, what the close-time
+ * target pick needs (stale-ticket target pick plan, KTD1): every `cleanupRules` entry matching the
+ * project + issue type (not only the first), and a snapshot of that project/issue type's cached
+ * workflow graph. No target or transition path is chosen here — both happen when the user closes
+ * (KTD2), so a group no longer needs a cleanup rule to be closable (R10). `issueDetails` supplies
+ * each candidate's summary/status/issue type from the stale search's own result.
  *
- * A group with no matching rule, or a ticket with no valid transition path, is reported into
- * `ineligible` rather than silently dropped (the session-settled governing decision: "still shown,
- * excluded-by-default with a note, rather than omitted"). A group whose rule needs a resolution
- * (the same "closed-like target state needs a resolution" check `handleRunCleanup` makes) but the
- * Jira instance has none configured degrades to `resolvedGroups` with `resolution: undefined`,
- * mirroring the equivalent fallback in `JiraParticipant.ts`'s own resolution-selection call site.
+ * A ticket whose issue type is unknown, or whose project/issue type has no discovered workflow, is
+ * reported into `ineligible` rather than silently dropped. Resolution names are fetched once when
+ * at least one group is eligible; a failed fetch degrades to an empty list rather than throwing, so
+ * it can't discard the whole stale section in the caller.
  */
 export async function buildStaleTicketGroups(
   staleMatches: StaleTicketMatch[],
@@ -328,6 +320,7 @@ export async function buildStaleTicketGroups(
   projectKey: string,
   jiraClient: IJiraClient,
   workspaceRoot: string,
+  scope = 'jira.cleanup',
 ): Promise<StaleGroupBuildResult> {
   const { cleanupRules } = new TemplateService(workspaceRoot).loadTemplates();
   const cache = loadWorkflowCache(workspaceRoot);
@@ -342,7 +335,7 @@ export async function buildStaleTicketGroups(
         key: match.key,
         summary: detail?.summary ?? match.key,
         currentStatus: detail?.currentStatus ?? '?',
-        note: 'could not determine this ticket\'s issue type — no cleanup rule can be matched',
+        note: 'could not determine this ticket\'s issue type — it cannot be transitioned from here',
       });
       continue;
     }
@@ -350,63 +343,40 @@ export async function buildStaleTicketGroups(
     byIssueType.get(detail.issueType)!.push(match);
   }
 
-  const groupsNeedingResolution: Array<{ issueType: string; ruleName: string | undefined; targetState: string; tickets: TransitionBatchTicket[] }> = [];
-  const resolvedGroups: StaleTicketGroup[] = [];
-
+  const groups: StaleTicketGroup[] = [];
   for (const [issueType, matches] of byIssueType) {
-    const rule: CleanupRule | null = cleanupRules.find((r) => r.project === projectKey && r.issueType === issueType) ?? null;
-    if (!rule) {
+    const graph = cache[projectKey]?.[issueType]?.graph;
+    if (!graph) {
       for (const m of matches) {
         const d = issueDetails.get(m.key)!;
         ineligible.push({
           key: m.key, summary: d.summary, currentStatus: d.currentStatus,
-          note: `no cleanup rule configured for ${projectKey}/${issueType} — configure one to close automatically`,
+          note: `no workflow cache for ${projectKey}/${issueType} — run @jira discover workflow ${projectKey} ${issueType}`,
         });
       }
       continue;
     }
-
-    const targetState = rule.targetState ?? 'Done';
-    const graph = cache[projectKey]?.[issueType]?.graph;
-    const tickets: TransitionBatchTicket[] = [];
-    for (const m of matches) {
+    const rules = cleanupRules
+      .filter((r: CleanupRule) => r.project === projectKey && r.issueType === issueType)
+      .map((r: CleanupRule) => ({ name: r.name, targetState: r.targetState ?? 'Done', resolution: r.resolution }));
+    // `included` defaults false for a stale ticket — nothing transitions without an explicit toggle.
+    const tickets: TransitionBatchTicket[] = matches.map((m) => {
       const d = issueDetails.get(m.key)!;
-      const path = graph ? findPath(graph, d.currentStatus, targetState) : null;
-      if (!path) {
-        ineligible.push({
-          key: m.key, summary: d.summary, currentStatus: d.currentStatus,
-          note: graph
-            ? `no path found from ${d.currentStatus} to ${targetState}`
-            : `no workflow cache for ${projectKey}/${issueType} — run @jira discover workflow ${projectKey} ${issueType}`,
-        });
-        continue;
-      }
-      // R3: `included` defaults false for a stale ticket — the deliberate divergence from
-      // handleRunCleanup's own `included: true` default (session-settled governing decision).
-      tickets.push({ key: m.key, summary: d.summary, currentStatus: d.currentStatus, transitionPath: path, subtasks: [], included: false });
-    }
-    if (tickets.length === 0) continue;
+      return { key: m.key, summary: d.summary, currentStatus: d.currentStatus, transitionPath: [], subtasks: [], included: false };
+    });
+    groups.push({ issueType, rules, graph, tickets });
+  }
 
-    if (rule.resolution === undefined && CLOSED_LIKE_STATES.has(targetState.toLowerCase())) {
-      groupsNeedingResolution.push({ issueType, ruleName: rule.name, targetState, tickets });
-    } else {
-      resolvedGroups.push({ issueType, ruleName: rule.name, targetState, resolution: rule.resolution, tickets });
+  let resolutionOptions: string[] = [];
+  if (groups.length > 0) {
+    try {
+      resolutionOptions = (await jiraClient.getResolutions()).map((r) => r.name);
+    } catch (err) {
+      logDiag(scope, 'warn', 'Could not fetch resolutions for the stale-ticket close — it will not ask for one', {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
-  let pendingGroups: StaleResolutionPendingGroup[] = [];
-  if (groupsNeedingResolution.length > 0) {
-    const resolutions = await jiraClient.getResolutions();
-    if (resolutions.length > 0) {
-      const resolutionOptions = resolutions.map((r) => r.name);
-      pendingGroups = groupsNeedingResolution.map((g) => ({ ...g, resolutionOptions }));
-    } else {
-      // Mirrors JiraParticipant.ts's own multi-ticket-transition fallback: no resolutions
-      // configured on this Jira instance at all — proceed without asking rather than blocking on a
-      // pick list with nothing to pick from.
-      for (const g of groupsNeedingResolution) resolvedGroups.push({ ...g, resolution: undefined });
-    }
-  }
-
-  return { pendingGroups, resolvedGroups, ineligible };
+  return { groups, ineligible, resolutionOptions };
 }

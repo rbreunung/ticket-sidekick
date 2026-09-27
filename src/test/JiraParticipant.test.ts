@@ -1315,10 +1315,11 @@ describe('isSessionExpired (schemaVersion shape guard — AE7)', () => {
     expect(isSessionExpired(null)).toBe(false);
   });
 
-  it('treats a session persisted with the pre-fix schemaVersion (1) as expired after the bump to 6 (overview hub: per-screen view state) — a stale TemplateGenerationTypePickSession (old string[] availableIssueTypes shape) never reaches the new {id, name}[] parsing', () => {
-    expect(CURRENT_SESSION_SCHEMA_VERSION).toBe(6);
+  it('treats a session persisted with the pre-fix schemaVersion (1) as expired after the bump to 7 (stale-ticket target pick: new stale group and close-session shape) — a stale TemplateGenerationTypePickSession (old string[] availableIssueTypes shape) never reaches the new {id, name}[] parsing', () => {
+    expect(CURRENT_SESSION_SCHEMA_VERSION).toBe(7);
     expect(isSessionExpired({ schemaVersion: 1 })).toBe(true);
     expect(isSessionExpired({ schemaVersion: 5 })).toBe(true); // built before the overview hub
+    expect(isSessionExpired({ schemaVersion: 6 })).toBe(true); // built before the stale target pick
   });
 
   it('exposes a user-facing message that tells the user to re-run the import', () => {

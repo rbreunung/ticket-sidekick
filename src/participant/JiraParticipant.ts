@@ -65,11 +65,11 @@ import type {
 import { AWAIT_ISSUE_TYPE_SESSION_KEY, STALE_RESOLUTION_SESSION_KEY } from './jira/ticketContext';
 import {
   parseAwaitFreeTextReply, type AwaitIssueTypeSession, buildChatCommandLink, neutralizeMarkdownLinks, withLastTicket,
-  type StaleResolutionAskSession,
+  type StaleCloseSession,
 } from './sessionState';
 import { trustedChatMarkdown } from '../utils/chatMarkdown';
-import { handleVeracodeAwaitIssueType, handleVeracodeStaleResolution } from './jira/veracodeHandler';
-import { handleWaltzAwaitIssueType, handleWaltzStaleResolution } from './jira/waltzHandler';
+import { handleVeracodeAwaitIssueType, handleVeracodeStaleClose } from './jira/veracodeHandler';
+import { handleWaltzAwaitIssueType, handleWaltzStaleClose } from './jira/waltzHandler';
 import { handleEmailAwaitIssueType } from './jira/emailHandler';
 import { handleUploadAttachment, handleUploadReviewReply, handleAwaitUploadTicketReply, UPLOAD_REVIEW_SESSION_KEY, AWAIT_UPLOAD_TICKET_SESSION_KEY } from './jira/uploadHandler';
 import type { UploadReviewSession, AwaitUploadTicketSession } from './sessionState';
@@ -1175,11 +1175,10 @@ export function createJiraParticipant(
       }
     }
 
-    // U6: stale-ticket batch's own chained per-issue-type-group resolution ask — sibling to the
-    // shared issue-type ask above, but a numbered resolution pick (mirrors 'resolution-selection'
-    // below) rather than a free-text prompt. See StaleResolutionAskSession's own doc comment.
+    // Report import's stepped stale-ticket close (issue type → target → resolution), each step a
+    // numbered pick. See StaleCloseSession's own doc comment.
     if (getActiveJiraSession(chatContext)?.kinds.includes('stale-resolution-selection')) {
-      const ask = ws.get<StaleResolutionAskSession>(STALE_RESOLUTION_SESSION_KEY);
+      const ask = ws.get<StaleCloseSession>(STALE_RESOLUTION_SESSION_KEY);
       if (ask) {
         if (isSessionExpired(ask)) {
           await ws.update(STALE_RESOLUTION_SESSION_KEY, undefined);
@@ -1188,9 +1187,9 @@ export function createJiraParticipant(
         }
         try {
           if (ask.descriptorKind === 'veracode') {
-            return await handleVeracodeStaleResolution(request.prompt, ask, ticketService, stream, ws, config.baseUrl);
+            return await handleVeracodeStaleClose(request.prompt, ask, ticketService, stream, ws, config.baseUrl);
           }
-          return await handleWaltzStaleResolution(request.prompt, ask, ticketService, stream, ws, config.baseUrl);
+          return await handleWaltzStaleClose(request.prompt, ask, ticketService, stream, ws, config.baseUrl);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logDiag('jira.participant', 'error', message, {});

@@ -6,12 +6,12 @@ import {
   parseWaltzReport, filterComponents, sanitizeComponentLabel, buildSummary, buildLabels, buildDescriptionWiki,
   type WaltzComponent, type WaltzReviewRow,
 } from '../../utils/waltzReport';
-import type { WaltzTemplateSelectionSession, WaltzReviewSession, StaleResolutionAskSession } from '../sessionState';
+import type { WaltzTemplateSelectionSession, WaltzReviewSession, StaleCloseSession } from '../sessionState';
 import { WALTZ_REVIEW_COLUMNS } from '../sessionState';
 import {
   readAndFilterReport, buildImportTemplateSession, handleImportReport,
   handleImportTemplateSelection, handleImportReviewReply, continueAfterImportIssueType,
-  continueAfterStaleResolution,
+  continueStaleClose,
   type ReportImportDescriptor,
 } from './reportImportHandler';
 import { resolveMaxReportBytes } from '../../utils/reportImport';
@@ -224,15 +224,15 @@ export async function handleWaltzReviewReply(
   return handleImportReviewReply(reply, session, ticketService, stream, ws, waltzDescriptor, baseUrl);
 }
 
-// U6: resumes a Waltz stale-ticket batch's chained per-issue-type-group resolution ask
-// (JiraParticipant.ts's router, mirroring handleWaltzAwaitIssueType above).
-export async function handleWaltzStaleResolution(
+// Resumes a Waltz import's stepped stale-ticket close (issue type → target → resolution) —
+// JiraParticipant.ts's router, mirroring handleWaltzAwaitIssueType above.
+export async function handleWaltzStaleClose(
   reply: string,
-  ask: StaleResolutionAskSession,
+  ask: StaleCloseSession,
   ticketService: TicketService,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
   baseUrl?: string,
 ): Promise<vscode.ChatResult | void> {
-  return continueAfterStaleResolution(reply, ask, stream, ws, waltzDescriptor, ticketService, baseUrl);
+  return continueStaleClose(reply, ask, stream, ws, waltzDescriptor, ticketService, baseUrl);
 }
