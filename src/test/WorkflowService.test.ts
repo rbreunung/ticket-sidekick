@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { findPath, findAllPaths, loadWorkflowCache, discoverWorkflow, preserveSkippedStatuses, resolveAndApplyTransition, discoverAndCacheWorkflow, saveWorkflowCache } from '../services/WorkflowService';
+import { findPath, findAllPaths, findReachableStatuses, loadWorkflowCache, discoverWorkflow, preserveSkippedStatuses, resolveAndApplyTransition, discoverAndCacheWorkflow, saveWorkflowCache } from '../services/WorkflowService';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService, PartialTransitionError } from '../services/TicketService';
 
@@ -39,6 +39,25 @@ describe('findPath', () => {
 
   it('returns empty array when already at target', () => {
     expect(findPath(graph, 'Done', 'Done')).toEqual([]);
+  });
+});
+
+describe('findReachableStatuses', () => {
+  it('lists every status reachable from the start, not the start itself', () => {
+    expect(findReachableStatuses(graph, 'Open').sort()).toEqual(['Done', 'In Progress', 'In Review']);
+  });
+
+  it('terminates on a cycle and lists each status once', () => {
+    const cyclic = {
+      A: [{ id: '1', name: 'Go', to: 'B' }],
+      B: [{ id: '2', name: 'Back', to: 'A' }, { id: '3', name: 'On', to: 'C' }],
+    };
+    expect(findReachableStatuses(cyclic, 'A').sort()).toEqual(['B', 'C']);
+  });
+
+  it('returns an empty list for a status with no outgoing transitions or one missing from the graph', () => {
+    expect(findReachableStatuses(graph, 'Done')).toEqual([]);
+    expect(findReachableStatuses(graph, 'Unknown')).toEqual([]);
   });
 });
 

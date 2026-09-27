@@ -11,7 +11,7 @@ import type { JiraTemplate } from '../templates/TemplateService';
 // Type-only — ConfigService.ts imports `vscode`, but a type-only import is erased before
 // this (vscode-free, Vitest-loadable) module is ever loaded at runtime.
 import type { JiraConfig } from '../services/ConfigService';
-import type { CachedTransition, WorkflowGraph } from '../services/WorkflowService';
+import { findReachableStatuses, type CachedTransition, type WorkflowGraph } from '../services/WorkflowService';
 // Type-only — llmHelpers.ts imports from this file too, but a type-only import is erased
 // before either module is ever loaded at runtime, so this stays safe (no runtime cycle).
 import type { Operation } from './jira/llmHelpers';
@@ -2100,6 +2100,61 @@ export function buildImportDoneSummary(outcomes: ImportOutcomes): string {
 // `page <n>` page-nav tokens (none of those match this pattern either). Reuses `TICKET_KEY_TOKEN`
 // (branchParser.ts's `TICKET_ID_PATTERN`, anchored) rather than a third independently-typed copy
 // of the Jira ticket-key shape.
+
+/** A cleanup rule matching a stale group's project + issue type, as offered in the close-time
+ * target pick (stale-ticket target pick plan, R2/R3). */
+export interface StaleRuleOption {
+  name: string;
+  targetState: string;
+  resolution?: string;
+}
+
+/** One entry of the close-time target pick: a matching cleanup rule (its target and resolution
+ * apply, R3) or a plain workflow status (R4). */
+export type StaleTargetOption =
+  | { kind: 'rule'; ruleName: string; targetState: string; resolution?: string }
+  | { kind: 'status'; status: string };
+
+/**
+ * R2/KTD3: the close-time target pick — matching cleanup rules first (in `.jira-templates.json`
+ * order), then every status reachable in the stored workflow graph from the current status of at
+ * least one selected ticket, alphabetically. A status a rule also targets is still listed: picking
+ * the plain status transitions without the rule's resolution. Empty when no rule matches and no
+ * selected ticket can reach anything.
+ */
+export function buildStaleTargetOptions(
+  rules: StaleRuleOption[],
+  graph: WorkflowGraph,
+  currentStatuses: string[],
+): StaleTargetOption[] {
+  const statuses = new Set<string>();
+  for (const from of new Set(currentStatuses)) {
+    for (const s of findReachableStatuses(graph, from)) statuses.add(s);
+  }
+  return [
+    ...rules.map((r): StaleTargetOption => ({ kind: 'rule', ruleName: r.name, targetState: r.targetState, resolution: r.resolution })),
+    ...[...statuses].sort((a, b) => a.localeCompare(b)).map((status): StaleTargetOption => ({ kind: 'status', status })),
+  ];
+}
+
+export function formatStaleTargetOption(option: StaleTargetOption): string {
+  return option.kind === 'rule' ? `${option.ruleName} → ${option.targetState}` : option.status;
+}
+
+/** Target-pick reply: a number, a plain status name, a rule name or its full label; `back` or a
+ * cancellation word goes back to the Stale screen (R5). */
+export function parseStaleTargetPick(reply: string, options: StaleTargetOption[]): StaleTargetOption | 'back' | 'invalid' {
+  if (reply.trim().toLowerCase() === 'back' || isCancellation(reply)) return 'back';
+  return pickByNumberOrName(reply, options, formatStaleTargetOption)
+    ?? options.find(o => o.kind === 'rule' && o.ruleName.toLowerCase() === reply.trim().toLowerCase())
+    ?? 'invalid';
+}
+
+/** R12: which issue type to close now, when the selection spans several. */
+export function parseStaleIssueTypePick(reply: string, issueTypes: string[]): string | 'back' | 'invalid' {
+  if (reply.trim().toLowerCase() === 'back' || isCancellation(reply)) return 'back';
+  return pickByNumberOrName(reply, issueTypes, (t) => t) ?? 'invalid';
+}
 
 /** Result of {@link parseStaleTicketToggle}: the matched stale-ticket keys plus whatever tokens in
  * the reply weren't stale-ticket keys, rejoined as a string — code-review fix: a reply mixing a

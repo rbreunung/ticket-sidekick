@@ -69,6 +69,28 @@ export function findPath(graph: WorkflowGraph, from: string, to: string): Cached
 }
 
 /**
+ * Every status reachable from `from` in the cached workflow graph, in BFS order, excluding `from`
+ * itself. Used by the stale-ticket close to offer every status a selected ticket can be moved to,
+ * not just directly-adjacent ones. A status missing from the graph, or with no outgoing
+ * transitions, reaches nothing.
+ */
+export function findReachableStatuses(graph: WorkflowGraph, from: string): string[] {
+  const visited = new Set<string>([from]);
+  const reachable: string[] = [];
+  const queue = [from];
+  while (queue.length > 0) {
+    const state = queue.shift()!;
+    for (const t of graph[state] ?? []) {
+      if (visited.has(t.to)) continue;
+      visited.add(t.to);
+      reachable.push(t.to);
+      queue.push(t.to);
+    }
+  }
+  return reachable;
+}
+
+/**
  * Enumerates up to `options.maxPaths` distinct routes from `from` to `to`, shortest first — used
  * by the guided transition flow to offer a ranked choice of multi-hop paths instead of the single
  * route `findPath` returns (KTD2). A depth-bounded DFS with a *per-path* visited set (not global):
