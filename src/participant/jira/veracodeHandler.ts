@@ -7,12 +7,12 @@ import {
   buildGroupSummary, buildGroupDescriptionWiki, buildGroupLabels, buildNewFindingsCommentWiki,
   type VeracodeFlaw, type VeracodeReviewRow,
 } from '../../utils/veracodeReport';
-import type { VeracodeTemplateSelectionSession, VeracodeReviewSession, StaleResolutionAskSession } from '../sessionState';
+import type { VeracodeTemplateSelectionSession, VeracodeReviewSession, StaleCloseSession } from '../sessionState';
 import { VERACODE_REVIEW_COLUMNS } from '../sessionState';
 import {
   readAndFilterReport, buildImportTemplateSession, handleImportReport,
   handleImportTemplateSelection, handleImportReviewReply, continueAfterImportIssueType,
-  continueAfterStaleResolution,
+  continueStaleClose,
   type ReportImportDescriptor,
 } from './reportImportHandler';
 import { resolveMaxReportBytes } from '../../utils/reportImport';
@@ -256,15 +256,15 @@ export async function handleVeracodeReviewReply(
   return handleImportReviewReply(reply, session, ticketService, stream, ws, veracodeDescriptor, baseUrl);
 }
 
-// U6: resumes a Veracode stale-ticket batch's chained per-issue-type-group resolution ask
-// (JiraParticipant.ts's router, mirroring handleVeracodeAwaitIssueType above).
-export async function handleVeracodeStaleResolution(
+// Resumes a Veracode import's stepped stale-ticket close (issue type → target → resolution) —
+// JiraParticipant.ts's router, mirroring handleVeracodeAwaitIssueType above.
+export async function handleVeracodeStaleClose(
   reply: string,
-  ask: StaleResolutionAskSession,
+  ask: StaleCloseSession,
   ticketService: TicketService,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
   baseUrl?: string,
 ): Promise<vscode.ChatResult | void> {
-  return continueAfterStaleResolution(reply, ask, stream, ws, veracodeDescriptor, ticketService, baseUrl);
+  return continueStaleClose(reply, ask, stream, ws, veracodeDescriptor, ticketService, baseUrl);
 }

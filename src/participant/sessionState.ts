@@ -11,7 +11,7 @@ import type { JiraTemplate } from '../templates/TemplateService';
 // Type-only — ConfigService.ts imports `vscode`, but a type-only import is erased before
 // this (vscode-free, Vitest-loadable) module is ever loaded at runtime.
 import type { JiraConfig } from '../services/ConfigService';
-import { findReachableStatuses, type CachedTransition, type WorkflowGraph } from '../services/WorkflowService';
+import { findPath, findReachableStatuses, type CachedTransition, type WorkflowGraph } from '../services/WorkflowService';
 // Type-only — llmHelpers.ts imports from this file too, but a type-only import is erased
 // before either module is ever loaded at runtime, so this stays safe (no runtime cycle).
 import type { Operation } from './jira/llmHelpers';
@@ -1221,7 +1221,10 @@ export function neutralizeMarkdownLinks(value: string): string {
 // `undefined`.
 // U3: bumped 4 -> 5 for the "update existing tickets" bulk action (ReviewRowBase gained the
 // optional `updatedExisting` per-row indicator) — same rationale as U6's bump.
-export const CURRENT_SESSION_SCHEMA_VERSION = 6;
+// Stale-ticket target pick: bumped 6 -> 7 — StaleTicketGroup no longer carries a build-time
+// target/resolution (it carries the matching rules and a workflow-graph snapshot instead), and the
+// stale-resolution ask became the stepped StaleCloseSession. Same rationale as the earlier bumps.
+export const CURRENT_SESSION_SCHEMA_VERSION = 7;
 
 export interface ImportTemplateSelectionSession<TItem> {
   reportFileName: string;
@@ -1374,26 +1377,20 @@ export type EmailReviewSession = ReviewSession<EmailReviewRow>;
 // `buildStaleGroupScreen` below.
 // ---------------------------------------------------------------------------------------------
 
-/** One issue-type group of stale tickets, resolution already chosen (or intentionally skipped —
- * `undefined`) — ready to render/transition. Every ticket defaults `included: false` (R3: nothing
- * transitions without an explicit choice, unlike `cleanupHandler.ts`'s own `included: true`
- * default). */
+/** One issue-type group of stale tickets. The target is not fixed here: it is picked when the
+ * user closes the group's selected tickets (stale-ticket target pick plan, R1/R2/KTD1), from the
+ * group's matching cleanup rules and the snapshot of its project/issue type's workflow graph, which
+ * is also what the transition paths are computed from at close time (KTD2). Every ticket defaults
+ * `included: false` and carries an empty `transitionPath` until then. */
 export interface StaleTicketGroup {
   issueType: string;
-  ruleName: string | undefined;
-  targetState: string;
-  resolution: string | undefined;
+  rules: StaleRuleOption[];
+  graph: WorkflowGraph;
   tickets: TransitionBatchTicket[];
-  // Overview-hub KTD6: present only while this group's resolution question is still unanswered —
-  // the options the question offers. The question is asked only after "close tickets" and only for
-  // groups with a selected ticket; answering (including "none") removes this field, so a group is
-  // never asked twice.
-  resolutionOptions?: string[];
 }
 
-/** A stale ticket whose project+issue-type has no matching `cleanupRules` entry (or, degenerately,
- * no valid transition path from its current status) — shown per the session-settled governing
- * decision, but never offered a toggle since there is no transition to run. */
+/** A stale ticket that can't be offered for a transition at all — its issue type is unknown, or no
+ * workflow has been discovered for its project/issue type — shown with a note but never toggleable. */
 export interface IneligibleStaleTicket {
   key: string;
   summary: string;
@@ -1401,43 +1398,89 @@ export interface IneligibleStaleTicket {
   note: string;
 }
 
-/** One issue-type group still awaiting its own resolution pick before the merged review screen can
- * render — mirrors `StaleTicketGroup` minus the already-chosen `resolution`, plus the option list
- * to present (`cleanupHandler.ts`'s `buildStaleTicketGroups` only populates this when the group's
- * rule needs one — the same "closed-like target state needs a resolution" check
- * `handleRunCleanup` already makes). */
-export interface StaleResolutionPendingGroup {
-  issueType: string;
-  ruleName: string | undefined;
-  targetState: string;
-  resolutionOptions: string[];
-  tickets: TransitionBatchTicket[];
-}
-
 export interface ReviewSessionStale {
   groups: StaleTicketGroup[];
   ineligible: IneligibleStaleTicket[];
-  // Overview-hub KTD3: tickets a "close tickets" action already transitioned — shown as closed, no
-  // longer toggleable, and never transitioned again.
+  // Tickets a "close tickets" run already transitioned — shown as done, no longer toggleable, and
+  // never transitioned again. (Named for the original closing-only flow; the target may now be a
+  // non-final status.)
   closedKeys?: string[];
+  // The Jira instance's resolution names, fetched once when the stale section is built (KTD1) so
+  // the close-time resolution question needs no Jira call. Empty when none exist or the fetch
+  // failed — the close then never asks.
+  resolutionOptions: string[];
 }
 
-/** Sibling to `AwaitIssueTypeSession` (ticketContext.ts) — same one-key ask/resume shape, but for
- * the chained per-issue-type-group resolution pick a stale-ticket batch may need before the merged
- * review screen renders. Kept as its own session type rather than a new `AwaitIssueTypeResume` kind
- * because its ask is a numbered resolution pick (mirrors `ResolutionSelectionSession`/
- * cleanupHandler.ts's own ask, `parseResolutionSelection`), not the generic free-text prompt
- * `streamAwaitIssueType` renders — and its "empty reply" re-prompt text would otherwise have to
- * become resume-kind-aware. `reviewSession` is the review session as built so far (rows, dedup —
- * everything except `staleTickets`), parked until every pending group is resolved.
+/**
+ * The stepped "close tickets" flow on the Stale screen (stale-ticket target pick plan, KTD4):
+ * `pick-issue-type` (only when the selection spans several issue types, R12), then `pick-target`
+ * (R1/R2), then `pick-resolution` (only when R4/KTD5 call for one). Stored under the existing
+ * `jira.session.staleResolution` key with the `stale-resolution-selection` metadata kind, so the
+ * participant's routing is unchanged. `reviewSession` is the review session parked while the
+ * questions are open; `back` at any step returns to its Stale screen with nothing transitioned.
  */
-export interface StaleResolutionAskSession {
-  descriptorKind: 'veracode' | 'waltz'; // email has no stale-check concept — never reaches this ask
-  pendingGroups: StaleResolutionPendingGroup[]; // [0] is the group currently being asked about
-  resolvedGroups: StaleTicketGroup[]; // accumulated as each group's ask resolves
-  ineligible: IneligibleStaleTicket[];
+export interface StaleCloseSession {
+  descriptorKind: 'veracode' | 'waltz'; // email has no stale-check concept — never reaches this flow
+  step: 'pick-issue-type' | 'pick-target' | 'pick-resolution';
+  issueTypeOptions: string[];
+  issueType?: string;
+  targetOptions?: StaleTargetOption[];
+  target?: StaleTargetOption;
   reviewSession: VeracodeReviewSession | WaltzReviewSession;
   schemaVersion: number;
+}
+
+// A target state in this set counts as closing, so a resolution is asked before transitioning to
+// it (when nothing else supplies one). Shared by `@jira cleanup` (cleanupHandler.ts) and the
+// stale-ticket close below.
+export const CLOSED_LIKE_STATES = new Set(['done', 'resolved', 'closed', "won't fix"]);
+
+/** R12: the issue types that have at least one selected, not-yet-transitioned stale ticket, in
+ * group order. */
+export function selectedStaleIssueTypes(stale: ReviewSessionStale): string[] {
+  const done = new Set(stale.closedKeys ?? []);
+  return stale.groups.filter(g => g.tickets.some(t => t.included && !done.has(t.key))).map(g => g.issueType);
+}
+
+export function staleTargetState(option: StaleTargetOption): string {
+  return option.kind === 'rule' ? option.targetState : option.status;
+}
+
+/** R3/R4/KTD5: a rule with a resolution never asks; a rule without one, or a plain status, asks
+ * only when its target is closed-like — and never when the instance has no resolutions at all. */
+export function staleTargetNeedsResolution(option: StaleTargetOption, resolutionOptions: string[]): boolean {
+  if (resolutionOptions.length === 0) return false;
+  if (option.kind === 'rule' && option.resolution !== undefined) return false;
+  return CLOSED_LIKE_STATES.has(staleTargetState(option).toLowerCase());
+}
+
+/**
+ * KTD2/R11: turns one group's selected, not-yet-transitioned tickets into runnable transitions
+ * toward `targetState`, using paths from the group's stored workflow graph. A ticket already in
+ * the target status, or with no path to it, is skipped with a reason instead.
+ */
+export function planStaleTransitions(
+  group: StaleTicketGroup,
+  targetState: string,
+  closedKeys: string[] = [],
+): { runnable: TransitionBatchTicket[]; skipped: Array<{ key: string; reason: string }> } {
+  const done = new Set(closedKeys);
+  const runnable: TransitionBatchTicket[] = [];
+  const skipped: Array<{ key: string; reason: string }> = [];
+  for (const t of group.tickets) {
+    if (!t.included || done.has(t.key)) continue;
+    if (t.currentStatus.toLowerCase() === targetState.toLowerCase()) {
+      skipped.push({ key: t.key, reason: `already in ${targetState}` });
+      continue;
+    }
+    const path = findPath(group.graph, t.currentStatus, targetState);
+    if (!path || path.length === 0) {
+      skipped.push({ key: t.key, reason: `no path found from ${t.currentStatus} to ${targetState} in the discovered workflow` });
+      continue;
+    }
+    runnable.push({ ...t, transitionPath: path });
+  }
+  return { runnable, skipped };
 }
 
 /**
@@ -1882,19 +1925,20 @@ export function buildTicketedGroupScreen<TRow extends ReviewRowBase>(
   return lines.join('\n');
 }
 
-/** R5/R9: the Stale group — per-ticket toggles (off by default) and "Close N tickets". */
+/** R5/R9: the Stale group — per-ticket toggles (off by default) and "Close N tickets". The target
+ * and resolution are picked when closing (stale-ticket target pick plan, R1), one issue type per
+ * run (R12), so the table shows each ticket's issue type instead of a fixed target. */
 export function buildStaleGroupScreen<TRow extends ReviewRowBase>(session: ReviewSession<TRow>, opts: ImportScreenOptions): string {
   const s = ensureImportViewState(session);
-  const stale: ReviewSessionStale = s.staleTickets ?? { groups: [], ineligible: [] };
+  const stale: ReviewSessionStale = s.staleTickets ?? { groups: [], ineligible: [], resolutionOptions: [] };
   const closed = new Set(stale.closedKeys ?? []);
   const c = countImportGroups(s);
 
   interface StaleRow {
     key: string;
     summary: string;
+    issueType: string;
     currentStatus: string;
-    to: string;
-    resolution: string;
     toggleCell: string;
   }
   const rows: StaleRow[] = [];
@@ -1903,9 +1947,8 @@ export function buildStaleGroupScreen<TRow extends ReviewRowBase>(session: Revie
       rows.push({
         key: formatKeyLink(t.key, opts.baseUrl),
         summary: neutralizeMarkdownLinks(t.summary),
+        issueType: group.issueType,
         currentStatus: t.currentStatus,
-        to: group.targetState,
-        resolution: group.resolutionOptions ? '_asked on close_' : (group.resolution ?? ''),
         toggleCell: closed.has(t.key) ? '✓ closed' : cmdLink(t.included ? '✓ close' : '_no_', t.key),
       });
     }
@@ -1914,9 +1957,8 @@ export function buildStaleGroupScreen<TRow extends ReviewRowBase>(session: Revie
     rows.push({
       key: formatKeyLink(t.key, opts.baseUrl),
       summary: neutralizeMarkdownLinks(t.summary),
+      issueType: '',
       currentStatus: t.currentStatus,
-      to: '—',
-      resolution: '',
       toggleCell: `_excluded — ${neutralizeMarkdownLinks(t.note)}_`,
     });
   }
@@ -1924,9 +1966,8 @@ export function buildStaleGroupScreen<TRow extends ReviewRowBase>(session: Revie
   const columns: ReviewTableColumn<StaleRow>[] = [
     { header: 'Key', accessor: r => r.key },
     { header: 'Summary', accessor: r => r.summary },
+    { header: 'Type', accessor: r => r.issueType },
     { header: 'Status', accessor: r => r.currentStatus },
-    { header: '→ To', accessor: r => r.to },
-    { header: 'Resolution', accessor: r => r.resolution },
     { header: 'Close?', accessor: r => r.toggleCell },
   ];
 
@@ -1934,9 +1975,14 @@ export function buildStaleGroupScreen<TRow extends ReviewRowBase>(session: Revie
   lines.push(renderReviewTable(columns, rows));
   lines.push('');
   if (c.staleOpen > 0) {
-    lines.push(c.staleSelected > 0
-      ? `Reply ${cmdLink(`Close ${c.staleSelected} tickets`, IMPORT_COMMANDS.close)} to transition the tickets marked ✓ close.`
-      : 'Close 0 tickets — reply a ticket key (e.g. `PROJ-123`) to mark it for closing.');
+    if (c.staleSelected > 0) {
+      lines.push(`Reply ${cmdLink(`Close ${c.staleSelected} tickets`, IMPORT_COMMANDS.close)} to transition the tickets marked ✓ close — you pick the target status next.`);
+      if (selectedStaleIssueTypes(stale).length > 1) {
+        lines.push('The selection spans several issue types: each run closes one issue type, and you are asked which one first.');
+      }
+    } else {
+      lines.push('Close 0 tickets — reply a ticket key (e.g. `PROJ-123`) to mark it for closing.');
+    }
   }
   lines.push(groupScreenExitLine(s.singleGroup!));
   return lines.join('\n');

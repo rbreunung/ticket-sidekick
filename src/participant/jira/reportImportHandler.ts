@@ -22,7 +22,10 @@ import {
 } from '../../utils/reportImport';
 import {
   isCancellation, pickEmailOption, applyStaleTicketToggle,
-  parseResolutionSelection, buildReviewPage, applyReviewSessionToggle,
+  parseResolutionSelection, buildReviewPage,
+  buildStaleTargetOptions, formatStaleTargetOption, parseStaleTargetPick, parseStaleIssueTypePick,
+  selectedStaleIssueTypes, staleTargetState, staleTargetNeedsResolution, planStaleTransitions,
+  type StaleTargetOption, applyReviewSessionToggle,
   markRowsUpdatedExisting, applyBulkNewRowSet,
   buildImportScreen, parseImportReviewReply, describeImportReplyVocabulary, buildImportDoneSummary,
   initImportViewState, ensureImportViewState, emptyImportOutcomes,
@@ -31,8 +34,7 @@ import {
   NO_ISSUE_TYPE, resolveTemplateIssueType, formatIssueTypeOptionLabel, buildChatCommandLink,
   type ImportTemplateSelectionSession, type ReviewSession, type ReviewTableColumn, type ReviewRowBase,
   type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession, type JiraSessionKind,
-  type VeracodeReviewSession, type WaltzReviewSession, type StaleResolutionAskSession,
-  type StaleTicketGroup,
+  type VeracodeReviewSession, type WaltzReviewSession, type StaleCloseSession,
 } from '../sessionState';
 import { resolveProjectKey, resolveIssueTypeOrPrompt, sessionWasSuperseded, STALE_RESOLUTION_SESSION_KEY } from './ticketContext';
 import { buildStaleTicketGroups, transitionTickets } from './cleanupHandler';
@@ -531,15 +533,10 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
         // the folded rows, the page the user was on). Degrade the same way
         // `staleResult.searchFailed` already does instead of throwing.
         try {
-          const grouped = await buildStaleTicketGroups(staleResult.stale, issueDetails, session.projectKey, jiraClient, workspaceRoot);
-
-          // Overview-hub KTD6: a group whose rule still needs a resolution is NOT asked about here —
-          // it keeps its options and is asked only if the user later closes one of its tickets.
-          const awaitingResolution: StaleTicketGroup[] = grouped.pendingGroups.map(g => ({ ...g, resolution: undefined }));
-          reviewSession = {
-            ...reviewSession,
-            staleTickets: { groups: [...grouped.resolvedGroups, ...awaitingResolution], ineligible: grouped.ineligible },
-          };
+          const grouped = await buildStaleTicketGroups(staleResult.stale, issueDetails, session.projectKey, jiraClient, workspaceRoot, descriptor.scope);
+          // The target (and any resolution) is picked only when the user closes selected tickets
+          // (stale-ticket target pick plan, R1) — nothing is asked here.
+          reviewSession = { ...reviewSession, staleTickets: grouped };
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logDiag(descriptor.scope, 'warn', 'Could not check for stale tickets — proceeding without a stale-ticket section', {
@@ -555,100 +552,154 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
 }
 
 /**
- * U6: streams the stale-ticket batch's chained per-issue-type-group resolution ask — one group at a
- * time (`ask.pendingGroups[0]`), mirroring `ResolutionSelectionSession`/cleanupHandler.ts's own
- * numbered resolution pick (not the generic free-text `streamAwaitIssueType` prompt — see
- * `StaleResolutionAskSession`'s own doc comment in sessionState.ts for why). Overview-hub KTD6:
- * only ever started by "close tickets" on the Stale screen, for groups with a selected ticket.
+ * Streams the current step of the stepped stale close (stale-ticket target pick plan, KTD4): which
+ * issue type to close (R12), which target (R1/R2), or which resolution (R4). Every choice is a
+ * clickable reply, plus `Back` to the Stale screen with nothing transitioned (R5).
  */
-export async function streamStaleResolutionAsk(
-  ask: StaleResolutionAskSession,
+export async function streamStaleCloseStep(
+  close: StaleCloseSession,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
+  note?: string,
 ): Promise<vscode.ChatResult> {
-  await ws.update(STALE_RESOLUTION_SESSION_KEY, ask);
-  const group = ask.pendingGroups[0];
-  const selected = group.tickets.filter(t => t.included).length;
-  const list = group.resolutionOptions.map((r, i) => `${i + 1}. ${buildChatCommandLink(r, '@jira', String(i + 1))}`).join('\n');
-  stream.markdown(trustedChatMarkdown(
-    `**${selected}** stale **${group.issueType}** ticket(s) will move to **${group.targetState}** — ` +
-    `which resolution should be set?\n\n${list}\n\n` +
-    `Reply with the name or number, ${buildChatCommandLink('None', '@jira', 'none')} to skip setting a resolution, ` +
-    `or ${buildChatCommandLink('Back', '@jira', 'back')} to return to the stale tickets without closing any.`,
-  ));
+  await ws.update(STALE_RESOLUTION_SESSION_KEY, close);
+  const numbered = (labels: string[]) => labels.map((l, i) => `${i + 1}. ${buildChatCommandLink(l, '@jira', String(i + 1))}`).join('\n');
+  const back = `${buildChatCommandLink('Back', '@jira', 'back')} to return to the stale tickets without transitioning any`;
+  const prefix = note ? `${note}\n\n` : '';
+  let body: string;
+  if (close.step === 'pick-issue-type') {
+    body = 'The selected stale tickets span several issue types, and each run closes one. Which issue type do you want to close now?\n\n' +
+      `${numbered(close.issueTypeOptions)}\n\nReply with the name or number, or ${back}.`;
+  } else if (close.step === 'pick-target') {
+    const selected = selectedCount(close);
+    body = `Where should the **${selected}** selected stale **${close.issueType}** ticket(s) go?\n\n` +
+      `${numbered(close.targetOptions!.map(formatStaleTargetOption))}\n\n` +
+      `Cleanup rules (listed first) apply their own resolution. Reply with the name or number, or ${back}.`;
+  } else {
+    const options = close.reviewSession.staleTickets?.resolutionOptions ?? [];
+    body = `The tickets will move to **${staleTargetState(close.target!)}** — which resolution should be set?\n\n${numbered(options)}\n\n` +
+      `Reply with the name or number, ${buildChatCommandLink('None', '@jira', 'none')} to skip setting a resolution, or ${back}.`;
+  }
+  stream.markdown(trustedChatMarkdown(prefix + body));
   return { metadata: { jiraSession: { kinds: ['stale-resolution-selection'] } } };
 }
 
+function selectedCount(close: StaleCloseSession): number {
+  const stale = close.reviewSession.staleTickets;
+  const done = new Set(stale?.closedKeys ?? []);
+  const group = stale?.groups.find(g => g.issueType === close.issueType);
+  return group ? group.tickets.filter(t => t.included && !done.has(t.key)).length : 0;
+}
+
 /**
- * Continues the chained stale-resolution ask once a reply for the currently-asked group comes in —
- * either re-prompting the same group (invalid reply), moving on to the next pending group, or (once
- * every asked group is answered) recording the answers on the parked review session, running the
- * selected tickets' transitions, and returning to the overview (overview-hub KTD6 / R9). A group
- * answered once — including with "none" — is never asked again.
+ * Continues the stepped stale close with the user's reply to the current step: moves to the next
+ * step, re-shows the same step on an unrecognized reply, returns to the Stale screen on `back`/
+ * cancel (R5), or — once the target (and any resolution) is known — runs the transitions for the
+ * chosen issue type and returns to the Stale screen or overview (KTD6).
  */
-export async function continueAfterStaleResolution<TItem, TRow extends ReviewRowBase>(
+export async function continueStaleClose<TItem, TRow extends ReviewRowBase>(
   reply: string,
-  ask: StaleResolutionAskSession,
+  close: StaleCloseSession,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
   descriptor: ReportImportDescriptor<TItem, TRow>,
   ticketService: TicketService,
   baseUrl?: string,
 ): Promise<vscode.ChatResult | void> {
-  // Mirrors handleVeracodeAwaitIssueType/handleWaltzAwaitIssueType's own guard: a second, independent
-  // import may have started (and claimed the template-selection session key) while this ask was open.
+  // A second, independent import may have started (and claimed the template-selection session key)
+  // while this question was open.
   if (sessionWasSuperseded(ws, descriptor.sessionKeys.templateSelection)) {
     await ws.update(STALE_RESOLUTION_SESSION_KEY, undefined);
-    stream.markdown('_A newer import was started while this one was waiting for a resolution — cancelled to avoid closing tickets from a stale batch._');
+    stream.markdown('_A newer import was started while this one was waiting for an answer — cancelled to avoid transitioning tickets from a stale batch._');
     return;
   }
 
-  // Code-review fix: the question now sits between "close tickets" and the transitions, so it needs
-  // a way out. "back" or a cancellation word (other than "skip", which here means "no resolution",
-  // same as "none") returns to the Stale screen with nothing transitioned and no answer recorded.
-  const normalizedReply = reply.trim().toLowerCase();
-  if (normalizedReply === 'back' || (isCancellation(reply) && normalizedReply !== 'skip')) {
+  const parked = ensureImportViewState(close.reviewSession as unknown as ReviewSession<TRow>);
+  const backToStale = async () => {
     await ws.update(STALE_RESOLUTION_SESSION_KEY, undefined);
-    stream.markdown('_No stale tickets were closed._\n\n');
-    const parked = ensureImportViewState(ask.reviewSession as unknown as ReviewSession<TRow>);
+    stream.markdown('_No stale tickets were transitioned._\n\n');
     return streamImportReview({ ...parked, view: 'stale' }, stream, ws, descriptor, baseUrl);
-  }
-
-  const group = ask.pendingGroups[0];
-  const choice = parseResolutionSelection(reply, group.resolutionOptions);
-  if (choice === 'invalid') {
-    return streamStaleResolutionAsk(ask, stream, ws);
-  }
-
-  const resolvedGroups: StaleTicketGroup[] = [
-    ...ask.resolvedGroups,
-    { issueType: group.issueType, ruleName: group.ruleName, targetState: group.targetState, resolution: choice ?? undefined, tickets: group.tickets },
-  ];
-  const remainingPending = ask.pendingGroups.slice(1);
-  if (remainingPending.length > 0) {
-    return streamStaleResolutionAsk({ ...ask, pendingGroups: remainingPending, resolvedGroups }, stream, ws);
-  }
-
-  await ws.update(STALE_RESOLUTION_SESSION_KEY, undefined);
-  const parked = ensureImportViewState(ask.reviewSession as unknown as ReviewSession<TRow>);
-  const answered = new Map(resolvedGroups.map(g => [staleGroupId(g), g.resolution]));
-  let session: ReviewSession<TRow> = {
-    ...parked,
-    staleTickets: parked.staleTickets && {
-      ...parked.staleTickets,
-      groups: parked.staleTickets.groups.map(g => {
-        if (!answered.has(staleGroupId(g))) return g;
-        const { resolutionOptions: _asked, ...rest } = g;
-        return { ...rest, resolution: answered.get(staleGroupId(g)) };
-      }),
-    },
   };
-  session = await runStaleTransitions(session, ticketService, stream, descriptor);
-  return streamImportReview(afterGroupAction(session), stream, ws, descriptor, baseUrl);
+  const invalid = "_Didn't understand that — pick one of the options below._";
+
+  if (close.step === 'pick-issue-type') {
+    const pick = parseStaleIssueTypePick(reply, close.issueTypeOptions);
+    if (pick === 'back') return backToStale();
+    if (pick === 'invalid') return streamStaleCloseStep(close, stream, ws, invalid);
+    return startTargetPick(pick, parked, close.issueTypeOptions, stream, ws, descriptor, baseUrl);
+  }
+
+  if (close.step === 'pick-target') {
+    const pick = parseStaleTargetPick(reply, close.targetOptions ?? []);
+    if (pick === 'back') return backToStale();
+    if (pick === 'invalid') return streamStaleCloseStep(close, stream, ws, invalid);
+    if (staleTargetNeedsResolution(pick, parked.staleTickets?.resolutionOptions ?? [])) {
+      return streamStaleCloseStep({ ...close, step: 'pick-resolution', target: pick }, stream, ws);
+    }
+    await ws.update(STALE_RESOLUTION_SESSION_KEY, undefined);
+    const resolution = pick.kind === 'rule' ? pick.resolution : undefined;
+    return finishStaleClose(parked, close.issueType!, pick, resolution, ticketService, stream, ws, descriptor, baseUrl);
+  }
+
+  // pick-resolution: "skip" here means "no resolution" (same as "none"), not "go back".
+  const normalized = reply.trim().toLowerCase();
+  if (normalized === 'back' || (isCancellation(reply) && normalized !== 'skip')) return backToStale();
+  const choice = parseResolutionSelection(reply, parked.staleTickets?.resolutionOptions ?? []);
+  if (choice === 'invalid') return streamStaleCloseStep(close, stream, ws, invalid);
+  await ws.update(STALE_RESOLUTION_SESSION_KEY, undefined);
+  return finishStaleClose(parked, close.issueType!, close.target!, choice ?? undefined, ticketService, stream, ws, descriptor, baseUrl);
 }
 
-function staleGroupId(g: { issueType: string; targetState: string }): string {
-  return `${g.issueType}\u0000${g.targetState}`;
+async function startTargetPick<TItem, TRow extends ReviewRowBase>(
+  issueType: string,
+  session: ReviewSession<TRow>,
+  issueTypeOptions: string[],
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+  baseUrl?: string,
+): Promise<vscode.ChatResult> {
+  const stale = session.staleTickets!;
+  const done = new Set(stale.closedKeys ?? []);
+  const group = stale.groups.find(g => g.issueType === issueType)!;
+  const selectedStatuses = group.tickets.filter(t => t.included && !done.has(t.key)).map(t => t.currentStatus);
+  const targetOptions = buildStaleTargetOptions(group.rules, group.graph, selectedStatuses);
+  if (targetOptions.length === 0) {
+    // Plan review fix: an empty pick list would strand the user on a question with nothing to pick.
+    await ws.update(STALE_RESOLUTION_SESSION_KEY, undefined);
+    stream.markdown(
+      `_The selected **${issueType}** tickets can't reach any status in the discovered workflow, and no cleanup rule matches. ` +
+      `Run \`@jira discover workflow ${session.projectKey} ${issueType}\` to refresh the workflow cache. No stale tickets were transitioned._\n\n`,
+    );
+    return streamImportReview({ ...session, view: 'stale' }, stream, ws, descriptor, baseUrl);
+  }
+  const close: StaleCloseSession = {
+    descriptorKind: descriptor.descriptorKind as 'veracode' | 'waltz',
+    step: 'pick-target',
+    issueTypeOptions,
+    issueType,
+    targetOptions,
+    reviewSession: session as unknown as VeracodeReviewSession | WaltzReviewSession,
+    schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
+  };
+  return streamStaleCloseStep(close, stream, ws);
+}
+
+async function finishStaleClose<TItem, TRow extends ReviewRowBase>(
+  session: ReviewSession<TRow>,
+  issueType: string,
+  target: StaleTargetOption,
+  resolution: string | undefined,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+  baseUrl?: string,
+): Promise<vscode.ChatResult> {
+  const updated = await runStaleTransitions(session, issueType, staleTargetState(target), resolution, ticketService, stream, descriptor);
+  // KTD6: while tickets of another issue type are still selected, stay on the Stale screen.
+  const next = selectedStaleIssueTypes(updated.staleTickets!).length > 0 ? { ...updated, view: 'stale' as const } : afterGroupAction(updated);
+  return streamImportReview(next, stream, ws, descriptor, baseUrl);
 }
 
 function screenOptions<TItem, TRow extends ReviewRowBase>(descriptor: ReportImportDescriptor<TItem, TRow>, baseUrl?: string): ImportScreenOptions {
@@ -765,7 +816,7 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
       Object.assign(session, afterGroupAction(await executeUpdateExistingTickets(session, ticketService, stream, descriptor, baseUrl)));
       return rerender();
     case 'close':
-      return closeStaleTickets(session, ticketService, stream, ws, descriptor, baseUrl);
+      return closeStaleTickets(session, stream, ws, descriptor, baseUrl);
   }
 }
 
@@ -901,97 +952,91 @@ export async function recreateTicketedRows<TItem, TRow extends ReviewRowBase>(
 }
 
 /**
- * R9 (KTD6): "close tickets" on the Stale screen. Groups with a selected ticket whose resolution is
- * still unanswered are asked first (chained, one question per group, never repeated); otherwise
- * the selected tickets transition right away and the overview returns.
+ * "close tickets" on the Stale screen (stale-ticket target pick plan, R1/R12): with nothing
+ * selected, says so; with several issue types selected, asks which one to close now; otherwise
+ * goes straight to the target pick for the one selected issue type. Nothing transitions until the
+ * target (and any resolution) is picked.
  */
 async function closeStaleTickets<TItem, TRow extends ReviewRowBase>(
   session: ReviewSession<TRow>,
-  ticketService: TicketService,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
   descriptor: ReportImportDescriptor<TItem, TRow>,
   baseUrl?: string,
 ): Promise<vscode.ChatResult | void> {
-  const stale = session.staleTickets;
-  const closed = new Set(stale?.closedKeys ?? []);
-  const withSelection = (stale?.groups ?? []).filter(g => g.tickets.some(t => t.included && !closed.has(t.key)));
-  if (withSelection.length === 0) {
+  const issueTypes = session.staleTickets ? selectedStaleIssueTypes(session.staleTickets) : [];
+  if (issueTypes.length === 0) {
     stream.markdown('_Nothing selected — no stale tickets were closed._\n\n');
     return streamImportReview(session, stream, ws, descriptor, baseUrl);
   }
-
-  const needsAnswer = withSelection.filter(g => g.resolutionOptions !== undefined);
-  if (needsAnswer.length > 0) {
-    await ws.update(descriptor.sessionKeys.review, session);
-    // descriptorKind is always 'veracode'/'waltz' here — email never sets descriptor.stale, so it
-    // never has a Stale group (erasure cast mirrors the one for AwaitIssueTypeResume's session).
-    const ask: StaleResolutionAskSession = {
+  await ws.update(descriptor.sessionKeys.review, session);
+  if (issueTypes.length > 1) {
+    const close: StaleCloseSession = {
       descriptorKind: descriptor.descriptorKind as 'veracode' | 'waltz',
-      pendingGroups: needsAnswer.map(g => ({
-        issueType: g.issueType,
-        ruleName: g.ruleName,
-        targetState: g.targetState,
-        resolutionOptions: g.resolutionOptions!,
-        tickets: g.tickets.filter(t => !closed.has(t.key)),
-      })),
-      resolvedGroups: [],
-      ineligible: stale!.ineligible,
+      step: 'pick-issue-type',
+      issueTypeOptions: issueTypes,
       reviewSession: session as unknown as VeracodeReviewSession | WaltzReviewSession,
       schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
     };
-    return streamStaleResolutionAsk(ask, stream, ws);
+    return streamStaleCloseStep(close, stream, ws);
   }
-
-  const updated = await runStaleTransitions(session, ticketService, stream, descriptor);
-  Object.assign(session, afterGroupAction(updated));
-  return streamImportReview(session, stream, ws, descriptor, baseUrl);
+  return startTargetPick(issueTypes[0], session, issueTypes, stream, ws, descriptor, baseUrl);
 }
 
 /**
- * Transitions every selected, not-yet-closed stale ticket through cleanupHandler.ts's shared
- * `transitionTickets()` (each group with its own resolution), then marks the successfully
- * transitioned ones closed so they are never transitioned again (KTD3).
+ * Transitions the chosen issue type's selected, not-yet-transitioned stale tickets to `targetState`
+ * through cleanupHandler.ts's shared `transitionTickets()`, with paths computed from the group's
+ * stored workflow graph (KTD2). A ticket already there or with no path is skipped with a note and
+ * deselected (R11); transitioned tickets are marked so they are never transitioned again.
  */
 async function runStaleTransitions<TItem, TRow extends ReviewRowBase>(
   session: ReviewSession<TRow>,
+  issueType: string,
+  targetState: string,
+  resolution: string | undefined,
   ticketService: TicketService,
   stream: vscode.ChatResponseStream,
   descriptor: ReportImportDescriptor<TItem, TRow>,
 ): Promise<ReviewSession<TRow>> {
   const stale = session.staleTickets;
-  if (!stale) return session;
-  const closed = new Set(stale.closedKeys ?? []);
-  const selectedCount = stale.groups.reduce((n, g) => n + g.tickets.filter(t => t.included && !closed.has(t.key)).length, 0);
-  stream.markdown(`_Transitioning ${selectedCount} stale ticket(s)…_\n\n`);
+  const group = stale?.groups.find(g => g.issueType === issueType);
+  if (!stale || !group) return session;
+  const closed = stale.closedKeys ?? [];
+  const { runnable, skipped } = planStaleTransitions(group, targetState, closed);
+  stream.markdown(`_Transitioning ${runnable.length} stale **${issueType}** ticket(s) to **${targetState}**…_\n\n`);
 
-  const failures: Array<{ key: string; reason: string }> = [];
-  const newlyClosed: string[] = [];
-  for (const group of stale.groups) {
-    const selected = group.tickets.filter(t => t.included && !closed.has(t.key));
-    if (selected.length === 0) continue;
-    const result = await transitionTickets(selected, ticketService, group.resolution, descriptor.scope);
-    failures.push(...result.failures);
-    const failedKeys = new Set(result.failures.map(f => f.key));
-    for (const t of selected) if (!failedKeys.has(t.key)) newlyClosed.push(t.key);
-  }
+  const result = runnable.length > 0
+    ? await transitionTickets(runnable, ticketService, resolution, descriptor.scope)
+    : { failures: [] as Array<{ key: string; reason: string }> };
+  const failedKeys = new Set(result.failures.map(f => f.key));
+  const newlyClosed = runnable.filter(t => !failedKeys.has(t.key)).map(t => t.key);
+  const failedTickets = runnable.length - newlyClosed.length;
 
-  const failedTickets = selectedCount - newlyClosed.length;
-  let summary = `**${newlyClosed.length}** stale ticket(s) closed, ${failedTickets} failed.`;
-  if (failures.length > 0) {
-    summary += '\n\n' + failures.map(f => `✗ ${f.key} — ${f.reason}`).join('\n');
+  let summary = `**${newlyClosed.length}** stale ticket(s) transitioned to **${targetState}**, ${failedTickets} failed` +
+    (skipped.length > 0 ? `, ${skipped.length} skipped.` : '.');
+  if (skipped.length > 0) summary += '\n\n' + skipped.map(s => `– ${s.key} skipped — ${s.reason}`).join('\n');
+  if (result.failures.length > 0) {
+    summary += '\n\n' + result.failures.map(f => `✗ ${f.key} — ${f.reason}`).join('\n');
     summary += '\n\nIf caused by a workflow gap, run `@jira discover workflow` to refresh the cache.';
   }
   stream.markdown(`${summary}\n\n`);
-  logDiag(descriptor.scope, failures.length > 0 ? 'warn' : 'info',
-    `${descriptor.importLabel} stale-ticket close — ${newlyClosed.length} closed, ${failedTickets} failed`,
-    { closed: newlyClosed.length, failed: failedTickets },
+  logDiag(descriptor.scope, result.failures.length > 0 ? 'warn' : 'info',
+    `${descriptor.importLabel} stale-ticket close — ${newlyClosed.length} transitioned to ${targetState}, ${failedTickets} failed, ${skipped.length} skipped`,
+    { issueType, targetState, transitioned: newlyClosed.length, failed: failedTickets, skipped: skipped.length },
   );
 
+  const skippedKeys = new Set(skipped.map(s => s.key));
   const outcomes = session.outcomes ?? emptyImportOutcomes();
   return {
     ...session,
-    staleTickets: { ...stale, closedKeys: [...closed, ...newlyClosed] },
+    staleTickets: {
+      ...stale,
+      groups: stale.groups.map(g => (g !== group ? g : {
+        ...g,
+        tickets: g.tickets.map(t => (skippedKeys.has(t.key) ? { ...t, included: false } : t)),
+      })),
+      closedKeys: [...closed, ...newlyClosed],
+    },
     outcomes: { ...outcomes, closed: outcomes.closed + newlyClosed.length, closeFailed: outcomes.closeFailed + failedTickets },
   };
 }

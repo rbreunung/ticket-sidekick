@@ -25,7 +25,8 @@ import {
 } from '../participant/sessionState';
 import {
   buildStaleTargetOptions, formatStaleTargetOption, parseStaleTargetPick, parseStaleIssueTypePick,
-  type StaleTargetOption,
+  selectedStaleIssueTypes, staleTargetNeedsResolution, planStaleTransitions,
+  type StaleTargetOption, type StaleTicketGroup,
 } from '../participant/sessionState';
 import {
   parseStaleTicketToggle, applyStaleTicketToggle,
@@ -1152,10 +1153,11 @@ describe('Already-ticketed screen — "Updated?" column and actions (U3/R13, R8,
 
 describe('Overview screen (R1, R2, R3, R15)', () => {
   const staleWithTicket: ReviewSessionStale = {
-    groups: [{ issueType: 'Bug', ruleName: 'r', targetState: 'Done', resolution: 'Fixed', tickets: [{
+    groups: [{ issueType: 'Bug', rules: [], graph: {}, tickets: [{
       key: 'SEC-7', summary: 's', currentStatus: 'Open', transitionPath: [], subtasks: [], included: false,
     }] }],
     ineligible: [],
+    resolutionOptions: [],
   };
 
   it('lists New, Already ticketed and Stale with counts, open links and a Done link — and no "Post it"', () => {
@@ -1241,10 +1243,11 @@ describe('Import view state (KTD1, KTD7)', () => {
 
 describe('Per-screen reply parsing (KTD2, R6)', () => {
   const stale: ReviewSessionStale = {
-    groups: [{ issueType: 'Bug', ruleName: 'r', targetState: 'Done', resolution: 'Fixed', tickets: [{
+    groups: [{ issueType: 'Bug', rules: [], graph: {}, tickets: [{
       key: 'SEC-7', summary: 's', currentStatus: 'Open', transitionPath: [], subtasks: [], included: false,
     }] }],
     ineligible: [],
+    resolutionOptions: [],
   };
   const ctx: ImportReplyContext = {
     singleGroup: false, groups: ['new', 'ticketed', 'stale'],
@@ -1328,8 +1331,9 @@ describe('Stale-ticket review section (U6)', () => {
 
   function makeStale(overrides: Partial<ReviewSessionStale> = {}): ReviewSessionStale {
     return {
-      groups: [{ issueType: 'Bug', ruleName: 'close-bugs', targetState: 'Done', resolution: 'Fixed', tickets: [makeStaleTicket('PROJ-1')] }],
+      groups: [{ issueType: 'Bug', rules: [], graph: {}, tickets: [makeStaleTicket('PROJ-1')] }],
       ineligible: [],
+      resolutionOptions: [],
       ...overrides,
     };
   }
@@ -1345,7 +1349,7 @@ describe('Stale-ticket review section (U6)', () => {
 
     it('matches multiple ticket keys in one reply', () => {
       const stale = makeStale({
-        groups: [{ issueType: 'Bug', ruleName: undefined, targetState: 'Done', resolution: undefined, tickets: [makeStaleTicket('PROJ-1'), makeStaleTicket('PROJ-2')] }],
+        groups: [{ issueType: 'Bug', rules: [], graph: {}, tickets: [makeStaleTicket('PROJ-1'), makeStaleTicket('PROJ-2')] }],
       });
       expect(parseStaleTicketToggle('PROJ-1 PROJ-2', stale)).toEqual({ matched: ['PROJ-1', 'PROJ-2'], remainder: '' });
     });
@@ -1393,7 +1397,7 @@ describe('Stale-ticket review section (U6)', () => {
 
     it('leaves tickets not named untouched', () => {
       const stale = makeStale({
-        groups: [{ issueType: 'Bug', ruleName: undefined, targetState: 'Done', resolution: undefined, tickets: [makeStaleTicket('PROJ-1'), makeStaleTicket('PROJ-2', true)] }],
+        groups: [{ issueType: 'Bug', rules: [], graph: {}, tickets: [makeStaleTicket('PROJ-1'), makeStaleTicket('PROJ-2', true)] }],
       });
       const toggled = applyStaleTicketToggle(stale, ['PROJ-1']);
       expect(toggled.groups[0].tickets[0].included).toBe(true);
@@ -1424,7 +1428,7 @@ describe('Stale-ticket review section (U6)', () => {
 
     it('offers "Close N tickets" for selected tickets and shows closed ones without a toggle', () => {
       const stale = makeStale({
-        groups: [{ issueType: 'Bug', ruleName: undefined, targetState: 'Done', resolution: undefined, tickets: [makeStaleTicket('PROJ-1', true), makeStaleTicket('PROJ-2', true)] }],
+        groups: [{ issueType: 'Bug', rules: [], graph: {}, tickets: [makeStaleTicket('PROJ-1', true), makeStaleTicket('PROJ-2', true)] }],
         closedKeys: ['PROJ-2'],
       });
       const rendered = buildStaleGroupScreen(staleSession(stale), { itemNoun: 'item(s)', supportsUpdateExisting: false });
@@ -1434,11 +1438,26 @@ describe('Stale-ticket review section (U6)', () => {
       expect(decodeURIComponent(p2)).not.toContain('"@jira PROJ-2"');
     });
 
-    it('marks a group whose resolution is still unanswered as "asked on close"', () => {
+    it('shows each ticket\'s issue type, no fixed target, and says the target is picked next', () => {
       const stale = makeStale({
-        groups: [{ issueType: 'Bug', ruleName: undefined, targetState: 'Done', resolution: undefined, resolutionOptions: ['Fixed'], tickets: [makeStaleTicket('PROJ-1')] }],
+        groups: [{ issueType: 'Bug', rules: [], graph: {}, tickets: [makeStaleTicket('PROJ-1', true)] }],
       });
-      expect(buildStaleGroupScreen(staleSession(stale), { itemNoun: 'item(s)', supportsUpdateExisting: false })).toContain('_asked on close_');
+      const rendered = buildStaleGroupScreen(staleSession(stale), { itemNoun: 'item(s)', supportsUpdateExisting: false });
+      expect(rendered).toContain('| Type |');
+      expect(rendered).not.toContain('→ To');
+      expect(rendered).toContain('you pick the target status next');
+      expect(rendered).not.toContain('several issue types');
+    });
+
+    it('explains the one-issue-type-per-run rule when the selection spans several issue types (R12)', () => {
+      const stale = makeStale({
+        groups: [
+          { issueType: 'Bug', rules: [], graph: {}, tickets: [makeStaleTicket('PROJ-1', true)] },
+          { issueType: 'Vulnerability', rules: [], graph: {}, tickets: [makeStaleTicket('PROJ-2', true)] },
+        ],
+      });
+      const rendered = buildStaleGroupScreen(staleSession(stale), { itemNoun: 'item(s)', supportsUpdateExisting: false });
+      expect(rendered).toContain('each run closes one issue type');
     });
   });
 });
@@ -1517,5 +1536,78 @@ describe('parseStaleIssueTypePick', () => {
     expect(parseStaleIssueTypePick('back', types)).toBe('back');
     expect(parseStaleIssueTypePick('cancel', types)).toBe('back');
     expect(parseStaleIssueTypePick('Story', types)).toBe('invalid');
+  });
+});
+
+describe('selectedStaleIssueTypes', () => {
+  const ticket = (key: string, included: boolean): TransitionBatchTicket => ({
+    key, summary: key, currentStatus: 'Open', transitionPath: [], subtasks: [], included,
+  });
+
+  it('lists only issue types with a selected ticket not yet transitioned, in group order', () => {
+    const stale: ReviewSessionStale = {
+      groups: [
+        { issueType: 'Bug', rules: [], graph: {}, tickets: [ticket('P-1', true)] },
+        { issueType: 'Task', rules: [], graph: {}, tickets: [ticket('P-2', false)] },
+        { issueType: 'Vulnerability', rules: [], graph: {}, tickets: [ticket('P-3', true)] },
+      ],
+      ineligible: [],
+      resolutionOptions: [],
+      closedKeys: ['P-3'],
+    };
+    expect(selectedStaleIssueTypes(stale)).toEqual(['Bug']);
+  });
+});
+
+describe('staleTargetNeedsResolution (R3/R4/KTD5)', () => {
+  const resolutions = ['Fixed', "Won't Do"];
+
+  it('never asks for a rule that names its own resolution', () => {
+    expect(staleTargetNeedsResolution({ kind: 'rule', ruleName: 'r', targetState: 'Done', resolution: 'Fixed' }, resolutions)).toBe(false);
+  });
+
+  it('asks for a closed-like target from a rule without a resolution or from a plain status', () => {
+    expect(staleTargetNeedsResolution({ kind: 'rule', ruleName: 'r', targetState: 'Done' }, resolutions)).toBe(true);
+    expect(staleTargetNeedsResolution({ kind: 'status', status: 'Closed' }, resolutions)).toBe(true);
+  });
+
+  it('never asks for a non-final status, or when the instance has no resolutions', () => {
+    expect(staleTargetNeedsResolution({ kind: 'status', status: 'Verification' }, resolutions)).toBe(false);
+    expect(staleTargetNeedsResolution({ kind: 'status', status: 'Done' }, [])).toBe(false);
+  });
+});
+
+describe('planStaleTransitions (KTD2/R11)', () => {
+  const graph: WorkflowGraph = {
+    'Open': [{ id: '1', name: 'Verify', to: 'Verification' }],
+    'Verification': [{ id: '2', name: 'Accept', to: 'Done' }],
+  };
+  const t = (key: string, currentStatus: string, included = true): TransitionBatchTicket => ({
+    key, summary: key, currentStatus, transitionPath: [], subtasks: [], included,
+  });
+
+  it('builds a path from the stored graph for each selected ticket, multi-hop included', () => {
+    const group: StaleTicketGroup = { issueType: 'Bug', rules: [], graph, tickets: [t('P-1', 'Open'), t('P-2', 'Open', false)] };
+    const { runnable, skipped } = planStaleTransitions(group, 'Done');
+    expect(runnable.map(r => r.key)).toEqual(['P-1']);
+    expect(runnable[0].transitionPath.map(h => h.to)).toEqual(['Verification', 'Done']);
+    expect(skipped).toEqual([]);
+  });
+
+  it('skips a ticket with no path, and one already in the target, with a reason each (AE5)', () => {
+    const group: StaleTicketGroup = {
+      issueType: 'Bug', rules: [], graph, tickets: [t('P-1', 'Open'), t('P-2', 'Done'), t('P-3', 'Verification')],
+    };
+    const { runnable, skipped } = planStaleTransitions(group, 'Verification');
+    expect(runnable.map(r => r.key)).toEqual(['P-1']);
+    expect(skipped).toEqual([
+      { key: 'P-2', reason: 'no path found from Done to Verification in the discovered workflow' },
+      { key: 'P-3', reason: 'already in Verification' },
+    ]);
+  });
+
+  it('never plans a ticket that was already transitioned', () => {
+    const group: StaleTicketGroup = { issueType: 'Bug', rules: [], graph, tickets: [t('P-1', 'Open')] };
+    expect(planStaleTransitions(group, 'Done', ['P-1']).runnable).toEqual([]);
   });
 });

@@ -560,113 +560,123 @@ describe('handleRunCleanup', () => {
 
 describe('buildStaleTicketGroups', () => {
   let client: MockJiraClient;
+  const bugGraph = { Open: [{ id: '1', name: 'Go', to: 'Done' }], Done: [] };
 
   function makeDetails(entries: Array<[string, string, string, string]>): Map<string, { summary: string; currentStatus: string; issueType: string }> {
     // [key, summary, currentStatus, issueType][]
     return new Map(entries.map(([key, summary, currentStatus, issueType]) => [key, { summary, currentStatus, issueType }]));
   }
 
+  function withRules(cleanupRules: unknown[]): void {
+    vi.mocked(TemplateService).mockImplementation(() => ({
+      loadTemplates: vi.fn().mockReturnValue({ templates: [], cleanupRules }),
+    }) as never);
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     client = new MockJiraClient();
-    vi.mocked(loadWorkflowCache).mockReturnValue({
-      PROJ: { Bug: { discovered: '2024-01-01', graph: { Open: [{ id: '1', name: 'Go', to: 'Done' }], Done: [] } } },
-    });
-    vi.mocked(findPath).mockReturnValue(dummyPath);
+    vi.mocked(loadWorkflowCache).mockReturnValue({ PROJ: { Bug: { discovered: '2024-01-01', graph: bugGraph } } });
   });
 
-  it('a group whose rule already names a resolution resolves directly — no ask needed', async () => {
-    vi.mocked(TemplateService).mockImplementation(() => ({
-      loadTemplates: vi.fn().mockReturnValue({
-        templates: [],
-        cleanupRules: [{ name: 'close-bugs', project: 'PROJ', issueType: 'Bug', targetState: 'Done', resolution: 'Fixed' }],
-      }),
-    }) as never);
+  it('AE1: a ticket with no matching cleanup rule is still selectable when its workflow is discovered (R10)', async () => {
+    withRules([]);
     const details = makeDetails([['PROJ-1', 'Old finding', 'Open', 'Bug']]);
 
     const result = await buildStaleTicketGroups([{ key: 'PROJ-1', ids: ['1'] }], details, 'PROJ', client, '/workspace');
 
-    expect(result.pendingGroups).toHaveLength(0);
-    expect(result.resolvedGroups).toHaveLength(1);
-    expect(result.resolvedGroups[0]).toMatchObject({ issueType: 'Bug', resolution: 'Fixed' });
-    expect(result.resolvedGroups[0].tickets[0]).toMatchObject({ key: 'PROJ-1', included: false }); // R3 default
-    expect(result.ineligible).toHaveLength(0);
+    expect(result.ineligible).toEqual([]);
+    expect(result.groups).toEqual([{
+      issueType: 'Bug', rules: [], graph: bugGraph,
+      tickets: [{ key: 'PROJ-1', summary: 'Old finding', currentStatus: 'Open', transitionPath: [], subtasks: [], included: false }],
+    }]);
   });
 
-  it('a group whose rule needs a resolution (closed-like target, none configured) is parked as pending', async () => {
-    vi.mocked(TemplateService).mockImplementation(() => ({
-      loadTemplates: vi.fn().mockReturnValue({
-        templates: [],
-        cleanupRules: [{ name: 'close-bugs', project: 'PROJ', issueType: 'Bug', targetState: 'Done' }],
-      }),
-    }) as never);
+  it('stores every matching cleanup rule for the group, not only the first', async () => {
+    withRules([
+      { name: 'close-bugs', project: 'PROJ', issueType: 'Bug', targetState: 'Done', resolution: 'Fixed' },
+      { name: 'verify-bugs', project: 'PROJ', issueType: 'Bug', targetState: 'Verification' },
+      { name: 'other-project', project: 'OTHER', issueType: 'Bug', targetState: 'Done' },
+    ]);
     const details = makeDetails([['PROJ-1', 'Old finding', 'Open', 'Bug']]);
 
     const result = await buildStaleTicketGroups([{ key: 'PROJ-1', ids: ['1'] }], details, 'PROJ', client, '/workspace');
 
-    expect(result.pendingGroups).toHaveLength(1);
-    expect(result.pendingGroups[0].resolutionOptions.length).toBeGreaterThan(0);
-    expect(result.resolvedGroups).toHaveLength(0);
-  });
-
-  it('a ticket whose project+issue-type has no matching rule is reported ineligible with a note', async () => {
-    vi.mocked(TemplateService).mockImplementation(() => ({
-      loadTemplates: vi.fn().mockReturnValue({ templates: [], cleanupRules: [] }),
-    }) as never);
-    const details = makeDetails([['PROJ-1', 'Old finding', 'Open', 'Bug']]);
-
-    const result = await buildStaleTicketGroups([{ key: 'PROJ-1', ids: ['1'] }], details, 'PROJ', client, '/workspace');
-
-    expect(result.pendingGroups).toHaveLength(0);
-    expect(result.resolvedGroups).toHaveLength(0);
-    expect(result.ineligible).toEqual([
-      { key: 'PROJ-1', summary: 'Old finding', currentStatus: 'Open', note: expect.stringContaining('no cleanup rule configured') },
+    expect(result.groups[0].rules).toEqual([
+      { name: 'close-bugs', targetState: 'Done', resolution: 'Fixed' },
+      { name: 'verify-bugs', targetState: 'Verification', resolution: undefined },
     ]);
   });
 
-  it('a ticket with no valid transition path is reported ineligible rather than dropped', async () => {
-    vi.mocked(TemplateService).mockImplementation(() => ({
-      loadTemplates: vi.fn().mockReturnValue({
-        templates: [],
-        cleanupRules: [{ name: 'close-bugs', project: 'PROJ', issueType: 'Bug', targetState: 'Done', resolution: 'Fixed' }],
-      }),
-    }) as never);
-    vi.mocked(findPath).mockReturnValue(null);
-    const details = makeDetails([['PROJ-1', 'Old finding', 'Open', 'Bug']]);
+  it('a ticket whose project+issue type has no discovered workflow is ineligible with the discover hint', async () => {
+    withRules([{ name: 'close-tasks', project: 'PROJ', issueType: 'Task', targetState: 'Done' }]);
+    const details = makeDetails([['PROJ-2', 'Task finding', 'Open', 'Task']]);
 
-    const result = await buildStaleTicketGroups([{ key: 'PROJ-1', ids: ['1'] }], details, 'PROJ', client, '/workspace');
+    const result = await buildStaleTicketGroups([{ key: 'PROJ-2', ids: ['2'] }], details, 'PROJ', client, '/workspace');
 
-    expect(result.resolvedGroups).toHaveLength(0);
-    expect(result.ineligible[0]).toMatchObject({ key: 'PROJ-1', note: expect.stringContaining('no path found') });
+    expect(result.groups).toEqual([]);
+    expect(result.ineligible).toEqual([
+      { key: 'PROJ-2', summary: 'Task finding', currentStatus: 'Open', note: expect.stringContaining('@jira discover workflow PROJ Task') },
+    ]);
+  });
+
+  it('a ticket whose issue type is unknown stays ineligible', async () => {
+    withRules([]);
+
+    const result = await buildStaleTicketGroups([{ key: 'PROJ-3', ids: ['3'] }], new Map(), 'PROJ', client, '/workspace');
+
+    expect(result.ineligible[0]).toMatchObject({ key: 'PROJ-3', note: expect.stringContaining('issue type') });
   });
 
   it('groups matches by issue type — two issue types produce two separate groups', async () => {
     vi.mocked(loadWorkflowCache).mockReturnValue({
       PROJ: {
-        Bug: { discovered: '2024-01-01', graph: { Open: [{ id: '1', name: 'Go', to: 'Done' }], Done: [] } },
-        Task: { discovered: '2024-01-01', graph: { Open: [{ id: '1', name: 'Go', to: 'Done' }], Done: [] } },
+        Bug: { discovered: '2024-01-01', graph: bugGraph },
+        Task: { discovered: '2024-01-01', graph: bugGraph },
       },
     });
-    vi.mocked(TemplateService).mockImplementation(() => ({
-      loadTemplates: vi.fn().mockReturnValue({
-        templates: [],
-        cleanupRules: [
-          { name: 'close-bugs', project: 'PROJ', issueType: 'Bug', targetState: 'Done', resolution: 'Fixed' },
-          { name: 'close-tasks', project: 'PROJ', issueType: 'Task', targetState: 'Done', resolution: 'Fixed' },
-        ],
-      }),
-    }) as never);
-    const details = makeDetails([
-      ['PROJ-1', 'Bug finding', 'Open', 'Bug'],
-      ['PROJ-2', 'Task finding', 'Open', 'Task'],
-    ]);
+    withRules([]);
+    const details = makeDetails([['PROJ-1', 'Bug finding', 'Open', 'Bug'], ['PROJ-2', 'Task finding', 'Open', 'Task']]);
 
     const result = await buildStaleTicketGroups(
       [{ key: 'PROJ-1', ids: ['1'] }, { key: 'PROJ-2', ids: ['2'] }], details, 'PROJ', client, '/workspace',
     );
 
-    expect(result.resolvedGroups).toHaveLength(2);
-    expect(result.resolvedGroups.map(g => g.issueType).sort()).toEqual(['Bug', 'Task']);
+    expect(result.groups.map(g => g.issueType).sort()).toEqual(['Bug', 'Task']);
+  });
+
+  it('fetches the resolution names once and stores them', async () => {
+    withRules([]);
+    const spy = vi.spyOn(client, 'getResolutions').mockResolvedValue([{ name: 'Fixed' }, { name: "Won't Do" }]);
+    const details = makeDetails([['PROJ-1', 'a', 'Open', 'Bug'], ['PROJ-2', 'b', 'Open', 'Bug']]);
+
+    const result = await buildStaleTicketGroups(
+      [{ key: 'PROJ-1', ids: ['1'] }, { key: 'PROJ-2', ids: ['2'] }], details, 'PROJ', client, '/workspace',
+    );
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(result.resolutionOptions).toEqual(['Fixed', "Won't Do"]);
+  });
+
+  it('a resolutions fetch that fails still produces the groups, with no resolutions', async () => {
+    withRules([]);
+    vi.spyOn(client, 'getResolutions').mockRejectedValue(new Error('503 Service Unavailable'));
+    const details = makeDetails([['PROJ-1', 'a', 'Open', 'Bug']]);
+
+    const result = await buildStaleTicketGroups([{ key: 'PROJ-1', ids: ['1'] }], details, 'PROJ', client, '/workspace');
+
+    expect(result.groups).toHaveLength(1);
+    expect(result.resolutionOptions).toEqual([]);
+  });
+
+  it('does not fetch resolutions when no group is eligible', async () => {
+    withRules([]);
+    const spy = vi.spyOn(client, 'getResolutions');
+    const details = makeDetails([['PROJ-2', 'Task finding', 'Open', 'Task']]);
+
+    await buildStaleTicketGroups([{ key: 'PROJ-2', ids: ['2'] }], details, 'PROJ', client, '/workspace');
+
+    expect(spy).not.toHaveBeenCalled();
   });
 });
 
