@@ -335,7 +335,8 @@ at a PR to review" guidance when `/review` is used with no URL.
 Both participants offer follow-up suggestion chips (`vscode.ChatFollowup`,
 via `participant.followupProvider`) after every major response, proposing a
 likely next action — e.g. after loading a ticket: add a comment, transition
-it; after a PR review: add findings to review, explain finding #1 (R6).
+it; after a PR review: add findings to review, explain finding #1, and Copy
+for Teams (the only chip after a review with no findings) (R6).
 
 **State passing.** `vscode.ChatResult.metadata` is the VS Code-native
 channel a chat handler uses to hand its own `followupProvider` "what just

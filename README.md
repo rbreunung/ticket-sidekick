@@ -454,6 +454,8 @@ Run `@bitbucket check` after setup to confirm the connection and see which accou
 | `@bitbucket #2` | Explain finding #2 in detail |
 | `@bitbucket #2 is this always a problem?` | Ask a follow-up question about a specific finding |
 | `@bitbucket is the change backwards-compatible?` | Ask any general question about the PR — no finding reference needed |
+| `@bitbucket copy` (or the **Copy for Teams** chip) | Copy the review to the clipboard as plain text, grouped by severity, ready to paste into a Teams chat |
+| `@bitbucket copy #1 #3` | Copy only findings #1 and #3 |
 | `@bitbucket #1 #3 add to review` | Preview findings #1 and #3 as comments — reply "post it" to confirm, "(c)" to cancel, or refine |
 | `@bitbucket add #1 #2 #3 to review` | Same — numbers can appear anywhere relative to the keywords |
 | `@bitbucket add all to review` | Preview all findings as PR comments at once |
