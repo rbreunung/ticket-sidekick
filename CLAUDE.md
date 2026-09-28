@@ -117,6 +117,7 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
 7. Add intent routing in `JiraParticipant.ts`
 8. If the new operation introduces any pure extraction/transformation logic, put it in `sessionState.ts` and test it in `JiraParticipant.test.ts`
 9. If the operation introduces a new multi-step flow, document it in `docs/jira-flows.md` (or the relevant domain doc) — add only a one-line summary and link here, not new flow prose (see "Where documentation belongs")
+10. If users can see the change (a new command, reply, chip, setting, or changed behaviour), update the user manual too — see "Where documentation belongs"
 
 ## Adding a new Bitbucket operation
 
@@ -128,6 +129,7 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
 6. Add routing in `BitbucketParticipant.ts`
 7. If the operation introduces pure helpers, put them in `reviewSessionState.ts` and test them in `PrReviewService.test.ts`
 8. If the operation introduces a new multi-step flow, document it in `docs/review-process.md` (or the relevant domain doc) — add only a one-line summary and link here, not new flow prose (see "Where documentation belongs")
+9. If users can see the change (a new command, reply, chip, setting, or changed behaviour), update the user manual too — see "Where documentation belongs"
 
 ## Jira API
 
@@ -160,7 +162,7 @@ Write tests for **user-facing use cases**, not internal mechanics. A test should
 
 ## VS Code settings keys
 
-All settings live under `package.json`'s `contributes.configuration`, grouped under five prefixes: `ticketSidekick.jira.*`, `.bitbucket.*`, `.email.*`, `.veracode.*`, `.waltz.*`. That file is the authoritative source for exact keys, defaults, and descriptions.
+All settings live under `package.json`'s `contributes.configuration`, grouped under five prefixes: `ticketSidekick.jira.*`, `.bitbucket.*`, `.email.*`, `.veracode.*`, `.waltz.*`. That file is the authoritative source for exact keys, defaults, and descriptions. Every setting must also be listed in `docs/manual/settings-reference.md` with the same default; `src/test/userDocsSync.test.ts` fails otherwise. A setting's `description` is what users read in VS Code's Settings screen, so keep it in step with the code's behaviour.
 
 ## Credentials
 
@@ -223,6 +225,15 @@ New multi-step feature-flow detail belongs in the relevant domain doc —
 none of those fit — not in this file. When a feature grows a new flow, add
 one line here: a short summary plus a link to where the detail lives. This
 file stays a lean, always-loaded index; the domain docs are read on demand.
+
+Those domain docs are for developers. Users read a separate **user manual**:
+`README.md` (setup and the core-command tables) and the
+[`docs/manual/`](docs/manual/) pages it links to. Any change users can see —
+a new command, reply word, chip, setting, or changed behaviour — updates the
+matching README table or manual page in the same PR. Updating a domain doc
+does not cover it. Settings are checked by `src/test/userDocsSync.test.ts`;
+commands and flows are not, so check them by hand (tracked as KL9 in
+[`docs/known-limitations.md`](docs/known-limitations.md)).
 
 ## Branch ticket detection
 

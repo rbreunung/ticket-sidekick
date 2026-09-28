@@ -144,6 +144,12 @@ Set `ticketSidekick.bitbucket.reviewMode` to `"quick"` to make this the default.
 
 Patterns use glob syntax. Both `*.snap` and `**/*.snap` work (bare filename patterns match at any depth).
 
+**Less surrounding code** — each change is sent with 12 unchanged lines around it by default, so the model sees the enclosing function. Lower this on very large PRs to save tokens:
+
+```json
+"ticketSidekick.bitbucket.reviewContextLines": 6
+```
+
 **Manual context override** — if the model's context size isn't auto-detected, set it explicitly:
 
 ```json
