@@ -842,7 +842,7 @@
             "default": 0.7,
             "minimum": 0,
             "maximum": 1,
-            "description": "Findings whose model-rated confidence falls below this value (0–1, default 0.7) are moved into a collapsed 'low-confidence' section rather than shown as primary findings. They are never discarded."
+            "description": "Findings whose model-rated confidence falls below this value (0–1, default 0.7) show their confidence in plain instead of bold text, and a copied review marks them '(low confidence)'. They stay in their severity table and are never hidden or discarded."
           },
           "ticketSidekick.bitbucket.detailedDiagnostics": {
             "type": "boolean",

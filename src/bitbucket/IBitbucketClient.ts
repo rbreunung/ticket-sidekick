@@ -34,7 +34,7 @@ export interface BitbucketConfig {
   reviewExcludePatterns?: string[];
   /** Diff context lines requested around each hunk (wider = more surrounding code for the reviewer). */
   reviewContextLines?: number;
-  /** Model self-rated confidence below this folds into a low-confidence section (0–1). */
+  /** Model self-rated confidence below this is muted (non-bold) in its severity table, never hidden (0–1). */
   confidenceThreshold?: number;
   /** When true, emit one fenced structured diagnostic record per review (R7). Default false. */
   detailedDiagnostics?: boolean;

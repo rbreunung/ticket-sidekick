@@ -82,6 +82,9 @@ Open GitHub Copilot Chat and use `@jira`:
 | `@jira move to Done` | Transitions the current ticket to a target status |
 | `@jira move to Cancelled with resolution "Not a Bug"` | Transitions and sets a resolution in one step |
 | `@jira find open bugs assigned to me` | Runs JQL search |
+| `@jira open bugs for my team` | Searches within your team's tickets — needs `ticketSidekick.jira.myTeamJql` (see [Settings Reference](docs/manual/settings-reference.md#jira-settings-reference)) |
+| `@jira show my filters` | Lists your favourite and own saved Jira filters to pick one and run it (runs it directly when you have only one) |
+| `@jira tickets from filter "My open bugs"` | Runs a saved filter by name (or `filter 12345` by ID) |
 | `@jira check required fields on PROJ-123` | Validates required fields |
 | `@jira check` | Validates the base URL, tests the connection, and shows active configuration |
 | `@jira create from email` | Create a Jira ticket from an imported `.eml` file |
@@ -317,6 +320,15 @@ If the target state requires multiple hops (e.g. Open → In Review → Done), t
 
 If no path is found, the response lists the directly reachable states from the current status.
 
+**Guided transition** — after `@jira show PROJ-123`, click **Transition it** (or type `@jira transition PROJ-123` without a status) to be walked through it instead:
+
+1. Pick the target status from a numbered list of every status the ticket can reach — directly, or through the discovered workflow
+2. If more than one route leads there, pick the route
+3. If the transition requires a resolution, pick one
+4. Confirm the summary — nothing changes in Jira before you reply **Yes**
+
+Reply **cancel** at any step to stop without changing anything.
+
 **Resolution** — include `with resolution "<name>"` to set the resolution field on the final transition in one command.
 
 #### Workflow discovery (required for bulk transitions)
@@ -372,6 +384,8 @@ On the review screen, reply:
 
 Execution streams one confirmation line per ticket. Failures are reported at the end without stopping the rest of the batch.
 
+To see more on the review screen (e.g. each ticket's fix version), add field IDs to `ticketSidekick.jira.cleanupFields` — see [Settings Reference](docs/manual/settings-reference.md#jira-settings-reference).
+
 ### Report imports (email, Veracode, Waltz)
 
 Turn a `.eml` email, a Veracode Detailed Report, or a Waltz OSS Report into Jira tickets — creating a new ticket, or adding an email as a comment to an existing one. See [Report Imports](docs/manual/report-imports.md) for the full walkthrough and settings.
@@ -382,7 +396,7 @@ Create a `.jira-templates.json` file in your workspace root to define per-applic
 
 ### Settings reference
 
-See [Settings Reference → Jira](docs/manual/settings-reference.md#jira-settings-reference) for every `ticketSidekick.jira.*` / `ticketSidekick.email.*` / `ticketSidekick.veracode.*` setting (Waltz settings are documented alongside the OSS report import in [Report Imports](docs/manual/report-imports.md)).
+See [Settings Reference → Jira](docs/manual/settings-reference.md#jira-settings-reference) for every `ticketSidekick.jira.*` setting, and [Report import settings](docs/manual/settings-reference.md#report-import-settings) for every `ticketSidekick.email.*` / `ticketSidekick.veracode.*` / `ticketSidekick.waltz.*` setting.
 
 ---
 

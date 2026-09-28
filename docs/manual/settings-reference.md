@@ -13,11 +13,12 @@ Full `ticketSidekick.*` settings for both `@jira` and `@bitbucket`. See the main
 | Required fields | `ticketSidekick.jira.requiredFields` | `[]` |
 | Always-show fields | `ticketSidekick.jira.additionalDisplayFields` | `[]` |
 | Search result columns | `ticketSidekick.jira.searchFields` | `[]` |
+| Cleanup review columns | `ticketSidekick.jira.cleanupFields` | `[]` |
+| Team JQL | `ticketSidekick.jira.myTeamJql` | _(empty)_ |
 | Hidden fields | `ticketSidekick.jira.hiddenDisplayFields` | _(see below)_ |
 | Connection info banner | `ticketSidekick.jira.showConnectionInfo` | `false` |
-| Delete .eml after import | `ticketSidekick.email.deleteEmlAfterImport` | `false` |
-| Veracode min severity | `ticketSidekick.veracode.minSeverity` | `4` |
-| Veracode included statuses | `ticketSidekick.veracode.includeRemediationStatuses` | `["New", "Open", "Reopened"]` |
+
+Settings for email, Veracode and OSS report imports are listed under [Report import settings](#report-import-settings) below.
 
 **Optional: default project**
 
@@ -64,6 +65,24 @@ By default `@jira find …` shows Key, Summary, Status, and Assignee. Add field 
 
 Run `@jira show fields on PROJ-123` to discover field IDs. Values render the same way as in `@jira show`.
 
+**Optional: cleanup review columns**
+
+By default the review screen of `@jira run cleanup …` and other bulk transitions lists each ticket's type, key, summary, current and target status, and the resolution when one is set. Add field IDs to `cleanupFields` to show them as extra columns, so you can check e.g. the fix version before confirming:
+
+```json
+"ticketSidekick.jira.cleanupFields": ["fixVersions", "priority"]
+```
+
+Subtasks in the batch get their own values for these columns. Run `@jira show fields on PROJ-123` to discover field IDs.
+
+**Optional: team JQL**
+
+```json
+"ticketSidekick.jira.myTeamJql": "project = BACKEND AND assignee in membersOf(\"backend-team\")"
+```
+
+A JQL fragment that describes your team's tickets. When a search mentions "my team" or "our team" (e.g. `@jira open bugs for my team`), `@jira` combines this fragment with the rest of your request. If the request adds no other conditions, only unresolved tickets are listed. If the setting is empty, `@jira` tells you to set it instead of guessing.
+
 **Optional: hidden fields**
 
 By default `@jira show` already omits several noisy system fields (e.g. `statusCategory`, `watches`, `votes`). To suppress additional fields, add their IDs to `hiddenDisplayFields`. Fields listed in `additionalDisplayFields` always override this list.
@@ -80,6 +99,29 @@ By default `@jira show` already omits several noisy system fields (e.g. `statusC
 
 When enabled, every `@jira` response starts with an italic line showing the active base URL, API version, and auth type. Useful during initial setup or when switching between instances. Off by default.
 
+## Report import settings
+
+| Setting | Key | Default |
+| --- | --- | --- |
+| Delete .eml after import | `ticketSidekick.email.deleteEmlAfterImport` | `false` |
+| Email batch size limit (MB) | `ticketSidekick.email.maxBatchSizeMB` | `150` |
+| Veracode min severity | `ticketSidekick.veracode.minSeverity` | `4` |
+| Veracode included statuses | `ticketSidekick.veracode.includeRemediationStatuses` | `["New", "Open", "Reopened"]` |
+| Veracode report size limit (MB) | `ticketSidekick.veracode.maxReportSizeMB` | `50` |
+| OSS report min vulnerability rating | `ticketSidekick.waltz.minVulnRating` | `"High"` |
+| OSS report included remediation actions | `ticketSidekick.waltz.includeRemediationActions` | `["", "Remediate"]` |
+| OSS report size limit (MB) | `ticketSidekick.waltz.maxReportSizeMB` | `50` |
+
+What the filter settings do is described with each import in [Report Imports](report-imports.md).
+
+**Optional: size limits**
+
+```json
+"ticketSidekick.veracode.maxReportSizeMB": 120
+```
+
+Each importer rejects a file larger than its limit before reading it. For an email batch the limit applies to all selected `.eml` files together. Raise it if a real report is rejected as too large: Veracode and OSS report limits can be set from 1 to 200 MB, the email batch limit from 1 to 500 MB. A value outside that range, or not a number, falls back to the default.
+
 ## Bitbucket settings reference
 
 | Setting | Key | Default |
@@ -92,6 +134,9 @@ When enabled, every `@jira` response starts with an italic line showing the acti
 | Context budget ratio | `ticketSidekick.bitbucket.contextBudgetRatio` | `0.7` |
 | Review mode | `ticketSidekick.bitbucket.reviewMode` | `"standard"` |
 | Review exclude patterns | `ticketSidekick.bitbucket.reviewExcludePatterns` | `[]` |
+| Diff context lines | `ticketSidekick.bitbucket.reviewContextLines` | `12` |
+| Confidence threshold | `ticketSidekick.bitbucket.confidenceThreshold` | `0.7` |
+| Detailed diagnostics | `ticketSidekick.bitbucket.detailedDiagnostics` | `false` |
 
 **Optional: Bitbucket connection info banner**
 
@@ -117,5 +162,29 @@ Some examples of what works well here:
 "This is a prototype — skip suggestions about test coverage."
 "Pay extra attention to off-by-one errors in pagination code."
 ```
+
+**Optional: diff context lines**
+
+```json
+"ticketSidekick.bitbucket.reviewContextLines": 6
+```
+
+How many unchanged lines (0–100) the review asks Bitbucket for around each change. The default of 12 usually includes the surrounding function, so the model reasons about real code instead of guessing. Lower it to save tokens on large PRs, see [Reducing token usage on large PRs](bitbucket-pr-review.md#reducing-token-usage-on-large-prs).
+
+**Optional: confidence threshold**
+
+```json
+"ticketSidekick.bitbucket.confidenceThreshold": 0.8
+```
+
+The model rates its confidence in each finding from 0 to 1. At or above this threshold the confidence is shown in bold; below it the number is shown plain, and a copied review (`@bitbucket copy`) marks the finding "(low confidence)". A low-confidence finding is never hidden or removed — it stays in its severity table.
+
+**Optional: detailed diagnostics**
+
+```json
+"ticketSidekick.bitbucket.detailedDiagnostics": true
+```
+
+When enabled, each review also writes one structured run record to the **Ticket Sidekick** output channel (**View → Output**): the run's configuration, every model call, and how many findings were kept or dropped at each step and why. It is one copy-pasteable block, useful for comparing two runs or attaching to a bug report. Off by default.
 
 **Using a local model:** `@bitbucket` works with any model available in GitHub Copilot Chat, including local models via [Ollama](https://ollama.com). Use a model with at least 16k context (32k+ recommended for large PRs).
