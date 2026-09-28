@@ -1,97 +1,118 @@
 ---
-title: "Broadened cancellation word list swallows exact domain-name matches (e.g. an issue type, template, or filter literally named Stop, Skip, or Quit)"
+title: "Cancellation word list swallows exact domain-name matches when checked before the offered options (e.g. a status, issue type, or filter named Cancelled or Stop)"
 date: 2026-08-21
+last_updated: 2026-09-28
 category: logic-errors
-module: "src/participant/sessionState.ts — parseIssueTypeSelection() / parseTemplateSelection() / parseFilterSelection()"
+module: "src/participant/sessionState.ts — every chat-reply parser that takes a live option list and also recognizes isCancellation()/isBackOrCancellation() words"
 problem_type: logic_error
 component: assistant
 symptoms:
-  - "A Jira issue type literally named `Stop` (or `Skip`/`Quit`/any other newly-added cancellation word) cannot be selected during ticket creation — typing its exact name cancels the flow instead of picking it"
-  - "A `.jira-templates.json` template named `Stop` is unreachable the same way during template selection"
-  - "A saved Jira filter named `Stop` cannot be chosen during filter selection — the user's exact-name reply is interpreted as cancel"
-  - "No test failure and no compile error: `npm test` stayed green (982/982) through implementation because no fixture in the repo happened to use a colliding name, and `npm run compile` was clean — this is an environment-dependent regression, invisible unless the caller's live Jira data happens to collide with the generic word list"
-  - "Not caught by the two earlier `ce-doc-review` planning-phase passes or by the implementer — caught only by a separate, later, post-implementation `ce-code-review` pass run after the feature was otherwise fully implemented and tests were passing"
+  - "Typing the exact name of a live Jira value that is also a cancel word (a workflow status `Cancelled`, an issue type or saved filter named `Stop`) cancels or backs out of the flow instead of picking it"
+  - "Clicking the numbered chip for the same option still works (chips resubmit the number), so the bug only shows up when the user follows the prompt's own \"reply with the number or name\" hint"
+  - "No test failure and no compile error — the suite stays green because no fixture uses a colliding name; the defect depends on the user's live Jira data"
+  - "Caught twice, in PR #36 and again in PR #71, only by a post-implementation `ce-code-review` pass — not by planning reviews, the implementer, or the test suite"
 root_cause: logic_error
 resolution_type: code_fix
 severity: medium
-related_components: [JiraParticipant, sessionState, createHandler]
-tags: [confirm-cancel-parsing, name-collision, multi-turn-session, keyword-list-ordering, chat-participant, code-review-finding, regression, exact-match-precedence]
+related_components: [JiraParticipant, sessionState, createHandler, reportImportHandler, templateGenerationHandler]
+tags: [confirm-cancel-parsing, name-collision, multi-turn-session, keyword-list-ordering, chat-participant, code-review-finding, regression, exact-match-precedence, recurrence, stale-close]
 ---
 
-# Broadened cancellation word list swallows exact domain-name matches (e.g. an issue type, template, or filter literally named Stop, Skip, or Quit)
+# Cancellation word list swallows exact domain-name matches when checked before the offered options (e.g. a status, issue type, or filter named Cancelled or Stop)
 
 ## Problem
 
-Commit `36ea22e` unified six previously hand-rolled multi-turn `@jira` chat-reply parsers in `src/participant/sessionState.ts` onto shared `isConfirmation()`/`isCancellation()` helpers, and broadened `isCancellation()`'s word list from a narrow `c`/`cancel` set to also include `no, nope, cancelled, stop, abort, never mind, nevermind, don't, dont, quit, skip` (`src/participant/sessionState.ts:260-267`). Three of the six unified parsers — `parseIssueTypeSelection`, `parseTemplateSelection`, `parseFilterSelection` — accept the user's raw reply plus a caller-supplied live list of real domain values (a project's actual Jira issue types, a workspace's actual template names, a user's actual saved Jira filters) and let the user select one by typing its exact name. In the pre-fix version, all three checked `isCancellation(reply)` before checking whether `reply` matched a real domain value, so any project/workspace whose issue type, template, or saved filter happened to be literally named "Stop", "Skip", "Quit", etc. would have that value become permanently unselectable by name.
+`isCancellation()` (`src/participant/sessionState.ts:574-581`) treats a fixed set of words as "cancel": `c, no, nope, cancel, cancelled, stop, abort, never mind, nevermind, don't, dont, quit, skip`. `isBackOrCancellation()` (`:585-587`) adds `back`. Many `@jira` multi-turn parsers take the user's reply **and** a live list of real Jira values (issue types, workflow statuses, resolutions, saved filters, cleanup rules) and let the user pick one by number or by exact name. When such a parser checks the cancel words **before** it matches the offered options, any live value whose name is also a cancel word can never be picked by name. `Cancelled` is a common real Jira workflow status and resolution, so this is not a theoretical collision.
+
+The bug has now appeared twice:
+
+1. **PR #36 (2026-08-21).** Broadening the cancel list made three parsers (`parseIssueTypeSelection`, `parseTemplateSelection`, `parseFilterSelection`) swallow a type, template, or filter named `Stop`. Fixed by reordering. The first two parsers no longer exist in the current tree; `parseFilterSelection` (`src/participant/sessionState.ts:767-779`) still carries the fix.
+2. **PR #71 (2026-09-27).** The new stale-ticket close flow added `parseStaleTargetPick` and `parseStaleIssueTypePick`, written cancel-first from the start, so a workflow status named `Cancelled` or an issue type named `Stop` could not be chosen. Fixed by reordering in the same PR, after `ce-code-review` flagged it.
+
+The second occurrence did not come from broadening the list. A parser written weeks after this learning existed repeated the same order. So the risk is not "someone grows the word list". It is "someone writes a new pick-list parser".
 
 ## Symptoms
 
-- A Jira issue type literally named "Stop" (or "Skip"/"Quit"/any other newly-added cancellation word) cannot be selected during ticket creation — typing its exact name cancels the flow instead of picking it.
-- A `.jira-templates.json` template named "Stop" is unreachable the same way during template selection.
-- A saved Jira filter named "Stop" cannot be chosen during filter selection — the user's exact-name reply is interpreted as "cancel".
-- No test failure and no compile error: `npm test` stayed green (982/982) through implementation because no fixture in the repo happened to use a colliding name, and `npm run compile` was clean — this is an environment-dependent regression, invisible unless the caller's live Jira data happens to collide with the generic word list.
-- Not caught by the two earlier `ce-doc-review` planning-phase passes (which caught two unrelated issues — a plan referencing a nonexistent method, and a missed pair of parsers needing relabeling) or by the implementer. Caught only by a separate, later, post-implementation `ce-code-review` pass run as a background agent after the feature was otherwise fully implemented and tests were passing.
+- A workflow status named `Cancelled`, or an issue type named `Stop`, typed by name at the stale close's target or issue-type step, returned to the Stale screen instead of picking it (pre-PR #71).
+- An issue type, template, or saved filter named `Stop` typed by name cancelled the flow (pre-PR #36).
+- The numbered chip for the same option works, because `buildChatCommandLink` chips resubmit the option's number (e.g. `src/participant/JiraParticipant.ts:302`, `src/participant/jira/reportImportHandler.ts:567`). The failure needs the user to type the name, which is exactly what the prompts invite ("Reply with the number or name").
+- `npm test` and `npm run compile` stay green: no fixture uses a colliding name.
 
 ## What Didn't Work
 
-Nothing was tried and discarded before the fix — this was a straightforward, single-pass reordering once the code-review finding was understood. The only design question worth recording is that a broader "shared parser skeleton" refactor was considered and explicitly rejected as out of scope for this fix (see the `d67ff6b` commit message: "Not applied: a shared parser skeleton beyond the confirm/cancel prefix — judged out of scope, a bigger redesign than this fix warrants").
+- **Keying prevention to "when broadening the word list".** The first version of this learning told reviewers to audit callers whenever the shared list grows. The list has not grown since, yet three more parsers were written cancel-first afterwards: `parseGuidedTransitionStatusPick` / `parseGuidedTransitionResolutionPick` (guided "Transition it" flow, 2026-09-10), `parseIssueTypePick` (template-generation flow), and the stale close's two pick parsers (PR #71). The trigger that matters is writing any new parser that takes a live option list.
+- **A shared option matcher that leaves the order to each caller.** `pickByNumberOrName()` (`src/participant/sessionState.ts:317-322`) was extracted to share number-or-name matching, but it returns `undefined` on no match and leaves the cancel check to the caller. Every caller still decides the order, and several got it wrong.
+- **Per-word carve-outs.** The stale close's resolution step (`src/participant/jira/reportImportHandler.ts:645`) runs `isBackOrCancellation(reply) && reply.trim().toLowerCase() !== 'skip'` before `parseResolutionSelection`. That special-cases one word (`skip` there means "no resolution") and leaves every other collision open: a resolution named `Cancelled` still goes back. This is the pattern PR #36 explicitly rejected.
+- **Planning reviews and the test suite.** Neither caught either occurrence. Both were caught by a dedicated post-implementation `ce-code-review` pass (PR #71's description lists it as one of two confirmed findings fixed before merge).
 
 ## Solution
 
-Fixed in commit `d67ff6b` ("fix(jira): close name-collision regressions from confirm/cancel unification"). Each of the three affected parsers was reordered so the exact, case-insensitive match against the caller's live domain list runs **before** the call to `isCancellation()`. This is a general reordering — not a per-word carve-out (e.g. not "special-case the word 'stop'"), which would only move the same bug class to the next word someone adds to the shared list later.
+Match the offered options first. Only if nothing matched, treat the reply as cancel/back. Otherwise report it as invalid. Do not special-case individual words.
 
-`parseIssueTypeSelection`, before (as it existed on `36ea22e`, prior to `d67ff6b`):
+PR #71's stale target pick, before:
 
 ```ts
-export function parseIssueTypeSelection(reply: string, types: string[]): string | 'cancel' | 'invalid' {
-  const normalized = reply.trim().toLowerCase();
-  if (isCancellation(normalized)) return 'cancel';
-  const num = parseInt(normalized, 10);
-  if (!isNaN(num) && num >= 1 && num <= types.length) return types[num - 1];
-  if (!isNaN(num)) return 'invalid';
-  const match = types.find((t) => t.toLowerCase() === normalized);
-  return match ?? 'invalid';
+export function parseStaleTargetPick(reply: string, options: StaleTargetOption[]): StaleTargetOption | 'back' | 'invalid' {
+  if (isBackOrCancellation(reply)) return 'back';
+  return pickByNumberOrName(reply, options, formatStaleTargetOption)
+    ?? options.find(o => o.kind === 'rule' && o.ruleName.toLowerCase() === reply.trim().toLowerCase())
+    ?? 'invalid';
 }
 ```
 
-After, `src/participant/sessionState.ts:194-204`:
+After (`src/participant/sessionState.ts:2203-2208`):
 
 ```ts
-export function parseIssueTypeSelection(reply: string, types: string[]): string | 'cancel' | 'invalid' {
-  const normalized = reply.trim().toLowerCase();
-  // A real issue type name wins over the generic cancellation word list — otherwise a
-  // project with a type literally named "Stop" or "Quit" could never select it by name.
-  const match = types.find((t) => t.toLowerCase() === normalized);
-  if (match) return match;
-  if (isCancellation(reply)) return 'cancel';
-  const num = parseInt(normalized, 10);
-  if (!isNaN(num) && num >= 1 && num <= types.length) return types[num - 1];
-  return 'invalid';
+export function parseStaleTargetPick(reply: string, options: StaleTargetOption[]): StaleTargetOption | 'back' | 'invalid' {
+  const picked = pickByNumberOrName(reply, options, formatStaleTargetOption)
+    ?? options.find(o => o.kind === 'rule' && o.ruleName.toLowerCase() === reply.trim().toLowerCase());
+  if (picked) return picked;
+  return isBackOrCancellation(reply) ? 'back' : 'invalid';
 }
 ```
 
-The same reordering was applied to `parseTemplateSelection` (`src/participant/sessionState.ts:206-220`) and `parseFilterSelection` (`src/participant/sessionState.ts:353-367`). `parseTemplateSelection` also keeps a separate `NO_TEMPLATE` shortcut set (`n`, `no template`, `none`, `0`, `without template`, `src/participant/sessionState.ts:215`) — that is an unrelated, deliberate, pre-existing product decision for "proceed without a template" and is not part of this fix; it is checked after both the name match and `isCancellation()`.
+`parseStaleIssueTypePick` (`:2212-2216`) got the same reordering. Regression tests: `src/test/sessionState.test.ts:1521-1525` (a `Cancelled` status stays pickable while a bare `cancel` still goes back) and `:1541-1543` (an issue type named `Stop`).
 
-The other three unified parsers — `parseSkipInput` (`src/participant/sessionState.ts:153-183`), `parseBulkUpdateReview` (`:340-351`), and `parseReviewInput` (`:596-609`) — were **not** touched, and correctly so: none of them matches `reply` against a caller-supplied free-text domain-value list. `parseSkipInput` only matches numeric ticket-key suffixes extracted from `tickets`, not names; `parseBulkUpdateReview` only recognizes a fixed `skip <keys>` prefix; `parseReviewInput` only matches short synthetic row ids (`'1'..'N'`, `'A1'..'Am'`) that are never user-chosen text. None of them has a name-collision surface to protect, so reordering them would have been a no-op.
+PR #36 applied the same reordering to `parseFilterSelection` (still in the tree at `src/participant/sessionState.ts:767-779`, tests at `src/test/JiraParticipant.test.ts:565-568` and `:607-612`) and to the since-removed `parseIssueTypeSelection` / `parseTemplateSelection`. `parseConstraintMatchSelection` (`src/participant/sessionState.ts:983-996`) was written label-first following the same rule.
 
-The commit also carried two minor, unrelated riders: removing a duplicated `ticketSidekick.jira.baseUrl` config read from `src/participant/jira/emailHandler.ts` (now passed in as a parameter, matching every other handler), and standardizing `parseBulkUpdateReview`/`parseFilterSelection` to pass the raw `reply` rather than a pre-trimmed variable into `isCancellation`/`isConfirmation` (style-only, both already trim internally).
+For **free-text asks**, where the reply is not matched against a list at all (a new template name, a typed issue type), the codebase uses a second remedy: only the literal `(c)` cancels, via `isExplicitCancelToken()` (`src/participant/sessionState.ts:589-598`, "KTD3"), so `Stop` stays enterable as a value. The chat-based issue-type ask in `src/participant/jira/ticketContext.ts:105` uses it too.
 
-Regression tests were added in `src/test/JiraParticipant.test.ts`: `describe('parseTemplateSelection', ...)` at line 169 with the new case at line 208, `describe('parseIssueTypeSelection', ...)` at line 230 with the new case at line 272, and `describe('parseFilterSelection', ...)` at line 583 with the new case at line 622 — each constructs a types/templates/filters list containing a literal `'Stop'` entry and asserts both the exact-case and lowercased reply resolve to that real value, not to `'cancel'`.
+### Open instances as of 2026-09-28
+
+A sweep of the current tree while writing this update found these parsers still cancel-first. Each takes a live Jira list and prompts "reply with the number or name":
+
+| Parser | Location | Live list | Colliding value that fails by name |
+| --- | --- | --- | --- |
+| `parseGuidedTransitionStatusPick` | `src/participant/sessionState.ts:411-414` | workflow statuses | `Cancelled` |
+| `parseGuidedTransitionResolutionPick` | `src/participant/sessionState.ts:444-447` | the transition's resolutions | `Cancelled` |
+| `parseIssueTypePick` | `src/participant/sessionState.ts:2517-2523` | project issue types | `Stop` |
+| stale close, pick-resolution step | `src/participant/jira/reportImportHandler.ts:645` | resolutions | any cancel word except `skip` |
+
+The fix for each is the same reordering. For the resolution step, it also means dropping the `skip` carve-out in favour of letting `parseResolutionSelection` (which already maps `none`/`skip` to "no resolution", `src/participant/sessionState.ts:324-328`) run first.
 
 ## Why This Works
 
-The general principle: **a specific-identity check against live, caller-supplied data must run before a generic keyword/classification check**, whenever both could plausibly match the same input string. A real domain value (an issue type someone actually created, a template someone actually authored) is always more specific and more intentional than membership in a shared generic word list — the user typing "Stop" when "Stop" is a real option in front of them is far more likely to mean "select Stop" than "cancel via a word that happens to also mean cancel elsewhere."
+A live option the user can see is more specific than membership in a generic word list. If `Cancelled` is on screen as a status and the user types `Cancelled`, they almost certainly mean the status. Checking the options first honours that. A reply that matches nothing still reaches the cancel/back check, so `cancel`, `stop`, and `back` keep working whenever no offered option has that name.
 
-This bug class is worth distinguishing from an ordinary logic bug because of *where* the blast radius lives. `isCancellation()`'s word list and its six call sites are decoupled by design — that's the whole point of unifying them. But that decoupling means growing the shared list is an **action-at-a-distance** change: editing one `Set` in `sessionState.ts` silently grows the collision surface of every caller that matches raw user free text against it, including callers whose own diff didn't change at all. Nothing in the diff of the word-list broadening itself reveals this; you have to separately reason about every caller's data shape to see the risk. That is precisely why this is a distinct hazard class from a typo or an off-by-one: the failure isn't local to the changed lines, it's a property of the interaction between the changed lines and code elsewhere that appears untouched.
+The hazard persists because cancel handling and option matching live in separate helpers (`isCancellation`/`isBackOrCancellation` versus `pickByNumberOrName`). Each new parser re-combines them, and the cancel-first order reads naturally ("handle the escape hatch, then the real work"). Nothing in the type system or the test suite pushes back.
 
 ## Prevention
 
-- When broadening a shared free-text keyword/classification list (confirm/cancel words, redaction key-patterns, status/priority name matching, or any other "does this string mean X" mechanism), explicitly audit every caller that matches raw user input against a **live domain-value list** for collision risk — not just the callers that happen to have existing test fixtures. The unit test suite staying green here (`982/982`) proved nothing about this risk, because no fixture used a colliding name; passing tests are not evidence of safety for this bug class.
-- Ask the question directly during review: "what happens when a real value collides with one of these new words?" That question, asked in a dedicated post-implementation review pass rather than inferred from reading the diff, is what caught this — not the existing test suite, and not either of the two earlier planning-phase reviews, which were scoped to the plan document rather than to interaction effects across the implemented code.
-- Add adversarial "name collides with the generic word" test cases as a standing category whenever a parser both classifies free text generically *and* matches it against a live domain list — replicate the pattern in `src/test/JiraParticipant.test.ts:208, 272, 622`: build a values list containing a literal entry equal to one of the generic keywords (e.g. `'Stop'`), and assert both exact-case and lowercased replies resolve to the real value, not to the generic classification.
-- This principle generalizes beyond `isCancellation()`/`isConfirmation()`: any shared generic-keyword or classification mechanism in this codebase — redaction key-patterns (`src/utils/logRedaction.ts`), status/priority/name matching against Jira metadata, or any future shared free-text parser — carries the same shape of risk when its keyword set is broadened. The fix pattern is the same every time: check the specific, caller-supplied, live-data match first; fall through to the generic classification only when nothing specific matched.
+- **Trigger: writing or reviewing any parser that takes a live option list and also accepts a cancel/back word.** Growing the word list is only one way in. Ask: "What happens when a real option is named `Cancelled`, `Stop`, or `Skip`?"
+- **Audit command.** Find parsers that check cancel words before options:
+
+  ```bash
+  grep -n -A2 "if (isCancellation(reply))\|if (isBackOrCancellation(reply))" src/participant/sessionState.ts src/participant/jira/*.ts
+  ```
+
+  Any hit followed by `pickByNumberOrName(...)` or an `options.find(...)` name match is this bug.
+- **Standing test case.** For every such parser, add a test with an option literally named like a cancel word. Prefer `Cancelled` for statuses and resolutions, since it is a real Jira default in many instances, and `Stop` for issue types, templates, and filters. Assert that the exact and lower-cased name resolve to the option, and that a bare `cancel` or `back` still cancels. Model: `src/test/sessionState.test.ts:1521-1525`.
+- **Free-text asks use `isExplicitCancelToken()`**, not `isCancellation()`, when the value itself could plausibly be a cancel word.
+- **No per-word exceptions.** A `!== 'skip'` style guard fixes one word and hides the rest.
+- **Structural option (not yet done).** A single helper that takes the options plus the cancel predicate and always matches options first would remove the per-caller ordering decision that has gone wrong in every round listed above. The same principle applies to any shared generic classifier matched against live data, such as redaction key patterns in `src/utils/logRedaction.ts`: specific live-data match first, generic classification second.
 
 ## Related Issues
 
-- **Moderate overlap** with [`redaction-substring-match-false-positives.md`](redaction-substring-match-false-positives.md) — both are `root_cause: logic_error` instances of "a generic/broad matcher started matching legitimate values it shouldn't have," but via different mechanisms: that bug was a single matcher that was structurally too loose (bare substring containment, fixed by tightening the matcher itself with word-boundary + exact-set logic); this bug was a two-check *ordering* problem (an already-correct specific check existed but ran after the generic one, fixed by reordering rather than changing either check's own logic). Worth reading together as two instances of the same broader principle: specific/exact matches against live data must run before a generic classifier.
-- Fixed in [PR #36](https://github.com/rbreunung/ticket-sidekick/pull/36) (commit `d67ff6b`, branch `fix/jira-chat-ux-consistency`), merged into `main`.
+- **Moderate overlap** with [`redaction-substring-match-false-positives.md`](redaction-substring-match-false-positives.md): both are "a generic matcher claims a legitimate value". That one was a matcher that was too loose (fixed by tightening it); this one is a check-ordering problem (fixed by reordering). Read them together.
+- First fix: [PR #36](https://github.com/rbreunung/ticket-sidekick/pull/36) (branch `fix/jira-chat-ux-consistency`), merged 2026-08-21.
+- Recurrence fix: [PR #71](https://github.com/rbreunung/ticket-sidekick/pull/71) (stale-ticket target pick), merged 2026-09-27. Its `parseStaleTargetPick` doc comment links back to this file.
