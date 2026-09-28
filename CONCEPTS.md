@@ -15,7 +15,7 @@ A single open-source dependency (name + version) named in an OSS Report, togethe
 The state of a Component for which a prior import already created a matching Jira ticket, detected by a dedup lookup rather than by re-scanning every ticket by hand. An already-ticketed Component is excluded from ticket creation by default on a later import run, so re-running an import against the same report is safe and only acts on genuinely new Components.
 
 ### Stale ticket
-An open Jira ticket carrying an importer's marker label (`veracode` / `oss-dependency`) whose findings are all gone from the current report or no longer match the importer's remediation filter. Applies to both Veracode and Waltz imports. A stale ticket is only offered for a transition, never moved automatically, and a ticket moved to a non-final status stays stale on later imports because it is still open.
+An open Jira ticket carrying an importer's marker label whose findings are all gone from the current report or no longer match the importer's remediation filter. Applies to both Veracode and Waltz imports. A stale ticket is only offered for a transition, never moved automatically, and a ticket moved to a non-final status stays stale on later imports because it is still open.
 
 ## Bitbucket Review
 
