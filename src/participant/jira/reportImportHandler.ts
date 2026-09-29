@@ -641,10 +641,12 @@ export async function continueStaleClose<TItem, TRow extends ReviewRowBase>(
     return finishStaleClose(parked, close.issueType!, pick, resolution, ticketService, stream, ws, descriptor, baseUrl);
   }
 
-  // pick-resolution: "skip" here means "no resolution" (same as "none"), not "go back".
-  if (isBackOrCancellation(reply) && reply.trim().toLowerCase() !== 'skip') return backToStale();
+  // pick-resolution: a resolution name (even "Cancelled") and "none"/"skip" (no resolution) are
+  // matched before back/cancel words, which only go back when nothing else matched.
   const choice = parseResolutionSelection(reply, parked.staleTickets?.resolutionOptions ?? []);
-  if (choice === 'invalid') return streamStaleCloseStep(close, stream, ws, invalid);
+  if (choice === 'invalid') {
+    return isBackOrCancellation(reply) ? backToStale() : streamStaleCloseStep(close, stream, ws, invalid);
+  }
   await ws.update(STALE_RESOLUTION_SESSION_KEY, undefined);
   return finishStaleClose(parked, close.issueType!, close.target!, choice ?? undefined, ticketService, stream, ws, descriptor, baseUrl);
 }

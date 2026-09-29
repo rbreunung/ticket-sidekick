@@ -1046,6 +1046,32 @@ describe('Stale-ticket review + close with a picked target', () => {
     expect(await reply('PROJ-2', ws)).toContain("Didn't understand that");
   });
 
+  it('a resolution whose name is also a cancel word is set, not treated as going back', async () => {
+    vi.spyOn(client, 'getResolutions').mockResolvedValue([{ name: 'Fixed' }, { name: 'Cancelled' }]);
+    const ws = makeMockWs();
+    await importStale([makeStaleIssue('PROJ-1', 'Bug', ['1'])], ws);
+    await reply('PROJ-1', ws);
+    await reply('close tickets', ws);
+    expect(await reply('Done', ws)).toContain('which resolution should be set?');
+
+    await reply('Cancelled', ws);
+
+    expect(client.executeTransitionCalls).toEqual([{ issueKey: 'PROJ-1', transitionId: '12', fields: { resolution: { name: 'Cancelled' } } }]);
+  });
+
+  it('at the resolution step, a cancel word that names no resolution still goes back', async () => {
+    const ws = makeMockWs();
+    await importStale([makeStaleIssue('PROJ-1', 'Bug', ['1'])], ws);
+    await reply('PROJ-1', ws);
+    await reply('close tickets', ws);
+    await reply('Done', ws);
+
+    const back = await reply('stop', ws);
+
+    expect(back).toContain('No stale tickets were transitioned');
+    expect(client.executeTransitionCalls).toHaveLength(0);
+  });
+
   it('AE4: "back" or a cancellation word at the target or resolution step returns to the Stale screen with nothing transitioned', async () => {
     const ws = makeMockWs();
     await importStale([makeStaleIssue('PROJ-1', 'Bug', ['1'])], ws);
