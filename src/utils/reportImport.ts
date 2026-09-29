@@ -42,6 +42,27 @@ export function resolveMaxReportBytes(configuredMB: unknown, defaultMB: number, 
 }
 
 /**
+ * Default and allowed range of each size-limit setting, keyed by its name under `ticketSidekick.`.
+ * They repeat package.json's `default`/`minimum`/`maximum` (what VS Code's Settings screen shows),
+ * because package.json isn't importable at runtime; reportImport.test.ts fails if the two differ.
+ */
+export const REPORT_SIZE_LIMITS_MB = {
+  'email.maxBatchSizeMB': { defaultMB: 150, minMB: 1, maxMB: 500 },
+  'veracode.maxReportSizeMB': { defaultMB: 50, minMB: 1, maxMB: 200 },
+  'waltz.maxReportSizeMB': { defaultMB: 50, minMB: 1, maxMB: 200 },
+} as const;
+
+export type ReportSizeSetting = keyof typeof REPORT_SIZE_LIMITS_MB;
+
+/** resolveMaxReportBytes() for one of the size-limit settings, reading its value through `read`
+ * (the caller's `vscode.workspace.getConfiguration('ticketSidekick').get`, kept out of here so this
+ * module stays vscode-free). */
+export function resolveSizeLimitSetting(setting: ReportSizeSetting, read: (key: string) => unknown): number {
+  const { defaultMB, minMB, maxMB } = REPORT_SIZE_LIMITS_MB[setting];
+  return resolveMaxReportBytes(read(setting), defaultMB, minMB, maxMB);
+}
+
+/**
  * Splits `items` into chunks of at most `chunkSize`, preserving order. Generalized from the
  * byte-identical `chunkIssueIds`/`chunkComponentLabels` each importer had (they differed only in
  * parameter naming).

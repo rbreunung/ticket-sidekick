@@ -72,3 +72,31 @@ describe('user manual stays in sync with package.json settings', () => {
     expect(wrong).toEqual([]);
   });
 });
+
+describe('user manual covers everything else users see from package.json', () => {
+  const contributes = pkg.contributes;
+  const allDocs = userDocs.map((d) => d.text).join('\n');
+  const readme = userDocs.find((d) => d.name === 'README.md')!.text;
+  const toolsPage = userDocs.find((d) => d.name === 'docs/manual/agent-mode-tools.md')?.text ?? '';
+
+  it('names every Command Palette command by its title', () => {
+    const missing = (contributes.commands as Array<{ title: string }>)
+      .map((c) => c.title)
+      .filter((title) => !allDocs.includes(title));
+    expect(missing, 'add these command titles to README.md or docs/manual/').toEqual([]);
+  });
+
+  it('lists every slash command in the README', () => {
+    const missing = (contributes.chatParticipants as Array<{ name: string; commands?: Array<{ name: string }> }>)
+      .flatMap((p) => (p.commands ?? []).map((c) => `@${p.name} /${c.name}`))
+      .filter((command) => !readme.includes(`\`${command}\``));
+    expect(missing, 'add these to the slash-command tables in README.md').toEqual([]);
+  });
+
+  it('lists every Agent Mode tool, with its # reference, on the tools page', () => {
+    const missing = (contributes.languageModelTools as Array<{ name: string; toolReferenceName?: string }>)
+      .flatMap((t) => [`\`${t.name}\``, ...(t.toolReferenceName ? [`\`#${t.toolReferenceName}\``] : [])])
+      .filter((entry) => !toolsPage.includes(entry));
+    expect(missing, 'add these to docs/manual/agent-mode-tools.md').toEqual([]);
+  });
+});

@@ -15,25 +15,16 @@ import {
   continueStaleClose,
   type ReportImportDescriptor,
 } from './reportImportHandler';
-import { resolveMaxReportBytes } from '../../utils/reportImport';
+import { resolveSizeLimitSetting } from '../../utils/reportImport';
 import type { AwaitIssueTypeResume } from '../sessionState';
 import { sessionWasSuperseded } from './ticketContext';
-
-// Bounds match ticketSidekick.veracode.maxReportSizeMB's package.json declaration (default 50,
-// range 1-200 MB) — single source of truth for the default kept there; these are duplicated here
-// only as the numeric bounds resolveMaxReportBytes() needs, since package.json isn't importable.
-const DEFAULT_MAX_REPORT_SIZE_MB = 50;
-const MIN_MAX_REPORT_SIZE_MB = 1;
-const MAX_MAX_REPORT_SIZE_MB = 200;
 
 // Exported so extension.ts's command-palette entry point resolves ticketSidekick.veracode.maxReportSizeMB
 // exactly the same way as the @jira chat entry point below, rather than re-deriving the bounds and
 // risking the two entry points drifting apart.
 export function getVeracodeMaxReportBytes(): number {
   const cfg = vscode.workspace.getConfiguration('ticketSidekick');
-  return resolveMaxReportBytes(
-    cfg.get<number>('veracode.maxReportSizeMB'), DEFAULT_MAX_REPORT_SIZE_MB, MIN_MAX_REPORT_SIZE_MB, MAX_MAX_REPORT_SIZE_MB,
-  );
+  return resolveSizeLimitSetting('veracode.maxReportSizeMB', (key) => cfg.get(key));
 }
 
 function getVeracodeConfig(): { minSeverity: number; includeStatuses: string[]; maxReportBytes: number } {

@@ -9,7 +9,7 @@ Two independent GitHub Copilot Chat participants — use one or both:
 
 Neither participant requires the other to be configured.
 
-Every core operation is also exposed as a GitHub Copilot **Agent Mode** tool (`jira_*`, `bitbucket_*`), so an agent can create tickets, update fields, review PRs, and more without the user typing `@jira`/`@bitbucket` at all — see [`docs/onboarding.md`](docs/onboarding.md) for the full tool list and how confirmation works.
+Most operations are also available as GitHub Copilot **Agent Mode** tools (`jira_*`, `bitbucket_*`), so an agent can read and create tickets, update fields, read pull requests, and post comments without you typing `@jira`/`@bitbucket` — see [Agent Mode Tools](docs/manual/agent-mode-tools.md) for the list and which tools ask before changing anything.
 
 ---
 
@@ -91,6 +91,19 @@ Open GitHub Copilot Chat and use `@jira`:
 | `@jira import veracode report` | Create Jira tickets from a Veracode Detailed Report XML export |
 | `@jira generate a template from PROJ-123 called "Billing Bug"` | Generate a reusable `.jira-templates.json` template from a reference ticket's fields — reviewed and confirmed before saving |
 | `@jira upload the report to PROJ-123` | Attach one or more local files to a ticket — shows a confirmation before uploading |
+
+**Slash commands** — typing `@jira /` in Copilot Chat lists shortcuts for the most common operations. Each one is the same as writing the request in your own words (`@jira /view PROJ-123` does what `@jira view PROJ-123` does):
+
+| Command | Example | What it does |
+| --- | --- | --- |
+| `@jira /check` | `@jira /check` | Verify your Jira connection and credentials |
+| `@jira /create` | `@jira /create a bug in PROJ: login fails after password reset` | Create a new ticket |
+| `@jira /view` | `@jira /view PROJ-123` | Show a ticket's fields, description and comments |
+| `@jira /load` | `@jira /load PROJ-123` | Download a ticket's description, comments and attachments into the workspace |
+| `@jira /comment` | `@jira /comment PROJ-123 thanks, looks good to merge` | Add a comment |
+| `@jira /field` | `@jira /field PROJ-123 set priority to High` | Update a field |
+| `@jira /move` | `@jira /move PROJ-123 to In Progress` | Move a ticket to a new status |
+| `@jira /search` | `@jira /search my open bugs in PROJ` | Search with JQL or plain language |
 
 ### Reading tickets
 
@@ -475,6 +488,13 @@ Run `@bitbucket check` after setup to confirm the connection and see which accou
 | `@bitbucket add all to review` | Preview all findings as PR comments at once |
 | `@bitbucket #2 add to review blocking merge` | Preview with reviewer note "blocking merge" appended — confirm before posting |
 | `@bitbucket c` | Exit the current review session |
+
+**Slash commands** — typing `@bitbucket /` lists the same shortcuts:
+
+| Command | Example | What it does |
+| --- | --- | --- |
+| `@bitbucket /check` | `@bitbucket /check` | Verify your Bitbucket connection and credentials |
+| `@bitbucket /review` | `@bitbucket /review https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42` | Review a pull request |
 
 ### PR review
 

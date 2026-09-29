@@ -6,7 +6,7 @@ import type { TicketService } from '../../services/TicketService';
 import type { ConfigService } from '../../services/ConfigService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import { markdownToJiraWiki } from '../../utils/markdownToJiraWiki';
-import { sanitizeCellText, BATCH_LIMIT, resolveMaxReportBytes } from '../../utils/reportImport';
+import { sanitizeCellText, BATCH_LIMIT, resolveSizeLimitSetting } from '../../utils/reportImport';
 import { parseEmlFile, type EmailImportItem, type EmailReviewRow } from '../../utils/emlParser';
 import type {
   EmailContentSession, AwaitIssueTypeResume, EmailTemplateSelectionSession, EmailReviewSession, ReviewTableColumn,
@@ -107,18 +107,9 @@ const emailDescriptor: ReportImportDescriptor<EmailImportItem, EmailReviewRow> =
   },
 };
 
-// Bounds match ticketSidekick.email.maxBatchSizeMB's package.json declaration (default 150, range
-// 1-500 MB) — single source of truth for the default kept there; these are duplicated here only as
-// the numeric bounds resolveMaxReportBytes() needs, since package.json isn't importable.
-const DEFAULT_MAX_BATCH_SIZE_MB = 150;
-const MIN_MAX_BATCH_SIZE_MB = 1;
-const MAX_MAX_BATCH_SIZE_MB = 500;
-
 function getEmailMaxBatchBytes(): number {
   const cfg = vscode.workspace.getConfiguration('ticketSidekick');
-  return resolveMaxReportBytes(
-    cfg.get<number>('email.maxBatchSizeMB'), DEFAULT_MAX_BATCH_SIZE_MB, MIN_MAX_BATCH_SIZE_MB, MAX_MAX_BATCH_SIZE_MB,
-  );
+  return resolveSizeLimitSetting('email.maxBatchSizeMB', (key) => cfg.get(key));
 }
 
 // Checks the file-count cap (KTD6) and the aggregate attachment-byte cap (KTD7) for a set of
