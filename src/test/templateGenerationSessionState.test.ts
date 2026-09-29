@@ -250,6 +250,13 @@ describe('parseIssueTypePick', () => {
     expect(parseIssueTypePick('c', types)).toBe('cancel');
   });
 
+  it('picks an issue type whose name is also a cancel word instead of cancelling', () => {
+    const withStop = [...types, { id: '10004', name: 'Stop' }];
+    expect(parseIssueTypePick('Stop', withStop)).toEqual({ id: '10004', name: 'Stop' });
+    expect(parseIssueTypePick('stop', withStop)).toEqual({ id: '10004', name: 'Stop' });
+    expect(parseIssueTypePick('cancel', withStop)).toBe('cancel');
+  });
+
   it('returns invalid for an out-of-range number or unrecognized text', () => {
     expect(parseIssueTypePick('99', types)).toBe('invalid');
     expect(parseIssueTypePick('nonsense', types)).toBe('invalid');

@@ -472,6 +472,13 @@ describe('parseGuidedTransitionStatusPick', () => {
     expect(parseGuidedTransitionStatusPick('cancel', options)).toBe('cancel');
   });
 
+  it('picks a status whose name is also a cancel word instead of cancelling', () => {
+    const withCancelled = [...options, 'Cancelled'];
+    expect(parseGuidedTransitionStatusPick('Cancelled', withCancelled)).toBe('Cancelled');
+    expect(parseGuidedTransitionStatusPick('cancelled', withCancelled)).toBe('Cancelled');
+    expect(parseGuidedTransitionStatusPick('cancel', withCancelled)).toBe('cancel');
+  });
+
   it('reports an unmatched reply as invalid (KTD6) rather than guessing', () => {
     expect(parseGuidedTransitionStatusPick('Nonexistent Status', options)).toBe('invalid');
   });
@@ -592,6 +599,12 @@ describe('parseGuidedTransitionResolutionPick', () => {
 
   it('recognizes an explicit cancellation', () => {
     expect(parseGuidedTransitionResolutionPick('cancel', options)).toBe('cancel');
+  });
+
+  it('picks a resolution whose name is also a cancel word instead of cancelling', () => {
+    const withCancelled = [...options, 'Cancelled'];
+    expect(parseGuidedTransitionResolutionPick('Cancelled', withCancelled)).toBe('Cancelled');
+    expect(parseGuidedTransitionResolutionPick('cancel', withCancelled)).toBe('cancel');
   });
 
   it('treats "none" as unmatched — this ask is only shown when a resolution is required', () => {

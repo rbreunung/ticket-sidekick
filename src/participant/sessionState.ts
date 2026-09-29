@@ -409,8 +409,11 @@ export function buildGuidedTransitionStatusOptions(
  * this step's options with a "didn't understand that" message rather than erroring or dropping the
  * turn — same convention as parseFilterSelection/parseResolutionSelection. */
 export function parseGuidedTransitionStatusPick(reply: string, statusOptions: string[]): string | 'cancel' | 'invalid' {
-  if (isCancellation(reply)) return 'cancel';
-  return pickByNumberOrName(reply, statusOptions, (s) => s) ?? 'invalid';
+  // Offered statuses win over cancel words, so a status named "Cancelled" stays pickable — see
+  // docs/solutions/logic-errors/confirm-cancel-word-list-broadening-swallows-domain-name-collisions.md.
+  const picked = pickByNumberOrName(reply, statusOptions, (s) => s);
+  if (picked) return picked;
+  return isCancellation(reply) ? 'cancel' : 'invalid';
 }
 
 /** Finds the ticket's own direct (single-hop) transition to `targetStatus`, if one exists —
@@ -442,8 +445,10 @@ export function formatTransitionPathOption(currentStatus: string, path: CachedTr
  * when the transition's own metadata says a resolution is *required* — so there is no "skip"
  * option here; an unrecognized reply (including "none") is simply unmatched. */
 export function parseGuidedTransitionResolutionPick(reply: string, options: string[]): string | 'cancel' | 'invalid' {
-  if (isCancellation(reply)) return 'cancel';
-  return pickByNumberOrName(reply, options, (s) => s) ?? 'invalid';
+  // Offered resolutions win over cancel words, as in parseGuidedTransitionStatusPick.
+  const picked = pickByNumberOrName(reply, options, (s) => s);
+  if (picked) return picked;
+  return isCancellation(reply) ? 'cancel' : 'invalid';
 }
 
 /** R2 step 4's confirm-step summary: resolved status, resolution (if any), and path (only when
@@ -2518,8 +2523,10 @@ export function parseIssueTypePick<T extends { name: string }>(
   reply: string,
   issueTypes: T[],
 ): T | 'cancel' | 'invalid' {
-  if (isCancellation(reply)) return 'cancel';
-  return pickByNumberOrName(reply, issueTypes, (t) => t.name) ?? 'invalid';
+  // Offered issue types win over cancel words, so a type named "Stop" stays pickable.
+  const picked = pickByNumberOrName(reply, issueTypes, (t) => t.name);
+  if (picked) return picked;
+  return isCancellation(reply) ? 'cancel' : 'invalid';
 }
 
 export type TemplateCollisionReply =
