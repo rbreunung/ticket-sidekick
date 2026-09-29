@@ -1,9 +1,42 @@
 import { describe, it, expect, vi } from 'vitest';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import {
   chunkStrings, buildDedupJql, extractDedupMap, findAlreadyTicketed, buildReviewRows,
   sanitizeCellText, sanitizeStandaloneLine, resolveMaxReportBytes, findStaleTickets, buildStaleSearchJql,
+  REPORT_SIZE_LIMITS_MB, resolveSizeLimitSetting,
   type JqlIssueLike,
 } from '../utils/reportImport';
+
+describe('size-limit settings', () => {
+  const pkg = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf-8'));
+  const settings: Record<string, { default?: unknown; minimum?: unknown; maximum?: unknown }> = Object.assign(
+    {},
+    ...[].concat(pkg.contributes.configuration).map((group: { properties?: object }) => group.properties ?? {}),
+  );
+
+  it('use the same default and range as the Settings screen (package.json)', () => {
+    for (const [setting, limits] of Object.entries(REPORT_SIZE_LIMITS_MB)) {
+      const declared = settings[`ticketSidekick.${setting}`];
+      expect(declared, `ticketSidekick.${setting} is not in package.json`).toBeDefined();
+      expect({ defaultMB: declared.default, minMB: declared.minimum, maxMB: declared.maximum }, setting).toEqual(limits);
+    }
+  });
+
+  it('cover every size-limit setting package.json declares', () => {
+    const declared = Object.keys(settings)
+      .filter((key) => /\.max\w*SizeMB$/.test(key))
+      .map((key) => key.replace(/^ticketSidekick\./, ''))
+      .sort();
+    expect(declared).toEqual(Object.keys(REPORT_SIZE_LIMITS_MB).sort());
+  });
+
+  it('read the configured value, and fall back to the default when it is out of range', () => {
+    expect(resolveSizeLimitSetting('veracode.maxReportSizeMB', () => 120)).toBe(120 * 1024 * 1024);
+    expect(resolveSizeLimitSetting('veracode.maxReportSizeMB', () => 999)).toBe(50 * 1024 * 1024);
+    expect(resolveSizeLimitSetting('email.maxBatchSizeMB', () => undefined)).toBe(150 * 1024 * 1024);
+  });
+});
 
 describe('resolveMaxReportBytes', () => {
   it('returns the default in bytes when given undefined', () => {

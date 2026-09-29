@@ -17,6 +17,7 @@ implementation of the same operation. Code lives in:
 - [`src/tools/jiraTools.ts`](../src/tools/jiraTools.ts) — tool registration, `prepareInvocation`/`invoke` implementations.
 - [`src/participant/sessionState.ts`](../src/participant/sessionState.ts) — pure confirmation-text and result-message builders the tools call into (Vitest-loadable; `jiraTools.ts` itself imports `vscode` and is not).
 - `package.json`'s `contributes.languageModelTools` — the tool declarations (name, description, JSON input schema, `when` clause) VS Code reads.
+- [`docs/manual/agent-mode-tools.md`](manual/agent-mode-tools.md) — the user-facing list; a new tool needs a row there (`src/test/userDocsSync.test.ts` fails otherwise).
 
 None of these tools appear in Agent Mode's tool picker until Jira
 credentials are configured — each one's `when` clause gates on the
