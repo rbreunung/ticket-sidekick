@@ -10,7 +10,7 @@ import { sanitizeCellText, BATCH_LIMIT, resolveSizeLimitSetting } from '../../ut
 import { parseEmlFile, type EmailImportItem, type EmailReviewRow } from '../../utils/emlParser';
 import type {
   EmailContentSession, AwaitIssueTypeResume, EmailTemplateSelectionSession, EmailReviewSession, ReviewTableColumn,
-  EmailCleanupSession, EmailCleanupTarget,
+  EmailCleanupSession, EmailCleanupTarget, EmailCleanupDecision,
 } from '../sessionState';
 import {
   isCancellation, isConfirmation, isSessionExpired, SESSION_EXPIRED_MESSAGE, buildChatCommandLink, neutralizeMarkdownLinks, withLastTicket,
@@ -23,6 +23,7 @@ import {
 } from '../../utils/emailBoilerplate';
 import { withLmRetry, UnparseableReplyError } from '../../utils/lmRetry';
 import { resolveProjectKey, sessionWasSuperseded } from './ticketContext';
+import { sendAndCollect } from './llmHelpers';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import {
   buildImportTemplateSession, streamImportTemplateSelection, handleImportTemplateSelection,
@@ -277,7 +278,6 @@ async function startEmailCleanup(
   for (const row of session.rows) {
     const body = row.item.markdownBody;
     row.blocks = detectPatternBlocks(body, patterns, row.item.senderName);
-    row.excluded = false;
     if (row.blocks.length > 0 || !body.trim()) row.modelStatus = 'not-needed';
     else row.modelStatus = isTooLongForModelCheck(body) ? 'too-long' : 'awaiting-consent';
   }
@@ -300,7 +300,7 @@ async function startEmailCleanup(
 // the template pick for a batch, the comment preview for "add email as comment".
 async function continueAfterCleanup(
   session: EmailCleanupSession,
-  decision: 'strip' | 'keep',
+  decision: EmailCleanupDecision,
   jiraClient: IJiraClient,
   stream: vscode.ChatResponseStream,
   ws: vscode.Memento,
@@ -330,13 +330,6 @@ async function continueAfterCleanup(
   return streamImportTemplateSelection(templateSession, stream, ws, emailDescriptor);
 }
 
-async function sendModelCheck(model: vscode.LanguageModelChat, body: string, token: vscode.CancellationToken): Promise<string> {
-  const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(buildModelCheckPrompt(body))], {}, token);
-  let reply = '';
-  for await (const chunk of response.text) reply += chunk;
-  return reply;
-}
-
 // KTD5: one call per email the user consented to; the model proposes, verifyModelBlocks keeps only
 // quotes that really occur. A failed or unparseable call leaves that email as nothing detected and
 // is logged with metadata only — the reply echoes email text, so neither it nor the body is logged.
@@ -357,7 +350,7 @@ async function runModelCheck(
       if (token?.isCancellationRequested) throw new Error('cancelled');
       const proposals = await withLmRetry(async () => {
         attempts++;
-        const reply = await sendModelCheck(model, body, token);
+        const reply = await sendAndCollect(model, [vscode.LanguageModelChatMessage.User(buildModelCheckPrompt(body))], token);
         replyLength = reply.length;
         if (!/[[{]/.test(reply)) throw new UnparseableReplyError(reply);
         return parseModelCheckReply(reply);

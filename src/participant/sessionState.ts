@@ -3,7 +3,10 @@ import { formatJiraBody } from '../utils/markdownFormatter';
 import type { VeracodeFlaw, VeracodeReviewRow } from '../utils/veracodeReport';
 import type { WaltzComponent, WaltzReviewRow } from '../utils/waltzReport';
 import type { EmailImportItem, EmailReviewRow } from '../utils/emlParser';
-import { applyBoilerplateCleanup, buildPatternFromBlock, type BoilerplateKind, type BoilerplatePattern, type DetectedBlock } from '../utils/emailBoilerplate';
+import {
+  applyBoilerplateCleanup, computeDroppedImageNames, buildPatternFromBlock, BOILERPLATE_KINDS,
+  type BoilerplatePattern, type DetectedBlock,
+} from '../utils/emailBoilerplate';
 import { BATCH_LIMIT, sanitizeCellText } from '../utils/reportImport';
 import { TICKET_ID_PATTERN, extractTicketId } from '../utils/branchParser';
 import { formatFileSize } from '../utils/attachmentEligibility';
@@ -3246,18 +3249,12 @@ export function numberEmailCleanupBlocks(session: EmailCleanupSession): Numbered
   return out;
 }
 
-const KIND_PLURAL: Record<BoilerplateKind, [string, string]> = {
-  header: ['header', 'headers'],
-  footer: ['footer', 'footers'],
-  signature: ['signature', 'signatures'],
-};
-
 // "3 footers, 1 signature" — kinds in header/footer/signature order.
 export function describeBlockKinds(blocks: DetectedBlock[]): string {
-  return (['header', 'footer', 'signature'] as BoilerplateKind[])
+  return BOILERPLATE_KINDS
     .map(kind => [kind, blocks.filter(b => b.kind === kind).length] as const)
     .filter(([, count]) => count > 0)
-    .map(([kind, count]) => `${count} ${KIND_PLURAL[kind][count === 1 ? 0 : 1]}`)
+    .map(([kind, count]) => countedNoun(count, `${kind}(s)`))
     .join(', ');
 }
 
@@ -3324,7 +3321,7 @@ export function buildEmailCleanupPreview(session: EmailCleanupSession, notice?: 
       out.push(`**${row.id}** · ${subject} — ${nothingDetectedLabel(row.modelStatus)}`, '');
       continue;
     }
-    const dropped = applyBoilerplateCleanup(row.item, row.blocks).droppedImageNames.length;
+    const dropped = computeDroppedImageNames(row.item, row.blocks).length;
     const imagePart = dropped > 0 ? ` · ${dropped} image(s) would be dropped` : '';
     const toggle = multi
       ? ` · ${buildChatCommandLink(row.excluded ? `Include ${row.id}` : `Exclude ${row.id}`, '@jira', row.id)}`
@@ -3385,9 +3382,11 @@ export function parseEmailCleanupReply(reply: string, phase: 'consent' | 'previe
 
 // R7/R10: strip applies each included row's blocks; excluded rows, rows with nothing detected and
 // every row on keep come back as the original items.
+export type EmailCleanupDecision = 'strip' | 'keep';
+
 export function applyEmailCleanupDecision(
   session: EmailCleanupSession,
-  decision: 'strip' | 'keep',
+  decision: EmailCleanupDecision,
 ): { items: EmailImportItem[]; strippedCount: number; droppedImageCount: number } {
   let strippedCount = 0;
   let droppedImageCount = 0;

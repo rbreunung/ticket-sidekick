@@ -194,14 +194,17 @@ function normalizedSegmentText(lines: string[], segment: MessageSegment): { text
 
 function findCandidates(lines: string[], segments: MessageSegment[], specs: BlockSpec[]): Candidate[] {
   const candidates: Candidate[] = [];
+  const phrases = specs.map(spec => ({
+    start: normalizePhrase(spec.start),
+    end: spec.end !== undefined ? normalizePhrase(spec.end) : '',
+  }));
   for (const segment of segments) {
     if (segment.bodyStartLine > segment.endLine) continue;
     const { text, lineAt } = normalizedSegmentText(lines, segment);
     if (!text) continue;
     specs.forEach((spec, order) => {
-      const start = normalizePhrase(spec.start);
+      const { start, end } = phrases[order];
       if (!start) return;
-      const end = spec.end !== undefined ? normalizePhrase(spec.end) : '';
       let from = 0;
       for (;;) {
         const s = text.indexOf(start, from);
@@ -284,7 +287,14 @@ export function detectBlocks(markdownBody: string, specs: BlockSpec[], topSender
     if (c.endLine !== undefined) {
       endLine = c.endLine;
     } else {
-      const next = candidates.slice(i + 1).find(o => o.segment === seg && o.startLine > c.startLine);
+      let next: Candidate | undefined;
+      for (let j = i + 1; j < candidates.length; j++) {
+        const o = candidates[j];
+        if (o.segment === seg && o.startLine > c.startLine) {
+          next = o;
+          break;
+        }
+      }
       let limit = next ? next.startLine - 1 : seg.endLine;
       if (c.spec.kind === 'header') {
         while (startLine > Math.max(seg.bodyStartLine, lastEnd + 1) && !isBlank(lines[startLine - 1])) startLine--;
@@ -302,13 +312,14 @@ export function detectBlocks(markdownBody: string, specs: BlockSpec[], topSender
   return blocks;
 }
 
+// The configured patterns as specs, each tagged with its entry's index.
+function toPatternSpecs(patterns: BoilerplatePattern[]): BlockSpec[] {
+  return patterns.map((p, patternIndex) => ({ kind: p.kind, start: p.start, end: p.end, source: 'pattern' as const, patternIndex }));
+}
+
 // Detection for the configured patterns (R2): each block records the index of the entry that found it.
 export function detectPatternBlocks(markdownBody: string, patterns: BoilerplatePattern[], topSenderName?: string): DetectedBlock[] {
-  return detectBlocks(
-    markdownBody,
-    patterns.map((p, patternIndex) => ({ kind: p.kind, start: p.start, end: p.end, source: 'pattern' as const, patternIndex })),
-    topSenderName,
-  );
+  return detectBlocks(markdownBody, toPatternSpecs(patterns), topSenderName);
 }
 
 
@@ -413,15 +424,10 @@ function markerNames(text: string): Set<string> {
   return new Set(Array.from(text.matchAll(IMAGE_MARKER), m => m[1].trim()));
 }
 
-// Applies confirmed detections to an email item: removes each block's lines back to front (so earlier
-// indices stay valid), keeps a signature's name line, collapses the blank-line runs left behind and
-// drops inline attachments whose `[📎 name]` markers were all in removed text (KTD7). Non-inline
-// attachments and inline ones without any marker are never dropped. Overlapping or out-of-range
-// blocks are skipped. With no blocks the returned item equals the input (R10).
-export function applyBoilerplateCleanup(item: EmailImportItem, blocks: DetectedBlock[]): CleanupResult {
-  const copy: EmailImportItem = { ...item, inlineImageMap: { ...item.inlineImageMap }, attachments: [...item.attachments] };
-  if (blocks.length === 0) return { item: copy, droppedImageNames: [] };
-
+// Removes each block's lines back to front (so earlier indices stay valid), keeps a signature's name
+// line and collapses the blank-line runs left behind. Overlapping or out-of-range blocks are skipped.
+// Returns the cleaned body and every line of the removed blocks (a kept name line included).
+function stripBlockLines(item: EmailImportItem, blocks: DetectedBlock[]): { markdownBody: string; removed: string[] } {
   const lines = item.markdownBody.split('\n');
   const segments = splitSegments(item.markdownBody, item.senderName);
   const removed: string[] = [];
@@ -444,8 +450,11 @@ export function applyBoilerplateCleanup(item: EmailImportItem, blocks: DetectedB
     if (seam >= lines.length) while (lines.length && isBlank(lines[lines.length - 1])) lines.pop();
     if (b.startLine === 0) while (lines.length && isBlank(lines[0])) lines.shift();
   }
-  const markdownBody = lines.join('\n');
+  return { markdownBody: lines.join('\n'), removed };
+}
 
+// KTD7: the inline attachments whose `[📎 name]` markers occur only in removed text, in attachment order.
+function droppedNamesAfterStrip(item: EmailImportItem, markdownBody: string, removed: string[]): string[] {
   const kept = markerNames(markdownBody);
   const onlyRemoved = [...markerNames(removed.join('\n'))].filter(n => !kept.has(n));
   const drop = new Set(onlyRemoved.filter(n => item.attachments.some(a => a.isInline && a.name === n)));
@@ -453,6 +462,27 @@ export function applyBoilerplateCleanup(item: EmailImportItem, blocks: DetectedB
   for (const a of item.attachments) {
     if (a.isInline && drop.has(a.name) && !droppedImageNames.includes(a.name)) droppedImageNames.push(a.name);
   }
+  return droppedImageNames;
+}
+
+// The inline attachment names applyBoilerplateCleanup would drop for these blocks, without building
+// the cleaned item — same line removal and name retention, so the result is always identical.
+export function computeDroppedImageNames(item: EmailImportItem, blocks: DetectedBlock[]): string[] {
+  if (blocks.length === 0) return [];
+  const { markdownBody, removed } = stripBlockLines(item, blocks);
+  return droppedNamesAfterStrip(item, markdownBody, removed);
+}
+
+// Applies confirmed detections to an email item: strips the blocks (stripBlockLines) and drops inline
+// attachments whose `[📎 name]` markers were all in removed text (KTD7). Non-inline attachments and
+// inline ones without any marker are never dropped. With no blocks the returned item equals the input (R10).
+export function applyBoilerplateCleanup(item: EmailImportItem, blocks: DetectedBlock[]): CleanupResult {
+  const copy: EmailImportItem = { ...item, inlineImageMap: { ...item.inlineImageMap }, attachments: [...item.attachments] };
+  if (blocks.length === 0) return { item: copy, droppedImageNames: [] };
+
+  const { markdownBody, removed } = stripBlockLines(item, blocks);
+  const droppedImageNames = droppedNamesAfterStrip(item, markdownBody, removed);
+  const drop = new Set(droppedImageNames);
   const inlineImageMap: Record<string, string> = {};
   for (const [cid, name] of Object.entries(item.inlineImageMap)) if (!drop.has(name)) inlineImageMap[cid] = name;
   return {
@@ -463,7 +493,7 @@ export function applyBoilerplateCleanup(item: EmailImportItem, blocks: DetectedB
 
 // ── Pattern setting and save-as-pattern (R1, R8; KTD3, KTD9) ─────────────────────────────────────
 
-const KINDS: readonly BoilerplateKind[] = ['header', 'footer', 'signature'];
+export const BOILERPLATE_KINDS: readonly BoilerplateKind[] = ['header', 'footer', 'signature'];
 export const MAX_PATTERN_PHRASE_CHARS = 200;
 
 export type PatternDropReason = 'not-an-array' | 'not-an-object' | 'unknown-kind' | 'empty-start' | 'invalid-end';
@@ -486,7 +516,7 @@ export function resolveBoilerplatePatterns(
       continue;
     }
     const e = entry as Record<string, unknown>;
-    if (typeof e.kind !== 'string' || !KINDS.includes(e.kind as BoilerplateKind)) {
+    if (typeof e.kind !== 'string' || !BOILERPLATE_KINDS.includes(e.kind as BoilerplateKind)) {
       onDrop?.('unknown-kind', entry);
       continue;
     }
@@ -603,7 +633,7 @@ function toProposal(entry: unknown): ModelBlockProposal | undefined {
   if (typeof entry !== 'object' || entry === null) return undefined;
   const e = entry as Record<string, unknown>;
   const kind = typeof e.kind === 'string' ? e.kind.trim().toLowerCase() : '';
-  if (!KINDS.includes(kind as BoilerplateKind)) return undefined;
+  if (!BOILERPLATE_KINDS.includes(kind as BoilerplateKind)) return undefined;
   if (typeof e.startQuote !== 'string' || typeof e.endQuote !== 'string') return undefined;
   const startQuote = e.startQuote.trim();
   const endQuote = e.endQuote.trim();
@@ -647,7 +677,7 @@ export function verifyModelBlocks(
   const bodyText = markdownBody.split('\n').map(normalizePhrase).filter(Boolean).join(' ');
   const modelSpecs: BlockSpec[] = [];
   for (const p of proposals) {
-    if (!KINDS.includes(p.kind)) continue;
+    if (!BOILERPLATE_KINDS.includes(p.kind)) continue;
     const start = typeof p.startQuote === 'string' ? normalizePhrase(p.startQuote) : '';
     const end = typeof p.endQuote === 'string' ? normalizePhrase(p.endQuote) : '';
     if (!start || !end) continue;
@@ -657,8 +687,5 @@ export function verifyModelBlocks(
     if (p.authorName) spec.authorName = p.authorName;
     modelSpecs.push(spec);
   }
-  const patternSpecs: BlockSpec[] = patterns.map((pt, patternIndex) => ({
-    kind: pt.kind, start: pt.start, end: pt.end, source: 'pattern' as const, patternIndex,
-  }));
-  return detectBlocks(markdownBody, [...patternSpecs, ...modelSpecs], topSenderName);
+  return detectBlocks(markdownBody, [...toPatternSpecs(patterns), ...modelSpecs], topSenderName);
 }

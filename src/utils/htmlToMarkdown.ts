@@ -116,7 +116,7 @@ function wrapLines(content: string, marker: string): string {
 
 // Inline images become `[📎 name]` markers so the email flows can match them to attachments
 function convertImages(html: string, inlineImageMap: Map<string, string>): string {
-  // data-ts-filename (OWA Tampermonkey bridge) — must come before cid: and alt rules
+  // data-ts-filename (OWA Tampermonkey bridge) before the cid: rule; the alt-text fallback runs afterwards in htmlToMarkdown
   return html
     .replace(/<img[^>]+data-ts-filename="([^"]*)"[^>]*\/?>/gi, (_: string, filename: string) => `[📎 ${filename}]`)
     .replace(/<img[^>]+src="cid:([^"]*)"[^>]*\/?>/gi, (_: string, cid: string) =>
