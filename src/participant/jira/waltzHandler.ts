@@ -4,6 +4,8 @@ import type { TicketService } from '../../services/TicketService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import {
   parseWaltzReport, filterComponents, sanitizeComponentLabel, buildSummary, buildLabels, buildDescriptionWiki,
+  describeWaltzRowChange, buildRecordLabels, buildCveLabel, buildRatingLabel, buildUpdateCommentWiki,
+  buildFollowUpDescriptionWiki, buildFollowUpSummary, rewriteSummaryRating,
   type WaltzComponent, type WaltzReviewRow,
 } from '../../utils/waltzReport';
 import type { WaltzTemplateSelectionSession, WaltzReviewSession, StaleCloseSession } from '../sessionState';
@@ -14,7 +16,7 @@ import {
   continueStaleClose,
   type ReportImportDescriptor,
 } from './reportImportHandler';
-import { resolveSizeLimitSetting } from '../../utils/reportImport';
+import { resolveSizeLimitSetting, templateLabelsOf } from '../../utils/reportImport';
 import type { AwaitIssueTypeResume } from '../sessionState';
 import { sessionWasSuperseded } from './ticketContext';
 
@@ -115,6 +117,7 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent, WaltzReviewRow> = 
     summary: buildSummary(component),
     labels: buildLabels(component, templateLabels),
     descriptionWiki: buildDescriptionWiki(component),
+    sourceComponent: component,
   }),
   reviewColumns: WALTZ_REVIEW_COLUMNS,
   itemRefFor: row => row.nameVersion,
@@ -131,6 +134,40 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent, WaltzReviewRow> = 
     markerLabel: WALTZ_STALE_MARKER_LABEL,
     labelToDedupKey: waltzLabelToDedupKey,
     buildActivePredicate: rawItems => buildWaltzActiveComponentPredicate(rawItems as WaltzComponent[], getWaltzConfig().includeRemediationActions),
+  },
+  // Import ticket updates parity (KTD2/KTD3): a component's findings are recorded as one
+  // `oss-cve-<id>` label per CVE plus exactly one `oss-rating-<rating>` label, which `update`
+  // replaces rather than accumulates. A rating rise also rewrites the summary's rating suffix (R12).
+  changeTracking: {
+    findingNoun: 'CVE(s)',
+    describe: describeWaltzRowChange,
+    recordLabelsOf: (row, change) => {
+      if (change.kind === 'baseline') return buildRecordLabels(row.sourceComponent);
+      const labels = change.newIds.map(buildCveLabel);
+      if (change.ratingRise) labels.push(buildRatingLabel(change.ratingRise.to));
+      return labels.filter(l => l !== '');
+    },
+    removeLabelPrefix: 'oss-rating-',
+    buildUpdateComment: (row, change, { summaryUnchanged }) => buildUpdateCommentWiki(
+      row.sourceComponent, { newCveIds: change.newIds, ratingRise: change.ratingRise }, { summaryUnchanged },
+    ),
+    rewriteSummary: (summary, change) => (change.ratingRise
+      ? rewriteSummaryRating(summary, change.ratingRise.to)
+      : undefined),
+    // KTD10/R14: the follow-up carries the item's dedup record (oss-dependency + component label),
+    // only the new CVE labels and the current rating label, plus the template's labels.
+    buildFollowUp: (row, change, originalKey, additionalFields) => {
+      const component = row.sourceComponent;
+      const templateLabels = templateLabelsOf(additionalFields);
+      const labels = [
+        WALTZ_STALE_MARKER_LABEL, sanitizeComponentLabel(component.nameVersion),
+        ...change.newIds.map(buildCveLabel), buildRatingLabel(component.maxVulnRating), ...templateLabels,
+      ].filter(l => l !== '');
+      return {
+        summary: buildFollowUpSummary(component, originalKey),
+        fields: { ...additionalFields, labels: [...new Set(labels)], description: buildFollowUpDescriptionWiki(component, change.newIds) },
+      };
+    },
   },
 };
 

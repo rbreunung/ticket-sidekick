@@ -3,6 +3,7 @@ import ExcelJS from 'exceljs';
 import { markdownToJiraWiki } from './markdownToJiraWiki';
 import {
   MAX_REPORT_BYTES as SHARED_MAX_REPORT_BYTES, sanitizeCellText, sanitizeStandaloneLine,
+  type RowChange,
 } from './reportImport';
 
 export interface WaltzVulnerability {
@@ -329,12 +330,18 @@ function labelHashSuffix(nameVersion: string): string {
   return createHash('sha256').update(nameVersion).digest('hex').slice(0, LABEL_HASH_LENGTH);
 }
 
-export function sanitizeComponentLabel(nameVersion: string): string {
-  const sanitized = nameVersion
+// Lowercases and collapses every run of characters outside [a-z0-9._-] to one hyphen, trimming
+// leading/trailing hyphens — the character rules shared by component and record labels.
+function slugifyLabelPart(value: string): string {
+  return value
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '');
+}
+
+export function sanitizeComponentLabel(nameVersion: string): string {
+  const sanitized = slugifyLabelPart(nameVersion);
   const suffix = `-${labelHashSuffix(nameVersion)}`;
   const readableBudget = MAX_LABEL_LENGTH - 'oss-dep-'.length - suffix.length;
   // Truncating mid-string can land right after a hyphen; strip a trailing one so it doesn't collide
@@ -344,12 +351,145 @@ export function sanitizeComponentLabel(nameVersion: string): string {
 }
 
 export function buildLabels(component: WaltzComponent, templateLabels: string[] = []): string[] {
-  const own = ['oss-dependency', sanitizeComponentLabel(component.nameVersion)];
+  // KTD4: new tickets carry their CVE/rating record from creation, so only tickets created before
+  // record labels existed ever show up as a "baseline" on a later import.
+  const own = ['oss-dependency', sanitizeComponentLabel(component.nameVersion), ...buildRecordLabels(component)];
   return [...new Set([...own, ...templateLabels])];
 }
 
 export function buildSummary(component: WaltzComponent): string {
   return `[OSS] ${component.nameVersion} — ${component.maxVulnRating}`;
+}
+
+// ── Record labels (KTD3) ────────────────────────────────────────────────────────────────────────
+// A Waltz ticket records which findings it already covers as Jira labels: one `oss-cve-<id>` per
+// CVE and exactly one `oss-rating-<rating>`. Labels come back for free with the dedup search, so a
+// later import can tell what changed without reading descriptions. Same character rules as
+// sanitizeComponentLabel(), but no hash suffix: CVE ids and ratings are already unique tokens, and
+// the label has to be rebuildable from the report value alone for comparison.
+const CVE_LABEL_PREFIX = 'oss-cve-';
+const RATING_LABEL_PREFIX = 'oss-rating-';
+
+function sanitizeRecordLabelPart(value: string, prefix: string): string {
+  const sanitized = slugifyLabelPart(value);
+  return sanitized.slice(0, MAX_LABEL_LENGTH - prefix.length).replace(/-+$/, '');
+}
+
+/** `oss-cve-<id>` for one CVE id, or '' when the id sanitizes to nothing. */
+export function buildCveLabel(cveId: string): string {
+  const part = sanitizeRecordLabelPart(cveId, CVE_LABEL_PREFIX);
+  return part ? `${CVE_LABEL_PREFIX}${part}` : '';
+}
+
+/** `oss-rating-<rating>`, or '' when the rating sanitizes to nothing. */
+export function buildRatingLabel(rating: string): string {
+  const part = sanitizeRecordLabelPart(rating, RATING_LABEL_PREFIX);
+  return part ? `${RATING_LABEL_PREFIX}${part}` : '';
+}
+
+/** Every record label for a component's current findings: its CVE labels (deduplicated) plus one rating label. */
+export function buildRecordLabels(component: WaltzComponent): string[] {
+  const labels = [
+    ...component.vulnerabilities.map(v => buildCveLabel(v.cveId)),
+    buildRatingLabel(component.maxVulnRating),
+  ].filter(l => l !== '');
+  return [...new Set(labels)];
+}
+
+export interface WaltzRecord {
+  /** Sanitized, lower-cased CVE ids as stored in the labels (e.g. `cve-2021-44228`). */
+  cveIds: string[];
+  /** Highest recorded rating (canonical casing when it is a known rating), or null when none is recorded. */
+  rating: string | null;
+}
+
+/** Reads the CVE ids and the highest recorded rating back from a (possibly multi-ticket, unioned) label list. */
+export function parseRecordLabels(labels: string[]): WaltzRecord {
+  const cveIds = new Set<string>();
+  let rating: string | null = null;
+  for (const label of labels) {
+    if (label.startsWith(CVE_LABEL_PREFIX) && label.length > CVE_LABEL_PREFIX.length) {
+      cveIds.add(label.slice(CVE_LABEL_PREFIX.length));
+    } else if (label.startsWith(RATING_LABEL_PREFIX) && label.length > RATING_LABEL_PREFIX.length) {
+      const raw = label.slice(RATING_LABEL_PREFIX.length);
+      const canonical = VULN_RATING_ORDER.find(r => r.toLowerCase() === raw) ?? raw;
+      if (rating === null || vulnRatingRank(canonical) > vulnRatingRank(rating)) rating = canonical;
+    }
+  }
+  return { cveIds: [...cveIds], rating };
+}
+
+export interface WaltzRatingRise { from: string; to: string }
+
+/** What changed on an already-ticketed component: new CVE ids (report casing) and/or a higher worst rating. */
+export interface WaltzFindingsChange {
+  newCveIds: string[];
+  ratingRise?: WaltzRatingRise;
+}
+
+export type WaltzChange = { baseline: true } | WaltzFindingsChange;
+
+/**
+ * R1/R4: compares a component against the record labels its tickets carry (the union across all of
+ * the item's tickets). No record label at all → baseline (a ticket created before record labels);
+ * otherwise new CVE ids and/or a rating rise, or null when nothing changed. A rating drop is not a change.
+ */
+export function describeWaltzChange(component: WaltzComponent, knownLabels: string[]): WaltzChange | null {
+  const known = parseRecordLabels(knownLabels);
+  if (known.cveIds.length === 0 && known.rating === null) return { baseline: true };
+
+  const knownCveLabels = new Set(known.cveIds.map(id => `${CVE_LABEL_PREFIX}${id}`));
+  const seen = new Set<string>();
+  const newCveIds: string[] = [];
+  for (const v of component.vulnerabilities) {
+    const label = buildCveLabel(v.cveId);
+    if (!label || knownCveLabels.has(label) || seen.has(label)) continue;
+    seen.add(label);
+    newCveIds.push(v.cveId);
+  }
+
+  const ratingRise = known.rating !== null && vulnRatingRank(component.maxVulnRating) > vulnRatingRank(known.rating)
+    ? { from: known.rating, to: component.maxVulnRating }
+    : undefined;
+
+  if (newCveIds.length === 0 && !ratingRise) return null;
+  return ratingRise ? { newCveIds, ratingRise } : { newCveIds };
+}
+
+/** U3: describeWaltzChange mapped to the shared RowChange shape buildReviewRows' change tracking uses. */
+export function describeWaltzRowChange(component: WaltzComponent, knownLabels: string[]): RowChange | null {
+  const change = describeWaltzChange(component, knownLabels);
+  if (change === null) return null;
+  if ('baseline' in change) return { kind: 'baseline' };
+  return change.ratingRise
+    ? { kind: 'findings', newIds: change.newCveIds, ratingRise: change.ratingRise }
+    : { kind: 'findings', newIds: change.newCveIds };
+}
+
+const FOLLOW_UP_SUFFIX_PATTERN = / \(follow-up to [A-Z][A-Z0-9_]*-\d+\)$/;
+
+/** Summary for a follow-up ticket (KTD10): the standard summary plus ` (follow-up to <KEY>)`. */
+export function buildFollowUpSummary(component: WaltzComponent, originalKey: string): string {
+  return `${buildSummary(component)} (follow-up to ${originalKey})`;
+}
+
+/**
+ * R12: replaces the trailing ` — <rating>` of a summary with ` — <to>`, also when it is directly
+ * followed by a ` (follow-up to <KEY>)` suffix (kept as is). `<rating>` is whatever known rating
+ * (VULN_RATING_ORDER, case-insensitive) ends the summary — not necessarily the rise's `from`, which
+ * is the highest rating across all of the component's tickets and can be above the target ticket's
+ * own (e.g. open T1 still says Low while a resolved follow-up recorded Medium). Returns null when the
+ * summary does not end in a known rating that way (e.g. the user renamed the ticket) — it is then left
+ * alone.
+ */
+export function rewriteSummaryRating(summary: string, to: string): string | null {
+  const suffixMatch = summary.match(FOLLOW_UP_SUFFIX_PATTERN);
+  const suffix = suffixMatch ? suffixMatch[0] : '';
+  const head = suffix ? summary.slice(0, -suffix.length) : summary;
+  const lowerHead = head.toLowerCase();
+  const current = VULN_RATING_ORDER.find(r => lowerHead.endsWith(` — ${r.toLowerCase()}`));
+  if (current === undefined) return null;
+  return `${head.slice(0, -` — ${current}`.length)} — ${to}${suffix}`;
 }
 
 function sortVulnerabilities(vulns: WaltzVulnerability[]): WaltzVulnerability[] {
@@ -421,6 +561,65 @@ export function buildDescriptionWiki(component: WaltzComponent): string {
   return markdownToJiraWiki(lines.join('\n'));
 }
 
+function vulnerabilitiesMatching(component: WaltzComponent, cveIds: string[]): WaltzVulnerability[] {
+  const wanted = new Set(cveIds.map(buildCveLabel));
+  return component.vulnerabilities.filter(v => wanted.has(buildCveLabel(v.cveId)));
+}
+
+const MAX_NEW_CVES_IN_COMMENT = 25;
+
+/**
+ * R11/R12: the one comment `update` posts on an existing ticket — a table of the new CVEs (severity,
+ * CVSS, fixed version, summary), a rating-rise line, and, when the summary could not be rewritten,
+ * a note saying so. Authored as Markdown and converted once, like buildDescriptionWiki(); every
+ * report-derived value goes through sanitizeCellText().
+ */
+export function buildUpdateCommentWiki(
+  component: WaltzComponent,
+  change: WaltzFindingsChange,
+  options: { summaryUnchanged?: boolean } = {},
+): string {
+  const lines: string[] = [];
+  lines.push('The latest OSS report shows changes since this ticket was last updated:');
+  lines.push('');
+
+  if (change.ratingRise) {
+    lines.push(`**Max Vuln Rating rose:** ${sanitizeCellText(change.ratingRise.from)} → ${sanitizeCellText(change.ratingRise.to)}`);
+    if (options.summaryUnchanged) {
+      lines.push('');
+      lines.push('The ticket summary was not changed because it no longer ends in the imported rating.');
+    }
+    lines.push('');
+  }
+
+  const newVulns = sortVulnerabilities(vulnerabilitiesMatching(component, change.newCveIds));
+  if (newVulns.length > 0) {
+    const total = newVulns.length;
+    lines.push(`### New vulnerabilities (${total} total${total > MAX_NEW_CVES_IN_COMMENT ? ` — showing top ${MAX_NEW_CVES_IN_COMMENT}` : ''})`);
+    lines.push('| CVE | Severity | CVSS | Fixed Version | Summary |');
+    lines.push('| --- | --- | --- | --- | --- |');
+    for (const v of newVulns.slice(0, MAX_NEW_CVES_IN_COMMENT)) {
+      const score = v.cvssV3Score != null ? String(v.cvssV3Score) : 'n/a';
+      lines.push(`| ${sanitizeCellText(v.cveId)} | ${sanitizeCellText(v.overallSeverity ?? 'Unknown')} | ${score} | ${sanitizeCellText(v.fixedVersion ?? 'n/a')} | ${sanitizeCellText(v.cveSummary ?? 'No summary reported.')} |`);
+    }
+    if (total > MAX_NEW_CVES_IN_COMMENT) {
+      lines.push('');
+      lines.push(`+${total - MAX_NEW_CVES_IN_COMMENT} more not shown`);
+    }
+    lines.push('');
+  }
+
+  lines.push('### Component');
+  lines.push(sanitizeStandaloneLine(component.nameVersion));
+
+  return markdownToJiraWiki(lines.join('\n'));
+}
+
+/** R14/KTD10: a follow-up ticket's description — the standard description over only the new CVEs. */
+export function buildFollowUpDescriptionWiki(component: WaltzComponent, newCveIds: string[]): string {
+  return buildDescriptionWiki({ ...component, vulnerabilities: vulnerabilitiesMatching(component, newCveIds) });
+}
+
 // Lives here (rather than in sessionState.ts, where the other session-related types live) so that
 // reportImportHandler.ts's shared buildReviewRows() can produce it directly without a type-only
 // circular import between this file and sessionState.ts — mirrors the same layout decision made for
@@ -432,6 +631,9 @@ export interface WaltzReviewRow {
   summary: string;
   labels: string[];
   descriptionWiki: string;
+  // Mirrors VeracodeReviewRow.sourceGroup: the parsed component is kept on the row so the
+  // apply-time update comment / follow-up builders can read its CVEs from the persisted session.
+  sourceComponent: WaltzComponent;
   existingTicketKey: string | null;
   included: boolean; // whether this row will be (re)created if the batch runs
 }

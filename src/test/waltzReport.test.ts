@@ -4,12 +4,26 @@ import { join } from 'path';
 import {
   parseWaltzReport, assertSafeWaltzReportSize, filterComponents,
   buildSummary, buildDescriptionWiki, buildLabels, sanitizeComponentLabel,
+  buildCveLabel, buildRatingLabel, buildRecordLabels, parseRecordLabels, describeWaltzChange, describeWaltzRowChange,
+  buildUpdateCommentWiki, buildFollowUpDescriptionWiki, buildFollowUpSummary, rewriteSummaryRating,
   type WaltzComponent,
 } from '../utils/waltzReport';
 import { sanitizeCellText } from '../utils/reportImport';
 
 const fixturePath = (name: string) => join(__dirname, 'fixtures', 'waltz', name);
 const fixtureBuffer = (name: string) => readFileSync(fixturePath(name));
+
+function makeComponent(nameVersion: string, maxVulnRating: string, cveIds: string[], summaryFor: (id: string) => string | null = () => null): WaltzComponent {
+  return {
+    nameVersion,
+    maxVulnRating,
+    remediationAction: null,
+    instancePaths: ['/app/services/checkout/pom.xml'],
+    vulnerabilities: cveIds.map((cveId, i) => ({
+      cveId, cveSummary: summaryFor(cveId), overallSeverity: i === 0 ? 'High' : 'Critical', cvssV3Score: 7 + i, fixedVersion: null,
+    })),
+  };
+}
 
 describe('parseWaltzReport', () => {
   it('parses all 5 components with their remediation, instance, and vulnerability data joined together', async () => {
@@ -155,14 +169,25 @@ describe('buildLabels', () => {
   it('always includes oss-dependency + the sanitized component label', async () => {
     const components = await parseWaltzReport(fixtureBuffer('sample-report.xlsx'));
     const exampleLib = components.find(c => c.nameVersion === 'example-lib:1.2.3')!;
-    expect(buildLabels(exampleLib)).toEqual(['oss-dependency', sanitizeComponentLabel(exampleLib.nameVersion)]);
+    expect(buildLabels(exampleLib)).toEqual([
+      'oss-dependency', sanitizeComponentLabel(exampleLib.nameVersion),
+      'oss-cve-cve-2099-0001', 'oss-cve-cve-2099-0002', 'oss-rating-critical',
+    ]);
+  });
+
+  it('records a CVE-2021-44228 / Critical component as oss-cve-cve-2021-44228 + oss-rating-critical alongside the component labels (KTD4)', () => {
+    const log4j = makeComponent('log4j-core 2.14.1', 'Critical', ['CVE-2021-44228']);
+    expect(buildLabels(log4j)).toEqual([
+      'oss-dependency', sanitizeComponentLabel('log4j-core 2.14.1'), 'oss-cve-cve-2021-44228', 'oss-rating-critical',
+    ]);
   });
 
   it('merges in template labels without duplicates', async () => {
     const components = await parseWaltzReport(fixtureBuffer('sample-report.xlsx'));
     const exampleLib = components.find(c => c.nameVersion === 'example-lib:1.2.3')!;
     expect(buildLabels(exampleLib, ['oss-dependency', 'team-payments'])).toEqual([
-      'oss-dependency', sanitizeComponentLabel(exampleLib.nameVersion), 'team-payments',
+      'oss-dependency', sanitizeComponentLabel(exampleLib.nameVersion),
+      'oss-cve-cve-2099-0001', 'oss-cve-cve-2099-0002', 'oss-rating-critical', 'team-payments',
     ]);
   });
 });
@@ -338,3 +363,188 @@ describe('buildDescriptionWiki', () => {
 // chunkComponentLabels/buildDedupJql/extractDedupMap/buildReviewRows were Waltz-local wrappers
 // around the shared primitives in reportImport.ts; they've been removed now that waltzHandler.ts
 // calls those shared primitives directly — see reportImport.test.ts for their tests.
+
+describe('Waltz record labels', () => {
+  it('builds lower-cased, sanitized CVE and rating labels', () => {
+    expect(buildCveLabel('CVE-2021-44228')).toBe('oss-cve-cve-2021-44228');
+    expect(buildCveLabel('GHSA xxxx:yyyy')).toBe('oss-cve-ghsa-xxxx-yyyy');
+    expect(buildRatingLabel('Critical')).toBe('oss-rating-critical');
+  });
+
+  it('keeps an overlong id within the label length limit', () => {
+    expect(buildCveLabel('X'.repeat(400)).length).toBeLessThanOrEqual(250);
+  });
+
+  it('records each CVE once plus exactly one rating label', () => {
+    const c = makeComponent('pkg 1.0', 'High', ['CVE-1', 'cve-1', 'CVE-2']);
+    expect(buildRecordLabels(c)).toEqual(['oss-cve-cve-1', 'oss-cve-cve-2', 'oss-rating-high']);
+  });
+
+  it('reads CVE ids and the highest recorded rating back from a label list', () => {
+    const parsed = parseRecordLabels([
+      'oss-dependency', 'oss-dep-x-abc123', 'oss-cve-cve-2021-44228', 'oss-rating-medium', 'oss-rating-high', 'team-a',
+    ]);
+    expect(parsed.cveIds).toEqual(['cve-2021-44228']);
+    expect(parsed.rating).toBe('High');
+  });
+
+  it('reports no record when only component labels are present', () => {
+    expect(parseRecordLabels(['oss-dependency', 'oss-dep-x-abc123'])).toEqual({ cveIds: [], rating: null });
+  });
+});
+
+describe('describeWaltzChange', () => {
+  const componentLabel = sanitizeComponentLabel('jackson-databind 2.9');
+
+  it('finds new CVEs and a rating rise against the known labels', () => {
+    const c = makeComponent('jackson-databind 2.9', 'Critical', ['CVE-A', 'CVE-B']);
+    const change = describeWaltzChange(c, ['oss-dependency', componentLabel, buildCveLabel('CVE-A'), 'oss-rating-high']);
+    expect(change).toEqual({ newCveIds: ['CVE-B'], ratingRise: { from: 'High', to: 'Critical' } });
+  });
+
+  it('reports a baseline when the tickets carry no CVE or rating labels (pre-existing ticket)', () => {
+    const c = makeComponent('jackson-databind 2.9', 'Critical', ['CVE-A', 'CVE-B']);
+    expect(describeWaltzChange(c, ['oss-dependency', componentLabel])).toEqual({ baseline: true });
+  });
+
+  it('returns null when every CVE is known and the rating is unchanged', () => {
+    const c = makeComponent('jackson-databind 2.9', 'High', ['CVE-A', 'CVE-B']);
+    expect(describeWaltzChange(c, [componentLabel, buildCveLabel('CVE-A'), buildCveLabel('CVE-B'), 'oss-rating-high'])).toBeNull();
+  });
+
+  it('does not treat a rating drop as a change', () => {
+    const c = makeComponent('jackson-databind 2.9', 'High', ['CVE-A']);
+    expect(describeWaltzChange(c, [componentLabel, buildCveLabel('CVE-A'), 'oss-rating-critical'])).toBeNull();
+  });
+
+  it('compares against the highest rating when several tickets record different ratings', () => {
+    const c = makeComponent('jackson-databind 2.9', 'Critical', ['CVE-A']);
+    expect(describeWaltzChange(c, [buildCveLabel('CVE-A'), 'oss-rating-high', 'oss-rating-critical'])).toBeNull();
+  });
+
+  it('reports only new CVEs when the rating is unchanged', () => {
+    const c = makeComponent('jackson-databind 2.9', 'High', ['CVE-A', 'CVE-C']);
+    expect(describeWaltzChange(c, [buildCveLabel('CVE-A'), 'oss-rating-high'])).toEqual({ newCveIds: ['CVE-C'] });
+  });
+});
+
+describe('rewriteSummaryRating', () => {
+  it('replaces the trailing imported rating (AE4)', () => {
+    expect(rewriteSummaryRating('[OSS] log4j-core 2.14.1 — High', 'Critical')).toBe('[OSS] log4j-core 2.14.1 — Critical');
+  });
+
+  it('leaves a renamed summary alone (AE4)', () => {
+    expect(rewriteSummaryRating('log4j upgrade', 'Critical')).toBeNull();
+  });
+
+  it('keeps a trailing follow-up suffix', () => {
+    expect(rewriteSummaryRating('[OSS] jackson-databind 2.9 — High (follow-up to PROJ-8)', 'Critical'))
+      .toBe('[OSS] jackson-databind 2.9 — Critical (follow-up to PROJ-8)');
+  });
+
+  it('replaces whatever known rating ends the summary, even one below the rise\'s from (#6)', () => {
+    // T1 still says Low while a resolved follow-up recorded Medium; the report now says High.
+    expect(rewriteSummaryRating('[OSS] x — Low', 'High')).toBe('[OSS] x — High');
+  });
+
+  it('replaces a lower known rating in front of a follow-up suffix (#6)', () => {
+    expect(rewriteSummaryRating('[OSS] x — Low (follow-up to PROJ-8)', 'High'))
+      .toBe('[OSS] x — High (follow-up to PROJ-8)');
+  });
+
+  it('matches the known rating case-insensitively', () => {
+    expect(rewriteSummaryRating('[OSS] x — medium', 'Critical')).toBe('[OSS] x — Critical');
+  });
+
+  it('accepts the two-argument form without a from rating', () => {
+    expect(rewriteSummaryRating('[OSS] x — Low', 'High')).toBe('[OSS] x — High');
+    expect(rewriteSummaryRating('log4j upgrade', 'High')).toBeNull();
+  });
+
+  it('returns null when the summary ends in an unknown word after the dash', () => {
+    expect(rewriteSummaryRating('[OSS] x — Urgent', 'Critical')).toBeNull();
+  });
+});
+
+describe('buildFollowUpSummary', () => {
+  it('appends the follow-up suffix to the standard summary', () => {
+    const c = makeComponent('jackson-databind 2.9', 'Critical', ['CVE-A']);
+    expect(buildFollowUpSummary(c, 'PROJ-8')).toBe('[OSS] jackson-databind 2.9 — Critical (follow-up to PROJ-8)');
+  });
+});
+
+describe('buildUpdateCommentWiki', () => {
+  const c = makeComponent('log4j-core 2.14.1', 'Critical', ['CVE-A', 'CVE-B'], id => `Summary of ${id}`);
+
+  it('lists only the new CVEs with severity, score and summary, plus the rating rise', () => {
+    const wiki = buildUpdateCommentWiki(c, { newCveIds: ['CVE-B'], ratingRise: { from: 'High', to: 'Critical' } });
+    expect(wiki).toContain(sanitizeCellText('CVE-B'));
+    expect(wiki).toContain('Summary of CVEB');
+    expect(wiki).toContain('|Critical|8|');
+    expect(wiki).not.toContain(`|${sanitizeCellText('CVE-A')}|`);
+    expect(wiki).toMatch(/High → Critical/);
+    expect(wiki).not.toMatch(/summary was not changed/i);
+  });
+
+  it('notes when the summary was left unchanged', () => {
+    const wiki = buildUpdateCommentWiki(c, { newCveIds: [], ratingRise: { from: 'High', to: 'Critical' } }, { summaryUnchanged: true });
+    expect(wiki).toMatch(/summary was not changed/i);
+    expect(wiki).not.toContain('||CVE||');
+  });
+});
+
+describe('buildFollowUpDescriptionWiki', () => {
+  it('describes only the new CVEs', () => {
+    const c = makeComponent('jackson-databind 2.9', 'Critical', ['CVE-A', 'CVE-B', 'CVE-C']);
+    const wiki = buildFollowUpDescriptionWiki(c, ['CVE-C']);
+    expect(wiki).toContain('h3. Known vulnerabilities (1 total)');
+    expect(wiki).toContain(sanitizeCellText('CVE-C'));
+    expect(wiki).not.toContain(`|${sanitizeCellText('CVE-A')}|`);
+    expect(wiki).not.toContain(`|${sanitizeCellText('CVE-B')}|`);
+  });
+});
+
+describe('update comment and follow-up description neutralize crafted CVE summaries', () => {
+  const evil = makeComponent('evil 1.0', 'Critical', ['CVE-X'], () => 'Pwn {code}alert(1){code}\nh1. Fake heading\n| a | b |');
+
+  for (const [name, build] of [
+    ['update comment', () => buildUpdateCommentWiki(evil, { newCveIds: ['CVE-X'] })],
+    ['follow-up description', () => buildFollowUpDescriptionWiki(evil, ['CVE-X'])],
+  ] as const) {
+    it(`in the ${name}`, () => {
+      const wiki = build();
+      expect(wiki).not.toContain('{code}');
+      expect(wiki).not.toMatch(/^h1\. Fake/m);
+      expect(wiki).not.toContain('||a||b||');
+    });
+  }
+});
+
+// U3: adapter from describeWaltzChange's result to the shared RowChange shape buildReviewRows uses.
+describe('describeWaltzRowChange', () => {
+  const componentLabel = sanitizeComponentLabel('jackson-databind 2.9');
+
+  it('maps a baseline to { kind: baseline }', () => {
+    const c = makeComponent('jackson-databind 2.9', 'High', ['CVE-A']);
+    expect(describeWaltzRowChange(c, [componentLabel])).toEqual({ kind: 'baseline' });
+  });
+
+  it('maps new CVEs and a rating rise to a findings change', () => {
+    const c = makeComponent('jackson-databind 2.9', 'Critical', ['CVE-A', 'CVE-B']);
+    expect(describeWaltzRowChange(c, [componentLabel, buildCveLabel('CVE-A'), 'oss-rating-high'])).toEqual({
+      kind: 'findings', newIds: ['CVE-B'], ratingRise: { from: 'High', to: 'Critical' },
+    });
+  });
+
+  it('maps a rating-only rise to a findings change with no new ids', () => {
+    const c = makeComponent('jackson-databind 2.9', 'Critical', ['CVE-A']);
+    expect(describeWaltzRowChange(c, [componentLabel, buildCveLabel('CVE-A'), 'oss-rating-high'])).toEqual({
+      kind: 'findings', newIds: [], ratingRise: { from: 'High', to: 'Critical' },
+    });
+  });
+
+  it('returns null when nothing changed', () => {
+    const c = makeComponent('jackson-databind 2.9', 'High', ['CVE-A']);
+    expect(describeWaltzRowChange(c, [componentLabel, buildCveLabel('CVE-A'), 'oss-rating-high'])).toBeNull();
+  });
+});

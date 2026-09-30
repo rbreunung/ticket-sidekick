@@ -47,6 +47,14 @@ export class MockJiraClient implements IJiraClient {
     this.addCommentCalls.push({ issueKey, body });
   }
 
+  public createIssueLinkCalls: Array<{ inwardKey: string; outwardKey: string; typeName: string }> = [];
+  /** Set to make `createIssueLink()` reject (e.g. linking disabled on the instance). */
+  public createIssueLinkError: Error | null = null;
+  async createIssueLink(inwardKey: string, outwardKey: string, typeName: string): Promise<void> {
+    if (this.createIssueLinkError) throw this.createIssueLinkError;
+    this.createIssueLinkCalls.push({ inwardKey, outwardKey, typeName });
+  }
+
   async searchJql(_jql: string, _maxResults?: number, _startAt?: number, _extraFields?: string[]): Promise<JiraSearchResult> {
     return loadFixture<JiraSearchResult>('search-results.json');
   }

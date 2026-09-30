@@ -897,3 +897,37 @@ describe('JiraApiClient', () => {
     });
   });
 });
+
+describe('JiraApiClient.createIssueLink (import follow-up linking)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('sends one POST to /rest/api/2/issueLink with the link type and both issue keys', async () => {
+    // Real Jira answers 201 with an empty body — parsing it as JSON would throw.
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true, status: 201, statusText: 'Created',
+      headers: { get: () => null },
+      json: () => Promise.reject(new SyntaxError('Unexpected end of JSON input')),
+      text: () => Promise.resolve(''),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+    await new JiraApiClient(BASE_CONFIG).createIssueLink('PROJ-1', 'PROJ-2', 'Relates');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url, options] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://jira.example.com/rest/api/2/issueLink');
+    expect(options.method).toBe('POST');
+    expect(JSON.parse(options.body as string)).toEqual({
+      type: { name: 'Relates' },
+      inwardIssue: { key: 'PROJ-1' },
+      outwardIssue: { key: 'PROJ-2' },
+    });
+  });
+
+  it('throws a JiraApiError with status 400 on a rejected link and does not retry', async () => {
+    const mockFetch = makeFetch({ errorMessages: ['No issue link type with name Relates found.'] }, 400);
+    vi.stubGlobal('fetch', mockFetch);
+    const err = await new JiraApiClient(BASE_CONFIG).createIssueLink('PROJ-1', 'PROJ-2', 'Relates').catch(e => e);
+    expect(err).toBeInstanceOf(JiraApiError);
+    expect((err as JiraApiError).status).toBe(400);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+});
