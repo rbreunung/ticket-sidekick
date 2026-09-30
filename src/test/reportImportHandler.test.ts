@@ -1428,6 +1428,48 @@ describe('Already-ticketed per-row actions — apply executor (U5)', () => {
     expect(streamText(again)).toContain("Didn't understand that");
   });
 
+  it('an update whose target already carries every record label writes nothing, posts no comment and counts as already up to date', async () => {
+    const tickets: Record<string, FakeTicket> = { 'PROJ-12': { labels: ['test-1', 'test-f-a'] } };
+    const { session, ws } = await build([{ ref: '1', findings: ['a', 'b'] }], tickets);
+    expect(session.allRows[0].change).toEqual({ kind: 'findings', newIds: ['b'] });
+    expect(session.allRows[0].action).toBe('update');
+    // Someone else records finding b on the ticket between the review screen and `apply`.
+    tickets['PROJ-12'].labels = ['test-1', 'test-f-a', 'test-f-b'];
+    const stream = mockStream();
+
+    await reply('apply', session, ws, stream);
+
+    expect(client.updateIssueCalls).toHaveLength(0);
+    expect(client.addCommentCalls).toHaveLength(0);
+    expect(session.allRows[0].result).toEqual({ status: 'done', action: 'update', note: 'up-to-date' });
+    const text = streamText(stream);
+    expect(text).toContain('PROJ-12');
+    expect(text).toContain('already up to date');
+    expect(text).toContain('**0** updated, 0 follow-up(s) created, 0 re-created, 1 already up to date, 0 failed.');
+    expect(session.outcomes).toMatchObject({ updated: 0, updateFailed: 0 });
+  });
+
+  it('running the same update from a second session for the same ticket posts no second comment (idempotent)', async () => {
+    const tickets: Record<string, FakeTicket> = { 'PROJ-12': { labels: ['test-1', 'test-f-a'] } };
+    // Two reviews of the same report built before either is applied — both see finding b as new.
+    const first = await build([{ ref: '1', findings: ['a', 'b'] }], tickets, makeMockWs());
+    const second = await build([{ ref: '1', findings: ['a', 'b'] }], tickets, makeMockWs());
+    expect(second.session.allRows[0].action).toBe('update');
+
+    await reply('apply', first.session, first.ws);
+    expect(tickets['PROJ-12'].labels).toEqual(['test-1', 'test-f-a', 'test-f-b']);
+    expect(client.updateIssueCalls).toHaveLength(1);
+    expect(client.addCommentCalls).toEqual([{ issueKey: 'PROJ-12', body: 'New findings: b' }]);
+
+    const stream = mockStream();
+    await reply('apply', second.session, second.ws, stream);
+
+    expect(client.updateIssueCalls).toHaveLength(1);
+    expect(client.addCommentCalls).toHaveLength(1);
+    expect(second.session.allRows[0].result).toEqual({ status: 'done', action: 'update', note: 'up-to-date' });
+    expect(streamText(stream)).toContain('already up to date');
+  });
+
   it('Covers AE3: a baseline update writes the record labels only — no comment — and the next import shows no change', async () => {
     const tickets: Record<string, FakeTicket> = { 'PROJ-5': { labels: ['test-1'] } };
     const { session, ws } = await build([{ ref: '1', findings: ['a', 'b'] }], tickets);
