@@ -210,10 +210,18 @@ function findCandidates(lines: string[], segments: MessageSegment[], specs: Bloc
         const s = text.indexOf(start, from);
         if (s < 0) break;
         if (end) {
-          const e = text.indexOf(end, s + start.length);
+          // A one-line entry (start === end) ends on the very occurrence it starts on.
+          const e = end === start ? s : text.indexOf(end, s + start.length);
           if (e < 0) break; // no end phrase after this start in this segment: no block here
-          candidates.push({ spec, segment, startLine: lineAt(s), endLine: lineAt(e + end.length - 1), order });
+          // Tightest span: the last start occurrence before that end (never before `s`), so a start
+          // phrase that also appears earlier in the message text does not widen the block over it.
+          const tight = end === start ? s : Math.max(s, text.lastIndexOf(start, e - start.length));
+          candidates.push({ spec, segment, startLine: lineAt(tight), endLine: lineAt(e + end.length - 1), order });
           from = e + end.length;
+        } else if (spec.kind === 'header') {
+          // A header without an end phrase covers only the line(s) its start phrase is on.
+          candidates.push({ spec, segment, startLine: lineAt(s), endLine: lineAt(s + start.length - 1), order });
+          from = s + start.length;
         } else {
           candidates.push({ spec, segment, startLine: lineAt(s), order });
           from = s + start.length;
@@ -266,7 +274,7 @@ function makeBlock(lines: string[], c: Candidate, startLine: number, endLine: nu
 
 // Locates every occurrence of every entry in every segment and applies the extent rules:
 //  - with `end`: start line through the line holding the end phrase (same segment only);
-//  - header without `end`: its paragraph (bounded by blank lines);
+//  - header without `end`: only the line(s) its start phrase is on — multi-line headers need an `end`;
 //  - footer/signature without `end`: until the next matched block's start or the segment end;
 //  - without `end`, at most BLOCK_LINE_CAP non-empty lines (capped = true when that cut it short).
 // Blocks never overlap: a candidate starting inside an already accepted block is dropped.
@@ -281,7 +289,7 @@ export function detectBlocks(markdownBody: string, specs: BlockSpec[], topSender
     const c = candidates[i];
     if (c.startLine <= lastEnd) continue;
     const seg = c.segment;
-    let startLine = c.startLine;
+    const startLine = c.startLine;
     let endLine: number;
     let capped = false;
     if (c.endLine !== undefined) {
@@ -295,13 +303,7 @@ export function detectBlocks(markdownBody: string, specs: BlockSpec[], topSender
           break;
         }
       }
-      let limit = next ? next.startLine - 1 : seg.endLine;
-      if (c.spec.kind === 'header') {
-        while (startLine > Math.max(seg.bodyStartLine, lastEnd + 1) && !isBlank(lines[startLine - 1])) startLine--;
-        let paraEnd = c.startLine;
-        while (paraEnd + 1 <= limit && !isBlank(lines[paraEnd + 1])) paraEnd++;
-        limit = paraEnd;
-      }
+      const limit = next ? next.startLine - 1 : seg.endLine;
       const extent = capExtent(lines, startLine, limit);
       endLine = trimTrailingBlank(lines, startLine, extent.endLine);
       capped = extent.capped;

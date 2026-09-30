@@ -250,6 +250,12 @@ function cleanupResult(session: EmailCleanupSession): vscode.ChatResult {
     : { metadata: { jiraSession: { kinds: ['email-cleanup'] } } };
 }
 
+// A branch that ends the cleanup step (cancel, expired) still names the comment target's ticket,
+// so it carries lastTicketKey (empty kinds: no session) for a bare follow-up; a batch has none.
+function endedCleanupResult(session: EmailCleanupSession): vscode.ChatResult | void {
+  return session.target.kind === 'comment' ? withLastTicket(session.target.ticketKey) : undefined;
+}
+
 async function showCleanupScreen(
   session: EmailCleanupSession,
   stream: vscode.ChatResponseStream,
@@ -333,22 +339,26 @@ async function continueAfterCleanup(
 // KTD5: one call per email the user consented to; the model proposes, verifyModelBlocks keeps only
 // quotes that really occur. A failed or unparseable call leaves that email as nothing detected and
 // is logged with metadata only — the reply echoes email text, so neither it nor the body is logged.
+// Returns 'cancelled' when the chat request is cancelled: the loop stops, the email in flight and
+// every later one stay 'awaiting-consent' (not 'failed'), and emails already checked keep their result.
 async function runModelCheck(
   session: EmailCleanupSession,
   model: vscode.LanguageModelChat,
   token: vscode.CancellationToken,
   stream: vscode.ChatResponseStream,
-): Promise<void> {
+): Promise<'done' | 'cancelled'> {
+  const cancelled = () => token?.isCancellationRequested === true;
   const asked = session.rows.filter(r => r.modelStatus === 'awaiting-consent');
   stream.markdown(`_Checking ${asked.length} email(s) with the Copilot model…_\n\n`);
   const patterns = readBoilerplatePatterns();
   for (const row of asked) {
+    if (cancelled()) break;
     const body = row.item.markdownBody;
     let attempts = 0;
     let replyLength = 0;
     try {
-      if (token?.isCancellationRequested) throw new Error('cancelled');
       const proposals = await withLmRetry(async () => {
+        if (cancelled()) throw new Error('cancelled');
         attempts++;
         const reply = await sendAndCollect(model, [vscode.LanguageModelChatMessage.User(buildModelCheckPrompt(body))], token);
         replyLength = reply.length;
@@ -361,6 +371,7 @@ async function runModelCheck(
         rowId: row.id, attempts, proposals: proposals.length, verifiedBlocks: row.blocks.length, replyLength, bodyLength: body.length,
       });
     } catch (err) {
+      if (cancelled()) break; // stays 'awaiting-consent'
       row.blocks = [];
       row.modelStatus = 'failed';
       const code = typeof (err as { code?: unknown })?.code === 'string' ? (err as { code: string }).code : undefined;
@@ -369,6 +380,12 @@ async function runModelCheck(
       });
     }
   }
+  if (!cancelled()) return 'done';
+  logDiag('jira.email', 'info', 'Model check cancelled', {
+    checked: asked.filter(r => r.modelStatus !== 'awaiting-consent').length,
+    remaining: asked.filter(r => r.modelStatus === 'awaiting-consent').length,
+  });
+  return 'cancelled';
 }
 
 // Replies to the cleanup step's consent and preview screens (router kind 'email-cleanup'), plus the
@@ -385,7 +402,7 @@ export async function handleEmailCleanupReply(
   if (isSessionExpired(session)) {
     await ws.update(EMAIL_CLEANUP_SESSION_KEY, undefined);
     stream.markdown(SESSION_EXPIRED_MESSAGE);
-    return;
+    return endedCleanupResult(session);
   }
   if (session.phase === 'pending') return startEmailCleanup(session, jiraClient, stream, ws);
 
@@ -393,7 +410,7 @@ export async function handleEmailCleanupReply(
   if (parsed.action === 'cancel') {
     await ws.update(EMAIL_CLEANUP_SESSION_KEY, undefined);
     stream.markdown('_Cancelled — nothing was imported._');
-    return;
+    return endedCleanupResult(session);
   }
 
   if (session.phase === 'consent') {
@@ -401,7 +418,12 @@ export async function handleEmailCleanupReply(
       if (!model) {
         return showCleanupScreen(session, stream, ws, '_No Copilot model is available in this chat — reply **skip model** to continue without it._');
       }
-      await runModelCheck(session, model, token, stream);
+      if (await runModelCheck(session, model, token, stream) === 'cancelled') {
+        // Stay at consent: the unchecked emails still await it, and nothing continues into the template pick.
+        await ws.update(EMAIL_CLEANUP_SESSION_KEY, session);
+        stream.markdown('_Model check stopped — reply **model check** or **skip model** to continue._');
+        return cleanupResult(session);
+      }
     } else if (parsed.action === 'skip-model') {
       for (const row of session.rows) if (row.modelStatus === 'awaiting-consent') row.modelStatus = 'declined';
     } else {
@@ -455,7 +477,12 @@ async function saveBlockAsPattern(
     await cfg.update('email.boilerplatePatterns', [...(Array.isArray(current) ? current : []), target.pattern], vscode.ConfigurationTarget.Global);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    logDiag('jira.email', 'error', 'Could not save boilerplate pattern', { error: message });
+    // The phrases are email text: an error that echoes the written value must not put them in the log.
+    const phrases = [target.pattern.start, target.pattern.end].filter((p): p is string => !!p);
+    const logMessage = phrases.reduce((m, p) => m.split(p).join('<pattern text>'), message);
+    logDiag('jira.email', 'error', 'Could not save boilerplate pattern', {
+      error: logMessage, errorName: err instanceof Error ? err.name : typeof err, kind: target.pattern.kind,
+    });
     return showCleanupScreen(session, stream, ws, `_Could not save the pattern: ${neutralizeMarkdownLinks(message)}_`);
   }
   logDiag('jira.email', 'info', 'Saved boilerplate pattern', { kind: target.pattern.kind, hasEnd: target.pattern.end !== undefined });
@@ -485,7 +512,7 @@ export async function handleCreateFromEmail(
     if (isSessionExpired(cleanup)) {
       await ws.update(EMAIL_CLEANUP_SESSION_KEY, undefined);
       stream.markdown(SESSION_EXPIRED_MESSAGE);
-      return;
+      return endedCleanupResult(cleanup);
     }
     if (cleanup.target.kind === 'batch') {
       if (cleanup.phase === 'pending') return startEmailCleanup(cleanup, jiraClient, stream, ws);
@@ -676,7 +703,8 @@ export async function streamEmailCommentPreview(session: EmailContentSession, st
     `\n\nReply ${buildChatCommandLink('Post it', '@jira', 'post it')} to add as comment to **${key}**, ` +
     `or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
   ));
-  return { metadata: { jiraSession: { kinds: ['email-content'] } } };
+  // The preview names the target ticket, so it carries lastTicketKey alongside its session kind.
+  return withLastTicket(key, ['email-content']);
 }
 
 // Handles replies to the comment-attach preview (streamEmailCommentPreview above) — the only

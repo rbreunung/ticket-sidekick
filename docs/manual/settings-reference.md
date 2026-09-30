@@ -132,7 +132,7 @@ Each importer rejects a file larger than its limit before reading it. For an ema
 ]
 ```
 
-Known confidentiality headers, legal footers and signatures to remove from imported emails, in every message of the thread. `kind` is `header`, `footer` or `signature`; `start` and `end` are plain text (not regular expressions), matched ignoring case, extra spaces and bold/italic. With `end`, the block runs through the line containing it. Without `end`, a header covers its paragraph and a footer or signature runs until the next matched block, the next quoted message or the end of the message, at most 40 lines. A stripped signature keeps the author's name when one can be recognized. Entries with an unknown `kind` or an empty `start` are ignored.
+Known confidentiality headers, legal footers and signatures to remove from imported emails, in every message of the thread. `kind` is `header`, `footer` or `signature`; `start` and `end` are plain text (not regular expressions), matched ignoring case, extra spaces and bold/italic. With `end`, the block runs through the line containing it. Without `end`, a header covers the line(s) its start phrase is on — add an `end` for multi-line headers — and a footer or signature runs until the next matched block, the next quoted message or the end of the message, at most 40 lines. A stripped signature keeps the author's name when one can be recognized. Entries with an unknown `kind` or an empty `start` are ignored. This setting can only be set in your user settings, not in a workspace's `.vscode/settings.json`.
 
 ## Bitbucket settings reference
 

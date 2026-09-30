@@ -194,16 +194,46 @@ describe('detectPatternBlocks — extent rules (KTD4)', () => {
     expect(blockText(mail.markdownBody, blocks[0])).toEqual(['Best regards,', 'Alice Top', 'Senior Analyst, Reporting']);
   });
 
-  it('a header pattern covers only its paragraph, including lines above the matched one', async () => {
+  it('a header pattern without an end phrase covers only the line its start phrase is on', async () => {
     const mail = await load('chain-owa-en.eml');
     const blocks = detectPatternBlocks(mail.markdownBody,
       [{ kind: 'header', start: 'Do not click links' }], mail.senderName);
     expect(blocks).toHaveLength(1);
     expect(blockText(mail.markdownBody, blocks[0])).toEqual([
+      'Do not click links or open attachments unless you recognise the sender.',
+    ]);
+    expect(blocks[0].excerpt).toBe('Do not click links or open attachments unless you recognise the sender.');
+  });
+
+  it('a multi-line header is covered by giving it an end phrase', async () => {
+    const mail = await load('chain-owa-en.eml');
+    const blocks = detectPatternBlocks(mail.markdownBody,
+      [{ kind: 'header', start: '[EXTERNAL] This message originated', end: 'recognise the sender.' }], mail.senderName);
+    expect(blocks).toHaveLength(1);
+    expect(blockText(mail.markdownBody, blocks[0])).toEqual([
       '[EXTERNAL] This message originated from outside Example Bank.',
       'Do not click links or open attachments unless you recognise the sender.',
     ]);
-    expect(blocks[0].excerpt).toBe('[EXTERNAL] This message originated from outside Example Bank.');
+  });
+
+  it('a header without an end phrase spans every line its start phrase wraps across', () => {
+    const body = htmlToMarkdown('<div>[EXTERNAL] This message</div><div>originated outside.</div><div>Hi Bob,</div>');
+    const blocks = detectPatternBlocks(body, [{ kind: 'header', start: '[EXTERNAL] This message originated' }]);
+    expect(blocks.map(b => blockText(body, b))).toEqual([['[EXTERNAL] This message', 'originated outside.']]);
+  });
+
+  it('in a div-per-line OWA body an end-less header banner does not swallow the greeting and first paragraph', () => {
+    const body = htmlToMarkdown('<div>[EXTERNAL] This email came from outside the organisation.</div>'
+      + '<div>Hi Bob,</div><div>please find the numbers attached.</div><div>Thanks</div>');
+    expect(body.split('\n')).toEqual([
+      '[EXTERNAL] This email came from outside the organisation.',
+      'Hi Bob,',
+      'please find the numbers attached.',
+      'Thanks',
+    ]);
+    const blocks = detectPatternBlocks(body, [{ kind: 'header', start: '[EXTERNAL] This email came from outside' }]);
+    expect(blocks).toHaveLength(1);
+    expect(blockText(body, blocks[0])).toEqual(['[EXTERNAL] This email came from outside the organisation.']);
   });
 
   it('a signature without end phrase runs to the segment end, not into the next message', async () => {
@@ -224,12 +254,27 @@ describe('detectPatternBlocks — extent rules (KTD4)', () => {
     expect(blocks.map(b => blockText(body, b))).toEqual([['Kind regards', 'Alice'], ['Kind regards', 'Bob']]);
   });
 
-  it('a start phrase appearing twice before a single end phrase yields one block from the first start', () => {
+  it('a start phrase appearing twice before a single end phrase yields one block from the last start (tightest span)', () => {
     const body = htmlToMarkdown('<div>Kind regards<br>Kind regards<br>Alice<br>END OF SIGNATURE</div>');
     const blocks = detectPatternBlocks(body, [{ kind: 'signature', start: 'Kind regards', end: 'END OF SIGNATURE' }]);
     expect(blocks).toHaveLength(1);
-    expect(blocks[0].startLine).toBe(0);
+    expect(blocks[0].startLine).toBe(1);
     expect(blocks[0].endLine).toBe(3);
+  });
+
+  it('a start phrase quoted earlier in the message does not widen the block over the message text', () => {
+    const body = htmlToMarkdown('<div>Please note the deadline moved to Friday.</div><div>The report is attached.</div>'
+      + '<div><br></div><div>Please note: this e-mail is confidential.</div><div>If received in error, delete it.</div>');
+    const blocks = detectPatternBlocks(body, [{ kind: 'footer', start: 'Please note', end: 'delete it.' }]);
+    expect(blocks.map(b => blockText(body, b))).toEqual([
+      ['Please note: this e-mail is confidential.', 'If received in error, delete it.'],
+    ]);
+  });
+
+  it('an entry whose start and end phrase are the same matches that one occurrence', () => {
+    const body = htmlToMarkdown('<div>Done.</div><div><br></div><div>Sent from my iPhone</div>');
+    const blocks = detectPatternBlocks(body, [{ kind: 'footer', start: 'Sent from my iPhone', end: 'Sent from my iPhone' }]);
+    expect(blocks.map(b => blockText(body, b))).toEqual([['Sent from my iPhone']]);
   });
 
   it('two patterns matching the same line produce a single block (the first configured one)', async () => {
@@ -248,7 +293,7 @@ describe('detectPatternBlocks — extent rules (KTD4)', () => {
     const blocks = detectPatternBlocks(mail.markdownBody, [{ kind: 'header', start: 'Quarterly report numbers' }], mail.senderName);
     expect(blocks).toHaveLength(1);
     expect(blocks[0].segmentIndex).toBe(2);
-    expect(blockText(mail.markdownBody, blocks[0])).toEqual(['Hello both,', 'please find the quarterly report numbers below.']);
+    expect(blockText(mail.markdownBody, blocks[0])).toEqual(['please find the quarterly report numbers below.']);
   });
 });
 
@@ -425,7 +470,7 @@ describe('applyBoilerplateCleanup — stripping and name retention (R5, KTD6)', 
     const mail = await load('chain-owa-en.eml');
     const blocks = detectPatternBlocks(mail.markdownBody, [
       DISCLAIMER_EN,
-      { kind: 'header', start: '[EXTERNAL] This message originated' },
+      { kind: 'header', start: '[EXTERNAL] This message originated', end: 'recognise the sender.' },
     ], mail.senderName);
     const result = applyBoilerplateCleanup(mail, blocks);
     const body = result.item.markdownBody;
@@ -557,7 +602,10 @@ describe('buildPatternFromBlock — save as pattern (R8, KTD9)', () => {
 
   it('trims phrases longer than 200 characters', () => {
     const long = 'A'.repeat(150) + ' ' + 'B'.repeat(150);
-    const body = `Hi.\n\n${long}\nmiddle\n${long} end`;
+    // The last line starts differently from the first: a start phrase repeated right before the end
+    // phrase would (by the tightest-span rule) bind to that later occurrence.
+    const lastLong = 'C'.repeat(150) + ' ' + 'B'.repeat(150);
+    const body = `Hi.\n\n${long}\nmiddle\n${lastLong} end`;
     const block = detectBlocks(body, [{ kind: 'footer', start: 'A'.repeat(20), end: 'B end', source: 'model' }])[0];
     const pattern = buildPatternFromBlock(body, block);
     expect(pattern.start.length).toBeLessThanOrEqual(200);

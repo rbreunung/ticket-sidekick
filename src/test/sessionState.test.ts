@@ -1730,6 +1730,21 @@ describe('email cleanup step — screens, replies and decisions', () => {
     expect(preview).toContain('Re: ［click me］');
   });
 
+  it('an angle-bracket autolink in a subject or excerpt renders inert on both the consent and preview screens', () => {
+    const autolink = '<command:workbench.action.chat.open?%5B%22x%22%5D>';
+    const body = `Hello\n\nCONFIDENTIALITY NOTICE: <https://evil.example/x>`;
+    const session = batchSession([emailItem(`Re: ${autolink}`, body), emailItem(autolink, 'plain body')]);
+    session.rows[1].modelStatus = 'awaiting-consent';
+    const consent = buildEmailCleanupConsent(session);
+    const preview = buildEmailCleanupPreview(session);
+    for (const text of [consent, preview]) {
+      expect(text).not.toMatch(/(^|[^\\])<command:/);
+      expect(text).toContain('\\<command:workbench.action.chat.open');
+    }
+    expect(preview).not.toMatch(/(^|[^\\])<https:\/\/evil/);
+    expect(preview).toContain('\\<https://evil.example/x>');
+  });
+
   it('the consent screen lists only the unmatched emails and offers model check / skip model', () => {
     const session = batchSession([emailItem('Matched', `x\n\n${FOOTER}`), emailItem('Unmatched', 'plain')]);
     session.rows[1].modelStatus = 'awaiting-consent';
@@ -1748,6 +1763,8 @@ describe('email cleanup step — screens, replies and decisions', () => {
     expect(parseEmailCleanupReply('no', 'consent', [])).toEqual({ action: 'skip-model' });
     expect(parseEmailCleanupReply('cancel', 'consent', [])).toEqual({ action: 'cancel' });
     expect(parseEmailCleanupReply('strip', 'consent', [])).toEqual({ action: 'invalid' });
+    // A bare "check" is routed to the connection check before any session router, so it is not a consent word
+    expect(parseEmailCleanupReply('check', 'consent', [])).toEqual({ action: 'invalid' });
   });
 
   it('parses preview replies: keep, save <n>, several row ids, unknown ids and model check are invalid', () => {

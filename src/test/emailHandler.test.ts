@@ -661,9 +661,9 @@ function fakeModel(reply: string | (() => never)) {
   };
 }
 
-async function runCleanup(reply: string, ws: ReturnType<typeof makeMockWs>, client: MockJiraClient, model?: unknown, stream = mockStream()) {
+async function runCleanup(reply: string, ws: ReturnType<typeof makeMockWs>, client: MockJiraClient, model?: unknown, stream = mockStream(), token?: unknown) {
   const session = ws.store[EMAIL_CLEANUP_SESSION_KEY] as EmailCleanupSession;
-  const result = await handleEmailCleanupReply(reply, session, model as never, undefined as never, client, stream as never, ws as never);
+  const result = await handleEmailCleanupReply(reply, session, model as never, token as never, client, stream as never, ws as never);
   return { result, stream, texts: streamTexts(stream) };
 }
 
@@ -979,5 +979,147 @@ describe('email boilerplate cleanup step (U5 batch, U6 comment)', () => {
     const { texts, result } = await runCleanup('banana', ws, client);
     expect(texts.join('\n')).toContain('Email boilerplate found');
     expect(result?.metadata?.jiraSession?.kinds).toEqual(['email-cleanup']);
+  });
+  // ── Review fixes: cancellation, consent edge cases, save failures, last-ticket metadata ──────────
+
+  async function consentBatch(ws: ReturnType<typeof makeMockWs>, subjects = ['Only']) {
+    ws.store[EMAIL_CLEANUP_SESSION_KEY] = buildPendingEmailCleanupSession(
+      subjects.map(sub => plainItem(sub, `Hello from ${sub}\n\nThis mail is private.\nDelete it if misdirected.`)),
+      { kind: 'batch', projectKey: 'PROJ', fileName: 'x' },
+    );
+    await handleCreateFromEmail({ prompt: 'x' } as never, mockStream() as never, undefined as never, client, ticketService, undefined as never, ws as never);
+    expect((ws.store[EMAIL_CLEANUP_SESSION_KEY] as EmailCleanupSession).phase).toBe('consent');
+  }
+
+  it('a model check whose chat request is already cancelled stops: nothing sent, nothing failed, still at consent', async () => {
+    const model = fakeModel('{"blocks":[]}');
+    const ws = makeMockWs();
+    await consentBatch(ws, ['One', 'Two']);
+    const { texts, result } = await runCleanup('model check', ws, client, model, mockStream(), { isCancellationRequested: true });
+
+    expect(model.sendRequest).not.toHaveBeenCalled();
+    expect(ws.store['jira.session.emailTemplateSelection']).toBeUndefined();
+    const session = ws.store[EMAIL_CLEANUP_SESSION_KEY] as EmailCleanupSession;
+    expect(session.phase).toBe('consent');
+    expect(session.rows.map(r => r.modelStatus)).toEqual(['awaiting-consent', 'awaiting-consent']);
+    expect(result?.metadata?.jiraSession?.kinds).toEqual(['email-cleanup']);
+    expect(texts.join('\n')).toContain('Model check stopped');
+    expect(texts.join('\n')).not.toContain('model check failed');
+  });
+
+  it('a model check cancelled part-way keeps the finished email checked and the rest awaiting consent', async () => {
+    const token = { isCancellationRequested: false };
+    const model = {
+      sendRequest: vi.fn(async () => {
+        if (model.sendRequest.mock.calls.length === 2) {
+          token.isCancellationRequested = true;
+          throw Object.assign(new Error('Canceled'), { name: 'Canceled' });
+        }
+        return { text: (async function* () { yield '{"blocks":[]}'; })() };
+      }),
+    };
+    const ws = makeMockWs();
+    await consentBatch(ws, ['One', 'Two', 'Three']);
+    const { texts } = await runCleanup('model check', ws, client, model, mockStream(), token);
+
+    expect(model.sendRequest).toHaveBeenCalledTimes(2);
+    expect(ws.store['jira.session.emailTemplateSelection']).toBeUndefined();
+    const session = ws.store[EMAIL_CLEANUP_SESSION_KEY] as EmailCleanupSession;
+    expect(session.phase).toBe('consent');
+    expect(session.rows.map(r => r.modelStatus)).toEqual(['checked', 'awaiting-consent', 'awaiting-consent']);
+    expect(texts.join('\n')).toContain('Model check stopped');
+  });
+
+  it('model check with no Copilot model available keeps the consent screen and starts no template pick', async () => {
+    const ws = makeMockWs();
+    await consentBatch(ws);
+    const { texts, result } = await runCleanup('model check', ws, client, undefined);
+    expect(texts.join('\n')).toContain('No Copilot model is available');
+    expect((ws.store[EMAIL_CLEANUP_SESSION_KEY] as EmailCleanupSession).phase).toBe('consent');
+    expect(ws.store['jira.session.emailTemplateSelection']).toBeUndefined();
+    expect(result?.metadata?.jiraSession?.kinds).toEqual(['email-cleanup']);
+  });
+
+  it('an unrecognized reply on the consent screen shows the consent hint and sends nothing to the model', async () => {
+    const model = fakeModel('{"blocks":[]}');
+    const ws = makeMockWs();
+    await consentBatch(ws);
+    const { texts, result } = await runCleanup('banana', ws, client, model);
+    expect(texts.join('\n')).toContain('Reply **model check** to let the model look, or **skip model**');
+    expect(model.sendRequest).not.toHaveBeenCalled();
+    expect((ws.store[EMAIL_CLEANUP_SESSION_KEY] as EmailCleanupSession).phase).toBe('consent');
+    expect(result?.metadata?.jiraSession?.kinds).toEqual(['email-cleanup']);
+  });
+
+  async function previewWithModelBlock(ws: ReturnType<typeof makeMockWs>) {
+    h.patterns = [CONFIDENTIAL_FOOTER];
+    const model = fakeModel('{"blocks":[{"kind":"footer","startQuote":"This mail is private.","endQuote":"Delete it if misdirected."}]}');
+    ws.store[EMAIL_CLEANUP_SESSION_KEY] = buildPendingEmailCleanupSession([
+      plainItem('Matched', 'Hi\n\nCONFIDENTIALITY NOTICE: x'),
+      plainItem('Unmatched', 'Hello\n\nThis mail is private.\nDelete it if misdirected.'),
+    ], { kind: 'batch', projectKey: 'PROJ', fileName: '2 selected file(s)' });
+    await handleCreateFromEmail({ prompt: 'x', model } as never, mockStream() as never, undefined as never, client, ticketService, undefined as never, ws as never);
+    await runCleanup('model check', ws, client, model);
+  }
+
+  it('save 2 whose settings write fails shows "Could not save the pattern" and logs no pattern text', async () => {
+    const ws = makeMockWs();
+    await previewWithModelBlock(ws);
+    h.appendLine.mockClear();
+    h.configUpdate.mockRejectedValueOnce(new Error('Unable to write value "This mail is private." to user settings'));
+    const { texts, result } = await runCleanup('save 2', ws, client);
+
+    expect(texts.join('\n')).toContain('Could not save the pattern');
+    expect(result?.metadata?.jiraSession?.kinds).toEqual(['email-cleanup']);
+    expect((ws.store[EMAIL_CLEANUP_SESSION_KEY] as EmailCleanupSession).savedBlocks).toEqual([]);
+    const log = h.appendLine.mock.calls.map(c => String(c[0])).join('\n');
+    expect(log).toContain('Could not save boilerplate pattern');
+    expect(log).not.toContain('This mail is private.');
+    expect(log).not.toContain('Delete it if misdirected.');
+  });
+
+  it('saving the same block twice writes it once and then says it is already saved', async () => {
+    const ws = makeMockWs();
+    await previewWithModelBlock(ws);
+    await runCleanup('save 2', ws, client);
+    const again = await runCleanup('save 2', ws, client);
+    expect(h.configUpdate).toHaveBeenCalledTimes(1);
+    expect(again.texts.join('\n')).toContain('#2 is already saved as a pattern');
+  });
+
+  async function commentCleanup(ws: ReturnType<typeof makeMockWs>) {
+    h.patterns = [{ kind: 'footer', start: 'See:' }];
+    (vscode.window.showOpenDialog as ReturnType<typeof vi.fn>).mockResolvedValue([{ fsPath: FIXTURE }]);
+    const first = await handleAddEmailFromChat(
+      { prompt: 'add email to PROJ-42' } as never, mockStream() as never, undefined as never,
+      client, ticketService, undefined as never, ws as never,
+    );
+    expect(first?.metadata?.jiraSession?.lastTicketKey).toBe('PROJ-42');
+  }
+
+  it('cancelling the cleanup step of "add email to PROJ-42" still carries PROJ-42 as the last ticket', async () => {
+    const ws = makeMockWs();
+    await commentCleanup(ws);
+    const { result } = await runCleanup('cancel', ws, client);
+    expect(result?.metadata?.jiraSession?.lastTicketKey).toBe('PROJ-42');
+    expect(result?.metadata?.jiraSession?.kinds).toEqual([]);
+  });
+
+  it('an expired comment-target cleanup session still carries its ticket as the last ticket', async () => {
+    const ws = makeMockWs();
+    await commentCleanup(ws);
+    ws.store[EMAIL_CLEANUP_SESSION_KEY] = { ...(ws.store[EMAIL_CLEANUP_SESSION_KEY] as EmailCleanupSession), schemaVersion: 1 };
+    const { texts, result } = await runCleanup('strip', ws, client);
+    expect(texts).toEqual([SESSION_EXPIRED_MESSAGE]);
+    expect(result?.metadata?.jiraSession?.lastTicketKey).toBe('PROJ-42');
+    expect(result?.metadata?.jiraSession?.kinds).toEqual([]);
+  });
+
+  it('strip continuing into the comment preview carries PROJ-42 as the last ticket alongside the email-content session', async () => {
+    const ws = makeMockWs();
+    await commentCleanup(ws);
+    const { result } = await runCleanup('strip', ws, client);
+    expect(result?.metadata?.jiraSession?.kinds).toEqual(['email-content']);
+    expect(result?.metadata?.jiraSession?.lastTicketKey).toBe('PROJ-42');
   });
 });

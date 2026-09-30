@@ -163,6 +163,17 @@ describe('htmlToMarkdown', () => {
       expect(result).not.toContain('|');
     });
 
+    it('converts thousands of nested empty tables quickly instead of rescanning once per level', () => {
+      const depth = 16_000;
+      const html = 'Hello' + '<table>'.repeat(depth) + '</table>'.repeat(depth) + 'Bye';
+      const start = performance.now();
+      const result = htmlToMarkdown(html);
+      expect(performance.now() - start).toBeLessThan(1000);
+      expect(result).toContain('Hello');
+      expect(result).toContain('Bye');
+      expect(result).not.toContain('<table');
+    }, 10_000);
+
     it('keeps images inside a data table cell as markers', () => {
       const html = '<table><tr><th>Name</th><th>Logo</th></tr>'
         + '<tr><td>Acme</td><td><img data-ts-filename="acme.png"></td></tr></table>';

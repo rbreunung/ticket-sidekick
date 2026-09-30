@@ -27,7 +27,7 @@ Inline images are uploaded as Jira attachments and embedded as thumbnails at the
 
 Before an email becomes a ticket or a comment, `@jira` looks for boilerplate in every message of the thread, including quoted and forwarded ones: confidentiality headers at the top, legal footers and disclaimers at the bottom, and signature blocks with their logos. Nothing is removed until you say so.
 
-**Your patterns first.** List the texts your company repeats in the `ticketSidekick.email.boilerplatePatterns` user setting (see [Settings Reference](settings-reference.md#report-import-settings) for the format). Every email is checked against them.
+**Your patterns first.** List the texts your company repeats in the `ticketSidekick.email.boilerplatePatterns` user setting (see [Settings Reference](settings-reference.md#report-import-settings) for the format). Every email is checked against them. Without an end phrase, a header covers the line(s) its start phrase is on — add an end phrase for multi-line headers.
 
 **The model only with your yes.** If an email matches none of your patterns, `@jira` asks once for the whole import whether the Copilot model may look at those emails:
 
@@ -37,7 +37,7 @@ Before an email becomes a ticket or a comment, `@jira` looks for boilerplate in 
 | `skip model` (or `no`) | Nothing is sent. Those emails show *nothing detected* and import unchanged |
 | `cancel` | Stops the import |
 
-No email content goes to the model without this reply, and the answer is not remembered for the next import. With no patterns configured you see this question on every import. If nothing was found and you skip the model, the import continues straight to the template pick.
+No email content goes to the model without this reply, and the answer is not remembered for the next import. If you stop the chat response while the model check runs, the import pauses at this question: emails already checked keep their result, the rest are not sent, and you reply **model check** or **skip model** to continue. With no patterns configured you see this question on every import. If nothing was found and you skip the model, the import continues straight to the template pick.
 
 **The preview.** One screen lists, per email, its row id, subject, which blocks were found (for example *3 footers, 1 signature*) with a short excerpt and line count of each, and how many images would be dropped. A block marked *capped* hit the 40-line limit before a natural end. Reply:
 

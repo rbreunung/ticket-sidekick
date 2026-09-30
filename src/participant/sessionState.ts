@@ -3264,7 +3264,10 @@ const EXCERPT_MAX_CHARS = 80;
 function untrustedSnippet(text: string, max = EXCERPT_MAX_CHARS): string {
   const line = text.replace(/\s+/g, ' ').trim();
   const cut = line.length > max ? `${line.slice(0, max).trimEnd()}…` : line;
-  return neutralizeMarkdownLinks(cut);
+  // These screens are trusted markdown, so besides [text](url) links, angle-bracket autolinks
+  // (<command:…>, <https://…>) are defused too: backslashes first, so an email's own "\<" cannot
+  // un-escape the added one, then every "<" becomes a literal "\<".
+  return neutralizeMarkdownLinks(cut).replace(/\\/g, '\\\\').replace(/</g, '\\<');
 }
 
 function nothingDetectedLabel(status: EmailCleanupModelStatus): string {
@@ -3363,7 +3366,8 @@ export type EmailCleanupReply =
 export function parseEmailCleanupReply(reply: string, phase: 'consent' | 'preview', rowIds: string[]): EmailCleanupReply {
   const text = reply.trim().toLowerCase().replace(/[.!]+$/, '');
   if (phase === 'consent') {
-    if (/^model[\s-]*check$/.test(text) || text === 'yes' || text === 'y' || text === 'check') return { action: 'model-check' };
+    // Not a bare "check": JiraParticipant routes that to the connection check before any session router.
+    if (/^model[\s-]*check$/.test(text) || text === 'yes' || text === 'y') return { action: 'model-check' };
     if (/^skip[\s-]*model$/.test(text) || ['no', 'n', 'nope', 'skip'].includes(text)) return { action: 'skip-model' };
     if (isCancellation(text)) return { action: 'cancel' };
     return { action: 'invalid' };

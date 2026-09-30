@@ -1,3 +1,6 @@
+/** Nesting levels of `<table>` unwrapped innermost-first before leftovers are tag-stripped. */
+const MAX_TABLE_UNWRAP_PASSES = 20;
+
 export function htmlToMarkdown(html: string, inlineImageMap: Map<string, string> = new Map()): string {
   html = html.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   let s = html
@@ -17,8 +20,12 @@ export function htmlToMarkdown(html: string, inlineImageMap: Map<string, string>
   // Tables, innermost first (process before headings to avoid header-row confusion).
   // A table whose cells hold line breaks (e.g. a signature layout) is unwrapped into
   // its cells' own content, one after another, for the rest of the pipeline to convert.
+  // Each pass unwraps one nesting level and rescans the whole string, so the passes
+  // are capped: crafted HTML with thousands of nested tables would otherwise make this
+  // quadratic. Real email layouts nest a handful deep; any table tags left over past
+  // the cap are dropped by the ordinary tag stripping further down.
   const innermostTable = /<table(?:\s[^>]*)?>(?:(?!<table[\s>])[\s\S])*?<\/table>/gi;
-  for (let prev = ''; prev !== s;) {
+  for (let prev = '', pass = 0; prev !== s && pass < MAX_TABLE_UNWRAP_PASSES; pass++) {
     prev = s;
     s = s.replace(innermostTable, (table) => {
       const rows: string[][] = [];
