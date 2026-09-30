@@ -4,9 +4,10 @@ import { resolve } from 'path';
 import {
   chunkStrings, buildDedupJql, extractDedupMap, findAlreadyTicketed, buildReviewRows,
   sanitizeCellText, sanitizeStandaloneLine, resolveMaxReportBytes, findStaleTickets, buildStaleSearchJql,
-  REPORT_SIZE_LIMITS_MB, resolveSizeLimitSetting,
-  type JqlIssueLike,
+  REPORT_SIZE_LIMITS_MB, resolveSizeLimitSetting, pickTargetTicket,
+  type JqlIssueLike, type DedupTicket, type DedupMap, type RowChange,
 } from '../utils/reportImport';
+import type { ReviewRowBase } from '../participant/sessionState';
 
 describe('size-limit settings', () => {
   const pkg = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf-8'));
@@ -156,17 +157,56 @@ describe('buildDedupJql', () => {
   });
 });
 
+// U3/KTD1: helper building one dedup-search ticket entry in the new key -> ticket-list shape.
+function ticket(key: string, labels: string[], opts: { resolved?: boolean; created?: string | null; status?: string | null } = {}): DedupTicket {
+  return {
+    key,
+    labels,
+    resolved: opts.resolved ?? false,
+    created: opts.created ?? null,
+    status: opts.status ?? (opts.resolved ? 'Done' : 'Open'),
+  };
+}
+
 describe('extractDedupMap', () => {
   const labelToDedupKey = (label: string) => (label.startsWith('oss-dep-') ? label : null);
 
-  it('maps a matched label to the issue key when fields.labels is present', () => {
+  it('maps a matched label to the ticket with its labels, resolution, creation date and status', () => {
     const issues: JqlIssueLike[] = [
-      { key: 'PROJ-1', fields: { labels: ['oss-dependency', 'oss-dep-example-lib-1-2-3'] } },
+      {
+        key: 'PROJ-1',
+        fields: {
+          labels: ['oss-dependency', 'oss-dep-example-lib-1-2-3'],
+          resolution: { name: 'Done' },
+          created: '2026-01-15T10:00:00.000+0000',
+          status: { name: 'Done' },
+        },
+      },
       { key: 'PROJ-2', fields: { labels: ['unrelated'] } },
     ];
     const map = extractDedupMap(issues, labelToDedupKey);
-    expect(map.get('oss-dep-example-lib-1-2-3')).toBe('PROJ-1');
+    expect(map.get('oss-dep-example-lib-1-2-3')).toEqual([{
+      key: 'PROJ-1',
+      labels: ['oss-dependency', 'oss-dep-example-lib-1-2-3'],
+      resolved: true,
+      created: '2026-01-15T10:00:00.000+0000',
+      status: 'Done',
+    }]);
     expect(map.size).toBe(1);
+  });
+
+  it('keeps every ticket carrying the same dedup key, and treats a null resolution as unresolved', () => {
+    const issues: JqlIssueLike[] = [
+      { key: 'PROJ-8', fields: { labels: ['oss-dep-jackson'], resolution: { name: 'Done' }, status: { name: 'Done' } } },
+      { key: 'PROJ-30', fields: { labels: ['oss-dep-jackson'], resolution: null, status: { name: 'Open' } } },
+    ];
+    const tickets = extractDedupMap(issues, labelToDedupKey).get('oss-dep-jackson')!;
+    expect(tickets.map(t => [t.key, t.resolved, t.status])).toEqual([['PROJ-8', true, 'Done'], ['PROJ-30', false, 'Open']]);
+  });
+
+  it('lists a ticket once per key even when it carries the key label twice', () => {
+    const issues: JqlIssueLike[] = [{ key: 'PROJ-1', fields: { labels: ['oss-dep-x', 'oss-dep-x'] } }];
+    expect(extractDedupMap(issues, labelToDedupKey).get('oss-dep-x')).toHaveLength(1);
   });
 
   it('treats an absent fields.labels as no matches, without throwing', () => {
@@ -195,7 +235,7 @@ describe('findAlreadyTicketed', () => {
 
     const result = await findAlreadyTicketed(labels, 40, search, (label) => label, onDiag);
 
-    expect(result.map.get('label-40')).toBe('PROJ-9'); // second chunk's match survived
+    expect(result.map.get('label-40')?.map(t => t.key)).toEqual(['PROJ-9']); // second chunk's match survived
     expect(result.map.size).toBe(1); // first (failed) chunk contributed nothing, but didn't wipe the second's result
     expect(result.failedChunks).toBe(1);
     expect(result.totalChunks).toBe(2);
@@ -210,14 +250,26 @@ describe('findAlreadyTicketed', () => {
   it('merges matches across all chunks when every search resolves', async () => {
     const labels = ['a', 'b', 'c'];
     const search = async (chunk: string[]): Promise<JqlIssueLike[]> =>
-      chunk.map((label, i) => ({ key: `PROJ-${label}`, fields: { labels: [label] } }));
+      chunk.map((label) => ({ key: `PROJ-${label}`, fields: { labels: [label] } }));
 
     const result = await findAlreadyTicketed(labels, 1, search, (label) => label);
-    expect(result.map.get('a')).toBe('PROJ-a');
-    expect(result.map.get('b')).toBe('PROJ-b');
-    expect(result.map.get('c')).toBe('PROJ-c');
+    expect(result.map.get('a')?.map(t => t.key)).toEqual(['PROJ-a']);
+    expect(result.map.get('b')?.map(t => t.key)).toEqual(['PROJ-b']);
+    expect(result.map.get('c')?.map(t => t.key)).toEqual(['PROJ-c']);
     expect(result.failedChunks).toBe(0);
     expect(result.totalChunks).toBe(3);
+  });
+
+  it('collects every ticket for a key across chunks without listing the same ticket twice', async () => {
+    // PROJ-1 carries both labels, so both chunks return it; PROJ-2 only matches the second chunk.
+    const search = async (chunk: string[]): Promise<JqlIssueLike[]> => chunk[0] === 'k1'
+      ? [{ key: 'PROJ-1', fields: { labels: ['k1', 'k2'] } }]
+      : [{ key: 'PROJ-1', fields: { labels: ['k1', 'k2'] } }, { key: 'PROJ-2', fields: { labels: ['k2'] } }];
+
+    const result = await findAlreadyTicketed(['k1', 'k2'], 1, search, (label) => label);
+
+    expect(result.map.get('k1')?.map(t => t.key)).toEqual(['PROJ-1']);
+    expect(result.map.get('k2')?.map(t => t.key)).toEqual(['PROJ-1', 'PROJ-2']);
   });
 
   it('returns an empty map without calling search when given no labels', async () => {
@@ -256,9 +308,33 @@ describe('findAlreadyTicketed', () => {
   });
 });
 
+describe('pickTargetTicket', () => {
+  it('picks the unresolved ticket with the latest created date', () => {
+    const target = pickTargetTicket([
+      ticket('PROJ-40', [], { created: '2026-01-01T09:00:00.000+0000' }),
+      ticket('PROJ-12', [], { created: '2026-03-01T09:00:00.000+0000' }),
+      ticket('PROJ-50', [], { created: '2026-06-01T09:00:00.000+0000', resolved: true }),
+    ]);
+    expect(target.key).toBe('PROJ-12');
+  });
+
+  it('breaks a created-date tie by the highest key number, not string order', () => {
+    const created = '2026-01-01T09:00:00.000+0000';
+    expect(pickTargetTicket([ticket('PROJ-9', [], { created }), ticket('PROJ-10', [], { created })]).key).toBe('PROJ-10');
+  });
+
+  it('falls back to the newest ticket overall when every ticket is resolved', () => {
+    const target = pickTargetTicket([
+      ticket('PROJ-8', [], { created: '2026-01-01T09:00:00.000+0000', resolved: true }),
+      ticket('PROJ-9', [], { created: '2026-02-01T09:00:00.000+0000', resolved: true }),
+    ]);
+    expect(target.key).toBe('PROJ-9');
+  });
+});
+
 describe('buildReviewRows', () => {
   interface Item { id: string; label: string }
-  interface Row { id: string; existingTicketKey: string | null; included: boolean; label: string }
+  interface Row extends ReviewRowBase { label: string }
 
   it('assigns sequential numeric ids to new items and A-prefixed ids to already-ticketed ones, in source order', () => {
     const items: Item[] = [
@@ -267,7 +343,7 @@ describe('buildReviewRows', () => {
       { id: 'x3', label: 'gamma' },
       { id: 'x4', label: 'delta' }, // already ticketed
     ];
-    const dedupMap = new Map([['beta', 'PROJ-501'], ['delta', 'PROJ-502']]);
+    const dedupMap: DedupMap = new Map([['beta', [ticket('PROJ-501', ['beta'])]], ['delta', [ticket('PROJ-502', ['delta'])]]]);
 
     const rows = buildReviewRows<Item, Row>(items, dedupMap, item => [item.label], item => ({ label: item.label }));
 
@@ -285,15 +361,28 @@ describe('buildReviewRows', () => {
     expect(rows).toEqual([]);
   });
 
+  it('keeps today\'s row shape when no change tracking is given (email and not-yet-wired importers)', () => {
+    const dedupMap: DedupMap = new Map([['beta', [ticket('PROJ-8', ['beta'], { resolved: true }), ticket('PROJ-30', ['beta'])]]]);
+
+    const rows = buildReviewRows<Item, Row>(
+      [{ id: 'x1', label: 'alpha' }, { id: 'x2', label: 'beta' }], dedupMap, item => [item.label], item => ({ label: item.label }),
+    );
+
+    expect(rows).toEqual([
+      { id: '1', existingTicketKey: null, included: true, label: 'alpha' },
+      { id: 'A1', existingTicketKey: 'PROJ-30', included: false, label: 'beta' },
+    ]);
+  });
+
   // U2/R11: multi-key dedupKeyOf — a folded group's own multiple candidate keys (one per member
   // flaw), not just a single-item's one label.
   describe('multi-key dedupKeyOf (folded groups, R11)', () => {
     interface Group { id: string; keys: string[] }
-    interface GroupRow { id: string; existingTicketKey: string | null; included: boolean; keys: string[] }
+    interface GroupRow extends ReviewRowBase { keys: string[] }
 
     it('treats a group as already-ticketed when only one of its member keys matches', () => {
       const groups: Group[] = [{ id: 'g1', keys: ['issue-1', 'issue-2', 'issue-3'] }];
-      const dedupMap = new Map([['issue-2', 'PROJ-900']]); // only the 2nd of 3 member keys matches
+      const dedupMap: DedupMap = new Map([['issue-2', [ticket('PROJ-900', ['issue-2'])]]]); // only the 2nd of 3 member keys matches
 
       const rows = buildReviewRows<Group, GroupRow>(groups, dedupMap, g => g.keys, g => ({ keys: g.keys }));
 
@@ -306,7 +395,8 @@ describe('buildReviewRows', () => {
 
     it('does not flag an already-ticketed group whose every member key is already on a ticket', () => {
       const groups: Group[] = [{ id: 'g1', keys: ['issue-1', 'issue-2'] }];
-      const dedupMap = new Map([['issue-1', 'PROJ-900'], ['issue-2', 'PROJ-900']]);
+      const t = ticket('PROJ-900', ['issue-1', 'issue-2']);
+      const dedupMap: DedupMap = new Map([['issue-1', [t]], ['issue-2', [t]]]);
 
       const rows = buildReviewRows<Group, GroupRow>(groups, dedupMap, g => g.keys, g => ({ keys: g.keys }));
 
@@ -316,11 +406,153 @@ describe('buildReviewRows', () => {
 
     it('treats a group as new when none of its member keys match', () => {
       const groups: Group[] = [{ id: 'g1', keys: ['issue-1', 'issue-2', 'issue-3'] }];
-      const dedupMap = new Map([['issue-99', 'PROJ-900']]); // matches nothing in this group
+      const dedupMap: DedupMap = new Map([['issue-99', [ticket('PROJ-900', ['issue-99'])]]]); // matches nothing in this group
 
       const rows = buildReviewRows<Group, GroupRow>(groups, dedupMap, g => g.keys, g => ({ keys: g.keys }));
 
       expect(rows).toEqual([{ id: '1', existingTicketKey: null, included: true, keys: ['issue-1', 'issue-2', 'issue-3'] }]);
+    });
+  });
+
+  // U3/R3/R6/R7/KTD1: per-row target, change and default action once change tracking is given.
+  describe('with change tracking (U3)', () => {
+    // A Waltz-like item: one dedup key, a list of finding ids, and a rating. The describer below
+    // mirrors describeWaltzChange's rules with plain `f-<id>` / `r-<rating>` record labels.
+    interface Comp { key: string; findings: string[]; rating: number }
+    interface CompRow extends ReviewRowBase { key: string }
+    const describe_ = (c: Comp, known: string[]): RowChange | null => {
+      const findingLabels = known.filter(l => l.startsWith('f-'));
+      const ratings = known.filter(l => l.startsWith('r-')).map(l => Number(l.slice(2)));
+      if (findingLabels.length === 0 && ratings.length === 0) return { kind: 'baseline' };
+      const newIds = c.findings.filter(f => !known.includes(`f-${f}`));
+      const knownRating = Math.max(...ratings);
+      const ratingRise = ratings.length > 0 && c.rating > knownRating ? { from: String(knownRating), to: String(c.rating) } : undefined;
+      if (newIds.length === 0 && !ratingRise) return null;
+      return ratingRise ? { kind: 'findings', newIds, ratingRise } : { kind: 'findings', newIds };
+    };
+    const tracking = { describe: describe_ };
+    const build = (items: Comp[], dedupMap: DedupMap) =>
+      buildReviewRows<Comp, CompRow>(items, dedupMap, c => [c.key], c => ({ key: c.key }), tracking);
+
+    it('Covers AE1: open ticket + change → update, all resolved + new findings → follow-up, no change → leave', () => {
+      const dedupMap: DedupMap = new Map([
+        ['log4j', [ticket('PROJ-12', ['log4j', 'f-A', 'r-3'], { status: 'In Progress' })]],
+        ['jackson', [ticket('PROJ-8', ['jackson', 'f-A', 'r-3'], { resolved: true })]],
+        ['commons', [ticket('PROJ-15', ['commons', 'f-A', 'r-3'])]],
+      ]);
+      const rows = build([
+        { key: 'log4j', findings: ['A', 'B', 'C'], rating: 3 },
+        { key: 'jackson', findings: ['A', 'B'], rating: 3 },
+        { key: 'commons', findings: ['A'], rating: 3 },
+      ], dedupMap);
+
+      expect(rows.map(r => r.action)).toEqual(['update', 'follow-up', 'leave']);
+      expect(rows[0]).toMatchObject({
+        id: 'A1', existingTicketKey: 'PROJ-12', ticketKeys: ['PROJ-12'],
+        target: { key: 'PROJ-12', status: 'In Progress', resolved: false },
+        change: { kind: 'findings', newIds: ['B', 'C'] },
+        allowedActions: ['update', 'follow-up', 're-create', 'leave'],
+      });
+      expect(rows[1].allowedActions).toEqual(['update', 'follow-up', 're-create', 'leave']);
+      expect(rows[2].change).toBeNull();
+      expect(rows[2].allowedActions).toEqual(['re-create', 'leave']);
+    });
+
+    it('Covers AE2: known findings are the union of every ticket; the target is the newest open ticket', () => {
+      const dedupMap: DedupMap = new Map([['jackson', [
+        ticket('PROJ-8', ['jackson', 'f-A', 'r-3'], { resolved: true, status: 'Done', created: '2026-01-01T09:00:00.000+0000' }),
+        ticket('PROJ-30', ['jackson', 'f-B', 'r-3'], { status: 'Open', created: '2026-05-01T09:00:00.000+0000' }),
+      ]]]);
+
+      const [row] = build([{ key: 'jackson', findings: ['A', 'B', 'C'], rating: 3 }], dedupMap);
+
+      expect(row.change).toEqual({ kind: 'findings', newIds: ['C'] });
+      expect(row.target).toEqual({ key: 'PROJ-30', status: 'Open', resolved: false });
+      expect(row.existingTicketKey).toBe('PROJ-30');
+      expect(row.ticketKeys).toEqual(['PROJ-8', 'PROJ-30']);
+      expect(row.action).toBe('update');
+    });
+
+    it('targets the later-created of two open tickets, and the higher key number on a created tie', () => {
+      const dedupMap: DedupMap = new Map([
+        ['a', [
+          ticket('PROJ-40', ['a', 'f-A'], { created: '2026-06-01T09:00:00.000+0000' }),
+          ticket('PROJ-41', ['a', 'f-A'], { created: '2026-02-01T09:00:00.000+0000' }),
+        ]],
+        ['b', [
+          ticket('PROJ-99', ['b', 'f-A'], { created: '2026-02-01T09:00:00.000+0000' }),
+          ticket('PROJ-100', ['b', 'f-A'], { created: '2026-02-01T09:00:00.000+0000' }),
+        ]],
+      ]);
+
+      const rows = build([{ key: 'a', findings: ['A'], rating: 0 }, { key: 'b', findings: ['A'], rating: 0 }], dedupMap);
+
+      expect(rows.map(r => r.target?.key)).toEqual(['PROJ-40', 'PROJ-100']);
+    });
+
+    it('Covers AE3 (detection): a ticket with only the dedup label is a baseline, defaulting to update without follow-up', () => {
+      const dedupMap: DedupMap = new Map([['old', [ticket('PROJ-5', ['old'])]]]);
+
+      const [row] = build([{ key: 'old', findings: ['A', 'B'], rating: 3 }], dedupMap);
+
+      expect(row.change).toEqual({ kind: 'baseline' });
+      expect(row.action).toBe('update');
+      expect(row.allowedActions).toEqual(['update', 're-create', 'leave']);
+    });
+
+    it('gives a baseline row whose only ticket is resolved that ticket as its target', () => {
+      const dedupMap: DedupMap = new Map([['old', [ticket('PROJ-5', ['old'], { resolved: true, status: 'Done' })]]]);
+
+      const [row] = build([{ key: 'old', findings: ['A'], rating: 3 }], dedupMap);
+
+      expect(row.target).toEqual({ key: 'PROJ-5', status: 'Done', resolved: true });
+      expect(row.action).toBe('update');
+    });
+
+    it('defaults a rating-only rise on all-resolved tickets to update, offering re-create but not follow-up', () => {
+      const dedupMap: DedupMap = new Map([['lib', [ticket('PROJ-8', ['lib', 'f-A', 'r-3'], { resolved: true })]]]);
+
+      const [row] = build([{ key: 'lib', findings: ['A'], rating: 4 }], dedupMap);
+
+      expect(row.change).toEqual({ kind: 'findings', newIds: [], ratingRise: { from: '3', to: '4' } });
+      expect(row.action).toBe('update');
+      expect(row.allowedActions).toEqual(['update', 're-create', 'leave']);
+    });
+
+    it('unions the labels of two different tickets holding a folded group\'s flaws (R2)', () => {
+      interface Group { ids: string[] }
+      interface GroupRow extends ReviewRowBase { ids: string[] }
+      const seen: string[][] = [];
+      const dedupMap: DedupMap = new Map([
+        ['1', [ticket('PROJ-1', ['veracode-issue-1'])]],
+        ['2', [ticket('PROJ-2', ['veracode-issue-2'])]],
+      ]);
+
+      const [row] = buildReviewRows<Group, GroupRow>(
+        [{ ids: ['1', '2', '3'] }], dedupMap, g => g.ids, g => ({ ids: g.ids }),
+        {
+          describe: (g, known) => {
+            seen.push(known);
+            const newIds = g.ids.filter(id => !known.includes(`veracode-issue-${id}`));
+            return newIds.length ? { kind: 'findings', newIds } : null;
+          },
+        },
+      );
+
+      expect([...seen[0]].sort()).toEqual(['veracode-issue-1', 'veracode-issue-2']);
+      expect(row.change).toEqual({ kind: 'findings', newIds: ['3'] });
+      expect(row.ticketKeys).toEqual(['PROJ-1', 'PROJ-2']);
+      // hasUnsyncedFindings keeps working for Veracode until the Already-ticketed screen moves to `action`.
+      expect(row.hasUnsyncedFindings).toBe(true);
+    });
+
+    it('does not call the describer or add action fields for a new (un-ticketed) row', () => {
+      const describeSpy = vi.fn(() => null);
+      const rows = buildReviewRows<Comp, CompRow>(
+        [{ key: 'fresh', findings: ['A'], rating: 1 }], new Map(), c => [c.key], c => ({ key: c.key }), { describe: describeSpy },
+      );
+      expect(describeSpy).not.toHaveBeenCalled();
+      expect(rows).toEqual([{ id: '1', existingTicketKey: null, included: true, key: 'fresh' }]);
     });
   });
 });

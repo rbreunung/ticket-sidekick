@@ -2,6 +2,7 @@ import { XMLParser } from 'fast-xml-parser';
 import { markdownToJiraWiki } from './markdownToJiraWiki';
 import {
   MAX_REPORT_BYTES as SHARED_MAX_REPORT_BYTES, sanitizeCellText, sanitizeStandaloneLine,
+  type RowChange,
 } from './reportImport';
 
 export interface VeracodeFlaw {
@@ -398,6 +399,17 @@ export function buildNewFindingsCommentWiki(newFlaws: VeracodeFlaw[]): string {
   }
 
   return markdownToJiraWiki(lines.join('\n'));
+}
+
+/**
+ * U3/R2: the Veracode change describer for buildReviewRows — a folded group's new findings are the
+ * member flaw ids whose `veracode-issue-<id>` label none of its tickets carry (`knownLabels` is the
+ * union across all of them). Veracode has no baseline and no rating rise; null when nothing is new.
+ */
+export function describeVeracodeChange(group: VeracodeFlaw[], knownLabels: string[]): RowChange | null {
+  const known = new Set(knownLabels);
+  const newIds = [...new Set(group.map(f => f.issueId))].filter(id => !known.has(`veracode-issue-${id}`));
+  return newIds.length > 0 ? { kind: 'findings', newIds } : null;
 }
 
 // Lives here (rather than in sessionState.ts, where the other session-related types live) so that

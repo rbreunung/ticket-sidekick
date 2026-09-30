@@ -3,6 +3,7 @@ import ExcelJS from 'exceljs';
 import { markdownToJiraWiki } from './markdownToJiraWiki';
 import {
   MAX_REPORT_BYTES as SHARED_MAX_REPORT_BYTES, sanitizeCellText, sanitizeStandaloneLine,
+  type RowChange,
 } from './reportImport';
 
 export interface WaltzVulnerability {
@@ -451,6 +452,16 @@ export function describeWaltzChange(component: WaltzComponent, knownLabels: stri
 
   if (newCveIds.length === 0 && !ratingRise) return null;
   return ratingRise ? { newCveIds, ratingRise } : { newCveIds };
+}
+
+/** U3: describeWaltzChange mapped to the shared RowChange shape buildReviewRows' change tracking uses. */
+export function describeWaltzRowChange(component: WaltzComponent, knownLabels: string[]): RowChange | null {
+  const change = describeWaltzChange(component, knownLabels);
+  if (change === null) return null;
+  if ('baseline' in change) return { kind: 'baseline' };
+  return change.ratingRise
+    ? { kind: 'findings', newIds: change.newCveIds, ratingRise: change.ratingRise }
+    : { kind: 'findings', newIds: change.newCveIds };
 }
 
 const FOLLOW_UP_SUFFIX_PATTERN = / \(follow-up to [A-Z][A-Z0-9_]*-\d+\)$/;

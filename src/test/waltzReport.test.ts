@@ -4,7 +4,7 @@ import { join } from 'path';
 import {
   parseWaltzReport, assertSafeWaltzReportSize, filterComponents,
   buildSummary, buildDescriptionWiki, buildLabels, sanitizeComponentLabel,
-  buildCveLabel, buildRatingLabel, buildRecordLabels, parseRecordLabels, describeWaltzChange,
+  buildCveLabel, buildRatingLabel, buildRecordLabels, parseRecordLabels, describeWaltzChange, describeWaltzRowChange,
   buildUpdateCommentWiki, buildFollowUpDescriptionWiki, buildFollowUpSummary, rewriteSummaryRating,
   type WaltzComponent,
 } from '../utils/waltzReport';
@@ -499,4 +499,33 @@ describe('update comment and follow-up description neutralize crafted CVE summar
       expect(wiki).not.toContain('||a||b||');
     });
   }
+});
+
+// U3: adapter from describeWaltzChange's result to the shared RowChange shape buildReviewRows uses.
+describe('describeWaltzRowChange', () => {
+  const componentLabel = sanitizeComponentLabel('jackson-databind 2.9');
+
+  it('maps a baseline to { kind: baseline }', () => {
+    const c = makeComponent('jackson-databind 2.9', 'High', ['CVE-A']);
+    expect(describeWaltzRowChange(c, [componentLabel])).toEqual({ kind: 'baseline' });
+  });
+
+  it('maps new CVEs and a rating rise to a findings change', () => {
+    const c = makeComponent('jackson-databind 2.9', 'Critical', ['CVE-A', 'CVE-B']);
+    expect(describeWaltzRowChange(c, [componentLabel, buildCveLabel('CVE-A'), 'oss-rating-high'])).toEqual({
+      kind: 'findings', newIds: ['CVE-B'], ratingRise: { from: 'High', to: 'Critical' },
+    });
+  });
+
+  it('maps a rating-only rise to a findings change with no new ids', () => {
+    const c = makeComponent('jackson-databind 2.9', 'Critical', ['CVE-A']);
+    expect(describeWaltzRowChange(c, [componentLabel, buildCveLabel('CVE-A'), 'oss-rating-high'])).toEqual({
+      kind: 'findings', newIds: [], ratingRise: { from: 'High', to: 'Critical' },
+    });
+  });
+
+  it('returns null when nothing changed', () => {
+    const c = makeComponent('jackson-databind 2.9', 'High', ['CVE-A']);
+    expect(describeWaltzRowChange(c, [componentLabel, buildCveLabel('CVE-A'), 'oss-rating-high'])).toBeNull();
+  });
 });

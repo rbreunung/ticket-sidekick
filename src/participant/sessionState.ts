@@ -4,6 +4,7 @@ import type { VeracodeFlaw, VeracodeReviewRow } from '../utils/veracodeReport';
 import type { WaltzComponent, WaltzReviewRow } from '../utils/waltzReport';
 import type { EmailImportItem, EmailReviewRow } from '../utils/emlParser';
 import { BATCH_LIMIT, sanitizeCellText } from '../utils/reportImport';
+import type { RowChange } from '../utils/reportImport';
 import { TICKET_ID_PATTERN, extractTicketId } from '../utils/branchParser';
 import { formatFileSize } from '../utils/attachmentEligibility';
 import { formatKeyLink, coerceTypedFieldValue, buildExtraFieldColumns, type TemplateFieldCandidate } from '../services/TicketService';
@@ -1313,7 +1314,22 @@ export interface ReviewRowBase {
   // Overview-hub KTD4: the key of the fresh ticket a "re-create tickets" action created for this
   // already-ticketed row — the row stays listed, shows this key, and is no longer toggleable.
   recreatedKey?: string;
+  // U3/KTD1/KTD2: set by buildReviewRows only on an already-ticketed row of an importer with change
+  // tracking (Veracode, Waltz) — never on email rows or new rows.
+  /** Every ticket carrying one of the row's dedup keys. */
+  ticketKeys?: string[];
+  /** The ticket `update` writes to: the newest open one, or the newest overall when all are resolved. */
+  target?: { key: string; status: string | null; resolved: boolean };
+  /** What changed since the tickets were made; null = no change. */
+  change?: RowChange | null;
+  /** The actions this row offers (R6). */
+  allowedActions?: TicketedAction[];
+  /** The row's current action — the R7 default until the user changes it. */
+  action?: TicketedAction;
 }
+
+/** U3/R6: the per-row actions on the Already-ticketed screen. */
+export type TicketedAction = 'update' | 'follow-up' | 're-create' | 'leave';
 
 /** Which screen of a report-import review is showing (overview-hub KTD1). */
 export type ImportReviewView = 'overview' | 'new' | 'ticketed' | 'stale';

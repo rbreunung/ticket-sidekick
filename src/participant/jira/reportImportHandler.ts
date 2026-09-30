@@ -18,7 +18,7 @@ import { TemplateService } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
 import {
   MAX_REPORT_BYTES, BATCH_LIMIT, DEFAULT_DEDUP_CHUNK_SIZE, findAlreadyTicketed, buildReviewRows,
-  buildDedupJql, findStaleTickets, type JqlIssueLike,
+  buildDedupJql, findStaleTickets, type JqlIssueLike, type DedupMap,
 } from '../../utils/reportImport';
 import {
   isCancellation, pickEmailOption, applyStaleTicketToggle,
@@ -415,7 +415,7 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
   // KTD2: dedup is optional — an importer that omits searchLabelOf/dedupKeyOf/labelToDedupKey (email)
   // has no per-item dedup key, so the "already ticketed" search is skipped entirely rather than run
   // and found empty. dedupMap stays empty, so every item is treated as new below.
-  let dedupMap: Map<string, string> = new Map();
+  let dedupMap: DedupMap = new Map();
   if (descriptor.searchLabelOf && descriptor.dedupKeyOf && descriptor.labelToDedupKey) {
     stream.markdown(`_Checking for already-ticketed ${plural}…_\n\n`);
     // The template session was already cleared above, so a failure here must degrade gracefully
@@ -432,7 +432,9 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
       const result = await findAlreadyTicketed(
         searchLabels,
         DEFAULT_DEDUP_CHUNK_SIZE,
-        chunk => ticketService.searchTicketsRaw(buildDedupJql(session.projectKey, chunk), 100).then(r => r.issues as JqlIssueLike[]),
+        // U3/KTD1: resolution + created let buildReviewRows pick each item's newest open ticket.
+        chunk => ticketService.searchTicketsRaw(buildDedupJql(session.projectKey, chunk), 100, ['resolution', 'created'])
+          .then(r => r.issues as JqlIssueLike[]),
         descriptor.labelToDedupKey,
         (level, message, details) => logDiag(descriptor.scope, level, message, details),
       );
