@@ -16,7 +16,8 @@ import {
   buildReviewPage, parseReviewPageNav, applyReviewSessionToggle, type ReviewRowBase,
 } from '../participant/sessionState';
 import {
-  markRowsUpdatedExisting, parseBulkNewRowReply, applyBulkNewRowSet,
+  parseBulkNewRowReply, applyBulkNewRowSet, applyTicketedActionChange, formatRowChange,
+  CURRENT_SESSION_SCHEMA_VERSION, isSessionExpired, describeImportReplyVocabulary, type TicketedAction,
   buildImportOverview, buildNewGroupScreen, buildTicketedGroupScreen, buildStaleGroupScreen,
   initImportViewState, ensureImportViewState, computeImportResultGroups, emptyImportOutcomes, buildImportDoneSummary,
   parseOverviewReply, parseNewGroupReply, parseTicketedGroupReply, parseStaleGroupReply, IMPORT_COMMANDS,
@@ -939,21 +940,12 @@ describe('applyReviewSessionToggle (U4/R7-R8)', () => {
     expect(result.rows.find(r => r.id === '1')!.included).toBe(true);
   });
 
-  it('mirrors an "already ticketed" row\'s toggle into allRows so it survives a page-navigation recompute', () => {
+  it('never touches an already-ticketed row — those rows take per-row actions, not toggles (U4)', () => {
     const ticketed = makeTicketedRow('A1', 'PROJ-1');
-    const allRows = [ticketed, ...makeFreshRows(60)];
-    const page0 = buildReviewPage(allRows, 0);
-
-    const toggled = applyReviewSessionToggle(page0.rows, allRows, ['A1']);
-    expect(toggled.rows.find(r => r.id === 'A1')!.included).toBe(true);
-    expect(toggled.allRows.find(r => r.id === 'A1')!.included).toBe(true);
-
-    // Navigate away and back — buildReviewPage re-derives `rows` from the updated allRows, so the
-    // ticketed-row toggle must still be visible (R8: "already ticketed" is shown in full, unaffected).
-    const page1 = buildReviewPage(toggled.allRows, 1);
-    const backToPage0 = buildReviewPage(toggled.allRows, 0);
-    expect(page1.rows.find(r => r.id === 'A1')!.included).toBe(true);
-    expect(backToPage0.rows.find(r => r.id === 'A1')!.included).toBe(true);
+    const allRows = [ticketed, ...makeFreshRows(3)];
+    const toggled = applyReviewSessionToggle(allRows, allRows, ['A1']);
+    expect(toggled.rows.find(r => r.id === 'A1')).toEqual(ticketed);
+    expect(toggled.allRows.find(r => r.id === 'A1')).toEqual(ticketed);
   });
 
   it('does NOT mirror a "new" row\'s toggle into allRows — a page revisited later resets to default-included (R7)', () => {
@@ -974,35 +966,6 @@ describe('applyReviewSessionToggle (U4/R7-R8)', () => {
     const result = applyReviewSessionToggle(rows, rows, ['2']);
     expect(result.rows.find(r => r.id === '1')!.included).toBe(true);
     expect(result.rows.find(r => r.id === '3')!.included).toBe(true);
-  });
-});
-
-// U3: per-row "synced" bookkeeping for "update tickets" (R13).
-
-describe('markRowsUpdatedExisting (U3/R13)', () => {
-  it('sets updatedExisting on every row (in both rows and allRows) whose ticket key is in the update set', () => {
-    const ticketed = makeTicketedRow('A1', 'PROJ-1');
-    const allRows = [ticketed, ...makeFreshRows(3)];
-    const result = markRowsUpdatedExisting(allRows, allRows, new Set(['PROJ-1']));
-
-    expect(result.rows.find(r => r.id === 'A1')!.updatedExisting).toBe(true);
-    expect(result.allRows.find(r => r.id === 'A1')!.updatedExisting).toBe(true);
-  });
-
-  it('leaves every other row untouched, including a "new" row with no existingTicketKey', () => {
-    const ticketed = makeTicketedRow('A1', 'PROJ-1');
-    const rows = [ticketed, ...makeFreshRows(2)];
-    const result = markRowsUpdatedExisting(rows, rows, new Set(['PROJ-1']));
-
-    expect(result.rows.find(r => r.id === '1')!.updatedExisting).toBeUndefined();
-    expect(result.rows.find(r => r.id === '2')!.updatedExisting).toBeUndefined();
-  });
-
-  it('is a no-op when the update set is empty', () => {
-    const ticketed = makeTicketedRow('A1', 'PROJ-1');
-    const rows = [ticketed];
-    const result = markRowsUpdatedExisting(rows, rows, new Set());
-    expect(result.rows[0].updatedExisting).toBeUndefined();
   });
 });
 
@@ -1081,7 +1044,7 @@ function screenSession(allRows: PageRow[], extra: Partial<ReviewSession<PageRow>
   });
 }
 
-const itemOpts = { itemNoun: 'item(s)', supportsUpdateExisting: false };
+const itemOpts = { itemNoun: 'item(s)' };
 
 describe('New screen — "Include all" / "Exclude all" links (review-table toggle-all)', () => {
   it('renders both bulk links when New rows exist, each resubmitting its exact token', () => {
@@ -1117,50 +1080,160 @@ describe('New screen — "Include all" / "Exclude all" links (review-table toggl
   });
 });
 
-describe('Already-ticketed screen — "Updated?" column and actions (U3/R13, R8, R16)', () => {
-  it('omits the "Updated?" column and the update action when the importer does not support it (Waltz)', () => {
-    const rows = [{ ...makeTicketedRow('A1', 'PROJ-1'), hasUnsyncedFindings: true }, ...makeFreshRows(1)];
-    const text = buildTicketedGroupScreen(screenSession(rows), [], itemOpts);
-    expect(text).not.toContain('Updated?');
-    expect(text).not.toContain('update tickets');
+// U4 (import-ticket-updates-parity plan): the shared per-row Already-ticketed screen.
+function cmd(label: string, command: string): string {
+  return buildChatCommandLink(label, '@jira', command);
+}
+
+function makeActionRow(
+  id: string,
+  key: string,
+  extra: Partial<PageRow> = {},
+): PageRow {
+  return {
+    id, existingTicketKey: key, included: false,
+    target: { key, status: 'In Progress', resolved: false },
+    ticketKeys: [key],
+    change: null,
+    allowedActions: ['re-create', 'leave'],
+    action: 'leave',
+    ...extra,
+  };
+}
+
+const changedRow = (id: string, key: string, extra: Partial<PageRow> = {}) => makeActionRow(id, key, {
+  change: { kind: 'findings', newIds: ['CVE-1', 'CVE-2'], ratingRise: { from: 'High', to: 'Critical' } },
+  allowedActions: ['update', 'follow-up', 're-create', 'leave'],
+  action: 'update',
+  ...extra,
+});
+
+const waltzOpts = { itemNoun: 'component(s)', findingNoun: 'CVE(s)' };
+
+function rowLine(text: string, id: string): string {
+  return text.split('\n').find(l => l.startsWith(`| ${id} |`))!;
+}
+
+describe('Already-ticketed screen — per-row actions (U4/R5, R6, KTD9)', () => {
+  it('an update row with a change lists every allowed action as a link, the current one in bold', () => {
+    const text = buildTicketedGroupScreen(screenSession([changedRow('A1', 'PROJ-12')]), [], waltzOpts);
+    const line = rowLine(text, 'A1');
+    expect(line).toContain(
+      `**${cmd('update', 'A1 update')}** · ${cmd('follow-up', 'A1 follow-up')} · ${cmd('re-create', 'A1 re-create')} · ${cmd('leave', 'A1 leave')}`,
+    );
   });
 
-  it('offers "Update N tickets" counting only rows with a finding their ticket lacks', () => {
-    const rows = [
-      { ...makeTicketedRow('A1', 'PROJ-1'), hasUnsyncedFindings: true },
-      { ...makeTicketedRow('A2', 'PROJ-2'), hasUnsyncedFindings: true },
-      makeTicketedRow('A3', 'PROJ-3'),
-    ];
-    const text = buildTicketedGroupScreen(screenSession(rows), [], { ...itemOpts, supportsUpdateExisting: true });
-    expect(text).toContain('Updated?');
-    expect(decodeURIComponent(text)).toContain('[Update 2 tickets]');
-    expect(decodeURIComponent(text)).toContain('"@jira update tickets"');
+  it('a no-change row lists **leave** · re-create', () => {
+    const text = buildTicketedGroupScreen(screenSession([makeActionRow('A3', 'PROJ-3')]), [], waltzOpts);
+    expect(rowLine(text, 'A3')).toContain(`**${cmd('leave', 'A3 leave')}** · ${cmd('re-create', 'A3 re-create')}`);
   });
 
-  it('says every row is up to date instead of offering "Update 0 tickets"', () => {
-    const text = buildTicketedGroupScreen(screenSession([makeTicketedRow('A1', 'PROJ-1')]), [], { ...itemOpts, supportsUpdateExisting: true });
+  it('a row built without change tracking still gets the per-row actions (leave / re-create)', () => {
+    const text = buildTicketedGroupScreen(screenSession([makeTicketedRow('A1', 'PROJ-1')]), [], itemOpts);
+    expect(rowLine(text, 'A1')).toContain(`**${cmd('leave', 'A1 leave')}** · ${cmd('re-create', 'A1 re-create')}`);
+  });
+
+  it('shows Ticket, Status and a one-line Change column', () => {
+    const text = buildTicketedGroupScreen(screenSession([
+      changedRow('A1', 'PROJ-12'),
+      makeActionRow('A2', 'PROJ-5', { change: { kind: 'baseline' }, target: { key: 'PROJ-5', status: 'Done', resolved: true } }),
+      makeActionRow('A3', 'PROJ-3'),
+    ]), [], waltzOpts);
+    expect(text).toContain('| # | Ticket | Status | Change | Action |');
+    expect(rowLine(text, 'A1')).toContain('| PROJ-12 | In Progress | +2 CVEs, High→Critical |');
+    expect(rowLine(text, 'A2')).toContain('| PROJ-5 | Done | baseline |');
+    expect(rowLine(text, 'A3')).toContain('| PROJ-3 | In Progress | — |');
+  });
+
+  it('a finished row shows its result instead of links; a failed row shows the error and keeps its links', () => {
+    const text = buildTicketedGroupScreen(screenSession([
+      changedRow('A1', 'PROJ-12', { result: { status: 'done', action: 'update' } }),
+      changedRow('A2', 'PROJ-8', { action: 'follow-up', result: { status: 'done', action: 'follow-up', key: 'PROJ-31' } }),
+      changedRow('A3', 'PROJ-9', { action: 'follow-up', result: { status: 'done', action: 'follow-up', key: 'PROJ-33', linkMissing: true } }),
+      changedRow('A4', 'PROJ-4', { action: 're-create', result: { status: 'done', action: 're-create', key: 'PROJ-32' } }),
+      changedRow('A5', 'PROJ-5', { result: { status: 'failed', action: 'update', error: 'Field | labels is read-only' } }),
+    ]), [], waltzOpts);
+    expect(rowLine(text, 'A1')).toMatch(/\| updated \|$/);
+    expect(rowLine(text, 'A2')).toMatch(/\| follow-up PROJ-31 \|$/);
+    expect(rowLine(text, 'A3')).toMatch(/\| follow-up PROJ-33 \(link missing\) \|$/);
+    expect(rowLine(text, 'A4')).toMatch(/\| re-created as PROJ-32 \|$/);
+    for (const id of ['A1', 'A2', 'A3', 'A4']) expect(rowLine(text, id)).not.toContain('command:');
+    const failed = rowLine(text, 'A5');
+    expect(failed).toContain('✗ update failed: Field \\| labels is read-only');
+    expect(failed).toContain(cmd('update', 'A5 update'));
+  });
+
+  it('the footer offers "Apply N actions" counting unfinished rows not on leave, plus shortcuts for rows on update / re-create', () => {
+    const text = buildTicketedGroupScreen(screenSession([
+      changedRow('A1', 'PROJ-1'),
+      changedRow('A2', 'PROJ-2', { action: 're-create' }),
+      changedRow('A3', 'PROJ-3', { result: { status: 'done', action: 'update' } }),
+      makeActionRow('A4', 'PROJ-4'),
+    ]), [], waltzOpts);
+    expect(text).toContain(cmd('Apply 2 actions', 'apply'));
+    expect(text).toContain(cmd('Update 1 tickets', 'update tickets'));
+    expect(text).toContain(cmd('Re-create 1 tickets', 're-create tickets'));
+    expect(text).toContain('`A2 follow-up`');
+  });
+
+  it('with every row on leave, there is nothing to apply and no shortcut link', () => {
+    const text = buildTicketedGroupScreen(screenSession([makeActionRow('A1', 'PROJ-1'), makeActionRow('A2', 'PROJ-2')]), [], waltzOpts);
+    expect(text).not.toContain('"@jira apply"');
     expect(text).not.toContain('"@jira update tickets"');
-    expect(text).toContain('up to date');
+    expect(text).not.toContain('"@jira re-create tickets"');
+    expect(text).toContain('nothing to apply');
   });
 
-  it('renders "✓ synced" only for a row whose updatedExisting flag is set', () => {
-    const rows = [{ ...makeTicketedRow('A1', 'PROJ-1'), updatedExisting: true }, makeTicketedRow('A2', 'PROJ-2')];
-    const text = buildTicketedGroupScreen(screenSession(rows), [], { ...itemOpts, supportsUpdateExisting: true });
-    const lines = text.split('\n');
-    expect(lines.find(l => l.includes('PROJ-1'))!).toContain('✓ synced');
-    expect(lines.find(l => l.includes('PROJ-2'))!).not.toContain('✓ synced');
+  it('notes the 50-per-reply cap when more rows are pending', () => {
+    const rows = Array.from({ length: 60 }, (_, i) => changedRow(`A${i + 1}`, `PROJ-${i + 1}`));
+    const text = buildTicketedGroupScreen(screenSession(rows), [], waltzOpts);
+    expect(text).toContain(cmd('Apply 60 actions', 'apply'));
+    expect(text).toContain('first 50');
+  });
+});
+
+describe('Session schema version (U4/KTD8)', () => {
+  it('is 8, so a review built with the version-7 row shape expires', () => {
+    expect(CURRENT_SESSION_SCHEMA_VERSION).toBe(8);
+    expect(isSessionExpired({ schemaVersion: 7 })).toBe(true);
+    expect(isSessionExpired({ schemaVersion: 8 })).toBe(false);
+  });
+});
+
+describe('formatRowChange (U4/R5)', () => {
+  it('summarizes a change in one line', () => {
+    expect(formatRowChange({ kind: 'findings', newIds: ['a', 'b'], ratingRise: { from: 'High', to: 'Critical' } }, 'CVE(s)')).toBe('+2 CVEs, High→Critical');
+    expect(formatRowChange({ kind: 'findings', newIds: ['1'] }, 'flaw(s)')).toBe('+1 flaw');
+    expect(formatRowChange({ kind: 'findings', newIds: [], ratingRise: { from: 'High', to: 'Critical' } }, 'CVE(s)')).toBe('High→Critical');
+    expect(formatRowChange({ kind: 'baseline' }, 'CVE(s)')).toBe('baseline');
+    expect(formatRowChange(null, 'CVE(s)')).toBe('—');
+    expect(formatRowChange(undefined, 'CVE(s)')).toBe('—');
+  });
+});
+
+describe('applyTicketedActionChange (U4/R8)', () => {
+  const rows = (): PageRow[] => [
+    changedRow('A1', 'PROJ-1'),
+    makeActionRow('A2', 'PROJ-2'),
+    changedRow('A3', 'PROJ-3', { result: { status: 'done', action: 'update' } }),
+    ...makeFreshRows(1),
+  ];
+
+  it('sets one row\'s action', () => {
+    const out = applyTicketedActionChange(rows(), 'A1', 'follow-up');
+    expect(out.find(r => r.id === 'A1')!.action).toBe('follow-up');
+    expect(out.find(r => r.id === 'A2')!.action).toBe('leave');
   });
 
-  it('shows "Re-create 0" until a row is toggled on, then "Re-create 1"; a re-created row shows its new key and no toggle', () => {
-    const rows = [makeTicketedRow('A1', 'PROJ-1'), makeTicketedRow('A2', 'PROJ-2')];
-    expect(buildTicketedGroupScreen(screenSession(rows), [], itemOpts)).toContain('Re-create 0 tickets');
-
-    const toggled = [{ ...rows[0], included: true }, { ...rows[1], recreatedKey: 'PROJ-77', included: false }];
-    const text = buildTicketedGroupScreen(screenSession(toggled), [], itemOpts);
-    expect(decodeURIComponent(text)).toContain('[Re-create 1 tickets]');
-    const a2Line = text.split('\n').find(l => l.includes('PROJ-2'))!;
-    expect(a2Line).toContain('re-created as PROJ-77');
-    expect(decodeURIComponent(a2Line)).not.toContain('"@jira A2"');
+  it('"all <action>" sets every unfinished row that offers it and leaves the rest', () => {
+    const out = applyTicketedActionChange(rows(), 'all', 'update');
+    expect(out.find(r => r.id === 'A1')!.action).toBe('update');
+    expect(out.find(r => r.id === 'A2')!.action).toBe('leave'); // update not offered
+    const all = applyTicketedActionChange(rows(), 'all', 're-create');
+    expect(all.find(r => r.id === 'A1')!.action).toBe('re-create');
+    expect(all.find(r => r.id === 'A2')!.action).toBe('re-create');
+    expect(all.find(r => r.id === 'A3')!.action).toBe('update'); // finished rows keep theirs
+    expect(all.find(r => r.id === '1')!.action).toBeUndefined(); // new rows untouched
   });
 });
 
@@ -1190,6 +1263,23 @@ describe('Overview screen (R1, R2, R3, R15)', () => {
     const session = screenSession([makeTicketedRow('A1', 'PROJ-1'), ...makeFreshRows(12)]);
     session.outcomes = { ...session.outcomes!, created: 50 };
     expect(buildImportOverview(session, itemOpts)).toContain('50 created · 12 left');
+  });
+
+  it('reports rows with changes and the updated / follow-up / re-created counts separately (U4/R16)', () => {
+    const ticketed = [
+      ...Array.from({ length: 3 }, (_, i) => changedRow(`A${i + 1}`, `PROJ-${i + 1}`)),
+      ...Array.from({ length: 9 }, (_, i) => makeActionRow(`A${i + 4}`, `PROJ-${i + 4}`)),
+    ];
+    const session = screenSession([...ticketed, ...makeFreshRows(1)]);
+    session.outcomes = { ...session.outcomes!, updated: 2, followedUp: 1, recreated: 1 };
+    const text = buildImportOverview(session, waltzOpts);
+    expect(text).toContain('**Already ticketed** — 12 components · 3 with changes · 2 updated · 1 follow-up · 1 re-created');
+    expect(text).not.toContain('with new findings');
+  });
+
+  it('omits "with changes" when no row changed', () => {
+    const text = buildImportOverview(screenSession([makeActionRow('A1', 'PROJ-1'), ...makeFreshRows(1)]), waltzOpts);
+    expect(text).toContain('**Already ticketed** — 1 component —');
   });
 
   it('omits a group that had no rows when the import was built', () => {
@@ -1250,7 +1340,9 @@ describe('Import view state (KTD1, KTD7)', () => {
 
   it('buildImportDoneSummary reports every outcome and any failures', () => {
     expect(buildImportDoneSummary({ ...emptyImportOutcomes(), created: 3, closed: 1, createFailed: 1 }))
-      .toBe('Import finished — **3** created, 0 re-created, 0 updated, 1 closed, 1 failed.');
+      .toBe('Import finished — **3** created, 0 updated, 0 follow-ups, 0 re-created, 1 closed, 1 failed.');
+    expect(buildImportDoneSummary({ ...emptyImportOutcomes(), followedUp: 1, followUpFailed: 1 }))
+      .toBe('Import finished — **0** created, 0 updated, 1 follow-up, 0 re-created, 0 closed, 1 failed.');
   });
 });
 
@@ -1264,7 +1356,13 @@ describe('Per-screen reply parsing (KTD2, R6)', () => {
   };
   const ctx: ImportReplyContext = {
     singleGroup: false, groups: ['new', 'ticketed', 'stale'],
-    newRowIds: ['1', '2', '3'], ticketedRowIds: ['A1', 'A2'], stale, supportsUpdateExisting: true,
+    newRowIds: ['1', '2', '3'],
+    ticketedRows: [
+      { id: 'A1', allowedActions: ['update', 'follow-up', 're-create', 'leave'] },
+      { id: 'A2', allowedActions: ['update', 're-create', 'leave'] },
+      { id: 'A3', allowedActions: ['re-create', 'leave'] },
+    ],
+    stale,
   };
 
   it('overview: open links, done, cancellation, and nothing else', () => {
@@ -1297,14 +1395,56 @@ describe('Per-screen reply parsing (KTD2, R6)', () => {
     expect(parseNewGroupReply('cancel', single)).toEqual({ kind: 'done' });
   });
 
-  it('Already ticketed: update / re-create / A-ids; confirmation words are rejected (two actions)', () => {
-    expect(parseTicketedGroupReply('A1', ctx)).toEqual({ kind: 'toggleRows', ids: ['A1'] });
+  it('Already ticketed: `<row id> <action>` and `all <action>` set actions (U4/KTD7)', () => {
+    expect(parseTicketedGroupReply('A2 follow-up', { ...ctx, ticketedRows: [{ id: 'A2', allowedActions: ['update', 'follow-up', 're-create', 'leave'] }] }))
+      .toEqual({ kind: 'setAction', id: 'A2', action: 'follow-up' });
+    expect(parseTicketedGroupReply('a1 Re-Create', ctx)).toEqual({ kind: 'setAction', id: 'A1', action: 're-create' });
+    expect(parseTicketedGroupReply('A1 followup', ctx)).toEqual({ kind: 'setAction', id: 'A1', action: 'follow-up' });
+    expect(parseTicketedGroupReply('A1 follow up', ctx)).toEqual({ kind: 'setAction', id: 'A1', action: 'follow-up' });
+    expect(parseTicketedGroupReply('all leave', ctx)).toEqual({ kind: 'setAllActions', action: 'leave' });
+    expect(parseTicketedGroupReply('all follow-up', ctx)).toEqual({ kind: 'setAllActions', action: 'follow-up' });
+  });
+
+  it('Covers AE6: an action a row does not offer is rejected with a message', () => {
+    const reply = parseTicketedGroupReply('A3 follow-up', ctx);
+    expect(reply.kind).toBe('invalid');
+    expect((reply as { reason?: string }).reason).toContain('A3');
+    expect(parseTicketedGroupReply('A2 follow-up', ctx).kind).toBe('invalid');
+    // No unfinished row offers the action at all.
+    expect(parseTicketedGroupReply('all follow-up', { ...ctx, ticketedRows: [{ id: 'A3', allowedActions: ['re-create', 'leave'] }] }).kind).toBe('invalid');
+  });
+
+  it('a finished row (absent from ticketedRows) or an unknown row cannot be set', () => {
+    expect(parseTicketedGroupReply('A9 leave', ctx).kind).toBe('invalid');
+  });
+
+  it('a bare row id no longer toggles anything', () => {
+    expect(parseTicketedGroupReply('A1', ctx)).toEqual({ kind: 'invalid' });
+    expect(parseTicketedGroupReply('3', ctx)).toEqual({ kind: 'invalid' });
+  });
+
+  it('apply, confirmation words and the shortcuts', () => {
+    expect(parseTicketedGroupReply('apply', ctx)).toEqual({ kind: 'apply' });
+    expect(parseTicketedGroupReply('ok', ctx)).toEqual({ kind: 'apply' });
+    expect(parseTicketedGroupReply('post it', ctx)).toEqual({ kind: 'apply' });
     expect(parseTicketedGroupReply('update tickets', ctx)).toEqual({ kind: 'update' });
     expect(parseTicketedGroupReply('update existing tickets', ctx)).toEqual({ kind: 'update' });
     expect(parseTicketedGroupReply('re-create tickets', ctx)).toEqual({ kind: 'recreate' });
-    expect(parseTicketedGroupReply('ok', ctx)).toEqual({ kind: 'invalid' });
-    expect(parseTicketedGroupReply('3', ctx)).toEqual({ kind: 'invalid' });
-    expect(parseTicketedGroupReply('update tickets', { ...ctx, supportsUpdateExisting: false })).toEqual({ kind: 'invalid' });
+  });
+
+  it('exit words still leave the screen', () => {
+    expect(parseTicketedGroupReply('back', ctx)).toEqual({ kind: 'back' });
+    expect(parseTicketedGroupReply('cancel', ctx)).toEqual({ kind: 'back' });
+    expect(parseTicketedGroupReply('done', { ...ctx, singleGroup: true })).toEqual({ kind: 'done' });
+  });
+
+  it('the vocabulary reminder names the per-row replies', () => {
+    const text = describeImportReplyVocabulary('ticketed', ctx);
+    expect(text).toContain('`apply`');
+    expect(text).toContain('`A2 follow-up`');
+    expect(text).toContain('`all leave`');
+    expect(text).toContain('`update tickets`');
+    expect(text).toContain('`re-create tickets`');
   });
 
   it('Stale: ticket keys toggle, confirmation words close, row ids are rejected', () => {
@@ -1320,7 +1460,9 @@ describe('Per-screen reply parsing (KTD2, R6)', () => {
   });
 
   it('no command word is a confirmation/cancellation word, a row id, or a ticket key', () => {
-    for (const word of Object.values(IMPORT_COMMANDS)) {
+    const actions: TicketedAction[] = ['update', 'follow-up', 're-create', 'leave'];
+    const rowReplies = actions.flatMap(a => [`A1 ${a}`, `all ${a}`]);
+    for (const word of [...Object.values(IMPORT_COMMANDS), ...actions, ...rowReplies]) {
       expect(isConfirmation(word)).toBe(false);
       expect(isCancellation(word)).toBe(false);
       expect(/^\d+$|^a\d+$/i.test(word)).toBe(false);
@@ -1430,7 +1572,7 @@ describe('Stale-ticket review section (U6)', () => {
       const stale = makeStale({
         ineligible: [{ key: 'PROJ-9', summary: 'Old finding', currentStatus: 'Open', note: 'no cleanup rule configured for PROJ/Task' }],
       });
-      const rendered = buildStaleGroupScreen(staleSession(stale), { itemNoun: 'item(s)', supportsUpdateExisting: false });
+      const rendered = buildStaleGroupScreen(staleSession(stale), { itemNoun: 'item(s)' });
       expect(rendered).toContain('PROJ-1');
       expect(rendered).toContain('PROJ-9');
       expect(rendered).toContain('no cleanup rule configured for PROJ/Task');
@@ -1444,7 +1586,7 @@ describe('Stale-ticket review section (U6)', () => {
         groups: [{ issueType: 'Bug', rules: [], graph: {}, tickets: [makeStaleTicket('PROJ-1', true), makeStaleTicket('PROJ-2', true)] }],
         closedKeys: ['PROJ-2'],
       });
-      const rendered = buildStaleGroupScreen(staleSession(stale), { itemNoun: 'item(s)', supportsUpdateExisting: false });
+      const rendered = buildStaleGroupScreen(staleSession(stale), { itemNoun: 'item(s)' });
       expect(decodeURIComponent(rendered)).toContain('[Close 1 tickets]');
       const p2 = rendered.split('\n').find(l => l.includes('PROJ-2'))!;
       expect(p2).toContain('✓ closed');
@@ -1455,7 +1597,7 @@ describe('Stale-ticket review section (U6)', () => {
       const stale = makeStale({
         groups: [{ issueType: 'Bug', rules: [], graph: {}, tickets: [makeStaleTicket('PROJ-1', true)] }],
       });
-      const rendered = buildStaleGroupScreen(staleSession(stale), { itemNoun: 'item(s)', supportsUpdateExisting: false });
+      const rendered = buildStaleGroupScreen(staleSession(stale), { itemNoun: 'item(s)' });
       expect(rendered).toContain('| Type |');
       expect(rendered).not.toContain('→ To');
       expect(rendered).toContain('you pick the target status next');
@@ -1469,7 +1611,7 @@ describe('Stale-ticket review section (U6)', () => {
           { issueType: 'Vulnerability', rules: [], graph: {}, tickets: [makeStaleTicket('PROJ-2', true)] },
         ],
       });
-      const rendered = buildStaleGroupScreen(staleSession(stale), { itemNoun: 'item(s)', supportsUpdateExisting: false });
+      const rendered = buildStaleGroupScreen(staleSession(stale), { itemNoun: 'item(s)' });
       expect(rendered).toContain('each run closes one issue type');
     });
   });

@@ -5,7 +5,7 @@ import { parseVeracodeReport, filterFlaws, assertSafeVeracodeXml } from '../util
 import { deriveShortLabel, buildSummary, buildDescriptionWiki, buildLabels } from '../utils/veracodeReport';
 import {
   groupFlawsByLocation, buildGroupLabels, buildGroupDescriptionWiki, buildGroupSummary,
-  buildNewFindingsCommentWiki, describeVeracodeChange,
+  buildNewFindingsCommentWiki, describeVeracodeChange, flawsWithIds, buildFollowUpSummary,
   type VeracodeFlaw,
 } from '../utils/veracodeReport';
 
@@ -634,5 +634,25 @@ describe('describeVeracodeChange', () => {
 
   it('never reports a baseline, even when no flaw label is known', () => {
     expect(describeVeracodeChange(group, ['veracode'])).toEqual({ kind: 'findings', newIds: ['1', '2', '3'] });
+  });
+});
+
+// Import ticket updates (U5/KTD10): a follow-up ticket covers only the group's new flaws.
+describe('Veracode follow-up builders', () => {
+  const group = [
+    makeFlaw({ issueId: '1', sourceFile: 'Foo.java', line: 42, categoryName: 'SQL Injection', cweName: null }),
+    makeFlaw({ issueId: '2', sourceFile: 'Foo.java', line: 42, categoryName: 'SQL Injection', cweName: null }),
+    makeFlaw({ issueId: '3', sourceFile: 'Foo.java', line: 42, categoryName: 'SQL Injection', cweName: null }),
+  ];
+
+  it('flawsWithIds keeps only the named flaws, in group order', () => {
+    expect(flawsWithIds(group, ['3', '2']).map(f => f.issueId)).toEqual(['2', '3']);
+  });
+
+  it('the follow-up summary is the subset group summary plus " (follow-up to <KEY>)"', () => {
+    const subset = flawsWithIds(group, ['2', '3']);
+    expect(buildFollowUpSummary(subset, 'PROJ-8')).toBe(`${buildGroupSummary(subset)} (follow-up to PROJ-8)`);
+    expect(buildFollowUpSummary(subset, 'PROJ-8')).toContain('2, 3');
+    expect(buildFollowUpSummary(subset, 'PROJ-8')).not.toContain('1, 2');
   });
 });

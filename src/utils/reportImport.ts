@@ -467,9 +467,6 @@ export function buildReviewRows<TItem, TRow extends ReviewRowBase>(
       existingTicketKey,
       included: existingTicketKey === null,
     };
-    // Overview-hub KTD5: an already-ticketed row with a key no found ticket carries yet has a newer
-    // finding its ticket does not reflect — counted by the Already-ticketed screen's "Update N".
-    if (existingTicketKey && keys.some(k => !dedupMap.has(k))) base.hasUnsyncedFindings = true;
     if (target && changeTracking) {
       const knownLabels = [...new Set(tickets.flatMap(t => t.labels))];
       const change = changeTracking.describe(item, knownLabels);

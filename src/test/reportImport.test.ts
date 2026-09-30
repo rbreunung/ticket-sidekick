@@ -386,22 +386,11 @@ describe('buildReviewRows', () => {
 
       const rows = buildReviewRows<Group, GroupRow>(groups, dedupMap, g => g.keys, g => ({ keys: g.keys }));
 
-      // Two of the three member keys have no ticket label yet — a newer finding on this line, so the
-      // row is flagged for the Already-ticketed screen's "Update N tickets" (overview-hub KTD5).
+      // Without change tracking the row keeps the plain shape — what is new on it is the change
+      // describer's job (U3/U4), not a flag set here.
       expect(rows).toEqual([{
-        id: 'A1', existingTicketKey: 'PROJ-900', included: false, hasUnsyncedFindings: true, keys: ['issue-1', 'issue-2', 'issue-3'],
+        id: 'A1', existingTicketKey: 'PROJ-900', included: false, keys: ['issue-1', 'issue-2', 'issue-3'],
       }]);
-    });
-
-    it('does not flag an already-ticketed group whose every member key is already on a ticket', () => {
-      const groups: Group[] = [{ id: 'g1', keys: ['issue-1', 'issue-2'] }];
-      const t = ticket('PROJ-900', ['issue-1', 'issue-2']);
-      const dedupMap: DedupMap = new Map([['issue-1', [t]], ['issue-2', [t]]]);
-
-      const rows = buildReviewRows<Group, GroupRow>(groups, dedupMap, g => g.keys, g => ({ keys: g.keys }));
-
-      expect(rows[0].existingTicketKey).toBe('PROJ-900');
-      expect(rows[0].hasUnsyncedFindings).toBeUndefined();
     });
 
     it('treats a group as new when none of its member keys match', () => {
@@ -542,8 +531,6 @@ describe('buildReviewRows', () => {
       expect([...seen[0]].sort()).toEqual(['veracode-issue-1', 'veracode-issue-2']);
       expect(row.change).toEqual({ kind: 'findings', newIds: ['3'] });
       expect(row.ticketKeys).toEqual(['PROJ-1', 'PROJ-2']);
-      // hasUnsyncedFindings keeps working for Veracode until the Already-ticketed screen moves to `action`.
-      expect(row.hasUnsyncedFindings).toBe(true);
     });
 
     it('does not call the describer or add action fields for a new (un-ticketed) row', () => {

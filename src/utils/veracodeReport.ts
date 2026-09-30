@@ -372,7 +372,7 @@ export function buildGroupDescriptionWiki(group: VeracodeFlaw[]): string {
 }
 
 /**
- * U3/R13: "update existing tickets"' summarizing-comment body — one `### Issue <id>` block per
+ * U3/R13 (now the per-row `update` action's comment): summarizing-comment body — one `### Issue <id>` block per
  * newly-added flaw (severity, CWE, description; no `### Location` — the ticket the comment is
  * posted to already carries it). Same sanitize-then-convert-once pattern as
  * `buildGroupDescriptionWiki()`: every untrusted field routed through `sanitizeCellText()`/
@@ -382,7 +382,7 @@ export function buildGroupDescriptionWiki(group: VeracodeFlaw[]): string {
  * crafted report field and a live Jira-wiki-markup injection in the posted comment (see
  * `docs/solutions/security-issues/` for the prior history of exactly this vulnerability shape).
  * `newFlaws` is expected to be the subset of a group's members whose id was actually newly added
- * this run — the caller (reportImportHandler.ts's `executeUpdateExistingTickets`) is responsible
+ * this run — the caller (the `update` action's comment builder in veracodeHandler.ts) is responsible
  * for that filtering; this function itself renders whatever it's given.
  */
 export function buildNewFindingsCommentWiki(newFlaws: VeracodeFlaw[]): string {
@@ -410,6 +410,20 @@ export function describeVeracodeChange(group: VeracodeFlaw[], knownLabels: strin
   const known = new Set(knownLabels);
   const newIds = [...new Set(group.map(f => f.issueId))].filter(id => !known.has(`veracode-issue-${id}`));
   return newIds.length > 0 ? { kind: 'findings', newIds } : null;
+}
+
+/** U5: the members of a folded group whose issue id is in `ids`, in group order. */
+export function flawsWithIds(group: VeracodeFlaw[], ids: string[]): VeracodeFlaw[] {
+  const wanted = new Set(ids);
+  return group.filter(f => wanted.has(f.issueId));
+}
+
+/**
+ * U5/KTD10: a follow-up ticket's summary — the group summary over only the new flaws (`subset`,
+ * see {@link flawsWithIds}) plus ` (follow-up to <KEY>)`, so the two tickets stay distinguishable.
+ */
+export function buildFollowUpSummary(subset: VeracodeFlaw[], originalKey: string): string {
+  return `${buildGroupSummary(subset)} (follow-up to ${originalKey})`;
 }
 
 // Lives here (rather than in sessionState.ts, where the other session-related types live) so that

@@ -1051,7 +1051,7 @@ describe('TicketService.bulkUpdateField', () => {
   });
 });
 
-describe('TicketService.addMissingLabels (U3/R13 read-merge-write)', () => {
+describe('TicketService.updateLabels — append-only (no prefix)', () => {
   let client: MockJiraClient;
   let service: TicketService;
 
@@ -1067,7 +1067,7 @@ describe('TicketService.addMissingLabels (U3/R13 read-merge-write)', () => {
   it('appends only the missing labels, preserving the ticket\'s existing ones', async () => {
     client.getIssue = async () => issue(['veracode', 'veracode-issue-101']);
 
-    const added = await service.addMissingLabels('PROJ-1', ['veracode-issue-101', 'veracode-issue-102']);
+    const { added } = await service.updateLabels('PROJ-1', ['veracode-issue-101', 'veracode-issue-102']);
 
     expect(added).toEqual(['veracode-issue-102']);
     expect(client.updateIssueCalls).toHaveLength(1);
@@ -1080,7 +1080,7 @@ describe('TicketService.addMissingLabels (U3/R13 read-merge-write)', () => {
   it('is a no-op — no write at all — when every candidate label is already present', async () => {
     client.getIssue = async () => issue(['veracode-issue-101', 'veracode-issue-102']);
 
-    const added = await service.addMissingLabels('PROJ-1', ['veracode-issue-101', 'veracode-issue-102']);
+    const { added } = await service.updateLabels('PROJ-1', ['veracode-issue-101', 'veracode-issue-102']);
 
     expect(added).toEqual([]);
     expect(client.updateIssueCalls).toHaveLength(0);
@@ -1089,11 +1089,69 @@ describe('TicketService.addMissingLabels (U3/R13 read-merge-write)', () => {
   it('handles a ticket with no labels at all', async () => {
     client.getIssue = async () => issue([]);
 
-    const added = await service.addMissingLabels('PROJ-1', ['veracode-issue-201']);
+    const { added } = await service.updateLabels('PROJ-1', ['veracode-issue-201']);
 
     expect(added).toEqual(['veracode-issue-201']);
     expect(client.updateIssueCalls[0].fields).toEqual({ labels: ['veracode-issue-201'] });
   });
+});
+
+describe('TicketService.updateLabels (import ticket updates, U5/KTD3)', () => {
+  let client: MockJiraClient;
+  let service: TicketService;
+
+  beforeEach(() => {
+    client = new MockJiraClient();
+    service = new TicketService(client);
+  });
+
+  function issue(labels: string[], summary = '[OSS] log4j-core 2.14.1 — High'): JiraIssue {
+    return { id: '1', key: 'PROJ-12', fields: { labels, summary } as JiraIssue['fields'] };
+  }
+
+  it('after High→Critical exactly one oss-rating-* label remains, in one updateIssue call', async () => {
+    client.getIssue = async () => issue(['oss-dependency', 'oss-cve-a', 'oss-rating-high']);
+
+    const result = await service.updateLabels('PROJ-12', ['oss-cve-b', 'oss-rating-critical'], { removePrefix: 'oss-rating-' });
+
+    expect(result).toMatchObject({ added: ['oss-cve-b', 'oss-rating-critical'], removed: ['oss-rating-high'] });
+    expect(client.updateIssueCalls).toHaveLength(1);
+    const labels = client.updateIssueCalls[0].fields.labels as string[];
+    expect(labels.filter(l => l.startsWith('oss-rating-'))).toEqual(['oss-rating-critical']);
+    expect(labels).toEqual(['oss-dependency', 'oss-cve-a', 'oss-cve-b', 'oss-rating-critical']);
+  });
+
+  it('keeps a prefixed label that is itself being added', async () => {
+    client.getIssue = async () => issue(['oss-rating-critical']);
+    const result = await service.updateLabels('PROJ-12', ['oss-rating-critical'], { removePrefix: 'oss-rating-' });
+    expect(result).toMatchObject({ added: [], removed: [] });
+    expect(client.updateIssueCalls).toHaveLength(0);
+  });
+
+  it('writes a rewritten summary in the same updateIssue call', async () => {
+    client.getIssue = async () => issue(['oss-rating-high']);
+    const result = await service.updateLabels('PROJ-12', ['oss-rating-critical'], {
+      removePrefix: 'oss-rating-',
+      rewriteSummary: summary => summary.replace(/High$/, 'Critical'),
+    });
+    expect(result.summaryRewritten).toBe(true);
+    expect(result.summaryUnchanged).toBe(false);
+    expect(client.updateIssueCalls).toEqual([{
+      issueKey: 'PROJ-12',
+      fields: { labels: ['oss-rating-critical'], summary: '[OSS] log4j-core 2.14.1 — Critical' },
+    }]);
+  });
+
+  it('reports a summary the rewriter could not handle and leaves it alone', async () => {
+    client.getIssue = async () => issue(['oss-rating-high'], 'log4j upgrade');
+    const result = await service.updateLabels('PROJ-12', ['oss-rating-critical'], {
+      removePrefix: 'oss-rating-',
+      rewriteSummary: () => null,
+    });
+    expect(result.summaryUnchanged).toBe(true);
+    expect(client.updateIssueCalls[0].fields).toEqual({ labels: ['oss-rating-critical'] });
+  });
+
 });
 
 describe('TicketService findSprints', () => {

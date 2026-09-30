@@ -4,7 +4,7 @@ vi.mock('vscode', () => ({
   window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
 }));
 
-import { isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseSkipInput, applyTicketToggle, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseListedFiltersSelection, type ListedFiltersSession, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, resolveTemplateIssueType, formatIssueTypeOptionLabel, formatIssueTypeInlinePhrase, NO_ISSUE_TYPE, buildImportOverview, buildNewGroupScreen, buildTicketedGroupScreen, buildImportScreen, buildReviewPage, initImportViewState, parseReviewInput, applyReviewToggle, VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION, buildBulkUpdateReviewTable, buildBulkUpdateReviewMessage, applyBulkUpdateToggle, type VeracodeReviewRow, type BulkUpdateReviewRow, type ReviewSession } from '../participant/sessionState';
+import { isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseSkipInput, applyTicketToggle, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseListedFiltersSelection, type ListedFiltersSession, parseBulkUpdateReview, rewriteAttachmentLinks, parseSkippedAttachmentSelection, pickEmailOption, buildTeamJql, selectDefaultIssueType, resolveTemplateIssueType, formatIssueTypeOptionLabel, formatIssueTypeInlinePhrase, NO_ISSUE_TYPE, buildImportOverview, buildNewGroupScreen, buildTicketedGroupScreen, buildImportScreen, buildReviewPage, initImportViewState, parseReviewInput, applyReviewToggle, VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION, buildBulkUpdateReviewTable, buildBulkUpdateReviewMessage, applyBulkUpdateToggle, type VeracodeReviewRow, type BulkUpdateReviewRow, type ReviewSession, type TicketedAction } from '../participant/sessionState';
 import type { WaltzReviewRow } from '../utils/waltzReport';
 import { isPointerPrompt } from '../participant/jira/llmHelpers';
 import type { TransitionBatchTicket } from '../participant/sessionState';
@@ -1021,7 +1021,7 @@ function importSession<TRow extends VeracodeReviewRow | WaltzReviewRow>(allRows:
   });
 }
 
-const veracodeOpts = { itemNoun: 'flaw(s)', supportsUpdateExisting: true };
+const veracodeOpts = { itemNoun: 'flaw(s)', findingNoun: 'flaw(s)' };
 
 describe('Import screens — Veracode config', () => {
   it('shows an overview with one line per result group, and no "Post it" anywhere', () => {
@@ -1046,14 +1046,14 @@ describe('Import screens — Veracode config', () => {
     expect(text).toContain(linkTo('Back to overview', 'back'));
   });
 
-  it('the Already-ticketed screen links the existing ticket and offers re-create per row', () => {
+  it('the Already-ticketed screen links the existing ticket and offers per-row actions', () => {
     const session = { ...importSession(sampleRows), view: 'ticketed' as const };
     const text = buildTicketedGroupScreen(session, VERACODE_REVIEW_COLUMNS, { ...veracodeOpts, baseUrl: 'https://jira.example.com' });
     expect(text).toContain('### Already ticketed');
     expect(text).toContain('[PROJ-501](https://jira.example.com/browse/PROJ-501)');
-    expect(text).toContain(linkTo('_no_', 'A1'));
+    expect(text).toContain(`**${linkTo('leave', 'A1 leave')}** · ${linkTo('re-create', 'A1 re-create')}`);
     expect(text).not.toContain('SQL Injection'); // new rows live on their own screen
-    expect(text).toContain('Re-create 0 tickets');
+    expect(text).toContain('nothing to apply');
   });
 
   it('renders the ticket key as plain text when no baseUrl is configured', () => {
@@ -1226,7 +1226,7 @@ const sampleWaltzRows: WaltzReviewRow[] = [
 ];
 
 describe('Import screens — Waltz config', () => {
-  const waltzOpts = { itemNoun: 'component(s)', supportsUpdateExisting: false };
+  const waltzOpts = { itemNoun: 'component(s)', findingNoun: 'CVE(s)' };
 
   it('lists New and Already ticketed as separate groups on the overview', () => {
     const text = buildImportOverview(importSession(sampleWaltzRows), waltzOpts);
@@ -1240,12 +1240,21 @@ describe('Import screens — Waltz config', () => {
     expect(text).toContain('[PROJ-1](https://jira.example.com/browse/PROJ-1)');
   });
 
-  it('never offers "Update N tickets" for Waltz, which has no update-existing action (R16)', () => {
-    const rows = sampleWaltzRows.map(r => (r.existingTicketKey ? { ...r, hasUnsyncedFindings: true } : r));
+  it('offers the same per-row actions as Veracode, with the change counted in CVEs (U4/R5)', () => {
+    const rows = sampleWaltzRows.map(r => (r.existingTicketKey
+      ? {
+        ...r,
+        target: { key: r.existingTicketKey, status: 'In Progress', resolved: false },
+        change: { kind: 'findings' as const, newIds: ['CVE-1', 'CVE-2'], ratingRise: { from: 'High', to: 'Critical' } },
+        allowedActions: ['update', 'follow-up', 're-create', 'leave'] as TicketedAction[],
+        action: 'update' as const,
+      }
+      : r));
     const session = { ...importSession(rows), view: 'ticketed' as const };
     const text = buildTicketedGroupScreen(session, WALTZ_REVIEW_COLUMNS, waltzOpts);
-    expect(text).not.toContain('update tickets');
-    expect(text).not.toContain('Updated?');
+    expect(text).toContain('+2 CVEs, High→Critical');
+    expect(text).toContain(`**${linkTo('update', 'A1 update')}** · ${linkTo('follow-up', 'A1 follow-up')}`);
+    expect(text).toContain(linkTo('Update 1 tickets', 'update tickets'));
   });
 
   it('opens straight into the Already-ticketed screen with "Done" when every match already has a ticket (R4)', () => {
@@ -1315,11 +1324,12 @@ describe('isSessionExpired (schemaVersion shape guard — AE7)', () => {
     expect(isSessionExpired(null)).toBe(false);
   });
 
-  it('treats a session persisted with the pre-fix schemaVersion (1) as expired after the bump to 7 (stale-ticket target pick: new stale group and close-session shape) — a stale TemplateGenerationTypePickSession (old string[] availableIssueTypes shape) never reaches the new {id, name}[] parsing', () => {
-    expect(CURRENT_SESSION_SCHEMA_VERSION).toBe(7);
+  it('treats a session persisted with the pre-fix schemaVersion (1) as expired after the bump to 8 (import ticket updates: per-row already-ticketed actions) — a stale TemplateGenerationTypePickSession (old string[] availableIssueTypes shape) never reaches the new {id, name}[] parsing', () => {
+    expect(CURRENT_SESSION_SCHEMA_VERSION).toBe(8);
     expect(isSessionExpired({ schemaVersion: 1 })).toBe(true);
     expect(isSessionExpired({ schemaVersion: 5 })).toBe(true); // built before the overview hub
     expect(isSessionExpired({ schemaVersion: 6 })).toBe(true); // built before the stale target pick
+    expect(isSessionExpired({ schemaVersion: 7 })).toBe(true); // built before the per-row actions
   });
 
   it('exposes a user-facing message that tells the user to re-run the import', () => {

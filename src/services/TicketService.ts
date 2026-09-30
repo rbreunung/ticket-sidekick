@@ -366,6 +366,16 @@ export function assembleDescription(sections: string[], answers: Record<string, 
     .join('\n\n');
 }
 
+/** What {@link TicketService.updateLabels} changed on a ticket. */
+export interface LabelUpdateResult {
+  added: string[];
+  removed: string[];
+  /** The summary was rewritten in the same write. */
+  summaryRewritten: boolean;
+  /** A rewrite applied but this summary could not be rewritten, so it was left as is. */
+  summaryUnchanged: boolean;
+}
+
 export class TicketService {
   constructor(private readonly client: IJiraClient, private readonly onDiag?: DiagLogger) {}
 
@@ -417,26 +427,42 @@ export class TicketService {
   }
 
   /**
-   * U3/R13: read-merge-write label update for the report-import "update existing tickets" bulk
-   * action — neither a bare `updateField('labels', …)` call (would need every existing label
-   * re-typed as a comma string) nor `buildArrayValue()` (built for allowed-value/edit-meta-backed
-   * fields, an unnecessary extra `getEditMeta` round-trip for a plain-string field like labels) is
-   * the right tool for an additive, idempotent change here — see the governing decision in the U3
-   * plan. Reads the ticket's current labels, appends whichever of `labelsToAdd` aren't already
-   * present, and writes the full merged array back in one `updateIssue` call. Returns exactly the
-   * labels that were newly added (in `labelsToAdd`'s own order) — an empty array means every one was
-   * already present, and the caller skips the write AND the follow-up comment entirely for full
-   * idempotency (R13: running this twice against an unchanged ticket must not repost the comment).
+   * Import ticket updates (U5/KTD3): one read-merge-write of a ticket's labels — and optionally its
+   * summary — for the report-import `update` action. Reads the ticket, appends whichever of
+   * `labelsToAdd` it lacks, removes every label starting with `removePrefix` that is not itself in
+   * `labelsToAdd` (so `oss-rating-critical` replaces `oss-rating-high` rather than accumulating),
+   * and, when `rewriteSummary` returns a new summary, writes it too — all in one `updateIssue` call.
+   * `rewriteSummary` returns the new summary, `null` when it cannot rewrite this summary (e.g. the
+   * user renamed the ticket), or `undefined` when no rewrite applies. Nothing is written when
+   * nothing changes, so a row already up to date is idempotent (no write at all).
    */
-  async addMissingLabels(issueKey: string, labelsToAdd: string[]): Promise<string[]> {
+  async updateLabels(
+    issueKey: string,
+    labelsToAdd: string[],
+    options: { removePrefix?: string; rewriteSummary?: (summary: string) => string | null | undefined } = {},
+  ): Promise<LabelUpdateResult> {
     const issue = await this.client.getIssue(issueKey);
     const current = issue.fields.labels ?? [];
+    const toAdd = [...new Set(labelsToAdd)];
     const currentSet = new Set(current);
-    const missing = labelsToAdd.filter(l => !currentSet.has(l));
-    if (missing.length === 0) return [];
-    await this.client.updateIssue(issueKey, { labels: [...current, ...missing] });
-    this.onDiag?.('info', `Labels updated — ${issueKey}`, { issueKey, added: missing });
-    return missing;
+    const added = toAdd.filter(l => !currentSet.has(l));
+    const { removePrefix } = options;
+    const removed = removePrefix ? current.filter(l => l.startsWith(removePrefix) && !toAdd.includes(l)) : [];
+    const rewritten = options.rewriteSummary?.(issue.fields.summary);
+    const summaryUnchanged = rewritten === null;
+    const summaryRewritten = typeof rewritten === 'string' && rewritten !== issue.fields.summary;
+
+    const fields: Record<string, unknown> = {};
+    if (added.length > 0 || removed.length > 0) {
+      const removedSet = new Set(removed);
+      fields.labels = [...current.filter(l => !removedSet.has(l)), ...added];
+    }
+    if (summaryRewritten) fields.summary = rewritten;
+    if (Object.keys(fields).length > 0) {
+      await this.client.updateIssue(issueKey, fields);
+      this.onDiag?.('info', `Labels updated — ${issueKey}`, { issueKey, added, removed, summaryRewritten });
+    }
+    return { added, removed, summaryRewritten, summaryUnchanged };
   }
 
   async uploadAttachment(issueKey: string, filename: string, contentType: string, contentBytes: string): Promise<void> {
