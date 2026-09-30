@@ -1925,7 +1925,8 @@ export function formatRowChange(change: RowChange | null | undefined, findingNou
   if (change.kind === 'baseline') return 'baseline';
   const parts: string[] = [];
   if (change.newIds.length > 0) parts.push(`+${countedNoun(change.newIds.length, findingNoun)}`);
-  if (change.ratingRise) parts.push(`${change.ratingRise.from}→${change.ratingRise.to}`);
+  // Rating text derives from Jira labels (untrusted) and lands in a trusted table cell.
+  if (change.ratingRise) parts.push(`${safeCellText(change.ratingRise.from)}→${safeCellText(change.ratingRise.to)}`);
   return parts.length > 0 ? parts.join(', ') : '—';
 }
 
@@ -2196,6 +2197,10 @@ const TICKETED_ACTION_WORDS: Record<string, TicketedAction> = {
   'leave': 'leave',
 };
 
+/** isConfirmation()'s paging/expand phrases — not assent, so they must never trigger `apply`
+ * (up to a batch of Jira writes) on the Already-ticketed screen. */
+const NON_ASSENT_CONFIRMATIONS = new Set(['load all', 'load more', 'show all', 'show more']);
+
 /**
  * U4/KTD7: the Already-ticketed screen's replies. Commands and row actions are matched first and
  * the exit/cancellation words last, so an offered option is never swallowed by a cancel word (see
@@ -2205,7 +2210,8 @@ const TICKETED_ACTION_WORDS: Record<string, TicketedAction> = {
  */
 export function parseTicketedGroupReply(reply: string, ctx: ImportReplyContext): ImportReplyAction {
   const n = normalizeReply(reply);
-  if (n === IMPORT_COMMANDS.apply || isConfirmation(reply)) return { kind: 'apply' };
+  const assent = isConfirmation(reply) && !NON_ASSENT_CONFIRMATIONS.has(reply.trim().toLowerCase());
+  if (n === IMPORT_COMMANDS.apply || assent) return { kind: 'apply' };
   if (n === IMPORT_COMMANDS.update || n === LEGACY_UPDATE_COMMAND) return { kind: 'update' };
   if (n === IMPORT_COMMANDS.recreate) return { kind: 'recreate' };
 

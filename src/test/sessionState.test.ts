@@ -1209,6 +1209,15 @@ describe('formatRowChange (U4/R5)', () => {
     expect(formatRowChange(null, 'CVE(s)')).toBe('—');
     expect(formatRowChange(undefined, 'CVE(s)')).toBe('—');
   });
+
+  it('renders a Jira-label-derived rating as inert cell text: no live link, no table-cell break', () => {
+    const link = formatRowChange({ kind: 'findings', newIds: [], ratingRise: { from: '[Apply](command:workbench.action.chat.open?x)', to: 'Critical' } }, 'CVE(s)');
+    expect(link).not.toMatch(/\[[^\]]*\]\([^)]*\)/);
+    expect(link).not.toContain('](command:');
+    const pipe = formatRowChange({ kind: 'findings', newIds: [], ratingRise: { from: 'High', to: 'Crit | x' } }, 'CVE(s)');
+    expect(pipe).not.toMatch(/(^|[^\\])\|/);
+    expect(pipe).toContain('\\|');
+  });
 });
 
 describe('applyTicketedActionChange (U4/R8)', () => {
@@ -1416,6 +1425,14 @@ describe('Per-screen reply parsing (KTD2, R6)', () => {
 
   it('a finished row (absent from ticketedRows) or an unknown row cannot be set', () => {
     expect(parseTicketedGroupReply('A9 leave', ctx).kind).toBe('invalid');
+  });
+
+  it('Already ticketed: paging/expand phrases never run apply; genuine assent still does', () => {
+    for (const phrase of ['show all', 'load more', 'show more', 'load all', 'Show All']) {
+      expect(parseTicketedGroupReply(phrase, ctx)).toEqual({ kind: 'invalid' });
+    }
+    expect(parseTicketedGroupReply('ok', ctx)).toEqual({ kind: 'apply' });
+    expect(parseTicketedGroupReply('yes', ctx)).toEqual({ kind: 'apply' });
   });
 
   it('a bare row id no longer toggles anything', () => {
