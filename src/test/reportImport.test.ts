@@ -6,6 +6,7 @@ import {
   sanitizeCellText, sanitizeStandaloneLine, resolveMaxReportBytes, findStaleTickets, buildStaleSearchJql,
   REPORT_SIZE_LIMITS_MB, resolveSizeLimitSetting, pickTargetTicket,
   type JqlIssueLike, type DedupTicket, type DedupMap, type RowChange,
+  fetchAllPages,
 } from '../utils/reportImport';
 import type { ReviewRowBase } from '../participant/sessionState';
 
@@ -680,5 +681,49 @@ describe('findStaleTickets', () => {
     const result = await findStaleTickets('PROJ', 'oss-dependency', search, waltzLabelToDedupKey, isActive);
 
     expect(result.stale).toEqual([{ key: 'PROJ-9', ids: ['oss-dep-example-lib-1-2-3-abc123'] }]);
+  });
+});
+
+describe('fetchAllPages (dedup search paging)', () => {
+  it('keeps fetching pages until the search is exhausted, so no matching ticket is dropped', async () => {
+    const all = Array.from({ length: 250 }, (_, i) => ({ key: `PROJ-${i + 1}` }));
+    const fetchPage = vi.fn(async (startAt: number) => ({ issues: all.slice(startAt, startAt + 100), total: 250 }));
+
+    const issues = await fetchAllPages(fetchPage, 100);
+
+    expect(issues).toHaveLength(250);
+    expect(fetchPage.mock.calls.map(c => c[0])).toEqual([0, 100, 200]);
+  });
+
+  it('stops after one page when the result fits in it', async () => {
+    const fetchPage = vi.fn(async () => ({ issues: [{ key: 'PROJ-1' }], total: 1 }));
+
+    expect(await fetchAllPages(fetchPage, 100)).toHaveLength(1);
+    expect(fetchPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops on a short page even when the server reports no total', async () => {
+    const fetchPage = vi.fn(async (startAt: number) => ({ issues: startAt === 0 ? Array.from({ length: 100 }, (_, i) => ({ key: `P-${i}` })) : [{ key: 'P-100' }] }));
+
+    expect(await fetchAllPages(fetchPage, 100)).toHaveLength(101);
+    expect(fetchPage).toHaveBeenCalledTimes(2);
+  });
+
+  it('never fetches beyond the safety cap', async () => {
+    const fetchPage = vi.fn(async () => ({ issues: Array.from({ length: 100 }, (_, i) => ({ key: `P-${i}` })), total: 100000 }));
+
+    const issues = await fetchAllPages(fetchPage, 100, 300);
+
+    expect(issues).toHaveLength(300);
+    expect(fetchPage).toHaveBeenCalledTimes(3);
+  });
+
+  it('passes a page failure through to the caller (findAlreadyTicketed then skips that chunk)', async () => {
+    const fetchPage = vi.fn(async (startAt: number) => {
+      if (startAt > 0) throw new Error('503');
+      return { issues: Array.from({ length: 100 }, (_, i) => ({ key: `P-${i}` })), total: 150 };
+    });
+
+    await expect(fetchAllPages(fetchPage, 100)).rejects.toThrow('503');
   });
 });

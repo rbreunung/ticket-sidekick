@@ -206,6 +206,33 @@ export async function findAlreadyTicketed(
   return { map, failedChunks, totalChunks: chunks.length };
 }
 
+/** Upper bound on tickets read for one dedup chunk, so a runaway search can't loop forever. */
+export const MAX_DEDUP_TICKETS_PER_CHUNK = 1000;
+
+/**
+ * Reads every page of a Jira search. The dedup search needs this: an item's known findings are the
+ * union of all its tickets (follow-ups and re-creates add more tickets per dedup label), so a single
+ * truncated page could pick the wrong target or show recorded findings as new. Stops when a page is
+ * short or empty, the server reports the end (`isLast`) or its `total` is reached, or `maxItems`
+ * tickets were read. A failed page rejects, so `findAlreadyTicketed` treats the whole chunk as
+ * failed rather than trusting a partial one.
+ */
+export async function fetchAllPages<T>(
+  fetchPage: (startAt: number) => Promise<{ issues: T[]; total?: number; isLast?: boolean }>,
+  pageSize: number,
+  maxItems = MAX_DEDUP_TICKETS_PER_CHUNK,
+): Promise<T[]> {
+  const all: T[] = [];
+  while (all.length < maxItems) {
+    const page = await fetchPage(all.length);
+    all.push(...page.issues.slice(0, maxItems - all.length));
+    const done = page.issues.length < pageSize || page.isLast === true
+      || (page.total !== undefined && all.length >= page.total);
+    if (done) break;
+  }
+  return all;
+}
+
 /** One open ticket found stale by {@link findStaleTickets}. `ids` are the marker-id dedup keys
  * (e.g. Veracode flaw ids, or Waltz's `oss-dep-...` component label) extracted from its labels —
  * every one of them turned out inactive, which is what made the ticket stale. */

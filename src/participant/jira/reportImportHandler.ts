@@ -17,7 +17,7 @@ import type { IJiraClient } from '../../jira/IJiraClient';
 import { TemplateService } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
 import {
-  MAX_REPORT_BYTES, BATCH_LIMIT, DEFAULT_DEDUP_CHUNK_SIZE, findAlreadyTicketed, buildReviewRows,
+  MAX_REPORT_BYTES, BATCH_LIMIT, DEFAULT_DEDUP_CHUNK_SIZE, findAlreadyTicketed, fetchAllPages, buildReviewRows,
   buildDedupJql, findStaleTickets, templateLabelsOf, type JqlIssueLike, type DedupMap, type RowChange,
 } from '../../utils/reportImport';
 import {
@@ -157,6 +157,9 @@ export interface ImportChangeTracking<TItem, TRow extends ReviewRowBase> {
 // per-descriptor `templateTag`/`reviewTag` strings the ChatResult.metadata mechanism no longer
 // needs (R1/R3). A plain object literal rather than a `${descriptorKind}-template` template-string
 // cast keeps every kind spelled out as a literal JiraSessionKind, so a typo here is a compile error.
+// Page size for the dedup search; fetchAllPages reads every page of each label chunk.
+const DEDUP_PAGE_SIZE = 100;
+
 const IMPORT_SESSION_KINDS: Record<ReportImportDescriptor<unknown, ReviewRowBase>['descriptorKind'], { template: JiraSessionKind; review: JiraSessionKind }> = {
   veracode: { template: 'veracode-template', review: 'veracode-review' },
   waltz: { template: 'waltz-template', review: 'waltz-review' },
@@ -447,8 +450,12 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
         searchLabels,
         DEFAULT_DEDUP_CHUNK_SIZE,
         // U3/KTD1: resolution + created let buildReviewRows pick each item's newest open ticket.
-        chunk => ticketService.searchTicketsRaw(buildDedupJql(session.projectKey, chunk), 100, ['resolution', 'created'])
-          .then(r => r.issues as JqlIssueLike[]),
+        // Every page is read: the union of an item's tickets decides its target and known findings.
+        chunk => fetchAllPages(
+          startAt => ticketService.searchTicketsRaw(buildDedupJql(session.projectKey, chunk), DEDUP_PAGE_SIZE, ['resolution', 'created'], startAt)
+            .then(r => ({ ...r, issues: r.issues as JqlIssueLike[] })),
+          DEDUP_PAGE_SIZE,
+        ),
         descriptor.labelToDedupKey,
         (level, message, details) => logDiag(descriptor.scope, level, message, details),
       );

@@ -558,6 +558,23 @@ describe('handleImportReviewReply — bulk include/exclude (toggle-all)', () => 
     expect(session.allRows.find(r => r.id === 'A1')!.existingTicketKey).toBe('PROJ-999');
   });
 
+  it('reads every page of the dedup search, so a ticket beyond the first page still counts as already-ticketed', async () => {
+    // 100 unrelated tickets fill page 1; the ticket for item 1 only appears on page 2.
+    const filler = Array.from({ length: 100 }, (_, i) => ({ key: `PROJ-${i + 1}`, fields: { labels: ['unrelated'] } }));
+    const spy = vi.spyOn(ticketService, 'searchTicketsRaw').mockImplementation(async (jql: string, _max?: number, _fields?: string[], startAt?: number) => {
+      if (!jql.includes('labels in (')) return { issues: [], total: 0, isLast: true } as unknown as JiraSearchResult;
+      return (startAt ?? 0) === 0
+        ? { issues: filler, total: 101 } as unknown as JiraSearchResult
+        : { issues: [{ key: 'PROJ-500', fields: { labels: ['test-1'] } }], total: 101 } as unknown as JiraSearchResult;
+    });
+    const ws = makeMockWs();
+    await continueAfterImportIssueType('Bug', null, makeSession({ items: [{ ref: '1' }], availableIssueTypes: ['Bug'] }), client, ticketService, mockStream() as never, ws as never, descriptor);
+
+    expect(spy.mock.calls.filter(([jql]) => jql.includes('labels in (')).map(c => c[3] ?? 0)).toEqual([0, 100]);
+    const session = ws.store[descriptor.sessionKeys.review] as ReviewSession<TestRow>;
+    expect(session.allRows.find(r => r.id === 'A1')!.existingTicketKey).toBe('PROJ-500');
+  });
+
   it('"exclude all" leaves an already-ticketed row untouched (R4)', async () => {
     vi.spyOn(ticketService, 'searchTicketsRaw').mockResolvedValue({
       issues: [{ key: 'PROJ-999', fields: { labels: ['test-1'] } }],

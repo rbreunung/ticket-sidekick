@@ -68,7 +68,7 @@ The New screen offers two bulk controls — **`include all`** and **`exclude all
 
 #### Already-ticketed rows: per-row actions (Veracode + Waltz)
 
-The dedup search keeps every ticket per dedup key (`findAlreadyTicketed()` returns a `DedupMap` of `DedupTicket` lists with labels, resolution, creation date and status). For an already-ticketed item, `buildReviewRows()` unions the labels of all its tickets, asks the importer's `changeTracking.describe()` what changed, and picks the row's **target**: the newest unresolved ticket (latest `created`, ties to the highest key number), or the newest ticket when all are resolved (`pickTargetTicket()`).
+The dedup search reads every result page of each label chunk (`fetchAllPages()`, capped at 1000 tickets per chunk) and keeps every ticket per dedup key (`findAlreadyTicketed()` returns a `DedupMap` of `DedupTicket` lists with labels, resolution, creation date and status). For an already-ticketed item, `buildReviewRows()` unions the labels of all its tickets, asks the importer's `changeTracking.describe()` what changed, and picks the row's **target**: the newest unresolved ticket (latest `created`, ties to the highest key number), or the newest ticket when all are resolved (`pickTargetTicket()`).
 
 A change is a finding id none of the item's tickets record — a Veracode flaw's `veracode-issue-<id>` label, or a Waltz CVE's `oss-cve-<id>` label — or, for Waltz, a worst rating higher than the recorded `oss-rating-<rating>` label. A Waltz ticket with neither kind of record label (created before this feature) is a **baseline**. New Waltz tickets get these record labels at creation.
 

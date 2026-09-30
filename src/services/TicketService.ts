@@ -646,8 +646,8 @@ export class TicketService {
     }
   }
 
-  async searchTicketsRaw(jql: string, maxResults = 50, extraFields: string[] = []): Promise<JiraSearchResult> {
-    return this.client.searchJql(jql, maxResults, undefined, extraFields);
+  async searchTicketsRaw(jql: string, maxResults = 50, extraFields: string[] = [], startAt?: number): Promise<JiraSearchResult> {
+    return this.client.searchJql(jql, maxResults, startAt, extraFields);
   }
 
   async getFilterById(id: string): Promise<JiraFilter> {
