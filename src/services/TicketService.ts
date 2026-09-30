@@ -407,6 +407,16 @@ export class TicketService {
   }
 
   /**
+   * KTD6/R14: links a follow-up ticket (`fromKey`) to the ticket it follows up (`toKey`) with a
+   * "Relates" link. "Relates" is symmetric, so direction only fixes which side Jira calls outward.
+   * Errors propagate so the caller can surface a warning without undoing the created ticket.
+   */
+  async linkIssues(fromKey: string, toKey: string): Promise<void> {
+    await this.client.createIssueLink(toKey, fromKey, 'Relates');
+    this.onDiag?.('info', `Issues linked — ${fromKey} relates to ${toKey}`, { fromKey, toKey, linkType: 'Relates' });
+  }
+
+  /**
    * U3/R13: read-merge-write label update for the report-import "update existing tickets" bulk
    * action — neither a bare `updateField('labels', …)` call (would need every existing label
    * re-typed as a comma string) nor `buildArrayValue()` (built for allowed-value/edit-meta-backed

@@ -201,6 +201,30 @@ export class JiraApiClient implements IJiraClient {
     });
   }
 
+  // Jira answers POST /issueLink with 201 and an empty body, so this bypasses request()'s
+  // JSON parsing. POST is never retried by fetchWithRetry, so a link is never created twice.
+  async createIssueLink(inwardKey: string, outwardKey: string, typeName: string): Promise<void> {
+    const url = `${this.baseUrl}/rest/api/2/issueLink`;
+    const response = await fetchWithRetry(url, {
+      method: 'POST',
+      headers: {
+        Authorization: this.authHeader,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        type: { name: typeName },
+        inwardIssue: { key: inwardKey },
+        outwardIssue: { key: outwardKey },
+      }),
+    });
+    if (!response.ok) {
+      if (response.status === 401) throw new JiraApiError(`Authentication failed at ${url}. Check your credentials.`, 401, url);
+      const body = await response.text().catch(() => '');
+      throw new JiraApiError(`Issue link failed (${response.status}) at ${url}${body ? ` — ${body}` : ''}`, response.status, url, body);
+    }
+  }
+
   async uploadAttachment(issueKey: string, filename: string, contentType: string, contentBytes: string): Promise<void> {
     assertAttachmentWithinLimit(filename, contentBytes);
     const url = `${this.baseUrl}/rest/api/2/issue/${issueKey}/attachments`;

@@ -1588,3 +1588,25 @@ describe('coerceTypedFieldValue', () => {
     expect(coerceTypedFieldValue('raw', undefined)).toBe('raw');
   });
 });
+
+describe('TicketService.linkIssues (import follow-up linking)', () => {
+  it('links the follow-up ticket to the original with one "Relates" link and logs it', async () => {
+    const client = new MockJiraClient();
+    const onDiag = vi.fn();
+    const service = new TicketService(client, onDiag);
+    await service.linkIssues('PROJ-200', 'PROJ-123');
+    expect(client.createIssueLinkCalls).toEqual([
+      { inwardKey: 'PROJ-123', outwardKey: 'PROJ-200', typeName: 'Relates' },
+    ]);
+    expect(onDiag).toHaveBeenCalledWith('info', expect.stringContaining('PROJ-200'), expect.objectContaining({ fromKey: 'PROJ-200', toKey: 'PROJ-123' }));
+  });
+
+  it('propagates a link failure to the caller without logging success', async () => {
+    const client = new MockJiraClient();
+    client.createIssueLinkError = new Error('Issue linking is disabled');
+    const onDiag = vi.fn();
+    const service = new TicketService(client, onDiag);
+    await expect(service.linkIssues('PROJ-200', 'PROJ-123')).rejects.toThrow('Issue linking is disabled');
+    expect(onDiag).not.toHaveBeenCalledWith('info', expect.anything(), expect.anything());
+  });
+});
