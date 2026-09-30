@@ -14,27 +14,38 @@ export function htmlToMarkdown(html: string, inlineImageMap: Map<string, string>
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'");
 
-  // Tables (process before headings to avoid header-row confusion)
-  s = s.replace(/<table[\s\S]*?<\/table>/gi, (table) => {
-    const rows: string[][] = [];
-    table.replace(/<tr[^>]*>([\s\S]*?)<\/tr>/gi, (_: string, row: string) => {
-      const cells: string[] = [];
-      row.replace(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi, (_2: string, cell: string) => {
-        cells.push(stripTags(cell).trim().replace(/\|/g, '\\|'));
+  // Tables, innermost first (process before headings to avoid header-row confusion).
+  // A table whose cells hold line breaks (e.g. a signature layout) is unwrapped into
+  // its cells' own content, one after another, for the rest of the pipeline to convert.
+  const innermostTable = /<table(?:\s[^>]*)?>(?:(?!<table[\s>])[\s\S])*?<\/table>/gi;
+  for (let prev = ''; prev !== s;) {
+    prev = s;
+    s = s.replace(innermostTable, (table) => {
+      const rows: string[][] = [];
+      table.replace(/<tr(?:\s[^>]*)?>([\s\S]*?)<\/tr>/gi, (_: string, row: string) => {
+        const cells: string[] = [];
+        row.replace(/<t[hd](?:\s[^>]*)?>([\s\S]*?)<\/t[hd]>/gi, (_2: string, cell: string) => {
+          cells.push(cell);
+          return '';
+        });
+        if (cells.length) rows.push(cells);
         return '';
       });
-      if (cells.length) rows.push(cells);
-      return '';
+      if (rows.length === 0) return '';
+      if (rows.some(r => r.some(c => LINE_BREAK_TAG.test(c)))) {
+        const cells = rows.flat().filter(c => stripTags(c).trim() || /<img/i.test(c));
+        return `<br>${cells.join('<br>')}<br>`;
+      }
+      const text = rows.map(r => r.map(c => stripTags(convertImages(c, inlineImageMap)).trim().replace(/\|/g, '\\|')));
+      const sep = text[0].map(() => '---');
+      const lines = [
+        `| ${text[0].join(' | ')} |`,
+        `| ${sep.join(' | ')} |`,
+        ...text.slice(1).map(r => `| ${r.join(' | ')} |`),
+      ];
+      return '\n' + lines.join('\n') + '\n';
     });
-    if (rows.length === 0) return '';
-    const sep = rows[0].map(() => '---');
-    const lines = [
-      `| ${rows[0].join(' | ')} |`,
-      `| ${sep.join(' | ')} |`,
-      ...rows.slice(1).map(r => `| ${r.join(' | ')} |`),
-    ];
-    return '\n' + lines.join('\n') + '\n';
-  });
+  }
 
   // Headings
   for (let i = 6; i >= 1; i--) {
@@ -48,21 +59,14 @@ export function htmlToMarkdown(html: string, inlineImageMap: Map<string, string>
   s = s.replace(/<code[^>]*>([\s\S]*?)<\/code>/gi, '`$1`');
 
   // Bold / italic (process before stripping remaining tags)
-  s = s.replace(/<(?:b|strong)[^>]*>([\s\S]*?)<\/(?:b|strong)>/gi, '**$1**');
-  s = s.replace(/<(?:i|em)[^>]*>([\s\S]*?)<\/(?:i|em)>/gi, '_$1_');
+  // Each line of a run spanning a line break is wrapped separately
+  s = s.replace(/<(b|strong)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi, (_: string, _t: string, c: string) => wrapLines(c, '**'));
+  s = s.replace(/<(i|em)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi, (_: string, _t: string, c: string) => wrapLines(c, '_'));
 
   // Links
   s = s.replace(/<a[^>]+href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)');
 
-  // Inline images: data-ts-filename (OWA Tampermonkey bridge) — must come before cid: and alt rules
-  s = s.replace(/<img[^>]+data-ts-filename="([^"]*)"[^>]*\/?>/gi, (_: string, filename: string) =>
-    `![${filename}](${filename})`
-  );
-  // Inline images: cid: references
-  s = s.replace(/<img[^>]+src="cid:([^"]*)"[^>]*\/?>/gi, (_: string, cid: string) => {
-    const filename = inlineImageMap.get(cid.trim()) ?? cid.trim();
-    return `[📎 ${filename}]`;
-  });
+  s = convertImages(s, inlineImageMap);
   // Other images: use alt text
   s = s.replace(/<img[^>]*alt="([^"]*)"[^>]*\/?>/gi, '[$1]');
   s = s.replace(/<img[^>]*\/?>/gi, '');
@@ -82,6 +86,7 @@ export function htmlToMarkdown(html: string, inlineImageMap: Map<string, string>
   // Paragraphs / line breaks
   s = s.replace(/<\/p>/gi, '\n\n').replace(/<p[^>]*>/gi, '');
   s = s.replace(/<br\s*\/?>/gi, '\n');
+  s = s.replace(/(?:<\/div>\s*)+/gi, '\n').replace(/<hr(?:\s[^>]*)?>/gi, '\n').replace(/<\/tr>/gi, '\n');
 
   // Strip remaining tags
   s = s.replace(/<[^>]+>/g, '');
@@ -99,4 +104,21 @@ export function htmlToMarkdown(html: string, inlineImageMap: Map<string, string>
 
 function stripTags(html: string): string {
   return html.replace(/<[^>]+>/g, '');
+}
+
+const LINE_BREAK_TAG = /<br[\s/>]|<\/(?:p|div|tr|li)>|<hr[\s/>]/i;
+
+function wrapLines(content: string, marker: string): string {
+  return content.split(/(<br\s*\/?>|<\/(?:p|div)>)/i)
+    .map((part, i) => (i % 2 ? part : `${marker}${part}${marker}`))
+    .join('');
+}
+
+// Inline images become `[📎 name]` markers so the email flows can match them to attachments
+function convertImages(html: string, inlineImageMap: Map<string, string>): string {
+  // data-ts-filename (OWA Tampermonkey bridge) — must come before cid: and alt rules
+  return html
+    .replace(/<img[^>]+data-ts-filename="([^"]*)"[^>]*\/?>/gi, (_: string, filename: string) => `[📎 ${filename}]`)
+    .replace(/<img[^>]+src="cid:([^"]*)"[^>]*\/?>/gi, (_: string, cid: string) =>
+      `[📎 ${inlineImageMap.get(cid.trim()) ?? cid.trim()}]`);
 }
