@@ -199,8 +199,8 @@ flowchart TB
   2. Extend `buildLabels` with those labels (KTD4).
   3. Add a change describer returning new CVE ids, a rating rise (old → new, compared with the existing `vulnRatingRank`), or baseline when no record label is present.
   4. Add an update-comment builder (new CVEs table, rating rise line, optional "summary not changed" note), a follow-up description builder over the new CVEs only, and a summary rewriter that replaces ` — <old rating>` at the end of the summary or directly before a trailing ` (follow-up to <KEY>)` (keeping that suffix), and returns null otherwise.
-  6. Add the source `WaltzComponent` to `WaltzReviewRow` (mirroring Veracode's `sourceGroup`) so the apply-time comment and follow-up builders can read the new CVEs from the persisted row.
   5. Every untrusted value goes through `sanitizeCellText`/`sanitizeStandaloneLine` and one `markdownToJiraWiki()` call, as `buildDescriptionWiki` does.
+  6. Add the source `WaltzComponent` to `WaltzReviewRow` (mirroring Veracode's `sourceGroup`) so the apply-time comment and follow-up builders can read the new CVEs from the persisted row.
 - **Patterns to follow:** `buildDescriptionWiki`, `sanitizeComponentLabel` in `src/utils/waltzReport.ts`; `buildNewFindingsCommentWiki` in `src/utils/veracodeReport.ts`.
 - **Test scenarios:**
   - A component with CVE-2021-44228 and rating Critical yields labels `oss-cve-cve-2021-44228` and `oss-rating-critical` alongside the existing component labels.
