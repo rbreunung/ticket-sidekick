@@ -149,6 +149,7 @@ Each session below is looked up by its `workspaceState` key; liveness is checked
 | `FieldSelectionSession` | `jira.session.fieldSelection` | metadata — `jiraSession.kinds: ['field-selection']` |
 | `FieldUpdatePreviewSession` | `jira.session.fieldUpdatePreview` | metadata — `jiraSession.kinds: ['field-update-preview']` |
 | `EmailContentSession` | `jira.session.emailContent` | metadata — `jiraSession.kinds: ['email-content']` |
+| `EmailCleanupSession` | `jira.session.emailCleanup` | metadata — `jiraSession.kinds: ['email-cleanup']` |
 | `VeracodeTemplateSelectionSession` | `jira.session.veracodeTemplateSelection` | metadata — `jiraSession.kinds: ['veracode-template']` |
 | `VeracodeReviewSession` | `jira.session.veracodeReview` | metadata — `jiraSession.kinds: ['veracode-review']` |
 | `WaltzTemplateSelectionSession` | `jira.session.waltzTemplateSelection` | metadata — `jiraSession.kinds: ['waltz-template']` |

@@ -11,8 +11,9 @@ import { buildVeracodeTemplateSession, getVeracodeMaxReportBytes } from './parti
 import { parseWaltzReport, filterComponents } from './utils/waltzReport';
 import { buildWaltzTemplateSession, getWaltzMaxReportBytes } from './participant/jira/waltzHandler';
 import {
-  checkEmailBatchCaps, buildEmailTemplateSession, parseEmlFiles, describeEmailFileSelection, EMAIL_TEMPLATE_SESSION_KEY,
+  checkEmailBatchCaps, parseEmlFiles, describeEmailFileSelection, EMAIL_TEMPLATE_SESSION_KEY, EMAIL_CLEANUP_SESSION_KEY,
 } from './participant/jira/emailHandler';
+import { buildPendingEmailCleanupSession } from './participant/sessionState';
 import { resolveMaxReportBytes } from './utils/reportImport';
 import { readAndFilterReport } from './participant/jira/reportImportHandler';
 import { logDiag } from './utils/diagLog';
@@ -250,10 +251,10 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
 
-    // R1/KTD1: selects one or more .eml files and hands off into the same email
-    // ReportImportDescriptor flow the chat-triggered picker uses (emailHandler.ts) — building an
-    // EmailTemplateSelectionSession here (Command Palette context, native VS Code messages) instead
-    // of a chat-only EmailContentSession.
+    // R1/KTD1: selects one or more .eml files and hands off into the same email flow the
+    // chat-triggered picker uses (emailHandler.ts). KTD8: stores a `pending` EmailCleanupSession; the
+    // chat turn opened below runs boilerplate detection (and asks for model consent there, since the
+    // model is only reachable from a chat request), then continues into the template pick.
     vscode.commands.registerCommand('ticket-sidekick.importEml', async () => {
       const uris = await vscode.window.showOpenDialog({
         canSelectMany: true,
@@ -289,16 +290,12 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
 
-      const jiraClient = new JiraApiClient({
-        baseUrl: config.baseUrl,
-        authType: config.authType,
-        token: config.token,
-        onDiag: (level, message, details) => logDiag('jira.apiClient', level, message, details),
+      const session = buildPendingEmailCleanupSession(items, {
+        kind: 'batch', projectKey, fileName: describeEmailFileSelection(items),
       });
-
-      const session = await buildEmailTemplateSession(items, describeEmailFileSelection(items), projectKey, jiraClient);
-
-      await context.workspaceState.update(EMAIL_TEMPLATE_SESSION_KEY, session);
+      // A template session left over from an earlier import must not be resumed instead of this one.
+      await context.workspaceState.update(EMAIL_TEMPLATE_SESSION_KEY, undefined);
+      await context.workspaceState.update(EMAIL_CLEANUP_SESSION_KEY, session);
       await vscode.commands.executeCommand('workbench.action.chat.open', { query: '@jira create from email' });
     }),
   );

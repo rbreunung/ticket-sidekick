@@ -40,9 +40,9 @@ import { streamReviewScreen, executeCleanupBatch, handleRunCleanup, extractExtra
 import { handleDiscoverWorkflow } from './jira/workflowHandler';
 import {
   handleCreateFromEmail, handleAddEmailFromChat, handleEmailContentSession,
-  handleEmailTemplateSelection, handleEmailReviewReply,
+  handleEmailTemplateSelection, handleEmailReviewReply, handleEmailCleanupReply, EMAIL_CLEANUP_SESSION_KEY,
 } from './jira/emailHandler';
-import type { EmailContentSession, EmailTemplateSelectionSession, EmailReviewSession } from './sessionState';
+import type { EmailContentSession, EmailTemplateSelectionSession, EmailReviewSession, EmailCleanupSession } from './sessionState';
 import {
   handleImportVeracodeReport, handleVeracodeTemplateSelection, handleVeracodeReviewReply,
 } from './jira/veracodeHandler';
@@ -1504,6 +1504,15 @@ export function createJiraParticipant(
         });
         stream.markdown(`\n_Done — ${passed} updated${failed > 0 ? `, ${failed} failed` : ''}_`);
         return;
+      }
+    }
+
+    // Email boilerplate cleanup step (KTD8) — model consent / strip-or-keep preview in front of both
+    // email flows. handleEmailCleanupReply handles an expired session itself (message + clear key).
+    if (getActiveJiraSession(chatContext)?.kinds.includes('email-cleanup')) {
+      const cleanupSession = ws.get<EmailCleanupSession>(EMAIL_CLEANUP_SESSION_KEY);
+      if (cleanupSession) {
+        return await handleEmailCleanupReply(request.prompt, cleanupSession, request.model, token, jiraClient, stream, ws);
       }
     }
 
