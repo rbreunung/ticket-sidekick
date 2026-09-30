@@ -72,7 +72,7 @@ Stale-ticket closing and the overview hub are already shared by both importers o
 
 **Actions**
 
-- R11. `update` writes to the newest open ticket for the item: it records the new findings on the ticket and posts one comment listing them, and for Waltz the comment also names a rating rise.
+- R11. `update` writes to the item's target ticket — its newest open ticket, or its newest ticket when all are resolved: it records the new findings on the ticket and posts one comment listing them, and for Waltz the comment also names a rating rise.
 - R12. On a Waltz rating rise, `update` also replaces the rating at the end of the ticket's summary; a summary that no longer ends in the previously imported rating is left untouched and the comment says so.
 - R13. `update` on a baseline row records the component's current CVEs and rating on the ticket without posting a comment or changing the summary.
 - R14. `follow-up` creates a new ticket with the batch's picked template and issue type, containing only the new findings, carrying the item's dedup record plus the new findings, and linked "relates to" the item's newest ticket; if the link fails, the ticket is kept and the user sees a warning that is also logged.
@@ -129,7 +129,7 @@ Stale-ticket closing and the overview hub are already shared by both importers o
 
 ### Key Technical Decisions
 
-- KTD1. **The dedup search returns every ticket per dedup key, with its labels, resolution and creation date.** `findAlreadyTicketed` moves from a key→first-ticket map to key→ticket list; the search adds `resolution` and `created` to its requested fields. The row's target is the unresolved ticket with the latest `created` (ties: highest key number); known findings are the union of all its tickets' labels. Implements R3, R7, R11; replaces `extractDedupMap`'s "first match wins".
+- KTD1. **The dedup search returns every ticket per dedup key, with its labels, resolution and creation date.** `findAlreadyTicketed` moves from a key→first-ticket map to key→ticket list; the search adds `resolution` and `created` to its requested fields. The row's target is the unresolved ticket with the latest `created` (ties: highest key number), or the newest ticket overall when every ticket is resolved; known findings are the union of all its tickets' labels. Implements R3, R7, R11; replaces `extractDedupMap`'s "first match wins".
 - KTD2. **One optional `changeTracking` hook on `ReportImportDescriptor` replaces `updateExisting`.** It supplies: the record labels an item's current findings map to, a change describer (new finding ids, rating rise, baseline) given the known labels, the update comment builder, the follow-up ticket builder, and an optional summary rewriter. Veracode and Waltz both configure it; email omits it and keeps its screen unchanged. Implements R1, R2, R4–R15 without importer-specific branches in the shared handler.
 - KTD3. **Waltz records findings as labels: `oss-cve-<id>` per CVE and one `oss-rating-<rating>`.** Ids and ratings are lower-cased and pass through the same character sanitizing as `sanitizeComponentLabel`. The rating label is replaced (not accumulated) on update. Implements R1, R4, R13. (session-settled: user-directed — chosen over a hidden Jira issue property and over labelling only the top-N CVEs: labels arrive free with the dedup search and never miss a low-severity CVE.)
 - KTD4. **New Waltz tickets get the CVE and rating labels at creation.** The New group's `buildLabels` adds them, so every ticket created after this ships has a baseline without a later `apply`. Keeps R4's baseline state limited to pre-existing tickets.
@@ -149,7 +149,7 @@ flowchart TB
   S[Dedup search: all tickets per key] --> C{changeTracking.describe}
   C -->|no record labels on any ticket| B[change = baseline, action = update]
   C -->|no new ids, no rating rise| L[action = leave]
-  C -->|change, newest ticket open| U[action = update]
+  C -->|change, any ticket open| U[action = update]
   C -->|change, all tickets resolved| F[action = follow-up]
   B & L & U & F --> O[User overrides via A2 follow-up / all leave]
   O --> A[apply or shortcut]
@@ -198,7 +198,8 @@ flowchart TB
   1. Add builders for `oss-cve-<id>` and `oss-rating-<rating>` labels and a parser that reads CVE ids and the recorded rating back from a label list.
   2. Extend `buildLabels` with those labels (KTD4).
   3. Add a change describer returning new CVE ids, a rating rise (old → new, compared with the existing `vulnRatingRank`), or baseline when no record label is present.
-  4. Add an update-comment builder (new CVEs table, rating rise line, optional "summary not changed" note), a follow-up description builder over the new CVEs only, and a summary rewriter that replaces a trailing ` — <old rating>` and returns null when the summary does not end that way.
+  4. Add an update-comment builder (new CVEs table, rating rise line, optional "summary not changed" note), a follow-up description builder over the new CVEs only, and a summary rewriter that replaces ` — <old rating>` at the end of the summary or directly before a trailing ` (follow-up to <KEY>)` (keeping that suffix), and returns null otherwise.
+  6. Add the source `WaltzComponent` to `WaltzReviewRow` (mirroring Veracode's `sourceGroup`) so the apply-time comment and follow-up builders can read the new CVEs from the persisted row.
   5. Every untrusted value goes through `sanitizeCellText`/`sanitizeStandaloneLine` and one `markdownToJiraWiki()` call, as `buildDescriptionWiki` does.
 - **Patterns to follow:** `buildDescriptionWiki`, `sanitizeComponentLabel` in `src/utils/waltzReport.ts`; `buildNewFindingsCommentWiki` in `src/utils/veracodeReport.ts`.
 - **Test scenarios:**
@@ -208,6 +209,7 @@ flowchart TB
   - Known labels already hold every CVE and the same rating → no change.
   - A rating drop (Critical → High) is not a change.
   - Covers AE4. Summary `[OSS] log4j-core 2.14.1 — High` becomes `… — Critical`; summary `log4j upgrade` returns null.
+  - `[OSS] jackson-databind 2.9 — High (follow-up to PROJ-8)` becomes `… — Critical (follow-up to PROJ-8)`.
   - A CVE summary containing `{code}` or a line starting with `h1.` is neutralized in the comment and the follow-up description.
 - **Verification:** `waltzReport.test.ts` passes; existing Waltz label tests updated for the added labels.
 
@@ -227,6 +229,7 @@ flowchart TB
   - Covers AE1. Three rows (open ticket + change, resolved ticket + change, no change) default to `update`, `follow-up`, `leave`.
   - Covers AE2. PROJ-8 (Done, CVE-A) and PROJ-30 (Open, CVE-B); report has A, B, C → only C new, target PROJ-30.
   - Two open tickets for one key → the later-created one is the target.
+  - A baseline row whose only ticket is resolved gets that ticket as its target, so `update` has somewhere to write.
   - Covers AE3 (detection half). A ticket with only the component label → change `baseline`, action `update`, `follow-up` not allowed.
   - A Veracode folded group whose flaws sit on two different tickets unions both tickets' labels (R2 unchanged).
   - One failed search chunk still returns tickets from the other chunks.
@@ -241,17 +244,19 @@ flowchart TB
 - **Approach:**
   1. Extend `ReviewRowBase` with `action`, `allowedActions`, `change`, `target` and a per-row `result`; bump `CURRENT_SESSION_SCHEMA_VERSION` to 8.
   2. Rewrite `buildTicketedGroupScreen`: columns `#`, importer columns, Ticket, Status, Change, Action (KTD9 links); footer with `apply` (counting rows not on `leave`), the two shortcut links when they have rows, and the exit line.
-  3. Update `countImportGroups` and the overview line to report rows with changes, updated, followed-up and re-created counts.
-  4. Rewrite `parseTicketedGroupReply` per KTD7 with new action kinds (`setAction`, `setAllActions`, `apply`, `update`, `recreate`) and reject actions not in a row's `allowedActions`.
-  5. Update `describeImportReplyVocabulary` and the command-word disjointness test.
+  3. After a run, a finished row's Action cell shows its result instead of links (`updated`, `follow-up PROJ-31`, `follow-up PROJ-31 (link missing)`, `re-created as PROJ-32`); finished rows are excluded from later `apply`, `all <action>` and shortcut runs. A failed row shows the error and keeps its links for retry; a row left pending by the cap keeps its links.
+  4. Update `countImportGroups` and the overview line to report rows with changes, updated, followed-up and re-created counts.
+  5. Rewrite `parseTicketedGroupReply` per KTD7 with new action kinds (`setAction`, `setAllActions`, `apply`, `update`, `recreate`) and reject actions not in a row's `allowedActions`.
+  6. Update `describeImportReplyVocabulary` and the command-word disjointness test.
 - **Patterns to follow:** `buildNewGroupScreen`, `parseStrictRowToggle`, `IMPORT_COMMANDS`, the existing disjointness unit test.
 - **Test scenarios:**
-  - The Action cell of an `update` row with a change lists `**update** · follow-up · re-create · leave` as links; a no-change row lists `**leave** · update · re-create`.
+  - The Action cell of an `update` row with a change lists `**update** · follow-up · re-create · leave` as links; a no-change row lists `**leave** · re-create`.
   - `A2 follow-up` returns a set-action reply for A2; `all leave` returns set-all.
   - Covers AE6. `A3 follow-up` on a no-change row is invalid.
   - A bare `A1` is invalid on this screen.
   - `ok` returns `apply`; `update tickets`, `update existing tickets` and `re-create tickets` return their shortcuts.
   - A session with schema version 7 is expired.
+  - A row updated in an earlier `apply` shows `updated` with no links and is skipped by a second `apply`; a failed row still shows its action links.
   - Overview reads e.g. "12 components · 3 with changes · 2 updated · 1 follow-up".
 - **Verification:** `sessionState.test.ts` passes, including the disjointness test with the new words.
 
@@ -260,20 +265,22 @@ flowchart TB
 - **Goal:** Run the chosen actions against Jira and wire both importers to the hook.
 - **Requirements:** R9–R16; KTD2, KTD5, KTD10.
 - **Dependencies:** U1, U2, U3, U4.
-- **Files:** `src/participant/jira/reportImportHandler.ts`, `src/participant/jira/veracodeHandler.ts`, `src/participant/jira/waltzHandler.ts`, `src/utils/veracodeReport.ts`, `src/test/reportImportHandler.test.ts`, `src/test/veracodeReport.test.ts`.
+- **Files:** `src/participant/jira/reportImportHandler.ts`, `src/participant/jira/veracodeHandler.ts`, `src/participant/jira/waltzHandler.ts`, `src/utils/veracodeReport.ts`, `src/services/TicketService.ts`, `src/test/reportImportHandler.test.ts`, `src/test/veracodeReport.test.ts`, `src/test/TicketService.test.ts`.
 - **Approach:**
   1. Replace `updateExisting` with the `changeTracking` hook on `ReportImportDescriptor` (KTD2) and request `resolution`/`created` in the dedup search.
-  2. Add `executeTicketedActions` (KTD5): `update` → `addMissingLabels` (replacing any old `oss-rating-*` for Waltz), comment, summary rewrite via `updateIssue` when the rewriter returns a value; baseline `update` → labels only; `follow-up` → `createTicket` with the subset content, then `linkIssues`, warning and log on link failure; `re-create` → today's creation path.
-  3. Record each row's result, update `ImportOutcomes` with a new `followedUp` counter, and return to the overview as today.
-  4. Route the new reply kinds in `handleImportReviewReply`; remove `executeUpdateExistingTickets` and `recreateTicketedRows`.
-  5. Configure `changeTracking` in `veracodeHandler.ts` (record labels `veracode-issue-<id>`, no rating, no summary rewrite; follow-up via a new `buildFollowUpSummary` over the subset group) and `waltzHandler.ts` (U2 builders).
+  2. Add a `TicketService` read-merge-write that adds missing labels and removes labels with a given prefix in one `updateIssue` call, returning the labels it added (`addMissingLabels` only appends, so it cannot replace `oss-rating-*` per KTD3).
+  3. Add `executeTicketedActions` (KTD5): `update` → that label operation (removing old `oss-rating-*` for Waltz), comment, summary rewrite via `updateIssue` when the rewriter returns a value; baseline `update` → labels only; `follow-up` → `createTicket` with the subset content, then `linkIssues`, warning and log on link failure; `re-create` → today's creation path.
+  4. Record each row's result, update `ImportOutcomes` with a new `followedUp` counter, and return to the overview as today.
+  5. Route the new reply kinds in `handleImportReviewReply`; remove `executeUpdateExistingTickets` and `recreateTicketedRows`.
+  6. Configure `changeTracking` in `veracodeHandler.ts` (record labels `veracode-issue-<id>`, no rating, no summary rewrite; follow-up via a new `buildFollowUpSummary` over the subset group) and `waltzHandler.ts` (U2 builders).
 - **Patterns to follow:** `executeUpdateExistingTickets` (concurrency, split label/comment failure handling), `createOne` (per-row progress lines, `afterCreate` warning path).
 - **Test scenarios:**
   - `apply` with rows on update, follow-up, re-create and leave writes to Jira for the first three only.
   - Covers AE3. Baseline `update` adds the record labels and posts no comment; a rebuilt session shows the row as no change.
   - Covers AE4. Waltz rating rise rewrites the summary through `updateIssue` and posts one comment; a renamed summary is left and the comment notes it.
   - Covers AE5. Link failure keeps the follow-up, streams a warning and logs at warn.
-  - The follow-up ticket carries the component label plus only the new CVE labels and a ` (follow-up to PROJ-8)` summary suffix.
+  - The Waltz follow-up ticket carries the component label, only the new CVE labels, the current `oss-rating-*` label, and a ` (follow-up to PROJ-8)` summary suffix.
+  - After a High→Critical update the ticket has exactly one `oss-rating-*` label, `oss-rating-critical`.
   - 60 rows set to non-leave actions: the first 50 run and the reply says 10 remain.
   - `update tickets` runs only `update` rows; `re-create tickets` only `re-create` rows.
   - A comment failure after labels were added reports "labels updated, comment failed" and counts once, as today.
