@@ -8,8 +8,9 @@ Download the email from OWA using **More actions → Download message** to save 
 
 1. Run **Command Palette → Ticket Sidekick: Create Jira ticket from email (.eml)**
 2. Select the `.eml` file from your Downloads folder
-3. A preview appears in the `@jira` chat with subject, sender, date, body, and attachments
-4. Reply with a template number, an issue type number, or **post it** to create the ticket
+3. If boilerplate was found, or an email needs your OK for a model check, that step comes first — see [Removing confidentiality headers, footers and signatures](#removing-confidentiality-headers-footers-and-signatures)
+4. A preview appears in the `@jira` chat with subject, sender, date, body, and attachments
+5. Reply with a template number, an issue type number, or **post it** to create the ticket
 
 You can also trigger the import from the chat directly:
 
@@ -21,6 +22,34 @@ You can also trigger the import from the chat directly:
 A file picker opens, the preview appears, and you proceed as above.
 
 Inline images are uploaded as Jira attachments and embedded as thumbnails at their position in the description. File attachments are uploaded to the ticket. Individual attachments larger than 25 MB are rejected with a clear message rather than failing mid-upload.
+
+## Removing confidentiality headers, footers and signatures
+
+Before an email becomes a ticket or a comment, `@jira` looks for boilerplate in every message of the thread, including quoted and forwarded ones: confidentiality headers at the top, legal footers and disclaimers at the bottom, and signature blocks with their logos. Nothing is removed until you say so.
+
+**Your patterns first.** List the texts your company repeats in the `ticketSidekick.email.boilerplatePatterns` user setting (see [Settings Reference](settings-reference.md#report-import-settings) for the format). Every email is checked against them. Without an end phrase, a header covers the line(s) its start phrase is on — add an end phrase for multi-line headers.
+
+**The model only with your yes.** If an email matches none of your patterns, `@jira` asks once for the whole import whether the Copilot model may look at those emails:
+
+| Reply | What happens |
+|---|---|
+| `model check` (or `yes`) | Only the emails listed on that screen are sent to the model, one at a time. Emails that matched a pattern are never sent. An email longer than 30,000 characters is never sent and shows *too long for model check* |
+| `skip model` (or `no`) | Nothing is sent. Those emails show *nothing detected* and import unchanged |
+| `cancel` | Stops the import |
+
+No email content goes to the model without this reply, and the answer is not remembered for the next import. If you stop the chat response while the model check runs, the import pauses at this question: emails already checked keep their result, the rest are not sent, and you reply **model check** or **skip model** to continue. With no patterns configured you see this question on every import. If nothing was found and you skip the model, the import continues straight to the template pick.
+
+**The preview.** One screen lists, per email, its row id, subject, which blocks were found (for example *3 footers, 1 signature*) with a short excerpt and line count of each, and how many images would be dropped. A block marked *capped* hit the 40-line limit before a natural end. Reply:
+
+| Reply | What happens |
+|---|---|
+| `strip` | Removes the listed blocks, then continues to the template pick (or the comment preview) |
+| `keep` | Imports every email unchanged |
+| a row id, e.g. `3` (or `2, 4`) | Excludes that email from stripping; reply it again to include it. Excluded emails import unchanged |
+| `save <n>` | For a block the model found (numbered `#n`): saves it as a pattern in your user settings, so the next import finds it without the model. The preview shows the exact start and end phrases it will store before you save. Blocks your patterns found are already saved and cannot be saved again |
+| `cancel` | Stops the import |
+
+**What stripping keeps.** A stripped signature keeps the author's name line when it can be recognized (the sender's name, or a name right after a closing such as "Best regards"); a signature with no recognizable name, such as "BR" and a logo, is removed completely. An inline image that appears only inside stripped blocks is removed from the text and not uploaded; an image also used in the kept text stays. With `ticketSidekick.email.deleteEmlAfterImport` on, the stripped text is gone for good.
 
 ## Add an email as a comment to an existing ticket
 
@@ -45,7 +74,7 @@ The email preview appears. Reply with a ticket key (e.g. `PROJ-42`) to add as a 
 
 **Via command palette:** Use **Command Palette → Ticket Sidekick: Create Jira ticket from email (.eml)**, then reply with a ticket key in the preview.
 
-The comment includes the sender name and received date as a header, followed by the full email body in Jira markup. All attachments are uploaded to the ticket.
+The comment includes the sender name and received date as a header, followed by the email body in Jira markup. The same [boilerplate step](#removing-confidentiality-headers-footers-and-signatures) runs first for the one email; after `strip`, only the attachments that remain are uploaded, otherwise all of them are.
 
 **Settings:**
 
@@ -54,6 +83,7 @@ The comment includes the sender name and received date as a header, followed by 
 | `ticketSidekick.email.deleteEmlAfterImport` | `false` | Delete the `.eml` file automatically after the ticket is created |
 | `ticketSidekick.jira.defaultProject` | — | Project key used when creating tickets (required for new ticket flow) |
 | `ticketSidekick.email.maxBatchSizeMB` | `150` | Largest total size (1–500 MB) of the `.eml` files selected for one batch; a larger batch is rejected before any file is read |
+| `ticketSidekick.email.boilerplatePatterns` | `[]` | Your known confidentiality headers, legal footers and signatures, found and offered for removal before import (see above) |
 
 ## Create Jira tickets from a Veracode report (.xml)
 

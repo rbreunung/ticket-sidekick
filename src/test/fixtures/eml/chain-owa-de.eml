@@ -1,0 +1,47 @@
+From: Anna Schmidt <anna.schmidt@example.de>
+To: Bernd Weber <bernd.weber@example.de>
+Subject: AW: Freigabe Zahlungsdatei
+Date: Wed, 30 Sep 2026 10:00:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary="related_de_001"
+
+--related_de_001
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+<html><body dir="ltr">
+<div>Hallo Bernd,</div>
+<div>die Datei ist freigegeben.</div>
+<div><br></div>
+<div>Mit freundlichen Grüßen<br>Anna Schmidt<br>Abteilung Zahlungsverkehr<br>Tel. +49 69 9876 5432<br><img src="cid:sig-de@example.de"></div>
+<div><br></div>
+<div style="font-size:8pt;color:#808080">VERTRAULICHKEITSHINWEIS: Diese E-Mail enthält vertrauliche Informationen.<br>Wenn Sie nicht der richtige Adressat sind, informieren Sie bitte sofort den Absender und löschen Sie diese E-Mail.</div>
+<hr style="display:inline-block;width:98%" tabindex="-1">
+<div id="divRplyFwdMsg" dir="ltr"><font face="Calibri, sans-serif" style="font-size:11pt" color="#000000"><b>Von:</b> Bernd Weber &lt;bernd.weber@example.de&gt;<br><b>Gesendet:</b> Dienstag, 29. September 2026 16:20<br><b>An:</b> Anna Schmidt &lt;anna.schmidt@example.de&gt;<br><b>Betreff:</b> WG: Freigabe Zahlungsdatei</font>
+<div>&nbsp;</div></div>
+<div>Hallo Anna,</div>
+<div>bitte gib die weitergeleitete Datei frei.</div>
+<div><br></div>
+<div>Viele Grüße<br>Bernd Weber</div>
+<div><br></div>
+<div style="font-size:8pt;color:#808080">VERTRAULICHKEITSHINWEIS: Diese E-Mail enthält vertrauliche Informationen.<br>Wenn Sie nicht der richtige Adressat sind, informieren Sie bitte sofort den Absender und löschen Sie diese E-Mail.</div>
+<hr style="display:inline-block;width:98%" tabindex="-1">
+<div id="divRplyFwdMsg" dir="ltr"><font face="Calibri, sans-serif" style="font-size:11pt" color="#000000"><b>Von:</b> Clara Neumann &lt;clara.neumann@example.de&gt;<br><b>Gesendet:</b> Dienstag, 29. September 2026 09:05<br><b>An:</b> Bernd Weber &lt;bernd.weber@example.de&gt;<br><b>Betreff:</b> Freigabe Zahlungsdatei</font>
+<div>&nbsp;</div></div>
+<div>Hallo Bernd,</div>
+<div>anbei die Zahlungsdatei zur Freigabe.</div>
+<div><br></div>
+<div>Clara Neumann</div>
+<div><br></div>
+<div style="font-size:8pt;color:#808080">VERTRAULICHKEITSHINWEIS: Diese E-Mail enthält vertrauliche Informationen.<br>Wenn Sie nicht der richtige Adressat sind, informieren Sie bitte sofort den Absender und löschen Sie diese E-Mail.</div>
+</body></html>
+
+--related_de_001
+Content-Type: image/png
+Content-ID: <sig-de@example.de>
+Content-Disposition: inline; filename="signatur-logo.png"
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQAABjE+ibYAAAAASUVORK5CYII=
+
+--related_de_001--

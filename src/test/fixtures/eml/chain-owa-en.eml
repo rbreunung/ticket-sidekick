@@ -1,0 +1,56 @@
+From: Alice Top <alice.top@example.com>
+To: Bob Middle <bob.middle@example.com>
+Subject: RE: Quarterly report numbers
+Date: Wed, 30 Sep 2026 09:00:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary="related_en_001"
+
+--related_en_001
+Content-Type: text/html; charset=utf-8
+
+<html><head><style>p{margin:0}</style></head><body dir="ltr">
+<p style="background:#ffeb9c">[EXTERNAL] This message originated from outside Example Bank.<br>Do not click links or open attachments unless you recognise the sender.</p>
+<div style="font-family:Calibri">Hi Bob,</div>
+<div style="font-family:Calibri"><br></div>
+<div style="font-family:Calibri">the corrected numbers are attached. Please check row 12.</div>
+<div style="font-family:Calibri"><br></div>
+<div style="font-family:Calibri">Best regards,<br>Alice Top<br>Senior Analyst, Reporting<br>Phone +49 69 1234 5678<br><img src="cid:logo001@example.com" width="120" height="40"></div>
+<div><br></div>
+<div style="font-size:8pt;color:#808080"><span>CONFIDENTIALITY NOTICE: This e-mail and any attachments are confidential and may be legally privileged.<br>If you are not the intended recipient, please notify the sender immediately and delete this e-mail.<br>Example Bank AG, Registered office Frankfurt am Main.</span></div>
+<hr style="display:inline-block;width:98%" tabindex="-1">
+<div id="divRplyFwdMsg" dir="ltr"><font face="Calibri, sans-serif" style="font-size:11pt" color="#000000"><b>From:</b> Bob Middle &lt;bob.middle@example.com&gt;<br><b>Sent:</b> Tuesday, September 29, 2026 17:12<br><b>To:</b> Alice Top &lt;alice.top@example.com&gt;<br><b>Subject:</b> RE: Quarterly report numbers</font>
+<div>&nbsp;</div></div>
+<div>Alice,</div>
+<div>row 12 looks wrong to me. Can you double-check?</div>
+<div><br></div>
+<div>Thanks,<br>Bob Middle<br><img src="cid:logo001@example.com" width="120" height="40"></div>
+<div><br></div>
+<div style="font-size:8pt;color:#808080"><span>CONFIDENTIALITY NOTICE: This e-mail and any attachments are confidential and may be legally privileged.<br>If you are not the intended recipient, please notify the sender immediately and delete this e-mail.<br>Example Bank AG, Registered office Frankfurt am Main.</span></div>
+<hr style="display:inline-block;width:98%" tabindex="-1">
+<div id="divRplyFwdMsg" dir="ltr"><font face="Calibri, sans-serif" style="font-size:11pt" color="#000000"><b>From:</b> Carol Third &lt;carol.third@example.com&gt;<br><b>Sent:</b> Tuesday, September 29, 2026 11:03<br><b>To:</b> Bob Middle &lt;bob.middle@example.com&gt;<br><b>Cc:</b> Alice Top &lt;alice.top@example.com&gt;<br><b>Subject:</b> Quarterly report numbers</font>
+<div>&nbsp;</div></div>
+<div>Hello both,</div>
+<div>please find the quarterly report numbers below.</div>
+<div><br></div>
+<div>Kind regards<br>Carol Third</div>
+<div><br></div>
+<div style="font-size:8pt;color:#808080"><span>CONFIDENTIALITY NOTICE: This e-mail and any attachments are confidential and may be legally privileged.<br>If you are not the intended recipient, please notify the sender immediately and delete this e-mail.<br>Example Bank AG, Registered office Frankfurt am Main.</span></div>
+<hr style="display:inline-block;width:98%" tabindex="-1">
+<div id="divRplyFwdMsg" dir="ltr"><font face="Calibri, sans-serif" style="font-size:11pt" color="#000000"><b>From:</b> Dave Fourth &lt;dave.fourth@example.com&gt;<br><b>Sent:</b> Monday, September 28, 2026 08:45<br><b>To:</b> Carol Third &lt;carol.third@example.com&gt;<br><b>Subject:</b> Report request</font>
+<div>&nbsp;</div></div>
+<div>Carol, can you send the numbers?</div>
+<div><br></div>
+<div>Dave</div>
+<div><br></div>
+<div style="font-size:8pt;color:#808080"><span>CONFIDENTIALITY NOTICE: This e-mail and any attachments are confidential and may be legally privileged.<br>If you are not the intended recipient, please notify the sender immediately and delete this e-mail.<br>Example Bank AG, Registered office Frankfurt am Main.</span></div>
+</body></html>
+
+--related_en_001
+Content-Type: image/png
+Content-ID: <logo001@example.com>
+Content-Disposition: inline; filename="bank-logo.png"
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQAABjE+ibYAAAAASUVORK5CYII=
+
+--related_en_001--

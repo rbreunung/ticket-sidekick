@@ -10,9 +10,20 @@ import { sanitizeCellText, BATCH_LIMIT, resolveSizeLimitSetting } from '../../ut
 import { parseEmlFile, type EmailImportItem, type EmailReviewRow } from '../../utils/emlParser';
 import type {
   EmailContentSession, AwaitIssueTypeResume, EmailTemplateSelectionSession, EmailReviewSession, ReviewTableColumn,
+  EmailCleanupSession, EmailCleanupTarget, EmailCleanupDecision,
 } from '../sessionState';
-import { isCancellation, isConfirmation, isSessionExpired, SESSION_EXPIRED_MESSAGE, buildChatCommandLink, neutralizeMarkdownLinks, withLastTicket } from '../sessionState';
+import {
+  isCancellation, isConfirmation, isSessionExpired, SESSION_EXPIRED_MESSAGE, buildChatCommandLink, neutralizeMarkdownLinks, withLastTicket,
+  buildPendingEmailCleanupSession, buildEmailCleanupConsent, buildEmailCleanupPreview, parseEmailCleanupReply,
+  applyEmailCleanupDecision, resolveSaveTarget,
+} from '../sessionState';
+import {
+  detectPatternBlocks, resolveBoilerplatePatterns, isTooLongForModelCheck, buildModelCheckPrompt, parseModelCheckReply,
+  verifyModelBlocks, type BoilerplatePattern,
+} from '../../utils/emailBoilerplate';
+import { withLmRetry, UnparseableReplyError } from '../../utils/lmRetry';
 import { resolveProjectKey, sessionWasSuperseded } from './ticketContext';
+import { sendAndCollect } from './llmHelpers';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import {
   buildImportTemplateSession, streamImportTemplateSelection, handleImportTemplateSelection,
@@ -196,7 +207,8 @@ async function pickAndParseEmlFiles(stream: vscode.ChatResponseStream): Promise<
 }
 
 // Shared by both ticket-creation entry points below: prompts for files, resolves the project key,
-// and streams the template-selection screen. Used when no in-progress session exists.
+// and runs the boilerplate cleanup step (KTD8), which continues into the template-selection screen.
+// Used when no in-progress session exists.
 async function startEmailBatchImport(
   stream: vscode.ChatResponseStream,
   jiraClient: IJiraClient,
@@ -211,27 +223,280 @@ async function startEmailBatchImport(
     return;
   }
 
-  const session = await buildImportTemplateSession(items, describeEmailFileSelection(items), projectKey, jiraClient, emailDescriptor);
-  return streamImportTemplateSelection(session, stream, ws, emailDescriptor);
+  const target: EmailCleanupTarget = { kind: 'batch', projectKey, fileName: describeEmailFileSelection(items) };
+  return startEmailCleanup(buildPendingEmailCleanupSession(items, target), jiraClient, stream, ws);
 }
 
-// Thin wrapper mirroring buildVeracodeTemplateSession/buildWaltzTemplateSession — used by
-// extension.ts's ticket-sidekick.importEml Command Palette command, which does its own multi-select
-// file picking (VS Code command context, not a chat stream) and then hands off into this same
-// shared session builder.
-export async function buildEmailTemplateSession(
-  items: EmailImportItem[],
-  fileName: string,
-  projectKey: string,
+// ── Boilerplate cleanup step (KTD8): detect → [consent] → [preview] → the existing flow ──────────
+
+// Exported so extension.ts's Command Palette command stores its `pending` session under this key.
+export const EMAIL_CLEANUP_SESSION_KEY = 'jira.session.emailCleanup';
+
+// R1: the user's configured patterns. Invalid entries are dropped and logged with the reason and the
+// entry's kind only — never its phrases.
+function readBoilerplatePatterns(): BoilerplatePattern[] {
+  const raw = vscode.workspace.getConfiguration('ticketSidekick').get<unknown>('email.boilerplatePatterns');
+  return resolveBoilerplatePatterns(raw, (reason, entry) => {
+    const kind = typeof entry === 'object' && entry !== null && typeof (entry as { kind?: unknown }).kind === 'string'
+      ? (entry as { kind: string }).kind.slice(0, 20)
+      : undefined;
+    logDiag('jira.email', 'warn', `Ignored an invalid ticketSidekick.email.boilerplatePatterns entry — ${reason}`, { reason, kind });
+  });
+}
+
+function cleanupResult(session: EmailCleanupSession): vscode.ChatResult {
+  return session.target.kind === 'comment'
+    ? withLastTicket(session.target.ticketKey, ['email-cleanup'])
+    : { metadata: { jiraSession: { kinds: ['email-cleanup'] } } };
+}
+
+// A branch that ends the cleanup step (cancel, expired) still names the comment target's ticket,
+// so it carries lastTicketKey (empty kinds: no session) for a bare follow-up; a batch has none.
+function endedCleanupResult(session: EmailCleanupSession): vscode.ChatResult | void {
+  return session.target.kind === 'comment' ? withLastTicket(session.target.ticketKey) : undefined;
+}
+
+async function showCleanupScreen(
+  session: EmailCleanupSession,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+  notice?: string,
+): Promise<vscode.ChatResult> {
+  await ws.update(EMAIL_CLEANUP_SESSION_KEY, session);
+  if (session.phase === 'consent') {
+    stream.markdown(trustedChatMarkdown(`${notice ? `${notice}\n\n` : ''}${buildEmailCleanupConsent(session)}`));
+  } else {
+    stream.markdown(trustedChatMarkdown(buildEmailCleanupPreview(session, notice)));
+  }
+  return cleanupResult(session);
+}
+
+// Runs the configured patterns over every email (R2, R4) and picks the next step: the consent
+// screen when a non-empty email had no match and fits the model check (R3), the preview when
+// something was found, or — nothing found, nothing to ask — straight into the existing flow (R10).
+async function startEmailCleanup(
+  session: EmailCleanupSession,
   jiraClient: IJiraClient,
-): Promise<EmailTemplateSelectionSession> {
-  return buildImportTemplateSession(items, fileName, projectKey, jiraClient, emailDescriptor);
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+): Promise<vscode.ChatResult | void> {
+  const patterns = readBoilerplatePatterns();
+  for (const row of session.rows) {
+    const body = row.item.markdownBody;
+    row.blocks = detectPatternBlocks(body, patterns, row.item.senderName);
+    if (row.blocks.length > 0 || !body.trim()) row.modelStatus = 'not-needed';
+    else row.modelStatus = isTooLongForModelCheck(body) ? 'too-long' : 'awaiting-consent';
+  }
+  logDiag('jira.email', 'info', 'Boilerplate patterns checked', {
+    emails: session.rows.length,
+    patterns: patterns.length,
+    matched: session.rows.filter(r => r.blocks.length > 0).length,
+    awaitingConsent: session.rows.filter(r => r.modelStatus === 'awaiting-consent').length,
+  });
+  if (session.rows.some(r => r.modelStatus === 'awaiting-consent')) {
+    return showCleanupScreen({ ...session, phase: 'consent' }, stream, ws);
+  }
+  if (session.rows.some(r => r.blocks.length > 0)) {
+    return showCleanupScreen({ ...session, phase: 'preview' }, stream, ws);
+  }
+  return continueAfterCleanup(session, 'keep', jiraClient, stream, ws);
+}
+
+// Strip or keep, then hand the (cleaned) items to the flow that ran before this step existed:
+// the template pick for a batch, the comment preview for "add email as comment".
+async function continueAfterCleanup(
+  session: EmailCleanupSession,
+  decision: EmailCleanupDecision,
+  jiraClient: IJiraClient,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+): Promise<vscode.ChatResult | void> {
+  await ws.update(EMAIL_CLEANUP_SESSION_KEY, undefined);
+  const { items, strippedCount, droppedImageCount } = applyEmailCleanupDecision(session, decision);
+  if (strippedCount > 0) {
+    logDiag('jira.email', 'info', 'Boilerplate stripped', { emails: strippedCount, droppedImages: droppedImageCount });
+    stream.markdown(`_Removed boilerplate from ${strippedCount} email(s)` +
+      `${droppedImageCount > 0 ? `; ${droppedImageCount} image(s) will not be uploaded` : ''}._\n\n`);
+  }
+  if (session.target.kind === 'comment') {
+    const item = items[0];
+    return streamEmailCommentPreview({
+      emailId: 'eml-import',
+      subject: item.subject,
+      senderName: item.senderName,
+      receivedDateTime: item.receivedDateTime,
+      markdownBody: item.markdownBody,
+      inlineImageMap: item.inlineImageMap,
+      attachments: item.attachments, // U6: the cleaned set — images only in stripped blocks are gone
+      emlFilePath: item.emlFilePath,
+      pendingCommentTicketKey: session.target.ticketKey,
+    }, stream, ws);
+  }
+  const templateSession = await buildImportTemplateSession(items, session.target.fileName, session.target.projectKey, jiraClient, emailDescriptor);
+  return streamImportTemplateSelection(templateSession, stream, ws, emailDescriptor);
+}
+
+// KTD5: one call per email the user consented to; the model proposes, verifyModelBlocks keeps only
+// quotes that really occur. A failed or unparseable call leaves that email as nothing detected and
+// is logged with metadata only — the reply echoes email text, so neither it nor the body is logged.
+// Returns 'cancelled' when the chat request is cancelled: the loop stops, the email in flight and
+// every later one stay 'awaiting-consent' (not 'failed'), and emails already checked keep their result.
+async function runModelCheck(
+  session: EmailCleanupSession,
+  model: vscode.LanguageModelChat,
+  token: vscode.CancellationToken,
+  stream: vscode.ChatResponseStream,
+): Promise<'done' | 'cancelled'> {
+  const cancelled = () => token?.isCancellationRequested === true;
+  const asked = session.rows.filter(r => r.modelStatus === 'awaiting-consent');
+  stream.markdown(`_Checking ${asked.length} email(s) with the Copilot model…_\n\n`);
+  const patterns = readBoilerplatePatterns();
+  for (const row of asked) {
+    if (cancelled()) break;
+    const body = row.item.markdownBody;
+    let attempts = 0;
+    let replyLength = 0;
+    try {
+      const proposals = await withLmRetry(async () => {
+        if (cancelled()) throw new Error('cancelled');
+        attempts++;
+        const reply = await sendAndCollect(model, [vscode.LanguageModelChatMessage.User(buildModelCheckPrompt(body))], token);
+        replyLength = reply.length;
+        if (!/[[{]/.test(reply)) throw new UnparseableReplyError(reply);
+        return parseModelCheckReply(reply);
+      });
+      row.blocks = verifyModelBlocks(body, proposals, patterns, row.item.senderName);
+      row.modelStatus = 'checked';
+      logDiag('jira.email', 'info', 'Model check done', {
+        rowId: row.id, attempts, proposals: proposals.length, verifiedBlocks: row.blocks.length, replyLength, bodyLength: body.length,
+      });
+    } catch (err) {
+      if (cancelled()) break; // stays 'awaiting-consent'
+      row.blocks = [];
+      row.modelStatus = 'failed';
+      const code = typeof (err as { code?: unknown })?.code === 'string' ? (err as { code: string }).code : undefined;
+      logDiag('jira.email', 'warn', 'Model check failed', {
+        rowId: row.id, errorCode: code, errorName: err instanceof Error ? err.name : typeof err, attempts, replyLength, bodyLength: body.length,
+      });
+    }
+  }
+  if (!cancelled()) return 'done';
+  logDiag('jira.email', 'info', 'Model check cancelled', {
+    checked: asked.filter(r => r.modelStatus !== 'awaiting-consent').length,
+    remaining: asked.filter(r => r.modelStatus === 'awaiting-consent').length,
+  });
+  return 'cancelled';
+}
+
+// Replies to the cleanup step's consent and preview screens (router kind 'email-cleanup'), plus the
+// `pending` session the Command Palette stores (detection runs on this chat turn).
+export async function handleEmailCleanupReply(
+  reply: string,
+  session: EmailCleanupSession,
+  model: vscode.LanguageModelChat | undefined,
+  token: vscode.CancellationToken,
+  jiraClient: IJiraClient,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+): Promise<vscode.ChatResult | void> {
+  if (isSessionExpired(session)) {
+    await ws.update(EMAIL_CLEANUP_SESSION_KEY, undefined);
+    stream.markdown(SESSION_EXPIRED_MESSAGE);
+    return endedCleanupResult(session);
+  }
+  if (session.phase === 'pending') return startEmailCleanup(session, jiraClient, stream, ws);
+
+  const parsed = parseEmailCleanupReply(reply, session.phase, session.rows.map(r => r.id));
+  if (parsed.action === 'cancel') {
+    await ws.update(EMAIL_CLEANUP_SESSION_KEY, undefined);
+    stream.markdown('_Cancelled — nothing was imported._');
+    return endedCleanupResult(session);
+  }
+
+  if (session.phase === 'consent') {
+    if (parsed.action === 'model-check') {
+      if (!model) {
+        return showCleanupScreen(session, stream, ws, '_No Copilot model is available in this chat — reply **skip model** to continue without it._');
+      }
+      if (await runModelCheck(session, model, token, stream) === 'cancelled') {
+        // Stay at consent: the unchecked emails still await it, and nothing continues into the template pick.
+        await ws.update(EMAIL_CLEANUP_SESSION_KEY, session);
+        stream.markdown('_Model check stopped — reply **model check** or **skip model** to continue._');
+        return cleanupResult(session);
+      }
+    } else if (parsed.action === 'skip-model') {
+      for (const row of session.rows) if (row.modelStatus === 'awaiting-consent') row.modelStatus = 'declined';
+    } else {
+      return showCleanupScreen(session, stream, ws, '_Reply **model check** to let the model look, or **skip model** to continue without it._');
+    }
+    if (session.rows.some(r => r.blocks.length > 0)) return showCleanupScreen({ ...session, phase: 'preview' }, stream, ws);
+    if (parsed.action === 'model-check') {
+      const failed = session.rows.filter(r => r.modelStatus === 'failed').length;
+      stream.markdown(`_The model check found no boilerplate${failed > 0 ? ` (model check failed for ${failed} email(s))` : ''} — continuing with the email(s) unchanged._\n\n`);
+    }
+    return continueAfterCleanup(session, 'keep', jiraClient, stream, ws);
+  }
+
+  switch (parsed.action) {
+    case 'strip':
+    case 'keep':
+      return continueAfterCleanup(session, parsed.action, jiraClient, stream, ws);
+    case 'toggle': {
+      for (const row of session.rows) if (parsed.rowIds.includes(row.id)) row.excluded = !row.excluded;
+      return showCleanupScreen(session, stream, ws);
+    }
+    case 'save':
+      return saveBlockAsPattern(session, parsed.blockNumber, stream, ws);
+    default:
+      return showCleanupScreen(session, stream, ws,
+        '_Reply **strip**, **keep**, a row id to exclude or include an email, or **save <n>** for a block the model found._');
+  }
+}
+
+// R8/KTD9: appends the block's first/last-line pattern to the user's global setting, so the next
+// import finds the same text through the patterns without asking about the model.
+async function saveBlockAsPattern(
+  session: EmailCleanupSession,
+  blockNumber: number,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+): Promise<vscode.ChatResult> {
+  const target = resolveSaveTarget(session, blockNumber);
+  if (!target.ok) {
+    const reason = {
+      'unknown': `_There is no block #${blockNumber} in this preview._`,
+      'pattern-found': `_#${blockNumber} was found by one of your patterns, so it is already saved. Only blocks the model found (they show a Save chip) can be saved._`,
+      'no-text': `_#${blockNumber} has no text that could be saved as a pattern._`,
+      'already-saved': `_#${blockNumber} is already saved as a pattern._`,
+    }[target.reason];
+    return showCleanupScreen(session, stream, ws, reason);
+  }
+  const cfg = vscode.workspace.getConfiguration('ticketSidekick');
+  const current = cfg.inspect<unknown>('email.boilerplatePatterns')?.globalValue;
+  try {
+    await cfg.update('email.boilerplatePatterns', [...(Array.isArray(current) ? current : []), target.pattern], vscode.ConfigurationTarget.Global);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    // The phrases are email text: an error that echoes the written value must not put them in the log.
+    const phrases = [target.pattern.start, target.pattern.end].filter((p): p is string => !!p);
+    const logMessage = phrases.reduce((m, p) => m.split(p).join('<pattern text>'), message);
+    logDiag('jira.email', 'error', 'Could not save boilerplate pattern', {
+      error: logMessage, errorName: err instanceof Error ? err.name : typeof err, kind: target.pattern.kind,
+    });
+    return showCleanupScreen(session, stream, ws, `_Could not save the pattern: ${neutralizeMarkdownLinks(message)}_`);
+  }
+  logDiag('jira.email', 'info', 'Saved boilerplate pattern', { kind: target.pattern.kind, hasEnd: target.pattern.end !== undefined });
+  const saved: EmailCleanupSession = { ...session, savedBlocks: [...session.savedBlocks, blockNumber] };
+  return showCleanupScreen(saved, stream, ws,
+    `_Saved #${blockNumber} as a ${target.pattern.kind} pattern in your user settings — the next import finds it without the model._`);
 }
 
 // Entry point for the "createFromEmail" operation (chat: "@jira create from email" / "@jira import
 // email" with no ticket key). Handles both invocation paths:
-//  1. Command-triggered — an EmailTemplateSelectionSession is already in workspaceState (built by
-//     extension.ts's ticket-sidekick.importEml command).
+//  1. Command-triggered — extension.ts's ticket-sidekick.importEml command stored a `pending`
+//     EmailCleanupSession; detection runs now, on this chat turn (KTD8). A batch cleanup session
+//     already at its consent/preview step is re-shown, and an EmailTemplateSelectionSession left
+//     from a later step resumes as before.
 //  2. Chat-only — opens its own multi-select file picker.
 export async function handleCreateFromEmail(
   _request: vscode.ChatRequest,
@@ -242,6 +507,19 @@ export async function handleCreateFromEmail(
   _configService: ConfigService,
   ws: vscode.Memento,
 ): Promise<vscode.ChatResult | void> {
+  const cleanup = ws.get<EmailCleanupSession>(EMAIL_CLEANUP_SESSION_KEY);
+  if (cleanup) {
+    if (isSessionExpired(cleanup)) {
+      await ws.update(EMAIL_CLEANUP_SESSION_KEY, undefined);
+      stream.markdown(SESSION_EXPIRED_MESSAGE);
+      return endedCleanupResult(cleanup);
+    }
+    if (cleanup.target.kind === 'batch') {
+      if (cleanup.phase === 'pending') return startEmailCleanup(cleanup, jiraClient, stream, ws);
+      return showCleanupScreen(cleanup, stream, ws);
+    }
+  }
+
   const existing = ws.get<EmailTemplateSelectionSession>(emailDescriptor.sessionKeys.templateSelection);
   if (existing) {
     if (isSessionExpired(existing)) {
@@ -288,18 +566,8 @@ export async function handleAddEmailFromChat(
       return;
     }
 
-    const quickSession: EmailContentSession = {
-      emailId: 'eml-import',
-      subject: item.subject,
-      senderName: item.senderName,
-      receivedDateTime: item.receivedDateTime,
-      markdownBody: item.markdownBody,
-      inlineImageMap: item.inlineImageMap,
-      attachments: item.attachments,
-      emlFilePath: item.emlFilePath,
-      pendingCommentTicketKey: promptTicketKey,
-    };
-    return streamEmailCommentPreview(quickSession, stream, ws);
+    // U6/R11: the same cleanup step as the batch flow, for one email, ending in the comment preview.
+    return startEmailCleanup(buildPendingEmailCleanupSession([item], { kind: 'comment', ticketKey: promptTicketKey }), jiraClient, stream, ws);
   }
 
   // No ticket key — this is a ticket-creation request, same batch flow as handleCreateFromEmail's
@@ -435,7 +703,8 @@ export async function streamEmailCommentPreview(session: EmailContentSession, st
     `\n\nReply ${buildChatCommandLink('Post it', '@jira', 'post it')} to add as comment to **${key}**, ` +
     `or ${buildChatCommandLink('Cancel', '@jira', 'cancel')}.`,
   ));
-  return { metadata: { jiraSession: { kinds: ['email-content'] } } };
+  // The preview names the target ticket, so it carries lastTicketKey alongside its session kind.
+  return withLastTicket(key, ['email-content']);
 }
 
 // Handles replies to the comment-attach preview (streamEmailCommentPreview above) — the only

@@ -156,7 +156,7 @@ export function extractFixVersionFromPrompt(prompt: string): string | null {
   return null;
 }
 
-async function sendAndCollect(
+export async function sendAndCollect(
   model: vscode.LanguageModelChat,
   messages: vscode.LanguageModelChatMessage[],
   token: vscode.CancellationToken,
