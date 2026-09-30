@@ -1696,7 +1696,7 @@ export const VERACODE_REVIEW_COLUMNS: ReviewTableColumn<VeracodeReviewRow>[] = [
 
 export const WALTZ_REVIEW_COLUMNS: ReviewTableColumn<WaltzReviewRow>[] = [
   { header: 'Component', accessor: (r) => neutralizeMarkdownLinks(r.nameVersion) },
-  { header: 'Rating', accessor: (r) => r.maxVulnRating },
+  { header: 'Rating', accessor: (r) => safeCellText(r.maxVulnRating) },
 ];
 
 // ---------------------------------------------------------------------------------------------

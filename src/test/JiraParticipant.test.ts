@@ -1072,6 +1072,13 @@ describe('Import screens — Veracode config', () => {
     expect(text).not.toContain('[Evil](command:');
     expect(text).toContain('Evil］(command:');
   });
+
+  it('neutralizes a Waltz rating cell crafted to carry a command link or break the table', () => {
+    const rating = WALTZ_REVIEW_COLUMNS.find(c => c.header === 'Rating')!;
+    const cell = rating.accessor({ maxVulnRating: '[Apply](command:workbench.action.chat.open?x) | High' } as never);
+    expect(cell).not.toMatch(/\[[^\]]*\]\([^)]*\)/);
+    expect(cell).toContain('\\|');
+  });
 });
 
 describe('New screen — paging (U4/R6-R7)', () => {
