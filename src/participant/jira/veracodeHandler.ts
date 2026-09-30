@@ -16,7 +16,7 @@ import {
   continueStaleClose,
   type ReportImportDescriptor,
 } from './reportImportHandler';
-import { resolveSizeLimitSetting } from '../../utils/reportImport';
+import { resolveSizeLimitSetting, templateLabelsOf } from '../../utils/reportImport';
 import type { AwaitIssueTypeResume } from '../sessionState';
 import { sessionWasSuperseded } from './ticketContext';
 
@@ -165,7 +165,7 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
     // veracode-issue-<id> and cwe-<id> labels) plus the template's, its summary and description.
     buildFollowUp: (row, change, originalKey, additionalFields) => {
       const subset = flawsWithIds(row.sourceGroup, change.newIds);
-      const templateLabels = Array.isArray(additionalFields.labels) ? additionalFields.labels as string[] : [];
+      const templateLabels = templateLabelsOf(additionalFields);
       return {
         summary: buildFollowUpSummary(subset, originalKey),
         fields: { ...additionalFields, labels: buildGroupLabels(subset, templateLabels), description: buildGroupDescriptionWiki(subset) },

@@ -18,7 +18,7 @@ import { TemplateService } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
 import {
   MAX_REPORT_BYTES, BATCH_LIMIT, DEFAULT_DEDUP_CHUNK_SIZE, findAlreadyTicketed, buildReviewRows,
-  buildDedupJql, findStaleTickets, type JqlIssueLike, type DedupMap, type RowChange,
+  buildDedupJql, findStaleTickets, templateLabelsOf, type JqlIssueLike, type DedupMap, type RowChange,
 } from '../../utils/reportImport';
 import {
   isCancellation, pickEmailOption, applyStaleTicketToggle,
@@ -27,7 +27,7 @@ import {
   selectedStaleIssueTypes, staleTargetState, staleTargetNeedsResolution, planStaleTransitions,
   selectedOpenStaleTickets, isBackOrCancellation,
   type StaleTargetOption, applyReviewSessionToggle, applyBulkNewRowSet,
-  applyTicketedActionChange, ticketedRowActions, isTicketedRowFinished,
+  applyTicketedActionChange, ticketedRowActions, ticketedTargetKey, isTicketedRowFinished,
   type TicketedAction, type TicketedRowResult,
   buildImportScreen, parseImportReviewReply, describeImportReplyVocabulary, buildImportDoneSummary,
   initImportViewState, ensureImportViewState, emptyImportOutcomes,
@@ -424,7 +424,7 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
   }
 
   const plural = descriptor.itemNoun.replace('(s)', 's'); // 'flaw(s)' -> 'flaws', 'component(s)' -> 'components'
-  const templateLabels = Array.isArray(additionalFields.labels) ? additionalFields.labels as string[] : [];
+  const templateLabels = templateLabelsOf(additionalFields);
 
   // KTD2: dedup is optional — an importer that omits searchLabelOf/dedupKeyOf/labelToDedupKey (email)
   // has no per-item dedup key, so the "already ticketed" search is skipped entirely rather than run
@@ -1144,7 +1144,7 @@ async function updateTicketedRow<TItem, TRow extends ReviewRowBase>(
 ): Promise<TicketedRowResult> {
   const tracking = descriptor.changeTracking;
   const change = row.change;
-  const ticketKey = row.target?.key ?? row.existingTicketKey!;
+  const ticketKey = ticketedTargetKey(row);
   const link = formatKeyLink(ticketKey, baseUrl);
   try {
     if (!tracking || !change) throw new Error('nothing to update on this row');
@@ -1205,7 +1205,7 @@ async function createForTicketedRow<TItem, TRow extends ReviewRowBase>(
 
   const change = row.change;
   const tracking = descriptor.changeTracking;
-  const originalKey = row.target?.key ?? row.existingTicketKey!;
+  const originalKey = ticketedTargetKey(row);
   if (!tracking || change?.kind !== 'findings' || change.newIds.length === 0) {
     const error = 'no new findings for a follow-up';
     stream.markdown(`✗ ${descriptor.itemRefFor(row)} — ${error}\n\n`);

@@ -374,7 +374,12 @@ export interface RowChangeTracking<TItem> {
   describe(item: TItem, knownLabels: string[]): RowChange | null;
 }
 
-const TICKETED_ACTION_ORDER: readonly TicketedAction[] = ['update', 'follow-up', 're-create', 'leave'];
+/** A template's `labels` field as a string array, or [] when it has none. */
+export function templateLabelsOf(additionalFields: Record<string, unknown>): string[] {
+  return Array.isArray(additionalFields.labels) ? additionalFields.labels as string[] : [];
+}
+
+export const TICKETED_ACTION_ORDER: readonly TicketedAction[] = ['update', 'follow-up', 're-create', 'leave'];
 
 function createdTime(created: string | null): number {
   if (!created) return Number.NEGATIVE_INFINITY;

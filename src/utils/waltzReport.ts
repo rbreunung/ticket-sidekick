@@ -330,12 +330,18 @@ function labelHashSuffix(nameVersion: string): string {
   return createHash('sha256').update(nameVersion).digest('hex').slice(0, LABEL_HASH_LENGTH);
 }
 
-export function sanitizeComponentLabel(nameVersion: string): string {
-  const sanitized = nameVersion
+// Lowercases and collapses every run of characters outside [a-z0-9._-] to one hyphen, trimming
+// leading/trailing hyphens — the character rules shared by component and record labels.
+function slugifyLabelPart(value: string): string {
+  return value
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '');
+}
+
+export function sanitizeComponentLabel(nameVersion: string): string {
+  const sanitized = slugifyLabelPart(nameVersion);
   const suffix = `-${labelHashSuffix(nameVersion)}`;
   const readableBudget = MAX_LABEL_LENGTH - 'oss-dep-'.length - suffix.length;
   // Truncating mid-string can land right after a hyphen; strip a trailing one so it doesn't collide
@@ -365,11 +371,7 @@ const CVE_LABEL_PREFIX = 'oss-cve-';
 const RATING_LABEL_PREFIX = 'oss-rating-';
 
 function sanitizeRecordLabelPart(value: string, prefix: string): string {
-  const sanitized = value
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
+  const sanitized = slugifyLabelPart(value);
   return sanitized.slice(0, MAX_LABEL_LENGTH - prefix.length).replace(/-+$/, '');
 }
 

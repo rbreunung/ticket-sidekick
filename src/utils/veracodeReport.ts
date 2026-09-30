@@ -372,18 +372,13 @@ export function buildGroupDescriptionWiki(group: VeracodeFlaw[]): string {
 }
 
 /**
- * U3/R13 (now the per-row `update` action's comment): summarizing-comment body — one `### Issue <id>` block per
- * newly-added flaw (severity, CWE, description; no `### Location` — the ticket the comment is
- * posted to already carries it). Same sanitize-then-convert-once pattern as
- * `buildGroupDescriptionWiki()`: every untrusted field routed through `sanitizeCellText()`/
- * `sanitizeStandaloneLine()`, the whole thing authored as Markdown and converted via
- * `markdownToJiraWiki()` exactly once at the end — `addComment()` sends its `body` argument to Jira
- * verbatim with no sanitization of its own, so this function is the only thing standing between a
- * crafted report field and a live Jira-wiki-markup injection in the posted comment (see
- * `docs/solutions/security-issues/` for the prior history of exactly this vulnerability shape).
- * `newFlaws` is expected to be the subset of a group's members whose id was actually newly added
- * this run — the caller (the `update` action's comment builder in veracodeHandler.ts) is responsible
- * for that filtering; this function itself renders whatever it's given.
+ * Builds the `update` action's comment body for the given new flaws (already filtered by the caller
+ * to the flaws newly added this run): one `### Issue <id>` block per flaw (severity, CWE,
+ * description; no `### Location` — the ticket the comment is posted to already carries it). Every
+ * untrusted field is sanitized via `sanitizeCellText()`/`sanitizeStandaloneLine()`, and the whole
+ * body is authored as Markdown and converted via `markdownToJiraWiki()` exactly once at the end.
+ * `addComment()` sends the body to Jira verbatim, so this sanitization is what prevents Jira
+ * wiki-markup injection from crafted report fields.
  */
 export function buildNewFindingsCommentWiki(newFlaws: VeracodeFlaw[]): string {
   const lines: string[] = [];

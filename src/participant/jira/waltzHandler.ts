@@ -16,7 +16,7 @@ import {
   continueStaleClose,
   type ReportImportDescriptor,
 } from './reportImportHandler';
-import { resolveSizeLimitSetting } from '../../utils/reportImport';
+import { resolveSizeLimitSetting, templateLabelsOf } from '../../utils/reportImport';
 import type { AwaitIssueTypeResume } from '../sessionState';
 import { sessionWasSuperseded } from './ticketContext';
 
@@ -158,7 +158,7 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent, WaltzReviewRow> = 
     // only the new CVE labels and the current rating label, plus the template's labels.
     buildFollowUp: (row, change, originalKey, additionalFields) => {
       const component = row.sourceComponent;
-      const templateLabels = Array.isArray(additionalFields.labels) ? additionalFields.labels as string[] : [];
+      const templateLabels = templateLabelsOf(additionalFields);
       const labels = [
         WALTZ_STALE_MARKER_LABEL, sanitizeComponentLabel(component.nameVersion),
         ...change.newIds.map(buildCveLabel), buildRatingLabel(component.maxVulnRating), ...templateLabels,

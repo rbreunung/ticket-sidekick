@@ -3,7 +3,7 @@ import { formatJiraBody } from '../utils/markdownFormatter';
 import type { VeracodeFlaw, VeracodeReviewRow } from '../utils/veracodeReport';
 import type { WaltzComponent, WaltzReviewRow } from '../utils/waltzReport';
 import type { EmailImportItem, EmailReviewRow } from '../utils/emlParser';
-import { BATCH_LIMIT, sanitizeCellText } from '../utils/reportImport';
+import { BATCH_LIMIT, TICKETED_ACTION_ORDER, sanitizeCellText } from '../utils/reportImport';
 import type { RowChange } from '../utils/reportImport';
 import { TICKET_ID_PATTERN, extractTicketId } from '../utils/branchParser';
 import { formatFileSize } from '../utils/attachmentEligibility';
@@ -1335,12 +1335,16 @@ export type TicketedRowResult =
   | { status: 'done'; action: 're-create'; key: string }
   | { status: 'failed'; action: TicketedAction; error: string };
 
-const TICKETED_ACTIONS: readonly TicketedAction[] = ['update', 'follow-up', 're-create', 'leave'];
 const DEFAULT_TICKETED_ACTIONS: readonly TicketedAction[] = ['re-create', 'leave'];
 
 /** A row's offered actions and current action — rows built without change tracking offer re-create / leave. */
 export function ticketedRowActions(row: ReviewRowBase): { allowedActions: TicketedAction[]; action: TicketedAction } {
   return { allowedActions: [...(row.allowedActions ?? DEFAULT_TICKETED_ACTIONS)], action: row.action ?? 'leave' };
+}
+
+/** The ticket a ticketed row's action targets: its chosen target, else its existing ticket. */
+export function ticketedTargetKey(row: ReviewRowBase): string {
+  return row.target?.key ?? row.existingTicketKey!;
 }
 
 /** A row whose action already ran successfully — excluded from every later apply, `all` and shortcut. */
@@ -1975,7 +1979,7 @@ function ticketedActionCell(row: ReviewRowBase, baseUrl?: string): string {
 }
 
 function ticketedTicketCell(row: ReviewRowBase, baseUrl?: string): string {
-  const key = row.target?.key ?? row.existingTicketKey!;
+  const key = ticketedTargetKey(row);
   const others = (row.ticketKeys?.length ?? 1) - 1;
   return `${formatKeyLink(key, baseUrl)}${others > 0 ? ` (+${others} more)` : ''}`;
 }
@@ -2257,7 +2261,7 @@ export function describeImportReplyVocabulary(view: ImportReviewView, ctx: Impor
       return `On this screen you can reply \`create tickets\`, row numbers to toggle (e.g. \`2 4\`), \`include all\` / \`exclude all\`, \`next\` / \`prev\`, or ${exit}.`;
     case 'ticketed':
       return 'On this screen you can reply `apply`, `<row> <action>` (e.g. `A2 follow-up` — actions are ' +
-        `${TICKETED_ACTIONS.map(a => `\`${a}\``).join(', ')}), \`all <action>\` (e.g. \`all leave\`), ` +
+        `${TICKETED_ACTION_ORDER.map(a => `\`${a}\``).join(', ')}), \`all <action>\` (e.g. \`all leave\`), ` +
         `\`update tickets\`, \`re-create tickets\`, or ${exit}.`;
     case 'stale':
       return `On this screen you can reply \`close tickets\`, a stale ticket's key to toggle it (e.g. \`PROJ-123\`), or ${exit}.`;
