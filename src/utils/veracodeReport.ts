@@ -2,6 +2,7 @@ import { XMLParser } from 'fast-xml-parser';
 import { markdownToJiraWiki } from './markdownToJiraWiki';
 import {
   MAX_REPORT_BYTES as SHARED_MAX_REPORT_BYTES, sanitizeCellText, sanitizeStandaloneLine,
+  type RowChange,
 } from './reportImport';
 
 export interface VeracodeFlaw {
@@ -371,18 +372,13 @@ export function buildGroupDescriptionWiki(group: VeracodeFlaw[]): string {
 }
 
 /**
- * U3/R13: "update existing tickets"' summarizing-comment body — one `### Issue <id>` block per
- * newly-added flaw (severity, CWE, description; no `### Location` — the ticket the comment is
- * posted to already carries it). Same sanitize-then-convert-once pattern as
- * `buildGroupDescriptionWiki()`: every untrusted field routed through `sanitizeCellText()`/
- * `sanitizeStandaloneLine()`, the whole thing authored as Markdown and converted via
- * `markdownToJiraWiki()` exactly once at the end — `addComment()` sends its `body` argument to Jira
- * verbatim with no sanitization of its own, so this function is the only thing standing between a
- * crafted report field and a live Jira-wiki-markup injection in the posted comment (see
- * `docs/solutions/security-issues/` for the prior history of exactly this vulnerability shape).
- * `newFlaws` is expected to be the subset of a group's members whose id was actually newly added
- * this run — the caller (reportImportHandler.ts's `executeUpdateExistingTickets`) is responsible
- * for that filtering; this function itself renders whatever it's given.
+ * Builds the `update` action's comment body for the given new flaws (already filtered by the caller
+ * to the flaws newly added this run): one `### Issue <id>` block per flaw (severity, CWE,
+ * description; no `### Location` — the ticket the comment is posted to already carries it). Every
+ * untrusted field is sanitized via `sanitizeCellText()`/`sanitizeStandaloneLine()`, and the whole
+ * body is authored as Markdown and converted via `markdownToJiraWiki()` exactly once at the end.
+ * `addComment()` sends the body to Jira verbatim, so this sanitization is what prevents Jira
+ * wiki-markup injection from crafted report fields.
  */
 export function buildNewFindingsCommentWiki(newFlaws: VeracodeFlaw[]): string {
   const lines: string[] = [];
@@ -398,6 +394,31 @@ export function buildNewFindingsCommentWiki(newFlaws: VeracodeFlaw[]): string {
   }
 
   return markdownToJiraWiki(lines.join('\n'));
+}
+
+/**
+ * U3/R2: the Veracode change describer for buildReviewRows — a folded group's new findings are the
+ * member flaw ids whose `veracode-issue-<id>` label none of its tickets carry (`knownLabels` is the
+ * union across all of them). Veracode has no baseline and no rating rise; null when nothing is new.
+ */
+export function describeVeracodeChange(group: VeracodeFlaw[], knownLabels: string[]): RowChange | null {
+  const known = new Set(knownLabels);
+  const newIds = [...new Set(group.map(f => f.issueId))].filter(id => !known.has(`veracode-issue-${id}`));
+  return newIds.length > 0 ? { kind: 'findings', newIds } : null;
+}
+
+/** U5: the members of a folded group whose issue id is in `ids`, in group order. */
+export function flawsWithIds(group: VeracodeFlaw[], ids: string[]): VeracodeFlaw[] {
+  const wanted = new Set(ids);
+  return group.filter(f => wanted.has(f.issueId));
+}
+
+/**
+ * U5/KTD10: a follow-up ticket's summary — the group summary over only the new flaws (`subset`,
+ * see {@link flawsWithIds}) plus ` (follow-up to <KEY>)`, so the two tickets stay distinguishable.
+ */
+export function buildFollowUpSummary(subset: VeracodeFlaw[], originalKey: string): string {
+  return `${buildGroupSummary(subset)} (follow-up to ${originalKey})`;
 }
 
 // Lives here (rather than in sessionState.ts, where the other session-related types live) so that

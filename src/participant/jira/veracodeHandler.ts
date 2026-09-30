@@ -5,6 +5,7 @@ import type { IJiraClient } from '../../jira/IJiraClient';
 import {
   parseVeracodeReport, filterFlaws, severityLabel, groupFlawsByLocation,
   buildGroupSummary, buildGroupDescriptionWiki, buildGroupLabels, buildNewFindingsCommentWiki,
+  describeVeracodeChange, flawsWithIds, buildFollowUpSummary,
   type VeracodeFlaw, type VeracodeReviewRow,
 } from '../../utils/veracodeReport';
 import type { VeracodeTemplateSelectionSession, VeracodeReviewSession, StaleCloseSession } from '../sessionState';
@@ -15,7 +16,7 @@ import {
   continueStaleClose,
   type ReportImportDescriptor,
 } from './reportImportHandler';
-import { resolveSizeLimitSetting } from '../../utils/reportImport';
+import { resolveSizeLimitSetting, templateLabelsOf } from '../../utils/reportImport';
 import type { AwaitIssueTypeResume } from '../sessionState';
 import { sessionWasSuperseded } from './ticketContext';
 
@@ -153,13 +154,23 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
     labelToDedupKey: veracodeLabelToIssueId,
     buildActivePredicate: rawItems => buildVeracodeActiveFlawPredicate(rawItems as VeracodeFlaw[], getVeracodeConfig().includeStatuses),
   },
-  // U3/R13: "update existing tickets" — only Veracode folds multiple flaws onto one row (R9), so
-  // only Veracode can ever have "a finding not yet reflected on its ticket" (Waltz/email omit this
-  // entirely — see ReportImportDescriptor.updateExisting's own doc comment).
-  updateExisting: {
-    idsOf: row => row.issueIds,
-    labelOf: id => `veracode-issue-${id}`,
-    buildCommentWiki: (row, newIds) => buildNewFindingsCommentWiki(row.sourceGroup.filter(flaw => newIds.includes(flaw.issueId))),
+  // Import ticket updates parity (KTD2): a folded group's findings are its flaw ids, recorded as
+  // `veracode-issue-<id>` labels. No baseline, no rating and no summary rewrite for Veracode.
+  changeTracking: {
+    findingNoun: 'flaw(s)',
+    describe: describeVeracodeChange,
+    recordLabelsOf: (_row, change) => (change.kind === 'findings' ? change.newIds.map(id => `veracode-issue-${id}`) : []),
+    buildUpdateComment: (row, change) => buildNewFindingsCommentWiki(flawsWithIds(row.sourceGroup, change.newIds)),
+    // KTD10: the follow-up covers only the new flaws — its own labels (veracode, their
+    // veracode-issue-<id> and cwe-<id> labels) plus the template's, its summary and description.
+    buildFollowUp: (row, change, originalKey, additionalFields) => {
+      const subset = flawsWithIds(row.sourceGroup, change.newIds);
+      const templateLabels = templateLabelsOf(additionalFields);
+      return {
+        summary: buildFollowUpSummary(subset, originalKey),
+        fields: { ...additionalFields, labels: buildGroupLabels(subset, templateLabels), description: buildGroupDescriptionWiki(subset) },
+      };
+    },
   },
 };
 

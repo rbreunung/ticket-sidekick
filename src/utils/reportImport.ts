@@ -11,7 +11,7 @@ import { TRIGGER_CHARS_PATTERN } from './markdownToJiraWiki';
 // Type-only import: erased at compile time (no runtime `require`), so this does not create the
 // circular *runtime* import that sessionState.ts's own value import of this file (BATCH_LIMIT,
 // sanitizeCellText) would otherwise raise — only a value/side-effect import can cycle.
-import type { ReviewRowBase } from '../participant/sessionState';
+import type { ReviewRowBase, TicketedAction } from '../participant/sessionState';
 
 // Single source of truth for both importers (KTD4). Both currently hardcode the identical values
 // (20 MB / 50 tickets per run) independently; consuming these from here instead of the local
@@ -86,35 +86,77 @@ export function buildDedupJql(projectKey: string, labels: string[]): string {
 }
 
 // Matches the raw Jira search-result shape (`fields.labels`, possibly absent) rather than a
-// flattened `{ key, labels }[]` — KTD2.
+// flattened `{ key, labels }[]` — KTD2. U3/KTD1: the dedup search also requests `resolution`
+// (null = unresolved) and `created`; `status` is always returned by the search. All optional, so a
+// search that did not request them (e.g. the stale search) still fits.
 export interface JqlIssueLike {
   key: string;
-  fields: { labels?: string[] };
+  fields: {
+    labels?: string[];
+    resolution?: unknown;
+    created?: string | null;
+    status?: { name?: string } | null;
+  };
+}
+
+/** U3/KTD1: one ticket carrying an item's dedup key, as the dedup search found it. */
+export interface DedupTicket {
+  key: string;
+  labels: string[];
+  /** True when the ticket has a resolution set (the same test the stale search uses). */
+  resolved: boolean;
+  /** Jira's `created` timestamp, or null when the search did not return one. */
+  created: string | null;
+  /** The ticket's status name, or null when the search did not return one. */
+  status: string | null;
+}
+
+/** Dedup key -> every ticket carrying it (U3/KTD1 — no longer "first match wins"). */
+export type DedupMap = Map<string, DedupTicket[]>;
+
+function toDedupTicket(issue: JqlIssueLike): DedupTicket {
+  const { fields } = issue;
+  return {
+    key: issue.key,
+    labels: fields.labels ?? [],
+    resolved: fields.resolution !== undefined && fields.resolution !== null,
+    created: typeof fields.created === 'string' ? fields.created : null,
+    status: typeof fields.status?.name === 'string' ? fields.status.name : null,
+  };
+}
+
+function addTicket(map: DedupMap, dedupKey: string, ticket: DedupTicket): void {
+  const list = map.get(dedupKey);
+  if (!list) map.set(dedupKey, [ticket]);
+  else if (!list.some(t => t.key === ticket.key)) list.push(ticket);
 }
 
 /**
- * Extracts a dedup-key -> ticket-key map from search results. `labelToDedupKey` is
- * importer-supplied: it inspects one label and either returns the dedup key it encodes (e.g. the
- * numeric Veracode issue id extracted from `veracode-issue-<id>`, or the Waltz component label
- * itself when it has the `oss-dep-` prefix) or `null` if the label is unrelated to this importer.
+ * Extracts a dedup-key -> tickets map from search results. `labelToDedupKey` is importer-supplied:
+ * it inspects one label and either returns the dedup key it encodes (e.g. the numeric Veracode
+ * issue id extracted from `veracode-issue-<id>`, or the Waltz component label itself when it has the
+ * `oss-dep-` prefix) or `null` if the label is unrelated to this importer. U3/KTD1: every ticket
+ * carrying a key is kept (each listed once per key), so a caller can union their findings and pick
+ * the newest open one as the target.
  */
 export function extractDedupMap(
   issues: JqlIssueLike[],
   labelToDedupKey: (label: string) => string | null,
-): Map<string, string> {
-  const map = new Map<string, string>();
+): DedupMap {
+  const map: DedupMap = new Map();
   for (const issue of issues) {
-    for (const label of issue.fields.labels ?? []) {
+    const ticket = toDedupTicket(issue);
+    for (const label of ticket.labels) {
       const dedupKey = labelToDedupKey(label);
       if (dedupKey === null) continue;
-      if (!map.has(dedupKey)) map.set(dedupKey, issue.key); // first match wins if somehow duplicated
+      addTicket(map, dedupKey, ticket);
     }
   }
   return map;
 }
 
 export interface FindAlreadyTicketedResult {
-  map: Map<string, string>;
+  map: DedupMap;
   failedChunks: number;
   totalChunks: number;
 }
@@ -122,11 +164,12 @@ export interface FindAlreadyTicketedResult {
 /**
  * Fault-tolerant, chunked dedup search (R5/AE2). `search` performs the actual Jira query for one
  * chunk of labels (built + executed by the caller, e.g. `chunk => ticketService.searchTicketsRaw(
- * buildDedupJql(projectKey, chunk), 100).then(r => r.issues)`) and is expected to already return
- * results in the `JqlIssueLike` shape. A chunk whose search rejects is logged via `onDiag` and
- * skipped — it must NOT discard the dedup matches already found by other, successful chunks, since
- * a caller-level catch-and-reset would silently re-treat already-ticketed items as new and create
- * duplicate tickets. Partial dedup coverage beats none.
+ * buildDedupJql(projectKey, chunk), 100, ['resolution', 'created']).then(r => r.issues)`) and is
+ * expected to already return results in the `JqlIssueLike` shape. A chunk whose search rejects is
+ * logged via `onDiag` and skipped — it must NOT discard the dedup matches already found by other,
+ * successful chunks, since a caller-level catch-and-reset would silently re-treat already-ticketed
+ * items as new and create duplicate tickets. Partial dedup coverage beats none. Tickets for the
+ * same key found by several chunks are merged, each listed once.
  *
  * Never rejects — even when every chunk fails, this resolves with an empty `map` rather than
  * throwing. That leaves "zero matches" and "total search failure" looking identical to a caller
@@ -142,14 +185,16 @@ export async function findAlreadyTicketed(
   labelToDedupKey: (label: string) => string | null,
   onDiag?: DiagLogger,
 ): Promise<FindAlreadyTicketedResult> {
-  const map = new Map<string, string>();
+  const map: DedupMap = new Map();
   const chunks = chunkStrings(labels, chunkSize).filter(chunk => chunk.length > 0);
   let failedChunks = 0;
   for (const chunk of chunks) {
     try {
       const issues = await search(chunk);
       const found = extractDedupMap(issues, labelToDedupKey);
-      for (const [dedupKey, ticketKey] of found) map.set(dedupKey, ticketKey);
+      for (const [dedupKey, tickets] of found) {
+        for (const ticket of tickets) addTicket(map, dedupKey, ticket);
+      }
     } catch (err) {
       failedChunks++;
       const message = err instanceof Error ? err.message : String(err);
@@ -159,6 +204,33 @@ export async function findAlreadyTicketed(
     }
   }
   return { map, failedChunks, totalChunks: chunks.length };
+}
+
+/** Upper bound on tickets read for one dedup chunk, so a runaway search can't loop forever. */
+export const MAX_DEDUP_TICKETS_PER_CHUNK = 1000;
+
+/**
+ * Reads every page of a Jira search. The dedup search needs this: an item's known findings are the
+ * union of all its tickets (follow-ups and re-creates add more tickets per dedup label), so a single
+ * truncated page could pick the wrong target or show recorded findings as new. Stops when a page is
+ * short or empty, the server reports the end (`isLast`) or its `total` is reached, or `maxItems`
+ * tickets were read. A failed page rejects, so `findAlreadyTicketed` treats the whole chunk as
+ * failed rather than trusting a partial one.
+ */
+export async function fetchAllPages<T>(
+  fetchPage: (startAt: number) => Promise<{ issues: T[]; total?: number; isLast?: boolean }>,
+  pageSize: number,
+  maxItems = MAX_DEDUP_TICKETS_PER_CHUNK,
+): Promise<T[]> {
+  const all: T[] = [];
+  while (all.length < maxItems) {
+    const page = await fetchPage(all.length);
+    all.push(...page.issues.slice(0, maxItems - all.length));
+    const done = page.issues.length < pageSize || page.isLast === true
+      || (page.total !== undefined && all.length >= page.total);
+    if (done) break;
+  }
+  return all;
 }
 
 /** One open ticket found stale by {@link findStaleTickets}. `ids` are the marker-id dedup keys
@@ -315,18 +387,83 @@ export function sanitizeStandaloneLine(value: string): string {
 }
 
 /**
- * Looks up a matching ticket key across every candidate dedup key an item carries — a folded
- * Veracode group's `dedupKeyOf` returns one key per member flaw (R11), and a match on *any* of
- * them counts as already-ticketed. Single-key importers (Waltz) just pass a one-element array, so
- * this is a pure superset of the old single-key lookup. First matching key wins (stable, since a
- * given item's key order is caller-determined and doesn't change between calls).
+ * U3/KTD2: what changed on an already-ticketed item since its tickets were made. `baseline` means
+ * the tickets record no findings at all (created before record labels existed); `findings` lists
+ * the new finding ids (possibly none, when only the rating rose) and an optional rating rise.
+ * `null` (at the call sites) means no change.
  */
-function findExistingTicketKey(dedupMap: Map<string, string>, keys: string[]): string | null {
+export type RowChange =
+  | { kind: 'baseline' }
+  | { kind: 'findings'; newIds: string[]; ratingRise?: { from: string; to: string } };
+
+/** U3/KTD2: the importer's change describer, given the union of labels across all of an item's tickets. */
+export interface RowChangeTracking<TItem> {
+  describe(item: TItem, knownLabels: string[]): RowChange | null;
+}
+
+/** A template's `labels` field as a string array, or [] when it has none. */
+export function templateLabelsOf(additionalFields: Record<string, unknown>): string[] {
+  return Array.isArray(additionalFields.labels) ? additionalFields.labels as string[] : [];
+}
+
+export const TICKETED_ACTION_ORDER: readonly TicketedAction[] = ['update', 'follow-up', 're-create', 'leave'];
+
+function createdTime(created: string | null): number {
+  if (!created) return Number.NEGATIVE_INFINITY;
+  // Jira returns `+0000`-style offsets; normalize to `+00:00` so parsing does not rely on engine leniency.
+  const ms = Date.parse(created.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
+  return Number.isNaN(ms) ? Number.NEGATIVE_INFINITY : ms;
+}
+
+function keyNumber(key: string): number {
+  const match = key.match(/-(\d+)$/);
+  return match ? Number(match[1]) : Number.NEGATIVE_INFINITY;
+}
+
+function newestFirst(a: DedupTicket, b: DedupTicket): number {
+  return (createdTime(b.created) - createdTime(a.created)) || (keyNumber(b.key) - keyNumber(a.key));
+}
+
+/**
+ * KTD1/R11: an item's target ticket — the unresolved ticket with the latest `created` (ties: the
+ * highest key number), or the newest ticket overall when every ticket is resolved. `tickets` must
+ * be non-empty.
+ */
+export function pickTargetTicket(tickets: DedupTicket[]): DedupTicket {
+  const open = tickets.filter(t => !t.resolved);
+  return [...(open.length > 0 ? open : tickets)].sort(newestFirst)[0];
+}
+
+/**
+ * R6/R7: which actions a row offers and which one it proposes. `follow-up` needs new findings;
+ * `update` needs a change or a baseline; `re-create` and `leave` are always offered. Default: no
+ * change → leave; baseline → update; change with any open ticket → update; change with every ticket
+ * resolved → follow-up, except a rating rise with no new findings → update.
+ */
+export function deriveTicketedActions(
+  change: RowChange | null,
+  anyOpen: boolean,
+): { allowedActions: TicketedAction[]; action: TicketedAction } {
+  const hasNewFindings = change?.kind === 'findings' && change.newIds.length > 0;
+  const allowed = new Set<TicketedAction>(['re-create', 'leave']);
+  if (change) allowed.add('update');
+  if (hasNewFindings) allowed.add('follow-up');
+  let action: TicketedAction;
+  if (!change) action = 'leave';
+  else if (change.kind === 'baseline' || anyOpen || !hasNewFindings) action = 'update';
+  else action = 'follow-up';
+  return { allowedActions: TICKETED_ACTION_ORDER.filter(a => allowed.has(a)), action };
+}
+
+/** Every distinct ticket across an item's dedup keys, in key-number order. */
+function collectTickets(dedupMap: DedupMap, keys: string[]): DedupTicket[] {
+  const byKey = new Map<string, DedupTicket>();
   for (const key of keys) {
-    const ticketKey = dedupMap.get(key);
-    if (ticketKey) return ticketKey;
+    for (const ticket of dedupMap.get(key) ?? []) {
+      if (!byKey.has(ticket.key)) byKey.set(ticket.key, ticket);
+    }
   }
-  return null;
+  return [...byKey.values()].sort((a, b) => keyNumber(a.key) - keyNumber(b.key));
 }
 
 /**
@@ -336,27 +473,42 @@ function findExistingTicketKey(dedupMap: Map<string, string>, keys: string[]): s
  * matches as already-ticketed as soon as any one of its member flaws' keys does — a single-key
  * importer just returns a one-element array); `rowBuilder` supplies the importer-specific row
  * fields (everything beyond id/existingTicketKey/included).
+ *
+ * `existingTicketKey` is the item's target ticket ({@link pickTargetTicket}) across every ticket of
+ * every key. U3: with `changeTracking`, an already-ticketed row also carries `ticketKeys`, `target`,
+ * `change` (from the describer, given the union of all its tickets' labels), `allowedActions` and
+ * the default `action` ({@link deriveTicketedActions}). Without it (email), rows keep the older shape.
  */
 export function buildReviewRows<TItem, TRow extends ReviewRowBase>(
   items: TItem[],
-  dedupMap: Map<string, string>,
+  dedupMap: DedupMap,
   dedupKeyOf: (item: TItem) => string[],
   rowBuilder: (item: TItem) => Omit<TRow, keyof ReviewRowBase>,
+  changeTracking?: RowChangeTracking<TItem>,
 ): TRow[] {
   const rows: TRow[] = [];
   let newIndex = 0;
   let ticketedIndex = 0;
   for (const item of items) {
     const keys = dedupKeyOf(item);
-    const existingTicketKey = findExistingTicketKey(dedupMap, keys);
+    const tickets = collectTickets(dedupMap, keys);
+    const target = tickets.length > 0 ? pickTargetTicket(tickets) : null;
+    const existingTicketKey = target ? target.key : null;
     const base: ReviewRowBase = {
       id: existingTicketKey ? `A${++ticketedIndex}` : `${++newIndex}`,
       existingTicketKey,
       included: existingTicketKey === null,
     };
-    // Overview-hub KTD5: an already-ticketed row with a key no found ticket carries yet has a newer
-    // finding its ticket does not reflect — counted by the Already-ticketed screen's "Update N".
-    if (existingTicketKey && keys.some(k => !dedupMap.has(k))) base.hasUnsyncedFindings = true;
+    if (target && changeTracking) {
+      const knownLabels = [...new Set(tickets.flatMap(t => t.labels))];
+      const change = changeTracking.describe(item, knownLabels);
+      const { allowedActions, action } = deriveTicketedActions(change, tickets.some(t => !t.resolved));
+      base.ticketKeys = tickets.map(t => t.key);
+      base.target = { key: target.key, status: target.status, resolved: target.resolved };
+      base.change = change;
+      base.allowedActions = allowedActions;
+      base.action = action;
+    }
     rows.push({ ...base, ...rowBuilder(item) } as TRow);
   }
   return rows;

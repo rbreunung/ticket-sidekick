@@ -5,7 +5,7 @@ import { parseVeracodeReport, filterFlaws, assertSafeVeracodeXml } from '../util
 import { deriveShortLabel, buildSummary, buildDescriptionWiki, buildLabels } from '../utils/veracodeReport';
 import {
   groupFlawsByLocation, buildGroupLabels, buildGroupDescriptionWiki, buildGroupSummary,
-  buildNewFindingsCommentWiki,
+  buildNewFindingsCommentWiki, describeVeracodeChange, flawsWithIds, buildFollowUpSummary,
   type VeracodeFlaw,
 } from '../utils/veracodeReport';
 
@@ -615,5 +615,44 @@ describe('buildGroupSummary', () => {
     expect(summary).toContain('1, 2, 3');
     expect(summary).toContain('Foo.java:42');
     expect(summary).toContain('(+2 more)');
+  });
+});
+
+// U3/R2: the Veracode change describer — new ids are the group's flaws no known ticket label records.
+describe('describeVeracodeChange', () => {
+  const group = [makeFlaw({ issueId: '1' }), makeFlaw({ issueId: '2' }), makeFlaw({ issueId: '3' })];
+
+  it('lists the flaw ids whose veracode-issue label none of the tickets carry', () => {
+    expect(describeVeracodeChange(group, ['veracode', 'veracode-issue-1', 'veracode-issue-3', 'cwe-89'])).toEqual({
+      kind: 'findings', newIds: ['2'],
+    });
+  });
+
+  it('returns null when every flaw is already recorded', () => {
+    expect(describeVeracodeChange(group, ['veracode-issue-1', 'veracode-issue-2', 'veracode-issue-3'])).toBeNull();
+  });
+
+  it('never reports a baseline, even when no flaw label is known', () => {
+    expect(describeVeracodeChange(group, ['veracode'])).toEqual({ kind: 'findings', newIds: ['1', '2', '3'] });
+  });
+});
+
+// Import ticket updates (U5/KTD10): a follow-up ticket covers only the group's new flaws.
+describe('Veracode follow-up builders', () => {
+  const group = [
+    makeFlaw({ issueId: '1', sourceFile: 'Foo.java', line: 42, categoryName: 'SQL Injection', cweName: null }),
+    makeFlaw({ issueId: '2', sourceFile: 'Foo.java', line: 42, categoryName: 'SQL Injection', cweName: null }),
+    makeFlaw({ issueId: '3', sourceFile: 'Foo.java', line: 42, categoryName: 'SQL Injection', cweName: null }),
+  ];
+
+  it('flawsWithIds keeps only the named flaws, in group order', () => {
+    expect(flawsWithIds(group, ['3', '2']).map(f => f.issueId)).toEqual(['2', '3']);
+  });
+
+  it('the follow-up summary is the subset group summary plus " (follow-up to <KEY>)"', () => {
+    const subset = flawsWithIds(group, ['2', '3']);
+    expect(buildFollowUpSummary(subset, 'PROJ-8')).toBe(`${buildGroupSummary(subset)} (follow-up to PROJ-8)`);
+    expect(buildFollowUpSummary(subset, 'PROJ-8')).toContain('2, 3');
+    expect(buildFollowUpSummary(subset, 'PROJ-8')).not.toContain('1, 2');
   });
 });

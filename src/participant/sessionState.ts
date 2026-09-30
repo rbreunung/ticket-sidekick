@@ -7,7 +7,8 @@ import {
   applyBoilerplateCleanup, computeDroppedImageNames, buildPatternFromBlock, BOILERPLATE_KINDS,
   type BoilerplatePattern, type DetectedBlock,
 } from '../utils/emailBoilerplate';
-import { BATCH_LIMIT, sanitizeCellText } from '../utils/reportImport';
+import { BATCH_LIMIT, TICKETED_ACTION_ORDER, sanitizeCellText } from '../utils/reportImport';
+import type { RowChange } from '../utils/reportImport';
 import { TICKET_ID_PATTERN, extractTicketId } from '../utils/branchParser';
 import { formatFileSize } from '../utils/attachmentEligibility';
 import { formatKeyLink, coerceTypedFieldValue, buildExtraFieldColumns, type TemplateFieldCandidate } from '../services/TicketService';
@@ -1239,7 +1240,10 @@ export function neutralizeMarkdownLinks(value: string): string {
 // Stale-ticket target pick: bumped 6 -> 7 — StaleTicketGroup no longer carries a build-time
 // target/resolution (it carries the matching rules and a workflow-graph snapshot instead), and the
 // stale-resolution ask became the stepped StaleCloseSession. Same rationale as the earlier bumps.
-export const CURRENT_SESSION_SCHEMA_VERSION = 7;
+// Import ticket updates parity (KTD8): bumped 7 -> 8 — already-ticketed rows now carry a per-row
+// `action`/`allowedActions`/`change`/`target`/`result` instead of the re-create toggle and the
+// `updatedExisting`/`hasUnsyncedFindings`/`recreatedKey` flags.
+export const CURRENT_SESSION_SCHEMA_VERSION = 8;
 
 export interface ImportTemplateSelectionSession<TItem> {
   reportFileName: string;
@@ -1302,21 +1306,54 @@ export interface AwaitIssueTypeSession {
 export interface ReviewRowBase {
   id: string; // '1'..'N' new candidates, 'A1'..'Am' already-ticketed
   existingTicketKey: string | null;
-  included: boolean; // whether this row will be (re)created if the batch runs
-  // U3/R13: set once "update existing tickets" (executeUpdateExistingTickets in
-  // reportImportHandler.ts) has added this row's missing label(s) + summarizing comment to its
-  // ticket — a per-row "synced" indicator the review table renders in the Already-ticketed
-  // section's "Updated?" column. Undefined/false for every row until that action runs; never set
-  // by any other code path (toggling, paging, creation all leave it untouched).
-  updatedExisting?: boolean;
-  // Overview-hub KTD5: set at row-build time (buildReviewRows) on an already-ticketed row whose
-  // finding group has at least one dedup key no found ticket carries yet — i.e. a newer finding on
-  // an already-ticketed line. Drives the Already-ticketed screen's "Update N tickets" count without
-  // any extra Jira call; cleared once "update tickets" finds the ticket up to date.
-  hasUnsyncedFindings?: boolean;
-  // Overview-hub KTD4: the key of the fresh ticket a "re-create tickets" action created for this
-  // already-ticketed row — the row stays listed, shows this key, and is no longer toggleable.
-  recreatedKey?: string;
+  // Whether a New row will be created when the user creates the page's tickets. Already-ticketed
+  // rows ignore it — they carry a per-row `action` instead (U4).
+  included: boolean;
+  // U3/KTD1/KTD2: set by buildReviewRows only on an already-ticketed row of an importer with change
+  // tracking (Veracode, Waltz) — never on email rows or new rows.
+  /** Every ticket carrying one of the row's dedup keys. */
+  ticketKeys?: string[];
+  /** The ticket `update` writes to: the newest open one, or the newest overall when all are resolved. */
+  target?: { key: string; status: string | null; resolved: boolean };
+  /** What changed since the tickets were made; null = no change. */
+  change?: RowChange | null;
+  /** The actions this row offers (R6). */
+  allowedActions?: TicketedAction[];
+  /** The row's current action — the R7 default until the user changes it. */
+  action?: TicketedAction;
+  /** U4/R16: what the last `apply` (or shortcut) did to this row; a `done` row is finished for good. */
+  result?: TicketedRowResult;
+}
+
+/** U3/R6: the per-row actions on the Already-ticketed screen. */
+export type TicketedAction = 'update' | 'follow-up' | 're-create' | 'leave';
+
+/**
+ * U4/R16: one already-ticketed row's outcome after an action ran. `update` notes: `baseline` — only
+ * the record labels were written; `up-to-date` — the ticket already carried everything, nothing was
+ * written; `comment-failed` — labels were written but the comment could not be posted.
+ */
+export type TicketedRowResult =
+  | { status: 'done'; action: 'update'; note?: 'baseline' | 'up-to-date' | 'comment-failed' }
+  | { status: 'done'; action: 'follow-up'; key: string; linkMissing?: boolean }
+  | { status: 'done'; action: 're-create'; key: string }
+  | { status: 'failed'; action: TicketedAction; error: string };
+
+const DEFAULT_TICKETED_ACTIONS: readonly TicketedAction[] = ['re-create', 'leave'];
+
+/** A row's offered actions and current action — rows built without change tracking offer re-create / leave. */
+export function ticketedRowActions(row: ReviewRowBase): { allowedActions: TicketedAction[]; action: TicketedAction } {
+  return { allowedActions: [...(row.allowedActions ?? DEFAULT_TICKETED_ACTIONS)], action: row.action ?? 'leave' };
+}
+
+/** The ticket a ticketed row's action targets: its chosen target, else its existing ticket. */
+export function ticketedTargetKey(row: ReviewRowBase): string {
+  return row.target?.key ?? row.existingTicketKey!;
+}
+
+/** A row whose action already ran successfully — excluded from every later apply, `all` and shortcut. */
+export function isTicketedRowFinished(row: ReviewRowBase): boolean {
+  return row.result?.status === 'done';
 }
 
 /** Which screen of a report-import review is showing (overview-hub KTD1). */
@@ -1333,12 +1370,17 @@ export interface ImportOutcomes {
   recreateFailed: number;
   updated: number;
   updateFailed: number;
+  followedUp: number;
+  followUpFailed: number;
   closed: number;
   closeFailed: number;
 }
 
 export function emptyImportOutcomes(): ImportOutcomes {
-  return { created: 0, createFailed: 0, recreated: 0, recreateFailed: 0, updated: 0, updateFailed: 0, closed: 0, closeFailed: 0 };
+  return {
+    created: 0, createFailed: 0, recreated: 0, recreateFailed: 0, updated: 0, updateFailed: 0,
+    followedUp: 0, followUpFailed: 0, closed: 0, closeFailed: 0,
+  };
 }
 
 export interface ReviewSession<TRow> {
@@ -1578,27 +1620,20 @@ export function parseReviewPageNav(reply: string): ReviewPageNav | null {
 }
 
 /**
- * U4/R7-R8: applies a toggle reply's row ids to the currently-visible `rows` (identical to
- * `applyReviewToggle`) AND, for any toggled row that is "already ticketed", mirrors the same flip
- * into `allRows` — that section is shown in full on every page (R8), so its toggle state must
- * survive a later page-navigation recompute (`buildReviewPage` always re-derives `rows` from
- * `allRows`). A toggled "new"/fresh row is deliberately left untouched in `allRows`: R7's per-page
- * reset relies on `allRows` staying at its default-included state for "new" rows, so a page
- * revisited later always renders with every row back to its default-included state.
+ * U4/R7: applies a toggle reply's row ids to the currently-visible "new" rows only. `allRows` is
+ * deliberately left untouched: R7's per-page reset relies on `allRows` staying at its
+ * default-included state for "new" rows, so a page revisited later always renders with every row
+ * back to its default-included state. Already-ticketed rows are never toggled — they carry a
+ * per-row action instead (import ticket updates parity, U4).
  */
 export function applyReviewSessionToggle<TRow extends ReviewRowBase>(
   rows: TRow[],
   allRows: TRow[],
   ids: string[],
 ): { rows: TRow[]; allRows: TRow[] } {
-  const newRows = applyReviewToggle(rows, ids);
   const idSet = new Set(ids);
-  const newAllRows = allRows.map(r => {
-    if (r.existingTicketKey === null || !idSet.has(r.id)) return r;
-    const updated = newRows.find(nr => nr.id === r.id);
-    return updated ? { ...r, included: updated.included } : r;
-  });
-  return { rows: newRows, allRows: newAllRows };
+  const newRows = rows.map(r => (r.existingTicketKey === null && idSet.has(r.id) ? { ...r, included: !r.included } : r));
+  return { rows: newRows, allRows };
 }
 
 /**
@@ -1628,25 +1663,6 @@ export function parseBulkNewRowReply(reply: string): boolean | null {
  */
 export function applyBulkNewRowSet<TRow extends ReviewRowBase>(rows: TRow[], value: boolean): TRow[] {
   return rows.map(r => (r.existingTicketKey === null ? { ...r, included: value } : r));
-}
-
-/**
- * U3/R13: mirrors a just-completed "update existing tickets" run's outcome (`updatedKeys` — the
- * ticket keys that actually got a new label + comment this run) into both `rows` and `allRows` by
- * setting `updatedExisting: true` on every row whose `existingTicketKey` is in that set — same
- * shape as `applyReviewSessionToggle`'s dual-array mirroring, since the Already-ticketed section is
- * always shown in full (R8) and must survive a later page-navigation recompute. Pure so it's
- * independently testable; the caller (`executeUpdateExistingTickets` in reportImportHandler.ts)
- * only computes `updatedKeys`, never mutates rows itself.
- */
-export function markRowsUpdatedExisting<TRow extends ReviewRowBase>(
-  rows: TRow[],
-  allRows: TRow[],
-  updatedKeys: Set<string>,
-): { rows: TRow[]; allRows: TRow[] } {
-  const mark = (r: TRow): TRow =>
-    r.existingTicketKey !== null && updatedKeys.has(r.existingTicketKey) ? { ...r, updatedExisting: true } : r;
-  return { rows: rows.map(mark), allRows: allRows.map(mark) };
 }
 
 export interface ReviewTableColumn<TRow> {
@@ -1684,7 +1700,7 @@ export const VERACODE_REVIEW_COLUMNS: ReviewTableColumn<VeracodeReviewRow>[] = [
 
 export const WALTZ_REVIEW_COLUMNS: ReviewTableColumn<WaltzReviewRow>[] = [
   { header: 'Component', accessor: (r) => neutralizeMarkdownLinks(r.nameVersion) },
-  { header: 'Rating', accessor: (r) => r.maxVulnRating },
+  { header: 'Rating', accessor: (r) => safeCellText(r.maxVulnRating) },
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -1706,6 +1722,7 @@ export const IMPORT_COMMANDS = {
   create: 'create tickets',
   update: 'update tickets',
   recreate: 're-create tickets',
+  apply: 'apply',
   close: 'close tickets',
 } as const;
 
@@ -1757,9 +1774,11 @@ export interface ImportGroupCounts {
   newRemaining: number; // every not-yet-created new row, across all pages
   newIncludedOnPage: number; // what "Create N tickets" would create now
   ticketedTotal: number;
-  ticketedOpen: number; // already-ticketed rows not re-created yet — still worth opening the screen for
-  updatable: number; // already-ticketed rows with a finding their ticket does not carry yet
-  recreatable: number; // already-ticketed rows toggled on for re-creation, not re-created yet
+  ticketedOpen: number; // already-ticketed rows whose action has not run yet — still worth opening the screen for
+  ticketedChanged: number; // already-ticketed rows with a change (new findings, rating rise or baseline)
+  pendingActions: number; // unfinished already-ticketed rows not on `leave` — what `apply` would run
+  pendingUpdates: number; // ... of those, set to `update` (the `update tickets` shortcut)
+  pendingRecreates: number; // ... of those, set to `re-create` (the `re-create tickets` shortcut)
   staleOpen: number; // eligible stale tickets not closed yet
   staleSelected: number; // what "Close N tickets" would close now
   staleIneligible: number;
@@ -1767,15 +1786,18 @@ export interface ImportGroupCounts {
 
 export function countImportGroups<TRow extends ReviewRowBase>(session: ReviewSession<TRow>): ImportGroupCounts {
   const ticketed = session.allRows.filter(r => r.existingTicketKey !== null);
+  const open = ticketed.filter(r => !isTicketedRowFinished(r));
   const closed = new Set(session.staleTickets?.closedKeys ?? []);
   const staleTickets = (session.staleTickets?.groups ?? []).flatMap(g => g.tickets).filter(t => !closed.has(t.key));
   return {
     newRemaining: session.allRows.filter(r => r.existingTicketKey === null).length,
     newIncludedOnPage: session.rows.filter(r => r.existingTicketKey === null && r.included).length,
     ticketedTotal: ticketed.length,
-    ticketedOpen: ticketed.filter(r => !r.recreatedKey).length,
-    updatable: ticketed.filter(r => r.hasUnsyncedFindings && !r.updatedExisting && !r.recreatedKey).length,
-    recreatable: ticketed.filter(r => r.included && !r.recreatedKey).length,
+    ticketedOpen: open.length,
+    ticketedChanged: ticketed.filter(r => r.change != null).length,
+    pendingActions: open.filter(r => ticketedRowActions(r).action !== 'leave').length,
+    pendingUpdates: open.filter(r => ticketedRowActions(r).action === 'update').length,
+    pendingRecreates: open.filter(r => ticketedRowActions(r).action === 're-create').length,
     staleOpen: staleTickets.length,
     staleSelected: staleTickets.filter(t => t.included).length,
     staleIneligible: session.staleTickets?.ineligible.length ?? 0,
@@ -1785,7 +1807,9 @@ export function countImportGroups<TRow extends ReviewRowBase>(session: ReviewSes
 export interface ImportScreenOptions {
   baseUrl?: string;
   itemNoun: string; // e.g. 'flaw(s)' — pluralized for display
-  supportsUpdateExisting: boolean; // R16: only Veracode configures the update action
+  // What one new finding on an already-ticketed row is called in its Change cell, e.g. 'flaw(s)' /
+  // 'CVE(s)' (U4/R5). Defaults to 'finding(s)'.
+  findingNoun?: string;
 }
 
 function pluralNoun(itemNoun: string): string {
@@ -1829,10 +1853,12 @@ export function buildImportOverview<TRow extends ReviewRowBase>(session: ReviewS
       lines.push(`- **New** — ${parts.join(' · ')}${link ? ` — ${link}` : ''}`);
     } else if (group === 'ticketed') {
       parts.push(countedNoun(c.ticketedTotal, opts.itemNoun));
-      if (opts.supportsUpdateExisting && c.updatable > 0) parts.push(`${c.updatable} with new findings`);
+      if (c.ticketedChanged > 0) parts.push(`${c.ticketedChanged} with changes`);
       if (o.updated > 0) parts.push(`${o.updated} updated`);
+      if (o.followedUp > 0) parts.push(`${o.followedUp} follow-up${o.followedUp === 1 ? '' : 's'}`);
       if (o.recreated > 0) parts.push(`${o.recreated} re-created`);
-      if (o.updateFailed + o.recreateFailed > 0) parts.push(`${o.updateFailed + o.recreateFailed} failed`);
+      const failed = o.updateFailed + o.followUpFailed + o.recreateFailed;
+      if (failed > 0) parts.push(`${failed} failed`);
       if (c.ticketedOpen > 0) link = cmdLink('Review', IMPORT_COMMANDS.openTicketed);
       lines.push(`- **Already ticketed** — ${parts.join(' · ')}${link ? ` — ${link}` : ''}`);
     } else {
@@ -1897,7 +1923,78 @@ export function buildNewGroupScreen<TRow extends ReviewRowBase>(
   return lines.join('\n');
 }
 
-/** R5/R8/R16: the Already-ticketed group — "Update N tickets" (where supported) and "Re-create N". */
+/** U4/R5: one-line summary of what changed on an already-ticketed row, e.g. "+2 CVEs, High→Critical". */
+export function formatRowChange(change: RowChange | null | undefined, findingNoun = 'finding(s)'): string {
+  if (!change) return '—';
+  if (change.kind === 'baseline') return 'baseline';
+  const parts: string[] = [];
+  if (change.newIds.length > 0) parts.push(`+${countedNoun(change.newIds.length, findingNoun)}`);
+  // Rating text derives from Jira labels (untrusted) and lands in a trusted table cell.
+  if (change.ratingRise) parts.push(`${safeCellText(change.ratingRise.from)}→${safeCellText(change.ratingRise.to)}`);
+  return parts.length > 0 ? parts.join(', ') : '—';
+}
+
+/** Makes untrusted text safe inside one trusted markdown table cell: no links, no cell breaks. */
+function safeCellText(value: string): string {
+  return neutralizeMarkdownLinks(value).replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
+}
+
+/** U4/R16: a row's result as shown in its Action cell (and in the per-row progress lines). */
+export function formatTicketedRowResult(result: TicketedRowResult, baseUrl?: string): string {
+  if (result.status === 'failed') return `✗ ${result.action} failed: ${safeCellText(result.error)}`;
+  switch (result.action) {
+    case 'update':
+      if (result.note === 'baseline') return 'baseline recorded';
+      if (result.note === 'up-to-date') return 'already up to date';
+      if (result.note === 'comment-failed') return 'updated (labels only — comment failed)';
+      return 'updated';
+    case 'follow-up':
+      return `follow-up ${formatKeyLink(result.key, baseUrl)}${result.linkMissing ? ' (link missing)' : ''}`;
+    case 're-create':
+      return `re-created as ${formatKeyLink(result.key, baseUrl)}`;
+  }
+}
+
+/**
+ * U4/R8: sets `action` on one already-ticketed row (`target` = its id) or on every row (`'all'`).
+ * Only unfinished rows that offer the action change; everything else (new rows, finished rows, rows
+ * not offering it) is returned untouched. Pure — the handler applies it to `rows` and `allRows`.
+ */
+export function applyTicketedActionChange<TRow extends ReviewRowBase>(
+  rows: TRow[],
+  target: string | 'all',
+  action: TicketedAction,
+): TRow[] {
+  return rows.map(r => {
+    if (r.existingTicketKey === null || isTicketedRowFinished(r)) return r;
+    if (target !== 'all' && r.id !== target) return r;
+    if (!ticketedRowActions(r).allowedActions.includes(action)) return r;
+    return { ...r, action };
+  });
+}
+
+/** KTD9: every allowed action as its own link (sending `<row id> <action>`), the current one first and bold. */
+function ticketedActionCell(row: ReviewRowBase, baseUrl?: string): string {
+  if (row.result?.status === 'done') return formatTicketedRowResult(row.result, baseUrl);
+  const { allowedActions, action } = ticketedRowActions(row);
+  const ordered = [action, ...allowedActions.filter(a => a !== action)];
+  const links = ordered.map(a => (a === action ? `**${cmdLink(a, `${row.id} ${a}`)}**` : cmdLink(a, `${row.id} ${a}`)));
+  const prefix = row.result?.status === 'failed' ? `${formatTicketedRowResult(row.result, baseUrl)} — ` : '';
+  return prefix + links.join(' · ');
+}
+
+function ticketedTicketCell(row: ReviewRowBase, baseUrl?: string): string {
+  const key = ticketedTargetKey(row);
+  const others = (row.ticketKeys?.length ?? 1) - 1;
+  return `${formatKeyLink(key, baseUrl)}${others > 0 ? ` (+${others} more)` : ''}`;
+}
+
+/**
+ * U4/R5/R8-R10 (KTD9): the Already-ticketed group — one row per already-ticketed item with its
+ * target ticket, that ticket's status, what changed and a per-row Action cell; `apply` runs every
+ * unfinished row not on `leave`, and the `update tickets` / `re-create tickets` shortcuts run only
+ * the rows set to that action.
+ */
 export function buildTicketedGroupScreen<TRow extends ReviewRowBase>(
   session: ReviewSession<TRow>,
   columns: ReviewTableColumn<TRow>[],
@@ -1911,33 +2008,30 @@ export function buildTicketedGroupScreen<TRow extends ReviewRowBase>(
   const ticketedColumns: ReviewTableColumn<TRow>[] = [
     { header: '#', accessor: (r) => r.id },
     ...columns,
-    { header: 'Ticket', accessor: (r) => formatKeyLink(r.existingTicketKey!, opts.baseUrl) },
-    ...(opts.supportsUpdateExisting
-      ? [{
-        header: 'Updated?',
-        accessor: (r: TRow) => (r.updatedExisting ? '✓ synced' : r.hasUnsyncedFindings ? 'new finding' : ''),
-      } as ReviewTableColumn<TRow>]
-      : []),
-    {
-      header: 'Re-create?',
-      accessor: (r) => (r.recreatedKey
-        ? `re-created as ${formatKeyLink(r.recreatedKey, opts.baseUrl)}`
-        : cmdLink(r.included ? '✓ re-create' : '_no_', r.id)),
-    },
+    { header: 'Ticket', accessor: (r) => ticketedTicketCell(r, opts.baseUrl) },
+    { header: 'Status', accessor: (r) => safeCellText(r.target?.status ?? '—') },
+    { header: 'Change', accessor: (r) => formatRowChange(r.change, opts.findingNoun) },
+    { header: 'Action', accessor: (r) => ticketedActionCell(r, opts.baseUrl) },
   ];
   lines.push(renderReviewTable(ticketedColumns, ticketed));
   lines.push('');
 
-  if (opts.supportsUpdateExisting) {
-    lines.push(c.updatable > 0
-      ? `Reply ${cmdLink(`Update ${c.updatable} tickets`, IMPORT_COMMANDS.update)} to add each new finding's label and a summarizing comment to its existing ticket.`
-      : '_Every already-ticketed row is up to date — nothing to update._');
+  if (c.pendingActions > 0) {
+    lines.push(`Reply ${cmdLink(`Apply ${c.pendingActions} actions`, IMPORT_COMMANDS.apply)} to run every row not set to leave.`);
+    if (c.pendingActions > BATCH_LIMIT) {
+      lines.push(`_Only the first ${BATCH_LIMIT} rows run per reply — reply \`apply\` again for the rest._`);
+    }
+    const shortcuts: string[] = [];
+    if (c.pendingUpdates > 0) shortcuts.push(cmdLink(`Update ${c.pendingUpdates} tickets`, IMPORT_COMMANDS.update));
+    if (c.pendingRecreates > 0) shortcuts.push(cmdLink(`Re-create ${c.pendingRecreates} tickets`, IMPORT_COMMANDS.recreate));
+    if (shortcuts.length > 0) lines.push(`Or run only one kind: ${shortcuts.join(' / ')}.`);
+  } else {
+    lines.push(c.ticketedOpen > 0
+      ? '_Every row is set to leave — nothing to apply._'
+      : '_Every row has been handled — nothing to apply._');
   }
-  lines.push(c.recreatable > 0
-    ? `Reply ${cmdLink(`Re-create ${c.recreatable} tickets`, IMPORT_COMMANDS.recreate)} to create a fresh ticket for each row marked ✓ re-create.`
-    : 'Re-create 0 tickets — reply a row id (e.g. `A1`) to mark it for a fresh ticket.');
-  if (c.recreatable > BATCH_LIMIT) {
-    lines.push(`_Only the first ${BATCH_LIMIT} marked rows will be re-created per action._`);
+  if (c.ticketedOpen > 0) {
+    lines.push('Change a row with `<row> <action>` (e.g. `A2 follow-up`) or every row with `all <action>` (e.g. `all leave`), or click an action in the table.');
   }
   lines.push(groupScreenExitLine(s.singleGroup!));
   return lines.join('\n');
@@ -2027,22 +2121,27 @@ export type ImportReplyAction =
   | { kind: 'done' }
   | { kind: 'back' }
   | { kind: 'create' }
-  | { kind: 'update' }
-  | { kind: 'recreate' }
+  | { kind: 'update' } // U4/R10: run only the rows set to `update`
+  | { kind: 'recreate' } // U4/R10: run only the rows set to `re-create`
+  | { kind: 'apply' } // U4/R9: run every unfinished row not on `leave`
+  | { kind: 'setAction'; id: string; action: TicketedAction }
+  | { kind: 'setAllActions'; action: TicketedAction }
   | { kind: 'close' }
   | { kind: 'pageNav'; nav: ReviewPageNav }
   | { kind: 'bulk'; include: boolean }
   | { kind: 'toggleRows'; ids: string[] }
   | { kind: 'toggleStale'; keys: string[] }
-  | { kind: 'invalid' };
+  // `reason`, when present, says specifically why (e.g. an action a row does not offer, AE6).
+  | { kind: 'invalid'; reason?: string };
 
 export interface ImportReplyContext {
   singleGroup: boolean;
   groups: ImportResultGroup[];
   newRowIds: string[]; // ids of the new rows on the visible page
-  ticketedRowIds: string[]; // ids of already-ticketed rows that can still be toggled
+  // U4: the already-ticketed rows whose action has not run yet, with the actions each offers —
+  // a finished row is absent, so it can no longer be changed.
+  ticketedRows: Array<{ id: string; allowedActions: TicketedAction[] }>;
   stale?: ReviewSessionStale;
-  supportsUpdateExisting: boolean;
 }
 
 function normalizeReply(reply: string): string {
@@ -2094,16 +2193,52 @@ export function parseNewGroupReply(reply: string, ctx: ImportReplyContext): Impo
   return ids ? { kind: 'toggleRows', ids } : { kind: 'invalid' };
 }
 
+// Accepted spellings of each row action (after normalizeReply lower-casing).
+const TICKETED_ACTION_WORDS: Record<string, TicketedAction> = {
+  'update': 'update',
+  'follow-up': 'follow-up', 'followup': 'follow-up', 'follow up': 'follow-up',
+  're-create': 're-create', 'recreate': 're-create', 're create': 're-create',
+  'leave': 'leave',
+};
+
+/** isConfirmation()'s paging/expand phrases — not assent, so they must never trigger `apply`
+ * (up to a batch of Jira writes) on the Already-ticketed screen. */
+const NON_ASSENT_CONFIRMATIONS = new Set(['load all', 'load more', 'show all', 'show more']);
+
+/**
+ * U4/KTD7: the Already-ticketed screen's replies. Commands and row actions are matched first and
+ * the exit/cancellation words last, so an offered option is never swallowed by a cancel word (see
+ * docs/solutions/logic-errors/confirm-cancel-word-list-broadening-swallows-domain-name-collisions.md).
+ * Confirmation words mean `apply` — the screen's single run action. A bare row id no longer toggles
+ * anything and is invalid, as is an action the row does not offer (or a finished row, AE6).
+ */
 export function parseTicketedGroupReply(reply: string, ctx: ImportReplyContext): ImportReplyAction {
   const n = normalizeReply(reply);
+  const assent = isConfirmation(reply) && !NON_ASSENT_CONFIRMATIONS.has(reply.trim().toLowerCase());
+  if (n === IMPORT_COMMANDS.apply || assent) return { kind: 'apply' };
+  if (n === IMPORT_COMMANDS.update || n === LEGACY_UPDATE_COMMAND) return { kind: 'update' };
   if (n === IMPORT_COMMANDS.recreate) return { kind: 'recreate' };
-  if (n === IMPORT_COMMANDS.update || n === LEGACY_UPDATE_COMMAND) {
-    return ctx.supportsUpdateExisting ? { kind: 'update' } : { kind: 'invalid' };
+
+  const match = n.match(/^(\S+) (.+)$/);
+  const action = match ? TICKETED_ACTION_WORDS[match[2]] : undefined;
+  if (match && action) {
+    const target = match[1];
+    if (target === 'all') {
+      return ctx.ticketedRows.some(r => r.allowedActions.includes(action))
+        ? { kind: 'setAllActions', action }
+        : { kind: 'invalid', reason: `No row can be set to \`${action}\`.` };
+    }
+    const row = ctx.ticketedRows.find(r => r.id.toLowerCase() === target);
+    if (row) {
+      return row.allowedActions.includes(action)
+        ? { kind: 'setAction', id: row.id, action }
+        : { kind: 'invalid', reason: `${row.id} can't be set to \`${action}\` — it offers ${row.allowedActions.map(a => `\`${a}\``).join(', ')}.` };
+    }
   }
+
   const exit = parseGroupExit(reply, ctx);
   if (exit) return exit;
-  const ids = parseStrictRowToggle(reply, ctx.ticketedRowIds);
-  return ids ? { kind: 'toggleRows', ids } : { kind: 'invalid' };
+  return { kind: 'invalid' };
 }
 
 export function parseStaleGroupReply(reply: string, ctx: ImportReplyContext): ImportReplyAction {
@@ -2135,7 +2270,9 @@ export function describeImportReplyVocabulary(view: ImportReviewView, ctx: Impor
     case 'new':
       return `On this screen you can reply \`create tickets\`, row numbers to toggle (e.g. \`2 4\`), \`include all\` / \`exclude all\`, \`next\` / \`prev\`, or ${exit}.`;
     case 'ticketed':
-      return `On this screen you can reply ${ctx.supportsUpdateExisting ? '`update tickets`, ' : ''}\`re-create tickets\`, row ids to toggle (e.g. \`A1\`), or ${exit}.`;
+      return 'On this screen you can reply `apply`, `<row> <action>` (e.g. `A2 follow-up` — actions are ' +
+        `${TICKETED_ACTION_ORDER.map(a => `\`${a}\``).join(', ')}), \`all <action>\` (e.g. \`all leave\`), ` +
+        `\`update tickets\`, \`re-create tickets\`, or ${exit}.`;
     case 'stale':
       return `On this screen you can reply \`close tickets\`, a stale ticket's key to toggle it (e.g. \`PROJ-123\`), or ${exit}.`;
     default: {
@@ -2147,13 +2284,15 @@ export function describeImportReplyVocabulary(view: ImportReviewView, ctx: Impor
 
 /** Import summary streamed on "done" (R3), from the session's accumulated outcomes. */
 export function buildImportDoneSummary(outcomes: ImportOutcomes): string {
+  const { followedUp } = outcomes;
   const parts = [
     `**${outcomes.created}** created`,
-    `${outcomes.recreated} re-created`,
     `${outcomes.updated} updated`,
+    `${followedUp} follow-up${followedUp === 1 ? '' : 's'}`,
+    `${outcomes.recreated} re-created`,
     `${outcomes.closed} closed`,
   ];
-  const failed = outcomes.createFailed + outcomes.recreateFailed + outcomes.updateFailed + outcomes.closeFailed;
+  const failed = outcomes.createFailed + outcomes.recreateFailed + outcomes.updateFailed + outcomes.followUpFailed + outcomes.closeFailed;
   if (failed > 0) parts.push(`${failed} failed`);
   return `Import finished — ${parts.join(', ')}.`;
 }
