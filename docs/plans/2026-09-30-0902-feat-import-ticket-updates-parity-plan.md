@@ -45,7 +45,7 @@ Stale-ticket closing and the overview hub are already shared by both importers o
 - **What counts as a Waltz change: new CVEs on the same component version, and a higher worst rating.** Governs R1. (session-settled: user-directed — chosen over also treating a newer version of the same library as the same ticket: a version bump keeps producing a new ticket plus a stale one.)
 - **One per-row action model for both importers, replacing the bulk commands.** Governs R5–R10. (session-settled: user-directed — chosen over separate bulk commands per action and over a sub-menu per action: one screen, smart defaults, one `apply`.)
 - **Both a follow-up (new findings only) and a full re-create are offered.** Governs R6, R14, R15. (session-settled: user-directed — chosen over offering only one of the two: not everything fits in one ticket, and a full fresh ticket is still sometimes wanted.)
-- **A resolved ticket defaults to follow-up, but the user may still update it.** Governs R7. (session-settled: user-directed — chosen over blocking updates to resolved tickets and over no special case.)
+- **A resolved ticket defaults to follow-up, but the user may still update it; a rating-only rise on resolved tickets defaults to update, with re-create available for a still-open issue.** Governs R7. (session-settled: user-directed — chosen over blocking updates to resolved tickets and over no special case.)
 - **Pre-existing Waltz tickets get a baseline recorded through `apply`, not automatically.** Governs R4, R13. (session-settled: user-directed — chosen over parsing old descriptions, over an automatic write during the dedup step, and over an in-memory-only comparison: keeps the no-write-without-action rule and avoids a flood of "new CVE" comments.)
 - **Several tickets per item are read as one union; updates target the newest open one.** Governs R3, R11. (session-settled: user-directed — chosen over comparing against the newest ticket only and over one row per ticket.)
 - **A rating rise rewrites the summary's rating suffix as well as commenting.** Governs R12. (session-settled: user-directed — chosen over comment only and over also changing Jira priority: the ticket list should show the current rating, and no rating-to-priority mapping exists.)
@@ -65,7 +65,7 @@ Stale-ticket closing and the overview hub are already shared by both importers o
 
 - R5. Veracode and Waltz show the same Already-ticketed screen: each row names its target ticket and that ticket's status, a one-line change summary (e.g. "+2 CVEs, High→Critical", "+1 flaw", "baseline", "—"), and its current action, alongside the importer's own item columns.
 - R6. The row actions are `update`, `follow-up`, `re-create` and `leave`; `follow-up` is offered only on a row with new findings, and `update` only on a row with a change or a baseline.
-- R7. Each row's proposed action is: no change → `leave`; change and the target ticket is open → `update`; change and every ticket for the item is resolved → `follow-up`; baseline → `update`.
+- R7. Each row's proposed action is: no change → `leave`; change and the target ticket is open → `update`; change and every ticket for the item is resolved → `follow-up`, or `update` when the change is a rating rise with no new findings (the user can pick `re-create` to track it as a new ticket); baseline → `update`.
 - R8. The user changes a row with `<row id> <action>` (e.g. `A2 follow-up`) or every eligible row with `all <action>`; an action not offered on a row is rejected with a message and changes nothing.
 - R9. Replying `apply` runs every row whose action is not `leave`, at most 50 (`BATCH_LIMIT`) rows per reply; rows beyond the cap stay pending and the reply says how many remain.
 - R10. `update tickets` runs only the rows currently set to `update`, and `re-create tickets` only the rows currently set to `re-create`, under the same cap as R9.
@@ -230,6 +230,7 @@ flowchart TB
   - Covers AE2. PROJ-8 (Done, CVE-A) and PROJ-30 (Open, CVE-B); report has A, B, C → only C new, target PROJ-30.
   - Two open tickets for one key → the later-created one is the target.
   - A baseline row whose only ticket is resolved gets that ticket as its target, so `update` has somewhere to write.
+  - A Waltz row whose only change is High→Critical and whose tickets are all resolved defaults to `update`, offers `re-create`, and does not offer `follow-up`.
   - Covers AE3 (detection half). A ticket with only the component label → change `baseline`, action `update`, `follow-up` not allowed.
   - A Veracode folded group whose flaws sit on two different tickets unions both tickets' labels (R2 unchanged).
   - One failed search chunk still returns tickets from the other chunks.
