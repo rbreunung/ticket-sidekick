@@ -430,20 +430,39 @@ describe('describeWaltzChange', () => {
 
 describe('rewriteSummaryRating', () => {
   it('replaces the trailing imported rating (AE4)', () => {
-    expect(rewriteSummaryRating('[OSS] log4j-core 2.14.1 — High', 'High', 'Critical')).toBe('[OSS] log4j-core 2.14.1 — Critical');
+    expect(rewriteSummaryRating('[OSS] log4j-core 2.14.1 — High', 'Critical')).toBe('[OSS] log4j-core 2.14.1 — Critical');
   });
 
   it('leaves a renamed summary alone (AE4)', () => {
-    expect(rewriteSummaryRating('log4j upgrade', 'High', 'Critical')).toBeNull();
+    expect(rewriteSummaryRating('log4j upgrade', 'Critical')).toBeNull();
   });
 
   it('keeps a trailing follow-up suffix', () => {
-    expect(rewriteSummaryRating('[OSS] jackson-databind 2.9 — High (follow-up to PROJ-8)', 'High', 'Critical'))
+    expect(rewriteSummaryRating('[OSS] jackson-databind 2.9 — High (follow-up to PROJ-8)', 'Critical'))
       .toBe('[OSS] jackson-databind 2.9 — Critical (follow-up to PROJ-8)');
   });
 
-  it('returns null when the summary ends in a different rating than the one imported', () => {
-    expect(rewriteSummaryRating('[OSS] log4j-core 2.14.1 — Medium', 'High', 'Critical')).toBeNull();
+  it('replaces whatever known rating ends the summary, even one below the rise\'s from (#6)', () => {
+    // T1 still says Low while a resolved follow-up recorded Medium; the report now says High.
+    expect(rewriteSummaryRating('[OSS] x — Low', 'High')).toBe('[OSS] x — High');
+  });
+
+  it('replaces a lower known rating in front of a follow-up suffix (#6)', () => {
+    expect(rewriteSummaryRating('[OSS] x — Low (follow-up to PROJ-8)', 'High'))
+      .toBe('[OSS] x — High (follow-up to PROJ-8)');
+  });
+
+  it('matches the known rating case-insensitively', () => {
+    expect(rewriteSummaryRating('[OSS] x — medium', 'Critical')).toBe('[OSS] x — Critical');
+  });
+
+  it('accepts the two-argument form without a from rating', () => {
+    expect(rewriteSummaryRating('[OSS] x — Low', 'High')).toBe('[OSS] x — High');
+    expect(rewriteSummaryRating('log4j upgrade', 'High')).toBeNull();
+  });
+
+  it('returns null when the summary ends in an unknown word after the dash', () => {
+    expect(rewriteSummaryRating('[OSS] x — Urgent', 'Critical')).toBeNull();
   });
 });
 

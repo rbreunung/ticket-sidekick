@@ -474,17 +474,22 @@ export function buildFollowUpSummary(component: WaltzComponent, originalKey: str
 }
 
 /**
- * R12: replaces the trailing ` — <from>` rating of a summary with ` — <to>`, also when it is directly
- * followed by a ` (follow-up to <KEY>)` suffix (kept as is). Returns null when the summary does not
- * end in the previously imported rating (e.g. the user renamed the ticket) — it is then left alone.
+ * R12: replaces the trailing ` — <rating>` of a summary with ` — <to>`, also when it is directly
+ * followed by a ` (follow-up to <KEY>)` suffix (kept as is). `<rating>` is whatever known rating
+ * (VULN_RATING_ORDER, case-insensitive) ends the summary — not necessarily the rise's `from`, which
+ * is the highest rating across all of the component's tickets and can be above the target ticket's
+ * own (e.g. open T1 still says Low while a resolved follow-up recorded Medium). Returns null when the
+ * summary does not end in a known rating that way (e.g. the user renamed the ticket) — it is then left
+ * alone.
  */
-export function rewriteSummaryRating(summary: string, from: string, to: string): string | null {
+export function rewriteSummaryRating(summary: string, to: string): string | null {
   const suffixMatch = summary.match(FOLLOW_UP_SUFFIX_PATTERN);
   const suffix = suffixMatch ? suffixMatch[0] : '';
   const head = suffix ? summary.slice(0, -suffix.length) : summary;
-  const tail = ` — ${from}`;
-  if (!head.toLowerCase().endsWith(tail.toLowerCase())) return null;
-  return `${head.slice(0, -tail.length)} — ${to}${suffix}`;
+  const lowerHead = head.toLowerCase();
+  const current = VULN_RATING_ORDER.find(r => lowerHead.endsWith(` — ${r.toLowerCase()}`));
+  if (current === undefined) return null;
+  return `${head.slice(0, -` — ${current}`.length)} — ${to}${suffix}`;
 }
 
 function sortVulnerabilities(vulns: WaltzVulnerability[]): WaltzVulnerability[] {

@@ -152,7 +152,7 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent, WaltzReviewRow> = 
       row.sourceComponent, { newCveIds: change.newIds, ratingRise: change.ratingRise }, { summaryUnchanged },
     ),
     rewriteSummary: (summary, change) => (change.ratingRise
-      ? rewriteSummaryRating(summary, change.ratingRise.from, change.ratingRise.to)
+      ? rewriteSummaryRating(summary, change.ratingRise.to)
       : undefined),
     // KTD10/R14: the follow-up carries the item's dedup record (oss-dependency + component label),
     // only the new CVE labels and the current rating label, plus the template's labels.
