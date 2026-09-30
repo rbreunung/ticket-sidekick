@@ -105,6 +105,7 @@ When enabled, every `@jira` response starts with an italic line showing the acti
 | --- | --- | --- |
 | Delete .eml after import | `ticketSidekick.email.deleteEmlAfterImport` | `false` |
 | Email batch size limit (MB) | `ticketSidekick.email.maxBatchSizeMB` | `150` |
+| Email boilerplate patterns | `ticketSidekick.email.boilerplatePatterns` | `[]` |
 | Veracode min severity | `ticketSidekick.veracode.minSeverity` | `4` |
 | Veracode included statuses | `ticketSidekick.veracode.includeRemediationStatuses` | `["New", "Open", "Reopened"]` |
 | Veracode report size limit (MB) | `ticketSidekick.veracode.maxReportSizeMB` | `50` |
@@ -121,6 +122,17 @@ What the filter settings do is described with each import in [Report Imports](re
 ```
 
 Each importer rejects a file larger than its limit before reading it. For an email batch the limit applies to all selected `.eml` files together. Raise it if a real report is rejected as too large: Veracode and OSS report limits can be set from 1 to 200 MB, the email batch limit from 1 to 500 MB. A value outside that range, or not a number, falls back to the default.
+
+**Optional: email boilerplate patterns**
+
+```json
+"ticketSidekick.email.boilerplatePatterns": [
+  { "kind": "footer", "start": "CONFIDENTIALITY NOTICE:", "end": "Registered office Frankfurt am Main." },
+  { "kind": "signature", "start": "Best regards" }
+]
+```
+
+Known confidentiality headers, legal footers and signatures to remove from imported emails, in every message of the thread. `kind` is `header`, `footer` or `signature`; `start` and `end` are plain text (not regular expressions), matched ignoring case, extra spaces and bold/italic. With `end`, the block runs through the line containing it. Without `end`, a header covers its paragraph and a footer or signature runs until the next matched block, the next quoted message or the end of the message, at most 40 lines. A stripped signature keeps the author's name when one can be recognized. Entries with an unknown `kind` or an empty `start` are ignored.
 
 ## Bitbucket settings reference
 

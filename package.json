@@ -866,6 +866,37 @@
             "minimum": 1,
             "maximum": 500,
             "description": "Maximum total size, in MB, of a selected .eml batch. Raise this if your email batch import is rejected for exceeding the size limit."
+          },
+          "ticketSidekick.email.boilerplatePatterns": {
+            "type": "array",
+            "default": [],
+            "description": "Known boilerplate to remove from imported emails: confidentiality headers, legal footers and signatures. Each entry has a kind (header, footer or signature), a start phrase and an optional end phrase. Phrases are plain text, not regular expressions; matching ignores case, extra spaces and bold/italic markers, and runs on every message of the thread, including quoted ones. With an end phrase, the block runs from the start phrase through the line containing the end phrase, and only matches where the end phrase follows the start phrase in the same message. Without one, a header covers its paragraph, and a footer or signature runs until the next matched block, the next quoted message, or the end of the message, at most 40 lines. You are always shown what was found before anything is removed.",
+            "items": {
+              "type": "object",
+              "required": [
+                "kind",
+                "start"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "header",
+                    "footer",
+                    "signature"
+                  ],
+                  "description": "What the block is: a header (e.g. an external-sender warning), a footer (e.g. a legal disclaimer) or a signature."
+                },
+                "start": {
+                  "type": "string",
+                  "description": "Text the block starts with, e.g. \"CONFIDENTIALITY NOTICE:\"."
+                },
+                "end": {
+                  "type": "string",
+                  "description": "Optional text on the block's last line, e.g. \"Registered office Frankfurt am Main.\""
+                }
+              }
+            }
           }
         }
       },
