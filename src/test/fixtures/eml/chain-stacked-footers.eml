@@ -1,0 +1,39 @@
+From: Hanna Stack <hanna.stack@example.com>
+To: Ivan Recipient <ivan.recipient@example.com>
+Subject: RE: Contract draft
+Date: Wed, 30 Sep 2026 12:00:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary="related_stack_001"
+
+--related_stack_001
+Content-Type: text/html; charset=utf-8
+
+<html><body dir="ltr">
+<div>Hi Ivan,</div>
+<div>see my comments inline below.</div>
+<div><br></div>
+<div>Cheers,<br>Hanna</div>
+<div><br></div>
+<hr style="display:inline-block;width:98%" tabindex="-1">
+<div id="divRplyFwdMsg" dir="ltr"><font face="Calibri, sans-serif" style="font-size:11pt" color="#000000"><b>From:</b> Ivan Recipient &lt;ivan.recipient@example.com&gt;<br><b>Sent:</b> Tuesday, September 29, 2026 10:00<br><b>To:</b> Hanna Stack &lt;hanna.stack@example.com&gt;<br><b>Subject:</b> Contract draft</font>
+<div>&nbsp;</div></div>
+<div>Hanna, here is the draft.</div>
+<div><br></div>
+<div>Best regards,<br>Ivan Recipient<br>Procurement Manager<br>Phone +49 69 5555 0000<br><img src="cid:stack-logo@example.com"></div>
+<div><br></div>
+<div style="font-size:8pt">LEGAL NOTICE: Example Bank AG is authorised by the Federal Financial Supervisory Authority.<br>Registered office Frankfurt am Main, commercial register HRB 12345.</div>
+<div><br></div>
+<div style="font-size:8pt">CONFIDENTIALITY NOTICE: This e-mail is confidential and intended solely for the addressee.<br>If you are not the intended recipient, please delete this e-mail.</div>
+<div><br></div>
+<div style="font-size:8pt">DATA PROTECTION: Information on how we process personal data is available at https://example.com/privacy.</div>
+</body></html>
+
+--related_stack_001
+Content-Type: image/png
+Content-ID: <stack-logo@example.com>
+Content-Disposition: inline; filename="stack-logo.png"
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQAABjE+ibYAAAAASUVORK5CYII=
+
+--related_stack_001--
