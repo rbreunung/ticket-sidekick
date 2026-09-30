@@ -115,6 +115,7 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent, WaltzReviewRow> = 
     summary: buildSummary(component),
     labels: buildLabels(component, templateLabels),
     descriptionWiki: buildDescriptionWiki(component),
+    sourceComponent: component,
   }),
   reviewColumns: WALTZ_REVIEW_COLUMNS,
   itemRefFor: row => row.nameVersion,
