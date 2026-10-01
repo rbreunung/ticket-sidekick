@@ -175,6 +175,11 @@ describe('formatTokenFooter', () => {
       .toBe('_Tokens: 1,200 in · 300 out · m_');
   });
 
+  it('escapes markdown characters in the model id so the italic line stays intact', () => {
+    expect(formatTokenFooter({ input: 1, output: 1, estimated: false, modelId: 'gpt_4o*mini' }))
+      .toBe('_Tokens: 1 in · 1 out · gpt\\_4o\\*mini_');
+  });
+
   it('marks estimated figures with a tilde', () => {
     expect(formatTokenFooter({ input: 1_200, output: 300, estimated: true, modelId: 'm' }))
       .toBe('_Tokens: ~1,200 in · ~300 out · m_');

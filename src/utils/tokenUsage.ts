@@ -110,6 +110,9 @@ export class TokenUsageService {
 
 const fmt = (n: number): string => n.toLocaleString('en-US');
 
+/** Model ids come from the editor; escape markdown characters so they cannot break the footer or table. */
+const escapeMarkdown = (text: string): string => text.replace(/[\\`*_{}[\]<>|]/g, '\\$&');
+
 export function formatTokenFooter(params: {
   input: number;
   output: number;
@@ -121,7 +124,7 @@ export function formatTokenFooter(params: {
   const parts = [
     `Tokens: ${mark}${fmt(params.input)} in`,
     `${mark}${fmt(params.output)} out`,
-    params.modelId,
+    escapeMarkdown(params.modelId),
   ];
   if (params.budget !== undefined) parts.push(`budget ${fmt(params.budget)}`);
   return `_${parts.join(' · ')}_`;
@@ -135,7 +138,7 @@ export function formatUsageTable(store: UsageStore, now: Date): string {
     for (const modelId of Object.keys(visible[month]).sort()) {
       const row = visible[month][modelId];
       const mark = row.estimated ? '~' : '';
-      lines.push(`| ${month} | ${modelId.replace(/\|/g, '\\|')} | ${mark}${fmt(row.input)} | ${mark}${fmt(row.output)} | ${fmt(row.calls)} |`);
+      lines.push(`| ${month} | ${escapeMarkdown(modelId)} | ${mark}${fmt(row.input)} | ${mark}${fmt(row.output)} | ${fmt(row.calls)} |`);
     }
   }
   if (lines.length === 0) return NO_USAGE_MESSAGE;
