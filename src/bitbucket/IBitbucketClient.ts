@@ -38,6 +38,8 @@ export interface BitbucketConfig {
   confidenceThreshold?: number;
   /** When true, emit one fenced structured diagnostic record per review (R7). Default false. */
   detailedDiagnostics?: boolean;
+  /** When true, every @bitbucket answer ends with an input/output token line. Default false. */
+  showTokenUsage?: boolean;
 }
 
 export interface BitbucketCommentResult {
