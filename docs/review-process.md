@@ -412,26 +412,30 @@ everywhere for users without `reviewInstructions` configured.
 If a question was supplied, the review's first streamed line is `_focus: <question>_`,
 before `_Fetching PR…_`.
 
-## Token estimate
+## Token usage
 
-A `_~N estimated tokens · budget K_` line is appended after the review output
-and after every follow-up answer. The estimate is `(totalInputChars +
-totalOutputChars) / 4`, summed across all LLM calls in that response (Pass 1,
-continuation, Pass 2, and critic for a review; the single call for a
-follow-up). VS Code's LM API does not expose actual token counts; this is a
-ballpark consistent with the chunk-budget heuristic above.
+Every `@bitbucket` model call (reviews, follow-ups, comment refinement) goes through
+a token meter (`src/participant/bitbucket/tokenMeter.ts`): the handler wraps
+`request.model` once per response in a proxy that overrides only `sendRequest`.
+Input is counted with `model.countTokens` on the request messages once the
+provider accepts the request; output is counted on the streamed text when the
+stream ends, breaks, or is abandoned. Every accepted attempt counts, retries
+included. When `countTokens` throws, that figure falls back to `ceil(chars / 4)`
+and the call is flagged estimated. Cache reads, cache writes, and reasoning
+tokens are not exposed by the VS Code API and are not tracked.
 
-Persona passes (`buildPersonaPrompt`) and smart mode's phase 1
-`recommendedPersonas` trailer add no separate accounting — they're regular
-prompt/response calls whose char counts are added into the same
-`totalInputChars`/`totalOutputChars` accumulators as every other pass
-(`runPersonaPassesForChunk` returns its own `inputChars`/`outputChars`,
-summed at each call site the same way pass1/pass2/critic already are), so
-the estimate line already reflects them without any special-casing. A
-`smart`-mode review's estimate therefore covers phase 1 (standard pass, all
-chunks) plus phase 2 (selected personas × all chunks); a `deep`-mode
-review's covers the standard pass, all four persona passes, and the critic
-pass, all per chunk.
+Each counted call is added to a per-month, per-model counter in
+`ExtensionContext.globalState` (`src/utils/tokenUsage.ts`, key
+`bitbucket.tokenUsage`), whether or not the footer is shown. Months older than
+the current one plus the two before it are deleted on write. Writes inside one
+window are queued; two windows writing at the same instant can lose an update
+(KL11 in [`known-limitations.md`](known-limitations.md)). `@bitbucket usage`
+(and `/usage`) prints the stored months as a table; it needs no Bitbucket
+credentials and the extension holds no prices.
+
+With `ticketSidekick.bitbucket.showTokenUsage` on (default off), each answer ends
+with `_Tokens: <in> in · <out> out · <model>_`; a review adds `· budget K`.
+Figures are the totals of all calls in that response; `~` marks estimated ones.
 
 ## Follow-ups
 

@@ -59,6 +59,7 @@ export class ConfigService {
       reviewContextLines: config.get<number>('bitbucket.reviewContextLines') ?? 12,
       confidenceThreshold: config.get<number>('bitbucket.confidenceThreshold') ?? 0.7,
       detailedDiagnostics: config.get<boolean>('bitbucket.detailedDiagnostics') ?? false,
+      showTokenUsage: config.get<boolean>('bitbucket.showTokenUsage') ?? false,
     };
   }
 

@@ -125,8 +125,6 @@ export interface ReviewTally {
   /** Present only when the critic ran (deep mode). */
   droppedByCritic?: number;
   anyBatchFailed: boolean;
-  inputChars: number;
-  outputChars: number;
 }
 
 /**
@@ -168,6 +166,11 @@ export function parseSmartFallbackReply(prompt: string): SmartFallbackChoice {
 
 export function hasPrUrl(prompt: string): boolean {
   return /https?:\/\/\S+\/pull-requests\/\d+/.test(prompt);
+}
+
+/** `@bitbucket usage` typed as plain text: exactly the word, never alongside a PR URL. */
+export function isUsageRequest(prompt: string): boolean {
+  return !hasPrUrl(prompt) && /^usage$/i.test(prompt.trim());
 }
 
 /**

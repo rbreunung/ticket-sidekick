@@ -149,6 +149,7 @@ Known confidentiality headers, legal footers and signatures to remove from impor
 | Diff context lines | `ticketSidekick.bitbucket.reviewContextLines` | `12` |
 | Confidence threshold | `ticketSidekick.bitbucket.confidenceThreshold` | `0.7` |
 | Detailed diagnostics | `ticketSidekick.bitbucket.detailedDiagnostics` | `false` |
+| Show token usage | `ticketSidekick.bitbucket.showTokenUsage` | `false` |
 
 **Optional: Bitbucket connection info banner**
 
@@ -198,5 +199,13 @@ The model rates its confidence in each finding from 0 to 1. At or above this thr
 ```
 
 When enabled, each review also writes one structured run record to the **Ticket Sidekick** output channel (**View → Output**): the run's configuration, every model call, and how many findings were kept or dropped at each step and why. It is one copy-pasteable block, useful for comparing two runs or attaching to a bug report. Off by default.
+
+**Optional: token usage line**
+
+```json
+"ticketSidekick.bitbucket.showTokenUsage": true
+```
+
+When enabled, every `@bitbucket` answer ends with one line such as `Tokens: 41,230 in · 6,840 out · claude-sonnet-4.5`. A review also shows its budget. Counts come from the editor's tokenizer for the selected model, so they are approximate and can differ from provider billing; a `~` marks a figure that had to be estimated. Off by default. Usage is recorded for [`@bitbucket usage`](bitbucket-pr-review.md#token-usage) whether or not this line is shown.
 
 **Using a local model:** `@bitbucket` works with any model available in GitHub Copilot Chat, including local models via [Ollama](https://ollama.com). Use a model with at least 16k context (32k+ recommended for large PRs).

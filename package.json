@@ -102,6 +102,11 @@
             "name": "review",
             "description": "Review a Bitbucket pull request",
             "sampleRequest": "https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42"
+          },
+          {
+            "name": "usage",
+            "description": "Show token usage per model for recent months",
+            "sampleRequest": "usage"
           }
         ],
         "disambiguation": [
@@ -848,6 +853,11 @@
             "type": "boolean",
             "default": false,
             "description": "When enabled, each review additionally emits a single fenced structured run record to the \"Ticket Sidekick\" output channel — run configuration, per-call records, and the findings funnel with drop reasons — copy-pasteable as one block for comparing runs or filing a provider bug report."
+          },
+          "ticketSidekick.bitbucket.showTokenUsage": {
+            "type": "boolean",
+            "default": false,
+            "description": "When enabled, every @bitbucket answer (review, follow-up, comment refinement) ends with one line showing its input and output tokens and the model, for example \"Tokens: 41,230 in · 6,840 out · claude-sonnet-4.5\". Counts come from the editor's tokenizer and are approximate (a ~ marks estimates). Usage is recorded for @bitbucket usage whether or not this is on."
           }
         }
       },

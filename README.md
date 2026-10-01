@@ -474,6 +474,7 @@ Run `@bitbucket check` after setup to confirm the connection and see which accou
 | What you type | What happens |
 | --- | --- |
 | `@bitbucket check` | Test connection and show active configuration |
+| `@bitbucket usage` | Show input and output tokens per model for the current month and the two before it |
 | `@bitbucket <pr-url>` | Full structured review of the PR |
 | `@bitbucket review quick <pr-url>` | Review using diffs only — no second-pass file fetch (fewer tokens) |
 | `@bitbucket review deep <pr-url>` | Force standard two-pass review regardless of default setting |
@@ -495,6 +496,7 @@ Run `@bitbucket check` after setup to confirm the connection and see which accou
 | --- | --- | --- |
 | `@bitbucket /check` | `@bitbucket /check` | Verify your Bitbucket connection and credentials |
 | `@bitbucket /review` | `@bitbucket /review https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42` | Review a pull request |
+| `@bitbucket /usage` | `@bitbucket /usage` | Show token usage per model for recent months |
 
 ### PR review
 

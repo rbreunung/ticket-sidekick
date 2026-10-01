@@ -53,3 +53,22 @@ describe('ConfigService.isBitbucketConfigured', () => {
     expect(configService.isBitbucketConfigured({ authType: 'datacenter', baseUrl: 'https://bitbucket.example.com', token: undefined })).toBe(false);
   });
 });
+
+describe('ConfigService.getBitbucketConfig showTokenUsage', () => {
+  async function readWith(settings: Record<string, unknown>) {
+    const vscode = await import('vscode');
+    vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
+      get: (key: string) => settings[key],
+    } as never);
+    const service = new ConfigService({ secrets: { get: async () => undefined } } as never);
+    return service.getBitbucketConfig();
+  }
+
+  it('is off when the setting is not set', async () => {
+    expect((await readWith({})).showTokenUsage).toBe(false);
+  });
+
+  it('is on when the user enables it', async () => {
+    expect((await readWith({ 'bitbucket.showTokenUsage': true })).showTokenUsage).toBe(true);
+  });
+});
