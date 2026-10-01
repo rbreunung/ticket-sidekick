@@ -91,6 +91,7 @@ function createHarness(config: Partial<BitbucketConfig> = {}): Harness {
   h.clipboard = undefined;
   h.clipboardError = undefined;
   const workspaceState = new Map<string, unknown>();
+  const globalState = new Map<string, unknown>();
   const prompts: string[] = [];
   const fullConfig = {
     authType: 'datacenter', baseUrl: 'https://bb.example.com', token: 'test-token',
@@ -101,6 +102,10 @@ function createHarness(config: Partial<BitbucketConfig> = {}): Harness {
     workspaceState: {
       get: (key: string) => workspaceState.get(key),
       update: async (key: string, value: unknown) => { workspaceState.set(key, value); },
+    },
+    globalState: {
+      get: (key: string) => globalState.get(key),
+      update: async (key: string, value: unknown) => { globalState.set(key, value); },
     },
     subscriptions: [] as unknown[],
   };
@@ -119,6 +124,8 @@ function createHarness(config: Partial<BitbucketConfig> = {}): Harness {
       let callIndex = 0;
       const model = {
         vendor: 'test', family: 'test', id: 'test-model', version: '1', maxInputTokens: 128_000,
+        // Deterministic stand-in for the editor's tokenizer: one token per four characters.
+        countTokens: async (input: string | { content: string }) => Math.ceil((typeof input === 'string' ? input : input.content).length / 4),
         sendRequest: async (messages: Array<{ content: string }>) => {
           const sent = messages.map((m) => m.content).join('\n');
           prompts.push(sent);
@@ -590,7 +597,7 @@ describe('a resumed smart review finishes like an uninterrupted one (U11)', () =
     expect(personaPrompts).toHaveLength(4);
     for (const p of personaPrompts) expect(p).toContain('does this break concurrent writes?');
     expect(resumed.text).toContain('SQL injection');
-    expect(resumed.text).toMatch(/estimated tokens/);
+    expect(resumed.text).not.toContain('Tokens:');
     expect(resumed.result).toMatchObject({
       metadata: { bitbucketFollowup: { kind: 'reviewCompleted' }, bitbucketSession: { kinds: ['review-session'] } },
     });
@@ -704,5 +711,61 @@ describe('Copy for Teams', () => {
     await harness.turn('copy', []);
 
     expect(h.clipboard).toBeUndefined();
+  });
+});
+
+describe('token usage line and the usage command', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const reviewReply = [findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'SQL injection', 'critical'), META_LINE].join('\n');
+  const footer = /_Tokens: [\d,]+ in · [\d,]+ out · test-model(?: · budget [\d,]+)?_/;
+
+  // AE1
+  it('shows no token line by default', async () => {
+    const harness = createHarness();
+    const { text } = await harness.turn(PR_URL, [reviewReply]);
+    expect(text).not.toContain('Tokens:');
+    expect(text).not.toContain('estimated tokens');
+  });
+
+  // AE2
+  it('ends a review with the input/output line and the budget when the setting is on', async () => {
+    const harness = createHarness({ showTokenUsage: true });
+    const { text } = await harness.turn(PR_URL, [reviewReply]);
+    expect(text).toMatch(/_Tokens: [\d,]+ in · [\d,]+ out · test-model · budget [\d,]+_/);
+  });
+
+  it('ends a follow-up answer with the line, without a budget', async () => {
+    const harness = createHarness({ showTokenUsage: true });
+    const first = await harness.turn(PR_URL, [reviewReply]);
+    const { text } = await harness.turn('#1 why is this critical?', ['Because the query is built from input.'], [sessionTurn(first.result)]);
+    expect(text).toMatch(footer);
+    expect(text).not.toContain('budget');
+  });
+
+  // AE4 / AE6
+  it('records usage even with the footer off and shows it with the usage command', async () => {
+    const harness = createHarness();
+    const first = await harness.turn(PR_URL, [reviewReply]);
+    await harness.turn('#1 why is this critical?', ['Because.'], [sessionTurn(first.result)]);
+    const calls = harness.prompts.length;
+
+    const { text } = await harness.turn('usage', []);
+    expect(harness.prompts).toHaveLength(calls);
+    expect(text).toContain('| Month | Model | Input | Output | Calls |');
+    expect(text).toMatch(/\| \d{4}-\d{2} \| test-model \| [\d,]+ \| [\d,]+ \| 2 \|/);
+  });
+
+  it('says so when nothing has been recorded yet', async () => {
+    const harness = createHarness();
+    const { text } = await harness.turn('usage', []);
+    expect(text).toBe('_No token usage recorded yet._');
+  });
+
+  it('still reviews when a PR URL comes with the word usage', async () => {
+    const harness = createHarness();
+    const { text } = await harness.turn(`usage ${PR_URL}`, [reviewReply]);
+    expect(text).toContain('SQL injection');
   });
 });

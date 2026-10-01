@@ -102,6 +102,11 @@
             "name": "review",
             "description": "Review a Bitbucket pull request",
             "sampleRequest": "https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42"
+          },
+          {
+            "name": "usage",
+            "description": "Show token usage per model for recent months",
+            "sampleRequest": "usage"
           }
         ],
         "disambiguation": [

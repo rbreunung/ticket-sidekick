@@ -44,6 +44,7 @@ import {
   buildChatCommandLink,
   composeReviewOutput,
   hasPrUrl,
+  isUsageRequest,
   type ReviewFinding,
   type ReviewSession,
   type BitbucketCommentPreviewSession,
@@ -57,6 +58,8 @@ import {
 } from './reviewSessionState';
 import { isConfirmation, isCancellation, isGreetingOrEmpty } from './sessionState';
 import { generateContent } from './jira/llmHelpers';
+import { createTokenMeter } from './bitbucket/tokenMeter';
+import { TokenUsageService, formatTokenFooter, formatUsageTable } from '../utils/tokenUsage';
 import { trustedChatMarkdown } from '../utils/chatMarkdown';
 import { tokenStatus } from '../utils/diagUtils';
 import { validateBaseUrl } from '../services/configValidation';
@@ -314,7 +317,7 @@ async function runContinuation(params: {
   totalBatches: number;
   batchStatus: string;
   runTag: string;
-  request: vscode.ChatRequest;
+  request: Pick<vscode.ChatRequest, 'model'>;
   token: vscode.CancellationToken;
   logReview: (level: 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>) => void;
   stream: vscode.ChatResponseStream;
@@ -364,7 +367,7 @@ async function runPersonaPassesForChunk(params: {
   pr: BitbucketPR;
   service: PrReviewService;
   extraInstructions: string;
-  request: vscode.ChatRequest;
+  request: Pick<vscode.ChatRequest, 'model'>;
   token: vscode.CancellationToken;
   runTag: string;
   batchStatus: string;
@@ -549,6 +552,8 @@ export function createBitbucketParticipant(
   context: vscode.ExtensionContext,
   configService: ConfigService,
 ): vscode.ChatParticipant {
+  // One counter store per window; per-machine, kept for the current month and the two before it.
+  const usageService = new TokenUsageService(context.globalState);
   // U5/R6: the handler returns `{ metadata: { bitbucketFollowup } }` from a major response so
   // `participant.followupProvider` below can compute the right suggestion chips for it — mirrors
   // `JiraParticipant.ts`'s own use of `vscode.ChatResult.metadata` for the same purpose. A bare
@@ -571,6 +576,31 @@ export function createBitbucketParticipant(
       await handleCheck(stream, config, configService);
       return;
     }
+
+    // `usage` reads local counters only — it works without Bitbucket credentials and runs before
+    // session detection, so the bare word `usage` is always this command (KTD9).
+    if (request.command === 'usage' || isUsageRequest(prompt)) {
+      stream.markdown(formatUsageTable(usageService.snapshot(), new Date()));
+      return;
+    }
+
+    // Every model call in this response goes through the meter: it feeds the monthly usage
+    // counters and, when `showTokenUsage` is on, the footer line.
+    const meter = createTokenMeter(
+      request.model,
+      (modelId, figures) => usageService.record(modelId, figures),
+      (level, message, details) => logDiag('bitbucket.tokenUsage', level, message, details),
+    );
+    const model = meter.model;
+    const modelRequest = { model };
+    const appendTokenFooter = (budget?: number): void => {
+      if (!config.showTokenUsage) return;
+      const totals = meter.totals();
+      if (totals.calls === 0) return;
+      stream.markdown(`\n\n${formatTokenFooter({
+        input: totals.input, output: totals.output, estimated: totals.estimated, modelId: meter.modelId, budget,
+      })}`);
+    };
 
     // U4/R5: `/review` needs no dispatch of its own — VS Code strips the command name
     // out of `request.prompt`, so `/review <url>` leaves `prompt` as exactly the PR URL
@@ -715,8 +745,7 @@ export function createBitbucketParticipant(
       const droppedNotice = formatDroppedFindingsNotice({ outsidePr: tally.droppedOutsidePr, critic: tally.droppedByCritic ?? 0 });
       if (droppedNotice) stream.markdown(`${droppedNotice}\n\n`);
       stream.markdown(trustedChatMarkdown(composeReviewOutput(reviewResult)));
-      const reviewTokenEst = Math.ceil((tally.inputChars + tally.outputChars) / 4);
-      stream.markdown(`\n\n_~${reviewTokenEst.toLocaleString()} estimated tokens · budget ${tokenBudget.toLocaleString()}_`);
+      appendTokenFooter(tokenBudget);
 
       const storedDiff = buildStoredReviewDiff(fileDiffs, numbered, tokenBudget * 4);
       await ws.update('bitbucket.session.review', {
@@ -788,7 +817,7 @@ export function createBitbucketParticipant(
         logDiag('bitbucket.review', level, message, details);
       };
       const extraInstructions = [config.reviewInstructions, session.upfrontQuestion].filter(Boolean).join('\n\n');
-      const { tokenBudget } = resolveTokenBudget(config, request.model);
+      const { tokenBudget } = resolveTokenBudget(config, model);
       // Sessions stored before R23 carry no tally; start from phase 1's finding count rather than fail.
       const tally: ReviewTally = {
         ...(session.phase1Tally ?? {
@@ -810,7 +839,7 @@ export function createBitbucketParticipant(
           const batchStatus = session.chunks.length > 1 ? `Batch ${i + 1}/${session.chunks.length}` : 'Analysing';
           const personaResult = await runPersonaPassesForChunk({
             personas: selectedPersonas, chunk: session.chunks[i], batchNum: i + 1, totalBatches: session.chunks.length,
-            pr, service, extraInstructions, request, token, runTag, batchStatus, logReview, stream,
+            pr, service, extraInstructions, request: modelRequest, token, runTag, batchStatus, logReview, stream,
           });
           tally.inputChars += personaResult.inputChars;
           tally.outputChars += personaResult.outputChars;
@@ -851,17 +880,13 @@ export function createBitbucketParticipant(
         // Refinement — revise each comment text with the instruction, one LLM call per item
         try {
           const revisedItems: Array<{ finding: ReviewFinding; text: string }> = [];
-          let refInputChars = 0;
-          let refOutputChars = 0;
           for (const item of previewSession.items) {
             const instruction = `Revise the following Bitbucket PR comment based on this instruction: "${prompt}"\n\nOriginal comment:\n${item.text}`;
-            refInputChars += instruction.length;
-            const revised = await generateContent(instruction, request.model, token, undefined, 'generate');
-            refOutputChars += (revised ?? '').length;
+            const revised = await generateContent(instruction, model, token, undefined, 'generate');
             revisedItems.push({ finding: item.finding, text: revised || item.text });
           }
           const result = await streamCommentPreview({ ...previewSession, items: revisedItems });
-          stream.markdown(`\n\n_~${Math.ceil((refInputChars + refOutputChars) / 4).toLocaleString()} estimated tokens_`);
+          appendTokenFooter();
           return result;
         } catch (err) {
           logDiag('bitbucket.followup', 'error', 'Comment refinement failed', { error: err instanceof Error ? err.message : String(err) });
@@ -964,8 +989,6 @@ export function createBitbucketParticipant(
 
           // intent.kind === 'explain'
           let finding: ReviewFinding | undefined;
-          let matchInputChars = 0;
-          let matchOutputChars = 0;
 
           if (intent.findingRef != null) {
             finding = session.findings.find((f) => f.id === intent.findingRef);
@@ -980,32 +1003,28 @@ export function createBitbucketParticipant(
               `The developer asked: "${intent.question}"\n\n` +
               `Available findings:\n${session.findings.map((f) => `#${f.id}: [${f.severity}] ${f.title} (${f.file})`).join('\n')}\n\n` +
               `Reply with ONLY the finding number (e.g. "2") that best matches the question, or "none" if no match.`;
-            matchInputChars = matchPrompt.length;
-            const matchRaw = await callLLMWithProgress(matchPrompt, request.model, token, 'Matching finding', 'follow-up match');
-            matchOutputChars = matchRaw.length;
+            const matchRaw = await callLLMWithProgress(matchPrompt, model, token, 'Matching finding', 'follow-up match');
             const num = parseFindingMatchReply(matchRaw);
             finding = num === undefined ? undefined : session.findings.find((f) => f.id === num);
           }
 
           if (!finding) {
             // General PR-level question — no specific finding matched
-            const { tokenBudget } = resolveTokenBudget(config, request.model);
+            const { tokenBudget } = resolveTokenBudget(config, model);
             const prContextPrompt = session.rawDiff
               ? buildDiffAwarePrompt(session, intent.question, tokenBudget * 4)
               : buildPrContextPrompt(session, intent.question);
-            const prAnswer = await callLLMWithProgress(prContextPrompt, request.model, token, 'Answering question', 'follow-up pr-answer');
-            const totalEst = Math.ceil((matchInputChars + matchOutputChars + prContextPrompt.length + prAnswer.length) / 4);
+            const prAnswer = await callLLMWithProgress(prContextPrompt, model, token, 'Answering question', 'follow-up pr-answer');
             stream.markdown(prAnswer);
-            stream.markdown(`\n\n_~${totalEst.toLocaleString()} estimated tokens_`);
+            appendTokenFooter();
             return reviewSessionResult;
           }
 
           const followUpPrompt = buildFindingFollowUpPrompt(session, finding, intent.question);
 
-          const answer = await callLLMWithProgress(followUpPrompt, request.model, token, 'Explaining finding', 'follow-up explain');
-          const totalEst = Math.ceil((matchInputChars + matchOutputChars + followUpPrompt.length + answer.length) / 4);
+          const answer = await callLLMWithProgress(followUpPrompt, model, token, 'Explaining finding', 'follow-up explain');
           stream.markdown(`**Finding #${finding.id} — ${finding.title}**\n\n${answer}`);
-          stream.markdown(`\n\n_~${totalEst.toLocaleString()} estimated tokens_`);
+          appendTokenFooter();
           return reviewSessionResult;
 
         } catch (err) {
@@ -1101,12 +1120,12 @@ export function createBitbucketParticipant(
       const extraInstructions = [config.reviewInstructions, upfrontQuestion].filter(Boolean).join('\n\n');
 
       // Resolve token budget: user setting → model API → safe fallback
-      const { tokenBudget, resolvedContextTokens, budgetRatio } = resolveTokenBudget(config, request.model);
+      const { tokenBudget, resolvedContextTokens, budgetRatio } = resolveTokenBudget(config, model);
 
       // R3: one opening line recording the effective run configuration, so a
       // misconfigured token budget/ratio is visible without re-running the review.
       const configLine =
-        `${runTag} model=${request.model.vendor}/${request.model.family} tokenBudget=${tokenBudget} ` +
+        `${runTag} model=${model.vendor}/${model.family} tokenBudget=${tokenBudget} ` +
         `(resolved=${resolvedContextTokens} ratio=${budgetRatio}) reviewMode=${reviewMode} ` +
         `criticEnabled=${criticEnabled} contextLines=${config.reviewContextLines ?? 12}`;
 
@@ -1133,9 +1152,9 @@ export function createBitbucketParticipant(
 
       logReview('info', `Review started — ${runTag}`, {
         runTag,
-        vendor: request.model.vendor,
-        family: request.model.family,
-        id: request.model.id,
+        vendor: model.vendor,
+        family: model.family,
+        id: model.id,
         resolvedContextTokens,
         contextBudgetRatio: budgetRatio,
         // Named budgetTokens, not tokenBudget — isSensitiveKey redacts the standalone
@@ -1165,11 +1184,11 @@ export function createBitbucketParticipant(
       stream.markdown('_Fetching PR…_\n\n');
       const pr = await client.getPullRequest(parsed.project, parsed.repo, parsed.prId);
       logReview('info', 'model in use', {
-        vendor: request.model.vendor,
-        family: request.model.family,
-        id: request.model.id,
-        version: request.model.version,
-        maxInputTokens: request.model.maxInputTokens,
+        vendor: model.vendor,
+        family: model.family,
+        id: model.id,
+        version: model.version,
+        maxInputTokens: model.maxInputTokens,
       });
       // Widen surrounding context (default 12) so the reviewer sees the enclosing code,
       // not just the changed lines. Applies in quick mode too — only Pass 2 is skipped there.
@@ -1290,7 +1309,7 @@ export function createBitbucketParticipant(
             const prompt = service.buildPrompt(pr, files, undefined, extraInstructions, resolvedMode === 'smart');
             pass1PromptChars = prompt.length;
             totalInputChars += prompt.length;
-            const raw = await callLLMOnceWithProgress(prompt, request.model, token, batchStatus);
+            const raw = await callLLMOnceWithProgress(prompt, model, token, batchStatus);
             totalOutputChars += raw.length;
             assertReadableReply(raw);
             const status = parseReviewReply(raw).truncated ? 'truncated' : 'ok';
@@ -1368,7 +1387,7 @@ export function createBitbucketParticipant(
                 buildPrompt: (reported) => service.buildPrompt(
                   pr, batch.items, undefined, extraInstructions, resolvedMode === 'smart', { alreadyReported: reported },
                 ),
-                batchNum: i + 1, totalBatches: chunks.length, batchStatus, runTag, request, token, logReview, stream,
+                batchNum: i + 1, totalBatches: chunks.length, batchStatus, runTag, request: modelRequest, token, logReview, stream,
               });
               totalInputChars += cont.promptChars;
               totalOutputChars += cont.responseChars;
@@ -1413,7 +1432,7 @@ export function createBitbucketParticipant(
                 totalInputChars += pass2Prompt.length;
                 const pass2Attempt: CallAttemptOut = { attempt: 0, durationMs: 0 };
                 const pass2Raw = await callLLMWithProgress(
-                  pass2Prompt, request.model, token, `${batchStatus} pass 2`,
+                  pass2Prompt, model, token, `${batchStatus} pass 2`,
                   `pass2 batch ${i + 1}/${chunks.length}`,
                   {
                     attemptOut: pass2Attempt,
@@ -1476,7 +1495,7 @@ export function createBitbucketParticipant(
         if (activePersonas.length > 0) {
           const personaResult = await runPersonaPassesForChunk({
             personas: activePersonas, chunk, batchNum: i + 1, totalBatches: chunks.length,
-            pr, service, extraInstructions, request, token, runTag, batchStatus, logReview, stream,
+            pr, service, extraInstructions, request: modelRequest, token, runTag, batchStatus, logReview, stream,
           });
           totalInputChars += personaResult.inputChars;
           totalOutputChars += personaResult.outputChars;
@@ -1508,7 +1527,7 @@ export function createBitbucketParticipant(
               );
               criticPromptChars = prompt.length;
               totalInputChars += prompt.length;
-              const raw = await callLLMOnceWithProgress(prompt, request.model, token, `${batchStatus} verifying`);
+              const raw = await callLLMOnceWithProgress(prompt, model, token, `${batchStatus} verifying`);
               totalOutputChars += raw.length;
               logReview('info', formatCallLine({
                 runTag, pass: 'critic', batch: i + 1, totalBatches: chunks.length, attempt,
@@ -1573,7 +1592,7 @@ export function createBitbucketParticipant(
                   totalInputChars += round2Prompt.length;
                   const round2Attempt: CallAttemptOut = { attempt: 0, durationMs: 0 };
                   const round2Raw = await callLLMWithProgress(
-                    round2Prompt, request.model, token, `${batchStatus} verifying (round 2)`,
+                    round2Prompt, model, token, `${batchStatus} verifying (round 2)`,
                     `critic round2 batch ${i + 1}/${chunks.length}`,
                     {
                       attemptOut: round2Attempt,
@@ -1691,7 +1710,7 @@ export function createBitbucketParticipant(
             lastStage = `smart phase 2 batch ${i + 1}/${chunks.length}`;
             const personaResult = await runPersonaPassesForChunk({
               personas: selectedPersonas, chunk, batchNum: i + 1, totalBatches: chunks.length,
-              pr, service, extraInstructions, request, token, runTag, batchStatus, logReview, stream,
+              pr, service, extraInstructions, request: modelRequest, token, runTag, batchStatus, logReview, stream,
             });
             totalInputChars += personaResult.inputChars;
             totalOutputChars += personaResult.outputChars;

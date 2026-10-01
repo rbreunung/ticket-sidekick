@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  isUsageRequest,
   buildBitbucketNotConfiguredMessage,
   buildChatCommandLink,
   neutralizeMarkdownLinks,
@@ -356,5 +357,22 @@ describe('formatReviewForSharing (Copy for Teams)', () => {
 
     const order = [3, 2, 1].map((id) => text.indexOf(`#${id} `));
     expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+});
+
+describe('isUsageRequest', () => {
+  it('recognises the bare word, in any case and with surrounding whitespace', () => {
+    expect(isUsageRequest('usage')).toBe(true);
+    expect(isUsageRequest('  Usage ')).toBe(true);
+  });
+
+  it('is false for anything else, including a sentence that mentions usage', () => {
+    expect(isUsageRequest('show usage')).toBe(false);
+    expect(isUsageRequest('usage of retries?')).toBe(false);
+    expect(isUsageRequest('')).toBe(false);
+  });
+
+  it('is false when the message carries a PR URL, so a review always wins', () => {
+    expect(isUsageRequest('usage https://bitbucket.example.com/projects/P/repos/r/pull-requests/4')).toBe(false);
   });
 });
