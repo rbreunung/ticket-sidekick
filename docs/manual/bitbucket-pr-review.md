@@ -77,7 +77,7 @@ After a review, the session stays active for multi-turn follow-ups. Reference a 
 
 Questions without a `#N` reference automatically answer at the PR level using the title and all findings as context. For reviews run after this feature, the underlying diff is stored alongside the session, so these general follow-ups can also draw on the actual code changes — not just the findings summary — giving more grounded answers to broad questions like "did I introduce a regression?".
 
-Each AI response ends with a `_~N estimated tokens_` line (using a `chars/4` heuristic — VS Code's LM API does not expose exact counts).
+To see what each answer cost in tokens, turn on `ticketSidekick.bitbucket.showTokenUsage` — see [Token usage](#token-usage).
 
 To exit the review session, reply `c` or `cancel`:
 
@@ -119,6 +119,26 @@ add that this affects all authenticated endpoints
 ```
 
 > **Note (Bitbucket Cloud):** Posting comments requires the **Pull requests: Write** scope on your App Password. See [Store your Bitbucket credentials](../../README.md#3-store-your-bitbucket-credentials) in the main README.
+
+## Token usage
+
+Set `ticketSidekick.bitbucket.showTokenUsage` to `true` and every `@bitbucket` answer ends with one line:
+
+```
+Tokens: 41,230 in · 6,840 out · claude-sonnet-4.5 · budget 90,000
+```
+
+The budget segment appears on reviews only. Counts come from the editor's tokenizer for the selected model and are approximate; a `~` marks figures that had to be estimated. Cache reads, cache writes, and reasoning tokens are not available and are not counted.
+
+Whether or not the line is shown, `@bitbucket` keeps a running total per month and model on your machine. Run `@bitbucket usage` to see it:
+
+```
+| Month   | Model             | Input     | Output  | Calls |
+| ------- | ----------------- | --------: | ------: | ----: |
+| 2026-10 | claude-sonnet-4.5 | 1,240,000 | 188,000 |    27 |
+```
+
+The table covers the current month and the two before it; older months are deleted. Only counters are stored, never PR content. The totals are meant for comparing against current API prices yourself — the extension holds no prices and your Copilot plan may bill differently. Totals are per machine and do not sync.
 
 ## Reducing token usage on large PRs
 

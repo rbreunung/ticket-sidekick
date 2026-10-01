@@ -15,7 +15,7 @@ Several gaps surfaced during daily use of the `@bitbucket` review participant:
 All LLM call sites in the follow-up path (explain, general question, comment refinement) are now wrapped in try/catch. Errors surface as `**Follow-up failed: …**` while keeping the session marker alive so the user can retry.
 
 ### Token footer
-Every AI-powered response (review chunks, follow-up answers, comment refinements) appends `_~N estimated tokens_` at the bottom. The estimate uses `(inputChars + outputChars) / 4` — the same heuristic used internally for context budgeting. Actual token counts are not exposed by the VS Code LM API, so this is a ballpark.
+With `ticketSidekick.bitbucket.showTokenUsage` on (default off), every AI-powered response (review, follow-up answers, comment refinements) ends with `_Tokens: <in> in · <out> out · <model>_`. Counts come from the model's own token counter and are approximate; see [Token usage](review-process.md#token-usage).
 
 ### General PR questions
 Asking a question without a `#N` finding reference (e.g. `is the change scoped correctly?`) now answers at the PR level — a prompt including the PR title and all findings is sent to the LLM. Previously this hit a dead end.
