@@ -125,8 +125,6 @@ export interface ReviewTally {
   /** Present only when the critic ran (deep mode). */
   droppedByCritic?: number;
   anyBatchFailed: boolean;
-  inputChars: number;
-  outputChars: number;
 }
 
 /**

@@ -111,7 +111,7 @@ Product Contract preservation: restructured, no scope change. The multi-model as
 - KTD7. **Model key is `model.id`,** shown as-is in the footer and the table. Governs R3, R5, R8.
 - KTD8. **Setting is `ticketSidekick.bitbucket.showTokenUsage`** (boolean, default `false`), named after `showConnectionInfo`. Governs R1, R2.
 - KTD9. **`usage` is routed right after `check`,** before connection-info output, session detection, and the Bitbucket-configured gate, so it works without credentials. It answers to `@bitbucket /usage` and to a prompt that is exactly the word `usage` (case-insensitive); any prompt containing a PR URL is never a usage request. Governs R8. Inside an active review session, a reply that is exactly `usage` is therefore treated as this command, not as a follow-up question.
-- KTD10. **The existing character tallies stay.** They feed the budget log lines and the structured diagnostic record, not the footer, so diagnostics are unchanged.
+- KTD10. **The old character tallies are removed.** Once the footer is built from the meter, nothing reads `inputChars`/`outputChars`; the funnel and diagnostic record never did. Their accumulators, the stored-session fields, and `runContinuation`'s `promptChars`/`responseChars` return values go with the old footer.
 
 ### High-Level Technical Design
 

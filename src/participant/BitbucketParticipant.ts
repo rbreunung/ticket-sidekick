@@ -321,7 +321,7 @@ async function runContinuation(params: {
   token: vscode.CancellationToken;
   logReview: (level: 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>) => void;
   stream: vscode.ChatResponseStream;
-}): Promise<{ reply: ParsedReviewReply; promptChars: number; responseChars: number }> {
+}): Promise<{ reply: ParsedReviewReply }> {
   const { pass, files, alreadyReported, buildPrompt, batchNum, totalBatches, batchStatus, runTag, request, token, logReview, stream } = params;
   logReview('info', formatRecoveryDecision(runTag, { kind: 'continuation', batch: batchNum, totalBatches, fileCount: files.length }));
   stream.markdown(formatContinuationMessage(files.length));
@@ -345,7 +345,7 @@ async function runContinuation(params: {
     itemCount: files.length, promptChars: prompt.length, responseChars: raw.length,
     durationMs: attemptOut.durationMs, status: reply.truncated ? 'truncated' : 'ok',
   }));
-  return { reply, promptChars: prompt.length, responseChars: raw.length };
+  return { reply };
 }
 
 /**
@@ -377,16 +377,12 @@ async function runPersonaPassesForChunk(params: {
   findings: Array<Omit<ReviewFinding, 'id'>>;
   rawCount: number;
   droppedOutsidePr: number;
-  inputChars: number;
-  outputChars: number;
   anyFailed: boolean;
 }> {
   const { personas, chunk, batchNum, totalBatches, pr, service, extraInstructions, request, token, runTag, batchStatus, logReview, stream } = params;
   let findings: Array<Omit<ReviewFinding, 'id'>> = [];
   let rawCount = 0;
   let droppedOutsidePr = 0;
-  let inputChars = 0;
-  let outputChars = 0;
   let anyFailed = false;
 
   for (const persona of personas) {
@@ -399,9 +395,7 @@ async function runPersonaPassesForChunk(params: {
         const attempt = personaTracker.start(files);
         const prompt = service.buildPersonaPrompt(persona, pr, files, undefined, extraInstructions);
         personaPromptChars = prompt.length;
-        inputChars += prompt.length;
         const raw = await callLLMOnceWithProgress(prompt, request.model, token, batchStatus);
-        outputChars += raw.length;
         assertReadableReply(raw);
         const status = parseReviewReply(raw).truncated ? 'truncated' : 'ok';
         logReview('info', formatCallLine({
@@ -443,8 +437,6 @@ async function runPersonaPassesForChunk(params: {
             buildPrompt: (reported) => service.buildPersonaPrompt(persona, pr, batch.items, undefined, extraInstructions, { alreadyReported: reported }),
             batchNum, totalBatches, batchStatus, runTag, request, token, logReview, stream,
           });
-          inputChars += cont.promptChars;
-          outputChars += cont.responseChars;
           const contResolved = resolveFindingAnchors(cont.reply.findings as Array<Omit<ReviewFinding, 'id'>>, batch.items);
           rawCount += cont.reply.findings.length;
           droppedOutsidePr += contResolved.droppedOutsidePr;
@@ -462,7 +454,7 @@ async function runPersonaPassesForChunk(params: {
     }
   }
 
-  return { findings, rawCount, droppedOutsidePr, inputChars, outputChars, anyFailed };
+  return { findings, rawCount, droppedOutsidePr, anyFailed };
 }
 
 /** Token budget per review call: `modelContextTokens` setting → model API → fallback, × `contextBudgetRatio`. */
@@ -822,7 +814,7 @@ export function createBitbucketParticipant(
       const tally: ReviewTally = {
         ...(session.phase1Tally ?? {
           raw: session.phase1Findings.length, dedupedEarlier: 0, droppedOutsidePr: 0, retractedByPass2: 0,
-          anyBatchFailed: false, inputChars: 0, outputChars: 0,
+          anyBatchFailed: false,
         }),
       };
 
@@ -841,8 +833,6 @@ export function createBitbucketParticipant(
             personas: selectedPersonas, chunk: session.chunks[i], batchNum: i + 1, totalBatches: session.chunks.length,
             pr, service, extraInstructions, request: modelRequest, token, runTag, batchStatus, logReview, stream,
           });
-          tally.inputChars += personaResult.inputChars;
-          tally.outputChars += personaResult.outputChars;
           tally.raw += personaResult.rawCount;
           tally.droppedOutsidePr += personaResult.droppedOutsidePr;
           if (personaResult.anyFailed) tally.anyBatchFailed = true;
@@ -1266,8 +1256,6 @@ export function createBitbucketParticipant(
 
       let allFindings: Array<Omit<ReviewFinding, 'id'>> = [];
       let fileOffset = 0;
-      let totalInputChars = 0;
-      let totalOutputChars = 0;
       // Session-level cache so a file requested in batch 2 isn't re-fetched in batch 5.
       const fetchedFileCache = new Map<string, string>();
 
@@ -1308,9 +1296,7 @@ export function createBitbucketParticipant(
             const attempt = pass1Tracker.start(files);
             const prompt = service.buildPrompt(pr, files, undefined, extraInstructions, resolvedMode === 'smart');
             pass1PromptChars = prompt.length;
-            totalInputChars += prompt.length;
             const raw = await callLLMOnceWithProgress(prompt, model, token, batchStatus);
-            totalOutputChars += raw.length;
             assertReadableReply(raw);
             const status = parseReviewReply(raw).truncated ? 'truncated' : 'ok';
             logReview('info', formatCallLine({
@@ -1389,8 +1375,6 @@ export function createBitbucketParticipant(
                 ),
                 batchNum: i + 1, totalBatches: chunks.length, batchStatus, runTag, request: modelRequest, token, logReview, stream,
               });
-              totalInputChars += cont.promptChars;
-              totalOutputChars += cont.responseChars;
               // The cut-off reply never reached its meta line, so the continuation's is this
               // batch's only chance to contribute a smart-mode persona recommendation.
               if (resolvedMode === 'smart' && cont.reply.hasMetaLine) {
@@ -1429,7 +1413,6 @@ export function createBitbucketParticipant(
                 const pass2Prompt = service.buildPrompt(
                   pr, batch.items, extraContents, extraInstructions, false, { priorFindings: batchFindings },
                 );
-                totalInputChars += pass2Prompt.length;
                 const pass2Attempt: CallAttemptOut = { attempt: 0, durationMs: 0 };
                 const pass2Raw = await callLLMWithProgress(
                   pass2Prompt, model, token, `${batchStatus} pass 2`,
@@ -1443,7 +1426,6 @@ export function createBitbucketParticipant(
                   },
                   assertReadableReply,
                 );
-                totalOutputChars += pass2Raw.length;
                 const pass2 = parseReviewReply(pass2Raw);
                 logReview('info', formatCallLine({
                   runTag, pass: 'pass2', batch: i + 1, totalBatches: chunks.length, attempt: pass2Attempt.attempt,
@@ -1497,8 +1479,6 @@ export function createBitbucketParticipant(
             personas: activePersonas, chunk, batchNum: i + 1, totalBatches: chunks.length,
             pr, service, extraInstructions, request: modelRequest, token, runTag, batchStatus, logReview, stream,
           });
-          totalInputChars += personaResult.inputChars;
-          totalOutputChars += personaResult.outputChars;
           rawFindingsTotal += personaResult.rawCount;
           droppedOutsidePrTotal += personaResult.droppedOutsidePr;
           if (personaResult.anyFailed) anyBatchFailed = true;
@@ -1526,9 +1506,7 @@ export function createBitbucketParticipant(
                 pr, relevantDiffs, findingsSubset, extraInstructions, criticContext.size > 0 ? criticContext : undefined,
               );
               criticPromptChars = prompt.length;
-              totalInputChars += prompt.length;
               const raw = await callLLMOnceWithProgress(prompt, model, token, `${batchStatus} verifying`);
-              totalOutputChars += raw.length;
               logReview('info', formatCallLine({
                 runTag, pass: 'critic', batch: i + 1, totalBatches: chunks.length, attempt,
                 itemCount: findingsSubset.length, promptChars: prompt.length, responseChars: raw.length,
@@ -1589,7 +1567,6 @@ export function createBitbucketParticipant(
                   const round2Prompt = service.buildCriticPrompt(
                     pr, relevantDiffs, batch.items, round2Instructions, extraContents,
                   );
-                  totalInputChars += round2Prompt.length;
                   const round2Attempt: CallAttemptOut = { attempt: 0, durationMs: 0 };
                   const round2Raw = await callLLMWithProgress(
                     round2Prompt, model, token, `${batchStatus} verifying (round 2)`,
@@ -1602,7 +1579,6 @@ export function createBitbucketParticipant(
                       })),
                     },
                   );
-                  totalOutputChars += round2Raw.length;
                   // Only trust round 2 when its verdict is readable. A successful-but-garbled
                   // reply must not replace round 1's real keep decision with an unreadable one.
                   if (parseCriticKeep(round2Raw, batch.items.length) !== null) {
@@ -1688,7 +1664,7 @@ export function createBitbucketParticipant(
             phase1Tally: {
               raw: rawFindingsTotal, dedupedEarlier: allFindings.length - phase1Deduped.length,
               droppedOutsidePr: droppedOutsidePrTotal, retractedByPass2: retractedByPass2Total,
-              anyBatchFailed, inputChars: totalInputChars, outputChars: totalOutputChars,
+              anyBatchFailed,
             },
           });
         }
@@ -1712,8 +1688,6 @@ export function createBitbucketParticipant(
               personas: selectedPersonas, chunk, batchNum: i + 1, totalBatches: chunks.length,
               pr, service, extraInstructions, request: modelRequest, token, runTag, batchStatus, logReview, stream,
             });
-            totalInputChars += personaResult.inputChars;
-            totalOutputChars += personaResult.outputChars;
             rawFindingsTotal += personaResult.rawCount;
             droppedOutsidePrTotal += personaResult.droppedOutsidePr;
             if (personaResult.anyFailed) anyBatchFailed = true;
@@ -1728,7 +1702,7 @@ export function createBitbucketParticipant(
         tally: {
           raw: rawFindingsTotal, dedupedEarlier: 0, droppedOutsidePr: droppedOutsidePrTotal,
           retractedByPass2: retractedByPass2Total, ...(criticEnabled ? { droppedByCritic: criticDroppedTotal } : {}),
-          anyBatchFailed, inputChars: totalInputChars, outputChars: totalOutputChars,
+          anyBatchFailed,
         },
         tokenBudget, upfrontQuestion,
         ...(detailedDiagnostics ? { structuredRecord: { configLine, lines: recordedLines } } : {}),

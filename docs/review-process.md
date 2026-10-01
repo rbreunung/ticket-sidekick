@@ -437,9 +437,6 @@ With `ticketSidekick.bitbucket.showTokenUsage` on (default off), each answer end
 with `_Tokens: <in> in · <out> out · <model>_`; a review adds `· budget K`.
 Figures are the totals of all calls in that response; `~` marks estimated ones.
 
-The `inputChars`/`outputChars` tallies in `ReviewTally` are separate: they feed
-the diagnostic funnel and the stored session, not the footer.
-
 ## Follow-ups
 
 After a review, `ReviewSession` is stored in `workspaceState` with the findings,
