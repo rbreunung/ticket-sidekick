@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createAttemptTracker, errorCodeOf, handleAttemptFailure } from '../participant/bitbucket/reviewDiagnostics';
+import {
+  createAttemptTracker, errorCodeOf, handleAttemptFailure, describeErrorForLog,
+  formatBatchFailureNotice, formatReviewFailedMessage, PARTIAL_REVIEW_WARNING,
+} from '../participant/bitbucket/reviewDiagnostics';
+import { sanitizeDetails } from '../utils/logRedaction';
 
 describe('errorCodeOf', () => {
   it('returns the string code from a vscode.LanguageModelError-shaped error', () => {
@@ -89,11 +93,93 @@ describe('handleAttemptFailure', () => {
     expect(p.logReview).toHaveBeenCalledWith('error', expect.any(String));
   });
 
-  it('logs no recovery decision for a non-transient error, even on the unsplit batch\'s first attempt', () => {
+  it('logs no retry or split for a non-transient error, only the not-retried decision naming its class', () => {
     const p = baseParams({ err: Object.assign(new Error('nope'), { code: 'NoPermissions' }) });
     p.tracker.start(p.items);
     handleAttemptFailure(p);
-    expect(p.logReview).toHaveBeenCalledTimes(1);
+    expect(p.logReview).toHaveBeenCalledTimes(2);
     expect(p.logReview).toHaveBeenCalledWith('error', expect.any(String));
+    expect(p.logReview).toHaveBeenCalledWith('warn', expect.stringContaining('not retrying'));
+  });
+
+  it('explains why a plain TypeError ended after one attempt', () => {
+    const p = baseParams({ err: new TypeError('proxy invariant') });
+    p.tracker.start(p.items);
+    handleAttemptFailure(p);
+    expect(p.logReview).toHaveBeenCalledWith('warn', expect.stringContaining('TypeError'));
+    expect(p.logReview).not.toHaveBeenCalledWith('info', expect.stringContaining('retry'));
+  });
+
+  it('logs the not-retried decision for a split half too, since a non-transient error ends it there', () => {
+    const half = ['a'];
+    const p = baseParams({ err: new TypeError('x'), items: half });
+    p.tracker.start(half);
+    handleAttemptFailure(p);
+    expect(p.logReview).toHaveBeenCalledWith('warn', expect.stringContaining('not retrying'));
+  });
+});
+
+describe('describeErrorForLog', () => {
+  it('names a plain TypeError and keeps at most three stack frames without directories', () => {
+    const err = new TypeError('boom');
+    err.stack = [
+      'TypeError: boom',
+      '    at createTokenMeter (/home/me/.vscode/extensions/x/out/tokenMeter.js:130:5)',
+      '    at async callLLMOnce (/home/me/.vscode/extensions/x/out/BitbucketParticipant.js:128:20)',
+      '    at /home/me/.vscode/extensions/x/out/lmRetry.js:104:18',
+      '    at never.js:1:1',
+    ].join('\n');
+    const info = describeErrorForLog(err);
+    expect(info.errorName).toBe('TypeError');
+    expect(info.stackHead).toEqual([
+      'createTokenMeter (tokenMeter.js:130:5)',
+      'async callLLMOnce (BitbucketParticipant.js:128:20)',
+      'lmRetry.js:104:18',
+    ]);
+    expect(JSON.stringify(info)).not.toContain('/home/me');
+  });
+
+  it('keeps the provider code and skips the stack for a LanguageModelError-shaped error', () => {
+    const err = Object.assign(new Error('hiccup'), { name: 'LanguageModelError', code: 'Unknown' });
+    expect(describeErrorForLog(err)).toEqual({ errorName: 'LanguageModelError', code: 'Unknown' });
+  });
+
+  it('copes with a thrown string', () => {
+    expect(describeErrorForLog('just text')).toEqual({ errorName: 'string' });
+  });
+
+  it('produces keys that survive log redaction', () => {
+    const details = { ...describeErrorForLog(new TypeError('x')), metering: 'on', frozen: true };
+    expect(JSON.stringify(sanitizeDetails(details))).not.toContain('REDACTED');
+  });
+});
+
+describe('failure wording', () => {
+  const transient = Object.assign(new Error('hiccup'), { code: 'Unknown' });
+
+  it('says "after retrying" only for an error class the retry layer retries', () => {
+    expect(formatBatchFailureNotice({ label: 'Batch 1', filePaths: 'a.ts', cause: 'hiccup', err: transient })).toContain('after retrying');
+    expect(formatBatchFailureNotice({ label: 'Batch 1', filePaths: 'a.ts', cause: 'proxy invariant', err: new TypeError('x') })).not.toContain('after retrying');
+  });
+
+  it('names the label, the files and the cause in the batch notice', () => {
+    const text = formatBatchFailureNotice({ label: 'Security pass — batch 2', filePaths: 'a.ts, b.ts', cause: 'boom', err: new TypeError('x') });
+    expect(text).toContain('Security pass — batch 2');
+    expect(text).toContain('a.ts, b.ts');
+    expect(text).toContain('boom');
+  });
+
+  it('keeps the partial-results warning free of retry claims', () => {
+    expect(PARTIAL_REVIEW_WARNING).toContain('partial results');
+    expect(PARTIAL_REVIEW_WARNING).not.toContain('after retrying');
+  });
+
+  it('states that nothing was reviewed, with the count, the cause and the output channel, and never "No issues found"', () => {
+    const text = formatReviewFailedMessage({ fileCount: 1, cause: 'proxy invariant' });
+    expect(text).toContain('Review failed');
+    expect(text).toContain('1 file');
+    expect(text).toContain('proxy invariant');
+    expect(text).toContain('Ticket Sidekick');
+    expect(text).not.toContain('No issues found');
   });
 });

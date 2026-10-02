@@ -41,6 +41,65 @@ export function errorCodeOf(err: unknown): string | undefined {
 
 export { createAttemptTracker };
 
+/** What a log line needs to tell a provider failure from a bug in our own code. */
+export interface ErrorLogInfo {
+  errorName: string;
+  code?: string;
+  /** Top frames as `function (file:line:col)`, only for errors with no provider code. */
+  stackHead?: string[];
+}
+
+const STACK_HEAD_FRAMES = 3;
+
+export function errorNameOf(err: unknown): string {
+  return err instanceof Error ? err.name : typeof err;
+}
+
+/** `at fn (/dir/file.ts:1:2)` → `fn (file.ts:1:2)`; directories are dropped so a pasted log leaks no home path. */
+function trimStackFrame(line: string): string | undefined {
+  const match = /^at\s+(?:(.*?)\s+\()?(.*?)\)?$/.exec(line.trim());
+  if (!match) return undefined;
+  const location = match[2].split(/[\\/]/).pop() ?? '';
+  if (!location) return undefined;
+  return match[1] ? `${match[1]} (${location})` : location;
+}
+
+/** Keys here must stay clear of `logRedaction`'s secret words (the standalone word "token"). */
+export function describeErrorForLog(err: unknown): ErrorLogInfo {
+  const info: ErrorLogInfo = { errorName: errorNameOf(err) };
+  if (!(err instanceof Error)) return info;
+  const code = errorCodeOf(err);
+  if (code !== undefined) {
+    info.code = code;
+    return info;
+  }
+  const frames = (err.stack ?? '').split('\n')
+    .filter((line) => line.trim().startsWith('at '))
+    .slice(0, STACK_HEAD_FRAMES)
+    .map(trimStackFrame)
+    .filter((frame): frame is string => frame !== undefined);
+  if (frames.length > 0) info.stackHead = frames;
+  return info;
+}
+
+/** The per-batch notice; "after retrying" only when the error is of a class the retry layer retries. */
+export function formatBatchFailureNotice(params: { label: string; filePaths: string; cause: string; err: unknown }): string {
+  const retried = isTransientLmError(params.err) ? ' after retrying' : '';
+  return `_⚠ ${params.label} — could not review ${params.filePaths}${retried}: ${params.cause}_\n\n`;
+}
+
+export const PARTIAL_REVIEW_WARNING =
+  '_⚠ Some batches had failures — showing partial results. See the "Ticket Sidekick" output channel for details._\n\n';
+
+/** The result of a review in which no file got a readable reply — never the "No issues found" a clean review shows. */
+export function formatReviewFailedMessage(params: { fileCount: number; cause: string }): string {
+  return (
+    `**Review failed:** no file could be reviewed (${params.fileCount} file${params.fileCount !== 1 ? 's' : ''}). ` +
+    `Cause: ${params.cause}\n\n` +
+    `Nothing was stored as a review. Try again, or see the "Ticket Sidekick" output channel for details.`
+  );
+}
+
 type LogReviewFn = (level: 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>) => void;
 
 /**
@@ -85,7 +144,13 @@ export function handleAttemptFailure<T>(params: {
     status: 'error', errorCode: errorCodeOf(err),
   }));
 
-  if (!isTransientLmError(err) || items !== originalItems) return;
+  if (!isTransientLmError(err)) {
+    logReview('warn', formatRecoveryDecision(runTag, {
+      kind: 'give-up', pass, batch, totalBatches, errorName: errorNameOf(err),
+    }));
+    return;
+  }
+  if (items !== originalItems) return;
 
   if (originalItems.length <= 1) {
     // Single-item chunk can't split further — it gets the plain 3-identical-

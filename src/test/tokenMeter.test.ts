@@ -136,3 +136,64 @@ describe('createTokenMeter', () => {
     expect(createTokenMeter(fakeModel(), vi.fn()).modelId).toBe('claude-sonnet-4.5');
   });
 });
+
+describe('createTokenMeter on read-only host objects', () => {
+  it('meters a frozen model and counts a frozen reply', async () => {
+    const record = vi.fn().mockResolvedValue(undefined);
+    const model = fakeModel({ chunks: ['hello'], countInput: () => 7, countOutput: () => 3 });
+    const sendRequest = model.sendRequest.bind(model);
+    // The host freezes its model and its replies: every property is read-only and non-configurable.
+    Object.assign(model, { sendRequest: async (m: Msg[]) => Object.freeze(await sendRequest(m)) });
+    Object.freeze(model);
+    const meter = createTokenMeter(model, record);
+
+    expect(await drain(await meter.model.sendRequest([msg('q')]))).toBe('hello');
+    expect(meter.totals()).toEqual({ input: 7, output: 3, calls: 1, estimated: false });
+    expect(record).toHaveBeenCalledWith('claude-sonnet-4.5', { input: 7, output: 3, estimated: false });
+    expect(meter.metered).toBe(true);
+  });
+
+  it('reads every other property and method of a frozen model through unchanged', async () => {
+    const { model } = createTokenMeter(Object.freeze(fakeModel()), vi.fn().mockResolvedValue(undefined));
+    expect(model.id).toBe('claude-sonnet-4.5');
+    expect(model.family).toBe('claude-sonnet');
+    expect(model.maxInputTokens).toBe(100_000);
+    expect(await model.countTokens('abcd')).toBe(4);
+  });
+
+  it('keeps the model as `this` for methods that use private state', async () => {
+    class PrivateStateModel {
+      readonly id = 'private-state';
+      #windowSize = 128;
+      async countTokens(): Promise<number> { return this.#windowSize; }
+      async sendRequest() { return { text: (async function* () { yield 'ok'; })() }; }
+    }
+    const { model } = createTokenMeter(Object.freeze(new PrivateStateModel()) as unknown as MeterableModel, vi.fn().mockResolvedValue(undefined));
+    expect(await model.countTokens('x')).toBe(128);
+  });
+
+  it('reads getter-based properties through', () => {
+    const base = fakeModel();
+    const withGetter = Object.freeze(Object.create(base, { family: { get: () => 'from-getter', enumerable: true } }));
+    const { model } = createTokenMeter(withGetter as typeof base, vi.fn());
+    expect(model.family).toBe('from-getter');
+  });
+
+  it('answers `in` for real properties only', () => {
+    const { model } = createTokenMeter(Object.freeze(fakeModel()), vi.fn());
+    expect('family' in model).toBe(true);
+    expect('nonsense' in model).toBe(false);
+  });
+
+  it.each(['sendRequest', 'countTokens'] as const)('falls back to the raw model when reading `%s` throws', (property) => {
+    const onDiag = vi.fn();
+    const raw = fakeModel();
+    Object.defineProperty(raw, property, { get() { throw new TypeError(`${property} is unreadable`); }, configurable: true });
+    const meter = createTokenMeter(raw, vi.fn(), onDiag);
+
+    expect(meter.model).toBe(raw);
+    expect(meter.metered).toBe(false);
+    expect(meter.totals()).toEqual({ input: 0, output: 0, calls: 0, estimated: false });
+    expect(onDiag).toHaveBeenCalledWith('warn', expect.stringContaining('metering'), expect.objectContaining({ errorName: 'TypeError' }));
+  });
+});

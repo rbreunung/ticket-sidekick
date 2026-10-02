@@ -2096,6 +2096,13 @@ describe('formatRecoveryDecision', () => {
     expect(line).toContain('2 and 3');
   });
 
+  it('renders the not-retried decision with the error class', () => {
+    const line = formatRecoveryDecision('pr=PROJ/repo#42', { kind: 'give-up', pass: 'pass1', batch: 1, totalBatches: 1, errorName: 'TypeError' });
+    expect(line).toContain('not retrying');
+    expect(line).toContain('TypeError');
+    expect(line).toContain('batch 1/1');
+  });
+
   it('renders the continuation-starting-with-N-files decision', () => {
     const line = formatRecoveryDecision('pr=PROJ/repo#42', { kind: 'continuation', batch: 1, totalBatches: 2, fileCount: 5 });
     expect(line).toContain('continuation starting with 5 file(s)');

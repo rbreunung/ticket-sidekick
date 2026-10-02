@@ -1,10 +1,15 @@
 /**
  * Counts the tokens of every call a chat model makes during one `@bitbucket` response.
  *
- * `createTokenMeter` wraps the model in a proxy that overrides only `sendRequest`: input is counted
+ * `createTokenMeter` wraps the model in a proxy that replaces only `sendRequest`: input is counted
  * once the provider accepts the request, output when the reply stream ends, breaks, or is abandoned.
  * Every other property and method reads through to the original model. Typed structurally (no
  * `vscode` import) so Vitest can load it; the participant passes in the real `LanguageModelChat`.
+ *
+ * The host may hand over frozen objects whose properties are read-only and non-configurable. A proxy
+ * whose `get` trap returns anything but the real value for such a property throws, so both wrappers
+ * proxy an empty target and read from the real object themselves. If the model still cannot be wrapped,
+ * the meter fails open: the raw model is returned and the response simply goes uncounted.
  */
 import type { TokenFigures } from '../../utils/tokenUsage';
 import type { DiagLogger } from '../../utils/diagTypes';
@@ -29,6 +34,8 @@ export interface TokenMeter<M> {
   /** The wrapped model; use it for every model call in the response. */
   model: M;
   modelId: string;
+  /** False when the model could not be wrapped and calls go uncounted. */
+  metered: boolean;
   totals(): MeterTotals;
 }
 
@@ -112,21 +119,46 @@ export function createTokenMeter<M extends MeterableModel>(
       return counted;
     };
 
-    return new Proxy(response, {
-      get(target, prop) {
+    // Empty target: the proxy invariants only look at the target's own properties, so a frozen reply
+    // can never make this wrapper throw.
+    return new Proxy({} as typeof response, {
+      get(_target, prop) {
         if (prop === 'text') return text();
-        return Reflect.get(target, prop, target);
+        return Reflect.get(response, prop, response);
       },
+      has: (_target, prop) => prop in response,
     });
   }
 
-  const wrapped = new Proxy(model, {
-    get(target, prop) {
+  const wrapped = new Proxy({} as M, {
+    get(_target, prop) {
       if (prop === 'sendRequest') return sendRequest;
-      const value = Reflect.get(target, prop, target);
-      return typeof value === 'function' ? value.bind(target) : value;
+      const value = Reflect.get(model, prop, model);
+      return typeof value === 'function' ? value.bind(model) : value;
     },
+    has: (_target, prop) => prop in model,
   });
 
-  return { model: wrapped, modelId: model.id, totals: () => ({ ...totals }) };
+  try {
+    // `wrapped.sendRequest` never touches the real model, so probe the real one.
+    if (typeof Reflect.get(model, 'sendRequest', model) !== 'function') throw new TypeError('the model has no callable sendRequest');
+    void wrapped.countTokens;
+    void wrapped.id;
+  } catch (err) {
+    onDiag?.('warn', 'Token metering disabled — the model could not be wrapped; this response goes uncounted', {
+      errorName: err instanceof Error ? err.name : typeof err,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return { model, modelId: safeModelId(model), metered: false, totals: () => ({ input: 0, output: 0, calls: 0, estimated: false }) };
+  }
+
+  return { model: wrapped, modelId: model.id, metered: true, totals: () => ({ ...totals }) };
+}
+
+function safeModelId(model: { id?: unknown }): string {
+  try {
+    return typeof model.id === 'string' ? model.id : 'unknown';
+  } catch {
+    return 'unknown';
+  }
 }

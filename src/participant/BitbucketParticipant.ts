@@ -67,7 +67,8 @@ import { withLmRetry, withEasierRetry, isTransientLmError, PartialLmResponseErro
 import { logDiag } from '../utils/diagLog';
 import { sanitizeDetails } from '../utils/logRedaction';
 import {
-  errorCodeOf, handleAttemptFailure,
+  errorCodeOf, handleAttemptFailure, describeErrorForLog,
+  formatBatchFailureNotice, formatReviewFailedMessage, PARTIAL_REVIEW_WARNING,
   type CallAttemptOut, type CallDiagHooks,
 } from './bitbucket/reviewDiagnostics';
 
@@ -96,7 +97,7 @@ function logLmFailure(
   logDiag('bitbucket.review', 'error', `LLM call failed — ${contextLabel} (attempt ${attempt})`, {
     ...extra,
     error: err instanceof Error ? err.message : String(err),
-    code: errorCodeOf(err),
+    ...describeErrorForLog(err),
     cause: cause instanceof Error ? cause.message : cause !== undefined ? String(cause) : undefined,
     partialTextChars: partialText?.length,
     partialTextPreview: partialText?.slice(0, RAW_PREVIEW_CHARS),
@@ -378,12 +379,15 @@ async function runPersonaPassesForChunk(params: {
   rawCount: number;
   droppedOutsidePr: number;
   anyFailed: boolean;
+  /** True when at least one persona batch got a readable reply — it counts as review, not as failure. */
+  anySucceeded: boolean;
 }> {
   const { personas, chunk, batchNum, totalBatches, pr, service, extraInstructions, request, token, runTag, batchStatus, logReview, stream } = params;
   let findings: Array<Omit<ReviewFinding, 'id'>> = [];
   let rawCount = 0;
   let droppedOutsidePr = 0;
   let anyFailed = false;
+  let anySucceeded = false;
 
   for (const persona of personas) {
     const personaLabel = `${persona.id} batch ${batchNum}/${totalBatches}`;
@@ -421,9 +425,12 @@ async function runPersonaPassesForChunk(params: {
       if (batch.error !== undefined) {
         anyFailed = true;
         const filePaths = batch.items.map((f) => f.path).join(', ');
-        stream.markdown(`_⚠ ${persona.displayName} pass — batch ${batchNum} — could not review ${filePaths} after retrying: ${describeFailure(batch.error)}_\n\n`);
+        stream.markdown(formatBatchFailureNotice({
+          label: `${persona.displayName} pass — batch ${batchNum}`, filePaths, cause: describeFailure(batch.error), err: batch.error,
+        }));
         continue;
       }
+      anySucceeded = true;
       const { findings: batchFindings, truncated } = await parseReviewResponse(batch.result!);
       const pass1Resolved = resolveFindingAnchors(batchFindings, batch.items);
       let resolved = pass1Resolved.findings;
@@ -454,7 +461,7 @@ async function runPersonaPassesForChunk(params: {
     }
   }
 
-  return { findings, rawCount, droppedOutsidePr, anyFailed };
+  return { findings, rawCount, droppedOutsidePr, anyFailed, anySucceeded };
 }
 
 /** Token budget per review call: `modelContextTokens` setting → model API → fallback, × `contextBudgetRatio`. */
@@ -585,6 +592,8 @@ export function createBitbucketParticipant(
     );
     const model = meter.model;
     const modelRequest = { model };
+    // Logged on the review's opening lines: whether metering attached, and whether the host froze the model.
+    const hostModelState = { metering: meter.metered ? 'on' : 'off', frozen: Object.isFrozen(request.model) };
     const appendTokenFooter = (budget?: number): void => {
       if (!config.showTokenUsage) return;
       const totals = meter.totals();
@@ -706,6 +715,7 @@ export function createBitbucketParticipant(
       logReview('info', `PR review completed — ${numbered.length} finding(s)`, {
         project: ref.project, repo: ref.repo, prId: ref.prId,
         findingCount: numbered.length, fileCount: fileDiffs.length, batchCount, anyBatchFailed: tally.anyBatchFailed,
+        reviewedFileCount: tally.reviewedFileCount, failedFileCount: tally.failedFileCount,
       });
 
       // R6: findings funnel — where findings dropped and by which stage. KTD5/KTD6: no confidence
@@ -732,7 +742,7 @@ export function createBitbucketParticipant(
         }
       }
       if (tally.anyBatchFailed) {
-        stream.markdown(`_⚠ Some batches had failures after retrying — showing partial results. See the "Ticket Sidekick" output channel for details._\n\n`);
+        stream.markdown(PARTIAL_REVIEW_WARNING);
       }
       const droppedNotice = formatDroppedFindingsNotice({ outsidePr: tally.droppedOutsidePr, critic: tally.droppedByCritic ?? 0 });
       if (droppedNotice) stream.markdown(`${droppedNotice}\n\n`);
@@ -847,7 +857,7 @@ export function createBitbucketParticipant(
         });
       } catch (err) {
         logDiag('bitbucket.review', 'error', `Smart-fallback resume failed — [${runTag}]`, {
-          runTag, error: err instanceof Error ? err.message : String(err),
+          runTag, error: err instanceof Error ? err.message : String(err), ...describeErrorForLog(err),
         });
         stream.markdown(friendlyLmFailureMessage('**Review failed:**', err));
       }
@@ -879,7 +889,7 @@ export function createBitbucketParticipant(
           appendTokenFooter();
           return result;
         } catch (err) {
-          logDiag('bitbucket.followup', 'error', 'Comment refinement failed', { error: err instanceof Error ? err.message : String(err) });
+          logDiag('bitbucket.followup', 'error', 'Comment refinement failed', { error: err instanceof Error ? err.message : String(err), ...describeErrorForLog(err) });
           stream.markdown(friendlyLmFailureMessage('**Refinement failed:**', err));
           return { metadata: { bitbucketSession: { kinds: ['comment-preview'] } } };
         }
@@ -1018,7 +1028,7 @@ export function createBitbucketParticipant(
           return reviewSessionResult;
 
         } catch (err) {
-          logDiag('bitbucket.followup', 'error', 'Follow-up handling failed', { error: err instanceof Error ? err.message : String(err) });
+          logDiag('bitbucket.followup', 'error', 'Follow-up handling failed', { error: err instanceof Error ? err.message : String(err), ...describeErrorForLog(err) });
           stream.markdown(friendlyLmFailureMessage('**Follow-up failed:**', err));
           return reviewSessionResult;
         }
@@ -1154,6 +1164,7 @@ export function createBitbucketParticipant(
         reviewMode,
         criticEnabled,
         reviewContextLines: config.reviewContextLines ?? 12,
+        ...hostModelState,
       });
 
       // R6: findings-funnel counters. Tallied exactly once per per-file batch, on
@@ -1179,6 +1190,7 @@ export function createBitbucketParticipant(
         id: model.id,
         version: model.version,
         maxInputTokens: model.maxInputTokens,
+        ...hostModelState,
       });
       // Widen surrounding context (default 12) so the reviewer sees the enclosing code,
       // not just the changed lines. Applies in quick mode too — only Pass 2 is skipped there.
@@ -1267,6 +1279,13 @@ export function createBitbucketParticipant(
       };
 
       let anyBatchFailed = false;
+      // KTD3: "failed" is a count, not the boolean above. Files in pass-1 batches that did / did not get a
+      // readable reply feed the reported counts; a persona batch with a reply only keeps the review from
+      // counting as failed (personas re-run the same files, so they never add to the counts).
+      let reviewedFileCount = 0;
+      let failedFileCount = 0;
+      let firstFailure: string | undefined;
+      let anyPersonaSucceeded = false;
 
       // One entry per chunk, populated only in `smart` mode — each chunk's standard pass's
       // own recommendation, or `undefined` when the call failed or the trailer's
@@ -1330,10 +1349,14 @@ export function createBitbucketParticipant(
         for (const batch of pass1Batches) {
           if (batch.error !== undefined) {
             anyBatchFailed = true;
+            failedFileCount += batch.items.length;
             const filePaths = batch.items.map((f) => f.path).join(', ');
-            stream.markdown(`_⚠ Batch ${i + 1} — could not review ${filePaths} after retrying: ${describeFailure(batch.error)}_\n\n`);
+            const cause = describeFailure(batch.error);
+            firstFailure ??= cause;
+            stream.markdown(formatBatchFailureNotice({ label: `Batch ${i + 1}`, filePaths, cause, err: batch.error }));
             continue;
           }
+          reviewedFileCount += batch.items.length;
 
           const { findings, additionalFilesNeeded, truncated, hasMetaLine, danglingTail, recommendedPersonas } =
             await parseReviewResponse(batch.result!);
@@ -1482,6 +1505,7 @@ export function createBitbucketParticipant(
           rawFindingsTotal += personaResult.rawCount;
           droppedOutsidePrTotal += personaResult.droppedOutsidePr;
           if (personaResult.anyFailed) anyBatchFailed = true;
+          if (personaResult.anySucceeded) anyPersonaSucceeded = true;
           chunkFindings = chunkFindings.concat(personaResult.findings);
         }
 
@@ -1644,6 +1668,17 @@ export function createBitbucketParticipant(
         }
       }
 
+      // R4/R5: nothing was reviewed — say so instead of finishing as a review that found nothing. This
+      // follows the abort path's contract (no stored session, no walkthrough signal, no chips), and it
+      // runs before smart mode's persona question, which would otherwise ask about a review that never ran.
+      if (reviewedFileCount === 0 && !anyPersonaSucceeded) {
+        logReview('error', `Review failed — no file could be reviewed — ${runTag}`, {
+          runTag, fileCount: fileDiffs.length, batchCount: chunks.length, reviewedFileCount, failedFileCount, firstFailure,
+        });
+        stream.markdown(formatReviewFailedMessage({ fileCount: fileDiffs.length, cause: firstFailure ?? 'unknown' }));
+        return;
+      }
+
       // U7/R4/R6/R7: smart mode's phase 2 — run once, after every chunk's standard pass
       // (phase 1, the loop above) has returned, over the SAME chunks, for the PR-wide
       // aggregated persona set (never per-chunk — see the note above the loop).
@@ -1664,7 +1699,7 @@ export function createBitbucketParticipant(
             phase1Tally: {
               raw: rawFindingsTotal, dedupedEarlier: allFindings.length - phase1Deduped.length,
               droppedOutsidePr: droppedOutsidePrTotal, retractedByPass2: retractedByPass2Total,
-              anyBatchFailed,
+              anyBatchFailed, reviewedFileCount, failedFileCount,
             },
           });
         }
@@ -1702,7 +1737,7 @@ export function createBitbucketParticipant(
         tally: {
           raw: rawFindingsTotal, dedupedEarlier: 0, droppedOutsidePr: droppedOutsidePrTotal,
           retractedByPass2: retractedByPass2Total, ...(criticEnabled ? { droppedByCritic: criticDroppedTotal } : {}),
-          anyBatchFailed,
+          anyBatchFailed, reviewedFileCount, failedFileCount,
         },
         tokenBudget, upfrontQuestion,
         ...(detailedDiagnostics ? { structuredRecord: { configLine, lines: recordedLines } } : {}),
@@ -1712,7 +1747,7 @@ export function createBitbucketParticipant(
       // silently never got here (e.g. a channel-write failure) — the funnel's absence
       // alone can't tell those apart.
       logDiag('bitbucket.review', 'error', `Review aborted — [${runTag}] last stage: ${lastStage}`, {
-        runTag, lastStage, error: err instanceof Error ? err.message : String(err),
+        runTag, lastStage, error: err instanceof Error ? err.message : String(err), ...describeErrorForLog(err),
       });
       stream.markdown(friendlyLmFailureMessage('**Review failed:**', err));
     }

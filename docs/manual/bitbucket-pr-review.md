@@ -63,6 +63,10 @@ _by Jane Smith → main · 3 files changed_
 → Use parameterised queries or a query builder instead.
 ```
 
+### When a review can't run
+
+If the model fails on every file, you see **Review failed** with the cause and a pointer to the "Ticket Sidekick" output channel (View → Output), never "No issues found". Nothing is stored, so there is nothing to follow up on; try again. If only some files fail, the findings you got are shown under a warning that some batches had failures, and the per-file notices name the files that could not be reviewed. "after retrying" appears only when the model was actually retried.
+
 ## Follow-ups and posting comments
 
 After a review, the session stays active for multi-turn follow-ups. Reference a finding by number, describe it in natural language, or ask any general question about the PR:
@@ -127,6 +131,8 @@ Set `ticketSidekick.bitbucket.showTokenUsage` to `true` and every `@bitbucket` a
 ```
 Tokens: 41,230 in · 6,840 out · claude-sonnet-4.5 · budget 90,000
 ```
+
+If the editor's model object cannot be wrapped for counting, the answer ends without the Tokens line, that response is not counted, and the output channel says why.
 
 The budget segment appears on reviews only. Counts come from the editor's tokenizer for the selected model and are approximate; a `~` marks figures that had to be estimated. Cache reads, cache writes, and reasoning tokens are not available and are not counted.
 
