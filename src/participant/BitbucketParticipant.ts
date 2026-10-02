@@ -592,6 +592,8 @@ export function createBitbucketParticipant(
     );
     const model = meter.model;
     const modelRequest = { model };
+    // Logged on the review's opening lines: whether metering attached, and whether the host froze the model.
+    const hostModelState = { metering: meter.metered ? 'on' : 'off', frozen: Object.isFrozen(request.model) };
     const appendTokenFooter = (budget?: number): void => {
       if (!config.showTokenUsage) return;
       const totals = meter.totals();
@@ -1162,8 +1164,7 @@ export function createBitbucketParticipant(
         reviewMode,
         criticEnabled,
         reviewContextLines: config.reviewContextLines ?? 12,
-        metering: meter.metered ? 'on' : 'off',
-        frozen: Object.isFrozen(request.model),
+        ...hostModelState,
       });
 
       // R6: findings-funnel counters. Tallied exactly once per per-file batch, on
@@ -1189,8 +1190,7 @@ export function createBitbucketParticipant(
         id: model.id,
         version: model.version,
         maxInputTokens: model.maxInputTokens,
-        metering: meter.metered ? 'on' : 'off',
-        frozen: Object.isFrozen(request.model),
+        ...hostModelState,
       });
       // Widen surrounding context (default 12) so the reviewer sees the enclosing code,
       // not just the changed lines. Applies in quick mode too — only Pass 2 is skipped there.

@@ -51,6 +51,10 @@ export interface ErrorLogInfo {
 
 const STACK_HEAD_FRAMES = 3;
 
+export function errorNameOf(err: unknown): string {
+  return err instanceof Error ? err.name : typeof err;
+}
+
 /** `at fn (/dir/file.ts:1:2)` → `fn (file.ts:1:2)`; directories are dropped so a pasted log leaks no home path. */
 function trimStackFrame(line: string): string | undefined {
   const match = /^at\s+(?:(.*?)\s+\()?(.*?)\)?$/.exec(line.trim());
@@ -62,8 +66,8 @@ function trimStackFrame(line: string): string | undefined {
 
 /** Keys here must stay clear of `logRedaction`'s secret words (the standalone word "token"). */
 export function describeErrorForLog(err: unknown): ErrorLogInfo {
-  if (!(err instanceof Error)) return { errorName: typeof err };
-  const info: ErrorLogInfo = { errorName: err.name };
+  const info: ErrorLogInfo = { errorName: errorNameOf(err) };
+  if (!(err instanceof Error)) return info;
   const code = errorCodeOf(err);
   if (code !== undefined) {
     info.code = code;
@@ -142,7 +146,7 @@ export function handleAttemptFailure<T>(params: {
 
   if (!isTransientLmError(err)) {
     logReview('warn', formatRecoveryDecision(runTag, {
-      kind: 'give-up', pass, batch, totalBatches, errorName: describeErrorForLog(err).errorName,
+      kind: 'give-up', pass, batch, totalBatches, errorName: errorNameOf(err),
     }));
     return;
   }
