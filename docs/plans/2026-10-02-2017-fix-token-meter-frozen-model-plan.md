@@ -106,7 +106,7 @@ Review outcome after the chunk loop (R4, R5, R6):
 | Reviewed files | Chat | Stored session, walkthrough signal, chips | Completion log |
 | --- | --- | --- | --- |
 | All batches readable | Findings, or "No issues found." | Yes | Info, finding count |
-| Some batches failed | Findings plus the partial-results warning | Yes | Info, finding count and failed-file count |
+| Some batches failed | Findings plus the partial-results warning | Yes | Info, finding count, reviewed and failed file counts |
 | None | "Review failed" with file count, cause, output-channel pointer | No | Error, reviewed and failed counts, first cause |
 
 ---
