@@ -1634,12 +1634,14 @@ export type ReviewPass =
   | 'pass1' | 'continuation' | 'pass2' | 'critic' | 'critic-r2'
   | 'security' | 'performance' | 'reliability' | 'maintainability';
 
-/** R5's three recovery-decision shapes — logged so a reader can follow what happened
+/** R5's recovery-decision shapes — logged so a reader can follow what happened
  * without knowing the retry/split algorithm. */
 export type RecoveryDecision =
   | { kind: 'retry'; pass: ReviewPass; batch: number; totalBatches: number; attempt: number }
   | { kind: 'split'; pass: ReviewPass; batch: number; totalBatches: number; leftCount: number; rightCount: number }
-  | { kind: 'continuation'; batch: number; totalBatches: number; fileCount: number };
+  | { kind: 'continuation'; batch: number; totalBatches: number; fileCount: number }
+  /** A non-transient error ends the call after one attempt — says so, so a one-attempt failure explains itself. */
+  | { kind: 'give-up'; pass: ReviewPass; batch: number; totalBatches: number; errorName: string };
 
 export function formatRecoveryDecision(runTag: string, decision: RecoveryDecision): string {
   const batchTag = `batch ${decision.batch}/${decision.totalBatches}`;
@@ -1650,6 +1652,8 @@ export function formatRecoveryDecision(runTag: string, decision: RecoveryDecisio
       return `[${runTag}] ${decision.pass} ${batchTag} — splitting into halves of ${decision.leftCount} and ${decision.rightCount} after repeated failure`;
     case 'continuation':
       return `[${runTag}] ${batchTag} — continuation starting with ${decision.fileCount} file(s)`;
+    case 'give-up':
+      return `[${runTag}] ${decision.pass} ${batchTag} — not retrying: ${decision.errorName} is not a transient provider error`;
   }
 }
 
