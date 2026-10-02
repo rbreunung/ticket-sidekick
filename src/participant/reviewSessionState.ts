@@ -125,6 +125,9 @@ export interface ReviewTally {
   /** Present only when the critic ran (deep mode). */
   droppedByCritic?: number;
   anyBatchFailed: boolean;
+  /** Files in pass-1 batches that did / did not get a readable reply. Optional: stored smart-fallback sessions predate them. */
+  reviewedFileCount?: number;
+  failedFileCount?: number;
 }
 
 /**

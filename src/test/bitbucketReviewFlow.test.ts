@@ -12,6 +12,10 @@ const h = vi.hoisted(() => ({
   clipboard: undefined as string | undefined,
   /** When set, the clipboard write rejects with this error. */
   clipboardError: undefined as Error | undefined,
+  /** Every line written to the "Ticket Sidekick" output channel. */
+  log: [] as string[],
+  /** Arguments of every `vscode.commands.executeCommand` call. */
+  commands: [] as unknown[][],
 }));
 
 vi.mock('vscode', () => {
@@ -37,11 +41,11 @@ vi.mock('vscode', () => {
       Assistant: (content: string) => ({ role: 'assistant', content }),
     },
     window: {
-      createOutputChannel: () => ({ appendLine: () => undefined }),
+      createOutputChannel: () => ({ appendLine: (line: string) => { h.log.push(line); } }),
       withProgress: (_opts: unknown, task: (progress: { report: () => void }) => unknown) => task({ report: () => undefined }),
     },
     ProgressLocation: { Window: 10 },
-    commands: { executeCommand: async () => undefined },
+    commands: { executeCommand: async (...args: unknown[]) => { h.commands.push(args); } },
     env: {
       clipboard: {
         writeText: async (text: string) => {
@@ -81,8 +85,11 @@ interface Harness {
   client: MockBitbucketClient;
   workspaceState: Map<string, unknown>;
   prompts: string[];
+  /** Output-channel lines and executed commands, since this harness was created. */
+  log: string[];
+  commands: unknown[][];
   /** Run one chat turn. A reply list is consumed in call order, and running out fails the call. */
-  turn(prompt: string, script: Script, history?: unknown[]): Promise<{ text: string; result: unknown }>;
+  turn(prompt: string, script: Script, history?: unknown[], options?: { freezeModel?: boolean }): Promise<{ text: string; result: unknown }>;
 }
 
 function createHarness(config: Partial<BitbucketConfig> = {}): Harness {
@@ -90,6 +97,8 @@ function createHarness(config: Partial<BitbucketConfig> = {}): Harness {
   h.client = client;
   h.clipboard = undefined;
   h.clipboardError = undefined;
+  h.log.length = 0;
+  h.commands.length = 0;
   const workspaceState = new Map<string, unknown>();
   const globalState = new Map<string, unknown>();
   const prompts: string[] = [];
@@ -119,7 +128,9 @@ function createHarness(config: Partial<BitbucketConfig> = {}): Harness {
     client,
     workspaceState,
     prompts,
-    async turn(prompt, script, history = []) {
+    log: h.log,
+    commands: h.commands,
+    async turn(prompt, script, history = [], options = {}) {
       const queue = Array.isArray(script) ? [...script] : [];
       let callIndex = 0;
       const model = {
@@ -132,9 +143,12 @@ function createHarness(config: Partial<BitbucketConfig> = {}): Harness {
           const next = Array.isArray(script) ? queue.shift() : script(sent, callIndex++);
           if (next === undefined) throw new Error('recorded-reply harness: no scripted reply left');
           if (next instanceof Error) throw next;
-          return { text: (async function* () { yield next; })() };
+          const reply = { text: (async function* () { yield next; })() };
+          // The editor hands over frozen replies as well as a frozen model.
+          return options.freezeModel ? Object.freeze(reply) : reply;
         },
       };
+      if (options.freezeModel) Object.freeze(model);
       const out: string[] = [];
       const stream = { markdown: (m: string | { value: string }) => { out.push(typeof m === 'string' ? m : m.value); } };
       const token = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => undefined }) };
@@ -209,14 +223,131 @@ describe('recorded-reply harness (U6)', () => {
     expect(session.findings.map((f) => f.title)).toEqual(['SQL injection']);
   });
 
-  it('shows the partial-failure banner when a batch fails on every try', async () => {
-    const harness = createHarness();
-    const { text } = await harness.turn(PR_URL, [
-      transientError(), transientError(), transientError(), transientError(),
-    ]);
+});
 
-    expect(text).toContain('Some batches had failures after retrying');
-    expect(text).toContain('No issues found');
+describe('failed reviews and read-only host objects', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const ONLY_LINE = 'const a = 1;';
+  const oneFileDiff = makeDiff([{ path: 'src/only.ts', lines: [ONLY_LINE] }]);
+  const logText = (harness: Harness): string => harness.log.join('\n');
+  const reviewCompletedSignals = (harness: Harness): unknown[][] =>
+    harness.commands.filter((c) => c[1] === 'ticketSidekick.firstReviewCompleted');
+
+  // AE1 / R1
+  it('completes a review when the editor freezes the model and its replies', async () => {
+    const harness = createHarness();
+    harness.client.rawDiff = oneFileDiff;
+    const { text } = await harness.turn(
+      PR_URL,
+      [[findingLine('src/only.ts', ONLY_LINE, 'Magic number'), META_LINE].join('\n')],
+      [],
+      { freezeModel: true },
+    );
+
+    expect(text).toContain('Magic number');
+    expect(text).not.toContain('Review failed');
+    const session = harness.workspaceState.get('bitbucket.session.review') as { findings: Array<{ title: string }> };
+    expect(session.findings.map((f) => f.title)).toEqual(['Magic number']);
+  });
+
+  // AE2 / R4, R5, R7, R8, R9, R10
+  it('reports a failed review when a one-file PR fails with a plain TypeError, and stores nothing', async () => {
+    const harness = createHarness();
+    harness.client.rawDiff = oneFileDiff;
+    const { text, result } = await harness.turn(PR_URL, () => new TypeError('proxy invariant'));
+
+    expect(harness.prompts).toHaveLength(1);
+    expect(text).toContain('Review failed');
+    expect(text).toContain('proxy invariant');
+    expect(text).not.toContain('No issues found');
+    expect(text).toContain('could not review src/only.ts');
+    expect(text).not.toContain('after retrying');
+    expect(result).toBeUndefined();
+    expect(harness.workspaceState.get('bitbucket.session.review')).toBeUndefined();
+    expect(reviewCompletedSignals(harness)).toHaveLength(0);
+
+    const log = logText(harness);
+    expect(log).toContain('not retrying: TypeError');
+    expect(log).toContain('"errorName":"TypeError"');
+    expect(log).toMatch(/\[ERROR\] \[bitbucket\.review\] Review failed/);
+    expect(log).not.toContain('PR review completed — 0 finding(s)');
+  });
+
+  // AE4 / R7
+  it('says "after retrying" when a one-file PR fails on a transient error every try', async () => {
+    const harness = createHarness();
+    harness.client.rawDiff = oneFileDiff;
+    const { text } = await harness.turn(PR_URL, () => transientError());
+
+    expect(harness.prompts).toHaveLength(3);
+    expect(text).toContain('could not review src/only.ts after retrying');
+    expect(text).toContain('Review failed');
+  });
+
+  // AE2 / R4, R5
+  it('reports a failed review when every batch of a multi-file PR fails on every try', async () => {
+    const harness = createHarness();
+    const { text } = await harness.turn(PR_URL, [transientError(), transientError(), transientError(), transientError()]);
+
+    expect(harness.prompts).toHaveLength(4);
+    expect(text).toContain('Review failed');
+    expect(text).not.toContain('No issues found');
+    expect(text).not.toContain('Some batches could not be reviewed');
+    expect(harness.workspaceState.get('bitbucket.session.review')).toBeUndefined();
+  });
+
+  // R5
+  it('does not ask for specialist lenses in smart mode when nothing was reviewed', async () => {
+    const harness = createHarness({ reviewMode: 'smart' });
+    const { text, result } = await harness.turn(PR_URL, () => transientError());
+
+    expect(text).toContain('Review failed');
+    expect(text).not.toContain('persona recommendation');
+    expect(result).toBeUndefined();
+  });
+
+  // AE3 / R6, R10
+  it('keeps partial results under a neutral warning when only some batches fail', async () => {
+    const harness = createHarness({ modelContextTokens: 3_000, contextBudgetRatio: 1 });
+    harness.client.rawDiff = makeDiff([
+      { path: 'src/f1.ts', lines: bulkyLines('One') },
+      { path: 'src/f2.ts', lines: bulkyLines('Two') },
+    ]);
+    const { text, result } = await harness.turn(PR_URL, (prompt) => (prompt.includes('### File: src/f1.ts')
+      ? transientError()
+      : [findingLine('src/f2.ts', 'const TwoValue = computeTwo();', 'Issue in Two'), META_LINE].join('\n')));
+
+    expect(text).toContain('Some batches could not be reviewed');
+    expect(text).not.toContain('Review failed');
+    expect(text).toContain('Issue in Two');
+    expect(result).toMatchObject({ metadata: { bitbucketFollowup: { kind: 'reviewCompleted' } } });
+    expect(harness.workspaceState.get('bitbucket.session.review')).toBeDefined();
+    expect(logText(harness)).toMatch(/"reviewedFileCount":1,"failedFileCount":1/);
+  });
+
+  // R5 / KTD3: persona batches count as review
+  it('keeps a deep review partial, not failed, when pass 1 fails but persona passes succeed', async () => {
+    const harness = createHarness({ reviewMode: 'deep' });
+    const { text } = await harness.turn(PR_URL, (prompt) => {
+      if (isCriticPrompt(prompt)) return keepAll(prompt);
+      if (isPersonaPrompt(prompt, 'security')) return [findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'SQL injection', 'critical'), META_LINE].join('\n');
+      if (prompt.includes('lens ONLY')) return META_LINE;
+      return transientError();
+    });
+
+    expect(text).not.toContain('Review failed');
+    expect(text).toContain('SQL injection');
+    expect(text).toContain('Some batches could not be reviewed');
+  });
+
+  // R11
+  it('records on the opening log line whether metering is on and whether the host model is frozen', async () => {
+    const harness = createHarness();
+    await harness.turn(PR_URL, [[findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'SQL injection', 'critical'), META_LINE].join('\n')], [], { freezeModel: true });
+
+    expect(logText(harness)).toMatch(/"metering":"on","frozen":true/);
   });
 });
 
@@ -619,7 +750,7 @@ describe('a resumed smart review finishes like an uninterrupted one (U11)', () =
     expect(first.text).toContain('couldn\'t determine a persona recommendation');
 
     const resumed = await harness.turn('standard', [], [sessionTurn(first.result)]);
-    expect(resumed.text).toContain('Some batches had failures after retrying');
+    expect(resumed.text).toContain('Some batches could not be reviewed');
     expect(resumed.text).toContain('Issue in Two');
   });
 });
