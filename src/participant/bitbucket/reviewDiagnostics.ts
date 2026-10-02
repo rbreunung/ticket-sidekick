@@ -89,7 +89,7 @@ export function formatBatchFailureNotice(params: { label: string; filePaths: str
 }
 
 export const PARTIAL_REVIEW_WARNING =
-  '_⚠ Some batches could not be reviewed — showing partial results. See the "Ticket Sidekick" output channel for details._\n\n';
+  '_⚠ Some batches had failures — showing partial results. See the "Ticket Sidekick" output channel for details._\n\n';
 
 /** The result of a review in which no file got a readable reply — never the "No issues found" a clean review shows. */
 export function formatReviewFailedMessage(params: { fileCount: number; cause: string }): string {

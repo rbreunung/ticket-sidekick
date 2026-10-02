@@ -65,7 +65,7 @@ _by Jane Smith → main · 3 files changed_
 
 ### When a review can't run
 
-If the model fails on every file, you see **Review failed** with the cause and a pointer to the "Ticket Sidekick" output channel (View → Output), never "No issues found". Nothing is stored, so there is nothing to follow up on; try again. If only some files fail, the findings you got are shown under a warning that some batches could not be reviewed, and the notice names the files. "after retrying" appears only when the model was actually retried.
+If the model fails on every file, you see **Review failed** with the cause and a pointer to the "Ticket Sidekick" output channel (View → Output), never "No issues found". Nothing is stored, so there is nothing to follow up on; try again. If only some files fail, the findings you got are shown under a warning that some batches had failures, and the per-file notices name the files that could not be reviewed. "after retrying" appears only when the model was actually retried.
 
 ## Follow-ups and posting comments
 

@@ -294,7 +294,7 @@ describe('failed reviews and read-only host objects', () => {
     expect(harness.prompts).toHaveLength(4);
     expect(text).toContain('Review failed');
     expect(text).not.toContain('No issues found');
-    expect(text).not.toContain('Some batches could not be reviewed');
+    expect(text).not.toContain('Some batches had failures');
     expect(harness.workspaceState.get('bitbucket.session.review')).toBeUndefined();
   });
 
@@ -319,7 +319,7 @@ describe('failed reviews and read-only host objects', () => {
       ? transientError()
       : [findingLine('src/f2.ts', 'const TwoValue = computeTwo();', 'Issue in Two'), META_LINE].join('\n')));
 
-    expect(text).toContain('Some batches could not be reviewed');
+    expect(text).toContain('Some batches had failures');
     expect(text).not.toContain('Review failed');
     expect(text).toContain('Issue in Two');
     expect(result).toMatchObject({ metadata: { bitbucketFollowup: { kind: 'reviewCompleted' } } });
@@ -339,7 +339,7 @@ describe('failed reviews and read-only host objects', () => {
 
     expect(text).not.toContain('Review failed');
     expect(text).toContain('SQL injection');
-    expect(text).toContain('Some batches could not be reviewed');
+    expect(text).toContain('Some batches had failures');
   });
 
   // R11
@@ -750,7 +750,7 @@ describe('a resumed smart review finishes like an uninterrupted one (U11)', () =
     expect(first.text).toContain('couldn\'t determine a persona recommendation');
 
     const resumed = await harness.turn('standard', [], [sessionTurn(first.result)]);
-    expect(resumed.text).toContain('Some batches could not be reviewed');
+    expect(resumed.text).toContain('Some batches had failures');
     expect(resumed.text).toContain('Issue in Two');
   });
 });
