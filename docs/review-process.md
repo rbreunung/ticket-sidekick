@@ -175,8 +175,25 @@ each half gets one final attempt. This bounds every chunk to at most 4 real
 LLM calls, never an open-ended retry storm. A file or finding that still
 fails standalone after its tries is skipped and reported — it does not
 abort the rest of the review. `dedupeFindings` → `formatReview` →
-`ReviewSession` always run on whatever was collected, even after partial
-failures, so follow-ups keep working.
+`ReviewSession` run on whatever was collected, even after partial failures, so
+follow-ups keep working. The one exception is a review in which no file got a
+readable reply (no pass-1 file and no persona batch): it ends as a failure,
+not a clean review.
+
+| Reviewed files | Chat | Stored session, walkthrough signal, chips | Completion log |
+| --- | --- | --- | --- |
+| All batches readable | Findings, or "No issues found." | Yes | Info, finding count |
+| Some batches failed | Findings plus the partial-results warning | Yes | Info, finding count, reviewed and failed file counts |
+| None | "Review failed" with the file count, cause and an output-channel pointer | No | Error, reviewed and failed counts, first cause |
+
+"Reviewed" counts files in successful pass-1 batches only; persona passes
+re-run the same files, so they add only a "some persona batch succeeded" flag
+that keeps a deep review from counting as failed. The failed result follows the
+abort path's contract (no session, no `firstReviewCompleted` context key, no
+chips) and is decided right after the chunk loop, so smart mode never asks for
+lenses on a review that never ran. A per-file notice says "after retrying"
+only when the error is a class the retry layer retries (`isTransientLmError`);
+a non-transient error ends after one attempt.
 
 ### Reading replies
 
@@ -269,7 +286,16 @@ alone can't tell those apart).
 
 Every failed attempt — including ones that succeed on retry — is logged to
 the output channel this way, along with the model identity in use
-(vendor/family/id/version) once per review. This is what makes it possible
+(vendor/family/id/version) once per review, together with `metering` (`on` or
+`off` when the token meter fell back to the raw model) and `frozen` (whether the
+host's model object is frozen). Every failed attempt's line also names the error
+class (`errorName`); for an error with no provider code it carries `stackHead`,
+the top three frames reduced to function plus file and line, without directories.
+When an error is not retried, one `not retrying: <class> is not a transient
+provider error` line says why only one attempt ran. A review that ends failed
+logs `Review failed — no file could be reviewed` at error level with the reviewed
+and failed file counts and the first cause; a partial review's completion line
+carries the same counts. This is what makes it possible
 to tell a one-off provider hiccup apart from a specific model that
 consistently fails on a specific prompt shape, or the model's output from
 an operator-side misconfiguration.
@@ -416,7 +442,14 @@ before `_Fetching PR…_`.
 
 Every `@bitbucket` model call (reviews, follow-ups, comment refinement) goes through
 a token meter (`src/participant/bitbucket/tokenMeter.ts`): the handler wraps
-`request.model` once per response in a proxy that overrides only `sendRequest`.
+`request.model` once per response in a proxy that replaces only `sendRequest`.
+The proxy targets an empty object and reads the real model itself, because the
+host may freeze its model: a `get` trap may not return a different value for a
+read-only, non-configurable property of its target, and the old wrapper threw
+on every method access. If the model cannot be wrapped (checked once at
+creation) the meter fails open: the raw model is used, the response goes
+uncounted and shows no footer, and a warning is logged (KL12 in
+[`known-limitations.md`](known-limitations.md)).
 Input is counted with `model.countTokens` on the request messages once the
 provider accepts the request; output is counted on the streamed text when the
 stream ends, breaks, or is abandoned. Every accepted attempt counts, retries
