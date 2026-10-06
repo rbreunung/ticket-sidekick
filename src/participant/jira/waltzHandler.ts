@@ -147,6 +147,7 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
   },
   // Accepted-CVE list (KTD8): component + CVE pairs the team accepted stay off the New screen.
   accepted: {
+    itemOf: row => row.sourceGroup,
     service: () => {
       const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
       return workspaceRoot ? new AcceptedListService(workspaceRoot) : null;
@@ -155,7 +156,7 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
       const narrowed = narrowGroup(group, entries, getWaltzConfig().minVulnRating);
       return { item: narrowed.group, hiddenCves: narrowed.hiddenCves, belowFloor: narrowed.belowFloor };
     },
-    entriesOf: group => acceptedEntriesOf(group),
+    entriesOf: (group, reason) => acceptedEntriesOf(group, reason),
   },
   // Import ticket updates parity (KTD2/KTD3): a component's findings are recorded as one
   // `oss-cve-<id>` label per CVE plus exactly one `oss-rating-<rating>` label, which `update`

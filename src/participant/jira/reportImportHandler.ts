@@ -33,7 +33,7 @@ import {
   type TicketedAction, type TicketedRowResult,
   buildImportScreen, parseImportReviewReply, describeImportReplyVocabulary, buildImportDoneSummary,
   initImportViewState, ensureImportViewState, emptyImportOutcomes,
-  type ImportReplyContext, type ImportScreenOptions, buildAllHiddenMessage, computeImportResultGroups,
+  type ImportReplyContext, type ImportScreenOptions, buildAllHiddenMessage, buildAcceptedList, computeImportResultGroups,
   CURRENT_SESSION_SCHEMA_VERSION, isSessionExpired, SESSION_EXPIRED_MESSAGE,
   NO_ISSUE_TYPE, resolveTemplateIssueType, formatIssueTypeOptionLabel, buildChatCommandLink,
   type ImportTemplateSelectionSession, type ReviewSession, type ReviewTableColumn, type ReviewRowBase,
@@ -133,17 +133,19 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   fold?: ImportFold<TItem, TRow>;
   // Accepted-CVE list (KTD8): optional, like `fold` and `stale`. Waltz supplies it; Veracode and email
   // omit it and behave exactly as before.
-  accepted?: ImportAccepted<TItem>;
+  accepted?: ImportAccepted<TItem, TRow>;
 }
 
 /** Accepted-CVE list: what an importer supplies so findings the team accepted stay off the New screen. */
-export interface ImportAccepted<TItem> {
+export interface ImportAccepted<TItem, TRow extends ReviewRowBase> {
+  /** The row's group of findings or components. */
+  itemOf: (row: TRow) => TItem;
   /** The list's file service, or null when no workspace folder is open (nothing hidden, nothing writable). */
   service: () => AcceptedListService | null;
   /** The item with accepted findings taken out and its rating recomputed; `item` is null when nothing of it is left. */
   narrow: (item: TItem, entries: AcceptedEntry[]) => { item: TItem | null; hiddenCves: number; belowFloor: number };
-  /** One entry per finding the item currently lists — what `accept` writes for a row. */
-  entriesOf: (item: TItem) => AcceptedEntry[];
+  /** One entry per finding the item currently lists, each carrying the reason when given — what `accept` writes for a row. */
+  entriesOf: (item: TItem, reason?: string) => AcceptedEntry[];
 }
 
 /** Finding folding (KTD1/KTD4): what an importer supplies so its New rows can be merged by the user. */
@@ -793,7 +795,7 @@ async function finishStaleClose<TItem, TRow extends ReviewRowBase>(
 }
 
 function screenOptions<TItem, TRow extends ReviewRowBase>(descriptor: ReportImportDescriptor<TItem, TRow>, baseUrl?: string): ImportScreenOptions {
-  return { baseUrl, itemNoun: descriptor.itemNoun, findingNoun: descriptor.changeTracking?.findingNoun, canFold: descriptor.fold !== undefined };
+  return { baseUrl, itemNoun: descriptor.itemNoun, findingNoun: descriptor.changeTracking?.findingNoun, canFold: descriptor.fold !== undefined, canAccept: descriptor.accepted !== undefined };
 }
 
 /** R10: after a group action, back to the overview — or the same group when there is no overview. */
@@ -855,6 +857,7 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
       .map(r => ({ id: r.id, allowedActions: ticketedRowActions(r).allowedActions })),
     stale: session.staleTickets,
     canFold: descriptor.fold !== undefined,
+    canAccept: descriptor.accepted !== undefined,
     mergedRowIds: session.rows.filter(r => r.existingTicketKey === null && r.memberIds !== undefined).map(r => r.id),
   };
   const action = parseImportReviewReply(view, reply, ctx);
@@ -900,6 +903,33 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
     case 'unmerge':
       session.rows = unmergeNewRow(session.rows, session.allRows, action.id);
       return rerender();
+    case 'accept':
+      Object.assign(session, await acceptRows(session, action, stream, descriptor));
+      return rerender();
+    case 'listAccepted': {
+      const service = descriptor.accepted!.service();
+      if (!service) {
+        stream.markdown(NO_WORKSPACE_ACCEPTED_MESSAGE);
+      } else {
+        const loaded = service.load();
+        if (loaded.warning) stream.markdown(`_Warning: ${loaded.warning}_\n\n`);
+        stream.markdown(trustedChatMarkdown(`${buildAcceptedList(loaded.entries)}\n\n`));
+      }
+      return rerender();
+    }
+    case 'unaccept': {
+      const service = descriptor.accepted!.service();
+      const removal = service?.remove(action.position);
+      if (!service) {
+        stream.markdown(NO_WORKSPACE_ACCEPTED_MESSAGE);
+      } else if (!removal!.ok) {
+        stream.markdown(`✗ ${removal!.message}\n\n`);
+      } else {
+        logDiag(descriptor.scope, 'info', `${descriptor.importLabel} import — accepted entry removed`, { position: action.position });
+        stream.markdown(`✓ Removed ${removal!.removed.component} · ${removal!.removed.cve} from the accepted list. It is offered again on the next import; rows already hidden stay hidden in this review.\n\n`);
+      }
+      return rerender();
+    }
     case 'addPrompt':
       await showAddPrompt(session, action.ids, action.key, ticketService, stream, descriptor, baseUrl);
       return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
@@ -1201,6 +1231,66 @@ async function addToTicket<TItem, TRow extends ReviewRowBase>(
     rows: restoreMergedRows(page.rows, keptMerged),
     page: page.page,
     outcomes: { ...outcomes, added: outcomes.added + rows.length },
+  };
+}
+
+const NO_WORKSPACE_ACCEPTED_MESSAGE = '_No workspace folder is open, so the accepted list cannot be read or changed._\n\n';
+
+/**
+ * Accepted-CVE list (R5, KTD7): writes the CVEs of the named New rows to the list file, then narrows
+ * every New row again against the updated list. `allRows` is what counts the hidden findings; a merged
+ * row on the page that was not named is narrowed too (it is page-local, so `allRows` cannot do it) and
+ * keeps its id and merge, or falls back to its remaining originals when a member vanished. A failed
+ * write leaves the session exactly as it was.
+ */
+async function acceptRows<TItem, TRow extends ReviewRowBase>(
+  session: ReviewSession<TRow>,
+  action: { ids: string[]; reason?: string },
+  stream: vscode.ChatResponseStream,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+): Promise<ReviewSession<TRow>> {
+  const accepted = descriptor.accepted!;
+  const service = accepted.service();
+  if (!service) {
+    stream.markdown(NO_WORKSPACE_ACCEPTED_MESSAGE);
+    return session;
+  }
+  const named = session.rows.filter(r => r.existingTicketKey === null && action.ids.includes(r.id));
+  const written = service.add(named.flatMap(r => accepted.entriesOf(accepted.itemOf(r), action.reason)));
+  if (!written.ok) {
+    logDiag(descriptor.scope, 'warn', `${descriptor.importLabel} import — accepting rows failed`, { error: written.message });
+    stream.markdown(`✗ ${written.message}\n\n`);
+    return session;
+  }
+  logDiag(descriptor.scope, 'info', `${descriptor.importLabel} import — accepted entries added`, { rows: named.length, added: written.added });
+
+  const templateLabels = templateLabelsOf(session.additionalFields);
+  const hidden = { cves: session.acceptedHidden?.cves ?? 0, belowFloor: session.acceptedHidden?.belowFloor ?? 0 };
+  const narrowRow = (row: TRow, count: boolean): TRow | null => {
+    const item = accepted.itemOf(row);
+    const narrowed = accepted.narrow(item, written.entries);
+    if (count) {
+      hidden.cves += narrowed.hiddenCves;
+      hidden.belowFloor += narrowed.belowFloor;
+    }
+    if (narrowed.item === null) return null;
+    if (narrowed.item === item) return row;
+    return { ...row, ...descriptor.buildRowFields(narrowed.item, templateLabels) };
+  };
+  const allRows = session.allRows.flatMap(r => (r.existingTicketKey !== null ? [r] : [narrowRow(r, true)].filter((n): n is TRow => n !== null)));
+  const keptMerged = session.rows
+    .filter(r => r.existingTicketKey === null && r.memberIds !== undefined && !action.ids.includes(r.id))
+    .flatMap(r => [narrowRow(r, false)].filter((n): n is TRow => n !== null));
+  const page = buildReviewPage(allRows, session.page);
+  stream.markdown(written.added > 0
+    ? `✓ Accepted ${written.added} CVE(s) from ${named.length} row(s) — hidden from this and future imports.\n\n`
+    : '_Those CVEs were already on the accepted list._\n\n');
+  return {
+    ...session,
+    allRows,
+    rows: restoreMergedRows(page.rows, keptMerged),
+    page: page.page,
+    ...(hidden.cves > 0 || hidden.belowFloor > 0 ? { acceptedHidden: hidden } : {}),
   };
 }
 
