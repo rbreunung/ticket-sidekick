@@ -26,7 +26,7 @@ import {
   buildStaleTargetOptions, formatStaleTargetOption, parseStaleTargetPick, parseStaleIssueTypePick,
   selectedStaleIssueTypes, staleTargetState, staleTargetNeedsResolution, planStaleTransitions,
   selectedOpenStaleTickets, isBackOrCancellation,
-  type StaleTargetOption, applyReviewSessionToggle, applyBulkNewRowSet,
+  type StaleTargetOption, applyReviewSessionToggle, applyBulkNewRowSet, mergeNewRows, unmergeNewRow,
   applyTicketedActionChange, ticketedRowActions, ticketedTargetKey, isTicketedRowFinished,
   type TicketedAction, type TicketedRowResult,
   buildImportScreen, parseImportReviewReply, describeImportReplyVocabulary, buildImportDoneSummary,
@@ -126,6 +126,18 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   // screen. Veracode and Waltz configure it; email (no dedup, no Already-ticketed group) omits it.
   // Without it an already-ticketed row only offers re-create / leave.
   changeTracking?: ImportChangeTracking<TItem, TRow>;
+  // Finding folding (KTD4): optional merge/unmerge/add support. An importer that omits it (email)
+  // offers none of those replies. Both Veracode and Waltz items are groups, so combining items is
+  // concatenation (KTD1).
+  fold?: ImportFold<TItem, TRow>;
+}
+
+/** Finding folding (KTD1/KTD4): what an importer supplies so its New rows can be merged by the user. */
+export interface ImportFold<TItem, TRow extends ReviewRowBase> {
+  /** The row's group of findings or components. */
+  itemOf: (row: TRow) => TItem;
+  /** One item holding every member of `items`, in order. */
+  combine: (items: TItem[]) => TItem;
 }
 
 type FindingsChange = Extract<RowChange, { kind: 'findings' }>;
@@ -727,7 +739,7 @@ async function finishStaleClose<TItem, TRow extends ReviewRowBase>(
 }
 
 function screenOptions<TItem, TRow extends ReviewRowBase>(descriptor: ReportImportDescriptor<TItem, TRow>, baseUrl?: string): ImportScreenOptions {
-  return { baseUrl, itemNoun: descriptor.itemNoun, findingNoun: descriptor.changeTracking?.findingNoun };
+  return { baseUrl, itemNoun: descriptor.itemNoun, findingNoun: descriptor.changeTracking?.findingNoun, canFold: descriptor.fold !== undefined };
 }
 
 /** R10: after a group action, back to the overview — or the same group when there is no overview. */
@@ -788,6 +800,8 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
       .filter(r => r.existingTicketKey !== null && !isTicketedRowFinished(r))
       .map(r => ({ id: r.id, allowedActions: ticketedRowActions(r).allowedActions })),
     stale: session.staleTickets,
+    canFold: descriptor.fold !== undefined,
+    mergedRowIds: session.rows.filter(r => r.existingTicketKey === null && r.memberIds !== undefined).map(r => r.id),
   };
   const action = parseImportReviewReply(view, reply, ctx);
   const rerender = () => streamImportReview(session, stream, ws, descriptor, baseUrl);
@@ -819,6 +833,18 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
     }
     case 'bulk':
       session.rows = applyBulkNewRowSet(session.rows, action.include);
+      return rerender();
+    case 'merge': {
+      // Page-local like a toggle (KTD3): only `rows` changes, `allRows` keeps the originals, so a
+      // page move discards the merge and an unmerge can restore them.
+      const fold = descriptor.fold!;
+      const templateLabels = templateLabelsOf(session.additionalFields);
+      session.rows = mergeNewRows(session.rows, action.ids, members =>
+        descriptor.buildRowFields(fold.combine(members.map(fold.itemOf)), templateLabels));
+      return rerender();
+    }
+    case 'unmerge':
+      session.rows = unmergeNewRow(session.rows, session.allRows, action.id);
       return rerender();
     case 'toggleRows': {
       // A new-row toggle stays page-local (applyReviewSessionToggle's own contract).
@@ -910,7 +936,9 @@ export async function createNewRows<TItem, TRow extends ReviewRowBase>(
 ): Promise<ReviewSession<TRow>> {
   const pageFresh = session.rows.filter(r => r.existingTicketKey === null);
   const toCreate = pageFresh.filter(r => r.included).slice(0, BATCH_LIMIT);
-  const excludedIds = new Set(pageFresh.filter(r => !r.included).map(r => r.id));
+  // A merged row stands for all of its member rows in `allRows` (KTD3).
+  const memberIdsOf = (r: TRow) => r.memberIds ?? [r.id];
+  const excludedIds = new Set(pageFresh.filter(r => !r.included).flatMap(memberIdsOf));
   if (toCreate.length === 0) {
     stream.markdown('_Nothing selected — no tickets were created._\n\n');
     return session;
@@ -921,7 +949,7 @@ export async function createNewRows<TItem, TRow extends ReviewRowBase>(
   let failed = 0;
   for (const row of toCreate) {
     const outcome = await createOne(row, session, ticketService, stream, descriptor, baseUrl);
-    if ('key' in outcome) createdIds.add(row.id); else failed++;
+    if ('key' in outcome) memberIdsOf(row).forEach(id => createdIds.add(id)); else failed++;
   }
 
   const created = createdIds.size;

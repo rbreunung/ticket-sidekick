@@ -1863,3 +1863,158 @@ describe('Veracode per-row actions through the real descriptor (U5)', () => {
     expect(client.createIssueLinkCalls).toEqual([{ inwardKey: 'PROJ-8', outwardKey: 'PROJ-100', typeName: 'Relates' }]);
   });
 });
+
+describe('Merge and unmerge through the real descriptors (finding folding, U4)', () => {
+  function makeFlaw(issueId: string, overrides: Partial<VeracodeFlaw> = {}): VeracodeFlaw {
+    return {
+      issueId, severity: 4, categoryName: 'SQL Injection', cweId: '89', cweName: null,
+      description: 'Untrusted input reaches a query.', recommendation: null,
+      module: 'app.jar', sourceFile: `File${issueId}.java`, sourceFilePath: 'src/main/java/',
+      line: 42, scope: null, functionPrototype: null, remediationStatus: 'New',
+      ...overrides,
+    };
+  }
+  // Different file and CWE per flaw, so each stays its own New row under the automatic fold.
+  const distinct = (id: number) => makeFlaw(String(id), { sourceFile: `Distinct${id}.java`, cweId: String(1000 + id) });
+
+  let client: MockJiraClient;
+  let ticketService: TicketService;
+  beforeEach(() => {
+    client = new MockJiraClient();
+    ticketService = new TicketService(client);
+  });
+
+  async function importVeracode(flaws: VeracodeFlaw[], ws = makeMockWs()) {
+    const tickets: Record<string, FakeTicket> = {};
+    statefulJira(client, tickets);
+    searchFromStore(ticketService, tickets);
+    const templateSession = await buildVeracodeTemplateSession(flaws, 'report.xml', 'PROJ', client);
+    const resume: Extract<AwaitIssueTypeResume, { kind: 'reportImport' }> = {
+      kind: 'reportImport', descriptorKind: 'veracode', pickedTemplateName: null, session: templateSession,
+    };
+    await handleVeracodeAwaitIssueType(resume, 'Bug', client, ticketService, mockStream() as never, ws as never);
+    return { session: ws.store['jira.session.veracodeReview'] as VeracodeReviewSession, ws, tickets };
+  }
+
+  const reply = (text: string, session: VeracodeReviewSession, ws: ReturnType<typeof makeMockWs>, stream = mockStream()) =>
+    handleVeracodeReviewReply(text, session, ticketService, stream as never, ws as never);
+
+  const sqlA = () => makeFlaw('1', { sourceFile: 'A.java', cweId: '89', categoryName: 'SQL Injection' });
+  const xssB = () => makeFlaw('2', { sourceFile: 'B.java', cweId: '79', categoryName: 'Cross-Site Scripting' });
+
+  it('AE3: merge 1 2 combines two New rows into one row with a count-based title that names both CWEs and the extra file', async () => {
+    const { session, ws } = await importVeracode([sqlA(), xssB(), makeFlaw('3', { sourceFile: 'C.java', cweId: '22' })]);
+    expect(session.rows.filter(r => r.existingTicketKey === null)).toHaveLength(3);
+
+    await reply('merge 1 2', session, ws);
+
+    const fresh = session.rows.filter(r => r.existingTicketKey === null);
+    expect(fresh.map(r => r.id)).toEqual(['1', '3']);
+    expect(fresh[0].memberIds).toEqual(['1', '2']);
+    expect(fresh[0].issueIds).toEqual(['1', '2']);
+    expect(fresh[0].summary).toBe('A.java +1 file - 2 findings: SQL Injection, Cross-Site Scripting');
+    expect(session.allRows).toHaveLength(3); // the originals stay in allRows (page-local merge)
+  });
+
+  it('creating the merged row makes one ticket carrying every member and removes all members from allRows', async () => {
+    const { session, ws } = await importVeracode([sqlA(), xssB(), makeFlaw('3', { sourceFile: 'C.java', cweId: '22' })]);
+    await reply('merge 1 2', session, ws);
+
+    await reply('create tickets', session, ws);
+
+    expect(client.createIssueCalls).toHaveLength(2); // the merged row and row 3
+    const merged = client.createIssueCalls[0];
+    expect(merged.summary).toBe('A.java +1 file - 2 findings: SQL Injection, Cross-Site Scripting');
+    expect(merged.additionalFields!.labels).toEqual(expect.arrayContaining(['veracode', 'veracode-issue-1', 'veracode-issue-2', 'cwe-89', 'cwe-79']));
+    expect(String(merged.additionalFields!.description)).toContain('This ticket folds 2 Veracode findings.');
+    expect(session.allRows.filter(r => r.existingTicketKey === null)).toHaveLength(0);
+  });
+
+  it('a merged row that was excluded creates nothing and leaves both members excluded in allRows', async () => {
+    const { session, ws } = await importVeracode([sqlA(), xssB(), makeFlaw('3', { sourceFile: 'C.java', cweId: '22' })]);
+    await reply('merge 1 2', session, ws);
+    await reply('1', session, ws); // toggle the merged row off
+
+    await reply('create tickets', session, ws);
+
+    expect(client.createIssueCalls).toHaveLength(1); // only row 3
+    const left = session.allRows.filter(r => r.existingTicketKey === null);
+    expect(left.map(r => r.id)).toEqual(['1', '2']);
+    expect(left.every(r => r.included === false)).toBe(true);
+  });
+
+  it('a failed create leaves the member rows in allRows, so the refreshed page shows them separately again', async () => {
+    const { session, ws } = await importVeracode([sqlA(), xssB()]);
+    await reply('merge 1 2', session, ws);
+    client.createIssue = async () => { throw new Error('boom'); };
+
+    await reply('create tickets', session, ws);
+
+    const left = session.allRows.filter(r => r.existingTicketKey === null);
+    expect(left.map(r => r.id)).toEqual(['1', '2']);
+    expect(left.every(r => r.memberIds === undefined)).toBe(true);
+  });
+
+  it('unmerge restores the original rows', async () => {
+    const { session, ws } = await importVeracode([sqlA(), xssB()]);
+    await reply('merge 1 2', session, ws);
+    await reply('unmerge 1', session, ws);
+
+    const fresh = session.rows.filter(r => r.existingTicketKey === null);
+    expect(fresh.map(r => r.id)).toEqual(['1', '2']);
+    expect(fresh.every(r => r.memberIds === undefined)).toBe(true);
+  });
+
+  it('moving to another page and back discards a merge (page-local)', async () => {
+    const { session, ws } = await importVeracode(Array.from({ length: 60 }, (_, i) => distinct(i + 1)));
+    await reply('merge 1 2', session, ws);
+    expect(session.rows.filter(r => r.existingTicketKey === null).length).toBe(49);
+
+    await reply('next', session, ws);
+    await reply('prev', session, ws);
+
+    const fresh = session.rows.filter(r => r.existingTicketKey === null);
+    expect(fresh).toHaveLength(50);
+    expect(fresh.every(r => r.memberIds === undefined)).toBe(true);
+  });
+
+  it('AE4: an id from another page is not merged and the reply says which row it could not use', async () => {
+    const { session, ws } = await importVeracode(Array.from({ length: 60 }, (_, i) => distinct(i + 1)));
+    const stream = mockStream();
+
+    await reply('merge 3,55', session, ws, stream);
+
+    expect(session.rows.filter(r => r.existingTicketKey === null)).toHaveLength(50);
+    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map(c => markdownText(c[0])).join('\n');
+    expect(text).toContain('Row 55');
+  });
+
+  it('AE5: merging Waltz components gives one row with the merged title, every component label and one rating label', async () => {
+    const vuln = (cveId: string): WaltzVulnerability => ({ cveId, cveSummary: null, overallSeverity: 'High', cvssV3Score: 7, fixedVersion: null });
+    const comp = (nameVersion: string, rating: string): WaltzComponent => ({
+      nameVersion, maxVulnRating: rating, remediationAction: 'Remediate', instancePaths: ['app.jar'], vulnerabilities: [vuln(`CVE-2099-${nameVersion.length}`)],
+    });
+    const tickets: Record<string, FakeTicket> = {};
+    statefulJira(client, tickets);
+    searchFromStore(ticketService, tickets);
+    const templateSession = await buildWaltzTemplateSession(
+      [comp('netty-codec:4.1.100', 'High'), comp('netty-handler:4.1.100', 'High'), comp('netty-buffer:4.1.94', 'Medium')], 'r.xlsx', 'PROJ', client);
+    const ws = makeMockWs();
+    await handleWaltzAwaitIssueType({
+      kind: 'reportImport', descriptorKind: 'waltz', pickedTemplateName: null, session: templateSession,
+    }, 'Bug', client, ticketService, mockStream() as never, ws as never);
+    const session = ws.store['jira.session.waltzReview'] as WaltzReviewSession;
+
+    await handleWaltzReviewReply('merge 1 2 3', session, ticketService, mockStream() as never, ws as never);
+    await handleWaltzReviewReply('create tickets', session, ticketService, mockStream() as never, ws as never);
+
+    expect(client.createIssueCalls).toHaveLength(1);
+    const call = client.createIssueCalls[0];
+    expect(call.summary).toBe('[OSS] netty-codec:4.1.100 +2 components — High');
+    const labels = call.additionalFields!.labels as string[];
+    expect(labels).toEqual(expect.arrayContaining([
+      'oss-dependency', sanitizeComponentLabel('netty-codec:4.1.100'), sanitizeComponentLabel('netty-handler:4.1.100'), sanitizeComponentLabel('netty-buffer:4.1.94'),
+    ]));
+    expect(labels.filter(l => l.startsWith('oss-rating-'))).toEqual(['oss-rating-high']);
+  });
+});

@@ -136,6 +136,11 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
     labelToDedupKey: waltzLabelToDedupKey,
     buildActivePredicate: rawItems => buildWaltzActiveComponentPredicate(rawItems as WaltzComponent[], getWaltzConfig().includeRemediationActions),
   },
+  // Finding folding (KTD1/KTD4): a row's item is its group of components, so merging is concatenation.
+  fold: {
+    itemOf: row => row.sourceGroup,
+    combine: groups => groups.flat(),
+  },
   // Import ticket updates parity (KTD2/KTD3): a component's findings are recorded as one
   // `oss-cve-<id>` label per CVE plus exactly one `oss-rating-<rating>` label, which `update`
   // replaces rather than accumulates. A rating rise also rewrites the summary's rating suffix (R12).

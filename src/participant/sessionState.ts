@@ -1243,7 +1243,9 @@ export function neutralizeMarkdownLinks(value: string): string {
 // Import ticket updates parity (KTD8): bumped 7 -> 8 — already-ticketed rows now carry a per-row
 // `action`/`allowedActions`/`change`/`target`/`result` instead of the re-create toggle and the
 // `updatedExisting`/`hasUnsyncedFindings`/`recreatedKey` flags.
-export const CURRENT_SESSION_SCHEMA_VERSION = 8;
+// Finding folding (KTD12): bumped 8 -> 9 — report-import rows can carry `memberIds` (a merged row) and
+// Waltz rows hold `sourceGroup` (a component array) instead of `sourceComponent`.
+export const CURRENT_SESSION_SCHEMA_VERSION = 9;
 
 export interface ImportTemplateSelectionSession<TItem> {
   reportFileName: string;
@@ -1323,6 +1325,12 @@ export interface ReviewRowBase {
   action?: TicketedAction;
   /** U4/R16: what the last `apply` (or shortcut) did to this row; a `done` row is finished for good. */
   result?: TicketedRowResult;
+  /**
+   * Finding folding (KTD3): on a New row the user merged, the ids of every original row folded into
+   * it, in page order (its own `id` is the first). `allRows` keeps the originals, so unmerging
+   * restores them and creating the merged row removes all of them.
+   */
+  memberIds?: string[];
 }
 
 /** U3/R6: the per-row actions on the Already-ticketed screen. */
@@ -1810,6 +1818,8 @@ export interface ImportScreenOptions {
   // What one new finding on an already-ticketed row is called in its Change cell, e.g. 'flaw(s)' /
   // 'CVE(s)' (U4/R5). Defaults to 'finding(s)'.
   findingNoun?: string;
+  // Finding folding: whether the New screen offers merge/unmerge (Veracode, Waltz; not email).
+  canFold?: boolean;
 }
 
 function pluralNoun(itemNoun: string): string {
@@ -1906,6 +1916,10 @@ export function buildNewGroupScreen<TRow extends ReviewRowBase>(
     `Reply ${cmdLink('Include all', 'include all')} / ${cmdLink('Exclude all', 'exclude all')} to set every row on this page.`,
   );
   lines.push('');
+  if (opts.canFold) {
+    lines.push('Reply `merge 2 4` to combine rows on this page into one ticket, or `unmerge 2` to split a merged row.');
+    lines.push('');
+  }
   if (totalPages > 1) {
     lines.push(
       `_Page ${s.page + 1} of ${totalPages}._ Reply ${cmdLink('next', 'next')} / ${cmdLink('prev', 'prev')} or \`page <n>\` to navigate.`,
@@ -2129,6 +2143,8 @@ export type ImportReplyAction =
   | { kind: 'close' }
   | { kind: 'pageNav'; nav: ReviewPageNav }
   | { kind: 'bulk'; include: boolean }
+  | { kind: 'merge'; ids: string[] } // finding folding: combine these visible New rows into one
+  | { kind: 'unmerge'; id: string } // finding folding: split a merged row back into its originals
   | { kind: 'toggleRows'; ids: string[] }
   | { kind: 'toggleStale'; keys: string[] }
   // `reason`, when present, says specifically why (e.g. an action a row does not offer, AE6).
@@ -2142,6 +2158,10 @@ export interface ImportReplyContext {
   // a finished row is absent, so it can no longer be changed.
   ticketedRows: Array<{ id: string; allowedActions: TicketedAction[] }>;
   stale?: ReviewSessionStale;
+  // Finding folding: whether the importer supports merge/unmerge at all (Veracode and Waltz; not
+  // email), and which visible New rows are merged rows (the only valid `unmerge` targets).
+  canFold?: boolean;
+  mergedRowIds?: string[];
 }
 
 function normalizeReply(reply: string): string {
@@ -2189,8 +2209,85 @@ export function parseNewGroupReply(reply: string, ctx: ImportReplyContext): Impo
   if (nav) return { kind: 'pageNav', nav };
   const bulk = parseBulkNewRowReply(reply);
   if (bulk !== null) return { kind: 'bulk', include: bulk };
+  if (ctx.canFold) {
+    const fold = parseFoldReply(reply, ctx);
+    if (fold) return fold;
+  }
   const ids = parseStrictRowToggle(reply, ctx.newRowIds);
   return ids ? { kind: 'toggleRows', ids } : { kind: 'invalid' };
+}
+
+/**
+ * Finding folding: `merge <ids>` and `unmerge <id>` on the New screen. Page-local like every other
+ * New-screen reply (R5): an id that is not a New row on the visible page is rejected, naming it. A
+ * reply starting with either word is always answered here (valid or `invalid` with a reason), never
+ * handed to the row-toggle parse, so a typo cannot half-apply.
+ */
+function parseFoldReply(reply: string, ctx: ImportReplyContext): ImportReplyAction | null {
+  const n = normalizeReply(reply);
+  const merge = n.match(/^merge(?: (.*))?$/);
+  if (merge) {
+    const tokens = (merge[1] ?? '').split(/[\s,]+/).filter(Boolean);
+    const byLower = new Map(ctx.newRowIds.map(id => [id.toLowerCase(), id]));
+    const ids: string[] = [];
+    for (const token of tokens) {
+      const id = byLower.get(token);
+      if (!id) return { kind: 'invalid', reason: `Row ${token.toUpperCase()} isn't a New row on this page, so it can't be merged.` };
+      if (!ids.includes(id)) ids.push(id);
+    }
+    return ids.length >= 2
+      ? { kind: 'merge', ids }
+      : { kind: 'invalid', reason: 'Merge needs at least two different row numbers, e.g. `merge 2 4`.' };
+  }
+  const unmerge = n.match(/^unmerge(?: (\S+))?$/);
+  if (unmerge) {
+    const token = unmerge[1] ?? '';
+    const id = (ctx.mergedRowIds ?? []).find(m => m.toLowerCase() === token);
+    return id
+      ? { kind: 'unmerge', id }
+      : { kind: 'invalid', reason: token ? `Row ${token.toUpperCase()} isn't a merged row on this page.` : 'Unmerge needs a merged row number, e.g. `unmerge 2`.' };
+  }
+  return null;
+}
+
+/**
+ * Finding folding (KTD3): replaces the named visible New rows with one merged row. It keeps the
+ * first member's id and position, lists every original id in `memberIds` (a member that is itself
+ * merged contributes all of its originals) and starts included. `buildFields` supplies the
+ * importer-specific fields from the members; identity and fold bookkeeping are set here so no
+ * importer can get them wrong. Already-ticketed rows are never merged, even when named. Pure.
+ */
+export function mergeNewRows<TRow extends ReviewRowBase>(
+  rows: TRow[],
+  ids: string[],
+  buildFields: (members: TRow[]) => Omit<TRow, keyof ReviewRowBase>,
+): TRow[] {
+  const wanted = new Set(ids);
+  const members = rows.filter(r => r.existingTicketKey === null && wanted.has(r.id));
+  if (members.length < 2) return rows;
+  const merged = {
+    ...buildFields(members),
+    id: members[0].id,
+    existingTicketKey: null,
+    included: true,
+    memberIds: members.flatMap(m => m.memberIds ?? [m.id]),
+  } as unknown as TRow;
+  const memberSet = new Set(members);
+  return rows.flatMap(r => (r === members[0] ? [merged] : memberSet.has(r) ? [] : [r]));
+}
+
+/**
+ * Finding folding: puts a merged row's original rows (still held, untouched, in `allRows`) back in
+ * its place. A row that is not merged, or whose originals are missing, leaves `rows` unchanged. Pure.
+ */
+export function unmergeNewRow<TRow extends ReviewRowBase>(rows: TRow[], allRows: TRow[], id: string): TRow[] {
+  const merged = rows.find(r => r.existingTicketKey === null && r.id === id && r.memberIds !== undefined);
+  if (!merged) return rows;
+  const originals = merged.memberIds!
+    .map(memberId => allRows.find(a => a.existingTicketKey === null && a.id === memberId))
+    .filter((r): r is TRow => r !== undefined);
+  if (originals.length !== merged.memberIds!.length) return rows;
+  return rows.flatMap(r => (r === merged ? originals : [r]));
 }
 
 // Accepted spellings of each row action (after normalizeReply lower-casing).
@@ -2268,7 +2365,8 @@ export function describeImportReplyVocabulary(view: ImportReviewView, ctx: Impor
   const exit = ctx.singleGroup ? '`done`' : '`back`';
   switch (view) {
     case 'new':
-      return `On this screen you can reply \`create tickets\`, row numbers to toggle (e.g. \`2 4\`), \`include all\` / \`exclude all\`, \`next\` / \`prev\`, or ${exit}.`;
+      return `On this screen you can reply \`create tickets\`, row numbers to toggle (e.g. \`2 4\`), \`include all\` / \`exclude all\`, ` +
+        `${ctx.canFold ? '`merge 2 4` / `unmerge 2`, ' : ''}\`next\` / \`prev\`, or ${exit}.`;
     case 'ticketed':
       return 'On this screen you can reply `apply`, `<row> <action>` (e.g. `A2 follow-up` — actions are ' +
         `${TICKETED_ACTION_ORDER.map(a => `\`${a}\``).join(', ')}), \`all <action>\` (e.g. \`all leave\`), ` +

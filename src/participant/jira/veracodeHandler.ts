@@ -156,6 +156,11 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
     labelToDedupKey: veracodeLabelToIssueId,
     buildActivePredicate: rawItems => buildVeracodeActiveFlawPredicate(rawItems as VeracodeFlaw[], getVeracodeConfig().includeStatuses),
   },
+  // Finding folding (KTD1/KTD4): a row's item is its group of flaws, so merging is concatenation.
+  fold: {
+    itemOf: row => row.sourceGroup,
+    combine: groups => groups.flat(),
+  },
   // Import ticket updates parity (KTD2): a folded group's findings are its flaw ids, recorded as
   // `veracode-issue-<id>` labels. No baseline, no rating and no summary rewrite for Veracode.
   changeTracking: {
