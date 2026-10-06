@@ -1826,6 +1826,14 @@ describe('Veracode per-row actions through the real descriptor (U5)', () => {
     expect(session.outcomes?.updated).toBe(2);
   });
 
+  it('a fold of flaws with different severities shows its most severe member on the row', async () => {
+    const flaws = [makeFlaw('101', { line: 1, severity: 3 }), makeFlaw('102', { line: 2, severity: 5 })];
+    const { session } = await importVeracode(flaws, {});
+    expect(session.allRows).toHaveLength(1);
+    expect(session.allRows[0].severity).toBe(5);
+    expect(session.allRows[0].issueIds).toEqual(['101', '102']);
+  });
+
   it('AE8: ten same-file, same-CWE flaws with one already ticketed form one Already-ticketed row proposing update, and none in New', async () => {
     const flaws = Array.from({ length: 10 }, (_, i) => makeFlaw(String(101 + i), { line: i + 1, cweId: '89' }));
     const tickets: Record<string, FakeTicket> = { 'PROJ-50': { labels: ['veracode', 'veracode-issue-101'] } };

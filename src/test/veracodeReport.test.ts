@@ -5,7 +5,7 @@ import { parseVeracodeReport, filterFlaws, assertSafeVeracodeXml } from '../util
 import { deriveShortLabel, buildSummary, buildDescriptionWiki, buildLabels } from '../utils/veracodeReport';
 import {
   groupFlawsByLocation, buildGroupLabels, buildGroupDescriptionWiki, buildGroupSummary,
-  buildNewFindingsCommentWiki, describeVeracodeChange, flawsWithIds, buildFollowUpSummary,
+  buildNewFindingsCommentWiki, describeVeracodeChange, flawsWithIds, buildFollowUpSummary, buildFoldedCommentWiki,
   type VeracodeFlaw,
 } from '../utils/veracodeReport';
 
@@ -533,20 +533,20 @@ describe('buildGroupLabels', () => {
 });
 
 describe('buildGroupDescriptionWiki', () => {
-  it("combines both flaws' sections (severity, CWE, description, recommendation) under their own issue heading, hoisting the shared location once", () => {
+  it("combines both flaws' sections (severity, CWE, description, recommendation) under their own issue heading, each with its own location", () => {
     const a = makeFlaw({
       issueId: '1', severity: 5, cweId: '89', description: 'First flaw description.', recommendation: 'First recommendation.',
     });
     const b = makeFlaw({
-      issueId: '2', severity: 3, cweId: '79', description: 'Second flaw description.', recommendation: 'Second recommendation.',
+      issueId: '2', severity: 3, cweId: '79', line: 99, description: 'Second flaw description.', recommendation: 'Second recommendation.',
     });
     const wiki = buildGroupDescriptionWiki([a, b]);
 
-    // Location hoisted once (both flaws share module/sourceFile/line via makeFlaw defaults).
-    expect(wiki.match(/h3\. Location/g)).toHaveLength(1);
+    // R8: every finding carries its own location — nothing is hoisted, because a fold can span files.
+    expect(wiki.match(/h4\. Location/g)).toHaveLength(2);
     expect(wiki).toContain('File: com/example/webapp/dao/ExampleOrderDao.java:88');
+    expect(wiki).toContain('File: com/example/webapp/dao/ExampleOrderDao.java:99');
 
-    // Each flaw gets its own issue section with its own severity/CWE/description/recommendation.
     expect(wiki).toContain('h3. Issue 1');
     expect(wiki).toContain('h4. Severity\nVery High (5)');
     expect(wiki).toContain('[CWE-89|https://cwe.mitre.org/data/definitions/89.html]');
@@ -558,6 +558,63 @@ describe('buildGroupDescriptionWiki', () => {
     expect(wiki).toContain('[CWE-79|https://cwe.mitre.org/data/definitions/79.html]');
     expect(wiki).toContain(': Second flaw description.');
     expect(wiki).toContain(': Second recommendation.');
+  });
+
+  describe('folded ticket banner and overview table (R8)', () => {
+    const group = [
+      makeFlaw({ issueId: '1001', severity: 5, cweId: '89', line: 10, functionPrototype: 'void a()' }),
+      makeFlaw({ issueId: '1002', severity: 3, cweId: '79', line: 20, sourceFile: 'Other.java', functionPrototype: null }),
+    ];
+
+    it('opens with a banner stating how many findings the ticket folds', () => {
+      expect(buildGroupDescriptionWiki(group).startsWith('This ticket folds 2 Veracode findings.')).toBe(true);
+    });
+
+    it('lists every finding in an overview table with issue id, severity, CWE, file:line and function', () => {
+      const wiki = buildGroupDescriptionWiki(group);
+      expect(wiki).toContain('||Issue ID||Severity||CWE||Location||Function||');
+      expect(wiki).toContain('|1001|Very High (5)|CWE-89|com/example/webapp/dao/ExampleOrderDao.java:10|void a()|');
+      expect(wiki).toContain('|1002|Medium (3)|CWE-79|com/example/webapp/dao/Other.java:20|n/a|');
+    });
+
+    it('cannot be broken or injected through a pipe or macro character in a table cell', () => {
+      const evil = makeFlaw({ issueId: '1', functionPrototype: 'a | b {quote}x{quote} !http://evil.example/t.gif!' });
+      const wiki = buildGroupDescriptionWiki([evil, makeFlaw({ issueId: '2', line: 5 })]);
+      const row = wiki.split('\n').find(l => l.startsWith('|1|'))!;
+      expect(row.split('|').length).toBe(7); // leading empty + 5 cells + trailing empty
+      expect(wiki).not.toContain('{quote}');
+      expect(wiki).not.toContain('!http://evil.example/t.gif!');
+    });
+
+    it('a one-flaw group has no banner and no table, matching the unfolded layout', () => {
+      const wiki = buildGroupDescriptionWiki([makeFlaw({ issueId: '1' })]);
+      expect(wiki).not.toContain('This ticket folds');
+      expect(wiki).not.toContain('||Issue ID||');
+    });
+  });
+
+  describe('size budget (R10)', () => {
+    const big = Array.from({ length: 40 }, (_, i) => makeFlaw({
+      issueId: String(2000 + i), line: i + 1,
+      description: `Description ${i}. ` + 'lorem ipsum dolor sit amet '.repeat(80),
+      recommendation: `Recommendation ${i}. ` + 'consectetur adipiscing elit '.repeat(80),
+    }));
+
+    it('shortens per-finding text so forty large findings fit within 30,000 characters, and says so', () => {
+      const wiki = buildGroupDescriptionWiki(big);
+      expect(wiki.length).toBeLessThanOrEqual(30_000);
+      expect(wiki).toContain('shortened');
+    });
+
+    it('still lists every finding in the overview table after shortening', () => {
+      const wiki = buildGroupDescriptionWiki(big);
+      for (const flaw of big) expect(wiki).toContain(`|${flaw.issueId}|`);
+    });
+
+    it('does not shorten or mention shortening when the full text fits', () => {
+      const small = [makeFlaw({ issueId: '1' }), makeFlaw({ issueId: '2', line: 5 })];
+      expect(buildGroupDescriptionWiki(small)).not.toContain('shortened');
+    });
   });
 
   it('omits the Recommendation and CWE sections for a folded flaw missing that data, independently per flaw', () => {
@@ -652,14 +709,42 @@ describe('buildGroupSummary', () => {
     expect(buildGroupSummary([a])).toBe(buildSummary(a));
   });
 
-  it('lists every folded issue id and notes how many additional flaws are folded in', () => {
-    const a = makeFlaw({ issueId: '1', sourceFile: 'Foo.java', line: 42, categoryName: 'SQL Injection', cweName: null });
-    const b = makeFlaw({ issueId: '2', sourceFile: 'Foo.java', line: 42, categoryName: 'SQL Injection', cweName: null });
-    const c = makeFlaw({ issueId: '3', sourceFile: 'Foo.java', line: 42, categoryName: 'SQL Injection', cweName: null });
-    const summary = buildGroupSummary([a, b, c]);
-    expect(summary).toContain('1, 2, 3');
-    expect(summary).toContain('Foo.java:42');
-    expect(summary).toContain('(+2 more)');
+  const sevenIn = (file: string, from: number, count: number, extra: Partial<VeracodeFlaw> = {}) =>
+    Array.from({ length: count }, (_, i) => makeFlaw({
+      issueId: String(from + i), sourceFile: file, sourceFilePath: null, line: from + i, cweName: null, ...extra,
+    }));
+
+  it('AE1: names the file, CWE label and finding count of a same-file, same-CWE fold', () => {
+    const group = sevenIn('OrderRepository.java', 1001, 7, { categoryName: 'SQL Injection' });
+    expect(buildGroupSummary(group)).toBe('OrderRepository.java - SQL Injection (7 findings)');
+  });
+
+  it('AE3: lists the distinct CWE labels when the fold mixes CWEs', () => {
+    const group = [
+      ...sevenIn('OrderRepository.java', 1001, 5, { categoryName: 'SQL Injection', cweId: '89' }),
+      ...sevenIn('OrderRepository.java', 1101, 2, { categoryName: 'Cross-Site Scripting', cweId: '79' }),
+    ];
+    expect(buildGroupSummary(group)).toBe('OrderRepository.java - 7 findings: SQL Injection, Cross-Site Scripting');
+  });
+
+  it('names the first file and counts the other files when the fold spans files', () => {
+    const group = [
+      ...sevenIn('OrderRepository.java', 1, 3), ...sevenIn('CartDao.java', 11, 2), ...sevenIn('UserDao.java', 21, 2),
+    ].map(f => ({ ...f, categoryName: 'SQL Injection' }));
+    expect(buildGroupSummary(group)).toBe('OrderRepository.java +2 files - SQL Injection (7 findings)');
+  });
+
+  it('lists three CWE labels and counts the rest', () => {
+    const group = ['Alpha', 'Beta', 'Gamma', 'Delta'].flatMap((name, i) =>
+      sevenIn('Foo.java', 10 * (i + 1), 1, { categoryName: name, cweId: String(i + 1) }));
+    expect(buildGroupSummary(group)).toBe('Foo.java - 4 findings: Alpha, Beta, Gamma, +1 more CWEs');
+  });
+
+  it('clamps a very long file name to 255 characters and keeps the finding count', () => {
+    const group = sevenIn('F'.repeat(300) + '.java', 1, 7, { categoryName: 'SQL Injection' });
+    const summary = buildGroupSummary(group);
+    expect(summary.length).toBeLessThanOrEqual(255);
+    expect(summary.endsWith(' - SQL Injection (7 findings)')).toBe(true);
   });
 });
 
@@ -697,7 +782,55 @@ describe('Veracode follow-up builders', () => {
   it('the follow-up summary is the subset group summary plus " (follow-up to <KEY>)"', () => {
     const subset = flawsWithIds(group, ['2', '3']);
     expect(buildFollowUpSummary(subset, 'PROJ-8')).toBe(`${buildGroupSummary(subset)} (follow-up to PROJ-8)`);
-    expect(buildFollowUpSummary(subset, 'PROJ-8')).toContain('2, 3');
-    expect(buildFollowUpSummary(subset, 'PROJ-8')).not.toContain('1, 2');
+    expect(buildFollowUpSummary(subset, 'PROJ-8')).toBe('Foo.java - SQL Injection (2 findings) (follow-up to PROJ-8)');
+  });
+});
+
+describe('buildGroupLabels across files (R11)', () => {
+  it('a fold across two files carries one issue label per finding, one cwe label per distinct CWE, and veracode', () => {
+    const labels = buildGroupLabels([
+      makeFlaw({ issueId: '1', sourceFile: 'A.java', cweId: '89' }),
+      makeFlaw({ issueId: '2', sourceFile: 'B.java', cweId: '89' }),
+      makeFlaw({ issueId: '3', sourceFile: 'B.java', cweId: '79', line: 9 }),
+    ]);
+    expect(labels).toEqual(['veracode', 'veracode-issue-1', 'cwe-89', 'veracode-issue-2', 'veracode-issue-3', 'cwe-79']);
+  });
+});
+
+describe('buildFoldedCommentWiki (R14, R15)', () => {
+  const group = [
+    makeFlaw({ issueId: '1', sourceFile: 'A.java', line: 4 }),
+    makeFlaw({ issueId: '2', sourceFile: 'B.java', line: 8 }),
+  ];
+
+  it('lists each added finding with its own file and line under a banner', () => {
+    const wiki = buildFoldedCommentWiki(group);
+    expect(wiki.startsWith('These 2 Veracode findings were added to this ticket.')).toBe(true);
+    expect(wiki).toContain('|1|');
+    expect(wiki).toContain('A.java:4');
+    expect(wiki).toContain('B.java:8');
+    expect(wiki).toContain('h3. Issue 1');
+    expect(wiki).toContain('h3. Issue 2');
+  });
+
+  it('names the findings the ticket recorded that no longer appear in its description', () => {
+    const wiki = buildFoldedCommentWiki(group, ['1001', '1002']);
+    expect(wiki).toContain('No longer in the description');
+    expect(wiki).toContain('1001');
+    expect(wiki).toContain('1002');
+  });
+
+  it('has no dropped section when nothing was dropped', () => {
+    expect(buildFoldedCommentWiki(group)).not.toContain('No longer in the description');
+  });
+
+  it('stays within the size budget for large groups and still lists every finding', () => {
+    const big = Array.from({ length: 40 }, (_, i) => makeFlaw({
+      issueId: String(3000 + i), line: i + 1,
+      description: 'lorem ipsum dolor sit amet '.repeat(120), recommendation: 'consectetur adipiscing '.repeat(120),
+    }));
+    const wiki = buildFoldedCommentWiki(big);
+    expect(wiki.length).toBeLessThanOrEqual(30_000);
+    for (const flaw of big) expect(wiki).toContain(`|${flaw.issueId}|`);
   });
 });

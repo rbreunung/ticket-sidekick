@@ -6,7 +6,7 @@ import {
   sanitizeCellText, sanitizeStandaloneLine, resolveMaxReportBytes, findStaleTickets, buildStaleSearchJql,
   REPORT_SIZE_LIMITS_MB, resolveSizeLimitSetting, pickTargetTicket,
   type JqlIssueLike, type DedupTicket, type DedupMap, type RowChange,
-  fetchAllPages,
+  fetchAllPages, clampSummary, fitWiki, MAX_SUMMARY_CHARS, MAX_DESCRIPTION_CHARS,
 } from '../utils/reportImport';
 import type { ReviewRowBase } from '../participant/sessionState';
 
@@ -725,5 +725,52 @@ describe('fetchAllPages (dedup search paging)', () => {
     });
 
     await expect(fetchAllPages(fetchPage, 100)).rejects.toThrow('503');
+  });
+});
+
+describe('clampSummary (R9: titles stay within Jira\'s summary limit)', () => {
+  it('returns head + tail unchanged when it already fits', () => {
+    expect(clampSummary('OrderRepository.java', ' - SQL Injection (7 findings)')).toBe('OrderRepository.java - SQL Injection (7 findings)');
+  });
+
+  it('trims only the head when too long, so the tail (count, labels, rating suffix) always survives', () => {
+    const head = 'A'.repeat(300);
+    const tail = ' - SQL Injection (7 findings)';
+    const result = clampSummary(head, tail);
+    expect(result.length).toBeLessThanOrEqual(MAX_SUMMARY_CHARS);
+    expect(result.endsWith(tail)).toBe(true);
+    expect(result.startsWith('AAAA')).toBe(true);
+    expect(result).toContain('…');
+  });
+
+  it('honors an explicit smaller limit', () => {
+    expect(clampSummary('abcdefghij', '!', 6).length).toBeLessThanOrEqual(6);
+  });
+});
+
+describe('fitWiki (R10: descriptions and comments stay within the size budget)', () => {
+  it('uses full detail (level 0) when it fits, and reports nothing shortened', () => {
+    const result = fitWiki(level => `level ${level}`, 4, 100);
+    expect(result).toEqual({ wiki: 'level 0', shortened: false, level: 0 });
+  });
+
+  it('steps down through the detail levels until the output fits', () => {
+    const sizes = [500, 300, 90, 10];
+    const result = fitWiki(level => 'x'.repeat(sizes[level]), 4, 100);
+    expect(result.level).toBe(2);
+    expect(result.shortened).toBe(true);
+    expect(result.wiki).toHaveLength(90);
+  });
+
+  it('returns the smallest level when nothing fits, rather than failing', () => {
+    const result = fitWiki(level => 'x'.repeat(1000 - level * 100), 3, 50);
+    expect(result.level).toBe(2);
+    expect(result.shortened).toBe(true);
+  });
+
+  it('defaults to the 30,000-character description budget', () => {
+    expect(MAX_DESCRIPTION_CHARS).toBe(30_000);
+    const result = fitWiki(level => (level === 0 ? 'x'.repeat(30_001) : 'ok'), 2);
+    expect(result.level).toBe(1);
   });
 });

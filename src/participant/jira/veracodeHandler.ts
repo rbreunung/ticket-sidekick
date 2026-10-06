@@ -119,10 +119,12 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
   labelToDedupKey: veracodeLabelToIssueId,
   buildRowFields: (group, templateLabels) => {
     const first = group[0];
+    // A fold shows its most severe member (finding folding plan, Assumptions).
+    const severity = Math.max(...group.map(flaw => flaw.severity));
     return {
       issueIds: group.map(flaw => flaw.issueId),
-      severity: first.severity,
-      severityLabelText: severityLabel(first.severity),
+      severity,
+      severityLabelText: severityLabel(severity),
       cweId: first.cweId,
       summary: buildGroupSummary(group),
       labels: buildGroupLabels(group, templateLabels),

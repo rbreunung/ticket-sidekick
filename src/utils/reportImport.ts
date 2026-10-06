@@ -386,6 +386,45 @@ export function sanitizeStandaloneLine(value: string): string {
   return `: ${sanitizeCellText(value)}`;
 }
 
+// --- Size budgets for folded tickets (finding folding plan, KTD8/KTD9) ---------------------------
+//
+// Jira's default limits are 255 characters for a summary and about 32,767 for a description or
+// comment. They are assumed, not checked against a live instance (see docs/known-limitations.md);
+// the description budget leaves margin below the default.
+export const MAX_SUMMARY_CHARS = 255;
+export const MAX_DESCRIPTION_CHARS = 30_000;
+
+/**
+ * Joins a title's `head` (a file or component name — the only part that may be trimmed) and its
+ * `tail` (finding count, CWE labels, rating suffix — never trimmed) within `max` characters. A
+ * trimmed head ends in `…` so the cut is visible.
+ */
+export function clampSummary(head: string, tail: string, max: number = MAX_SUMMARY_CHARS): string {
+  if (head.length + tail.length <= max) return head + tail;
+  const room = Math.max(0, max - tail.length - 1);
+  const clamped = `${head.slice(0, room)}…${tail}`;
+  return clamped.length <= max ? clamped : clamped.slice(0, max);
+}
+
+/**
+ * Builds wiki text at successively smaller detail levels (0 = full) until it fits `max`, and returns
+ * the first level that does — or the smallest level when none fits, so a caller always gets an
+ * answer. `shortened` is true whenever level 0 did not fit; the builder decides what each level
+ * drops and how it tells the reader (its last level should list every finding but little else).
+ */
+export function fitWiki(
+  build: (level: number) => string,
+  levels: number,
+  max: number = MAX_DESCRIPTION_CHARS,
+): { wiki: string; shortened: boolean; level: number } {
+  let wiki = '';
+  for (let level = 0; level < levels; level++) {
+    wiki = build(level);
+    if (wiki.length <= max || level === levels - 1) return { wiki, shortened: level > 0, level };
+  }
+  return { wiki, shortened: false, level: 0 };
+}
+
 /**
  * U3/KTD2: what changed on an already-ticketed item since its tickets were made. `baseline` means
  * the tickets record no findings at all (created before record labels existed); `findings` lists
