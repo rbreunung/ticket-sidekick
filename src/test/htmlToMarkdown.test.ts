@@ -186,6 +186,41 @@ describe('htmlToMarkdown', () => {
       expect(htmlToMarkdown(html)).toBe('| A | B |\n| --- | --- |\n| 1 | 2 |');
     });
 
+    describe('Outlook/Word data tables', () => {
+      const cell = (t: string, bold = false) =>
+        `<td><p class="MsoNormal">${bold ? `<b><span>${t}</span></b>` : `<span>${t}</span>`}<o:p></o:p></p></td>`;
+      const row = (cells: string[], bold = false) => `<tr>${cells.map(c => cell(c, bold)).join('')}</tr>`;
+      const table = (rows: string) => `<table class="MsoNormalTable" border="0"><tbody>${rows}</tbody></table>`;
+
+      it('renders a table whose cells each wrap one paragraph as a Markdown table', () => {
+        const html = table(row(['Ref', 'Code', 'Amount'], true) + row(['R-001', 'AAA111', '1,000.00']) + row(['R-002', 'BBB222', '2,000.00']));
+        expect(htmlToMarkdown(html)).toBe(
+          '| Ref | Code | Amount |\n| --- | --- | --- |\n| R-001 | AAA111 | 1,000.00 |\n| R-002 | BBB222 | 2,000.00 |');
+      });
+
+      it('renders header cells written as <td> inside <thead> as a Markdown table', () => {
+        const html = '<table><thead>' + row(['A', 'B'], true) + '</thead><tbody>' + row(['1', '2']) + '</tbody></table>';
+        expect(htmlToMarkdown(html)).toBe('| A | B |\n| --- | --- |\n| 1 | 2 |');
+      });
+
+      it('keeps an empty cell as an empty column and escapes a literal pipe', () => {
+        const html = table(row(['Ref', 'Code', 'Amount'], true)
+          + '<tr><td><p class="MsoNormal"><o:p>&nbsp;</o:p></p></td>' + cell('a | b') + cell('9') + '</tr>');
+        expect(htmlToMarkdown(html)).toBe('| Ref | Code | Amount |\n| --- | --- | --- |\n|  | a \\| b | 9 |');
+      });
+
+      it('joins a cell with two paragraphs by a space instead of dropping the separator', () => {
+        const html = '<table><tr><td><p>H1</p></td><td><p>H2</p></td></tr>'
+          + '<tr><td><p>first</p><p>second</p></td><td><p>x</p></td></tr></table>';
+        expect(htmlToMarkdown(html)).toBe('| H1 | H2 |\n| --- | --- |\n| first second | x |');
+      });
+
+      it('still lays out a one-row signature table whose cells are Outlook paragraphs', () => {
+        const html = '<table><tr><td><p>Jane Doe<br>Head of Operations</p></td></tr></table>';
+        expect(htmlToMarkdown(html).split('\n').filter(l => l.trim())).toEqual(['Jane Doe', 'Head of Operations']);
+      });
+    });
+
     it('does not produce stray bold markers around a line break', () => {
       expect(htmlToMarkdown('Hi<br>there <b>Bob</b>')).toBe('Hi\nthere **Bob**');
     });

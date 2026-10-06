@@ -21,6 +21,8 @@ You can also trigger the import from the chat directly:
 
 A file picker opens, the preview appears, and you proceed as above.
 
+Tables in the email body (including those written in desktop Outlook or Word) arrive as Jira tables with a header row, and empty cells stay empty. A table that only lays out a signature or logo is still flattened into plain lines.
+
 Inline images are uploaded as Jira attachments and embedded as thumbnails at their position in the description. File attachments are uploaded to the ticket. Individual attachments larger than 25 MB are rejected with a clear message rather than failing mid-upload.
 
 ## Removing confidentiality headers, footers and signatures
