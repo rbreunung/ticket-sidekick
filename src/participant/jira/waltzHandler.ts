@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import type { TicketService } from '../../services/TicketService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import {
-  parseWaltzReport, filterComponents, sanitizeComponentLabel, buildGroupSummary, buildGroupLabels, buildGroupDescriptionWiki,
+  parseWaltzReport, filterComponents, sanitizeComponentLabel, buildGroupSummary, buildGroupLabels, buildGroupDescriptionWiki, buildFoldedCommentWiki,
   describeWaltzRowChange, buildRecordLabels, buildCveLabel, buildRatingLabel, buildUpdateCommentWiki,
   buildFollowUpDescriptionWiki, buildFollowUpSummary, rewriteSummaryRating, highestRating,
   type WaltzComponent, type WaltzReviewRow,
@@ -140,6 +140,8 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
   fold: {
     itemOf: row => row.sourceGroup,
     combine: groups => groups.flat(),
+    recordLabelsOf: group => buildGroupLabels(group),
+    buildComment: (group, droppedKeys) => buildFoldedCommentWiki(group, droppedKeys),
   },
   // Import ticket updates parity (KTD2/KTD3): a component's findings are recorded as one
   // `oss-cve-<id>` label per CVE plus exactly one `oss-rating-<rating>` label, which `update`

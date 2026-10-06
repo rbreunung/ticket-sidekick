@@ -1333,6 +1333,9 @@ export interface ReviewRowBase {
   memberIds?: string[];
 }
 
+/** Finding folding: how `add … to <KEY>` writes to the target ticket. */
+export type AddMode = 'comment' | 'rewrite';
+
 /** U3/R6: the per-row actions on the Already-ticketed screen. */
 export type TicketedAction = 'update' | 'follow-up' | 're-create' | 'leave';
 
@@ -1382,12 +1385,15 @@ export interface ImportOutcomes {
   followUpFailed: number;
   closed: number;
   closeFailed: number;
+  // Finding folding: New rows added to an existing ticket (`add … to <KEY>`), and rows whose add failed.
+  added: number;
+  addFailed: number;
 }
 
 export function emptyImportOutcomes(): ImportOutcomes {
   return {
     created: 0, createFailed: 0, recreated: 0, recreateFailed: 0, updated: 0, updateFailed: 0,
-    followedUp: 0, followUpFailed: 0, closed: 0, closeFailed: 0,
+    followedUp: 0, followUpFailed: 0, closed: 0, closeFailed: 0, added: 0, addFailed: 0,
   };
 }
 
@@ -1857,8 +1863,9 @@ export function buildImportOverview<TRow extends ReviewRowBase>(session: ReviewS
     let link = '';
     if (group === 'new') {
       if (o.created > 0) parts.push(`${o.created} created`);
-      if (o.createFailed > 0) parts.push(`${o.createFailed} failed`);
-      parts.push(o.created > 0 || o.createFailed > 0 ? `${c.newRemaining} left` : countedNoun(c.newRemaining, opts.itemNoun));
+      if (o.added > 0) parts.push(`${o.added} added to existing tickets`);
+      if (o.createFailed + o.addFailed > 0) parts.push(`${o.createFailed + o.addFailed} failed`);
+      parts.push(o.created + o.createFailed + o.added + o.addFailed > 0 ? `${c.newRemaining} left` : countedNoun(c.newRemaining, opts.itemNoun));
       if (c.newRemaining > 0) link = cmdLink('Review & create', IMPORT_COMMANDS.openNew);
       lines.push(`- **New** — ${parts.join(' · ')}${link ? ` — ${link}` : ''}`);
     } else if (group === 'ticketed') {
@@ -1917,7 +1924,7 @@ export function buildNewGroupScreen<TRow extends ReviewRowBase>(
   );
   lines.push('');
   if (opts.canFold) {
-    lines.push('Reply `merge 2 4` to combine rows on this page into one ticket, or `unmerge 2` to split a merged row.');
+    lines.push('Reply `merge 2 4` to combine rows on this page into one ticket, `unmerge 2` to split a merged row, or `add 2 4 to PROJ-123` to add rows to an existing ticket.');
     lines.push('');
   }
   if (totalPages > 1) {
@@ -2145,6 +2152,10 @@ export type ImportReplyAction =
   | { kind: 'bulk'; include: boolean }
   | { kind: 'merge'; ids: string[] } // finding folding: combine these visible New rows into one
   | { kind: 'unmerge'; id: string } // finding folding: split a merged row back into its originals
+  // Finding folding: add rows to an existing ticket. `addPrompt` (no mode yet) shows the ticket and
+  // the Comment / Rewrite choice; `add` carries the chosen mode and executes.
+  | { kind: 'addPrompt'; ids: string[]; key: string }
+  | { kind: 'add'; ids: string[]; key: string; mode: AddMode }
   | { kind: 'toggleRows'; ids: string[] }
   | { kind: 'toggleStale'; keys: string[] }
   // `reason`, when present, says specifically why (e.g. an action a row does not offer, AE6).
@@ -2239,6 +2250,7 @@ function parseFoldReply(reply: string, ctx: ImportReplyContext): ImportReplyActi
       ? { kind: 'merge', ids }
       : { kind: 'invalid', reason: 'Merge needs at least two different row numbers, e.g. `merge 2 4`.' };
   }
+  if (n === 'add' || n.startsWith('add ')) return parseAddReply(n, ctx);
   const unmerge = n.match(/^unmerge(?: (\S+))?$/);
   if (unmerge) {
     const token = unmerge[1] ?? '';
@@ -2248,6 +2260,68 @@ function parseFoldReply(reply: string, ctx: ImportReplyContext): ImportReplyActi
       : { kind: 'invalid', reason: token ? `Row ${token.toUpperCase()} isn't a merged row on this page.` : 'Unmerge needs a merged row number, e.g. `unmerge 2`.' };
   }
   return null;
+}
+
+const ADD_USAGE = 'Add rows to a ticket like this: `add 2 4 to PROJ-123`, then choose Comment or Rewrite.';
+
+/** `add <ids> to <KEY>` with an optional `as comment` / `as rewrite` (normalized, lower-cased input). */
+function parseAddReply(n: string, ctx: ImportReplyContext): ImportReplyAction {
+  const match = n.match(/^add (.+?) to ([a-z][a-z0-9_]*-\d+)(?: as (comment|rewrite))?$/);
+  if (!match) return { kind: 'invalid', reason: ADD_USAGE };
+  const byLower = new Map(ctx.newRowIds.map(id => [id.toLowerCase(), id]));
+  const ids: string[] = [];
+  for (const token of match[1].split(/[\s,]+/).filter(Boolean)) {
+    const id = byLower.get(token);
+    if (!id) return { kind: 'invalid', reason: `Row ${token.toUpperCase()} isn't a New row on this page, so it can't be added.` };
+    if (!ids.includes(id)) ids.push(id);
+  }
+  if (ids.length === 0) return { kind: 'invalid', reason: ADD_USAGE };
+  const key = match[2].toUpperCase();
+  return match[3] ? { kind: 'add', ids, key, mode: match[3] as AddMode } : { kind: 'addPrompt', ids, key };
+}
+
+/** Everything the add prompt shows about the target ticket and what a rewrite would drop. */
+export interface AddPromptInput {
+  key: string;
+  summary: string;
+  status: string | null;
+  resolved: boolean;
+  ids: string[];
+  rowCount: number;
+  /** Findings the ticket recorded that a rewrite's description would no longer cover. */
+  droppedKeys: string[];
+  baseUrl?: string;
+}
+
+/**
+ * Finding folding (KTD5/KTD13): the first step of `add … to <KEY>` — the target ticket, a resolved
+ * warning, the overwrite warning with the findings a rewrite would drop, and two links that resend
+ * the command with the mode. Clicking one is the confirmation. The ticket's summary, status and the
+ * dropped keys come from Jira, so each is neutralized before it lands in this trusted response.
+ */
+export function buildAddPrompt(input: AddPromptInput): string {
+  const safe = (value: string) => neutralizeMarkdownLinks(value).replace(/\r?\n/g, ' ');
+  const rows = input.ids.join(',');
+  const command = (mode: AddMode) => `add ${rows} to ${input.key} as ${mode}`;
+  const lines: string[] = [
+    `### Add ${input.rowCount} ${input.rowCount === 1 ? 'row' : 'rows'} to ${formatKeyLink(input.key, input.baseUrl)}`,
+    '',
+    `**${input.key}** — ${safe(input.summary)}${input.status ? ` (${safe(input.status)})` : ''}`,
+    '',
+  ];
+  if (input.resolved) {
+    lines.push('⚠ This ticket is resolved. You can still add to it, but nobody may be watching it.');
+    lines.push('');
+  }
+  lines.push(`- ${cmdLink('Comment', command('comment'))} — posts one comment listing the added findings and adds their record labels. The description and title stay as they are.`);
+  lines.push(`- ${cmdLink('Rewrite', command('rewrite'))} — **overwrites the description and title** with the findings of this report, adds the record labels, and posts a comment listing what was added.`);
+  if (input.droppedKeys.length > 0) {
+    lines.push('');
+    lines.push(`Rewrite would drop these findings the ticket currently records, because the report does not cover them here: ${input.droppedKeys.map(safe).join(', ')}.`);
+  }
+  lines.push('');
+  lines.push('Either choice also changes this ticket\'s labels. Nothing is written until you pick one.');
+  return lines.join('\n');
 }
 
 /**
@@ -2366,7 +2440,7 @@ export function describeImportReplyVocabulary(view: ImportReviewView, ctx: Impor
   switch (view) {
     case 'new':
       return `On this screen you can reply \`create tickets\`, row numbers to toggle (e.g. \`2 4\`), \`include all\` / \`exclude all\`, ` +
-        `${ctx.canFold ? '`merge 2 4` / `unmerge 2`, ' : ''}\`next\` / \`prev\`, or ${exit}.`;
+        `${ctx.canFold ? '`merge 2 4` / `unmerge 2`, `add 2 4 to PROJ-123`, ' : ''}\`next\` / \`prev\`, or ${exit}.`;
     case 'ticketed':
       return 'On this screen you can reply `apply`, `<row> <action>` (e.g. `A2 follow-up` — actions are ' +
         `${TICKETED_ACTION_ORDER.map(a => `\`${a}\``).join(', ')}), \`all <action>\` (e.g. \`all leave\`), ` +
@@ -2390,7 +2464,8 @@ export function buildImportDoneSummary(outcomes: ImportOutcomes): string {
     `${outcomes.recreated} re-created`,
     `${outcomes.closed} closed`,
   ];
-  const failed = outcomes.createFailed + outcomes.recreateFailed + outcomes.updateFailed + outcomes.followUpFailed + outcomes.closeFailed;
+  if (outcomes.added > 0) parts.push(`${outcomes.added} added to existing tickets`);
+  const failed = outcomes.createFailed + outcomes.recreateFailed + outcomes.updateFailed + outcomes.followUpFailed + outcomes.closeFailed + outcomes.addFailed;
   if (failed > 0) parts.push(`${failed} failed`);
   return `Import finished — ${parts.join(', ')}.`;
 }

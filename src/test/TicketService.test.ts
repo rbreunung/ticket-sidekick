@@ -1668,3 +1668,58 @@ describe('TicketService.linkIssues (import follow-up linking)', () => {
     expect(onDiag).not.toHaveBeenCalledWith('info', expect.anything(), expect.anything());
   });
 });
+
+describe('TicketService.rewriteTicket (finding folding, KTD7)', () => {
+  let client: MockJiraClient;
+  let service: TicketService;
+
+  beforeEach(() => {
+    client = new MockJiraClient();
+    service = new TicketService(client);
+  });
+
+  function issue(labels: string[]): JiraIssue {
+    return { id: '1', key: 'PROJ-1', fields: { labels, summary: 'Old summary' } as JiraIssue['fields'] };
+  }
+
+  it('writes summary, description and the merged labels in one updateIssue call', async () => {
+    client.getIssue = async () => issue(['security', 'veracode-issue-9']);
+
+    const result = await service.rewriteTicket('PROJ-1', {
+      summary: 'New summary', description: 'h3. New', labelsToAdd: ['veracode', 'veracode-issue-9', 'veracode-issue-1'],
+    });
+
+    expect(client.updateIssueCalls).toHaveLength(1);
+    expect(client.updateIssueCalls[0]).toEqual({
+      issueKey: 'PROJ-1',
+      fields: { summary: 'New summary', description: 'h3. New', labels: ['security', 'veracode-issue-9', 'veracode', 'veracode-issue-1'] },
+    });
+    expect(result).toEqual({ added: ['veracode', 'veracode-issue-1'], removed: [] });
+  });
+
+  it('replaces labels starting with the given prefix instead of accumulating them', async () => {
+    client.getIssue = async () => issue(['oss-dependency', 'oss-rating-medium']);
+
+    const result = await service.rewriteTicket('PROJ-1', {
+      summary: 's', description: 'd', labelsToAdd: ['oss-dependency', 'oss-rating-high'], removePrefix: 'oss-rating-',
+    });
+
+    expect(client.updateIssueCalls[0].fields.labels).toEqual(['oss-dependency', 'oss-rating-high']);
+    expect(result.removed).toEqual(['oss-rating-medium']);
+  });
+
+  it('leaves labels out of the write when none change', async () => {
+    client.getIssue = async () => issue(['veracode']);
+
+    await service.rewriteTicket('PROJ-1', { summary: 's', description: 'd', labelsToAdd: ['veracode'] });
+
+    expect(client.updateIssueCalls[0].fields).toEqual({ summary: 's', description: 'd' });
+  });
+
+  it('writes nothing when the ticket cannot be read', async () => {
+    client.getIssue = async () => { throw new Error('Issue does not exist'); };
+
+    await expect(service.rewriteTicket('PROJ-9', { summary: 's', description: 'd', labelsToAdd: [] })).rejects.toThrow('Issue does not exist');
+    expect(client.updateIssueCalls).toHaveLength(0);
+  });
+});

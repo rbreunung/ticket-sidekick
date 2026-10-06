@@ -535,6 +535,18 @@ describe('batch email creation (U3/U4, via the shared reportImportHandler flow)'
     expect(text).not.toContain('`merge 2 4`');
   });
 
+  it('does not offer add either: add 1 to PROJ-1 writes nothing', async () => {
+    const templateSession = makeTemplateSession();
+    const ws = makeMockWs();
+    await handleEmailTemplateSelection('1', templateSession, client, ticketService, mockStream() as never, ws as never);
+    const reviewSession = ws.store['jira.session.emailReview'];
+
+    await handleEmailReviewReply('add 1 to PROJ-1 as comment', reviewSession as never, ticketService, mockStream() as never, ws as never);
+
+    expect(client.createIssueCalls).toHaveLength(0);
+    expect(client.addCommentCalls).toHaveLength(0);
+  });
+
   it('uploads each row\'s attachments after creating its ticket (KTD4 afterCreate hook)', async () => {
     const templateSession = makeTemplateSession({
       items: [{ subject: 'With attachment', senderName: 'Alice', markdownBody: 'Body', inlineImageMap: {}, emlFilePath: '/a.eml', attachments: [

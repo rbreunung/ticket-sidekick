@@ -465,6 +465,34 @@ export class TicketService {
     return { added, removed, summaryRewritten, summaryUnchanged };
   }
 
+  /**
+   * Finding folding (KTD7): the `add … as rewrite` write. Reads the ticket, merges labels as
+   * `updateLabels` does (append what is missing, replace labels starting with `removePrefix` that the
+   * new set does not carry) and writes summary, description and labels in one `updateIssue` call.
+   * Labels are left out of the write when none change. A ticket that cannot be read is never written.
+   */
+  async rewriteTicket(
+    issueKey: string,
+    change: { summary: string; description: string; labelsToAdd: string[]; removePrefix?: string },
+  ): Promise<{ added: string[]; removed: string[] }> {
+    const issue = await this.client.getIssue(issueKey);
+    const current = issue.fields.labels ?? [];
+    const toAdd = [...new Set(change.labelsToAdd)];
+    const currentSet = new Set(current);
+    const added = toAdd.filter(l => !currentSet.has(l));
+    const { removePrefix } = change;
+    const removed = removePrefix ? current.filter(l => l.startsWith(removePrefix) && !toAdd.includes(l)) : [];
+
+    const fields: Record<string, unknown> = { summary: change.summary, description: change.description };
+    if (added.length > 0 || removed.length > 0) {
+      const removedSet = new Set(removed);
+      fields.labels = [...current.filter(l => !removedSet.has(l)), ...added];
+    }
+    await this.client.updateIssue(issueKey, fields);
+    this.onDiag?.('info', `Ticket rewritten — ${issueKey}`, { issueKey, added, removed });
+    return { added, removed };
+  }
+
   async uploadAttachment(issueKey: string, filename: string, contentType: string, contentBytes: string): Promise<void> {
     return this.client.uploadAttachment(issueKey, filename, contentType, contentBytes);
   }

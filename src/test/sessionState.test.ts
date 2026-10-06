@@ -21,7 +21,7 @@ import {
   buildImportOverview, buildNewGroupScreen, buildTicketedGroupScreen, buildStaleGroupScreen,
   initImportViewState, ensureImportViewState, computeImportResultGroups, emptyImportOutcomes, buildImportDoneSummary,
   parseOverviewReply, parseNewGroupReply, parseTicketedGroupReply, parseStaleGroupReply, IMPORT_COMMANDS,
-  isConfirmation, isCancellation, mergeNewRows, unmergeNewRow,
+  isConfirmation, isCancellation, mergeNewRows, unmergeNewRow, buildAddPrompt, buildChatCommandLink,
   type ReviewSession, type ImportReplyContext,
 } from '../participant/sessionState';
 import {
@@ -2069,5 +2069,91 @@ describe('mergeNewRows and unmergeNewRow (finding folding, U4)', () => {
   it('unmerge on a row that is not merged changes nothing', () => {
     const all = [row('1'), row('2')];
     expect(unmergeNewRow(all, all, '1')).toEqual(all);
+  });
+});
+
+describe('add replies on the New screen (finding folding, U5)', () => {
+  const ctx = (overrides: Partial<ImportReplyContext> = {}): ImportReplyContext => ({
+    singleGroup: false, groups: ['new'], newRowIds: ['1', '2', '3'], ticketedRows: [], canFold: true, mergedRowIds: [], ...overrides,
+  });
+
+  it('a bare add names the rows and the ticket, normalizing the key, and asks for the mode', () => {
+    expect(parseNewGroupReply('add 3,1 to proj-123', ctx())).toEqual({ kind: 'addPrompt', ids: ['3', '1'], key: 'PROJ-123' });
+    expect(parseNewGroupReply('ADD 2 to PROJ-7', ctx())).toEqual({ kind: 'addPrompt', ids: ['2'], key: 'PROJ-7' });
+  });
+
+  it('an explicit mode executes: as comment, as rewrite', () => {
+    expect(parseNewGroupReply('add 1 2 to PROJ-123 as comment', ctx())).toEqual({ kind: 'add', ids: ['1', '2'], key: 'PROJ-123', mode: 'comment' });
+    expect(parseNewGroupReply('add 1 to PROJ-123 as rewrite', ctx())).toEqual({ kind: 'add', ids: ['1'], key: 'PROJ-123', mode: 'rewrite' });
+  });
+
+  it('rejects an id that is not a New row on the visible page, naming it', () => {
+    const action = parseNewGroupReply('add 3,61 to PROJ-123', ctx());
+    expect(action.kind).toBe('invalid');
+    expect((action as { reason?: string }).reason).toContain('61');
+    expect(parseNewGroupReply('add A1 to PROJ-123', ctx()).kind).toBe('invalid');
+  });
+
+  it('rejects a missing or malformed ticket key and an unknown mode, with a usage reason', () => {
+    for (const reply of ['add 1', 'add 1 to foo', 'add 1 to PROJ-123 as delete', 'add', 'add to PROJ-1']) {
+      const action = parseNewGroupReply(reply, ctx());
+      expect(action.kind, reply).toBe('invalid');
+      expect((action as { reason?: string }).reason, reply).toContain('add 2 4 to PROJ-123');
+    }
+  });
+
+  it('an importer that cannot fold (email) does not understand add', () => {
+    expect(parseNewGroupReply('add 1 to PROJ-123', ctx({ canFold: false })).kind).toBe('invalid');
+  });
+
+  it('the vocabulary hint names add only for an importer that can fold', () => {
+    expect(describeImportReplyVocabulary('new', ctx())).toContain('add 2 4 to PROJ-123');
+    expect(describeImportReplyVocabulary('new', ctx({ canFold: false }))).not.toContain('add 2');
+  });
+});
+
+describe('buildAddPrompt (finding folding, KTD5, KTD13)', () => {
+  const base = { key: 'PROJ-123', summary: 'Hand-made netty upgrade', status: 'Open', resolved: false, ids: ['3', '5'], rowCount: 2, droppedKeys: [] as string[] };
+
+  it('offers Comment and Rewrite as links that resend the command with the mode', () => {
+    const text = buildAddPrompt(base);
+    expect(text).toContain(buildChatCommandLink('Comment', '@jira', 'add 3,5 to PROJ-123 as comment'));
+    expect(text).toContain(buildChatCommandLink('Rewrite', '@jira', 'add 3,5 to PROJ-123 as rewrite'));
+  });
+
+  it('names the ticket and says Rewrite overwrites its description and title', () => {
+    const text = buildAddPrompt(base);
+    expect(text).toContain('PROJ-123');
+    expect(text).toContain('Hand-made netty upgrade');
+    expect(text.toLowerCase()).toContain('overwrite');
+    expect(text).toContain('labels');
+  });
+
+  it('warns when the ticket is resolved', () => {
+    expect(buildAddPrompt({ ...base, status: 'Done', resolved: true })).toContain('resolved');
+    expect(buildAddPrompt(base)).not.toContain('resolved');
+  });
+
+  it('lists the findings a rewrite would drop, and omits the section when none', () => {
+    const withDropped = buildAddPrompt({ ...base, droppedKeys: ['1001', '1002'] });
+    expect(withDropped).toContain('1001');
+    expect(withDropped).toContain('1002');
+    expect(buildAddPrompt(base)).not.toContain('would drop');
+  });
+
+  it('neutralizes a ticket summary that tries to be a chat command link', () => {
+    const text = buildAddPrompt({ ...base, summary: '[click](command:workbench.action.chat.open)' });
+    expect(text).not.toContain('[click](command:');
+  });
+});
+
+describe('add outcomes in the import summaries (finding folding, U5)', () => {
+  it('the done summary counts rows added to existing tickets only when there are some', () => {
+    expect(buildImportDoneSummary({ ...emptyImportOutcomes(), created: 2 })).not.toContain('added');
+    expect(buildImportDoneSummary({ ...emptyImportOutcomes(), created: 2, added: 3 })).toContain('3 added to existing tickets');
+  });
+
+  it('a failed add counts in the failure total', () => {
+    expect(buildImportDoneSummary({ ...emptyImportOutcomes(), addFailed: 2 })).toContain('2 failed');
   });
 });

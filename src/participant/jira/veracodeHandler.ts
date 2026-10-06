@@ -4,7 +4,7 @@ import type { TicketService } from '../../services/TicketService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import {
   parseVeracodeReport, filterFlaws, severityLabel, groupFlawsByLocation,
-  buildGroupSummary, buildGroupDescriptionWiki, buildGroupLabels, buildNewFindingsCommentWiki,
+  buildGroupSummary, buildGroupDescriptionWiki, buildGroupLabels, buildNewFindingsCommentWiki, buildFoldedCommentWiki,
   describeVeracodeChange, flawsWithIds, buildFollowUpSummary,
   type VeracodeFlaw, type VeracodeReviewRow,
 } from '../../utils/veracodeReport';
@@ -160,6 +160,8 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
   fold: {
     itemOf: row => row.sourceGroup,
     combine: groups => groups.flat(),
+    recordLabelsOf: group => buildGroupLabels(group),
+    buildComment: (group, droppedKeys) => buildFoldedCommentWiki(group, droppedKeys),
   },
   // Import ticket updates parity (KTD2): a folded group's findings are its flaw ids, recorded as
   // `veracode-issue-<id>` labels. No baseline, no rating and no summary rewrite for Veracode.
