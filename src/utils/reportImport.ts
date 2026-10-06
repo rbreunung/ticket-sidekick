@@ -355,7 +355,8 @@ export async function findStaleTickets(
 //     so it is kept and the value stays readable. Underscore does not count as a word character
 //     here: it is stripped below, and "_-_foo_-_" must not turn into a live "-foo-". A letter
 //     outside ASCII does not count either (conservative: its hyphen is stripped)
-//   - '+' is stripped — Jira-native underline is `+text+`
+//   - '+' is stripped unless it sits between two ASCII letters or digits, by the same flank rule as
+//     '-' above ("1.0.0+build.5" stays readable) — Jira-native underline is `+text+`
 //   - '^' is stripped — Jira-native superscript is `^text^`
 //   - '?' is stripped — Jira-native citation is `??text??`
 //   - '{' and '}' are stripped — Jira macros are `{quote}`, `{color}`, `{panel}`, `{code}`,
@@ -368,17 +369,17 @@ export async function findStaleTickets(
 //     already prevents inline()'s `/!\[([^\]]*)\]\(([^)]+)\)/g` regex from matching, so stripping
 //     '!' is redundant-but-harmless for that path and purely defensive against the Jira-native
 //     `!url!` trigger, which needs no brackets at all.)
-// Every character of TRIGGER_CHARS except '-', which is handled by its own flank rule below.
-const NON_HYPHEN_TRIGGER_CHARS_PATTERN = new RegExp(TRIGGER_CHARS_PATTERN.source.replace('\\-', ''), 'g');
-// A hyphen with anything other than an ASCII letter or digit on either side.
-const BOUNDARY_HYPHEN_PATTERN = /(?<![A-Za-z0-9])-|-(?![A-Za-z0-9])/g;
+// Every character of TRIGGER_CHARS except '-' and '+', which are handled by their own flank rule below.
+const OTHER_TRIGGER_CHARS_PATTERN = new RegExp(TRIGGER_CHARS_PATTERN.source.replace('\\-', '').replace('+', ''), 'g');
+// A hyphen or plus sign with anything other than an ASCII letter or digit on either side.
+const BOUNDARY_DELIMITER_PATTERN = /(?<![A-Za-z0-9])[-+]|[-+](?![A-Za-z0-9])/g;
 
 export function sanitizeCellText(value: string): string {
   return value
     .replace(/\r\n|\r|\n/g, ' ')
     .replace(/\|/g, '/')
-    .replace(BOUNDARY_HYPHEN_PATTERN, '')
-    .replace(NON_HYPHEN_TRIGGER_CHARS_PATTERN, '');
+    .replace(BOUNDARY_DELIMITER_PATTERN, '')
+    .replace(OTHER_TRIGGER_CHARS_PATTERN, '');
 }
 
 // A value pushed as an entire standalone line (no trusted prefix character in front of it, e.g.

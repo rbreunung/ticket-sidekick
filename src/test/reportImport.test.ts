@@ -94,12 +94,14 @@ describe('sanitizeCellText', () => {
   });
 });
 
-describe('sanitizeCellText keeps hyphens inside words', () => {
+describe('sanitizeCellText keeps hyphens and plus signs inside words', () => {
   it.each([
     ['netty-codec:4.1.100', 'netty-codec:4.1.100'],
     ['CVE-2099-1', 'CVE-2099-1'],
     ['/app/services/svc-0/package-lock.json', '/app/services/svc-0/package-lock.json'],
     ['state-of-the-art', 'state-of-the-art'],
+    ['1.0.0+build.5', '1.0.0+build.5'],
+    ['guava 31.1-jre+hotfix', 'guava 31.1-jre+hotfix'],
   ])('leaves %s unchanged', (value, expected) => {
     expect(sanitizeCellText(value)).toBe(expected);
   });
@@ -133,13 +135,32 @@ describe('sanitizeCellText keeps hyphens inside words', () => {
     expect(sanitizeCellText('über-lib')).toBe('über-lib'); // the hyphen sits between "r" and "l", both ASCII
   });
 
-  it('never leaves a hyphen that has a non-alphanumeric neighbor, whatever the payload', () => {
-    const crafted = 'a-b -c- --d-- e-_-f -*-g -- ~-~ x-y-z -x- (-a-) [-b-] {-c-} !-d-! ?-e-? ^-f-^ +-g-+';
-    expect(sanitizeCellText(crafted)).not.toMatch(/(?<![A-Za-z0-9])-|-(?![A-Za-z0-9])/);
+  it('strips a plus sign at the start or end of a word, where Jira reads it as an underline delimiter', () => {
+    expect(sanitizeCellText('+underline+')).toBe('underline');
+    expect(sanitizeCellText('a +b+ c')).toBe('a b c');
+    expect(sanitizeCellText('c++')).toBe('c');
+    expect(sanitizeCellText('a++b')).toBe('ab');
+    expect(sanitizeCellText('1 + 2')).toBe('1  2');
+  });
+
+  it('keeps only the inner plus sign of a wrapped word, and strips plus and hyphen next to each other', () => {
+    expect(sanitizeCellText('+a+b+')).toBe('a+b');
+    expect(sanitizeCellText('a-+b')).toBe('ab');
+    expect(sanitizeCellText('a+-b')).toBe('ab');
+  });
+
+  it('cannot assemble an underline by stripping underscores around a plus sign', () => {
+    expect(sanitizeCellText('_+_foo_+_')).toBe('foo');
+  });
+
+  it('never leaves a hyphen or plus sign that has a non-alphanumeric neighbor, whatever the payload', () => {
+    const crafted = 'a-b -c- --d-- e-_-f -*-g -- ~-~ x-y-z -x- (-a-) [-b-] {-c-} !-d-! ?-e-? ^-f-^ +-g-+ '
+      + 'a+b +c+ ++d++ e+_+f +*+g ~+~ x+y+z +x+ (+a+) [+b+] {+c+} !+d+! ?+e+? ^+f+^ -+g+-';
+    expect(sanitizeCellText(crafted)).not.toMatch(/(?<![A-Za-z0-9])[-+]|[-+](?![A-Za-z0-9])/);
   });
 
   it('still removes every other trigger character, wherever it sits', () => {
-    for (const char of '*_`[]~+^?{}!') {
+    for (const char of '*_`[]~^?{}!') {
       expect(sanitizeCellText(`a${char}b ${char}c${char} ${char}`), char).not.toContain(char);
     }
   });
