@@ -8,6 +8,8 @@ import {
   buildFollowUpDescriptionWiki, buildFollowUpSummary, rewriteSummaryRating, highestRating,
   type WaltzComponent, type WaltzReviewRow,
 } from '../../utils/waltzReport';
+import { AcceptedListService } from '../../services/AcceptedListService';
+import { narrowGroup, acceptedEntriesOf } from '../../utils/waltzAccepted';
 import type { WaltzTemplateSelectionSession, WaltzReviewSession, StaleCloseSession } from '../sessionState';
 import { WALTZ_REVIEW_COLUMNS } from '../sessionState';
 import {
@@ -28,10 +30,14 @@ export function getWaltzMaxReportBytes(): number {
   return resolveSizeLimitSetting('waltz.maxReportSizeMB', (key) => cfg.get(key));
 }
 
+function getWaltzMinVulnRating(): string {
+  return vscode.workspace.getConfiguration('ticketSidekick').get<string>('waltz.minVulnRating') ?? 'High';
+}
+
 function getWaltzConfig(): { minVulnRating: string; includeRemediationActions: string[]; maxReportBytes: number } {
   const cfg = vscode.workspace.getConfiguration('ticketSidekick');
   return {
-    minVulnRating: cfg.get<string>('waltz.minVulnRating') ?? 'High',
+    minVulnRating: getWaltzMinVulnRating(),
     includeRemediationActions: cfg.get<string[]>('waltz.includeRemediationActions') ?? ['', 'Remediate'],
     maxReportBytes: getWaltzMaxReportBytes(),
   };
@@ -142,6 +148,19 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
     combine: groups => groups.flat(),
     recordLabelsOf: group => buildGroupLabels(group),
     buildComment: (group, droppedKeys) => buildFoldedCommentWiki(group, droppedKeys),
+  },
+  // Accepted-CVE list (KTD8): component + CVE pairs the team accepted stay off the New screen.
+  accepted: {
+    itemOf: row => row.sourceGroup,
+    service: () => {
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      return workspaceRoot ? new AcceptedListService(workspaceRoot) : null;
+    },
+    narrow: (group, entries) => {
+      const narrowed = narrowGroup(group, entries, getWaltzMinVulnRating());
+      return { item: narrowed.group, hiddenCves: narrowed.hiddenCves, belowFloor: narrowed.belowFloor };
+    },
+    entriesOf: (group, reason) => acceptedEntriesOf(group, reason),
   },
   // Import ticket updates parity (KTD2/KTD3): a component's findings are recorded as one
   // `oss-cve-<id>` label per CVE plus exactly one `oss-rating-<rating>` label, which `update`

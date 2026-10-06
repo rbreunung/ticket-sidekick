@@ -447,6 +447,31 @@ describe('buildReviewRows', () => {
     expect(rows.map(r => r.label)).toEqual(['alpha', 'beta', 'gamma', 'delta']);
   });
 
+  it('narrows only items with no existing ticket, drops those narrowed away, and keeps the surviving new ids contiguous', () => {
+    const items: Item[] = [
+      { id: 'x1', label: 'alpha' }, // narrowed away
+      { id: 'x2', label: 'beta' }, // already ticketed: never narrowed
+      { id: 'x3', label: 'gamma' }, // narrowed to a different label
+      { id: 'x4', label: 'delta' },
+    ];
+    const dedupMap: DedupMap = new Map([['beta', [ticket('PROJ-501', ['beta'])]]]);
+    const seen: string[] = [];
+    const narrowNew = (item: Item): Item | null => {
+      seen.push(item.label);
+      if (item.label === 'alpha') return null;
+      return item.label === 'gamma' ? { ...item, label: 'gamma-narrowed' } : item;
+    };
+
+    const rows = buildReviewRows<Item, Row>(items, dedupMap, item => [item.label], item => ({ label: item.label }), undefined, narrowNew);
+
+    expect(seen).toEqual(['alpha', 'gamma', 'delta']);
+    expect(rows.map(r => ({ id: r.id, label: r.label }))).toEqual([
+      { id: 'A1', label: 'beta' },
+      { id: '1', label: 'gamma-narrowed' },
+      { id: '2', label: 'delta' },
+    ]);
+  });
+
   it('returns an empty array for empty input', () => {
     const rows = buildReviewRows<Item, Row>([], new Map(), item => [item.label], item => ({ label: item.label }));
     expect(rows).toEqual([]);

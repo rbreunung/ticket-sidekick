@@ -29,6 +29,12 @@ export type ImportReplyAction =
   // the Comment / Rewrite choice; `add` carries the chosen mode and executes.
   | { kind: 'addPrompt'; ids: string[]; key: string }
   | { kind: 'add'; ids: string[]; key: string; mode: AddMode }
+  // Accepted-CVE list: hide the CVEs of these visible New rows from future imports (with an optional
+  // reason), list the entries, or remove the entry at that 1-based position.
+  | { kind: 'accept'; ids: string[]; reason?: string }
+  | { kind: 'listAccepted' }
+  | { kind: 'unaccept'; position: number }
+  | { kind: 'unacceptEntry'; component: string; cve: string } // what a Remove link sends: the entry itself, not its position
   | { kind: 'toggleRows'; ids: string[] }
   | { kind: 'toggleStale'; keys: string[] }
   // `reason`, when present, says specifically why (e.g. an action a row does not offer, AE6).
@@ -46,6 +52,9 @@ export interface ImportReplyContext {
   // email), and which visible New rows are merged rows (the only valid `unmerge` targets).
   canFold?: boolean;
   mergedRowIds?: string[];
+  // Accepted-CVE list: whether the importer supports it (Waltz), which turns on `accept`, `accepted`
+  // and `unaccept`.
+  canAccept?: boolean;
 }
 
 /** Every token must be one of `ids` (case-insensitive) — a stray token makes the reply invalid
@@ -69,7 +78,43 @@ export function parseOverviewReply(reply: string, ctx: ImportReplyContext): Impo
   if (n === IMPORT_COMMANDS.openNew && ctx.groups.includes('new')) return { kind: 'open', view: 'new' };
   if (n === IMPORT_COMMANDS.openTicketed && ctx.groups.includes('ticketed')) return { kind: 'open', view: 'ticketed' };
   if (n === IMPORT_COMMANDS.openStale && ctx.groups.includes('stale')) return { kind: 'open', view: 'stale' };
+  const listing = ctx.canAccept ? parseAcceptedListReply(reply) : null;
+  if (listing) return listing;
   return { kind: 'invalid' };
+}
+
+const UNACCEPT_USAGE = 'Remove an accepted entry by its number, e.g. `unaccept 2` (reply `accepted` to see the numbers).';
+// `unaccept <component> <CVE>`: the CVE is the last word, the component everything before it.
+const UNACCEPT_ENTRY_PATTERN = /^unaccept (.+) (\S+)$/;
+const ACCEPT_USAGE = 'Accept the CVEs of rows like this: `accept 2 4`, optionally with a reason: `accept 2 because not reachable`.';
+
+/**
+ * Accepted-CVE list: `accepted` (list the entries) and `unaccept <n>` (remove one). A reply starting
+ * with either word is always answered here — valid, or `invalid` with a usage reason — never handed on.
+ */
+function parseAcceptedListReply(reply: string): ImportReplyAction | null {
+  const n = normalizeReply(reply);
+  if (n === IMPORT_COMMANDS.accepted) return { kind: 'listAccepted' };
+  const unaccept = n.match(/^unaccept(?: (.*))?$/);
+  if (!unaccept) return null;
+  const entry = n.match(UNACCEPT_ENTRY_PATTERN);
+  if (entry) return { kind: 'unacceptEntry', component: entry[1], cve: entry[2] };
+  const position = /^\d+$/.test(unaccept[1] ?? '') ? Number(unaccept[1]) : 0;
+  return position > 0 ? { kind: 'unaccept', position } : { kind: 'invalid', reason: UNACCEPT_USAGE };
+}
+
+/** `accept <rows> [because <reason>]` on the New screen; the reason keeps the casing the user typed. */
+function parseAcceptReply(reply: string, ctx: ImportReplyContext): ImportReplyAction | null {
+  const trimmed = reply.trim().replace(/\s+/g, ' ');
+  const match = trimmed.match(/^accept(?: (.*))?$/i);
+  if (!match) return null;
+  const [rowsPart, ...reasonParts] = (match[1] ?? '').split(/ because /i);
+  const tokens = rowsPart.toLowerCase().replace(/ because$/, '').split(/[\s,]+/).filter(Boolean);
+  if (tokens.length === 0) return { kind: 'invalid', reason: ACCEPT_USAGE };
+  const rows = matchVisibleNewRows(tokens, ctx, 'accepted');
+  if ('reason' in rows) return { kind: 'invalid', reason: rows.reason };
+  const reason = reasonParts.join(' because ').trim();
+  return reason ? { kind: 'accept', ids: rows.ids, reason } : { kind: 'accept', ids: rows.ids };
 }
 
 /** Shared by every group screen: back/done and cancellation words (KTD2). */
@@ -92,6 +137,10 @@ export function parseNewGroupReply(reply: string, ctx: ImportReplyContext): Impo
   if (ctx.canFold) {
     const fold = parseFoldReply(reply, ctx);
     if (fold) return fold;
+  }
+  if (ctx.canAccept) {
+    const accepted = parseAcceptReply(reply, ctx) ?? parseAcceptedListReply(reply);
+    if (accepted) return accepted;
   }
   const ids = parseStrictRowToggle(reply, ctx.newRowIds);
   return ids ? { kind: 'toggleRows', ids } : { kind: 'invalid' };
@@ -126,7 +175,7 @@ function parseFoldReply(reply: string, ctx: ImportReplyContext): ImportReplyActi
 }
 
 /** The distinct row ids named by `tokens`, each of which must be a New row on the visible page (else the reason, naming it). */
-function matchVisibleNewRows(tokens: string[], ctx: ImportReplyContext, verb: 'merged' | 'added'): { ids: string[] } | { reason: string } {
+function matchVisibleNewRows(tokens: string[], ctx: ImportReplyContext, verb: 'merged' | 'added' | 'accepted'): { ids: string[] } | { reason: string } {
   const byLower = new Map(ctx.newRowIds.map(id => [id.toLowerCase(), id]));
   const ids: string[] = [];
   for (const token of tokens) {
@@ -297,6 +346,9 @@ export function parseTicketedGroupReply(reply: string, ctx: ImportReplyContext):
 
   const exit = parseGroupExit(reply, ctx);
   if (exit) return exit;
+  // An import with no overview has no other screen to list the accepted entries from.
+  const listing = ctx.canAccept && ctx.singleGroup ? parseAcceptedListReply(reply) : null;
+  if (listing) return listing;
   return { kind: 'invalid' };
 }
 
@@ -305,6 +357,8 @@ export function parseStaleGroupReply(reply: string, ctx: ImportReplyContext): Im
   if (n === IMPORT_COMMANDS.close || isConfirmation(reply)) return { kind: 'close' };
   const exit = parseGroupExit(reply, ctx);
   if (exit) return exit;
+  const listing = ctx.canAccept && ctx.singleGroup ? parseAcceptedListReply(reply) : null;
+  if (listing) return listing;
   if (!ctx.stale) return { kind: 'invalid' };
   const toggle = parseStaleTicketToggle(reply, ctx.stale);
   // A reply mixing a ticket key with anything else is rejected whole rather than half-applied.
@@ -328,7 +382,8 @@ export function describeImportReplyVocabulary(view: ImportReviewView, ctx: Impor
   switch (view) {
     case 'new':
       return `On this screen you can reply \`create tickets\`, row numbers to toggle (e.g. \`2 4\`), \`include all\` / \`exclude all\`, ` +
-        `${ctx.canFold ? '`merge 2 4` / `unmerge 2`, `add 2 4 to PROJ-123`, ' : ''}\`next\` / \`prev\`, or ${exit}.`;
+        `${ctx.canFold ? '`merge 2 4` / `unmerge 2`, `add 2 4 to PROJ-123`, ' : ''}` +
+        `${ctx.canAccept ? '`accept 2 4`, `accepted` / `unaccept 2`, ' : ''}\`next\` / \`prev\`, or ${exit}.`;
     case 'ticketed':
       return 'On this screen you can reply `apply`, `<row> <action>` (e.g. `A2 follow-up` — actions are ' +
         `${TICKETED_ACTION_ORDER.map(a => `\`${a}\``).join(', ')}), \`all <action>\` (e.g. \`all leave\`), ` +
@@ -337,7 +392,7 @@ export function describeImportReplyVocabulary(view: ImportReviewView, ctx: Impor
       return `On this screen you can reply \`close tickets\`, a stale ticket's key to toggle it (e.g. \`PROJ-123\`), or ${exit}.`;
     default: {
       const opens = ctx.groups.map(g => `\`${g === 'new' ? IMPORT_COMMANDS.openNew : g === 'ticketed' ? IMPORT_COMMANDS.openTicketed : IMPORT_COMMANDS.openStale}\``);
-      return `On the overview you can reply ${[...opens, '`done`'].join(', ')}.`;
+      return `On the overview you can reply ${[...opens, ...(ctx.canAccept ? ['`accepted`', '`unaccept 2`'] : []), '`done`'].join(', ')}.`;
     }
   }
 }

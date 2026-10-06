@@ -121,7 +121,7 @@ Only `<staticflaws>` are imported (dynamic/manual analysis findings are out of s
 
 When an import finds more than one kind of result, `@jira` first shows an **overview** listing each group with its count:
 
-- **New** — findings without a ticket yet. Open it to toggle rows (reply row numbers, `include all` / `exclude all`, `next` / `prev` for more pages), fold rows together (`merge 2 4`, `unmerge 2`) or add them to an existing ticket (`add 2 4 to PROJ-123`) — see [Folding findings into one ticket](#folding-findings-into-one-ticket) — and reply **Create N tickets** (or **ok**) to create the included rows on the visible page.
+- **New** — findings without a ticket yet. Open it to toggle rows (reply row numbers, `include all` / `exclude all`, `next` / `prev` for more pages), fold rows together (`merge 2 4`, `unmerge 2`) or add them to an existing ticket (`add 2 4 to PROJ-123`) — see [Folding findings into one ticket](#folding-findings-into-one-ticket) — hide CVEs you have decided to accept (`accept 2 4`, OSS reports only — see [Accepting CVEs](#accepting-cves-you-have-decided-to-live-with)) — and reply **Create N tickets** (or **ok**) to create the included rows on the visible page.
 - **Already ticketed** — findings that already have a ticket. Each row shows its ticket, the ticket's status, what changed since the ticket was made (for example "+2 CVEs, High→Critical" or "+1 flaw"), and a proposed action. Click another action in the row, or reply e.g. `A2 follow-up` or `all leave`, then reply **Apply** (or **ok**):
   - **update** — adds the new findings to the existing ticket as labels and one comment. For an OSS report, a higher rating also updates the rating at the end of the ticket's summary, unless you renamed the summary.
   - **follow-up** — creates a new ticket with only the new findings and links it to the existing one. Offered only when there are new findings.
@@ -188,3 +188,37 @@ Each ticket is labeled `oss-dependency` and a sanitized, collision-safe version 
 | `ticketSidekick.waltz.maxReportSizeMB` | `50` | Largest report file (1–200 MB) accepted; a larger file is rejected before it is read |
 
 Each **Create N tickets** creates at most 50 tickets (one page) — reply `next` on the New screen and create again for the remainder. If you re-run the import later, already-created tickets are automatically skipped via the dedup check.
+
+### Accepting CVEs you have decided to live with
+
+Some CVEs are known and accepted (not reachable in your setup, no fix available yet). Record them once and the OSS import stops offering them in **New**.
+
+On the New screen, reply `accept` and the row numbers:
+
+```text
+accept 2 4
+accept 2 because only reachable from the internal network
+```
+
+The CVEs listed on those rows are written to `.jira-oss-accepted.json` in the workspace root, next to `.jira-templates.json`. The reason is optional. Commit the file and your team shares the same decisions; you can also edit it by hand:
+
+```json
+{
+  "accepted": [
+    { "component": "netty-codec", "cve": "CVE-2024-1234", "reason": "only reachable from the internal network" },
+    { "component": "libfoo", "cve": "CVE-2024-5678" }
+  ]
+}
+```
+
+How it applies:
+
+- **Matched by component name and CVE, not version.** `netty-codec:4.1.100` and `netty-codec:4.1.101` are the same component, so an upgrade that still reports the accepted CVE stays hidden. A new CVE on the same component is offered again.
+- **A partly accepted component stays in New** with only its remaining CVEs: the ticket's description, CVE labels and rating cover just those, and the rating is recomputed from them. A component whose CVEs are all accepted disappears from New.
+- **The rating floor still applies.** If a component's remaining CVEs rate below `ticketSidekick.waltz.minVulnRating` after the accepted ones are dropped, it is hidden too.
+- **Merged rows.** `accept` on a merged row accepts the CVEs of every component in it.
+- **New screen only.** The Already ticketed and Stale screens are unchanged, so a later import can still propose adding an accepted CVE to an existing ticket.
+
+Nothing is hidden silently: the overview (or the New screen, when the import has only one group) shows a line such as "3 accepted CVEs hidden · 1 component below the rating floor". Reply `accepted` to list the entries with their reasons, and `unaccept 2` (or click **Remove**) to delete an entry. A **Remove** link names the entry itself (`unaccept netty-codec CVE-2024-1234`), so a link from an older list never deletes a different entry after the list has changed. A removed entry is offered again on the next import; rows already hidden stay hidden in the review that is open.
+
+If `.jira-oss-accepted.json` is not valid JSON, the import hides nothing and shows a warning. If it has an entry that cannot be read (for example a mistyped key), that entry is skipped with a warning. In both cases `accept` and `unaccept` leave the file alone until you fix it, so nothing you wrote by hand is lost.

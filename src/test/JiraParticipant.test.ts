@@ -1331,13 +1331,14 @@ describe('isSessionExpired (schemaVersion shape guard — AE7)', () => {
     expect(isSessionExpired(null)).toBe(false);
   });
 
-  it('treats a session persisted with the pre-fix schemaVersion (1) as expired after the bump to 9 (finding folding: merged rows and Waltz groups) — a stale TemplateGenerationTypePickSession (old string[] availableIssueTypes shape) never reaches the new {id, name}[] parsing', () => {
-    expect(CURRENT_SESSION_SCHEMA_VERSION).toBe(9);
+  it('treats a session persisted with the pre-fix schemaVersion (1) as expired after the bump to 10 (accepted-CVE counts on the review session) — a stale TemplateGenerationTypePickSession (old string[] availableIssueTypes shape) never reaches the new {id, name}[] parsing', () => {
+    expect(CURRENT_SESSION_SCHEMA_VERSION).toBe(10);
     expect(isSessionExpired({ schemaVersion: 1 })).toBe(true);
     expect(isSessionExpired({ schemaVersion: 5 })).toBe(true); // built before the overview hub
     expect(isSessionExpired({ schemaVersion: 6 })).toBe(true); // built before the stale target pick
     expect(isSessionExpired({ schemaVersion: 7 })).toBe(true); // built before the per-row actions
     expect(isSessionExpired({ schemaVersion: 8 })).toBe(true); // built before merged rows and Waltz groups
+    expect(isSessionExpired({ schemaVersion: 9 })).toBe(true); // built before the accepted-CVE counts
   });
 
   it('exposes a user-facing message that tells the user to re-run the import', () => {
