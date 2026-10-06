@@ -4,6 +4,7 @@
 import { BATCH_LIMIT } from '../../utils/reportImport';
 import type { RowChange } from '../../utils/reportImport';
 import { formatKeyLink } from '../../services/TicketService';
+import type { AcceptedEntry } from '../../utils/waltzAccepted';
 import { AcceptedHidden, ImportResultGroup, ImportReviewView, ReviewRowBase, ReviewSession, ReviewSessionStale, TicketedAction, TicketedRowResult, emptyImportOutcomes, isTicketedRowFinished, selectedStaleIssueTypes, ticketedRowActions, ticketedTargetKey } from './importTypes';
 import { ReviewTableColumn, cmdLink, countedNoun, neutralizeMarkdownLinks, pluralNoun, renderReviewTable, safeCellText } from './primitives';
 import { buildReviewPage } from './reviewPaging';
@@ -118,6 +119,8 @@ export interface ImportScreenOptions {
   findingNoun?: string;
   // Finding folding: whether the New screen offers merge/unmerge (Veracode, Waltz; not email).
   canFold?: boolean;
+  // Accepted-CVE list: whether the New screen offers `accept` (Waltz only).
+  canAccept?: boolean;
 }
 
 const pluralize = (n: number, singular: string, plural: string): string => `${n} ${n === 1 ? singular : plural}`;
@@ -194,6 +197,8 @@ export function buildImportOverview<TRow extends ReviewRowBase>(session: ReviewS
     }
   }
 
+  const hiddenLine = buildAcceptedHiddenLine(s.acceptedHidden);
+  if (hiddenLine) lines.push('', hiddenLine);
   lines.push('');
   lines.push('_Open a group to review it. Nothing is created, updated or closed until you choose an action inside that group._');
   lines.push('');
@@ -212,9 +217,11 @@ export function buildNewGroupScreen<TRow extends ReviewRowBase>(
   const { totalPages } = buildReviewPage(s.allRows, s.page);
   const lines: string[] = ['### New — will create'];
 
+  const hiddenLine = buildAcceptedHiddenLine(s.acceptedHidden);
   if (fresh.length === 0) {
     lines.push(`_No new ${pluralNoun(opts.itemNoun)} left to create._`);
     lines.push('');
+    if (hiddenLine) lines.push(hiddenLine, '');
     lines.push(groupScreenExitLine(s.singleGroup!));
     return lines.join('\n');
   }
@@ -231,6 +238,14 @@ export function buildNewGroupScreen<TRow extends ReviewRowBase>(
   lines.push('');
   if (opts.canFold) {
     lines.push('Reply `merge 2 4` to combine rows on this page into one ticket, `unmerge 2` to split a merged row, or `add 2 4 to PROJ-123` to add rows to an existing ticket.');
+    lines.push('');
+  }
+  if (opts.canAccept) {
+    lines.push('Reply `accept 2 4` to hide those rows\' CVEs from this and future imports (add `because …` to record why), or `accepted` to list what is accepted.');
+    lines.push('');
+  }
+  if (hiddenLine) {
+    lines.push(hiddenLine);
     lines.push('');
   }
   if (totalPages > 1) {
@@ -431,10 +446,24 @@ export function buildImportScreen<TRow extends ReviewRowBase>(
   opts: ImportScreenOptions,
 ): string {
   const s = ensureImportViewState(session);
+  // With no overview, the Already-ticketed or Stale screen is the only place to see what the accepted list hid.
+  const withHiddenLine = (screen: string): string => {
+    const line = s.singleGroup ? buildAcceptedHiddenLine(s.acceptedHidden) : '';
+    return line ? `${screen}\n\n${line}` : screen;
+  };
   switch (s.view) {
     case 'new': return buildNewGroupScreen(s, columns, opts);
-    case 'ticketed': return buildTicketedGroupScreen(s, columns, opts);
-    case 'stale': return buildStaleGroupScreen(s, opts);
+    case 'ticketed': return withHiddenLine(buildTicketedGroupScreen(s, columns, opts));
+    case 'stale': return withHiddenLine(buildStaleGroupScreen(s, opts));
     default: return buildImportOverview(s, opts);
   }
+}
+
+/** Accepted-CVE list (R7): the entries numbered in file order, each with a link that removes it. */
+export function buildAcceptedList(entries: AcceptedEntry[]): string {
+  if (entries.length === 0) return '_The accepted list is empty._';
+  const text = (value: string): string => neutralizeMarkdownLinks(value).replace(/\s+/g, ' ').trim();
+  const lines = entries.map((e, i) =>
+    `${i + 1}. ${text(e.component)} · ${text(e.cve)}${e.reason ? ` — ${text(e.reason)}` : ''} — ${cmdLink('Remove', `unaccept ${i + 1}`)}`);
+  return ['### Accepted CVEs', '', ...lines].join('\n');
 }
