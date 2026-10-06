@@ -2329,7 +2329,9 @@ export interface AddPromptInput {
  * dropped keys come from Jira, so each is neutralized before it lands in this trusted response.
  */
 export function buildAddPrompt(input: AddPromptInput): string {
-  const safe = (value: string) => neutralizeMarkdownLinks(value).replace(/\r?\n/g, ' ');
+  // Jira-sourced text on a trusted screen: besides [text](url) links, angle-bracket autolinks
+  // (<command:…>) are defused too — backslashes first, so the text's own "\<" cannot un-escape ours.
+  const safe = (value: string) => neutralizeMarkdownLinks(value.replace(/\r?\n/g, ' ')).replace(/\\/g, '\\\\').replace(/</g, '\\<');
   const rows = input.ids.join(',');
   const command = (mode: AddMode) => `add ${rows} to ${input.key} as ${mode}`;
   const lines: string[] = [
@@ -2351,6 +2353,20 @@ export function buildAddPrompt(input: AddPromptInput): string {
   lines.push('');
   lines.push('Either choice also changes this ticket\'s labels. Nothing is written until you pick one.');
   return lines.join('\n');
+}
+
+/**
+ * Finding folding: after a page is rebuilt from `allRows` (which keeps the originals), puts each
+ * of `merged` back in place of its members when all of them are still on the page. A merged row
+ * whose members were split across pages falls back to its originals. Pure.
+ */
+export function restoreMergedRows<TRow extends ReviewRowBase>(rows: TRow[], merged: TRow[]): TRow[] {
+  return merged.reduce((acc, row) => {
+    const ids = new Set(row.memberIds ?? [row.id]);
+    const members = acc.filter(r => r.existingTicketKey === null && ids.has(r.id));
+    if (members.length !== ids.size) return acc;
+    return acc.flatMap(r => (r === members[0] ? [row] : members.includes(r) ? [] : [r]));
+  }, rows);
 }
 
 /**

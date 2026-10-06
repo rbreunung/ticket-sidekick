@@ -376,6 +376,25 @@ export interface LabelUpdateResult {
   summaryUnchanged: boolean;
 }
 
+/**
+ * The label write both `updateLabels` and `rewriteTicket` make: append what the ticket lacks and
+ * drop labels starting with `removePrefix` that the new set does not carry. `labels` is the full
+ * array to write, or null when nothing changes.
+ */
+function mergeLabels(
+  current: string[],
+  labelsToAdd: string[],
+  removePrefix?: string,
+): { added: string[]; removed: string[]; labels: string[] | null } {
+  const toAdd = [...new Set(labelsToAdd)];
+  const currentSet = new Set(current);
+  const added = toAdd.filter(l => !currentSet.has(l));
+  const removed = removePrefix ? current.filter(l => l.startsWith(removePrefix) && !toAdd.includes(l)) : [];
+  if (added.length === 0 && removed.length === 0) return { added, removed, labels: null };
+  const removedSet = new Set(removed);
+  return { added, removed, labels: [...current.filter(l => !removedSet.has(l)), ...added] };
+}
+
 export class TicketService {
   constructor(private readonly client: IJiraClient, private readonly onDiag?: DiagLogger) {}
 
@@ -442,21 +461,13 @@ export class TicketService {
     options: { removePrefix?: string; rewriteSummary?: (summary: string) => string | null | undefined } = {},
   ): Promise<LabelUpdateResult> {
     const issue = await this.client.getIssue(issueKey);
-    const current = issue.fields.labels ?? [];
-    const toAdd = [...new Set(labelsToAdd)];
-    const currentSet = new Set(current);
-    const added = toAdd.filter(l => !currentSet.has(l));
-    const { removePrefix } = options;
-    const removed = removePrefix ? current.filter(l => l.startsWith(removePrefix) && !toAdd.includes(l)) : [];
+    const { added, removed, labels } = mergeLabels(issue.fields.labels ?? [], labelsToAdd, options.removePrefix);
     const rewritten = options.rewriteSummary?.(issue.fields.summary);
     const summaryUnchanged = rewritten === null;
     const summaryRewritten = typeof rewritten === 'string' && rewritten !== issue.fields.summary;
 
     const fields: Record<string, unknown> = {};
-    if (added.length > 0 || removed.length > 0) {
-      const removedSet = new Set(removed);
-      fields.labels = [...current.filter(l => !removedSet.has(l)), ...added];
-    }
+    if (labels) fields.labels = labels;
     if (summaryRewritten) fields.summary = rewritten;
     if (Object.keys(fields).length > 0) {
       await this.client.updateIssue(issueKey, fields);
@@ -476,18 +487,10 @@ export class TicketService {
     change: { summary: string; description: string; labelsToAdd: string[]; removePrefix?: string },
   ): Promise<{ added: string[]; removed: string[] }> {
     const issue = await this.client.getIssue(issueKey);
-    const current = issue.fields.labels ?? [];
-    const toAdd = [...new Set(change.labelsToAdd)];
-    const currentSet = new Set(current);
-    const added = toAdd.filter(l => !currentSet.has(l));
-    const { removePrefix } = change;
-    const removed = removePrefix ? current.filter(l => l.startsWith(removePrefix) && !toAdd.includes(l)) : [];
+    const { added, removed, labels } = mergeLabels(issue.fields.labels ?? [], change.labelsToAdd, change.removePrefix);
 
     const fields: Record<string, unknown> = { summary: change.summary, description: change.description };
-    if (added.length > 0 || removed.length > 0) {
-      const removedSet = new Set(removed);
-      fields.labels = [...current.filter(l => !removedSet.has(l)), ...added];
-    }
+    if (labels) fields.labels = labels;
     await this.client.updateIssue(issueKey, fields);
     this.onDiag?.('info', `Ticket rewritten — ${issueKey}`, { issueKey, added, removed });
     return { added, removed };

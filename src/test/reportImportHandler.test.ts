@@ -1746,6 +1746,25 @@ describe('Waltz per-row actions through the real descriptor (U5)', () => {
     expect(rebuilt.session.allRows[0].change).toBeNull();
   });
 
+  it('two rows that update the same ticket write one after the other, so neither overwrites the other\'s labels', async () => {
+    const a = component('lib-a 1.0', 'High', ['CVE-2020-1', 'CVE-2020-2']);
+    const b = component('lib-b 1.0', 'High', ['CVE-2021-1', 'CVE-2021-2']);
+    const tickets: Record<string, FakeTicket> = {
+      'PROJ-9': {
+        labels: [sanitizeComponentLabel(a.nameVersion), sanitizeComponentLabel(b.nameVersion), 'oss-cve-cve-2020-1', 'oss-cve-cve-2021-1', 'oss-rating-high'],
+      },
+    };
+    const { session, ws } = await importWaltz([a, b], tickets);
+    expect(session.allRows.map(r => r.action)).toEqual(['update', 'update']);
+    // A read that yields before answering: two parallel updates would both read the old labels.
+    const read = client.getIssue.bind(client);
+    client.getIssue = async (key: string) => { const issue = await read(key); await new Promise(r => setTimeout(r, 5)); return issue; };
+
+    await handleWaltzReviewReply('apply', session, ticketService, mockStream() as never, ws as never);
+
+    expect(tickets['PROJ-9'].labels).toEqual(expect.arrayContaining(['oss-cve-cve-2020-2', 'oss-cve-cve-2021-2']));
+  });
+
   it('`update tickets` with no row set to update writes nothing', async () => {
     const lib = component('lib 1.0', 'High', ['CVE-2020-1']);
     const tickets: Record<string, FakeTicket> = { 'PROJ-5': { labels: [sanitizeComponentLabel(lib.nameVersion), 'oss-cve-cve-2020-1', 'oss-rating-high'] } };
@@ -1920,6 +1939,39 @@ describe('Merge and unmerge through the real descriptors (finding folding, U4)',
     expect(session.allRows).toHaveLength(3); // the originals stay in allRows (page-local merge)
   });
 
+  it('a merged row whose ticket creation fails stays merged, so a retry creates one ticket, not one per member', async () => {
+    const { session, ws } = await importVeracode([sqlA(), xssB(), makeFlaw('3', { sourceFile: 'C.java', cweId: '22' })]);
+    await reply('merge 1 2', session, ws);
+    const create = client.createIssue.bind(client);
+    let fail = true;
+    client.createIssue = async (...args: Parameters<typeof create>) => {
+      if (fail && args[1].includes('2 findings')) throw new Error('boom');
+      return create(...args);
+    };
+
+    await reply('create tickets', session, ws);
+    const fresh = session.rows.filter(r => r.existingTicketKey === null);
+    expect(fresh.map(r => r.id)).toEqual(['1']);
+    expect(fresh[0].memberIds).toEqual(['1', '2']);
+    expect(fresh[0].included).toBe(true);
+
+    fail = false;
+    client.createIssueCalls.length = 0;
+    await reply('create tickets', session, ws);
+    expect(client.createIssueCalls).toHaveLength(1);
+    expect(client.createIssueCalls[0].summary).toContain('2 findings');
+  });
+
+  it('the created count counts tickets, not the findings merged into them', async () => {
+    const { session, ws } = await importVeracode([sqlA(), xssB()]);
+    await reply('merge 1 2', session, ws);
+
+    const stream = mockStream();
+    await reply('create tickets', session, ws, stream);
+
+    expect(streamText(stream)).toContain('**1** created');
+  });
+
   it('creating the merged row makes one ticket carrying every member and removes all members from allRows', async () => {
     const { session, ws } = await importVeracode([sqlA(), xssB(), makeFlaw('3', { sourceFile: 'C.java', cweId: '22' })]);
     await reply('merge 1 2', session, ws);
@@ -2080,6 +2132,38 @@ describe('Add rows to an existing ticket through the real descriptors (finding f
     expect(client.updateIssueCalls).toHaveLength(0);
     expect(client.addCommentCalls).toHaveLength(0);
     expect(newRows(session)).toEqual(['1', '2']);
+  });
+
+  it('adding rows from a long New list keeps the other pages reachable', async () => {
+    const flaws = Array.from({ length: 60 }, (_, i) => makeFlaw(String(i + 1), { sourceFile: `F${i + 1}.java`, cweId: String(3000 + i) }));
+    const { session, ws } = await importVeracode(flaws, handMade());
+    expect(session.rows.filter(r => r.existingTicketKey === null)).toHaveLength(50);
+
+    await reply('add 1,2 to PROJ-123 as comment', session, ws);
+
+    // The two added rows left; rows 51 and 52 slid onto the first page.
+    expect(session.rows.filter(r => r.existingTicketKey === null)).toHaveLength(50);
+    expect(newRows(session)).toHaveLength(58);
+    await reply('next', session, ws);
+    expect(session.rows.filter(r => r.existingTicketKey === null)).toHaveLength(8);
+  });
+
+  it('as rewrite marks the unfinished rows already pointing at that ticket as done, so apply cannot write them again', async () => {
+    const tickets: Record<string, FakeTicket> = {
+      'PROJ-123': { labels: ['veracode', 'veracode-issue-9'], summary: 'Old', status: 'Open' },
+    };
+    const known = makeFlaw('9', { sourceFile: 'Z.java', cweId: '1' });
+    const { session, ws } = await importVeracode([known, sqlA()], tickets);
+    expect(session.allRows.filter(r => r.existingTicketKey === 'PROJ-123')).toHaveLength(1);
+
+    await reply('open new', session, ws);
+    await reply('add 1 to PROJ-123 as rewrite', session, ws);
+    const ticketed = session.allRows.filter(r => r.existingTicketKey === 'PROJ-123');
+    expect(ticketed.every(r => r.result?.status === 'done' && r.result.action === 'rewrite')).toBe(true);
+    client.updateIssueCalls.length = 0;
+    await reply('back', session, ws);
+    await reply('apply', session, ws);
+    expect(client.updateIssueCalls).toHaveLength(0);
   });
 
   it('AE6: as comment adds the record labels and one comment listing both findings, leaving summary and description alone', async () => {
@@ -2364,6 +2448,21 @@ describe('Rewrite on the Already-ticketed screen through the real descriptors (f
 
     await reply('apply', session, ws);
     expect(client.updateIssueCalls.map(c => c.issueKey)).toEqual(['PROJ-1', 'PROJ-2']);
+  });
+
+  it('a single ticket whose rewrite covers more rows than the per-reply cap still runs whole', async () => {
+    const flaws = Array.from({ length: 55 }, (_, i) => makeFlaw(String(i + 1), { sourceFile: `F${i + 1}.java`, cweId: String(2000 + i) }));
+    const tickets: Record<string, FakeTicket> = {
+      'PROJ-1': { labels: ['veracode', ...flaws.map(f => `veracode-issue-${f.issueId}`)], summary: 'Everything', status: 'Open', created: '2026-01-01T09:00:00.000+0000' },
+    };
+    const { session, ws } = await importVeracode(flaws, tickets);
+    await reply('all rewrite', session, ws);
+
+    const stream = await reply('apply', session, ws);
+
+    expect(client.updateIssueCalls.map(c => c.issueKey)).toEqual(['PROJ-1']);
+    expect(session.allRows.filter(r => r.existingTicketKey !== null).every(r => r.result?.status === 'done')).toBe(true);
+    expect(text(stream)).not.toContain('remain');
   });
 
   it('a row already finished by update is outside the all-or-none set, and its findings still go into the rewrite', async () => {

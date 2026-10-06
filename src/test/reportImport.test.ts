@@ -9,6 +9,7 @@ import {
   fetchAllPages, clampSummary, fitWiki, MAX_SUMMARY_CHARS, MAX_DESCRIPTION_CHARS,
 } from '../utils/reportImport';
 import type { ReviewRowBase } from '../participant/sessionState';
+import { TRIGGER_CHARS } from '../utils/markdownToJiraWiki';
 
 describe('size-limit settings', () => {
   const pkg = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf-8'));
@@ -91,6 +92,23 @@ describe('sanitizeCellText', () => {
     expect(sanitized).not.toContain('\n');
     expect(sanitized).not.toContain('|');
     expect(sanitized).not.toMatch(/[*_`[\]~\-+^?{}!]/);
+  });
+});
+
+describe('sanitizeCellText covers the converter\'s whole trigger set', () => {
+  it('strips every TRIGGER_CHARS character between letters, except the in-word hyphen and plus', () => {
+    for (const ch of TRIGGER_CHARS) {
+      const out = sanitizeCellText(`a${ch}b`);
+      expect(out, `trigger ${ch}`).toBe(ch === '-' || ch === '+' ? `a${ch}b` : 'ab');
+    }
+  });
+
+  it('strips a hyphen or plus at any boundary', () => {
+    for (const ch of ['-', '+']) {
+      expect(sanitizeCellText(`${ch}a`)).toBe('a');
+      expect(sanitizeCellText(`a${ch}`)).toBe('a');
+      expect(sanitizeCellText(`a ${ch} b`)).toBe('a  b');
+    }
   });
 });
 

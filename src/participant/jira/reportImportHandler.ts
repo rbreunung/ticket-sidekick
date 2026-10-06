@@ -26,7 +26,7 @@ import {
   buildStaleTargetOptions, formatStaleTargetOption, parseStaleTargetPick, parseStaleIssueTypePick,
   selectedStaleIssueTypes, staleTargetState, staleTargetNeedsResolution, planStaleTransitions,
   selectedOpenStaleTickets, isBackOrCancellation,
-  type StaleTargetOption, applyReviewSessionToggle, applyBulkNewRowSet, mergeNewRows, unmergeNewRow, buildAddPrompt, findPartialRewrites, type AddMode,
+  type StaleTargetOption, applyReviewSessionToggle, applyBulkNewRowSet, mergeNewRows, unmergeNewRow, restoreMergedRows, buildAddPrompt, findPartialRewrites, type AddMode,
   applyTicketedActionChange, ticketedRowActions, ticketedTargetKey, isTicketedRowFinished,
   type TicketedAction, type TicketedRowResult,
   buildImportScreen, parseImportReviewReply, describeImportReplyVocabulary, buildImportDoneSummary,
@@ -88,9 +88,8 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   // KTD2: dedup is optional — an importer with no dedup key (email) omits all three, and the
   // "already ticketed" search step is skipped entirely instead of run and found empty.
   // U2/R11: both return one candidate value *per member* of the item — a folded Veracode group
-  // returns one label/key per flaw it contains, so a match on any one of them counts as
-  // already-ticketed; a single-item importer (Waltz) just returns a one-element array (no
-  // behavior change there).
+  // returns one label/key per flaw it contains and a Waltz group one per component, so a
+  // match on any one of them counts as already-ticketed.
   searchLabelOf?: (item: TItem) => string[]; // every label value searched for in the dedup JQL
   dedupKeyOf?: (item: TItem) => string[]; // every key looked up in the dedup map (may differ from searchLabelOf)
   labelToDedupKey?: (label: string) => string | null;
@@ -961,13 +960,19 @@ export async function createNewRows<TItem, TRow extends ReviewRowBase>(
 
   stream.markdown(`_Creating ${toCreate.length} ticket(s)…_\n\n`);
   const createdIds = new Set<string>();
+  const failedMerged: TRow[] = [];
   let failed = 0;
   for (const row of toCreate) {
     const outcome = await createOne(row, session, ticketService, stream, descriptor, baseUrl);
-    if ('key' in outcome) memberIdsOf(row).forEach(id => createdIds.add(id)); else failed++;
+    if ('key' in outcome) {
+      memberIdsOf(row).forEach(id => createdIds.add(id));
+    } else {
+      failed++;
+      if (row.memberIds) failedMerged.push(row);
+    }
   }
 
-  const created = createdIds.size;
+  const created = toCreate.length - failed;
   stream.markdown(
     `${pageFresh.length} ${descriptor.itemNoun} on this page — **${created}** created, ${failed} failed, ${excludedIds.size} excluded by you.\n\n`,
   );
@@ -983,7 +988,8 @@ export async function createNewRows<TItem, TRow extends ReviewRowBase>(
   return {
     ...session,
     allRows,
-    rows: page.rows,
+    // A merged row that failed keeps its merge, so a retry retries the one ticket, not one per member.
+    rows: restoreMergedRows(page.rows, failedMerged),
     page: page.page,
     outcomes: { ...outcomes, created: outcomes.created + created, createFailed: outcomes.createFailed + failed },
   };
@@ -1133,10 +1139,21 @@ async function addToTicket<TItem, TRow extends ReviewRowBase>(
   // The added rows leave New. Other rows on the page (merged ones included) are left as they are.
   const gone = new Set(rows.flatMap(r => r.memberIds ?? [r.id]));
   const isGone = (r: TRow) => r.existingTicketKey === null && gone.has(r.id);
+  // A rewrite rebuilt the ticket from the rows that already point to it, so those are done too.
+  const rewrittenResult: TicketedRowResult = commentFailed
+    ? { status: 'done', action: 'rewrite', note: 'comment-failed' } : { status: 'done', action: 'rewrite' };
+  const markRewritten = (r: TRow): TRow =>
+    mode === 'rewrite' && r.existingTicketKey !== null && !isTicketedRowFinished(r) && ticketedTargetKey(r) === key
+      ? { ...r, result: rewrittenResult } : r;
+  // The page is rebuilt from allRows so rows from the next page slide in; merged rows that stay keep their merge.
+  const allRows = session.allRows.filter(r => !isGone(r)).map(markRewritten);
+  const page = buildReviewPage(allRows, session.page);
+  const keptMerged = session.rows.filter(r => r.existingTicketKey === null && r.memberIds && !ids.includes(r.id));
   return {
     ...session,
-    allRows: session.allRows.filter(r => !isGone(r)),
-    rows: session.rows.filter(r => !(r.existingTicketKey === null && ids.includes(r.id))),
+    allRows,
+    rows: restoreMergedRows(page.rows, keptMerged),
+    page: page.page,
     outcomes: { ...outcomes, added: outcomes.added + rows.length },
   };
 }
@@ -1307,10 +1324,20 @@ export async function executeTicketedActions<TItem, TRow extends ReviewRowBase>(
     const members = rewriteGroups.get(key);
     if (members) members.push(r); else rewriteGroups.set(key, [r]);
   }
-  for (let i = 0; i < updates.length; i += UPDATE_CONCURRENCY) {
-    const batch = updates.slice(i, i + UPDATE_CONCURRENCY);
-    await Promise.all(batch.map(async row => {
-      results.set(row.id, await updateTicketedRow(row, ticketService, stream, descriptor, baseUrl));
+  // Rows that update the same ticket (several Waltz components can share one) run one after the
+  // other: each label write reads the ticket first, so parallel ones would overwrite each other.
+  const updateBuckets = new Map<string, TRow[]>();
+  for (const r of updates) {
+    const key = ticketedTargetKey(r);
+    const bucket = updateBuckets.get(key);
+    if (bucket) bucket.push(r); else updateBuckets.set(key, [r]);
+  }
+  const buckets = [...updateBuckets.values()];
+  for (let i = 0; i < buckets.length; i += UPDATE_CONCURRENCY) {
+    await Promise.all(buckets.slice(i, i + UPDATE_CONCURRENCY).map(async bucket => {
+      for (const row of bucket) {
+        results.set(row.id, await updateTicketedRow(row, ticketService, stream, descriptor, baseUrl));
+      }
     }));
   }
   for (const row of creations) {

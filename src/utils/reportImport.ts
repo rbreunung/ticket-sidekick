@@ -7,7 +7,7 @@
 // (what a "label" means, how a row's own fields are built) are injected via callbacks, not
 // duplicated. R9: only what Veracode and Waltz need today is here — no speculative generality.
 import type { DiagLogger } from './diagTypes';
-import { TRIGGER_CHARS_PATTERN } from './markdownToJiraWiki';
+import { TRIGGER_CHARS } from './markdownToJiraWiki';
 // Type-only import: erased at compile time (no runtime `require`), so this does not create the
 // circular *runtime* import that sessionState.ts's own value import of this file (BATCH_LIMIT,
 // sanitizeCellText) would otherwise raise — only a value/side-effect import can cycle.
@@ -370,7 +370,10 @@ export async function findStaleTickets(
 //     '!' is redundant-but-harmless for that path and purely defensive against the Jira-native
 //     `!url!` trigger, which needs no brackets at all.)
 // Every character of TRIGGER_CHARS except '-' and '+', which are handled by their own flank rule below.
-const OTHER_TRIGGER_CHARS_PATTERN = new RegExp(TRIGGER_CHARS_PATTERN.source.replace('\\-', '').replace('+', ''), 'g');
+const OTHER_TRIGGER_CHARS_PATTERN = new RegExp(
+  `[${[...TRIGGER_CHARS].filter(c => c !== '-' && c !== '+').map(c => `\\${c}`).join('')}]`,
+  'g',
+);
 // A hyphen or plus sign with anything other than an ASCII letter or digit on either side.
 const BOUNDARY_DELIMITER_PATTERN = /(?<![A-Za-z0-9])[-+]|[-+](?![A-Za-z0-9])/g;
 
@@ -523,8 +526,7 @@ function collectTickets(dedupMap: DedupMap, keys: string[]): DedupTicket[] {
  * Builds review rows from raw parsed items, assigning the shared id-numbering scheme (new
  * candidates numbered '1'..'N' in source order, already-ticketed ones 'A1'..'Am' in source order).
  * `dedupKeyOf` maps an item to *every* candidate key looked up in `dedupMap` (R11: a folded group
- * matches as already-ticketed as soon as any one of its member flaws' keys does — a single-key
- * importer just returns a one-element array); `rowBuilder` supplies the importer-specific row
+ * matches as already-ticketed as soon as any one of its members' keys does); `rowBuilder` supplies the importer-specific row
  * fields (everything beyond id/existingTicketKey/included).
  *
  * `existingTicketKey` is the item's target ticket ({@link pickTargetTicket}) across every ticket of

@@ -21,7 +21,7 @@ import {
   buildImportOverview, buildNewGroupScreen, buildTicketedGroupScreen, buildStaleGroupScreen,
   initImportViewState, ensureImportViewState, computeImportResultGroups, emptyImportOutcomes, buildImportDoneSummary,
   parseOverviewReply, parseNewGroupReply, parseTicketedGroupReply, parseStaleGroupReply, IMPORT_COMMANDS,
-  isConfirmation, isCancellation, mergeNewRows, unmergeNewRow, buildAddPrompt, buildChatCommandLink, findPartialRewrites, formatTicketedRowResult,
+  isConfirmation, isCancellation, mergeNewRows, unmergeNewRow, restoreMergedRows, buildAddPrompt, buildChatCommandLink, findPartialRewrites, formatTicketedRowResult,
   type ReviewSession, type ImportReplyContext,
 } from '../participant/sessionState';
 import {
@@ -2144,6 +2144,35 @@ describe('buildAddPrompt (finding folding, KTD5, KTD13)', () => {
   it('neutralizes a ticket summary that tries to be a chat command link', () => {
     const text = buildAddPrompt({ ...base, summary: '[click](command:workbench.action.chat.open)' });
     expect(text).not.toContain('[click](command:');
+  });
+
+  it('defuses angle-bracket command autolinks in the summary, status and dropped keys', () => {
+    const evil = '<command:workbench.action.chat.open?%7B%22query%22%3A%22x%22%7D>';
+    const text = buildAddPrompt({ ...base, summary: evil, status: evil, droppedKeys: [evil] });
+    expect(text).not.toMatch(/(?<!\\)<command:/);
+    expect(text).toContain('\\<command:');
+  });
+
+  it('a backslash in the summary cannot un-escape the defused bracket', () => {
+    const text = buildAddPrompt({ ...base, summary: '\\<command:workbench.action.chat.open>' });
+    expect(text).toContain('\\\\\\<command:');
+  });
+});
+
+describe('restoreMergedRows (finding folding)', () => {
+  const row = (id: string, extra: Record<string, unknown> = {}) => ({ id, existingTicketKey: null, included: true, ...extra }) as never;
+
+  it('puts a merged row back in place of its members', () => {
+    const merged = row('1', { memberIds: ['1', '2'], included: true });
+    const rebuilt = [row('1'), row('2'), row('3')];
+    expect(restoreMergedRows(rebuilt, [merged]).map(r => (r as { id: string }).id)).toEqual(['1', '3']);
+    expect(restoreMergedRows(rebuilt, [merged])[0]).toBe(merged);
+  });
+
+  it('leaves the originals when a member is no longer on the page', () => {
+    const merged = row('1', { memberIds: ['1', '2'] });
+    const rebuilt = [row('1'), row('3')];
+    expect(restoreMergedRows(rebuilt, [merged])).toEqual(rebuilt);
   });
 });
 
