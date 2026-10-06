@@ -381,10 +381,10 @@ describe('Already-ticketed screen — per-row actions (U4/R5, R6, KTD9)', () => 
 });
 
 describe('Session schema version (U4/KTD8)', () => {
-  it('is 9, so a review built with the version-8 row shape (no merged rows, Waltz sourceComponent) expires', () => {
-    expect(CURRENT_SESSION_SCHEMA_VERSION).toBe(9);
-    expect(isSessionExpired({ schemaVersion: 8 })).toBe(true);
-    expect(isSessionExpired({ schemaVersion: 9 })).toBe(false);
+  it('is 10, so a review built before the accepted-CVE counts (version 9) expires', () => {
+    expect(CURRENT_SESSION_SCHEMA_VERSION).toBe(10);
+    expect(isSessionExpired({ schemaVersion: 9 })).toBe(true);
+    expect(isSessionExpired({ schemaVersion: 10 })).toBe(false);
   });
 });
 

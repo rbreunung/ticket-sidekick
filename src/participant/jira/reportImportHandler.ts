@@ -15,6 +15,8 @@ import type { TicketService } from '../../services/TicketService';
 import { formatKeyLink } from '../../services/TicketService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import { TemplateService } from '../../templates/TemplateService';
+import type { AcceptedListService } from '../../services/AcceptedListService';
+import type { AcceptedEntry } from '../../utils/waltzAccepted';
 import { FieldResolver } from '../../templates/FieldResolver';
 import {
   MAX_REPORT_BYTES, BATCH_LIMIT, DEFAULT_DEDUP_CHUNK_SIZE, findAlreadyTicketed, fetchAllPages, buildReviewRows,
@@ -31,7 +33,7 @@ import {
   type TicketedAction, type TicketedRowResult,
   buildImportScreen, parseImportReviewReply, describeImportReplyVocabulary, buildImportDoneSummary,
   initImportViewState, ensureImportViewState, emptyImportOutcomes,
-  type ImportReplyContext, type ImportScreenOptions,
+  type ImportReplyContext, type ImportScreenOptions, buildAllHiddenMessage, computeImportResultGroups,
   CURRENT_SESSION_SCHEMA_VERSION, isSessionExpired, SESSION_EXPIRED_MESSAGE,
   NO_ISSUE_TYPE, resolveTemplateIssueType, formatIssueTypeOptionLabel, buildChatCommandLink,
   type ImportTemplateSelectionSession, type ReviewSession, type ReviewTableColumn, type ReviewRowBase,
@@ -129,6 +131,19 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   // offers none of those replies. Both Veracode and Waltz items are groups, so combining items is
   // concatenation (KTD1).
   fold?: ImportFold<TItem, TRow>;
+  // Accepted-CVE list (KTD8): optional, like `fold` and `stale`. Waltz supplies it; Veracode and email
+  // omit it and behave exactly as before.
+  accepted?: ImportAccepted<TItem>;
+}
+
+/** Accepted-CVE list: what an importer supplies so findings the team accepted stay off the New screen. */
+export interface ImportAccepted<TItem> {
+  /** The list's file service, or null when no workspace folder is open (nothing hidden, nothing writable). */
+  service: () => AcceptedListService | null;
+  /** The item with accepted findings taken out and its rating recomputed; `item` is null when nothing of it is left. */
+  narrow: (item: TItem, entries: AcceptedEntry[]) => { item: TItem | null; hiddenCves: number; belowFloor: number };
+  /** One entry per finding the item currently lists — what `accept` writes for a row. */
+  entriesOf: (item: TItem) => AcceptedEntry[];
 }
 
 /** Finding folding (KTD1/KTD4): what an importer supplies so its New rows can be merged by the user. */
@@ -503,12 +518,34 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
   // that part to ticket-creation time via its own buildTicketFields, rather than paying the cost
   // here for every candidate the user may never confirm.
   const dedupKeyOf = descriptor.dedupKeyOf ?? (() => []);
+  // Accepted-CVE list (KTD1): applied to the New items only, after the dedup split, so Already ticketed
+  // and Stale keep seeing the full report (R8). A missing list file or workspace hides nothing; a
+  // broken one hides nothing and is reported.
+  const acceptedHidden = { cves: 0, belowFloor: 0 };
+  let narrowNew: ((item: TItem) => TItem | null) | undefined;
+  if (descriptor.accepted) {
+    const accepted = descriptor.accepted;
+    const loaded = accepted.service()?.load();
+    if (loaded?.warning) {
+      logDiag(descriptor.scope, 'warn', 'Accepted-CVE list could not be applied in full', { warning: loaded.warning });
+      stream.markdown(`_Warning: ${loaded.warning}_\n\n`);
+    }
+    if (loaded && loaded.entries.length > 0) {
+      narrowNew = item => {
+        const narrowed = accepted.narrow(item, loaded.entries);
+        acceptedHidden.cves += narrowed.hiddenCves;
+        acceptedHidden.belowFloor += narrowed.belowFloor;
+        return narrowed.item;
+      };
+    }
+  }
   const allRows = buildReviewRows<TItem, TRow>(
     session.items,
     dedupMap,
     dedupKeyOf,
     item => descriptor.buildRowFields(item, templateLabels),
     descriptor.changeTracking,
+    narrowNew,
   );
   const initialPage = buildReviewPage(allRows, 0);
 
@@ -520,6 +557,7 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
     allRows,
     rows: initialPage.rows,
     page: initialPage.page,
+    ...(acceptedHidden.cves > 0 || acceptedHidden.belowFloor > 0 ? { acceptedHidden } : {}),
     schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
   };
 
@@ -591,6 +629,14 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
         }
       }
     }
+  }
+
+  // Every finding was kept off the screen by the accepted list and nothing else (ticketed, stale) is
+  // left to review: say so, rather than the filter-mismatch wording. Runs after the stale check
+  // because Stale counts as a group (KTD1).
+  if (reviewSession.acceptedHidden && computeImportResultGroups(reviewSession.allRows, reviewSession.staleTickets).length === 0) {
+    stream.markdown(buildAllHiddenMessage(reviewSession.acceptedHidden));
+    return {};
   }
 
   return streamImportReview(initImportViewState(reviewSession), stream, ws, descriptor, baseUrl);

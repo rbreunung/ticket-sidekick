@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   parseAcceptedFile, serializeAcceptedFile, componentNameOf, addAcceptedEntries, removeAcceptedEntry,
-  narrowGroup, narrowGroups, type AcceptedEntry,
+  narrowGroup, narrowGroups, acceptedEntriesOf, type AcceptedEntry,
 } from '../utils/waltzAccepted';
 import type { WaltzComponent } from '../utils/waltzReport';
 
@@ -189,5 +189,36 @@ describe('componentNameOf', () => {
     expect(componentNameOf('netty-codec:4.1.100')).toBe('netty-codec');
     expect(componentNameOf('org.example:artifact:1.2.3')).toBe('org.example:artifact');
     expect(componentNameOf('standalone')).toBe('standalone');
+  });
+});
+
+describe('acceptedEntriesOf — what accepting a row writes', () => {
+  it('lists one entry per CVE of every member of a merged row, by component name', () => {
+    const group = [
+      component('a:1.0', 'High', [['CVE-2024-0001', 'High']]),
+      component('b:2.0', 'High', [['CVE-2024-0002', 'High'], ['CVE-2024-0003', 'Low']]),
+    ];
+    expect(acceptedEntriesOf(group)).toEqual([
+      { component: 'a', cve: 'CVE-2024-0001' },
+      { component: 'b', cve: 'CVE-2024-0002' },
+      { component: 'b', cve: 'CVE-2024-0003' },
+    ]);
+  });
+
+  it('writes a CVE once when two members share a component name and the CVE', () => {
+    const group = [
+      component('a:1.0', 'High', [['CVE-2024-0001', 'High']]),
+      component('a:2.0', 'High', [['CVE-2024-0001', 'High']]),
+    ];
+    expect(acceptedEntriesOf(group)).toEqual([{ component: 'a', cve: 'CVE-2024-0001' }]);
+  });
+
+  it('adds the reason to every entry when one is given', () => {
+    const group = [component('a:1.0', 'High', [['CVE-2024-0001', 'High']])];
+    expect(acceptedEntriesOf(group, 'not reachable')).toEqual([{ component: 'a', cve: 'CVE-2024-0001', reason: 'not reachable' }]);
+  });
+
+  it('is empty for a component with no CVE data', () => {
+    expect(acceptedEntriesOf([component('a:1.0', 'High', [])])).toEqual([]);
   });
 });

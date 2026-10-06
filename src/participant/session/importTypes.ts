@@ -39,7 +39,9 @@ import { TransitionBatchTicket } from './sessionTypes';
 // `updatedExisting`/`hasUnsyncedFindings`/`recreatedKey` flags.
 // Finding folding (KTD12): bumped 8 -> 9 — report-import rows can carry `memberIds` (a merged row) and
 // Waltz rows hold `sourceGroup` (a component array) instead of `sourceComponent`.
-export const CURRENT_SESSION_SCHEMA_VERSION = 9;
+// Accepted-CVE list (KTD5): bumped 9 -> 10 — ReviewSession gained `acceptedHidden`, the counts of what
+// the list hid from the New screen.
+export const CURRENT_SESSION_SCHEMA_VERSION = 10;
 
 export interface ImportTemplateSelectionSession<TItem> {
   reportFileName: string;
@@ -252,7 +254,16 @@ export interface ReviewSession<TRow> {
   groups?: ImportResultGroup[];
   singleGroup?: boolean;
   outcomes?: ImportOutcomes;
+  // Accepted-CVE list (KTD5): what the accepted list kept off the New screen — CVEs hidden because
+  // they are accepted, and components hidden because their recomputed rating fell below the floor.
+  // Stored, not recomputed per render; absent when nothing was hidden or the importer has no list.
+  acceptedHidden?: AcceptedHidden;
   schemaVersion: number;
+}
+
+export interface AcceptedHidden {
+  cves: number;
+  belowFloor: number;
 }
 
 export type VeracodeReviewSession = ReviewSession<VeracodeReviewRow>;

@@ -4,7 +4,7 @@
 import { BATCH_LIMIT } from '../../utils/reportImport';
 import type { RowChange } from '../../utils/reportImport';
 import { formatKeyLink } from '../../services/TicketService';
-import { ImportResultGroup, ImportReviewView, ReviewRowBase, ReviewSession, ReviewSessionStale, TicketedAction, TicketedRowResult, emptyImportOutcomes, isTicketedRowFinished, selectedStaleIssueTypes, ticketedRowActions, ticketedTargetKey } from './importTypes';
+import { AcceptedHidden, ImportResultGroup, ImportReviewView, ReviewRowBase, ReviewSession, ReviewSessionStale, TicketedAction, TicketedRowResult, emptyImportOutcomes, isTicketedRowFinished, selectedStaleIssueTypes, ticketedRowActions, ticketedTargetKey } from './importTypes';
 import { ReviewTableColumn, cmdLink, countedNoun, neutralizeMarkdownLinks, pluralNoun, renderReviewTable, safeCellText } from './primitives';
 import { buildReviewPage } from './reviewPaging';
 
@@ -29,6 +29,7 @@ export const IMPORT_COMMANDS = {
   recreate: 're-create tickets',
   apply: 'apply',
   close: 'close tickets',
+  accepted: 'accepted',
 } as const;
 
 // Pre-overview-hub spelling of the update action — still accepted on the Already-ticketed screen so
@@ -117,6 +118,31 @@ export interface ImportScreenOptions {
   findingNoun?: string;
   // Finding folding: whether the New screen offers merge/unmerge (Veracode, Waltz; not email).
   canFold?: boolean;
+}
+
+const pluralize = (n: number, singular: string, plural: string): string => `${n} ${n === 1 ? singular : plural}`;
+
+function describeAcceptedHidden(hidden: AcceptedHidden): string {
+  const parts: string[] = [];
+  if (hidden.cves > 0) parts.push(`${pluralize(hidden.cves, 'accepted CVE', 'accepted CVEs')} hidden`);
+  if (hidden.belowFloor > 0) parts.push(`${pluralize(hidden.belowFloor, 'component', 'components')} below the rating floor`);
+  return parts.join(' · ');
+}
+
+/**
+ * Accepted-CVE list (R7, R10): the line saying what the list kept off the New screen, with a link to
+ * list the entries. Empty when nothing was hidden. Shown on the overview and, when there is no
+ * overview, on the group screen itself, so the count is never invisible.
+ */
+export function buildAcceptedHiddenLine(hidden: AcceptedHidden | undefined): string {
+  if (!hidden || (hidden.cves === 0 && hidden.belowFloor === 0)) return '';
+  return `_${describeAcceptedHidden(hidden)}_ — ${cmdLink('Show accepted', IMPORT_COMMANDS.accepted)}`;
+}
+
+/** Said when the accepted list leaves nothing in any group, instead of the filter-mismatch message. */
+export function buildAllHiddenMessage(hidden: AcceptedHidden): string {
+  return `Nothing is left to import: ${describeAcceptedHidden(hidden)} (see \`.jira-oss-accepted.json\`). ` +
+    'Remove an entry from that file, or lower the rating floor, to see those findings again.';
 }
 
 /** "Back to overview" normally; "Done" when the import has a single group and no overview (R4). */

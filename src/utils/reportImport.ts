@@ -540,14 +540,24 @@ export function buildReviewRows<TItem, TRow extends ReviewRowBase>(
   dedupKeyOf: (item: TItem) => string[],
   rowBuilder: (item: TItem) => Omit<TRow, keyof ReviewRowBase>,
   changeTracking?: RowChangeTracking<TItem>,
+  // Accepted-CVE list (KTD1): applied only to items with no existing ticket, before the row id is
+  // assigned, so a hidden item never becomes a row and the surviving new ids stay contiguous. A
+  // null return drops the item; an already-ticketed item is never narrowed (R8).
+  narrowNew?: (item: TItem) => TItem | null,
 ): TRow[] {
   const rows: TRow[] = [];
   let newIndex = 0;
   let ticketedIndex = 0;
-  for (const item of items) {
-    const keys = dedupKeyOf(item);
+  for (const original of items) {
+    const keys = dedupKeyOf(original);
     const tickets = collectTickets(dedupMap, keys);
     const target = tickets.length > 0 ? pickTargetTicket(tickets) : null;
+    let item = original;
+    if (!target && narrowNew) {
+      const narrowed = narrowNew(original);
+      if (narrowed === null) continue;
+      item = narrowed;
+    }
     const existingTicketKey = target ? target.key : null;
     const base: ReviewRowBase = {
       id: existingTicketKey ? `A${++ticketedIndex}` : `${++newIndex}`,

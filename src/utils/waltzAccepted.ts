@@ -154,3 +154,19 @@ export function narrowGroups(groups: WaltzComponent[][], entries: AcceptedEntry[
   }
   return { groups: out, hiddenCves, belowFloor };
 }
+
+/** The entries accepting a row writes: one per CVE of every member, by component name, each CVE once (R5). */
+export function acceptedEntriesOf(group: WaltzComponent[], reason?: string): AcceptedEntry[] {
+  const seen = new Set<string>();
+  const entries: AcceptedEntry[] = [];
+  for (const c of group) {
+    const component = componentNameOf(c.nameVersion);
+    for (const v of c.vulnerabilities) {
+      const key = pairKey(component, v.cveId);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      entries.push(reason ? { component, cve: v.cveId, reason } : { component, cve: v.cveId });
+    }
+  }
+  return entries;
+}

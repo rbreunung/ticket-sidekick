@@ -8,6 +8,8 @@ import {
   buildFollowUpDescriptionWiki, buildFollowUpSummary, rewriteSummaryRating, highestRating,
   type WaltzComponent, type WaltzReviewRow,
 } from '../../utils/waltzReport';
+import { AcceptedListService } from '../../services/AcceptedListService';
+import { narrowGroup, acceptedEntriesOf } from '../../utils/waltzAccepted';
 import type { WaltzTemplateSelectionSession, WaltzReviewSession, StaleCloseSession } from '../sessionState';
 import { WALTZ_REVIEW_COLUMNS } from '../sessionState';
 import {
@@ -142,6 +144,18 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
     combine: groups => groups.flat(),
     recordLabelsOf: group => buildGroupLabels(group),
     buildComment: (group, droppedKeys) => buildFoldedCommentWiki(group, droppedKeys),
+  },
+  // Accepted-CVE list (KTD8): component + CVE pairs the team accepted stay off the New screen.
+  accepted: {
+    service: () => {
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      return workspaceRoot ? new AcceptedListService(workspaceRoot) : null;
+    },
+    narrow: (group, entries) => {
+      const narrowed = narrowGroup(group, entries, getWaltzConfig().minVulnRating);
+      return { item: narrowed.group, hiddenCves: narrowed.hiddenCves, belowFloor: narrowed.belowFloor };
+    },
+    entriesOf: group => acceptedEntriesOf(group),
   },
   // Import ticket updates parity (KTD2/KTD3): a component's findings are recorded as one
   // `oss-cve-<id>` label per CVE plus exactly one `oss-rating-<rating>` label, which `update`
