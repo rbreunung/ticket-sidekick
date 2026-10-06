@@ -5,6 +5,10 @@ import { buildImportScreen, ensureImportViewState, type ImportScreenOptions, typ
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import type { ReportImportDescriptor } from './reportImportTypes';
 
+// U4: maps each importer's `descriptorKind` to its two JiraSessionKind literals — replaces the
+// per-descriptor `templateTag`/`reviewTag` strings the ChatResult.metadata mechanism no longer
+// needs (R1/R3). A plain object literal rather than a `${descriptorKind}-template` template-string
+// cast keeps every kind spelled out as a literal JiraSessionKind, so a typo here is a compile error.
 export const IMPORT_SESSION_KINDS: Record<ReportImportDescriptor<unknown, ReviewRowBase>['descriptorKind'], { template: JiraSessionKind; review: JiraSessionKind }> = {
   veracode: { template: 'veracode-template', review: 'veracode-review' },
   waltz: { template: 'waltz-template', review: 'waltz-review' },

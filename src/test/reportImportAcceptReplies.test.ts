@@ -165,6 +165,17 @@ describe('buildAcceptedList — the entries, numbered, each with a remove link',
     expect(text).toMatch(/unaccept(%20| )libfoo(%20| )CVE-2024-0002/);
   });
 
+  it('keeps a component with parentheses or spaces in the link, so the click sends the whole name', () => {
+    const text = buildAcceptedList([{ component: 'lib) with (parens', cve: 'CVE-2024-0001' }]);
+    const target = text.match(/\(command:[^\s]*?\)(?=$|\s)/m)?.[0] ?? '';
+    // the markdown destination holds no raw parenthesis beyond its own opening and closing one
+    expect(target.slice(1, -1)).not.toMatch(/[()]/);
+    const query = JSON.parse(decodeURIComponent(target.slice(1, -1).split('?')[1])).query as string;
+    expect(query).toBe('@jira unaccept lib) with (parens CVE-2024-0001');
+    expect(parseImportReviewReply('new', query.replace('@jira ', ''), ctx()))
+      .toEqual({ kind: 'unacceptEntry', component: 'lib) with (parens', cve: 'cve-2024-0001' });
+  });
+
   it('says so when the list is empty', () => {
     expect(buildAcceptedList([])).toMatch(/empty/i);
   });

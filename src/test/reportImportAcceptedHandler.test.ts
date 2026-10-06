@@ -232,6 +232,16 @@ describe('accept on the New screen (R5, R7)', () => {
     expect(newRows(after.session)).toHaveLength(3);
   });
 
+  it('refuses to accept over a list file that has an entry it could not read, and changes nothing', async () => {
+    const { session, ws } = await importWaltz(report());
+    const original = JSON.stringify({ accepted: [{ component: 'typo', cves: 'CVE-1' }, { component: 'kept', cve: 'CVE-2', ticket: 'PROJ-9' }] });
+    writeFileSync(fileOn(), original);
+    const after = await reply('accept 1', session!, ws);
+    expect(after.text).toContain('left as it is');
+    expect(readFileSync(fileOn(), 'utf8')).toBe(original);
+    expect(newRows(after.session)).toHaveLength(3);
+  });
+
   it('says so when no workspace folder is open, and writes nothing', async () => {
     const { session, ws } = await importWaltz(report());
     workspace.dir = undefined;

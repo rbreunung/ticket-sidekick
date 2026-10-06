@@ -71,7 +71,9 @@ export const TICKET_KEY_TOKEN = new RegExp(`^${TICKET_ID_PATTERN.source}$`, 'i')
 export function buildChatCommandLink(label: string, participantId: '@jira' | '@bitbucket', replyText: string): string {
   const safeLabel = neutralizeMarkdownLinks(label);
   const query = `${participantId} ${replyText}`;
-  const encodedArgs = encodeURIComponent(JSON.stringify({ query, isPartialQuery: false }));
+  // encodeURIComponent leaves ( and ) literal, and an unbalanced ) would end the markdown link destination
+  // early, so reply text that carries one (a component name from a hand-edited file) would cut the link off.
+  const encodedArgs = encodeURIComponent(JSON.stringify({ query, isPartialQuery: false })).replace(/\(/g, '%28').replace(/\)/g, '%29');
   return `[${safeLabel}](command:workbench.action.chat.open?${encodedArgs})`;
 }
 

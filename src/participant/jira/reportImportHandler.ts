@@ -24,7 +24,7 @@ import { CURRENT_SESSION_SCHEMA_VERSION, NO_ISSUE_TYPE, SESSION_EXPIRED_MESSAGE,
 import { resolveIssueTypeOrPrompt, resolveProjectKey, sessionWasSuperseded } from './ticketContext';
 import { buildStaleTicketGroups } from './cleanupHandler';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
-import { acceptRows, removeAcceptedEntry, showAcceptedList } from './importAccept';
+import { acceptRows, showAcceptedList, unacceptEntry } from './importAccept';
 import { addToTicket, showAddPrompt } from './importAddToTicket';
 import { createNewRows } from './importCreate';
 import { IMPORT_SESSION_KINDS, afterGroupAction, streamImportReview } from './importReviewScreen';
@@ -40,10 +40,6 @@ export { createNewRows } from './importCreate';
 export { streamStaleCloseStep, continueStaleClose } from './importStaleClose';
 export { executeTicketedActions } from './importTicketedActions';
 
-// U4: maps each importer's `descriptorKind` to its two JiraSessionKind literals — replaces the
-// per-descriptor `templateTag`/`reviewTag` strings the ChatResult.metadata mechanism no longer
-// needs (R1/R3). A plain object literal rather than a `${descriptorKind}-template` template-string
-// cast keeps every kind spelled out as a literal JiraSessionKind, so a typo here is a compile error.
 // Page size for the dedup search; fetchAllPages reads every page of each label chunk.
 const DEDUP_PAGE_SIZE = 100;
 
@@ -579,7 +575,7 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
       return rerender();
     case 'unaccept':
     case 'unacceptEntry':
-      removeAcceptedEntry(descriptor, action, stream);
+      unacceptEntry(descriptor, action, stream);
       return rerender();
     case 'addPrompt':
       await showAddPrompt(session, action.ids, action.key, ticketService, stream, descriptor, baseUrl);

@@ -89,7 +89,7 @@ export function showAcceptedList<TItem, TRow extends ReviewRowBase>(
  * list file. Rows already hidden stay hidden in the review that is open; the entry's findings come back on
  * the next import. Every piece of file text shown here is neutralized.
  */
-export function removeAcceptedEntry<TItem, TRow extends ReviewRowBase>(
+export function unacceptEntry<TItem, TRow extends ReviewRowBase>(
   descriptor: ReportImportDescriptor<TItem, TRow>,
   action: { kind: 'unaccept'; position: number } | { kind: 'unacceptEntry'; component: string; cve: string },
   stream: vscode.ChatResponseStream,

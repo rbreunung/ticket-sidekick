@@ -58,6 +58,7 @@ describe('AcceptedListService.add', () => {
     const service = new AcceptedListService(dir);
     expect(service.add([{ component: 'libnew', cve: 'CVE-2024-0003' }]).ok).toBe(false);
     expect(service.remove(1).ok).toBe(false);
+    expect(service.removePair('libbar', 'CVE-2024-0002').ok).toBe(false);
     expect(readFileSync(file(), 'utf8')).toBe(original);
   });
 

@@ -26,7 +26,7 @@ export function componentNameOf(nameVersion: string): string {
   return colon === -1 ? nameVersion : nameVersion.slice(0, colon);
 }
 
-const normalizeName = (name: string): string => name.trim().toLowerCase();
+const normalizeName = (name: string): string => name.trim().replace(/\s+/g, ' ').toLowerCase();
 const normalizeCve = (cve: string): string => cve.trim().toUpperCase();
 const pairKey = (component: string, cve: string): string => `${normalizeName(component)}\u0000${normalizeCve(cve)}`;
 
@@ -87,11 +87,14 @@ export function removeAcceptedEntry(entries: AcceptedEntry[], position: number):
   return { entries: entries.filter((_, i) => i !== position - 1), removed: entries[position - 1] };
 }
 
-/** Removes the entry for a component + CVE pair wherever it sits (what a Remove link names); null when it is not on the list. */
+/**
+ * Removes the entry for a component + CVE pair wherever it sits (what a Remove link names); null when it
+ * is not on the list. A pair a hand edit listed twice is removed in full, so "offered again" stays true.
+ */
 export function removeAcceptedPair(entries: AcceptedEntry[], component: string, cve: string): { entries: AcceptedEntry[]; removed: AcceptedEntry } | null {
   const key = pairKey(component, cve);
-  const index = entries.findIndex(e => pairKey(e.component, e.cve) === key);
-  return index === -1 ? null : { entries: entries.filter((_, i) => i !== index), removed: entries[index] };
+  const removed = entries.find(e => pairKey(e.component, e.cve) === key);
+  return removed ? { entries: entries.filter(e => pairKey(e.component, e.cve) !== key), removed } : null;
 }
 
 export interface NarrowResult {

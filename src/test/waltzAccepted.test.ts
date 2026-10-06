@@ -161,6 +161,17 @@ describe('editing the list', () => {
     expect(result!.entries).toEqual([accepted('a', 'CVE-1'), accepted('c', 'CVE-3')]);
   });
 
+  it('matches a component whose stored name has inner whitespace runs the way a Remove link spells it', () => {
+    const existing = [accepted('lib  with   gaps', 'CVE-1')];
+    expect(removeAcceptedPair(existing, 'lib with gaps', 'CVE-1')!.entries).toEqual([]);
+  });
+
+  it('removes every copy of a pair a hand edit listed twice, so the CVE really is offered again', () => {
+    const existing = [accepted('a', 'CVE-1'), accepted('A', 'cve-1', 'again'), accepted('b', 'CVE-2')];
+    const result = removeAcceptedPair(existing, 'a', 'CVE-1');
+    expect(result!.entries).toEqual([accepted('b', 'CVE-2')]);
+  });
+
   it('removes nothing for a pair that is not on the list', () => {
     expect(removeAcceptedPair([accepted('a', 'CVE-1')], 'a', 'CVE-2')).toBeNull();
   });
