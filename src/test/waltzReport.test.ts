@@ -682,6 +682,12 @@ describe('Waltz folded groups (R1, R3, R8-R11)', () => {
       expect(buildFoldedCommentWiki(group)).not.toContain('No longer in the description');
     });
 
+    it('with no added components (a rewrite with nothing new) says so and has no table', () => {
+      const wiki = buildFoldedCommentWiki([]);
+      expect(wiki).toContain('no components were added');
+      expect(wiki).not.toContain('||Component||');
+    });
+
     it('neutralizes a recorded label outside the normal label alphabet', () => {
       const wiki = buildFoldedCommentWiki(group, ['evil {quote}x{quote} !http://evil.example/t.gif!']);
       expect(wiki).not.toContain('{quote}');

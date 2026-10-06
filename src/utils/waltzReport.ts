@@ -632,12 +632,12 @@ function droppedKeyText(key: string): string {
 
 function buildFoldedMarkdown(group: WaltzComponent[], banner: string, level: number, droppedKeys: string[]): string {
   const lines: string[] = [banner, ''];
-  if (level > 0) {
+  if (level > 0 && group.length > 0) {
     lines.push("Per-component detail was shortened to fit Jira's size limit; the table lists every component.");
     lines.push('');
   }
-  pushFoldedTable(lines, group);
-  if (level < FOLD_LEVELS - 1) {
+  if (group.length > 0) pushFoldedTable(lines, group);
+  if (group.length > 0 && level < FOLD_LEVELS - 1) {
     for (const c of group) {
       lines.push(`### Component ${sanitizeCellText(c.nameVersion)}`);
       lines.push('');
@@ -671,9 +671,11 @@ export function buildGroupDescriptionWiki(group: WaltzComponent[]): string {
  * `droppedKeys` are component labels the ticket recorded that a rewrite no longer covers.
  */
 export function buildFoldedCommentWiki(group: WaltzComponent[], droppedKeys: string[] = []): string {
-  const banner = group.length === 1
-    ? 'This component was added to this ticket.'
-    : `These ${group.length} components were added to this ticket.`;
+  const banner = group.length === 0
+    ? 'This ticket was rewritten from the latest report; no components were added.'
+    : group.length === 1
+      ? 'This component was added to this ticket.'
+      : `These ${group.length} components were added to this ticket.`;
   return buildFoldedWiki(group, banner, droppedKeys);
 }
 

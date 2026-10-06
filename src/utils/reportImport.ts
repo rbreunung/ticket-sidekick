@@ -445,7 +445,7 @@ export function templateLabelsOf(additionalFields: Record<string, unknown>): str
   return Array.isArray(additionalFields.labels) ? additionalFields.labels as string[] : [];
 }
 
-export const TICKETED_ACTION_ORDER: readonly TicketedAction[] = ['update', 'follow-up', 're-create', 'leave'];
+export const TICKETED_ACTION_ORDER: readonly TicketedAction[] = ['update', 'follow-up', 'rewrite', 're-create', 'leave'];
 
 function createdTime(created: string | null): number {
   if (!created) return Number.NEGATIVE_INFINITY;
@@ -474,7 +474,7 @@ export function pickTargetTicket(tickets: DedupTicket[]): DedupTicket {
 }
 
 /**
- * R6/R7: which actions a row offers and which one it proposes. `follow-up` needs new findings;
+ * R6/R7: which actions a row offers and which one it proposes. `follow-up` needs new findings; `rewrite` is always offered;
  * `update` needs a change or a baseline; `re-create` and `leave` are always offered. Default: no
  * change → leave; baseline → update; change with any open ticket → update; change with every ticket
  * resolved → follow-up, except a rating rise with no new findings → update.
@@ -484,7 +484,8 @@ export function deriveTicketedActions(
   anyOpen: boolean,
 ): { allowedActions: TicketedAction[]; action: TicketedAction } {
   const hasNewFindings = change?.kind === 'findings' && change.newIds.length > 0;
-  const allowed = new Set<TicketedAction>(['re-create', 'leave']);
+  // `rewrite` (finding folding) is always offered: it rebuilds the target ticket from the report.
+  const allowed = new Set<TicketedAction>(['re-create', 'rewrite', 'leave']);
   if (change) allowed.add('update');
   if (hasNewFindings) allowed.add('follow-up');
   let action: TicketedAction;

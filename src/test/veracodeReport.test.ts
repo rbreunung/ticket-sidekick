@@ -824,6 +824,13 @@ describe('buildFoldedCommentWiki (R14, R15)', () => {
     expect(buildFoldedCommentWiki(group)).not.toContain('No longer in the description');
   });
 
+  it('with no added findings (a rewrite with nothing new) says so and has no table', () => {
+    const wiki = buildFoldedCommentWiki([]);
+    expect(wiki).toContain('no findings were added');
+    expect(wiki).not.toContain('||Issue ID||');
+    expect(buildFoldedCommentWiki([], ['1001'])).toContain('1001');
+  });
+
   it('stays within the size budget for large groups and still lists every finding', () => {
     const big = Array.from({ length: 40 }, (_, i) => makeFlaw({
       issueId: String(3000 + i), line: i + 1,

@@ -431,12 +431,12 @@ function pushFoldedSection(lines: string[], flaw: VeracodeFlaw, cap: number): vo
  */
 function buildFoldedMarkdown(group: VeracodeFlaw[], banner: string, level: number, droppedIds: string[]): string {
   const lines: string[] = [banner, ''];
-  if (level > 0) {
+  if (level > 0 && group.length > 0) {
     lines.push("Per-finding text was shortened to fit Jira's size limit; the table lists every finding.");
     lines.push('');
   }
-  pushFoldedTable(lines, group);
-  if (level < FOLD_LEVELS - 1) {
+  if (group.length > 0) pushFoldedTable(lines, group);
+  if (group.length > 0 && level < FOLD_LEVELS - 1) {
     const cap = FOLD_TEXT_CAPS[level];
     for (const flaw of group) pushFoldedSection(lines, flaw, cap);
   }
@@ -497,9 +497,11 @@ export function buildGroupDescriptionWiki(group: VeracodeFlaw[]): string {
  * ids the ticket recorded that a rewrite no longer covers.
  */
 export function buildFoldedCommentWiki(group: VeracodeFlaw[], droppedIds: string[] = []): string {
-  const banner = group.length === 1
-    ? 'This Veracode finding was added to this ticket.'
-    : `These ${group.length} Veracode findings were added to this ticket.`;
+  const banner = group.length === 0
+    ? 'This ticket was rewritten from the latest report; no findings were added.'
+    : group.length === 1
+      ? 'This Veracode finding was added to this ticket.'
+      : `These ${group.length} Veracode findings were added to this ticket.`;
   return buildFoldedWiki(group, banner, droppedIds);
 }
 

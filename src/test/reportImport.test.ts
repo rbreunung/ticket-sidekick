@@ -441,11 +441,11 @@ describe('buildReviewRows', () => {
         id: 'A1', existingTicketKey: 'PROJ-12', ticketKeys: ['PROJ-12'],
         target: { key: 'PROJ-12', status: 'In Progress', resolved: false },
         change: { kind: 'findings', newIds: ['B', 'C'] },
-        allowedActions: ['update', 'follow-up', 're-create', 'leave'],
+        allowedActions: ['update', 'follow-up', 'rewrite', 're-create', 'leave'],
       });
-      expect(rows[1].allowedActions).toEqual(['update', 'follow-up', 're-create', 'leave']);
+      expect(rows[1].allowedActions).toEqual(['update', 'follow-up', 'rewrite', 're-create', 'leave']);
       expect(rows[2].change).toBeNull();
-      expect(rows[2].allowedActions).toEqual(['re-create', 'leave']);
+      expect(rows[2].allowedActions).toEqual(['rewrite', 're-create', 'leave']);
     });
 
     it('Covers AE2: known findings are the union of every ticket; the target is the newest open ticket', () => {
@@ -487,7 +487,7 @@ describe('buildReviewRows', () => {
 
       expect(row.change).toEqual({ kind: 'baseline' });
       expect(row.action).toBe('update');
-      expect(row.allowedActions).toEqual(['update', 're-create', 'leave']);
+      expect(row.allowedActions).toEqual(['update', 'rewrite', 're-create', 'leave']);
     });
 
     it('gives a baseline row whose only ticket is resolved that ticket as its target', () => {
@@ -506,7 +506,7 @@ describe('buildReviewRows', () => {
 
       expect(row.change).toEqual({ kind: 'findings', newIds: [], ratingRise: { from: '3', to: '4' } });
       expect(row.action).toBe('update');
-      expect(row.allowedActions).toEqual(['update', 're-create', 'leave']);
+      expect(row.allowedActions).toEqual(['update', 'rewrite', 're-create', 'leave']);
     });
 
     it('unions the labels of two different tickets holding a folded group\'s flaws (R2)', () => {

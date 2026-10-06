@@ -1337,7 +1337,7 @@ export interface ReviewRowBase {
 export type AddMode = 'comment' | 'rewrite';
 
 /** U3/R6: the per-row actions on the Already-ticketed screen. */
-export type TicketedAction = 'update' | 'follow-up' | 're-create' | 'leave';
+export type TicketedAction = 'update' | 'follow-up' | 'rewrite' | 're-create' | 'leave';
 
 /**
  * U4/R16: one already-ticketed row's outcome after an action ran. `update` notes: `baseline` — only
@@ -1347,6 +1347,7 @@ export type TicketedAction = 'update' | 'follow-up' | 're-create' | 'leave';
 export type TicketedRowResult =
   | { status: 'done'; action: 'update'; note?: 'baseline' | 'up-to-date' | 'comment-failed' }
   | { status: 'done'; action: 'follow-up'; key: string; linkMissing?: boolean }
+  | { status: 'done'; action: 'rewrite'; note?: 'comment-failed' }
   | { status: 'done'; action: 're-create'; key: string }
   | { status: 'failed'; action: TicketedAction; error: string };
 
@@ -1360,6 +1361,26 @@ export function ticketedRowActions(row: ReviewRowBase): { allowedActions: Ticket
 /** The ticket a ticketed row's action targets: its chosen target, else its existing ticket. */
 export function ticketedTargetKey(row: ReviewRowBase): string {
   return row.target?.key ?? row.existingTicketKey!;
+}
+
+/**
+ * Finding folding (KTD11): targets whose unfinished Already-ticketed rows are only partly on
+ * `rewrite`. A rewrite rebuilds a ticket from every row that points to it, so the rows' individual
+ * choices would be overridden — it is accepted for all of them or none. Finished rows are outside
+ * the set. Pure.
+ */
+export function findPartialRewrites(rows: ReviewRowBase[]): Array<{ key: string; rewriteIds: string[]; otherIds: string[] }> {
+  const byTarget = new Map<string, { rewriteIds: string[]; otherIds: string[] }>();
+  for (const row of rows) {
+    if (row.existingTicketKey === null || isTicketedRowFinished(row)) continue;
+    const key = ticketedTargetKey(row);
+    const entry = byTarget.get(key) ?? { rewriteIds: [], otherIds: [] };
+    (ticketedRowActions(row).action === 'rewrite' ? entry.rewriteIds : entry.otherIds).push(row.id);
+    byTarget.set(key, entry);
+  }
+  return [...byTarget.entries()]
+    .filter(([, e]) => e.rewriteIds.length > 0 && e.otherIds.length > 0)
+    .map(([key, e]) => ({ key, ...e }));
 }
 
 /** A row whose action already ran successfully — excluded from every later apply, `all` and shortcut. */
@@ -1388,12 +1409,15 @@ export interface ImportOutcomes {
   // Finding folding: New rows added to an existing ticket (`add … to <KEY>`), and rows whose add failed.
   added: number;
   addFailed: number;
+  // Finding folding: tickets rebuilt by `rewrite` on the Already-ticketed screen, and ones that failed.
+  rewritten: number;
+  rewriteFailed: number;
 }
 
 export function emptyImportOutcomes(): ImportOutcomes {
   return {
     created: 0, createFailed: 0, recreated: 0, recreateFailed: 0, updated: 0, updateFailed: 0,
-    followedUp: 0, followUpFailed: 0, closed: 0, closeFailed: 0, added: 0, addFailed: 0,
+    followedUp: 0, followUpFailed: 0, closed: 0, closeFailed: 0, added: 0, addFailed: 0, rewritten: 0, rewriteFailed: 0,
   };
 }
 
@@ -1873,8 +1897,9 @@ export function buildImportOverview<TRow extends ReviewRowBase>(session: ReviewS
       if (c.ticketedChanged > 0) parts.push(`${c.ticketedChanged} with changes`);
       if (o.updated > 0) parts.push(`${o.updated} updated`);
       if (o.followedUp > 0) parts.push(`${o.followedUp} follow-up${o.followedUp === 1 ? '' : 's'}`);
+      if (o.rewritten > 0) parts.push(`${o.rewritten} rewritten`);
       if (o.recreated > 0) parts.push(`${o.recreated} re-created`);
-      const failed = o.updateFailed + o.followUpFailed + o.recreateFailed;
+      const failed = o.updateFailed + o.followUpFailed + o.recreateFailed + o.rewriteFailed;
       if (failed > 0) parts.push(`${failed} failed`);
       if (c.ticketedOpen > 0) link = cmdLink('Review', IMPORT_COMMANDS.openTicketed);
       lines.push(`- **Already ticketed** — ${parts.join(' · ')}${link ? ` — ${link}` : ''}`);
@@ -1969,6 +1994,8 @@ export function formatTicketedRowResult(result: TicketedRowResult, baseUrl?: str
       if (result.note === 'up-to-date') return 'already up to date';
       if (result.note === 'comment-failed') return 'updated (labels only — comment failed)';
       return 'updated';
+    case 'rewrite':
+      return result.note === 'comment-failed' ? 'rewritten (comment failed)' : 'rewritten';
     case 'follow-up':
       return `follow-up ${formatKeyLink(result.key, baseUrl)}${result.linkMissing ? ' (link missing)' : ''}`;
     case 're-create':
@@ -2368,6 +2395,7 @@ export function unmergeNewRow<TRow extends ReviewRowBase>(rows: TRow[], allRows:
 const TICKETED_ACTION_WORDS: Record<string, TicketedAction> = {
   'update': 'update',
   'follow-up': 'follow-up', 'followup': 'follow-up', 'follow up': 'follow-up',
+  'rewrite': 'rewrite',
   're-create': 're-create', 'recreate': 're-create', 're create': 're-create',
   'leave': 'leave',
 };
@@ -2465,7 +2493,8 @@ export function buildImportDoneSummary(outcomes: ImportOutcomes): string {
     `${outcomes.closed} closed`,
   ];
   if (outcomes.added > 0) parts.push(`${outcomes.added} added to existing tickets`);
-  const failed = outcomes.createFailed + outcomes.recreateFailed + outcomes.updateFailed + outcomes.followUpFailed + outcomes.closeFailed + outcomes.addFailed;
+  if (outcomes.rewritten > 0) parts.push(`${outcomes.rewritten} rewritten`);
+  const failed = outcomes.createFailed + outcomes.recreateFailed + outcomes.updateFailed + outcomes.followUpFailed + outcomes.closeFailed + outcomes.addFailed + outcomes.rewriteFailed;
   if (failed > 0) parts.push(`${failed} failed`);
   return `Import finished — ${parts.join(', ')}.`;
 }

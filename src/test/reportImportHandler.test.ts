@@ -2248,3 +2248,178 @@ describe('Add rows to an existing ticket through the real descriptors (finding f
     });
   });
 });
+
+describe('Rewrite on the Already-ticketed screen through the real descriptors (finding folding, U6)', () => {
+  function makeFlaw(issueId: string, overrides: Partial<VeracodeFlaw> = {}): VeracodeFlaw {
+    return {
+      issueId, severity: 4, categoryName: 'SQL Injection', cweId: '89', cweName: null,
+      description: 'Untrusted input reaches a query.', recommendation: null,
+      module: 'app.jar', sourceFile: `File${issueId}.java`, sourceFilePath: 'src/main/java/',
+      line: 42, scope: null, functionPrototype: null, remediationStatus: 'New',
+      ...overrides,
+    };
+  }
+  const sqlA = () => makeFlaw('1', { sourceFile: 'A.java', cweId: '89', categoryName: 'SQL Injection' });
+  const xssB = () => makeFlaw('2', { sourceFile: 'B.java', cweId: '79', categoryName: 'Cross-Site Scripting' });
+  const pathC = () => makeFlaw('3', { sourceFile: 'C.java', cweId: '22', categoryName: 'Path Traversal' });
+
+  let client: MockJiraClient;
+  let ticketService: TicketService;
+  beforeEach(() => {
+    client = new MockJiraClient();
+    ticketService = new TicketService(client);
+  });
+
+  async function importVeracode(flaws: VeracodeFlaw[], tickets: Record<string, FakeTicket>, ws = makeMockWs()) {
+    statefulJira(client, tickets);
+    searchFromStore(ticketService, tickets);
+    const templateSession = await buildVeracodeTemplateSession(flaws, 'report.xml', 'PROJ', client);
+    const resume: Extract<AwaitIssueTypeResume, { kind: 'reportImport' }> = {
+      kind: 'reportImport', descriptorKind: 'veracode', pickedTemplateName: null, session: templateSession,
+    };
+    await handleVeracodeAwaitIssueType(resume, 'Bug', client, ticketService, mockStream() as never, ws as never);
+    return { session: ws.store['jira.session.veracodeReview'] as VeracodeReviewSession, ws };
+  }
+  const text = (stream: ReturnType<typeof mockStream>) =>
+    (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map(c => markdownText(c[0])).join('\n');
+  const reply = async (replyText: string, session: VeracodeReviewSession, ws: ReturnType<typeof makeMockWs>) => {
+    const stream = mockStream();
+    await handleVeracodeReviewReply(replyText, session, ticketService, stream as never, ws as never);
+    return stream;
+  };
+  const merged = (): Record<string, FakeTicket> => ({
+    'PROJ-123': { labels: ['veracode', 'veracode-issue-1', 'veracode-issue-2', 'veracode-issue-3'], summary: 'Merged by hand', status: 'Open' },
+  });
+
+  it('every Already-ticketed row offers rewrite, and it is not the default', async () => {
+    const { session } = await importVeracode([sqlA(), xssB(), pathC()], merged());
+    expect(session.allRows).toHaveLength(3);
+    for (const row of session.allRows) {
+      expect(row.allowedActions).toContain('rewrite');
+      expect(row.action).toBe('leave');
+    }
+  });
+
+  it('AE9: rewrite on only some rows of one ticket stops the whole apply, writes nothing and names the rows left out', async () => {
+    const { session, ws } = await importVeracode([sqlA(), xssB(), pathC()], merged());
+    await reply('A1 rewrite', session, ws);
+    await reply('A3 rewrite', session, ws);
+
+    const stream = await reply('apply', session, ws);
+
+    expect(client.updateIssueCalls).toHaveLength(0);
+    expect(client.addCommentCalls).toHaveLength(0);
+    const shown = text(stream);
+    expect(shown).toContain('PROJ-123');
+    expect(shown).toContain('A2');
+    expect(shown.toLowerCase()).toContain('all');
+    expect(session.allRows.every(r => r.result === undefined)).toBe(true);
+  });
+
+  it('all rewrite rebuilds the ticket once from every row that points to it and records the result on each row', async () => {
+    const { session, ws } = await importVeracode([sqlA(), xssB(), pathC()], merged());
+    await reply('all rewrite', session, ws);
+
+    await reply('apply', session, ws);
+
+    expect(client.updateIssueCalls).toHaveLength(1);
+    const write = client.updateIssueCalls[0];
+    expect(write.issueKey).toBe('PROJ-123');
+    expect(String(write.fields.summary)).toBe('A.java +2 files - 3 findings: SQL Injection, Cross-Site Scripting, Path Traversal');
+    expect(String(write.fields.description)).toContain('This ticket folds 3 Veracode findings.');
+    expect(client.addCommentCalls).toHaveLength(1);
+    expect(client.addCommentCalls[0].body).toContain('no findings were added');
+    expect(session.allRows.every(r => r.result?.status === 'done' && r.result.action === 'rewrite')).toBe(true);
+    expect(session.outcomes?.rewritten).toBe(1);
+  });
+
+  it('the traceability comment lists only the findings the ticket did not record yet', async () => {
+    // Flaws 1 and 3 share a file and CWE, so they are one row; only flaw 1 is recorded on PROJ-123.
+    const tickets: Record<string, FakeTicket> = { 'PROJ-123': { labels: ['veracode', 'veracode-issue-1', 'veracode-issue-2'], summary: 'Old', status: 'Open' } };
+    const flaws = [sqlA(), xssB(), makeFlaw('3', { sourceFile: 'A.java', cweId: '89', line: 77 })];
+    const { session, ws } = await importVeracode(flaws, tickets);
+    await reply('all rewrite', session, ws);
+
+    await reply('apply', session, ws);
+
+    expect(client.addCommentCalls).toHaveLength(1);
+    const body = client.addCommentCalls[0].body;
+    expect(body).toContain('|3|');
+    expect(body).not.toContain('|1|');
+    expect(client.updateIssueCalls[0].fields.labels).toEqual(expect.arrayContaining(['veracode-issue-3']));
+  });
+
+  it('rows of one ticket are never split by the per-reply cap: the second ticket waits for the next apply', async () => {
+    const flaws = Array.from({ length: 60 }, (_, i) => makeFlaw(String(i + 1), { sourceFile: `F${i + 1}.java`, cweId: String(2000 + i) }));
+    const tickets: Record<string, FakeTicket> = {
+      'PROJ-1': { labels: ['veracode', ...flaws.slice(0, 30).map(f => `veracode-issue-${f.issueId}`)], summary: 'First', status: 'Open', created: '2026-01-01T09:00:00.000+0000' },
+      'PROJ-2': { labels: ['veracode', ...flaws.slice(30).map(f => `veracode-issue-${f.issueId}`)], summary: 'Second', status: 'Open', created: '2026-01-02T09:00:00.000+0000' },
+    };
+    const { session, ws } = await importVeracode(flaws, tickets);
+    await reply('all rewrite', session, ws);
+
+    const first = await reply('apply', session, ws);
+    expect(client.updateIssueCalls.map(c => c.issueKey)).toEqual(['PROJ-1']);
+    expect(text(first)).toContain('30 remain');
+
+    await reply('apply', session, ws);
+    expect(client.updateIssueCalls.map(c => c.issueKey)).toEqual(['PROJ-1', 'PROJ-2']);
+  });
+
+  it('a row already finished by update is outside the all-or-none set, and its findings still go into the rewrite', async () => {
+    const tickets: Record<string, FakeTicket> = { 'PROJ-123': { labels: ['veracode', 'veracode-issue-1', 'veracode-issue-2'], summary: 'Old', status: 'Open' } };
+    const flaws = [sqlA(), xssB(), makeFlaw('3', { sourceFile: 'A.java', cweId: '89', line: 77 })];
+    const { session, ws } = await importVeracode(flaws, tickets);
+    expect(session.allRows.find(r => r.id === 'A1')?.action).toBe('update');
+    await reply('update tickets', session, ws);
+    expect(session.allRows.find(r => r.id === 'A1')?.result?.status).toBe('done');
+    client.updateIssueCalls.length = 0;
+    client.addCommentCalls.length = 0;
+
+    await reply('A2 rewrite', session, ws);
+    const stream = await reply('apply', session, ws);
+
+    expect(text(stream)).not.toContain('must cover');
+    expect(client.updateIssueCalls).toHaveLength(1);
+    expect(String(client.updateIssueCalls[0].fields.description)).toContain('Issue 3');
+  });
+
+  it('a failed rewrite is recorded on its rows, posts no comment and can be retried', async () => {
+    const { session, ws } = await importVeracode([sqlA(), xssB(), pathC()], merged());
+    await reply('all rewrite', session, ws);
+    client.updateIssue = async () => { throw new Error('forbidden'); };
+
+    await reply('apply', session, ws);
+
+    expect(client.addCommentCalls).toHaveLength(0);
+    expect(session.allRows.every(r => r.result?.status === 'failed')).toBe(true);
+    expect(session.outcomes?.rewriteFailed).toBe(1);
+  });
+
+  it('Waltz: rewriting a ticket two components were merged into rebuilds it with the merged title and both labels', async () => {
+    const vuln = (cveId: string): WaltzVulnerability => ({ cveId, cveSummary: null, overallSeverity: 'High', cvssV3Score: 7, fixedVersion: null });
+    const comp = (nameVersion: string): WaltzComponent => ({
+      nameVersion, maxVulnRating: 'High', remediationAction: 'Remediate', instancePaths: ['app.jar'], vulnerabilities: [vuln('CVE-2099-1')],
+    });
+    const a = comp('netty-codec:4.1.100');
+    const b = comp('netty-handler:4.1.100');
+    const tickets: Record<string, FakeTicket> = {
+      'PROJ-7': { labels: ['oss-dependency', sanitizeComponentLabel(a.nameVersion), sanitizeComponentLabel(b.nameVersion), 'oss-cve-cve-2099-1', 'oss-rating-high'], summary: 'Merged', status: 'Open' },
+    };
+    statefulJira(client, tickets);
+    searchFromStore(ticketService, tickets);
+    const templateSession = await buildWaltzTemplateSession([a, b], 'r.xlsx', 'PROJ', client);
+    const ws = makeMockWs();
+    await handleWaltzAwaitIssueType({
+      kind: 'reportImport', descriptorKind: 'waltz', pickedTemplateName: null, session: templateSession,
+    }, 'Bug', client, ticketService, mockStream() as never, ws as never);
+    const session = ws.store['jira.session.waltzReview'] as WaltzReviewSession;
+
+    await handleWaltzReviewReply('all rewrite', session, ticketService, mockStream() as never, ws as never);
+    await handleWaltzReviewReply('apply', session, ticketService, mockStream() as never, ws as never);
+
+    expect(client.updateIssueCalls).toHaveLength(1);
+    expect(client.updateIssueCalls[0].fields.summary).toBe('[OSS] netty-codec:4.1.100 +1 component — High');
+    expect(String(client.updateIssueCalls[0].fields.description)).toContain('This ticket folds 2 components');
+  });
+});

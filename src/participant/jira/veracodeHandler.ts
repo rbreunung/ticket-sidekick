@@ -162,6 +162,7 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
     combine: groups => groups.flat(),
     recordLabelsOf: group => buildGroupLabels(group),
     buildComment: (group, droppedKeys) => buildFoldedCommentWiki(group, droppedKeys),
+    narrowToNew: (group, change) => flawsWithIds(group, change.newIds),
   },
   // Import ticket updates parity (KTD2): a folded group's findings are its flaw ids, recorded as
   // `veracode-issue-<id>` labels. No baseline, no rating and no summary rewrite for Veracode.

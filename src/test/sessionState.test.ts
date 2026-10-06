@@ -21,7 +21,7 @@ import {
   buildImportOverview, buildNewGroupScreen, buildTicketedGroupScreen, buildStaleGroupScreen,
   initImportViewState, ensureImportViewState, computeImportResultGroups, emptyImportOutcomes, buildImportDoneSummary,
   parseOverviewReply, parseNewGroupReply, parseTicketedGroupReply, parseStaleGroupReply, IMPORT_COMMANDS,
-  isConfirmation, isCancellation, mergeNewRows, unmergeNewRow, buildAddPrompt, buildChatCommandLink,
+  isConfirmation, isCancellation, mergeNewRows, unmergeNewRow, buildAddPrompt, buildChatCommandLink, findPartialRewrites, formatTicketedRowResult,
   type ReviewSession, type ImportReplyContext,
 } from '../participant/sessionState';
 import {
@@ -2155,5 +2155,37 @@ describe('add outcomes in the import summaries (finding folding, U5)', () => {
 
   it('a failed add counts in the failure total', () => {
     expect(buildImportDoneSummary({ ...emptyImportOutcomes(), addFailed: 2 })).toContain('2 failed');
+  });
+});
+
+describe('rewrite as a ticketed action (finding folding, U6)', () => {
+  const row = (id: string, key: string, action: TicketedAction, extra: Partial<ReviewRowBase> = {}): ReviewRowBase => ({
+    id, existingTicketKey: key, included: false, target: { key, status: 'Open', resolved: false }, action,
+    allowedActions: ['update', 'rewrite', 're-create', 'leave'], ...extra,
+  });
+
+  it('parses "<row> rewrite" and "all rewrite" on the Already-ticketed screen', () => {
+    const ctx: ImportReplyContext = { singleGroup: false, groups: ['ticketed'], newRowIds: [], ticketedRows: [{ id: 'A1', allowedActions: ['update', 'rewrite', 'leave'] }] };
+    expect(parseTicketedGroupReply('A1 rewrite', ctx)).toEqual({ kind: 'setAction', id: 'A1', action: 'rewrite' });
+    expect(parseTicketedGroupReply('all rewrite', ctx)).toEqual({ kind: 'setAllActions', action: 'rewrite' });
+  });
+
+  it('findPartialRewrites reports a target whose unfinished rows are only partly on rewrite', () => {
+    const rows = [row('A1', 'PROJ-1', 'rewrite'), row('A2', 'PROJ-1', 'leave'), row('A3', 'PROJ-1', 'rewrite'), row('A4', 'PROJ-2', 'update')];
+    expect(findPartialRewrites(rows)).toEqual([{ key: 'PROJ-1', rewriteIds: ['A1', 'A3'], otherIds: ['A2'] }]);
+  });
+
+  it('is empty when every unfinished row of a target is on rewrite, or none is', () => {
+    expect(findPartialRewrites([row('A1', 'PROJ-1', 'rewrite'), row('A2', 'PROJ-1', 'rewrite'), row('A3', 'PROJ-2', 'leave')])).toEqual([]);
+  });
+
+  it('ignores a finished row of the target', () => {
+    const done = row('A2', 'PROJ-1', 'update', { result: { status: 'done', action: 'update' } });
+    expect(findPartialRewrites([row('A1', 'PROJ-1', 'rewrite'), done])).toEqual([]);
+  });
+
+  it('shows a rewrite result in the Action cell wording', () => {
+    expect(formatTicketedRowResult({ status: 'done', action: 'rewrite' })).toBe('rewritten');
+    expect(formatTicketedRowResult({ status: 'done', action: 'rewrite', note: 'comment-failed' })).toContain('comment failed');
   });
 });
