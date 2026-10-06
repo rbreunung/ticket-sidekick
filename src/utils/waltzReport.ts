@@ -301,7 +301,7 @@ export interface WaltzFilterOptions {
 
 const VULN_RATING_ORDER = ['None', 'Low', 'Medium', 'High', 'Critical'];
 
-function vulnRatingRank(rating: string): number {
+export function vulnRatingRank(rating: string): number {
   const idx = VULN_RATING_ORDER.findIndex(r => r.toLowerCase() === rating.toLowerCase());
   return idx === -1 ? 0 : idx;
 }
