@@ -3,6 +3,7 @@ import ExcelJS from 'exceljs';
 import { markdownToJiraWiki } from './markdownToJiraWiki';
 import {
   MAX_REPORT_BYTES as SHARED_MAX_REPORT_BYTES, sanitizeCellText, sanitizeStandaloneLine,
+  clampSummary, fitWiki,
   type RowChange,
 } from './reportImport';
 
@@ -506,20 +507,24 @@ function sortVulnerabilities(vulns: WaltzVulnerability[]): WaltzVulnerability[] 
 // interpolated into the Markdown built here) now live in reportImport.ts as shared primitives — see
 // the doc comments there for exactly what each one neutralizes and why.
 
-// Authored as Markdown (headings, bullets, a real pipe table) and converted once at the end via
-// markdownToJiraWiki() — avoids hand-writing Jira's ||table|| syntax; use **bold** (not Jira's
-// single-asterisk bold) in the Markdown source since the converter's inline() pass would otherwise
-// mistake a lone-asterisk span for italics.
-export function buildDescriptionWiki(component: WaltzComponent): string {
-  const lines: string[] = [];
+// How much of a component's artifacts and CVEs one description section shows. A folded ticket that
+// would exceed its size budget steps these down (R10) before dropping the sections altogether.
+interface DetailCaps { artifacts: number; cves: number }
+const FULL_CAPS: DetailCaps = { artifacts: MAX_ARTIFACTS_SHOWN, cves: MAX_CVES_SHOWN };
+
+/**
+ * One component's rating, most critical CVE, affected artifacts and vulnerability table, under
+ * headings of level `h` (`###` for a single-component ticket, `####` inside a folded section).
+ */
+function pushComponentDetail(lines: string[], component: WaltzComponent, h: string, caps: DetailCaps): void {
   const sorted = sortVulnerabilities(component.vulnerabilities);
 
-  lines.push('### Max Vuln Rating');
+  lines.push(`${h} Max Vuln Rating`);
   lines.push(sanitizeStandaloneLine(component.maxVulnRating));
   lines.push('');
 
   // Surfaces *why* this ticket exists at a glance, ahead of the full artifact/CVE lists below.
-  lines.push('### Most Critical Vulnerability');
+  lines.push(`${h} Most Critical Vulnerability`);
   if (sorted.length === 0) {
     lines.push('No CVE-level detail was reported for this component.');
   } else {
@@ -529,36 +534,147 @@ export function buildDescriptionWiki(component: WaltzComponent): string {
   lines.push('');
 
   const artifactTotal = component.instancePaths.length;
-  lines.push(`### Affected artifacts (${artifactTotal} total${artifactTotal > MAX_ARTIFACTS_SHOWN ? ` — showing top ${MAX_ARTIFACTS_SHOWN}` : ''})`);
+  lines.push(`${h} Affected artifacts (${artifactTotal} total${artifactTotal > caps.artifacts ? ` — showing top ${caps.artifacts}` : ''})`);
   if (artifactTotal === 0) {
     lines.push('No affected artifact paths were reported for this component.');
   } else {
-    for (const p of component.instancePaths.slice(0, MAX_ARTIFACTS_SHOWN)) lines.push(`- ${sanitizeCellText(p)}`);
-    if (artifactTotal > MAX_ARTIFACTS_SHOWN) lines.push(`+${artifactTotal - MAX_ARTIFACTS_SHOWN} more not shown`);
+    for (const p of component.instancePaths.slice(0, caps.artifacts)) lines.push(`- ${sanitizeCellText(p)}`);
+    if (artifactTotal > caps.artifacts) lines.push(`+${artifactTotal - caps.artifacts} more not shown`);
   }
   lines.push('');
 
   const total = component.vulnerabilities.length;
-  lines.push(`### Known vulnerabilities (${total} total${total > MAX_CVES_SHOWN ? ` — showing top ${MAX_CVES_SHOWN}` : ''})`);
+  lines.push(`${h} Known vulnerabilities (${total} total${total > caps.cves ? ` — showing top ${caps.cves}` : ''})`);
   if (total === 0) {
     lines.push('No CVE-level detail was reported for this component.');
   } else {
     lines.push('| CVE | Severity | CVSS | Fixed Version |');
     lines.push('| --- | --- | --- | --- |');
-    for (const v of sorted.slice(0, MAX_CVES_SHOWN)) {
+    for (const v of sorted.slice(0, caps.cves)) {
       const score = v.cvssV3Score != null ? String(v.cvssV3Score) : 'n/a';
       lines.push(`| ${sanitizeCellText(v.cveId)} | ${sanitizeCellText(v.overallSeverity ?? 'Unknown')} | ${score} | ${sanitizeCellText(v.fixedVersion ?? 'n/a')} |`);
     }
-    if (total > MAX_CVES_SHOWN) {
+    if (total > caps.cves) {
       lines.push('');
-      lines.push(`+${total - MAX_CVES_SHOWN} more not shown`);
+      lines.push(`+${total - caps.cves} more not shown`);
     }
   }
   lines.push('');
+}
+
+// Authored as Markdown (headings, bullets, a real pipe table) and converted once at the end via
+// markdownToJiraWiki() — avoids hand-writing Jira's ||table|| syntax; use **bold** (not Jira's
+// single-asterisk bold) in the Markdown source since the converter's inline() pass would otherwise
+// mistake a lone-asterisk span for italics.
+export function buildDescriptionWiki(component: WaltzComponent): string {
+  const lines: string[] = [];
+  pushComponentDetail(lines, component, '###', FULL_CAPS);
   lines.push('### Component');
   lines.push(sanitizeStandaloneLine(component.nameVersion));
 
   return markdownToJiraWiki(lines.join('\n'));
+}
+
+// --- Folded ticket content (finding folding plan: R8-R11, R14, R15) ------------------------------
+
+/** The group's highest worst-rating, in the casing the report used for it. */
+export function highestRating(group: WaltzComponent[]): string {
+  return group.reduce((best, c) => (vulnRatingRank(c.maxVulnRating) > vulnRatingRank(best) ? c.maxVulnRating : best), group[0].maxVulnRating);
+}
+
+/**
+ * Title of a folded group (R9): `[OSS] <first>:<version> +<m> components — <highest rating>`. The
+ * ` — <rating>` suffix stays last so `rewriteSummaryRating()` can still rewrite it on a rating rise;
+ * only the first component's name may be trimmed to fit Jira's summary limit. A one-component group
+ * is `buildSummary()` exactly.
+ */
+export function buildGroupSummary(group: WaltzComponent[]): string {
+  if (group.length === 1) return buildSummary(group[0]);
+  return clampSummary(`[OSS] ${group[0].nameVersion}`, ` +${group.length - 1} component${group.length === 2 ? '' : 's'} — ${highestRating(group)}`);
+}
+
+/**
+ * Labels of a folded group (R11): `oss-dependency`, every member's component label, the union of
+ * their CVE labels and one rating label for the highest rating, plus the template's labels. A
+ * one-component group is `buildLabels()` exactly.
+ */
+export function buildGroupLabels(group: WaltzComponent[], templateLabels: string[] = []): string[] {
+  if (group.length === 1) return buildLabels(group[0], templateLabels);
+  const own = [
+    'oss-dependency',
+    ...group.map(c => sanitizeComponentLabel(c.nameVersion)),
+    ...group.flatMap(c => c.vulnerabilities.map(v => buildCveLabel(v.cveId))),
+    buildRatingLabel(highestRating(group)),
+  ].filter(l => l !== '');
+  return [...new Set([...own, ...templateLabels])];
+}
+
+// Per-component detail by level (R10): full, then fewer artifacts and CVEs, then the overview table
+// alone (the last level), which always lists every component.
+const FOLD_CAPS: DetailCaps[] = [FULL_CAPS, { artifacts: 10, cves: 5 }, { artifacts: 3, cves: 3 }];
+const FOLD_LEVELS = FOLD_CAPS.length + 1;
+
+function pushFoldedTable(lines: string[], group: WaltzComponent[]): void {
+  lines.push('| Component | Max rating | CVEs | Artifacts |');
+  lines.push('| --- | --- | --- | --- |');
+  for (const c of group) {
+    lines.push(`| ${sanitizeCellText(c.nameVersion)} | ${sanitizeCellText(c.maxVulnRating)} | ${c.vulnerabilities.length} | ${c.instancePaths.length} |`);
+  }
+  lines.push('');
+}
+
+// A label read back from Jira is untrusted. One in the normal label alphabet is shown verbatim in
+// code formatting (the sanitizer would strip its hyphens and make it unreadable); anything else
+// goes through the cell sanitizer.
+function droppedKeyText(key: string): string {
+  return /^[A-Za-z0-9._-]{1,250}$/.test(key) ? `\`${key}\`` : sanitizeCellText(key);
+}
+
+function buildFoldedMarkdown(group: WaltzComponent[], banner: string, level: number, droppedKeys: string[]): string {
+  const lines: string[] = [banner, ''];
+  if (level > 0) {
+    lines.push("Per-component detail was shortened to fit Jira's size limit; the table lists every component.");
+    lines.push('');
+  }
+  pushFoldedTable(lines, group);
+  if (level < FOLD_LEVELS - 1) {
+    for (const c of group) {
+      lines.push(`### Component ${sanitizeCellText(c.nameVersion)}`);
+      lines.push('');
+      pushComponentDetail(lines, c, '####', FOLD_CAPS[level]);
+    }
+  }
+  if (droppedKeys.length > 0) {
+    lines.push('### No longer in the description');
+    lines.push(`The ticket recorded these component labels, which the latest report no longer covers here: ${droppedKeys.map(droppedKeyText).join(', ')}.`);
+    lines.push('');
+  }
+  return lines.join('\n');
+}
+
+function buildFoldedWiki(group: WaltzComponent[], banner: string, droppedKeys: string[] = []): string {
+  return fitWiki(level => markdownToJiraWiki(buildFoldedMarkdown(group, banner, level, droppedKeys)), FOLD_LEVELS).wiki;
+}
+
+/**
+ * Description of a folded group (R8): a banner, an overview table with one row per component, then
+ * one section per component, stepped down when the whole would exceed the size budget (R10). A
+ * one-component group is `buildDescriptionWiki()` exactly.
+ */
+export function buildGroupDescriptionWiki(group: WaltzComponent[]): string {
+  if (group.length === 1) return buildDescriptionWiki(group[0]);
+  return buildFoldedWiki(group, `This ticket folds ${group.length} components from the OSS report.`);
+}
+
+/**
+ * The comment an `add … to <KEY>` posts (R14, R15): the added components in the folded layout.
+ * `droppedKeys` are component labels the ticket recorded that a rewrite no longer covers.
+ */
+export function buildFoldedCommentWiki(group: WaltzComponent[], droppedKeys: string[] = []): string {
+  const banner = group.length === 1
+    ? 'This component was added to this ticket.'
+    : `These ${group.length} components were added to this ticket.`;
+  return buildFoldedWiki(group, banner, droppedKeys);
 }
 
 function vulnerabilitiesMatching(component: WaltzComponent, cveIds: string[]): WaltzVulnerability[] {
@@ -631,9 +747,9 @@ export interface WaltzReviewRow {
   summary: string;
   labels: string[];
   descriptionWiki: string;
-  // Mirrors VeracodeReviewRow.sourceGroup: the parsed component is kept on the row so the
+  // Mirrors VeracodeReviewRow.sourceGroup: the parsed component(s) are kept on the row so the
   // apply-time update comment / follow-up builders can read its CVEs from the persisted session.
-  sourceComponent: WaltzComponent;
+  sourceGroup: WaltzComponent[];
   existingTicketKey: string | null;
   included: boolean; // whether this row will be (re)created if the batch runs
 }

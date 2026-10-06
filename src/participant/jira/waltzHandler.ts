@@ -3,9 +3,9 @@ import * as fs from 'fs';
 import type { TicketService } from '../../services/TicketService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import {
-  parseWaltzReport, filterComponents, sanitizeComponentLabel, buildSummary, buildLabels, buildDescriptionWiki,
+  parseWaltzReport, filterComponents, sanitizeComponentLabel, buildGroupSummary, buildGroupLabels, buildGroupDescriptionWiki,
   describeWaltzRowChange, buildRecordLabels, buildCveLabel, buildRatingLabel, buildUpdateCommentWiki,
-  buildFollowUpDescriptionWiki, buildFollowUpSummary, rewriteSummaryRating,
+  buildFollowUpDescriptionWiki, buildFollowUpSummary, rewriteSummaryRating, highestRating,
   type WaltzComponent, type WaltzReviewRow,
 } from '../../utils/waltzReport';
 import type { WaltzTemplateSelectionSession, WaltzReviewSession, StaleCloseSession } from '../sessionState';
@@ -37,7 +37,7 @@ function getWaltzConfig(): { minVulnRating: string; includeRemediationActions: s
   };
 }
 
-async function readAndFilterWaltzFile(filePath: string): Promise<{ items: WaltzComponent[]; rawItems: WaltzComponent[] }> {
+async function readAndFilterWaltzFile(filePath: string): Promise<{ items: WaltzComponent[][]; rawItems: WaltzComponent[] }> {
   // parseWaltzReport() itself also re-checks size (single source of truth used by the pure unit
   // tests too) — both checks share the same resolved maxReportBytes so they agree with each other
   // and with the user's setting.
@@ -52,7 +52,9 @@ async function readAndFilterWaltzFile(filePath: string): Promise<{ items: WaltzC
     components => filterComponents(components, filterConfig),
     maxReportBytes,
   );
-  return { items, rawItems };
+  // Waltz folds nothing automatically (R3): each component is its own one-member group, so the
+  // shared review flow can treat a Waltz item and a Veracode item alike (KTD1).
+  return { items: items.map(component => [component]), rawItems };
 }
 
 // U5: the `oss-dependency` label every Waltz-imported ticket carries (alongside its own
@@ -90,7 +92,7 @@ export function buildWaltzActiveComponentPredicate(
   };
 }
 
-const waltzDescriptor: ReportImportDescriptor<WaltzComponent, WaltzReviewRow> = {
+const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> = {
   descriptorKind: 'waltz',
   scope: 'jira.waltz',
   importLabel: 'Waltz OSS',
@@ -106,18 +108,17 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent, WaltzReviewRow> = 
     templateSelection: 'jira.session.waltzTemplateSelection',
     review: 'jira.session.waltzReview',
   },
-  // U2: Waltz stays single-key — one component maps to exactly one label/dedup key, wrapped in a
-  // one-element array to satisfy the (now folding-aware) descriptor contract. No behavior change.
-  searchLabelOf: component => [sanitizeComponentLabel(component.nameVersion)],
-  dedupKeyOf: component => [sanitizeComponentLabel(component.nameVersion)],
+  // One label/key per member component, so a ticket a user merged by hand is found from any member.
+  searchLabelOf: group => group.map(component => sanitizeComponentLabel(component.nameVersion)),
+  dedupKeyOf: group => group.map(component => sanitizeComponentLabel(component.nameVersion)),
   labelToDedupKey: waltzLabelToDedupKey,
-  buildRowFields: (component, templateLabels) => ({
-    nameVersion: component.nameVersion,
-    maxVulnRating: component.maxVulnRating,
-    summary: buildSummary(component),
-    labels: buildLabels(component, templateLabels),
-    descriptionWiki: buildDescriptionWiki(component),
-    sourceComponent: component,
+  buildRowFields: (group, templateLabels) => ({
+    nameVersion: group.length === 1 ? group[0].nameVersion : `${group[0].nameVersion} (+${group.length - 1} more)`,
+    maxVulnRating: highestRating(group),
+    summary: buildGroupSummary(group),
+    labels: buildGroupLabels(group, templateLabels),
+    descriptionWiki: buildGroupDescriptionWiki(group),
+    sourceGroup: group,
   }),
   reviewColumns: WALTZ_REVIEW_COLUMNS,
   itemRefFor: row => row.nameVersion,
@@ -140,16 +141,18 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent, WaltzReviewRow> = 
   // replaces rather than accumulates. A rating rise also rewrites the summary's rating suffix (R12).
   changeTracking: {
     findingNoun: 'CVE(s)',
-    describe: describeWaltzRowChange,
+    // Change tracking only ever sees Already-ticketed rows, and Waltz never folds those (merges act
+    // on New rows only), so the group holds exactly one component here.
+    describe: (group, knownLabels) => describeWaltzRowChange(group[0], knownLabels),
     recordLabelsOf: (row, change) => {
-      if (change.kind === 'baseline') return buildRecordLabels(row.sourceComponent);
+      if (change.kind === 'baseline') return buildRecordLabels(row.sourceGroup[0]);
       const labels = change.newIds.map(buildCveLabel);
       if (change.ratingRise) labels.push(buildRatingLabel(change.ratingRise.to));
       return labels.filter(l => l !== '');
     },
     removeLabelPrefix: 'oss-rating-',
     buildUpdateComment: (row, change, { summaryUnchanged }) => buildUpdateCommentWiki(
-      row.sourceComponent, { newCveIds: change.newIds, ratingRise: change.ratingRise }, { summaryUnchanged },
+      row.sourceGroup[0], { newCveIds: change.newIds, ratingRise: change.ratingRise }, { summaryUnchanged },
     ),
     rewriteSummary: (summary, change) => (change.ratingRise
       ? rewriteSummaryRating(summary, change.ratingRise.to)
@@ -157,7 +160,7 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent, WaltzReviewRow> = 
     // KTD10/R14: the follow-up carries the item's dedup record (oss-dependency + component label),
     // only the new CVE labels and the current rating label, plus the template's labels.
     buildFollowUp: (row, change, originalKey, additionalFields) => {
-      const component = row.sourceComponent;
+      const component = row.sourceGroup[0];
       const templateLabels = templateLabelsOf(additionalFields);
       const labels = [
         WALTZ_STALE_MARKER_LABEL, sanitizeComponentLabel(component.nameVersion),
@@ -186,7 +189,7 @@ export async function buildWaltzTemplateSession(
   // stale check gracefully rather than crashing.
   rawComponents: WaltzComponent[] = components,
 ): Promise<WaltzTemplateSelectionSession> {
-  return buildImportTemplateSession(components, fileName, projectKey, jiraClient, waltzDescriptor, rawComponents);
+  return buildImportTemplateSession(components.map(component => [component]), fileName, projectKey, jiraClient, waltzDescriptor, rawComponents);
 }
 
 // Entry point for the "importWaltzReport" operation. Handles both invocation paths:

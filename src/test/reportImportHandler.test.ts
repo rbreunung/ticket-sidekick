@@ -656,7 +656,7 @@ describe('handleWaltzReviewReply — paging via the same shared code path as Ver
     return {
       id, nameVersion: `pkg-${id}:1.0.0`, maxVulnRating: 'High',
       summary: `[OSS] pkg-${id}:1.0.0 — High`, labels: ['oss-dependency'], descriptionWiki: 'x',
-      sourceComponent: { nameVersion: `pkg-${id}:1.0.0`, maxVulnRating: 'High', remediationAction: null, instancePaths: [], vulnerabilities: [] },
+      sourceGroup: [{ nameVersion: `pkg-${id}:1.0.0`, maxVulnRating: 'High', remediationAction: null, instancePaths: [], vulnerabilities: [] }],
       existingTicketKey: null, included: true,
     };
   }

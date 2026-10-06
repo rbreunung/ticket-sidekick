@@ -6,6 +6,7 @@ import {
   buildSummary, buildDescriptionWiki, buildLabels, sanitizeComponentLabel,
   buildCveLabel, buildRatingLabel, buildRecordLabels, parseRecordLabels, describeWaltzChange, describeWaltzRowChange,
   buildUpdateCommentWiki, buildFollowUpDescriptionWiki, buildFollowUpSummary, rewriteSummaryRating,
+  buildGroupSummary, buildGroupLabels, buildGroupDescriptionWiki, buildFoldedCommentWiki,
   type WaltzComponent,
 } from '../utils/waltzReport';
 import { sanitizeCellText } from '../utils/reportImport';
@@ -546,5 +547,145 @@ describe('describeWaltzRowChange', () => {
   it('returns null when nothing changed', () => {
     const c = makeComponent('jackson-databind 2.9', 'High', ['CVE-A']);
     expect(describeWaltzRowChange(c, [componentLabel, buildCveLabel('CVE-A'), 'oss-rating-high'])).toBeNull();
+  });
+});
+
+describe('Waltz folded groups (R1, R3, R8-R11)', () => {
+  const netty = (artifact: string, version: string, rating: string, cves: string[] = ['CVE-2099-1']) =>
+    makeComponent(`${artifact}:${version}`, rating, cves);
+
+  describe('a one-component group is unchanged from the unfolded layout', () => {
+    const c = makeComponent('example-lib:1.2.3', 'Critical', ['CVE-2099-0001', 'CVE-2099-0002']);
+
+    it('has the same title, labels and description as the single-component builders', () => {
+      expect(buildGroupSummary([c])).toBe(buildSummary(c));
+      expect(buildGroupLabels([c], ['security'])).toEqual(buildLabels(c, ['security']));
+      expect(buildGroupDescriptionWiki([c])).toBe(buildDescriptionWiki(c));
+    });
+  });
+
+  describe('title', () => {
+    it('AE5: names the first component, counts the others, and ends with the highest rating', () => {
+      const group = [netty('netty-codec', '4.1.100', 'High'), netty('netty-handler', '4.1.100', 'High'), netty('netty-buffer', '4.1.94', 'Medium')];
+      expect(buildGroupSummary(group)).toBe('[OSS] netty-codec:4.1.100 +2 components — High');
+    });
+
+    it('uses the highest rating of mixed ratings', () => {
+      const group = [netty('a', '1', 'Medium'), netty('b', '1', 'High'), netty('c', '1', 'Critical')];
+      expect(buildGroupSummary(group)).toBe('[OSS] a:1 +2 components — Critical');
+    });
+
+    it('still ends in " — <rating>" so a rating-rise update can rewrite it', () => {
+      const group = [netty('a', '1', 'Medium'), netty('b', '1', 'High')];
+      expect(rewriteSummaryRating(buildGroupSummary(group), 'Critical')).toBe('[OSS] a:1 +1 component — Critical');
+    });
+
+    it('trims a very long component name to 255 characters and keeps the count and rating', () => {
+      const group = [netty('x'.repeat(300), '1', 'High'), netty('b', '1', 'High')];
+      const summary = buildGroupSummary(group);
+      expect(summary.length).toBeLessThanOrEqual(255);
+      expect(summary.endsWith(' +1 component — High')).toBe(true);
+    });
+  });
+
+  describe('labels (R11)', () => {
+    it('AE5: carries every member component label, every CVE label, one rating label, and oss-dependency', () => {
+      const group = [
+        netty('netty-codec', '4.1.100', 'High', ['CVE-2099-1', 'CVE-2099-2']),
+        netty('netty-handler', '4.1.100', 'Medium', ['CVE-2099-2', 'CVE-2099-3']),
+      ];
+      const labels = buildGroupLabels(group, ['security']);
+      expect(labels).toContain('oss-dependency');
+      expect(labels).toContain(sanitizeComponentLabel('netty-codec:4.1.100'));
+      expect(labels).toContain(sanitizeComponentLabel('netty-handler:4.1.100'));
+      expect(labels.filter(l => l.startsWith('oss-cve-')).sort()).toEqual(['oss-cve-cve-2099-1', 'oss-cve-cve-2099-2', 'oss-cve-cve-2099-3']);
+      expect(labels.filter(l => l.startsWith('oss-rating-'))).toEqual(['oss-rating-high']);
+      expect(labels).toContain('security');
+    });
+  });
+
+  describe('description (R8)', () => {
+    const group = [
+      makeComponent('netty-codec:4.1.100', 'High', ['CVE-2099-1', 'CVE-2099-2']),
+      makeComponent('netty-handler:4.1.94', 'Critical', ['CVE-2099-3']),
+    ];
+
+    it('opens with a banner stating how many components it folds', () => {
+      expect(buildGroupDescriptionWiki(group).startsWith('This ticket folds 2 components from the OSS report.')).toBe(true);
+    });
+
+    it('has an overview table with component, rating, CVE count and artifact count, one row per component', () => {
+      const wiki = buildGroupDescriptionWiki(group);
+      expect(wiki).toContain('||Component||Max rating||CVEs||Artifacts||');
+      // The table cell goes through sanitizeCellText() like every report value (it drops hyphens).
+      expect(wiki).toContain(`|${sanitizeCellText('netty-codec:4.1.100')}|High|2|1|`);
+      expect(wiki).toContain(`|${sanitizeCellText('netty-handler:4.1.94')}|Critical|1|1|`);
+    });
+
+    it('gives each component its own section with its vulnerabilities', () => {
+      const wiki = buildGroupDescriptionWiki(group);
+      expect(wiki).toContain(`h3. Component ${sanitizeCellText('netty-codec:4.1.100')}`);
+      expect(wiki).toContain(`h3. Component ${sanitizeCellText('netty-handler:4.1.94')}`);
+      expect(wiki).toContain(sanitizeCellText('CVE-2099-3'));
+    });
+
+    it('cannot be broken or injected through a pipe or macro character in a component name', () => {
+      const evil = makeComponent('a | b {quote}x{quote} !http://evil.example/t.gif!:1', 'High', ['CVE-2099-1']);
+      const wiki = buildGroupDescriptionWiki([evil, makeComponent('b:1', 'High', ['CVE-2099-2'])]);
+      expect(wiki).not.toContain('{quote}');
+      expect(wiki).not.toContain('!http://evil.example/t.gif!');
+      const row = wiki.split('\n').find(l => l.startsWith('|a / b'))!;
+      expect(row.split('|').length).toBe(6);
+    });
+  });
+
+  describe('size budget (R10)', () => {
+    const big = Array.from({ length: 12 }, (_, i) => ({
+      ...makeComponent(`lib-${i}:1.0`, 'High', Array.from({ length: 40 }, (_, j) => `CVE-2099-${i}${j}`),
+        id => `Summary for ${id} ` + 'lorem ipsum dolor sit amet '.repeat(40)),
+      instancePaths: Array.from({ length: 60 }, (_, k) => `/app/services/very/long/path/number/${k}/pom.xml`),
+    }));
+
+    it('shortens per-component detail so twelve large components fit within 30,000 characters, and says so', () => {
+      const wiki = buildGroupDescriptionWiki(big);
+      expect(wiki.length).toBeLessThanOrEqual(30_000);
+      expect(wiki).toContain('shortened');
+    });
+
+    it('still lists every component in the overview table', () => {
+      const wiki = buildGroupDescriptionWiki(big);
+      for (const c of big) expect(wiki).toContain(`|${sanitizeCellText(c.nameVersion)}|`);
+    });
+
+    it('does not mention shortening when everything fits', () => {
+      expect(buildGroupDescriptionWiki([netty('a', '1', 'High'), netty('b', '1', 'High')])).not.toContain('shortened');
+    });
+  });
+
+  describe('add comment (R14, R15)', () => {
+    const group = [netty('netty-codec', '4.1.100', 'High', ['CVE-2099-1', 'CVE-2099-2']), netty('netty-handler', '4.1.100', 'High')];
+
+    it('lists each added component with its CVE count under a banner', () => {
+      const wiki = buildFoldedCommentWiki(group);
+      expect(wiki.startsWith('These 2 components were added to this ticket.')).toBe(true);
+      expect(wiki).toContain(`|${sanitizeCellText('netty-codec:4.1.100')}|High|2|1|`);
+      expect(wiki).toContain(`|${sanitizeCellText('netty-handler:4.1.100')}|High|1|1|`);
+    });
+
+    it('names the component labels the ticket recorded that no longer appear in its description', () => {
+      const wiki = buildFoldedCommentWiki(group, ['oss-dep-old-lib-1-0-abc123']);
+      expect(wiki).toContain('No longer in the description');
+      expect(wiki).toContain('oss-dep-old-lib-1-0-abc123');
+    });
+
+    it('has no dropped section when nothing was dropped', () => {
+      expect(buildFoldedCommentWiki(group)).not.toContain('No longer in the description');
+    });
+
+    it('neutralizes a recorded label outside the normal label alphabet', () => {
+      const wiki = buildFoldedCommentWiki(group, ['evil {quote}x{quote} !http://evil.example/t.gif!']);
+      expect(wiki).not.toContain('{quote}');
+      expect(wiki).not.toContain('!http://evil.example/t.gif!');
+    });
   });
 });
