@@ -33,7 +33,7 @@ import {
   type TicketedAction, type TicketedRowResult,
   buildImportScreen, parseImportReviewReply, describeImportReplyVocabulary, buildImportDoneSummary,
   initImportViewState, ensureImportViewState, emptyImportOutcomes,
-  type ImportReplyContext, type ImportScreenOptions, buildAllHiddenMessage, buildAcceptedList, computeImportResultGroups,
+  type ImportReplyContext, type ImportScreenOptions, neutralizeMarkdownLinks, buildAllHiddenMessage, buildAcceptedList, computeImportResultGroups,
   CURRENT_SESSION_SCHEMA_VERSION, isSessionExpired, SESSION_EXPIRED_MESSAGE,
   NO_ISSUE_TYPE, resolveTemplateIssueType, formatIssueTypeOptionLabel, buildChatCommandLink,
   type ImportTemplateSelectionSession, type ReviewSession, type ReviewTableColumn, type ReviewRowBase,
@@ -530,7 +530,7 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
     const loaded = accepted.service()?.load();
     if (loaded?.warning) {
       logDiag(descriptor.scope, 'warn', 'Accepted-CVE list could not be applied in full', { warning: loaded.warning });
-      stream.markdown(`_Warning: ${loaded.warning}_\n\n`);
+      stream.markdown(`_Warning: ${neutralizeMarkdownLinks(loaded.warning)}_\n\n`);
     }
     if (loaded && loaded.entries.length > 0) {
       narrowNew = item => {
@@ -912,22 +912,23 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
         stream.markdown(NO_WORKSPACE_ACCEPTED_MESSAGE);
       } else {
         const loaded = service.load();
-        if (loaded.warning) stream.markdown(`_Warning: ${loaded.warning}_\n\n`);
+        if (loaded.warning) stream.markdown(`_Warning: ${neutralizeMarkdownLinks(loaded.warning)}_\n\n`);
         stream.markdown(trustedChatMarkdown(`${buildAcceptedList(loaded.entries)}\n\n`));
       }
       return rerender();
     }
-    case 'unaccept': {
+    case 'unaccept':
+    case 'unacceptEntry': {
       const service = descriptor.accepted!.service();
       if (!service) {
         stream.markdown(NO_WORKSPACE_ACCEPTED_MESSAGE);
       } else {
-        const removal = service.remove(action.position);
+        const removal = action.kind === 'unaccept' ? service.remove(action.position) : service.removePair(action.component, action.cve);
         if (!removal.ok) {
-          stream.markdown(`✗ ${removal.message}\n\n`);
+          stream.markdown(`✗ ${neutralizeMarkdownLinks(removal.message)}\n\n`);
         } else {
-          logDiag(descriptor.scope, 'info', `${descriptor.importLabel} import — accepted entry removed`, { position: action.position });
-          stream.markdown(`✓ Removed ${removal.removed.component} · ${removal.removed.cve} from the accepted list. It is offered again on the next import; rows already hidden stay hidden in this review.\n\n`);
+          logDiag(descriptor.scope, 'info', `${descriptor.importLabel} import — accepted entry removed`, action.kind === 'unaccept' ? { position: action.position } : { entry: true });
+          stream.markdown(`✓ Removed ${neutralizeMarkdownLinks(removal.removed.component)} · ${neutralizeMarkdownLinks(removal.removed.cve)} from the accepted list. It is offered again on the next import; rows already hidden stay hidden in this review.\n\n`);
         }
       }
       return rerender();
@@ -1261,7 +1262,7 @@ async function acceptRows<TItem, TRow extends ReviewRowBase>(
   const written = service.add(named.flatMap(r => accepted.entriesOf(accepted.itemOf(r), action.reason)));
   if (!written.ok) {
     logDiag(descriptor.scope, 'warn', `${descriptor.importLabel} import — accepting rows failed`, { error: written.message });
-    stream.markdown(`✗ ${written.message}\n\n`);
+    stream.markdown(`✗ ${neutralizeMarkdownLinks(written.message)}\n\n`);
     return session;
   }
   logDiag(descriptor.scope, 'info', `${descriptor.importLabel} import — accepted entries added`, { rows: named.length, added: written.added });

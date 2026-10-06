@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   parseAcceptedFile, serializeAcceptedFile, componentNameOf, addAcceptedEntries, removeAcceptedEntry,
-  narrowGroup, acceptedEntriesOf, type AcceptedEntry,
+  narrowGroup, acceptedEntriesOf, removeAcceptedPair, type AcceptedEntry,
 } from '../utils/waltzAccepted';
 import type { WaltzComponent } from '../utils/waltzReport';
 
@@ -152,6 +152,17 @@ describe('editing the list', () => {
     const result = removeAcceptedEntry(existing, 2);
     expect(result!.removed).toEqual(accepted('b', 'CVE-2'));
     expect(result!.entries).toEqual([accepted('a', 'CVE-1'), accepted('c', 'CVE-3')]);
+  });
+
+  it('removes an entry by component and CVE whatever its position, ignoring case and spaces', () => {
+    const existing = [accepted('a', 'CVE-1'), accepted('b', 'CVE-2'), accepted('c', 'CVE-3')];
+    const result = removeAcceptedPair(existing, ' B ', 'cve-2');
+    expect(result!.removed).toEqual(accepted('b', 'CVE-2'));
+    expect(result!.entries).toEqual([accepted('a', 'CVE-1'), accepted('c', 'CVE-3')]);
+  });
+
+  it('removes nothing for a pair that is not on the list', () => {
+    expect(removeAcceptedPair([accepted('a', 'CVE-1')], 'a', 'CVE-2')).toBeNull();
   });
 
   it('refuses a position outside the list', () => {

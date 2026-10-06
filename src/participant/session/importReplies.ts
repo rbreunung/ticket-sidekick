@@ -34,6 +34,7 @@ export type ImportReplyAction =
   | { kind: 'accept'; ids: string[]; reason?: string }
   | { kind: 'listAccepted' }
   | { kind: 'unaccept'; position: number }
+  | { kind: 'unacceptEntry'; component: string; cve: string } // what a Remove link sends: the entry itself, not its position
   | { kind: 'toggleRows'; ids: string[] }
   | { kind: 'toggleStale'; keys: string[] }
   // `reason`, when present, says specifically why (e.g. an action a row does not offer, AE6).
@@ -83,6 +84,8 @@ export function parseOverviewReply(reply: string, ctx: ImportReplyContext): Impo
 }
 
 const UNACCEPT_USAGE = 'Remove an accepted entry by its number, e.g. `unaccept 2` (reply `accepted` to see the numbers).';
+// `unaccept <component> <CVE>`: the CVE is the last word, the component everything before it.
+const UNACCEPT_ENTRY_PATTERN = /^unaccept (.+) (\S+)$/;
 const ACCEPT_USAGE = 'Accept the CVEs of rows like this: `accept 2 4`, optionally with a reason: `accept 2 because not reachable`.';
 
 /**
@@ -94,6 +97,8 @@ function parseAcceptedListReply(reply: string): ImportReplyAction | null {
   if (n === IMPORT_COMMANDS.accepted) return { kind: 'listAccepted' };
   const unaccept = n.match(/^unaccept(?: (.*))?$/);
   if (!unaccept) return null;
+  const entry = n.match(UNACCEPT_ENTRY_PATTERN);
+  if (entry) return { kind: 'unacceptEntry', component: entry[1], cve: entry[2] };
   const position = /^\d+$/.test(unaccept[1] ?? '') ? Number(unaccept[1]) : 0;
   return position > 0 ? { kind: 'unaccept', position } : { kind: 'invalid', reason: UNACCEPT_USAGE };
 }

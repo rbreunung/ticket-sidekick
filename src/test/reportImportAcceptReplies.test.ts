@@ -54,6 +54,13 @@ describe('listing and removing accepted entries (R7)', () => {
     expect(parseImportReviewReply('new', 'unaccept 1', ctx())).toEqual({ kind: 'unaccept', position: 1 });
   });
 
+  it('"unaccept <component> <CVE>" names the entry itself, which is what the Remove links send', () => {
+    expect(parseImportReviewReply('new', 'unaccept netty-codec CVE-2024-1234', ctx()))
+      .toEqual({ kind: 'unacceptEntry', component: 'netty-codec', cve: 'cve-2024-1234' });
+    expect(parseImportReviewReply('overview', 'unaccept org.example:lib CVE-1', ctx()))
+      .toEqual({ kind: 'unacceptEntry', component: 'org.example:lib', cve: 'cve-1' });
+  });
+
   it('"unaccept" without a number is invalid and says how to use it', () => {
     const action = parseImportReviewReply('new', 'unaccept', ctx());
     expect(action).toMatchObject({ kind: 'invalid' });
@@ -145,7 +152,7 @@ describe('screens', () => {
 });
 
 describe('buildAcceptedList — the entries, numbered, each with a remove link', () => {
-  it('lists component, CVE and reason in file order with a link that resends unaccept <n>', () => {
+  it('lists component, CVE and reason in file order with a link that resends unaccept <component> <CVE>', () => {
     const text = buildAcceptedList([
       { component: 'netty-codec', cve: 'CVE-2024-0001', reason: 'not reachable' },
       { component: 'libfoo', cve: 'CVE-2024-0002' },
@@ -154,8 +161,8 @@ describe('buildAcceptedList — the entries, numbered, each with a remove link',
     expect(text).toContain('netty-codec');
     expect(text).toContain('not reachable');
     expect(text).toContain('2. ');
-    expect(text).toMatch(/unaccept(%20| )1/);
-    expect(text).toMatch(/unaccept(%20| )2/);
+    expect(text).toMatch(/unaccept(%20| )netty-codec(%20| )CVE-2024-0001/);
+    expect(text).toMatch(/unaccept(%20| )libfoo(%20| )CVE-2024-0002/);
   });
 
   it('says so when the list is empty', () => {

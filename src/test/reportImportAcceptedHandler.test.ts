@@ -262,6 +262,31 @@ describe('listing and removing accepted entries (R7)', () => {
     expect(after.text).toMatch(/next import/i);
   });
 
+  it('an old Remove link still removes the entry it named after the list shifted', async () => {
+    writeList([{ component: 'a', cve: 'CVE-1', reason: 'first' }, { component: 'b', cve: 'CVE-2', reason: 'second' }, { component: 'c', cve: 'CVE-3', reason: 'third' }]);
+    const { session, ws } = await importWaltz([comp('other:1.0', 'High', [['CVE-2099-9', 'High']])]);
+    await reply('unaccept 1', session!, ws);
+    const after = await reply('unaccept c CVE-3', session!, ws);
+    expect(readList()).toEqual([{ component: 'b', cve: 'CVE-2', reason: 'second' }]);
+    expect(after.text).toMatch(/Removed c · CVE-3/);
+  });
+
+  it('says so when the named entry is no longer on the list and changes nothing', async () => {
+    writeList([{ component: 'a', cve: 'CVE-1' }]);
+    const { session, ws } = await importWaltz([comp('other:1.0', 'High', [['CVE-2099-9', 'High']])]);
+    const after = await reply('unaccept gone CVE-9', session!, ws);
+    expect(after.text).toMatch(/not on the accepted list/i);
+    expect(readList()).toHaveLength(1);
+  });
+
+  it('shows text from the file without link or image syntax in its own messages', async () => {
+    writeList([{ component: '![x](https://tracker.example/p.png)', cve: 'CVE-1' }, { component: 'b', cve: 'CVE-2' }]);
+    const { session, ws } = await importWaltz([comp('other:1.0', 'High', [['CVE-2099-9', 'High']])]);
+    const removed = await reply('unaccept 1', session!, ws);
+    expect(removed.text).not.toContain('](https://tracker.example');
+    expect(removed.text).toContain('Removed');
+  });
+
   it('reports an entry number that is not on the list', async () => {
     writeList([{ component: 'a', cve: 'CVE-1' }]);
     const { session, ws } = await importWaltz([comp('other:1.0', 'High', [['CVE-2099-9', 'High']])]);

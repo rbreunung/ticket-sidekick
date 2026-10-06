@@ -87,6 +87,13 @@ export function removeAcceptedEntry(entries: AcceptedEntry[], position: number):
   return { entries: entries.filter((_, i) => i !== position - 1), removed: entries[position - 1] };
 }
 
+/** Removes the entry for a component + CVE pair wherever it sits (what a Remove link names); null when it is not on the list. */
+export function removeAcceptedPair(entries: AcceptedEntry[], component: string, cve: string): { entries: AcceptedEntry[]; removed: AcceptedEntry } | null {
+  const key = pairKey(component, cve);
+  const index = entries.findIndex(e => pairKey(e.component, e.cve) === key);
+  return index === -1 ? null : { entries: entries.filter((_, i) => i !== index), removed: entries[index] };
+}
+
 export interface NarrowResult {
   /** The members that remain; null when nothing of the group is left to offer. */
   group: WaltzComponent[] | null;

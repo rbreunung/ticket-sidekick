@@ -461,7 +461,8 @@ export function buildImportScreen<TRow extends ReviewRowBase>(
 export function buildAcceptedList(entries: AcceptedEntry[]): string {
   if (entries.length === 0) return '_The accepted list is empty._';
   const text = (value: string): string => neutralizeMarkdownLinks(value).replace(/\s+/g, ' ').trim();
+  // The link names the entry, not its position, so a link from an older list still removes what it showed.
   const lines = entries.map((e, i) =>
-    `${i + 1}. ${text(e.component)} · ${text(e.cve)}${e.reason ? ` — ${text(e.reason)}` : ''} — ${cmdLink('Remove', `unaccept ${i + 1}`)}`);
+    `${i + 1}. ${text(e.component)} · ${text(e.cve)}${e.reason ? ` — ${text(e.reason)}` : ''} — ${cmdLink('Remove', `unaccept ${e.component.replace(/\s+/g, ' ').trim()} ${e.cve.trim()}`)}`);
   return ['### Accepted CVEs', '', ...lines].join('\n');
 }

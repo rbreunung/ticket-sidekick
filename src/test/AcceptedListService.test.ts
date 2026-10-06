@@ -77,6 +77,25 @@ describe('AcceptedListService.remove', () => {
     expect(service.load().entries).toEqual([{ component: 'b', cve: 'CVE-2' }]);
   });
 
+  it('removes an entry by component and CVE, so an old link still hits the entry it named', () => {
+    const service = new AcceptedListService(dir);
+    service.add([{ component: 'a', cve: 'CVE-1', reason: 'kept' }, { component: 'b', cve: 'CVE-2' }, { component: 'c', cve: 'CVE-3' }]);
+    service.remove(1); // the list shifts: b is now first, c second
+    const result = service.removePair('c', 'CVE-3');
+    expect(result).toMatchObject({ ok: true, removed: { component: 'c', cve: 'CVE-3' } });
+    expect(service.load().entries).toEqual([{ component: 'b', cve: 'CVE-2' }]);
+  });
+
+  it('reports a pair that is no longer on the list and writes nothing', () => {
+    const service = new AcceptedListService(dir);
+    service.add([{ component: 'a', cve: 'CVE-1' }]);
+    const before = readFileSync(file(), 'utf8');
+    const result = service.removePair('zzz', 'CVE-9');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toMatch(/not on the accepted list/i);
+    expect(readFileSync(file(), 'utf8')).toBe(before);
+  });
+
   it('leaves an empty but valid file after the last entry is removed', () => {
     const service = new AcceptedListService(dir);
     service.add([{ component: 'a', cve: 'CVE-1' }]);
