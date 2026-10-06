@@ -1,3 +1,11 @@
+## [0.7.1] - 2026-10-06
+
+## What's Changed
+* fix(email): keep Outlook data tables as Jira tables when importing .eml
+
+
+**Full Changelog**: https://github.com/rbreunung/ticket-sidekick/compare/0.7.0...0.7.1
+
 ## [0.7.0] - 2026-10-06
 
 ## What's Changed
