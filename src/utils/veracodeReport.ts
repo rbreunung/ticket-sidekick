@@ -260,48 +260,72 @@ export function buildLabels(flaw: VeracodeFlaw, templateLabels: string[] = []): 
   return [...new Set([...own, ...templateLabels])];
 }
 
-// --- Folding (grouping same-line flaws) ---------------------------------------------------------
+// --- Folding (grouping related flaws) -----------------------------------------------------------
 //
-// R9/R12: flaws sharing a source file + line number fold into one review row / one ticket,
-// regardless of CWE or category, UNLESS either sourceFile or line is missing — a flaw with no
-// location never folds with anything, even another flaw that also lacks a location (each such flaw
-// stays its own singleton group, never grouped with another missing-location flaw either).
+// R2 (finding folding plan): flaws fold into one review row / one ticket when they share a source
+// file AND a CWE (any line), or share a source file AND a line (any CWE). The two rules link flaws
+// transitively, so one flaw can never appear in two groups. A flaw with no source file never folds
+// with anything, and a flaw with no CWE never folds by CWE (it still folds by line).
 
 // The `::` separator between the path and file segments is required: bare concatenation (the
 // pattern fullSourcePath() uses for *display*, where a collision is only cosmetic) lets two flaws
 // in genuinely different locations produce the same key — e.g. path `src/foo/` + file `bar.js`
 // versus path `src/foo/bar.` + file `js` both concatenate to `src/foo/bar.js`, but with `::`
-// inserted between path and file they key as `src/foo/::bar.js:10` and `src/foo/bar.::js:10`
+// inserted between path and file they key as `src/foo/::bar.js` and `src/foo/bar.::js`
 // respectively, which differ.
-function groupKey(flaw: VeracodeFlaw): string | null {
-  if (flaw.sourceFile == null || flaw.line == null) return null;
-  return `${flaw.sourceFilePath ?? ''}::${flaw.sourceFile}:${flaw.line}`;
+function fileKey(flaw: VeracodeFlaw): string | null {
+  if (flaw.sourceFile == null) return null;
+  return `${flaw.sourceFilePath ?? ''}::${flaw.sourceFile}`;
+}
+
+/** The keys a flaw can be linked through: same file + same line, and same file + same CWE. */
+function linkKeys(flaw: VeracodeFlaw): string[] {
+  const file = fileKey(flaw);
+  if (file === null) return [];
+  const keys: string[] = [];
+  if (flaw.line != null) keys.push(`line:${file}:${flaw.line}`);
+  if (flaw.cweId != null) keys.push(`cwe:${file}|${flaw.cweId}`);
+  return keys;
 }
 
 /**
- * Groups flaws that share a source file + line number (R9). A flaw missing either field is never
- * folded with another flaw (R12) — including another flaw that also lacks a location — so it
- * always comes back as its own singleton group. Group order follows first-occurrence order of each
- * group's first member in the input; members within a group keep their relative input order.
+ * Groups flaws that share a source file and either a CWE or a line number (R2). Groups are the
+ * transitive closure of the two rules. A flaw with no source file is never folded with another flaw
+ * — including another flaw that also lacks one — so it always comes back as its own singleton
+ * group. Group order follows first-occurrence order of each group's first member in the input;
+ * members within a group keep their relative input order.
  */
 export function groupFlawsByLocation(flaws: VeracodeFlaw[]): VeracodeFlaw[][] {
-  const groups: VeracodeFlaw[][] = [];
-  const keyToGroup = new Map<string, VeracodeFlaw[]>();
-  for (const flaw of flaws) {
-    const key = groupKey(flaw);
-    if (key === null) {
-      groups.push([flaw]);
-      continue;
+  const parent = flaws.map((_, i) => i);
+  const find = (i: number): number => {
+    while (parent[i] !== i) {
+      parent[i] = parent[parent[i]];
+      i = parent[i];
     }
-    const existing = keyToGroup.get(key);
+    return i;
+  };
+  const firstWithKey = new Map<string, number>();
+  flaws.forEach((flaw, i) => {
+    for (const key of linkKeys(flaw)) {
+      const first = firstWithKey.get(key);
+      if (first === undefined) firstWithKey.set(key, i);
+      else parent[find(i)] = find(first);
+    }
+  });
+
+  const groups: VeracodeFlaw[][] = [];
+  const rootToGroup = new Map<number, VeracodeFlaw[]>();
+  flaws.forEach((flaw, i) => {
+    const root = find(i);
+    const existing = rootToGroup.get(root);
     if (existing) {
       existing.push(flaw);
     } else {
       const group = [flaw];
-      keyToGroup.set(key, group);
+      rootToGroup.set(root, group);
       groups.push(group);
     }
-  }
+  });
   return groups;
 }
 

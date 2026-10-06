@@ -1807,8 +1807,11 @@ describe('Veracode per-row actions through the real descriptor (U5)', () => {
   });
 
   it('AE4 (overview hub): update touches only the tickets missing a finding and creates nothing', async () => {
+    // One CWE per line, so the three line groups stay three groups under file + CWE folding too.
     const flaws = [
-      makeFlaw('101', { line: 10 }), makeFlaw('102', { line: 10 }), makeFlaw('201', { line: 20 }), makeFlaw('202', { line: 20 }), makeFlaw('301', { line: 30 }),
+      makeFlaw('101', { line: 10, cweId: '89' }), makeFlaw('102', { line: 10, cweId: '89' }),
+      makeFlaw('201', { line: 20, cweId: '79' }), makeFlaw('202', { line: 20, cweId: '79' }),
+      makeFlaw('301', { line: 30, cweId: '22' }),
     ];
     const tickets: Record<string, FakeTicket> = {
       'PROJ-1': { labels: ['veracode-issue-101'] }, 'PROJ-2': { labels: ['veracode-issue-201'] }, 'PROJ-3': { labels: ['veracode-issue-301'] },
@@ -1821,6 +1824,20 @@ describe('Veracode per-row actions through the real descriptor (U5)', () => {
     expect(client.updateIssueCalls.map(c => c.issueKey).sort()).toEqual(['PROJ-1', 'PROJ-2']);
     expect(client.createIssueCalls).toHaveLength(0);
     expect(session.outcomes?.updated).toBe(2);
+  });
+
+  it('AE8: ten same-file, same-CWE flaws with one already ticketed form one Already-ticketed row proposing update, and none in New', async () => {
+    const flaws = Array.from({ length: 10 }, (_, i) => makeFlaw(String(101 + i), { line: i + 1, cweId: '89' }));
+    const tickets: Record<string, FakeTicket> = { 'PROJ-50': { labels: ['veracode', 'veracode-issue-101'] } };
+    const { session } = await importVeracode(flaws, tickets);
+
+    expect(session.allRows).toHaveLength(1);
+    const [row] = session.allRows;
+    expect(row.existingTicketKey).toBe('PROJ-50');
+    expect(row.action).toBe('update');
+    expect(row.change).toMatchObject({ kind: 'findings' });
+    expect((row.change as { newIds: string[] }).newIds).toHaveLength(9);
+    expect(session.allRows.filter(r => r.existingTicketKey === null)).toHaveLength(0);
   });
 
   it('a follow-up covers only the new flaws: its labels, summary and description', async () => {

@@ -424,12 +424,57 @@ describe('groupFlawsByLocation', () => {
     expect(groups.every(g => g.length === 1)).toBe(true);
   });
 
-  it('never folds a flaw with a null line, even with an otherwise-identical source file in another flaw', () => {
-    const a = makeFlaw({ issueId: '1', sourceFile: 'Foo.java', line: null });
-    const b = makeFlaw({ issueId: '2', sourceFile: 'Foo.java', line: null });
+  it('never folds by line when the line is null: same file but different CWEs stay separate', () => {
+    const a = makeFlaw({ issueId: '1', sourceFile: 'Foo.java', line: null, cweId: '89' });
+    const b = makeFlaw({ issueId: '2', sourceFile: 'Foo.java', line: null, cweId: '79' });
     const groups = groupFlawsByLocation([a, b]);
     expect(groups).toHaveLength(2);
     expect(groups.every(g => g.length === 1)).toBe(true);
+  });
+
+  describe('file + CWE folding (R2)', () => {
+    it('AE1: folds seven same-file, same-CWE flaws on seven different lines into one group in report order', () => {
+      const flaws = [10, 20, 30, 40, 50, 60, 70].map((line, i) =>
+        makeFlaw({ issueId: String(1001 + i), sourceFile: 'OrderRepository.java', line }));
+      const groups = groupFlawsByLocation(flaws);
+      expect(groups).toHaveLength(1);
+      expect(groups[0].map(f => f.issueId)).toEqual(['1001', '1002', '1003', '1004', '1005', '1006', '1007']);
+    });
+
+    it('AE2: links through both keys, so same-line and same-CWE flaws form one group of three', () => {
+      const a = makeFlaw({ issueId: 'A', cweId: '89', line: 10 });
+      const b = makeFlaw({ issueId: 'B', cweId: '89', line: 20 });
+      const c = makeFlaw({ issueId: 'C', cweId: '79', line: 10 });
+      const groups = groupFlawsByLocation([a, b, c]);
+      expect(groups).toHaveLength(1);
+      expect(groups[0].map(f => f.issueId)).toEqual(['A', 'B', 'C']);
+    });
+
+    it('keeps different CWEs on different lines of one file as separate groups', () => {
+      const a = makeFlaw({ issueId: '1', cweId: '89', line: 10 });
+      const b = makeFlaw({ issueId: '2', cweId: '79', line: 20 });
+      expect(groupFlawsByLocation([a, b])).toHaveLength(2);
+    });
+
+    it('never folds the same file name under two different source paths', () => {
+      const a = makeFlaw({ issueId: '1', sourceFilePath: 'src/a/', sourceFile: 'Dao.java', line: 1 });
+      const b = makeFlaw({ issueId: '2', sourceFilePath: 'src/b/', sourceFile: 'Dao.java', line: 2 });
+      expect(groupFlawsByLocation([a, b])).toHaveLength(2);
+    });
+
+    it('folds same-file, same-CWE flaws even when their lines are null', () => {
+      const a = makeFlaw({ issueId: '1', sourceFile: 'Foo.java', line: null, cweId: '89' });
+      const b = makeFlaw({ issueId: '2', sourceFile: 'Foo.java', line: null, cweId: '89' });
+      expect(groupFlawsByLocation([a, b]).map(g => g.map(f => f.issueId))).toEqual([['1', '2']]);
+    });
+
+    it('never folds flaws with no CWE by CWE, but still folds them on the same line', () => {
+      const a = makeFlaw({ issueId: '1', cweId: null, cweName: null, line: 10 });
+      const b = makeFlaw({ issueId: '2', cweId: null, cweName: null, line: 20 });
+      const c = makeFlaw({ issueId: '3', cweId: null, cweName: null, line: 10 });
+      const groups = groupFlawsByLocation([a, b, c]);
+      expect(groups.map(g => g.map(f => f.issueId))).toEqual([['1', '3'], ['2']]);
+    });
   });
 
   it('does not fold two flaws whose sourceFilePath+sourceFile concatenation collides without the "::" separator', () => {
