@@ -76,7 +76,8 @@ export function markdownToJiraWiki(md: string): string {
     if (line.startsWith('|') && line.endsWith('|')) {
       const nextLine = lines[i + 1] ?? '';
       const isHeader = /^\|[\s\-:|]+\|$/.test(nextLine);
-      const cells = line.slice(1, -1).split('|').map(c => inline(c.trim()));
+      // Split on unescaped pipes only; an empty cell is a single space because `||` opens a header cell
+      const cells = line.slice(1, -1).split(/(?<!\\)\|/).map(c => inline(c.trim()) || ' ');
       out.push(isHeader ? '||' + cells.join('||') + '||' : '|' + cells.join('|') + '|');
       i++;
       continue;

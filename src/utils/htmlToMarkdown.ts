@@ -39,11 +39,12 @@ export function htmlToMarkdown(html: string, inlineImageMap: Map<string, string>
         return '';
       });
       if (rows.length === 0) return '';
-      if (rows.some(r => r.some(c => LINE_BREAK_TAG.test(c)))) {
+      if (isLayoutTable(rows)) {
         const cells = rows.flat().filter(c => stripTags(c).trim() || /<img/i.test(c));
         return `<br>${cells.join('<br>')}<br>`;
       }
-      const text = rows.map(r => r.map(c => stripTags(convertImages(c, inlineImageMap)).trim().replace(/\|/g, '\\|')));
+      const text = rows.map(r => r.map(c =>
+        stripTags(convertImages(c, inlineImageMap).replace(BLOCK_CLOSE_OR_BR, ' ')).replace(/\s+/g, ' ').trim().replace(/\|/g, '\\|')));
       const sep = text[0].map(() => '---');
       const lines = [
         `| ${text[0].join(' | ')} |`,
@@ -114,6 +115,25 @@ function stripTags(html: string): string {
 }
 
 const LINE_BREAK_TAG = /<br[\s/>]|<\/(?:p|div|tr|li)>|<hr[\s/>]/i;
+const HARD_BREAK_TAG = /<br[\s/>]|<hr[\s/>]/i;
+const BLOCK_CLOSE_OR_BR = /<\/(?:p|div|li)>|<br\s*\/?>/gi;
+// Outlook/Word wrap every cell's content in exactly one paragraph, so the close tags (and empty
+// `<o:p>`) at the very end of a cell say nothing about whether the cell holds several lines.
+const TRAILING_BREAK_TAGS = /(?:\s|<\/?(?:p|div|o:p|br)(?:\s[^>]*)?\/?>)+$/i;
+
+/**
+ * A table whose cells hold several lines (a signature or logo container) is layout and gets
+ * unwrapped into its content. A regular multi-row grid whose cells only differ by paragraph
+ * breaks is data and stays a table, with those breaks joined by a space.
+ */
+function isLayoutTable(rows: string[][]): boolean {
+  const content = rows.map(r => r.map(c => c.replace(TRAILING_BREAK_TAGS, '')));
+  // A nested data table already converted to pipe rows must keep its line structure.
+  if (content.some(r => r.some(c => /\n\|/.test(c)))) return true;
+  if (!content.some(r => r.some(c => LINE_BREAK_TAG.test(c)))) return false;
+  const regularGrid = rows.length >= 2 && rows[0].length >= 2 && rows.every(r => r.length === rows[0].length);
+  return !regularGrid || content.some(r => r.some(c => HARD_BREAK_TAG.test(c)));
+}
 
 function wrapLines(content: string, marker: string): string {
   return content.split(/(<br\s*\/?>|<\/(?:p|div)>)/i)

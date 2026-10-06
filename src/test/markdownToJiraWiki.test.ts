@@ -125,6 +125,17 @@ describe('markdownToJiraWiki', () => {
     });
   });
 
+  describe('tables with empty and escaped cells', () => {
+    it('renders an empty cell as a single space, never as a header delimiter', () => {
+      const md = '| A | B | C |\n| --- | --- | --- |\n|  | Total | 9 |';
+      expect(markdownToJiraWiki(md)).toBe('||A||B||C||\n| |Total|9|');
+    });
+    it('does not split a row on an escaped pipe', () => {
+      const md = '| A | B |\n| --- | --- |\n| a \\| b | c |';
+      expect(markdownToJiraWiki(md)).toBe('||A||B||\n|a \\| b|c|');
+    });
+  });
+
   describe('passthrough', () => {
     it('leaves plain text unchanged', () => {
       expect(markdownToJiraWiki('just plain text')).toBe('just plain text');

@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { parseEmlFile } from '../utils/emlParser';
 import { htmlToMarkdown } from '../utils/htmlToMarkdown';
+import { markdownToJiraWiki } from '../utils/markdownToJiraWiki';
 import type { EmailImportItem } from '../utils/emlParser';
 import {
   BLOCK_LINE_CAP,
@@ -761,5 +762,29 @@ describe('verifyModelBlocks — the model proposes, local code verifies (KTD5)',
 
   it('no proposals and no patterns yield no blocks', () => {
     expect(verifyModelBlocks('Hello', [], [])).toEqual([]);
+  });
+});
+
+describe('applyBoilerplateCleanup — Outlook data tables (HTML → Markdown → wiki)', () => {
+  const cell = (t: string) => `<td><p class="MsoNormal"><span>${t}</span><o:p></o:p></p></td>`;
+  const tbl = (rows: string[][]) =>
+    `<table class="MsoNormalTable"><tbody>${rows.map(r => `<tr>${r.map(cell).join('')}</tr>`).join('')}</tbody></table>`;
+
+  it('keeps every table row intact, also in a quoted older message, when only a footer is stripped', () => {
+    const html = '<p>Numbers below.</p>' + tbl([['Ref', 'Code'], ['R-001', 'AAA'], ['', 'Total']])
+      + '<p>CONFIDENTIALITY NOTICE: internal only.</p>'
+      + '<div>From: Bob Example</div><div>Sent: Monday, 5 October 2026 09:00</div><div>To: Anna Schmidt</div><div>Subject: Re: Numbers</div>'
+      + tbl([['Old', 'Val'], ['x', '1']]);
+    const body = htmlToMarkdown(html);
+    const item = makeItem(body, { senderName: 'Anna Schmidt' });
+    const blocks = detectPatternBlocks(body, [DISCLAIMER_EN], item.senderName);
+    const kept = applyBoilerplateCleanup(item, blocks).item.markdownBody;
+    expect(kept).not.toContain('CONFIDENTIALITY');
+    const tableLines = kept.split('\n').filter(l => l.startsWith('|'));
+    expect(tableLines).toEqual([
+      '| Ref | Code |', '| --- | --- |', '| R-001 | AAA |', '|  | Total |',
+      '| Old | Val |', '| --- | --- |', '| x | 1 |',
+    ]);
+    expect(markdownToJiraWiki(kept)).toContain('||Ref||Code||\n|R-001|AAA|\n| |Total|');
   });
 });
