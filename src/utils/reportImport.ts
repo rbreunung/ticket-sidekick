@@ -346,9 +346,15 @@ export async function findStaleTickets(
 // protects doesn't stop being dangerous once it survives that converter — the *output* is sent to
 // Jira verbatim as wiki markup, and Jira's renderer recognizes its own trigger set that
 // markdownToJiraWiki() never touches and therefore never neutralizes on the way through:
-//   - '-' is stripped — Jira-native strikethrough is `-text-` (not `~~text~~`; that Markdown form
-//     is what inline() converts *into* `-text-`, but a value that already contains bare hyphens
-//     reaches Jira as literal `-text-` without ever passing through that conversion)
+//   - '-' is stripped unless it sits between two ASCII letters or digits — Jira-native strikethrough
+//     is `-text-` (not `~~text~~`; that Markdown form is what inline() converts *into* `-text-`, but
+//     a value that already contains bare hyphens reaches Jira as literal `-text-` without ever
+//     passing through that conversion). A hyphen flanked by letters or digits on both sides
+//     ("netty-codec", "CVE-2099-1", "package-lock.json") can be neither an opening nor a closing
+//     delimiter — the same word-boundary rule markdownToJiraWiki()'s JIRA_TRIGGER_SHAPES applies —
+//     so it is kept and the value stays readable. Underscore does not count as a word character
+//     here: it is stripped below, and "_-_foo_-_" must not turn into a live "-foo-". A letter
+//     outside ASCII does not count either (conservative: its hyphen is stripped)
 //   - '+' is stripped — Jira-native underline is `+text+`
 //   - '^' is stripped — Jira-native superscript is `^text^`
 //   - '?' is stripped — Jira-native citation is `??text??`
@@ -362,11 +368,17 @@ export async function findStaleTickets(
 //     already prevents inline()'s `/!\[([^\]]*)\]\(([^)]+)\)/g` regex from matching, so stripping
 //     '!' is redundant-but-harmless for that path and purely defensive against the Jira-native
 //     `!url!` trigger, which needs no brackets at all.)
+// Every character of TRIGGER_CHARS except '-', which is handled by its own flank rule below.
+const NON_HYPHEN_TRIGGER_CHARS_PATTERN = new RegExp(TRIGGER_CHARS_PATTERN.source.replace('\\-', ''), 'g');
+// A hyphen with anything other than an ASCII letter or digit on either side.
+const BOUNDARY_HYPHEN_PATTERN = /(?<![A-Za-z0-9])-|-(?![A-Za-z0-9])/g;
+
 export function sanitizeCellText(value: string): string {
   return value
     .replace(/\r\n|\r|\n/g, ' ')
     .replace(/\|/g, '/')
-    .replace(TRIGGER_CHARS_PATTERN, '');
+    .replace(BOUNDARY_HYPHEN_PATTERN, '')
+    .replace(NON_HYPHEN_TRIGGER_CHARS_PATTERN, '');
 }
 
 // A value pushed as an entire standalone line (no trusted prefix character in front of it, e.g.

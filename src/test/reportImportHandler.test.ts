@@ -1694,9 +1694,9 @@ describe('Waltz per-row actions through the real descriptor (U5)', () => {
     const call = client.createIssueCalls[0];
     expect(call.summary).toBe('[OSS] jackson-databind 2.9 — High (follow-up to PROJ-8)');
     expect([...(call.additionalFields!.labels as string[])].sort()).toEqual(['oss-cve-cve-2019-2', 'oss-dependency', compLabel, 'oss-rating-high'].sort());
-    // sanitizeCellText strips '-' (a Jira strikethrough trigger) from report values.
-    expect(call.additionalFields!.description).toContain('CVE20192');
-    expect(call.additionalFields!.description).not.toContain('CVE20191');
+    // sanitizeCellText keeps a hyphen inside a word, so the CVE id stays readable.
+    expect(call.additionalFields!.description).toContain('CVE-2019-2');
+    expect(call.additionalFields!.description).not.toContain('CVE-2019-1');
     expect(client.createIssueLinkCalls).toEqual([{ inwardKey: 'PROJ-8', outwardKey: 'PROJ-100', typeName: 'Relates' }]);
   });
 

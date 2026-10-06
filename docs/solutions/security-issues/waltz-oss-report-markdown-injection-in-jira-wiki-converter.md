@@ -1,7 +1,7 @@
 ---
 title: Backslash-Escaping Doesn't Sanitize Input for markdownToJiraWiki()
 date: 2026-08-13
-last_updated: 2026-08-24
+last_updated: 2026-10-06
 category: security-issues
 module: "Shared report-import sanitizer — sanitizeCellText()/sanitizeStandaloneLine() (src/utils/reportImport.ts), consumed by both the Veracode and Waltz importers' buildDescriptionWiki()"
 problem_type: security_issue
@@ -103,6 +103,8 @@ New crafted-payload tests cover the full trigger set end-to-end (parse → sanit
 Fixed on branch `refactor/consolidate-report-importers`, merged via [PR #33](https://github.com/rbreunung/ticket-sidekick/pull/33) 2026-08-14.
 
 **2026-08-24 update — a second, broader layer of protection now exists.** The fix above extended `sanitizeCellText()`'s character class, which protects only callers that route untrusted values through it before building Markdown — the report importers, specifically. `markdownToJiraWiki()` itself still had no equivalent guarantee, which left every other caller (content preview/refinement, email-to-ticket) unprotected. That gap is now closed at the shared-converter level: see `docs/solutions/security-issues/jira-native-wiki-trigger-neutralization-in-shared-markdown-converter.md` (fixed via [PR #38](https://github.com/rbreunung/ticket-sidekick/pull/38), merged 2026-08-24). Both layers stay in place — this doc's `sanitizeCellText()` fix still protects against a value breaking out of its slot in a hand-assembled Markdown template, a different failure mode than the render-safety guarantee the newer fix adds.
+
+**2026-10-06 update — hyphens inside words are kept.** Stripping every `-` made folded Waltz and Veracode tickets unreadable (`netty-codec:4.1.100` became `nettycodec:4.1.100`, `CVE-2099-1` became `CVE20991`). `sanitizeCellText()` now strips a hyphen only when it does not sit between two ASCII letters or digits. Such a hyphen cannot be an opening or closing `-text-` delimiter under the word-boundary rule `markdownToJiraWiki()`'s `JIRA_TRIGGER_SHAPES` already applies to ordinary prose. Underscore and non-ASCII letters deliberately do not count as word characters, so `_-_foo_-_` cannot be reassembled into a live `-foo-` once the underscores are stripped. The rule rests on Jira's own renderer using the same word-boundary behavior, which is the same unverified-against-a-live-instance assumption as KL6 in `docs/known-limitations.md`.
 
 ### Why this specific gap survived two careful sanitization passes
 

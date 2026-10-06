@@ -94,6 +94,57 @@ describe('sanitizeCellText', () => {
   });
 });
 
+describe('sanitizeCellText keeps hyphens inside words', () => {
+  it.each([
+    ['netty-codec:4.1.100', 'netty-codec:4.1.100'],
+    ['CVE-2099-1', 'CVE-2099-1'],
+    ['/app/services/svc-0/package-lock.json', '/app/services/svc-0/package-lock.json'],
+    ['state-of-the-art', 'state-of-the-art'],
+  ])('leaves %s unchanged', (value, expected) => {
+    expect(sanitizeCellText(value)).toBe(expected);
+  });
+
+  it('still strips a hyphen at the start or end of a word, where Jira reads it as a strikethrough delimiter', () => {
+    expect(sanitizeCellText('-struck-')).toBe('struck');
+    expect(sanitizeCellText('a -b- c')).toBe('a b c');
+    expect(sanitizeCellText('open Monday - Friday')).toBe('open Monday  Friday');
+  });
+
+  it('keeps only the inner hyphen of a wrapped compound word', () => {
+    expect(sanitizeCellText('-a-b-')).toBe('a-b');
+    expect(sanitizeCellText('x -y-z- w')).toBe('x y-z w');
+  });
+
+  it('strips hyphens next to another hyphen or any other trigger character', () => {
+    expect(sanitizeCellText('a--b')).toBe('ab');
+    expect(sanitizeCellText('a---b')).toBe('ab');
+    expect(sanitizeCellText('a-+b')).toBe('ab');
+    expect(sanitizeCellText('a-*b')).toBe('ab');
+  });
+
+  it('cannot assemble a strikethrough by stripping underscores around a hyphen', () => {
+    // Were "_" counted as a word character, "_-_foo_-_" would leave "-foo-" once the underscores go.
+    expect(sanitizeCellText('_-_foo_-_')).toBe('foo');
+    expect(sanitizeCellText('x_-_y')).toBe('xy');
+  });
+
+  it('treats a letter outside ASCII as not a word character, so a hyphen next to it is stripped (conservative)', () => {
+    expect(sanitizeCellText('a-über')).toBe('aüber');
+    expect(sanitizeCellText('über-lib')).toBe('über-lib'); // the hyphen sits between "r" and "l", both ASCII
+  });
+
+  it('never leaves a hyphen that has a non-alphanumeric neighbor, whatever the payload', () => {
+    const crafted = 'a-b -c- --d-- e-_-f -*-g -- ~-~ x-y-z -x- (-a-) [-b-] {-c-} !-d-! ?-e-? ^-f-^ +-g-+';
+    expect(sanitizeCellText(crafted)).not.toMatch(/(?<![A-Za-z0-9])-|-(?![A-Za-z0-9])/);
+  });
+
+  it('still removes every other trigger character, wherever it sits', () => {
+    for (const char of '*_`[]~+^?{}!') {
+      expect(sanitizeCellText(`a${char}b ${char}c${char} ${char}`), char).not.toContain(char);
+    }
+  });
+});
+
 describe('sanitizeStandaloneLine', () => {
   it('prefixes the sanitized value with ": " so it cannot occupy line-start position', () => {
     expect(sanitizeStandaloneLine('Critical')).toBe(': Critical');

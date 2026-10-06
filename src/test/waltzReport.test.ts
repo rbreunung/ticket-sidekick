@@ -273,8 +273,8 @@ describe('buildDescriptionWiki', () => {
     const wiki = buildDescriptionWiki(many);
     expect(wiki).toContain('h3. Affected artifacts (30 total — showing top 25)');
     expect(wiki).toContain('+5 more not shown');
-    // Instance paths are untrusted and go through sanitizeCellText(), which now also strips '-'
-    // (Finding #1), so a real-world hyphenated path (e.g. "package-lock.json") loses its dashes too.
+    // Instance paths are untrusted and go through sanitizeCellText(); a hyphen inside a word
+    // ("package-lock.json", "svc-0") survives it.
     expect(wiki).toContain(sanitizeCellText('/app/services/svc-0/package-lock.json'));
     expect(wiki).not.toContain(sanitizeCellText('/app/services/svc-29/package-lock.json'));
   });
@@ -480,7 +480,7 @@ describe('buildUpdateCommentWiki', () => {
   it('lists only the new CVEs with severity, score and summary, plus the rating rise', () => {
     const wiki = buildUpdateCommentWiki(c, { newCveIds: ['CVE-B'], ratingRise: { from: 'High', to: 'Critical' } });
     expect(wiki).toContain(sanitizeCellText('CVE-B'));
-    expect(wiki).toContain('Summary of CVEB');
+    expect(wiki).toContain('Summary of CVE-B');
     expect(wiki).toContain('|Critical|8|');
     expect(wiki).not.toContain(`|${sanitizeCellText('CVE-A')}|`);
     expect(wiki).toMatch(/High → Critical/);
@@ -617,16 +617,16 @@ describe('Waltz folded groups (R1, R3, R8-R11)', () => {
     it('has an overview table with component, rating, CVE count and artifact count, one row per component', () => {
       const wiki = buildGroupDescriptionWiki(group);
       expect(wiki).toContain('||Component||Max rating||CVEs||Artifacts||');
-      // The table cell goes through sanitizeCellText() like every report value (it drops hyphens).
-      expect(wiki).toContain(`|${sanitizeCellText('netty-codec:4.1.100')}|High|2|1|`);
-      expect(wiki).toContain(`|${sanitizeCellText('netty-handler:4.1.94')}|Critical|1|1|`);
+      // The cell goes through sanitizeCellText() like every report value; a hyphen inside a word survives it.
+      expect(wiki).toContain('|netty-codec:4.1.100|High|2|1|');
+      expect(wiki).toContain('|netty-handler:4.1.94|Critical|1|1|');
     });
 
     it('gives each component its own section with its vulnerabilities', () => {
       const wiki = buildGroupDescriptionWiki(group);
-      expect(wiki).toContain(`h3. Component ${sanitizeCellText('netty-codec:4.1.100')}`);
-      expect(wiki).toContain(`h3. Component ${sanitizeCellText('netty-handler:4.1.94')}`);
-      expect(wiki).toContain(sanitizeCellText('CVE-2099-3'));
+      expect(wiki).toContain('h3. Component netty-codec:4.1.100');
+      expect(wiki).toContain('h3. Component netty-handler:4.1.94');
+      expect(wiki).toContain('CVE-2099-3');
     });
 
     it('cannot be broken or injected through a pipe or macro character in a component name', () => {
@@ -668,8 +668,8 @@ describe('Waltz folded groups (R1, R3, R8-R11)', () => {
     it('lists each added component with its CVE count under a banner', () => {
       const wiki = buildFoldedCommentWiki(group);
       expect(wiki.startsWith('These 2 components were added to this ticket.')).toBe(true);
-      expect(wiki).toContain(`|${sanitizeCellText('netty-codec:4.1.100')}|High|2|1|`);
-      expect(wiki).toContain(`|${sanitizeCellText('netty-handler:4.1.100')}|High|1|1|`);
+      expect(wiki).toContain('|netty-codec:4.1.100|High|2|1|');
+      expect(wiki).toContain('|netty-handler:4.1.100|High|1|1|');
     });
 
     it('names the component labels the ticket recorded that no longer appear in its description', () => {
