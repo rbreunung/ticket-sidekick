@@ -219,4 +219,4 @@ How it applies:
 
 Nothing is hidden silently: the overview (or the New screen, when the import has only one group) shows a line such as "3 accepted CVEs hidden · 1 component below the rating floor". Reply `accepted` to list the entries with their reasons, and `unaccept 2` (or click **Remove**) to delete the entry with that number. A removed entry is offered again on the next import; rows already hidden stay hidden in the review that is open.
 
-If `.jira-oss-accepted.json` is not valid JSON, the import hides nothing and shows a warning, and `accept` will not overwrite the file until you fix it.
+If `.jira-oss-accepted.json` is not valid JSON, the import hides nothing and shows a warning. If it has an entry that cannot be read (for example a mistyped key), that entry is skipped with a warning. In both cases `accept` and `unaccept` leave the file alone until you fix it, so nothing you wrote by hand is lost.

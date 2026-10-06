@@ -106,6 +106,20 @@ describe('building the New rows with an accepted list (R3, R4, R8, R9)', () => {
     expect(streamText(stream)).toContain('1 accepted CVE');
   });
 
+  it('keeps the review open when the list hides every New component but an Already-ticketed one remains', async () => {
+    writeList([{ component: 'netty-codec', cve: 'CVE-2099-1' }]);
+    const ticketed = comp('other:1.0', 'High', [['CVE-2099-9', 'High']]);
+    const { session, stream } = await importWaltz(
+      [comp('netty-codec:4.1.100', 'High', [['CVE-2099-1', 'High']]), ticketed],
+      { 'PROJ-7': { labels: ['oss-dependency', sanitizeComponentLabel(ticketed.nameVersion)] } },
+    );
+    expect(session).toBeDefined();
+    expect(newRows(session!)).toEqual([]);
+    expect(session!.allRows.filter(r => r.existingTicketKey !== null)).toHaveLength(1);
+    expect(session!.acceptedHidden).toEqual({ cves: 1, belowFloor: 0 });
+    expect(streamText(stream)).not.toContain('Nothing is left to import');
+  });
+
   it('hides a component whose open CVEs fall below the rating floor and reports it apart (AE5)', async () => {
     writeList([{ component: 'libfoo', cve: 'CVE-2099-1' }]);
     const { session } = await importWaltz([

@@ -52,6 +52,15 @@ describe('AcceptedListService.add', () => {
     expect(readFileSync(file(), 'utf8')).toBe('{ "accepted": [ ');
   });
 
+  it('refuses to write over a file that has an entry it could not read, so no entry or extra key is lost', () => {
+    const original = JSON.stringify({ accepted: [{ component: 'libfoo', cves: 'CVE-2024-0001' }, { component: 'libbar', cve: 'CVE-2024-0002', ticket: 'PROJ-9' }] });
+    writeFileSync(file(), original);
+    const service = new AcceptedListService(dir);
+    expect(service.add([{ component: 'libnew', cve: 'CVE-2024-0003' }]).ok).toBe(false);
+    expect(service.remove(1).ok).toBe(false);
+    expect(readFileSync(file(), 'utf8')).toBe(original);
+  });
+
   it('reports a failed write instead of throwing', () => {
     const result = new AcceptedListService(join(dir, 'missing-subdir')).add([{ component: 'libfoo', cve: 'CVE-2024-0001' }]);
     expect(result.ok).toBe(false);

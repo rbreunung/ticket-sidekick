@@ -37,7 +37,7 @@ export class AcceptedListService {
 
   add(additions: AcceptedEntry[]): AcceptedListChange {
     const current = this.load();
-    if (current.unparseable) return { ok: false, message: this.unparseableMessage() };
+    if (current.warning) return { ok: false, message: this.unwritableMessage(current.warning) };
     const { entries, added } = addAcceptedEntries(current.entries, additions);
     if (added === 0) return { ok: true, entries, added };
     return this.write(entries, { ok: true, entries, added });
@@ -45,7 +45,7 @@ export class AcceptedListService {
 
   remove(position: number): AcceptedListRemoval {
     const current = this.load();
-    if (current.unparseable) return { ok: false, message: this.unparseableMessage() };
+    if (current.warning) return { ok: false, message: this.unwritableMessage(current.warning) };
     const result = removeAcceptedEntry(current.entries, position);
     if (!result) return { ok: false, message: `There is no entry ${position} in ${ACCEPTED_FILE_NAME}.` };
     return this.write(result.entries, { ok: true, entries: result.entries, removed: result.removed });
@@ -61,7 +61,9 @@ export class AcceptedListService {
     }
   }
 
-  private unparseableMessage(): string {
-    return `${ACCEPTED_FILE_NAME} is not valid JSON, so it was left as it is. Fix the file first.`;
+  // A file that could not be read in full (invalid JSON, or entries skipped) is never rewritten: the
+  // rewrite would drop whatever the reader could not keep (R6, data-loss review finding).
+  private unwritableMessage(warning: string): string {
+    return `${warning} The file was left as it is — fix it first.`;
   }
 }
