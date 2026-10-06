@@ -30,10 +30,14 @@ export function getWaltzMaxReportBytes(): number {
   return resolveSizeLimitSetting('waltz.maxReportSizeMB', (key) => cfg.get(key));
 }
 
+function getWaltzMinVulnRating(): string {
+  return vscode.workspace.getConfiguration('ticketSidekick').get<string>('waltz.minVulnRating') ?? 'High';
+}
+
 function getWaltzConfig(): { minVulnRating: string; includeRemediationActions: string[]; maxReportBytes: number } {
   const cfg = vscode.workspace.getConfiguration('ticketSidekick');
   return {
-    minVulnRating: cfg.get<string>('waltz.minVulnRating') ?? 'High',
+    minVulnRating: getWaltzMinVulnRating(),
     includeRemediationActions: cfg.get<string[]>('waltz.includeRemediationActions') ?? ['', 'Remediate'],
     maxReportBytes: getWaltzMaxReportBytes(),
   };
@@ -153,7 +157,7 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
       return workspaceRoot ? new AcceptedListService(workspaceRoot) : null;
     },
     narrow: (group, entries) => {
-      const narrowed = narrowGroup(group, entries, getWaltzConfig().minVulnRating);
+      const narrowed = narrowGroup(group, entries, getWaltzMinVulnRating());
       return { item: narrowed.group, hiddenCves: narrowed.hiddenCves, belowFloor: narrowed.belowFloor };
     },
     entriesOf: (group, reason) => acceptedEntriesOf(group, reason),

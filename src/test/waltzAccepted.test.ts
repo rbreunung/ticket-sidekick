@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   parseAcceptedFile, serializeAcceptedFile, componentNameOf, addAcceptedEntries, removeAcceptedEntry,
-  narrowGroup, narrowGroups, acceptedEntriesOf, type AcceptedEntry,
+  narrowGroup, acceptedEntriesOf, type AcceptedEntry,
 } from '../utils/waltzAccepted';
 import type { WaltzComponent } from '../utils/waltzReport';
 
@@ -98,21 +98,6 @@ describe('narrowGroup — what the New screen offers for a component', () => {
     expect(result.group!.map(c => c.nameVersion)).toEqual(['b:2.0']);
     expect(result.group![0].vulnerabilities.map(v => v.cveId)).toEqual(['CVE-2024-0003']);
     expect(result.hiddenCves).toBe(2);
-  });
-});
-
-describe('narrowGroups — a whole report at once', () => {
-  it('drops hidden groups and totals the counts', () => {
-    const groups = [
-      [component('a:1.0', 'High', [['CVE-2024-0001', 'High']])],
-      [component('b:1.0', 'High', [['CVE-2024-0002', 'High'], ['CVE-2024-0003', 'Low']])],
-      [component('c:1.0', 'High', [['CVE-2024-0009', 'High']])],
-    ];
-    const entries = [accepted('a', 'CVE-2024-0001'), accepted('b', 'CVE-2024-0002')];
-    const result = narrowGroups(groups, entries, 'High');
-    expect(result.groups).toEqual([groups[2]]);
-    expect(result.hiddenCves).toBe(2);
-    expect(result.belowFloor).toBe(1);
   });
 });
 

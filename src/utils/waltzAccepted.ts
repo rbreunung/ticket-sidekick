@@ -141,20 +141,6 @@ export function narrowGroup(group: WaltzComponent[], entries: AcceptedEntry[], m
   return { group: kept.length > 0 ? kept : null, hiddenCves, belowFloor };
 }
 
-/** Narrows every group of a report; groups with nothing left are dropped and the counts are totalled. */
-export function narrowGroups(groups: WaltzComponent[][], entries: AcceptedEntry[], minRating: string): { groups: WaltzComponent[][]; hiddenCves: number; belowFloor: number } {
-  const out: WaltzComponent[][] = [];
-  let hiddenCves = 0;
-  let belowFloor = 0;
-  for (const group of groups) {
-    const result = narrowGroup(group, entries, minRating);
-    hiddenCves += result.hiddenCves;
-    belowFloor += result.belowFloor;
-    if (result.group) out.push(result.group);
-  }
-  return { groups: out, hiddenCves, belowFloor };
-}
-
 /** The entries accepting a row writes: one per CVE of every member, by component name, each CVE once (R5). */
 export function acceptedEntriesOf(group: WaltzComponent[], reason?: string): AcceptedEntry[] {
   const seen = new Set<string>();

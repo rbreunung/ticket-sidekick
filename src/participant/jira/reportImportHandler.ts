@@ -919,14 +919,16 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
     }
     case 'unaccept': {
       const service = descriptor.accepted!.service();
-      const removal = service?.remove(action.position);
       if (!service) {
         stream.markdown(NO_WORKSPACE_ACCEPTED_MESSAGE);
-      } else if (!removal!.ok) {
-        stream.markdown(`✗ ${removal!.message}\n\n`);
       } else {
-        logDiag(descriptor.scope, 'info', `${descriptor.importLabel} import — accepted entry removed`, { position: action.position });
-        stream.markdown(`✓ Removed ${removal!.removed.component} · ${removal!.removed.cve} from the accepted list. It is offered again on the next import; rows already hidden stay hidden in this review.\n\n`);
+        const removal = service.remove(action.position);
+        if (!removal.ok) {
+          stream.markdown(`✗ ${removal.message}\n\n`);
+        } else {
+          logDiag(descriptor.scope, 'info', `${descriptor.importLabel} import — accepted entry removed`, { position: action.position });
+          stream.markdown(`✓ Removed ${removal.removed.component} · ${removal.removed.cve} from the accepted list. It is offered again on the next import; rows already hidden stay hidden in this review.\n\n`);
+        }
       }
       return rerender();
     }
@@ -1266,21 +1268,22 @@ async function acceptRows<TItem, TRow extends ReviewRowBase>(
 
   const templateLabels = templateLabelsOf(session.additionalFields);
   const hidden = { cves: session.acceptedHidden?.cves ?? 0, belowFloor: session.acceptedHidden?.belowFloor ?? 0 };
-  const narrowRow = (row: TRow, count: boolean): TRow | null => {
+  // The row narrowed against the updated list: [] when nothing of it is left, the row itself when untouched.
+  const narrowRow = (row: TRow, count: boolean): TRow[] => {
     const item = accepted.itemOf(row);
     const narrowed = accepted.narrow(item, written.entries);
     if (count) {
       hidden.cves += narrowed.hiddenCves;
       hidden.belowFloor += narrowed.belowFloor;
     }
-    if (narrowed.item === null) return null;
-    if (narrowed.item === item) return row;
-    return { ...row, ...descriptor.buildRowFields(narrowed.item, templateLabels) };
+    if (narrowed.item === null) return [];
+    if (narrowed.item === item) return [row];
+    return [{ ...row, ...descriptor.buildRowFields(narrowed.item, templateLabels) }];
   };
-  const allRows = session.allRows.flatMap(r => (r.existingTicketKey !== null ? [r] : [narrowRow(r, true)].filter((n): n is TRow => n !== null)));
+  const allRows = session.allRows.flatMap(r => (r.existingTicketKey !== null ? [r] : narrowRow(r, true)));
   const keptMerged = session.rows
     .filter(r => r.existingTicketKey === null && r.memberIds !== undefined && !action.ids.includes(r.id))
-    .flatMap(r => [narrowRow(r, false)].filter((n): n is TRow => n !== null));
+    .flatMap(r => narrowRow(r, false));
   const page = buildReviewPage(allRows, session.page);
   stream.markdown(written.added > 0
     ? `✓ Accepted ${written.added} CVE(s) from ${named.length} row(s) — hidden from this and future imports.\n\n`

@@ -123,12 +123,10 @@ export interface ImportScreenOptions {
   canAccept?: boolean;
 }
 
-const pluralize = (n: number, singular: string, plural: string): string => `${n} ${n === 1 ? singular : plural}`;
-
 function describeAcceptedHidden(hidden: AcceptedHidden): string {
   const parts: string[] = [];
-  if (hidden.cves > 0) parts.push(`${pluralize(hidden.cves, 'accepted CVE', 'accepted CVEs')} hidden`);
-  if (hidden.belowFloor > 0) parts.push(`${pluralize(hidden.belowFloor, 'component', 'components')} below the rating floor`);
+  if (hidden.cves > 0) parts.push(`${countedNoun(hidden.cves, 'accepted CVE(s)')} hidden`);
+  if (hidden.belowFloor > 0) parts.push(`${countedNoun(hidden.belowFloor, 'component(s)')} below the rating floor`);
   return parts.join(' · ');
 }
 
