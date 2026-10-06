@@ -6,9 +6,10 @@ import {
   sanitizeCellText, sanitizeStandaloneLine, resolveMaxReportBytes, findStaleTickets, buildStaleSearchJql,
   REPORT_SIZE_LIMITS_MB, resolveSizeLimitSetting, pickTargetTicket,
   type JqlIssueLike, type DedupTicket, type DedupMap, type RowChange,
-  fetchAllPages,
+  fetchAllPages, clampSummary, fitWiki, MAX_SUMMARY_CHARS, MAX_DESCRIPTION_CHARS,
 } from '../utils/reportImport';
 import type { ReviewRowBase } from '../participant/sessionState';
+import { TRIGGER_CHARS } from '../utils/markdownToJiraWiki';
 
 describe('size-limit settings', () => {
   const pkg = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf-8'));
@@ -91,6 +92,95 @@ describe('sanitizeCellText', () => {
     expect(sanitized).not.toContain('\n');
     expect(sanitized).not.toContain('|');
     expect(sanitized).not.toMatch(/[*_`[\]~\-+^?{}!]/);
+  });
+});
+
+describe('sanitizeCellText covers the converter\'s whole trigger set', () => {
+  it('strips every TRIGGER_CHARS character between letters, except the in-word hyphen and plus', () => {
+    for (const ch of TRIGGER_CHARS) {
+      const out = sanitizeCellText(`a${ch}b`);
+      expect(out, `trigger ${ch}`).toBe(ch === '-' || ch === '+' ? `a${ch}b` : 'ab');
+    }
+  });
+
+  it('strips a hyphen or plus at any boundary', () => {
+    for (const ch of ['-', '+']) {
+      expect(sanitizeCellText(`${ch}a`)).toBe('a');
+      expect(sanitizeCellText(`a${ch}`)).toBe('a');
+      expect(sanitizeCellText(`a ${ch} b`)).toBe('a  b');
+    }
+  });
+});
+
+describe('sanitizeCellText keeps hyphens and plus signs inside words', () => {
+  it.each([
+    ['netty-codec:4.1.100', 'netty-codec:4.1.100'],
+    ['CVE-2099-1', 'CVE-2099-1'],
+    ['/app/services/svc-0/package-lock.json', '/app/services/svc-0/package-lock.json'],
+    ['state-of-the-art', 'state-of-the-art'],
+    ['1.0.0+build.5', '1.0.0+build.5'],
+    ['guava 31.1-jre+hotfix', 'guava 31.1-jre+hotfix'],
+  ])('leaves %s unchanged', (value, expected) => {
+    expect(sanitizeCellText(value)).toBe(expected);
+  });
+
+  it('still strips a hyphen at the start or end of a word, where Jira reads it as a strikethrough delimiter', () => {
+    expect(sanitizeCellText('-struck-')).toBe('struck');
+    expect(sanitizeCellText('a -b- c')).toBe('a b c');
+    expect(sanitizeCellText('open Monday - Friday')).toBe('open Monday  Friday');
+  });
+
+  it('keeps only the inner hyphen of a wrapped compound word', () => {
+    expect(sanitizeCellText('-a-b-')).toBe('a-b');
+    expect(sanitizeCellText('x -y-z- w')).toBe('x y-z w');
+  });
+
+  it('strips hyphens next to another hyphen or any other trigger character', () => {
+    expect(sanitizeCellText('a--b')).toBe('ab');
+    expect(sanitizeCellText('a---b')).toBe('ab');
+    expect(sanitizeCellText('a-+b')).toBe('ab');
+    expect(sanitizeCellText('a-*b')).toBe('ab');
+  });
+
+  it('cannot assemble a strikethrough by stripping underscores around a hyphen', () => {
+    // Were "_" counted as a word character, "_-_foo_-_" would leave "-foo-" once the underscores go.
+    expect(sanitizeCellText('_-_foo_-_')).toBe('foo');
+    expect(sanitizeCellText('x_-_y')).toBe('xy');
+  });
+
+  it('treats a letter outside ASCII as not a word character, so a hyphen next to it is stripped (conservative)', () => {
+    expect(sanitizeCellText('a-über')).toBe('aüber');
+    expect(sanitizeCellText('über-lib')).toBe('über-lib'); // the hyphen sits between "r" and "l", both ASCII
+  });
+
+  it('strips a plus sign at the start or end of a word, where Jira reads it as an underline delimiter', () => {
+    expect(sanitizeCellText('+underline+')).toBe('underline');
+    expect(sanitizeCellText('a +b+ c')).toBe('a b c');
+    expect(sanitizeCellText('c++')).toBe('c');
+    expect(sanitizeCellText('a++b')).toBe('ab');
+    expect(sanitizeCellText('1 + 2')).toBe('1  2');
+  });
+
+  it('keeps only the inner plus sign of a wrapped word, and strips plus and hyphen next to each other', () => {
+    expect(sanitizeCellText('+a+b+')).toBe('a+b');
+    expect(sanitizeCellText('a-+b')).toBe('ab');
+    expect(sanitizeCellText('a+-b')).toBe('ab');
+  });
+
+  it('cannot assemble an underline by stripping underscores around a plus sign', () => {
+    expect(sanitizeCellText('_+_foo_+_')).toBe('foo');
+  });
+
+  it('never leaves a hyphen or plus sign that has a non-alphanumeric neighbor, whatever the payload', () => {
+    const crafted = 'a-b -c- --d-- e-_-f -*-g -- ~-~ x-y-z -x- (-a-) [-b-] {-c-} !-d-! ?-e-? ^-f-^ +-g-+ '
+      + 'a+b +c+ ++d++ e+_+f +*+g ~+~ x+y+z +x+ (+a+) [+b+] {+c+} !+d+! ?+e+? ^+f+^ -+g+-';
+    expect(sanitizeCellText(crafted)).not.toMatch(/(?<![A-Za-z0-9])[-+]|[-+](?![A-Za-z0-9])/);
+  });
+
+  it('still removes every other trigger character, wherever it sits', () => {
+    for (const char of '*_`[]~^?{}!') {
+      expect(sanitizeCellText(`a${char}b ${char}c${char} ${char}`), char).not.toContain(char);
+    }
   });
 });
 
@@ -441,11 +531,11 @@ describe('buildReviewRows', () => {
         id: 'A1', existingTicketKey: 'PROJ-12', ticketKeys: ['PROJ-12'],
         target: { key: 'PROJ-12', status: 'In Progress', resolved: false },
         change: { kind: 'findings', newIds: ['B', 'C'] },
-        allowedActions: ['update', 'follow-up', 're-create', 'leave'],
+        allowedActions: ['update', 'follow-up', 'rewrite', 're-create', 'leave'],
       });
-      expect(rows[1].allowedActions).toEqual(['update', 'follow-up', 're-create', 'leave']);
+      expect(rows[1].allowedActions).toEqual(['update', 'follow-up', 'rewrite', 're-create', 'leave']);
       expect(rows[2].change).toBeNull();
-      expect(rows[2].allowedActions).toEqual(['re-create', 'leave']);
+      expect(rows[2].allowedActions).toEqual(['rewrite', 're-create', 'leave']);
     });
 
     it('Covers AE2: known findings are the union of every ticket; the target is the newest open ticket', () => {
@@ -487,7 +577,7 @@ describe('buildReviewRows', () => {
 
       expect(row.change).toEqual({ kind: 'baseline' });
       expect(row.action).toBe('update');
-      expect(row.allowedActions).toEqual(['update', 're-create', 'leave']);
+      expect(row.allowedActions).toEqual(['update', 'rewrite', 're-create', 'leave']);
     });
 
     it('gives a baseline row whose only ticket is resolved that ticket as its target', () => {
@@ -506,7 +596,7 @@ describe('buildReviewRows', () => {
 
       expect(row.change).toEqual({ kind: 'findings', newIds: [], ratingRise: { from: '3', to: '4' } });
       expect(row.action).toBe('update');
-      expect(row.allowedActions).toEqual(['update', 're-create', 'leave']);
+      expect(row.allowedActions).toEqual(['update', 'rewrite', 're-create', 'leave']);
     });
 
     it('unions the labels of two different tickets holding a folded group\'s flaws (R2)', () => {
@@ -725,5 +815,52 @@ describe('fetchAllPages (dedup search paging)', () => {
     });
 
     await expect(fetchAllPages(fetchPage, 100)).rejects.toThrow('503');
+  });
+});
+
+describe('clampSummary (R9: titles stay within Jira\'s summary limit)', () => {
+  it('returns head + tail unchanged when it already fits', () => {
+    expect(clampSummary('OrderRepository.java', ' - SQL Injection (7 findings)')).toBe('OrderRepository.java - SQL Injection (7 findings)');
+  });
+
+  it('trims only the head when too long, so the tail (count, labels, rating suffix) always survives', () => {
+    const head = 'A'.repeat(300);
+    const tail = ' - SQL Injection (7 findings)';
+    const result = clampSummary(head, tail);
+    expect(result.length).toBeLessThanOrEqual(MAX_SUMMARY_CHARS);
+    expect(result.endsWith(tail)).toBe(true);
+    expect(result.startsWith('AAAA')).toBe(true);
+    expect(result).toContain('…');
+  });
+
+  it('honors an explicit smaller limit', () => {
+    expect(clampSummary('abcdefghij', '!', 6).length).toBeLessThanOrEqual(6);
+  });
+});
+
+describe('fitWiki (R10: descriptions and comments stay within the size budget)', () => {
+  it('uses full detail (level 0) when it fits, and reports nothing shortened', () => {
+    const result = fitWiki(level => `level ${level}`, 4, 100);
+    expect(result).toEqual({ wiki: 'level 0', shortened: false, level: 0 });
+  });
+
+  it('steps down through the detail levels until the output fits', () => {
+    const sizes = [500, 300, 90, 10];
+    const result = fitWiki(level => 'x'.repeat(sizes[level]), 4, 100);
+    expect(result.level).toBe(2);
+    expect(result.shortened).toBe(true);
+    expect(result.wiki).toHaveLength(90);
+  });
+
+  it('returns the smallest level when nothing fits, rather than failing', () => {
+    const result = fitWiki(level => 'x'.repeat(1000 - level * 100), 3, 50);
+    expect(result.level).toBe(2);
+    expect(result.shortened).toBe(true);
+  });
+
+  it('defaults to the 30,000-character description budget', () => {
+    expect(MAX_DESCRIPTION_CHARS).toBe(30_000);
+    const result = fitWiki(level => (level === 0 ? 'x'.repeat(30_001) : 'ok'), 2);
+    expect(result.level).toBe(1);
   });
 });

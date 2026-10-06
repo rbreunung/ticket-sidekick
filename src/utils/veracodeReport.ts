@@ -2,6 +2,7 @@ import { XMLParser } from 'fast-xml-parser';
 import { markdownToJiraWiki } from './markdownToJiraWiki';
 import {
   MAX_REPORT_BYTES as SHARED_MAX_REPORT_BYTES, sanitizeCellText, sanitizeStandaloneLine,
+  clampSummary, fitWiki,
   type RowChange,
 } from './reportImport';
 
@@ -220,16 +221,22 @@ function pushSeverityAndCwe(lines: string[], flaw: VeracodeFlaw, headingPrefix: 
   }
 }
 
-function pushDescription(lines: string[], flaw: VeracodeFlaw, headingPrefix: string): void {
+// `cap` shortens the text for a folded ticket that is over its size budget (R10); the cut is made
+// on the raw value, before sanitizing, so the sanitizers still see (and neutralize) every character.
+function capText(text: string, cap: number): string {
+  return text.length > cap ? `${text.slice(0, cap).trimEnd()}…` : text;
+}
+
+function pushDescription(lines: string[], flaw: VeracodeFlaw, headingPrefix: string, cap = Infinity): void {
   lines.push(`${headingPrefix} Description`);
-  lines.push(sanitizeStandaloneLine(flaw.description));
+  lines.push(sanitizeStandaloneLine(capText(flaw.description, cap)));
   lines.push('');
 }
 
-function pushRecommendation(lines: string[], flaw: VeracodeFlaw, headingPrefix: string): void {
+function pushRecommendation(lines: string[], flaw: VeracodeFlaw, headingPrefix: string, cap = Infinity): void {
   if (!flaw.recommendation) return;
   lines.push(`${headingPrefix} Recommendation`);
-  lines.push(sanitizeStandaloneLine(flaw.recommendation));
+  lines.push(sanitizeStandaloneLine(capText(flaw.recommendation, cap)));
   lines.push('');
 }
 
@@ -260,48 +267,72 @@ export function buildLabels(flaw: VeracodeFlaw, templateLabels: string[] = []): 
   return [...new Set([...own, ...templateLabels])];
 }
 
-// --- Folding (grouping same-line flaws) ---------------------------------------------------------
+// --- Folding (grouping related flaws) -----------------------------------------------------------
 //
-// R9/R12: flaws sharing a source file + line number fold into one review row / one ticket,
-// regardless of CWE or category, UNLESS either sourceFile or line is missing — a flaw with no
-// location never folds with anything, even another flaw that also lacks a location (each such flaw
-// stays its own singleton group, never grouped with another missing-location flaw either).
+// R2 (finding folding plan): flaws fold into one review row / one ticket when they share a source
+// file AND a CWE (any line), or share a source file AND a line (any CWE). The two rules link flaws
+// transitively, so one flaw can never appear in two groups. A flaw with no source file never folds
+// with anything, and a flaw with no CWE never folds by CWE (it still folds by line).
 
 // The `::` separator between the path and file segments is required: bare concatenation (the
 // pattern fullSourcePath() uses for *display*, where a collision is only cosmetic) lets two flaws
 // in genuinely different locations produce the same key — e.g. path `src/foo/` + file `bar.js`
 // versus path `src/foo/bar.` + file `js` both concatenate to `src/foo/bar.js`, but with `::`
-// inserted between path and file they key as `src/foo/::bar.js:10` and `src/foo/bar.::js:10`
+// inserted between path and file they key as `src/foo/::bar.js` and `src/foo/bar.::js`
 // respectively, which differ.
-function groupKey(flaw: VeracodeFlaw): string | null {
-  if (flaw.sourceFile == null || flaw.line == null) return null;
-  return `${flaw.sourceFilePath ?? ''}::${flaw.sourceFile}:${flaw.line}`;
+function fileKey(flaw: VeracodeFlaw): string | null {
+  if (flaw.sourceFile == null) return null;
+  return `${flaw.sourceFilePath ?? ''}::${flaw.sourceFile}`;
+}
+
+/** The keys a flaw can be linked through: same file + same line, and same file + same CWE. */
+function linkKeys(flaw: VeracodeFlaw): string[] {
+  const file = fileKey(flaw);
+  if (file === null) return [];
+  const keys: string[] = [];
+  if (flaw.line != null) keys.push(`line:${file}:${flaw.line}`);
+  if (flaw.cweId != null) keys.push(`cwe:${file}|${flaw.cweId}`);
+  return keys;
 }
 
 /**
- * Groups flaws that share a source file + line number (R9). A flaw missing either field is never
- * folded with another flaw (R12) — including another flaw that also lacks a location — so it
- * always comes back as its own singleton group. Group order follows first-occurrence order of each
- * group's first member in the input; members within a group keep their relative input order.
+ * Groups flaws that share a source file and either a CWE or a line number (R2). Groups are the
+ * transitive closure of the two rules. A flaw with no source file is never folded with another flaw
+ * — including another flaw that also lacks one — so it always comes back as its own singleton
+ * group. Group order follows first-occurrence order of each group's first member in the input;
+ * members within a group keep their relative input order.
  */
 export function groupFlawsByLocation(flaws: VeracodeFlaw[]): VeracodeFlaw[][] {
-  const groups: VeracodeFlaw[][] = [];
-  const keyToGroup = new Map<string, VeracodeFlaw[]>();
-  for (const flaw of flaws) {
-    const key = groupKey(flaw);
-    if (key === null) {
-      groups.push([flaw]);
-      continue;
+  const parent = flaws.map((_, i) => i);
+  const find = (i: number): number => {
+    while (parent[i] !== i) {
+      parent[i] = parent[parent[i]];
+      i = parent[i];
     }
-    const existing = keyToGroup.get(key);
+    return i;
+  };
+  const firstWithKey = new Map<string, number>();
+  flaws.forEach((flaw, i) => {
+    for (const key of linkKeys(flaw)) {
+      const first = firstWithKey.get(key);
+      if (first === undefined) firstWithKey.set(key, i);
+      else parent[find(i)] = find(first);
+    }
+  });
+
+  const groups: VeracodeFlaw[][] = [];
+  const rootToGroup = new Map<number, VeracodeFlaw[]>();
+  flaws.forEach((flaw, i) => {
+    const root = find(i);
+    const existing = rootToGroup.get(root);
     if (existing) {
       existing.push(flaw);
     } else {
       const group = [flaw];
-      keyToGroup.set(key, group);
+      rootToGroup.set(root, group);
       groups.push(group);
     }
-  }
+  });
   return groups;
 }
 
@@ -319,56 +350,162 @@ export function buildGroupLabels(group: VeracodeFlaw[], templateLabels: string[]
   return [...new Set([...own, ...templateLabels])];
 }
 
+// --- Folded ticket content (finding folding plan: R8-R10, R14, R15) ------------------------------
+
 /**
- * Group-aware summary builder. A singleton group renders identically to `buildSummary()`. A
- * multi-flaw group lists every folded issue id, keeps the (shared) file:line location, uses the
- * first member's short label, and notes how many additional flaws are folded in.
+ * A folded group's title parts. `head` is the first member's file (the only part that may be
+ * trimmed to fit Jira's summary limit); `tail` carries what must always survive: how many other
+ * files, the finding count and the CWE labels. A fold that spans several CWEs or files says so in
+ * the title instead of hiding it behind the first member's label.
  */
-export function buildGroupSummary(group: VeracodeFlaw[]): string {
+function foldedTitleParts(group: VeracodeFlaw[]): { head: string; tail: string } {
   const first = group[0];
-  if (group.length === 1) return buildSummary(first);
-  const ref = fileRef(first);
-  const lineSuffix = first.line != null ? `:${first.line}` : '';
-  const shortLabel = deriveShortLabel(first.categoryName, first.cweName);
-  const ids = group.map(f => f.issueId).join(', ');
-  return `${ids} - ${ref}${lineSuffix} - ${shortLabel} (+${group.length - 1} more)`;
+  const files = new Set(group.map(f => fileKey(f) ?? `module:${f.module}`));
+  const labels = [...new Set(group.map(f => deriveShortLabel(f.categoryName, f.cweName)))];
+  const otherFiles = files.size - 1;
+  const fileTail = otherFiles > 0 ? ` +${otherFiles} file${otherFiles === 1 ? '' : 's'}` : '';
+  const shown = labels.slice(0, 3).join(', ');
+  const more = labels.length > 3 ? `, +${labels.length - 3} more CWEs` : '';
+  const what = labels.length === 1
+    ? `${labels[0]} (${group.length} findings)`
+    : `${group.length} findings: ${shown}${more}`;
+  return { head: fileRef(first), tail: `${fileTail} - ${what}` };
 }
 
 /**
- * Group-aware description builder (R10): hoists the shared file+line `### Location` once (all
- * members share it by construction — see `groupKey()`), then renders each folded flaw's own
- * severity/CWE/description/recommendation under its own `### Issue <id>` heading. Every untrusted
- * field is routed through the same `sanitizeCellText()`/`sanitizeStandaloneLine()` sanitizers
- * `buildDescriptionWiki()` uses — no raw string concatenation bypasses either sanitizer layer — and
- * the combined Markdown is converted once via `markdownToJiraWiki()` at the end, same as the
- * single-flaw path.
+ * Group-aware summary builder. A singleton group renders identically to `buildSummary()`. A folded
+ * group is count-based (R9): `<file> - <CWE label> (<n> findings)`, `<file> - <n> findings: <labels>`
+ * when CWEs are mixed, and `<file> +<m> files - …` when it spans files — never an id list, which
+ * cannot fit in a large fold. The issue ids stay in the description table and the labels.
  */
-export function buildGroupDescriptionWiki(group: VeracodeFlaw[]): string {
-  const first = group[0];
+export function buildGroupSummary(group: VeracodeFlaw[]): string {
+  if (group.length === 1) return buildSummary(group[0]);
+  const { head, tail } = foldedTitleParts(group);
+  return clampSummary(head, tail);
+}
+
+// Per-finding description/recommendation caps by detail level (R10); the last level drops the
+// per-finding sections altogether and leaves the (always complete) overview table.
+const FOLD_TEXT_CAPS = [Infinity, 400, 120];
+const FOLD_LEVELS = FOLD_TEXT_CAPS.length + 1;
+
+function severityText(flaw: VeracodeFlaw): string {
+  return `${severityLabel(flaw.severity)} (${flaw.severity})`;
+}
+
+function locationText(flaw: VeracodeFlaw): string {
+  const path = fullSourcePath(flaw);
+  return path ? `${path}${flaw.line != null ? `:${flaw.line}` : ''}` : sanitizeCellText(fileRef(flaw));
+}
+
+function pushFoldedTable(lines: string[], group: VeracodeFlaw[]): void {
+  lines.push('| Issue ID | Severity | CWE | Location | Function |');
+  lines.push('| --- | --- | --- | --- | --- |');
+  for (const flaw of group) {
+    const cwe = flaw.cweId ? `CWE-${flaw.cweId}` : 'n/a';
+    const fn = flaw.functionPrototype ? sanitizeCellText(flaw.functionPrototype) : 'n/a';
+    lines.push(`| ${flaw.issueId} | ${severityText(flaw)} | ${cwe} | ${locationText(flaw)} | ${fn} |`);
+  }
+  lines.push('');
+}
+
+// The Module and File lines of a Location block, shared by the single-flaw and folded layouts.
+function pushModuleAndFile(lines: string[], flaw: VeracodeFlaw): void {
+  lines.push(`Module: ${sanitizeCellText(flaw.module)}`);
+  const path = fullSourcePath(flaw);
+  if (path) lines.push(`File: ${path}${flaw.line != null ? `:${flaw.line}` : ''}`);
+}
+
+function pushFoldedSection(lines: string[], flaw: VeracodeFlaw, cap: number): void {
+  lines.push(`### Issue ${flaw.issueId}`);
+  lines.push('');
+  lines.push('#### Location');
+  pushModuleAndFile(lines, flaw);
+  if (flaw.functionPrototype) lines.push(`Function: ${sanitizeCellText(flaw.functionPrototype)}`);
+  lines.push('');
+  pushSeverityAndCwe(lines, flaw, '####');
+  pushDescription(lines, flaw, '####', cap);
+  pushRecommendation(lines, flaw, '####', cap);
+}
+
+/**
+ * Banner, overview table (one row per finding, always complete), then one section per finding with
+ * its own location — nothing is hoisted, because a fold can span files (R8). `level` steps the
+ * per-finding text down (R10) until the output fits; `droppedIds` names findings a rewritten ticket
+ * recorded that its new description no longer covers (R15).
+ */
+function buildFoldedMarkdown(group: VeracodeFlaw[], banner: string, level: number, droppedIds: string[]): string {
+  const lines: string[] = [banner, ''];
+  if (level > 0 && group.length > 0) {
+    lines.push("Per-finding text was shortened to fit Jira's size limit; the table lists every finding.");
+    lines.push('');
+  }
+  if (group.length > 0) pushFoldedTable(lines, group);
+  if (group.length > 0 && level < FOLD_LEVELS - 1) {
+    const cap = FOLD_TEXT_CAPS[level];
+    for (const flaw of group) pushFoldedSection(lines, flaw, cap);
+  }
+  if (droppedIds.length > 0) {
+    lines.push('### No longer in the description');
+    lines.push(`The ticket recorded these issue ids, which the latest report no longer covers here: ${droppedIds.join(', ')}.`);
+    lines.push('');
+  }
+  return lines.join('\n');
+}
+
+function buildFoldedWiki(group: VeracodeFlaw[], banner: string, droppedIds: string[] = []): string {
+  return fitWiki(level => markdownToJiraWiki(buildFoldedMarkdown(group, banner, level, droppedIds)), FOLD_LEVELS).wiki;
+}
+
+/** A one-flaw ticket: hoisted Location, then the flaw's own sections — the layout before folding existed. */
+function buildSingleFlawDescriptionWiki(flaw: VeracodeFlaw): string {
   const lines: string[] = [];
 
   lines.push('### Location');
-  lines.push(`Module: ${sanitizeCellText(first.module)}`);
-  const path = fullSourcePath(first);
-  if (path) lines.push(`File: ${path}${first.line != null ? `:${first.line}` : ''}`);
+  pushModuleAndFile(lines, flaw);
   lines.push('');
 
-  for (const flaw of group) {
-    lines.push(`### Issue ${flaw.issueId}`);
+  lines.push(`### Issue ${flaw.issueId}`);
+  lines.push('');
+
+  pushSeverityAndCwe(lines, flaw, '####');
+
+  if (flaw.functionPrototype) {
+    lines.push(`Function: ${sanitizeCellText(flaw.functionPrototype)}`);
     lines.push('');
-
-    pushSeverityAndCwe(lines, flaw, '####');
-
-    if (flaw.functionPrototype) {
-      lines.push(`Function: ${sanitizeCellText(flaw.functionPrototype)}`);
-      lines.push('');
-    }
-
-    pushDescription(lines, flaw, '####');
-    pushRecommendation(lines, flaw, '####');
   }
 
+  pushDescription(lines, flaw, '####');
+  pushRecommendation(lines, flaw, '####');
+
   return markdownToJiraWiki(lines.join('\n'));
+}
+
+/**
+ * Group-aware description builder. A one-flaw group renders as it did before folding. A folded
+ * group opens with a banner and an overview table so the fold is unmissable (R8), then one section
+ * per finding with its own location, and shortens per-finding text when it would exceed the size
+ * budget (R10). Every untrusted field goes through the same `sanitizeCellText()` /
+ * `sanitizeStandaloneLine()` sanitizers as the single-flaw path, and the Markdown is converted once
+ * via `markdownToJiraWiki()` at the end.
+ */
+export function buildGroupDescriptionWiki(group: VeracodeFlaw[]): string {
+  if (group.length === 1) return buildSingleFlawDescriptionWiki(group[0]);
+  return buildFoldedWiki(group, `This ticket folds ${group.length} Veracode findings.`);
+}
+
+/**
+ * The comment an `add … to <KEY>` posts (R14, R15): the added findings in the same banner, table and
+ * sections form as a folded description, each with its own file and line. `droppedIds` are issue
+ * ids the ticket recorded that a rewrite no longer covers.
+ */
+export function buildFoldedCommentWiki(group: VeracodeFlaw[], droppedIds: string[] = []): string {
+  const banner = group.length === 0
+    ? 'This ticket was rewritten from the latest report; no findings were added.'
+    : group.length === 1
+      ? 'This Veracode finding was added to this ticket.'
+      : `These ${group.length} Veracode findings were added to this ticket.`;
+  return buildFoldedWiki(group, banner, droppedIds);
 }
 
 /**
@@ -418,7 +555,10 @@ export function flawsWithIds(group: VeracodeFlaw[], ids: string[]): VeracodeFlaw
  * see {@link flawsWithIds}) plus ` (follow-up to <KEY>)`, so the two tickets stay distinguishable.
  */
 export function buildFollowUpSummary(subset: VeracodeFlaw[], originalKey: string): string {
-  return `${buildGroupSummary(subset)} (follow-up to ${originalKey})`;
+  const suffix = ` (follow-up to ${originalKey})`;
+  if (subset.length === 1) return `${buildSummary(subset[0])}${suffix}`;
+  const { head, tail } = foldedTitleParts(subset);
+  return clampSummary(head, tail + suffix);
 }
 
 // Lives here (rather than in sessionState.ts, where the other session-related types live) so that

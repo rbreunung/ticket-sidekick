@@ -4,7 +4,7 @@ import type { TicketService } from '../../services/TicketService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import {
   parseVeracodeReport, filterFlaws, severityLabel, groupFlawsByLocation,
-  buildGroupSummary, buildGroupDescriptionWiki, buildGroupLabels, buildNewFindingsCommentWiki,
+  buildGroupSummary, buildGroupDescriptionWiki, buildGroupLabels, buildNewFindingsCommentWiki, buildFoldedCommentWiki,
   describeVeracodeChange, flawsWithIds, buildFollowUpSummary,
   type VeracodeFlaw, type VeracodeReviewRow,
 } from '../../utils/veracodeReport';
@@ -119,10 +119,12 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
   labelToDedupKey: veracodeLabelToIssueId,
   buildRowFields: (group, templateLabels) => {
     const first = group[0];
+    // A fold shows its most severe member (finding folding plan, Assumptions).
+    const severity = Math.max(...group.map(flaw => flaw.severity));
     return {
       issueIds: group.map(flaw => flaw.issueId),
-      severity: first.severity,
-      severityLabelText: severityLabel(first.severity),
+      severity,
+      severityLabelText: severityLabel(severity),
       cweId: first.cweId,
       summary: buildGroupSummary(group),
       labels: buildGroupLabels(group, templateLabels),
@@ -153,6 +155,14 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
     markerLabel: VERACODE_STALE_MARKER_LABEL,
     labelToDedupKey: veracodeLabelToIssueId,
     buildActivePredicate: rawItems => buildVeracodeActiveFlawPredicate(rawItems as VeracodeFlaw[], getVeracodeConfig().includeStatuses),
+  },
+  // Finding folding (KTD1/KTD4): a row's item is its group of flaws, so merging is concatenation.
+  fold: {
+    itemOf: row => row.sourceGroup,
+    combine: groups => groups.flat(),
+    recordLabelsOf: group => buildGroupLabels(group),
+    buildComment: (group, droppedKeys) => buildFoldedCommentWiki(group, droppedKeys),
+    narrowToNew: (group, change) => flawsWithIds(group, change.newIds),
   },
   // Import ticket updates parity (KTD2): a folded group's findings are its flaw ids, recorded as
   // `veracode-issue-<id>` labels. No baseline, no rating and no summary rewrite for Veracode.

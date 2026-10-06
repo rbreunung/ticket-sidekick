@@ -93,7 +93,7 @@ Export a Detailed Report XML from Veracode, then:
 2. Select the `.xml` file
 3. Pick a template or issue type in the `@jira` chat
 4. Review the results (see [Reviewing an import](#reviewing-an-import) below) — new flaws, flaws that already have a ticket, and stale tickets each get their own screen and their own action
-5. Tickets are created one per flaw, with severity, CWE (linked to the public CWE definition), file/line location, the flaw's own description, and the category's remediation recommendation
+5. Tickets are created one per group of related flaws (flaws in the same file with the same CWE, or on the same line, fold into one ticket — see [Folding findings into one ticket](#folding-findings-into-one-ticket)), with severity, CWE (linked to the public CWE definition), file/line location, each flaw's own description, and the category's remediation recommendation
 
 You can also trigger the import from the chat directly:
 
@@ -119,10 +119,11 @@ Only `<staticflaws>` are imported (dynamic/manual analysis findings are out of s
 
 When an import finds more than one kind of result, `@jira` first shows an **overview** listing each group with its count:
 
-- **New** — findings without a ticket yet. Open it to toggle rows (reply row numbers, `include all` / `exclude all`, `next` / `prev` for more pages) and reply **Create N tickets** (or **ok**) to create the included rows on the visible page.
+- **New** — findings without a ticket yet. Open it to toggle rows (reply row numbers, `include all` / `exclude all`, `next` / `prev` for more pages), fold rows together (`merge 2 4`, `unmerge 2`) or add them to an existing ticket (`add 2 4 to PROJ-123`) — see [Folding findings into one ticket](#folding-findings-into-one-ticket) — and reply **Create N tickets** (or **ok**) to create the included rows on the visible page.
 - **Already ticketed** — findings that already have a ticket. Each row shows its ticket, the ticket's status, what changed since the ticket was made (for example "+2 CVEs, High→Critical" or "+1 flaw"), and a proposed action. Click another action in the row, or reply e.g. `A2 follow-up` or `all leave`, then reply **Apply** (or **ok**):
   - **update** — adds the new findings to the existing ticket as labels and one comment. For an OSS report, a higher rating also updates the rating at the end of the ticket's summary, unless you renamed the summary.
   - **follow-up** — creates a new ticket with only the new findings and links it to the existing one. Offered only when there are new findings.
+  - **rewrite** — rebuilds the existing ticket's title, description and labels from the report and posts a comment naming what was added and what dropped out (see [Folding findings into one ticket](#folding-findings-into-one-ticket)). It rebuilds the whole ticket, so set it on all the rows that point to the same ticket or on none of them; **Apply** stops with nothing written otherwise.
   - **re-create** — creates a fresh, complete ticket.
   - **leave** — does nothing.
 
@@ -130,6 +131,31 @@ When an import finds more than one kind of result, `@jira` first shows an **over
 - **Stale tickets** — open tickets whose finding is no longer in the report. Toggle a ticket by its key (e.g. `PROJ-123`) and reply **Close N tickets** (or **ok**). You then pick where the tickets go: one of your matching cleanup rules (listed first), or any status your workflow can reach, such as a review status like "Verification". Each run handles one issue type; if your selection mixes issue types, you are asked which one to close first. A resolution is asked only when the target is a closing status and no rule supplies one. Reply **Back** at any point to return without changing anything. A ticket needs a discovered workflow (`@jira discover workflow <project> <issue type>`) to be selectable. Tickets you move to a status that isn't final stay open, so later imports list them again as stale.
 
 Each screen only understands its own replies, and each action only affects its own group — nothing is created, updated or closed until you choose that group's action. Reply **Back to overview** to switch groups and **Done** to finish; the overview keeps track of what you already did (e.g. "50 created · 12 left"). When an import has only one kind of result (always the case for email batches), that screen opens directly and offers **Done** instead of an overview.
+
+### Folding findings into one ticket
+
+Several findings are often one piece of work: ten SQL injections in one repository class, or a dozen `netty-*` artifacts that move to the next version together. A **folded ticket** covers all of them.
+
+**Veracode folds automatically.** Flaws in the same file with the same CWE become one row and one ticket, whatever their lines. Flaws on the same line fold too, whatever their CWE. A flaw with no source file never folds, and a flaw with no CWE never folds by CWE. Waltz folds nothing automatically; every component is its own row.
+
+**Fold more yourself on the New screen** (both importers):
+
+| Reply | What it does |
+|---|---|
+| `merge 2 4` (or `merge 2,4`) | Combines the named rows into one row — any CWEs, files, components or versions. Works on the rows of the visible page only. |
+| `unmerge 2` | Splits a merged row back into the rows it came from. |
+| `add 2 4 to PROJ-123` | Adds those rows to an existing ticket (see below). |
+
+A merge is not saved between pages or between imports: moving to another page discards it, and a later import shows the members as separate rows again.
+
+**What a folded ticket looks like.** The title says what it folds instead of listing ids, for example `OrderRepository.java - SQL Injection (7 findings)`, `OrderRepository.java - 7 findings: SQL Injection, Cross-Site Scripting` when CWEs are mixed, `OrderRepository.java +2 files - SQL Injection (7 findings)` across files, or `[OSS] netty-codec:4.1.100 +2 components — High`. The description opens with a banner stating how many findings it folds and a table with one row per finding (issue id or component, severity or rating, location, and so on), followed by a section per finding with its own details. If a description would get too long for Jira, the per-finding text is shortened and a note says so; the table always lists every finding. The ticket carries the labels of every finding in it, so the next import recognizes each of them.
+
+**Add rows to an existing ticket.** `add 2 4 to PROJ-123` works for any ticket, including one a colleague created by hand. It first shows the ticket, warns if it is resolved, and offers two links:
+
+- **Comment** — adds the findings' labels to the ticket and posts one comment listing them. The ticket's description and title stay as they are.
+- **Rewrite** — **overwrites the ticket's description and title** with the findings of this report (the added rows plus the Already-ticketed rows that point to this ticket), adds the labels, and posts a comment listing what was added and any finding the ticket recorded that the new description no longer covers. The first screen lists those findings before you click.
+
+Both choices change the ticket's labels. Nothing is written until you click one. If a write fails, the rows stay in New; if only the comment fails, the write stands and the rows leave New.
 
 ## Create Jira tickets from an OSS report (.xlsx)
 
@@ -139,7 +165,7 @@ Export an "OSS Report" from Waltz (or a compatible SCA tool) as `.xlsx`, then:
 2. Select the `.xlsx` file
 3. Pick a template or issue type in the `@jira` chat
 4. Review the results (see [Reviewing an import](#reviewing-an-import) below), the same way as a Veracode import
-5. Tickets are created one per component, with the max vulnerability rating, the single most critical CVE up front, affected artifact paths, and a table of known vulnerabilities
+5. Tickets are created one per component (use `merge` to fold related components such as a family of `netty-*` artifacts into one ticket — see [Folding findings into one ticket](#folding-findings-into-one-ticket)), with the max vulnerability rating, the single most critical CVE up front, affected artifact paths, and a table of known vulnerabilities
 
 You can also trigger the import from the chat directly:
 

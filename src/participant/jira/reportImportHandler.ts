@@ -26,7 +26,7 @@ import {
   buildStaleTargetOptions, formatStaleTargetOption, parseStaleTargetPick, parseStaleIssueTypePick,
   selectedStaleIssueTypes, staleTargetState, staleTargetNeedsResolution, planStaleTransitions,
   selectedOpenStaleTickets, isBackOrCancellation,
-  type StaleTargetOption, applyReviewSessionToggle, applyBulkNewRowSet,
+  type StaleTargetOption, applyReviewSessionToggle, applyBulkNewRowSet, mergeNewRows, unmergeNewRow, restoreMergedRows, buildAddPrompt, findPartialRewrites, type AddMode,
   applyTicketedActionChange, ticketedRowActions, ticketedTargetKey, isTicketedRowFinished,
   type TicketedAction, type TicketedRowResult,
   buildImportScreen, parseImportReviewReply, describeImportReplyVocabulary, buildImportDoneSummary,
@@ -88,9 +88,8 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   // KTD2: dedup is optional — an importer with no dedup key (email) omits all three, and the
   // "already ticketed" search step is skipped entirely instead of run and found empty.
   // U2/R11: both return one candidate value *per member* of the item — a folded Veracode group
-  // returns one label/key per flaw it contains, so a match on any one of them counts as
-  // already-ticketed; a single-item importer (Waltz) just returns a one-element array (no
-  // behavior change there).
+  // returns one label/key per flaw it contains and a Waltz group one per component, so a
+  // match on any one of them counts as already-ticketed.
   searchLabelOf?: (item: TItem) => string[]; // every label value searched for in the dedup JQL
   dedupKeyOf?: (item: TItem) => string[]; // every key looked up in the dedup map (may differ from searchLabelOf)
   labelToDedupKey?: (label: string) => string | null;
@@ -126,6 +125,27 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   // screen. Veracode and Waltz configure it; email (no dedup, no Already-ticketed group) omits it.
   // Without it an already-ticketed row only offers re-create / leave.
   changeTracking?: ImportChangeTracking<TItem, TRow>;
+  // Finding folding (KTD4): optional merge/unmerge/add support. An importer that omits it (email)
+  // offers none of those replies. Both Veracode and Waltz items are groups, so combining items is
+  // concatenation (KTD1).
+  fold?: ImportFold<TItem, TRow>;
+}
+
+/** Finding folding (KTD1/KTD4): what an importer supplies so its New rows can be merged by the user. */
+export interface ImportFold<TItem, TRow extends ReviewRowBase> {
+  /** The row's group of findings or components. */
+  itemOf: (row: TRow) => TItem;
+  /** One item holding every member of `items`, in order. */
+  combine: (items: TItem[]) => TItem;
+  /** The record labels an `add` writes to the target ticket (no template labels: a foreign ticket is not ours to label). */
+  recordLabelsOf: (item: TItem) => string[];
+  /** The comment an `add` posts: the added item in the folded layout, plus findings a rewrite no longer covers. */
+  buildComment: (item: TItem, droppedKeys: string[]) => string;
+  /**
+   * Optional: narrows a row's item to the findings its ticket did not record yet, for a rewrite's
+   * traceability comment (Veracode keeps only the new flaws). Without it the whole item is listed.
+   */
+  narrowToNew?: (item: TItem, change: FindingsChange) => TItem;
 }
 
 type FindingsChange = Extract<RowChange, { kind: 'findings' }>;
@@ -727,7 +747,7 @@ async function finishStaleClose<TItem, TRow extends ReviewRowBase>(
 }
 
 function screenOptions<TItem, TRow extends ReviewRowBase>(descriptor: ReportImportDescriptor<TItem, TRow>, baseUrl?: string): ImportScreenOptions {
-  return { baseUrl, itemNoun: descriptor.itemNoun, findingNoun: descriptor.changeTracking?.findingNoun };
+  return { baseUrl, itemNoun: descriptor.itemNoun, findingNoun: descriptor.changeTracking?.findingNoun, canFold: descriptor.fold !== undefined };
 }
 
 /** R10: after a group action, back to the overview — or the same group when there is no overview. */
@@ -788,6 +808,8 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
       .filter(r => r.existingTicketKey !== null && !isTicketedRowFinished(r))
       .map(r => ({ id: r.id, allowedActions: ticketedRowActions(r).allowedActions })),
     stale: session.staleTickets,
+    canFold: descriptor.fold !== undefined,
+    mergedRowIds: session.rows.filter(r => r.existingTicketKey === null && r.memberIds !== undefined).map(r => r.id),
   };
   const action = parseImportReviewReply(view, reply, ctx);
   const rerender = () => streamImportReview(session, stream, ws, descriptor, baseUrl);
@@ -819,6 +841,24 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
     }
     case 'bulk':
       session.rows = applyBulkNewRowSet(session.rows, action.include);
+      return rerender();
+    case 'merge': {
+      // Page-local like a toggle (KTD3): only `rows` changes, `allRows` keeps the originals, so a
+      // page move discards the merge and an unmerge can restore them.
+      const fold = descriptor.fold!;
+      const templateLabels = templateLabelsOf(session.additionalFields);
+      session.rows = mergeNewRows(session.rows, action.ids, members =>
+        descriptor.buildRowFields(fold.combine(members.map(fold.itemOf)), templateLabels));
+      return rerender();
+    }
+    case 'unmerge':
+      session.rows = unmergeNewRow(session.rows, session.allRows, action.id);
+      return rerender();
+    case 'addPrompt':
+      await showAddPrompt(session, action.ids, action.key, ticketService, stream, descriptor, baseUrl);
+      return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
+    case 'add':
+      Object.assign(session, afterGroupAction(await addToTicket(session, action.ids, action.key, action.mode, ticketService, stream, descriptor, baseUrl)));
       return rerender();
     case 'toggleRows': {
       // A new-row toggle stays page-local (applyReviewSessionToggle's own contract).
@@ -910,7 +950,9 @@ export async function createNewRows<TItem, TRow extends ReviewRowBase>(
 ): Promise<ReviewSession<TRow>> {
   const pageFresh = session.rows.filter(r => r.existingTicketKey === null);
   const toCreate = pageFresh.filter(r => r.included).slice(0, BATCH_LIMIT);
-  const excludedIds = new Set(pageFresh.filter(r => !r.included).map(r => r.id));
+  // A merged row stands for all of its member rows in `allRows` (KTD3).
+  const memberIdsOf = (r: TRow) => r.memberIds ?? [r.id];
+  const excludedIds = new Set(pageFresh.filter(r => !r.included).flatMap(memberIdsOf));
   if (toCreate.length === 0) {
     stream.markdown('_Nothing selected — no tickets were created._\n\n');
     return session;
@@ -918,13 +960,19 @@ export async function createNewRows<TItem, TRow extends ReviewRowBase>(
 
   stream.markdown(`_Creating ${toCreate.length} ticket(s)…_\n\n`);
   const createdIds = new Set<string>();
+  const failedMerged: TRow[] = [];
   let failed = 0;
   for (const row of toCreate) {
     const outcome = await createOne(row, session, ticketService, stream, descriptor, baseUrl);
-    if ('key' in outcome) createdIds.add(row.id); else failed++;
+    if ('key' in outcome) {
+      memberIdsOf(row).forEach(id => createdIds.add(id));
+    } else {
+      failed++;
+      if (row.memberIds) failedMerged.push(row);
+    }
   }
 
-  const created = createdIds.size;
+  const created = toCreate.length - failed;
   stream.markdown(
     `${pageFresh.length} ${descriptor.itemNoun} on this page — **${created}** created, ${failed} failed, ${excludedIds.size} excluded by you.\n\n`,
   );
@@ -940,9 +988,173 @@ export async function createNewRows<TItem, TRow extends ReviewRowBase>(
   return {
     ...session,
     allRows,
-    rows: page.rows,
+    // A merged row that failed keeps its merge, so a retry retries the one ticket, not one per member.
+    rows: restoreMergedRows(page.rows, failedMerged),
     page: page.page,
     outcomes: { ...outcomes, created: outcomes.created + created, createFailed: outcomes.createFailed + failed },
+  };
+}
+
+// --- Add rows to an existing ticket (finding folding, KTD5-KTD7) ------------------------------------
+
+type AddTargetIssue = Awaited<ReturnType<TicketService['getIssue']>>;
+
+/**
+ * KTD6: what writing to ticket `key` involves — the findings its description would be rebuilt from
+ * (the added rows plus the Already-ticketed rows whose target it is, the ticket's own rows first)
+ * and the findings it records that none of those cover, which a rewrite drops and says so.
+ */
+function planRewrite<TItem, TRow extends ReviewRowBase>(
+  session: ReviewSession<TRow>,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+  key: string,
+  issueLabels: string[],
+  extraRows: TRow[],
+): { regenItem: TItem; droppedKeys: string[] } {
+  const fold = descriptor.fold!;
+  const ticketRows = session.allRows.filter(r => r.existingTicketKey === key);
+  const regenItem = fold.combine([...ticketRows, ...extraRows].map(fold.itemOf));
+  const covered = new Set(descriptor.dedupKeyOf?.(regenItem) ?? []);
+  const recorded = issueLabels.map(l => descriptor.labelToDedupKey?.(l) ?? null).filter((k): k is string => k !== null);
+  return { regenItem, droppedKeys: [...new Set(recorded.filter(k => !covered.has(k)))] };
+}
+
+/** KTD7: rebuilds `key` from `regenItem` — the importer's own summary, description and labels (no template labels) — in one write. */
+async function writeRewrite<TItem, TRow extends ReviewRowBase>(
+  ticketService: TicketService,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+  key: string,
+  regenItem: TItem,
+): Promise<void> {
+  const fields = descriptor.buildRowFields(regenItem, []);
+  const built = descriptor.buildTicketFields({ ...fields, id: '0', existingTicketKey: null, included: true } as unknown as TRow, {});
+  await ticketService.rewriteTicket(key, {
+    summary: built.summary,
+    description: String(built.fields.description ?? ''),
+    labelsToAdd: (built.fields.labels as string[] | undefined) ?? [],
+    removePrefix: descriptor.changeTracking?.removeLabelPrefix,
+  });
+}
+
+/** The visible New rows an add names, or null (with a message) when the page no longer holds them. */
+function rowsToAdd<TRow extends ReviewRowBase>(session: ReviewSession<TRow>, ids: string[], stream: vscode.ChatResponseStream): TRow[] | null {
+  const rows = session.rows.filter(r => r.existingTicketKey === null && ids.includes(r.id));
+  if (rows.length !== ids.length) {
+    stream.markdown("_Those rows are no longer on this page, so nothing was added._\n\n");
+    return null;
+  }
+  return rows;
+}
+
+/** Step one of `add … to <KEY>` (KTD5): reads the ticket and shows the warnings and the two mode links. Writes nothing. */
+async function showAddPrompt<TItem, TRow extends ReviewRowBase>(
+  session: ReviewSession<TRow>,
+  ids: string[],
+  key: string,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+  baseUrl?: string,
+): Promise<void> {
+  const rows = rowsToAdd(session, ids, stream);
+  if (!rows) return;
+  let issue: AddTargetIssue;
+  try {
+    issue = await ticketService.getIssue(key);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logDiag(descriptor.scope, 'warn', `Could not read the target ticket — ${key}`, { issueKey: key, error: message });
+    stream.markdown(`✗ ${key} — ${message}\n\n`);
+    return;
+  }
+  const { droppedKeys } = planRewrite(session, descriptor, key, issue.fields.labels ?? [], rows);
+  stream.markdown(trustedChatMarkdown(buildAddPrompt({
+    key, summary: issue.fields.summary ?? '', status: issue.fields.status?.name ?? null,
+    resolved: issue.fields.resolution != null, ids, rowCount: rows.length, droppedKeys, baseUrl,
+  })));
+}
+
+/**
+ * Step two of `add … to <KEY>` (KTD5-KTD7): Comment adds the record labels and posts a comment listing
+ * the added findings; Rewrite rebuilds summary, description and labels and then posts that comment
+ * plus any dropped findings. A failed write keeps the rows in New; a comment that fails after the
+ * write is reported and the rows still leave New, because their findings are now recorded.
+ */
+async function addToTicket<TItem, TRow extends ReviewRowBase>(
+  session: ReviewSession<TRow>,
+  ids: string[],
+  key: string,
+  mode: AddMode,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+  baseUrl?: string,
+): Promise<ReviewSession<TRow>> {
+  const rows = rowsToAdd(session, ids, stream);
+  if (!rows) return session;
+  const fold = descriptor.fold!;
+  const link = formatKeyLink(key, baseUrl);
+  const outcomes = session.outcomes ?? emptyImportOutcomes();
+  const failWith = (message: string): ReviewSession<TRow> => {
+    logDiag(descriptor.scope, 'error', `Add to existing ticket failed — ${key}`, { issueKey: key, mode, error: message });
+    stream.markdown(`✗ ${link} — ${message}\n\n`);
+    return { ...session, outcomes: { ...outcomes, addFailed: outcomes.addFailed + rows.length } };
+  };
+
+  let comment: string;
+  try {
+    const issue = await ticketService.getIssue(key);
+    const labels = issue.fields.labels ?? [];
+    const addedItem = fold.combine(rows.map(fold.itemOf));
+    const plan = planRewrite(session, descriptor, key, labels, rows);
+    const ratingPrefix = descriptor.changeTracking?.removeLabelPrefix;
+    if (mode === 'comment') {
+      // A rating label already on the ticket is left alone: a comment must not change its rating.
+      const recordLabels = fold.recordLabelsOf(addedItem);
+      const toAdd = ratingPrefix && labels.some(l => l.startsWith(ratingPrefix))
+        ? recordLabels.filter(l => !l.startsWith(ratingPrefix)) : recordLabels;
+      await ticketService.updateLabels(key, toAdd);
+      comment = fold.buildComment(addedItem, []);
+    } else {
+      await writeRewrite(ticketService, descriptor, key, plan.regenItem);
+      comment = fold.buildComment(addedItem, plan.droppedKeys);
+    }
+  } catch (err) {
+    return failWith(err instanceof Error ? err.message : String(err));
+  }
+
+  let commentFailed: string | null = null;
+  try {
+    await ticketService.addComment(key, comment, baseUrl);
+  } catch (err) {
+    commentFailed = err instanceof Error ? err.message : String(err);
+    logDiag(descriptor.scope, 'warn', `Added to ticket but the comment failed — ${key}`, { issueKey: key, mode, error: commentFailed });
+  }
+  const done = mode === 'comment' ? 'labels added and comment posted' : 'rewritten and comment posted';
+  stream.markdown(commentFailed
+    ? `⚠ ${link} — ${mode === 'comment' ? 'labels added' : 'rewritten'}, comment failed: ${commentFailed}\n\n`
+    : `✓ ${link} — ${done}\n\n`);
+  logDiag(descriptor.scope, commentFailed ? 'warn' : 'info', `${descriptor.importLabel} import — ${rows.length} row(s) added to ${key} (${mode})`, { issueKey: key, mode });
+
+  // The added rows leave New. Other rows on the page (merged ones included) are left as they are.
+  const gone = new Set(rows.flatMap(r => r.memberIds ?? [r.id]));
+  const isGone = (r: TRow) => r.existingTicketKey === null && gone.has(r.id);
+  // A rewrite rebuilt the ticket from the rows that already point to it, so those are done too.
+  const rewrittenResult: TicketedRowResult = commentFailed
+    ? { status: 'done', action: 'rewrite', note: 'comment-failed' } : { status: 'done', action: 'rewrite' };
+  const markRewritten = (r: TRow): TRow =>
+    mode === 'rewrite' && r.existingTicketKey !== null && !isTicketedRowFinished(r) && ticketedTargetKey(r) === key
+      ? { ...r, result: rewrittenResult } : r;
+  // The page is rebuilt from allRows so rows from the next page slide in; merged rows that stay keep their merge.
+  const allRows = session.allRows.filter(r => !isGone(r)).map(markRewritten);
+  const page = buildReviewPage(allRows, session.page);
+  const keptMerged = session.rows.filter(r => r.existingTicketKey === null && r.memberIds && !ids.includes(r.id));
+  return {
+    ...session,
+    allRows,
+    rows: restoreMergedRows(page.rows, keptMerged),
+    page: page.page,
+    outcomes: { ...outcomes, added: outcomes.added + rows.length },
   };
 }
 
@@ -1038,7 +1250,7 @@ async function runStaleTransitions<TItem, TRow extends ReviewRowBase>(
 
 /** KTD5/KTD7: which row actions each Already-ticketed run reply runs, and the word to repeat for the rest. */
 const TICKETED_RUNS: Record<'apply' | 'update' | 'recreate', { actions: ReadonlySet<TicketedAction>; command: string }> = {
-  apply: { actions: new Set<TicketedAction>(['update', 'follow-up', 're-create']), command: 'apply' },
+  apply: { actions: new Set<TicketedAction>(['update', 'follow-up', 'rewrite', 're-create']), command: 'apply' },
   update: { actions: new Set<TicketedAction>(['update']), command: 'update tickets' },
   recreate: { actions: new Set<TicketedAction>(['re-create']), command: 're-create tickets' },
 };
@@ -1064,6 +1276,17 @@ export async function executeTicketedActions<TItem, TRow extends ReviewRowBase>(
   descriptor: ReportImportDescriptor<TItem, TRow>,
   baseUrl?: string,
 ): Promise<ReviewSession<TRow>> {
+  // KTD11: rewrite rebuilds a whole ticket, so it is all-or-none per target. Checked before anything
+  // is written; a violation stops the whole apply.
+  if (actions.has('rewrite')) {
+    const partial = findPartialRewrites(session.allRows);
+    if (partial.length > 0) {
+      const detail = partial.map(p => `${p.key}: ${p.rewriteIds.join(', ')} ${p.rewriteIds.length === 1 ? 'is' : 'are'} on rewrite but ${p.otherIds.join(', ')} ${p.otherIds.length === 1 ? 'is' : 'are'} not`).join('; ');
+      stream.markdown(`_Nothing was written. Rewrite rebuilds a whole ticket, so it must cover all the rows that point to it or none of them (${detail}). Use \`all rewrite\`, or set the others to another action._\n\n`);
+      return session;
+    }
+  }
+
   const candidates = session.allRows.filter(r => {
     if (r.existingTicketKey === null || isTicketedRowFinished(r)) return false;
     const { action } = ticketedRowActions(r);
@@ -1076,21 +1299,56 @@ export async function executeTicketedActions<TItem, TRow extends ReviewRowBase>(
     return session;
   }
 
-  const toRun = candidates.slice(0, BATCH_LIMIT);
+  // At most BATCH_LIMIT rows run per reply, but the rows of one ticket's rewrite run together or not
+  // at all (KTD11); a single group larger than the cap still runs whole.
+  const units = new Map<string, TRow[]>();
+  for (const r of candidates) {
+    const unit = ticketedRowActions(r).action === 'rewrite' ? `rewrite:${ticketedTargetKey(r)}` : `row:${r.id}`;
+    const members = units.get(unit);
+    if (members) members.push(r); else units.set(unit, [r]);
+  }
+  const toRun: TRow[] = [];
+  for (const unit of units.values()) {
+    if (toRun.length > 0 && toRun.length + unit.length > BATCH_LIMIT) break;
+    toRun.push(...unit);
+  }
   const remaining = candidates.length - toRun.length;
   stream.markdown(`_Applying ${toRun.length} action(s)…_\n\n`);
 
   const results = new Map<string, TicketedRowResult>();
   const updates = toRun.filter(r => ticketedRowActions(r).action === 'update');
-  const creations = toRun.filter(r => ticketedRowActions(r).action !== 'update');
-  for (let i = 0; i < updates.length; i += UPDATE_CONCURRENCY) {
-    const batch = updates.slice(i, i + UPDATE_CONCURRENCY);
-    await Promise.all(batch.map(async row => {
-      results.set(row.id, await updateTicketedRow(row, ticketService, stream, descriptor, baseUrl));
+  const creations = toRun.filter(r => ['follow-up', 're-create'].includes(ticketedRowActions(r).action));
+  const rewriteGroups = new Map<string, TRow[]>();
+  for (const r of toRun.filter(r => ticketedRowActions(r).action === 'rewrite')) {
+    const key = ticketedTargetKey(r);
+    const members = rewriteGroups.get(key);
+    if (members) members.push(r); else rewriteGroups.set(key, [r]);
+  }
+  // Rows that update the same ticket (several Waltz components can share one) run one after the
+  // other: each label write reads the ticket first, so parallel ones would overwrite each other.
+  const updateBuckets = new Map<string, TRow[]>();
+  for (const r of updates) {
+    const key = ticketedTargetKey(r);
+    const bucket = updateBuckets.get(key);
+    if (bucket) bucket.push(r); else updateBuckets.set(key, [r]);
+  }
+  const buckets = [...updateBuckets.values()];
+  for (let i = 0; i < buckets.length; i += UPDATE_CONCURRENCY) {
+    await Promise.all(buckets.slice(i, i + UPDATE_CONCURRENCY).map(async bucket => {
+      for (const row of bucket) {
+        results.set(row.id, await updateTicketedRow(row, ticketService, stream, descriptor, baseUrl));
+      }
     }));
   }
   for (const row of creations) {
     results.set(row.id, await createForTicketedRow(row, session, ticketService, stream, descriptor, baseUrl));
+  }
+  let rewrittenTickets = 0;
+  let rewriteFailedTickets = 0;
+  for (const [key, rows] of rewriteGroups) {
+    const result = await rewriteTicketedGroup(rows, key, session, ticketService, stream, descriptor, baseUrl);
+    for (const row of rows) results.set(row.id, result);
+    if (result.status === 'done') rewrittenTickets++; else rewriteFailedTickets++;
   }
 
   const all = [...results.values()];
@@ -1102,9 +1360,10 @@ export async function executeTicketedActions<TItem, TRow extends ReviewRowBase>(
   const updateFailed = count('update', 'failed');
   const followUpFailed = count('follow-up', 'failed');
   const recreateFailed = count('re-create', 'failed');
-  const failed = updateFailed + followUpFailed + recreateFailed;
+  const failed = updateFailed + followUpFailed + recreateFailed + rewriteFailedTickets;
 
   let summary = `**${updated}** updated, ${followedUp} follow-up(s) created, ${recreated} re-created` +
+    (rewrittenTickets > 0 ? `, ${rewrittenTickets} rewritten` : '') +
     (upToDate > 0 ? `, ${upToDate} already up to date` : '') + `, ${failed} failed.`;
   if (remaining > 0) {
     summary += ` _${remaining} remain — capped at ${BATCH_LIMIT} actions per reply; reply \`${command}\` again to run them._`;
@@ -1112,7 +1371,7 @@ export async function executeTicketedActions<TItem, TRow extends ReviewRowBase>(
   stream.markdown(`${summary}\n\n`);
   logDiag(descriptor.scope, failed > 0 ? 'warn' : 'info',
     `${descriptor.importLabel} already-ticketed actions — ${updated} updated, ${followedUp} follow-ups, ${recreated} re-created, ${failed} failed`,
-    { command, updated, upToDate, followedUp, recreated, updateFailed, followUpFailed, recreateFailed, remaining },
+    { command, updated, upToDate, followedUp, recreated, rewritten: rewrittenTickets, updateFailed, followUpFailed, recreateFailed, rewriteFailed: rewriteFailedTickets, remaining },
   );
 
   const mark = (r: TRow): TRow => {
@@ -1132,8 +1391,60 @@ export async function executeTicketedActions<TItem, TRow extends ReviewRowBase>(
       followUpFailed: outcomes.followUpFailed + followUpFailed,
       recreated: outcomes.recreated + recreated,
       recreateFailed: outcomes.recreateFailed + recreateFailed,
+      rewritten: outcomes.rewritten + rewrittenTickets,
+      rewriteFailed: outcomes.rewriteFailed + rewriteFailedTickets,
     },
   };
+}
+
+/**
+ * Finding folding (KTD6/KTD7/KTD11): `rewrite` on one target ticket, for every unfinished row that
+ * points to it — the ticket's summary, description and labels are rebuilt from all rows that point
+ * to it, then one comment names the findings its tickets did not record yet and any it recorded
+ * that the rebuilt description no longer covers. A failed write leaves the ticket as it was; a
+ * comment that fails afterwards is reported but the rewrite stands.
+ */
+async function rewriteTicketedGroup<TItem, TRow extends ReviewRowBase>(
+  rows: TRow[],
+  key: string,
+  session: ReviewSession<TRow>,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+  baseUrl?: string,
+): Promise<TicketedRowResult> {
+  const fold = descriptor.fold;
+  const link = formatKeyLink(key, baseUrl);
+  let comment: string;
+  try {
+    if (!fold) throw new Error('rewrite is not available for this import');
+    const issue = await ticketService.getIssue(key);
+    const added = rows.flatMap(r => {
+      const change = r.change;
+      if (change?.kind !== 'findings' || change.newIds.length === 0) return [];
+      const item = fold.itemOf(r);
+      return [fold.narrowToNew ? fold.narrowToNew(item, change) : item];
+    });
+    const addedItem = fold.combine(added);
+    const plan = planRewrite(session, descriptor, key, issue.fields.labels ?? [], []);
+    await writeRewrite(ticketService, descriptor, key, plan.regenItem);
+    comment = fold.buildComment(addedItem, plan.droppedKeys);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logDiag(descriptor.scope, 'error', `Rewrite of existing ticket failed — ${key}`, { issueKey: key, error: message });
+    stream.markdown(`✗ ${link} — ${message}\n\n`);
+    return { status: 'failed', action: 'rewrite', error: message };
+  }
+  try {
+    await ticketService.addComment(key, comment, baseUrl);
+  } catch (commentErr) {
+    const message = commentErr instanceof Error ? commentErr.message : String(commentErr);
+    logDiag(descriptor.scope, 'warn', `Rewritten but the comment failed — ${key}`, { issueKey: key, error: message });
+    stream.markdown(`⚠ ${link} — rewritten, but the comment could not be posted: ${message}\n\n`);
+    return { status: 'done', action: 'rewrite', note: 'comment-failed' };
+  }
+  stream.markdown(`✓ ${link} — rewritten from ${rows.length} row(s)\n\n`);
+  return { status: 'done', action: 'rewrite' };
 }
 
 /**

@@ -7,7 +7,7 @@
 // (what a "label" means, how a row's own fields are built) are injected via callbacks, not
 // duplicated. R9: only what Veracode and Waltz need today is here — no speculative generality.
 import type { DiagLogger } from './diagTypes';
-import { TRIGGER_CHARS_PATTERN } from './markdownToJiraWiki';
+import { TRIGGER_CHARS } from './markdownToJiraWiki';
 // Type-only import: erased at compile time (no runtime `require`), so this does not create the
 // circular *runtime* import that sessionState.ts's own value import of this file (BATCH_LIMIT,
 // sanitizeCellText) would otherwise raise — only a value/side-effect import can cycle.
@@ -346,10 +346,17 @@ export async function findStaleTickets(
 // protects doesn't stop being dangerous once it survives that converter — the *output* is sent to
 // Jira verbatim as wiki markup, and Jira's renderer recognizes its own trigger set that
 // markdownToJiraWiki() never touches and therefore never neutralizes on the way through:
-//   - '-' is stripped — Jira-native strikethrough is `-text-` (not `~~text~~`; that Markdown form
-//     is what inline() converts *into* `-text-`, but a value that already contains bare hyphens
-//     reaches Jira as literal `-text-` without ever passing through that conversion)
-//   - '+' is stripped — Jira-native underline is `+text+`
+//   - '-' is stripped unless it sits between two ASCII letters or digits — Jira-native strikethrough
+//     is `-text-` (not `~~text~~`; that Markdown form is what inline() converts *into* `-text-`, but
+//     a value that already contains bare hyphens reaches Jira as literal `-text-` without ever
+//     passing through that conversion). A hyphen flanked by letters or digits on both sides
+//     ("netty-codec", "CVE-2099-1", "package-lock.json") can be neither an opening nor a closing
+//     delimiter — the same word-boundary rule markdownToJiraWiki()'s JIRA_TRIGGER_SHAPES applies —
+//     so it is kept and the value stays readable. Underscore does not count as a word character
+//     here: it is stripped below, and "_-_foo_-_" must not turn into a live "-foo-". A letter
+//     outside ASCII does not count either (conservative: its hyphen is stripped)
+//   - '+' is stripped unless it sits between two ASCII letters or digits, by the same flank rule as
+//     '-' above ("1.0.0+build.5" stays readable) — Jira-native underline is `+text+`
 //   - '^' is stripped — Jira-native superscript is `^text^`
 //   - '?' is stripped — Jira-native citation is `??text??`
 //   - '{' and '}' are stripped — Jira macros are `{quote}`, `{color}`, `{panel}`, `{code}`,
@@ -362,11 +369,20 @@ export async function findStaleTickets(
 //     already prevents inline()'s `/!\[([^\]]*)\]\(([^)]+)\)/g` regex from matching, so stripping
 //     '!' is redundant-but-harmless for that path and purely defensive against the Jira-native
 //     `!url!` trigger, which needs no brackets at all.)
+// Every character of TRIGGER_CHARS except '-' and '+', which are handled by their own flank rule below.
+const OTHER_TRIGGER_CHARS_PATTERN = new RegExp(
+  `[${[...TRIGGER_CHARS].filter(c => c !== '-' && c !== '+').map(c => `\\${c}`).join('')}]`,
+  'g',
+);
+// A hyphen or plus sign with anything other than an ASCII letter or digit on either side.
+const BOUNDARY_DELIMITER_PATTERN = /(?<![A-Za-z0-9])[-+]|[-+](?![A-Za-z0-9])/g;
+
 export function sanitizeCellText(value: string): string {
   return value
     .replace(/\r\n|\r|\n/g, ' ')
     .replace(/\|/g, '/')
-    .replace(TRIGGER_CHARS_PATTERN, '');
+    .replace(BOUNDARY_DELIMITER_PATTERN, '')
+    .replace(OTHER_TRIGGER_CHARS_PATTERN, '');
 }
 
 // A value pushed as an entire standalone line (no trusted prefix character in front of it, e.g.
@@ -384,6 +400,45 @@ export function sanitizeCellText(value: string): string {
 // character), so a whitespace-only prefix would not have closed this gap.
 export function sanitizeStandaloneLine(value: string): string {
   return `: ${sanitizeCellText(value)}`;
+}
+
+// --- Size budgets for folded tickets (finding folding plan, KTD8/KTD9) ---------------------------
+//
+// Jira's default limits are 255 characters for a summary and about 32,767 for a description or
+// comment. They are assumed, not checked against a live instance (see docs/known-limitations.md);
+// the description budget leaves margin below the default.
+export const MAX_SUMMARY_CHARS = 255;
+export const MAX_DESCRIPTION_CHARS = 30_000;
+
+/**
+ * Joins a title's `head` (a file or component name — the only part that may be trimmed) and its
+ * `tail` (finding count, CWE labels, rating suffix — never trimmed) within `max` characters. A
+ * trimmed head ends in `…` so the cut is visible.
+ */
+export function clampSummary(head: string, tail: string, max: number = MAX_SUMMARY_CHARS): string {
+  if (head.length + tail.length <= max) return head + tail;
+  const room = Math.max(0, max - tail.length - 1);
+  const clamped = `${head.slice(0, room)}…${tail}`;
+  return clamped.length <= max ? clamped : clamped.slice(0, max);
+}
+
+/**
+ * Builds wiki text at successively smaller detail levels (0 = full) until it fits `max`, and returns
+ * the first level that does — or the smallest level when none fits, so a caller always gets an
+ * answer. `shortened` is true whenever level 0 did not fit; the builder decides what each level
+ * drops and how it tells the reader (its last level should list every finding but little else).
+ */
+export function fitWiki(
+  build: (level: number) => string,
+  levels: number,
+  max: number = MAX_DESCRIPTION_CHARS,
+): { wiki: string; shortened: boolean; level: number } {
+  let wiki = '';
+  for (let level = 0; level < levels; level++) {
+    wiki = build(level);
+    if (wiki.length <= max || level === levels - 1) return { wiki, shortened: level > 0, level };
+  }
+  return { wiki, shortened: false, level: 0 };
 }
 
 /**
@@ -406,7 +461,7 @@ export function templateLabelsOf(additionalFields: Record<string, unknown>): str
   return Array.isArray(additionalFields.labels) ? additionalFields.labels as string[] : [];
 }
 
-export const TICKETED_ACTION_ORDER: readonly TicketedAction[] = ['update', 'follow-up', 're-create', 'leave'];
+export const TICKETED_ACTION_ORDER: readonly TicketedAction[] = ['update', 'follow-up', 'rewrite', 're-create', 'leave'];
 
 function createdTime(created: string | null): number {
   if (!created) return Number.NEGATIVE_INFINITY;
@@ -435,7 +490,7 @@ export function pickTargetTicket(tickets: DedupTicket[]): DedupTicket {
 }
 
 /**
- * R6/R7: which actions a row offers and which one it proposes. `follow-up` needs new findings;
+ * R6/R7: which actions a row offers and which one it proposes. `follow-up` needs new findings; `rewrite` is always offered;
  * `update` needs a change or a baseline; `re-create` and `leave` are always offered. Default: no
  * change → leave; baseline → update; change with any open ticket → update; change with every ticket
  * resolved → follow-up, except a rating rise with no new findings → update.
@@ -445,7 +500,8 @@ export function deriveTicketedActions(
   anyOpen: boolean,
 ): { allowedActions: TicketedAction[]; action: TicketedAction } {
   const hasNewFindings = change?.kind === 'findings' && change.newIds.length > 0;
-  const allowed = new Set<TicketedAction>(['re-create', 'leave']);
+  // `rewrite` (finding folding) is always offered: it rebuilds the target ticket from the report.
+  const allowed = new Set<TicketedAction>(['re-create', 'rewrite', 'leave']);
   if (change) allowed.add('update');
   if (hasNewFindings) allowed.add('follow-up');
   let action: TicketedAction;
@@ -470,8 +526,7 @@ function collectTickets(dedupMap: DedupMap, keys: string[]): DedupTicket[] {
  * Builds review rows from raw parsed items, assigning the shared id-numbering scheme (new
  * candidates numbered '1'..'N' in source order, already-ticketed ones 'A1'..'Am' in source order).
  * `dedupKeyOf` maps an item to *every* candidate key looked up in `dedupMap` (R11: a folded group
- * matches as already-ticketed as soon as any one of its member flaws' keys does — a single-key
- * importer just returns a one-element array); `rowBuilder` supplies the importer-specific row
+ * matches as already-ticketed as soon as any one of its members' keys does); `rowBuilder` supplies the importer-specific row
  * fields (everything beyond id/existingTicketKey/included).
  *
  * `existingTicketKey` is the item's target ticket ({@link pickTargetTicket}) across every ticket of

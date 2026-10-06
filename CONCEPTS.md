@@ -17,6 +17,12 @@ The state of a Component for which a prior import already created a matching Jir
 ### Follow-up ticket
 A ticket an import creates for an already-ticketed item that holds only the findings its existing tickets don't record yet, linked "relates to" the item's newest ticket. Used when the existing ticket is resolved or shouldn't take more work. Distinct from a re-created ticket, which repeats the item's full content.
 
+### Fold
+A group of findings or components that an import turns into one review row and one ticket instead of one per finding. Veracode folds flaws that share a file and CWE, or a file and a line, automatically; in both importers the user can fold more with `merge`. A ticket created from a fold is a **Folded ticket**: its title says what it folds by count, and its description opens with a banner and an overview table so the fold is visible. A merge lasts only for the page and the import it was made on; the findings it folded stay recorded on the ticket as labels.
+
+### Rewrite
+An import action that rebuilds an existing ticket's title, description and labels from the report as if the ticket had always been one fold, and posts a comment naming the findings it added and any it dropped. Offered when adding rows to a ticket (`add … to <KEY>`, as an alternative to a plain comment) and on Already-ticketed rows, where it covers all the rows that point to the ticket or none. Distinct from a re-created ticket, which is a new ticket, and from an update, which only adds labels and a comment.
+
 ### Stale ticket
 An open Jira ticket carrying an importer's marker label whose findings are all gone from the current report or no longer match the importer's remediation filter. Applies to both Veracode and Waltz imports. A stale ticket is only offered for a transition, never moved automatically, and a ticket moved to a non-final status stays stale on later imports because it is still open.
 
