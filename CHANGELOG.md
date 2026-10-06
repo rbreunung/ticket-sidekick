@@ -1,3 +1,27 @@
+## [0.7.0] - 2026-10-06
+
+## What's Changed
+* docs: add requirements plan for ticket attachment uploads
+* docs: split README into a hybrid entry point with docs/manual pages
+* feat(report-import): split import review into an overview and per-group screens
+* fix(bitbucket): stop the PR review from losing or blurring findings
+* feat(bitbucket): Copy for Teams — share a review as plain text
+* feat(jira): pick where stale import tickets go when closing them
+* docs(manual): document missing settings and flows, and test settings coverage
+* docs(solutions): update cancel-word collision learning after its recurrence
+* fix(jira): keep options named like cancel words pickable in four more pick lists
+* docs(manual): cover slash commands and Agent Mode tools, and test size limits against package.json
+* feat(report-import): per-row actions for already-ticketed Veracode and Waltz items
+* feat(email): optional cleanup of confidentiality headers, legal footers and signatures before email import
+* feat(bitbucket): opt-in token footer and monthly token usage table
+* fix(bitbucket): token meter on frozen host objects, honest failed-review result, clearer review logs
+* feat(import): fold duplicate findings for Veracode and Waltz report imports
+* refactor(session): split sessionState.ts into per-domain modules
+* test(report-import): split reportImportHandler.test.ts and extract a shared harness
+
+
+**Full Changelog**: https://github.com/rbreunung/ticket-sidekick/compare/0.6.6...0.7.0
+
 ## [0.6.6] - 2026-09-15
 
 ## What's Changed
