@@ -1287,7 +1287,8 @@ export async function executeTicketedActions<TItem, TRow extends ReviewRowBase>(
   const units = new Map<string, TRow[]>();
   for (const r of candidates) {
     const unit = ticketedRowActions(r).action === 'rewrite' ? `rewrite:${ticketedTargetKey(r)}` : `row:${r.id}`;
-    units.set(unit, [...(units.get(unit) ?? []), r]);
+    const members = units.get(unit);
+    if (members) members.push(r); else units.set(unit, [r]);
   }
   const toRun: TRow[] = [];
   for (const unit of units.values()) {
@@ -1303,7 +1304,8 @@ export async function executeTicketedActions<TItem, TRow extends ReviewRowBase>(
   const rewriteGroups = new Map<string, TRow[]>();
   for (const r of toRun.filter(r => ticketedRowActions(r).action === 'rewrite')) {
     const key = ticketedTargetKey(r);
-    rewriteGroups.set(key, [...(rewriteGroups.get(key) ?? []), r]);
+    const members = rewriteGroups.get(key);
+    if (members) members.push(r); else rewriteGroups.set(key, [r]);
   }
   for (let i = 0; i < updates.length; i += UPDATE_CONCURRENCY) {
     const batch = updates.slice(i, i + UPDATE_CONCURRENCY);

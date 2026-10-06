@@ -409,13 +409,18 @@ function pushFoldedTable(lines: string[], group: VeracodeFlaw[]): void {
   lines.push('');
 }
 
+// The Module and File lines of a Location block, shared by the single-flaw and folded layouts.
+function pushModuleAndFile(lines: string[], flaw: VeracodeFlaw): void {
+  lines.push(`Module: ${sanitizeCellText(flaw.module)}`);
+  const path = fullSourcePath(flaw);
+  if (path) lines.push(`File: ${path}${flaw.line != null ? `:${flaw.line}` : ''}`);
+}
+
 function pushFoldedSection(lines: string[], flaw: VeracodeFlaw, cap: number): void {
   lines.push(`### Issue ${flaw.issueId}`);
   lines.push('');
   lines.push('#### Location');
-  lines.push(`Module: ${sanitizeCellText(flaw.module)}`);
-  const path = fullSourcePath(flaw);
-  if (path) lines.push(`File: ${path}${flaw.line != null ? `:${flaw.line}` : ''}`);
+  pushModuleAndFile(lines, flaw);
   if (flaw.functionPrototype) lines.push(`Function: ${sanitizeCellText(flaw.functionPrototype)}`);
   lines.push('');
   pushSeverityAndCwe(lines, flaw, '####');
@@ -457,9 +462,7 @@ function buildSingleFlawDescriptionWiki(flaw: VeracodeFlaw): string {
   const lines: string[] = [];
 
   lines.push('### Location');
-  lines.push(`Module: ${sanitizeCellText(flaw.module)}`);
-  const path = fullSourcePath(flaw);
-  if (path) lines.push(`File: ${path}${flaw.line != null ? `:${flaw.line}` : ''}`);
+  pushModuleAndFile(lines, flaw);
   lines.push('');
 
   lines.push(`### Issue ${flaw.issueId}`);

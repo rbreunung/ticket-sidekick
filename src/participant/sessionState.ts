@@ -2265,16 +2265,10 @@ function parseFoldReply(reply: string, ctx: ImportReplyContext): ImportReplyActi
   const n = normalizeReply(reply);
   const merge = n.match(/^merge(?: (.*))?$/);
   if (merge) {
-    const tokens = (merge[1] ?? '').split(/[\s,]+/).filter(Boolean);
-    const byLower = new Map(ctx.newRowIds.map(id => [id.toLowerCase(), id]));
-    const ids: string[] = [];
-    for (const token of tokens) {
-      const id = byLower.get(token);
-      if (!id) return { kind: 'invalid', reason: `Row ${token.toUpperCase()} isn't a New row on this page, so it can't be merged.` };
-      if (!ids.includes(id)) ids.push(id);
-    }
-    return ids.length >= 2
-      ? { kind: 'merge', ids }
+    const rows = matchVisibleNewRows((merge[1] ?? '').split(/[\s,]+/).filter(Boolean), ctx, 'merged');
+    if ('reason' in rows) return { kind: 'invalid', reason: rows.reason };
+    return rows.ids.length >= 2
+      ? { kind: 'merge', ids: rows.ids }
       : { kind: 'invalid', reason: 'Merge needs at least two different row numbers, e.g. `merge 2 4`.' };
   }
   if (n === 'add' || n.startsWith('add ')) return parseAddReply(n, ctx);
@@ -2289,19 +2283,27 @@ function parseFoldReply(reply: string, ctx: ImportReplyContext): ImportReplyActi
   return null;
 }
 
+/** The distinct row ids named by `tokens`, each of which must be a New row on the visible page (else the reason, naming it). */
+function matchVisibleNewRows(tokens: string[], ctx: ImportReplyContext, verb: 'merged' | 'added'): { ids: string[] } | { reason: string } {
+  const byLower = new Map(ctx.newRowIds.map(id => [id.toLowerCase(), id]));
+  const ids: string[] = [];
+  for (const token of tokens) {
+    const id = byLower.get(token);
+    if (!id) return { reason: `Row ${token.toUpperCase()} isn't a New row on this page, so it can't be ${verb}.` };
+    if (!ids.includes(id)) ids.push(id);
+  }
+  return { ids };
+}
+
 const ADD_USAGE = 'Add rows to a ticket like this: `add 2 4 to PROJ-123`, then choose Comment or Rewrite.';
 
 /** `add <ids> to <KEY>` with an optional `as comment` / `as rewrite` (normalized, lower-cased input). */
 function parseAddReply(n: string, ctx: ImportReplyContext): ImportReplyAction {
   const match = n.match(/^add (.+?) to ([a-z][a-z0-9_]*-\d+)(?: as (comment|rewrite))?$/);
   if (!match) return { kind: 'invalid', reason: ADD_USAGE };
-  const byLower = new Map(ctx.newRowIds.map(id => [id.toLowerCase(), id]));
-  const ids: string[] = [];
-  for (const token of match[1].split(/[\s,]+/).filter(Boolean)) {
-    const id = byLower.get(token);
-    if (!id) return { kind: 'invalid', reason: `Row ${token.toUpperCase()} isn't a New row on this page, so it can't be added.` };
-    if (!ids.includes(id)) ids.push(id);
-  }
+  const rows = matchVisibleNewRows(match[1].split(/[\s,]+/).filter(Boolean), ctx, 'added');
+  if ('reason' in rows) return { kind: 'invalid', reason: rows.reason };
+  const { ids } = rows;
   if (ids.length === 0) return { kind: 'invalid', reason: ADD_USAGE };
   const key = match[2].toUpperCase();
   return match[3] ? { kind: 'add', ids, key, mode: match[3] as AddMode } : { kind: 'addPrompt', ids, key };
