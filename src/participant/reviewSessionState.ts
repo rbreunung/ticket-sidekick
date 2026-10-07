@@ -1712,7 +1712,7 @@ export function buildTruncationEvent(params: {
  * create a cycle.
  */
 export type ReviewPass =
-  | 'pass1' | 'continuation' | 'pass2' | 'critic' | 'critic-r2'
+  | 'pass1' | 'continuation' | 'pass2' | 'critic' | 'critic-r2' | 'requirements'
   | 'security' | 'performance' | 'reliability' | 'maintainability';
 
 /** R5's recovery-decision shapes — logged so a reader can follow what happened
