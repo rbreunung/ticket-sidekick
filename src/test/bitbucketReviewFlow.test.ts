@@ -1299,3 +1299,138 @@ describe('requirements-aware review (U4)', () => {
     expect(resumed.text).toContain('SQL injection');
   });
 });
+
+describe('correcting the requirements reading, and sharing it (U5)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const SMART_TRAILER = '{"additionalFilesNeeded":[],"recommendedPersonas":[]}';
+  const isRequirementsPrompt = (prompt: string): boolean => prompt.includes('does what its Jira ticket asks for');
+  const TICKET_SENTINEL = 'idempotency key to the capture request';
+
+  function requirementsReply(name: string, patch: Record<string, unknown> = {}): string {
+    const base = JSON.parse(readFileSync(resolve(process.cwd(), 'src/test/fixtures', `requirements-reply-${name}.json`), 'utf-8')) as object;
+    return JSON.stringify({ ...base, additionalFilesNeeded: [], ...patch });
+  }
+
+  function script(requirements: ScriptedReply): (prompt: string) => ScriptedReply {
+    return (prompt) => {
+      if (isRequirementsPrompt(prompt)) return requirements;
+      if (prompt.includes('lens ONLY')) return META_LINE;
+      return [findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'SQL injection', 'critical'), SMART_TRAILER].join('\n');
+    };
+  }
+
+  type StoredSession = { findings: Array<{ id: number; title: string }>; requirements?: { ticketKey: string; coverage: { userGoal?: string; unseenFileCount: number; requirements: Array<{ text: string }> } }; rawDiffOmittedFiles?: string[] };
+  const stored = (harness: Harness): StoredSession => harness.workspaceState.get('bitbucket.session.review') as StoredSession;
+
+  async function reviewedWithTicket(harness: Harness): Promise<unknown> {
+    const { result } = await harness.turn(`review smart ${PR_URL} REQ-2`, script(requirementsReply('bug-comment-fix')));
+    return result;
+  }
+
+  // F3
+  it('redoes only the requirements block against the stated goal, leaving the findings alone', async () => {
+    const harness = createHarness({}, { jira: true });
+    const review = await reviewedWithTicket(harness);
+    const before = stored(harness);
+    const promptsBefore = harness.prompts.length;
+
+    const { text, result } = await harness.turn('the goal is actually that no customer is ever charged twice', script(requirementsReply('clean-spec')), [sessionTurn(review)]);
+
+    expect(harness.prompts.length - promptsBefore).toBe(1);
+    const prompt = harness.prompts[harness.prompts.length - 1];
+    expect(isRequirementsPrompt(prompt)).toBe(true);
+    expect(prompt.indexOf('no customer is ever charged twice')).toBeLessThan(prompt.indexOf(TICKET_SENTINEL));
+    expect(text).toContain('### Requirements coverage — REQ-2');
+    expect(text).toContain('Using your stated goal');
+    expect(result).toMatchObject({ metadata: { bitbucketSession: { kinds: ['review-session'] } } });
+
+    const after = stored(harness);
+    expect(after.findings).toEqual(before.findings);
+    expect(after.requirements!.coverage.userGoal).toBe('that no customer is ever charged twice');
+    expect(after.requirements!.coverage.requirements[0].text).toBe('Retry up to 3 times with exponential backoff');
+  });
+
+  it('copies the new block after a correction and puts the coverage above the findings', async () => {
+    const harness = createHarness({}, { jira: true });
+    const review = await reviewedWithTicket(harness);
+    const corrected = await harness.turn('goal: no double charges', script(requirementsReply('clean-spec')), [sessionTurn(review)]);
+
+    await harness.turn('copy', [], [sessionTurn(corrected.result)]);
+    expect(h.clipboard).toContain('Requirements coverage (REQ-2)');
+    expect(h.clipboard).toContain('Using the stated goal: no double charges');
+    expect(h.clipboard!.indexOf('Requirements coverage')).toBeLessThan(h.clipboard!.indexOf('🔴 Critical'));
+  });
+
+  it('leaves the coverage out of a copy limited to some findings', async () => {
+    const harness = createHarness({}, { jira: true });
+    const review = await reviewedWithTicket(harness);
+
+    await harness.turn('copy #1', [], [sessionTurn(review)]);
+    expect(h.clipboard).toContain('SQL injection');
+    expect(h.clipboard).not.toContain('Requirements coverage');
+  });
+
+  it('copies a review without a ticket exactly as before', async () => {
+    const harness = createHarness({});
+    const { result } = await harness.turn(PR_URL, [[findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'SQL injection', 'critical'), META_LINE].join('\n')]);
+    await harness.turn('copy', [], [sessionTurn(result)]);
+    expect(h.clipboard).not.toContain('Requirements coverage');
+  });
+
+  it('answers "what is the goal of this PR?" as a question, with no requirements pass', async () => {
+    const harness = createHarness({}, { jira: true });
+    const review = await reviewedWithTicket(harness);
+    const requirementsCallsBefore = harness.prompts.filter(isRequirementsPrompt).length;
+
+    const { text } = await harness.turn('what is the goal of this PR?', ['none', 'It fixes a double charge.'], [sessionTurn(review)]);
+    expect(text).toContain('It fixes a double charge.');
+    expect(harness.prompts.filter(isRequirementsPrompt)).toHaveLength(requirementsCallsBefore);
+  });
+
+  it('treats "the goal is …" as a question when the review had no requirements block', async () => {
+    const harness = createHarness({});
+    const { result } = await harness.turn(PR_URL, [[findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'SQL injection', 'critical'), META_LINE].join('\n')]);
+
+    const { text } = await harness.turn('the goal is actually X', ['none', 'An answer.'], [sessionTurn(result)]);
+    expect(text).toContain('An answer.');
+    expect(harness.prompts.some(isRequirementsPrompt)).toBe(false);
+  });
+
+  it('asks what the goal is when "goal:" has nothing after it', async () => {
+    const harness = createHarness({}, { jira: true });
+    const review = await reviewedWithTicket(harness);
+    const promptsBefore = harness.prompts.length;
+
+    const { text } = await harness.turn('goal:', [], [sessionTurn(review)]);
+    expect(text).toContain('Tell me the goal');
+    expect(harness.prompts).toHaveLength(promptsBefore);
+  });
+
+  it('says how many files the redone block did not see when the stored diff was cut down', async () => {
+    const harness = createHarness({ modelContextTokens: 5_000, contextBudgetRatio: 1 }, { jira: true });
+    harness.client.rawDiff = makeDiff([
+      { path: 'src/f1.ts', lines: bulkyLines('One') },
+      { path: 'src/f2.ts', lines: bulkyLines('Two') },
+      { path: 'src/f3.ts', lines: bulkyLines('Three') },
+      { path: 'src/f4.ts', lines: bulkyLines('Four') },
+    ]);
+    const review = await reviewedWithTicket(harness);
+    expect(stored(harness).rawDiffOmittedFiles?.length ?? 0).toBeGreaterThan(0);
+
+    const { text } = await harness.turn('the goal is retries must not double charge', script(requirementsReply('clean-spec', { outOfScope: [] })), [sessionTurn(review)]);
+    expect(text).toMatch(/\d+ files? (was|were) not shown to this check/);
+  });
+
+  it('keeps the old block and says so when the correction cannot be completed', async () => {
+    const harness = createHarness({}, { jira: true });
+    const review = await reviewedWithTicket(harness);
+    const before = stored(harness).requirements!.coverage;
+
+    const { text, result } = await harness.turn('the goal is actually X', script('I cannot do that.'), [sessionTurn(review)]);
+    expect(text).toContain('requirements check could not be completed');
+    expect(stored(harness).requirements!.coverage).toEqual(before);
+    expect(result).toMatchObject({ metadata: { bitbucketSession: { kinds: ['review-session'] } } });
+  });
+});

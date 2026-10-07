@@ -2,6 +2,7 @@ import { extractJsonObject } from '../utils/extractJsonObject';
 import { isCancellation } from './session/primitives';
 import { TICKET_ID_PATTERN } from '../utils/branchParser';
 import type { RequirementsSource } from '../utils/requirementsSource';
+import type { RequirementsCoverage } from './bitbucket/requirementsCoverage';
 // Type-only — IBitbucketClient.ts has no imports of its own (vscode included), so this
 // stays safe for a vscode-free, Vitest-loadable module.
 import type { BitbucketConfig, BitbucketPR, ReviewMode } from '../bitbucket/IBitbucketClient';
@@ -81,6 +82,8 @@ export interface ReviewSession {
   prAuthor?: string;
   /** PR target branch, for the "Copy for Teams" header. Absent on sessions saved before it existed. */
   prTargetBranch?: string;
+  /** The ticket check, when the user opted into one: kept so "Copy for Teams" can include it and a stated goal can redo it. */
+  requirements?: { ticketKey: string; source: RequirementsSource; coverage: RequirementsCoverage };
 }
 
 export interface BitbucketCommentPreviewSession {
@@ -342,7 +345,7 @@ function countFindings(n: number): string {
  */
 export function formatReviewForSharing(
   session: Pick<ReviewSession, 'prId' | 'prTitle' | 'prUrl' | 'prAuthor' | 'prTargetBranch' | 'findings'>,
-  options: { targets?: number[]; confidenceThreshold?: number } = {},
+  options: { targets?: number[]; confidenceThreshold?: number; coverageText?: string } = {},
 ): { text: string; copiedCount: number; totalCount: number; countLabel: string } {
   const threshold = options.confidenceThreshold ?? 0.7;
   const totalCount = session.findings.length;
@@ -363,8 +366,11 @@ export function formatReviewForSharing(
     session.prUrl,
   ].join('\n');
 
+  // The ticket check belongs to the whole review, so a copy limited to some findings leaves it out.
+  const coverage = options.targets || !options.coverageText ? '' : `\n\n${options.coverageText}`;
+
   if (copiedCount === 0) {
-    return { text: `${header}\n\nNo issues found.`, copiedCount, totalCount, countLabel };
+    return { text: `${header}${coverage}\n\nNo issues found.`, copiedCount, totalCount, countLabel };
   }
 
   const block = (f: ReviewFinding): string => {
@@ -393,7 +399,7 @@ export function formatReviewForSharing(
     return [`${shareSeverityIcon(severity)} ${label} (${rows.length})`, ...rows.map(block)];
   });
 
-  return { text: `${header}\n\n${groups.join('\n\n')}`, copiedCount, totalCount, countLabel };
+  return { text: `${header}${coverage}\n\n${groups.join('\n\n')}`, copiedCount, totalCount, countLabel };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -846,6 +852,7 @@ export function aggregateRecommendedPersonas(
 }
 
 export type FollowUpIntent =
+  | { kind: 'goal'; goal: string }
   | { kind: 'copy'; targets: number[] | 'all' }
   | { kind: 'add'; targets: number[] | 'all'; note: string }
   | { kind: 'explain'; findingRef: number | null; question: string };
@@ -877,9 +884,28 @@ function parseCopyCommand(message: string): FollowUpIntent | undefined {
   return { kind: 'copy', targets: numbers.length > 0 && !hasAll ? [...new Set(numbers)] : 'all' };
 }
 
-export function parseFollowUpIntent(message: string): FollowUpIntent {
+/**
+ * The user stating the real goal of the ticket ("the goal is actually …", "goal: …"). Start-anchored,
+ * so a question that merely mentions the goal ("what is the goal of this PR?") stays a question.
+ * An empty goal comes back as ''.
+ */
+function parseGoalStatement(message: string): FollowUpIntent | undefined {
+  const text = message.trim();
+  const sentence = /^(?:(?:actually|no|well)[\s,]+)?the\s+(?:(?:real|actual|true)\s+)?goal\s+(?:is|was|should\s+be)\b[\s:,-]*(?:actually\b[\s:,-]*)?([\s\S]*)$/i.exec(text);
+  const label = /^goal\s*:\s*([\s\S]*)$/i.exec(text);
+  const goal = (sentence ?? label)?.[1];
+  return goal === undefined ? undefined : { kind: 'goal', goal: goal.trim() };
+}
+
+export function parseFollowUpIntent(message: string, options: { hasRequirements?: boolean } = {}): FollowUpIntent {
   const copy = parseCopyCommand(message);
   if (copy) return copy;
+
+  // Checked before `add`: a goal such as "to add logging to the review" must not read as an add command.
+  if (options.hasRequirements) {
+    const goal = parseGoalStatement(message);
+    if (goal) return goal;
+  }
 
   // R20: only a request to add/post findings *to the review* is an add — a question that merely
   // mentions both words ("can you review whether #2 would add latency?") is answered instead.

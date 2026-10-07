@@ -331,7 +331,7 @@ export class PrReviewService {
     ticketText: string,
     fileDiffs: FileDiff[],
     options?: {
-      omittedFiles?: Array<{ path: string; changedLines: number }>;
+      omittedFiles?: Array<{ path: string; changedLines?: number }>;
       userGoal?: string;
       fileContents?: Map<string, string>;
     },
@@ -344,7 +344,7 @@ export class PrReviewService {
     const omittedRule = omitted.length > 0
       ? `FILES NOT SHOWN: ${omitted.length} file(s) of this PR are NOT SHOWN to you. If the evidence for a requirement could be in a ` +
         `file you were not shown, mark it "unclear" — never "not-evident". Not shown: ` +
-        `${omitted.map((f) => `${f.path} (${f.changedLines} changed lines)`).join(', ')}.\n\n`
+        `${omitted.map((f) => (f.changedLines === undefined ? f.path : `${f.path} (${f.changedLines} changed lines)`)).join(', ')}.\n\n`
       : '';
     const diffText = fileDiffs.map((fd) => `### File: ${fd.path}\n${fd.diff}`).join('\n\n---\n\n') + renderContextFiles(fileDiffs, options?.fileContents);
     const contextNote = options?.fileContents && options.fileContents.size > 0

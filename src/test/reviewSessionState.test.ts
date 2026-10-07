@@ -601,3 +601,39 @@ describe('extractPromptDirectives (ticket key, "no ticket", informal question)',
     expect(d.remainder).toBe('review');
   });
 });
+
+describe('formatReviewForSharing with a requirements coverage section', () => {
+  const PR_URL = 'https://bb.example.com/projects/PROJ/repos/app/pull-requests/42';
+  const finding = (id: number): ReviewFinding => ({
+    id, file: `src/file${id}.ts`, line: 10, severity: 'warning', title: `Title ${id}`, description: 'd', recommendation: `Rec ${id}`, confidence: 0.9,
+  });
+  const session = (findings: ReviewFinding[]): ReviewSession => ({
+    prTitle: 'Fix login race', prUrl: PR_URL, project: 'PROJ', repo: 'app', prId: 42, findings, prAuthor: 'Jane', prTargetBranch: 'main',
+  });
+  const COVERAGE = 'Requirements coverage (PROJ-1)\nmet — Add key (comment)';
+
+  it('puts the coverage after the header and before the severity groups when the whole review is copied', () => {
+    const { text } = formatReviewForSharing(session([finding(1)]), { coverageText: COVERAGE });
+    expect(text.indexOf(PR_URL)).toBeLessThan(text.indexOf('Requirements coverage (PROJ-1)'));
+    expect(text.indexOf('Requirements coverage (PROJ-1)')).toBeLessThan(text.indexOf('🟡 Warning'));
+  });
+
+  it('keeps the coverage on a review with no findings', () => {
+    const { text } = formatReviewForSharing(session([]), { coverageText: COVERAGE });
+    expect(text).toContain('Requirements coverage (PROJ-1)');
+    expect(text).toContain('No issues found.');
+    expect(text.indexOf('Requirements coverage')).toBeLessThan(text.indexOf('No issues found.'));
+  });
+
+  it('leaves the coverage out when only some findings are copied', () => {
+    const { text } = formatReviewForSharing(session([finding(1), finding(2)]), { targets: [2], coverageText: COVERAGE });
+    expect(text).not.toContain('Requirements coverage');
+    expect(text).toContain('Title 2');
+  });
+
+  it('is unchanged when there is no coverage', () => {
+    const base = formatReviewForSharing(session([finding(1)]));
+    expect(formatReviewForSharing(session([finding(1)]), { coverageText: undefined }).text).toBe(base.text);
+    expect(base.text).not.toContain('Requirements coverage');
+  });
+});

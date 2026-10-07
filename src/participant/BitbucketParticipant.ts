@@ -67,7 +67,7 @@ import { TicketService } from '../services/TicketService';
 import { extractTicketId } from '../utils/branchParser';
 import { formatRequirementsSourceText, type RequirementsSource } from '../utils/requirementsSource';
 import {
-  parseRequirementsReply, buildCoverage, renderCoverageMarkdown, packDiffFiles,
+  parseRequirementsReply, buildCoverage, renderCoverageMarkdown, renderCoverageText, packDiffFiles,
   type RequirementsCoverage,
 } from './bitbucket/requirementsCoverage';
 import {
@@ -340,16 +340,20 @@ async function runRequirementsPass(params: {
   fetchedFileCache: Map<string, string>;
   /** A goal the user stated; when set it replaces the ticket as the primary requirement. */
   userGoal?: string;
+  /** Files of the PR that are not in `fileDiffs` at all (cut from a stored diff), counted as not seen. */
+  alreadyOmittedPaths?: string[];
   logReview: (level: 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>) => void;
   stream: vscode.ChatResponseStream;
 }): Promise<RequirementsCoverage | undefined> {
-  const { pr, ref, ticket, fileDiffs, service, request, token, runTag, tokenBudget, fetchedFileCache, userGoal, logReview, stream } = params;
+  const { pr, ref, ticket, fileDiffs, service, request, token, runTag, tokenBudget, fetchedFileCache, userGoal, alreadyOmittedPaths = [], logReview, stream } = params;
   stream.markdown(`_Checking the diff against ${ticket.ticketKey}…_\n\n`);
   try {
     const ticketText = formatRequirementsSourceText(ticket.source);
     const packBudget = Math.max(0, tokenBudget - Math.ceil(ticketText.length / 4) - REQUIREMENTS_PROMPT_OVERHEAD_TOKENS);
-    const { shown, omitted } = packDiffFiles(fileDiffs, packBudget);
-    const prPaths = [...new Set(fileDiffs.map((f) => f.path))];
+    const packed = packDiffFiles(fileDiffs, packBudget);
+    const shown = packed.shown;
+    const omitted: Array<{ path: string; changedLines?: number }> = [...packed.omitted, ...alreadyOmittedPaths.map((path) => ({ path }))];
+    const prPaths = [...new Set([...fileDiffs.map((f) => f.path), ...alreadyOmittedPaths])];
     if (omitted.length > 0) {
       logReview('info', `Requirements pass sees ${shown.length} of ${prPaths.length} file(s)`, { runTag, omitted: omitted.map((o) => o.path) });
     }
@@ -899,6 +903,9 @@ export function createBitbucketParticipant(
         rawDiffOmittedFiles: storedDiff.omittedFiles,
         prAuthor: pr.author.displayName,
         prTargetBranch: pr.targetBranch,
+        ...(coverage && params.requirements
+          ? { requirements: { ticketKey: params.requirements.ticketKey, source: params.requirements.source, coverage } }
+          : {}),
       } satisfies ReviewSession);
       // U7/KTD9: the Bitbucket Getting-Started walkthrough's "first PR review" step completes on
       // this context key — set only at a real review completion, never on an aborted run.
@@ -1073,7 +1080,42 @@ export function createBitbucketParticipant(
         }
 
         try {
-          const intent = parseFollowUpIntent(prompt);
+          const intent = parseFollowUpIntent(prompt, { hasRequirements: session.requirements !== undefined });
+
+          if (intent.kind === 'goal') {
+            // Only the requirements pass re-runs, against the stored diff, with the stated goal as the
+            // primary requirement. Findings and their numbers are untouched; a failed redo keeps the old block.
+            const stored = session.requirements!;
+            if (!intent.goal) {
+              stream.markdown('_Tell me the goal after "the goal is …" and I will check the PR against it._');
+              return reviewSessionResult;
+            }
+            const goalClient = new BitbucketApiClient({
+              baseUrl: config.baseUrl ?? '',
+              authType: config.authType,
+              token: config.token!,
+              onDiag: (level, message, details) => logDiag('bitbucket.apiClient', level, message, details),
+            });
+            const goalService = new PrReviewService(
+              goalClient,
+              (level, message, details) => logDiag('bitbucket.prReviewService', level, message, details),
+            );
+            const goalRunTag = buildRunTag(session.project, session.repo, session.prId);
+            const goalPr = await goalClient.getPullRequest(session.project, session.repo, session.prId);
+            const coverage = await runRequirementsPass({
+              pr: goalPr, ref: { project: session.project, repo: session.repo },
+              ticket: { ticketKey: stored.ticketKey, source: stored.source },
+              fileDiffs: parseDiff(session.rawDiff ?? ''), service: goalService, request: modelRequest, token, runTag: goalRunTag,
+              tokenBudget: resolveTokenBudget(config, model).tokenBudget, fetchedFileCache: new Map(), userGoal: intent.goal,
+              alreadyOmittedPaths: session.rawDiffOmittedFiles ?? [],
+              logReview: (level, message, details) => logDiag('bitbucket.review', level, message, details), stream,
+            });
+            if (!coverage) return reviewSessionResult;
+            await ws.update('bitbucket.session.review', { ...session, requirements: { ...stored, coverage } } satisfies ReviewSession);
+            stream.markdown(trustedChatMarkdown(renderCoverageMarkdown(coverage)));
+            appendTokenFooter();
+            return reviewSessionResult;
+          }
 
           if (intent.kind === 'copy') {
             // "Copy for Teams": plain text on the local clipboard only (R9) — nothing is posted.
@@ -1085,7 +1127,11 @@ export function createBitbucketParticipant(
               );
               return reviewSessionResult;
             }
-            const share = formatReviewForSharing(session, { targets, confidenceThreshold: config.confidenceThreshold });
+            const share = formatReviewForSharing(session, {
+              targets,
+              confidenceThreshold: config.confidenceThreshold,
+              ...(session.requirements ? { coverageText: renderCoverageText(session.requirements.coverage) } : {}),
+            });
             try {
               await vscode.env.clipboard.writeText(share.text);
             } catch (err) {

@@ -3299,3 +3299,39 @@ describe('PrReviewService.buildRequirementsPrompt and the coverage preamble', ()
     expect(md).not.toContain('COVERAGE');
   });
 });
+
+describe('parseFollowUpIntent: stating the real goal', () => {
+  const withRequirements = { hasRequirements: true };
+
+  it('reads the strict "the goal is …" forms as a goal when the review has a requirements block', () => {
+    expect(parseFollowUpIntent('the goal is actually that nobody is charged twice', withRequirements))
+      .toEqual({ kind: 'goal', goal: 'that nobody is charged twice' });
+    expect(parseFollowUpIntent('Actually the goal is to retry captures', withRequirements)).toEqual({ kind: 'goal', goal: 'to retry captures' });
+    expect(parseFollowUpIntent('the real goal is: CSV export', withRequirements)).toEqual({ kind: 'goal', goal: 'CSV export' });
+    expect(parseFollowUpIntent('goal: keep the UI unchanged', withRequirements)).toEqual({ kind: 'goal', goal: 'keep the UI unchanged' });
+  });
+
+  it('keeps a message that merely mentions the goal as a question', () => {
+    expect(parseFollowUpIntent('what is the goal of this PR?', withRequirements)).toMatchObject({ kind: 'explain' });
+    expect(parseFollowUpIntent('does #2 serve the goal is it?', withRequirements)).toMatchObject({ kind: 'explain' });
+  });
+
+  it('ignores the goal form when the review has no requirements block', () => {
+    expect(parseFollowUpIntent('the goal is actually X')).toMatchObject({ kind: 'explain' });
+    expect(parseFollowUpIntent('the goal is actually X', { hasRequirements: false })).toMatchObject({ kind: 'explain' });
+  });
+
+  it('prefers the goal over an add-to-review reading when the message starts as a goal', () => {
+    expect(parseFollowUpIntent('the goal is to add logging to the review', withRequirements))
+      .toEqual({ kind: 'goal', goal: 'to add logging to the review' });
+  });
+
+  it('returns an empty goal for "goal:" with nothing after it', () => {
+    expect(parseFollowUpIntent('goal:', withRequirements)).toEqual({ kind: 'goal', goal: '' });
+  });
+
+  it('still reads copy and add commands as before', () => {
+    expect(parseFollowUpIntent('copy', withRequirements)).toEqual({ kind: 'copy', targets: 'all' });
+    expect(parseFollowUpIntent('add #2 to review', withRequirements)).toMatchObject({ kind: 'add', targets: [2] });
+  });
+});
