@@ -14,6 +14,7 @@ import {
   parseSmartFallbackReply,
   ALL_PERSONA_IDS,
   formatReviewForSharing,
+  extractPromptDirectives,
   type BitbucketFollowupState,
   type ReviewFinding,
   type ReviewSession,
@@ -494,5 +495,109 @@ describe('isUsageRequest', () => {
 
   it('is false when the message carries a PR URL, so a review always wins', () => {
     expect(isUsageRequest('usage https://bitbucket.example.com/projects/P/repos/r/pull-requests/4')).toBe(false);
+  });
+});
+
+describe('extractPromptDirectives (ticket key, "no ticket", informal question)', () => {
+  const URL = 'https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42';
+
+  it('ignores a key inside the question and leaves the mode words for mode detection', () => {
+    const d = extractPromptDirectives(`review deep ${URL} does this fix PROJ-77?`);
+    expect(d.question).toBe('does this fix PROJ-77?');
+    expect(d.ticketKey).toBeUndefined();
+    expect(d.skipTicket).toBe(false);
+    expect(d.remainder).toBe('review deep');
+  });
+
+  it('reads a bare key next to the URL as the explicit ticket', () => {
+    const d = extractPromptDirectives(`review smart ${URL} PROJ-9`);
+    expect(d.ticketKey).toBe('PROJ-9');
+    expect(d.question).toBeUndefined();
+    expect(d.remainder).toBe('review smart');
+  });
+
+  it('reads the key and an informal question together', () => {
+    const d = extractPromptDirectives(`review smart ${URL} PROJ-9 does this handle retries?`);
+    expect(d.ticketKey).toBe('PROJ-9');
+    expect(d.question).toBe('does this handle retries?');
+    expect(d.remainder).toBe('review smart');
+  });
+
+  it('takes a leading question sentence before the URL', () => {
+    const d = extractPromptDirectives(`does this handle retries? ${URL}`);
+    expect(d.question).toBe('does this handle retries?');
+    expect(d.remainder).toBe('');
+  });
+
+  it('keeps mode words that precede an informal question on the same line out of the question', () => {
+    const d = extractPromptDirectives(`review smart does this handle retries? ${URL}`);
+    expect(d.question).toBe('does this handle retries?');
+    expect(d.remainder).toBe('review smart');
+  });
+
+  it('keeps the question: and -- forms working exactly as before', () => {
+    expect(extractPromptDirectives(`${URL} question: is it backwards compatible?`).question).toBe('is it backwards compatible?');
+    expect(extractPromptDirectives(`${URL} -- is it backwards compatible?`).question).toBe('is it backwards compatible?');
+    // The delimiter form wins over a second informal sentence.
+    const both = extractPromptDirectives(`is this quick? ${URL} -- is it safe for retries?`);
+    expect(both.question).toBe('is it safe for retries?');
+  });
+
+  it('never reads a -- in a URL slug, or PROJ in the URL path, as a marker or a ticket', () => {
+    const d = extractPromptDirectives('review deep https://bitbucket.org/myteam/api--service/pull-requests/42');
+    expect(d.question).toBeUndefined();
+    expect(d.ticketKey).toBeUndefined();
+    expect(extractPromptDirectives(URL).ticketKey).toBeUndefined();
+  });
+
+  it('never reads a PR URL ending in a query string as a question', () => {
+    expect(extractPromptDirectives(`review smart ${URL}?w=1`).question).toBeUndefined();
+    const d = extractPromptDirectives(`review smart ${URL}? does this handle retries?`);
+    expect(d.question).toBe('does this handle retries?');
+  });
+
+  it('treats the words "no ticket" as an explicit skip, which wins over a key', () => {
+    expect(extractPromptDirectives(`review smart ${URL} no ticket`).skipTicket).toBe(true);
+    const both = extractPromptDirectives(`review smart ${URL} PROJ-9 no ticket`);
+    expect(both.skipTicket).toBe(true);
+    expect(both.ticketKey).toBeUndefined();
+    expect(both.remainder).toBe('review smart');
+  });
+
+  it('ignores "no ticket" inside the question text', () => {
+    const d = extractPromptDirectives(`review smart ${URL} is there no ticket for this change?`);
+    expect(d.skipTicket).toBe(false);
+    expect(d.question).toBe('is there no ticket for this change?');
+  });
+
+  it('keeps the configured mode when the question merely contains a mode word', () => {
+    const d = extractPromptDirectives(`is this quick to fix? ${URL}`);
+    expect(d.question).toBe('is this quick to fix?');
+    expect(d.remainder).toBe('');
+  });
+
+  it('does not treat statements or short fragments as questions', () => {
+    expect(extractPromptDirectives(`review smart ${URL} please look at retries`).question).toBeUndefined();
+    expect(extractPromptDirectives(`review smart ${URL} ok?`).question).toBeUndefined();
+  });
+
+  it('takes the first key outside the URL and question when there are two', () => {
+    expect(extractPromptDirectives(`review smart ${URL} PROJ-9 PROJ-10`).ticketKey).toBe('PROJ-9');
+  });
+
+  it('does not match a lowercase key, and returns a key-shaped word like UTF-8 (documented false positive)', () => {
+    expect(extractPromptDirectives(`review smart ${URL} proj-9`).ticketKey).toBeUndefined();
+    expect(extractPromptDirectives(`review smart ${URL} UTF-8`).ticketKey).toBe('UTF-8');
+  });
+
+  it('leaves a plain prompt untouched apart from trimming', () => {
+    const d = extractPromptDirectives(`  review deep ${URL}  `);
+    expect(d).toEqual({ question: undefined, ticketKey: undefined, skipTicket: false, remainder: 'review deep' });
+  });
+
+  it('removes the key from the remainder so a key such as DEEP-1 cannot flip the mode', () => {
+    const d = extractPromptDirectives(`review ${URL} DEEP-1`);
+    expect(d.ticketKey).toBe('DEEP-1');
+    expect(d.remainder).toBe('review');
   });
 });

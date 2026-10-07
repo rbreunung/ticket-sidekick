@@ -1,5 +1,6 @@
 import { extractJsonObject } from '../utils/extractJsonObject';
 import { isCancellation } from './session/primitives';
+import { TICKET_ID_PATTERN } from '../utils/branchParser';
 // Type-only — IBitbucketClient.ts has no imports of its own (vscode included), so this
 // stays safe for a vscode-free, Vitest-loadable module.
 import type { BitbucketConfig, BitbucketPR, ReviewMode } from '../bitbucket/IBitbucketClient';
@@ -487,7 +488,83 @@ function findUpfrontQuestionMatch(prompt: string): { question: string; start: nu
     return { question, start: dashStart, end };
   }
 
-  return null;
+  return findInformalQuestionMatch(prompt, urlSpans);
+}
+
+/** Words that may precede an informal question on its line; they stay in the prompt. */
+const MODE_LEAD_WORD = /^(?:review|quick|standard|smart|deep)\b\s*/;
+const NO_TICKET_LEAD = /^no\s+ticket\b\s*/i;
+const TICKET_KEY_LEAD = new RegExp(`^${TICKET_ID_PATTERN.source}(?![A-Za-z0-9-])\\s*`);
+const TICKET_KEY_ANYWHERE = new RegExp(`(?<![A-Za-z0-9])${TICKET_ID_PATTERN.source}(?![A-Za-z0-9-])`);
+const MIN_INFORMAL_QUESTION_WORDS = 3;
+
+/**
+ * An upfront question written as a plain sentence ending in `?`, with no delimiter: the last such
+ * sentence (at least three words) found outside every URL span, so a query string such as `?w=1`
+ * on a PR URL is never a question. A PR URL also ends a sentence. Mode words, `no ticket` and a
+ * Jira key at the start of the sentence stay in the prompt rather than becoming part of the
+ * question. Only reached when neither the `question:` nor the `--` form matched.
+ */
+function findInformalQuestionMatch(
+  prompt: string,
+  urlSpans: Array<[number, number]>,
+): { question: string; start: number; end: number } | null {
+  let masked = '';
+  let last = 0;
+  for (const [s, e] of urlSpans) {
+    masked += prompt.slice(last, s) + '\n'.repeat(e - s);
+    last = e;
+  }
+  masked += prompt.slice(last);
+
+  let found: { question: string; start: number; end: number } | null = null;
+  for (const m of masked.matchAll(/[^.!?\n]*\?/g)) {
+    if (m.index === undefined) continue;
+    let start = m.index;
+    const end = m.index + m[0].length;
+    for (;;) {
+      const rest = prompt.slice(start, end);
+      const lead = /^\s+/.exec(rest) ?? MODE_LEAD_WORD.exec(rest) ?? NO_TICKET_LEAD.exec(rest) ?? TICKET_KEY_LEAD.exec(rest);
+      if (!lead || lead[0].length === 0) break;
+      start += lead[0].length;
+    }
+    const question = prompt.slice(start, end).trim();
+    if (question.split(/\s+/).length >= MIN_INFORMAL_QUESTION_WORDS) found = { question, start, end };
+  }
+  return found;
+}
+
+/**
+ * What a new-review prompt asks for, beyond the PR URL. Extraction runs in a fixed order so a key,
+ * `no ticket` or mode word inside the question or URL never acts: the upfront question first, then
+ * PR URLs, then `no ticket`, then the first Jira key in what remains. `remainder` is what mode
+ * detection should read. `no ticket` wins over a key.
+ */
+export interface PromptDirectives {
+  question: string | undefined;
+  ticketKey: string | undefined;
+  skipTicket: boolean;
+  remainder: string;
+}
+
+export function extractPromptDirectives(prompt: string): PromptDirectives {
+  const match = findUpfrontQuestionMatch(prompt);
+  let text = match ? `${prompt.slice(0, match.start)} ${prompt.slice(match.end)}` : prompt;
+  text = text.replace(/https?:\/\/\S+/g, ' ');
+
+  const noTicket = /(?<![A-Za-z0-9])no\s+ticket(?![A-Za-z0-9])/i;
+  const skipTicket = noTicket.test(text);
+  text = text.replace(noTicket, ' ');
+
+  const keyMatch = TICKET_KEY_ANYWHERE.exec(text);
+  if (keyMatch) text = text.replace(keyMatch[0], ' ');
+
+  return {
+    question: match?.question,
+    ticketKey: skipTicket ? undefined : keyMatch?.[0],
+    skipTicket,
+    remainder: text.replace(/\s+/g, ' ').trim(),
+  };
 }
 
 export function parseUpfrontQuestion(prompt: string): string | undefined {
