@@ -83,11 +83,19 @@ Questions without a `#N` reference automatically answer at the PR level using th
 
 To see what each answer cost in tokens, turn on `ticketSidekick.bitbucket.showTokenUsage` — see [Token usage](#token-usage).
 
-To exit the review session, reply `c` or `cancel`:
+To leave the review session, click the **Done** chip under any response, or reply `done`, `c` or `cancel`:
 
 ```text
-c
+done
 ```
+
+The session also ends on its own when you move on:
+
+- A message with a PR URL always starts a fresh review, whatever mode word or question comes with it.
+- `/review` or a bare `quick`, `smart` or `deep` without a PR URL ends the session and shows the usual "point me at a PR" help instead of being answered as a question about the old review.
+- Any `@jira` request ends it, so a later `@bitbucket` message is not answered as a follow-up to the old review.
+
+`@bitbucket check` and `@bitbucket usage` do not end it: you can run either in the middle of a review and keep asking follow-up questions.
 
 Share the review in a Microsoft Teams chat (or anywhere else) — click the **Copy for Teams** chip after a review, or type:
 
@@ -114,7 +122,7 @@ The `#N` references can appear anywhere in the message, but `add`/`post` must co
 - `📌 Inline comment on line 42 of src/auth.ts` — the comment will be anchored to that diff line
 - `⚠️ Line 42 could not be located in the diff — will fall back to activity feed comment` — the line was reported by the AI but isn't in the diff; you can cancel and investigate, or confirm to post as a general comment
 
-Reply **`"post it"`** to post, **`(c)`** to cancel, or give a refinement instruction to adjust the comment text before posting. For example:
+Click **Post it** (or reply `"post it"`) to post, click **Cancel** (or reply `(c)`) to drop the preview and stay in the review session, or give a refinement instruction to adjust the comment text before posting. For example:
 
 ```text
 make it more concise
