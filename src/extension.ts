@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import { ConfigService } from './services/ConfigService';
 import { createJiraParticipant } from './participant/JiraParticipant';
 import { createBitbucketParticipant } from './participant/BitbucketParticipant';
+import { endBitbucketSessions } from './participant/reviewSessionState';
 import { JiraApiClient } from './jira/JiraApiClient';
 import { parseVeracodeReport, filterFlaws } from './utils/veracodeReport';
 import { buildVeracodeTemplateSession, getVeracodeMaxReportBytes } from './participant/jira/veracodeHandler';
@@ -350,7 +351,8 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  createJiraParticipant(context, configService);
+  // A Jira request moves the user on from a Bitbucket review, so it ends that review's session.
+  createJiraParticipant(context, configService, () => endBitbucketSessions(context.workspaceState));
   createBitbucketParticipant(context, configService);
   registerJiraTools(context, configService);
   registerBitbucketTools(context, configService);

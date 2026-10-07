@@ -766,6 +766,9 @@ async function continueMultiTicketTransition(
 export function createJiraParticipant(
   context: vscode.ExtensionContext,
   configService: ConfigService,
+  /** Runs first on every `@jira` request — `extension.ts` uses it to end the other participant's
+   * sessions without this file importing it. A throw is logged and the request carries on. */
+  onRequest?: () => PromiseLike<void> | void,
 ): vscode.ChatParticipant {
   // U5/R6: the handler returns `{ metadata: { jiraFollowup } }` from a major response so
   // `participant.followupProvider` below can compute the right suggestion chips for it without
@@ -779,6 +782,11 @@ export function createJiraParticipant(
     stream: vscode.ChatResponseStream,
     token: vscode.CancellationToken,
   ): Promise<vscode.ChatResult | void> => {
+    try {
+      await onRequest?.();
+    } catch (err) {
+      logDiag('jira.participant', 'warn', 'onRequest hook failed', { error: err instanceof Error ? err.message : String(err) });
+    }
     const config = await configService.getConfig();
 
     if (!configService.isConfigured(config)) {
