@@ -899,6 +899,8 @@ function parseGoalStatement(message: string): FollowUpIntent | undefined {
   const sentence = /^(?:(?:actually|no|well)[\s,]+)?the\s+(?:(?:real|actual|true)\s+)?goal\s+(?:is|was|should\s+be)\b[\s:,-]*(?:actually\b[\s:,-]*)?([\s\S]*)$/i.exec(text);
   const label = /^goal\s*:\s*([\s\S]*)$/i.exec(text);
   const goal = (sentence ?? label)?.[1];
+  // A trailing `?` makes it a question about the goal, not a correction of it.
+  if (goal !== undefined && /\?\s*$/.test(goal)) return undefined;
   return goal === undefined ? undefined : { kind: 'goal', goal: goal.trim() };
 }
 

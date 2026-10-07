@@ -3311,6 +3311,10 @@ describe('parseFollowUpIntent: stating the real goal', () => {
     expect(parseFollowUpIntent('goal: keep the UI unchanged', withRequirements)).toEqual({ kind: 'goal', goal: 'keep the UI unchanged' });
   });
 
+  it('treats a question that mentions the goal as a question, not a correction', () => {
+    expect(parseFollowUpIntent('The goal is to fix retries, does finding #2 matter?', withRequirements).kind).not.toBe('goal');
+  });
+
   it('keeps a message that merely mentions the goal as a question', () => {
     expect(parseFollowUpIntent('what is the goal of this PR?', withRequirements)).toMatchObject({ kind: 'explain' });
     expect(parseFollowUpIntent('does #2 serve the goal is it?', withRequirements)).toMatchObject({ kind: 'explain' });

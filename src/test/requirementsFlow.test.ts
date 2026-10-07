@@ -5,7 +5,7 @@ import {
   buildTicketHintLine,
   buildTicketFailureLine,
 } from '../participant/bitbucket/requirementsFlow';
-import { buildSmartRerunCommand } from '../participant/reviewSessionState';
+import { buildSmartRerunCommand, extractPromptDirectives } from '../participant/reviewSessionState';
 
 const base = { explicitKey: undefined, skipTicket: false, titleKey: undefined, jiraConfigured: true } as const;
 
@@ -55,6 +55,19 @@ describe('ticket lines and commands', () => {
       .map((m) => (JSON.parse(decodeURIComponent(m[1])) as { query: string }).query);
     expect(queries).toEqual([`@bitbucket review smart ${URL} PROJ-123`, `@bitbucket review smart ${URL} no ticket`]);
     expect(pause).toContain('PROJ-123');
+  });
+
+  it.each([
+    ['a `--` question', `review smart ${URL} -- does this handle retries?`],
+    ['a `question:` question', `review smart ${URL} question: does this handle retries?`],
+    ['an informal question', `review smart ${URL} does this handle the retry case?`],
+  ])('pause links still take effect when the prompt has %s', (_label, prompt) => {
+    const pause = buildTicketPause('PROJ-123', prompt);
+    const [use, skip] = [...pause.matchAll(/command:workbench\.action\.chat\.open\?([^)]+)\)/g)]
+      .map((m) => (JSON.parse(decodeURIComponent(m[1])) as { query: string }).query.replace(/^@bitbucket /, ''));
+    expect(extractPromptDirectives(use).ticketKey).toBe('PROJ-123');
+    expect(extractPromptDirectives(skip).skipTicket).toBe(true);
+    expect(extractPromptDirectives(use).question).toBe(extractPromptDirectives(prompt).question);
   });
 
   it('shows the exact smart re-run command in the hint', () => {

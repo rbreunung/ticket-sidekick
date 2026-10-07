@@ -1402,16 +1402,29 @@ export function createBitbucketParticipant(
           return;
         case 'run': {
           if (!configService.isConfigured(jiraConfig)) break;
-          const ticketService = new TicketService(
-            new JiraApiClient({
-              baseUrl: jiraConfig.baseUrl,
-              authType: jiraConfig.authType,
-              token: jiraConfig.token,
-              onDiag: (level, message, details) => logDiag('jira.apiClient', level, message, details),
-            }),
-            (level, message, details) => logDiag('jira.ticketService', level, message, details),
-          );
-          const read = await ticketService.getRequirementsSource(ticketStep.key);
+          type TicketRead = Awaited<ReturnType<TicketService['getRequirementsSource']>>;
+          let read: TicketRead;
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            const ticketService = new TicketService(
+              new JiraApiClient({
+                baseUrl: jiraConfig.baseUrl,
+                authType: jiraConfig.authType,
+                token: jiraConfig.token,
+                onDiag: (level, message, details) => logDiag('jira.apiClient', level, message, details),
+              }),
+              (level, message, details) => logDiag('jira.ticketService', level, message, details),
+            );
+            const timeout = new Promise<TicketRead>((resolve) => {
+              timer = setTimeout(() => resolve({ ok: false, reason: 'error', message: 'timed out' }), 20000);
+            });
+            read = await Promise.race([ticketService.getRequirementsSource(ticketStep.key), timeout]);
+          } catch (err) {
+            logReview('warn', 'Ticket read threw — continuing without a ticket', { runTag, ...describeErrorForLog(err) });
+            read = { ok: false, reason: 'error', message: 'unexpected error' };
+          } finally {
+            if (timer) clearTimeout(timer);
+          }
           if (read.ok) {
             requirementsTicket = { ticketKey: ticketStep.key, source: read.source };
             stream.markdown(`_Using ticket ${ticketStep.key} to check requirements._\n\n`);

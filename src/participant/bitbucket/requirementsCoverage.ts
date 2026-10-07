@@ -148,7 +148,8 @@ function unseenLine(count: number): string {
 /** The "Requirements coverage" block for the chat response. Every ticket- or model-derived string is
  * neutralized, and table cells are kept on one line without pipes. */
 export function renderCoverageMarkdown(coverage: RequirementsCoverage): string {
-  const safe = (value: string): string => neutralizeMarkdownLinks(oneLine(value));
+  const safe = (value: string): string =>
+    neutralizeMarkdownLinks(oneLine(value)).replace(/\\/g, '\\\\').replace(/</g, '\\<');
   const cell = (value: string): string => sanitizeGfmCellText(safe(value));
   const lines: string[] = [`### Requirements coverage — ${safe(coverage.ticketKey)}`, ''];
 
@@ -170,7 +171,7 @@ export function renderCoverageMarkdown(coverage: RequirementsCoverage): string {
 
   if (coverage.outOfScope.length > 0) {
     lines.push('**Not accounted for by the ticket**', '');
-    for (const o of coverage.outOfScope) lines.push(`- \`${safe(o.file)}\`${o.note ? ` — ${safe(o.note)}` : ''}`);
+    for (const o of coverage.outOfScope) lines.push(`- \`${oneLine(o.file).replace(/`/g, "'")}\`${o.note ? ` — ${safe(o.note)}` : ''}`);
     lines.push('');
   }
 

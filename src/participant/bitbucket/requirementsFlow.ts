@@ -50,11 +50,19 @@ export function decideTicketStep(input: TicketStepInput): TicketStep {
   return { kind: 'no-key' };
 }
 
+/** Puts the directive right after the PR URL (before any trailing `--`/`question:` text, which would swallow it). */
+function withDirective(prompt: string, directive: string): string {
+  const url = /https?:\/\/\S+/.exec(prompt);
+  if (!url) return `${directive} ${prompt}`;
+  const end = url.index + url[0].length;
+  return `${prompt.slice(0, end)} ${directive}${prompt.slice(end)}`;
+}
+
 /** The pause: two clickable commands, each a complete re-run of this review (nothing is stored between turns). */
 export function buildTicketPause(key: string, originalPrompt: string): string {
   const prompt = originalPrompt.trim();
-  const use = buildChatCommandLink(`Use ${key}`, '@bitbucket', `${prompt} ${key}`);
-  const skip = buildChatCommandLink('Skip', '@bitbucket', `${prompt} no ticket`);
+  const use = buildChatCommandLink(`Use ${key}`, '@bitbucket', withDirective(prompt, key));
+  const skip = buildChatCommandLink('Skip', '@bitbucket', withDirective(prompt, 'no ticket'));
   return (
     `Found **${key}** in the PR title. Check this PR against that ticket?\n\n` +
     `${use} · ${skip}\n\n` +

@@ -79,6 +79,14 @@ describe('renderCoverageMarkdown', () => {
     expect(md).toContain('src/ui/Checkout.ts');
   });
 
+  it('defuses angle-bracket command autolinks from ticket-derived text', () => {
+    const cov = coverageOf('bug-comment-fix');
+    cov.reading = 'See <command:workbench.action.chat.open?%7B%7D> now';
+    const md = renderCoverageMarkdown(cov);
+    expect(md).not.toMatch(/(^|[^\\])<command:/);
+    expect(md).toContain('\\<command:');
+  });
+
   it('says no clear requirements were found, with no table and no out-of-scope list (AE4)', () => {
     const md = renderCoverageMarkdown(coverageOf('empty'));
     expect(md).toContain('No clear requirements found');
