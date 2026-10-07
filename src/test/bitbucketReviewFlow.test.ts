@@ -1434,3 +1434,45 @@ describe('correcting the requirements reading, and sharing it (U5)', () => {
     expect(result).toMatchObject({ metadata: { bitbucketSession: { kinds: ['review-session'] } } });
   });
 });
+
+describe('finding the options without remembering them (U6)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const OPTIONS = ['smart', 'deep', 'PROJ-123', 'no ticket'];
+
+  it('lists the options in the greeting', async () => {
+    const harness = createHarness();
+    const { text } = await harness.turn('hello', []);
+    for (const option of OPTIONS) expect(text).toContain(option);
+    expect(text).toMatch(/\?/);
+  });
+
+  it('lists the options, with examples, when a review starts without a URL', async () => {
+    const harness = createHarness();
+    const { text } = await harness.turn('smart', []);
+    expect(text).toContain('Point me at a PR to review');
+    for (const option of OPTIONS) expect(text).toContain(option);
+    expect(text).toContain('question:');
+  });
+
+  // AE2
+  it('adds a chip with the exact smart command after a standard review of a PR that names a ticket', async () => {
+    const harness = createHarness({}, { jira: true });
+    harness.client.prOverride = { title: 'REQ-2 fix double charge' };
+    const { result, text } = await harness.turn(PR_URL, [[findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'SQL injection', 'critical'), META_LINE].join('\n')]);
+
+    const prompts = harness.chips(result).map((c) => c.prompt);
+    expect(prompts).toContain(`review smart ${PR_URL} REQ-2`);
+    expect(prompts).not.toContain('explain finding #1');
+    expect(prompts.filter((p) => p !== 'done')).toHaveLength(3);
+    expect(text).toContain(`review smart ${PR_URL} REQ-2`);
+  });
+
+  it('adds no ticket chip when the title has no key', async () => {
+    const harness = createHarness({}, { jira: true });
+    const { result } = await harness.turn(PR_URL, [[findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'SQL injection', 'critical'), META_LINE].join('\n')]);
+    expect(harness.chips(result).map((c) => c.prompt)).toContain('explain finding #1');
+    expect(harness.chips(result).some((c) => c.prompt.startsWith('review smart'))).toBe(false);
+  });
+});

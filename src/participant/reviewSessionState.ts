@@ -430,6 +430,11 @@ export function buildPostCommentConfirmation(project: string, repo: string, prId
   };
 }
 
+/** The exact command that re-runs a PR review as smart with a ticket — what the hint line and its chip show. */
+export function buildSmartRerunCommand(prUrl: string, key: string): string {
+  return `review smart ${prUrl} ${key}`;
+}
+
 export function parsePrUrl(url: string): ParsedPrUrl | null {
   try {
     const u = new URL(url);
@@ -1940,7 +1945,7 @@ export interface BitbucketFollowupSuggestion {
  * for the response that was just streamed, without re-deriving state from response text. */
 export type BitbucketFollowupState =
   | { kind: 'greeting' }
-  | { kind: 'reviewCompleted'; findingCount: number }
+  | { kind: 'reviewCompleted'; findingCount: number; ticketHint?: { key: string; prUrl: string } }
   | { kind: 'none' };
 
 /**
@@ -2053,14 +2058,20 @@ function actionChips(state: BitbucketFollowupState): BitbucketFollowupSuggestion
     case 'reviewCompleted': {
       // KTD7: sharing works for every review — "No issues found" is worth sharing too.
       const copyChip = { prompt: 'copy for teams', label: 'Copy for Teams' };
+      // A quick or standard review of a PR that names a Jira ticket: one click re-runs it as smart with the ticket.
+      const ticketChip = state.ticketHint
+        ? { prompt: buildSmartRerunCommand(state.ticketHint.prUrl, state.ticketHint.key), label: `Check against ${state.ticketHint.key}` }
+        : undefined;
       if (state.findingCount === 0) {
         // R10: no one-click "ask a question" follow-up — a real Q&A flow needs its own
         // review, and asking a question is relevant mid-review, not as a post-review chip.
-        return [copyChip];
+        return ticketChip ? [ticketChip, copyChip] : [copyChip];
       }
+      // The ticket chip takes the place of "Explain finding #1" (typing #1 does the same) to keep three chips.
       return [
+        ...(ticketChip ? [ticketChip] : []),
         { prompt: 'add all findings to review', label: 'Add findings to review' },
-        { prompt: 'explain finding #1', label: 'Explain finding #1' },
+        ...(ticketChip ? [] : [{ prompt: 'explain finding #1', label: 'Explain finding #1' }]),
         copyChip,
       ].slice(0, BITBUCKET_MAX_FOLLOWUPS);
     }

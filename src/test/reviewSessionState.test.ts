@@ -637,3 +637,24 @@ describe('formatReviewForSharing with a requirements coverage section', () => {
     expect(base.text).not.toContain('Requirements coverage');
   });
 });
+
+describe('computeBitbucketFollowups with a ticket hint', () => {
+  const PR = 'https://bb.example.com/projects/PROJ/repos/app/pull-requests/42';
+  const hint = { key: 'PROJ-123', prUrl: PR };
+
+  it('offers the exact smart re-run command and drops "Explain finding #1" so the cap of three holds', () => {
+    const chips = computeBitbucketFollowups({ kind: 'reviewCompleted', findingCount: 3, ticketHint: hint });
+    expect(chips.map((c) => c.prompt)).toEqual([`review smart ${PR} PROJ-123`, 'add all findings to review', 'copy for teams']);
+    expect(chips[0].label).toContain('PROJ-123');
+  });
+
+  it('puts the re-run chip beside Copy when the review found nothing', () => {
+    const chips = computeBitbucketFollowups({ kind: 'reviewCompleted', findingCount: 0, ticketHint: hint });
+    expect(chips.map((c) => c.prompt)).toEqual([`review smart ${PR} PROJ-123`, 'copy for teams']);
+  });
+
+  it('leaves the usual three chips alone without a hint', () => {
+    const chips = computeBitbucketFollowups({ kind: 'reviewCompleted', findingCount: 3 });
+    expect(chips.map((c) => c.prompt)).toEqual(['add all findings to review', 'explain finding #1', 'copy for teams']);
+  });
+});

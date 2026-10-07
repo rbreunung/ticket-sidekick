@@ -1,6 +1,8 @@
 import type { ReviewMode } from '../../bitbucket/IBitbucketClient';
 import type { RequirementsSourceResult } from '../../services/TicketService';
-import { buildChatCommandLink } from '../reviewSessionState';
+import { buildChatCommandLink, buildSmartRerunCommand } from '../reviewSessionState';
+
+export { buildSmartRerunCommand };
 
 // Pure and `vscode`-free: the decision about what a review does with a Jira ticket, and the lines
 // and commands that go with each outcome. The participant file only executes the outcome.
@@ -60,11 +62,6 @@ export function buildTicketPause(key: string, originalPrompt: string): string {
     `${use} · ${skip}\n\n` +
     `_To use a different ticket, put its key in the command._`
   );
-}
-
-/** The exact command that re-runs a PR review as smart with a ticket — what the hint and its chip show. */
-export function buildSmartRerunCommand(prUrl: string, key: string): string {
-  return `review smart ${prUrl} ${key}`;
 }
 
 export function buildTicketHintLine(key: string, prUrl: string): string {

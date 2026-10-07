@@ -831,8 +831,8 @@ export function createBitbucketParticipant(
       requirements?: { ticketKey: string; source: RequirementsSource };
       /** Files already fetched in this review, so the requirements pass never re-fetches one. */
       fetchedFileCache?: Map<string, string>;
-      /** One line shown after the review when a ticket was spotted but not used (quick and standard). */
-      ticketHintLine?: string;
+      /** A ticket spotted in the title but not used (quick and standard): a line after the review and a chip. */
+      ticketHint?: { key: string; prUrl: string };
     }): Promise<vscode.ChatResult> => {
       const { pr, ref, runTag, service, logReview, allFindings, fileDiffs, batchCount, tally, tokenBudget, upfrontQuestion } = params;
       // Collapse the same issue surfacing in multiple batches before numbering.
@@ -884,7 +884,7 @@ export function createBitbucketParticipant(
       const droppedNotice = formatDroppedFindingsNotice({ outsidePr: tally.droppedOutsidePr, critic: tally.droppedByCritic ?? 0 });
       if (droppedNotice) stream.markdown(`${droppedNotice}\n\n`);
       stream.markdown(trustedChatMarkdown(composeReviewOutput(reviewResult)));
-      if (params.ticketHintLine) stream.markdown(`\n\n${params.ticketHintLine}`);
+      if (params.ticketHint) stream.markdown(`\n\n${buildTicketHintLine(params.ticketHint.key, params.ticketHint.prUrl)}`);
       appendTokenFooter(tokenBudget);
 
       const storedDiff = buildStoredReviewDiff(fileDiffs, numbered, tokenBudget * 4);
@@ -911,7 +911,9 @@ export function createBitbucketParticipant(
       // this context key — set only at a real review completion, never on an aborted run.
       await vscode.commands.executeCommand('setContext', 'ticketSidekick.firstReviewCompleted', true);
       // R6: "after a PR review: add findings to review, ask about a finding" — the follow-up chips.
-      const reviewState: BitbucketFollowupState = { kind: 'reviewCompleted', findingCount: numbered.length };
+      const reviewState: BitbucketFollowupState = {
+        kind: 'reviewCompleted', findingCount: numbered.length, ...(params.ticketHint ? { ticketHint: params.ticketHint } : {}),
+      };
       // bitbucketSession makes this review the active ReviewSession on the next turn.
       return { metadata: { bitbucketFollowup: reviewState, bitbucketSession: { kinds: ['review-session'] } } };
     };
@@ -1236,8 +1238,10 @@ export function createBitbucketParticipant(
       if (isGreetingOrEmpty(prompt)) {
         stream.markdown(
           '**@bitbucket** reviews Bitbucket pull requests — paste a PR URL to get started ' +
-          '(`@bitbucket https://bitbucket.company.com/projects/PROJ/repos/myrepo/pull-requests/42`), ' +
-          'or try the suggestion below.',
+          '(`@bitbucket https://bitbucket.company.com/projects/PROJ/repos/myrepo/pull-requests/42`). ' +
+          'Add `smart` or `deep` for a deeper review, a Jira key such as `PROJ-123` to check the PR against its ticket ' +
+          '(or `no ticket` to skip it), or a question as a plain sentence, for example `does this handle retries?`. ' +
+          'Or try the suggestion below.',
         );
         const greetingState: BitbucketFollowupState = { kind: 'greeting' };
         return { metadata: { bitbucketFollowup: greetingState } };
@@ -1245,7 +1249,10 @@ export function createBitbucketParticipant(
       stream.markdown(
         'Point me at a PR to review — paste the URL right after `@bitbucket`:\n\n' +
         '`@bitbucket https://bitbucket.company.com/projects/PROJ/repos/myrepo/pull-requests/42`\n\n' +
-        'Optionally add a focus question: `@bitbucket <url> -- Did I introduce any regression?`\n\n' +
+        'You can add, in any order:\n' +
+        '- `smart` or `deep` for a deeper review (`quick` for a lighter one)\n' +
+        '- a Jira key such as `PROJ-123` to check the PR against its ticket in smart and deep (`no ticket` skips it)\n' +
+        '- a question as a plain sentence, for example `does this handle retries?` (`question: …` and `-- …` also work)\n\n' +
         'Not sure what to do? Type `@bitbucket help`.',
       );
       return;
@@ -1389,7 +1396,7 @@ export function createBitbucketParticipant(
       });
       logReview('info', `Ticket step — ${ticketStep.kind}`, { runTag, step: ticketStep.kind, ...('key' in ticketStep ? { key: ticketStep.key } : {}) });
       let requirementsTicket: { ticketKey: string; source: RequirementsSource } | undefined;
-      let ticketHintLine: string | undefined;
+      let ticketHint: { key: string; prUrl: string } | undefined;
       switch (ticketStep.kind) {
         case 'ask':
           stream.markdown(trustedChatMarkdown(buildTicketPause(ticketStep.key, prompt)));
@@ -1415,7 +1422,7 @@ export function createBitbucketParticipant(
           break;
         }
         case 'hint':
-          ticketHintLine = buildTicketHintLine(ticketStep.key, prUrlMatch[0]);
+          ticketHint = { key: ticketStep.key, prUrl: prUrlMatch[0] };
           break;
         case 'ignored-explicit':
           stream.markdown(`${buildIgnoredTicketLine(ticketStep.key)}\n\n`);
@@ -1988,7 +1995,7 @@ export function createBitbucketParticipant(
         },
         tokenBudget, upfrontQuestion,
         ...(requirementsTicket ? { requirements: requirementsTicket, fetchedFileCache } : {}),
-        ...(ticketHintLine ? { ticketHintLine } : {}),
+        ...(ticketHint ? { ticketHint } : {}),
         ...(detailedDiagnostics ? { structuredRecord: { configLine, lines: recordedLines } } : {}),
       });
     } catch (err) {
