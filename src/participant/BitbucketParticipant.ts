@@ -60,7 +60,7 @@ import {
   type ReviewPass,
   type ReviewTally,
 } from './reviewSessionState';
-import { isConfirmation, isCancellation, isGreetingOrEmpty } from './sessionState';
+import { isConfirmation, isGreetingOrEmpty } from './sessionState';
 import { generateContent } from './jira/llmHelpers';
 import { createTokenMeter } from './bitbucket/tokenMeter';
 import { TokenUsageService, formatTokenFooter, formatUsageTable } from '../utils/tokenUsage';
@@ -886,7 +886,7 @@ export function createBitbucketParticipant(
     if (!hasPrUrl(prompt) && activeSession?.kinds.includes('comment-preview')) {
       const previewSession = ws.get<BitbucketCommentPreviewSession>('bitbucket.session.commentPreview');
       if (previewSession) {
-        if (isCancellation(prompt)) {
+        if (isEndSessionRequest(prompt)) {
           await ws.update('bitbucket.session.commentPreview', undefined);
           stream.markdown(`_Cancelled._`);
           return { metadata: { bitbucketSession: { kinds: ['review-session'] } } };
@@ -918,7 +918,7 @@ export function createBitbucketParticipant(
     if (!hasPrUrl(prompt) && activeSession?.kinds.includes('smart-fallback-session')) {
       const fallbackSession = ws.get<SmartFallbackSession>('bitbucket.session.smartFallback');
       if (fallbackSession) {
-        if (isCancellation(prompt)) {
+        if (isEndSessionRequest(prompt)) {
           await ws.update('bitbucket.session.smartFallback', undefined);
           stream.markdown('_Fallback question cancelled — the review stops here._');
           return;
@@ -1102,6 +1102,9 @@ export function createBitbucketParticipant(
       stream.markdown(`Could not parse PR URL: \`${prUrlMatch[0]}\``);
       return;
     }
+    // A PR URL starts a fresh review, so a stored preview or fallback question from an earlier
+    // one must not outlive it.
+    await endBitbucketSessions(ws);
     // Two @bitbucket reviews can run concurrently in one VS Code window, sharing one
     // output channel — every diagnostic line for this run carries this tag (KTD1).
     const runTag = buildRunTag(parsed.project, parsed.repo, parsed.prId);

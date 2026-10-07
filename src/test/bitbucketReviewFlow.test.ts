@@ -969,6 +969,40 @@ describe('leaving a review session', () => {
     expect(harness.chips(result)).toEqual([{ prompt: 'cancel', label: 'Cancel' }]);
   });
 
+  // R1
+  it('treats a typed done under a comment preview like Cancel, and under the fallback question as the end', async () => {
+    const harness = createHarness();
+    const first = await harness.turn(PR_URL, [reviewReply]);
+    const preview = await harness.turn('add #1 to review', [], [sessionTurn(first.result)]);
+    const calls = harness.prompts.length;
+
+    const doneUnderPreview = await harness.turn('done', [], [sessionTurn(preview.result)]);
+
+    expect(doneUnderPreview.text).toContain('Cancelled');
+    expect(harness.prompts).toHaveLength(calls);
+    expect(harness.workspaceState.get('bitbucket.session.commentPreview')).toBeUndefined();
+    expect(harness.workspaceState.get('bitbucket.session.review')).toBeDefined();
+
+    harness.workspaceState.set('bitbucket.session.smartFallback', { prUrl: PR_URL });
+    const fallbackTurn = sessionTurn({ metadata: { bitbucketSession: { kinds: ['smart-fallback-session'] } } });
+    const doneUnderFallback = await harness.turn('done', [], [fallbackTurn]);
+
+    expect(doneUnderFallback.text).toContain('Fallback question cancelled');
+    expect(harness.workspaceState.get('bitbucket.session.smartFallback')).toBeUndefined();
+  });
+
+  // R5
+  it('drops a stored preview from an earlier review when a new PR URL arrives', async () => {
+    const harness = createHarness();
+    const first = await harness.turn(PR_URL, [reviewReply]);
+    await harness.turn('add #1 to review', [], [sessionTurn(first.result)]);
+    expect(harness.workspaceState.get('bitbucket.session.commentPreview')).toBeDefined();
+
+    await harness.turn(PR_URL, [reviewReply]);
+
+    expect(harness.workspaceState.get('bitbucket.session.commentPreview')).toBeUndefined();
+  });
+
   // AE3 / R5
   it('starts a fresh review when a PR URL arrives, whatever the mode word or question', async () => {
     const harness = createHarness();

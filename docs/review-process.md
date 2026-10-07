@@ -523,7 +523,9 @@ session forward. Cancel inside a comment preview drops only the preview and
 returns the review-session marker, so its response shows Done.
 
 A session also ends when the user moves on. A message with a PR URL skips
-every session branch (`hasPrUrl`). `/review` without a URL, or a message
+every session branch (`hasPrUrl`) and clears any stored preview or fallback
+question from an earlier review. A typed `done` under a comment preview acts
+like Cancel; under the smart-fallback question it ends that question. `/review` without a URL, or a message
 that is only `quick`, `smart` or `deep` (`isReviewStartWithoutUrl`,
 whole-message only so "is this quick to fix?" stays a follow-up), ends the
 session and falls through to the usual no-URL response. Any `@jira` request
