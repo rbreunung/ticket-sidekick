@@ -6,6 +6,10 @@ import {
   neutralizeMarkdownLinks,
   composeReviewOutput,
   computeBitbucketFollowups,
+  isEndSessionRequest,
+  isReviewStartWithoutUrl,
+  endBitbucketSessions,
+  BITBUCKET_SESSION_KEYS,
   parseSmartFallbackReply,
   ALL_PERSONA_IDS,
   formatReviewForSharing,
@@ -165,6 +169,96 @@ describe('computeBitbucketFollowups', () => {
 
   it('returns no chips when there is no prior operation state', () => {
     expect(computeBitbucketFollowups({ kind: 'none' })).toEqual([]);
+  });
+});
+
+describe('end-session chips (Done / Post it / Cancel)', () => {
+  const done = { prompt: 'done', label: 'Done' };
+
+  it('appends Done after the three action chips of a finished review', () => {
+    const chips = computeBitbucketFollowups({ kind: 'reviewCompleted', findingCount: 3 }, ['review-session']);
+
+    expect(chips.map((c) => c.label)).toEqual(['Add findings to review', 'Explain finding #1', 'Copy for Teams', 'Done']);
+    expect(chips[3]).toEqual(done);
+  });
+
+  it('offers Copy for Teams then Done after a review with no findings', () => {
+    const chips = computeBitbucketFollowups({ kind: 'reviewCompleted', findingCount: 0 }, ['review-session']);
+
+    expect(chips).toEqual([{ prompt: 'copy for teams', label: 'Copy for Teams' }, done]);
+  });
+
+  it('offers only Done for a follow-up answer that carries no action state', () => {
+    expect(computeBitbucketFollowups({ kind: 'none' }, ['review-session'])).toEqual([done]);
+  });
+
+  it('offers Post it and Cancel for a comment preview', () => {
+    expect(computeBitbucketFollowups({ kind: 'none' }, ['comment-preview'])).toEqual([
+      { prompt: 'post it', label: 'Post it' },
+      { prompt: 'cancel', label: 'Cancel' },
+    ]);
+  });
+
+  it('offers Cancel for the smart-fallback question', () => {
+    expect(computeBitbucketFollowups({ kind: 'none' }, ['smart-fallback-session'])).toEqual([
+      { prompt: 'cancel', label: 'Cancel' },
+    ]);
+  });
+
+  it('offers no chips without a state and without a session', () => {
+    expect(computeBitbucketFollowups({ kind: 'none' }, [])).toEqual([]);
+    expect(computeBitbucketFollowups({ kind: 'none' }, undefined)).toEqual([]);
+  });
+});
+
+describe('isEndSessionRequest', () => {
+  it('accepts done in any case and the existing cancel words', () => {
+    for (const word of ['done', 'Done', ' DONE ', 'cancel', 'c', 'stop']) {
+      expect(isEndSessionRequest(word)).toBe(true);
+    }
+  });
+
+  it('does not treat a question that mentions done as an end request', () => {
+    expect(isEndSessionRequest('done with the security findings?')).toBe(false);
+    expect(isEndSessionRequest('explain #2')).toBe(false);
+  });
+});
+
+describe('isReviewStartWithoutUrl', () => {
+  it('is true for the review command with no URL and for a bare mode word', () => {
+    expect(isReviewStartWithoutUrl('', 'review')).toBe(true);
+    expect(isReviewStartWithoutUrl('focus on security', 'review')).toBe(true);
+    for (const word of ['smart', 'Quick', ' deep ']) {
+      expect(isReviewStartWithoutUrl(word, undefined)).toBe(true);
+    }
+  });
+
+  it('is false for a question that merely contains a mode word', () => {
+    expect(isReviewStartWithoutUrl('is this quick to fix?', undefined)).toBe(false);
+    expect(isReviewStartWithoutUrl('explain #2', undefined)).toBe(false);
+  });
+
+  it('is false when a PR URL is present or nothing was asked', () => {
+    const url = 'https://bb.example.com/projects/P/repos/r/pull-requests/1';
+    expect(isReviewStartWithoutUrl(`smart ${url}`, undefined)).toBe(false);
+    expect(isReviewStartWithoutUrl(url, 'review')).toBe(false);
+    expect(isReviewStartWithoutUrl('', undefined)).toBe(false);
+  });
+});
+
+describe('endBitbucketSessions', () => {
+  it('clears the three Bitbucket session keys and leaves other keys alone', async () => {
+    const store = new Map<string, unknown>([
+      ['bitbucket.session.review', { x: 1 }],
+      ['bitbucket.session.commentPreview', { x: 2 }],
+      ['bitbucket.session.smartFallback', { x: 3 }],
+      ['jira.session.creating', { keep: true }],
+    ]);
+
+    await endBitbucketSessions({ update: async (key, value) => { store.set(key, value); } });
+
+    for (const key of BITBUCKET_SESSION_KEYS) expect(store.get(key)).toBeUndefined();
+    expect(store.get('jira.session.creating')).toEqual({ keep: true });
   });
 });
 
