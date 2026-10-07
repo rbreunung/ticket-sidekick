@@ -1,0 +1,26 @@
+{
+  "id": "20100",
+  "key": "REQ-1",
+  "fields": {
+    "summary": "Retry failed payment captures",
+    "description": "h2. Goal\nFailed payment captures are retried automatically.\n\nh2. Acceptance criteria\n* Retry up to 3 times with exponential backoff\n* Each retry carries the same idempotency key\n* After the last failure the order is flagged for manual review\n",
+    "status": {
+      "name": "Open"
+    },
+    "issuetype": {
+      "name": "Story"
+    },
+    "assignee": null,
+    "reporter": {
+      "accountId": "rep1",
+      "displayName": "Rita Reporter",
+      "emailAddress": "rita@example.com"
+    },
+    "priority": {
+      "name": "Medium"
+    },
+    "labels": [],
+    "fixVersions": [],
+    "comment": null
+  }
+}

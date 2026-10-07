@@ -1,6 +1,8 @@
 import type { IJiraClient, JiraAttachment, JiraComment, JiraEditMetaField, JiraFieldMeta, JiraFilter, JiraIssue, JiraIssueLink, JiraIssueType, JiraMyFiltersResult, JiraRemoteLink, JiraSearchResult, JiraSprintCandidate } from '../jira/IJiraClient';
 import type { DiagLogger } from '../utils/diagTypes';
 import { formatJiraBody } from '../utils/markdownFormatter';
+import { ApiError } from '../utils/apiError';
+import { buildRequirementsSource, type RequirementsSource } from '../utils/requirementsSource';
 import { formatFileSize } from '../utils/attachmentEligibility';
 import { renderReviewTable, neutralizeMarkdownLinks, buildChatCommandLink, type ReviewTableColumn } from '../participant/sessionState';
 
@@ -349,6 +351,11 @@ const SUPPORTED_FIELDS: Record<string, string> = {
   fixversion: 'fixVersions',
 };
 
+/** Result of {@link TicketService.getRequirementsSource}. */
+export type RequirementsSourceResult =
+  | { ok: true; source: RequirementsSource }
+  | { ok: false; reason: 'not-found' | 'auth' | 'error'; message: string };
+
 export function extractTextFromAdf(node: unknown): string {
   if (typeof node === 'string') return node; // API v2 returns plain text, not ADF
   if (!node || typeof node !== 'object') return '';
@@ -642,6 +649,30 @@ export class TicketService {
 
   async getIssueComments(issueKey: string, maxResults = 20): Promise<{ comments: JiraComment[]; total: number }> {
     return this.client.getIssueComments(issueKey, maxResults);
+  }
+
+  /**
+   * What a review reads from a ticket: summary, description and comments, size-capped. Failures are
+   * classified by HTTP status, never by message text. A failed comment fetch still returns the
+   * ticket, flagged so the review can say its comments were not read.
+   */
+  async getRequirementsSource(issueKey: string): Promise<RequirementsSourceResult> {
+    let issue: JiraIssue;
+    try {
+      issue = await this.client.getIssue(issueKey);
+    } catch (err) {
+      const status = err instanceof ApiError ? err.status : undefined;
+      const reason = status === 404 ? 'not-found' : status === 401 || status === 403 ? 'auth' : 'error';
+      this.onDiag?.('warn', `Requirements source unavailable — ${issueKey}`, { issueKey, status, reason });
+      return { ok: false, reason, message: err instanceof Error ? err.message : String(err) };
+    }
+    try {
+      const comments = await this.client.getAllComments(issueKey);
+      return { ok: true, source: buildRequirementsSource(issue, comments) };
+    } catch (err) {
+      this.onDiag?.('warn', `Ticket comments unavailable — ${issueKey}`, { issueKey, error: err instanceof Error ? err.message : String(err) });
+      return { ok: true, source: buildRequirementsSource(issue, [], { commentsUnavailable: true }) };
+    }
   }
 
   async getOpenSubtasks(issueKey: string): Promise<Array<{ key: string; summary: string; currentStatus: string }>> {

@@ -26,6 +26,15 @@ function loadFixture<T>(filename: string): T {
   return JSON.parse(readFileSync(p, 'utf-8')) as T;
 }
 
+/** Tickets for the requirements pass: a clean spec, a bug whose fix is agreed in a comment, a
+ * contradictory thread, and an empty ticket. */
+const REQUIREMENTS_FIXTURES: Record<string, string> = {
+  'REQ-1': 'ticket-req-clean-spec.json',
+  'REQ-2': 'ticket-req-bug-comment-fix.json',
+  'REQ-3': 'ticket-req-contradictory.json',
+  'REQ-4': 'ticket-req-empty.json',
+};
+
 export class MockJiraClient implements IJiraClient {
   public updateIssueCalls: Array<{ issueKey: string; fields: Record<string, unknown> }> = [];
   public addCommentCalls: Array<{ issueKey: string; body: string }> = [];
@@ -36,6 +45,8 @@ export class MockJiraClient implements IJiraClient {
     if (issueKey === 'PROJ-404') {
       throw new Error('Not found: /issue/PROJ-404');
     }
+    const requirementsFixture = REQUIREMENTS_FIXTURES[issueKey];
+    if (requirementsFixture) return loadFixture<JiraIssue>(requirementsFixture);
     return loadFixture<JiraIssue>('ticket-PROJ-123.json');
   }
 
