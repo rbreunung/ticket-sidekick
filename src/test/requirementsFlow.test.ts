@@ -2,10 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   decideTicketStep,
   buildTicketPause,
-  buildSmartRerunCommand,
   buildTicketHintLine,
   buildTicketFailureLine,
 } from '../participant/bitbucket/requirementsFlow';
+import { buildSmartRerunCommand } from '../participant/reviewSessionState';
 
 const base = { explicitKey: undefined, skipTicket: false, titleKey: undefined, jiraConfigured: true } as const;
 

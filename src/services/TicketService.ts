@@ -657,22 +657,24 @@ export class TicketService {
    * ticket, flagged so the review can say its comments were not read.
    */
   async getRequirementsSource(issueKey: string): Promise<RequirementsSourceResult> {
-    let issue: JiraIssue;
-    try {
-      issue = await this.client.getIssue(issueKey);
-    } catch (err) {
+    // The two reads are independent, so they run together; a failed issue read decides the result.
+    const [issueRead, commentsRead] = await Promise.allSettled([
+      this.client.getIssue(issueKey),
+      this.client.getAllComments(issueKey),
+    ]);
+    if (issueRead.status === 'rejected') {
+      const err: unknown = issueRead.reason;
       const status = err instanceof ApiError ? err.status : undefined;
       const reason = status === 404 ? 'not-found' : status === 401 || status === 403 ? 'auth' : 'error';
       this.onDiag?.('warn', `Requirements source unavailable — ${issueKey}`, { issueKey, status, reason });
       return { ok: false, reason, message: err instanceof Error ? err.message : String(err) };
     }
-    try {
-      const comments = await this.client.getAllComments(issueKey);
-      return { ok: true, source: buildRequirementsSource(issue, comments) };
-    } catch (err) {
+    if (commentsRead.status === 'rejected') {
+      const err: unknown = commentsRead.reason;
       this.onDiag?.('warn', `Ticket comments unavailable — ${issueKey}`, { issueKey, error: err instanceof Error ? err.message : String(err) });
-      return { ok: true, source: buildRequirementsSource(issue, [], { commentsUnavailable: true }) };
+      return { ok: true, source: buildRequirementsSource(issueRead.value, [], { commentsUnavailable: true }) };
     }
+    return { ok: true, source: buildRequirementsSource(issueRead.value, commentsRead.value) };
   }
 
   async getOpenSubtasks(issueKey: string): Promise<Array<{ key: string; summary: string; currentStatus: string }>> {

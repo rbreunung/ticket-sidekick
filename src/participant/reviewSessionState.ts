@@ -328,7 +328,7 @@ function shareSeverityIcon(severity: ReviewFinding['severity']): string {
  * one space and control characters are removed, so each finding stays one readable block. Nothing
  * is neutralized — the fullwidth brackets `neutralizeMarkdownLinks` adds protect the trusted chat
  * renderer and would only be noise in pasted plain text. */
-function normalizeShareText(value: string): string {
+export function normalizeShareText(value: string): string {
   return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '').replace(/\s+/g, ' ').trim();
 }
 

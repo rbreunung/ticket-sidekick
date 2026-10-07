@@ -2,8 +2,6 @@ import type { ReviewMode } from '../../bitbucket/IBitbucketClient';
 import type { RequirementsSourceResult } from '../../services/TicketService';
 import { buildChatCommandLink, buildSmartRerunCommand } from '../reviewSessionState';
 
-export { buildSmartRerunCommand };
-
 // Pure and `vscode`-free: the decision about what a review does with a Jira ticket, and the lines
 // and commands that go with each outcome. The participant file only executes the outcome.
 

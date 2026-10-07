@@ -1,6 +1,6 @@
 import { extractJsonObject } from '../../utils/extractJsonObject';
 import { UnparseableReplyError } from '../../utils/lmRetry';
-import { neutralizeMarkdownLinks, sanitizeGfmCellText, type FileDiff } from '../reviewSessionState';
+import { neutralizeMarkdownLinks, sanitizeGfmCellText, normalizeShareText, type FileDiff } from '../reviewSessionState';
 
 // Pure and `vscode`-free: the requirements pass's reply parsing and its two renderers (the chat
 // block and the plain text for "Copy for Teams"). Everything derived from the ticket or the model
@@ -180,15 +180,11 @@ export function renderCoverageMarkdown(coverage: RequirementsCoverage): string {
   return lines.join('\n').trimEnd();
 }
 
-function plain(value: string): string {
-  return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '').replace(/\s+/g, ' ').trim();
-}
-
 /** The same content as plain text for pasting into a chat that does not render Markdown. */
 export function renderCoverageText(coverage: RequirementsCoverage): string {
-  const lines: string[] = [`Requirements coverage (${plain(coverage.ticketKey)})`];
-  if (coverage.userGoal) lines.push(`Using the stated goal: ${plain(coverage.userGoal)}`);
-  if (coverage.reading) lines.push(`How I read this ticket: ${plain(coverage.reading)}`);
+  const lines: string[] = [`Requirements coverage (${normalizeShareText(coverage.ticketKey)})`];
+  if (coverage.userGoal) lines.push(`Using the stated goal: ${normalizeShareText(coverage.userGoal)}`);
+  if (coverage.reading) lines.push(`How I read this ticket: ${normalizeShareText(coverage.reading)}`);
 
   if (coverage.noClearRequirements) {
     lines.push('No clear requirements found — the requirements and scope checks were skipped.');
@@ -196,14 +192,14 @@ export function renderCoverageText(coverage: RequirementsCoverage): string {
   }
 
   for (const r of coverage.requirements) {
-    lines.push(`${STATUS_WORD[r.status]} — ${plain(r.text)} (${r.source})`);
-    if (r.evidence) lines.push(`   ${plain(r.evidence)}`);
+    lines.push(`${STATUS_WORD[r.status]} — ${normalizeShareText(r.text)} (${r.source})`);
+    if (r.evidence) lines.push(`   ${normalizeShareText(r.evidence)}`);
   }
   if (coverage.outOfScope.length > 0) {
     lines.push('Not accounted for by the ticket:');
-    for (const o of coverage.outOfScope) lines.push(`   ${plain(o.file)}${o.note ? ` — ${plain(o.note)}` : ''}`);
+    for (const o of coverage.outOfScope) lines.push(`   ${normalizeShareText(o.file)}${o.note ? ` — ${normalizeShareText(o.note)}` : ''}`);
   }
-  if (coverage.conflict) lines.push(`Conflict in the ticket: ${plain(coverage.conflict)}`);
+  if (coverage.conflict) lines.push(`Conflict in the ticket: ${normalizeShareText(coverage.conflict)}`);
   if (coverage.unseenFileCount > 0) lines.push(unseenLine(coverage.unseenFileCount));
   return lines.join('\n');
 }

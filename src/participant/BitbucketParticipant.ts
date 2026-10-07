@@ -350,9 +350,8 @@ async function runRequirementsPass(params: {
   try {
     const ticketText = formatRequirementsSourceText(ticket.source);
     const packBudget = Math.max(0, tokenBudget - Math.ceil(ticketText.length / 4) - REQUIREMENTS_PROMPT_OVERHEAD_TOKENS);
-    const packed = packDiffFiles(fileDiffs, packBudget);
-    const shown = packed.shown;
-    const omitted: Array<{ path: string; changedLines?: number }> = [...packed.omitted, ...alreadyOmittedPaths.map((path) => ({ path }))];
+    const { shown, omitted: packedOmitted } = packDiffFiles(fileDiffs, packBudget);
+    const omitted: Array<{ path: string; changedLines?: number }> = [...packedOmitted, ...alreadyOmittedPaths.map((path) => ({ path }))];
     const prPaths = [...new Set([...fileDiffs.map((f) => f.path), ...alreadyOmittedPaths])];
     if (omitted.length > 0) {
       logReview('info', `Requirements pass sees ${shown.length} of ${prPaths.length} file(s)`, { runTag, omitted: omitted.map((o) => o.path) });
