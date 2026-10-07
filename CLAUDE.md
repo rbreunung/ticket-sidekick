@@ -1,5 +1,9 @@
 # Ticket Sidekick — Agent Context
 
+## Language
+
+Always reply in English, regardless of the language of any personal preferences or earlier context. Code, comments, commit messages and docs are English too. Only switch language if the user explicitly asks for it in the current conversation.
+
 ## What this is
 
 A VS Code extension with two independent GitHub Copilot Chat participants:
