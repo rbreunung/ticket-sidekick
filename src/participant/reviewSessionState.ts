@@ -1,6 +1,7 @@
 import { extractJsonObject } from '../utils/extractJsonObject';
 import { isCancellation } from './session/primitives';
 import { TICKET_ID_PATTERN } from '../utils/branchParser';
+import type { RequirementsSource } from '../utils/requirementsSource';
 // Type-only — IBitbucketClient.ts has no imports of its own (vscode included), so this
 // stays safe for a vscode-free, Vitest-loadable module.
 import type { BitbucketConfig, BitbucketPR, ReviewMode } from '../bitbucket/IBitbucketClient';
@@ -115,6 +116,8 @@ export interface SmartFallbackSession {
   upfrontQuestion?: string;
   /** R23: phase 1's funnel counters and failure state, so the resumed review reports them. */
   phase1Tally?: ReviewTally;
+  /** The ticket the user opted into, so the resumed review still runs the requirements pass. */
+  requirementsTicket?: { ticketKey: string; source: RequirementsSource };
 }
 
 /** Running counters for one review, reported by the shared completion step (KTD10). */

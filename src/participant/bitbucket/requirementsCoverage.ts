@@ -1,6 +1,6 @@
 import { extractJsonObject } from '../../utils/extractJsonObject';
 import { UnparseableReplyError } from '../../utils/lmRetry';
-import { neutralizeMarkdownLinks, sanitizeGfmCellText } from '../reviewSessionState';
+import { neutralizeMarkdownLinks, sanitizeGfmCellText, type FileDiff } from '../reviewSessionState';
 
 // Pure and `vscode`-free: the requirements pass's reply parsing and its two renderers (the chat
 // block and the plain text for "Copy for Teams"). Everything derived from the ticket or the model
@@ -206,4 +206,36 @@ export function renderCoverageText(coverage: RequirementsCoverage): string {
   if (coverage.conflict) lines.push(`Conflict in the ticket: ${plain(coverage.conflict)}`);
   if (coverage.unseenFileCount > 0) lines.push(unseenLine(coverage.unseenFileCount));
   return lines.join('\n');
+}
+
+/** Added plus removed lines of a diff, not counting the `+++`/`---` file headers. */
+function countChangedLines(diff: string): number {
+  return diff.split('\n').filter((l) => (l.startsWith('+') && !l.startsWith('+++')) || (l.startsWith('-') && !l.startsWith('---'))).length;
+}
+
+/**
+ * Fits as many of the PR's files into the requirements prompt as the token budget allows, smallest
+ * first so the most files are seen. Pieces of one split file are rejoined under their path. Files
+ * that do not fit are returned with their changed-line counts so the prompt can name them. Shown
+ * files keep the PR's own order.
+ */
+export function packDiffFiles(
+  fileDiffs: FileDiff[],
+  budgetTokens: number,
+): { shown: FileDiff[]; omitted: Array<{ path: string; changedLines: number }> } {
+  const byPath = new Map<string, string>();
+  for (const fd of fileDiffs) byPath.set(fd.path, (byPath.get(fd.path) ?? '') + (fd.diff.endsWith('\n') ? fd.diff : `${fd.diff}\n`));
+  const entries = [...byPath].map(([path, diff]) => ({ path, diff, tokens: Math.ceil(diff.length / 4) }));
+
+  const fits = new Set<string>();
+  let used = 0;
+  for (const e of [...entries].sort((a, b) => a.tokens - b.tokens)) {
+    if (used + e.tokens > budgetTokens) continue;
+    fits.add(e.path);
+    used += e.tokens;
+  }
+  return {
+    shown: entries.filter((e) => fits.has(e.path)).map((e) => ({ path: e.path, diff: e.diff })),
+    omitted: entries.filter((e) => !fits.has(e.path)).map((e) => ({ path: e.path, changedLines: countChangedLines(e.diff) })),
+  };
 }

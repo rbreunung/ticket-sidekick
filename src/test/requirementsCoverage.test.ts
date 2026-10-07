@@ -6,6 +6,7 @@ import {
   buildCoverage,
   renderCoverageMarkdown,
   renderCoverageText,
+  packDiffFiles,
 } from '../participant/bitbucket/requirementsCoverage';
 import { UnparseableReplyError } from '../utils/lmRetry';
 
@@ -125,5 +126,42 @@ describe('renderCoverageText', () => {
     expect(text).toContain('met — Add key (comment)');
     expect(text).not.toContain('|');
     expect(text).not.toContain('\n\n\n');
+  });
+});
+
+describe('packDiffFiles', () => {
+  const diffOf = (path: string, added: number) => ({
+    path,
+    diff: `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -0,0 +1,${added} @@\n` + Array.from({ length: added }, (_, i) => `+line ${i}`).join('\n'),
+  });
+
+  it('shows every file when they all fit, in the PR order', () => {
+    const { shown, omitted } = packDiffFiles([diffOf('b.ts', 3), diffOf('a.ts', 2)], 10_000);
+    expect(shown.map((f) => f.path)).toEqual(['b.ts', 'a.ts']);
+    expect(omitted).toEqual([]);
+  });
+
+  it('leaves out the largest files first and counts their changed lines without the file headers', () => {
+    const big = diffOf('big.ts', 400);
+    const { shown, omitted } = packDiffFiles([big, diffOf('s1.ts', 3), diffOf('s2.ts', 3)], 200);
+    expect(shown.map((f) => f.path).sort()).toEqual(['s1.ts', 's2.ts']);
+    expect(omitted).toEqual([{ path: 'big.ts', changedLines: 400 }]);
+  });
+
+  it('has no cap on the number of files', () => {
+    const many = Array.from({ length: 40 }, (_, i) => diffOf(`f${i}.ts`, 1));
+    expect(packDiffFiles(many, 100_000).shown).toHaveLength(40);
+  });
+
+  it('rejoins the pieces of one split file under its path', () => {
+    const { shown } = packDiffFiles([diffOf('x.ts', 2), diffOf('x.ts', 2)], 10_000);
+    expect(shown).toHaveLength(1);
+    expect(shown[0].diff.match(/diff --git/g)).toHaveLength(2);
+  });
+
+  it('shows nothing and lists everything when even the smallest file does not fit', () => {
+    const { shown, omitted } = packDiffFiles([diffOf('a.ts', 50)], 5);
+    expect(shown).toEqual([]);
+    expect(omitted).toHaveLength(1);
   });
 });
