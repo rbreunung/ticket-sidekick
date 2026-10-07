@@ -339,6 +339,12 @@ likely next action — e.g. after loading a ticket: add a comment, transition
 it; after a PR review: add findings to review, explain finding #1, and Copy
 for Teams (the only chip after a review with no findings) (R6).
 
+**End-session chips.** `@bitbucket` also derives chips from the session kind
+in `result.metadata.bitbucketSession` (Done, Post it, Cancel — see
+[`docs/review-process.md`](review-process.md#follow-ups)), appended after the
+action chips and outside their cap of three, so a finished review shows up to
+four chips.
+
 **State passing.** `vscode.ChatResult.metadata` is the VS Code-native
 channel a chat handler uses to hand its own `followupProvider` "what just
 happened," so each handler's major return points now return

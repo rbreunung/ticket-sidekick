@@ -1,4 +1,5 @@
 import { extractJsonObject } from '../utils/extractJsonObject';
+import { isCancellation } from './session/primitives';
 // Type-only — IBitbucketClient.ts has no imports of its own (vscode included), so this
 // stays safe for a vscode-free, Vitest-loadable module.
 import type { BitbucketConfig, BitbucketPR, ReviewMode } from '../bitbucket/IBitbucketClient';
@@ -1853,7 +1854,74 @@ export interface BitbucketSessionContinuity {
   kinds: BitbucketSessionKind[];
 }
 
+/** Cap on *action* chips; the end-session chips below are appended outside it. */
 const BITBUCKET_MAX_FOLLOWUPS = 3;
+
+/** The three `workspaceState` keys that hold a live Bitbucket session. */
+export const BITBUCKET_SESSION_KEYS = [
+  'bitbucket.session.review',
+  'bitbucket.session.commentPreview',
+  'bitbucket.session.smartFallback',
+] as const;
+
+/** Which `workspaceState` key holds the data behind each session kind. */
+const SESSION_KEY_BY_KIND: Record<BitbucketSessionKind, (typeof BITBUCKET_SESSION_KEYS)[number]> = {
+  'review-session': 'bitbucket.session.review',
+  'comment-preview': 'bitbucket.session.commentPreview',
+  'smart-fallback-session': 'bitbucket.session.smartFallback',
+};
+
+/** True when the data behind at least one of the session kinds is still stored — the chat history
+ * can keep a session marker after the stored session was cleared (e.g. by an `@jira` request). */
+export function hasStoredBitbucketSession(
+  kinds: readonly BitbucketSessionKind[] | undefined,
+  store: { get(key: string): unknown },
+): boolean {
+  return (kinds ?? []).some((kind) => store.get(SESSION_KEY_BY_KIND[kind]) !== undefined);
+}
+
+/**
+ * Clears every Bitbucket session. Takes any store with `update` (and `get`, when it has one, so
+ * keys that hold nothing are not rewritten on every `@jira` request) to stay free of `vscode`.
+ */
+export async function endBitbucketSessions(
+  store: { get?(key: string): unknown; update(key: string, value: unknown): PromiseLike<void> | void },
+): Promise<void> {
+  for (const key of BITBUCKET_SESSION_KEYS) {
+    if (store.get && store.get(key) === undefined) continue;
+    await store.update(key, undefined);
+  }
+}
+
+/**
+ * Whole-message "leave the review session" request: `done` plus the shared cancel words.
+ * `done` is deliberately not added to the shared `isCancellation` — its other callers match
+ * against live Jira option names, and a status can be called `Done`.
+ */
+export function isEndSessionRequest(prompt: string): boolean {
+  return prompt.trim().toLowerCase() === 'done' || isCancellation(prompt);
+}
+
+/**
+ * A review start with nothing to review: the `review` command without a PR URL, or a message
+ * that is only a mode word. Whole-message only, so "is this quick to fix?" stays a follow-up.
+ */
+export function isReviewStartWithoutUrl(prompt: string, command: string | undefined): boolean {
+  if (hasPrUrl(prompt)) return false;
+  return command === 'review' || /^(quick|smart|deep)$/i.test(prompt.trim());
+}
+
+/** End-session chips for a live session of the given kinds: Post it/Cancel for a preview,
+ * Cancel for the smart-fallback question, Done for a review session. */
+function endSessionChips(kinds: readonly BitbucketSessionKind[] | undefined): BitbucketFollowupSuggestion[] {
+  if (!kinds) return [];
+  if (kinds.includes('comment-preview')) {
+    return [{ prompt: 'post it', label: 'Post it' }, { prompt: 'cancel', label: 'Cancel' }];
+  }
+  if (kinds.includes('smart-fallback-session')) return [{ prompt: 'cancel', label: 'Cancel' }];
+  if (kinds.includes('review-session')) return [{ prompt: 'done', label: 'Done' }];
+  return [];
+}
 
 /**
  * R6/KTD14: 2-3 example prompts, phrased as literal next messages a user could send, for a
@@ -1863,7 +1931,14 @@ const BITBUCKET_MAX_FOLLOWUPS = 3;
  * covers a non-greeting, non-URL prompt; R9's greeting/empty-prompt case is the one this
  * function's `'greeting'` state covers.
  */
-export function computeBitbucketFollowups(state: BitbucketFollowupState): BitbucketFollowupSuggestion[] {
+export function computeBitbucketFollowups(
+  state: BitbucketFollowupState,
+  sessionKinds?: readonly BitbucketSessionKind[],
+): BitbucketFollowupSuggestion[] {
+  return [...actionChips(state), ...endSessionChips(sessionKinds)];
+}
+
+function actionChips(state: BitbucketFollowupState): BitbucketFollowupSuggestion[] {
   switch (state.kind) {
     case 'greeting':
       return [

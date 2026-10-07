@@ -507,10 +507,33 @@ finding 2, and "none" as a general PR question. A message counts as "add to
 review" only when it asks to add or post findings *to the review*
 (`add … to (the) review`); a question that merely mentions both words is
 answered. `#N` where `N` doesn't exist gets a friendly "Finding #N
-not found. The review has findings #1–#M." message. `c` / `cancel` / etc.
-(`isCancellation`) clears the session and shows "Review session ended."
-without carrying the session forward, so no further follow-ups fire until a
-new review. Any LLM error surfaces as `**Follow-up failed: …**` with the
+not found. The review has findings #1–#M." message.
+
+**Leaving a session.** Every response that keeps a session alive carries an
+end-session chip, derived from the `bitbucketSession` kinds in the result
+metadata by `computeBitbucketFollowups` (so no return site has to ask for
+it): **Done** for a review session, **Post it** and **Cancel** for a
+comment preview, **Cancel** for the smart-fallback question. They sit after
+the action chips and outside their cap of three. `done`, `c`, `cancel` etc.
+(`isEndSessionRequest`: `done` plus `isCancellation`; `done` is deliberately
+not in the shared `isCancellation`, whose other callers match live Jira
+option names) clear all three `bitbucket.session.*` keys through
+`endBitbucketSessions` and show "Review session ended." without carrying the
+session forward. Cancel inside a comment preview drops only the preview and
+returns the review-session marker, so its response shows Done.
+
+A session also ends when the user moves on. A message with a PR URL skips
+every session branch (`hasPrUrl`) and clears any stored preview or fallback
+question from an earlier review. A typed `done` under a comment preview acts
+like Cancel; under the smart-fallback question it ends that question. `/review` without a URL, or a message
+that is only `quick`, `smart` or `deep` (`isReviewStartWithoutUrl`,
+whole-message only so "is this quick to fix?" stays a follow-up), ends the
+session and falls through to the usual no-URL response. Any `@jira` request
+ends it too: `createJiraParticipant` takes an `onRequest` hook that
+`extension.ts` binds to `endBitbucketSessions`, because `@jira` runs in its
+own chat history and `@bitbucket` would otherwise still see the stored
+session. `check` and `usage` are neutral: they return the active session's
+marker so a live session survives them. Any LLM error surfaces as `**Follow-up failed: …**` with the
 session kept alive so the user can retry; a comment-preview refinement error
 surfaces as `**Refinement failed: …**` with the comment-preview session kept
 alive the same way.
