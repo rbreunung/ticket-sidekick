@@ -7,6 +7,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // MockBitbucketClient so no network is involved.
 const h = vi.hoisted(() => ({
   handler: undefined as undefined | ((...args: unknown[]) => Promise<unknown>),
+  /** The participant object `createChatParticipant` returned, so tests can reach its `followupProvider`. */
+  participant: undefined as undefined | { followupProvider?: { provideFollowups(result: unknown): Array<{ prompt: string; label?: string }> } },
   client: undefined as unknown,
   /** What the last `vscode.env.clipboard.writeText` call wrote, or undefined when nothing was written. */
   clipboard: undefined as string | undefined,
@@ -33,7 +35,8 @@ vi.mock('vscode', () => {
     chat: {
       createChatParticipant: (_id: string, handler: (...args: unknown[]) => Promise<unknown>) => {
         h.handler = handler;
-        return { dispose: () => undefined };
+        h.participant = { };
+        return Object.assign(h.participant, { dispose: () => undefined });
       },
     },
     LanguageModelChatMessage: {
@@ -89,7 +92,9 @@ interface Harness {
   log: string[];
   commands: unknown[][];
   /** Run one chat turn. A reply list is consumed in call order, and running out fails the call. */
-  turn(prompt: string, script: Script, history?: unknown[], options?: { freezeModel?: boolean }): Promise<{ text: string; result: unknown }>;
+  turn(prompt: string, script: Script, history?: unknown[], options?: { freezeModel?: boolean; command?: string }): Promise<{ text: string; result: unknown }>;
+  /** The chips VS Code would render under a response that returned `result`. */
+  chips(result: unknown): Array<{ prompt: string; label?: string }>;
 }
 
 function createHarness(config: Partial<BitbucketConfig> = {}): Harness {
@@ -130,6 +135,7 @@ function createHarness(config: Partial<BitbucketConfig> = {}): Harness {
     prompts,
     log: h.log,
     commands: h.commands,
+    chips: (result) => h.participant!.followupProvider!.provideFollowups(result),
     async turn(prompt, script, history = [], options = {}) {
       const queue = Array.isArray(script) ? [...script] : [];
       let callIndex = 0;
@@ -152,7 +158,7 @@ function createHarness(config: Partial<BitbucketConfig> = {}): Harness {
       const out: string[] = [];
       const stream = { markdown: (m: string | { value: string }) => { out.push(typeof m === 'string' ? m : m.value); } };
       const token = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => undefined }) };
-      const run = h.handler!({ prompt, command: undefined, model }, { history }, stream, token);
+      const run = h.handler!({ prompt, command: options.command, model }, { history }, stream, token);
       // Retry backoff runs on fake timers; advance until the turn settles.
       let settled = false;
       const result = run.finally(() => { settled = true; });
@@ -898,5 +904,137 @@ describe('token usage line and the usage command', () => {
     const harness = createHarness();
     const { text } = await harness.turn(`usage ${PR_URL}`, [reviewReply]);
     expect(text).toContain('SQL injection');
+  });
+});
+
+describe('leaving a review session', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const reviewReply = [findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'SQL injection', 'critical'), META_LINE].join('\n');
+  const ENDED_KEYS = ['bitbucket.session.review', 'bitbucket.session.commentPreview', 'bitbucket.session.smartFallback'];
+
+  // AE1 / R1
+  it('shows a Done chip under the review and under every follow-up answer', async () => {
+    const harness = createHarness();
+    const first = await harness.turn(PR_URL, [reviewReply]);
+    expect(harness.chips(first.result).map((c) => c.label)).toEqual([
+      'Add findings to review', 'Explain finding #1', 'Copy for Teams', 'Done',
+    ]);
+
+    const answer = await harness.turn('#1 why is this critical?', ['Because.'], [sessionTurn(first.result)]);
+    expect(harness.chips(answer.result)).toEqual([{ prompt: 'done', label: 'Done' }]);
+  });
+
+  // AE1 / R1
+  it('ends the session on done, so later messages get no follow-up treatment', async () => {
+    const harness = createHarness();
+    const first = await harness.turn(PR_URL, [reviewReply]);
+    const calls = harness.prompts.length;
+
+    const ended = await harness.turn('done', [], [sessionTurn(first.result)]);
+    expect(ended.text).toContain('Review session ended');
+    expect(ended.result).toBeUndefined();
+    for (const key of ENDED_KEYS) expect(harness.workspaceState.get(key)).toBeUndefined();
+
+    // Even with the stale session marker still in the history, nothing is answered from the old review.
+    const later = await harness.turn('#1 why is this critical?', [], [sessionTurn(first.result)]);
+    expect(later.text).toContain('Point me at a PR to review');
+    expect(harness.prompts).toHaveLength(calls);
+  });
+
+  // AE2 / R2
+  it('offers Post it and Cancel on a preview; Cancel keeps the review session', async () => {
+    const harness = createHarness();
+    const first = await harness.turn(PR_URL, [reviewReply]);
+    const preview = await harness.turn('add #1 to review', [], [sessionTurn(first.result)]);
+    expect(harness.chips(preview.result)).toEqual([
+      { prompt: 'post it', label: 'Post it' },
+      { prompt: 'cancel', label: 'Cancel' },
+    ]);
+
+    const cancelled = await harness.turn('cancel', [], [sessionTurn(preview.result)]);
+    expect(cancelled.text).toContain('Cancelled');
+    expect(harness.workspaceState.get('bitbucket.session.commentPreview')).toBeUndefined();
+    expect(harness.chips(cancelled.result)).toEqual([{ prompt: 'done', label: 'Done' }]);
+
+    const followUp = await harness.turn('#1 is this exploitable?', ['Yes.'], [sessionTurn(cancelled.result)]);
+    expect(followUp.text).toContain('Yes.');
+  });
+
+  // R3
+  it('offers Cancel on the smart-fallback question', () => {
+    const harness = createHarness();
+    const result = { metadata: { bitbucketSession: { kinds: ['smart-fallback-session'] } } };
+    expect(harness.chips(result)).toEqual([{ prompt: 'cancel', label: 'Cancel' }]);
+  });
+
+  // AE3 / R5
+  it('starts a fresh review when a PR URL arrives, whatever the mode word or question', async () => {
+    const harness = createHarness();
+    const first = await harness.turn(PR_URL, [reviewReply]);
+
+    const second = await harness.turn(
+      `quick ${PR_URL} -- new focus`,
+      [[findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'Brand new finding', 'warning'), META_LINE].join('\n')],
+      [sessionTurn(first.result)],
+    );
+
+    expect(second.text).toContain('Brand new finding');
+    expect(harness.prompts.at(-1)).toContain('new focus');
+    const session = harness.workspaceState.get('bitbucket.session.review') as { findings: Array<{ title: string }> };
+    expect(session.findings.map((f) => f.title)).toEqual(['Brand new finding']);
+  });
+
+  // AE4 / R6
+  it('ends the session on a bare /review and on a bare mode word', async () => {
+    const harness = createHarness();
+    const first = await harness.turn(PR_URL, [reviewReply]);
+    const calls = harness.prompts.length;
+
+    const review = await harness.turn('', [], [sessionTurn(first.result)], { command: 'review' });
+    expect(review.text).toContain('paste a PR URL');
+    for (const key of ENDED_KEYS) expect(harness.workspaceState.get(key)).toBeUndefined();
+
+    const again = createHarness();
+    const second = await again.turn(PR_URL, [reviewReply]);
+    const mode = await again.turn('smart', [], [sessionTurn(second.result)]);
+    expect(mode.text).toContain('Point me at a PR to review');
+    for (const key of ENDED_KEYS) expect(again.workspaceState.get(key)).toBeUndefined();
+    expect(harness.prompts).toHaveLength(calls);
+  });
+
+  // AE7 / R6
+  it('still answers a question that merely contains a mode word', async () => {
+    const harness = createHarness();
+    const first = await harness.turn(PR_URL, [reviewReply]);
+
+    const { text } = await harness.turn('is this quick to fix?', ['none', 'Fairly quick.'], [sessionTurn(first.result)]);
+
+    expect(text).toContain('Fairly quick.');
+    expect(harness.workspaceState.get('bitbucket.session.review')).toBeDefined();
+  });
+
+  // AE6 / R8
+  it('keeps the session alive through usage and check', async () => {
+    const harness = createHarness();
+    const first = await harness.turn(PR_URL, [reviewReply]);
+
+    for (const word of ['usage', 'check']) {
+      const neutral = await harness.turn(word, [], [sessionTurn(first.result)]);
+      expect(neutral.result).toMatchObject({ metadata: { bitbucketSession: { kinds: ['review-session'] } } });
+      expect(harness.chips(neutral.result)).toEqual([{ prompt: 'done', label: 'Done' }]);
+
+      const followUp = await harness.turn('#1 why is this critical?', ['Because.'], [sessionTurn(neutral.result)]);
+      expect(followUp.text).toContain('Because.');
+    }
+  });
+
+  // R8
+  it('leaves usage and check without a session marker when no session is active', async () => {
+    const harness = createHarness();
+
+    expect((await harness.turn('usage', [])).result).toBeUndefined();
+    expect((await harness.turn('check', [])).result).toBeUndefined();
   });
 });

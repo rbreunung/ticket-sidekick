@@ -45,6 +45,9 @@ import {
   composeReviewOutput,
   hasPrUrl,
   isUsageRequest,
+  isEndSessionRequest,
+  isReviewStartWithoutUrl,
+  endBitbucketSessions,
   type ReviewFinding,
   type ReviewSession,
   type BitbucketCommentPreviewSession,
@@ -567,20 +570,26 @@ export function createBitbucketParticipant(
     const prompt = request.prompt.trim();
     const config = await configService.getBitbucketConfig();
 
+    // `check` and `usage` are neutral: they hand the active session's marker forward, so a live
+    // review (or preview) survives them and their response shows the session's end chip.
+    const historySession = getActiveBitbucketSession(chatContext);
+    const neutralResult = (): vscode.ChatResult | undefined =>
+      historySession ? { metadata: { bitbucketSession: historySession } } : undefined;
+
     // 1. check command — `/check` is the slash-command shortcut for this same check
     // (KTD12); `request.prompt` never includes the command name itself (confirmed
     // against vscode.ChatRequest's typings), so the regex below still only matches
     // plain-text "check".
     if (request.command === 'check' || /^check\b/i.test(prompt)) {
       await handleCheck(stream, config, configService);
-      return;
+      return neutralResult();
     }
 
     // `usage` reads local counters only — it works without Bitbucket credentials and runs before
     // session detection, so the bare word `usage` is always this command (KTD9).
     if (request.command === 'usage' || isUsageRequest(prompt)) {
       stream.markdown(formatUsageTable(usageService.snapshot(), new Date()));
-      return;
+      return neutralResult();
     }
 
     // Every model call in this response goes through the meter: it feeds the monthly usage
@@ -863,7 +872,12 @@ export function createBitbucketParticipant(
       }
     };
 
-    const activeSession = getActiveBitbucketSession(chatContext);
+    // A `/review` or bare mode word with no PR URL is a review start with nothing to review: it
+    // ends the old session instead of being answered as a follow-up question, and falls through
+    // to the usual no-URL response below.
+    const startsWithoutUrl = isReviewStartWithoutUrl(prompt, request.command);
+    if (startsWithoutUrl) await endBitbucketSessions(ws);
+    const activeSession = startsWithoutUrl ? undefined : historySession;
 
     // 2a. Comment preview — confirmation, cancellation, or refinement
     if (!hasPrUrl(prompt) && activeSession?.kinds.includes('comment-preview')) {
@@ -926,8 +940,8 @@ export function createBitbucketParticipant(
       if (session) {
         const reviewSessionResult: vscode.ChatResult = { metadata: { bitbucketSession: { kinds: ['review-session'] } } };
 
-        if (isCancellation(prompt)) {
-          await ws.update('bitbucket.session.review', undefined);
+        if (isEndSessionRequest(prompt)) {
+          await endBitbucketSessions(ws);
           stream.markdown('_Review session ended._');
           return;
         }
@@ -1756,13 +1770,16 @@ export function createBitbucketParticipant(
   const participant = vscode.chat.createChatParticipant('ticket-sidekick.bitbucket', handler);
   // U5/R6: follow-up suggestion chips for the response `result` was just returned from —
   // `result.metadata.bitbucketFollowup` is set above wherever the handler has chip-worthy
-  // state; no metadata (a bare `return;`) means no chips, e.g. a multi-turn follow-up reply
-  // whose own response tag already carries the next-step guidance.
+  // state, and `bitbucketSession` adds the end-session chips for a live session; no metadata
+  // (a bare `return;`) means no chips, e.g. after the session was ended.
   participant.followupProvider = {
     provideFollowups(result: vscode.ChatResult): vscode.ChatFollowup[] {
-      const state = (result.metadata as { bitbucketFollowup?: BitbucketFollowupState } | undefined)?.bitbucketFollowup;
-      if (!state) return [];
-      return computeBitbucketFollowups(state).map((s) => ({ prompt: s.prompt, label: s.label }));
+      const meta = result.metadata as
+        { bitbucketFollowup?: BitbucketFollowupState; bitbucketSession?: BitbucketSessionContinuity } | undefined;
+      // End-session chips come from the session kind, so every response that keeps a session
+      // alive carries them without its own return site having to ask.
+      return computeBitbucketFollowups(meta?.bitbucketFollowup ?? { kind: 'none' }, meta?.bitbucketSession?.kinds)
+        .map((s) => ({ prompt: s.prompt, label: s.label }));
     },
   };
   context.subscriptions.push(participant);
