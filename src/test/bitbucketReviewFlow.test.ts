@@ -1030,6 +1030,17 @@ describe('leaving a review session', () => {
     }
   });
 
+  // R7 + R8
+  it('does not offer Done after usage once an @jira request has ended the session', async () => {
+    const harness = createHarness();
+    const first = await harness.turn(PR_URL, [reviewReply]);
+    for (const key of ENDED_KEYS) harness.workspaceState.delete(key);
+
+    const { result } = await harness.turn('usage', [], [sessionTurn(first.result)]);
+
+    expect(result).toBeUndefined();
+  });
+
   // R8
   it('leaves usage and check without a session marker when no session is active', async () => {
     const harness = createHarness();

@@ -48,6 +48,7 @@ import {
   isEndSessionRequest,
   isReviewStartWithoutUrl,
   endBitbucketSessions,
+  hasStoredBitbucketSession,
   type ReviewFinding,
   type ReviewSession,
   type BitbucketCommentPreviewSession,
@@ -574,7 +575,9 @@ export function createBitbucketParticipant(
     // review (or preview) survives them and their response shows the session's end chip.
     const historySession = getActiveBitbucketSession(chatContext);
     const neutralResult = (): vscode.ChatResult | undefined =>
-      historySession ? { metadata: { bitbucketSession: historySession } } : undefined;
+      historySession && hasStoredBitbucketSession(historySession.kinds, context.workspaceState)
+        ? { metadata: { bitbucketSession: historySession } }
+        : undefined;
 
     // 1. check command — `/check` is the slash-command shortcut for this same check
     // (KTD12); `request.prompt` never includes the command name itself (confirmed

@@ -1864,11 +1864,33 @@ export const BITBUCKET_SESSION_KEYS = [
   'bitbucket.session.smartFallback',
 ] as const;
 
-/** Clears every Bitbucket session. Takes any `{ update }` store so this file stays `vscode`-free. */
+/** Which `workspaceState` key holds the data behind each session kind. */
+const SESSION_KEY_BY_KIND: Record<BitbucketSessionKind, (typeof BITBUCKET_SESSION_KEYS)[number]> = {
+  'review-session': 'bitbucket.session.review',
+  'comment-preview': 'bitbucket.session.commentPreview',
+  'smart-fallback-session': 'bitbucket.session.smartFallback',
+};
+
+/** True when the data behind at least one of the session kinds is still stored — the chat history
+ * can keep a session marker after the stored session was cleared (e.g. by an `@jira` request). */
+export function hasStoredBitbucketSession(
+  kinds: readonly BitbucketSessionKind[] | undefined,
+  store: { get(key: string): unknown },
+): boolean {
+  return (kinds ?? []).some((kind) => store.get(SESSION_KEY_BY_KIND[kind]) !== undefined);
+}
+
+/**
+ * Clears every Bitbucket session. Takes any store with `update` (and `get`, when it has one, so
+ * keys that hold nothing are not rewritten on every `@jira` request) to stay free of `vscode`.
+ */
 export async function endBitbucketSessions(
-  store: { update(key: string, value: unknown): PromiseLike<void> | void },
+  store: { get?(key: string): unknown; update(key: string, value: unknown): PromiseLike<void> | void },
 ): Promise<void> {
-  for (const key of BITBUCKET_SESSION_KEYS) await store.update(key, undefined);
+  for (const key of BITBUCKET_SESSION_KEYS) {
+    if (store.get && store.get(key) === undefined) continue;
+    await store.update(key, undefined);
+  }
 }
 
 /**

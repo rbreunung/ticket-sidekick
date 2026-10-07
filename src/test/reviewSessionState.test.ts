@@ -9,6 +9,7 @@ import {
   isEndSessionRequest,
   isReviewStartWithoutUrl,
   endBitbucketSessions,
+  hasStoredBitbucketSession,
   BITBUCKET_SESSION_KEYS,
   parseSmartFallbackReply,
   ALL_PERSONA_IDS,
@@ -259,6 +260,31 @@ describe('endBitbucketSessions', () => {
 
     for (const key of BITBUCKET_SESSION_KEYS) expect(store.get(key)).toBeUndefined();
     expect(store.get('jira.session.creating')).toEqual({ keep: true });
+  });
+
+  it('skips keys that hold nothing when the store can be read', async () => {
+    const updates: string[] = [];
+    const store = new Map<string, unknown>([['bitbucket.session.review', { x: 1 }]]);
+
+    await endBitbucketSessions({
+      get: (key) => store.get(key),
+      update: async (key, value) => { updates.push(key); store.set(key, value); },
+    });
+
+    expect(updates).toEqual(['bitbucket.session.review']);
+  });
+});
+
+describe('hasStoredBitbucketSession', () => {
+  const store = new Map<string, unknown>([['bitbucket.session.review', { x: 1 }]]);
+
+  it('is true while the data behind a session kind is stored', () => {
+    expect(hasStoredBitbucketSession(['review-session'], store)).toBe(true);
+  });
+
+  it('is false once that data is gone, or when there is no session', () => {
+    expect(hasStoredBitbucketSession(['comment-preview'], store)).toBe(false);
+    expect(hasStoredBitbucketSession(undefined, store)).toBe(false);
   });
 });
 
