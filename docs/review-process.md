@@ -15,7 +15,7 @@ The code lives in:
 
 ```mermaid
 flowchart TD
-    A[PR URL in prompt] --> B[getPullRequest + getPullRequestDiffWithCoverage<br/>contextLines = reviewContextLines, default 12]
+    A[PR URL in prompt] --> B[getPullRequest + getPullRequestDiffWithCoverage<br/>contextLines = reviewContextLines, default 12<br/>smart/deep with a title key: pause first, see Requirements pass]
     B --> B2{Data Center cut<br/>the diff short?}
     B2 -- yes --> B3[fetch each cut file on its own<br/>getPullRequestFileDiff]
     B2 -- no --> C
@@ -48,7 +48,10 @@ flowchart TD
     USB -- no --> FB[askSmartFallbackChoice<br/>SmartFallbackSession → next turn]
     USB -- yes --> PP2[phase 2: persona passes<br/>selected personas × every chunk<br/>runPersonaPassesForChunk]
     PP2 --> R[completeReview<br/>dedupeFindings → number 1..N]
-    R --> T[formatReview<br/>three severity tables, muted low-confidence<br/>and location-unverified rows]
+    R --> RQ{ticket chosen?}
+    RQ -- yes --> RP[requirements pass<br/>one call + one file round]
+    RQ -- no --> T
+    RP --> T[formatReview<br/>coverage block, then three severity tables,<br/>muted low-confidence and location-unverified rows]
     T --> U[store ReviewSession with the reviewed diff]
 ```
 
@@ -399,7 +402,8 @@ pass produced which finding.
 
 ### Upfront question
 
-An optional focus question can be attached to any review, in either syntax:
+An optional focus question can be attached to any review, in either syntax (or as a
+plain sentence ending in `?`, below):
 
 ```text
 @bitbucket question: does this change handle concurrent writes safely? <pr-url>
@@ -437,6 +441,76 @@ everywhere for users without `reviewInstructions` configured.
 
 If a question was supplied, the review's first streamed line is `_focus: <question>_`,
 before `_Fetching PR…_`.
+
+**Without a delimiter.** When neither `question:` nor `--` matches,
+`findInformalQuestionMatch` takes the last sentence of at least three words that ends in
+`?` outside every URL span (so a PR URL's `?w=1` is never a question). A PR URL ends a
+sentence, and mode words, `no ticket` and a Jira key at the start of the sentence stay in
+the prompt. It is a heuristic; the `_focus:_` echo makes a wrong guess visible (KL15 in
+`docs/known-limitations.md`).
+
+## Requirements pass (`smart` and `deep`)
+
+An isolated pass that checks the diff against the Jira ticket behind the PR. It
+adds a "Requirements coverage" block above the findings tables and adds no
+findings. **Only this call ever receives ticket text** — the pass-1, Pass 2,
+persona and critic prompts are untouched, which a recording fake model asserts in
+`src/test/bitbucketReviewFlow.test.ts`.
+
+**What happens when.** `extractPromptDirectives` (`reviewSessionState.ts`) reads the
+prompt in a fixed order — upfront question, PR URLs, `no ticket`, the first Jira
+key — so a key or mode word inside the question or URL never acts. After
+`getPullRequest`, `decideTicketStep` (`bitbucket/requirementsFlow.ts`, pure) picks
+one outcome from the mode, the explicit key, `no ticket`, the key in the PR title
+(`extractTicketId`) and whether Jira is configured:
+
+| Mode | Prompt / title | Outcome |
+| --- | --- | --- |
+| any | `no ticket` | review as usual, no lookup |
+| smart, deep | explicit key, Jira configured | read the ticket, run the pass (no pause) |
+| smart, deep | title key only, Jira configured | **pause**: Use / Skip |
+| smart, deep | key, Jira not configured | one line, review as usual |
+| smart, deep | no key | one line, review as usual |
+| quick, standard | explicit key | ignored, one line |
+| quick, standard | title key, Jira configured | hint line + chip with the exact smart command |
+
+**The pause is stateless.** Its two links are complete re-run commands — the
+original prompt plus the key, or plus `no ticket` — built with
+`buildChatCommandLink`, so no session kind or `workspaceState` key is stored.
+The PR is fetched a second time on the re-run (the first fetch only reads the
+title); the pause happens before the diff is fetched.
+
+**Reading the ticket.** `TicketService.getRequirementsSource` returns the summary,
+description and comments or a failure classified by HTTP status (404 not found,
+401/403 auth, anything else other). Sizes are capped in `utils/requirementsSource.ts`
+(description 6,000 characters, comments 8,000 newest first and 1,500 each); a failed
+comment fetch still returns the ticket. `@bitbucket` reaches Jira through the shared
+`TicketService`/`JiraApiClient`; it never imports `JiraParticipant`.
+
+**The call.** One call over the whole PR, run inside `completeReview` after every
+other pass (so the smart-fallback resume gets it too, via
+`SmartFallbackSession.requirementsTicket`). `packDiffFiles` fits as many files as
+the token budget allows, smallest first; files left out are listed by path and the
+prompt tells the model to mark a requirement *unclear*, never *not evident*, when its
+evidence could sit in an unseen file. The reply may ask for extra files
+(`additionalFilesNeeded`); one round goes through `fetchAndBudgetContextFiles`, never a
+second. The reply is one JSON object read by `parseRequirementsReply`; an unreadable
+reply is retried like a provider error, and if every try fails the review completes
+without the block and says so in one line. The pass logs with pass id `requirements`.
+
+**Output and safety.** `renderCoverageMarkdown` neutralizes every ticket- or
+model-derived string (the response is trust-gated, so un-neutralized ticket text could
+plant live command links) and keeps table cells on one line. The block is inserted by
+`formatReview` after the header and before the severity tables. It is not made of
+numbered findings, so `explain`, `add` and `copy #N` do not target it.
+
+**Stored state.** `ReviewSession.requirements` keeps the ticket key, the capped source
+and the parsed coverage. "Copy for Teams" puts the plain-text coverage
+(`renderCoverageText`) between the header and the findings for a whole-review copy; a
+copy limited to some findings leaves it out. A message that starts "the goal is …" or
+"goal: …" (only when the session has `requirements`) re-runs just this pass on the
+stored diff with that goal as the primary requirement, replaces the stored coverage and
+leaves the findings alone; a failed redo keeps the old block.
 
 ## Token usage
 

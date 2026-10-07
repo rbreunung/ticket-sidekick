@@ -478,12 +478,15 @@ Run `@bitbucket check` after setup to confirm the connection and see which accou
 | `@bitbucket <pr-url>` | Full structured review of the PR |
 | `@bitbucket review quick <pr-url>` | Review using diffs only — no second-pass file fetch (fewer tokens) |
 | `@bitbucket review deep <pr-url>` | Force standard two-pass review regardless of default setting |
-| `@bitbucket <pr-url> question: <text>` (or `-- <text>`) | Review with an upfront focus question — nudges the model toward that concern in every pass |
+| `@bitbucket <pr-url> question: <text>` (or `-- <text>`, or just a sentence ending in `?`) | Review with an upfront focus question — nudges the model toward that concern in every pass |
+| `@bitbucket review smart <pr-url> PROJ-123` | Check the PR against Jira ticket PROJ-123 (smart and deep only): a **Requirements coverage** block appears above the findings. If the PR title names a ticket and you don't, the review asks first |
+| `@bitbucket review smart <pr-url> no ticket` | Skip the ticket for this review |
 | `@bitbucket #2` | Explain finding #2 in detail |
 | `@bitbucket #2 is this always a problem?` | Ask a follow-up question about a specific finding |
 | `@bitbucket is the change backwards-compatible?` | Ask any general question about the PR — no finding reference needed |
 | `@bitbucket copy` (or the **Copy for Teams** chip) | Copy the review to the clipboard as plain text, grouped by severity, ready to paste into a Teams chat |
-| `@bitbucket copy #1 #3` | Copy only findings #1 and #3 |
+| `@bitbucket copy #1 #3` | Copy only findings #1 and #3 (without the requirements coverage) |
+| `@bitbucket the goal is actually <text>` | After a ticket check, redo the requirements coverage against your own statement of the goal; the findings stay as they are |
 | `@bitbucket done` (or the **Done** chip) | End the review session. `c` and `cancel` work too; a new PR URL or any `@jira` request also ends it |
 | `@bitbucket #1 #3 add to review` | Preview findings #1 and #3 as comments — reply "post it" to confirm, "(c)" to cancel, or refine |
 | `@bitbucket add #1 #2 #3 to review` | Same — numbers can appear anywhere relative to the keywords |
