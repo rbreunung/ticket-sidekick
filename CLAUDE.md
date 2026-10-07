@@ -2,7 +2,9 @@
 
 ## Language
 
-Always reply in English, regardless of the language of any personal preferences or earlier context. Code, comments, commit messages and docs are English too. Only switch language if the user explicitly asks for it in the current conversation.
+Always reply in English, regardless of the language of any personal preferences or earlier context. Code, comments, commit messages and docs are English too. Only switch the chat language if the user explicitly asks for it in the current conversation.
+
+The project itself is always English: source code, comments, identifiers, commit messages, PR descriptions, UI strings and all documentation (`README.md`, `docs/`, `CHANGELOG.md`). This holds even if the user's personal language changes or they write to you in another language — a different chat language never makes project artifacts non-English.
 
 ## What this is
 
