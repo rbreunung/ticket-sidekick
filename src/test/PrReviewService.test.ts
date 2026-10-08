@@ -1003,6 +1003,8 @@ describe('parseFollowUpIntent', () => {
       expect(parseFollowUpIntent('copy #1 #3')).toEqual({ kind: 'copy', targets: [1, 3] });
       expect(parseFollowUpIntent('copy #3, #1')).toEqual({ kind: 'copy', targets: [3, 1] });
       expect(parseFollowUpIntent('copy #2 #2')).toEqual({ kind: 'copy', targets: [2] });
+      expect(parseFollowUpIntent('copy #2 and #3')).toEqual({ kind: 'copy', targets: [2, 3] });
+      expect(parseFollowUpIntent('share #2 with Teams chat')).toEqual({ kind: 'copy', targets: [2] });
     });
 
     it('copies everything when "all" is given alongside numbers, like add', () => {

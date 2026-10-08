@@ -857,7 +857,7 @@ function resolveByIds(ids: number[], findings: ReviewFinding[]): ReviewFinding[]
 }
 
 /** Words a copy command may carry besides `copy`/`share` and `#N` references (KTD2). */
-const COPY_FILLER_WORDS = new Set(['for', 'to', 'teams', 'all', 'the', 'finding', 'findings', 'review', 'please']);
+const COPY_FILLER_WORDS = new Set(['for', 'to', 'with', 'and', 'teams', 'team', 'chat', 'all', 'the', 'finding', 'findings', 'review', 'please']);
 
 /**
  * "Copy for Teams" (KTD2): a strict whole-message command — `copy`/`share`, then only filler words
