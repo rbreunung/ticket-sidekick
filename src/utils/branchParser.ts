@@ -12,10 +12,7 @@ export function extractTicketId(branchName: string): string | null {
  * Key-shaped tokens that are not Jira tickets (`UTF-8`, `SHA-256`, `CVE-2024`, `RFC-7231`, …).
  * Only used where the text is free prose (a PR title or a review prompt), never for branch names.
  */
-const NON_JIRA_KEY_PREFIXES = new Set([
-  'UTF', 'SHA', 'MD', 'ISO', 'RFC', 'CVE', 'CWE', 'GHSA', 'IPV', 'TLS', 'SSL', 'AES', 'RSA',
-  'HTTP', 'HTTPS', 'TCP', 'UDP', 'WCAG', 'OWASP', 'ECMA', 'PEP', 'JEP', 'NIST', 'ASCII', 'ES',
-]);
+const NON_JIRA_KEY_PREFIXES = new Set(['UTF', 'SHA', 'ISO', 'RFC', 'CVE', 'CWE', 'GHSA', 'WCAG', 'OWASP', 'ECMA', 'NIST']);
 
 export function isLikelyJiraKey(key: string): boolean {
   return !NON_JIRA_KEY_PREFIXES.has(key.slice(0, key.lastIndexOf('-')));

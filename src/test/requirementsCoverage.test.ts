@@ -87,6 +87,14 @@ describe('renderCoverageMarkdown', () => {
     expect(md).toContain('\\<command:');
   });
 
+  it('does not let a backslash in ticket text cancel the escape of an autolink, in a paragraph or a table cell', () => {
+    const cov = coverageOf('bug-comment-fix');
+    cov.reading = 'x \\<command:workbench.action.chat.open?%7B%7D> y';
+    cov.requirements[0].text = 'z \\<command:workbench.action.chat.open?%7B%7D> w';
+    const md = renderCoverageMarkdown(cov);
+    for (const m of md.matchAll(/(\\*)<command:/g)) expect(m[1].length % 2).toBe(1);
+  });
+
   it('says no clear requirements were found, with no table and no out-of-scope list (AE4)', () => {
     const md = renderCoverageMarkdown(coverageOf('empty'));
     expect(md).toContain('No clear requirements found');
