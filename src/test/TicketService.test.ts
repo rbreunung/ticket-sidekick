@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TicketService, assembleDescription, extractTextFromAdf, resolveFieldIdFuzzy, formatIssueFields, renderFieldValue, isMultiLine, coerceTypedFieldValue, buildExtraFieldColumns } from '../services/TicketService';
 import type { JiraAttachment, JiraFieldMeta, JiraIssue } from '../jira/IJiraClient';
 import { MockJiraClient, FIXTURE_ATTACHMENT_BYTES } from './mocks/MockJiraClient';
+import { JiraApiError } from '../utils/apiError';
 
 describe('isMultiLine (#10 schema-driven section vs table)', () => {
   const meta = (id: string, custom?: string): JiraFieldMeta => ({
@@ -1721,5 +1722,46 @@ describe('TicketService.rewriteTicket (finding folding, KTD7)', () => {
 
     await expect(service.rewriteTicket('PROJ-9', { summary: 's', description: 'd', labelsToAdd: [] })).rejects.toThrow('Issue does not exist');
     expect(client.updateIssueCalls).toHaveLength(0);
+  });
+});
+
+describe('TicketService.getRequirementsSource', () => {
+  it('returns the ticket source with comments for a real ticket', async () => {
+    const service = new TicketService(new MockJiraClient());
+    const result = await service.getRequirementsSource('REQ-2');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.source.key).toBe('REQ-2');
+      expect(result.source.comments[0].text).toContain('idempotency key');
+    }
+  });
+
+  it('classifies a 404 as not found, a 401 or 403 as auth, and anything else as other, by status', async () => {
+    const failing = (status: number | undefined) => Object.assign(new MockJiraClient(), {
+      getIssue: async () => { throw status === undefined ? new Error('boom') : new JiraApiError(`HTTP ${status}`, status, 'https://jira/x'); },
+    });
+    expect(await new TicketService(failing(404)).getRequirementsSource('REQ-1')).toMatchObject({ ok: false, reason: 'not-found' });
+    expect(await new TicketService(failing(401)).getRequirementsSource('REQ-1')).toMatchObject({ ok: false, reason: 'auth' });
+    expect(await new TicketService(failing(403)).getRequirementsSource('REQ-1')).toMatchObject({ ok: false, reason: 'auth' });
+    expect(await new TicketService(failing(500)).getRequirementsSource('REQ-1')).toMatchObject({ ok: false, reason: 'error' });
+    expect(await new TicketService(failing(undefined)).getRequirementsSource('REQ-1')).toMatchObject({ ok: false, reason: 'error', message: 'boom' });
+  });
+
+  it('still returns the ticket, with comments marked unavailable, when only the comment fetch fails', async () => {
+    const client = Object.assign(new MockJiraClient(), {
+      getAllComments: async () => { throw new JiraApiError('HTTP 500', 500, 'https://jira/x'); },
+    });
+    const result = await new TicketService(client).getRequirementsSource('REQ-2');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.source.commentsUnavailable).toBe(true);
+      expect(result.source.comments).toEqual([]);
+      expect(result.source.descriptionText).toContain('double charge');
+    }
+  });
+
+  it('returns a summary-only source for an empty ticket', async () => {
+    const result = await new TicketService(new MockJiraClient()).getRequirementsSource('REQ-4');
+    expect(result.ok && result.source.descriptionText).toBe('');
   });
 });

@@ -9,8 +9,7 @@ import {
   parseDiff,
   parseFollowUpIntent,
   formatReviewForSharing,
-  parseUpfrontQuestion,
-  stripUpfrontQuestion,
+  extractPromptDirectives,
   buildPrContextPrompt,
   buildDiffAwarePrompt,
   buildFindingFollowUpPrompt,
@@ -63,6 +62,19 @@ import {
 import { isConfirmation, isGreetingOrEmpty } from './sessionState';
 import { generateContent } from './jira/llmHelpers';
 import { createTokenMeter } from './bitbucket/tokenMeter';
+import { JiraApiClient } from '../jira/JiraApiClient';
+import { TicketService } from '../services/TicketService';
+import { findJiraKeyInText } from '../utils/branchParser';
+import type { RequirementsTicket } from '../utils/requirementsSource';
+import { runRequirementsPass as runRequirementsPassCore, type RequirementsPassParams } from './bitbucket/requirementsPass';
+import {
+  renderCoverageMarkdown, renderCoverageText,
+  type RequirementsCoverage,
+} from './bitbucket/requirementsCoverage';
+import {
+  decideTicketStep, buildTicketPause, buildTicketHintLine, buildIgnoredTicketLine,
+  buildNotConfiguredLine, buildNoKeyLine, buildTicketFailureLine, buildTitleKeyAlternativeLine, readTicketGuarded, resolveGoalCommit, buildPrMovedOnLine,
+} from './bitbucket/requirementsFlow';
 import { TokenUsageService, formatTokenFooter, formatUsageTable } from '../utils/tokenUsage';
 import { trustedChatMarkdown } from '../utils/chatMarkdown';
 import { tokenStatus } from '../utils/diagUtils';
@@ -305,6 +317,45 @@ async function fetchAndBudgetContextFiles(params: {
     });
   }
   return selected;
+}
+
+/** The Bitbucket client and review service every flow builds from the same config, with diagnostics wired. */
+function makeBitbucketServices(config: Pick<BitbucketConfig, 'baseUrl' | 'authType' | 'token'>): { client: BitbucketApiClient; service: PrReviewService } {
+  const client = new BitbucketApiClient({
+    baseUrl: config.baseUrl ?? '',
+    authType: config.authType,
+    token: config.token!,
+    onDiag: (level, message, details) => logDiag('bitbucket.apiClient', level, message, details),
+  });
+  const service = new PrReviewService(
+    client,
+    (level, message, details) => logDiag('bitbucket.prReviewService', level, message, details),
+  );
+  return { client, service };
+}
+
+/** Binds the vscode-bound pieces (model call, file fetch, cancellation) to the vscode-free requirements pass. */
+async function runRequirementsPass(params: Omit<RequirementsPassParams, 'stream'> & {
+  stream: vscode.ChatResponseStream;
+  ref: { project: string; repo: string };
+  request: Pick<vscode.ChatRequest, 'model'>;
+  token: vscode.CancellationToken;
+  fetchedFileCache: Map<string, string>;
+}): Promise<RequirementsCoverage | undefined> {
+  const { ref, request, token, fetchedFileCache, ...passParams } = params;
+  const { pr, tokenBudget, service, logReview, stream } = passParams;
+  return runRequirementsPassCore(passParams, {
+    callModel: (prompt, round, diag, validateReply) => callLLMWithProgress(
+      prompt, request.model, token, 'Checking requirements', `requirements round ${round}`, diag, validateReply,
+    ),
+    fetchContextFiles: (requestedFiles, shown) => fetchAndBudgetContextFiles({
+      requestedFiles, fetchedFileCache, service,
+      project: ref.project, repo: ref.repo, commitHash: pr.fromCommitHash, tokenBudget, budgetAgainst: shown,
+      fetchMessage: (n) => `_Fetching ${n} file${n !== 1 ? 's' : ''} the requirements check asked for…_\n\n`,
+      logLabel: 'Requirements context files', batchNum: 1, logReview, stream,
+    }),
+    isCancelled: () => token.isCancellationRequested,
+  });
 }
 
 /**
@@ -666,16 +717,7 @@ export function createBitbucketParticipant(
     const postAndReport = async (previewSession: BitbucketCommentPreviewSession): Promise<vscode.ChatResult> => {
       await ws.update('bitbucket.session.commentPreview', undefined);
       stream.markdown(`_Posting ${previewSession.items.length} comment${previewSession.items.length !== 1 ? 's' : ''} to Bitbucket…_\n\n`);
-      const client = new BitbucketApiClient({
-        baseUrl: config.baseUrl ?? '',
-        authType: config.authType,
-        token: config.token!,
-        onDiag: (level, message, details) => logDiag('bitbucket.apiClient', level, message, details),
-      });
-      const service = new PrReviewService(
-        client,
-        (level, message, details) => logDiag('bitbucket.prReviewService', level, message, details),
-      );
+      const { client, service } = makeBitbucketServices(config);
       const results = await service.postCommentItems(
         previewSession.project, previewSession.repo, previewSession.prId, previewSession.items,
       );
@@ -718,12 +760,28 @@ export function createBitbucketParticipant(
       upfrontQuestion?: string;
       /** R7 (opt-in): the buffered per-call lines for the fenced structured record. */
       structuredRecord?: { configLine: string; lines: string[] };
+      /** The ticket the requirements pass checks the diff against; absent unless the user opted in. */
+      requirements?: RequirementsTicket;
+      /** Files already fetched in this review, so the requirements pass never re-fetches one. */
+      fetchedFileCache?: Map<string, string>;
+      /** A ticket spotted in the title but not used (quick and standard): a line after the review and a chip. */
+      ticketHint?: { key: string; prUrl: string };
     }): Promise<vscode.ChatResult> => {
       const { pr, ref, runTag, service, logReview, allFindings, fileDiffs, batchCount, tally, tokenBudget, upfrontQuestion } = params;
       // Collapse the same issue surfacing in multiple batches before numbering.
       const deduped = dedupeFindings(allFindings);
       const numbered = deduped.map((f, idx) => ({ ...f, id: idx + 1 }));
-      const reviewResult = service.formatReview(numbered, pr, fileDiffs.length, config.confidenceThreshold);
+      // The requirements pass runs after every other pass, once the findings are final, so the smart
+      // fallback resume gets it too. Its block goes above the findings tables; it adds no findings.
+      const coverage = params.requirements
+        ? await runRequirementsPass({
+          pr, ref, ticket: params.requirements, fileDiffs, service, request: modelRequest, token, runTag, tokenBudget,
+          fetchedFileCache: params.fetchedFileCache ?? new Map(), logReview, stream,
+        })
+        : undefined;
+      const reviewResult = service.formatReview(
+        numbered, pr, fileDiffs.length, config.confidenceThreshold, coverage ? renderCoverageMarkdown(coverage) : undefined,
+      );
       logReview('info', `PR review completed — ${numbered.length} finding(s)`, {
         project: ref.project, repo: ref.repo, prId: ref.prId,
         findingCount: numbered.length, fileCount: fileDiffs.length, batchCount, anyBatchFailed: tally.anyBatchFailed,
@@ -759,6 +817,7 @@ export function createBitbucketParticipant(
       const droppedNotice = formatDroppedFindingsNotice({ outsidePr: tally.droppedOutsidePr, critic: tally.droppedByCritic ?? 0 });
       if (droppedNotice) stream.markdown(`${droppedNotice}\n\n`);
       stream.markdown(trustedChatMarkdown(composeReviewOutput(reviewResult)));
+      if (params.ticketHint) stream.markdown(`\n\n${buildTicketHintLine(params.ticketHint.key, params.ticketHint.prUrl)}`);
       appendTokenFooter(tokenBudget);
 
       const storedDiff = buildStoredReviewDiff(fileDiffs, numbered, tokenBudget * 4);
@@ -775,14 +834,20 @@ export function createBitbucketParticipant(
         rawDiff: storedDiff.rawDiff,
         rawDiffTruncated: storedDiff.truncated,
         rawDiffOmittedFiles: storedDiff.omittedFiles,
+        prFromCommitHash: pr.fromCommitHash,
         prAuthor: pr.author.displayName,
         prTargetBranch: pr.targetBranch,
+        ...(coverage && params.requirements
+          ? { requirements: { ticketKey: params.requirements.ticketKey, source: params.requirements.source, coverage } }
+          : {}),
       } satisfies ReviewSession);
       // U7/KTD9: the Bitbucket Getting-Started walkthrough's "first PR review" step completes on
       // this context key — set only at a real review completion, never on an aborted run.
       await vscode.commands.executeCommand('setContext', 'ticketSidekick.firstReviewCompleted', true);
       // R6: "after a PR review: add findings to review, ask about a finding" — the follow-up chips.
-      const reviewState: BitbucketFollowupState = { kind: 'reviewCompleted', findingCount: numbered.length };
+      const reviewState: BitbucketFollowupState = {
+        kind: 'reviewCompleted', findingCount: numbered.length, ...(params.ticketHint ? { ticketHint: params.ticketHint } : {}),
+      };
       // bitbucketSession makes this review the active ReviewSession on the next turn.
       return { metadata: { bitbucketFollowup: reviewState, bitbucketSession: { kinds: ['review-session'] } } };
     };
@@ -817,16 +882,7 @@ export function createBitbucketParticipant(
       stream.markdown(`_Resuming review of **${session.prTitle}** with ${choiceLabel}…_\n\n`);
 
       const runTag = buildRunTag(session.project, session.repo, session.prId);
-      const client = new BitbucketApiClient({
-        baseUrl: config.baseUrl ?? '',
-        authType: config.authType,
-        token: config.token!,
-        onDiag: (level, message, details) => logDiag('bitbucket.apiClient', level, message, details),
-      });
-      const service = new PrReviewService(
-        client,
-        (level, message, details) => logDiag('bitbucket.prReviewService', level, message, details),
-      );
+      const { client, service } = makeBitbucketServices(config);
       const logReview = (level: 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>): void => {
         logDiag('bitbucket.review', level, message, details);
       };
@@ -866,6 +922,7 @@ export function createBitbucketParticipant(
           pr, ref: { prUrl: session.prUrl, project: session.project, repo: session.repo, prId: session.prId },
           runTag, service, logReview, allFindings, fileDiffs: session.diffs, batchCount: session.chunks.length,
           tally, tokenBudget, upfrontQuestion: session.upfrontQuestion,
+          ...(session.requirementsTicket ? { requirements: session.requirementsTicket } : {}),
         });
       } catch (err) {
         logDiag('bitbucket.review', 'error', `Smart-fallback resume failed — [${runTag}]`, {
@@ -950,7 +1007,39 @@ export function createBitbucketParticipant(
         }
 
         try {
-          const intent = parseFollowUpIntent(prompt);
+          const intent = parseFollowUpIntent(prompt, { hasRequirements: session.requirements !== undefined });
+
+          if (intent.kind === 'goal') {
+            // Only the requirements pass re-runs, against the stored diff, with the stated goal as the
+            // primary requirement. Findings and their numbers are untouched; a failed redo keeps the old block.
+            const stored = session.requirements!;
+            if (!intent.goal) {
+              stream.markdown('_Tell me the goal after "the goal is …" and I will check the PR against it._');
+              return reviewSessionResult;
+            }
+            if (!session.rawDiff) {
+              stream.markdown('_This review was stored without its diff, so the goal cannot be checked against it. Start a new review to use a goal._');
+              return reviewSessionResult;
+            }
+            const { client: goalClient, service: goalService } = makeBitbucketServices(config);
+            const goalRunTag = buildRunTag(session.project, session.repo, session.prId);
+            const goalPr = await goalClient.getPullRequest(session.project, session.repo, session.prId);
+            const goalCommit = resolveGoalCommit(session.prFromCommitHash, goalPr.fromCommitHash);
+            const coverage = await runRequirementsPass({
+              pr: { ...goalPr, fromCommitHash: goalCommit.commit }, ref: { project: session.project, repo: session.repo },
+              ticket: { ticketKey: stored.ticketKey, source: stored.source },
+              fileDiffs: parseDiff(session.rawDiff), service: goalService, request: modelRequest, token, runTag: goalRunTag,
+              tokenBudget: resolveTokenBudget(config, model).tokenBudget, fetchedFileCache: new Map(), userGoal: intent.goal,
+              alreadyOmittedPaths: session.rawDiffOmittedFiles ?? [],
+              logReview: (level, message, details) => logDiag('bitbucket.review', level, message, details), stream,
+            });
+            if (!coverage) return reviewSessionResult;
+            await ws.update('bitbucket.session.review', { ...session, requirements: { ...stored, coverage } } satisfies ReviewSession);
+            stream.markdown(trustedChatMarkdown(renderCoverageMarkdown(coverage)));
+            if (goalCommit.changed) stream.markdown(`\n\n${buildPrMovedOnLine()}`);
+            appendTokenFooter();
+            return reviewSessionResult;
+          }
 
           if (intent.kind === 'copy') {
             // "Copy for Teams": plain text on the local clipboard only (R9) — nothing is posted.
@@ -962,7 +1051,11 @@ export function createBitbucketParticipant(
               );
               return reviewSessionResult;
             }
-            const share = formatReviewForSharing(session, { targets, confidenceThreshold: config.confidenceThreshold });
+            const share = formatReviewForSharing(session, {
+              targets,
+              confidenceThreshold: config.confidenceThreshold,
+              ...(session.requirements ? { coverageText: renderCoverageText(session.requirements.coverage) } : {}),
+            });
             try {
               await vscode.env.clipboard.writeText(share.text);
             } catch (err) {
@@ -988,15 +1081,7 @@ export function createBitbucketParticipant(
               return reviewSessionResult;
             }
             const userNote = intent.note || undefined;
-            const service = new PrReviewService(
-              new BitbucketApiClient({
-                baseUrl: config.baseUrl ?? '',
-                authType: config.authType,
-                token: config.token!,
-                onDiag: (level, message, details) => logDiag('bitbucket.apiClient', level, message, details),
-              }),
-              (level, message, details) => logDiag('bitbucket.prReviewService', level, message, details),
-            );
+            const { service } = makeBitbucketServices(config);
             const items = selectedFindings.map(f => ({ finding: f, text: service.formatPrComment(f, userNote) }));
             const previewSession: BitbucketCommentPreviewSession = {
               project: session.project, repo: session.repo, prId: session.prId, items,
@@ -1067,8 +1152,10 @@ export function createBitbucketParticipant(
       if (isGreetingOrEmpty(prompt)) {
         stream.markdown(
           '**@bitbucket** reviews Bitbucket pull requests — paste a PR URL to get started ' +
-          '(`@bitbucket https://bitbucket.company.com/projects/PROJ/repos/myrepo/pull-requests/42`), ' +
-          'or try the suggestion below.',
+          '(`@bitbucket https://bitbucket.company.com/projects/PROJ/repos/myrepo/pull-requests/42`). ' +
+          'Add `smart` or `deep` for a deeper review, a Jira key such as `PROJ-123` to check the PR against its ticket ' +
+          '(or `no ticket` to skip it), or a question as a plain sentence, for example `does this handle retries?`. ' +
+          'Or try the suggestion below.',
         );
         const greetingState: BitbucketFollowupState = { kind: 'greeting' };
         return { metadata: { bitbucketFollowup: greetingState } };
@@ -1076,7 +1163,10 @@ export function createBitbucketParticipant(
       stream.markdown(
         'Point me at a PR to review — paste the URL right after `@bitbucket`:\n\n' +
         '`@bitbucket https://bitbucket.company.com/projects/PROJ/repos/myrepo/pull-requests/42`\n\n' +
-        'Optionally add a focus question: `@bitbucket <url> -- Did I introduce any regression?`\n\n' +
+        'You can add, in any order:\n' +
+        '- `smart` or `deep` for a deeper review (`quick` for a lighter one)\n' +
+        '- a Jira key such as `PROJ-123` to check the PR against its ticket in smart and deep (`no ticket` skips it)\n' +
+        '- a question as a plain sentence, for example `does this handle retries?` (`question: …` and `-- …` also work)\n\n' +
         'Not sure what to do? Type `@bitbucket help`.',
       );
       return;
@@ -1109,16 +1199,7 @@ export function createBitbucketParticipant(
     // output channel — every diagnostic line for this run carries this tag (KTD1).
     const runTag = buildRunTag(parsed.project, parsed.repo, parsed.prId);
 
-    const client = new BitbucketApiClient({
-      baseUrl: config.baseUrl ?? '',
-      authType: config.authType,
-      token: config.token!,
-      onDiag: (level, message, details) => logDiag('bitbucket.apiClient', level, message, details),
-    });
-    const service = new PrReviewService(
-      client,
-      (level, message, details) => logDiag('bitbucket.prReviewService', level, message, details),
-    );
+    const { client, service } = makeBitbucketServices(config);
 
     // KTD9: last stage reached before the run ended, so an aborted/thrown-out-of run
     // is distinguishable in the output channel from a channel-write failure — the
@@ -1126,10 +1207,12 @@ export function createBitbucketParticipant(
     // catch block below can still read it.
     let lastStage = 'setup';
     try {
-      const upfrontQuestion = parseUpfrontQuestion(prompt);
-      // Detect quick/deep mode keyword from prompt (overrides setting). Strip the upfront
-      // question first so a question containing "deep"/"quick" can't flip the review mode.
-      const promptWithoutUrl = stripUpfrontQuestion(prompt).replace(/https?:\/\/\S+/g, '').toLowerCase();
+      // The question, an explicit ticket key and `no ticket` come out of the prompt first, so a
+      // question containing "deep"/"quick" (or a key like DEEP-1) can't flip the review mode.
+      const directives = extractPromptDirectives(prompt);
+      const upfrontQuestion = directives.question;
+      // Detect quick/deep mode keyword from what remains (overrides setting).
+      const promptWithoutUrl = directives.remainder.toLowerCase();
       // Widened 4-value mode (quick < standard < smart < deep by capability), resolved with
       // deep > smart > quick > configured-default detection precedence (KTD1). `resolvedMode`
       // is the single source of truth later units read to decide which personas are active.
@@ -1204,6 +1287,69 @@ export function createBitbucketParticipant(
       lastStage = 'fetching PR';
       stream.markdown('_Fetching PR…_\n\n');
       const pr = await client.getPullRequest(parsed.project, parsed.repo, parsed.prId);
+
+      // What to do about a Jira ticket is decided now that the PR title is known (see requirementsFlow.ts).
+      // Smart and deep ask first when the title names a ticket; the choice comes back as a full re-run
+      // of this command, so nothing is stored while the user decides.
+      const jiraConfig = await configService.getConfig();
+      const ticketStep = decideTicketStep({
+        mode: reviewMode,
+        explicitKey: directives.ticketKey,
+        skipTicket: directives.skipTicket,
+        titleKey: findJiraKeyInText(pr.title),
+        jiraConfigured: configService.isConfigured(jiraConfig),
+      });
+      logReview('info', `Ticket step — ${ticketStep.kind}`, { runTag, step: ticketStep.kind, ...('key' in ticketStep ? { key: ticketStep.key } : {}) });
+      let requirementsTicket: RequirementsTicket | undefined;
+      let ticketHint: { key: string; prUrl: string } | undefined;
+      switch (ticketStep.kind) {
+        case 'ask':
+          stream.markdown(trustedChatMarkdown(buildTicketPause(ticketStep.key, prompt)));
+          return;
+        case 'run': {
+          if (!configService.isConfigured(jiraConfig)) break;
+          const read = await readTicketGuarded(async () => {
+            const ticketService = new TicketService(
+              new JiraApiClient({
+                baseUrl: jiraConfig.baseUrl,
+                authType: jiraConfig.authType,
+                token: jiraConfig.token,
+                onDiag: (level, message, details) => logDiag('jira.apiClient', level, message, details),
+              }),
+              (level, message, details) => logDiag('jira.ticketService', level, message, details),
+            );
+            return ticketService.getRequirementsSource(ticketStep.key);
+          });
+          if (read.ok) {
+            requirementsTicket = { ticketKey: ticketStep.key, source: read.source };
+            stream.markdown(`_Using ticket ${ticketStep.key} to check requirements._\n\n`);
+          } else {
+            logReview('warn', 'Ticket read failed — reviewing without it', { runTag, key: ticketStep.key, reason: read.reason });
+            stream.markdown(`${buildTicketFailureLine(ticketStep.key, read)}\n\n`);
+            // A key written in the prompt that does not exist while the title names another: say how to use that one.
+            const titleKey = findJiraKeyInText(pr.title);
+            if (read.reason === 'not-found' && titleKey && titleKey !== ticketStep.key) {
+              stream.markdown(`${buildTitleKeyAlternativeLine(titleKey, prUrlMatch[0])}\n\n`);
+            }
+          }
+          break;
+        }
+        case 'hint':
+          ticketHint = { key: ticketStep.key, prUrl: prUrlMatch[0] };
+          break;
+        case 'ignored-explicit':
+          stream.markdown(`${buildIgnoredTicketLine(ticketStep.key)}\n\n`);
+          break;
+        case 'not-configured':
+          stream.markdown(`${buildNotConfiguredLine(ticketStep.key)}\n\n`);
+          break;
+        case 'no-key':
+          stream.markdown(`${buildNoKeyLine()}\n\n`);
+          break;
+        default:
+          break;
+      }
+
       logReview('info', 'model in use', {
         vendor: model.vendor,
         family: model.family,
@@ -1721,6 +1867,7 @@ export function createBitbucketParticipant(
               droppedOutsidePr: droppedOutsidePrTotal, retractedByPass2: retractedByPass2Total,
               anyBatchFailed, reviewedFileCount, failedFileCount,
             },
+            ...(requirementsTicket ? { requirementsTicket } : {}),
           });
         }
 
@@ -1760,6 +1907,8 @@ export function createBitbucketParticipant(
           anyBatchFailed, reviewedFileCount, failedFileCount,
         },
         tokenBudget, upfrontQuestion,
+        ...(requirementsTicket ? { requirements: requirementsTicket, fetchedFileCache } : {}),
+        ...(ticketHint ? { ticketHint } : {}),
         ...(detailedDiagnostics ? { structuredRecord: { configLine, lines: recordedLines } } : {}),
       });
     } catch (err) {

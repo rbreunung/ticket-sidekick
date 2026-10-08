@@ -1,0 +1,50 @@
+{
+  "id": "20300",
+  "key": "REQ-3",
+  "fields": {
+    "summary": "Export monthly report",
+    "description": "Export should be CSV.",
+    "status": {
+      "name": "Open"
+    },
+    "issuetype": {
+      "name": "Task"
+    },
+    "assignee": null,
+    "reporter": {
+      "accountId": "rep1",
+      "displayName": "Rita Reporter",
+      "emailAddress": "rita@example.com"
+    },
+    "priority": {
+      "name": "Medium"
+    },
+    "labels": [],
+    "fixVersions": [],
+    "comment": {
+      "comments": [
+        {
+          "id": "1",
+          "author": {
+            "accountId": "carol",
+            "displayName": "Carol",
+            "emailAddress": "carol@example.com"
+          },
+          "body": "Switched: the export must be XLSX only.",
+          "created": "2026-09-02T10:00:00.000+0000"
+        },
+        {
+          "id": "2",
+          "author": {
+            "accountId": "dave",
+            "displayName": "Dave",
+            "emailAddress": "dave@example.com"
+          },
+          "body": "No, keep CSV. XLSX is out of scope for this ticket.",
+          "created": "2026-09-04T11:00:00.000+0000"
+        }
+      ],
+      "total": 2
+    }
+  }
+}

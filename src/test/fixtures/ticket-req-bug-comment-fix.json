@@ -1,0 +1,50 @@
+{
+  "id": "20200",
+  "key": "REQ-2",
+  "fields": {
+    "summary": "Customers charged twice on slow network",
+    "description": "Some customers report a double charge when the network is slow.",
+    "status": {
+      "name": "Open"
+    },
+    "issuetype": {
+      "name": "Bug"
+    },
+    "assignee": null,
+    "reporter": {
+      "accountId": "rep1",
+      "displayName": "Rita Reporter",
+      "emailAddress": "rita@example.com"
+    },
+    "priority": {
+      "name": "Medium"
+    },
+    "labels": [],
+    "fixVersions": [],
+    "comment": {
+      "comments": [
+        {
+          "id": "1",
+          "author": {
+            "accountId": "alice",
+            "displayName": "Alice",
+            "emailAddress": "alice@example.com"
+          },
+          "body": "Reproduced on staging, the capture call is sent twice.",
+          "created": "2026-09-01T09:00:00.000+0000"
+        },
+        {
+          "id": "2",
+          "author": {
+            "accountId": "bob",
+            "displayName": "Bob",
+            "emailAddress": "bob@example.com"
+          },
+          "body": "Agreed: fix by adding an idempotency key to the capture request. No change to the UI.",
+          "created": "2026-09-03T14:30:00.000+0000"
+        }
+      ],
+      "total": 2
+    }
+  }
+}

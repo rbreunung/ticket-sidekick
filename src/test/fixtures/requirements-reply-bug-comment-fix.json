@@ -1,0 +1,28 @@
+{
+  "reading": "Customers are charged twice on slow networks; a comment agrees the fix is an idempotency key on the capture request with no UI change.",
+  "requirements": [
+    {
+      "text": "Add an idempotency key to the capture request",
+      "source": "comment",
+      "status": "met",
+      "evidence": "capture() now sends an Idempotency-Key header."
+    },
+    {
+      "text": "No change to the UI",
+      "source": "comment",
+      "status": "unclear",
+      "evidence": "The diff touches src/ui/Checkout.ts."
+    }
+  ],
+  "outOfScope": [
+    {
+      "file": "src/ui/Checkout.ts",
+      "note": "UI change the comment said was not needed."
+    }
+  ],
+  "conflict": null,
+  "noClearRequirements": false,
+  "additionalFilesNeeded": [
+    "src/payments/client.ts"
+  ]
+}

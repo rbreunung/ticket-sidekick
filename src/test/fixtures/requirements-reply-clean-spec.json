@@ -1,0 +1,32 @@
+{
+  "reading": "Failed payment captures should be retried automatically up to three times, then flagged for manual review.",
+  "requirements": [
+    {
+      "text": "Retry up to 3 times with exponential backoff",
+      "source": "description",
+      "status": "met",
+      "evidence": "capture() loops three times with a doubling delay."
+    },
+    {
+      "text": "Each retry carries the same idempotency key",
+      "source": "description",
+      "status": "met",
+      "evidence": "The key is created once before the loop."
+    },
+    {
+      "text": "After the last failure the order is flagged for manual review",
+      "source": "description",
+      "status": "not-evident",
+      "evidence": "No code in the diff sets the order flag after the final attempt."
+    }
+  ],
+  "outOfScope": [
+    {
+      "file": "src/ui/Banner.ts",
+      "note": "Banner styling is not part of the ticket."
+    }
+  ],
+  "conflict": null,
+  "noClearRequirements": false,
+  "additionalFilesNeeded": []
+}

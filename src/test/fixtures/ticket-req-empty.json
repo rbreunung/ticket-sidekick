@@ -1,0 +1,26 @@
+{
+  "id": "20400",
+  "key": "REQ-4",
+  "fields": {
+    "summary": "Look into reporting",
+    "description": null,
+    "status": {
+      "name": "Open"
+    },
+    "issuetype": {
+      "name": "Task"
+    },
+    "assignee": null,
+    "reporter": {
+      "accountId": "rep1",
+      "displayName": "Rita Reporter",
+      "emailAddress": "rita@example.com"
+    },
+    "priority": {
+      "name": "Medium"
+    },
+    "labels": [],
+    "fixVersions": [],
+    "comment": null
+  }
+}

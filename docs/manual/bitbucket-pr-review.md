@@ -36,6 +36,14 @@ Give the reviewer something specific to look for before it starts:
 @bitbucket https://bitbucket.org/myworkspace/myrepo/pull-requests/7 -- does this change handle concurrent writes safely?
 ```
 
+You can also write the question as a plain sentence ending in `?`, before or after the URL, with no prefix:
+
+```text
+@bitbucket review smart <url> does this handle retries?
+```
+
+The review's first line echoes the question it understood, so a wrong guess is easy to spot. A mode word or a Jira key inside the question never changes the review mode or the ticket.
+
 It combines freely with `quick`/`deep`, in either order:
 
 ```text
@@ -62,6 +70,35 @@ _by Jane Smith → main · 3 files changed_
 **#1** 🔴 `L42` SQL injection — user input concatenated into query string
 → Use parameterised queries or a query builder instead.
 ```
+
+### Checking a PR against its Jira ticket
+
+In `smart` and `deep` reviews the review can read the Jira ticket behind the PR and tell you whether the change does what the ticket asked for, and what it changes beyond that. This needs Jira set up for `@jira`; `@bitbucket` works without it.
+
+- **From the PR title.** If the title contains a Jira key (for example `PROJ-123 add retry`), the review asks once before it starts: **Use PROJ-123** or **Skip**.
+- **From your command.** Write the key anywhere in the command to skip the question: `@bitbucket review smart <url> PROJ-123`. A key you write wins over the one in the title. Keys inside your question or the URL are ignored.
+- **Without a ticket.** Add `no ticket` to review as usual, with no lookup.
+
+```text
+@bitbucket review smart <url> PROJ-123
+@bitbucket review deep <url> PROJ-123 does this cover the retry case?
+@bitbucket review smart <url> no ticket
+```
+
+The review reads the ticket's summary, description and comments. Many tickets are loose bug reports where the agreed fix only appears in a comment; the newest agreed direction wins, and a contradictory thread is flagged. The result is a **Requirements coverage** block above the findings:
+
+- **How I read this ticket** — a short reading of the goal, so you can see at once whether it understood the ticket.
+- A table of the requirements it found, each with its source (description, comment or inferred) and a status: ✅ met, ⚠️ not evident or ❔ unclear.
+- **Not accounted for by the ticket** — changed files the ticket does not explain.
+- If the ticket gives no usable goal, the block says **No clear requirements found** and checks nothing; it never invents a requirement.
+
+On a large PR the check may not see every file. It says how many it did not see and marks the affected requirements unclear rather than reporting a gap.
+
+If the reading is wrong, tell it the real goal in your next message — `the goal is actually that nobody is charged twice` — and only the coverage block is redone; the findings and their numbers stay. The redo checks the version of the PR that was reviewed; if the PR has new commits since, it says so and suggests re-running the review. **Copy for Teams** includes the coverage block when you copy the whole review.
+
+If the title names a ticket in a `quick` or `standard` review, the review ends with a line and a **Check against PROJ-123** chip that re-run it as smart with the ticket. An explicit key in those modes is ignored with one line.
+
+If there is no key, Jira isn't configured, or the ticket can't be read (including when Jira does not answer within about 20 seconds), the review runs as usual and says why in one line. If a key you wrote does not exist but the PR title names another ticket, the line also gives the command for that one. Look-alikes such as `UTF-8` or `SHA-256` are not taken for ticket keys. Nothing is written to Jira.
 
 ### When a review can't run
 
@@ -104,7 +141,7 @@ Share the review in a Microsoft Teams chat (or anywhere else) — click the **Co
 @bitbucket copy #1 #3
 ```
 
-This puts the review on your clipboard as plain text: the PR title, author, target branch and link, then every finding grouped under Critical / Warning / Suggestion with its file and line, title and recommendation. Paste it into any Teams chat — there are no Markdown tables or links that Teams would show as raw symbols. `copy #1 #3` copies only those findings. Low-confidence and location-unverified findings are marked, not left out. Nothing is sent anywhere; the text only goes to your clipboard.
+This puts the review on your clipboard as plain text: the PR title, author, target branch and link, the requirements coverage when the review had one, then every finding grouped under Critical / Warning / Suggestion with its file and line, title and recommendation. Paste it into any Teams chat — there are no Markdown tables or links that Teams would show as raw symbols. `copy #1 #3` copies only those findings. Low-confidence and location-unverified findings are marked, not left out. Nothing is sent anywhere; the text only goes to your clipboard.
 
 Push selected findings back to Bitbucket as PR comments:
 

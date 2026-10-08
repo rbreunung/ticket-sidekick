@@ -1,5 +1,8 @@
 import { extractJsonObject } from '../utils/extractJsonObject';
 import { isCancellation } from './session/primitives';
+import { TICKET_ID_PATTERN, findJiraKeyMatch } from '../utils/branchParser';
+import type { RequirementsTicket } from '../utils/requirementsSource';
+import type { RequirementsCoverage } from './bitbucket/requirementsCoverage';
 // Type-only — IBitbucketClient.ts has no imports of its own (vscode included), so this
 // stays safe for a vscode-free, Vitest-loadable module.
 import type { BitbucketConfig, BitbucketPR, ReviewMode } from '../bitbucket/IBitbucketClient';
@@ -79,6 +82,10 @@ export interface ReviewSession {
   prAuthor?: string;
   /** PR target branch, for the "Copy for Teams" header. Absent on sessions saved before it existed. */
   prTargetBranch?: string;
+  /** The source commit the review ran against, so a later goal correction reads files at the same version. Absent on older sessions. */
+  prFromCommitHash?: string;
+  /** The ticket check, when the user opted into one: kept so "Copy for Teams" can include it and a stated goal can redo it. */
+  requirements?: RequirementsTicket & { coverage: RequirementsCoverage };
 }
 
 export interface BitbucketCommentPreviewSession {
@@ -114,6 +121,8 @@ export interface SmartFallbackSession {
   upfrontQuestion?: string;
   /** R23: phase 1's funnel counters and failure state, so the resumed review reports them. */
   phase1Tally?: ReviewTally;
+  /** The ticket the user opted into, so the resumed review still runs the requirements pass. */
+  requirementsTicket?: RequirementsTicket;
 }
 
 /** Running counters for one review, reported by the shared completion step (KTD10). */
@@ -221,7 +230,8 @@ export function buildBitbucketNotConfiguredMessage(config: Pick<BitbucketConfig,
 export function buildChatCommandLink(label: string, participantId: '@jira' | '@bitbucket', replyText: string): string {
   const safeLabel = neutralizeMarkdownLinks(label);
   const query = `${participantId} ${replyText}`;
-  const encodedArgs = encodeURIComponent(JSON.stringify({ query, isPartialQuery: false }));
+  // encodeURIComponent leaves ( and ) literal; an unbalanced ) would end the markdown link destination early.
+  const encodedArgs = encodeURIComponent(JSON.stringify({ query, isPartialQuery: false })).replace(/\(/g, '%28').replace(/\)/g, '%29');
   return `[${safeLabel}](command:workbench.action.chat.open?${encodedArgs})`;
 }
 
@@ -321,7 +331,7 @@ function shareSeverityIcon(severity: ReviewFinding['severity']): string {
  * one space and control characters are removed, so each finding stays one readable block. Nothing
  * is neutralized — the fullwidth brackets `neutralizeMarkdownLinks` adds protect the trusted chat
  * renderer and would only be noise in pasted plain text. */
-function normalizeShareText(value: string): string {
+export function normalizeShareText(value: string): string {
   return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '').replace(/\s+/g, ' ').trim();
 }
 
@@ -338,7 +348,7 @@ function countFindings(n: number): string {
  */
 export function formatReviewForSharing(
   session: Pick<ReviewSession, 'prId' | 'prTitle' | 'prUrl' | 'prAuthor' | 'prTargetBranch' | 'findings'>,
-  options: { targets?: number[]; confidenceThreshold?: number } = {},
+  options: { targets?: number[]; confidenceThreshold?: number; coverageText?: string } = {},
 ): { text: string; copiedCount: number; totalCount: number; countLabel: string } {
   const threshold = options.confidenceThreshold ?? 0.7;
   const totalCount = session.findings.length;
@@ -359,8 +369,11 @@ export function formatReviewForSharing(
     session.prUrl,
   ].join('\n');
 
+  // The ticket check belongs to the whole review, so a copy limited to some findings leaves it out.
+  const coverage = options.targets || !options.coverageText ? '' : `\n\n${options.coverageText}`;
+
   if (copiedCount === 0) {
-    return { text: `${header}\n\nNo issues found.`, copiedCount, totalCount, countLabel };
+    return { text: `${header}${coverage}\n\nNo issues found.`, copiedCount, totalCount, countLabel };
   }
 
   const block = (f: ReviewFinding): string => {
@@ -389,7 +402,7 @@ export function formatReviewForSharing(
     return [`${shareSeverityIcon(severity)} ${label} (${rows.length})`, ...rows.map(block)];
   });
 
-  return { text: `${header}\n\n${groups.join('\n\n')}`, copiedCount, totalCount, countLabel };
+  return { text: `${header}${coverage}\n\n${groups.join('\n\n')}`, copiedCount, totalCount, countLabel };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -420,6 +433,11 @@ export function buildPostCommentConfirmation(project: string, repo: string, prId
   };
 }
 
+/** The exact command that re-runs a PR review as smart with a ticket — what the hint line and its chip show. */
+export function buildSmartRerunCommand(prUrl: string, key: string): string {
+  return `review smart ${prUrl} ${key}`;
+}
+
 export function parsePrUrl(url: string): ParsedPrUrl | null {
   try {
     const u = new URL(url);
@@ -439,9 +457,9 @@ export function parsePrUrl(url: string): ParsedPrUrl | null {
 /**
  * Locate the upfront-question delimiter (`question:` prefix or a standalone `--`
  * marker) in the RAW prompt and return its span plus the extracted question text.
- * `parseUpfrontQuestion` and `stripUpfrontQuestion` both call this so they always
- * agree on the exact same substring as "the question" for a given input — running
- * two independently-normalized regex passes previously let them disagree (a `--`
+ * `extractPromptDirectives` calls this once and derives both the question and the prompt
+ * without it from the same span — running two independently-normalized regex passes
+ * previously let them disagree (a `--`
  * inside a URL/repo slug like `api--service` could be picked up by one function and
  * not the other, and a trailing newline could defeat one function's `$`-anchored
  * match while the other's `.trim()`-then-match still succeeded).
@@ -487,17 +505,82 @@ function findUpfrontQuestionMatch(prompt: string): { question: string; start: nu
     return { question, start: dashStart, end };
   }
 
-  return null;
+  return findInformalQuestionMatch(prompt, urlSpans);
 }
 
-export function parseUpfrontQuestion(prompt: string): string | undefined {
-  return findUpfrontQuestionMatch(prompt)?.question;
+/** Words that may precede an informal question on its line; they stay in the prompt. */
+const MODE_LEAD_WORD = /^(?:review|quick|standard|smart|deep)\b\s*/i;
+const NO_TICKET_LEAD = /^no\s+ticket\b\s*/i;
+const TICKET_KEY_LEAD = new RegExp(`^${TICKET_ID_PATTERN.source}(?![A-Za-z0-9-])\\s*`);
+const MIN_INFORMAL_QUESTION_WORDS = 3;
+
+/**
+ * An upfront question written as a plain sentence ending in `?`, with no delimiter: the last such
+ * sentence (at least three words) found outside every URL span, so a query string such as `?w=1`
+ * on a PR URL is never a question. A PR URL also ends a sentence. Mode words, `no ticket` and a
+ * Jira key at the start of the sentence stay in the prompt rather than becoming part of the
+ * question. Only reached when neither the `question:` nor the `--` form matched.
+ */
+function findInformalQuestionMatch(
+  prompt: string,
+  urlSpans: Array<[number, number]>,
+): { question: string; start: number; end: number } | null {
+  let masked = '';
+  let last = 0;
+  for (const [s, e] of urlSpans) {
+    masked += prompt.slice(last, s) + '\n'.repeat(e - s);
+    last = e;
+  }
+  masked += prompt.slice(last);
+
+  let found: { question: string; start: number; end: number } | null = null;
+  for (const m of masked.matchAll(/(?:[^.!?\n]|[.!](?=\S))*\?/g)) {
+    if (m.index === undefined) continue;
+    let start = m.index;
+    const end = m.index + m[0].length;
+    for (;;) {
+      const rest = prompt.slice(start, end);
+      const lead = /^\s+/.exec(rest) ?? MODE_LEAD_WORD.exec(rest) ?? NO_TICKET_LEAD.exec(rest) ?? TICKET_KEY_LEAD.exec(rest);
+      if (!lead || lead[0].length === 0) break;
+      start += lead[0].length;
+    }
+    const question = prompt.slice(start, end).trim();
+    if (question.split(/\s+/).length >= MIN_INFORMAL_QUESTION_WORDS) found = { question, start, end };
+  }
+  return found;
 }
 
-export function stripUpfrontQuestion(prompt: string): string {
+/**
+ * What a new-review prompt asks for, beyond the PR URL. Extraction runs in a fixed order so a key,
+ * `no ticket` or mode word inside the question or URL never acts: the upfront question first, then
+ * PR URLs, then `no ticket`, then the first Jira key in what remains. `remainder` is what mode
+ * detection should read. `no ticket` wins over a key.
+ */
+export interface PromptDirectives {
+  question: string | undefined;
+  ticketKey: string | undefined;
+  skipTicket: boolean;
+  remainder: string;
+}
+
+export function extractPromptDirectives(prompt: string): PromptDirectives {
   const match = findUpfrontQuestionMatch(prompt);
-  if (!match) return prompt.trim();
-  return (prompt.slice(0, match.start) + prompt.slice(match.end)).trim();
+  let text = match ? `${prompt.slice(0, match.start)} ${prompt.slice(match.end)}` : prompt;
+  text = text.replace(/https?:\/\/\S+/g, ' ');
+
+  const noTicket = /(?<![A-Za-z0-9])no\s+ticket(?![A-Za-z0-9])/i;
+  const skipTicket = noTicket.test(text);
+  text = text.replace(noTicket, ' ');
+
+  const keyMatch = findJiraKeyMatch(text);
+  if (keyMatch) text = `${text.slice(0, keyMatch.index)} ${text.slice(keyMatch.index + keyMatch.key.length)}`;
+
+  return {
+    question: match?.question,
+    ticketKey: skipTicket ? undefined : keyMatch?.key,
+    skipTicket,
+    remainder: text.replace(/\s+/g, ' ').trim(),
+  };
 }
 
 /**
@@ -766,6 +849,7 @@ export function aggregateRecommendedPersonas(
 }
 
 export type FollowUpIntent =
+  | { kind: 'goal'; goal: string }
   | { kind: 'copy'; targets: number[] | 'all' }
   | { kind: 'add'; targets: number[] | 'all'; note: string }
   | { kind: 'explain'; findingRef: number | null; question: string };
@@ -776,7 +860,7 @@ function resolveByIds(ids: number[], findings: ReviewFinding[]): ReviewFinding[]
 }
 
 /** Words a copy command may carry besides `copy`/`share` and `#N` references (KTD2). */
-const COPY_FILLER_WORDS = new Set(['for', 'to', 'teams', 'all', 'the', 'finding', 'findings', 'review', 'please']);
+const COPY_FILLER_WORDS = new Set(['for', 'to', 'with', 'and', 'teams', 'team', 'chat', 'all', 'the', 'finding', 'findings', 'review', 'please']);
 
 /**
  * "Copy for Teams" (KTD2): a strict whole-message command — `copy`/`share`, then only filler words
@@ -797,9 +881,30 @@ function parseCopyCommand(message: string): FollowUpIntent | undefined {
   return { kind: 'copy', targets: numbers.length > 0 && !hasAll ? [...new Set(numbers)] : 'all' };
 }
 
-export function parseFollowUpIntent(message: string): FollowUpIntent {
+/**
+ * The user stating the real goal of the ticket ("the goal is actually …", "goal: …"). Start-anchored,
+ * so a question that merely mentions the goal ("what is the goal of this PR?") stays a question.
+ * An empty goal comes back as ''.
+ */
+function parseGoalStatement(message: string): FollowUpIntent | undefined {
+  const text = message.trim();
+  const sentence = /^(?:(?:actually|no|well)[\s,]+)?the\s+(?:(?:real|actual|true)\s+)?goal\s+(?:is|was|should\s+be)\b[\s:,-]*(?:actually\b[\s:,-]*)?([\s\S]*)$/i.exec(text);
+  const label = /^goal\s*:\s*([\s\S]*)$/i.exec(text);
+  const goal = (sentence ?? label)?.[1];
+  // A trailing `?` makes it a question about the goal, not a correction of it.
+  if (goal !== undefined && /\?\s*$/.test(goal)) return undefined;
+  return goal === undefined ? undefined : { kind: 'goal', goal: goal.trim() };
+}
+
+export function parseFollowUpIntent(message: string, options: { hasRequirements?: boolean } = {}): FollowUpIntent {
   const copy = parseCopyCommand(message);
   if (copy) return copy;
+
+  // Checked before `add`: a goal such as "to add logging to the review" must not read as an add command.
+  if (options.hasRequirements) {
+    const goal = parseGoalStatement(message);
+    if (goal) return goal;
+  }
 
   // R20: only a request to add/post findings *to the review* is an add — a question that merely
   // mentions both words ("can you review whether #2 would add latency?") is answered instead.
@@ -1635,7 +1740,7 @@ export function buildTruncationEvent(params: {
  * create a cycle.
  */
 export type ReviewPass =
-  | 'pass1' | 'continuation' | 'pass2' | 'critic' | 'critic-r2'
+  | 'pass1' | 'continuation' | 'pass2' | 'critic' | 'critic-r2' | 'requirements'
   | 'security' | 'performance' | 'reliability' | 'maintainability';
 
 /** R5's recovery-decision shapes — logged so a reader can follow what happened
@@ -1834,7 +1939,7 @@ export interface BitbucketFollowupSuggestion {
  * for the response that was just streamed, without re-deriving state from response text. */
 export type BitbucketFollowupState =
   | { kind: 'greeting' }
-  | { kind: 'reviewCompleted'; findingCount: number }
+  | { kind: 'reviewCompleted'; findingCount: number; ticketHint?: { key: string; prUrl: string } }
   | { kind: 'none' };
 
 /**
@@ -1947,14 +2052,20 @@ function actionChips(state: BitbucketFollowupState): BitbucketFollowupSuggestion
     case 'reviewCompleted': {
       // KTD7: sharing works for every review — "No issues found" is worth sharing too.
       const copyChip = { prompt: 'copy for teams', label: 'Copy for Teams' };
+      // A quick or standard review of a PR that names a Jira ticket: one click re-runs it as smart with the ticket.
+      const ticketChip = state.ticketHint
+        ? { prompt: buildSmartRerunCommand(state.ticketHint.prUrl, state.ticketHint.key), label: `Check against ${state.ticketHint.key}` }
+        : undefined;
       if (state.findingCount === 0) {
         // R10: no one-click "ask a question" follow-up — a real Q&A flow needs its own
         // review, and asking a question is relevant mid-review, not as a post-review chip.
-        return [copyChip];
+        return ticketChip ? [ticketChip, copyChip] : [copyChip];
       }
+      // The ticket chip takes the place of "Explain finding #1" (typing #1 does the same) to keep three chips.
       return [
+        ...(ticketChip ? [ticketChip] : []),
         { prompt: 'add all findings to review', label: 'Add findings to review' },
-        { prompt: 'explain finding #1', label: 'Explain finding #1' },
+        ...(ticketChip ? [] : [{ prompt: 'explain finding #1', label: 'Explain finding #1' }]),
         copyChip,
       ].slice(0, BITBUCKET_MAX_FOLLOWUPS);
     }

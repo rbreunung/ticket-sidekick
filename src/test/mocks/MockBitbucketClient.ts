@@ -21,13 +21,15 @@ export class MockBitbucketClient implements IBitbucketClient {
   /** Per-file diffs served for recovery; a path not listed fails its request. */
   public perFileDiffs = new Map<string, PullRequestFileDiff>();
   public getPullRequestFileDiffCalls: Array<{ path: string; srcPath?: string }> = [];
+  /** Per-test fields laid over the `bitbucket-pr.json` fixture (for example a title with a Jira key). */
+  public prOverride: Partial<BitbucketPR> = {};
 
   async getCurrentUser(): Promise<BitbucketUser> {
     return { displayName: 'Jane Smith', emailAddress: 'jane.smith@example.com' };
   }
 
   async getPullRequest(_project: string, _repo: string, _prId: number): Promise<BitbucketPR> {
-    return loadFixture<BitbucketPR>('bitbucket-pr.json');
+    return { ...loadFixture<BitbucketPR>('bitbucket-pr.json'), ...this.prOverride };
   }
 
   async getPullRequestDiff(project: string, repo: string, prId: number, contextLines?: number): Promise<string> {

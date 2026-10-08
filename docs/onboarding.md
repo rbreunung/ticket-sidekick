@@ -336,8 +336,10 @@ at a PR to review" guidance when `/review` is used with no URL.
 Both participants offer follow-up suggestion chips (`vscode.ChatFollowup`,
 via `participant.followupProvider`) after every major response, proposing a
 likely next action — e.g. after loading a ticket: add a comment, transition
-it; after a PR review: add findings to review, explain finding #1, and Copy
-for Teams (the only chip after a review with no findings) (R6).
+it; after a PR review: add findings to review, explain finding #1 (or, in a
+quick/standard review whose title names a Jira ticket, **Check against KEY**,
+which re-runs it as smart), and Copy for Teams (the only chip after a review
+with no findings) (R6).
 
 **End-session chips.** `@bitbucket` also derives chips from the session kind
 in `result.metadata.bitbucketSession` (Done, Post it, Cancel — see

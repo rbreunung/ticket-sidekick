@@ -1,0 +1,15 @@
+{
+  "reading": "The export format is disputed between CSV and XLSX.",
+  "requirements": [
+    {
+      "text": "Export the monthly report",
+      "source": "description",
+      "status": "unclear",
+      "evidence": "The ticket disagrees on the format."
+    }
+  ],
+  "outOfScope": [],
+  "conflict": "The description says CSV, one comment says XLSX only, a later comment says keep CSV and XLSX is out of scope.",
+  "noClearRequirements": false,
+  "additionalFilesNeeded": []
+}

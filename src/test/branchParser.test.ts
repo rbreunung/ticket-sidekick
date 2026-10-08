@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractTicketId } from '../utils/branchParser';
+import { extractTicketId, findJiraKeyInText, isLikelyJiraKey } from '../utils/branchParser';
 
 describe('extractTicketId', () => {
   it('extracts ticket ID from standard feature branch', () => {
@@ -32,5 +32,27 @@ describe('extractTicketId', () => {
 
   it('returns null when project key is lowercase', () => {
     expect(extractTicketId('feature/proj-123-fix')).toBeNull();
+  });
+});
+
+describe('findJiraKeyInText', () => {
+  it('finds the ticket key in a PR title', () => {
+    expect(findJiraKeyInText('PAY-123: retry captures')).toBe('PAY-123');
+  });
+
+  it.each(['Switch to UTF-8 output', 'Use SHA-256 for the digest', 'Patch CVE-2024 handling', 'Follow RFC-7231 status codes'])(
+    'does not mistake well-known non-ticket shapes for a key: %s',
+    (title) => {
+      expect(findJiraKeyInText(title)).toBeUndefined();
+      expect(isLikelyJiraKey('UTF-8')).toBe(false);
+    },
+  );
+
+  it('prefers the real key when a non-ticket shape comes first', () => {
+    expect(findJiraKeyInText('UTF-8 handling for PAY-7')).toBe('PAY-7');
+  });
+
+  it('ignores a key glued to other letters or digits', () => {
+    expect(findJiraKeyInText('aPAY-7 xPAY-8-1')).toBeUndefined();
   });
 });

@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 
 // Recorded-reply harness (KTD1): drives the real `@bitbucket` chat handler end to end with
 // scripted model replies. `vscode` is mocked per the repo's per-test-file convention
@@ -10,6 +12,8 @@ const h = vi.hoisted(() => ({
   /** The participant object `createChatParticipant` returned, so tests can reach its `followupProvider`. */
   participant: undefined as undefined | { followupProvider?: { provideFollowups(result: unknown): Array<{ prompt: string; label?: string }> } },
   client: undefined as unknown,
+  /** The Jira client the participant's `JiraApiClient` constructor hands back. */
+  jiraClient: undefined as unknown,
   /** What the last `vscode.env.clipboard.writeText` call wrote, or undefined when nothing was written. */
   clipboard: undefined as string | undefined,
   /** When set, the clipboard write rejects with this error. */
@@ -67,9 +71,15 @@ vi.mock('../bitbucket/BitbucketApiClient', () => ({
   BitbucketApiClient: vi.fn().mockImplementation(() => h.client),
 }));
 
+vi.mock('../jira/JiraApiClient', () => ({
+  JiraApiClient: vi.fn().mockImplementation(() => h.jiraClient),
+}));
+
 import * as vscode from 'vscode';
 import { createBitbucketParticipant } from '../participant/BitbucketParticipant';
 import { MockBitbucketClient } from './mocks/MockBitbucketClient';
+import { MockJiraClient } from './mocks/MockJiraClient';
+import { JiraApiError } from '../utils/apiError';
 import type { BitbucketConfig } from '../bitbucket/IBitbucketClient';
 
 const PR_URL = 'https://bb.example.com/projects/PROJ/repos/repo/pull-requests/42';
@@ -86,6 +96,9 @@ function transientError(message = 'provider hiccup'): Error {
 
 interface Harness {
   client: MockBitbucketClient;
+  /** The fake Jira behind the participant; `getIssue` is spied so tests can count lookups. */
+  jira: MockJiraClient;
+  getIssueSpy: ReturnType<typeof vi.spyOn>;
   workspaceState: Map<string, unknown>;
   prompts: string[];
   /** Output-channel lines and executed commands, since this harness was created. */
@@ -97,9 +110,12 @@ interface Harness {
   chips(result: unknown): Array<{ prompt: string; label?: string }>;
 }
 
-function createHarness(config: Partial<BitbucketConfig> = {}): Harness {
+function createHarness(config: Partial<BitbucketConfig> = {}, options: { jira?: boolean } = {}): Harness {
   const client = new MockBitbucketClient();
   h.client = client;
+  const jira = new MockJiraClient();
+  const getIssueSpy = vi.spyOn(jira, 'getIssue');
+  h.jiraClient = jira;
   h.clipboard = undefined;
   h.clipboardError = undefined;
   h.log.length = 0;
@@ -126,11 +142,16 @@ function createHarness(config: Partial<BitbucketConfig> = {}): Harness {
   const configService = {
     getBitbucketConfig: async () => fullConfig,
     isBitbucketConfigured: () => true,
+    // Jira is unconfigured unless a test asks for it, as for a user who only uses @bitbucket.
+    getConfig: async () => ({ baseUrl: 'https://jira.example.com', authType: 'datacenter', token: 'jira-token' }),
+    isConfigured: () => options.jira === true,
   };
   createBitbucketParticipant(context as never, configService as never);
 
   return {
     client,
+    jira,
+    getIssueSpy,
     workspaceState,
     prompts,
     log: h.log,
@@ -1081,5 +1102,504 @@ describe('leaving a review session', () => {
 
     expect((await harness.turn('usage', [])).result).toBeUndefined();
     expect((await harness.turn('check', [])).result).toBeUndefined();
+  });
+});
+
+describe('requirements-aware review (U4)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const SMART_TRAILER = '{"additionalFilesNeeded":[],"recommendedPersonas":[]}';
+  const isRequirementsPrompt = (prompt: string): boolean => prompt.includes('does what its Jira ticket asks for');
+  // A distinctive phrase from the bug-report ticket's last comment; it must reach only the requirements call.
+  const TICKET_SENTINEL = 'idempotency key to the capture request';
+
+  function requirementsReply(name: string, patch: Record<string, unknown> = {}): string {
+    const base = JSON.parse(readFileSync(resolve(process.cwd(), 'src/test/fixtures', `requirements-reply-${name}.json`), 'utf-8')) as object;
+    return JSON.stringify({ ...base, ...patch });
+  }
+
+  /** Replies by call type: the requirements call gets `requirements`, everything else a normal review reply. */
+  function reviewScript(requirements: ScriptedReply | ((prompt: string) => ScriptedReply)): (prompt: string) => ScriptedReply {
+    return (prompt) => {
+      if (isRequirementsPrompt(prompt)) return typeof requirements === 'function' ? requirements(prompt) : requirements;
+      if (isCriticPrompt(prompt)) return keepAll(prompt);
+      if (prompt.includes('lens ONLY')) return META_LINE;
+      return [findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'SQL injection', 'critical'), SMART_TRAILER].join('\n');
+    };
+  }
+
+  function withTitleKey(harness: Harness, key = 'REQ-2'): Harness {
+    harness.client.prOverride = { title: `${key} fix double charge` };
+    return harness;
+  }
+
+  const linkQueries = (text: string): string[] =>
+    [...text.matchAll(/command:workbench\.action\.chat\.open\?([^)]+)\)/g)]
+      .map((m) => (JSON.parse(decodeURIComponent(m[1])) as { query: string }).query);
+
+  // AE1
+  it('pauses a smart review whose title has a key, offering use and skip, before any diff fetch or model call', async () => {
+    const harness = withTitleKey(createHarness({}, { jira: true }));
+    const { text, result } = await harness.turn(`review smart ${PR_URL}`, []);
+
+    expect(text).toContain('Found **REQ-2** in the PR title');
+    expect(linkQueries(text)).toEqual([`@bitbucket review smart ${PR_URL} REQ-2`, `@bitbucket review smart ${PR_URL} no ticket`]);
+    expect(harness.prompts).toHaveLength(0);
+    expect(harness.client.getPullRequestDiffCalls).toHaveLength(0);
+    expect(harness.getIssueSpy).not.toHaveBeenCalled();
+    expect(result).toBeUndefined();
+  });
+
+  // AE1
+  it('runs the requirements pass once the key is named, shows the coverage above the tables, and keeps ticket text out of every other call', async () => {
+    const harness = withTitleKey(createHarness({}, { jira: true }));
+    const { text } = await harness.turn(`review smart ${PR_URL} REQ-2`, reviewScript(requirementsReply('bug-comment-fix', { additionalFilesNeeded: [] })));
+
+    const coverageAt = text.indexOf('### Requirements coverage — REQ-2');
+    expect(coverageAt).toBeGreaterThan(text.indexOf('## PR #42'));
+    expect(coverageAt).toBeLessThan(text.indexOf('### 🔴 Critical'));
+    expect(text).toContain('SQL injection');
+    const requirementsPrompts = harness.prompts.filter(isRequirementsPrompt);
+    expect(requirementsPrompts).toHaveLength(1);
+    expect(requirementsPrompts[0]).toContain(TICKET_SENTINEL);
+    for (const other of harness.prompts.filter((p) => !isRequirementsPrompt(p))) expect(other).not.toContain(TICKET_SENTINEL);
+  });
+
+  it('keeps ticket text out of the persona and critic calls of a deep review', async () => {
+    const harness = withTitleKey(createHarness({}, { jira: true }));
+    const { text } = await harness.turn(`review deep ${PR_URL} REQ-2`, reviewScript(requirementsReply('bug-comment-fix', { additionalFilesNeeded: [] })));
+
+    expect(text).toContain('### Requirements coverage — REQ-2');
+    expect(harness.prompts.filter((p) => p.includes('lens ONLY')).length).toBe(4);
+    expect(harness.prompts.some(isCriticPrompt)).toBe(true);
+    for (const other of harness.prompts.filter((p) => !isRequirementsPrompt(p))) expect(other).not.toContain(TICKET_SENTINEL);
+    expect(harness.prompts.filter(isRequirementsPrompt)).toHaveLength(1);
+  });
+
+  // AE7
+  it('reviews exactly as before when the user skips the ticket, with no Jira lookup and no extra call', async () => {
+    const harness = withTitleKey(createHarness({}, { jira: true }));
+    const { text } = await harness.turn(`review smart ${PR_URL} no ticket`, reviewScript('unexpected'));
+
+    expect(harness.getIssueSpy).not.toHaveBeenCalled();
+    expect(harness.prompts.some(isRequirementsPrompt)).toBe(false);
+    expect(text).not.toContain('Requirements coverage');
+    expect(text).toContain('SQL injection');
+  });
+
+  // AE2
+  it('only hints in a standard review, showing the exact smart command, without a pause or a Jira call', async () => {
+    const harness = withTitleKey(createHarness({}, { jira: true }));
+    const { text } = await harness.turn(PR_URL, reviewScript('unexpected'));
+
+    expect(text).toContain(`review smart ${PR_URL} REQ-2`);
+    expect(text).toContain('SQL injection');
+    expect(harness.getIssueSpy).not.toHaveBeenCalled();
+    expect(harness.prompts).toHaveLength(1);
+  });
+
+  it('ignores an explicit key in a quick review with one line', async () => {
+    const harness = createHarness({}, { jira: true });
+    const { text } = await harness.turn(`review quick ${PR_URL} REQ-2`, reviewScript('unexpected'));
+
+    expect(text).toContain('ignored');
+    expect(harness.getIssueSpy).not.toHaveBeenCalled();
+    expect(text).toContain('SQL injection');
+  });
+
+  // AE6
+  it('says Jira is not configured and reviews as usual', async () => {
+    const harness = withTitleKey(createHarness({}));
+    const { text } = await harness.turn(`review smart ${PR_URL}`, reviewScript('unexpected'));
+
+    expect(text).toContain("Jira isn't configured");
+    expect(text).toContain('SQL injection');
+    expect(harness.getIssueSpy).not.toHaveBeenCalled();
+  });
+
+  it('says there is no key when a smart review has none in the prompt or the title', async () => {
+    const harness = createHarness({}, { jira: true });
+    const { text } = await harness.turn(`review smart ${PR_URL}`, reviewScript('unexpected'));
+
+    expect(text).toContain('No Jira key in the PR title');
+    expect(text).toContain('SQL injection');
+  });
+
+  it('reviews without a ticket that Jira cannot find, and says so on one line', async () => {
+    const harness = createHarness({}, { jira: true });
+    harness.jira.getIssue = async () => { throw new JiraApiError('HTTP 404', 404, 'https://jira.example.com/x'); };
+    const { text } = await harness.turn(`review smart ${PR_URL} REQ-9`, reviewScript('unexpected'));
+
+    expect(text).toContain('REQ-9 was not found in Jira');
+    expect(text).toContain('SQL injection');
+    expect(harness.prompts.some(isRequirementsPrompt)).toBe(false);
+  });
+
+  it('reviews without a ticket when Jira rejects the credentials', async () => {
+    const harness = createHarness({}, { jira: true });
+    harness.jira.getIssue = async () => { throw new JiraApiError('HTTP 401', 401, 'https://jira.example.com/x'); };
+    const { text } = await harness.turn(`review smart ${PR_URL} REQ-2`, reviewScript('unexpected'));
+
+    expect(text).toContain('rejected the credentials');
+    expect(text).toContain('SQL injection');
+  });
+
+  it('completes the review with a one-line notice when every requirements reply is unreadable, and shows no partial-review warning', async () => {
+    const harness = createHarness({}, { jira: true });
+    const { text } = await harness.turn(`review smart ${PR_URL} REQ-2`, reviewScript('I am unable to produce JSON.'));
+
+    expect(harness.prompts.filter(isRequirementsPrompt)).toHaveLength(3);
+    expect(text).toContain('requirements check could not be completed');
+    expect(text).not.toContain('Requirements coverage');
+    expect(text).not.toContain('Some batches had failures');
+    expect(text).toContain('SQL injection');
+  });
+
+  it('asks for one round of extra files and makes no second round', async () => {
+    const harness = createHarness({}, { jira: true });
+    harness.client.fileContents.set('src/payments/client.ts', 'export class PaymentsClient {}');
+    const asksForFile = requirementsReply('bug-comment-fix', { additionalFilesNeeded: ['src/payments/client.ts'] });
+    const { text } = await harness.turn(`review smart ${PR_URL} REQ-2`, reviewScript(asksForFile));
+
+    const requirementsPrompts = harness.prompts.filter(isRequirementsPrompt);
+    expect(requirementsPrompts).toHaveLength(2);
+    expect(requirementsPrompts[0]).not.toContain('### Context file: src/payments/client.ts');
+    expect(requirementsPrompts[1]).toContain('### Context file: src/payments/client.ts');
+    expect(harness.client.getFileContentCalls.filter((c) => c.path === 'src/payments/client.ts')).toHaveLength(1);
+    expect(text).toContain('### Requirements coverage — REQ-2');
+  });
+
+  it('still shows the block, with the file marked unavailable, when the file the check asked for cannot be fetched', async () => {
+    const harness = createHarness({}, { jira: true });
+    harness.client.getFileContent = async () => { throw new Error('HTTP 404'); };
+    const asksForFile = requirementsReply('bug-comment-fix', { additionalFilesNeeded: ['src/payments/missing.ts'] });
+    const { text } = await harness.turn(`review smart ${PR_URL} REQ-2`, reviewScript(asksForFile));
+
+    expect(harness.prompts.filter(isRequirementsPrompt)[1]).toContain('(file not available)');
+    expect(text).toContain('### Requirements coverage — REQ-2');
+    expect(text).not.toContain('could not be completed');
+  });
+
+  it('keeps the first answer when the second round answers with unreadable text on every try', async () => {
+    const harness = createHarness({}, { jira: true });
+    harness.client.fileContents.set('src/payments/client.ts', 'export class PaymentsClient {}');
+    const asksForFile = requirementsReply('bug-comment-fix', { additionalFilesNeeded: ['src/payments/client.ts'] });
+    let requirementsCalls = 0;
+    const { text } = await harness.turn(`review smart ${PR_URL} REQ-2`, reviewScript(() => (requirementsCalls++ === 0 ? asksForFile : 'no json here')));
+
+    expect(text).toContain('### Requirements coverage — REQ-2');
+    expect(text).not.toContain('could not be completed');
+    expect(text).toContain('SQL injection');
+  });
+
+  it('does not fetch a file again that the review itself already fetched', async () => {
+    const harness = createHarness({}, { jira: true });
+    harness.client.fileContents.set('src/util.ts', 'export const sanitize = (s: string) => s;');
+    const asksForUtil = requirementsReply('bug-comment-fix', { additionalFilesNeeded: ['src/util.ts'] });
+    await harness.turn(`review smart ${PR_URL} REQ-2`, (prompt) => {
+      if (isRequirementsPrompt(prompt)) return asksForUtil;
+      if (isCriticPrompt(prompt)) return keepAll(prompt);
+      if (prompt.includes('lens ONLY')) return META_LINE;
+      return [findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'SQL injection', 'critical'), '{"additionalFilesNeeded":["src/util.ts"],"recommendedPersonas":[]}'].join('\n');
+    });
+
+    expect(harness.client.getFileContentCalls.filter((c) => c.path === 'src/util.ts')).toHaveLength(1);
+    expect(harness.prompts.filter(isRequirementsPrompt)[1]).toContain('export const sanitize');
+  });
+
+  it('goes on without the ticket, naming the timeout, when Jira never answers', async () => {
+    const harness = createHarness({}, { jira: true });
+    harness.jira.getIssue = () => new Promise(() => {});
+    const { text } = await harness.turn(`review smart ${PR_URL} REQ-2`, reviewScript('unexpected'));
+
+    expect(text).toContain('Could not read REQ-2 from Jira (timed out)');
+    expect(harness.prompts.some(isRequirementsPrompt)).toBe(false);
+    expect(text).toContain('SQL injection');
+  });
+
+  it('points to the ticket in the PR title when the key written in the prompt does not exist', async () => {
+    const harness = withTitleKey(createHarness({}, { jira: true }), 'REQ-2');
+    harness.jira.getIssue = async () => { throw new JiraApiError('HTTP 404', 404, 'https://jira.example.com/x'); };
+    const { text } = await harness.turn(`review smart ${PR_URL} NOPE-9`, reviewScript('unexpected'));
+
+    expect(text).toContain('NOPE-9 was not found');
+    expect(text).toContain(`review smart ${PR_URL} REQ-2`);
+    expect(text).toContain('SQL injection');
+  });
+
+  it('does not take UTF-8 in the PR title for a ticket, so the review is not paused', async () => {
+    const harness = withTitleKey(createHarness({}, { jira: true }), 'UTF-8');
+    const { text } = await harness.turn(`review smart ${PR_URL}`, reviewScript('unexpected'));
+
+    expect(text).not.toContain('in the PR title. Check this PR');
+    expect(harness.getIssueSpy).not.toHaveBeenCalled();
+    expect(text).toContain('SQL injection');
+  });
+
+  it('lists the files it was not shown when a large PR does not fit, and says how many', async () => {
+    const harness = createHarness({ modelContextTokens: 5_000, contextBudgetRatio: 1 }, { jira: true });
+    harness.client.rawDiff = makeDiff([
+      { path: 'src/f1.ts', lines: bulkyLines('One') },
+      { path: 'src/f2.ts', lines: bulkyLines('Two') },
+      { path: 'src/f3.ts', lines: bulkyLines('Three') },
+      { path: 'src/f4.ts', lines: bulkyLines('Four') },
+    ]);
+    const { text } = await harness.turn(`review smart ${PR_URL} REQ-2`, reviewScript(requirementsReply('clean-spec', { outOfScope: [] })));
+
+    const requirementsPrompt = harness.prompts.find(isRequirementsPrompt)!;
+    expect(requirementsPrompt).toContain('NOT SHOWN');
+    expect(requirementsPrompt).toMatch(/src\/f\d\.ts \(\d+ changed lines\)/);
+    expect(text).toMatch(/\d+ files? (was|were) not shown to this check/);
+  });
+
+  it('gives a resumed smart review its coverage block after the fallback question', async () => {
+    const harness = createHarness({ reviewMode: 'smart' }, { jira: true });
+    const noSignalReply = findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'SQL injection', 'critical');
+    const first = await harness.turn(`${PR_URL} REQ-2`, [noSignalReply]);
+    expect(first.text).toContain('couldn\'t determine a persona recommendation');
+    expect(harness.prompts.some(isRequirementsPrompt)).toBe(false);
+
+    const resumed = await harness.turn('all', reviewScript(requirementsReply('bug-comment-fix', { additionalFilesNeeded: [] })), [sessionTurn(first.result)]);
+    expect(resumed.text).toContain('### Requirements coverage — REQ-2');
+    expect(harness.prompts.filter(isRequirementsPrompt)).toHaveLength(1);
+    expect(resumed.text).toContain('SQL injection');
+  });
+});
+
+describe('correcting the requirements reading, and sharing it (U5)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const SMART_TRAILER = '{"additionalFilesNeeded":[],"recommendedPersonas":[]}';
+  const isRequirementsPrompt = (prompt: string): boolean => prompt.includes('does what its Jira ticket asks for');
+  const TICKET_SENTINEL = 'idempotency key to the capture request';
+
+  function requirementsReply(name: string, patch: Record<string, unknown> = {}): string {
+    const base = JSON.parse(readFileSync(resolve(process.cwd(), 'src/test/fixtures', `requirements-reply-${name}.json`), 'utf-8')) as object;
+    return JSON.stringify({ ...base, additionalFilesNeeded: [], ...patch });
+  }
+
+  function script(requirements: ScriptedReply): (prompt: string) => ScriptedReply {
+    return (prompt) => {
+      if (isRequirementsPrompt(prompt)) return requirements;
+      if (prompt.includes('lens ONLY')) return META_LINE;
+      return [findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'SQL injection', 'critical'), SMART_TRAILER].join('\n');
+    };
+  }
+
+  type StoredSession = { findings: Array<{ id: number; title: string }>; requirements?: { ticketKey: string; coverage: { userGoal?: string; unseenFileCount: number; requirements: Array<{ text: string }> } }; rawDiffOmittedFiles?: string[] };
+  const stored = (harness: Harness): StoredSession => harness.workspaceState.get('bitbucket.session.review') as StoredSession;
+
+  async function reviewedWithTicket(harness: Harness): Promise<unknown> {
+    const { result } = await harness.turn(`review smart ${PR_URL} REQ-2`, script(requirementsReply('bug-comment-fix')));
+    return result;
+  }
+
+  // F3
+  it('redoes only the requirements block against the stated goal, leaving the findings alone', async () => {
+    const harness = createHarness({}, { jira: true });
+    const review = await reviewedWithTicket(harness);
+    const before = stored(harness);
+    const promptsBefore = harness.prompts.length;
+
+    const { text, result } = await harness.turn('the goal is actually that no customer is ever charged twice', script(requirementsReply('clean-spec')), [sessionTurn(review)]);
+
+    expect(harness.prompts.length - promptsBefore).toBe(1);
+    const prompt = harness.prompts[harness.prompts.length - 1];
+    expect(isRequirementsPrompt(prompt)).toBe(true);
+    expect(prompt.indexOf('no customer is ever charged twice')).toBeLessThan(prompt.indexOf(TICKET_SENTINEL));
+    expect(text).toContain('### Requirements coverage — REQ-2');
+    expect(text).toContain('Using your stated goal');
+    expect(result).toMatchObject({ metadata: { bitbucketSession: { kinds: ['review-session'] } } });
+
+    const after = stored(harness);
+    expect(after.findings).toEqual(before.findings);
+    expect(after.requirements!.coverage.userGoal).toBe('that no customer is ever charged twice');
+    expect(after.requirements!.coverage.requirements[0].text).toBe('Retry up to 3 times with exponential backoff');
+  });
+
+  it('says so, without running anything, when the stored review has no diff to check the goal against', async () => {
+    const harness = createHarness({}, { jira: true });
+    const review = await reviewedWithTicket(harness);
+    const session = harness.workspaceState.get('bitbucket.session.review') as Record<string, unknown>;
+    harness.workspaceState.set('bitbucket.session.review', { ...session, rawDiff: undefined });
+    const promptsBefore = harness.prompts.length;
+
+    const { text } = await harness.turn('goal: no double charges', script(requirementsReply('clean-spec')), [sessionTurn(review)]);
+
+    expect(text).toContain('stored without its diff');
+    expect(harness.prompts.length).toBe(promptsBefore);
+  });
+
+  it('stores the reviewed commit and, after the PR moves on, checks the reviewed version and says so', async () => {
+    const harness = createHarness({}, { jira: true });
+    harness.client.prOverride = { fromCommitHash: 'commit-reviewed' };
+    const review = await reviewedWithTicket(harness);
+    expect((harness.workspaceState.get('bitbucket.session.review') as { prFromCommitHash?: string }).prFromCommitHash).toBe('commit-reviewed');
+
+    harness.client.prOverride = { fromCommitHash: 'commit-newer' };
+    harness.client.fileContents.set('src/payments/client.ts', 'export class PaymentsClient {}');
+    const asksForFile = requirementsReply('bug-comment-fix', { additionalFilesNeeded: ['src/payments/client.ts'] });
+    const callsBefore = harness.client.getFileContentCalls.length;
+    const { text } = await harness.turn('goal: no double charges', script(asksForFile), [sessionTurn(review)]);
+
+    const fetched = harness.client.getFileContentCalls.slice(callsBefore);
+    expect(fetched.length).toBeGreaterThan(0);
+    expect(fetched.every((c) => c.commitHash === 'commit-reviewed')).toBe(true);
+    expect(text).toContain('new commits since this review');
+  });
+
+  it('adds no warning when the PR has not moved since the review', async () => {
+    const harness = createHarness({}, { jira: true });
+    const review = await reviewedWithTicket(harness);
+    const { text } = await harness.turn('goal: no double charges', script(requirementsReply('clean-spec')), [sessionTurn(review)]);
+
+    expect(text).not.toContain('new commits since this review');
+  });
+
+  it('keeps the old block and reports the failure when the PR cannot be loaded for the correction', async () => {
+    const harness = createHarness({}, { jira: true });
+    const review = await reviewedWithTicket(harness);
+    const before = stored(harness);
+    harness.client.getPullRequest = async () => { throw new Error('Bitbucket is down'); };
+
+    const { text } = await harness.turn('goal: no double charges', script(requirementsReply('clean-spec')), [sessionTurn(review)]);
+
+    expect(text).toContain('Bitbucket is down');
+    expect(stored(harness).requirements).toEqual(before.requirements);
+  });
+
+  it('answers a question that merely mentions the goal instead of redoing the check', async () => {
+    const harness = createHarness({}, { jira: true });
+    const review = await reviewedWithTicket(harness);
+
+    await harness.turn('The goal is to fix retries, does finding #1 matter?', (prompt) => (isRequirementsPrompt(prompt) ? 'unexpected' : 'none'), [sessionTurn(review)]);
+
+    expect(harness.prompts.filter(isRequirementsPrompt)).toHaveLength(1); // only the review's own pass
+  });
+
+  it('copies the new block after a correction and puts the coverage above the findings', async () => {
+    const harness = createHarness({}, { jira: true });
+    const review = await reviewedWithTicket(harness);
+    const corrected = await harness.turn('goal: no double charges', script(requirementsReply('clean-spec')), [sessionTurn(review)]);
+
+    await harness.turn('copy', [], [sessionTurn(corrected.result)]);
+    expect(h.clipboard).toContain('Requirements coverage (REQ-2)');
+    expect(h.clipboard).toContain('Using the stated goal: no double charges');
+    expect(h.clipboard!.indexOf('Requirements coverage')).toBeLessThan(h.clipboard!.indexOf('🔴 Critical'));
+  });
+
+  it('leaves the coverage out of a copy limited to some findings', async () => {
+    const harness = createHarness({}, { jira: true });
+    const review = await reviewedWithTicket(harness);
+
+    await harness.turn('copy #1', [], [sessionTurn(review)]);
+    expect(h.clipboard).toContain('SQL injection');
+    expect(h.clipboard).not.toContain('Requirements coverage');
+  });
+
+  it('copies a review without a ticket exactly as before', async () => {
+    const harness = createHarness({});
+    const { result } = await harness.turn(PR_URL, [[findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'SQL injection', 'critical'), META_LINE].join('\n')]);
+    await harness.turn('copy', [], [sessionTurn(result)]);
+    expect(h.clipboard).not.toContain('Requirements coverage');
+  });
+
+  it('answers "what is the goal of this PR?" as a question, with no requirements pass', async () => {
+    const harness = createHarness({}, { jira: true });
+    const review = await reviewedWithTicket(harness);
+    const requirementsCallsBefore = harness.prompts.filter(isRequirementsPrompt).length;
+
+    const { text } = await harness.turn('what is the goal of this PR?', ['none', 'It fixes a double charge.'], [sessionTurn(review)]);
+    expect(text).toContain('It fixes a double charge.');
+    expect(harness.prompts.filter(isRequirementsPrompt)).toHaveLength(requirementsCallsBefore);
+  });
+
+  it('treats "the goal is …" as a question when the review had no requirements block', async () => {
+    const harness = createHarness({});
+    const { result } = await harness.turn(PR_URL, [[findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'SQL injection', 'critical'), META_LINE].join('\n')]);
+
+    const { text } = await harness.turn('the goal is actually X', ['none', 'An answer.'], [sessionTurn(result)]);
+    expect(text).toContain('An answer.');
+    expect(harness.prompts.some(isRequirementsPrompt)).toBe(false);
+  });
+
+  it('asks what the goal is when "goal:" has nothing after it', async () => {
+    const harness = createHarness({}, { jira: true });
+    const review = await reviewedWithTicket(harness);
+    const promptsBefore = harness.prompts.length;
+
+    const { text } = await harness.turn('goal:', [], [sessionTurn(review)]);
+    expect(text).toContain('Tell me the goal');
+    expect(harness.prompts).toHaveLength(promptsBefore);
+  });
+
+  it('says how many files the redone block did not see when the stored diff was cut down', async () => {
+    const harness = createHarness({ modelContextTokens: 5_000, contextBudgetRatio: 1 }, { jira: true });
+    harness.client.rawDiff = makeDiff([
+      { path: 'src/f1.ts', lines: bulkyLines('One') },
+      { path: 'src/f2.ts', lines: bulkyLines('Two') },
+      { path: 'src/f3.ts', lines: bulkyLines('Three') },
+      { path: 'src/f4.ts', lines: bulkyLines('Four') },
+    ]);
+    const review = await reviewedWithTicket(harness);
+    expect(stored(harness).rawDiffOmittedFiles?.length ?? 0).toBeGreaterThan(0);
+
+    const { text } = await harness.turn('the goal is retries must not double charge', script(requirementsReply('clean-spec', { outOfScope: [] })), [sessionTurn(review)]);
+    expect(text).toMatch(/\d+ files? (was|were) not shown to this check/);
+  });
+
+  it('keeps the old block and says so when the correction cannot be completed', async () => {
+    const harness = createHarness({}, { jira: true });
+    const review = await reviewedWithTicket(harness);
+    const before = stored(harness).requirements!.coverage;
+
+    const { text, result } = await harness.turn('the goal is actually X', script('I cannot do that.'), [sessionTurn(review)]);
+    expect(text).toContain('requirements check could not be completed');
+    expect(stored(harness).requirements!.coverage).toEqual(before);
+    expect(result).toMatchObject({ metadata: { bitbucketSession: { kinds: ['review-session'] } } });
+  });
+});
+
+describe('finding the options without remembering them (U6)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const OPTIONS = ['smart', 'deep', 'PROJ-123', 'no ticket'];
+
+  it('lists the options in the greeting', async () => {
+    const harness = createHarness();
+    const { text } = await harness.turn('hello', []);
+    for (const option of OPTIONS) expect(text).toContain(option);
+    expect(text).toMatch(/\?/);
+  });
+
+  it('lists the options, with examples, when a review starts without a URL', async () => {
+    const harness = createHarness();
+    const { text } = await harness.turn('smart', []);
+    expect(text).toContain('Point me at a PR to review');
+    for (const option of OPTIONS) expect(text).toContain(option);
+    expect(text).toContain('question:');
+  });
+
+  // AE2
+  it('adds a chip with the exact smart command after a standard review of a PR that names a ticket', async () => {
+    const harness = createHarness({}, { jira: true });
+    harness.client.prOverride = { title: 'REQ-2 fix double charge' };
+    const { result, text } = await harness.turn(PR_URL, [[findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'SQL injection', 'critical'), META_LINE].join('\n')]);
+
+    const prompts = harness.chips(result).map((c) => c.prompt);
+    expect(prompts).toContain(`review smart ${PR_URL} REQ-2`);
+    expect(prompts).not.toContain('explain finding #1');
+    expect(prompts.filter((p) => p !== 'done')).toHaveLength(3);
+    expect(text).toContain(`review smart ${PR_URL} REQ-2`);
+  });
+
+  it('adds no ticket chip when the title has no key', async () => {
+    const harness = createHarness({}, { jira: true });
+    const { result } = await harness.turn(PR_URL, [[findingLine('src/auth/login.ts', LOGIN_ANCHOR, 'SQL injection', 'critical'), META_LINE].join('\n')]);
+    expect(harness.chips(result).map((c) => c.prompt)).toContain('explain finding #1');
+    expect(harness.chips(result).some((c) => c.prompt.startsWith('review smart'))).toBe(false);
   });
 });
