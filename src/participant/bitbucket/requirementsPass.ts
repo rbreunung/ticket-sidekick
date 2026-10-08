@@ -1,3 +1,4 @@
+import type { LogLevel } from '../../utils/diagTypes';
 import type { BitbucketPR } from '../../bitbucket/IBitbucketClient';
 import type { PrReviewService } from '../../services/PrReviewService';
 import { formatRequirementsSourceText, type RequirementsTicket } from '../../utils/requirementsSource';
@@ -10,8 +11,6 @@ import { parseRequirementsReply, buildCoverage, packDiffFiles, type Requirements
 
 /** Tokens reserved for the instructions, PR text and reply when packing diff files into the requirements prompt. */
 const REQUIREMENTS_PROMPT_OVERHEAD_TOKENS = 800;
-
-type LogLevel = 'info' | 'warn' | 'error';
 
 export interface RequirementsPassParams {
   pr: BitbucketPR;

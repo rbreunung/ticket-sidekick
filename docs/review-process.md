@@ -411,8 +411,8 @@ plain sentence ending in `?`, below):
 ```
 
 (`--` is a plain double-dash, chosen for keyboard-typability — not an em-dash.)
-`parseUpfrontQuestion`/`stripUpfrontQuestion` (`reviewSessionState.ts`) extract it
-and strip it from the prompt **before** `quick`/`deep` mode-keyword detection runs,
+`extractPromptDirectives` (`reviewSessionState.ts`) extracts it and returns the
+prompt without it, which is read **before** `quick`/`deep` mode-keyword detection runs,
 so a question that happens to contain the word "deep" or "quick" can't flip the
 review mode. This makes the question orthogonal to the mode keywords — the two
 compose freely, in either order:
