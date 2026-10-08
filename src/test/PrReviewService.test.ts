@@ -3075,6 +3075,21 @@ describe('extractPromptDirectives — the upfront question', () => {
   });
 });
 
+describe('extractPromptDirectives — plain-sentence questions', () => {
+  const URL = 'https://bb.example.com/projects/P/repos/r/pull-requests/1';
+
+  it('keeps file names and versions inside the question', () => {
+    expect(extractPromptDirectives(`${URL} does foo.ts still work with v1.2 of the client?`).question)
+      .toBe('does foo.ts still work with v1.2 of the client?');
+  });
+
+  it('keeps a capitalised mode word at the start out of the question', () => {
+    const d = extractPromptDirectives(`Smart ${URL} does this handle retries properly?`);
+    expect(d.question).toBe('does this handle retries properly?');
+    expect(d.remainder).toBe('Smart');
+  });
+});
+
 describe('extractPromptDirectives — which key counts', () => {
   const URL = 'https://bb.example.com/projects/P/repos/r/pull-requests/1';
 

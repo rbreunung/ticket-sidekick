@@ -72,6 +72,14 @@ describe('ticket lines and commands', () => {
     expect(extractPromptDirectives(use).question).toBe(extractPromptDirectives(prompt).question);
   });
 
+  it('keeps the pause links intact when the prompt contains parentheses', () => {
+    const pause = buildTicketPause('PROJ-123', `review smart ${URL} does foo() handle retries (really)?`);
+    const queries = [...pause.matchAll(/command:workbench\.action\.chat\.open\?([^)]+)\)/g)]
+      .map((m) => (JSON.parse(decodeURIComponent(m[1])) as { query: string }).query);
+    expect(queries).toHaveLength(2);
+    expect(queries[0]).toContain('foo()');
+  });
+
   it('shows the exact smart re-run command in the hint', () => {
     expect(buildSmartRerunCommand(URL, 'PROJ-123')).toBe(`review smart ${URL} PROJ-123`);
     expect(buildTicketHintLine('PROJ-123', URL)).toContain(`review smart ${URL} PROJ-123`);

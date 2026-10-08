@@ -228,7 +228,8 @@ export function buildBitbucketNotConfiguredMessage(config: Pick<BitbucketConfig,
 export function buildChatCommandLink(label: string, participantId: '@jira' | '@bitbucket', replyText: string): string {
   const safeLabel = neutralizeMarkdownLinks(label);
   const query = `${participantId} ${replyText}`;
-  const encodedArgs = encodeURIComponent(JSON.stringify({ query, isPartialQuery: false }));
+  // encodeURIComponent leaves ( and ) literal; an unbalanced ) would end the markdown link destination early.
+  const encodedArgs = encodeURIComponent(JSON.stringify({ query, isPartialQuery: false })).replace(/\(/g, '%28').replace(/\)/g, '%29');
   return `[${safeLabel}](command:workbench.action.chat.open?${encodedArgs})`;
 }
 
@@ -506,7 +507,7 @@ function findUpfrontQuestionMatch(prompt: string): { question: string; start: nu
 }
 
 /** Words that may precede an informal question on its line; they stay in the prompt. */
-const MODE_LEAD_WORD = /^(?:review|quick|standard|smart|deep)\b\s*/;
+const MODE_LEAD_WORD = /^(?:review|quick|standard|smart|deep)\b\s*/i;
 const NO_TICKET_LEAD = /^no\s+ticket\b\s*/i;
 const TICKET_KEY_LEAD = new RegExp(`^${TICKET_ID_PATTERN.source}(?![A-Za-z0-9-])\\s*`);
 const MIN_INFORMAL_QUESTION_WORDS = 3;
@@ -531,7 +532,7 @@ function findInformalQuestionMatch(
   masked += prompt.slice(last);
 
   let found: { question: string; start: number; end: number } | null = null;
-  for (const m of masked.matchAll(/[^.!?\n]*\?/g)) {
+  for (const m of masked.matchAll(/(?:[^.!?\n]|[.!](?=\S))*\?/g)) {
     if (m.index === undefined) continue;
     let start = m.index;
     const end = m.index + m[0].length;
