@@ -7,6 +7,7 @@ import {
   buildTitleKeyAlternativeLine,
   readTicketGuarded,
   resolveGoalCommit,
+  safeErrorText,
   buildPrMovedOnLine,
 } from '../participant/bitbucket/requirementsFlow';
 import { buildSmartRerunCommand, extractPromptDirectives } from '../participant/reviewSessionState';
@@ -137,5 +138,27 @@ describe('resolveGoalCommit', () => {
   it('falls back to the current commit, without a warning, for a review stored before the hash was kept', () => {
     expect(resolveGoalCommit(undefined, 'bbb')).toEqual({ commit: 'bbb', changed: false });
     expect(buildPrMovedOnLine()).toContain('Re-run the review');
+  });
+});
+
+describe('error text from a remote server', () => {
+  const hostile = 'Jira API error 502 — [click here](https://evil.example/x) <https://evil.example/y> ![i](https://evil.example/p.png) **bold** `code`';
+
+  it('is flattened so it renders no link, autolink, image or emphasis', () => {
+    const out = safeErrorText(hostile, 400);
+    expect(out).not.toMatch(/\[[^\]]*\]\(/);
+    expect(out).not.toMatch(/https?:\/\//);
+    expect(out).not.toMatch(/[<>*`]/);
+    expect(out).toContain('502');
+  });
+
+  it('is cut to the length limit on one line', () => {
+    expect(safeErrorText('a\n\nb '.repeat(200), 50)).toHaveLength(50);
+  });
+
+  it('reaches the ticket failure notice flattened', () => {
+    const line = buildTicketFailureLine('PROJ-1', { ok: false, reason: 'error', message: hostile });
+    expect(line).not.toMatch(/https?:\/\//);
+    expect(line).not.toMatch(/\]\(/);
   });
 });

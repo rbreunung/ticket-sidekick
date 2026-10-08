@@ -102,6 +102,16 @@ describe('runRequirementsPass', () => {
     expect(t.markdown.join('')).toMatch(/requirements check could not be completed \(provider failed with detail\)/);
   });
 
+  it('flattens links in a provider error before naming it in the notice', async () => {
+    const t = setup([new Error('boom [x](https://evil.example) <https://evil.example>')]);
+    await runRequirementsPass(t.params, t.deps);
+
+    const notice = t.markdown.join('');
+    expect(notice).toContain('could not be completed');
+    expect(notice).not.toMatch(/https?:\/\//);
+    expect(notice).not.toMatch(/\]\(/);
+  });
+
   it('rethrows when the request was cancelled, with no notice, so the review ends like any other pass', async () => {
     const cancelled = new Error('Canceled');
     const t = setup([cancelled], { isCancelled: () => true });

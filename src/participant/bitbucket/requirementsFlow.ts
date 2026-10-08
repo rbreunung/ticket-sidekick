@@ -1,6 +1,6 @@
 import type { ReviewMode } from '../../bitbucket/IBitbucketClient';
 import type { RequirementsSourceResult } from '../../services/TicketService';
-import { buildChatCommandLink, buildSmartRerunCommand } from '../reviewSessionState';
+import { buildChatCommandLink, buildSmartRerunCommand, neutralizeMarkdownLinks } from '../reviewSessionState';
 
 // Pure and `vscode`-free: the decision about what a review does with a Jira ticket, and the lines
 // and commands that go with each outcome. The participant file only executes the outcome.
@@ -86,6 +86,18 @@ export function buildNoKeyLine(): string {
   return '_No Jira key in the PR title, so requirements aren\'t checked. Put a key in the command to use a ticket._';
 }
 
+/**
+ * An error message shown in a notice line. It can carry text from a remote server (a Jira response body),
+ * so links, autolinks, HTML and emphasis markers are flattened and it is cut to `maxChars`.
+ */
+export function safeErrorText(message: string, maxChars: number): string {
+  return neutralizeMarkdownLinks(message.replace(/\s+/g, ' ').trim())
+    .replace(/[`*_~|<>\\]/g, ' ')
+    .replace(/\b([a-z][a-z0-9+.-]*):\/\//gi, '$1:\u200b//')
+    .replace(/\s+/g, ' ')
+    .slice(0, maxChars);
+}
+
 /** One line saying why a ticket could not be read; the review then runs without it. */
 export function buildTicketFailureLine(key: string, failure: Extract<RequirementsSourceResult, { ok: false }>): string {
   switch (failure.reason) {
@@ -94,7 +106,7 @@ export function buildTicketFailureLine(key: string, failure: Extract<Requirement
     case 'auth':
       return `_Jira rejected the credentials while reading ${key} — reviewing without it. Check them with \`@jira check\`._`;
     default:
-      return `_Could not read ${key} from Jira (${failure.message.replace(/\s+/g, ' ').slice(0, 120)}) — reviewing without it._`;
+      return `_Could not read ${key} from Jira (${safeErrorText(failure.message, 120)}) — reviewing without it._`;
   }
 }
 

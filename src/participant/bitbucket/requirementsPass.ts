@@ -4,6 +4,7 @@ import type { PrReviewService } from '../../services/PrReviewService';
 import { formatRequirementsSourceText, type RequirementsTicket } from '../../utils/requirementsSource';
 import { formatCallLine, type FileDiff } from '../reviewSessionState';
 import { describeErrorForLog, type CallAttemptOut, type CallDiagHooks } from './reviewDiagnostics';
+import { safeErrorText } from './requirementsFlow';
 import { parseRequirementsReply, buildCoverage, packDiffFiles, type RequirementsCoverage } from './requirementsCoverage';
 
 // `vscode`-free: the model call, the extra-file fetch and the chat stream arrive as parameters, so the
@@ -105,7 +106,7 @@ export async function runRequirementsPass(params: RequirementsPassParams, deps: 
     logReview('error', `Requirements pass failed — [${runTag}]`, {
       runTag, error: err instanceof Error ? err.message : String(err), ...describeErrorForLog(err),
     });
-    stream.markdown(`_⚠ The requirements check could not be completed (${(err instanceof Error ? err.message : String(err)).replace(/\s+/g, ' ').slice(0, 160)}) — the review below is complete without it._\n\n`);
+    stream.markdown(`_⚠ The requirements check could not be completed (${safeErrorText(err instanceof Error ? err.message : String(err), 160)}) — the review below is complete without it._\n\n`);
     return undefined;
   }
 }
