@@ -1,7 +1,7 @@
 import { extractJsonObject } from '../utils/extractJsonObject';
 import { isCancellation } from './session/primitives';
-import { TICKET_ID_PATTERN } from '../utils/branchParser';
-import type { RequirementsSource } from '../utils/requirementsSource';
+import { TICKET_ID_PATTERN, findJiraKeyMatch } from '../utils/branchParser';
+import type { RequirementsTicket } from '../utils/requirementsSource';
 import type { RequirementsCoverage } from './bitbucket/requirementsCoverage';
 // Type-only — IBitbucketClient.ts has no imports of its own (vscode included), so this
 // stays safe for a vscode-free, Vitest-loadable module.
@@ -83,7 +83,7 @@ export interface ReviewSession {
   /** PR target branch, for the "Copy for Teams" header. Absent on sessions saved before it existed. */
   prTargetBranch?: string;
   /** The ticket check, when the user opted into one: kept so "Copy for Teams" can include it and a stated goal can redo it. */
-  requirements?: { ticketKey: string; source: RequirementsSource; coverage: RequirementsCoverage };
+  requirements?: RequirementsTicket & { coverage: RequirementsCoverage };
 }
 
 export interface BitbucketCommentPreviewSession {
@@ -120,7 +120,7 @@ export interface SmartFallbackSession {
   /** R23: phase 1's funnel counters and failure state, so the resumed review reports them. */
   phase1Tally?: ReviewTally;
   /** The ticket the user opted into, so the resumed review still runs the requirements pass. */
-  requirementsTicket?: { ticketKey: string; source: RequirementsSource };
+  requirementsTicket?: RequirementsTicket;
 }
 
 /** Running counters for one review, reported by the shared completion step (KTD10). */
@@ -454,9 +454,9 @@ export function parsePrUrl(url: string): ParsedPrUrl | null {
 /**
  * Locate the upfront-question delimiter (`question:` prefix or a standalone `--`
  * marker) in the RAW prompt and return its span plus the extracted question text.
- * `parseUpfrontQuestion` and `stripUpfrontQuestion` both call this so they always
- * agree on the exact same substring as "the question" for a given input — running
- * two independently-normalized regex passes previously let them disagree (a `--`
+ * `extractPromptDirectives` calls this once and derives both the question and the prompt
+ * without it from the same span — running two independently-normalized regex passes
+ * previously let them disagree (a `--`
  * inside a URL/repo slug like `api--service` could be picked up by one function and
  * not the other, and a trailing newline could defeat one function's `$`-anchored
  * match while the other's `.trim()`-then-match still succeeded).
@@ -509,7 +509,6 @@ function findUpfrontQuestionMatch(prompt: string): { question: string; start: nu
 const MODE_LEAD_WORD = /^(?:review|quick|standard|smart|deep)\b\s*/;
 const NO_TICKET_LEAD = /^no\s+ticket\b\s*/i;
 const TICKET_KEY_LEAD = new RegExp(`^${TICKET_ID_PATTERN.source}(?![A-Za-z0-9-])\\s*`);
-const TICKET_KEY_ANYWHERE = new RegExp(`(?<![A-Za-z0-9])${TICKET_ID_PATTERN.source}(?![A-Za-z0-9-])`);
 const MIN_INFORMAL_QUESTION_WORDS = 3;
 
 /**
@@ -570,25 +569,15 @@ export function extractPromptDirectives(prompt: string): PromptDirectives {
   const skipTicket = noTicket.test(text);
   text = text.replace(noTicket, ' ');
 
-  const keyMatch = TICKET_KEY_ANYWHERE.exec(text);
-  if (keyMatch) text = text.replace(keyMatch[0], ' ');
+  const keyMatch = findJiraKeyMatch(text);
+  if (keyMatch) text = `${text.slice(0, keyMatch.index)} ${text.slice(keyMatch.index + keyMatch.key.length)}`;
 
   return {
     question: match?.question,
-    ticketKey: skipTicket ? undefined : keyMatch?.[0],
+    ticketKey: skipTicket ? undefined : keyMatch?.key,
     skipTicket,
     remainder: text.replace(/\s+/g, ' ').trim(),
   };
-}
-
-export function parseUpfrontQuestion(prompt: string): string | undefined {
-  return findUpfrontQuestionMatch(prompt)?.question;
-}
-
-export function stripUpfrontQuestion(prompt: string): string {
-  const match = findUpfrontQuestionMatch(prompt);
-  if (!match) return prompt.trim();
-  return (prompt.slice(0, match.start) + prompt.slice(match.end)).trim();
 }
 
 /**

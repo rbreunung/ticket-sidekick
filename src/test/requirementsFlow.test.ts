@@ -1,9 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   decideTicketStep,
   buildTicketPause,
   buildTicketHintLine,
   buildTicketFailureLine,
+  buildTitleKeyAlternativeLine,
+  readTicketGuarded,
 } from '../participant/bitbucket/requirementsFlow';
 import { buildSmartRerunCommand, extractPromptDirectives } from '../participant/reviewSessionState';
 
@@ -81,5 +83,34 @@ describe('ticket lines and commands', () => {
     const other = buildTicketFailureLine('PROJ-1', { ok: false, reason: 'error', message: 'boom\nwith lines' });
     expect(other).toContain('boom with lines');
     expect(other.split('\n')).toHaveLength(1);
+  });
+});
+
+describe('readTicketGuarded', () => {
+  it('passes a successful read through', async () => {
+    const ok = { ok: true, source: { key: 'PROJ-1' } } as never;
+    await expect(readTicketGuarded(async () => ok)).resolves.toBe(ok);
+  });
+
+  it('turns a read that never settles into a failure the review can continue from', async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = readTicketGuarded(() => new Promise(() => {}), 50);
+      await vi.advanceTimersByTimeAsync(60);
+      await expect(pending).resolves.toEqual({ ok: false, reason: 'error', message: 'timed out' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('turns a throwing read into a failure instead of failing the review', async () => {
+    await expect(readTicketGuarded(async () => { throw new Error('boom'); }))
+      .resolves.toEqual({ ok: false, reason: 'error', message: 'boom' });
+  });
+
+  it('names the PR-title ticket when the written key was not found', () => {
+    const line = buildTitleKeyAlternativeLine('PAY-9', 'https://bb.example.com/projects/P/repos/r/pull-requests/1');
+    expect(line).toContain('PAY-9');
+    expect(line).toContain('review smart https://bb.example.com/projects/P/repos/r/pull-requests/1 PAY-9');
   });
 });

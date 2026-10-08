@@ -16,6 +16,12 @@ export interface RequirementsComment {
   text: string;
 }
 
+/** The ticket a review is checked against: its key and what was read from it. */
+export interface RequirementsTicket {
+  ticketKey: string;
+  source: RequirementsSource;
+}
+
 /** What the requirements pass reads from a ticket: readable, size-capped, newest comment first. */
 export interface RequirementsSource {
   key: string;

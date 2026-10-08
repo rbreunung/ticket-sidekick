@@ -585,9 +585,9 @@ describe('extractPromptDirectives (ticket key, "no ticket", informal question)',
     expect(extractPromptDirectives(`review smart ${URL} PROJ-9 PROJ-10`).ticketKey).toBe('PROJ-9');
   });
 
-  it('does not match a lowercase key, and returns a key-shaped word like UTF-8 (documented false positive)', () => {
+  it('does not match a lowercase key or a well-known non-ticket shape like UTF-8', () => {
     expect(extractPromptDirectives(`review smart ${URL} proj-9`).ticketKey).toBeUndefined();
-    expect(extractPromptDirectives(`review smart ${URL} UTF-8`).ticketKey).toBe('UTF-8');
+    expect(extractPromptDirectives(`review smart ${URL} UTF-8`).ticketKey).toBeUndefined();
   });
 
   it('leaves a plain prompt untouched apart from trimming', () => {

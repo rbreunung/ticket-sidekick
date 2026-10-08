@@ -204,7 +204,7 @@ flowchart TB
 | A large PR hides the evidence for a requirement and the pass reports a false gap | KTD7: unseen files make a verdict "unclear" and the block says how many files were not seen. Registered as a known limitation (U6). |
 | A crafted ticket or comment injects instructions or fake links | KTD9 neutralizes all echoed text; the ticket is fenced as untrusted input (R7); output is advisory and nothing is posted. |
 | The informal question rule misreads a sentence | The first streamed line echoes the detected focus, so a wrong guess is visible. Registered as a known limitation (U6). |
-| A key-shaped word such as `UTF-8` is taken as a ticket | It produces one "not found" line and the review runs unchanged (R4). U1 pins this behavior with a test. |
+| A key-shaped word such as `UTF-8` is taken as a ticket | Well-known shapes (`UTF-8`, `SHA-256`, `CVE-…`, `RFC-…`) are skipped; any other look-alike produces one "not found" line and the review runs unchanged (R4). |
 | The "use" link needs the chat host to resubmit the full command | The links reuse `buildChatCommandLink`, already used for the smart-fallback reply. The click behavior is checked manually (Verification Contract). |
 | Extra cost on smart and deep reviews | One call plus at most one file round, only after the user opts in. |
 | Stored sessions grow | The capped source text adds at most about 14,000 characters; fields are optional. |
@@ -247,7 +247,7 @@ flowchart TB
 - A statement without `?`, and a fragment such as `ok?`, are not questions.
 - Two keys outside the URL and question give the first one.
 - A lowercase `proj-9` is not a key.
-- `UTF-8` outside the question is returned as the ticket key (documented false positive).
+- `UTF-8` and other well-known non-ticket shapes outside the question are not taken as the ticket key.
 - The remainder contains no URL, question, key or `no ticket`.
 
 **Verification:** All rows pass and the pre-existing upfront-question tests are unchanged and green.

@@ -7,7 +7,7 @@ import {
   estimateChunkTokens, selectFilesWithinBudget, MAX_CONTEXT_FILES_PER_BATCH, REVIEW_CHUNK_TOKEN_CAP,
   parseCriticKeep, parseCriticAdditionalFiles, dedupeFindings, extractHunkAround,
   parseFollowUpIntent, buildPrContextPrompt, buildDiffAwarePrompt, buildFindingFollowUpPrompt, parseFindingMatchReply, buildStoredReviewDiff,
-  parseUpfrontQuestion, stripUpfrontQuestion,
+  extractPromptDirectives,
   formatCallLine, formatFindingsFunnel, buildRunTag,
   buildTruncationEvent, formatRecoveryDecision, formatStructuredRunRecord,
   formatContinuationMessage, createAttemptTracker,
@@ -3034,76 +3034,94 @@ describe('buildDiffAwarePrompt', () => {
   });
 });
 
-describe('parseUpfrontQuestion', () => {
+describe('extractPromptDirectives — the upfront question', () => {
   it('parses -- suffix', () => {
-    expect(parseUpfrontQuestion('https://.../pull-requests/42 -- Did I introduce any regression?')).toBe('Did I introduce any regression?');
+    expect(extractPromptDirectives('https://.../pull-requests/42 -- Did I introduce any regression?').question).toBe('Did I introduce any regression?');
   });
 
   it('parses question: prefix', () => {
-    expect(parseUpfrontQuestion('https://.../pull-requests/42 question: Is this backwards compatible?')).toBe('Is this backwards compatible?');
+    expect(extractPromptDirectives('https://.../pull-requests/42 question: Is this backwards compatible?').question).toBe('Is this backwards compatible?');
   });
 
   it('returns undefined when no question', () => {
-    expect(parseUpfrontQuestion('https://.../pull-requests/42')).toBeUndefined();
+    expect(extractPromptDirectives('https://.../pull-requests/42').question).toBeUndefined();
   });
 
   it('extracts a question containing the words quick/deep without losing them', () => {
-    expect(parseUpfrontQuestion('https://.../pull-requests/42 -- Did we go deep enough on error handling?'))
+    expect(extractPromptDirectives('https://.../pull-requests/42 -- Did we go deep enough on error handling?').question)
       .toBe('Did we go deep enough on error handling?');
   });
 
   it('does not treat a -- embedded in a URL/repo slug as the question delimiter', () => {
     const prompt = 'https://bitbucket.org/myteam/api--service/pull-requests/42 review deep -- actual question here';
-    expect(parseUpfrontQuestion(prompt)).toBe('actual question here');
+    expect(extractPromptDirectives(prompt).question).toBe('actual question here');
   });
 
   it('is not defeated by a trailing newline after the question', () => {
     const prompt = 'https://bitbucket.org/myteam/svc/pull-requests/42 -- Did we go deep enough?\n';
-    expect(parseUpfrontQuestion(prompt)).toBe('Did we go deep enough?');
+    expect(extractPromptDirectives(prompt).question).toBe('Did we go deep enough?');
   });
 
   it('excludes a trailing PR URL when the question: prefix comes before it', () => {
     const prompt = 'question: does this change handle concurrent writes safely? https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42';
-    expect(parseUpfrontQuestion(prompt)).toBe('does this change handle concurrent writes safely?');
+    expect(extractPromptDirectives(prompt).question).toBe('does this change handle concurrent writes safely?');
   });
 
   it('excludes a trailing PR URL when the -- suffix comes before it', () => {
     const prompt = '-- does this change handle concurrent writes safely? https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42';
-    expect(parseUpfrontQuestion(prompt)).toBe('does this change handle concurrent writes safely?');
+    expect(extractPromptDirectives(prompt).question).toBe('does this change handle concurrent writes safely?');
   });
 });
 
-describe('stripUpfrontQuestion', () => {
+describe('extractPromptDirectives — which key counts', () => {
+  const URL = 'https://bb.example.com/projects/P/repos/r/pull-requests/1';
+
+  it('does not take key-shaped prose as the ticket', () => {
+    expect(extractPromptDirectives(`smart ${URL} check the UTF-8 handling`).ticketKey).toBeUndefined();
+  });
+
+  it('takes the real key even when key-shaped prose comes first', () => {
+    expect(extractPromptDirectives(`smart ${URL} SHA-256 PAY-7`).ticketKey).toBe('PAY-7');
+  });
+
+  it('removes the matched key itself, not an earlier look-alike, from the remainder', () => {
+    const d = extractPromptDirectives(`smart ${URL} aPAY-7 PAY-7`);
+    expect(d.ticketKey).toBe('PAY-7');
+    expect(d.remainder).toBe('smart aPAY-7');
+  });
+});
+
+describe('extractPromptDirectives — the prompt left without the question', () => {
   it('removes the -- question so mode-keyword detection does not see it', () => {
-    const stripped = stripUpfrontQuestion('review deep https://.../pull-requests/42 -- Did we go deep enough?');
+    const stripped = extractPromptDirectives('review deep https://.../pull-requests/42 -- Did we go deep enough?').remainder;
     expect(stripped).not.toMatch(/enough/);
     expect(stripped).toMatch(/deep/); // the mode keyword itself, outside the question, is preserved
   });
 
   it('does not strip a -- embedded in a URL/repo slug, but still strips the real question', () => {
     const prompt = 'https://bitbucket.org/myteam/api--service/pull-requests/42 review deep -- actual question here';
-    const stripped = stripUpfrontQuestion(prompt);
+    const stripped = extractPromptDirectives(prompt).remainder;
     expect(stripped).toContain('review deep');
     expect(stripped).not.toContain('actual question here');
   });
 
   it('strips the question even when followed by a trailing newline', () => {
     const prompt = 'https://bitbucket.org/myteam/svc/pull-requests/42 -- Did we go deep enough?\n';
-    const stripped = stripUpfrontQuestion(prompt);
+    const stripped = extractPromptDirectives(prompt).remainder;
     expect(stripped).not.toContain('deep');
   });
 
-  it('preserves a trailing PR URL when the question: prefix comes before it', () => {
+  it('keeps a trailing PR URL out of the question when the question: prefix comes before it', () => {
     const prompt = 'question: does this change handle concurrent writes safely? https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42';
-    const stripped = stripUpfrontQuestion(prompt);
-    expect(stripped).toBe('https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42');
+    const stripped = extractPromptDirectives(prompt).remainder;
+    expect(stripped).toBe(''); // the URL is read separately; only the question is gone from the rest
     expect(stripped).not.toContain('concurrent writes');
   });
 
-  it('preserves a trailing PR URL when the -- suffix comes before it', () => {
+  it('keeps a trailing PR URL out of the question when the -- suffix comes before it', () => {
     const prompt = '-- does this change handle concurrent writes safely? https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42';
-    const stripped = stripUpfrontQuestion(prompt);
-    expect(stripped).toBe('https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42');
+    const stripped = extractPromptDirectives(prompt).remainder;
+    expect(stripped).toBe(''); // the URL is read separately; only the question is gone from the rest
     expect(stripped).not.toContain('concurrent writes');
   });
 });

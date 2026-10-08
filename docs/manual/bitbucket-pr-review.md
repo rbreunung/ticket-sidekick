@@ -98,7 +98,7 @@ If the reading is wrong, tell it the real goal in your next message — `the goa
 
 If the title names a ticket in a `quick` or `standard` review, the review ends with a line and a **Check against PROJ-123** chip that re-run it as smart with the ticket. An explicit key in those modes is ignored with one line.
 
-If there is no key, Jira isn't configured, or the ticket can't be read, the review runs as usual and says why in one line. Nothing is written to Jira.
+If there is no key, Jira isn't configured, or the ticket can't be read (including when Jira does not answer within about 20 seconds), the review runs as usual and says why in one line. If a key you wrote does not exist but the PR title names another ticket, the line also gives the command for that one. Look-alikes such as `UTF-8` or `SHA-256` are not taken for ticket keys. Nothing is written to Jira.
 
 ### When a review can't run
 

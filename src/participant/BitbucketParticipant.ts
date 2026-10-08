@@ -64,15 +64,16 @@ import { generateContent } from './jira/llmHelpers';
 import { createTokenMeter } from './bitbucket/tokenMeter';
 import { JiraApiClient } from '../jira/JiraApiClient';
 import { TicketService } from '../services/TicketService';
-import { extractTicketId } from '../utils/branchParser';
-import { formatRequirementsSourceText, type RequirementsSource } from '../utils/requirementsSource';
+import { findJiraKeyInText } from '../utils/branchParser';
+import type { RequirementsTicket } from '../utils/requirementsSource';
+import { runRequirementsPass as runRequirementsPassCore, type RequirementsPassParams } from './bitbucket/requirementsPass';
 import {
-  parseRequirementsReply, buildCoverage, renderCoverageMarkdown, renderCoverageText, packDiffFiles,
+  renderCoverageMarkdown, renderCoverageText,
   type RequirementsCoverage,
 } from './bitbucket/requirementsCoverage';
 import {
   decideTicketStep, buildTicketPause, buildTicketHintLine, buildIgnoredTicketLine,
-  buildNotConfiguredLine, buildNoKeyLine, buildTicketFailureLine,
+  buildNotConfiguredLine, buildNoKeyLine, buildTicketFailureLine, buildTitleKeyAlternativeLine, readTicketGuarded,
 } from './bitbucket/requirementsFlow';
 import { TokenUsageService, formatTokenFooter, formatUsageTable } from '../utils/tokenUsage';
 import { trustedChatMarkdown } from '../utils/chatMarkdown';
@@ -318,101 +319,43 @@ async function fetchAndBudgetContextFiles(params: {
   return selected;
 }
 
-/** Tokens reserved for the instructions, PR text and reply when packing diff files into the requirements prompt. */
-const REQUIREMENTS_PROMPT_OVERHEAD_TOKENS = 800;
+/** The Bitbucket client and review service every flow builds from the same config, with diagnostics wired. */
+function makeBitbucketServices(config: Pick<BitbucketConfig, 'baseUrl' | 'authType' | 'token'>): { client: BitbucketApiClient; service: PrReviewService } {
+  const client = new BitbucketApiClient({
+    baseUrl: config.baseUrl ?? '',
+    authType: config.authType,
+    token: config.token!,
+    onDiag: (level, message, details) => logDiag('bitbucket.apiClient', level, message, details),
+  });
+  const service = new PrReviewService(
+    client,
+    (level, message, details) => logDiag('bitbucket.prReviewService', level, message, details),
+  );
+  return { client, service };
+}
 
-/**
- * The requirements pass: one call over the whole PR (not per chunk) comparing the diff with the
- * ticket, plus at most one round of extra files the model asks for. Only this call ever carries
- * ticket text. A failure never sinks the review: it is named in one line and the review goes on
- * without the coverage block. Returns undefined when no block can be shown.
- */
-async function runRequirementsPass(params: {
-  pr: BitbucketPR;
+/** Binds the vscode-bound pieces (model call, file fetch, cancellation) to the vscode-free requirements pass. */
+async function runRequirementsPass(params: Omit<RequirementsPassParams, 'stream'> & {
+  stream: vscode.ChatResponseStream;
   ref: { project: string; repo: string };
-  ticket: { ticketKey: string; source: RequirementsSource };
-  fileDiffs: FileDiff[];
-  service: PrReviewService;
   request: Pick<vscode.ChatRequest, 'model'>;
   token: vscode.CancellationToken;
-  runTag: string;
-  tokenBudget: number;
   fetchedFileCache: Map<string, string>;
-  /** A goal the user stated; when set it replaces the ticket as the primary requirement. */
-  userGoal?: string;
-  /** Files of the PR that are not in `fileDiffs` at all (cut from a stored diff), counted as not seen. */
-  alreadyOmittedPaths?: string[];
-  logReview: (level: 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>) => void;
-  stream: vscode.ChatResponseStream;
 }): Promise<RequirementsCoverage | undefined> {
-  const { pr, ref, ticket, fileDiffs, service, request, token, runTag, tokenBudget, fetchedFileCache, userGoal, alreadyOmittedPaths = [], logReview, stream } = params;
-  stream.markdown(`_Checking the diff against ${ticket.ticketKey}…_\n\n`);
-  try {
-    const ticketText = formatRequirementsSourceText(ticket.source);
-    const packBudget = Math.max(0, tokenBudget - Math.ceil(ticketText.length / 4) - REQUIREMENTS_PROMPT_OVERHEAD_TOKENS);
-    const { shown, omitted: packedOmitted } = packDiffFiles(fileDiffs, packBudget);
-    const omitted: Array<{ path: string; changedLines?: number }> = [...packedOmitted, ...alreadyOmittedPaths.map((path) => ({ path }))];
-    const prPaths = [...new Set([...fileDiffs.map((f) => f.path), ...alreadyOmittedPaths])];
-    if (omitted.length > 0) {
-      logReview('info', `Requirements pass sees ${shown.length} of ${prPaths.length} file(s)`, { runTag, omitted: omitted.map((o) => o.path) });
-    }
-
-    const callOnce = async (round: 1 | 2, fileContents?: Map<string, string>) => {
-      const prompt = service.buildRequirementsPrompt(pr, ticket.ticketKey, ticketText, shown, {
-        omittedFiles: omitted, ...(userGoal ? { userGoal } : {}), ...(fileContents ? { fileContents } : {}),
-      });
-      const attemptOut: CallAttemptOut = { attempt: 0, durationMs: 0 };
-      const raw = await callLLMWithProgress(
-        prompt, request.model, token, 'Checking requirements', `requirements round ${round}`,
-        {
-          attemptOut,
-          onAttemptError: (attempt, durationMs, errorCode) => logReview('error', formatCallLine({
-            runTag, pass: 'requirements', batch: 1, totalBatches: 1, attempt,
-            itemCount: shown.length, promptChars: prompt.length, durationMs, status: 'error', errorCode,
-          })),
-        },
-        (reply) => { parseRequirementsReply(reply, prPaths); },
-      );
-      logReview('info', formatCallLine({
-        runTag, pass: 'requirements', batch: 1, totalBatches: 1, attempt: attemptOut.attempt,
-        itemCount: shown.length, promptChars: prompt.length, responseChars: raw.length,
-        durationMs: attemptOut.durationMs, status: 'ok',
-      }));
-      return parseRequirementsReply(raw, prPaths);
-    };
-
-    let parsed = await callOnce(1);
-    if (parsed.additionalFilesNeeded.length > 0 && !parsed.noClearRequirements) {
-      try {
-        const context = await fetchAndBudgetContextFiles({
-          requestedFiles: parsed.additionalFilesNeeded, fetchedFileCache, service,
-          project: ref.project, repo: ref.repo, commitHash: pr.fromCommitHash, tokenBudget, budgetAgainst: shown,
-          fetchMessage: (n) => `_Fetching ${n} file${n !== 1 ? 's' : ''} the requirements check asked for…_\n\n`,
-          logLabel: 'Requirements context files', batchNum: 1, logReview, stream,
-        });
-        if (context.size > 0) parsed = await callOnce(2, context);
-      } catch (err) {
-        // One round only, and a failed second round keeps what the first one found.
-        logReview('warn', 'Requirements extra-file round failed — keeping the first answer', {
-          runTag, error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-    if (parsed.droppedOutOfScope > 0) {
-      logReview('info', `Requirements pass named ${parsed.droppedOutOfScope} file(s) outside the PR — dropped`, { runTag });
-    }
-    logReview('info', `Requirements coverage for ${ticket.ticketKey}`, {
-      runTag, requirements: parsed.requirements.length, outOfScope: parsed.outOfScope.length,
-      noClearRequirements: parsed.noClearRequirements, conflict: parsed.conflict !== undefined,
-    });
-    return buildCoverage(ticket.ticketKey, parsed, { unseenFileCount: omitted.length, ...(userGoal ? { userGoal } : {}) });
-  } catch (err) {
-    logDiag('bitbucket.review', 'error', `Requirements pass failed — [${runTag}]`, {
-      runTag, error: err instanceof Error ? err.message : String(err), ...describeErrorForLog(err),
-    });
-    stream.markdown(`_⚠ The requirements check could not be completed (${(err instanceof Error ? err.message : String(err)).replace(/\s+/g, ' ').slice(0, 160)}) — the review below is complete without it._\n\n`);
-    return undefined;
-  }
+  const { ref, request, token, fetchedFileCache, ...passParams } = params;
+  const { pr, tokenBudget, service, logReview, stream } = passParams;
+  return runRequirementsPassCore(passParams, {
+    callModel: (prompt, round, diag, validateReply) => callLLMWithProgress(
+      prompt, request.model, token, 'Checking requirements', `requirements round ${round}`, diag, validateReply,
+    ),
+    fetchContextFiles: (requestedFiles, shown) => fetchAndBudgetContextFiles({
+      requestedFiles, fetchedFileCache, service,
+      project: ref.project, repo: ref.repo, commitHash: pr.fromCommitHash, tokenBudget, budgetAgainst: shown,
+      fetchMessage: (n) => `_Fetching ${n} file${n !== 1 ? 's' : ''} the requirements check asked for…_\n\n`,
+      logLabel: 'Requirements context files', batchNum: 1, logReview, stream,
+    }),
+    isCancelled: () => token.isCancellationRequested,
+  });
 }
 
 /**
@@ -774,16 +717,7 @@ export function createBitbucketParticipant(
     const postAndReport = async (previewSession: BitbucketCommentPreviewSession): Promise<vscode.ChatResult> => {
       await ws.update('bitbucket.session.commentPreview', undefined);
       stream.markdown(`_Posting ${previewSession.items.length} comment${previewSession.items.length !== 1 ? 's' : ''} to Bitbucket…_\n\n`);
-      const client = new BitbucketApiClient({
-        baseUrl: config.baseUrl ?? '',
-        authType: config.authType,
-        token: config.token!,
-        onDiag: (level, message, details) => logDiag('bitbucket.apiClient', level, message, details),
-      });
-      const service = new PrReviewService(
-        client,
-        (level, message, details) => logDiag('bitbucket.prReviewService', level, message, details),
-      );
+      const { client, service } = makeBitbucketServices(config);
       const results = await service.postCommentItems(
         previewSession.project, previewSession.repo, previewSession.prId, previewSession.items,
       );
@@ -827,7 +761,7 @@ export function createBitbucketParticipant(
       /** R7 (opt-in): the buffered per-call lines for the fenced structured record. */
       structuredRecord?: { configLine: string; lines: string[] };
       /** The ticket the requirements pass checks the diff against; absent unless the user opted in. */
-      requirements?: { ticketKey: string; source: RequirementsSource };
+      requirements?: RequirementsTicket;
       /** Files already fetched in this review, so the requirements pass never re-fetches one. */
       fetchedFileCache?: Map<string, string>;
       /** A ticket spotted in the title but not used (quick and standard): a line after the review and a chip. */
@@ -947,16 +881,7 @@ export function createBitbucketParticipant(
       stream.markdown(`_Resuming review of **${session.prTitle}** with ${choiceLabel}…_\n\n`);
 
       const runTag = buildRunTag(session.project, session.repo, session.prId);
-      const client = new BitbucketApiClient({
-        baseUrl: config.baseUrl ?? '',
-        authType: config.authType,
-        token: config.token!,
-        onDiag: (level, message, details) => logDiag('bitbucket.apiClient', level, message, details),
-      });
-      const service = new PrReviewService(
-        client,
-        (level, message, details) => logDiag('bitbucket.prReviewService', level, message, details),
-      );
+      const { client, service } = makeBitbucketServices(config);
       const logReview = (level: 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>): void => {
         logDiag('bitbucket.review', level, message, details);
       };
@@ -1091,22 +1016,17 @@ export function createBitbucketParticipant(
               stream.markdown('_Tell me the goal after "the goal is …" and I will check the PR against it._');
               return reviewSessionResult;
             }
-            const goalClient = new BitbucketApiClient({
-              baseUrl: config.baseUrl ?? '',
-              authType: config.authType,
-              token: config.token!,
-              onDiag: (level, message, details) => logDiag('bitbucket.apiClient', level, message, details),
-            });
-            const goalService = new PrReviewService(
-              goalClient,
-              (level, message, details) => logDiag('bitbucket.prReviewService', level, message, details),
-            );
+            if (!session.rawDiff) {
+              stream.markdown('_This review was stored without its diff, so the goal cannot be checked against it. Start a new review to use a goal._');
+              return reviewSessionResult;
+            }
+            const { client: goalClient, service: goalService } = makeBitbucketServices(config);
             const goalRunTag = buildRunTag(session.project, session.repo, session.prId);
             const goalPr = await goalClient.getPullRequest(session.project, session.repo, session.prId);
             const coverage = await runRequirementsPass({
               pr: goalPr, ref: { project: session.project, repo: session.repo },
               ticket: { ticketKey: stored.ticketKey, source: stored.source },
-              fileDiffs: parseDiff(session.rawDiff ?? ''), service: goalService, request: modelRequest, token, runTag: goalRunTag,
+              fileDiffs: parseDiff(session.rawDiff), service: goalService, request: modelRequest, token, runTag: goalRunTag,
               tokenBudget: resolveTokenBudget(config, model).tokenBudget, fetchedFileCache: new Map(), userGoal: intent.goal,
               alreadyOmittedPaths: session.rawDiffOmittedFiles ?? [],
               logReview: (level, message, details) => logDiag('bitbucket.review', level, message, details), stream,
@@ -1158,15 +1078,7 @@ export function createBitbucketParticipant(
               return reviewSessionResult;
             }
             const userNote = intent.note || undefined;
-            const service = new PrReviewService(
-              new BitbucketApiClient({
-                baseUrl: config.baseUrl ?? '',
-                authType: config.authType,
-                token: config.token!,
-                onDiag: (level, message, details) => logDiag('bitbucket.apiClient', level, message, details),
-              }),
-              (level, message, details) => logDiag('bitbucket.prReviewService', level, message, details),
-            );
+            const { service } = makeBitbucketServices(config);
             const items = selectedFindings.map(f => ({ finding: f, text: service.formatPrComment(f, userNote) }));
             const previewSession: BitbucketCommentPreviewSession = {
               project: session.project, repo: session.repo, prId: session.prId, items,
@@ -1284,16 +1196,7 @@ export function createBitbucketParticipant(
     // output channel — every diagnostic line for this run carries this tag (KTD1).
     const runTag = buildRunTag(parsed.project, parsed.repo, parsed.prId);
 
-    const client = new BitbucketApiClient({
-      baseUrl: config.baseUrl ?? '',
-      authType: config.authType,
-      token: config.token!,
-      onDiag: (level, message, details) => logDiag('bitbucket.apiClient', level, message, details),
-    });
-    const service = new PrReviewService(
-      client,
-      (level, message, details) => logDiag('bitbucket.prReviewService', level, message, details),
-    );
+    const { client, service } = makeBitbucketServices(config);
 
     // KTD9: last stage reached before the run ended, so an aborted/thrown-out-of run
     // is distinguishable in the output channel from a channel-write failure — the
@@ -1390,11 +1293,11 @@ export function createBitbucketParticipant(
         mode: reviewMode,
         explicitKey: directives.ticketKey,
         skipTicket: directives.skipTicket,
-        titleKey: extractTicketId(pr.title) ?? undefined,
+        titleKey: findJiraKeyInText(pr.title),
         jiraConfigured: configService.isConfigured(jiraConfig),
       });
       logReview('info', `Ticket step — ${ticketStep.kind}`, { runTag, step: ticketStep.kind, ...('key' in ticketStep ? { key: ticketStep.key } : {}) });
-      let requirementsTicket: { ticketKey: string; source: RequirementsSource } | undefined;
+      let requirementsTicket: RequirementsTicket | undefined;
       let ticketHint: { key: string; prUrl: string } | undefined;
       switch (ticketStep.kind) {
         case 'ask':
@@ -1402,10 +1305,7 @@ export function createBitbucketParticipant(
           return;
         case 'run': {
           if (!configService.isConfigured(jiraConfig)) break;
-          type TicketRead = Awaited<ReturnType<TicketService['getRequirementsSource']>>;
-          let read: TicketRead;
-          let timer: ReturnType<typeof setTimeout> | undefined;
-          try {
+          const read = await readTicketGuarded(async () => {
             const ticketService = new TicketService(
               new JiraApiClient({
                 baseUrl: jiraConfig.baseUrl,
@@ -1415,21 +1315,19 @@ export function createBitbucketParticipant(
               }),
               (level, message, details) => logDiag('jira.ticketService', level, message, details),
             );
-            const timeout = new Promise<TicketRead>((resolve) => {
-              timer = setTimeout(() => resolve({ ok: false, reason: 'error', message: 'timed out' }), 20000);
-            });
-            read = await Promise.race([ticketService.getRequirementsSource(ticketStep.key), timeout]);
-          } catch (err) {
-            logReview('warn', 'Ticket read threw — continuing without a ticket', { runTag, ...describeErrorForLog(err) });
-            read = { ok: false, reason: 'error', message: 'unexpected error' };
-          } finally {
-            if (timer) clearTimeout(timer);
-          }
+            return ticketService.getRequirementsSource(ticketStep.key);
+          });
           if (read.ok) {
             requirementsTicket = { ticketKey: ticketStep.key, source: read.source };
             stream.markdown(`_Using ticket ${ticketStep.key} to check requirements._\n\n`);
           } else {
+            logReview('warn', 'Ticket read failed — reviewing without it', { runTag, key: ticketStep.key, reason: read.reason });
             stream.markdown(`${buildTicketFailureLine(ticketStep.key, read)}\n\n`);
+            // A key written in the prompt that does not exist while the title names another: say how to use that one.
+            const titleKey = findJiraKeyInText(pr.title);
+            if (read.reason === 'not-found' && titleKey && titleKey !== ticketStep.key) {
+              stream.markdown(`${buildTitleKeyAlternativeLine(titleKey, prUrlMatch[0])}\n\n`);
+            }
           }
           break;
         }

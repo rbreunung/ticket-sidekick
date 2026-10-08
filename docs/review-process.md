@@ -462,7 +462,7 @@ prompt in a fixed order — upfront question, PR URLs, `no ticket`, the first Ji
 key — so a key or mode word inside the question or URL never acts. After
 `getPullRequest`, `decideTicketStep` (`bitbucket/requirementsFlow.ts`, pure) picks
 one outcome from the mode, the explicit key, `no ticket`, the key in the PR title
-(`extractTicketId`) and whether Jira is configured:
+(`findJiraKeyInText`, which skips well-known non-ticket shapes such as `UTF-8`, `SHA-256`, `CVE-…` and `RFC-…`) and whether Jira is configured:
 
 | Mode | Prompt / title | Outcome |
 | --- | --- | --- |
@@ -476,13 +476,15 @@ one outcome from the mode, the explicit key, `no ticket`, the key in the PR titl
 
 **The pause is stateless.** Its two links are complete re-run commands — the
 original prompt plus the key, or plus `no ticket` — built with
-`buildChatCommandLink`, so no session kind or `workspaceState` key is stored.
+`buildChatCommandLink`, so no session kind or `workspaceState` key is stored. The
+directive goes right after the PR URL, never at the end, because a trailing `--` or
+`question:` question would swallow it and pause the re-run again.
 The PR is fetched a second time on the re-run (the first fetch only reads the
 title); the pause happens before the diff is fetched.
 
 **Reading the ticket.** `TicketService.getRequirementsSource` returns the summary,
 description and comments or a failure classified by HTTP status (404 not found,
-401/403 auth, anything else other). Sizes are capped in `utils/requirementsSource.ts`
+401/403 auth, anything else other). The read is guarded by `readTicketGuarded`: it times out after 20 seconds and a throw becomes an `error` failure, so a slow or broken Jira never holds up or fails the review. When a key written in the prompt is not found and the PR title names another, the failure line is followed by the exact command for the title's ticket. Sizes are capped in `utils/requirementsSource.ts`
 (description 6,000 characters, comments 8,000 newest first and 1,500 each); a failed
 comment fetch still returns the ticket. `@bitbucket` reaches Jira through the shared
 `TicketService`/`JiraApiClient`; it never imports `JiraParticipant`.
@@ -493,8 +495,8 @@ other pass (so the smart-fallback resume gets it too, via
 the token budget allows, smallest first; files left out are listed by path and the
 prompt tells the model to mark a requirement *unclear*, never *not evident*, when its
 evidence could sit in an unseen file. The reply may ask for extra files
-(`additionalFilesNeeded`); one round goes through `fetchAndBudgetContextFiles`, never a
-second. The reply is one JSON object read by `parseRequirementsReply`; an unreadable
+(`additionalFilesNeeded`); one round goes through `fetchAndBudgetContextFiles` (and the review's shared file cache), never a
+second; a failed or unreadable second round keeps the first answer. The pass itself lives in `bitbucket/requirementsPass.ts`, `vscode`-free, with the model call and file fetch injected. A cancelled request ends the review like in every other pass. The reply is one JSON object read by `parseRequirementsReply`; an unreadable
 reply is retried like a provider error, and if every try fails the review completes
 without the block and says so in one line. The pass logs with pass id `requirements`.
 
@@ -510,7 +512,7 @@ and the parsed coverage. "Copy for Teams" puts the plain-text coverage
 copy limited to some findings leaves it out. A message that starts "the goal is …" or
 "goal: …" (only when the session has `requirements`) re-runs just this pass on the
 stored diff with that goal as the primary requirement, replaces the stored coverage and
-leaves the findings alone; a failed redo keeps the old block.
+leaves the findings alone; a failed redo keeps the old block. A message that ends in `?` is a question, not a correction, and a review stored without its diff says so instead of redoing the check.
 
 ## Token usage
 
