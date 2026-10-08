@@ -6,6 +6,8 @@ import {
   buildTicketFailureLine,
   buildTitleKeyAlternativeLine,
   readTicketGuarded,
+  resolveGoalCommit,
+  buildPrMovedOnLine,
 } from '../participant/bitbucket/requirementsFlow';
 import { buildSmartRerunCommand, extractPromptDirectives } from '../participant/reviewSessionState';
 
@@ -120,5 +122,20 @@ describe('readTicketGuarded', () => {
     const line = buildTitleKeyAlternativeLine('PAY-9', 'https://bb.example.com/projects/P/repos/r/pull-requests/1');
     expect(line).toContain('PAY-9');
     expect(line).toContain('review smart https://bb.example.com/projects/P/repos/r/pull-requests/1 PAY-9');
+  });
+});
+
+describe('resolveGoalCommit', () => {
+  it('reads extra files at the reviewed commit and flags a PR that has moved on', () => {
+    expect(resolveGoalCommit('aaa', 'bbb')).toEqual({ commit: 'aaa', changed: true });
+  });
+
+  it('is quiet when the PR is unchanged', () => {
+    expect(resolveGoalCommit('aaa', 'aaa')).toEqual({ commit: 'aaa', changed: false });
+  });
+
+  it('falls back to the current commit, without a warning, for a review stored before the hash was kept', () => {
+    expect(resolveGoalCommit(undefined, 'bbb')).toEqual({ commit: 'bbb', changed: false });
+    expect(buildPrMovedOnLine()).toContain('Re-run the review');
   });
 });

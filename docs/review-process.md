@@ -512,7 +512,7 @@ and the parsed coverage. "Copy for Teams" puts the plain-text coverage
 copy limited to some findings leaves it out. A message that starts "the goal is …" or
 "goal: …" (only when the session has `requirements`) re-runs just this pass on the
 stored diff with that goal as the primary requirement, replaces the stored coverage and
-leaves the findings alone; a failed redo keeps the old block. A message that ends in `?` is a question, not a correction, and a review stored without its diff says so instead of redoing the check.
+leaves the findings alone; a failed redo keeps the old block. The session keeps the commit the review ran against (`ReviewSession.prFromCommitHash`), so extra files for the redo are read at that commit, and when the PR has new commits the answer ends with a line saying it covers the reviewed version. A message that ends in `?` is a question, not a correction, and a review stored without its diff says so instead of redoing the check.
 
 ## Token usage
 

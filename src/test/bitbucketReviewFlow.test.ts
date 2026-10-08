@@ -1432,6 +1432,32 @@ describe('correcting the requirements reading, and sharing it (U5)', () => {
     expect(harness.prompts.length).toBe(promptsBefore);
   });
 
+  it('stores the reviewed commit and, after the PR moves on, checks the reviewed version and says so', async () => {
+    const harness = createHarness({}, { jira: true });
+    harness.client.prOverride = { fromCommitHash: 'commit-reviewed' };
+    const review = await reviewedWithTicket(harness);
+    expect((harness.workspaceState.get('bitbucket.session.review') as { prFromCommitHash?: string }).prFromCommitHash).toBe('commit-reviewed');
+
+    harness.client.prOverride = { fromCommitHash: 'commit-newer' };
+    harness.client.fileContents.set('src/payments/client.ts', 'export class PaymentsClient {}');
+    const asksForFile = requirementsReply('bug-comment-fix', { additionalFilesNeeded: ['src/payments/client.ts'] });
+    const callsBefore = harness.client.getFileContentCalls.length;
+    const { text } = await harness.turn('goal: no double charges', script(asksForFile), [sessionTurn(review)]);
+
+    const fetched = harness.client.getFileContentCalls.slice(callsBefore);
+    expect(fetched.length).toBeGreaterThan(0);
+    expect(fetched.every((c) => c.commitHash === 'commit-reviewed')).toBe(true);
+    expect(text).toContain('new commits since this review');
+  });
+
+  it('adds no warning when the PR has not moved since the review', async () => {
+    const harness = createHarness({}, { jira: true });
+    const review = await reviewedWithTicket(harness);
+    const { text } = await harness.turn('goal: no double charges', script(requirementsReply('clean-spec')), [sessionTurn(review)]);
+
+    expect(text).not.toContain('new commits since this review');
+  });
+
   it('keeps the old block and reports the failure when the PR cannot be loaded for the correction', async () => {
     const harness = createHarness({}, { jira: true });
     const review = await reviewedWithTicket(harness);

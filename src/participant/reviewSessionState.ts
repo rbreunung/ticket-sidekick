@@ -82,6 +82,8 @@ export interface ReviewSession {
   prAuthor?: string;
   /** PR target branch, for the "Copy for Teams" header. Absent on sessions saved before it existed. */
   prTargetBranch?: string;
+  /** The source commit the review ran against, so a later goal correction reads files at the same version. Absent on older sessions. */
+  prFromCommitHash?: string;
   /** The ticket check, when the user opted into one: kept so "Copy for Teams" can include it and a stated goal can redo it. */
   requirements?: RequirementsTicket & { coverage: RequirementsCoverage };
 }

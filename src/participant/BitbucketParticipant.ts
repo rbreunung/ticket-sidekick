@@ -73,7 +73,7 @@ import {
 } from './bitbucket/requirementsCoverage';
 import {
   decideTicketStep, buildTicketPause, buildTicketHintLine, buildIgnoredTicketLine,
-  buildNotConfiguredLine, buildNoKeyLine, buildTicketFailureLine, buildTitleKeyAlternativeLine, readTicketGuarded,
+  buildNotConfiguredLine, buildNoKeyLine, buildTicketFailureLine, buildTitleKeyAlternativeLine, readTicketGuarded, resolveGoalCommit, buildPrMovedOnLine,
 } from './bitbucket/requirementsFlow';
 import { TokenUsageService, formatTokenFooter, formatUsageTable } from '../utils/tokenUsage';
 import { trustedChatMarkdown } from '../utils/chatMarkdown';
@@ -834,6 +834,7 @@ export function createBitbucketParticipant(
         rawDiff: storedDiff.rawDiff,
         rawDiffTruncated: storedDiff.truncated,
         rawDiffOmittedFiles: storedDiff.omittedFiles,
+        prFromCommitHash: pr.fromCommitHash,
         prAuthor: pr.author.displayName,
         prTargetBranch: pr.targetBranch,
         ...(coverage && params.requirements
@@ -1023,8 +1024,9 @@ export function createBitbucketParticipant(
             const { client: goalClient, service: goalService } = makeBitbucketServices(config);
             const goalRunTag = buildRunTag(session.project, session.repo, session.prId);
             const goalPr = await goalClient.getPullRequest(session.project, session.repo, session.prId);
+            const goalCommit = resolveGoalCommit(session.prFromCommitHash, goalPr.fromCommitHash);
             const coverage = await runRequirementsPass({
-              pr: goalPr, ref: { project: session.project, repo: session.repo },
+              pr: { ...goalPr, fromCommitHash: goalCommit.commit }, ref: { project: session.project, repo: session.repo },
               ticket: { ticketKey: stored.ticketKey, source: stored.source },
               fileDiffs: parseDiff(session.rawDiff), service: goalService, request: modelRequest, token, runTag: goalRunTag,
               tokenBudget: resolveTokenBudget(config, model).tokenBudget, fetchedFileCache: new Map(), userGoal: intent.goal,
@@ -1034,6 +1036,7 @@ export function createBitbucketParticipant(
             if (!coverage) return reviewSessionResult;
             await ws.update('bitbucket.session.review', { ...session, requirements: { ...stored, coverage } } satisfies ReviewSession);
             stream.markdown(trustedChatMarkdown(renderCoverageMarkdown(coverage)));
+            if (goalCommit.changed) stream.markdown(`\n\n${buildPrMovedOnLine()}`);
             appendTokenFooter();
             return reviewSessionResult;
           }

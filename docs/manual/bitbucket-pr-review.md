@@ -94,7 +94,7 @@ The review reads the ticket's summary, description and comments. Many tickets ar
 
 On a large PR the check may not see every file. It says how many it did not see and marks the affected requirements unclear rather than reporting a gap.
 
-If the reading is wrong, tell it the real goal in your next message — `the goal is actually that nobody is charged twice` — and only the coverage block is redone; the findings and their numbers stay. **Copy for Teams** includes the coverage block when you copy the whole review.
+If the reading is wrong, tell it the real goal in your next message — `the goal is actually that nobody is charged twice` — and only the coverage block is redone; the findings and their numbers stay. The redo checks the version of the PR that was reviewed; if the PR has new commits since, it says so and suggests re-running the review. **Copy for Teams** includes the coverage block when you copy the whole review.
 
 If the title names a ticket in a `quick` or `standard` review, the review ends with a line and a **Check against PROJ-123** chip that re-run it as smart with the ticket. An explicit key in those modes is ignored with one line.
 

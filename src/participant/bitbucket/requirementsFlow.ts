@@ -126,3 +126,15 @@ export async function readTicketGuarded(
     if (timer) clearTimeout(timer);
   }
 }
+
+/**
+ * A goal correction checks the stored diff, so extra files are read at the commit the review ran against.
+ * `changed` is true when the PR has moved on since (both hashes known and different).
+ */
+export function resolveGoalCommit(storedHash: string | undefined, currentHash: string): { commit: string; changed: boolean } {
+  return { commit: storedHash ?? currentHash, changed: storedHash !== undefined && storedHash !== currentHash };
+}
+
+export function buildPrMovedOnLine(): string {
+  return '_The PR has new commits since this review, so this check covers the version that was reviewed. Re-run the review for an up-to-date check._';
+}
