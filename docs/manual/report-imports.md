@@ -217,8 +217,39 @@ How it applies:
 - **A partly accepted component stays in New** with only its remaining CVEs: the ticket's description, CVE labels and rating cover just those, and the rating is recomputed from them. A component whose CVEs are all accepted disappears from New.
 - **The rating floor still applies.** If a component's remaining CVEs rate below `ticketSidekick.waltz.minVulnRating` after the accepted ones are dropped, it is hidden too.
 - **Merged rows.** `accept` on a merged row accepts the CVEs of every component in it.
-- **New screen only.** The Already ticketed and Stale screens are unchanged, so a later import can still propose adding an accepted CVE to an existing ticket.
+- **CVE entries affect the New screen only.** The Already ticketed and Stale screens are unchanged by them, so a later import can still propose adding an accepted CVE to an existing ticket. To take a whole component off all three screens, accept it as a component (below).
 
 Nothing is hidden silently: the overview (or the New screen, when the import has only one group) shows a line such as "3 accepted CVEs hidden · 1 component below the rating floor". Reply `accepted` to list the entries with their reasons, and `unaccept 2` (or click **Remove**) to delete an entry. A **Remove** link names the entry itself (`unaccept netty-codec CVE-2024-1234`), so a link from an older list never deletes a different entry after the list has changed. A removed entry is offered again on the next import; rows already hidden stay hidden in the review that is open.
 
 If `.jira-oss-accepted.json` is not valid JSON, the import hides nothing and shows a warning. If it has an entry that cannot be read (for example a mistyped key), that entry is skipped with a warning. In both cases `accept` and `unaccept` leave the file alone until you fix it, so nothing you wrote by hand is lost.
+
+### Accepting a whole component at its version
+
+Some components cannot be fixed at all (no newer version exists, or the risk is accepted). Accept the component at that exact version and the OSS import stops asking about it everywhere:
+
+```text
+accept component 2 4
+accept component A3 because no newer version exists
+```
+
+Use the New screen's row numbers, or the `A` numbers on the Already ticketed screen. The reason is optional. Each component is written to the same `.jira-oss-accepted.json` as an entry with a `version` and no `cve`:
+
+```json
+{
+  "accepted": [
+    { "component": "libfoo", "cve": "CVE-2024-5678" },
+    { "component": "netty-codec", "version": "4.1.100", "reason": "no newer version exists" }
+  ]
+}
+```
+
+What happens to an accepted component:
+
+- **New:** it is never offered as a new ticket.
+- **Already ticketed:** its existing tickets drop off the screen, whether they are open or resolved.
+- **Stale:** an existing ticket with no resolution is offered for closing on the Stale screen, even though the report still lists the component. Closing works as for any stale ticket (issue type, target, resolution). A resolved ticket is not offered. Accepting a row on the Already ticketed screen adds its ticket to Stale straight away. A ticket that also covers a component that is still active is left alone.
+- **Exact version:** `netty-codec:4.1.100` accepted does not cover `4.1.101`. After you upgrade, the new version is a normal row again.
+- **Stays accepted:** a new CVE, a higher rating or a fixed version in the report does not bring the component back. Remove the entry to review it again.
+- **Jira is not changed** by accepting. Only closing a stale ticket changes Jira, and only when you ask for it.
+
+The overview shows "2 accepted components hidden" with a **Show accepted** link. The `accepted` list shows component entries as "whole component" with a **Remove** link, which sends `unaccept-component netty-codec 4.1.100`. A removed entry is offered again on the next import; rows already hidden stay hidden in the review that is open. A version of the extension without this feature skips component entries with a warning and leaves the file alone, so update the extension for the whole team.
