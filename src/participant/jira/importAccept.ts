@@ -138,7 +138,8 @@ export async function acceptComponents<TItem, TRow extends ReviewRowBase>(
   const moved = await moveCandidatesToStale(narrowed, keys, ticketService, descriptor);
   stream.markdown(written.added > 0
     ? `✓ Accepted ${written.added} component${written.added === 1 ? '' : 's'} from ${named.length} row(s) — hidden from this and future imports.` +
-      `${moved.count > 0 ? ` ${moved.count} open ticket(s) are now offered under Stale.` : ''}\n\n`
+      `${moved.count > 0 ? ` ${moved.count} open ticket(s) are now offered under Stale.` : ''}` +
+      `${moved.failed > 0 ? ` ✗ Could not offer ${moved.failed} open ticket(s) under Stale; they are offered on the next import.` : ''}\n\n`
     : '_Those components were already accepted._\n\n');
   return moved.session;
 }
@@ -153,9 +154,9 @@ async function moveCandidatesToStale<TItem, TRow extends ReviewRowBase>(
   acceptedKeys: Set<string>,
   ticketService: TicketService,
   descriptor: ReportImportDescriptor<TItem, TRow>,
-): Promise<{ session: ReviewSession<TRow>; count: number }> {
+): Promise<{ session: ReviewSession<TRow>; count: number; failed: number }> {
   const candidates = session.staleCandidates ?? [];
-  if (candidates.length === 0 || acceptedKeys.size === 0) return { session, count: 0 };
+  if (candidates.length === 0 || acceptedKeys.size === 0) return { session, count: 0, failed: 0 };
   const stillOpen: StaleCandidate[] = [];
   const newlyStale: StaleCandidate[] = [];
   for (const c of candidates) {
@@ -164,7 +165,7 @@ async function moveCandidatesToStale<TItem, TRow extends ReviewRowBase>(
     else if (remaining.length === 0) newlyStale.push(c);
     else stillOpen.push({ ...c, activeIds: remaining });
   }
-  if (newlyStale.length === 0) return { session: { ...session, staleCandidates: stillOpen }, count: 0 };
+  if (newlyStale.length === 0) return { session: { ...session, staleCandidates: stillOpen }, count: 0, failed: 0 };
 
   let built: StaleGroupBuildResult;
   try {
@@ -175,7 +176,7 @@ async function moveCandidatesToStale<TItem, TRow extends ReviewRowBase>(
     logDiag(descriptor.scope, 'warn', `${descriptor.importLabel} import — could not offer accepted components' tickets under Stale`, {
       error: err instanceof Error ? err.message : String(err),
     });
-    return { session, count: 0 };
+    return { session, count: 0, failed: newlyStale.length };
   }
 
   const existing: ReviewSessionStale = session.staleTickets ?? { groups: [], ineligible: [], resolutionOptions: [] };
@@ -198,6 +199,7 @@ async function moveCandidatesToStale<TItem, TRow extends ReviewRowBase>(
   return {
     session: { ...session, staleTickets, staleCandidates: stillOpen, groups: nextGroups, singleGroup: nextGroups.length <= 1 },
     count: newlyStale.length,
+    failed: 0,
   };
 }
 

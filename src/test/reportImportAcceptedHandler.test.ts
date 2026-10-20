@@ -498,6 +498,32 @@ describe('accept component and remove it, in a running review (accepted-componen
     expect(after.text).toContain('Accepted 1 component');
   });
 
+  it('says so when the Stale groups cannot be built, keeps the entry and the dropped row, and offers the ticket nowhere yet', async () => {
+    const { session, ws } = await ticketedImport();
+    vi.mocked(TemplateService).mockImplementation(() => ({ loadTemplates: vi.fn().mockImplementation(() => { throw new Error('bad templates'); }) }) as never);
+    const after = await reply('accept component A1', session!, ws);
+    expect(readList()).toEqual([{ component: 'netty-codec', version: '4.1.100' }]);
+    expect(ticketedRows(after.session).map(r => r.nameVersion)).toEqual(['other:1.0']);
+    expect(staleKeys(after.session)).toEqual([]);
+    expect(after.text).toContain('Could not offer 1 open ticket(s) under Stale');
+  });
+
+  it('lists the ticket as not closable when its issue type has no discovered workflow', async () => {
+    const { session, ws } = await ticketedImport();
+    vi.mocked(loadWorkflowCache).mockReturnValue({ PROJ: {} } as never);
+    const after = await reply('accept component A1', session!, ws);
+    expect(after.session.staleTickets!.ineligible.map(i => i.key)).toEqual(['PROJ-7']);
+    expect(after.session.groups).toEqual(['ticketed', 'stale']);
+  });
+
+  it('keeps the selection of a ticket already on Stale after another accept', async () => {
+    const { session, ws } = await ticketedImport([{ key: 'PROJ-9', labels: ['oss-dependency', 'oss-dep-gone-abc123'] }]);
+    session!.staleTickets!.groups[0].tickets[0].included = true;
+    const opened = await reply('open already ticketed', session!, ws);
+    const after = await reply('accept component A1', opened.session, ws);
+    expect(after.session.staleTickets!.groups[0].tickets.map(t => [t.key, t.included])).toEqual([['PROJ-9', true], ['PROJ-7', false]]);
+  });
+
   it('adds the ticket to a group already on Stale and keeps what is there (AE2)', async () => {
     const { session, ws } = await ticketedImport([{ key: 'PROJ-9', labels: ['oss-dependency', 'oss-dep-gone-abc123'] }]);
     expect(staleKeys(session!)).toEqual(['PROJ-9']);

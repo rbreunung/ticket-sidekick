@@ -282,6 +282,13 @@ describe('screens with accepted components (accepted-components plan, U4)', () =
     expect(decodeURIComponent(text)).toContain('unaccept libfoo CVE-2024-0001');
   });
 
+  it('gives an entry whose version has whitespace no Remove link, and points to its number instead', () => {
+    const text = buildAcceptedList([{ component: 'lib', version: '1.0 final' }, { component: 'netty-codec', version: '4.1.100' }]);
+    expect(decodeURIComponent(text)).not.toContain(`${UNACCEPT_COMPONENT_WORD} lib`);
+    expect(text).toContain('`unaccept 1`');
+    expect(decodeURIComponent(text)).toContain(`${UNACCEPT_COMPONENT_WORD} netty-codec 4.1.100`);
+  });
+
   it('neutralizes link syntax in a hand-edited component name, version or reason', () => {
     const text = buildAcceptedList([{ component: '[x](http://evil.example)', version: '[y](http://evil.example)', reason: '[z](http://evil.example)\n# Heading' }]);
     expect(text).not.toContain('](http://evil.example)');

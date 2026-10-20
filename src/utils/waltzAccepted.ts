@@ -29,6 +29,10 @@ export function isComponentEntry(entry: AcceptedEntry): entry is AcceptedCompone
   return entry.cve === undefined;
 }
 
+export function isCveEntry(entry: AcceptedEntry): entry is AcceptedCveEntry {
+  return entry.cve !== undefined;
+}
+
 export interface ParsedAcceptedFile {
   entries: AcceptedEntry[];
   /** Shown to the user when the file could not be read in full; null when it was fine. */
@@ -177,7 +181,7 @@ function highestSeverity(vulns: WaltzComponent['vulnerabilities']): string | nul
  */
 export function narrowGroup(group: WaltzComponent[], entries: AcceptedEntry[], minRating: string): NarrowResult {
   if (entries.length === 0) return { group, hiddenCves: 0, belowFloor: 0, hiddenComponents: 0 };
-  const accepted = new Set(entries.filter(e => !isComponentEntry(e)).map(e => pairKey(e.component, e.cve!)));
+  const accepted = new Set(entries.filter(isCveEntry).map(e => pairKey(e.component, e.cve)));
   const acceptedComponents = acceptedComponentKeys(entries);
   const floor = vulnRatingRank(minRating);
   const kept: WaltzComponent[] = [];

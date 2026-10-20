@@ -475,7 +475,11 @@ export function buildAcceptedList(entries: AcceptedEntry[]): string {
   const lines = entries.map((e, i) => {
     const reason = e.reason ? ` — ${text(e.reason)}` : '';
     if (isComponentEntry(e)) {
-      return `${i + 1}. ${text(e.component)}:${text(e.version)} (whole component)${reason} — ${cmdLink('Remove', `${UNACCEPT_COMPONENT_WORD} ${flat(e.component)} ${e.version.trim()}`)}`;
+      // The Remove reply reads the last word as the version, so a version with whitespace is removed by number instead.
+      const remove = /\s/.test(e.version.trim())
+        ? `remove with \`unaccept ${i + 1}\``
+        : cmdLink('Remove', `${UNACCEPT_COMPONENT_WORD} ${flat(e.component)} ${e.version.trim()}`);
+      return `${i + 1}. ${text(e.component)}:${text(e.version)} (whole component)${reason} — ${remove}`;
     }
     return `${i + 1}. ${text(e.component)} · ${text(e.cve)}${reason} — ${cmdLink('Remove', `unaccept ${flat(e.component)} ${e.cve.trim()}`)}`;
   });
