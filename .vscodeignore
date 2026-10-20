@@ -5,7 +5,7 @@ esbuild.js
 .vscode-test/
 **/*.ts
 tsconfig.json
-vitest.config.ts
+vitest.config.mts
 .gitignore
 .claude/
 .superpowers/
