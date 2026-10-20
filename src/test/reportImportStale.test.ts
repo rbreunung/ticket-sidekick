@@ -485,6 +485,43 @@ describe('Stale-ticket review + close with a picked target', () => {
     expect(session.staleTickets?.groups[0].tickets[0].included).toBe(false);
   });
 
+  describe('paging the Stale screen, 20 tickets at a time', () => {
+    const manyIssues = (n: number) => Array.from({ length: n }, (_, i) => makeStaleIssue(`PROJ-${i + 1}`, 'Bug', [`id${i + 1}`]));
+    const keysIn = (text: string) => [...text.matchAll(/PROJ-(\d+)/g)].map(m => Number(m[1])).filter((n, i, a) => a.indexOf(n) === i);
+
+    it('shows the first 20 tickets and says which page of how many', async () => {
+      const ws = makeMockWs();
+      await importStale(manyIssues(45), ws);
+      const text = await reply('page 1', ws);
+      expect(keysIn(text).filter(n => n <= 45)).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
+      expect(text).toContain('Page 1 of 3');
+    });
+
+    it('next, prev and page <n> move between pages and clamp at the ends', async () => {
+      const ws = makeMockWs();
+      await importStale(manyIssues(45), ws);
+      const second = await reply('next', ws);
+      expect(keysIn(second)[0]).toBe(21);
+      expect(second).toContain('Page 2 of 3');
+      const last = await reply('page 3', ws);
+      expect(keysIn(last).filter(n => n <= 45)).toEqual([41, 42, 43, 44, 45]);
+      expect(await reply('next', ws)).toContain('Page 3 of 3');
+      expect(await reply('prev', ws)).toContain('Page 2 of 3');
+      expect(await reply('page 99', ws)).toContain('Page 3 of 3');
+    });
+
+    it('a single page shows no page line, and a ticket marked on another page still counts', async () => {
+      const ws = makeMockWs();
+      await importStale(manyIssues(5), ws);
+      expect(await reply('page 1', ws)).not.toContain('Page 1 of');
+      const ws2 = makeMockWs();
+      await importStale(manyIssues(45), ws2);
+      await reply('PROJ-44', ws2);
+      const back = await reply('page 1', ws2);
+      expect(back).toContain('Close 1 tickets');
+    });
+  });
+
   // Code-review fix regression test: the truncation-coverage warning used to be nested inside
   // `stale.length > 0`, so it silently never rendered when a truncated search's checked candidates
   // all turned out non-stale — defeating KTD10's "must not silently lose coverage" guarantee.

@@ -318,3 +318,16 @@ describe('screens with accepted components (accepted-components plan, U4)', () =
     expect(describeImportReplyVocabulary('ticketed', ctx({ canAccept: false }))).not.toContain('accept component');
   });
 });
+
+describe('Stale screen page replies', () => {
+  it('next, prev and page <n> are read on the Stale screen', () => {
+    const c = ctx({ groups: ['new', 'stale'] });
+    expect(parseImportReviewReply('stale', 'next', c)).toEqual({ kind: 'pageNav', nav: { kind: 'next' } });
+    expect(parseImportReviewReply('stale', 'Prev', c)).toEqual({ kind: 'pageNav', nav: { kind: 'prev' } });
+    expect(parseImportReviewReply('stale', 'page 3', c)).toEqual({ kind: 'pageNav', nav: { kind: 'goto', page: 2 } });
+  });
+
+  it('the "didn\'t understand" reminder names them', () => {
+    expect(describeImportReplyVocabulary('stale', ctx())).toContain('`next`');
+  });
+});

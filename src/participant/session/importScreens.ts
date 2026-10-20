@@ -389,6 +389,24 @@ export function buildTicketedGroupScreen<TRow extends ReviewRowBase>(
   return lines.join('\n');
 }
 
+/** Stale tickets shown per page. Fixed, not a setting (KL16). */
+export const STALE_PAGE_SIZE = 20;
+
+/** Every row the Stale screen lists: eligible tickets, then the ones that cannot be closed. */
+function staleRowCount(stale: ReviewSessionStale | undefined): number {
+  if (!stale) return 0;
+  return stale.groups.reduce((n, g) => n + g.tickets.length, 0) + stale.ineligible.length;
+}
+
+export function staleTotalPages(stale: ReviewSessionStale | undefined): number {
+  return Math.max(1, Math.ceil(staleRowCount(stale) / STALE_PAGE_SIZE));
+}
+
+/** The 0-based Stale page `target` clamped to the pages that exist. */
+export function clampStalePage(target: number, stale: ReviewSessionStale | undefined): number {
+  return Math.min(Math.max(0, target), staleTotalPages(stale) - 1);
+}
+
 /** R5/R9: the Stale group — per-ticket toggles (off by default) and "Close N tickets". The target
  * and resolution are picked when closing (stale-ticket target pick plan, R1), one issue type per
  * run (R12), so the table shows each ticket's issue type instead of a fixed target. */
@@ -435,9 +453,15 @@ export function buildStaleGroupScreen<TRow extends ReviewRowBase>(session: Revie
     { header: 'Close?', accessor: r => r.toggleCell },
   ];
 
+  const totalPages = staleTotalPages(stale);
+  const page = clampStalePage(s.stalePage ?? 0, stale);
   const lines: string[] = ['### Stale — no longer in the report, may be closed'];
-  lines.push(renderReviewTable(columns, rows));
+  lines.push(renderReviewTable(columns, rows.slice(page * STALE_PAGE_SIZE, (page + 1) * STALE_PAGE_SIZE)));
   lines.push('');
+  if (totalPages > 1) {
+    lines.push(`_Page ${page + 1} of ${totalPages}._ Reply ${cmdLink('next', 'next')} / ${cmdLink('prev', 'prev')} or \`page <n>\` to navigate; tickets marked on any page are closed together.`);
+    lines.push('');
+  }
   if (c.staleOpen > 0) {
     if (c.staleSelected > 0) {
       lines.push(`Reply ${cmdLink(`Close ${c.staleSelected} tickets`, IMPORT_COMMANDS.close)} to transition the tickets marked ✓ close — you pick the target status next.`);

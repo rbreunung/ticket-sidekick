@@ -411,6 +411,8 @@ export function parseStaleGroupReply(reply: string, ctx: ImportReplyContext): Im
   if (exit) return exit;
   const listing = ctx.canAccept && ctx.singleGroup ? parseAcceptedListReply(reply) : null;
   if (listing) return listing;
+  const nav = parseReviewPageNav(reply);
+  if (nav) return { kind: 'pageNav', nav };
   if (!ctx.stale) return { kind: 'invalid' };
   const toggle = parseStaleTicketToggle(reply, ctx.stale);
   // A reply mixing a ticket key with anything else is rejected whole rather than half-applied.
@@ -441,7 +443,7 @@ export function describeImportReplyVocabulary(view: ImportReviewView, ctx: Impor
         `${TICKETED_ACTION_ORDER.map(a => `\`${a}\``).join(', ')}), \`all <action>\` (e.g. \`all leave\`), ` +
         `${ctx.canAccept ? '`accept component A2`, ' : ''}\`update tickets\`, \`re-create tickets\`, or ${exit}.`;
     case 'stale':
-      return `On this screen you can reply \`close tickets\`, a stale ticket's key to toggle it (e.g. \`PROJ-123\`), or ${exit}.`;
+      return `On this screen you can reply \`close tickets\`, a stale ticket's key to toggle it (e.g. \`PROJ-123\`), \`next\` / \`prev\` / \`page <n>\`, or ${exit}.`;
     default: {
       const opens = ctx.groups.map(g => `\`${g === 'new' ? IMPORT_COMMANDS.openNew : g === 'ticketed' ? IMPORT_COMMANDS.openTicketed : IMPORT_COMMANDS.openStale}\``);
       return `On the overview you can reply ${[...opens, ...(ctx.canAccept ? ['`accepted`', '`unaccept 2`'] : []), '`done`'].join(', ')}.`;
