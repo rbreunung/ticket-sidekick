@@ -409,6 +409,10 @@ export class TicketService {
     return this.client.getFields();
   }
 
+  async getResolutions(): Promise<Array<{ name: string }>> {
+    return this.client.getResolutions();
+  }
+
   async getRemoteLinks(issueKey: string): Promise<JiraRemoteLink[]> {
     return this.client.getRemoteLinks(issueKey);
   }

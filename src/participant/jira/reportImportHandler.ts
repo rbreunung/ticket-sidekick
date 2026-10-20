@@ -25,7 +25,7 @@ import { resolveIssueTypeOrPrompt, resolveProjectKey, sessionWasSuperseded } fro
 import { buildStaleTicketGroups } from './cleanupHandler';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import type { AcceptedEntry } from '../../utils/waltzAccepted';
-import { acceptRows, showAcceptedList, unacceptEntry } from './importAccept';
+import { acceptComponents, acceptRows, showAcceptedList, unacceptEntry } from './importAccept';
 import { addToTicket, showAddPrompt } from './importAddToTicket';
 import { createNewRows } from './importCreate';
 import { IMPORT_SESSION_KINDS, afterGroupAction, streamImportReview } from './importReviewScreen';
@@ -590,11 +590,15 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
     case 'accept':
       Object.assign(session, await acceptRows(session, action, stream, descriptor));
       return rerender();
+    case 'acceptComponent':
+      Object.assign(session, await acceptComponents(session, action, ticketService, stream, descriptor));
+      return rerender();
     case 'listAccepted':
       showAcceptedList(descriptor, stream);
       return rerender();
     case 'unaccept':
     case 'unacceptEntry':
+    case 'unacceptComponent':
       unacceptEntry(descriptor, action, stream);
       return rerender();
     case 'addPrompt':
