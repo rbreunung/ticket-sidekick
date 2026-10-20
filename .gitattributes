@@ -1,0 +1,6 @@
+# Check text files out with LF on every platform. Without this, Git for Windows (core.autocrlf=true)
+# gives tests that read repo files (sources, docs, fixtures) CRLF line endings.
+* text=auto eol=lf
+*.png binary
+*.xlsx binary
+*.vsix binary
