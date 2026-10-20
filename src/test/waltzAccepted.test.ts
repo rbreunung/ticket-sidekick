@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseAcceptedFile, serializeAcceptedFile, componentNameOf, addAcceptedEntries, removeAcceptedEntry,
   narrowGroup, acceptedEntriesOf, removeAcceptedPair, type AcceptedEntry,
+  componentVersionOf, acceptedComponentKeys, isComponentAccepted, acceptedComponentEntriesOf, removeAcceptedComponent,
 } from '../utils/waltzAccepted';
 import type { WaltzComponent } from '../utils/waltzReport';
 
@@ -227,5 +228,136 @@ describe('acceptedEntriesOf — what accepting a row writes', () => {
 
   it('is empty for a component with no CVE data', () => {
     expect(acceptedEntriesOf([component('a:1.0', 'High', [])])).toEqual([]);
+  });
+});
+
+// Accepted components (accepted-components plan, U1): an entry without a CVE accepts one exact
+// component name + version.
+const acceptedComponent = (component: string, version: string, reason?: string): AcceptedEntry =>
+  (reason === undefined ? { component, version } : { component, version, reason });
+
+describe('component entries in the accepted file', () => {
+  it('reads a file with only component + CVE entries exactly as before (AE6)', () => {
+    const parsed = parseAcceptedFile(JSON.stringify({ accepted: [{ component: 'libfoo', cve: 'CVE-2024-0001', reason: 'x' }] }));
+    expect(parsed.entries).toEqual([{ component: 'libfoo', cve: 'CVE-2024-0001', reason: 'x' }]);
+    expect(parsed.warning).toBeNull();
+  });
+
+  it('reads an entry with a version and no CVE as a component entry', () => {
+    const parsed = parseAcceptedFile(JSON.stringify({ accepted: [{ component: 'netty-codec', version: '4.1.100', reason: 'no update' }] }));
+    expect(parsed.entries).toEqual([{ component: 'netty-codec', version: '4.1.100', reason: 'no update' }]);
+    expect(parsed.warning).toBeNull();
+  });
+
+  it('skips an entry with only a component and counts it in the warning', () => {
+    const parsed = parseAcceptedFile(JSON.stringify({ accepted: [{ component: 'libfoo' }, { component: 'libbar', version: '1.0' }] }));
+    expect(parsed.entries).toEqual([{ component: 'libbar', version: '1.0' }]);
+    expect(parsed.warning).toMatch(/1 entry/);
+  });
+
+  it('reads an entry with both a CVE and a version as a CVE pair and ignores the version', () => {
+    const parsed = parseAcceptedFile(JSON.stringify({ accepted: [{ component: 'libfoo', version: '1.0', cve: 'CVE-2024-0001' }] }));
+    expect(parsed.entries).toEqual([{ component: 'libfoo', cve: 'CVE-2024-0001' }]);
+  });
+
+  it('skips an entry whose cve is present but unusable instead of widening it to the whole component', () => {
+    const parsed = parseAcceptedFile(JSON.stringify({ accepted: [
+      { component: 'libfoo', cve: 123, version: '1.0' },
+      { component: 'libbar', cve: '', version: '1.0' },
+      { component: 'libok', version: '1.0' },
+    ] }));
+    expect(parsed.entries).toEqual([{ component: 'libok', version: '1.0' }]);
+    expect(parsed.warning).toMatch(/2 entries/);
+  });
+
+  it('round-trips a mixed file through serialize and parse', () => {
+    const entries = [accepted('libfoo', 'CVE-2024-0001'), acceptedComponent('netty-codec', '4.1.100', 'no update')];
+    expect(parseAcceptedFile(serializeAcceptedFile(entries)).entries).toEqual(entries);
+  });
+});
+
+describe('matching a component and version', () => {
+  it('splits the version off at the last colon', () => {
+    expect(componentVersionOf('org.x:lib:1.2.3')).toBe('1.2.3');
+    expect(componentVersionOf('no-version')).toBe('');
+  });
+
+  it('matches name and version case-insensitively and trimmed', () => {
+    const keys = acceptedComponentKeys([acceptedComponent(' Netty-Codec ', '4.1.100-RC1')]);
+    expect(isComponentAccepted('netty-codec:4.1.100-rc1', keys)).toBe(true);
+  });
+
+  it('does not match another version of the same component (AE4)', () => {
+    const keys = acceptedComponentKeys([acceptedComponent('netty-codec', '4.1.100')]);
+    expect(isComponentAccepted('netty-codec:4.1.101', keys)).toBe(false);
+    expect(isComponentAccepted('netty-codec-http:4.1.100', keys)).toBe(false);
+  });
+
+  it('ignores CVE pairs when building the component keys', () => {
+    expect(acceptedComponentKeys([accepted('libfoo', 'CVE-2024-0001')]).size).toBe(0);
+  });
+});
+
+describe('narrowGroup with accepted components', () => {
+  it('drops the accepted version and keeps the newer one (AE1, AE4)', () => {
+    const entries = [acceptedComponent('netty-codec', '4.1.100')];
+    const old = component('netty-codec:4.1.100', 'High', [['CVE-2024-0001', 'High']]);
+    const newer = component('netty-codec:4.1.101', 'High', [['CVE-2024-0001', 'High']]);
+    const result = narrowGroup([old, newer], entries, 'High');
+    expect(result.group!.map(c => c.nameVersion)).toEqual(['netty-codec:4.1.101']);
+    expect(result.hiddenComponents).toBe(1);
+  });
+
+  it('drops the whole row when its only component is accepted, whatever its CVEs say (AE5)', () => {
+    const group = [component('libfoo:1.0', 'Critical', [['CVE-2099-0001', 'Critical']])];
+    const result = narrowGroup(group, [acceptedComponent('libfoo', '1.0')], 'High');
+    expect(result.group).toBeNull();
+    expect(result.hiddenComponents).toBe(1);
+    expect(result.hiddenCves).toBe(0);
+  });
+
+  it('keeps the other members of a merged group untouched', () => {
+    const keep = component('libbar:2.0', 'High', [['CVE-2024-0002', 'High']]);
+    const result = narrowGroup([component('libfoo:1.0', 'High', []), keep], [acceptedComponent('libfoo', '1.0')], 'High');
+    expect(result.group![0]).toBe(keep);
+  });
+
+  it('reports no hidden components when nothing matched', () => {
+    const group = [component('libfoo:1.0', 'High', [['CVE-2024-0001', 'High']])];
+    const result = narrowGroup(group, [acceptedComponent('other', '1.0')], 'High');
+    expect(result.group).toBe(group);
+    expect(result.hiddenComponents).toBe(0);
+  });
+});
+
+describe('writing and removing component entries', () => {
+  it('writes one entry per member that has a version, with the reason', () => {
+    const group = [component('netty-codec:4.1.100', 'High', []), component('libfoo:1.0', 'High', [])];
+    expect(acceptedComponentEntriesOf(group, 'no update')).toEqual([
+      { component: 'netty-codec', version: '4.1.100', reason: 'no update' },
+      { component: 'libfoo', version: '1.0', reason: 'no update' },
+    ]);
+  });
+
+  it('does not repeat a component + version already on the list (case-insensitive)', () => {
+    const result = addAcceptedEntries([acceptedComponent('libfoo', '1.0')], [acceptedComponent('LIBFOO', '1.0'), acceptedComponent('libfoo', '2.0')]);
+    expect(result.added).toBe(1);
+    expect(result.entries).toHaveLength(2);
+  });
+
+  it('keeps a CVE pair and a component entry for the same component separate', () => {
+    const result = addAcceptedEntries([accepted('libfoo', 'CVE-2024-0001')], [acceptedComponent('libfoo', '1.0')]);
+    expect(result.added).toBe(1);
+  });
+
+  it('removes a component entry by name and version and leaves pairs alone', () => {
+    const entries = [accepted('libfoo', 'CVE-2024-0001'), acceptedComponent('libfoo', '1.0')];
+    const result = removeAcceptedComponent(entries, 'LibFoo', '1.0');
+    expect(result!.entries).toEqual([accepted('libfoo', 'CVE-2024-0001')]);
+    expect(removeAcceptedComponent(entries, 'libfoo', '9.9')).toBeNull();
+  });
+
+  it('removeAcceptedPair never removes a component entry', () => {
+    expect(removeAcceptedPair([acceptedComponent('libfoo', '1.0')], 'libfoo', '1.0')).toBeNull();
   });
 });

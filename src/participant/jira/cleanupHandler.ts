@@ -318,7 +318,7 @@ export async function buildStaleTicketGroups(
   staleMatches: StaleTicketMatch[],
   issueDetails: Map<string, { summary: string; currentStatus: string; issueType: string }>,
   projectKey: string,
-  jiraClient: IJiraClient,
+  jiraClient: Pick<IJiraClient, 'getResolutions'>,
   workspaceRoot: string,
   scope = 'jira.cleanup',
 ): Promise<StaleGroupBuildResult> {

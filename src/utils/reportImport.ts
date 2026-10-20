@@ -213,25 +213,47 @@ export const MAX_DEDUP_TICKETS_PER_CHUNK = 1000;
  * Reads every page of a Jira search. The dedup search needs this: an item's known findings are the
  * union of all its tickets (follow-ups and re-creates add more tickets per dedup label), so a single
  * truncated page could pick the wrong target or show recorded findings as new. Stops when a page is
- * short or empty, the server reports the end (`isLast`) or its `total` is reached, or `maxItems`
- * tickets were read. A failed page rejects, so `findAlreadyTicketed` treats the whole chunk as
- * failed rather than trusting a partial one.
+ * empty or (with `keyOf`) adds no ticket not already read, the server reports the end (`isLast`) or
+ * its `total` is reached, or — when the server reports no total — a page is short and carries no
+ * `nextPageToken`; or when `maxItems` tickets were read. A server that caps its page below
+ * `pageSize` is therefore still read to its `total`. Jira Cloud pages by `nextPageToken` and ignores
+ * `startAt`: the token is passed back to `fetchPage`, and the no-progress rule keeps a server that
+ * ignores both from repeating a page. A failed page rejects, so `findAlreadyTicketed` treats the
+ * whole chunk as failed rather than trusting a partial one.
  */
 export async function fetchAllPages<T>(
-  fetchPage: (startAt: number) => Promise<{ issues: T[]; total?: number; isLast?: boolean }>,
+  fetchPage: (startAt: number, pageToken?: string) => Promise<{ issues: T[]; total?: number; isLast?: boolean; nextPageToken?: string }>,
   pageSize: number,
   maxItems = MAX_DEDUP_TICKETS_PER_CHUNK,
+  keyOf?: (item: T) => string,
 ): Promise<T[]> {
   const all: T[] = [];
+  const seen = new Set<string>();
+  let pageToken: string | undefined;
   while (all.length < maxItems) {
-    const page = await fetchPage(all.length);
-    all.push(...page.issues.slice(0, maxItems - all.length));
-    const done = page.issues.length < pageSize || page.isLast === true
-      || (page.total !== undefined && all.length >= page.total);
+    const page = await fetchPage(all.length, pageToken);
+    pageToken = page.nextPageToken;
+    const fresh = keyOf
+      ? page.issues.filter(item => {
+        const key = keyOf(item);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      : page.issues;
+    all.push(...fresh.slice(0, maxItems - all.length));
+    const noProgress = keyOf !== undefined && fresh.length === 0;
+    const shortPage = page.total === undefined && pageToken === undefined && page.issues.length < pageSize;
+    const done = page.issues.length === 0 || noProgress || page.isLast === true
+      || (page.total !== undefined && all.length >= page.total) || shortPage;
     if (done) break;
   }
   return all;
 }
+
+/** Safety bound on the open marker-labeled tickets one import reads for the stale check (like the dedup search's bound). */
+export const MAX_STALE_TICKETS = 1000;
+const STALE_SEARCH_PAGE_SIZE = 100;
 
 /** One open ticket found stale by {@link findStaleTickets}. `ids` are the marker-id dedup keys
  * (e.g. Veracode flaw ids, or Waltz's `oss-dep-...` component label) extracted from its labels —
@@ -243,11 +265,15 @@ export interface StaleTicketMatch {
 
 export interface FindStaleTicketsResult {
   stale: StaleTicketMatch[];
-  /** Server-reported total match count (falls back to the checked-page length when the search
-   * result carries no `total`), so a caller can report "N found" even when truncated. */
+  /** The open tickets that were not flagged because an id is still active, each with only its still-active ids. */
+  pending: StaleTicketMatch[];
+  /** Server-reported total match count (falls back to the number read when the search result
+   * carries no `total`), so a caller can report "N found" even when truncated. */
   totalFound: number;
-  /** True when more than `BATCH_LIMIT` open tickets matched — only the first `BATCH_LIMIT` were
-   * checked, mirroring `handleRunCleanup`'s cap-at-50-with-warning shape (cleanupHandler.ts). */
+  /** How many open tickets were actually read and checked. */
+  checked: number;
+  /** True when more open tickets matched than were read (the `MAX_STALE_TICKETS` safety bound was
+   * reached), so coverage may be incomplete. */
   truncated: boolean;
   /** True when `search` rejected — `stale` is then always `[]` (not "genuinely zero stale
    * tickets") and the caller should tell the user staleness could not be checked, mirroring
@@ -287,34 +313,45 @@ export function buildStaleSearchJql(projectKey: string, markerLabel: string): st
 export async function findStaleTickets(
   projectKey: string,
   markerLabel: string,
-  search: (jql: string, maxResults: number) => Promise<{ issues: JqlIssueLike[]; total?: number; isLast?: boolean }>,
+  search: (jql: string, maxResults: number, startAt: number, pageToken?: string) => Promise<{ issues: JqlIssueLike[]; total?: number; isLast?: boolean; nextPageToken?: string }>,
   labelToDedupKey: (label: string) => string | null,
   isActive: (dedupKey: string) => boolean,
   onDiag?: DiagLogger,
 ): Promise<FindStaleTicketsResult> {
   const jql = buildStaleSearchJql(projectKey, markerLabel);
-  let result: { issues: JqlIssueLike[]; total?: number; isLast?: boolean };
+  let candidates: JqlIssueLike[];
+  let reportedTotal: number | undefined;
+  let reportedLast: boolean | undefined;
   try {
-    result = await search(jql, BATCH_LIMIT);
+    candidates = await fetchAllPages(async (startAt, pageToken) => {
+      const page = pageToken === undefined
+        ? await search(jql, STALE_SEARCH_PAGE_SIZE, startAt)
+        : await search(jql, STALE_SEARCH_PAGE_SIZE, startAt, pageToken);
+      reportedTotal = page.total ?? reportedTotal;
+      reportedLast = page.isLast;
+      return page;
+    }, STALE_SEARCH_PAGE_SIZE, MAX_STALE_TICKETS, issue => issue.key);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     onDiag?.('warn', 'Stale-ticket search failed — could not check for stale tickets', { error: message });
-    return { stale: [], totalFound: 0, truncated: false, searchFailed: true };
+    return { stale: [], pending: [], totalFound: 0, checked: 0, truncated: false, searchFailed: true };
   }
 
-  const candidates = result.issues.slice(0, BATCH_LIMIT);
-  const truncated = (result.total ?? 0) > BATCH_LIMIT || result.isLast === false;
+  const truncated = reportedTotal !== undefined ? reportedTotal > candidates.length : reportedLast === false;
 
   const stale: StaleTicketMatch[] = [];
+  const pending: StaleTicketMatch[] = [];
   for (const issue of candidates) {
     const ids = (issue.fields.labels ?? [])
       .map(labelToDedupKey)
       .filter((id): id is string => id !== null);
     if (ids.length === 0) continue; // nothing to compare — see doc comment above
-    if (!ids.some(isActive)) stale.push({ key: issue.key, ids });
+    const active = ids.filter(isActive);
+    if (active.length === 0) stale.push({ key: issue.key, ids });
+    else pending.push({ key: issue.key, ids: active });
   }
 
-  return { stale, totalFound: result.total ?? candidates.length, truncated, searchFailed: false };
+  return { stale, pending, totalFound: reportedTotal ?? candidates.length, checked: candidates.length, truncated, searchFailed: false };
 }
 
 // U4: the pre-build "new" cap (`capNewRows`) that used to run here before review rows were built at
@@ -544,6 +581,9 @@ export function buildReviewRows<TItem, TRow extends ReviewRowBase>(
   // assigned, so a hidden item never becomes a row and the surviving new ids stay contiguous. A
   // null return drops the item; an already-ticketed item is never narrowed (R8).
   narrowNew?: (item: TItem) => TItem | null,
+  // Accepted components: an already-ticketed item the list accepts as a whole is dropped here, before its
+  // `A` id is assigned, so the surviving ids stay contiguous. Never applied to a new item.
+  dropTicketed?: (item: TItem) => boolean,
 ): TRow[] {
   const rows: TRow[] = [];
   let newIndex = 0;
@@ -558,6 +598,7 @@ export function buildReviewRows<TItem, TRow extends ReviewRowBase>(
       if (narrowed === null) continue;
       item = narrowed;
     }
+    if (target && dropTicketed?.(original)) continue;
     const existingTicketKey = target ? target.key : null;
     const base: ReviewRowBase = {
       id: existingTicketKey ? `A${++ticketedIndex}` : `${++newIndex}`,

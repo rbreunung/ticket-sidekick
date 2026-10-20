@@ -28,7 +28,9 @@ vi.mock('../services/WorkflowService', async (importOriginal) => ({
   loadWorkflowCache: vi.fn(),
 }));
 
-import { handleWaltzAwaitIssueType, handleWaltzReviewReply, buildWaltzTemplateSession } from '../participant/jira/waltzHandler';
+import { handleWaltzAwaitIssueType, handleWaltzReviewReply, buildWaltzTemplateSession, buildWaltzActiveComponentPredicate } from '../participant/jira/waltzHandler';
+import { loadWorkflowCache } from '../services/WorkflowService';
+import { TemplateService } from '../templates/TemplateService';
 import type { WaltzReviewSession } from '../participant/sessionState';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService } from '../services/TicketService';
@@ -53,12 +55,21 @@ beforeEach(() => {
 afterEach(() => { workspace.dir = undefined; rmSync(dir, { recursive: true, force: true }); });
 
 const fileOn = () => join(dir, ACCEPTED_FILE_NAME);
-const writeList = (entries: Array<{ component: string; cve: string; reason?: string }>) => writeFileSync(fileOn(), JSON.stringify({ accepted: entries }));
+const writeList = (entries: Array<{ component: string; cve?: string; version?: string; reason?: string }>) => writeFileSync(fileOn(), JSON.stringify({ accepted: entries }));
 const readList = () => (JSON.parse(readFileSync(fileOn(), 'utf8')) as { accepted: Array<{ component: string; cve: string; reason?: string }> }).accepted;
 
-async function importWaltz(components: WaltzComponent[], tickets: Record<string, FakeTicket> = {}) {
+interface StaleIssue { key: string; labels: string[] }
+
+async function importWaltz(components: WaltzComponent[], tickets: Record<string, FakeTicket> = {}, staleIssues: StaleIssue[] = []) {
   statefulJira(client, tickets);
-  searchFromStore(ticketService, tickets);
+  const search = searchFromStore(ticketService, tickets);
+  if (staleIssues.length > 0) {
+    // The stale search ("labels = oss-dependency") returns the open tickets the test supplies; the dedup search stays as the store has it.
+    const dedup = search.getMockImplementation()!;
+    search.mockImplementation((async (jql: string, max?: number) => jql.includes('labels = "oss-dependency"')
+      ? { issues: staleIssues.map(t => ({ key: t.key, fields: { labels: t.labels, summary: `Summary of ${t.key}`, status: { name: 'Open' }, issuetype: { name: 'Bug' } } })), total: staleIssues.length, isLast: true }
+      : dedup(jql, max as never)) as never);
+  }
   const templateSession = await buildWaltzTemplateSession(components, 'r.xlsx', 'PROJ', client);
   const ws = makeMockWs();
   const stream = mockStream();
@@ -303,5 +314,337 @@ describe('listing and removing accepted entries (R7)', () => {
     const after = await reply('unaccept 5', session!, ws);
     expect(after.text).toMatch(/no entry 5/i);
     expect(readList()).toHaveLength(1);
+  });
+});
+
+describe('building the review with accepted components (accepted-components plan, U2)', () => {
+  const ticketOf = (c: WaltzComponent, extra: Partial<FakeTicket> = {}): FakeTicket => ({ labels: ['oss-dependency', sanitizeComponentLabel(c.nameVersion)], ...extra });
+  const ticketedRows = (s: WaltzReviewSession) => s.allRows.filter(r => r.existingTicketKey !== null);
+
+  it('never offers an accepted component as a new ticket (AE1)', async () => {
+    writeList([{ component: 'netty-codec', version: '4.1.100', reason: 'no update' }]);
+    const { session } = await importWaltz([
+      comp('netty-codec:4.1.100', 'High', [['CVE-2099-1', 'High']]),
+      comp('other:1.0', 'High', [['CVE-2099-9', 'High']]),
+    ]);
+    expect(newRows(session!).map(r => r.nameVersion)).toEqual(['other:1.0']);
+    expect(session!.acceptedHidden).toEqual({ cves: 0, belowFloor: 0, components: 1 });
+  });
+
+  it('offers another version of an accepted component as a normal row (AE4)', async () => {
+    writeList([{ component: 'netty-codec', version: '4.1.100' }]);
+    const { session } = await importWaltz([comp('netty-codec:4.1.101', 'High', [['CVE-2099-1', 'High']])]);
+    expect(newRows(session!).map(r => r.nameVersion)).toEqual(['netty-codec:4.1.101']);
+    expect(session!.acceptedHidden).toBeUndefined();
+  });
+
+  it('drops an accepted component with an open ticket from Already ticketed (AE2)', async () => {
+    writeList([{ component: 'netty-codec', version: '4.1.100' }]);
+    const netty = comp('netty-codec:4.1.100', 'High', [['CVE-2099-1', 'High']]);
+    const other = comp('other:1.0', 'High', [['CVE-2099-9', 'High']]);
+    const { session } = await importWaltz([netty, other], { 'PROJ-7': ticketOf(netty), 'PROJ-8': ticketOf(other) });
+    expect(ticketedRows(session!).map(r => r.nameVersion)).toEqual(['other:1.0']);
+    expect(session!.acceptedHidden).toEqual({ cves: 0, belowFloor: 0, components: 1 });
+  });
+
+  it('drops an accepted component whose ticket is resolved too (AE3)', async () => {
+    writeList([{ component: 'netty-codec', version: '4.1.100' }]);
+    const netty = comp('netty-codec:4.1.100', 'High', [['CVE-2099-1', 'High']]);
+    const other = comp('other:1.0', 'High', [['CVE-2099-9', 'High']]);
+    const { session } = await importWaltz([netty, other], { 'PROJ-7': ticketOf(netty, { resolution: { name: 'Done' } }), 'PROJ-8': ticketOf(other) });
+    expect(ticketedRows(session!).map(r => r.nameVersion)).toEqual(['other:1.0']);
+  });
+
+  it('keeps the surviving Already ticketed ids contiguous after a row is dropped', async () => {
+    writeList([{ component: 'b', version: '1.0' }]);
+    const a = comp('a:1.0', 'High', [['CVE-2099-1', 'High']]);
+    const b = comp('b:1.0', 'High', [['CVE-2099-2', 'High']]);
+    const c = comp('c:1.0', 'High', [['CVE-2099-3', 'High']]);
+    const { session } = await importWaltz([a, b, c], { 'PROJ-1': ticketOf(a), 'PROJ-2': ticketOf(b), 'PROJ-3': ticketOf(c) });
+    expect(ticketedRows(session!).map(r => `${r.id}=${r.nameVersion}`)).toEqual(['A1=a:1.0', 'A2=c:1.0']);
+  });
+
+  it('keeps an accepted component hidden when the report shows a new Critical CVE (AE5)', async () => {
+    writeList([{ component: 'netty-codec', version: '4.1.100' }]);
+    const netty = comp('netty-codec:4.1.100', 'Critical', [['CVE-2099-1', 'High'], ['CVE-2099-77', 'Critical']]);
+    const other = comp('other:1.0', 'High', [['CVE-2099-9', 'High']]);
+    const { session } = await importWaltz([netty, other], { 'PROJ-7': ticketOf(netty) });
+    expect(ticketedRows(session!)).toEqual([]);
+    expect(newRows(session!).map(r => r.nameVersion)).toEqual(['other:1.0']);
+  });
+
+  it('says how many accepted components are hidden, with the link to list them', async () => {
+    writeList([{ component: 'netty-codec', version: '4.1.100' }]);
+    const { stream } = await importWaltz([
+      comp('netty-codec:4.1.100', 'High', [['CVE-2099-1', 'High']]),
+      comp('other:1.0', 'High', [['CVE-2099-9', 'High']]),
+    ]);
+    expect(streamText(stream)).toContain('1 accepted component hidden');
+    expect(streamText(stream)).toContain('Show accepted');
+  });
+
+  it('ends with the all-hidden message when accepted components leave nothing to review', async () => {
+    writeList([{ component: 'netty-codec', version: '4.1.100' }]);
+    const { session, stream } = await importWaltz([comp('netty-codec:4.1.100', 'High', [['CVE-2099-1', 'High']])]);
+    expect(session).toBeUndefined();
+    expect(streamText(stream)).toContain('Nothing is left to import');
+    expect(streamText(stream)).toContain('1 accepted component');
+  });
+
+  it('counts accepted CVEs and accepted components apart', async () => {
+    writeList([{ component: 'libfoo', cve: 'CVE-2099-1' }, { component: 'netty-codec', version: '4.1.100' }]);
+    const { session } = await importWaltz([
+      comp('libfoo:1.0', 'High', [['CVE-2099-1', 'High']]),
+      comp('netty-codec:4.1.100', 'High', [['CVE-2099-2', 'High']]),
+      comp('other:1.0', 'High', [['CVE-2099-9', 'High']]),
+    ]);
+    expect(session!.acceptedHidden).toEqual({ cves: 1, belowFloor: 0, components: 1 });
+  });
+});
+
+describe('stale tickets and accepted components (accepted-components plan, U3)', () => {
+  const labelOf = (c: WaltzComponent) => sanitizeComponentLabel(c.nameVersion);
+  const staleKeys = (s: WaltzReviewSession) => (s.staleTickets?.groups ?? []).flatMap(g => g.tickets.map(t => t.key));
+
+  beforeEach(() => {
+    vi.mocked(loadWorkflowCache).mockReturnValue({
+      PROJ: { Bug: { discovered: '2024-01-01', graph: { Open: [{ id: '12', name: 'Close', to: 'Done' }], Done: [] } } },
+    });
+    vi.mocked(TemplateService).mockImplementation(() => ({ loadTemplates: vi.fn().mockReturnValue({ templates: [], cleanupRules: [] }) }) as never);
+  });
+
+  it('flags the open ticket of an accepted component stale although the report still lists it (AE2)', async () => {
+    writeList([{ component: 'netty-codec', version: '4.1.100' }]);
+    const netty = comp('netty-codec:4.1.100', 'High', [['CVE-2099-1', 'High']]);
+    const other = comp('other:1.0', 'High', [['CVE-2099-9', 'High']]);
+    const tickets = { 'PROJ-7': { labels: ['oss-dependency', labelOf(netty)] }, 'PROJ-8': { labels: ['oss-dependency', labelOf(other)] } };
+    const { session } = await importWaltz([netty, other], tickets, [
+      { key: 'PROJ-7', labels: tickets['PROJ-7'].labels }, { key: 'PROJ-8', labels: tickets['PROJ-8'].labels },
+    ]);
+    expect(staleKeys(session!)).toEqual(['PROJ-7']);
+  });
+
+  it('does not flag a ticket that also covers a component that is still active', async () => {
+    writeList([{ component: 'netty-codec', version: '4.1.100' }]);
+    const netty = comp('netty-codec:4.1.100', 'High', [['CVE-2099-1', 'High']]);
+    const other = comp('other:1.0', 'High', [['CVE-2099-9', 'High']]);
+    const labels = ['oss-dependency', labelOf(netty), labelOf(other)];
+    const { session } = await importWaltz([netty, other], { 'PROJ-7': { labels } }, [{ key: 'PROJ-7', labels }]);
+    expect(staleKeys(session!)).toEqual([]);
+    expect(session!.staleCandidates).toEqual([
+      { key: 'PROJ-7', summary: 'Summary of PROJ-7', currentStatus: 'Open', issueType: 'Bug', activeIds: [labelOf(other)] },
+    ]);
+  });
+
+  it('keeps the open tickets it did not flag, with their active ids, for a later accept', async () => {
+    const other = comp('other:1.0', 'High', [['CVE-2099-9', 'High']]);
+    const labels = ['oss-dependency', labelOf(other)];
+    const { session } = await importWaltz([other], { 'PROJ-8': { labels } }, [{ key: 'PROJ-8', labels }]);
+    expect(session!.staleCandidates?.map(c => ({ key: c.key, activeIds: c.activeIds }))).toEqual([{ key: 'PROJ-8', activeIds: [labelOf(other)] }]);
+    expect(session!.staleTickets).toBeUndefined();
+  });
+
+  it('treats an accepted component as inactive and any other component as before', () => {
+    const accepted = comp('netty-codec:4.1.100', 'High', []);
+    const other = comp('other:1.0', 'High', []);
+    const isActive = buildWaltzActiveComponentPredicate([accepted, other], ['', 'Remediate'], [{ component: 'netty-codec', version: '4.1.100' }]);
+    expect(isActive(labelOf(accepted))).toBe(false);
+    expect(isActive(labelOf(other))).toBe(true);
+  });
+
+  it('leaves the predicate as it was for a CVE-pair-only list', () => {
+    const c = comp('netty-codec:4.1.100', 'High', []);
+    const isActive = buildWaltzActiveComponentPredicate([c], ['', 'Remediate'], [{ component: 'netty-codec', cve: 'CVE-2099-1' }]);
+    expect(isActive(labelOf(c))).toBe(true);
+  });
+});
+
+describe('accept component and remove it, in a running review (accepted-components plan, U5)', () => {
+  const labelOf = (c: WaltzComponent) => sanitizeComponentLabel(c.nameVersion);
+  const staleKeys = (s: WaltzReviewSession) => (s.staleTickets?.groups ?? []).flatMap(g => g.tickets.map(t => t.key));
+  const ticketedRows = (s: WaltzReviewSession) => s.allRows.filter(r => r.existingTicketKey !== null);
+  const netty = comp('netty-codec:4.1.100', 'High', [['CVE-2099-1', 'High']]);
+  const other = comp('other:1.0', 'High', [['CVE-2099-9', 'High']]);
+
+  beforeEach(() => {
+    vi.mocked(loadWorkflowCache).mockReturnValue({
+      PROJ: { Bug: { discovered: '2024-01-01', graph: { Open: [{ id: '12', name: 'Close', to: 'Done' }], Done: [] } } },
+    });
+    vi.mocked(TemplateService).mockImplementation(() => ({ loadTemplates: vi.fn().mockReturnValue({ templates: [], cleanupRules: [] }) }) as never);
+  });
+
+  async function ticketedImport(extraStale: StaleIssue[] = []) {
+    const tickets = {
+      'PROJ-7': { labels: ['oss-dependency', labelOf(netty)] },
+      'PROJ-8': { labels: ['oss-dependency', labelOf(other)] },
+    };
+    return importWaltz([netty, other], tickets, [
+      { key: 'PROJ-7', labels: tickets['PROJ-7'].labels }, { key: 'PROJ-8', labels: tickets['PROJ-8'].labels }, ...extraStale,
+    ]);
+  }
+
+  it('Already ticketed: writes the entry, drops the row and offers its open ticket under Stale (AE2)', async () => {
+    const { session, ws } = await ticketedImport();
+    expect(staleKeys(session!)).toEqual([]);
+    const after = await reply('accept component A1 because no newer version', session!, ws);
+    expect(readList()).toEqual([{ component: 'netty-codec', version: '4.1.100', reason: 'no newer version' }]);
+    expect(ticketedRows(after.session).map(r => r.nameVersion)).toEqual(['other:1.0']);
+    expect(staleKeys(after.session)).toEqual(['PROJ-7']);
+    expect(after.session.staleTickets!.groups[0].tickets[0].included).toBe(false);
+    expect(after.session.groups).toEqual(['ticketed', 'stale']);
+    expect(after.session.singleGroup).toBe(false);
+    expect(after.session.acceptedHidden).toEqual({ cves: 0, belowFloor: 0, components: 1 });
+    expect(after.session.staleCandidates?.map(c => c.key)).toEqual(['PROJ-8']);
+    expect(after.text).toContain('Accepted 1 component');
+  });
+
+  it('says so when the Stale groups cannot be built, keeps the entry and the dropped row, and offers the ticket nowhere yet', async () => {
+    const { session, ws } = await ticketedImport();
+    vi.mocked(TemplateService).mockImplementation(() => ({ loadTemplates: vi.fn().mockImplementation(() => { throw new Error('bad templates'); }) }) as never);
+    const after = await reply('accept component A1', session!, ws);
+    expect(readList()).toEqual([{ component: 'netty-codec', version: '4.1.100' }]);
+    expect(ticketedRows(after.session).map(r => r.nameVersion)).toEqual(['other:1.0']);
+    expect(staleKeys(after.session)).toEqual([]);
+    expect(after.text).toContain('Could not offer 1 open ticket(s) under Stale');
+  });
+
+  it('says nothing is left, instead of showing an empty table, once every Already ticketed row is accepted', async () => {
+    const { session, ws } = await ticketedImport([{ key: 'PROJ-9', labels: ['oss-dependency', 'oss-dep-gone-abc123'] }]);
+    const opened = await reply('open already ticketed', session!, ws);
+    const after = await reply('accept component A1 A2', opened.session, ws);
+    expect(after.text).toContain('Nothing is left under Already ticketed');
+    expect(after.text).not.toContain('| # |');
+    const overview = await reply('back', after.session, ws);
+    expect(overview.text).toContain('**Already ticketed** — none left');
+    expect(overview.text).not.toContain('open already ticketed');
+  });
+
+  it('lists the ticket as not closable when its issue type has no discovered workflow', async () => {
+    const { session, ws } = await ticketedImport();
+    vi.mocked(loadWorkflowCache).mockReturnValue({ PROJ: {} } as never);
+    const after = await reply('accept component A1', session!, ws);
+    expect(after.session.staleTickets!.ineligible.map(i => i.key)).toEqual(['PROJ-7']);
+    expect(after.session.groups).toEqual(['ticketed', 'stale']);
+  });
+
+  it('keeps the selection of a ticket already on Stale after another accept', async () => {
+    const { session, ws } = await ticketedImport([{ key: 'PROJ-9', labels: ['oss-dependency', 'oss-dep-gone-abc123'] }]);
+    session!.staleTickets!.groups[0].tickets[0].included = true;
+    const opened = await reply('open already ticketed', session!, ws);
+    const after = await reply('accept component A1', opened.session, ws);
+    expect(after.session.staleTickets!.groups[0].tickets.map(t => [t.key, t.included])).toEqual([['PROJ-9', true], ['PROJ-7', false]]);
+  });
+
+  it('adds the ticket to a group already on Stale and keeps what is there (AE2)', async () => {
+    const { session, ws } = await ticketedImport([{ key: 'PROJ-9', labels: ['oss-dependency', 'oss-dep-gone-abc123'] }]);
+    expect(staleKeys(session!)).toEqual(['PROJ-9']);
+    const opened = await reply('open already ticketed', session!, ws);
+    const after = await reply('accept component A1', opened.session, ws);
+    expect(staleKeys(after.session)).toEqual(['PROJ-9', 'PROJ-7']);
+    expect(after.session.staleTickets!.groups).toHaveLength(1);
+  });
+
+  it('does not offer a ticket that also covers a component that is still active', async () => {
+    const labels = ['oss-dependency', labelOf(netty), labelOf(other)];
+    const { session, ws } = await importWaltz([netty, other], { 'PROJ-7': { labels } }, [{ key: 'PROJ-7', labels }]);
+    const after = await reply('accept component A1', session!, ws);
+    expect(staleKeys(after.session)).toEqual([]);
+    expect(after.session.staleCandidates).toEqual([expect.objectContaining({ key: 'PROJ-7', activeIds: [labelOf(other)] })]);
+  });
+
+  it('offers nothing under Stale when the accepted component\'s ticket is resolved (AE3)', async () => {
+    const tickets = { 'PROJ-7': { labels: ['oss-dependency', labelOf(netty)], resolution: { name: 'Done' } } };
+    const { session, ws } = await importWaltz([netty, other], tickets);
+    const opened = await reply('open already ticketed', session!, ws);
+    const after = await reply('accept component A1', opened.session, ws);
+    expect(ticketedRows(after.session).map(r => r.nameVersion)).toEqual([]);
+    expect(after.session.staleTickets).toBeUndefined();
+  });
+
+  it('New: writes the entry with its reason, removes the row and counts the component', async () => {
+    const { session, ws } = await importWaltz([netty, other]);
+    const after = await reply('accept component 1 because no update', session!, ws);
+    expect(readList()).toEqual([{ component: 'netty-codec', version: '4.1.100', reason: 'no update' }]);
+    expect(newRows(after.session).map(r => r.nameVersion)).toEqual(['other:1.0']);
+    expect(after.session.acceptedHidden).toEqual({ cves: 0, belowFloor: 0, components: 1 });
+  });
+
+  it('New: accepting a merged row accepts every member', async () => {
+    const { session, ws } = await importWaltz([netty, other, comp('c:2.0', 'High', [['CVE-2099-4', 'High']])]);
+    const merged = await reply('merge 1 2', session!, ws);
+    await reply('accept component 1', merged.session, ws);
+    expect((readList() as unknown as Array<{ component: string; version: string }>).map(e => `${e.component}:${e.version}`)).toEqual(['netty-codec:4.1.100', 'other:1.0']);
+    expect(newRows(ws.store['jira.session.waltzReview'] as WaltzReviewSession).map(r => r.nameVersion)).toEqual(['c:2.0']);
+  });
+
+  it('rejects a row whose report name has no version, naming it, and writes nothing', async () => {
+    const { session, ws } = await importWaltz([comp('noversion', 'High', [['CVE-2099-1', 'High']]), other]);
+    const after = await reply('accept component 1', session!, ws);
+    expect(after.text).toContain('Row 1 has no version');
+    expect(after.text).not.toContain('already accepted');
+    expect(existsSync(fileOn())).toBe(false);
+    expect(newRows(after.session).map(r => r.nameVersion)).toEqual(['noversion', 'other:1.0']);
+  });
+
+  it('accepts the rows that have a version and names the ones that do not', async () => {
+    const { session, ws } = await importWaltz([comp('noversion', 'High', [['CVE-2099-1', 'High']]), other]);
+    const after = await reply('accept component 1 2', session!, ws);
+    expect(readList()).toEqual([{ component: 'other', version: '1.0' }]);
+    expect(after.text).toContain('Accepted 1 component');
+    expect(after.text).toContain('Row 1 has no version');
+    expect(newRows(after.session).map(r => r.nameVersion)).toEqual(['noversion']);
+  });
+
+  it('says so when the component was already accepted, and still takes the row off the screen', async () => {
+    const { session, ws } = await importWaltz([netty, other]);
+    writeList([{ component: 'netty-codec', version: '4.1.100' }]);
+    const after = await reply('accept component 1', session!, ws);
+    expect(after.text).toContain('already accepted');
+    expect(newRows(after.session).map(r => r.nameVersion)).toEqual(['other:1.0']);
+  });
+
+  it('refuses to write over a file that is not valid JSON and leaves the session as it was', async () => {
+    const { session, ws } = await ticketedImport();
+    writeFileSync(fileOn(), '{ nope');
+    const after = await reply('accept component A1', session!, ws);
+    expect(after.text).toMatch(/not valid JSON/);
+    expect(readFileSync(fileOn(), 'utf8')).toBe('{ nope');
+    expect(ticketedRows(after.session)).toHaveLength(2);
+    expect(staleKeys(after.session)).toEqual([]);
+  });
+
+  it('says so when no workspace folder is open, and writes nothing', async () => {
+    const { session, ws } = await ticketedImport();
+    workspace.dir = undefined;
+    const after = await reply('accept component A1', session!, ws);
+    expect(after.text).toMatch(/workspace/i);
+    expect(ticketedRows(after.session)).toHaveLength(2);
+    expect(existsSync(fileOn())).toBe(false);
+  });
+
+  it('removes a component entry by name and version; the review keeps it hidden, the next import offers it again', async () => {
+    writeList([{ component: 'netty-codec', version: '4.1.100', reason: 'no update' }, { component: 'libfoo', cve: 'CVE-2099-1' }]);
+    const { session, ws } = await importWaltz([netty, other]);
+    const after = await reply('unaccept-component netty-codec 4.1.100', session!, ws);
+    expect(readList()).toEqual([{ component: 'libfoo', cve: 'CVE-2099-1' }]);
+    expect(after.text).toContain('Removed netty-codec:4.1.100');
+    expect(newRows(after.session).map(r => r.nameVersion)).toEqual(['other:1.0']);
+    const next = await importWaltz([netty, other]);
+    expect(newRows(next.session!).map(r => r.nameVersion)).toEqual(['netty-codec:4.1.100', 'other:1.0']);
+  });
+
+  it('reports a component entry that is not on the list', async () => {
+    writeList([{ component: 'libfoo', cve: 'CVE-2099-1' }]);
+    const { session, ws } = await importWaltz([netty, other]);
+    const after = await reply('unaccept-component netty-codec 4.1.100', session!, ws);
+    expect(after.text).toContain('is not on the accepted list');
+  });
+
+  it('lists a component entry next to a CVE entry', async () => {
+    writeList([{ component: 'libfoo', cve: 'CVE-2099-1' }, { component: 'netty-codec', version: '4.1.100', reason: 'no update' }]);
+    const { session, ws } = await importWaltz([comp('x:1.0', 'High', [['CVE-2099-5', 'High']]), other]);
+    const after = await reply('accepted', session!, ws);
+    expect(after.text).toContain('netty-codec:4.1.100 (whole component) — no update');
+    expect(after.text).toContain('libfoo · CVE-2099-1');
   });
 });

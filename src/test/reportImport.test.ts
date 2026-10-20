@@ -688,7 +688,7 @@ describe('findStaleTickets', () => {
     expect(result.stale).toEqual([{ key: 'PROJ-1', ids: ['101'] }]);
     expect(result.searchFailed).toBe(false);
     expect(result.truncated).toBe(false);
-    expect(search).toHaveBeenCalledWith(buildStaleSearchJql('PROJ', 'veracode'), expect.any(Number));
+    expect(search).toHaveBeenCalledWith(buildStaleSearchJql('PROJ', 'veracode'), expect.any(Number), 0);
   });
 
   it('flags a single-flaw ticket stale when its flaw id is present but no longer matches the remediation-status filter', async () => {
@@ -833,6 +833,40 @@ describe('fetchAllPages (dedup search paging)', () => {
     expect(fetchPage).toHaveBeenCalledTimes(3);
   });
 
+  it('stops when the server ignores startAt and keeps returning the same page (Cloud), without duplicating tickets', async () => {
+    const page = Array.from({ length: 100 }, (_, i) => ({ key: `P-${i}` }));
+    const fetchPage = vi.fn(async () => ({ issues: page, isLast: false }));
+
+    const issues = await fetchAllPages(fetchPage, 100, 1000, i => i.key);
+
+    expect(issues).toHaveLength(100);
+    expect(fetchPage).toHaveBeenCalledTimes(2);
+  });
+
+  it('follows nextPageToken when the server pages by token', async () => {
+    const pages: Record<string, { issues: Array<{ key: string }>; nextPageToken?: string; isLast: boolean }> = {
+      start: { issues: Array.from({ length: 100 }, (_, i) => ({ key: `A-${i}` })), nextPageToken: 't2', isLast: false },
+      t2: { issues: Array.from({ length: 100 }, (_, i) => ({ key: `B-${i}` })), nextPageToken: 't3', isLast: false },
+      t3: { issues: [{ key: 'C-0' }], isLast: true },
+    };
+    const fetchPage = vi.fn(async (_startAt: number, token?: string) => pages[token ?? 'start']);
+
+    const issues = await fetchAllPages(fetchPage, 100, 1000, i => i.key);
+
+    expect(issues).toHaveLength(201);
+    expect(fetchPage.mock.calls.map(c => c[1])).toEqual([undefined, 't2', 't3']);
+  });
+
+  it('keeps reading when the server caps its page below the requested size and a total says there is more', async () => {
+    const all = Array.from({ length: 120 }, (_, i) => ({ key: `P-${i}` }));
+    const fetchPage = vi.fn(async (startAt: number) => ({ issues: all.slice(startAt, startAt + 50), total: 120 }));
+
+    const issues = await fetchAllPages(fetchPage, 100, 1000, i => i.key);
+
+    expect(issues).toHaveLength(120);
+    expect(fetchPage.mock.calls.map(c => c[0])).toEqual([0, 50, 100]);
+  });
+
   it('passes a page failure through to the caller (findAlreadyTicketed then skips that chunk)', async () => {
     const fetchPage = vi.fn(async (startAt: number) => {
       if (startAt > 0) throw new Error('503');
@@ -887,5 +921,103 @@ describe('fitWiki (R10: descriptions and comments stay within the size budget)',
     expect(MAX_DESCRIPTION_CHARS).toBe(30_000);
     const result = fitWiki(level => (level === 0 ? 'x'.repeat(30_001) : 'ok'), 2);
     expect(result.level).toBe(1);
+  });
+});
+
+describe('findStaleTickets — tickets that were not flagged (accepted components plan, U3)', () => {
+  const labelToDedupKey = (label: string) => (label.startsWith('oss-dep-') ? label : null);
+
+  it('returns an open ticket that still has an active id, with only its active ids', async () => {
+    const search = vi.fn().mockResolvedValue({
+      issues: [{ key: 'PROJ-1', fields: { labels: ['oss-dependency', 'oss-dep-a', 'oss-dep-b'] } }],
+      total: 1,
+      isLast: true,
+    });
+    const result = await findStaleTickets('PROJ', 'oss-dependency', search, labelToDedupKey, id => id === 'oss-dep-b');
+    expect(result.stale).toEqual([]);
+    expect(result.pending).toEqual([{ key: 'PROJ-1', ids: ['oss-dep-b'] }]);
+  });
+
+  it('does not list a flagged ticket as pending, nor one with no component label', async () => {
+    const search = vi.fn().mockResolvedValue({
+      issues: [
+        { key: 'PROJ-1', fields: { labels: ['oss-dependency', 'oss-dep-a'] } },
+        { key: 'PROJ-2', fields: { labels: ['oss-dependency'] } },
+      ],
+      total: 2,
+      isLast: true,
+    });
+    const result = await findStaleTickets('PROJ', 'oss-dependency', search, labelToDedupKey, () => false);
+    expect(result.stale).toEqual([{ key: 'PROJ-1', ids: ['oss-dep-a'] }]);
+    expect(result.pending).toEqual([]);
+  });
+
+  it('returns no pending tickets when the search fails', async () => {
+    const result = await findStaleTickets('PROJ', 'oss-dependency', vi.fn().mockRejectedValue(new Error('boom')), labelToDedupKey, () => true);
+    expect(result.pending).toEqual([]);
+    expect(result.searchFailed).toBe(true);
+  });
+});
+
+describe('findStaleTickets — reads every page (stale search paging)', () => {
+  const labelToDedupKey = (label: string) => (label.startsWith('oss-dep-') ? label : null);
+  const issue = (i: number) => ({ key: `PROJ-${i}`, fields: { labels: ['oss-dependency', `oss-dep-${i}`] } });
+
+  it('reads past the first page so tickets beyond the 100th are still checked', async () => {
+    const all = Array.from({ length: 150 }, (_, i) => issue(i));
+    const search = vi.fn(async (_jql: string, max: number, startAt: number) => ({
+      issues: all.slice(startAt, startAt + max), total: 150, isLast: startAt + max >= 150,
+    }));
+    const result = await findStaleTickets('PROJ', 'oss-dependency', search, labelToDedupKey, () => false);
+    expect(result.stale).toHaveLength(150);
+    expect(result.checked).toBe(150);
+    expect(result.truncated).toBe(false);
+    expect(search.mock.calls.map(c => c[2])).toEqual([0, 100]);
+  });
+
+  it('stops at the safety bound, reports how many were checked and that coverage may be incomplete', async () => {
+    const search = vi.fn(async (_jql: string, max: number, startAt: number) => ({
+      issues: Array.from({ length: max }, (_, i) => issue(startAt + i)), total: 1500, isLast: false,
+    }));
+    const result = await findStaleTickets('PROJ', 'oss-dependency', search, labelToDedupKey, () => true);
+    expect(result.checked).toBe(1000);
+    expect(result.totalFound).toBe(1500);
+    expect(result.truncated).toBe(true);
+    expect(result.pending).toHaveLength(1000);
+  });
+
+  it('degrades to no stale tickets when a later page fails', async () => {
+    const search = vi.fn(async (_jql: string, max: number, startAt: number) => {
+      if (startAt > 0) throw new Error('page 2 failed');
+      return { issues: Array.from({ length: max }, (_, i) => issue(i)), total: 150, isLast: false };
+    });
+    const result = await findStaleTickets('PROJ', 'oss-dependency', search, labelToDedupKey, () => false);
+    expect(result.searchFailed).toBe(true);
+    expect(result.stale).toEqual([]);
+  });
+});
+
+describe('findStaleTickets — Cloud-style token paging', () => {
+  const labelToDedupKey = (label: string) => (label.startsWith('oss-dep-') ? label : null);
+  const issue = (i: number) => ({ key: `PROJ-${i}`, fields: { labels: ['oss-dependency', `oss-dep-${i}`] } });
+
+  it('reads all tickets by token with no duplicates, and passes the token to the search', async () => {
+    const search = vi.fn(async (_jql: string, _max: number, _startAt: number, token?: string) => (token === undefined
+      ? { issues: Array.from({ length: 100 }, (_, i) => issue(i)), nextPageToken: 'next', isLast: false }
+      : { issues: Array.from({ length: 30 }, (_, i) => issue(100 + i)), isLast: true }));
+    const result = await findStaleTickets('PROJ', 'oss-dependency', search, labelToDedupKey, () => false);
+    expect(result.checked).toBe(130);
+    expect(new Set(result.stale.map(s => s.key)).size).toBe(130);
+    expect(search.mock.calls.map(c => c[3])).toEqual([undefined, 'next']);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('a search that ignores startAt and has no token yields each ticket once and reports possible incompleteness', async () => {
+    const page = Array.from({ length: 100 }, (_, i) => issue(i));
+    const search = vi.fn(async () => ({ issues: page, isLast: false }));
+    const result = await findStaleTickets('PROJ', 'oss-dependency', search, labelToDedupKey, () => false);
+    expect(result.checked).toBe(100);
+    expect(result.stale).toHaveLength(100);
+    expect(result.truncated).toBe(true);
   });
 });

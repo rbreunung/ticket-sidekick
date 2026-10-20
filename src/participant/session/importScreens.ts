@@ -4,7 +4,7 @@
 import { BATCH_LIMIT } from '../../utils/reportImport';
 import type { RowChange } from '../../utils/reportImport';
 import { formatKeyLink } from '../../services/TicketService';
-import type { AcceptedEntry } from '../../utils/waltzAccepted';
+import { isComponentEntry, type AcceptedEntry } from '../../utils/waltzAccepted';
 import { AcceptedHidden, ImportResultGroup, ImportReviewView, ReviewRowBase, ReviewSession, ReviewSessionStale, TicketedAction, TicketedRowResult, emptyImportOutcomes, isTicketedRowFinished, selectedStaleIssueTypes, ticketedRowActions, ticketedTargetKey } from './importTypes';
 import { ReviewTableColumn, cmdLink, countedNoun, neutralizeMarkdownLinks, pluralNoun, renderReviewTable, safeCellText } from './primitives';
 import { buildReviewPage } from './reviewPaging';
@@ -32,6 +32,9 @@ export const IMPORT_COMMANDS = {
   close: 'close tickets',
   accepted: 'accepted',
 } as const;
+
+/** The reply word a component entry's Remove link sends; one token, so it never reads as the `unaccept <component> <CVE>` form. */
+export const UNACCEPT_COMPONENT_WORD = 'unaccept-component';
 
 // Pre-overview-hub spelling of the update action — still accepted on the Already-ticketed screen so
 // a user (or a clicked link in an older transcript) typing the old words is not rejected.
@@ -126,6 +129,7 @@ export interface ImportScreenOptions {
 function describeAcceptedHidden(hidden: AcceptedHidden): string {
   const parts: string[] = [];
   if (hidden.cves > 0) parts.push(`${countedNoun(hidden.cves, 'accepted CVE(s)')} hidden`);
+  if ((hidden.components ?? 0) > 0) parts.push(`${countedNoun(hidden.components!, 'accepted component(s)')} hidden`);
   if (hidden.belowFloor > 0) parts.push(`${countedNoun(hidden.belowFloor, 'component(s)')} below the rating floor`);
   return parts.join(' · ');
 }
@@ -136,7 +140,7 @@ function describeAcceptedHidden(hidden: AcceptedHidden): string {
  * overview, on the group screen itself, so the count is never invisible.
  */
 export function buildAcceptedHiddenLine(hidden: AcceptedHidden | undefined): string {
-  if (!hidden || (hidden.cves === 0 && hidden.belowFloor === 0)) return '';
+  if (!hidden || (hidden.cves === 0 && hidden.belowFloor === 0 && !hidden.components)) return '';
   return `_${describeAcceptedHidden(hidden)}_ — ${cmdLink('Show accepted', IMPORT_COMMANDS.accepted)}`;
 }
 
@@ -175,7 +179,7 @@ export function buildImportOverview<TRow extends ReviewRowBase>(session: ReviewS
       if (c.newRemaining > 0) link = cmdLink('Review & create', IMPORT_COMMANDS.openNew);
       lines.push(`- **New** — ${parts.join(' · ')}${link ? ` — ${link}` : ''}`);
     } else if (group === 'ticketed') {
-      parts.push(countedNoun(c.ticketedTotal, opts.itemNoun));
+      parts.push(c.ticketedTotal === 0 ? 'none left' : countedNoun(c.ticketedTotal, opts.itemNoun));
       if (c.ticketedChanged > 0) parts.push(`${c.ticketedChanged} with changes`);
       if (o.updated > 0) parts.push(`${o.updated} updated`);
       if (o.followedUp > 0) parts.push(`${o.followedUp} follow-up${o.followedUp === 1 ? '' : 's'}`);
@@ -240,6 +244,8 @@ export function buildNewGroupScreen<TRow extends ReviewRowBase>(
   }
   if (opts.canAccept) {
     lines.push('Reply `accept 2 4` to hide those rows\' CVEs from this and future imports (add `because …` to record why), or `accepted` to list what is accepted.');
+    lines.push('');
+    lines.push('Reply `accept component 2 4` to stop offering those components at that exact version for good: they also leave Already ticketed, and an open ticket is offered for closing under Stale.');
     lines.push('');
   }
   if (hiddenLine) {
@@ -342,6 +348,12 @@ export function buildTicketedGroupScreen<TRow extends ReviewRowBase>(
   const c = countImportGroups(s);
   const lines: string[] = ['### Already ticketed'];
 
+  // Every row accepted away (or none ever matched): say so rather than render an empty table.
+  if (ticketed.length === 0) {
+    lines.push(`_Nothing is left under Already ticketed._`, '', groupScreenExitLine(s.singleGroup!));
+    return lines.join('\n');
+  }
+
   const ticketedColumns: ReviewTableColumn<TRow>[] = [
     { header: '#', accessor: (r) => r.id },
     ...columns,
@@ -369,9 +381,30 @@ export function buildTicketedGroupScreen<TRow extends ReviewRowBase>(
   }
   if (c.ticketedOpen > 0) {
     lines.push('Change a row with `<row> <action>` (e.g. `A2 follow-up`) or every row with `all <action>` (e.g. `all leave`), or click an action in the table.');
+    if (opts.canAccept) {
+      lines.push('Reply `accept component A2 A3` to stop offering those components at that exact version (add `because …` to record why): they leave this list, and an open ticket is offered for closing under Stale.');
+    }
   }
   lines.push(groupScreenExitLine(s.singleGroup!));
   return lines.join('\n');
+}
+
+/** Stale tickets shown per page. Fixed, not a setting (KL16). */
+export const STALE_PAGE_SIZE = 20;
+
+/** Every row the Stale screen lists: eligible tickets, then the ones that cannot be closed. */
+function staleRowCount(stale: ReviewSessionStale | undefined): number {
+  if (!stale) return 0;
+  return stale.groups.reduce((n, g) => n + g.tickets.length, 0) + stale.ineligible.length;
+}
+
+export function staleTotalPages(stale: ReviewSessionStale | undefined): number {
+  return Math.max(1, Math.ceil(staleRowCount(stale) / STALE_PAGE_SIZE));
+}
+
+/** The 0-based Stale page `target` clamped to the pages that exist. */
+export function clampStalePage(target: number, stale: ReviewSessionStale | undefined): number {
+  return Math.min(Math.max(0, target), staleTotalPages(stale) - 1);
 }
 
 /** R5/R9: the Stale group — per-ticket toggles (off by default) and "Close N tickets". The target
@@ -420,9 +453,15 @@ export function buildStaleGroupScreen<TRow extends ReviewRowBase>(session: Revie
     { header: 'Close?', accessor: r => r.toggleCell },
   ];
 
+  const totalPages = staleTotalPages(stale);
+  const page = clampStalePage(s.stalePage ?? 0, stale);
   const lines: string[] = ['### Stale — no longer in the report, may be closed'];
-  lines.push(renderReviewTable(columns, rows));
+  lines.push(renderReviewTable(columns, rows.slice(page * STALE_PAGE_SIZE, (page + 1) * STALE_PAGE_SIZE)));
   lines.push('');
+  if (totalPages > 1) {
+    lines.push(`_Page ${page + 1} of ${totalPages}._ Reply ${cmdLink('next', 'next')} / ${cmdLink('prev', 'prev')} or \`page <n>\` to navigate; tickets marked on any page are closed together.`);
+    lines.push('');
+  }
   if (c.staleOpen > 0) {
     if (c.staleSelected > 0) {
       lines.push(`Reply ${cmdLink(`Close ${c.staleSelected} tickets`, IMPORT_COMMANDS.close)} to transition the tickets marked ✓ close — you pick the target status next.`);
@@ -457,12 +496,22 @@ export function buildImportScreen<TRow extends ReviewRowBase>(
   }
 }
 
-/** Accepted-CVE list (R7): the entries numbered in file order, each with a link that removes it. */
+/** Accepted list (R7, R8): the entries numbered in file order, each with a link that removes it. */
 export function buildAcceptedList(entries: AcceptedEntry[]): string {
   if (entries.length === 0) return '_The accepted list is empty._';
   const text = (value: string): string => neutralizeMarkdownLinks(value).replace(/\s+/g, ' ').trim();
+  const flat = (value: string): string => value.replace(/\s+/g, ' ').trim();
   // The link names the entry, not its position, so a link from an older list still removes what it showed.
-  const lines = entries.map((e, i) =>
-    `${i + 1}. ${text(e.component)} · ${text(e.cve)}${e.reason ? ` — ${text(e.reason)}` : ''} — ${cmdLink('Remove', `unaccept ${e.component.replace(/\s+/g, ' ').trim()} ${e.cve.trim()}`)}`);
-  return ['### Accepted CVEs', '', ...lines].join('\n');
+  const lines = entries.map((e, i) => {
+    const reason = e.reason ? ` — ${text(e.reason)}` : '';
+    if (isComponentEntry(e)) {
+      // The Remove reply reads the last word as the version, so a version with whitespace is removed by number instead.
+      const remove = /\s/.test(e.version.trim())
+        ? `remove with \`unaccept ${i + 1}\``
+        : cmdLink('Remove', `${UNACCEPT_COMPONENT_WORD} ${flat(e.component)} ${e.version.trim()}`);
+      return `${i + 1}. ${text(e.component)}:${text(e.version)} (whole component)${reason} — ${remove}`;
+    }
+    return `${i + 1}. ${text(e.component)} · ${text(e.cve)}${reason} — ${cmdLink('Remove', `unaccept ${flat(e.component)} ${e.cve.trim()}`)}`;
+  });
+  return ['### Accepted', '', ...lines].join('\n');
 }

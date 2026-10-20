@@ -20,11 +20,12 @@ import type { IJiraClient } from '../../jira/IJiraClient';
 import { TemplateService } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
 import { BATCH_LIMIT, DEFAULT_DEDUP_CHUNK_SIZE, MAX_REPORT_BYTES, buildDedupJql, buildReviewRows, fetchAllPages, findAlreadyTicketed, findStaleTickets, templateLabelsOf, type DedupMap, type JqlIssueLike } from '../../utils/reportImport';
-import { CURRENT_SESSION_SCHEMA_VERSION, NO_ISSUE_TYPE, SESSION_EXPIRED_MESSAGE, applyBulkNewRowSet, applyReviewSessionToggle, applyStaleTicketToggle, applyTicketedActionChange, buildAllHiddenMessage, buildChatCommandLink, buildImportDoneSummary, buildReviewPage, computeImportResultGroups, describeImportReplyVocabulary, ensureImportViewState, formatIssueTypeOptionLabel, initImportViewState, isCancellation, isSessionExpired, isTicketedRowFinished, mergeNewRows, neutralizeMarkdownLinks, parseImportReviewReply, pickEmailOption, resolveTemplateIssueType, ticketedRowActions, unmergeNewRow, type ImportReplyContext, type ImportTemplateSelectionSession, type ReviewRowBase, type ReviewSession, type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession } from '../sessionState';
+import { CURRENT_SESSION_SCHEMA_VERSION, NO_ISSUE_TYPE, SESSION_EXPIRED_MESSAGE, applyBulkNewRowSet, applyReviewSessionToggle, applyStaleTicketToggle, applyTicketedActionChange, buildAllHiddenMessage, buildChatCommandLink, buildImportDoneSummary, buildReviewPage, clampStalePage, computeImportResultGroups, describeImportReplyVocabulary, ensureImportViewState, formatIssueTypeOptionLabel, initImportViewState, isCancellation, isSessionExpired, isTicketedRowFinished, mergeNewRows, neutralizeMarkdownLinks, parseImportReviewReply, pickEmailOption, resolveTemplateIssueType, ticketedRowActions, toAcceptedHidden, unmergeNewRow, type ImportReplyContext, type ImportTemplateSelectionSession, type ReviewRowBase, type ReviewSession, type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession } from '../sessionState';
 import { resolveIssueTypeOrPrompt, resolveProjectKey, sessionWasSuperseded } from './ticketContext';
 import { buildStaleTicketGroups } from './cleanupHandler';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
-import { acceptRows, showAcceptedList, unacceptEntry } from './importAccept';
+import type { AcceptedEntry } from '../../utils/waltzAccepted';
+import { acceptComponents, acceptRows, showAcceptedList, unacceptEntry } from './importAccept';
 import { addToTicket, showAddPrompt } from './importAddToTicket';
 import { createNewRows } from './importCreate';
 import { IMPORT_SESSION_KINDS, afterGroupAction, streamImportReview } from './importReviewScreen';
@@ -329,9 +330,11 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
         // U3/KTD1: resolution + created let buildReviewRows pick each item's newest open ticket.
         // Every page is read: the union of an item's tickets decides its target and known findings.
         chunk => fetchAllPages(
-          startAt => ticketService.searchTicketsRaw(buildDedupJql(session.projectKey, chunk), DEDUP_PAGE_SIZE, ['resolution', 'created'], startAt)
+          (startAt, pageToken) => ticketService.searchTicketsRaw(buildDedupJql(session.projectKey, chunk), DEDUP_PAGE_SIZE, ['resolution', 'created'], startAt, pageToken)
             .then(r => ({ ...r, issues: r.issues as JqlIssueLike[] })),
           DEDUP_PAGE_SIZE,
+          undefined,
+          issue => issue.key,
         ),
         descriptor.labelToDedupKey,
         (level, message, details) => logDiag(descriptor.scope, level, message, details),
@@ -363,8 +366,10 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
   // Accepted-CVE list (KTD1): applied to the New items only, after the dedup split, so Already ticketed
   // and Stale keep seeing the full report (R8). A missing list file or workspace hides nothing; a
   // broken one hides nothing and is reported.
-  const acceptedHidden = { cves: 0, belowFloor: 0 };
+  const acceptedHidden = { cves: 0, belowFloor: 0, components: 0 };
   let narrowNew: ((item: TItem) => TItem | null) | undefined;
+  let dropTicketed: ((item: TItem) => boolean) | undefined;
+  let acceptedEntries: AcceptedEntry[] = [];
   if (descriptor.accepted) {
     const accepted = descriptor.accepted;
     const loaded = accepted.service()?.load();
@@ -373,11 +378,18 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
       stream.markdown(`_Warning: ${neutralizeMarkdownLinks(loaded.warning)}_\n\n`);
     }
     if (loaded && loaded.entries.length > 0) {
+      acceptedEntries = loaded.entries;
       narrowNew = item => {
         const narrowed = accepted.narrow(item, loaded.entries);
         acceptedHidden.cves += narrowed.hiddenCves;
         acceptedHidden.belowFloor += narrowed.belowFloor;
+        acceptedHidden.components += narrowed.hiddenComponents;
         return narrowed.item;
+      };
+      dropTicketed = item => {
+        const dropped = accepted.isAccepted(item, loaded.entries);
+        if (dropped) acceptedHidden.components++;
+        return dropped;
       };
     }
   }
@@ -388,8 +400,10 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
     item => descriptor.buildRowFields(item, templateLabels),
     descriptor.changeTracking,
     narrowNew,
+    dropTicketed,
   );
   const initialPage = buildReviewPage(allRows, 0);
+  const hiddenCounts = toAcceptedHidden(acceptedHidden);
 
   let reviewSession: ReviewSession<TRow> = {
     projectKey: session.projectKey,
@@ -399,7 +413,7 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
     allRows,
     rows: initialPage.rows,
     page: initialPage.page,
-    ...(acceptedHidden.cves > 0 || acceptedHidden.belowFloor > 0 ? { acceptedHidden } : {}),
+    ...(hiddenCounts ? { acceptedHidden: hiddenCounts } : {}),
     schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
   };
 
@@ -411,8 +425,8 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
     const staleResult = await findStaleTickets(
       session.projectKey,
       descriptor.stale.markerLabel,
-      async (jql, maxResults) => {
-        const result = await ticketService.searchTicketsRaw(jql, maxResults);
+      async (jql, maxResults, startAt, pageToken) => {
+        const result = await ticketService.searchTicketsRaw(jql, maxResults, [], startAt, pageToken);
         // Captured as a side effect of the search findStaleTickets() already runs — searchJql's
         // baseFields always include summary/status/issuetype (see JiraApiClient.ts), so this needs
         // no second fetch keyed by the returned stale keys. `JiraIssue.fields` already types these
@@ -429,7 +443,7 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
         return result;
       },
       descriptor.stale.labelToDedupKey,
-      descriptor.stale.buildActivePredicate(session.rawItems ?? []),
+      descriptor.stale.buildActivePredicate(session.rawItems ?? [], acceptedEntries),
       (level, message, details) => logDiag(descriptor.scope, level, message, details),
     );
 
@@ -444,9 +458,17 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
       // marker-labeled ticket count the search matched, not a stale count.
       if (staleResult.truncated) {
         stream.markdown(
-          `_Checked the first ${BATCH_LIMIT} of ${staleResult.totalFound} ticket(s) carrying the stale-check label` +
+          `_Checked the first ${staleResult.checked} of ${staleResult.totalFound} ticket(s) carrying the stale-check label` +
           ` — ${staleResult.stale.length} looked stale, but coverage may be incomplete._\n\n`,
         );
+      }
+      // Accepted components (KTD5): an importer with an accepted list keeps the open tickets it did not flag.
+      if (descriptor.accepted && staleResult.pending.length > 0) {
+        const staleCandidates = staleResult.pending.flatMap(m => {
+          const detail = issueDetails.get(m.key);
+          return detail ? [{ key: m.key, summary: detail.summary, currentStatus: detail.currentStatus, issueType: detail.issueType, activeIds: m.ids }] : [];
+        });
+        if (staleCandidates.length > 0) reviewSession = { ...reviewSession, staleCandidates };
       }
       if (staleResult.stale.length > 0) {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
@@ -545,6 +567,12 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
       return;
     }
     case 'pageNav': {
+      if (view === 'stale') {
+        const from = clampStalePage(session.stalePage ?? 0, session.staleTickets);
+        const target = action.nav.kind === 'next' ? from + 1 : action.nav.kind === 'prev' ? from - 1 : action.nav.page;
+        session.stalePage = clampStalePage(target, session.staleTickets);
+        return rerender();
+      }
       const current = buildReviewPage(session.allRows, session.page);
       const target = action.nav.kind === 'next' ? current.page + 1 : action.nav.kind === 'prev' ? current.page - 1 : action.nav.page;
       const next = buildReviewPage(session.allRows, target);
@@ -570,11 +598,15 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
     case 'accept':
       Object.assign(session, await acceptRows(session, action, stream, descriptor));
       return rerender();
+    case 'acceptComponent':
+      Object.assign(session, await acceptComponents(session, action, ticketService, stream, descriptor));
+      return rerender();
     case 'listAccepted':
       showAcceptedList(descriptor, stream);
       return rerender();
     case 'unaccept':
     case 'unacceptEntry':
+    case 'unacceptComponent':
       unacceptEntry(descriptor, action, stream);
       return rerender();
     case 'addPrompt':

@@ -3,7 +3,7 @@
 
 import { TICKETED_ACTION_ORDER } from '../../utils/reportImport';
 import { formatKeyLink } from '../../services/TicketService';
-import { IMPORT_COMMANDS, LEGACY_UPDATE_COMMAND } from './importScreens';
+import { IMPORT_COMMANDS, LEGACY_UPDATE_COMMAND, UNACCEPT_COMPONENT_WORD } from './importScreens';
 import { AddMode, ImportOutcomes, ImportResultGroup, ImportReviewView, ReviewRowBase, ReviewSessionStale, TicketedAction } from './importTypes';
 import { cmdLink, isCancellation, isConfirmation, neutralizeMarkdownLinks, normalizeReply } from './primitives';
 import { ReviewPageNav, parseBulkNewRowReply, parseReviewPageNav } from './reviewPaging';
@@ -35,6 +35,10 @@ export type ImportReplyAction =
   | { kind: 'listAccepted' }
   | { kind: 'unaccept'; position: number }
   | { kind: 'unacceptEntry'; component: string; cve: string } // what a Remove link sends: the entry itself, not its position
+  // Accepted components: accept the named rows' components at their version (New rows or Already-ticketed
+  // `A` rows, with an optional reason), and remove a component entry by its name + version.
+  | { kind: 'acceptComponent'; ids: string[]; reason?: string }
+  | { kind: 'unacceptComponent'; component: string; version: string }
   | { kind: 'toggleRows'; ids: string[] }
   | { kind: 'toggleStale'; keys: string[] }
   // `reason`, when present, says specifically why (e.g. an action a row does not offer, AE6).
@@ -87,6 +91,10 @@ const UNACCEPT_USAGE = 'Remove an accepted entry by its number, e.g. `unaccept 2
 // `unaccept <component> <CVE>`: the CVE is the last word, the component everything before it.
 const UNACCEPT_ENTRY_PATTERN = /^unaccept (.+) (\S+)$/;
 const ACCEPT_USAGE = 'Accept the CVEs of rows like this: `accept 2 4`, optionally with a reason: `accept 2 because not reachable`.';
+const ACCEPT_COMPONENT_USAGE = 'Accept whole components at their version like this: `accept component 2 4` (Already ticketed: `accept component A2`), optionally with a reason: `accept component 2 because no newer version`.';
+const UNACCEPT_COMPONENT_USAGE = `Remove an accepted component with the Remove link in the \`accepted\` list, or by name and version: \`${UNACCEPT_COMPONENT_WORD} netty-codec 4.1.100\`.`;
+// `unaccept-component <component> <version>`: the version is the last word, the component everything before it.
+const UNACCEPT_COMPONENT_PATTERN = new RegExp(`^${UNACCEPT_COMPONENT_WORD} (.+) (\\S+)$`);
 
 /**
  * Accepted-CVE list: `accepted` (list the entries) and `unaccept <n>` (remove one). A reply starting
@@ -95,6 +103,10 @@ const ACCEPT_USAGE = 'Accept the CVEs of rows like this: `accept 2 4`, optionall
 function parseAcceptedListReply(reply: string): ImportReplyAction | null {
   const n = normalizeReply(reply);
   if (n === IMPORT_COMMANDS.accepted) return { kind: 'listAccepted' };
+  if (n === UNACCEPT_COMPONENT_WORD || n.startsWith(`${UNACCEPT_COMPONENT_WORD} `)) {
+    const component = n.match(UNACCEPT_COMPONENT_PATTERN);
+    return component ? { kind: 'unacceptComponent', component: component[1], version: component[2] } : { kind: 'invalid', reason: UNACCEPT_COMPONENT_USAGE };
+  }
   const unaccept = n.match(/^unaccept(?: (.*))?$/);
   if (!unaccept) return null;
   const entry = n.match(UNACCEPT_ENTRY_PATTERN);
@@ -104,17 +116,50 @@ function parseAcceptedListReply(reply: string): ImportReplyAction | null {
 }
 
 /** `accept <rows> [because <reason>]` on the New screen; the reason keeps the casing the user typed. */
+/** Splits what follows an accept word into lower-cased row tokens and the reason after `because`, which keeps the casing typed. */
+function splitRowsAndReason(rest: string | undefined): { tokens: string[]; reason: string } {
+  const [rowsPart, ...reasonParts] = (rest ?? '').split(/ because /i);
+  const tokens = rowsPart.toLowerCase().replace(/ because$/, '').split(/[\s,]+/).filter(Boolean);
+  return { tokens, reason: reasonParts.join(' because ').trim() };
+}
+
 function parseAcceptReply(reply: string, ctx: ImportReplyContext): ImportReplyAction | null {
   const trimmed = reply.trim().replace(/\s+/g, ' ');
   const match = trimmed.match(/^accept(?: (.*))?$/i);
   if (!match) return null;
-  const [rowsPart, ...reasonParts] = (match[1] ?? '').split(/ because /i);
-  const tokens = rowsPart.toLowerCase().replace(/ because$/, '').split(/[\s,]+/).filter(Boolean);
+  const { tokens, reason } = splitRowsAndReason(match[1]);
   if (tokens.length === 0) return { kind: 'invalid', reason: ACCEPT_USAGE };
   const rows = matchVisibleNewRows(tokens, ctx, 'accepted');
   if ('reason' in rows) return { kind: 'invalid', reason: rows.reason };
-  const reason = reasonParts.join(' because ').trim();
   return reason ? { kind: 'accept', ids: rows.ids, reason } : { kind: 'accept', ids: rows.ids };
+}
+
+/**
+ * `accept component <rows> [because <reason>]` on the New screen (visible New rows) and the Already-ticketed
+ * screen (its `A` rows still open). A reply starting with these words is always answered here — valid, or
+ * `invalid` with a usage reason — never handed to the CVE `accept` parse.
+ */
+function parseAcceptComponentReply(reply: string, ctx: ImportReplyContext, view: 'new' | 'ticketed'): ImportReplyAction | null {
+  const trimmed = reply.trim().replace(/\s+/g, ' ');
+  const match = trimmed.match(/^accept component(?: (.*))?$/i);
+  if (!match) return null;
+  const { tokens, reason } = splitRowsAndReason(match[1]);
+  if (tokens.length === 0) return { kind: 'invalid', reason: ACCEPT_COMPONENT_USAGE };
+  const rows = view === 'new' ? matchVisibleNewRows(tokens, ctx, 'accepted') : matchOpenTicketedRows(tokens, ctx);
+  if ('reason' in rows) return { kind: 'invalid', reason: rows.reason };
+  return reason ? { kind: 'acceptComponent', ids: rows.ids, reason } : { kind: 'acceptComponent', ids: rows.ids };
+}
+
+/** The distinct ids named by `tokens`, each of which must be an Already-ticketed row whose action has not run yet (else the reason, naming it). */
+function matchOpenTicketedRows(tokens: string[], ctx: ImportReplyContext): { ids: string[] } | { reason: string } {
+  const byLower = new Map(ctx.ticketedRows.map(r => [r.id.toLowerCase(), r.id]));
+  const ids: string[] = [];
+  for (const token of tokens) {
+    const id = byLower.get(token);
+    if (!id) return { reason: `Row ${token.toUpperCase()} isn't an Already ticketed row that is still open, so it can't be accepted.` };
+    if (!ids.includes(id)) ids.push(id);
+  }
+  return { ids };
 }
 
 /** Shared by every group screen: back/done and cancellation words (KTD2). */
@@ -139,7 +184,7 @@ export function parseNewGroupReply(reply: string, ctx: ImportReplyContext): Impo
     if (fold) return fold;
   }
   if (ctx.canAccept) {
-    const accepted = parseAcceptReply(reply, ctx) ?? parseAcceptedListReply(reply);
+    const accepted = parseAcceptComponentReply(reply, ctx, 'new') ?? parseAcceptReply(reply, ctx) ?? parseAcceptedListReply(reply);
     if (accepted) return accepted;
   }
   const ids = parseStrictRowToggle(reply, ctx.newRowIds);
@@ -327,6 +372,13 @@ export function parseTicketedGroupReply(reply: string, ctx: ImportReplyContext):
   if (n === IMPORT_COMMANDS.update || n === LEGACY_UPDATE_COMMAND) return { kind: 'update' };
   if (n === IMPORT_COMMANDS.recreate) return { kind: 'recreate' };
 
+  if (ctx.canAccept) {
+    // Only the whole-component form exists here; plain `accept` is answered with the usage rather than read as a row action.
+    const accept = parseAcceptComponentReply(reply, ctx, 'ticketed');
+    if (accept) return accept;
+    if (n === 'accept' || n.startsWith('accept ')) return { kind: 'invalid', reason: ACCEPT_COMPONENT_USAGE };
+  }
+
   const match = n.match(/^(\S+) (.+)$/);
   const action = match ? TICKETED_ACTION_WORDS[match[2]] : undefined;
   if (match && action) {
@@ -359,6 +411,8 @@ export function parseStaleGroupReply(reply: string, ctx: ImportReplyContext): Im
   if (exit) return exit;
   const listing = ctx.canAccept && ctx.singleGroup ? parseAcceptedListReply(reply) : null;
   if (listing) return listing;
+  const nav = parseReviewPageNav(reply);
+  if (nav) return { kind: 'pageNav', nav };
   if (!ctx.stale) return { kind: 'invalid' };
   const toggle = parseStaleTicketToggle(reply, ctx.stale);
   // A reply mixing a ticket key with anything else is rejected whole rather than half-applied.
@@ -383,13 +437,13 @@ export function describeImportReplyVocabulary(view: ImportReviewView, ctx: Impor
     case 'new':
       return `On this screen you can reply \`create tickets\`, row numbers to toggle (e.g. \`2 4\`), \`include all\` / \`exclude all\`, ` +
         `${ctx.canFold ? '`merge 2 4` / `unmerge 2`, `add 2 4 to PROJ-123`, ' : ''}` +
-        `${ctx.canAccept ? '`accept 2 4`, `accepted` / `unaccept 2`, ' : ''}\`next\` / \`prev\`, or ${exit}.`;
+        `${ctx.canAccept ? '`accept 2 4`, `accept component 2 4`, `accepted` / `unaccept 2`, ' : ''}\`next\` / \`prev\`, or ${exit}.`;
     case 'ticketed':
       return 'On this screen you can reply `apply`, `<row> <action>` (e.g. `A2 follow-up` — actions are ' +
         `${TICKETED_ACTION_ORDER.map(a => `\`${a}\``).join(', ')}), \`all <action>\` (e.g. \`all leave\`), ` +
-        `\`update tickets\`, \`re-create tickets\`, or ${exit}.`;
+        `${ctx.canAccept ? '`accept component A2`, ' : ''}\`update tickets\`, \`re-create tickets\`, or ${exit}.`;
     case 'stale':
-      return `On this screen you can reply \`close tickets\`, a stale ticket's key to toggle it (e.g. \`PROJ-123\`), or ${exit}.`;
+      return `On this screen you can reply \`close tickets\`, a stale ticket's key to toggle it (e.g. \`PROJ-123\`), \`next\` / \`prev\` / \`page <n>\`, or ${exit}.`;
     default: {
       const opens = ctx.groups.map(g => `\`${g === 'new' ? IMPORT_COMMANDS.openNew : g === 'ticketed' ? IMPORT_COMMANDS.openTicketed : IMPORT_COMMANDS.openStale}\``);
       return `On the overview you can reply ${[...opens, ...(ctx.canAccept ? ['`accepted`', '`unaccept 2`'] : []), '`done`'].join(', ')}.`;

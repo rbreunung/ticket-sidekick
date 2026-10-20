@@ -41,7 +41,9 @@ import { TransitionBatchTicket } from './sessionTypes';
 // Waltz rows hold `sourceGroup` (a component array) instead of `sourceComponent`.
 // Accepted-CVE list (KTD5): bumped 9 -> 10 — ReviewSession gained `acceptedHidden`, the counts of what
 // the list hid from the New screen.
-export const CURRENT_SESSION_SCHEMA_VERSION = 10;
+// Accepted components (KTD7): bumped 10 -> 11 — `acceptedHidden` gained `components`, and the review keeps
+// the open tickets the stale search did not flag (`staleCandidates`).
+export const CURRENT_SESSION_SCHEMA_VERSION = 11;
 
 export interface ImportTemplateSelectionSession<TItem> {
   reportFileName: string;
@@ -245,6 +247,10 @@ export interface ReviewSession<TRow> {
   // (`transitionTickets`). Absent for importers with no stale-check concept (email, which has no
   // dedup/marker-label concept either — see ReportImportDescriptor's optional `stale` field).
   staleTickets?: ReviewSessionStale;
+  // Accepted components (KTD5): open tickets the stale search left alone, kept so an accept can flag them.
+  staleCandidates?: StaleCandidate[];
+  // Which page (0-based) of the Stale screen is showing, 20 tickets per page; absent means the first.
+  stalePage?: number;
   // Overview-hub KTD1/KTD7: the screen currently shown, the result groups that had rows when the
   // session was built (fixed for the session's life — R1's listing basis), whether exactly one
   // group had rows (then there is no overview, R4), and the accumulated action outcomes (R2).
@@ -264,6 +270,14 @@ export interface ReviewSession<TRow> {
 export interface AcceptedHidden {
   cves: number;
   belowFloor: number;
+  /** Components dropped because their exact name + version is accepted as a whole; absent when none. */
+  components?: number;
+}
+
+/** The counts as stored on the session: undefined when nothing was hidden, `components` only when above zero. */
+export function toAcceptedHidden(counts: { cves: number; belowFloor: number; components: number }): AcceptedHidden | undefined {
+  if (counts.cves === 0 && counts.belowFloor === 0 && counts.components === 0) return undefined;
+  return counts.components > 0 ? { ...counts } : { cves: counts.cves, belowFloor: counts.belowFloor };
 }
 
 export type VeracodeReviewSession = ReviewSession<VeracodeReviewRow>;
@@ -300,6 +314,19 @@ export interface IneligibleStaleTicket {
   summary: string;
   currentStatus: string;
   note: string;
+}
+
+/**
+ * An open, marker-labeled ticket the stale search did not flag (accepted components plan, KTD5): kept with
+ * what the search captured and the dedup ids still active for it, so accepting components mid-review can
+ * move it to Stale without a second search or the raw report.
+ */
+export interface StaleCandidate {
+  key: string;
+  summary: string;
+  currentStatus: string;
+  issueType: string;
+  activeIds: string[];
 }
 
 export interface ReviewSessionStale {

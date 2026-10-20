@@ -409,6 +409,10 @@ export class TicketService {
     return this.client.getFields();
   }
 
+  async getResolutions(): Promise<Array<{ name: string }>> {
+    return this.client.getResolutions();
+  }
+
   async getRemoteLinks(issueKey: string): Promise<JiraRemoteLink[]> {
     return this.client.getRemoteLinks(issueKey);
   }
@@ -710,8 +714,11 @@ export class TicketService {
     }
   }
 
-  async searchTicketsRaw(jql: string, maxResults = 50, extraFields: string[] = [], startAt?: number): Promise<JiraSearchResult> {
-    return this.client.searchJql(jql, maxResults, startAt, extraFields);
+  async searchTicketsRaw(jql: string, maxResults = 50, extraFields: string[] = [], startAt?: number, pageToken?: string): Promise<JiraSearchResult> {
+    // The token argument is added only when there is one, so every existing call keeps its exact shape.
+    return pageToken === undefined
+      ? this.client.searchJql(jql, maxResults, startAt, extraFields)
+      : this.client.searchJql(jql, maxResults, startAt, extraFields, pageToken);
   }
 
   async getFilterById(id: string): Promise<JiraFilter> {

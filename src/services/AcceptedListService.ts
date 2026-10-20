@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import {
-  ACCEPTED_FILE_NAME, addAcceptedEntries, parseAcceptedFile, removeAcceptedEntry, removeAcceptedPair, serializeAcceptedFile,
+  ACCEPTED_FILE_NAME, addAcceptedEntries, parseAcceptedFile, removeAcceptedComponent, removeAcceptedEntry, removeAcceptedPair, serializeAcceptedFile,
   type AcceptedEntry, type ParsedAcceptedFile,
 } from '../utils/waltzAccepted';
 
@@ -57,6 +57,15 @@ export class AcceptedListService {
     if (current.warning) return { ok: false, message: this.unwritableMessage(current.warning) };
     const result = removeAcceptedPair(current.entries, component, cve);
     if (!result) return { ok: false, message: `${component} · ${cve} is not on the accepted list (it may already have been removed).` };
+    return this.write(result.entries, { ok: true, entries: result.entries, removed: result.removed });
+  }
+
+  /** Removes the component entry naming this name + version, wherever it now sits (a Remove link from an older list). */
+  removeComponent(component: string, version: string): AcceptedListRemoval {
+    const current = this.load();
+    if (current.warning) return { ok: false, message: this.unwritableMessage(current.warning) };
+    const result = removeAcceptedComponent(current.entries, component, version);
+    if (!result) return { ok: false, message: `${component}:${version} is not on the accepted list (it may already have been removed).` };
     return this.write(result.entries, { ok: true, entries: result.entries, removed: result.removed });
   }
 
