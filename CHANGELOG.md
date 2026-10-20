@@ -1,3 +1,21 @@
+## [0.7.5] - 2026-10-20
+
+## What's Changed
+* feat(waltz): keep accepted CVEs off the OSS import's New screen
+* docs: pin agent reply language to English in CLAUDE.md
+* feat(bitbucket): easier exit from review sessions
+* feat(bitbucket): check smart and deep reviews against the Jira ticket
+* feat(waltz): accept whole components in the OSS import
+* Fix release publish (icon size) and update dependencies
+* chore(deps-dev): bump @types/vscode from 1.95.0 to 1.140.0 by @dependabot[bot] in https://github.com/rbreunung/ticket-sidekick/pull/90
+* chore(deps-dev): bump @types/node from 24.19.2 to 26.6.5 by @dependabot[bot] in https://github.com/rbreunung/ticket-sidekick/pull/91
+* Add smoke tests (bundle + real VS Code), fix Windows test paths, pin @types/vscode
+
+## New Contributors
+* @dependabot[bot] made their first contribution in https://github.com/rbreunung/ticket-sidekick/pull/90
+
+**Full Changelog**: https://github.com/rbreunung/ticket-sidekick/compare/0.7.1...0.7.5
+
 ## [0.7.1] - 2026-10-06
 
 ## What's Changed
