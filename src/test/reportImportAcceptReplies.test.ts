@@ -183,6 +183,6 @@ describe('buildAcceptedList — the entries, numbered, each with a remove link',
   it('neutralizes link syntax and line breaks in a hand-edited reason', () => {
     const text = buildAcceptedList([{ component: 'libfoo', cve: 'CVE-2024-0001', reason: '[click](http://evil.example)\n# Heading' }]);
     expect(text).not.toContain('](http://evil.example)');
-    expect(text.split('\n').filter(l => l.startsWith('#') && l !== '### Accepted CVEs')).toEqual([]);
+    expect(text.split('\n').filter(l => l.startsWith('#') && l !== '### Accepted')).toEqual([]);
   });
 });

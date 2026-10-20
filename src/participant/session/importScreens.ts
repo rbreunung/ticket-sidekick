@@ -4,7 +4,7 @@
 import { BATCH_LIMIT } from '../../utils/reportImport';
 import type { RowChange } from '../../utils/reportImport';
 import { formatKeyLink } from '../../services/TicketService';
-import type { AcceptedEntry } from '../../utils/waltzAccepted';
+import { isComponentEntry, type AcceptedEntry } from '../../utils/waltzAccepted';
 import { AcceptedHidden, ImportResultGroup, ImportReviewView, ReviewRowBase, ReviewSession, ReviewSessionStale, TicketedAction, TicketedRowResult, emptyImportOutcomes, isTicketedRowFinished, selectedStaleIssueTypes, ticketedRowActions, ticketedTargetKey } from './importTypes';
 import { ReviewTableColumn, cmdLink, countedNoun, neutralizeMarkdownLinks, pluralNoun, renderReviewTable, safeCellText } from './primitives';
 import { buildReviewPage } from './reviewPaging';
@@ -32,6 +32,9 @@ export const IMPORT_COMMANDS = {
   close: 'close tickets',
   accepted: 'accepted',
 } as const;
+
+/** The reply word a component entry's Remove link sends; one token, so it never reads as the `unaccept <component> <CVE>` form. */
+export const UNACCEPT_COMPONENT_WORD = 'unaccept-component';
 
 // Pre-overview-hub spelling of the update action — still accepted on the Already-ticketed screen so
 // a user (or a clicked link in an older transcript) typing the old words is not rejected.
@@ -457,12 +460,18 @@ export function buildImportScreen<TRow extends ReviewRowBase>(
   }
 }
 
-/** Accepted-CVE list (R7): the entries numbered in file order, each with a link that removes it. */
+/** Accepted list (R7, R8): the entries numbered in file order, each with a link that removes it. */
 export function buildAcceptedList(entries: AcceptedEntry[]): string {
   if (entries.length === 0) return '_The accepted list is empty._';
   const text = (value: string): string => neutralizeMarkdownLinks(value).replace(/\s+/g, ' ').trim();
+  const flat = (value: string): string => value.replace(/\s+/g, ' ').trim();
   // The link names the entry, not its position, so a link from an older list still removes what it showed.
-  const lines = entries.map((e, i) =>
-    `${i + 1}. ${text(e.component)} · ${text(e.cve)}${e.reason ? ` — ${text(e.reason)}` : ''} — ${cmdLink('Remove', `unaccept ${e.component.replace(/\s+/g, ' ').trim()} ${e.cve.trim()}`)}`);
-  return ['### Accepted CVEs', '', ...lines].join('\n');
+  const lines = entries.map((e, i) => {
+    const reason = e.reason ? ` — ${text(e.reason)}` : '';
+    if (isComponentEntry(e)) {
+      return `${i + 1}. ${text(e.component)}:${text(e.version)} (whole component)${reason} — ${cmdLink('Remove', `${UNACCEPT_COMPONENT_WORD} ${flat(e.component)} ${e.version.trim()}`)}`;
+    }
+    return `${i + 1}. ${text(e.component)} · ${text(e.cve)}${reason} — ${cmdLink('Remove', `unaccept ${flat(e.component)} ${e.cve.trim()}`)}`;
+  });
+  return ['### Accepted', '', ...lines].join('\n');
 }

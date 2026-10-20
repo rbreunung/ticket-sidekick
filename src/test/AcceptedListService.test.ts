@@ -119,3 +119,36 @@ describe('AcceptedListService.remove', () => {
     expect(readFileSync(file(), 'utf8')).toBe('nope');
   });
 });
+
+describe('AcceptedListService with component entries', () => {
+  it('adds a component entry and reads it back next to a CVE pair', () => {
+    const service = new AcceptedListService(dir);
+    service.add([{ component: 'libfoo', cve: 'CVE-2024-0001' }]);
+    const result = service.add([{ component: 'netty-codec', version: '4.1.100', reason: 'no update' }]);
+    expect(result).toMatchObject({ ok: true, added: 1 });
+    expect(service.load().entries).toEqual([
+      { component: 'libfoo', cve: 'CVE-2024-0001' },
+      { component: 'netty-codec', version: '4.1.100', reason: 'no update' },
+    ]);
+  });
+
+  it('removes a component entry by name and version', () => {
+    const service = new AcceptedListService(dir);
+    service.add([{ component: 'netty-codec', version: '4.1.100' }]);
+    expect(service.removeComponent('Netty-Codec', '4.1.100')).toMatchObject({ ok: true });
+    expect(service.load().entries).toEqual([]);
+  });
+
+  it('reports a component entry that is not on the list', () => {
+    const result = new AcceptedListService(dir).removeComponent('libfoo', '1.0');
+    expect(result.ok).toBe(false);
+  });
+
+  it('refuses to write a component entry over a file it could not read in full', () => {
+    const original = JSON.stringify({ accepted: [{ component: 'libfoo', cves: 'CVE-2024-0001' }] });
+    writeFileSync(file(), original);
+    const service = new AcceptedListService(dir);
+    expect(service.add([{ component: 'netty-codec', version: '4.1.100' }]).ok).toBe(false);
+    expect(readFileSync(file(), 'utf8')).toBe(original);
+  });
+});

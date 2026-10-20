@@ -3,6 +3,7 @@
 // removes one.
 import * as vscode from 'vscode';
 import { logDiag } from '../../utils/diagLog';
+import { isComponentEntry } from '../../utils/waltzAccepted';
 import { templateLabelsOf } from '../../utils/reportImport';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import { buildAcceptedList, buildReviewPage, neutralizeMarkdownLinks, restoreMergedRows, type ReviewRowBase, type ReviewSession } from '../sessionState';
@@ -105,5 +106,9 @@ export function unacceptEntry<TItem, TRow extends ReviewRowBase>(
     return;
   }
   logDiag(descriptor.scope, 'info', `${descriptor.importLabel} import — accepted entry removed`, action.kind === 'unaccept' ? { position: action.position } : { entry: true });
-  stream.markdown(`✓ Removed ${neutralizeMarkdownLinks(removal.removed.component)} · ${neutralizeMarkdownLinks(removal.removed.cve)} from the accepted list. It is offered again on the next import; rows already hidden stay hidden in this review.\n\n`);
+  const removed = removal.removed;
+  const label = isComponentEntry(removed)
+    ? `${neutralizeMarkdownLinks(removed.component)}:${neutralizeMarkdownLinks(removed.version)}`
+    : `${neutralizeMarkdownLinks(removed.component)} · ${neutralizeMarkdownLinks(removed.cve)}`;
+  stream.markdown(`✓ Removed ${label} from the accepted list. It is offered again on the next import; rows already hidden stay hidden in this review.\n\n`);
 }
