@@ -15,9 +15,9 @@ vi.mock('vscode', () => ({
 }));
 
 vi.mock('../templates/TemplateService', () => ({
-  TemplateService: vi.fn().mockImplementation(() => ({
+  TemplateService: vi.fn().mockImplementation(function () { return ({
     loadTemplates: vi.fn(),
-  })),
+  }); }),
 }));
 
 // U6: buildStaleTicketGroups (cleanupHandler.ts, called transitively via continueAfterImportIssueType)

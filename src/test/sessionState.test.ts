@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { renderReviewTable, buildJiraNotConfiguredMessage, buildChatCommandLink, neutralizeMarkdownLinks, isGreetingOrEmpty, computeJiraFollowups, withLastTicket, type ReviewTableColumn, type JiraFollowupState } from '../participant/sessionState';
-import { buildChatCommandLink } from '../participant/sessionState';
 
 interface Widget {
   name: string;

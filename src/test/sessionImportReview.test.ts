@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import { buildChatCommandLink } from '../participant/sessionState';
 import { buildReviewPage, parseReviewPageNav, applyReviewSessionToggle } from '../participant/sessionState';
 import { parseBulkNewRowReply, applyBulkNewRowSet, applyTicketedActionChange, formatRowChange, CURRENT_SESSION_SCHEMA_VERSION, isSessionExpired, describeImportReplyVocabulary, type TicketedAction, buildImportOverview, buildNewGroupScreen, buildTicketedGroupScreen, initImportViewState, ensureImportViewState, computeImportResultGroups, emptyImportOutcomes, buildImportDoneSummary, parseOverviewReply, parseNewGroupReply, parseTicketedGroupReply, parseStaleGroupReply, IMPORT_COMMANDS, isConfirmation, isCancellation, buildChatCommandLink, type ReviewSession, type ImportReplyContext } from '../participant/sessionState';
 import { type ReviewSessionStale } from '../participant/sessionState';

@@ -14,9 +14,9 @@ vi.mock('../services/WorkflowService', () => ({
 }));
 
 vi.mock('../templates/TemplateService', () => ({
-  TemplateService: vi.fn().mockImplementation(() => ({
+  TemplateService: vi.fn().mockImplementation(function () { return ({
     loadTemplates: vi.fn(),
-  })),
+  }); }),
 }));
 
 import { streamReviewScreen, executeCleanupBatch, handleRunCleanup, buildStaleTicketGroups, transitionTickets } from '../participant/jira/cleanupHandler';
@@ -264,12 +264,12 @@ describe('handleRunCleanup', () => {
     ticketService = new TicketService(client);
 
     // Default: no cleanup rules, has workflow cache
-    vi.mocked(TemplateService).mockImplementation(() => ({
+    vi.mocked(TemplateService).mockImplementation(function () { return ({
       loadTemplates: vi.fn().mockReturnValue({
         templates: [],
         cleanupRules: [],
       }),
-    }) as never);
+    }) as never; });
 
     vi.mocked(loadWorkflowCache).mockReturnValue({
       PROJ: {
@@ -297,7 +297,7 @@ describe('handleRunCleanup', () => {
   });
 
   it('ignores rule.jql and warns when it contains ORDER BY', async () => {
-    vi.mocked(TemplateService).mockImplementation(() => ({
+    vi.mocked(TemplateService).mockImplementation(function () { return ({
       loadTemplates: vi.fn().mockReturnValue({
         templates: [],
         cleanupRules: [
@@ -310,7 +310,7 @@ describe('handleRunCleanup', () => {
           },
         ],
       }),
-    }) as never);
+    }) as never; });
 
     const stream = mockStream();
     const ws = mockWs();
@@ -325,7 +325,7 @@ describe('handleRunCleanup', () => {
   });
 
   it('appends rule.jql as AND (...) to the base query', async () => {
-    vi.mocked(TemplateService).mockImplementation(() => ({
+    vi.mocked(TemplateService).mockImplementation(function () { return ({
       loadTemplates: vi.fn().mockReturnValue({
         templates: [],
         cleanupRules: [
@@ -338,7 +338,7 @@ describe('handleRunCleanup', () => {
           },
         ],
       }),
-    }) as never);
+    }) as never; });
 
     const stream = mockStream();
     const ws = mockWs();
@@ -367,7 +367,7 @@ describe('handleRunCleanup', () => {
 
   it('skips resolution dialog when intent.resolution is set', async () => {
     // With a closed targetState and intent.resolution set, no resolution dialog should appear
-    vi.mocked(TemplateService).mockImplementation(() => ({
+    vi.mocked(TemplateService).mockImplementation(function () { return ({
       loadTemplates: vi.fn().mockReturnValue({
         templates: [],
         cleanupRules: [
@@ -380,7 +380,7 @@ describe('handleRunCleanup', () => {
           },
         ],
       }),
-    }) as never);
+    }) as never; });
 
     // Return a ticket so we proceed past the "no tickets found" check
     vi.spyOn(ticketService, 'searchTicketsRaw').mockResolvedValue({
@@ -422,7 +422,7 @@ describe('handleRunCleanup', () => {
   });
 
   it('attaches subtasks to their parent in the review screen when closeSubtasks is true', async () => {
-    vi.mocked(TemplateService).mockImplementation(() => ({
+    vi.mocked(TemplateService).mockImplementation(function () { return ({
       loadTemplates: vi.fn().mockReturnValue({
         templates: [],
         cleanupRules: [
@@ -436,7 +436,7 @@ describe('handleRunCleanup', () => {
           },
         ],
       }),
-    }) as never);
+    }) as never; });
 
     const parentIssue = {
       id: '1', key: 'PROJ-1',
@@ -475,7 +475,7 @@ describe('handleRunCleanup', () => {
   });
 
   it('uses subtaskTargetState for the subtask JQL and path when set', async () => {
-    vi.mocked(TemplateService).mockImplementation(() => ({
+    vi.mocked(TemplateService).mockImplementation(function () { return ({
       loadTemplates: vi.fn().mockReturnValue({
         templates: [],
         cleanupRules: [
@@ -490,7 +490,7 @@ describe('handleRunCleanup', () => {
           },
         ],
       }),
-    }) as never);
+    }) as never; });
 
     const parentIssue = {
       id: '1', key: 'PROJ-1',
@@ -568,9 +568,9 @@ describe('buildStaleTicketGroups', () => {
   }
 
   function withRules(cleanupRules: unknown[]): void {
-    vi.mocked(TemplateService).mockImplementation(() => ({
+    vi.mocked(TemplateService).mockImplementation(function () { return ({
       loadTemplates: vi.fn().mockReturnValue({ templates: [], cleanupRules }),
-    }) as never);
+    }) as never; });
   }
 
   beforeEach(() => {
@@ -754,9 +754,9 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
     client = new MockJiraClient();
     ticketService = new TicketService(client);
 
-    vi.mocked(TemplateService).mockImplementation(() => ({
+    vi.mocked(TemplateService).mockImplementation(function () { return ({
       loadTemplates: vi.fn().mockReturnValue({ templates: [], cleanupRules: [] }),
-    }) as never);
+    }) as never; });
 
     vi.mocked(loadWorkflowCache).mockReturnValue({
       PROJ: { Bug: { discovered: '2024-01-01', graph: workflowGraph } },
@@ -802,7 +802,7 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
   });
 
   it('uses rule fixVersionFilter "released" when intent has no fixVersion', async () => {
-    vi.mocked(TemplateService).mockImplementation(() => ({
+    vi.mocked(TemplateService).mockImplementation(function () { return ({
       loadTemplates: vi.fn().mockReturnValue({
         templates: [],
         cleanupRules: [{
@@ -814,7 +814,7 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
           fixVersionFilter: 'released',
         }],
       }),
-    }) as never);
+    }) as never; });
 
     const stream = mockStream();
     const ws = mockWs();
@@ -827,7 +827,7 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
   });
 
   it('uses rule fixVersionPattern for wildcard JQL when intent has no fixVersion', async () => {
-    vi.mocked(TemplateService).mockImplementation(() => ({
+    vi.mocked(TemplateService).mockImplementation(function () { return ({
       loadTemplates: vi.fn().mockReturnValue({
         templates: [],
         cleanupRules: [{
@@ -839,7 +839,7 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
           fixVersionPattern: 'Release*',
         }],
       }),
-    }) as never);
+    }) as never; });
 
     const stream = mockStream();
     const ws = mockWs();
@@ -852,7 +852,7 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
   });
 
   it('prompt fixVersion overrides rule fixVersionFilter', async () => {
-    vi.mocked(TemplateService).mockImplementation(() => ({
+    vi.mocked(TemplateService).mockImplementation(function () { return ({
       loadTemplates: vi.fn().mockReturnValue({
         templates: [],
         cleanupRules: [{
@@ -864,7 +864,7 @@ describe('handleRunCleanup — fixVersion JQL variants', () => {
           fixVersionFilter: 'released',
         }],
       }),
-    }) as never);
+    }) as never; });
 
     const stream = mockStream();
     const ws = mockWs();

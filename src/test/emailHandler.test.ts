@@ -36,9 +36,9 @@ vi.mock('vscode', () => ({
 }));
 
 vi.mock('../templates/TemplateService', () => ({
-  TemplateService: vi.fn().mockImplementation(() => ({
+  TemplateService: vi.fn().mockImplementation(function () { return ({
     loadTemplates: vi.fn(),
-  })),
+  }); }),
 }));
 
 import * as vscode from 'vscode';

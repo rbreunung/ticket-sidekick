@@ -15,9 +15,9 @@ vi.mock('vscode', () => ({
 }));
 
 vi.mock('../templates/TemplateService', () => ({
-  TemplateService: vi.fn().mockImplementation(() => ({
+  TemplateService: vi.fn().mockImplementation(function () { return ({
     loadTemplates: vi.fn(),
-  })),
+  }); }),
 }));
 
 // U6: buildStaleTicketGroups (cleanupHandler.ts, called transitively via continueAfterImportIssueType)
@@ -171,12 +171,12 @@ describe('continueAfterImportIssueType (R6/KTD4 resume continuation)', () => {
 
   it('a picked template name resolves and merges its default fields into the batch (R6/KTD4 re-derivation)', async () => {
     (vscode.workspace as { workspaceFolders?: unknown }).workspaceFolders = [{ uri: { fsPath: '/workspace' } }];
-    vi.mocked(TemplateService).mockImplementation(() => ({
+    vi.mocked(TemplateService).mockImplementation(function () { return ({
       loadTemplates: vi.fn().mockReturnValue({
         templates: [{ name: 'Security Template', issueType: 'Bug', defaultFields: { priority: 'High' } }],
         cleanupRules: [],
       }),
-    }) as unknown as InstanceType<typeof TemplateService>);
+    }) as unknown as InstanceType<typeof TemplateService>; });
     try {
       const session = makeSession({ availableIssueTypes: [''] });
       const stream = mockStream();

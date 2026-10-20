@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import { buildChatCommandLink } from '../participant/sessionState';
 import { type ReviewRowBase } from '../participant/sessionState';
 import { describeImportReplyVocabulary, type TicketedAction, emptyImportOutcomes, buildImportDoneSummary, parseNewGroupReply, parseTicketedGroupReply, isConfirmation, isCancellation, mergeNewRows, unmergeNewRow, restoreMergedRows, buildAddPrompt, buildChatCommandLink, findPartialRewrites, formatTicketedRowResult, type ImportReplyContext } from '../participant/sessionState';
 

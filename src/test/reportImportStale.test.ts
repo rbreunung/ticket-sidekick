@@ -15,9 +15,9 @@ vi.mock('vscode', () => ({
 }));
 
 vi.mock('../templates/TemplateService', () => ({
-  TemplateService: vi.fn().mockImplementation(() => ({
+  TemplateService: vi.fn().mockImplementation(function () { return ({
     loadTemplates: vi.fn(),
-  })),
+  }); }),
 }));
 
 // U6: buildStaleTicketGroups (cleanupHandler.ts, called transitively via continueAfterImportIssueType)
@@ -94,9 +94,9 @@ describe('Stale-ticket review + close with a picked target', () => {
   }
 
   function withRules(cleanupRules: unknown[]): void {
-    vi.mocked(TemplateService).mockImplementation(() => ({
+    vi.mocked(TemplateService).mockImplementation(function () { return ({
       loadTemplates: vi.fn().mockReturnValue({ templates: [], cleanupRules }),
-    }) as never);
+    }) as never; });
   }
 
   // Runs an import whose only result group is Stale and returns the stored review session.
@@ -526,9 +526,9 @@ describe('Stale-ticket review + close with a picked target', () => {
   // `stale.length > 0`, so it silently never rendered when a truncated search's checked candidates
   // all turned out non-stale — defeating KTD10's "must not silently lose coverage" guarantee.
   it('the truncation-coverage warning renders even when none of the checked candidates turned out stale', async () => {
-    vi.mocked(TemplateService).mockImplementation(() => ({
+    vi.mocked(TemplateService).mockImplementation(function () { return ({
       loadTemplates: vi.fn().mockReturnValue({ templates: [], cleanupRules: [] }),
-    }) as never);
+    }) as never; });
     vi.spyOn(ticketService, 'searchTicketsRaw').mockImplementation(async (jql: string) => {
       if (jql.includes('labels in (')) return { issues: [], total: 0 };
       if (jql.includes('labels = "test-marker"')) {
@@ -554,9 +554,9 @@ describe('Stale-ticket review + close with a picked target', () => {
   // block right above it — a throw here used to propagate out and discard the whole in-progress
   // review instead of degrading gracefully.
   it('a failure inside buildStaleTicketGroups (e.g. a malformed templates file) degrades gracefully instead of discarding the whole review', async () => {
-    vi.mocked(TemplateService).mockImplementation(() => ({
+    vi.mocked(TemplateService).mockImplementation(function () { return ({
       loadTemplates: vi.fn().mockImplementation(() => { throw new Error('Malformed .jira-templates.json'); }),
-    }) as never);
+    }) as never; });
     mockSearches([makeStaleIssue('PROJ-1', 'Bug', ['1'])]);
     const templateSession = makeSession({ items: [{ ref: '2' }], availableIssueTypes: ['Bug'] });
     const stream = mockStream();
