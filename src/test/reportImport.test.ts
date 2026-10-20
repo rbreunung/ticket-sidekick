@@ -889,3 +889,38 @@ describe('fitWiki (R10: descriptions and comments stay within the size budget)',
     expect(result.level).toBe(1);
   });
 });
+
+describe('findStaleTickets — tickets that were not flagged (accepted components plan, U3)', () => {
+  const labelToDedupKey = (label: string) => (label.startsWith('oss-dep-') ? label : null);
+
+  it('returns an open ticket that still has an active id, with only its active ids', async () => {
+    const search = vi.fn().mockResolvedValue({
+      issues: [{ key: 'PROJ-1', fields: { labels: ['oss-dependency', 'oss-dep-a', 'oss-dep-b'] } }],
+      total: 1,
+      isLast: true,
+    });
+    const result = await findStaleTickets('PROJ', 'oss-dependency', search, labelToDedupKey, id => id === 'oss-dep-b');
+    expect(result.stale).toEqual([]);
+    expect(result.pending).toEqual([{ key: 'PROJ-1', ids: ['oss-dep-b'] }]);
+  });
+
+  it('does not list a flagged ticket as pending, nor one with no component label', async () => {
+    const search = vi.fn().mockResolvedValue({
+      issues: [
+        { key: 'PROJ-1', fields: { labels: ['oss-dependency', 'oss-dep-a'] } },
+        { key: 'PROJ-2', fields: { labels: ['oss-dependency'] } },
+      ],
+      total: 2,
+      isLast: true,
+    });
+    const result = await findStaleTickets('PROJ', 'oss-dependency', search, labelToDedupKey, () => false);
+    expect(result.stale).toEqual([{ key: 'PROJ-1', ids: ['oss-dep-a'] }]);
+    expect(result.pending).toEqual([]);
+  });
+
+  it('returns no pending tickets when the search fails', async () => {
+    const result = await findStaleTickets('PROJ', 'oss-dependency', vi.fn().mockRejectedValue(new Error('boom')), labelToDedupKey, () => true);
+    expect(result.pending).toEqual([]);
+    expect(result.searchFailed).toBe(true);
+  });
+});

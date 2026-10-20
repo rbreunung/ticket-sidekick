@@ -243,6 +243,8 @@ export interface StaleTicketMatch {
 
 export interface FindStaleTicketsResult {
   stale: StaleTicketMatch[];
+  /** The open tickets that were not flagged because an id is still active, each with only its still-active ids. */
+  pending: StaleTicketMatch[];
   /** Server-reported total match count (falls back to the checked-page length when the search
    * result carries no `total`), so a caller can report "N found" even when truncated. */
   totalFound: number;
@@ -299,22 +301,25 @@ export async function findStaleTickets(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     onDiag?.('warn', 'Stale-ticket search failed — could not check for stale tickets', { error: message });
-    return { stale: [], totalFound: 0, truncated: false, searchFailed: true };
+    return { stale: [], pending: [], totalFound: 0, truncated: false, searchFailed: true };
   }
 
   const candidates = result.issues.slice(0, BATCH_LIMIT);
   const truncated = (result.total ?? 0) > BATCH_LIMIT || result.isLast === false;
 
   const stale: StaleTicketMatch[] = [];
+  const pending: StaleTicketMatch[] = [];
   for (const issue of candidates) {
     const ids = (issue.fields.labels ?? [])
       .map(labelToDedupKey)
       .filter((id): id is string => id !== null);
     if (ids.length === 0) continue; // nothing to compare — see doc comment above
-    if (!ids.some(isActive)) stale.push({ key: issue.key, ids });
+    const active = ids.filter(isActive);
+    if (active.length === 0) stale.push({ key: issue.key, ids });
+    else pending.push({ key: issue.key, ids: active });
   }
 
-  return { stale, totalFound: result.total ?? candidates.length, truncated, searchFailed: false };
+  return { stale, pending, totalFound: result.total ?? candidates.length, truncated, searchFailed: false };
 }
 
 // U4: the pre-build "new" cap (`capNewRows`) that used to run here before review rows were built at

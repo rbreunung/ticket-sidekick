@@ -247,6 +247,8 @@ export interface ReviewSession<TRow> {
   // (`transitionTickets`). Absent for importers with no stale-check concept (email, which has no
   // dedup/marker-label concept either — see ReportImportDescriptor's optional `stale` field).
   staleTickets?: ReviewSessionStale;
+  // Accepted components (KTD5): open tickets the stale search left alone, kept so an accept can flag them.
+  staleCandidates?: StaleCandidate[];
   // Overview-hub KTD1/KTD7: the screen currently shown, the result groups that had rows when the
   // session was built (fixed for the session's life — R1's listing basis), whether exactly one
   // group had rows (then there is no overview, R4), and the accumulated action outcomes (R2).
@@ -310,6 +312,19 @@ export interface IneligibleStaleTicket {
   summary: string;
   currentStatus: string;
   note: string;
+}
+
+/**
+ * An open, marker-labeled ticket the stale search did not flag (accepted components plan, KTD5): kept with
+ * what the search captured and the dedup ids still active for it, so accepting components mid-review can
+ * move it to Stale without a second search or the raw report.
+ */
+export interface StaleCandidate {
+  key: string;
+  summary: string;
+  currentStatus: string;
+  issueType: string;
+  activeIds: string[];
 }
 
 export interface ReviewSessionStale {

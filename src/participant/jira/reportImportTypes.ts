@@ -82,7 +82,7 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   stale?: {
     markerLabel: string;
     labelToDedupKey: (label: string) => string | null;
-    buildActivePredicate: (rawItems: unknown[]) => (dedupKey: string) => boolean;
+    buildActivePredicate: (rawItems: unknown[], acceptedEntries: AcceptedEntry[]) => (dedupKey: string) => boolean;
   };
   // Import ticket updates parity (KTD2): optional change tracking for already-ticketed rows —
   // drives the per-row actions (update / follow-up / re-create / leave) on the Already-ticketed

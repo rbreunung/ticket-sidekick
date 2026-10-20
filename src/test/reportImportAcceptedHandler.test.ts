@@ -28,7 +28,9 @@ vi.mock('../services/WorkflowService', async (importOriginal) => ({
   loadWorkflowCache: vi.fn(),
 }));
 
-import { handleWaltzAwaitIssueType, handleWaltzReviewReply, buildWaltzTemplateSession } from '../participant/jira/waltzHandler';
+import { handleWaltzAwaitIssueType, handleWaltzReviewReply, buildWaltzTemplateSession, buildWaltzActiveComponentPredicate } from '../participant/jira/waltzHandler';
+import { loadWorkflowCache } from '../services/WorkflowService';
+import { TemplateService } from '../templates/TemplateService';
 import type { WaltzReviewSession } from '../participant/sessionState';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService } from '../services/TicketService';
@@ -56,9 +58,18 @@ const fileOn = () => join(dir, ACCEPTED_FILE_NAME);
 const writeList = (entries: Array<{ component: string; cve?: string; version?: string; reason?: string }>) => writeFileSync(fileOn(), JSON.stringify({ accepted: entries }));
 const readList = () => (JSON.parse(readFileSync(fileOn(), 'utf8')) as { accepted: Array<{ component: string; cve: string; reason?: string }> }).accepted;
 
-async function importWaltz(components: WaltzComponent[], tickets: Record<string, FakeTicket> = {}) {
+interface StaleIssue { key: string; labels: string[] }
+
+async function importWaltz(components: WaltzComponent[], tickets: Record<string, FakeTicket> = {}, staleIssues: StaleIssue[] = []) {
   statefulJira(client, tickets);
-  searchFromStore(ticketService, tickets);
+  const search = searchFromStore(ticketService, tickets);
+  if (staleIssues.length > 0) {
+    // The stale search ("labels = oss-dependency") returns the open tickets the test supplies; the dedup search stays as the store has it.
+    const dedup = search.getMockImplementation()!;
+    search.mockImplementation((async (jql: string, max?: number) => jql.includes('labels = "oss-dependency"')
+      ? { issues: staleIssues.map(t => ({ key: t.key, fields: { labels: t.labels, summary: `Summary of ${t.key}`, status: { name: 'Open' }, issuetype: { name: 'Bug' } } })), total: staleIssues.length, isLast: true }
+      : dedup(jql, max as never)) as never);
+  }
   const templateSession = await buildWaltzTemplateSession(components, 'r.xlsx', 'PROJ', client);
   const ws = makeMockWs();
   const stream = mockStream();
@@ -388,5 +399,62 @@ describe('building the review with accepted components (accepted-components plan
       comp('other:1.0', 'High', [['CVE-2099-9', 'High']]),
     ]);
     expect(session!.acceptedHidden).toEqual({ cves: 1, belowFloor: 0, components: 1 });
+  });
+});
+
+describe('stale tickets and accepted components (accepted-components plan, U3)', () => {
+  const labelOf = (c: WaltzComponent) => sanitizeComponentLabel(c.nameVersion);
+  const staleKeys = (s: WaltzReviewSession) => (s.staleTickets?.groups ?? []).flatMap(g => g.tickets.map(t => t.key));
+
+  beforeEach(() => {
+    vi.mocked(loadWorkflowCache).mockReturnValue({
+      PROJ: { Bug: { discovered: '2024-01-01', graph: { Open: [{ id: '12', name: 'Close', to: 'Done' }], Done: [] } } },
+    });
+    vi.mocked(TemplateService).mockImplementation(() => ({ loadTemplates: vi.fn().mockReturnValue({ templates: [], cleanupRules: [] }) }) as never);
+  });
+
+  it('flags the open ticket of an accepted component stale although the report still lists it (AE2)', async () => {
+    writeList([{ component: 'netty-codec', version: '4.1.100' }]);
+    const netty = comp('netty-codec:4.1.100', 'High', [['CVE-2099-1', 'High']]);
+    const other = comp('other:1.0', 'High', [['CVE-2099-9', 'High']]);
+    const tickets = { 'PROJ-7': { labels: ['oss-dependency', labelOf(netty)] }, 'PROJ-8': { labels: ['oss-dependency', labelOf(other)] } };
+    const { session } = await importWaltz([netty, other], tickets, [
+      { key: 'PROJ-7', labels: tickets['PROJ-7'].labels }, { key: 'PROJ-8', labels: tickets['PROJ-8'].labels },
+    ]);
+    expect(staleKeys(session!)).toEqual(['PROJ-7']);
+  });
+
+  it('does not flag a ticket that also covers a component that is still active', async () => {
+    writeList([{ component: 'netty-codec', version: '4.1.100' }]);
+    const netty = comp('netty-codec:4.1.100', 'High', [['CVE-2099-1', 'High']]);
+    const other = comp('other:1.0', 'High', [['CVE-2099-9', 'High']]);
+    const labels = ['oss-dependency', labelOf(netty), labelOf(other)];
+    const { session } = await importWaltz([netty, other], { 'PROJ-7': { labels } }, [{ key: 'PROJ-7', labels }]);
+    expect(staleKeys(session!)).toEqual([]);
+    expect(session!.staleCandidates).toEqual([
+      { key: 'PROJ-7', summary: 'Summary of PROJ-7', currentStatus: 'Open', issueType: 'Bug', activeIds: [labelOf(other)] },
+    ]);
+  });
+
+  it('keeps the open tickets it did not flag, with their active ids, for a later accept', async () => {
+    const other = comp('other:1.0', 'High', [['CVE-2099-9', 'High']]);
+    const labels = ['oss-dependency', labelOf(other)];
+    const { session } = await importWaltz([other], { 'PROJ-8': { labels } }, [{ key: 'PROJ-8', labels }]);
+    expect(session!.staleCandidates?.map(c => ({ key: c.key, activeIds: c.activeIds }))).toEqual([{ key: 'PROJ-8', activeIds: [labelOf(other)] }]);
+    expect(session!.staleTickets).toBeUndefined();
+  });
+
+  it('treats an accepted component as inactive and any other component as before', () => {
+    const accepted = comp('netty-codec:4.1.100', 'High', []);
+    const other = comp('other:1.0', 'High', []);
+    const isActive = buildWaltzActiveComponentPredicate([accepted, other], ['', 'Remediate'], [{ component: 'netty-codec', version: '4.1.100' }]);
+    expect(isActive(labelOf(accepted))).toBe(false);
+    expect(isActive(labelOf(other))).toBe(true);
+  });
+
+  it('leaves the predicate as it was for a CVE-pair-only list', () => {
+    const c = comp('netty-codec:4.1.100', 'High', []);
+    const isActive = buildWaltzActiveComponentPredicate([c], ['', 'Remediate'], [{ component: 'netty-codec', cve: 'CVE-2099-1' }]);
+    expect(isActive(labelOf(c))).toBe(true);
   });
 });

@@ -9,7 +9,7 @@ import {
   type WaltzComponent, type WaltzReviewRow,
 } from '../../utils/waltzReport';
 import { AcceptedListService } from '../../services/AcceptedListService';
-import { narrowGroup, acceptedEntriesOf, acceptedComponentEntriesOf, acceptedComponentKeys, isComponentAccepted } from '../../utils/waltzAccepted';
+import { narrowGroup, acceptedEntriesOf, acceptedComponentEntriesOf, acceptedComponentKeys, isComponentAccepted, type AcceptedEntry } from '../../utils/waltzAccepted';
 import type { WaltzTemplateSelectionSession, WaltzReviewSession, StaleCloseSession } from '../sessionState';
 import { WALTZ_REVIEW_COLUMNS } from '../sessionState';
 import {
@@ -89,9 +89,15 @@ function waltzLabelToDedupKey(label: string): string | null {
 export function buildWaltzActiveComponentPredicate(
   rawComponents: WaltzComponent[],
   includeRemediationActions: string[],
+  acceptedEntries: AcceptedEntry[] = [],
 ): (dedupKey: string) => boolean {
   const allowedActions = new Set(includeRemediationActions.map(a => a.trim()));
-  const actionByKey = new Map(rawComponents.map(c => [sanitizeComponentLabel(c.nameVersion), (c.remediationAction ?? '').trim()] as const));
+  // A component accepted as a whole is not an active finding even when the report still lists it, so
+  // a ticket covering only accepted components is offered for closing (accepted-components plan, KTD3).
+  const acceptedKeys = acceptedComponentKeys(acceptedEntries);
+  const actionByKey = new Map(rawComponents
+    .filter(c => !isComponentAccepted(c.nameVersion, acceptedKeys))
+    .map(c => [sanitizeComponentLabel(c.nameVersion), (c.remediationAction ?? '').trim()] as const));
   return (dedupKey: string) => {
     const action = actionByKey.get(dedupKey);
     return action !== undefined && allowedActions.has(action);
@@ -140,7 +146,7 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
   stale: {
     markerLabel: WALTZ_STALE_MARKER_LABEL,
     labelToDedupKey: waltzLabelToDedupKey,
-    buildActivePredicate: rawItems => buildWaltzActiveComponentPredicate(rawItems as WaltzComponent[], getWaltzConfig().includeRemediationActions),
+    buildActivePredicate: (rawItems, acceptedEntries) => buildWaltzActiveComponentPredicate(rawItems as WaltzComponent[], getWaltzConfig().includeRemediationActions, acceptedEntries),
   },
   // Finding folding (KTD1/KTD4): a row's item is its group of components, so merging is concatenation.
   fold: {

@@ -24,6 +24,7 @@ import { CURRENT_SESSION_SCHEMA_VERSION, NO_ISSUE_TYPE, SESSION_EXPIRED_MESSAGE,
 import { resolveIssueTypeOrPrompt, resolveProjectKey, sessionWasSuperseded } from './ticketContext';
 import { buildStaleTicketGroups } from './cleanupHandler';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
+import type { AcceptedEntry } from '../../utils/waltzAccepted';
 import { acceptRows, showAcceptedList, unacceptEntry } from './importAccept';
 import { addToTicket, showAddPrompt } from './importAddToTicket';
 import { createNewRows } from './importCreate';
@@ -366,6 +367,7 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
   const acceptedHidden = { cves: 0, belowFloor: 0, components: 0 };
   let narrowNew: ((item: TItem) => TItem | null) | undefined;
   let dropTicketed: ((item: TItem) => boolean) | undefined;
+  let acceptedEntries: AcceptedEntry[] = [];
   if (descriptor.accepted) {
     const accepted = descriptor.accepted;
     const loaded = accepted.service()?.load();
@@ -374,6 +376,7 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
       stream.markdown(`_Warning: ${neutralizeMarkdownLinks(loaded.warning)}_\n\n`);
     }
     if (loaded && loaded.entries.length > 0) {
+      acceptedEntries = loaded.entries;
       narrowNew = item => {
         const narrowed = accepted.narrow(item, loaded.entries);
         acceptedHidden.cves += narrowed.hiddenCves;
@@ -438,7 +441,7 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
         return result;
       },
       descriptor.stale.labelToDedupKey,
-      descriptor.stale.buildActivePredicate(session.rawItems ?? []),
+      descriptor.stale.buildActivePredicate(session.rawItems ?? [], acceptedEntries),
       (level, message, details) => logDiag(descriptor.scope, level, message, details),
     );
 
@@ -456,6 +459,14 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
           `_Checked the first ${BATCH_LIMIT} of ${staleResult.totalFound} ticket(s) carrying the stale-check label` +
           ` — ${staleResult.stale.length} looked stale, but coverage may be incomplete._\n\n`,
         );
+      }
+      // Accepted components (KTD5): an importer with an accepted list keeps the open tickets it did not flag.
+      if (descriptor.accepted && staleResult.pending.length > 0) {
+        const staleCandidates = staleResult.pending.flatMap(m => {
+          const detail = issueDetails.get(m.key);
+          return detail ? [{ key: m.key, summary: detail.summary, currentStatus: detail.currentStatus, issueType: detail.issueType, activeIds: m.ids }] : [];
+        });
+        if (staleCandidates.length > 0) reviewSession = { ...reviewSession, staleCandidates };
       }
       if (staleResult.stale.length > 0) {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
