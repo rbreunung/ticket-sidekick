@@ -1090,8 +1090,8 @@
     "watch": "tsc -watch -p ./",
     "bundle": "node esbuild.js",
     "package": "vsce package",
-    "test": "vitest run --reporter=verbose --config vitest.config.ts",
-    "test:e2e": "node ./out/test/runTest.js"
+    "test": "vitest run --reporter=verbose --config vitest.config.mts",
+    "test:e2e": "node esbuild.js && tsc -p ./ && node ./out/e2e/runTest.js"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
