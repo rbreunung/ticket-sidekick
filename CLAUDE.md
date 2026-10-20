@@ -106,6 +106,7 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 npm test          # Vitest unit tests (no VS Code required)
 npm run compile   # TypeScript type check
 npm run test:e2e  # @vscode/test-electron smoke tests in a real VS Code (src/e2e/); on Linux: xvfb-run -a npm run test:e2e
+                  # optional env: VSCODE_TEST_VERSION=1.95.0 (engines floor), VSCODE_TEST_EXECUTABLE=<path to Code>
 ```
 
 Node.js is installed system-wide — use plain `npm` from your PATH. (Volta was previously used but has been removed; do not reference `~/.volta/bin/npm`.)
