@@ -90,7 +90,8 @@ export function parseAcceptedFile(text: string): ParsedAcceptedFile {
     const version = (item as { version?: unknown })?.version;
     const reason = (item as { reason?: unknown })?.reason;
     const hasReason = typeof reason === 'string' && reason.trim() !== '';
-    if (typeof component !== 'string' || component.trim() === '') {
+    // A `cve` key that is present but not a usable string is a mistyped pair; never read it as a whole-component entry.
+    if (typeof component !== 'string' || component.trim() === '' || (cve !== undefined && (typeof cve !== 'string' || cve.trim() === ''))) {
       skipped++;
     } else if (typeof cve === 'string' && cve.trim() !== '') {
       // A CVE makes it a pair; a version on it is ignored (KTD1).

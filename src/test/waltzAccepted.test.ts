@@ -260,6 +260,16 @@ describe('component entries in the accepted file', () => {
     expect(parsed.entries).toEqual([{ component: 'libfoo', cve: 'CVE-2024-0001' }]);
   });
 
+  it('skips an entry whose cve is present but unusable instead of widening it to the whole component', () => {
+    const parsed = parseAcceptedFile(JSON.stringify({ accepted: [
+      { component: 'libfoo', cve: 123, version: '1.0' },
+      { component: 'libbar', cve: '', version: '1.0' },
+      { component: 'libok', version: '1.0' },
+    ] }));
+    expect(parsed.entries).toEqual([{ component: 'libok', version: '1.0' }]);
+    expect(parsed.warning).toMatch(/2 entries/);
+  });
+
   it('round-trips a mixed file through serialize and parse', () => {
     const entries = [accepted('libfoo', 'CVE-2024-0001'), acceptedComponent('netty-codec', '4.1.100', 'no update')];
     expect(parseAcceptedFile(serializeAcceptedFile(entries)).entries).toEqual(entries);
