@@ -179,7 +179,7 @@ export function buildImportOverview<TRow extends ReviewRowBase>(session: ReviewS
       if (c.newRemaining > 0) link = cmdLink('Review & create', IMPORT_COMMANDS.openNew);
       lines.push(`- **New** — ${parts.join(' · ')}${link ? ` — ${link}` : ''}`);
     } else if (group === 'ticketed') {
-      parts.push(countedNoun(c.ticketedTotal, opts.itemNoun));
+      parts.push(c.ticketedTotal === 0 ? 'none left' : countedNoun(c.ticketedTotal, opts.itemNoun));
       if (c.ticketedChanged > 0) parts.push(`${c.ticketedChanged} with changes`);
       if (o.updated > 0) parts.push(`${o.updated} updated`);
       if (o.followedUp > 0) parts.push(`${o.followedUp} follow-up${o.followedUp === 1 ? '' : 's'}`);
@@ -347,6 +347,12 @@ export function buildTicketedGroupScreen<TRow extends ReviewRowBase>(
   const ticketed = s.allRows.filter(r => r.existingTicketKey !== null);
   const c = countImportGroups(s);
   const lines: string[] = ['### Already ticketed'];
+
+  // Every row accepted away (or none ever matched): say so rather than render an empty table.
+  if (ticketed.length === 0) {
+    lines.push(`_Nothing is left under Already ticketed._`, '', groupScreenExitLine(s.singleGroup!));
+    return lines.join('\n');
+  }
 
   const ticketedColumns: ReviewTableColumn<TRow>[] = [
     { header: '#', accessor: (r) => r.id },

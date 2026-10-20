@@ -508,6 +508,17 @@ describe('accept component and remove it, in a running review (accepted-componen
     expect(after.text).toContain('Could not offer 1 open ticket(s) under Stale');
   });
 
+  it('says nothing is left, instead of showing an empty table, once every Already ticketed row is accepted', async () => {
+    const { session, ws } = await ticketedImport([{ key: 'PROJ-9', labels: ['oss-dependency', 'oss-dep-gone-abc123'] }]);
+    const opened = await reply('open already ticketed', session!, ws);
+    const after = await reply('accept component A1 A2', opened.session, ws);
+    expect(after.text).toContain('Nothing is left under Already ticketed');
+    expect(after.text).not.toContain('| # |');
+    const overview = await reply('back', after.session, ws);
+    expect(overview.text).toContain('**Already ticketed** — none left');
+    expect(overview.text).not.toContain('open already ticketed');
+  });
+
   it('lists the ticket as not closable when its issue type has no discovered workflow', async () => {
     const { session, ws } = await ticketedImport();
     vi.mocked(loadWorkflowCache).mockReturnValue({ PROJ: {} } as never);
