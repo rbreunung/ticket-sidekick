@@ -105,14 +105,14 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 ```bash
 npm test          # Vitest unit tests (no VS Code required)
 npm run compile   # TypeScript type check
-npm run test:e2e  # @vscode/test-electron participant tests (requires VS Code)
+npm run test:e2e  # @vscode/test-electron smoke tests in a real VS Code (src/e2e/); on Linux: xvfb-run -a npm run test:e2e
 ```
 
 Node.js is installed system-wide — use plain `npm` from your PATH. (Volta was previously used but has been removed; do not reference `~/.volta/bin/npm`.)
 
 **`npm test` must be green before every commit.** Run `npm run compile` to catch TypeScript errors first.
 
-CI (`.github/workflows/ci.yml`) runs `npm ci` → `npm run compile` → `npm test` on every push and pull request against `main` (Node 24). The `test:e2e` suite is not run in CI (it needs a real VS Code instance).
+CI (`.github/workflows/ci.yml`) runs `npm ci` → `npm run compile` → `npm test` on every push and pull request against `main` (Node 24). A separate `e2e` job in the same workflow runs `xvfb-run -a npm run test:e2e`: a small smoke suite (`src/e2e/`) that checks, in a real VS Code, that the bundled extension activates and registers every command and language model tool `package.json` declares. `src/test/bundleSmoke.test.ts` does the same against a stubbed `vscode` inside `npm test`, with no VS Code download. Chat flows are not covered by either (they need Copilot and real credentials).
 
 Releases are manual: `.github/workflows/release.yml` is a `workflow_dispatch` with inputs `channel` (`release` | `preview`), `bump` (`patch`/`minor`/`major`), and an optional explicit `version` (overrides `bump`). It computes the version via `npm version --no-git-tag-version`, gates on compile+test, builds the `.vsix`, publishes to the Marketplace (`vsce publish`, needs the `VSCE_PAT` secret), and creates the GitHub Release + bare tag `X.Y.Z`. **Both** channels commit the bump back to the branch and push it, so the published version line is strictly increasing and a version is never reused (avoids the Marketplace "no duplicate version" rule with no manual bumping); `preview` only adds `--pre-release` + marks the GitHub release as a pre-release. Before packaging the `.vsix`, the workflow fetches that version's notes via `gh api .../releases/generate-notes` once and reuses the captured text for both surfaces: a `channel: release` run strips GitHub's "by @author in #PR" attribution and prepends the result to `CHANGELOG.md` (committed in the same bump commit, so the entry ships inside that release's own `.vsix`); `preview` runs leave `CHANGELOG.md` untouched. `scripts/backfill-changelog.mjs` is a re-runnable one-off that seeds/regenerates `CHANGELOG.md` from every non-prerelease GitHub Release. See the README "Releasing" section.
 
@@ -120,7 +120,7 @@ Releases are manual: `.github/workflows/release.yml` is a `workflow_dispatch` wi
 
 Write tests for **user-facing use cases**, not internal mechanics. A test should read like a scenario: given this input, what does the user get back? Cover the happy path and the main failure case for every new feature.
 
-`JiraParticipant.ts` and `BitbucketParticipant.ts` import `vscode` and cannot be loaded by Vitest. Keep pure logic (string extraction, data formatting) in `sessionState.ts`, `reviewSessionState.ts`, `bitbucket/reviewDiagnostics.ts`, `TicketService.ts`, or `PrReviewService.ts` so it can be unit-tested. VS Code-dependent glue code is covered by the e2e suite only.
+`JiraParticipant.ts` and `BitbucketParticipant.ts` import `vscode` and cannot be loaded by Vitest. Keep pure logic (string extraction, data formatting) in `sessionState.ts`, `reviewSessionState.ts`, `bitbucket/reviewDiagnostics.ts`, `TicketService.ts`, or `PrReviewService.ts` so it can be unit-tested. The participants' chat flows are covered by Vitest suites that mock `vscode` (e.g. `bitbucketReviewFlow.test.ts`); the e2e suites only smoke-test activation and registration.
 
 ## Adding a new Jira operation
 

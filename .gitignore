@@ -7,3 +7,4 @@ out/
 
 # Veracode Detailed Report XSD is vendor reference material (Copyright Veracode, Inc.) — kept locally for reference, never committed
 docs/superpowers/plans/detailedreport.xsd
+.vscode-test/
