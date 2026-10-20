@@ -1106,7 +1106,7 @@
   "dependencies": {
     "exceljs": "^4.4.0",
     "fast-xml-parser": "^5.10.1",
-    "minimatch": "^9.0.9",
+    "minimatch": "^10.2.6",
     "postal-mime": "^2.7.4"
   }
 }
