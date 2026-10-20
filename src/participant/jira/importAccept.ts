@@ -101,7 +101,7 @@ export async function acceptRows<TItem, TRow extends ReviewRowBase>(
   stream.markdown(written.added > 0
     ? `✓ Accepted ${written.added} CVE(s) from ${named.length} row(s) — hidden from this and future imports.\n\n`
     : '_Those CVEs were already on the accepted list._\n\n');
-  return { ...session, allRows: applied.allRows, rows: applied.rows, page: applied.page, ...(applied.acceptedHidden ? { acceptedHidden: applied.acceptedHidden } : {}) };
+  return { ...session, ...applied };
 }
 
 /**
@@ -133,10 +133,7 @@ export async function acceptComponents<TItem, TRow extends ReviewRowBase>(
   logDiag(descriptor.scope, 'info', `${descriptor.importLabel} import — accepted components added`, { rows: named.length, added: written.added });
 
   const applied = applyAcceptedList(session, written.entries, action.ids, descriptor);
-  const narrowed: ReviewSession<TRow> = {
-    ...session, allRows: applied.allRows, rows: applied.rows, page: applied.page,
-    ...(applied.acceptedHidden ? { acceptedHidden: applied.acceptedHidden } : {}),
-  };
+  const narrowed: ReviewSession<TRow> = { ...session, ...applied };
   const keys = new Set(named.flatMap(r => descriptor.dedupKeyOf?.(accepted.itemOf(r)) ?? []));
   const moved = await moveCandidatesToStale(narrowed, keys, ticketService, descriptor);
   stream.markdown(written.added > 0
