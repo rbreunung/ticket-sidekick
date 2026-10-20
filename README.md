@@ -25,7 +25,7 @@ Then open Copilot Chat and try `@jira check` to confirm the connection, or `@jir
 
 ### Prerequisites
 
-- VS Code 1.90 or later with GitHub Copilot extension
+- VS Code 1.140 or later with GitHub Copilot extension
 - Jira Data Center (v8+) **or** any Jira Cloud instance
 
 ### Setup
@@ -425,7 +425,7 @@ Then open Copilot Chat and run `@bitbucket check` to confirm the connection, or 
 
 ### Prerequisites
 
-- VS Code 1.90 or later with GitHub Copilot extension
+- VS Code 1.140 or later with GitHub Copilot extension
 - Bitbucket Data Center **or** Bitbucket Cloud
 
 ### Setup

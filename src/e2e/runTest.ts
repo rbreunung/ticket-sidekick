@@ -6,7 +6,7 @@ import { runTests } from '@vscode/test-electron';
 // display: `xvfb-run -a npm run test:e2e`; on Windows and macOS it just opens a window briefly.
 //
 // Optional environment variables:
-//   VSCODE_TEST_VERSION     VS Code to download, e.g. 1.95.0 (the engines floor) or insiders; default stable
+//   VSCODE_TEST_VERSION     VS Code to download, e.g. 1.140.0 (the engines floor) or insiders; default stable
 //   VSCODE_TEST_EXECUTABLE  path to an installed Code.exe / code to use instead of downloading
 async function main(): Promise<void> {
   const extensionDevelopmentPath = path.resolve(__dirname, '..', '..');
