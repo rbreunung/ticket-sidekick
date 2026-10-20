@@ -544,6 +544,9 @@ export function buildReviewRows<TItem, TRow extends ReviewRowBase>(
   // assigned, so a hidden item never becomes a row and the surviving new ids stay contiguous. A
   // null return drops the item; an already-ticketed item is never narrowed (R8).
   narrowNew?: (item: TItem) => TItem | null,
+  // Accepted components: an already-ticketed item the list accepts as a whole is dropped here, before its
+  // `A` id is assigned, so the surviving ids stay contiguous. Never applied to a new item.
+  dropTicketed?: (item: TItem) => boolean,
 ): TRow[] {
   const rows: TRow[] = [];
   let newIndex = 0;
@@ -558,6 +561,7 @@ export function buildReviewRows<TItem, TRow extends ReviewRowBase>(
       if (narrowed === null) continue;
       item = narrowed;
     }
+    if (target && dropTicketed?.(original)) continue;
     const existingTicketKey = target ? target.key : null;
     const base: ReviewRowBase = {
       id: existingTicketKey ? `A${++ticketedIndex}` : `${++newIndex}`,

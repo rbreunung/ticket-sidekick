@@ -105,7 +105,11 @@ export interface ImportAccepted<TItem, TRow extends ReviewRowBase> {
   /** The list's file service, or null when no workspace folder is open (nothing hidden, nothing writable). */
   service: () => AcceptedListService | null;
   /** The item with accepted findings taken out and its rating recomputed; `item` is null when nothing of it is left. */
-  narrow: (item: TItem, entries: AcceptedEntry[]) => { item: TItem | null; hiddenCves: number; belowFloor: number };
+  narrow: (item: TItem, entries: AcceptedEntry[]) => { item: TItem | null; hiddenCves: number; belowFloor: number; hiddenComponents: number };
+  /** True when every component of an already-ticketed item is accepted as a whole, so its row is dropped from Already ticketed. */
+  isAccepted: (item: TItem, entries: AcceptedEntry[]) => boolean;
+  /** One entry per component + version the item lists, each carrying the reason when given — what `accept component` writes for a row. */
+  componentEntriesOf: (item: TItem, reason?: string) => AcceptedEntry[];
   /** One entry per finding the item currently lists, each carrying the reason when given — what `accept` writes for a row. */
   entriesOf: (item: TItem, reason?: string) => AcceptedEntry[];
 }

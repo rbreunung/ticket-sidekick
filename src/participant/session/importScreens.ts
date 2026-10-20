@@ -129,6 +129,7 @@ export interface ImportScreenOptions {
 function describeAcceptedHidden(hidden: AcceptedHidden): string {
   const parts: string[] = [];
   if (hidden.cves > 0) parts.push(`${countedNoun(hidden.cves, 'accepted CVE(s)')} hidden`);
+  if ((hidden.components ?? 0) > 0) parts.push(`${countedNoun(hidden.components!, 'accepted component(s)')} hidden`);
   if (hidden.belowFloor > 0) parts.push(`${countedNoun(hidden.belowFloor, 'component(s)')} below the rating floor`);
   return parts.join(' · ');
 }
@@ -139,7 +140,7 @@ function describeAcceptedHidden(hidden: AcceptedHidden): string {
  * overview, on the group screen itself, so the count is never invisible.
  */
 export function buildAcceptedHiddenLine(hidden: AcceptedHidden | undefined): string {
-  if (!hidden || (hidden.cves === 0 && hidden.belowFloor === 0)) return '';
+  if (!hidden || (hidden.cves === 0 && hidden.belowFloor === 0 && !hidden.components)) return '';
   return `_${describeAcceptedHidden(hidden)}_ — ${cmdLink('Show accepted', IMPORT_COMMANDS.accepted)}`;
 }
 

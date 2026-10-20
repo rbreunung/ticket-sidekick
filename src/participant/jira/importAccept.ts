@@ -6,7 +6,7 @@ import { logDiag } from '../../utils/diagLog';
 import { isComponentEntry } from '../../utils/waltzAccepted';
 import { templateLabelsOf } from '../../utils/reportImport';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
-import { buildAcceptedList, buildReviewPage, neutralizeMarkdownLinks, restoreMergedRows, type ReviewRowBase, type ReviewSession } from '../sessionState';
+import { buildAcceptedList, buildReviewPage, neutralizeMarkdownLinks, restoreMergedRows, toAcceptedHidden, type ReviewRowBase, type ReviewSession } from '../sessionState';
 import type { ReportImportDescriptor } from './reportImportTypes';
 
 const NO_WORKSPACE_ACCEPTED_MESSAGE = '_No workspace folder is open, so the accepted list cannot be read or changed._\n\n';
@@ -40,7 +40,7 @@ export async function acceptRows<TItem, TRow extends ReviewRowBase>(
   logDiag(descriptor.scope, 'info', `${descriptor.importLabel} import — accepted entries added`, { rows: named.length, added: written.added });
 
   const templateLabels = templateLabelsOf(session.additionalFields);
-  const hidden = { cves: session.acceptedHidden?.cves ?? 0, belowFloor: session.acceptedHidden?.belowFloor ?? 0 };
+  const hidden = { cves: session.acceptedHidden?.cves ?? 0, belowFloor: session.acceptedHidden?.belowFloor ?? 0, components: session.acceptedHidden?.components ?? 0 };
   // The row narrowed against the updated list: [] when nothing of it is left, the row itself when untouched.
   const narrowRow = (row: TRow, count: boolean): TRow[] => {
     const item = accepted.itemOf(row);
@@ -48,6 +48,7 @@ export async function acceptRows<TItem, TRow extends ReviewRowBase>(
     if (count) {
       hidden.cves += narrowed.hiddenCves;
       hidden.belowFloor += narrowed.belowFloor;
+      hidden.components += narrowed.hiddenComponents;
     }
     if (narrowed.item === null) return [];
     if (narrowed.item === item) return [row];
@@ -66,7 +67,7 @@ export async function acceptRows<TItem, TRow extends ReviewRowBase>(
     allRows,
     rows: restoreMergedRows(page.rows, keptMerged),
     page: page.page,
-    ...(hidden.cves > 0 || hidden.belowFloor > 0 ? { acceptedHidden: hidden } : {}),
+    ...(toAcceptedHidden(hidden) ? { acceptedHidden: toAcceptedHidden(hidden) } : {}),
   };
 }
 

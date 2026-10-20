@@ -53,7 +53,7 @@ beforeEach(() => {
 afterEach(() => { workspace.dir = undefined; rmSync(dir, { recursive: true, force: true }); });
 
 const fileOn = () => join(dir, ACCEPTED_FILE_NAME);
-const writeList = (entries: Array<{ component: string; cve: string; reason?: string }>) => writeFileSync(fileOn(), JSON.stringify({ accepted: entries }));
+const writeList = (entries: Array<{ component: string; cve?: string; version?: string; reason?: string }>) => writeFileSync(fileOn(), JSON.stringify({ accepted: entries }));
 const readList = () => (JSON.parse(readFileSync(fileOn(), 'utf8')) as { accepted: Array<{ component: string; cve: string; reason?: string }> }).accepted;
 
 async function importWaltz(components: WaltzComponent[], tickets: Record<string, FakeTicket> = {}) {
@@ -303,5 +303,90 @@ describe('listing and removing accepted entries (R7)', () => {
     const after = await reply('unaccept 5', session!, ws);
     expect(after.text).toMatch(/no entry 5/i);
     expect(readList()).toHaveLength(1);
+  });
+});
+
+describe('building the review with accepted components (accepted-components plan, U2)', () => {
+  const ticketOf = (c: WaltzComponent, extra: Partial<FakeTicket> = {}): FakeTicket => ({ labels: ['oss-dependency', sanitizeComponentLabel(c.nameVersion)], ...extra });
+  const ticketedRows = (s: WaltzReviewSession) => s.allRows.filter(r => r.existingTicketKey !== null);
+
+  it('never offers an accepted component as a new ticket (AE1)', async () => {
+    writeList([{ component: 'netty-codec', version: '4.1.100', reason: 'no update' }]);
+    const { session } = await importWaltz([
+      comp('netty-codec:4.1.100', 'High', [['CVE-2099-1', 'High']]),
+      comp('other:1.0', 'High', [['CVE-2099-9', 'High']]),
+    ]);
+    expect(newRows(session!).map(r => r.nameVersion)).toEqual(['other:1.0']);
+    expect(session!.acceptedHidden).toEqual({ cves: 0, belowFloor: 0, components: 1 });
+  });
+
+  it('offers another version of an accepted component as a normal row (AE4)', async () => {
+    writeList([{ component: 'netty-codec', version: '4.1.100' }]);
+    const { session } = await importWaltz([comp('netty-codec:4.1.101', 'High', [['CVE-2099-1', 'High']])]);
+    expect(newRows(session!).map(r => r.nameVersion)).toEqual(['netty-codec:4.1.101']);
+    expect(session!.acceptedHidden).toBeUndefined();
+  });
+
+  it('drops an accepted component with an open ticket from Already ticketed (AE2)', async () => {
+    writeList([{ component: 'netty-codec', version: '4.1.100' }]);
+    const netty = comp('netty-codec:4.1.100', 'High', [['CVE-2099-1', 'High']]);
+    const other = comp('other:1.0', 'High', [['CVE-2099-9', 'High']]);
+    const { session } = await importWaltz([netty, other], { 'PROJ-7': ticketOf(netty), 'PROJ-8': ticketOf(other) });
+    expect(ticketedRows(session!).map(r => r.nameVersion)).toEqual(['other:1.0']);
+    expect(session!.acceptedHidden).toEqual({ cves: 0, belowFloor: 0, components: 1 });
+  });
+
+  it('drops an accepted component whose ticket is resolved too (AE3)', async () => {
+    writeList([{ component: 'netty-codec', version: '4.1.100' }]);
+    const netty = comp('netty-codec:4.1.100', 'High', [['CVE-2099-1', 'High']]);
+    const other = comp('other:1.0', 'High', [['CVE-2099-9', 'High']]);
+    const { session } = await importWaltz([netty, other], { 'PROJ-7': ticketOf(netty, { resolution: { name: 'Done' } }), 'PROJ-8': ticketOf(other) });
+    expect(ticketedRows(session!).map(r => r.nameVersion)).toEqual(['other:1.0']);
+  });
+
+  it('keeps the surviving Already ticketed ids contiguous after a row is dropped', async () => {
+    writeList([{ component: 'b', version: '1.0' }]);
+    const a = comp('a:1.0', 'High', [['CVE-2099-1', 'High']]);
+    const b = comp('b:1.0', 'High', [['CVE-2099-2', 'High']]);
+    const c = comp('c:1.0', 'High', [['CVE-2099-3', 'High']]);
+    const { session } = await importWaltz([a, b, c], { 'PROJ-1': ticketOf(a), 'PROJ-2': ticketOf(b), 'PROJ-3': ticketOf(c) });
+    expect(ticketedRows(session!).map(r => `${r.id}=${r.nameVersion}`)).toEqual(['A1=a:1.0', 'A2=c:1.0']);
+  });
+
+  it('keeps an accepted component hidden when the report shows a new Critical CVE (AE5)', async () => {
+    writeList([{ component: 'netty-codec', version: '4.1.100' }]);
+    const netty = comp('netty-codec:4.1.100', 'Critical', [['CVE-2099-1', 'High'], ['CVE-2099-77', 'Critical']]);
+    const other = comp('other:1.0', 'High', [['CVE-2099-9', 'High']]);
+    const { session } = await importWaltz([netty, other], { 'PROJ-7': ticketOf(netty) });
+    expect(ticketedRows(session!)).toEqual([]);
+    expect(newRows(session!).map(r => r.nameVersion)).toEqual(['other:1.0']);
+  });
+
+  it('says how many accepted components are hidden, with the link to list them', async () => {
+    writeList([{ component: 'netty-codec', version: '4.1.100' }]);
+    const { stream } = await importWaltz([
+      comp('netty-codec:4.1.100', 'High', [['CVE-2099-1', 'High']]),
+      comp('other:1.0', 'High', [['CVE-2099-9', 'High']]),
+    ]);
+    expect(streamText(stream)).toContain('1 accepted component hidden');
+    expect(streamText(stream)).toContain('Show accepted');
+  });
+
+  it('ends with the all-hidden message when accepted components leave nothing to review', async () => {
+    writeList([{ component: 'netty-codec', version: '4.1.100' }]);
+    const { session, stream } = await importWaltz([comp('netty-codec:4.1.100', 'High', [['CVE-2099-1', 'High']])]);
+    expect(session).toBeUndefined();
+    expect(streamText(stream)).toContain('Nothing is left to import');
+    expect(streamText(stream)).toContain('1 accepted component');
+  });
+
+  it('counts accepted CVEs and accepted components apart', async () => {
+    writeList([{ component: 'libfoo', cve: 'CVE-2099-1' }, { component: 'netty-codec', version: '4.1.100' }]);
+    const { session } = await importWaltz([
+      comp('libfoo:1.0', 'High', [['CVE-2099-1', 'High']]),
+      comp('netty-codec:4.1.100', 'High', [['CVE-2099-2', 'High']]),
+      comp('other:1.0', 'High', [['CVE-2099-9', 'High']]),
+    ]);
+    expect(session!.acceptedHidden).toEqual({ cves: 1, belowFloor: 0, components: 1 });
   });
 });

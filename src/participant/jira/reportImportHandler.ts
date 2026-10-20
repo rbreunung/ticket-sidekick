@@ -20,7 +20,7 @@ import type { IJiraClient } from '../../jira/IJiraClient';
 import { TemplateService } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
 import { BATCH_LIMIT, DEFAULT_DEDUP_CHUNK_SIZE, MAX_REPORT_BYTES, buildDedupJql, buildReviewRows, fetchAllPages, findAlreadyTicketed, findStaleTickets, templateLabelsOf, type DedupMap, type JqlIssueLike } from '../../utils/reportImport';
-import { CURRENT_SESSION_SCHEMA_VERSION, NO_ISSUE_TYPE, SESSION_EXPIRED_MESSAGE, applyBulkNewRowSet, applyReviewSessionToggle, applyStaleTicketToggle, applyTicketedActionChange, buildAllHiddenMessage, buildChatCommandLink, buildImportDoneSummary, buildReviewPage, computeImportResultGroups, describeImportReplyVocabulary, ensureImportViewState, formatIssueTypeOptionLabel, initImportViewState, isCancellation, isSessionExpired, isTicketedRowFinished, mergeNewRows, neutralizeMarkdownLinks, parseImportReviewReply, pickEmailOption, resolveTemplateIssueType, ticketedRowActions, unmergeNewRow, type ImportReplyContext, type ImportTemplateSelectionSession, type ReviewRowBase, type ReviewSession, type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession } from '../sessionState';
+import { CURRENT_SESSION_SCHEMA_VERSION, NO_ISSUE_TYPE, SESSION_EXPIRED_MESSAGE, applyBulkNewRowSet, applyReviewSessionToggle, applyStaleTicketToggle, applyTicketedActionChange, buildAllHiddenMessage, buildChatCommandLink, buildImportDoneSummary, buildReviewPage, computeImportResultGroups, describeImportReplyVocabulary, ensureImportViewState, formatIssueTypeOptionLabel, initImportViewState, isCancellation, isSessionExpired, isTicketedRowFinished, mergeNewRows, neutralizeMarkdownLinks, parseImportReviewReply, pickEmailOption, resolveTemplateIssueType, ticketedRowActions, toAcceptedHidden, unmergeNewRow, type ImportReplyContext, type ImportTemplateSelectionSession, type ReviewRowBase, type ReviewSession, type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession } from '../sessionState';
 import { resolveIssueTypeOrPrompt, resolveProjectKey, sessionWasSuperseded } from './ticketContext';
 import { buildStaleTicketGroups } from './cleanupHandler';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
@@ -363,8 +363,9 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
   // Accepted-CVE list (KTD1): applied to the New items only, after the dedup split, so Already ticketed
   // and Stale keep seeing the full report (R8). A missing list file or workspace hides nothing; a
   // broken one hides nothing and is reported.
-  const acceptedHidden = { cves: 0, belowFloor: 0 };
+  const acceptedHidden = { cves: 0, belowFloor: 0, components: 0 };
   let narrowNew: ((item: TItem) => TItem | null) | undefined;
+  let dropTicketed: ((item: TItem) => boolean) | undefined;
   if (descriptor.accepted) {
     const accepted = descriptor.accepted;
     const loaded = accepted.service()?.load();
@@ -377,7 +378,13 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
         const narrowed = accepted.narrow(item, loaded.entries);
         acceptedHidden.cves += narrowed.hiddenCves;
         acceptedHidden.belowFloor += narrowed.belowFloor;
+        acceptedHidden.components += narrowed.hiddenComponents;
         return narrowed.item;
+      };
+      dropTicketed = item => {
+        const dropped = accepted.isAccepted(item, loaded.entries);
+        if (dropped) acceptedHidden.components++;
+        return dropped;
       };
     }
   }
@@ -388,8 +395,10 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
     item => descriptor.buildRowFields(item, templateLabels),
     descriptor.changeTracking,
     narrowNew,
+    dropTicketed,
   );
   const initialPage = buildReviewPage(allRows, 0);
+  const hiddenCounts = toAcceptedHidden(acceptedHidden);
 
   let reviewSession: ReviewSession<TRow> = {
     projectKey: session.projectKey,
@@ -399,7 +408,7 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
     allRows,
     rows: initialPage.rows,
     page: initialPage.page,
-    ...(acceptedHidden.cves > 0 || acceptedHidden.belowFloor > 0 ? { acceptedHidden } : {}),
+    ...(hiddenCounts ? { acceptedHidden: hiddenCounts } : {}),
     schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
   };
 

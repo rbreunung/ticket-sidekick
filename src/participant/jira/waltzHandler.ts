@@ -9,7 +9,7 @@ import {
   type WaltzComponent, type WaltzReviewRow,
 } from '../../utils/waltzReport';
 import { AcceptedListService } from '../../services/AcceptedListService';
-import { narrowGroup, acceptedEntriesOf } from '../../utils/waltzAccepted';
+import { narrowGroup, acceptedEntriesOf, acceptedComponentEntriesOf, acceptedComponentKeys, isComponentAccepted } from '../../utils/waltzAccepted';
 import type { WaltzTemplateSelectionSession, WaltzReviewSession, StaleCloseSession } from '../sessionState';
 import { WALTZ_REVIEW_COLUMNS } from '../sessionState';
 import {
@@ -158,8 +158,13 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
     },
     narrow: (group, entries) => {
       const narrowed = narrowGroup(group, entries, getWaltzMinVulnRating());
-      return { item: narrowed.group, hiddenCves: narrowed.hiddenCves, belowFloor: narrowed.belowFloor };
+      return { item: narrowed.group, hiddenCves: narrowed.hiddenCves, belowFloor: narrowed.belowFloor, hiddenComponents: narrowed.hiddenComponents };
     },
+    isAccepted: (group, entries) => {
+      const keys = acceptedComponentKeys(entries);
+      return group.length > 0 && group.every(c => isComponentAccepted(c.nameVersion, keys));
+    },
+    componentEntriesOf: (group, reason) => acceptedComponentEntriesOf(group, reason),
     entriesOf: (group, reason) => acceptedEntriesOf(group, reason),
   },
   // Import ticket updates parity (KTD2/KTD3): a component's findings are recorded as one
