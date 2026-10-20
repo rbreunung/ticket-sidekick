@@ -833,6 +833,40 @@ describe('fetchAllPages (dedup search paging)', () => {
     expect(fetchPage).toHaveBeenCalledTimes(3);
   });
 
+  it('stops when the server ignores startAt and keeps returning the same page (Cloud), without duplicating tickets', async () => {
+    const page = Array.from({ length: 100 }, (_, i) => ({ key: `P-${i}` }));
+    const fetchPage = vi.fn(async () => ({ issues: page, isLast: false }));
+
+    const issues = await fetchAllPages(fetchPage, 100, 1000, i => i.key);
+
+    expect(issues).toHaveLength(100);
+    expect(fetchPage).toHaveBeenCalledTimes(2);
+  });
+
+  it('follows nextPageToken when the server pages by token', async () => {
+    const pages: Record<string, { issues: Array<{ key: string }>; nextPageToken?: string; isLast: boolean }> = {
+      start: { issues: Array.from({ length: 100 }, (_, i) => ({ key: `A-${i}` })), nextPageToken: 't2', isLast: false },
+      t2: { issues: Array.from({ length: 100 }, (_, i) => ({ key: `B-${i}` })), nextPageToken: 't3', isLast: false },
+      t3: { issues: [{ key: 'C-0' }], isLast: true },
+    };
+    const fetchPage = vi.fn(async (_startAt: number, token?: string) => pages[token ?? 'start']);
+
+    const issues = await fetchAllPages(fetchPage, 100, 1000, i => i.key);
+
+    expect(issues).toHaveLength(201);
+    expect(fetchPage.mock.calls.map(c => c[1])).toEqual([undefined, 't2', 't3']);
+  });
+
+  it('keeps reading when the server caps its page below the requested size and a total says there is more', async () => {
+    const all = Array.from({ length: 120 }, (_, i) => ({ key: `P-${i}` }));
+    const fetchPage = vi.fn(async (startAt: number) => ({ issues: all.slice(startAt, startAt + 50), total: 120 }));
+
+    const issues = await fetchAllPages(fetchPage, 100, 1000, i => i.key);
+
+    expect(issues).toHaveLength(120);
+    expect(fetchPage.mock.calls.map(c => c[0])).toEqual([0, 50, 100]);
+  });
+
   it('passes a page failure through to the caller (findAlreadyTicketed then skips that chunk)', async () => {
     const fetchPage = vi.fn(async (startAt: number) => {
       if (startAt > 0) throw new Error('503');
@@ -960,5 +994,30 @@ describe('findStaleTickets — reads every page (stale search paging)', () => {
     const result = await findStaleTickets('PROJ', 'oss-dependency', search, labelToDedupKey, () => false);
     expect(result.searchFailed).toBe(true);
     expect(result.stale).toEqual([]);
+  });
+});
+
+describe('findStaleTickets — Cloud-style token paging', () => {
+  const labelToDedupKey = (label: string) => (label.startsWith('oss-dep-') ? label : null);
+  const issue = (i: number) => ({ key: `PROJ-${i}`, fields: { labels: ['oss-dependency', `oss-dep-${i}`] } });
+
+  it('reads all tickets by token with no duplicates, and passes the token to the search', async () => {
+    const search = vi.fn(async (_jql: string, _max: number, _startAt: number, token?: string) => (token === undefined
+      ? { issues: Array.from({ length: 100 }, (_, i) => issue(i)), nextPageToken: 'next', isLast: false }
+      : { issues: Array.from({ length: 30 }, (_, i) => issue(100 + i)), isLast: true }));
+    const result = await findStaleTickets('PROJ', 'oss-dependency', search, labelToDedupKey, () => false);
+    expect(result.checked).toBe(130);
+    expect(new Set(result.stale.map(s => s.key)).size).toBe(130);
+    expect(search.mock.calls.map(c => c[3])).toEqual([undefined, 'next']);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('a search that ignores startAt and has no token yields each ticket once and reports possible incompleteness', async () => {
+    const page = Array.from({ length: 100 }, (_, i) => issue(i));
+    const search = vi.fn(async () => ({ issues: page, isLast: false }));
+    const result = await findStaleTickets('PROJ', 'oss-dependency', search, labelToDedupKey, () => false);
+    expect(result.checked).toBe(100);
+    expect(result.stale).toHaveLength(100);
+    expect(result.truncated).toBe(true);
   });
 });

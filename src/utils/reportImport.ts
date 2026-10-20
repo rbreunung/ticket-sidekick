@@ -213,21 +213,39 @@ export const MAX_DEDUP_TICKETS_PER_CHUNK = 1000;
  * Reads every page of a Jira search. The dedup search needs this: an item's known findings are the
  * union of all its tickets (follow-ups and re-creates add more tickets per dedup label), so a single
  * truncated page could pick the wrong target or show recorded findings as new. Stops when a page is
- * short or empty, the server reports the end (`isLast`) or its `total` is reached, or `maxItems`
- * tickets were read. A failed page rejects, so `findAlreadyTicketed` treats the whole chunk as
- * failed rather than trusting a partial one.
+ * empty or (with `keyOf`) adds no ticket not already read, the server reports the end (`isLast`) or
+ * its `total` is reached, or — when the server reports no total — a page is short and carries no
+ * `nextPageToken`; or when `maxItems` tickets were read. A server that caps its page below
+ * `pageSize` is therefore still read to its `total`. Jira Cloud pages by `nextPageToken` and ignores
+ * `startAt`: the token is passed back to `fetchPage`, and the no-progress rule keeps a server that
+ * ignores both from repeating a page. A failed page rejects, so `findAlreadyTicketed` treats the
+ * whole chunk as failed rather than trusting a partial one.
  */
 export async function fetchAllPages<T>(
-  fetchPage: (startAt: number) => Promise<{ issues: T[]; total?: number; isLast?: boolean }>,
+  fetchPage: (startAt: number, pageToken?: string) => Promise<{ issues: T[]; total?: number; isLast?: boolean; nextPageToken?: string }>,
   pageSize: number,
   maxItems = MAX_DEDUP_TICKETS_PER_CHUNK,
+  keyOf?: (item: T) => string,
 ): Promise<T[]> {
   const all: T[] = [];
+  const seen = new Set<string>();
+  let pageToken: string | undefined;
   while (all.length < maxItems) {
-    const page = await fetchPage(all.length);
-    all.push(...page.issues.slice(0, maxItems - all.length));
-    const done = page.issues.length < pageSize || page.isLast === true
-      || (page.total !== undefined && all.length >= page.total);
+    const page = await fetchPage(all.length, pageToken);
+    pageToken = page.nextPageToken;
+    const fresh = keyOf
+      ? page.issues.filter(item => {
+        const key = keyOf(item);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      : page.issues;
+    all.push(...fresh.slice(0, maxItems - all.length));
+    const noProgress = keyOf !== undefined && fresh.length === 0;
+    const shortPage = page.total === undefined && pageToken === undefined && page.issues.length < pageSize;
+    const done = page.issues.length === 0 || noProgress || page.isLast === true
+      || (page.total !== undefined && all.length >= page.total) || shortPage;
     if (done) break;
   }
   return all;
@@ -295,7 +313,7 @@ export function buildStaleSearchJql(projectKey: string, markerLabel: string): st
 export async function findStaleTickets(
   projectKey: string,
   markerLabel: string,
-  search: (jql: string, maxResults: number, startAt: number) => Promise<{ issues: JqlIssueLike[]; total?: number; isLast?: boolean }>,
+  search: (jql: string, maxResults: number, startAt: number, pageToken?: string) => Promise<{ issues: JqlIssueLike[]; total?: number; isLast?: boolean; nextPageToken?: string }>,
   labelToDedupKey: (label: string) => string | null,
   isActive: (dedupKey: string) => boolean,
   onDiag?: DiagLogger,
@@ -305,12 +323,14 @@ export async function findStaleTickets(
   let reportedTotal: number | undefined;
   let reportedLast: boolean | undefined;
   try {
-    candidates = await fetchAllPages(async startAt => {
-      const page = await search(jql, STALE_SEARCH_PAGE_SIZE, startAt);
+    candidates = await fetchAllPages(async (startAt, pageToken) => {
+      const page = pageToken === undefined
+        ? await search(jql, STALE_SEARCH_PAGE_SIZE, startAt)
+        : await search(jql, STALE_SEARCH_PAGE_SIZE, startAt, pageToken);
       reportedTotal = page.total ?? reportedTotal;
       reportedLast = page.isLast;
       return page;
-    }, STALE_SEARCH_PAGE_SIZE, MAX_STALE_TICKETS);
+    }, STALE_SEARCH_PAGE_SIZE, MAX_STALE_TICKETS, issue => issue.key);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     onDiag?.('warn', 'Stale-ticket search failed — could not check for stale tickets', { error: message });

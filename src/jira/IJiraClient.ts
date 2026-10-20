@@ -69,6 +69,8 @@ export interface JiraSearchResult {
   total?: number;
   maxResults?: number;
   isLast?: boolean;
+  /** Jira Cloud's `/search/jql` pages by token rather than `startAt`; pass it back to read the next page. */
+  nextPageToken?: string;
 }
 
 export interface JiraTransition {
@@ -154,7 +156,7 @@ export interface IJiraClient {
   addComment(issueKey: string, body: string): Promise<void>;
   /** Creates an issue link of the named type (e.g. "Relates") between two issues. */
   createIssueLink(inwardKey: string, outwardKey: string, typeName: string): Promise<void>;
-  searchJql(jql: string, maxResults?: number, startAt?: number, extraFields?: string[]): Promise<JiraSearchResult>;
+  searchJql(jql: string, maxResults?: number, startAt?: number, extraFields?: string[], pageToken?: string): Promise<JiraSearchResult>;
   findUser(query: string): Promise<JiraUser[]>;
   getCurrentUser(): Promise<JiraUser>;
   getTransitions(issueKey: string): Promise<JiraTransition[]>;

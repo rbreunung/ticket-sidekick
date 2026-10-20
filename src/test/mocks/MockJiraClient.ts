@@ -66,7 +66,7 @@ export class MockJiraClient implements IJiraClient {
     this.createIssueLinkCalls.push({ inwardKey, outwardKey, typeName });
   }
 
-  async searchJql(_jql: string, _maxResults?: number, _startAt?: number, _extraFields?: string[]): Promise<JiraSearchResult> {
+  async searchJql(_jql: string, _maxResults?: number, _startAt?: number, _extraFields?: string[], _pageToken?: string): Promise<JiraSearchResult> {
     return loadFixture<JiraSearchResult>('search-results.json');
   }
 

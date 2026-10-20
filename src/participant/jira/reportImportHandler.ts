@@ -330,9 +330,11 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
         // U3/KTD1: resolution + created let buildReviewRows pick each item's newest open ticket.
         // Every page is read: the union of an item's tickets decides its target and known findings.
         chunk => fetchAllPages(
-          startAt => ticketService.searchTicketsRaw(buildDedupJql(session.projectKey, chunk), DEDUP_PAGE_SIZE, ['resolution', 'created'], startAt)
+          (startAt, pageToken) => ticketService.searchTicketsRaw(buildDedupJql(session.projectKey, chunk), DEDUP_PAGE_SIZE, ['resolution', 'created'], startAt, pageToken)
             .then(r => ({ ...r, issues: r.issues as JqlIssueLike[] })),
           DEDUP_PAGE_SIZE,
+          undefined,
+          issue => issue.key,
         ),
         descriptor.labelToDedupKey,
         (level, message, details) => logDiag(descriptor.scope, level, message, details),
@@ -423,8 +425,8 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
     const staleResult = await findStaleTickets(
       session.projectKey,
       descriptor.stale.markerLabel,
-      async (jql, maxResults, startAt) => {
-        const result = await ticketService.searchTicketsRaw(jql, maxResults, [], startAt);
+      async (jql, maxResults, startAt, pageToken) => {
+        const result = await ticketService.searchTicketsRaw(jql, maxResults, [], startAt, pageToken);
         // Captured as a side effect of the search findStaleTickets() already runs — searchJql's
         // baseFields always include summary/status/issuetype (see JiraApiClient.ts), so this needs
         // no second fetch keyed by the returned stale keys. `JiraIssue.fields` already types these

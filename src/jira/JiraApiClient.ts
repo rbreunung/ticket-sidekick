@@ -250,15 +250,20 @@ export class JiraApiClient implements IJiraClient {
     }
   }
 
-  async searchJql(jql: string, maxResults = 20, startAt?: number, extraFields: string[] = []): Promise<JiraSearchResult> {
+  async searchJql(jql: string, maxResults = 20, startAt?: number, extraFields: string[] = [], pageToken?: string): Promise<JiraSearchResult> {
     // U5: 'issuetype' added unconditionally (same convention as the other always-requested
     // fields here) so search-result sessions can record each ticket's issue type/project for
     // R8's sprint-refine-chip eligibility check without a second fetch.
     const baseFields = ['summary', 'status', 'assignee', 'priority', 'labels', 'fixVersions', 'reporter', 'subtasks', 'parent', 'issuetype'];
     const fields = [...baseFields, ...extraFields.filter(f => !baseFields.includes(f))];
     let qs = `jql=${encodeURIComponent(jql)}&maxResults=${maxResults}&${fields.map(f => `fields=${encodeURIComponent(f)}`).join('&')}`;
-    if (startAt !== undefined) qs += `&startAt=${startAt}`;
-    // Cloud removed /rest/api/2/search (410); must use /rest/api/3/search/jql
+    // Cloud removed /rest/api/2/search (410); must use /rest/api/3/search/jql, which pages by
+    // `nextPageToken` and ignores `startAt`.
+    if (this.authType === 'cloud' && pageToken !== undefined) {
+      qs += `&nextPageToken=${encodeURIComponent(pageToken)}`;
+    } else if (startAt !== undefined) {
+      qs += `&startAt=${startAt}`;
+    }
     if (this.authType === 'cloud') {
       return this.requestV3<JiraSearchResult>(`/search/jql?${qs}`);
     }

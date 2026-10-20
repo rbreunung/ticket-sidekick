@@ -251,6 +251,16 @@ describe('JiraApiClient', () => {
       expect(url).toContain('startAt=40');
     });
 
+    it('sends the cloud page token as nextPageToken and no startAt, because /search/jql pages by token', async () => {
+      const mockFetch = makeFetch({ issues: [], isLast: true });
+      vi.stubGlobal('fetch', mockFetch);
+      const client = new JiraApiClient({ ...BASE_CONFIG, authType: 'cloud' });
+      await client.searchJql('project = PROJ', 100, 100, [], 'tok/en==');
+      const [url] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(url).toContain('nextPageToken=tok%2Fen%3D%3D');
+      expect(url).not.toContain('startAt');
+    });
+
     it('omits startAt from the query string when not provided', async () => {
       const mockFetch = makeFetch({ issues: [], isLast: true });
       vi.stubGlobal('fetch', mockFetch);
