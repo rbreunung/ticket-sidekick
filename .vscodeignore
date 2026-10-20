@@ -16,3 +16,11 @@ CLAUDE.md
 .jira-templates.json
 package-lock.json
 images/source/
+.github/
+.compound-engineering/
+plans/
+scripts/
+CONCEPTS.md
+STRATEGY.md
+out/**
+!out/extension.js
