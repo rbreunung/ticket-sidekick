@@ -8,10 +8,13 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    # Windows too: the tests touch real paths (temp dirs, home directory, path.join), and
+    # the extension is developed on Windows as well.
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         node-version: ['24']
     steps:
       - uses: actions/checkout@v7.0.1

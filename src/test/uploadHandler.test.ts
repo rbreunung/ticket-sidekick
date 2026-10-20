@@ -37,6 +37,7 @@ vi.mock('../tools/pathSafety', () => ({
   isAllowedUploadPath: vi.fn(() => true),
 }));
 
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { isAllowedUploadPath } from '../tools/pathSafety';
 import {
@@ -171,7 +172,8 @@ describe('handleUploadAttachment — file resolution (R1-R3, AE2)', () => {
     );
 
     const readCalls = vi.mocked(vscode.workspace.fs.readFile).mock.calls;
-    expect(readCalls[0][0].fsPath).toBe('/workspace/report.pdf');
+    // The handler joins with the platform separator (\workspace\report.pdf on Windows).
+    expect(readCalls[0][0].fsPath).toBe(path.join('/workspace', 'report.pdf'));
   });
 
   it('resolves every file attached to the chat message, not just the first (R1/R8)', async () => {

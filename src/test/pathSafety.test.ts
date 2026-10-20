@@ -1,8 +1,18 @@
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, afterAll, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { isAllowedUploadPath, isSafeFilename, isSafePathSegment } from '../tools/pathSafety';
+
+// isAllowedUploadPath() is relative to os.homedir(). On Windows (and some CI images) os.tmpdir()
+// lives *inside* the home directory, so a temp dir can't stand in for "outside home". The tests
+// below pin homedir() to a throwaway directory instead, which behaves the same on every platform.
+const fakeHome = vi.hoisted(() => ({ dir: '' }));
+vi.mock('os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('os')>();
+  const homedir = () => fakeHome.dir || actual.homedir();
+  return { ...actual, homedir, default: { ...actual, homedir } };
+});
 
 describe('isSafePathSegment', () => {
   it('accepts a normal Jira ticket key', () => {
@@ -57,6 +67,10 @@ describe('isSafeFilename (code-review fix: isSafePathSegment was too strict for 
 });
 
 describe('isAllowedUploadPath (security fix: code-review P0/P1)', () => {
+  // realpath: macOS /var -> /private/var and Windows 8.3 short names would otherwise make the
+  // resolved file path differ from the home string even though both name the same directory.
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ticket-sidekick-home-')));
+  fakeHome.dir = home;
   const testRoot = fs.mkdtempSync(path.join(os.homedir(), 'ticket-sidekick-test-'));
   const plainFile = path.join(testRoot, 'report.pdf');
   fs.writeFileSync(plainFile, 'stub');
@@ -66,13 +80,14 @@ describe('isAllowedUploadPath (security fix: code-review P0/P1)', () => {
   fs.writeFileSync(dotDirFile, 'stub');
   const dotFile = path.join(testRoot, '.env');
   fs.writeFileSync(dotFile, 'stub');
-  const outsideHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ticket-sidekick-outside-'));
+  const outsideHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ticket-sidekick-outside-')));
   const outsideFile = path.join(outsideHome, 'evil.txt');
   fs.writeFileSync(outsideFile, 'stub');
 
   afterAll(() => {
-    fs.rmSync(testRoot, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(outsideHome, { recursive: true, force: true });
+    fakeHome.dir = '';
   });
 
   it('accepts a plain file directly under the home directory', () => {
