@@ -116,16 +116,21 @@ function parseAcceptedListReply(reply: string): ImportReplyAction | null {
 }
 
 /** `accept <rows> [because <reason>]` on the New screen; the reason keeps the casing the user typed. */
+/** Splits what follows an accept word into lower-cased row tokens and the reason after `because`, which keeps the casing typed. */
+function splitRowsAndReason(rest: string | undefined): { tokens: string[]; reason: string } {
+  const [rowsPart, ...reasonParts] = (rest ?? '').split(/ because /i);
+  const tokens = rowsPart.toLowerCase().replace(/ because$/, '').split(/[\s,]+/).filter(Boolean);
+  return { tokens, reason: reasonParts.join(' because ').trim() };
+}
+
 function parseAcceptReply(reply: string, ctx: ImportReplyContext): ImportReplyAction | null {
   const trimmed = reply.trim().replace(/\s+/g, ' ');
   const match = trimmed.match(/^accept(?: (.*))?$/i);
   if (!match) return null;
-  const [rowsPart, ...reasonParts] = (match[1] ?? '').split(/ because /i);
-  const tokens = rowsPart.toLowerCase().replace(/ because$/, '').split(/[\s,]+/).filter(Boolean);
+  const { tokens, reason } = splitRowsAndReason(match[1]);
   if (tokens.length === 0) return { kind: 'invalid', reason: ACCEPT_USAGE };
   const rows = matchVisibleNewRows(tokens, ctx, 'accepted');
   if ('reason' in rows) return { kind: 'invalid', reason: rows.reason };
-  const reason = reasonParts.join(' because ').trim();
   return reason ? { kind: 'accept', ids: rows.ids, reason } : { kind: 'accept', ids: rows.ids };
 }
 
@@ -138,12 +143,10 @@ function parseAcceptComponentReply(reply: string, ctx: ImportReplyContext, view:
   const trimmed = reply.trim().replace(/\s+/g, ' ');
   const match = trimmed.match(/^accept component(?: (.*))?$/i);
   if (!match) return null;
-  const [rowsPart, ...reasonParts] = (match[1] ?? '').split(/ because /i);
-  const tokens = rowsPart.toLowerCase().replace(/ because$/, '').split(/[\s,]+/).filter(Boolean);
+  const { tokens, reason } = splitRowsAndReason(match[1]);
   if (tokens.length === 0) return { kind: 'invalid', reason: ACCEPT_COMPONENT_USAGE };
   const rows = view === 'new' ? matchVisibleNewRows(tokens, ctx, 'accepted') : matchOpenTicketedRows(tokens, ctx);
   if ('reason' in rows) return { kind: 'invalid', reason: rows.reason };
-  const reason = reasonParts.join(' because ').trim();
   return reason ? { kind: 'acceptComponent', ids: rows.ids, reason } : { kind: 'acceptComponent', ids: rows.ids };
 }
 
