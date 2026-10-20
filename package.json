@@ -6,7 +6,7 @@
   "license": "MIT",
   "publisher": "RobertBreunung",
   "engines": {
-    "vscode": "^1.140.0"
+    "vscode": "^1.95.0"
   },
   "repository": {
     "type": "GitHub",
@@ -1095,7 +1095,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
-    "@types/vscode": "~1.140.0",
+    "@types/vscode": "~1.95.0",
     "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.28.2",
