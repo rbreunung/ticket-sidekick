@@ -245,6 +245,8 @@ export function buildNewGroupScreen<TRow extends ReviewRowBase>(
   if (opts.canAccept) {
     lines.push('Reply `accept 2 4` to hide those rows\' CVEs from this and future imports (add `because …` to record why), or `accepted` to list what is accepted.');
     lines.push('');
+    lines.push('Reply `accept component 2 4` to stop offering those components at that exact version for good: they also leave Already ticketed, and an open ticket is offered for closing under Stale.');
+    lines.push('');
   }
   if (hiddenLine) {
     lines.push(hiddenLine);
@@ -373,6 +375,9 @@ export function buildTicketedGroupScreen<TRow extends ReviewRowBase>(
   }
   if (c.ticketedOpen > 0) {
     lines.push('Change a row with `<row> <action>` (e.g. `A2 follow-up`) or every row with `all <action>` (e.g. `all leave`), or click an action in the table.');
+    if (opts.canAccept) {
+      lines.push('Reply `accept component A2 A3` to stop offering those components at that exact version (add `because …` to record why): they leave this list, and an open ticket is offered for closing under Stale.');
+    }
   }
   lines.push(groupScreenExitLine(s.singleGroup!));
   return lines.join('\n');
