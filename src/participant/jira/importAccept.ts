@@ -123,7 +123,17 @@ export async function acceptComponents<TItem, TRow extends ReviewRowBase>(
     stream.markdown(NO_WORKSPACE_ACCEPTED_MESSAGE);
     return session;
   }
-  const named = session.rows.filter(r => action.ids.includes(r.id));
+  // A row whose report name carries no version has nothing to match an entry on: name it rather than report it as already accepted.
+  const all = session.rows.filter(r => action.ids.includes(r.id));
+  const versionless = all.filter(r => accepted.componentEntriesOf(accepted.itemOf(r)).length === 0);
+  const named = all.filter(r => !versionless.includes(r));
+  const versionlessNote = versionless.length > 0
+    ? `${versionless.map(r => `Row ${r.id}`).join(', ')} ${versionless.length === 1 ? 'has' : 'have'} no version, so ${versionless.length === 1 ? 'it' : 'they'} can't be accepted as a whole component; use \`accept\` for the CVEs.\n\n`
+    : '';
+  if (named.length === 0) {
+    stream.markdown(versionlessNote);
+    return session;
+  }
   const written = service.add(named.flatMap(r => accepted.componentEntriesOf(accepted.itemOf(r), action.reason)));
   if (!written.ok) {
     logDiag(descriptor.scope, 'warn', `${descriptor.importLabel} import — accepting components failed`, { error: written.message });
@@ -141,6 +151,7 @@ export async function acceptComponents<TItem, TRow extends ReviewRowBase>(
       `${moved.count > 0 ? ` ${moved.count} open ticket(s) are now offered under Stale.` : ''}` +
       `${moved.failed > 0 ? ` ✗ Could not offer ${moved.failed} open ticket(s) under Stale; they are offered on the next import.` : ''}\n\n`
     : '_Those components were already accepted._\n\n');
+  stream.markdown(versionlessNote);
   return moved.session;
 }
 

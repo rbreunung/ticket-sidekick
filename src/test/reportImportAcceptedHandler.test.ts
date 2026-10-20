@@ -566,6 +566,24 @@ describe('accept component and remove it, in a running review (accepted-componen
     expect(newRows(ws.store['jira.session.waltzReview'] as WaltzReviewSession).map(r => r.nameVersion)).toEqual(['c:2.0']);
   });
 
+  it('rejects a row whose report name has no version, naming it, and writes nothing', async () => {
+    const { session, ws } = await importWaltz([comp('noversion', 'High', [['CVE-2099-1', 'High']]), other]);
+    const after = await reply('accept component 1', session!, ws);
+    expect(after.text).toContain('Row 1 has no version');
+    expect(after.text).not.toContain('already accepted');
+    expect(existsSync(fileOn())).toBe(false);
+    expect(newRows(after.session).map(r => r.nameVersion)).toEqual(['noversion', 'other:1.0']);
+  });
+
+  it('accepts the rows that have a version and names the ones that do not', async () => {
+    const { session, ws } = await importWaltz([comp('noversion', 'High', [['CVE-2099-1', 'High']]), other]);
+    const after = await reply('accept component 1 2', session!, ws);
+    expect(readList()).toEqual([{ component: 'other', version: '1.0' }]);
+    expect(after.text).toContain('Accepted 1 component');
+    expect(after.text).toContain('Row 1 has no version');
+    expect(newRows(after.session).map(r => r.nameVersion)).toEqual(['noversion']);
+  });
+
   it('says so when the component was already accepted, and still takes the row off the screen', async () => {
     const { session, ws } = await importWaltz([netty, other]);
     writeList([{ component: 'netty-codec', version: '4.1.100' }]);
