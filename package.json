@@ -1094,7 +1094,7 @@
     "test:e2e": "node esbuild.js && tsc -p ./ && node ./out/e2e/runTest.js"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
+    "@types/node": "^26.6.5",
     "@types/vscode": "~1.140.0",
     "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^4.0.0",
