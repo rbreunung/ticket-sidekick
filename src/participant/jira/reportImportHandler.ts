@@ -423,8 +423,8 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
     const staleResult = await findStaleTickets(
       session.projectKey,
       descriptor.stale.markerLabel,
-      async (jql, maxResults) => {
-        const result = await ticketService.searchTicketsRaw(jql, maxResults);
+      async (jql, maxResults, startAt) => {
+        const result = await ticketService.searchTicketsRaw(jql, maxResults, [], startAt);
         // Captured as a side effect of the search findStaleTickets() already runs — searchJql's
         // baseFields always include summary/status/issuetype (see JiraApiClient.ts), so this needs
         // no second fetch keyed by the returned stale keys. `JiraIssue.fields` already types these
@@ -456,7 +456,7 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
       // marker-labeled ticket count the search matched, not a stale count.
       if (staleResult.truncated) {
         stream.markdown(
-          `_Checked the first ${BATCH_LIMIT} of ${staleResult.totalFound} ticket(s) carrying the stale-check label` +
+          `_Checked the first ${staleResult.checked} of ${staleResult.totalFound} ticket(s) carrying the stale-check label` +
           ` — ${staleResult.stale.length} looked stale, but coverage may be incomplete._\n\n`,
         );
       }

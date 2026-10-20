@@ -233,6 +233,10 @@ export async function fetchAllPages<T>(
   return all;
 }
 
+/** Safety bound on the open marker-labeled tickets one import reads for the stale check (like the dedup search's bound). */
+export const MAX_STALE_TICKETS = 1000;
+const STALE_SEARCH_PAGE_SIZE = 100;
+
 /** One open ticket found stale by {@link findStaleTickets}. `ids` are the marker-id dedup keys
  * (e.g. Veracode flaw ids, or Waltz's `oss-dep-...` component label) extracted from its labels —
  * every one of them turned out inactive, which is what made the ticket stale. */
@@ -245,11 +249,13 @@ export interface FindStaleTicketsResult {
   stale: StaleTicketMatch[];
   /** The open tickets that were not flagged because an id is still active, each with only its still-active ids. */
   pending: StaleTicketMatch[];
-  /** Server-reported total match count (falls back to the checked-page length when the search
-   * result carries no `total`), so a caller can report "N found" even when truncated. */
+  /** Server-reported total match count (falls back to the number read when the search result
+   * carries no `total`), so a caller can report "N found" even when truncated. */
   totalFound: number;
-  /** True when more than `BATCH_LIMIT` open tickets matched — only the first `BATCH_LIMIT` were
-   * checked, mirroring `handleRunCleanup`'s cap-at-50-with-warning shape (cleanupHandler.ts). */
+  /** How many open tickets were actually read and checked. */
+  checked: number;
+  /** True when more open tickets matched than were read (the `MAX_STALE_TICKETS` safety bound was
+   * reached), so coverage may be incomplete. */
   truncated: boolean;
   /** True when `search` rejected — `stale` is then always `[]` (not "genuinely zero stale
    * tickets") and the caller should tell the user staleness could not be checked, mirroring
@@ -289,23 +295,29 @@ export function buildStaleSearchJql(projectKey: string, markerLabel: string): st
 export async function findStaleTickets(
   projectKey: string,
   markerLabel: string,
-  search: (jql: string, maxResults: number) => Promise<{ issues: JqlIssueLike[]; total?: number; isLast?: boolean }>,
+  search: (jql: string, maxResults: number, startAt: number) => Promise<{ issues: JqlIssueLike[]; total?: number; isLast?: boolean }>,
   labelToDedupKey: (label: string) => string | null,
   isActive: (dedupKey: string) => boolean,
   onDiag?: DiagLogger,
 ): Promise<FindStaleTicketsResult> {
   const jql = buildStaleSearchJql(projectKey, markerLabel);
-  let result: { issues: JqlIssueLike[]; total?: number; isLast?: boolean };
+  let candidates: JqlIssueLike[];
+  let reportedTotal: number | undefined;
+  let reportedLast: boolean | undefined;
   try {
-    result = await search(jql, BATCH_LIMIT);
+    candidates = await fetchAllPages(async startAt => {
+      const page = await search(jql, STALE_SEARCH_PAGE_SIZE, startAt);
+      reportedTotal = page.total ?? reportedTotal;
+      reportedLast = page.isLast;
+      return page;
+    }, STALE_SEARCH_PAGE_SIZE, MAX_STALE_TICKETS);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     onDiag?.('warn', 'Stale-ticket search failed — could not check for stale tickets', { error: message });
-    return { stale: [], pending: [], totalFound: 0, truncated: false, searchFailed: true };
+    return { stale: [], pending: [], totalFound: 0, checked: 0, truncated: false, searchFailed: true };
   }
 
-  const candidates = result.issues.slice(0, BATCH_LIMIT);
-  const truncated = (result.total ?? 0) > BATCH_LIMIT || result.isLast === false;
+  const truncated = reportedTotal !== undefined ? reportedTotal > candidates.length : reportedLast === false;
 
   const stale: StaleTicketMatch[] = [];
   const pending: StaleTicketMatch[] = [];
@@ -319,7 +331,7 @@ export async function findStaleTickets(
     else pending.push({ key: issue.key, ids: active });
   }
 
-  return { stale, pending, totalFound: result.total ?? candidates.length, truncated, searchFailed: false };
+  return { stale, pending, totalFound: reportedTotal ?? candidates.length, checked: candidates.length, truncated, searchFailed: false };
 }
 
 // U4: the pre-build "new" cap (`capNewRows`) that used to run here before review rows were built at

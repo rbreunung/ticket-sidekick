@@ -688,7 +688,7 @@ describe('findStaleTickets', () => {
     expect(result.stale).toEqual([{ key: 'PROJ-1', ids: ['101'] }]);
     expect(result.searchFailed).toBe(false);
     expect(result.truncated).toBe(false);
-    expect(search).toHaveBeenCalledWith(buildStaleSearchJql('PROJ', 'veracode'), expect.any(Number));
+    expect(search).toHaveBeenCalledWith(buildStaleSearchJql('PROJ', 'veracode'), expect.any(Number), 0);
   });
 
   it('flags a single-flaw ticket stale when its flaw id is present but no longer matches the remediation-status filter', async () => {
@@ -922,5 +922,43 @@ describe('findStaleTickets — tickets that were not flagged (accepted component
     const result = await findStaleTickets('PROJ', 'oss-dependency', vi.fn().mockRejectedValue(new Error('boom')), labelToDedupKey, () => true);
     expect(result.pending).toEqual([]);
     expect(result.searchFailed).toBe(true);
+  });
+});
+
+describe('findStaleTickets — reads every page (stale search paging)', () => {
+  const labelToDedupKey = (label: string) => (label.startsWith('oss-dep-') ? label : null);
+  const issue = (i: number) => ({ key: `PROJ-${i}`, fields: { labels: ['oss-dependency', `oss-dep-${i}`] } });
+
+  it('reads past the first page so tickets beyond the 100th are still checked', async () => {
+    const all = Array.from({ length: 150 }, (_, i) => issue(i));
+    const search = vi.fn(async (_jql: string, max: number, startAt: number) => ({
+      issues: all.slice(startAt, startAt + max), total: 150, isLast: startAt + max >= 150,
+    }));
+    const result = await findStaleTickets('PROJ', 'oss-dependency', search, labelToDedupKey, () => false);
+    expect(result.stale).toHaveLength(150);
+    expect(result.checked).toBe(150);
+    expect(result.truncated).toBe(false);
+    expect(search.mock.calls.map(c => c[2])).toEqual([0, 100]);
+  });
+
+  it('stops at the safety bound, reports how many were checked and that coverage may be incomplete', async () => {
+    const search = vi.fn(async (_jql: string, max: number, startAt: number) => ({
+      issues: Array.from({ length: max }, (_, i) => issue(startAt + i)), total: 1500, isLast: false,
+    }));
+    const result = await findStaleTickets('PROJ', 'oss-dependency', search, labelToDedupKey, () => true);
+    expect(result.checked).toBe(1000);
+    expect(result.totalFound).toBe(1500);
+    expect(result.truncated).toBe(true);
+    expect(result.pending).toHaveLength(1000);
+  });
+
+  it('degrades to no stale tickets when a later page fails', async () => {
+    const search = vi.fn(async (_jql: string, max: number, startAt: number) => {
+      if (startAt > 0) throw new Error('page 2 failed');
+      return { issues: Array.from({ length: max }, (_, i) => issue(i)), total: 150, isLast: false };
+    });
+    const result = await findStaleTickets('PROJ', 'oss-dependency', search, labelToDedupKey, () => false);
+    expect(result.searchFailed).toBe(true);
+    expect(result.stale).toEqual([]);
   });
 });

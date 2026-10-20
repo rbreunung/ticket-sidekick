@@ -116,7 +116,7 @@ Rows for components the team has accepted, or cannot upgrade, return on every Wa
 ### Risks
 
 - The Stale refresh (KTD5) adds state to the session and one more path through `buildStaleTicketGroups`. The unit keeps the new path to merging already-known candidates, so no new Jira search is needed beyond what the group builder does.
-- The stale search checks at most `BATCH_LIMIT` (50) open tickets, so the stored candidates are capped the same way. A ticket beyond that cap reaches Stale on a later import, after the search's existing "coverage may be incomplete" notice.
+- The stale search reads every page of open marker-labeled tickets up to a safety bound of 1000, so the stored candidates are bounded the same way. A ticket beyond that bound reaches Stale on a later import, after the search's "coverage may be incomplete" notice.
 - The reply handler must reach a Jira client for `buildStaleTicketGroups`. How it does so (through the ticket service or by threading the client) is settled in U5.
 
 ---
