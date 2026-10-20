@@ -8,6 +8,7 @@ import { type ImportTemplateSelectionSession } from '../../participant/sessionSt
 import { MockJiraClient } from '../mocks/MockJiraClient';
 import { TicketService } from '../../services/TicketService';
 import type { JiraIssue } from '../../jira/IJiraClient';
+import { getOutputChannel } from '../../utils/diagLog';
 
 export interface TestItem {
   ref: string;
@@ -121,8 +122,10 @@ export function streamText(stream: ReturnType<typeof mockStream>): string {
 }
 
 export function diagLines(): string[] {
-  return vi.mocked(vscode.window.createOutputChannel).mock.results
-    .flatMap(r => (r.value as { appendLine: ReturnType<typeof vi.fn> }).appendLine.mock.calls.map(c => String(c[0])));
+  // The channel is a module-level singleton, so read it directly; createOutputChannel's recorded
+  // results are cleared between tests and no longer reach a channel created by an earlier test.
+  const channel = getOutputChannel() as unknown as { appendLine: ReturnType<typeof vi.fn> };
+  return channel.appendLine.mock.calls.map(c => String(c[0]));
 }
 
 // A generic descriptor with change tracking: findings are recorded as `test-f-<id>` labels.

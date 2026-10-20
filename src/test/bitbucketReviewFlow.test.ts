@@ -68,11 +68,11 @@ vi.mock('vscode', () => {
 });
 
 vi.mock('../bitbucket/BitbucketApiClient', () => ({
-  BitbucketApiClient: vi.fn().mockImplementation(() => h.client),
+  BitbucketApiClient: vi.fn().mockImplementation(function () { return h.client; }),
 }));
 
 vi.mock('../jira/JiraApiClient', () => ({
-  JiraApiClient: vi.fn().mockImplementation(() => h.jiraClient),
+  JiraApiClient: vi.fn().mockImplementation(function () { return h.jiraClient; }),
 }));
 
 import * as vscode from 'vscode';

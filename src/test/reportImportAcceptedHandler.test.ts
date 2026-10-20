@@ -20,7 +20,7 @@ vi.mock('vscode', () => ({
 }));
 
 vi.mock('../templates/TemplateService', () => ({
-  TemplateService: vi.fn().mockImplementation(() => ({ loadTemplates: vi.fn() })),
+  TemplateService: vi.fn().mockImplementation(function () { return ({ loadTemplates: vi.fn() }); }),
 }));
 
 vi.mock('../services/WorkflowService', async (importOriginal) => ({
@@ -410,7 +410,7 @@ describe('stale tickets and accepted components (accepted-components plan, U3)',
     vi.mocked(loadWorkflowCache).mockReturnValue({
       PROJ: { Bug: { discovered: '2024-01-01', graph: { Open: [{ id: '12', name: 'Close', to: 'Done' }], Done: [] } } },
     });
-    vi.mocked(TemplateService).mockImplementation(() => ({ loadTemplates: vi.fn().mockReturnValue({ templates: [], cleanupRules: [] }) }) as never);
+    vi.mocked(TemplateService).mockImplementation(function () { return ({ loadTemplates: vi.fn().mockReturnValue({ templates: [], cleanupRules: [] }) }) as never; });
   });
 
   it('flags the open ticket of an accepted component stale although the report still lists it (AE2)', async () => {
@@ -470,7 +470,7 @@ describe('accept component and remove it, in a running review (accepted-componen
     vi.mocked(loadWorkflowCache).mockReturnValue({
       PROJ: { Bug: { discovered: '2024-01-01', graph: { Open: [{ id: '12', name: 'Close', to: 'Done' }], Done: [] } } },
     });
-    vi.mocked(TemplateService).mockImplementation(() => ({ loadTemplates: vi.fn().mockReturnValue({ templates: [], cleanupRules: [] }) }) as never);
+    vi.mocked(TemplateService).mockImplementation(function () { return ({ loadTemplates: vi.fn().mockReturnValue({ templates: [], cleanupRules: [] }) }) as never; });
   });
 
   async function ticketedImport(extraStale: StaleIssue[] = []) {
@@ -500,7 +500,7 @@ describe('accept component and remove it, in a running review (accepted-componen
 
   it('says so when the Stale groups cannot be built, keeps the entry and the dropped row, and offers the ticket nowhere yet', async () => {
     const { session, ws } = await ticketedImport();
-    vi.mocked(TemplateService).mockImplementation(() => ({ loadTemplates: vi.fn().mockImplementation(() => { throw new Error('bad templates'); }) }) as never);
+    vi.mocked(TemplateService).mockImplementation(function () { return ({ loadTemplates: vi.fn().mockImplementation(() => { throw new Error('bad templates'); }) }) as never; });
     const after = await reply('accept component A1', session!, ws);
     expect(readList()).toEqual([{ component: 'netty-codec', version: '4.1.100' }]);
     expect(ticketedRows(after.session).map(r => r.nameVersion)).toEqual(['other:1.0']);
