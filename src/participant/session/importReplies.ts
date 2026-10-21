@@ -371,6 +371,8 @@ export function parseTicketedGroupReply(reply: string, ctx: ImportReplyContext):
   if (n === IMPORT_COMMANDS.apply || assent) return { kind: 'apply' };
   if (n === IMPORT_COMMANDS.update || n === LEGACY_UPDATE_COMMAND) return { kind: 'update' };
   if (n === IMPORT_COMMANDS.recreate) return { kind: 'recreate' };
+  const nav = parseReviewPageNav(reply);
+  if (nav) return { kind: 'pageNav', nav };
 
   if (ctx.canAccept) {
     // Only the whole-component form exists here; plain `accept` is answered with the usage rather than read as a row action.
@@ -441,7 +443,7 @@ export function describeImportReplyVocabulary(view: ImportReviewView, ctx: Impor
     case 'ticketed':
       return 'On this screen you can reply `apply`, `<row> <action>` (e.g. `A2 follow-up` — actions are ' +
         `${TICKETED_ACTION_ORDER.map(a => `\`${a}\``).join(', ')}), \`all <action>\` (e.g. \`all leave\`), ` +
-        `${ctx.canAccept ? '`accept component A2`, ' : ''}\`update tickets\`, \`re-create tickets\`, or ${exit}.`;
+        `${ctx.canAccept ? '`accept component A2`, ' : ''}\`update tickets\`, \`re-create tickets\`, \`next\` / \`prev\` / \`page <n>\`, or ${exit}.`;
     case 'stale':
       return `On this screen you can reply \`close tickets\`, a stale ticket's key to toggle it (e.g. \`PROJ-123\`), \`next\` / \`prev\` / \`page <n>\`, or ${exit}.`;
     default: {

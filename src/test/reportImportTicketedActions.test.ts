@@ -542,3 +542,102 @@ describe('Veracode per-row actions through the real descriptor (U5)', () => {
     expect(client.createIssueLinkCalls).toEqual([{ inwardKey: 'PROJ-8', outwardKey: 'PROJ-100', typeName: 'Relates' }]);
   });
 });
+
+describe('paging the Already-ticketed screen, 20 rows at a time', () => {
+  let client: MockJiraClient;
+  let ticketService: TicketService;
+
+  beforeEach(() => {
+    client = new MockJiraClient();
+    ticketService = new TicketService(client);
+  });
+
+  // `count` already-ticketed rows A1..A<count>; every row gains finding 'b' so each proposes update.
+  async function buildMany(count: number, ws = makeMockWs()) {
+    const tickets: Record<string, FakeTicket> = {};
+    const items: TestItem[] = [];
+    for (let i = 1; i <= count; i++) {
+      tickets[`PROJ-${100 + i}`] = { labels: [`test-${i}`, 'test-f-a'] };
+      items.push({ ref: String(i), findings: ['a', 'b'] });
+    }
+    statefulJira(client, tickets);
+    searchFromStore(ticketService, tickets);
+    await continueAfterImportIssueType('Bug', null, makeSession({ items, availableIssueTypes: ['Bug'] }), client, ticketService, mockStream() as never, ws as never, trackedDescriptor);
+    return { session: ws.store[trackedDescriptor.sessionKeys.review] as ReviewSession<TestRow>, ws };
+  }
+
+  const reply = async (text: string, session: ReviewSession<TestRow>, ws: ReturnType<typeof makeMockWs>) => {
+    const stream = mockStream();
+    await handleImportReviewReply(text, session, ticketService, stream as never, ws as never, trackedDescriptor);
+    return streamText(stream);
+  };
+  const idsIn = (text: string) => [...text.matchAll(/\| A(\d+) \|/g)].map(m => Number(m[1]));
+
+  it('shows the first 20 rows and says which page of how many', async () => {
+    const { session, ws } = await buildMany(45);
+    expect(session.view).toBe('ticketed');
+    const text = await reply('next', session, ws); // nav is the first reply — also proves it re-renders page 2
+    expect(idsIn(text)).toEqual(Array.from({ length: 20 }, (_, i) => 21 + i));
+    expect(text).toContain('Page 2 of 3');
+  });
+
+  it('next, prev and page <n> move between pages and clamp at the ends', async () => {
+    const { session, ws } = await buildMany(45);
+    const last = await reply('page 3', session, ws);
+    expect(idsIn(last)).toEqual([41, 42, 43, 44, 45]);
+    expect(await reply('next', session, ws)).toContain('Page 3 of 3');
+    expect(await reply('prev', session, ws)).toContain('Page 2 of 3');
+    expect(await reply('page 99', session, ws)).toContain('Page 3 of 3');
+    expect(await reply('page 1', session, ws)).toContain('Page 1 of 3');
+    expect(await reply('prev', session, ws)).toContain('Page 1 of 3');
+  });
+
+  it('a single page shows every row and no page line', async () => {
+    const { session, ws } = await buildMany(20);
+    const text = await reply('page 1', session, ws);
+    expect(idsIn(text)).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
+    expect(text).not.toContain('Page 1 of');
+  });
+
+  it('a stored page past the end renders the last page', async () => {
+    const { session, ws } = await buildMany(45);
+    session.ticketedPage = 9;
+    const text = await reply('page 3', session, ws);
+    expect(idsIn(text)).toEqual([41, 42, 43, 44, 45]);
+    session.ticketedPage = 9;
+    const rerendered = await reply('prev', session, ws);
+    expect(rerendered).toContain('Page 2 of 3'); // clamped to the last page (3), then one back
+  });
+
+  it('a row on another page can be set, and all <action> and the counts cover every page', async () => {
+    const { session, ws } = await buildMany(45);
+    await reply('A44 leave', session, ws); // page 1 is showing; A44 is on page 3
+    expect(session.allRows.find(r => r.id === 'A44')!.action).toBe('leave');
+    const text = await reply('page 1', session, ws);
+    expect(text).toContain('Apply 44 actions'); // 45 pending minus the one left, across all pages
+    await reply('all leave', session, ws);
+    expect(session.allRows.every(r => r.action === 'leave')).toBe(true);
+  });
+
+  it('apply runs the first 50 pending rows across pages and reports the rest', async () => {
+    const { session, ws } = await buildMany(60);
+    const text = await reply('apply', session, ws);
+    expect(client.updateIssueCalls).toHaveLength(50);
+    expect(text).toContain('10 remain');
+  });
+
+  it('the New and Stale pages do not move when the Already-ticketed page does', async () => {
+    const { session, ws } = await buildMany(45);
+    session.page = 0;
+    session.stalePage = 0;
+    await reply('next', session, ws);
+    expect(session.ticketedPage).toBe(1);
+    expect(session.page).toBe(0);
+    expect(session.stalePage).toBe(0);
+  });
+
+  it('the help for an unrecognized reply mentions paging', async () => {
+    const { session, ws } = await buildMany(45);
+    expect(await reply('what now', session, ws)).toContain('`next` / `prev` / `page <n>`');
+  });
+});

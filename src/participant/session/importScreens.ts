@@ -362,8 +362,14 @@ export function buildTicketedGroupScreen<TRow extends ReviewRowBase>(
     { header: 'Change', accessor: (r) => formatRowChange(r.change, opts.findingNoun) },
     { header: 'Action', accessor: (r) => ticketedActionCell(r, opts.baseUrl) },
   ];
-  lines.push(renderReviewTable(ticketedColumns, ticketed));
+  const totalPages = groupTotalPages(ticketed.length);
+  const page = clampGroupPage(s.ticketedPage ?? 0, ticketed.length);
+  lines.push(renderReviewTable(ticketedColumns, ticketed.slice(page * GROUP_PAGE_SIZE, (page + 1) * GROUP_PAGE_SIZE)));
   lines.push('');
+  if (totalPages > 1) {
+    lines.push(`_Page ${page + 1} of ${totalPages}._ Reply ${cmdLink('next', 'next')} / ${cmdLink('prev', 'prev')} or \`page <n>\` to navigate; actions apply to rows on every page.`);
+    lines.push('');
+  }
 
   if (c.pendingActions > 0) {
     lines.push(`Reply ${cmdLink(`Apply ${c.pendingActions} actions`, IMPORT_COMMANDS.apply)} to run every row not set to leave.`);
@@ -389,8 +395,8 @@ export function buildTicketedGroupScreen<TRow extends ReviewRowBase>(
   return lines.join('\n');
 }
 
-/** Stale tickets shown per page. Fixed, not a setting (KL16). */
-export const STALE_PAGE_SIZE = 20;
+/** Rows shown per page on the Stale and Already-ticketed screens. Fixed, not a setting (KL16). */
+export const GROUP_PAGE_SIZE = 20;
 
 /** Every row the Stale screen lists: eligible tickets, then the ones that cannot be closed. */
 function staleRowCount(stale: ReviewSessionStale | undefined): number {
@@ -398,13 +404,27 @@ function staleRowCount(stale: ReviewSessionStale | undefined): number {
   return stale.groups.reduce((n, g) => n + g.tickets.length, 0) + stale.ineligible.length;
 }
 
+function groupTotalPages(rowCount: number): number {
+  return Math.max(1, Math.ceil(rowCount / GROUP_PAGE_SIZE));
+}
+
+/** The 0-based page `target` clamped to the pages `rowCount` rows fill. */
+function clampGroupPage(target: number, rowCount: number): number {
+  return Math.min(Math.max(0, target), groupTotalPages(rowCount) - 1);
+}
+
 export function staleTotalPages(stale: ReviewSessionStale | undefined): number {
-  return Math.max(1, Math.ceil(staleRowCount(stale) / STALE_PAGE_SIZE));
+  return groupTotalPages(staleRowCount(stale));
 }
 
 /** The 0-based Stale page `target` clamped to the pages that exist. */
 export function clampStalePage(target: number, stale: ReviewSessionStale | undefined): number {
-  return Math.min(Math.max(0, target), staleTotalPages(stale) - 1);
+  return clampGroupPage(target, staleRowCount(stale));
+}
+
+/** The 0-based Already-ticketed page `target` clamped to the pages that exist. */
+export function clampTicketedPage<TRow extends ReviewRowBase>(target: number, allRows: TRow[]): number {
+  return clampGroupPage(target, allRows.filter(r => r.existingTicketKey !== null).length);
 }
 
 /** R5/R9: the Stale group — per-ticket toggles (off by default) and "Close N tickets". The target
@@ -456,7 +476,7 @@ export function buildStaleGroupScreen<TRow extends ReviewRowBase>(session: Revie
   const totalPages = staleTotalPages(stale);
   const page = clampStalePage(s.stalePage ?? 0, stale);
   const lines: string[] = ['### Stale — no longer in the report, may be closed'];
-  lines.push(renderReviewTable(columns, rows.slice(page * STALE_PAGE_SIZE, (page + 1) * STALE_PAGE_SIZE)));
+  lines.push(renderReviewTable(columns, rows.slice(page * GROUP_PAGE_SIZE, (page + 1) * GROUP_PAGE_SIZE)));
   lines.push('');
   if (totalPages > 1) {
     lines.push(`_Page ${page + 1} of ${totalPages}._ Reply ${cmdLink('next', 'next')} / ${cmdLink('prev', 'prev')} or \`page <n>\` to navigate; tickets marked on any page are closed together.`);
