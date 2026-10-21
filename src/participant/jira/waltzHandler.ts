@@ -155,6 +155,10 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
     recordLabelsOf: group => buildGroupLabels(group),
     buildComment: (group, droppedKeys) => buildFoldedCommentWiki(group, droppedKeys),
   },
+  // Waltz ticket merge (KTD1): the survivor's comment opens by naming the tickets it absorbed.
+  ticketMerge: {
+    buildCommentPreface: absorbedKeys => `h4. Merged tickets\nThis ticket took over the items of ${absorbedKeys.join(', ')}, which were closed as duplicates of it.`,
+  },
   // Accepted-CVE list (KTD8): component + CVE pairs the team accepted stay off the New screen.
   accepted: {
     itemOf: row => row.sourceGroup,
@@ -225,8 +229,9 @@ export async function buildWaltzTemplateSession(
   // through; defaults to `components` (already filtered) for any other caller, which degrades the
   // stale check gracefully rather than crashing.
   rawComponents: WaltzComponent[] = components,
+  reportFilePath?: string,
 ): Promise<WaltzTemplateSelectionSession> {
-  return buildImportTemplateSession(components.map(component => [component]), fileName, projectKey, jiraClient, waltzDescriptor, rawComponents);
+  return buildImportTemplateSession(components.map(component => [component]), fileName, projectKey, jiraClient, waltzDescriptor, rawComponents, reportFilePath);
 }
 
 // Entry point for the "importWaltzReport" operation. Handles both invocation paths:

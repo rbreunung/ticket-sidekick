@@ -6,6 +6,7 @@ import type {
   JiraFieldMeta,
   JiraFilter,
   JiraIssue,
+  JiraIssueLinkType,
   JiraMyFiltersResult,
   JiraProject,
   JiraProjectStatus,
@@ -295,6 +296,11 @@ export class JiraApiClient implements IJiraClient {
 
   async getResolutions(): Promise<Array<{ name: string }>> {
     return this.request<Array<{ name: string }>>('/resolution');
+  }
+
+  async getIssueLinkTypes(): Promise<JiraIssueLinkType[]> {
+    const result = await this.request<{ issueLinkTypes?: JiraIssueLinkType[] }>('/issueLinkType');
+    return result.issueLinkTypes ?? [];
   }
 
   async getCurrentUser(): Promise<JiraUser> {

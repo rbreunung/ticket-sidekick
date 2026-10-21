@@ -15,12 +15,13 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { logDiag } from '../../utils/diagLog';
+import { hasUnfinishedChoices } from '../../utils/ticketMerge';
 import type { TicketService } from '../../services/TicketService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import { TemplateService } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
 import { BATCH_LIMIT, DEFAULT_DEDUP_CHUNK_SIZE, MAX_REPORT_BYTES, buildDedupJql, buildReviewRows, fetchAllPages, findAlreadyTicketed, findStaleTickets, templateLabelsOf, type DedupMap, type JqlIssueLike } from '../../utils/reportImport';
-import { CURRENT_SESSION_SCHEMA_VERSION, NO_ISSUE_TYPE, SESSION_EXPIRED_MESSAGE, applyBulkNewRowSet, applyReviewSessionToggle, applyStaleTicketToggle, applyTicketedActionChange, buildAllHiddenMessage, buildChatCommandLink, buildImportDoneSummary, buildReviewPage, clampStalePage, clampTicketedPage, computeImportResultGroups, describeImportReplyVocabulary, ensureImportViewState, formatIssueTypeOptionLabel, initImportViewState, isCancellation, isSessionExpired, isTicketedRowFinished, mergeNewRows, neutralizeMarkdownLinks, parseImportReviewReply, pickEmailOption, resolveTemplateIssueType, ticketedRowActions, toAcceptedHidden, unmergeNewRow, type ImportReplyContext, type ImportTemplateSelectionSession, type ReviewRowBase, type ReviewSession, type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession } from '../sessionState';
+import { CURRENT_SESSION_SCHEMA_VERSION, NO_ISSUE_TYPE, SESSION_EXPIRED_MESSAGE, applyBulkNewRowSet, applyReviewSessionToggle, applyStaleTicketToggle, applyTicketedActionChange, buildAllHiddenMessage, buildChatCommandLink, buildImportDoneSummary, buildReviewPage, clampStalePage, clampTicketedPage, computeImportResultGroups, describeImportReplyVocabulary, ensureImportViewState, IMPORT_COMMANDS, formatIssueTypeOptionLabel, initImportViewState, isCancellation, isSessionExpired, isTicketedRowFinished, mergeNewRows, neutralizeMarkdownLinks, parseImportReviewReply, pickEmailOption, resolveTemplateIssueType, safeMarkdownText, ticketedRowActions, toAcceptedHidden, unmergeNewRow, type ImportReplyContext, type ImportTemplateSelectionSession, type ReviewRowBase, type ReviewSession, type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession } from '../sessionState';
 import { resolveIssueTypeOrPrompt, resolveProjectKey, sessionWasSuperseded } from './ticketContext';
 import { buildStaleTicketGroups } from './cleanupHandler';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
@@ -29,6 +30,7 @@ import { acceptComponents, acceptRows, showAcceptedList, unacceptEntry } from '.
 import { addToTicket, showAddPrompt } from './importAddToTicket';
 import { createNewRows } from './importCreate';
 import { IMPORT_SESSION_KINDS, afterGroupAction, streamImportReview } from './importReviewScreen';
+import { handleMergeRunReply, showMergePrompt, startMerge, type MergeTurn } from './importMerge';
 import { closeStaleTickets } from './importStaleClose';
 import { TICKETED_RUNS, executeTicketedActions } from './importTicketedActions';
 import type { ReportImportDescriptor } from './reportImportTypes';
@@ -40,6 +42,8 @@ export { streamImportReview } from './importReviewScreen';
 export { createNewRows } from './importCreate';
 export { streamStaleCloseStep, continueStaleClose } from './importStaleClose';
 export { executeTicketedActions } from './importTicketedActions';
+
+const NO_REPORT_FILE_MESSAGE = '_This review was not built from a report file I can re-read, so there is nothing to reload. Start the import again._\n\n';
 
 // Page size for the dedup search; fetchAllPages reads every page of each label chunk.
 const DEDUP_PAGE_SIZE = 100;
@@ -74,7 +78,7 @@ export async function readAndFilterReport<TRaw, TItem>(
 async function openReportFilePicker<TItem, TRow extends ReviewRowBase>(
   stream: vscode.ChatResponseStream,
   descriptor: ReportImportDescriptor<TItem, TRow>,
-): Promise<{ items: TItem[]; rawItems: unknown[]; fileName: string } | null> {
+): Promise<{ items: TItem[]; rawItems: unknown[]; fileName: string; filePath: string } | null> {
   const uris = await vscode.window.showOpenDialog({
     canSelectMany: false,
     filters: { [descriptor.fileFilter!.label]: descriptor.fileFilter!.extensions },
@@ -85,7 +89,7 @@ async function openReportFilePicker<TItem, TRow extends ReviewRowBase>(
 
   try {
     const { items, rawItems } = await descriptor.parseAndFilter!(uris[0].fsPath);
-    return { items, rawItems, fileName: path.basename(uris[0].fsPath) };
+    return { items, rawItems, fileName: path.basename(uris[0].fsPath), filePath: uris[0].fsPath };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logDiag(descriptor.scope, 'error', `Could not import report — ${uris[0].fsPath}`, { path: uris[0].fsPath, error: message });
@@ -101,6 +105,7 @@ export async function buildImportTemplateSession<TItem, TRow extends ReviewRowBa
   jiraClient: IJiraClient,
   descriptor: ReportImportDescriptor<TItem, TRow>,
   rawItems: unknown[] = [],
+  reportFilePath?: string,
 ): Promise<ImportTemplateSelectionSession<TItem>> {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
@@ -131,6 +136,7 @@ export async function buildImportTemplateSession<TItem, TRow extends ReviewRowBa
 
   return {
     reportFileName: fileName,
+    ...(reportFilePath ? { reportFilePath } : {}),
     projectKey,
     items,
     rawItems,
@@ -206,7 +212,7 @@ export async function handleImportReport<TItem, TRow extends ReviewRowBase>(
     return;
   }
 
-  const session = await buildImportTemplateSession(picked.items, picked.fileName, projectKey, jiraClient, descriptor, picked.rawItems);
+  const session = await buildImportTemplateSession(picked.items, picked.fileName, projectKey, jiraClient, descriptor, picked.rawItems, picked.filePath);
   return streamImportTemplateSelection(session, stream, ws, descriptor);
 }
 
@@ -304,8 +310,50 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
     }
   }
 
+  const { session: reviewSession } = await buildImportReview<TItem, TRow>({
+    projectKey: session.projectKey, items: session.items, rawItems: session.rawItems ?? [], reportFilePath: session.reportFilePath,
+    issueType, templateName, additionalFields,
+  }, jiraClient, ticketService, stream, descriptor);
+
+  // Every finding was kept off the screen by the accepted list and nothing else (ticketed, stale) is
+  // left to review: say so, rather than the filter-mismatch wording. Runs after the stale check
+  // because Stale counts as a group (KTD1).
+  if (reviewSession.acceptedHidden && computeImportResultGroups(reviewSession.allRows, reviewSession.staleTickets).length === 0) {
+    stream.markdown(buildAllHiddenMessage(reviewSession.acceptedHidden));
+    return {};
+  }
+
+  return streamImportReview(initImportViewState(reviewSession), stream, ws, descriptor, baseUrl);
+}
+
+/** What a review is built from: the filtered report items, the choices made at import time, and where the report came from. */
+interface ImportReviewInput<TItem> {
+  projectKey: string;
+  items: TItem[];
+  rawItems: unknown[];
+  reportFilePath?: string;
+  issueType: string;
+  templateName: string | null;
+  additionalFields: Record<string, unknown>;
+}
+
+/**
+ * The dedup search, the review rows and the stale check, in one place (KTD9): the first import and every
+ * refresh or reload build the review through this, so a rebuilt review is the review a fresh import would show.
+ * Streams its progress lines; the caller decides what to show when nothing is left to review.
+ */
+async function buildImportReview<TItem, TRow extends ReviewRowBase>(
+  input: ImportReviewInput<TItem>,
+  resolutions: Pick<IJiraClient, 'getResolutions'>,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+): Promise<{ session: ReviewSession<TRow>; degraded: boolean }> {
+  // True when a Jira search the review depends on failed in whole or in part: the result is then a first-import best
+  // effort, not something a refresh may put in place of a review that was built from complete data.
+  let degraded = false;
   const plural = descriptor.itemNoun.replace('(s)', 's'); // 'flaw(s)' -> 'flaws', 'component(s)' -> 'components'
-  const templateLabels = templateLabelsOf(additionalFields);
+  const templateLabels = templateLabelsOf(input.additionalFields);
 
   // KTD2: dedup is optional — an importer that omits searchLabelOf/dedupKeyOf/labelToDedupKey (email)
   // has no per-item dedup key, so the "already ticketed" search is skipped entirely rather than run
@@ -323,14 +371,14 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
     try {
       // U2/R11: flattens across every item's own multiple candidate labels (a folded Veracode
       // group contributes one label per member flaw) so every member flaw's label is searched for.
-      const searchLabels = session.items.flatMap(descriptor.searchLabelOf);
+      const searchLabels = input.items.flatMap(descriptor.searchLabelOf);
       const result = await findAlreadyTicketed(
         searchLabels,
         DEFAULT_DEDUP_CHUNK_SIZE,
         // U3/KTD1: resolution + created let buildReviewRows pick each item's newest open ticket.
         // Every page is read: the union of an item's tickets decides its target and known findings.
         chunk => fetchAllPages(
-          (startAt, pageToken) => ticketService.searchTicketsRaw(buildDedupJql(session.projectKey, chunk), DEDUP_PAGE_SIZE, ['resolution', 'created'], startAt, pageToken)
+          (startAt, pageToken) => ticketService.searchTicketsRaw(buildDedupJql(input.projectKey, chunk), DEDUP_PAGE_SIZE, ['resolution', 'created'], startAt, pageToken)
             .then(r => ({ ...r, issues: r.issues as JqlIssueLike[] })),
           DEDUP_PAGE_SIZE,
           undefined,
@@ -340,19 +388,21 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
         (level, message, details) => logDiag(descriptor.scope, level, message, details),
       );
       dedupMap = result.map;
+      if (result.failedChunks > 0) degraded = true;
       if (result.totalChunks > 0 && result.failedChunks === result.totalChunks) {
         logDiag(descriptor.scope, 'warn', `Could not check for already-ticketed ${plural} — proceeding without dedup`, {
-          projectKey: session.projectKey, failedChunks: result.failedChunks, totalChunks: result.totalChunks,
+          projectKey: input.projectKey, failedChunks: result.failedChunks, totalChunks: result.totalChunks,
         });
         stream.markdown(`_Warning: could not check for already-ticketed ${plural} — proceeding without dedup._\n\n`);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logDiag(descriptor.scope, 'warn', `Could not check for already-ticketed ${plural} — proceeding without dedup`, {
-        projectKey: session.projectKey, error: message,
+        projectKey: input.projectKey, error: message,
       });
       stream.markdown(`_Warning: could not check for already-ticketed ${plural} — proceeding without dedup: ${message}_\n\n`);
       dedupMap = new Map();
+      degraded = true;
     }
   }
 
@@ -394,7 +444,7 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
     }
   }
   const allRows = buildReviewRows<TItem, TRow>(
-    session.items,
+    input.items,
     dedupMap,
     dedupKeyOf,
     item => descriptor.buildRowFields(item, templateLabels),
@@ -406,10 +456,11 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
   const hiddenCounts = toAcceptedHidden(acceptedHidden);
 
   let reviewSession: ReviewSession<TRow> = {
-    projectKey: session.projectKey,
-    issueType,
-    templateName,
-    additionalFields,
+    projectKey: input.projectKey,
+    issueType: input.issueType,
+    templateName: input.templateName,
+    additionalFields: input.additionalFields,
+    ...(input.reportFilePath ? { reportFilePath: input.reportFilePath } : {}),
     allRows,
     rows: initialPage.rows,
     page: initialPage.page,
@@ -423,7 +474,7 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
     stream.markdown('_Checking for stale tickets…_\n\n');
     const issueDetails = new Map<string, { summary: string; currentStatus: string; issueType: string }>();
     const staleResult = await findStaleTickets(
-      session.projectKey,
+      input.projectKey,
       descriptor.stale.markerLabel,
       async (jql, maxResults, startAt, pageToken) => {
         const result = await ticketService.searchTicketsRaw(jql, maxResults, [], startAt, pageToken);
@@ -443,11 +494,12 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
         return result;
       },
       descriptor.stale.labelToDedupKey,
-      descriptor.stale.buildActivePredicate(session.rawItems ?? [], acceptedEntries),
+      descriptor.stale.buildActivePredicate(input.rawItems, acceptedEntries),
       (level, message, details) => logDiag(descriptor.scope, level, message, details),
     );
 
     if (staleResult.searchFailed) {
+      degraded = true;
       stream.markdown('_Warning: could not check for stale tickets — proceeding without a stale-ticket section._\n\n');
     } else {
       // Code-review fix: hoisted out of the `stale.length > 0` branch below — this must render
@@ -480,14 +532,14 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
         // the folded rows, the page the user was on). Degrade the same way
         // `staleResult.searchFailed` already does instead of throwing.
         try {
-          const grouped = await buildStaleTicketGroups(staleResult.stale, issueDetails, session.projectKey, jiraClient, workspaceRoot, descriptor.scope);
+          const grouped = await buildStaleTicketGroups(staleResult.stale, issueDetails, input.projectKey, resolutions, workspaceRoot, descriptor.scope);
           // The target (and any resolution) is picked only when the user closes selected tickets
           // (stale-ticket target pick plan, R1) — nothing is asked here.
           reviewSession = { ...reviewSession, staleTickets: grouped };
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           logDiag(descriptor.scope, 'warn', 'Could not check for stale tickets — proceeding without a stale-ticket section', {
-            projectKey: session.projectKey, error: message,
+            projectKey: input.projectKey, error: message,
           });
           stream.markdown('_Warning: could not check for stale tickets — proceeding without a stale-ticket section._\n\n');
         }
@@ -495,15 +547,99 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
     }
   }
 
-  // Every finding was kept off the screen by the accepted list and nothing else (ticketed, stale) is
-  // left to review: say so, rather than the filter-mismatch wording. Runs after the stale check
-  // because Stale counts as a group (KTD1).
-  if (reviewSession.acceptedHidden && computeImportResultGroups(reviewSession.allRows, reviewSession.staleTickets).length === 0) {
-    stream.markdown(buildAllHiddenMessage(reviewSession.acceptedHidden));
-    return {};
-  }
+  return { session: reviewSession, degraded };
+}
 
-  return streamImportReview(initImportViewState(reviewSession), stream, ws, descriptor, baseUrl);
+type RefreshResult<TRow extends ReviewRowBase> = { ok: true; session: ReviewSession<TRow> } | { ok: false; missing: boolean; message: string };
+
+/**
+ * Waltz ticket merge (KTD9): rebuilds the review from its report file. Keeps what the user did that still
+ * means something (issue type, template, fields, outcomes) and recomputes what depends on the rows — the
+ * groups, whether there is an overview, the page positions. The previous view stays only when its group
+ * still exists. A file that is gone or no longer parses leaves the review as it was.
+ */
+async function refreshReview<TItem, TRow extends ReviewRowBase>(
+  session: ReviewSession<TRow>,
+  filePath: string,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+): Promise<RefreshResult<TRow>> {
+  let parsed: { items: TItem[]; rawItems: unknown[] };
+  try {
+    parsed = await descriptor.parseAndFilter!(filePath);
+  } catch (err) {
+    const missing = (err as NodeJS.ErrnoException | undefined)?.code === 'ENOENT';
+    const detail = err instanceof Error ? err.message : String(err);
+    logDiag(descriptor.scope, 'warn', `Could not re-read the report — ${filePath}`, { path: filePath, missing, error: detail });
+    return { ok: false, missing, message: missing ? `The report file \`${path.basename(filePath)}\` is no longer there.` : `Could not re-read the report: ${neutralizeMarkdownLinks(detail)}` };
+  }
+  const { session: built, degraded } = await buildImportReview<TItem, TRow>({
+    projectKey: session.projectKey, items: parsed.items, rawItems: parsed.rawItems, reportFilePath: filePath,
+    issueType: session.issueType, templateName: session.templateName, additionalFields: session.additionalFields,
+  }, { getResolutions: () => ticketService.getResolutions() }, ticketService, stream, descriptor);
+  if (degraded) {
+    logDiag(descriptor.scope, 'warn', 'Refresh left the review as it was: a Jira search failed, so a rebuild would show items as New that already have tickets', { path: filePath });
+    return { ok: false, missing: false, message: 'Jira could not be searched in full, so the review was left as it was rather than rebuilt from partial data.' };
+  }
+  const fresh = initImportViewState(built);
+  // The view stays only while the review keeps its shape: still with an overview (or still without one) and the
+  // screen's group still there. A review that gained or lost its overview starts from the fresh view instead.
+  const keepsView = session.view !== undefined && session.singleGroup === fresh.singleGroup
+    && (session.view === 'overview' ? !fresh.singleGroup : fresh.groups!.includes(session.view));
+  const page = buildReviewPage(fresh.allRows, session.page);
+  return {
+    ok: true,
+    session: {
+      ...fresh,
+      view: keepsView ? session.view! : fresh.view,
+      outcomes: session.outcomes ?? fresh.outcomes,
+      rows: page.rows,
+      page: page.page,
+      ticketedPage: clampTicketedPage(session.ticketedPage ?? 0, fresh.allRows),
+      stalePage: clampStalePage(session.stalePage ?? 0, fresh.staleTickets),
+    },
+  };
+}
+
+/** Rebuilds `session` in place from its report file, or from `filePathOverride` (a file the user picked instead). */
+async function refreshInPlace<TItem, TRow extends ReviewRowBase>(
+  session: ReviewSession<TRow>,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+  filePathOverride?: string,
+): Promise<{ ok: true } | { ok: false; missing: boolean }> {
+  const filePath = filePathOverride ?? session.reportFilePath;
+  if (!filePath) {
+    stream.markdown(NO_REPORT_FILE_MESSAGE);
+    return { ok: false, missing: false };
+  }
+  stream.markdown(`_Re-reading \`${neutralizeMarkdownLinks(path.basename(filePath))}\` and checking Jira again…_\n\n`);
+  const result = await refreshReview(session, filePath, ticketService, stream, descriptor);
+  if (!result.ok) {
+    stream.markdown(`✗ ${result.message}\n\n`);
+    return result;
+  }
+  // The rebuilt review replaces the old one; keys it no longer has (a merge run, the out-of-date mark) must not survive.
+  for (const key of Object.keys(session)) delete (session as unknown as Record<string, unknown>)[key];
+  Object.assign(session, result.session);
+  return { ok: true };
+}
+
+/** KTD10: after the accepted list changed, rebuild at once when nothing the user set up is lost; otherwise mark the screens out of date. */
+async function syncAfterListChange<TItem, TRow extends ReviewRowBase>(
+  session: ReviewSession<TRow>,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+): Promise<void> {
+  if (hasUnfinishedChoices(session)) {
+    session.outOfDate = true;
+    return;
+  }
+  const outcome = await refreshInPlace(session, ticketService, stream, descriptor);
+  if (!outcome.ok) session.outOfDate = true;
 }
 
 /**
@@ -544,10 +680,25 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
     stale: session.staleTickets,
     canFold: descriptor.fold !== undefined,
     canAccept: descriptor.accepted !== undefined,
+    canMergeTickets: descriptor.ticketMerge !== undefined,
     mergedRowIds: session.rows.filter(r => r.existingTicketKey === null && r.memberIds !== undefined).map(r => r.id),
   };
-  const action = parseImportReviewReply(view, reply, ctx);
   const rerender = () => streamImportReview(session, stream, ws, descriptor, baseUrl);
+  // A merge that is waiting for the user reads the reply first, ahead of the screen's own vocabulary (KTD3).
+  const afterMerge = async (turn: MergeTurn): Promise<vscode.ChatResult | void> => {
+    if (turn !== 'finished') {
+      if (turn === 'waiting') await ws.update(descriptor.sessionKeys.review, session);
+      return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
+    }
+    Object.assign(session, afterGroupAction(session));
+    // A merge that ended with a missing or skipped step leaves a cancelled ticket open, which a rebuild could pick as the target.
+    if (descriptor.ticketMerge && session.reportFilePath && !session.outOfDate) await syncAfterListChange(session, ticketService, stream, descriptor);
+    return rerender();
+  };
+  if (session.mergeRun && descriptor.ticketMerge) {
+    return afterMerge(await handleMergeRunReply(reply, session, ticketService, stream, descriptor, baseUrl));
+  }
+  const action = parseImportReviewReply(view, reply, ctx);
 
   switch (action.kind) {
     case 'invalid':
@@ -612,9 +763,44 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
       return rerender();
     case 'unaccept':
     case 'unacceptEntry':
-    case 'unacceptComponent':
-      unacceptEntry(descriptor, action, stream);
+    case 'unacceptComponent': {
+      const willRefresh = descriptor.ticketMerge !== undefined && session.reportFilePath !== undefined;
+      const removed = unacceptEntry(descriptor, action, stream, willRefresh);
+      if (removed && willRefresh) await syncAfterListChange(session, ticketService, stream, descriptor);
       return rerender();
+    }
+    case 'mergeTicketsPrompt':
+      return afterMerge(await showMergePrompt(session, action.sources, action.target, ticketService, stream, descriptor, baseUrl));
+    case 'mergeTickets':
+      return afterMerge(await startMerge(session, action.sources, action.target, ticketService, stream, descriptor, baseUrl));
+    case 'reloadPrompt': {
+      if (!session.reportFilePath) {
+        stream.markdown(NO_REPORT_FILE_MESSAGE);
+        return rerender();
+      }
+      const lost = hasUnfinishedChoices(session)
+        ? 'You have unfinished choices (excluded or merged New rows, or Already-ticketed actions you changed) and they will be lost.'
+        : 'Nothing you have set up on these screens will be lost.';
+      stream.markdown(trustedChatMarkdown(
+        `Reload re-reads **${safeMarkdownText(path.basename(session.reportFilePath))}**, checks Jira again and rebuilds every screen from the result. It also picks up changes to the accepted list. ${lost}\n\n` +
+        `${buildChatCommandLink('Reload now', '@jira', `${IMPORT_COMMANDS.reload} confirm`)}`,
+      ));
+      return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
+    }
+    case 'reload': {
+      const outcome = await refreshInPlace(session, ticketService, stream, descriptor);
+      if (!outcome.ok && outcome.missing) {
+        const picked = await vscode.window.showOpenDialog({
+          canSelectMany: false,
+          filters: { [descriptor.fileFilter!.label]: descriptor.fileFilter!.extensions },
+          defaultUri: vscode.Uri.file(path.dirname(session.reportFilePath!)),
+          title: descriptor.filePickerTitle,
+        });
+        if (!picked || picked.length === 0) stream.markdown('_No file picked — the review is unchanged._\n\n');
+        else await refreshInPlace(session, ticketService, stream, descriptor, picked[0].fsPath);
+      }
+      return rerender();
+    }
     case 'addPrompt':
       await showAddPrompt(session, action.ids, action.key, ticketService, stream, descriptor, baseUrl);
       return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };

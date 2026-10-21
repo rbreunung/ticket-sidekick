@@ -43,10 +43,14 @@ import { TransitionBatchTicket } from './sessionTypes';
 // the list hid from the New screen.
 // Accepted components (KTD7): bumped 10 -> 11 — `acceptedHidden` gained `components`, and the review keeps
 // the open tickets the stale search did not flag (`staleCandidates`).
-export const CURRENT_SESSION_SCHEMA_VERSION = 11;
+// Waltz ticket merge (KTD3/KTD9): bumped 11 -> 12 — the review keeps the report file's path (`reportFilePath`),
+// the interrupted merge (`mergeRun`) and the out-of-date mark, and already-ticketed rows record `defaultAction`.
+export const CURRENT_SESSION_SCHEMA_VERSION = 12;
 
 export interface ImportTemplateSelectionSession<TItem> {
   reportFileName: string;
+  /** Waltz ticket merge (KTD9): where the report was read from, so the review can rebuild itself from it. Absent for email. */
+  reportFilePath?: string;
   projectKey: string;
   items: TItem[]; // already filtered by the importer's own config (severity/rating, status/action, etc.)
   // U6: the *raw, unfiltered* parsed items (before the importer's own minSeverity/status-style
@@ -123,6 +127,8 @@ export interface ReviewRowBase {
   allowedActions?: TicketedAction[];
   /** The row's current action — the R7 default until the user changes it. */
   action?: TicketedAction;
+  /** The action the row was built with, so a choice the user made can be told from the default (Waltz ticket merge, KTD10). */
+  defaultAction?: TicketedAction;
   /** U4/R16: what the last `apply` (or shortcut) did to this row; a `done` row is finished for good. */
   result?: TicketedRowResult;
   /**
@@ -149,6 +155,8 @@ export type TicketedRowResult =
   | { status: 'done'; action: 'follow-up'; key: string; linkMissing?: boolean }
   | { status: 'done'; action: 'rewrite'; note?: 'comment-failed' }
   | { status: 'done'; action: 're-create'; key: string }
+  // Waltz ticket merge (KTD12): the row's ticket was cancelled as a duplicate of `into`.
+  | { status: 'done'; action: 'merge'; into: string }
   | { status: 'failed'; action: TicketedAction; error: string };
 
 const DEFAULT_TICKETED_ACTIONS: readonly TicketedAction[] = ['re-create', 'leave'];
@@ -212,12 +220,15 @@ export interface ImportOutcomes {
   // Finding folding: tickets rebuilt by `rewrite` on the Already-ticketed screen, and ones that failed.
   rewritten: number;
   rewriteFailed: number;
+  // Waltz ticket merge: source tickets cancelled as duplicates, and ones whose merge ended with a failed step.
+  merged: number;
+  mergeFailed: number;
 }
 
 export function emptyImportOutcomes(): ImportOutcomes {
   return {
     created: 0, createFailed: 0, recreated: 0, recreateFailed: 0, updated: 0, updateFailed: 0,
-    followedUp: 0, followUpFailed: 0, closed: 0, closeFailed: 0, added: 0, addFailed: 0, rewritten: 0, rewriteFailed: 0,
+    followedUp: 0, followUpFailed: 0, closed: 0, closeFailed: 0, added: 0, addFailed: 0, rewritten: 0, rewriteFailed: 0, merged: 0, mergeFailed: 0,
   };
 }
 
@@ -266,7 +277,51 @@ export interface ReviewSession<TRow> {
   // they are accepted, and components hidden because their recomputed rating fell below the floor.
   // Stored, not recomputed per render; absent when nothing was hidden or the importer has no list.
   acceptedHidden?: AcceptedHidden;
+  // Waltz ticket merge (KTD9): the report file the review was built from, kept so a refresh or reload can rebuild it.
+  reportFilePath?: string;
+  // Waltz ticket merge (KTD3): a merge that is waiting for the user (retry or ignore, a target status, a resolution).
+  mergeRun?: MergeRun;
+  // Waltz ticket merge (KTD10): the screens no longer match Jira or the ignore list, and the overview offers a reload.
+  outOfDate?: boolean;
   schemaVersion: number;
+}
+
+export type MergeStepKind = 'survivor-rewrite' | 'survivor-comment' | 'link' | 'source-rewrite' | 'close';
+
+/** One step of a merge. `key` is the ticket the step writes to. A `done` step is never run again; `skipped` was ignored after a failure. */
+export interface MergeStep {
+  kind: MergeStepKind;
+  key: string;
+  status: 'pending' | 'done' | 'failed' | 'skipped';
+  error?: string;
+  /** A short result worth showing in the final report, e.g. that a close left no Duplicate resolution or fell back to Relates. */
+  note?: string;
+}
+
+/**
+ * A merge in progress on the review session (KTD3). Present from the confirmation until the final report; the
+ * replies it waits for (`retry`/`ignore`, a target status, a resolution) are read before the screen's own vocabulary.
+ */
+export interface MergeRun {
+  survivor: string;
+  sources: string[];
+  steps: MergeStep[];
+  /** What the run waits for: the user's choice after a failed step, the target status of the close, or its resolution. */
+  awaiting?: 'decision' | 'target' | 'resolution';
+  /** The close ask: the sources grouped by issue type, the group being asked, the target picked, and the resolutions on offer. */
+  closeGroups?: StaleTicketGroup[];
+  closeIssueType?: string;
+  closeTarget?: StaleTargetOption;
+  closeTargetOptions?: StaleTargetOption[];
+  resolutionOptions?: string[];
+  /** The project's Duplicate resolution (its exact name) when it offers one; the close then sets it without asking. */
+  duplicateResolution?: string;
+  /** The link type the link steps use: `Duplicate`, or `Relates` when the project has no Duplicate link type (R9). */
+  linkType?: string;
+  /** Findings the rewritten survivor no longer covers, kept from the rewrite step for its comment. */
+  droppedKeys?: string[];
+  /** Sources the close skipped (no workflow graph, no path) with the reason, for the final report. */
+  closeSkipped?: Array<{ key: string; reason: string }>;
 }
 
 export interface AcceptedHidden {

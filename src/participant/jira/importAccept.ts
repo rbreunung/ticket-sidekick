@@ -244,19 +244,24 @@ export function unacceptEntry<TItem, TRow extends ReviewRowBase>(
   descriptor: ReportImportDescriptor<TItem, TRow>,
   action: { kind: 'unaccept'; position: number } | { kind: 'unacceptEntry'; component: string; cve: string } | { kind: 'unacceptComponent'; component: string; version: string },
   stream: vscode.ChatResponseStream,
-): void {
+  // Waltz ticket merge (KTD10): the review will rebuild itself from its report next, so it does not say the item waits for the next import.
+  willRefresh = false,
+): boolean {
   const service = descriptor.accepted!.service();
   if (!service) {
     stream.markdown(NO_WORKSPACE_ACCEPTED_MESSAGE);
-    return;
+    return false;
   }
   const removal = action.kind === 'unaccept' ? service.remove(action.position)
     : action.kind === 'unacceptComponent' ? service.removeComponent(action.component, action.version)
     : service.removePair(action.component, action.cve);
   if (!removal.ok) {
     stream.markdown(`✗ ${neutralizeMarkdownLinks(removal.message)}\n\n`);
-    return;
+    return false;
   }
   logDiag(descriptor.scope, 'info', `${descriptor.importLabel} import — accepted entry removed`, action.kind === 'unaccept' ? { position: action.position } : { entry: true });
-  stream.markdown(`✓ Removed ${describeRemoved(removal.removed)} from the accepted list. It is offered again on the next import; rows already hidden stay hidden in this review.\n\n`);
+  stream.markdown(willRefresh
+    ? `✓ Removed ${describeRemoved(removal.removed)} from the accepted list.\n\n`
+    : `✓ Removed ${describeRemoved(removal.removed)} from the accepted list. It is offered again on the next import; rows already hidden stay hidden in this review.\n\n`);
+  return true;
 }

@@ -31,6 +31,7 @@ export const IMPORT_COMMANDS = {
   apply: 'apply',
   close: 'close tickets',
   accepted: 'accepted',
+  reload: 'reload report',
 } as const;
 
 /** The reply word a component entry's Remove link sends; one token, so it never reads as the `unaccept <component> <CVE>` form. */
@@ -124,6 +125,8 @@ export interface ImportScreenOptions {
   canFold?: boolean;
   // Accepted-CVE list: whether the New screen offers `accept` (Waltz only).
   canAccept?: boolean;
+  // Waltz ticket merge: whether the review offers `merge … into …` and `reload report` (Waltz only).
+  canMergeTickets?: boolean;
 }
 
 function describeAcceptedHidden(hidden: AcceptedHidden): string {
@@ -151,10 +154,17 @@ export function buildAllHiddenMessage(hidden: AcceptedHidden): string {
 }
 
 /** "Back to overview" normally; "Done" when the import has a single group and no overview (R4). */
-function groupScreenExitLine(singleGroup: boolean): string {
-  return singleGroup
+function groupScreenExitLine(singleGroup: boolean, outOfDate = false): string {
+  const exit = singleGroup
     ? `Reply ${cmdLink('Done', IMPORT_COMMANDS.done)} when you are finished with this import.`
     : `Reply ${cmdLink('Back to overview', IMPORT_COMMANDS.back)} to see the other results.`;
+  // With no overview to carry the mark, a single-group import shows it here.
+  return singleGroup && outOfDate ? `${outOfDateLine()}\n\n${exit}` : exit;
+}
+
+/** Waltz ticket merge (KTD10): the screens no longer match Jira or the ignore list; the link starts the reload. */
+function outOfDateLine(): string {
+  return `⚠ These screens are out of date. Reply ${cmdLink('Reload report', IMPORT_COMMANDS.reload)} (\`${IMPORT_COMMANDS.reload}\`) to re-read the report file and refresh them.`;
 }
 
 /**
@@ -185,7 +195,8 @@ export function buildImportOverview<TRow extends ReviewRowBase>(session: ReviewS
       if (o.followedUp > 0) parts.push(`${o.followedUp} follow-up${o.followedUp === 1 ? '' : 's'}`);
       if (o.rewritten > 0) parts.push(`${o.rewritten} rewritten`);
       if (o.recreated > 0) parts.push(`${o.recreated} re-created`);
-      const failed = o.updateFailed + o.followUpFailed + o.recreateFailed + o.rewriteFailed;
+      if (o.merged > 0) parts.push(`${o.merged} merged`);
+      const failed = o.updateFailed + o.followUpFailed + o.recreateFailed + o.rewriteFailed + o.mergeFailed;
       if (failed > 0) parts.push(`${failed} failed`);
       if (c.ticketedOpen > 0) link = cmdLink('Review', IMPORT_COMMANDS.openTicketed);
       lines.push(`- **Already ticketed** — ${parts.join(' · ')}${link ? ` — ${link}` : ''}`);
@@ -201,6 +212,8 @@ export function buildImportOverview<TRow extends ReviewRowBase>(session: ReviewS
 
   const hiddenLine = buildAcceptedHiddenLine(s.acceptedHidden);
   if (hiddenLine) lines.push('', hiddenLine);
+  if (s.outOfDate) lines.push('', outOfDateLine());
+  else if (opts.canMergeTickets) lines.push('', `Reply ${cmdLink('Reload report', IMPORT_COMMANDS.reload)} (\`${IMPORT_COMMANDS.reload}\`) to re-read the report file and refresh these screens.`);
   lines.push('');
   lines.push('_Open a group to review it. Nothing is created, updated or closed until you choose an action inside that group._');
   lines.push('');
@@ -224,7 +237,7 @@ export function buildNewGroupScreen<TRow extends ReviewRowBase>(
     lines.push(`_No new ${pluralNoun(opts.itemNoun)} left to create._`);
     lines.push('');
     if (hiddenLine) lines.push(hiddenLine, '');
-    lines.push(groupScreenExitLine(s.singleGroup!));
+    lines.push(groupScreenExitLine(s.singleGroup!, s.outOfDate));
     return lines.join('\n');
   }
 
@@ -265,7 +278,7 @@ export function buildNewGroupScreen<TRow extends ReviewRowBase>(
     (n > 0 ? `Reply ${cmdLink(`Create ${n} tickets`, IMPORT_COMMANDS.create)} to create them, or ` : 'Reply ') +
     'a list of row numbers to toggle (e.g. `2 4`).',
   );
-  lines.push(groupScreenExitLine(s.singleGroup!));
+  lines.push(groupScreenExitLine(s.singleGroup!, s.outOfDate));
   return lines.join('\n');
 }
 
@@ -295,6 +308,8 @@ export function formatTicketedRowResult(result: TicketedRowResult, baseUrl?: str
       return `follow-up ${formatKeyLink(result.key, baseUrl)}${result.linkMissing ? ' (link missing)' : ''}`;
     case 're-create':
       return `re-created as ${formatKeyLink(result.key, baseUrl)}`;
+    case 'merge':
+      return `merged into ${formatKeyLink(result.into, baseUrl)}`;
   }
 }
 
@@ -350,7 +365,7 @@ export function buildTicketedGroupScreen<TRow extends ReviewRowBase>(
 
   // Every row accepted away (or none ever matched): say so rather than render an empty table.
   if (ticketed.length === 0) {
-    lines.push(`_Nothing is left under Already ticketed._`, '', groupScreenExitLine(s.singleGroup!));
+    lines.push(`_Nothing is left under Already ticketed._`, '', groupScreenExitLine(s.singleGroup!, s.outOfDate));
     return lines.join('\n');
   }
 
@@ -387,11 +402,14 @@ export function buildTicketedGroupScreen<TRow extends ReviewRowBase>(
   }
   if (c.ticketedOpen > 0) {
     lines.push('Change a row with `<row> <action>` (e.g. `A2 follow-up`) or every row with `all <action>` (e.g. `all leave`), or click an action in the table.');
+    if (opts.canMergeTickets) {
+      lines.push('Reply `merge A2 A3 into A1` (or ticket keys) to combine tickets: the ticket after `into` is kept, the others are linked as duplicates, rewritten and closed. You see the plan and confirm first.');
+    }
     if (opts.canAccept) {
       lines.push('Reply `accept component A2 A3` to stop offering those components at that exact version (add `because …` to record why): they leave this list, and an open ticket is offered for closing under Stale.');
     }
   }
-  lines.push(groupScreenExitLine(s.singleGroup!));
+  lines.push(groupScreenExitLine(s.singleGroup!, s.outOfDate));
   return lines.join('\n');
 }
 
@@ -492,7 +510,7 @@ export function buildStaleGroupScreen<TRow extends ReviewRowBase>(session: Revie
       lines.push('Close 0 tickets — reply a ticket key (e.g. `PROJ-123`) to mark it for closing.');
     }
   }
-  lines.push(groupScreenExitLine(s.singleGroup!));
+  lines.push(groupScreenExitLine(s.singleGroup!, s.outOfDate));
   return lines.join('\n');
 }
 

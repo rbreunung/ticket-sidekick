@@ -160,6 +160,36 @@ A merge is not saved between pages or between imports: moving to another page di
 
 Both choices change the ticket's labels. Nothing is written until you click one. If a write fails, the rows stay in New; if only the comment fails, the write stands and the rows leave New.
 
+### Merging related tickets (OSS reports)
+
+Two or more tickets for the same piece of work can be combined. On the overview or the **Already ticketed** screen, reply `merge` with the tickets to cancel, then `into` and the ticket to keep. Name tickets by their `A` number or their key:
+
+```text
+merge A5 A6 into A3
+merge PROJ-15 PROJ-18 into PROJ-12
+```
+
+`@jira` first shows the tickets, the steps and any warnings, and writes nothing. Click **Merge** to go ahead. Then:
+
+1. The kept ticket is rewritten once from the report rows of all the tickets (title, description and the combined labels), and a comment names the tickets it took over and any finding the new text no longer covers.
+2. Each cancelled ticket is linked as a duplicate of the kept one, gets `[Merged into PROJ-12]` in front of its title, and a banner above its text. The original text stays below the banner.
+3. Each cancelled ticket is closed with resolution Duplicate. You pick the status to move each issue type to.
+
+What to expect:
+
+- **Warnings before you click.** A resolved kept ticket, a ticket that no import created (a rewrite replaces its text, and the finding it would drop are listed), and an already-resolved cancelled ticket (it is rewritten and linked but not closed).
+- **Missing Jira pieces.** Without a Duplicate link type the tickets are linked as Relates. Without a Duplicate resolution you pick the resolution from your project's list. The confirmation says so up front.
+- **If a step fails,** the merge stops and lists every ticket with its link, the step that failed and the error. Reply **Retry** to run that step again, **Ignore** to skip it and carry on with the rest (the final report lists what is missing), or **Stop here** to end the merge. Steps already done stay done.
+- **A ticket Jira closes without the Duplicate resolution** (some workflows reject the field) is named in the final report.
+- **Where it works.** The overview and the Already ticketed screen. On the New screen `merge 2 4` still combines rows, and `add 2 4 to PROJ-123` still adds rows to a ticket. The Stale screen has its own **Close tickets**.
+- **Later imports.** Nothing is stored. The kept ticket carries every label and stays open, so it is the one later imports propose changes for; the cancelled ticket is resolved and is left alone.
+
+After a merge the review refreshes itself from Jira, unless you have unfinished choices on the screen (excluded or merged New rows, or Already-ticketed actions you changed). In that case the overview says the screens are out of date and offers **Reload report**.
+
+### Reloading the report
+
+Reply **Reload report** (`reload report`) on the overview, or on the only screen of a single-group import, to read the same report file again, check Jira again and rebuild every screen. It also picks up edits to `.jira-oss-accepted.json`. `@jira` says what it will do, and warns first if you would lose choices you have made on the screens. If the report file has moved, it opens the file picker.
+
 ## Create Jira tickets from an OSS report (.xlsx)
 
 Export an "OSS Report" from Waltz (or a compatible SCA tool) as `.xlsx`, then:
@@ -220,7 +250,7 @@ How it applies:
 - **Merged rows.** `accept` on a merged row accepts the CVEs of every component in it.
 - **CVE entries affect the New screen only.** The Already ticketed and Stale screens are unchanged by them, so a later import can still propose adding an accepted CVE to an existing ticket. To take a whole component off all three screens, accept it as a component (below).
 
-Nothing is hidden silently: the overview (or the New screen, when the import has only one group) shows a line such as "3 accepted CVEs hidden · 1 component below the rating floor". Reply `accepted` to list the entries with their reasons, and `unaccept 2` (or click **Remove**) to delete an entry. A **Remove** link names the entry itself (`unaccept netty-codec CVE-2024-1234`), so a link from an older list never deletes a different entry after the list has changed. A removed entry is offered again on the next import; rows already hidden stay hidden in the review that is open.
+Nothing is hidden silently: the overview (or the New screen, when the import has only one group) shows a line such as "3 accepted CVEs hidden · 1 component below the rating floor". Reply `accepted` to list the entries with their reasons, and `unaccept 2` (or click **Remove**) to delete an entry. A **Remove** link names the entry itself (`unaccept netty-codec CVE-2024-1234`), so a link from an older list never deletes a different entry after the list has changed. A removed entry is offered again right away: OSS reviews rebuild themselves from the report (or, if you have unfinished choices on the screens, mark themselves out of date and offer **Reload report**).
 
 If `.jira-oss-accepted.json` is not valid JSON, the import hides nothing and shows a warning. If it has an entry that cannot be read (for example a mistyped key), that entry is skipped with a warning. In both cases `accept` and `unaccept` leave the file alone until you fix it, so nothing you wrote by hand is lost.
 
@@ -253,4 +283,4 @@ What happens to an accepted component:
 - **Stays accepted:** a new CVE, a higher rating or a fixed version in the report does not bring the component back. Remove the entry to review it again.
 - **Jira is not changed** by accepting. Only closing a stale ticket changes Jira, and only when you ask for it.
 
-The overview shows "2 accepted components hidden" with a **Show accepted** link. The `accepted` list shows component entries as "whole component" with a **Remove** link, which sends `unaccept-component netty-codec 4.1.100`. A removed entry is offered again on the next import; rows already hidden stay hidden in the review that is open. A version of the extension without this feature skips component entries with a warning and leaves the file alone, so update the extension for the whole team.
+The overview shows "2 accepted components hidden" with a **Show accepted** link. The `accepted` list shows component entries as "whole component" with a **Remove** link, which sends `unaccept-component netty-codec 4.1.100`. A removed entry is offered again right away: OSS reviews rebuild themselves from the report (or, if you have unfinished choices on the screens, mark themselves out of date and offer **Reload report**). A version of the extension without this feature skips component entries with a warning and leaves the file alone, so update the extension for the whole team.

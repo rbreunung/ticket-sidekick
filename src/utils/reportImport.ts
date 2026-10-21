@@ -614,6 +614,7 @@ export function buildReviewRows<TItem, TRow extends ReviewRowBase>(
       base.change = change;
       base.allowedActions = allowedActions;
       base.action = action;
+      base.defaultAction = action;
     }
     rows.push({ ...base, ...rowBuilder(item) } as TRow);
   }

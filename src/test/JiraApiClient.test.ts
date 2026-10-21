@@ -941,3 +941,25 @@ describe('JiraApiClient.createIssueLink (import follow-up linking)', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('JiraApiClient.getIssueLinkTypes (Waltz ticket merge)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('reads /rest/api/2/issueLinkType and returns the link types', async () => {
+    const mockFetch = makeFetch({
+      issueLinkTypes: [{ id: '10001', name: 'Duplicate', inward: 'is duplicated by', outward: 'duplicates' }],
+    });
+    vi.stubGlobal('fetch', mockFetch);
+    const types = await new JiraApiClient(BASE_CONFIG).getIssueLinkTypes();
+    expect(types).toEqual([{ id: '10001', name: 'Duplicate', inward: 'is duplicated by', outward: 'duplicates' }]);
+    const [url] = mockFetch.mock.calls[0] as [string];
+    expect(url).toBe('https://jira.example.com/rest/api/2/issueLinkType');
+  });
+
+  it('throws a JiraApiError carrying the status when the instance refuses the read', async () => {
+    vi.stubGlobal('fetch', makeFetch({ errorMessages: ['forbidden'] }, 403));
+    const err = await new JiraApiClient(BASE_CONFIG).getIssueLinkTypes().catch(e => e);
+    expect(err).toBeInstanceOf(JiraApiError);
+    expect((err as JiraApiError).status).toBe(403);
+  });
+});

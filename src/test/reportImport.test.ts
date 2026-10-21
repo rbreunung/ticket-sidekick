@@ -427,6 +427,15 @@ describe('buildReviewRows', () => {
   interface Item { id: string; label: string }
   interface Row extends ReviewRowBase { label: string }
 
+  it('records the default action on an already-ticketed row, so a later choice can be told from it', () => {
+    const dedupMap: DedupMap = new Map([['beta', [ticket('PROJ-501', ['beta'])]]]);
+    const rows = buildReviewRows<Item, Row>(
+      [{ id: 'x2', label: 'beta' }], dedupMap, item => [item.label], item => ({ label: item.label }), { describe: () => null },
+    );
+    expect(rows[0].action).toBe('leave');
+    expect(rows[0].defaultAction).toBe('leave');
+  });
+
   it('assigns sequential numeric ids to new items and A-prefixed ids to already-ticketed ones, in source order', () => {
     const items: Item[] = [
       { id: 'x1', label: 'alpha' },
