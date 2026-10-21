@@ -158,7 +158,7 @@
       {
         "name": "jira_getTicket",
         "displayName": "Get Jira Ticket",
-        "modelDescription": "Fetches a Jira ticket's fields, description, and attachment filenames (with size and MIME type) by key. Use to look up ticket details before answering a question or deciding what to change, or to discover an attachment's filename before calling jira_downloadAttachment.",
+        "modelDescription": "Fetches a Jira ticket's fields, description, and attachment filenames (with size and MIME type) by key. Display only: nothing is saved to the workspace. Use for a quick look-up of ticket details, or to discover an attachment's filename before calling jira_downloadAttachment. When the user says download, load or fetch a ticket, or wants it analyzed or turned into a report, use jira_loadTicket instead.",
         "userDescription": "View a Jira ticket's fields and description.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraGetTicket",
@@ -492,7 +492,7 @@
       {
         "name": "jira_loadTicket",
         "displayName": "Load Jira Ticket",
-        "modelDescription": "Downloads a Jira ticket's description, comments, and attachments into .jira-context/<ticketKey>/ in the workspace (ticket.md, comments.md, attachments/). This writes files to the workspace — the user is asked to confirm the ticket and target folder before anything is written. The result names those files as available for follow-up reading; ask the user before reading them to analyze the ticket rather than doing so automatically.",
+        "modelDescription": "Downloads a Jira ticket's description, comments, and attachments into .jira-context/<ticketKey>/ in the workspace (ticket.md, comments.md, attachments/). This writes files to the workspace — the user is asked to confirm the ticket and target folder before anything is written. Use this whenever the user says download, load, fetch, pull or save a ticket, or wants it analyzed or reported on (prefer it over jira_getTicket for those requests). The result gives the exact paths of all written files, including comments.md, as the ticket's local source of information; read them from there. Attachments the load skips (binary, over-size, duplicate names) are listed by name and are not blocked: fetch any of them in a follow-up call with jira_downloadAttachment when the analysis needs it.",
         "userDescription": "Download a ticket's description, comments, and attachments into the workspace.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraLoadTicket",

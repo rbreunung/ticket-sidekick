@@ -34,13 +34,14 @@ Each of these shows a confirmation naming the exact change before it runs, e.g. 
 | `jira_updateField` | `#jiraUpdateField` | Changes one field on one ticket: summary, description, priority, assignee, labels, components or fix version |
 | `jira_createTicket` | `#jiraCreateTicket` | Creates a ticket, optionally from one of your templates |
 | `jira_transitionTicket` | `#jiraTransitionTicket` | Moves a ticket to a new status, optionally setting a resolution |
-| `jira_loadTicket` | `#jiraLoadTicket` | Downloads a ticket's description, comments and attachments into `.jira-context/<key>/`, like `@jira load` |
+| `jira_loadTicket` | `#jiraLoadTicket` | Downloads a ticket's description, comments and attachments into `.jira-context/<key>/`, like `@jira load`. Copilot picks it when you say "download" or "load" (or ask for an analysis or report); `jira_getTicket` only displays |
 | `jira_downloadAttachment` | `#jiraDownloadAttachment` | Downloads one named attachment, including one `jira_loadTicket` skipped |
 | `jira_uploadAttachment` | `#jiraUploadAttachment` | Uploads a local file to a ticket |
 | `bitbucket_postComment` | `#bitbucketPostComment` | Posts a comment on a pull request (a general comment, not tied to a line) |
 
 ## Good to know
 
+- **Where a loaded ticket lands.** `jira_loadTicket` writes `.jira-context/<key>/ticket.md` (fields, description, attachment list), `comments.md` and `attachments/`, and tells Copilot the exact paths. Your own skills or prompts can rely on that layout, e.g. "download PROJ-123, then analyze it and write the report".
 - **One ticket at a time.** Each tool changes a single ticket or pull request. For bulk changes, use `@jira run cleanup` or other bulk commands in chat.
 - **No guessed issue type.** If `jira_createTicket` gets neither an issue type nor a template that sets one, it creates nothing and returns the project's issue types to choose from.
 - **No accidental duplicates.** If Copilot repeats the same create, comment or upload within a minute, the repeat is skipped. A retry after a real failure still goes through.

@@ -847,14 +847,14 @@ class LoadTicketTool implements vscode.LanguageModelTool<LoadTicketInput> {
       const attachments = ticketService.getAttachments(issue);
       const alwaysShowIds = new Set<string>(config.additionalDisplayFields);
       const hiddenIds = new Set<string>(config.hiddenDisplayFields);
-      const { downloadedCount, skipped, writeErrors } = await loadTicketToWorkspace(
+      const { downloadedCount, downloadedFiles, skipped, writeErrors } = await loadTicketToWorkspace(
         ticketKey, ticketService,
         { issue, comments, attachments, remoteLinks },
         { fieldMeta, alwaysShowIds, hiddenIds, baseUrl: config.baseUrl },
         workspaceFolder.uri,
       );
       logDiag('jira.tools', 'info', `Loaded — ${ticketKey}`, { ticketKey, downloadedCount, skippedCount: skipped.length });
-      return textResult(buildLoadTicketResultMessage(ticketKey, comments.length, downloadedCount, skipped, writeErrors));
+      return textResult(buildLoadTicketResultMessage(ticketKey, comments.length, downloadedCount, skipped, writeErrors, downloadedFiles));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logDiag('jira.tools', 'error', `jira_loadTicket failed — ${ticketKey}`, { ticketKey, error: message });

@@ -56,6 +56,8 @@ export async function ensureJiraContextGitignored(wsRoot: vscode.Uri): Promise<v
 
 export interface LoadTicketCoreResult {
   downloadedCount: number;
+  /** Filenames written to `attachments/`, so the `jira_loadTicket` result can name them. */
+  downloadedFiles: string[];
   skipped: LoadSkippedSession['skipped'];
   writeErrors: string[];
 }
@@ -143,12 +145,14 @@ export async function loadTicketToWorkspace(
     // filename with the winner that was actually written, so a filename-only lookup would
     // otherwise show both as "downloaded" from the same path (code-review fix).
     const duplicateIds = new Set(duplicates.map(a => a.id));
+    const failedIds = new Set(downloadFailures.map(a => a.id));
     const attLines = attachments.map(att => {
       const size = formatFileSize(att.size);
       if (duplicateIds.has(att.id)) return `- \`${att.filename}\` — ${size} — skipped (duplicate filename)`;
       if (downloaded.has(att.filename)) return `- \`attachments/${att.filename}\` — ${size} (${att.mimeType})`;
       if (att.size > ATTACHMENT_SIZE_LIMIT) return `- \`${att.filename}\` — ${size} — skipped (over 100 MB size limit)`;
-      return `- \`${att.filename}\` — ${size} — skipped (binary non-image)`;
+      if (failedIds.has(att.id)) return `- \`${att.filename}\` — ${size} — download failed`;
+      return `- \`${att.filename}\` — ${size} — not downloaded by default (binary non-image); can be fetched on request`;
     });
     mdParts.push('', `## Attachments\n\n${attLines.join('\n')}`);
   }
@@ -195,7 +199,7 @@ export async function loadTicketToWorkspace(
     })),
   ];
 
-  return { downloadedCount: downloaded.size, skipped, writeErrors };
+  return { downloadedCount: downloaded.size, downloadedFiles: [...downloaded], skipped, writeErrors };
 }
 
 /** {@link handleLoadTicket}'s result: whether a skipped-attachments resume session started, plus

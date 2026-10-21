@@ -56,16 +56,20 @@ describe('jira_loadTicket confirmation (R4: names ticket and folder)', () => {
   });
 });
 
-describe('jira_loadTicket result message (R8/KTD4: ask the user, make no assumption)', () => {
-  it('names the written files and asks the user before reading them, without instructing the model to read them itself', () => {
-    const message = buildLoadTicketResultMessage('VSJI-38', 3, 2, [], []);
-    expect(message).toContain('VSJI-38');
-    expect(message).toContain('.jira-context/VSJI-38/');
-    expect(message).toContain('ticket.md');
-    expect(message).toContain('comments.md');
-    expect(message).toContain('attachments/');
-    expect(message).toMatch(/ask the user/i);
-    expect(message).not.toMatch(/read (these|them) (files )?to analyze/i);
+describe('jira_loadTicket result message (names exactly where the ticket went)', () => {
+  it('gives the full path of every written file, including comments and each downloaded attachment', () => {
+    const message = buildLoadTicketResultMessage('VSJI-38', 3, 2, [], [], ['error.log', 'shot.png']);
+    expect(message).toContain('.jira-context/VSJI-38/ticket.md');
+    expect(message).toContain('.jira-context/VSJI-38/comments.md');
+    expect(message).toContain('3 comments');
+    expect(message).toContain('.jira-context/VSJI-38/attachments/error.log');
+    expect(message).toContain('.jira-context/VSJI-38/attachments/shot.png');
+  });
+
+  it('continues into analysis only when the request already asked for it', () => {
+    const message = buildLoadTicketResultMessage('VSJI-38', 3, 2, [], [], ['error.log', 'shot.png']);
+    expect(message).toMatch(/already asks to analyze/i);
+    expect(message).toMatch(/only asked to download.*stop/i);
   });
 
   it('omits attachments/ from the file list when nothing was downloaded', () => {
@@ -73,13 +77,26 @@ describe('jira_loadTicket result message (R8/KTD4: ask the user, make no assumpt
     expect(message).not.toContain('attachments/');
   });
 
-  it('names skipped attachments and points at jira_downloadAttachment to fetch one', () => {
+  it('lists skipped attachments with size and reason and says a follow-up download call is possible', () => {
     const skipped = [
       { filename: 'heap-dump.bin', content: 'https://jira.example.com/x', size: 52428800, mimeType: 'application/octet-stream', reason: 'unknown binary format' },
     ];
     const message = buildLoadTicketResultMessage('VSJI-38', 1, 1, skipped, []);
     expect(message).toContain('heap-dump.bin');
+    expect(message).toContain('unknown binary format');
+    expect(message).toMatch(/not blocked/i);
     expect(message).toContain('jira_downloadAttachment');
+    expect(message).toMatch(/follow-up|if the analysis needs/i);
+  });
+
+  it('says an attachment over 100 MB cannot be fetched by jira_downloadAttachment either', () => {
+    const skipped = [
+      { filename: 'huge.zip', content: 'https://jira.example.com/y', size: 200 * 1024 * 1024, mimeType: 'application/zip', reason: 'over 100 MB size limit' },
+    ];
+    const message = buildLoadTicketResultMessage('VSJI-38', 0, 0, skipped, []);
+    expect(message).toContain('huge.zip');
+    expect(message).toMatch(/cannot fetch them either/i);
+    expect(message).not.toMatch(/not blocked/i);
   });
 
   it('surfaces write errors when present', () => {
