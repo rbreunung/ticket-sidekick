@@ -380,10 +380,10 @@ describe('Already-ticketed screen — per-row actions (U4/R5, R6, KTD9)', () => 
 });
 
 describe('Session schema version (U4/KTD8)', () => {
-  it('is 11, so a review built before the accepted-component counts (version 10) expires', () => {
-    expect(CURRENT_SESSION_SCHEMA_VERSION).toBe(11);
-    expect(isSessionExpired({ schemaVersion: 10 })).toBe(true);
-    expect(isSessionExpired({ schemaVersion: 11 })).toBe(false);
+  it('is 12, so a review built before the stored report path and merge run (version 11) expires', () => {
+    expect(CURRENT_SESSION_SCHEMA_VERSION).toBe(12);
+    expect(isSessionExpired({ schemaVersion: 11 })).toBe(true);
+    expect(isSessionExpired({ schemaVersion: 12 })).toBe(false);
   });
 });
 

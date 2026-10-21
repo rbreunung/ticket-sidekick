@@ -295,6 +295,8 @@ export function formatTicketedRowResult(result: TicketedRowResult, baseUrl?: str
       return `follow-up ${formatKeyLink(result.key, baseUrl)}${result.linkMissing ? ' (link missing)' : ''}`;
     case 're-create':
       return `re-created as ${formatKeyLink(result.key, baseUrl)}`;
+    case 'merge':
+      return `merged into ${formatKeyLink(result.into, baseUrl)}`;
   }
 }
 
