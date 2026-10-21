@@ -4,10 +4,11 @@
 import { TICKETED_ACTION_ORDER } from '../../utils/reportImport';
 import { formatKeyLink } from '../../services/TicketService';
 import { IMPORT_COMMANDS, LEGACY_UPDATE_COMMAND, UNACCEPT_COMPONENT_WORD } from './importScreens';
-import { AddMode, ImportOutcomes, ImportResultGroup, ImportReviewView, ReviewRowBase, ReviewSessionStale, TicketedAction } from './importTypes';
-import { cmdLink, isCancellation, isConfirmation, neutralizeMarkdownLinks, normalizeReply } from './primitives';
+import { AddMode, ImportOutcomes, ImportResultGroup, ImportReviewView, MergeRun, ReviewRowBase, ReviewSessionStale, StaleTargetOption, TicketedAction } from './importTypes';
+import { cmdLink, isBackOrCancellation, isCancellation, isConfirmation, neutralizeMarkdownLinks, normalizeReply } from './primitives';
+import { parseResolutionSelection } from './core';
 import { ReviewPageNav, parseBulkNewRowReply, parseReviewPageNav } from './reviewPaging';
-import { parseStaleTicketToggle } from './staleTargets';
+import { parseStaleTargetPick, parseStaleTicketToggle } from './staleTargets';
 
 /** What a reply on the current import screen asks for (KTD2). */
 export type ImportReplyAction =
@@ -39,6 +40,13 @@ export type ImportReplyAction =
   // `A` rows, with an optional reason), and remove a component entry by its name + version.
   | { kind: 'acceptComponent'; ids: string[]; reason?: string }
   | { kind: 'unacceptComponent'; component: string; version: string }
+  // Waltz ticket merge: `merge <sources> into <survivor>`. The prompt shows the plan; the confirmed form (a trailing
+  // `confirm`, sent by the prompt's link) runs it. Sides are the typed `A` ids or ticket keys, upper-cased.
+  | { kind: 'mergeTicketsPrompt'; sources: string[]; target: string }
+  | { kind: 'mergeTickets'; sources: string[]; target: string }
+  // Waltz ticket merge: re-read the report file and rebuild the screens; the prompt warns, the confirmed form runs.
+  | { kind: 'reloadPrompt' }
+  | { kind: 'reload' }
   | { kind: 'toggleRows'; ids: string[] }
   | { kind: 'toggleStale'; keys: string[] }
   // `reason`, when present, says specifically why (e.g. an action a row does not offer, AE6).
@@ -59,6 +67,8 @@ export interface ImportReplyContext {
   // Accepted-CVE list: whether the importer supports it (Waltz), which turns on `accept`, `accepted`
   // and `unaccept`.
   canAccept?: boolean;
+  // Waltz ticket merge: whether the importer supports `merge … into …` and `reload report` (Waltz only).
+  canMergeTickets?: boolean;
 }
 
 /** Every token must be one of `ids` (case-insensitive) — a stray token makes the reply invalid
@@ -76,6 +86,59 @@ function parseStrictRowToggle(reply: string, ids: string[]): string[] | null {
   return matched;
 }
 
+const MERGE_USAGE = 'Merge tickets like this: `merge A5 A6 into A3` (or ticket keys, `merge PROJ-15 into PROJ-12`). The ticket after `into` is kept; the others are cancelled as duplicates of it.';
+const MERGE_ON_NEW_OR_STALE = 'Merging tickets is done from the overview or the Already ticketed screen, not here. On the New screen `merge 2 4` still combines New rows.';
+
+/**
+ * Waltz ticket merge (KTD1): `merge <refs> into <ref>`, optionally followed by `confirm`. A reply starting with
+ * `merge` is always answered here on the screens that offer it — valid, or `invalid` with the usage — never handed on.
+ */
+function parseMergeTicketsReply(reply: string): ImportReplyAction | null {
+  const n = normalizeReply(reply);
+  if (n !== 'merge' && !n.startsWith('merge ')) return null;
+  const match = n.match(/^merge (.+?) into (\S+)(?: (confirm))?$/);
+  const sources = match ? match[1].split(/[\s,]+/).filter(Boolean).map(t => t.toUpperCase()) : [];
+  if (!match || sources.length === 0) return { kind: 'invalid', reason: MERGE_USAGE };
+  const target = match[2].toUpperCase();
+  return match[3] ? { kind: 'mergeTickets', sources, target } : { kind: 'mergeTicketsPrompt', sources, target };
+}
+
+/** `reload report` asks for the confirmation, `reload report confirm` (the prompt's link) runs it. */
+function parseReloadReply(reply: string): ImportReplyAction | null {
+  const n = normalizeReply(reply);
+  if (n === IMPORT_COMMANDS.reload) return { kind: 'reloadPrompt' };
+  if (n === `${IMPORT_COMMANDS.reload} confirm`) return { kind: 'reload' };
+  return null;
+}
+
+/** What a waiting merge reads: the user's choice after a failed step, the close's target status, or its resolution (KTD3). */
+export type MergeRunReply =
+  | { kind: 'retry' }
+  | { kind: 'ignore' }
+  | { kind: 'cancel' }
+  | { kind: 'target'; option: StaleTargetOption }
+  | { kind: 'resolution'; resolution: string | null }
+  | { kind: 'invalid' };
+
+/** Read before the screen's own vocabulary while a merge waits; anything it does not understand is `invalid`. */
+export function parseMergeRunReply(reply: string, run: MergeRun): MergeRunReply {
+  const n = normalizeReply(reply);
+  if (run.awaiting === 'target') {
+    const pick = parseStaleTargetPick(reply, run.closeTargetOptions ?? []);
+    if (pick === 'back') return { kind: 'cancel' };
+    return pick === 'invalid' ? { kind: 'invalid' } : { kind: 'target', option: pick };
+  }
+  if (run.awaiting === 'resolution') {
+    // A resolution name (even "Cancelled") is matched before the back and cancel words, as in the stale close.
+    const choice = parseResolutionSelection(reply, run.resolutionOptions ?? []);
+    if (choice !== 'invalid') return { kind: 'resolution', resolution: choice };
+    return isBackOrCancellation(reply) ? { kind: 'cancel' } : { kind: 'invalid' };
+  }
+  if (n === 'retry') return { kind: 'retry' };
+  if (n === 'ignore') return { kind: 'ignore' };
+  return isBackOrCancellation(reply) ? { kind: 'cancel' } : { kind: 'invalid' };
+}
+
 export function parseOverviewReply(reply: string, ctx: ImportReplyContext): ImportReplyAction {
   const n = normalizeReply(reply);
   if (n === IMPORT_COMMANDS.done || isCancellation(reply)) return { kind: 'done' };
@@ -84,6 +147,8 @@ export function parseOverviewReply(reply: string, ctx: ImportReplyContext): Impo
   if (n === IMPORT_COMMANDS.openStale && ctx.groups.includes('stale')) return { kind: 'open', view: 'stale' };
   const listing = ctx.canAccept ? parseAcceptedListReply(reply) : null;
   if (listing) return listing;
+  const tickets = ctx.canMergeTickets ? parseMergeTicketsReply(reply) ?? parseReloadReply(reply) : null;
+  if (tickets) return tickets;
   return { kind: 'invalid' };
 }
 
@@ -179,6 +244,11 @@ export function parseNewGroupReply(reply: string, ctx: ImportReplyContext): Impo
   if (nav) return { kind: 'pageNav', nav };
   const bulk = parseBulkNewRowReply(reply);
   if (bulk !== null) return { kind: 'bulk', include: bulk };
+  if (ctx.canMergeTickets) {
+    if (/^merge .+ into /.test(n)) return { kind: 'invalid', reason: MERGE_ON_NEW_OR_STALE };
+    const reload = ctx.singleGroup ? parseReloadReply(reply) : null;
+    if (reload) return reload;
+  }
   if (ctx.canFold) {
     const fold = parseFoldReply(reply, ctx);
     if (fold) return fold;
@@ -381,6 +451,11 @@ export function parseTicketedGroupReply(reply: string, ctx: ImportReplyContext):
     if (n === 'accept' || n.startsWith('accept ')) return { kind: 'invalid', reason: ACCEPT_COMPONENT_USAGE };
   }
 
+  if (ctx.canMergeTickets) {
+    const tickets = parseMergeTicketsReply(reply) ?? (ctx.singleGroup ? parseReloadReply(reply) : null);
+    if (tickets) return tickets;
+  }
+
   const match = n.match(/^(\S+) (.+)$/);
   const action = match ? TICKETED_ACTION_WORDS[match[2]] : undefined;
   if (match && action) {
@@ -413,6 +488,11 @@ export function parseStaleGroupReply(reply: string, ctx: ImportReplyContext): Im
   if (exit) return exit;
   const listing = ctx.canAccept && ctx.singleGroup ? parseAcceptedListReply(reply) : null;
   if (listing) return listing;
+  if (ctx.canMergeTickets) {
+    if (/^merge .+ into /.test(n)) return { kind: 'invalid', reason: MERGE_ON_NEW_OR_STALE };
+    const reload = ctx.singleGroup ? parseReloadReply(reply) : null;
+    if (reload) return reload;
+  }
   const nav = parseReviewPageNav(reply);
   if (nav) return { kind: 'pageNav', nav };
   if (!ctx.stale) return { kind: 'invalid' };
@@ -443,12 +523,12 @@ export function describeImportReplyVocabulary(view: ImportReviewView, ctx: Impor
     case 'ticketed':
       return 'On this screen you can reply `apply`, `<row> <action>` (e.g. `A2 follow-up` — actions are ' +
         `${TICKETED_ACTION_ORDER.map(a => `\`${a}\``).join(', ')}), \`all <action>\` (e.g. \`all leave\`), ` +
-        `${ctx.canAccept ? '`accept component A2`, ' : ''}\`update tickets\`, \`re-create tickets\`, \`next\` / \`prev\` / \`page <n>\`, or ${exit}.`;
+        `${ctx.canAccept ? '`accept component A2`, ' : ''}${ctx.canMergeTickets ? '`merge A5 into A3`, ' : ''}\`update tickets\`, \`re-create tickets\`, \`next\` / \`prev\` / \`page <n>\`, or ${exit}.`;
     case 'stale':
       return `On this screen you can reply \`close tickets\`, a stale ticket's key to toggle it (e.g. \`PROJ-123\`), \`next\` / \`prev\` / \`page <n>\`, or ${exit}.`;
     default: {
       const opens = ctx.groups.map(g => `\`${g === 'new' ? IMPORT_COMMANDS.openNew : g === 'ticketed' ? IMPORT_COMMANDS.openTicketed : IMPORT_COMMANDS.openStale}\``);
-      return `On the overview you can reply ${[...opens, ...(ctx.canAccept ? ['`accepted`', '`unaccept 2`'] : []), '`done`'].join(', ')}.`;
+      return `On the overview you can reply ${[...opens, ...(ctx.canAccept ? ['`accepted`', '`unaccept 2`'] : []), ...(ctx.canMergeTickets ? ['`merge A5 into A3`', `\`${IMPORT_COMMANDS.reload}\``] : []), '`done`'].join(', ')}.`;
     }
   }
 }
@@ -465,7 +545,8 @@ export function buildImportDoneSummary(outcomes: ImportOutcomes): string {
   ];
   if (outcomes.added > 0) parts.push(`${outcomes.added} added to existing tickets`);
   if (outcomes.rewritten > 0) parts.push(`${outcomes.rewritten} rewritten`);
-  const failed = outcomes.createFailed + outcomes.recreateFailed + outcomes.updateFailed + outcomes.followUpFailed + outcomes.closeFailed + outcomes.addFailed + outcomes.rewriteFailed;
+  if (outcomes.merged > 0) parts.push(`${outcomes.merged} merged`);
+  const failed = outcomes.createFailed + outcomes.recreateFailed + outcomes.updateFailed + outcomes.followUpFailed + outcomes.closeFailed + outcomes.addFailed + outcomes.rewriteFailed + outcomes.mergeFailed;
   if (failed > 0) parts.push(`${failed} failed`);
   return `Import finished — ${parts.join(', ')}.`;
 }
