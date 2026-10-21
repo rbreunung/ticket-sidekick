@@ -10,12 +10,12 @@ import { sanitizeCellText, BATCH_LIMIT, resolveSizeLimitSetting } from '../../ut
 import { parseEmlFile, type EmailImportItem, type EmailReviewRow } from '../../utils/emlParser';
 import type {
   EmailContentSession, AwaitIssueTypeResume, EmailTemplateSelectionSession, EmailReviewSession, ReviewTableColumn,
-  EmailCleanupSession, EmailCleanupTarget, EmailCleanupDecision,
+  EmailCleanupSession, EmailCleanupTarget, EmailCleanupDecision, EmailCleanupRow,
 } from '../sessionState';
 import {
   isCancellation, isConfirmation, isSessionExpired, SESSION_EXPIRED_MESSAGE, buildChatCommandLink, neutralizeMarkdownLinks, withLastTicket,
   buildPendingEmailCleanupSession, buildEmailCleanupConsent, buildEmailCleanupPreview, parseEmailCleanupReply,
-  applyEmailCleanupDecision, resolveSaveTarget,
+  applyEmailCleanupDecision, resolveSaveTarget, listModelCheckEligibleRows, numberEmailCleanupBlocks, remapSavedBlocks,
 } from '../sessionState';
 import {
   detectPatternBlocks, resolveBoilerplatePatterns, isTooLongForModelCheck, buildModelCheckPrompt, parseModelCheckReply,
@@ -340,15 +340,19 @@ async function continueAfterCleanup(
 // quotes that really occur. A failed or unparseable call leaves that email as nothing detected and
 // is logged with metadata only — the reply echoes email text, so neither it nor the body is logged.
 // Returns 'cancelled' when the chat request is cancelled: the loop stops, the email in flight and
-// every later one stay 'awaiting-consent' (not 'failed'), and emails already checked keep their result.
+// every later one keep the status they had (consent: 'awaiting-consent', never 'failed'), and emails
+// already checked keep their result. The consent screen passes its 'awaiting-consent' rows, the
+// preview's `model check` the eligible ones (pattern-matched emails included, so a failed call must
+// leave a row's existing blocks alone).
 async function runModelCheck(
   session: EmailCleanupSession,
+  asked: EmailCleanupRow[],
+  phase: 'consent' | 'preview',
   model: vscode.LanguageModelChat,
   token: vscode.CancellationToken,
   stream: vscode.ChatResponseStream,
 ): Promise<'done' | 'cancelled'> {
   const cancelled = () => token?.isCancellationRequested === true;
-  const asked = session.rows.filter(r => r.modelStatus === 'awaiting-consent');
   stream.markdown(`_Checking ${asked.length} email(s) with the Copilot model…_\n\n`);
   const patterns = readBoilerplatePatterns();
   for (const row of asked) {
@@ -368,22 +372,22 @@ async function runModelCheck(
       row.blocks = verifyModelBlocks(body, proposals, patterns, row.item.senderName);
       row.modelStatus = 'checked';
       logDiag('jira.email', 'info', 'Model check done', {
-        rowId: row.id, attempts, proposals: proposals.length, verifiedBlocks: row.blocks.length, replyLength, bodyLength: body.length,
+        phase, rowId: row.id, attempts, proposals: proposals.length, verifiedBlocks: row.blocks.length, replyLength, bodyLength: body.length,
       });
     } catch (err) {
-      if (cancelled()) break; // stays 'awaiting-consent'
-      row.blocks = [];
+      if (cancelled()) break; // keeps its status
       row.modelStatus = 'failed';
       const code = typeof (err as { code?: unknown })?.code === 'string' ? (err as { code: string }).code : undefined;
       logDiag('jira.email', 'warn', 'Model check failed', {
-        rowId: row.id, errorCode: code, errorName: err instanceof Error ? err.name : typeof err, attempts, replyLength, bodyLength: body.length,
+        phase, rowId: row.id, errorCode: code, errorName: err instanceof Error ? err.name : typeof err, attempts, replyLength, bodyLength: body.length,
       });
     }
   }
   if (!cancelled()) return 'done';
   logDiag('jira.email', 'info', 'Model check cancelled', {
-    checked: asked.filter(r => r.modelStatus !== 'awaiting-consent').length,
-    remaining: asked.filter(r => r.modelStatus === 'awaiting-consent').length,
+    phase,
+    checked: asked.filter(r => r.modelStatus === 'checked' || r.modelStatus === 'failed').length,
+    remaining: asked.filter(r => r.modelStatus !== 'checked' && r.modelStatus !== 'failed').length,
   });
   return 'cancelled';
 }
@@ -418,7 +422,7 @@ export async function handleEmailCleanupReply(
       if (!model) {
         return showCleanupScreen(session, stream, ws, '_No Copilot model is available in this chat — reply **skip model** to continue without it._');
       }
-      if (await runModelCheck(session, model, token, stream) === 'cancelled') {
+      if (await runModelCheck(session, session.rows.filter(r => r.modelStatus === 'awaiting-consent'), 'consent', model, token, stream) === 'cancelled') {
         // Stay at consent: the unchecked emails still await it, and nothing continues into the template pick.
         await ws.update(EMAIL_CLEANUP_SESSION_KEY, session);
         stream.markdown('_Model check stopped — reply **model check** or **skip model** to continue._');
@@ -447,10 +451,45 @@ export async function handleEmailCleanupReply(
     }
     case 'save':
       return saveBlockAsPattern(session, parsed.blockNumber, stream, ws);
+    case 'model-check':
+      return previewModelCheck(session, model, token, stream, ws);
     default:
       return showCleanupScreen(session, stream, ws,
-        '_Reply **strip**, **keep**, a row id to exclude or include an email, or **save <n>** for a block the model found._');
+        '_Reply **strip**, **keep**, **model check** to let the model look for more, a row id to exclude or include an email, or **save <n>** for a block the model found._');
   }
+}
+
+// The preview's `model check`: the model looks at every email it has not checked yet (pattern-matched
+// ones included), except excluded rows. Blocks it finds join the row's pattern blocks; saved block
+// numbers are remapped because new blocks can shift the numbering (KTD3).
+async function previewModelCheck(
+  session: EmailCleanupSession,
+  model: vscode.LanguageModelChat | undefined,
+  token: vscode.CancellationToken,
+  stream: vscode.ChatResponseStream,
+  ws: vscode.Memento,
+): Promise<vscode.ChatResult> {
+  if (!model) {
+    return showCleanupScreen(session, stream, ws, '_No Copilot model is available in this chat — reply **strip** or **keep** to continue without it._');
+  }
+  const eligible = listModelCheckEligibleRows(session);
+  if (eligible.length === 0) {
+    return showCleanupScreen(session, stream, ws, '_Nothing left to check — every email was checked, is excluded, or cannot be sent._');
+  }
+  const numberedBefore = numberEmailCleanupBlocks(session);
+  const countBefore = numberedBefore.length;
+  const outcome = await runModelCheck(session, eligible, 'preview', model, token, stream);
+  // Rows finished before a cancel already added blocks, so the numbers shift on that path too.
+  session.savedBlocks = remapSavedBlocks(session.savedBlocks, numberedBefore, session);
+  if (outcome === 'cancelled') {
+    return showCleanupScreen(session, stream, ws, '_Model check stopped — reply **model check** to continue._');
+  }
+  const added = numberEmailCleanupBlocks(session).length - countBefore;
+  const failed = eligible.filter(r => r.modelStatus === 'failed').length;
+  const failedNote = failed > 0 ? ` (model check failed for ${failed} email(s))` : '';
+  return showCleanupScreen(session, stream, ws, added > 0
+    ? `_The model found ${added} more block(s)${failedNote}._`
+    : `_The model found nothing more${failedNote}._`);
 }
 
 // R8/KTD9: appends the block's first/last-line pattern to the user's global setting, so the next

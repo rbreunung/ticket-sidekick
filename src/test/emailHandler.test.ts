@@ -1124,6 +1124,143 @@ describe('email boilerplate cleanup step (U5 batch, U6 comment)', () => {
     expect(first?.metadata?.jiraSession?.lastTicketKey).toBe('PROJ-42');
   }
 
+  describe('model check on the preview (pattern-matched emails)', () => {
+    const SIGNATURE_REPLY = '{"blocks":[{"kind":"signature","startQuote":"Best regards","endQuote":"Alice"}]}';
+    const matched = (subject: string) => plainItem(subject, 'Hi\n\nBest regards\nAlice\n\nCONFIDENTIALITY NOTICE: x');
+
+    async function previewBatch(ws: ReturnType<typeof makeMockWs>, items: EmailImportItem[], model: unknown) {
+      ws.store[EMAIL_CLEANUP_SESSION_KEY] = buildPendingEmailCleanupSession(items, { kind: 'batch', projectKey: 'PROJ', fileName: `${items.length} selected file(s)` });
+      await handleCreateFromEmail({ prompt: 'x', model } as never, mockStream() as never, undefined as never, client, ticketService, undefined as never, ws as never);
+    }
+    const sessionOf = (ws: ReturnType<typeof makeMockWs>) => ws.store[EMAIL_CLEANUP_SESSION_KEY] as EmailCleanupSession;
+
+    it('Covers AE1. sends the matched and the declined email once, adds the model block beside the pattern block with its save chip', async () => {
+      h.patterns = [CONFIDENTIAL_FOOTER];
+      const model = fakeModel(SIGNATURE_REPLY);
+      const ws = makeMockWs();
+      await previewBatch(ws, [matched('One'), matched('Two'), plainItem('Plain', 'Hello\n\nNothing special')], model);
+      await runCleanup('skip model', ws, client, model);
+      expect(model.sendRequest).not.toHaveBeenCalled();
+
+      const { texts, result } = await runCleanup('model check', ws, client, model);
+      expect(model.sendRequest).toHaveBeenCalledTimes(3);
+      const text = texts.join('\n');
+      expect(text).toContain('(found by the model)');
+      expect(text).toContain('(pattern)');
+      expect(decodeURIComponent(text)).toContain('"@jira save 1"');
+      expect(sessionOf(ws).rows[0].blocks.map(b => b.source).sort()).toEqual(['model', 'pattern']);
+      expect(result?.metadata?.jiraSession?.kinds).toEqual(['email-cleanup']);
+    });
+
+    it('Covers AE2. an excluded email is not sent', async () => {
+      h.patterns = [CONFIDENTIAL_FOOTER];
+      const model = fakeModel(SIGNATURE_REPLY);
+      const ws = makeMockWs();
+      await previewBatch(ws, [matched('One'), matched('Two')], model);
+      await runCleanup('2', ws, client, model);
+      await runCleanup('model check', ws, client, model);
+      expect(model.sendRequest).toHaveBeenCalledTimes(1);
+      expect(sessionOf(ws).rows[1].modelStatus).toBe('not-needed');
+    });
+
+    it('Covers AE3. a failed call keeps the pattern blocks, says so, and logs metadata only', async () => {
+      h.patterns = [CONFIDENTIAL_FOOTER];
+      const model = fakeModel('no json, only SECRET-REPLY-TEXT');
+      const ws = makeMockWs();
+      await previewBatch(ws, [matched('One')], model);
+      const { texts } = await runCleanup('model check', ws, client, model);
+      expect(model.sendRequest).toHaveBeenCalledTimes(3);
+      const row = sessionOf(ws).rows[0];
+      expect(row.modelStatus).toBe('failed');
+      expect(row.blocks.map(b => b.source)).toEqual(['pattern']);
+      expect(texts.join('\n')).toContain('model check failed');
+      expect(h.appendLine.mock.calls.map(c => String(c[0])).join('\n')).not.toContain('SECRET-REPLY-TEXT');
+    });
+
+    it('a second model check right after a finished one sends nothing and says nothing is left', async () => {
+      h.patterns = [CONFIDENTIAL_FOOTER];
+      const model = fakeModel(SIGNATURE_REPLY);
+      const ws = makeMockWs();
+      await previewBatch(ws, [matched('One')], model);
+      await runCleanup('model check', ws, client, model);
+      const { texts } = await runCleanup('model check', ws, client, model);
+      expect(model.sendRequest).toHaveBeenCalledTimes(1);
+      expect(texts.join('\n')).toContain('Nothing left to check');
+    });
+
+    it('without a Copilot model it keeps the preview and sends nothing', async () => {
+      h.patterns = [CONFIDENTIAL_FOOTER];
+      const ws = makeMockWs();
+      await previewBatch(ws, [matched('One')], undefined);
+      const { texts, result } = await runCleanup('model check', ws, client, undefined);
+      expect(texts.join('\n')).toContain('No Copilot model is available');
+      expect(sessionOf(ws).phase).toBe('preview');
+      expect(result?.metadata?.jiraSession?.kinds).toEqual(['email-cleanup']);
+    });
+
+    it('a request cancelled during the pass keeps the preview and leaves the email unchecked', async () => {
+      h.patterns = [CONFIDENTIAL_FOOTER];
+      const model = fakeModel(SIGNATURE_REPLY);
+      const ws = makeMockWs();
+      await previewBatch(ws, [matched('One')], model);
+      const { texts } = await runCleanup('model check', ws, client, model, mockStream(), { isCancellationRequested: true });
+      expect(model.sendRequest).not.toHaveBeenCalled();
+      expect(sessionOf(ws).phase).toBe('preview');
+      expect(sessionOf(ws).rows[0].modelStatus).toBe('not-needed');
+      expect(texts.join('\n')).toContain('Model check stopped');
+    });
+
+    it('a pass cancelled after the first email keeps saved block numbers on their blocks', async () => {
+      h.patterns = [CONFIDENTIAL_FOOTER];
+      const token = { isCancellationRequested: false };
+      const model = {
+        sendRequest: vi.fn(async () => {
+          if (model.sendRequest.mock.calls.length === 2) {
+            token.isCancellationRequested = true;
+            throw Object.assign(new Error('Canceled'), { name: 'Canceled' });
+          }
+          return { text: (async function* () { yield SIGNATURE_REPLY; })() };
+        }),
+      };
+      const ws = makeMockWs();
+      await previewBatch(ws, [matched('One'), matched('Two')], model);
+      // Email 2's footer is #2 before the pass; email 1 then gains a signature above it.
+      sessionOf(ws).savedBlocks = [2];
+      sessionOf(ws).rows[1].blocks = [{ ...sessionOf(ws).rows[1].blocks[0], source: 'model' }];
+      await runCleanup('model check', ws, client, model, mockStream(), token);
+      const session = sessionOf(ws);
+      expect(session.rows[0].modelStatus).toBe('checked');
+      expect(session.rows[1].modelStatus).toBe('not-needed');
+      expect(session.savedBlocks).toEqual([3]);
+    });
+
+    it('save on a model block found by the pass stores the pattern, strip removes both blocks', async () => {
+      h.patterns = [CONFIDENTIAL_FOOTER];
+      const model = fakeModel(SIGNATURE_REPLY);
+      const ws = makeMockWs();
+      await previewBatch(ws, [matched('One')], model);
+      await runCleanup('model check', ws, client, model);
+      await runCleanup('save 1', ws, client, model); // signature precedes the footer in the body, so it is #1
+      expect(h.configUpdate).toHaveBeenCalledTimes(1);
+      expect(sessionOf(ws).savedBlocks).toEqual([1]);
+      const stripped = await runCleanup('strip', ws, client, model);
+      expect(stripped.result?.metadata?.jiraSession?.kinds).toEqual(['email-template']);
+    });
+
+    it('works for the single-email "add email to PROJ-42" target and strip continues to the comment preview', async () => {
+      h.patterns = [{ kind: 'footer', start: 'See:' }];
+      const model = fakeModel('{"blocks":[]}');
+      (vscode.window.showOpenDialog as ReturnType<typeof vi.fn>).mockResolvedValue([{ fsPath: FIXTURE }]);
+      const ws = makeMockWs();
+      await handleAddEmailFromChat({ prompt: 'add email to PROJ-42' } as never, mockStream() as never, undefined as never, client, ticketService, undefined as never, ws as never);
+      const checked = await runCleanup('model check', ws, client, model);
+      expect(model.sendRequest).toHaveBeenCalledTimes(1);
+      expect(checked.result?.metadata?.jiraSession?.kinds).toEqual(['email-cleanup']);
+      const stripped = await runCleanup('strip', ws, client, model);
+      expect(stripped.result?.metadata?.jiraSession?.kinds).toEqual(['email-content']);
+    });
+  });
+
   it('cancelling the cleanup step of "add email to PROJ-42" still carries PROJ-42 as the last ticket', async () => {
     const ws = makeMockWs();
     await commentCleanup(ws);
