@@ -1,7 +1,7 @@
 // Pure confirmation-text and result-message builders shared by the `jira_*` Agent Mode tools.
 // Pure (vscode-free); re-exported through ../sessionState.ts.
 
-import { formatFileSize } from '../../utils/attachmentEligibility';
+import { ATTACHMENT_SIZE_LIMIT, formatFileSize } from '../../utils/attachmentEligibility';
 import type { ToolConfirmation } from '../../tools/toolConfirmation';
 import { formatBulletList } from './primitives';
 import { LoadSkippedSession } from './sessionTypes';
@@ -143,12 +143,21 @@ export function buildLoadTicketResultMessage(
       'if the user only asked to download it, stop here and ask what to do next.',
   );
   if (skipped.length > 0) {
+    const tooLarge = skipped.filter(s => s.size > ATTACHMENT_SIZE_LIMIT);
+    const fetchable = skipped.length - tooLarge.length;
     lines.push(
-      `${plural(skipped.length, 'attachment')} on ${ticketKey} not downloaded by the load (this is only a default filter, none is blocked):`,
+      `${plural(skipped.length, 'attachment')} on ${ticketKey} not downloaded by the load:`,
       ...skipped.map(s => `- ${s.filename} (${formatFileSize(s.size)}, ${s.reason})`),
-      'If the analysis needs one of them, call jira_downloadAttachment with ticketKey and the exact filename; it is saved to ' +
-        `\`.jira-context/${ticketKey}/attachments/\` and can be read from there.`,
     );
+    if (fetchable > 0) {
+      lines.push(
+        'The load only applies a default filter, so these are not blocked. If the analysis needs one, call jira_downloadAttachment ' +
+          `with ticketKey and the exact filename; it is saved to \`.jira-context/${ticketKey}/attachments/\` and can be read from there.`,
+      );
+    }
+    if (tooLarge.length > 0) {
+      lines.push(`Over 100 MB, so jira_downloadAttachment cannot fetch them either: ${tooLarge.map(s => s.filename).join(', ')}. Tell the user if one is needed.`);
+    }
   }
   if (writeErrors.length > 0) {
     lines.push(`Write errors: ${writeErrors.join('; ')}`);

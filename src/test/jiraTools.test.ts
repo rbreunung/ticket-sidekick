@@ -84,9 +84,19 @@ describe('jira_loadTicket result message (names exactly where the ticket went)',
     const message = buildLoadTicketResultMessage('VSJI-38', 1, 1, skipped, []);
     expect(message).toContain('heap-dump.bin');
     expect(message).toContain('unknown binary format');
-    expect(message).toMatch(/none is blocked/i);
+    expect(message).toMatch(/not blocked/i);
     expect(message).toContain('jira_downloadAttachment');
     expect(message).toMatch(/follow-up|if the analysis needs/i);
+  });
+
+  it('says an attachment over 100 MB cannot be fetched by jira_downloadAttachment either', () => {
+    const skipped = [
+      { filename: 'huge.zip', content: 'https://jira.example.com/y', size: 200 * 1024 * 1024, mimeType: 'application/zip', reason: 'over 100 MB size limit' },
+    ];
+    const message = buildLoadTicketResultMessage('VSJI-38', 0, 0, skipped, []);
+    expect(message).toContain('huge.zip');
+    expect(message).toMatch(/cannot fetch them either/i);
+    expect(message).not.toMatch(/not blocked/i);
   });
 
   it('surfaces write errors when present', () => {
