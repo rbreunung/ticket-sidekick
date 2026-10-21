@@ -22,7 +22,8 @@ export function planRewrite<TItem, TRow extends ReviewRowBase>(
   extraRows: TRow[],
 ): { regenItem: TItem; droppedKeys: string[] } {
   const fold = descriptor.fold!;
-  const ticketRows = session.allRows.filter(r => r.existingTicketKey === key);
+  // A source an earlier merge in this review already folded into `key` still feeds it until a refresh re-derives the targets.
+  const ticketRows = session.allRows.filter(r => r.existingTicketKey === key || (r.result?.status === 'done' && r.result.action === 'merge' && r.result.into === key));
   const regenItem = fold.combine([...ticketRows, ...extraRows].map(fold.itemOf));
   const covered = new Set(descriptor.dedupKeyOf?.(regenItem) ?? []);
   const recorded = issueLabels.map(l => descriptor.labelToDedupKey?.(l) ?? null).filter((k): k is string => k !== null);

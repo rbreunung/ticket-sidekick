@@ -1,5 +1,5 @@
-// Waltz ticket merge: pure helpers (vscode-free) — the text a cancelled ticket is marked with. The reference
-// resolution, step plan and refresh rule join this file in the merge flow's own units.
+// Waltz ticket merge: pure helpers (vscode-free) — the text a cancelled ticket is marked with, the reference
+// resolution, the step plan and the rule that decides between refreshing the review and marking it out of date.
 import { BATCH_LIMIT, MAX_SUMMARY_CHARS, clampSummary } from './reportImport';
 import { isTicketedRowFinished, ticketedTargetKey, type MergeStep, type ReviewRowBase } from '../participant/session/importTypes';
 

@@ -44,7 +44,11 @@ const comp = (nameVersion: string, rating = 'High'): WaltzComponent => ({
 });
 const labelsFor = (c: WaltzComponent) => ['oss-dependency', sanitizeComponentLabel(c.nameVersion)];
 
-const GRAPH = { Open: [{ id: '31', name: 'Close', to: 'Closed' }], Closed: [] as Array<{ id: string; name: string; to: string }> };
+const GRAPH = {
+  Open: [{ id: '31', name: 'Close', to: 'Closed' }],
+  'In Review': [{ id: '32', name: 'Close', to: 'Closed' }],
+  Closed: [] as Array<{ id: string; name: string; to: string }>,
+};
 
 let dir: string;
 let reportPath: string;
@@ -54,6 +58,7 @@ let ticketService: TicketService;
 let tickets: Record<string, FakeTicket>;
 let log: string[];
 let existingLinks: Array<[string, string]>;
+let comments: Record<string, string[]>;
 
 const libfoo = comp('libfoo:1.0');
 const libbar = comp('libbar:2.0');
@@ -78,6 +83,7 @@ beforeEach(() => {
   };
   log = [];
   existingLinks = [];
+  comments = {};
 });
 afterEach(() => { workspace.dir = undefined; rmSync(dir, { recursive: true, force: true }); });
 
@@ -100,9 +106,10 @@ function fakeJira() {
     return updateIssue(key, fields);
   };
   const addComment = client.addComment.bind(client);
-  client.addComment = async (key, body) => { log.push(`comment:${key}`); return addComment(key, body); };
+  client.addComment = async (key, body) => { log.push(`comment:${key}`); (comments[key] ??= []).push(body); return addComment(key, body); };
+  client.getAllComments = async key => (comments[key] ?? []).map((body, i) => ({ id: String(i), author: {} as never, body, created: '2026-10-21' }));
   const createIssueLink = client.createIssueLink.bind(client);
-  client.createIssueLink = async (inward, outward, type) => { await createIssueLink(inward, outward, type); log.push(`link:${outward}`); };
+  client.createIssueLink = async (inward, outward, type) => { await createIssueLink(inward, outward, type); existingLinks.push([outward, inward]); log.push(`link:${outward}`); };
   client.executeTransition = async (key, id, fields) => {
     if (fields?.resolution && tickets[key].rejectResolution) throw new Error('Field "resolution" cannot be set');
     client.executeTransitionCalls.push({ issueKey: key, transitionId: id, fields });
@@ -345,6 +352,8 @@ describe('the close (R7, R9, AE3)', () => {
     expect(out.text).toMatch(/discover workflow/);
     expect(log).toEqual(['rewrite:PROJ-12', 'comment:PROJ-12', 'link:PROJ-15', 'mark:PROJ-15']);
     expect(out.session.outcomes?.mergeFailed).toBe(1);
+    // a cancelled ticket still open must not become the target of a rebuilt review
+    expect(out.session.outOfDate).toBe(true);
   });
 
   it('back at the target question stops before any close and keeps the finished steps', async () => {
@@ -391,5 +400,74 @@ describe('where the reply is not offered (R16)', () => {
     await handleImportReviewReply('merge A1 into A2', session, ticketService, stream as never, ws as never, genericDescriptor);
     expect(streamText(stream)).toMatch(/Didn't understand/);
     expect(log).toEqual([]);
+  });
+});
+
+describe('review fixes: replay, retry, chaining and target names', () => {
+  it('a replayed confirmation neither links nor comments a second time', async () => {
+    const { ws } = await importWaltz();
+    await reply('merge PROJ-15 into PROJ-12 confirm', ws);
+    await reply('1', ws);
+    await reply('merge PROJ-15 into PROJ-12 confirm', ws);
+
+    expect(log.filter(l => l === 'comment:PROJ-12')).toHaveLength(1);
+    expect(client.createIssueLinkCalls).toHaveLength(1);
+  });
+
+  it('retry after a close that failed part-way plans from the ticket\'s current status', async () => {
+    const { ws } = await importWaltz();
+    await reply('merge PROJ-15 into PROJ-12 confirm', ws);
+    const transition = client.executeTransition;
+    client.executeTransition = async (key, id, fields) => {
+      if (id === '31') { tickets[key].status = 'In Review'; throw new Error('transition 2 failed'); }
+      return transition(key, id, fields);
+    };
+    const failed = await reply('1', ws);
+    expect(failed.session.mergeRun?.awaiting).toBe('decision');
+    expect(failed.text).toContain('PROJ-15');
+
+    const asked = await reply('retry', ws);
+    expect(asked.session.mergeRun?.awaiting).toBe('target');
+    await reply('1', ws);
+
+    expect(client.executeTransitionCalls.map(c => c.transitionId)).toEqual(['32']);
+    expect(tickets['PROJ-15'].status).toBe('Closed');
+  });
+
+  it('ignore after a failed close lists the close as missing and counts the source as not merged', async () => {
+    const { ws } = await importWaltz();
+    await reply('merge PROJ-15 into PROJ-12 confirm', ws);
+    client.executeTransition = async () => { throw new Error('workflow refused'); };
+    await reply('1', ws);
+    const done = await reply('ignore', ws);
+    expect(done.text).toMatch(/Still missing/);
+    expect(done.text).toContain('PROJ-15');
+    expect(done.session.outcomes?.mergeFailed).toBe(1);
+    expect(done.session.outOfDate).toBe(true);
+  });
+
+  it('a second merge into the same survivor keeps the first source\'s components when the screens were not rebuilt', async () => {
+    const { ws } = await importWaltz();
+    await reply('A3 rewrite', ws); // a changed choice, so the screens are marked out of date instead of rebuilt
+    await reply('merge PROJ-15 into PROJ-12 confirm', ws);
+    const first = await reply('1', ws);
+    expect(first.session.outOfDate).toBe(true);
+
+    await reply('merge PROJ-18 into PROJ-12 confirm', ws);
+    await reply('1', ws);
+
+    expect(tickets['PROJ-12'].description).toContain('libbar:2.0');
+    expect(tickets['PROJ-12'].description).toContain('libbaz:3.0');
+  });
+
+  it('a workflow status named Cancelled is picked as a status, not read as cancelling the question', async () => {
+    vi.mocked(loadWorkflowCache).mockReturnValue({ PROJ: { Bug: { graph: { Open: [{ id: '41', name: 'Cancel', to: 'Cancelled' }], Cancelled: [] } } } } as never);
+    const { ws } = await importWaltz();
+    const asked = await reply('merge PROJ-15 into PROJ-12 confirm', ws);
+    expect(asked.session.mergeRun?.awaiting).toBe('target');
+
+    await reply('Cancelled', ws);
+
+    expect(client.executeTransitionCalls.map(c => c.transitionId)).toEqual(['41']);
   });
 });

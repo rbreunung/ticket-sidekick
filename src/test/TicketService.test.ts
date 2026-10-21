@@ -1794,6 +1794,14 @@ describe('TicketService link types and typed links (Waltz ticket merge, U1)', ()
       expect(await service.hasLinkBetween('PROJ-15', 'PROJ-12')).toBe(true);
     });
 
+    it('looks only at the wanted link type when one is given', async () => {
+      const client = new MockJiraClient();
+      const service = new TicketService(client);
+      client.getIssue = async () => withLinks([{ id: '1', type: { name: 'Relates', inward: 'relates to', outward: 'relates to' }, outwardIssue: side('PROJ-12') }]);
+      expect(await service.hasLinkBetween('PROJ-15', 'PROJ-12', 'Duplicate')).toBe(false);
+      expect(await service.hasLinkBetween('PROJ-15', 'PROJ-12', 'relates')).toBe(true);
+    });
+
     it('is false for a link to another ticket and for a ticket with no links', async () => {
       const client = new MockJiraClient();
       const service = new TicketService(client);
@@ -1875,5 +1883,26 @@ describe('TicketService.markTicketMerged (Waltz ticket merge, U1)', () => {
     client.getIssue = async () => { throw new Error('Not found'); };
     await expect(service.markTicketMerged('PROJ-404', 'PROJ-12')).rejects.toThrow('Not found');
     expect(client.updateIssueCalls).toHaveLength(0);
+  });
+});
+
+describe('TicketService.hasCommentStartingWith (Waltz ticket merge)', () => {
+  it('finds a comment that begins with the text and ignores others', async () => {
+    const client = new MockJiraClient();
+    client.getAllComments = async () => [
+      { id: '1', author: { displayName: 'a' } as never, body: 'unrelated', created: '2026-10-21' },
+      { id: '2', author: { displayName: 'a' } as never, body: 'h4. Merged tickets\nTook over PROJ-15', created: '2026-10-21' },
+    ];
+    const service = new TicketService(client);
+    expect(await service.hasCommentStartingWith('PROJ-12', 'h4. Merged tickets')).toBe(true);
+    expect(await service.hasCommentStartingWith('PROJ-12', 'h4. Something else')).toBe(false);
+  });
+
+  it('is false for a ticket with no comments and for a rich-content body', async () => {
+    const client = new MockJiraClient();
+    client.getAllComments = async () => [{ id: '1', author: {} as never, body: { type: 'doc' }, created: '2026-10-21' }];
+    expect(await new TicketService(client).hasCommentStartingWith('PROJ-12', 'x')).toBe(false);
+    client.getAllComments = async () => [];
+    expect(await new TicketService(client).hasCommentStartingWith('PROJ-12', 'x')).toBe(false);
   });
 });

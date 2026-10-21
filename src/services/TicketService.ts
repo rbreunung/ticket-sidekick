@@ -448,8 +448,9 @@ export class TicketService {
   }
 
   /**
-   * KTD6/R14: links a follow-up ticket (`fromKey`) to the ticket it follows up (`toKey`) with a
-   * "Relates" link. "Relates" is symmetric, so direction only fixes which side Jira calls outward.
+   * Links `fromKey` to `toKey` with the named link type ("Relates" unless told otherwise). `fromKey` is the outward
+   * side and `toKey` the inward one: a follow-up ticket relates to the ticket it follows (KTD6/R14, symmetric, so the
+   * direction hardly matters), and with "Duplicate" the source `fromKey` "duplicates" the survivor `toKey`.
    * Errors propagate so the caller can surface a warning without undoing the created ticket.
    */
   async linkIssues(fromKey: string, toKey: string, typeName = 'Relates'): Promise<void> {
@@ -462,10 +463,19 @@ export class TicketService {
     return (await this.client.getIssueLinkTypes()).map(t => t.name);
   }
 
-  /** True when `key` already has a link, in either direction, to `otherKey` — lets a repeated merge skip the link step. */
-  async hasLinkBetween(key: string, otherKey: string): Promise<boolean> {
+  /**
+   * True when `key` already has a link, in either direction, to `otherKey` — of `typeName` when given, so another kind of
+   * link between the two does not stand in for the one a merge wants. Lets a repeated merge skip the link step.
+   */
+  async hasLinkBetween(key: string, otherKey: string, typeName?: string): Promise<boolean> {
     const issue = await this.client.getIssue(key);
-    return (issue.fields.issuelinks ?? []).some(l => l.inwardIssue?.key === otherKey || l.outwardIssue?.key === otherKey);
+    return (issue.fields.issuelinks ?? []).some(l =>
+      (l.inwardIssue?.key === otherKey || l.outwardIssue?.key === otherKey) && (!typeName || l.type.name.toLowerCase() === typeName.toLowerCase()));
+  }
+
+  /** True when a comment on `key` already begins with `prefix` — how a repeated merge avoids commenting twice. */
+  async hasCommentStartingWith(key: string, prefix: string): Promise<boolean> {
+    return (await this.client.getAllComments(key)).some(c => typeof c.body === 'string' && c.body.startsWith(prefix));
   }
 
   /**

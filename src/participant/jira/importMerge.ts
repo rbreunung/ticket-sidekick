@@ -22,7 +22,9 @@ type Issue = Awaited<ReturnType<TicketService['getIssue']>>;
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 function sourceRowsOf<TRow extends ReviewRowBase>(session: ReviewSession<TRow>, sources: string[]): TRow[] {
-  return session.allRows.filter(r => r.existingTicketKey !== null && sources.includes(ticketedTargetKey(r)));
+  // Rows an earlier merge in this review folded into one of the sources travel with it.
+  return session.allRows.filter(r => r.existingTicketKey !== null
+    && (sources.includes(ticketedTargetKey(r)) || (r.result?.status === 'done' && r.result.action === 'merge' && sources.includes(r.result.into))));
 }
 
 /** The labels of the survivor and every source, so a rewrite can name every recorded finding it would no longer cover. */
@@ -147,6 +149,8 @@ export async function handleMergeRunReply<TItem, TRow extends ReviewRowBase>(
         if (step.status !== 'failed') continue;
         step.status = parsed.kind === 'retry' ? 'pending' : 'skipped';
         if (parsed.kind === 'retry') delete step.error;
+        // A close that failed part-way left the ticket in another status; the groups are read again so the retry plans from it.
+        if (parsed.kind === 'retry' && step.kind === 'close') run.closeGroups = undefined;
       }
       run.awaiting = undefined;
       return advance(session, ticketService, stream, descriptor, baseUrl);
@@ -204,12 +208,18 @@ async function executeStep<TItem, TRow extends ReviewRowBase>(
       return;
     }
     case 'survivor-comment': {
+      const preface = descriptor.ticketMerge!.buildCommentPreface(run.sources);
+      // A replayed confirmation (a second click, an old link) would post the same comment again.
+      if (await ticketService.hasCommentStartingWith(run.survivor, preface)) {
+        step.note = 'already commented';
+        return;
+      }
       const body = fold.buildComment(fold.combine(sourceRows.map(fold.itemOf)), run.droppedKeys ?? []);
-      await ticketService.addComment(run.survivor, `${descriptor.ticketMerge!.buildCommentPreface(run.sources)}\n\n${body}`, baseUrl);
+      await ticketService.addComment(run.survivor, `${preface}\n\n${body}`, baseUrl);
       return;
     }
     case 'link': {
-      if (await ticketService.hasLinkBetween(step.key, run.survivor)) {
+      if (await ticketService.hasLinkBetween(step.key, run.survivor, run.linkType ?? 'Duplicate')) {
         step.note = 'already linked';
         return;
       }
@@ -383,7 +393,7 @@ async function closeGroup<TItem, TRow extends ReviewRowBase>(
 
   for (const s of skipped) {
     const step = stepOf(run, 'close', s.key)!;
-    const alreadyThere = s.reason.startsWith('already in');
+    const alreadyThere = group.tickets.find(t => t.key === s.key)?.currentStatus.toLowerCase() === targetState.toLowerCase();
     step.status = alreadyThere ? 'done' : 'skipped';
     step.note = s.reason;
     if (!alreadyThere) run.closeSkipped = [...(run.closeSkipped ?? []), { key: s.key, reason: s.reason }];
@@ -453,6 +463,8 @@ function finish<TItem, TRow extends ReviewRowBase>(
   logDiag(descriptor.scope, missing.length > 0 ? 'warn' : 'info', `${descriptor.importLabel} import — merge finished`, {
     survivor: run.survivor, sources: run.sources, closed: closedSources.length, missing: missing.length,
   });
+  // The screens no longer match Jira when a step is missing or a ticket was closed without its resolution; the next refresh is the user's.
+  if (missing.length > 0 || closedWithout.length > 0) session.outOfDate = true;
   session.mergeRun = undefined;
   return 'finished';
 }

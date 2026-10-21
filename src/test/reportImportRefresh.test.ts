@@ -240,3 +240,53 @@ describe('reload report (R13, AE6)', () => {
     expect(newRows(out.session)).toHaveLength(1);
   });
 });
+
+describe('review fixes: a refresh never replaces a review with a partial rebuild', () => {
+  const failSearch = () => vi.spyOn(ticketService, 'searchTicketsRaw').mockRejectedValue(new Error('Jira is down'));
+
+  it('reload report leaves the review as it was when the Jira search fails', async () => {
+    const libfoo = comp('libfoo:1.0', 'High', [['CVE-1', 'High']]);
+    const { session, ws } = await importWaltz([libfoo], { 'PROJ-7': { labels: ['oss-dependency', sanitizeComponentLabel(libfoo.nameVersion)] } });
+    expect(session.allRows.filter(r => r.existingTicketKey !== null)).toHaveLength(1);
+    failSearch();
+
+    const out = await reply('reload report confirm', session, ws);
+
+    expect(out.text).toMatch(/left it as it was|left as it was|as it was/i);
+    expect(out.session.allRows.filter(r => r.existingTicketKey !== null)).toHaveLength(1);
+    expect(newRows(out.session)).toHaveLength(0);
+  });
+
+  it('unaccept marks the screens out of date, and keeps the review, when the Jira search fails', async () => {
+    const libfoo = comp('libfoo:1.0', 'High', [['CVE-1', 'High']]);
+    writeList([{ component: 'bar', cve: 'CVE-9' }]);
+    const { session, ws } = await importWaltz(
+      [libfoo, comp('bar:1.0', 'High', [['CVE-9', 'High']])],
+      { 'PROJ-7': { labels: ['oss-dependency', sanitizeComponentLabel(libfoo.nameVersion)] } },
+    );
+    failSearch();
+
+    const out = await reply('unaccept 1', session, ws);
+
+    expect(out.session.outOfDate).toBe(true);
+    expect(out.session.allRows.filter(r => r.existingTicketKey !== null)).toHaveLength(1);
+  });
+});
+
+describe('review fixes: the report file name in the reload prompt', () => {
+  it('keeps a <command:…> autolink in the file name inert', async () => {
+    const hostile = join(dir, '<command:workbench.action.chat.open>.xlsx');
+    writeFileSync(hostile, 'placeholder');
+    report = [comp('bar:1.0', 'High', [['CVE-9', 'High']])];
+    statefulJira(client, {});
+    searchFromStore(ticketService, {});
+    const templateSession = await buildWaltzTemplateSession(report, 'r.xlsx', 'PROJ', client, report, hostile);
+    const ws = makeMockWs();
+    await handleWaltzAwaitIssueType({ kind: 'reportImport', descriptorKind: 'waltz', pickedTemplateName: null, session: templateSession }, 'Bug', client, ticketService, mockStream() as never, ws as never);
+
+    const out = await reply('reload report', ws.store['jira.session.waltzReview'] as WaltzReviewSession, ws);
+
+    expect(out.text).not.toMatch(/(?<!\\)<command:/);
+    expect(out.text).toContain('\\<command:');
+  });
+});

@@ -21,7 +21,7 @@ import type { IJiraClient } from '../../jira/IJiraClient';
 import { TemplateService } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
 import { BATCH_LIMIT, DEFAULT_DEDUP_CHUNK_SIZE, MAX_REPORT_BYTES, buildDedupJql, buildReviewRows, fetchAllPages, findAlreadyTicketed, findStaleTickets, templateLabelsOf, type DedupMap, type JqlIssueLike } from '../../utils/reportImport';
-import { CURRENT_SESSION_SCHEMA_VERSION, NO_ISSUE_TYPE, SESSION_EXPIRED_MESSAGE, applyBulkNewRowSet, applyReviewSessionToggle, applyStaleTicketToggle, applyTicketedActionChange, buildAllHiddenMessage, buildChatCommandLink, buildImportDoneSummary, buildReviewPage, clampStalePage, clampTicketedPage, computeImportResultGroups, describeImportReplyVocabulary, ensureImportViewState, IMPORT_COMMANDS, formatIssueTypeOptionLabel, initImportViewState, isCancellation, isSessionExpired, isTicketedRowFinished, mergeNewRows, neutralizeMarkdownLinks, parseImportReviewReply, pickEmailOption, resolveTemplateIssueType, ticketedRowActions, toAcceptedHidden, unmergeNewRow, type ImportReplyContext, type ImportTemplateSelectionSession, type ReviewRowBase, type ReviewSession, type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession } from '../sessionState';
+import { CURRENT_SESSION_SCHEMA_VERSION, NO_ISSUE_TYPE, SESSION_EXPIRED_MESSAGE, applyBulkNewRowSet, applyReviewSessionToggle, applyStaleTicketToggle, applyTicketedActionChange, buildAllHiddenMessage, buildChatCommandLink, buildImportDoneSummary, buildReviewPage, clampStalePage, clampTicketedPage, computeImportResultGroups, describeImportReplyVocabulary, ensureImportViewState, IMPORT_COMMANDS, formatIssueTypeOptionLabel, initImportViewState, isCancellation, isSessionExpired, isTicketedRowFinished, mergeNewRows, neutralizeMarkdownLinks, parseImportReviewReply, pickEmailOption, resolveTemplateIssueType, safeMarkdownText, ticketedRowActions, toAcceptedHidden, unmergeNewRow, type ImportReplyContext, type ImportTemplateSelectionSession, type ReviewRowBase, type ReviewSession, type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession } from '../sessionState';
 import { resolveIssueTypeOrPrompt, resolveProjectKey, sessionWasSuperseded } from './ticketContext';
 import { buildStaleTicketGroups } from './cleanupHandler';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
@@ -310,7 +310,7 @@ export async function continueAfterImportIssueType<TItem, TRow extends ReviewRow
     }
   }
 
-  const reviewSession = await buildImportReview<TItem, TRow>({
+  const { session: reviewSession } = await buildImportReview<TItem, TRow>({
     projectKey: session.projectKey, items: session.items, rawItems: session.rawItems ?? [], reportFilePath: session.reportFilePath,
     issueType, templateName, additionalFields,
   }, jiraClient, ticketService, stream, descriptor);
@@ -348,7 +348,10 @@ async function buildImportReview<TItem, TRow extends ReviewRowBase>(
   ticketService: TicketService,
   stream: vscode.ChatResponseStream,
   descriptor: ReportImportDescriptor<TItem, TRow>,
-): Promise<ReviewSession<TRow>> {
+): Promise<{ session: ReviewSession<TRow>; degraded: boolean }> {
+  // True when a Jira search the review depends on failed in whole or in part: the result is then a first-import best
+  // effort, not something a refresh may put in place of a review that was built from complete data.
+  let degraded = false;
   const plural = descriptor.itemNoun.replace('(s)', 's'); // 'flaw(s)' -> 'flaws', 'component(s)' -> 'components'
   const templateLabels = templateLabelsOf(input.additionalFields);
 
@@ -385,6 +388,7 @@ async function buildImportReview<TItem, TRow extends ReviewRowBase>(
         (level, message, details) => logDiag(descriptor.scope, level, message, details),
       );
       dedupMap = result.map;
+      if (result.failedChunks > 0) degraded = true;
       if (result.totalChunks > 0 && result.failedChunks === result.totalChunks) {
         logDiag(descriptor.scope, 'warn', `Could not check for already-ticketed ${plural} — proceeding without dedup`, {
           projectKey: input.projectKey, failedChunks: result.failedChunks, totalChunks: result.totalChunks,
@@ -398,6 +402,7 @@ async function buildImportReview<TItem, TRow extends ReviewRowBase>(
       });
       stream.markdown(`_Warning: could not check for already-ticketed ${plural} — proceeding without dedup: ${message}_\n\n`);
       dedupMap = new Map();
+      degraded = true;
     }
   }
 
@@ -494,6 +499,7 @@ async function buildImportReview<TItem, TRow extends ReviewRowBase>(
     );
 
     if (staleResult.searchFailed) {
+      degraded = true;
       stream.markdown('_Warning: could not check for stale tickets — proceeding without a stale-ticket section._\n\n');
     } else {
       // Code-review fix: hoisted out of the `stale.length > 0` branch below — this must render
@@ -541,7 +547,7 @@ async function buildImportReview<TItem, TRow extends ReviewRowBase>(
     }
   }
 
-  return reviewSession;
+  return { session: reviewSession, degraded };
 }
 
 type RefreshResult<TRow extends ReviewRowBase> = { ok: true; session: ReviewSession<TRow> } | { ok: false; missing: boolean; message: string };
@@ -568,10 +574,14 @@ async function refreshReview<TItem, TRow extends ReviewRowBase>(
     logDiag(descriptor.scope, 'warn', `Could not re-read the report — ${filePath}`, { path: filePath, missing, error: detail });
     return { ok: false, missing, message: missing ? `The report file \`${path.basename(filePath)}\` is no longer there.` : `Could not re-read the report: ${neutralizeMarkdownLinks(detail)}` };
   }
-  const built = await buildImportReview<TItem, TRow>({
+  const { session: built, degraded } = await buildImportReview<TItem, TRow>({
     projectKey: session.projectKey, items: parsed.items, rawItems: parsed.rawItems, reportFilePath: filePath,
     issueType: session.issueType, templateName: session.templateName, additionalFields: session.additionalFields,
   }, { getResolutions: () => ticketService.getResolutions() }, ticketService, stream, descriptor);
+  if (degraded) {
+    logDiag(descriptor.scope, 'warn', 'Refresh left the review as it was: a Jira search failed, so a rebuild would show items as New that already have tickets', { path: filePath });
+    return { ok: false, missing: false, message: 'Jira could not be searched in full, so the review was left as it was rather than rebuilt from partial data.' };
+  }
   const fresh = initImportViewState(built);
   // The view stays only while the review keeps its shape: still with an overview (or still without one) and the
   // screen's group still there. A review that gained or lost its overview starts from the fresh view instead.
@@ -681,7 +691,8 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
       return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
     }
     Object.assign(session, afterGroupAction(session));
-    if (descriptor.ticketMerge && session.reportFilePath) await syncAfterListChange(session, ticketService, stream, descriptor);
+    // A merge that ended with a missing or skipped step leaves a cancelled ticket open, which a rebuild could pick as the target.
+    if (descriptor.ticketMerge && session.reportFilePath && !session.outOfDate) await syncAfterListChange(session, ticketService, stream, descriptor);
     return rerender();
   };
   if (session.mergeRun && descriptor.ticketMerge) {
@@ -771,7 +782,7 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
         ? 'You have unfinished choices (excluded or merged New rows, or Already-ticketed actions you changed) and they will be lost.'
         : 'Nothing you have set up on these screens will be lost.';
       stream.markdown(trustedChatMarkdown(
-        `Reload re-reads **${neutralizeMarkdownLinks(path.basename(session.reportFilePath))}**, checks Jira again and rebuilds every screen from the result. It also picks up changes to the accepted list. ${lost}\n\n` +
+        `Reload re-reads **${safeMarkdownText(path.basename(session.reportFilePath))}**, checks Jira again and rebuilds every screen from the result. It also picks up changes to the accepted list. ${lost}\n\n` +
         `${buildChatCommandLink('Reload now', '@jira', `${IMPORT_COMMANDS.reload} confirm`)}`,
       ));
       return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
