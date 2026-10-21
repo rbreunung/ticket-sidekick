@@ -96,6 +96,15 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   // Accepted-CVE list (KTD8): optional, like `fold` and `stale`. Waltz supplies it; Veracode and email
   // omit it and behave exactly as before.
   accepted?: ImportAccepted<TItem, TRow>;
+  // Waltz ticket merge (KTD1): optional `merge … into …`, `reload report` and the refresh after an `unaccept`.
+  // Waltz supplies it; Veracode and email omit it and behave exactly as before.
+  ticketMerge?: ImportTicketMerge;
+}
+
+/** Waltz ticket merge: the importer's wording for the one comment the survivor receives (Jira wiki markup). */
+export interface ImportTicketMerge {
+  /** Opens the survivor's comment, naming the tickets it absorbed. */
+  buildCommentPreface: (absorbedKeys: string[]) => string;
 }
 
 /** Accepted-CVE list: what an importer supplies so findings the team accepted stay off the New screen. */

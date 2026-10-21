@@ -43,7 +43,7 @@ interface ReportImportCommandDescriptor<TRaw, TItem> {
   // concept can ignore it — passed through when present so buildVeracodeTemplateSession/
   // buildWaltzTemplateSession can build the stale-check's "is this finding still active" predicate
   // from the *unfiltered* report instead of degrading to the already-filtered set.
-  buildTemplateSession: (items: TItem[], fileName: string, projectKey: string, jiraClient: IJiraClient, rawItems?: TItem[]) => Promise<unknown>;
+  buildTemplateSession: (items: TItem[], fileName: string, projectKey: string, jiraClient: IJiraClient, rawItems?: TItem[], reportFilePath?: string) => Promise<unknown>;
   sessionKey: string;
   chatQuery: string;
   // Resolved fresh per invocation (not at registration time) so a setting the user just changed
@@ -157,7 +157,7 @@ function registerReportImportCommand<TRaw, TItem>(
       onDiag: (level, message, details) => logDiag('jira.apiClient', level, message, details),
     });
 
-    const session = await descriptor.buildTemplateSession(items, path.basename(reportPath), projectKey, jiraClient, rawParsedItems);
+    const session = await descriptor.buildTemplateSession(items, path.basename(reportPath), projectKey, jiraClient, rawParsedItems, reportPath);
 
     await context.workspaceState.update(descriptor.sessionKey, session);
     await vscode.commands.executeCommand('workbench.action.chat.open', { query: descriptor.chatQuery });
