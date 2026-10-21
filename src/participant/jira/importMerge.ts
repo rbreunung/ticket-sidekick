@@ -87,7 +87,8 @@ export async function showMergePrompt<TItem, TRow extends ReviewRowBase>(
     warnings.push('The resolutions could not be read, so the tickets may be closed without one.');
   }
 
-  const rewrite = planRewrite(session, descriptor, sides.survivor, await recordedLabels(ticketService, keys), sourceRowsOf(session, sides.sources));
+  const labels = [...new Set(keys.flatMap(key => issues.get(key)!.fields.labels ?? []))];
+  const rewrite = planRewrite(session, descriptor, sides.survivor, labels, sourceRowsOf(session, sides.sources));
   const ticket = (key: string) => ({ key, summary: issues.get(key)!.fields.summary ?? '', status: issues.get(key)!.fields.status?.name ?? null });
   stream.markdown(trustedChatMarkdown(buildMergePrompt({
     survivor: ticket(sides.survivor), sources: sides.sources.map(ticket), warnings, droppedKeys: rewrite.droppedKeys, baseUrl,
@@ -328,7 +329,7 @@ async function closePhase<TItem, TRow extends ReviewRowBase>(
       return failStep(step, err, run, stream, descriptor, baseUrl);
     }
     for (const t of built.ineligible) {
-      const step = run.steps.find(s => s.kind === 'close' && s.key === t.key)!;
+      const step = stepOf(run, 'close', t.key)!;
       step.status = 'skipped';
       step.note = t.note;
       run.closeSkipped = [...(run.closeSkipped ?? []), { key: t.key, reason: t.note }];

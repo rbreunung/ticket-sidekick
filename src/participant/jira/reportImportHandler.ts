@@ -43,6 +43,8 @@ export { createNewRows } from './importCreate';
 export { streamStaleCloseStep, continueStaleClose } from './importStaleClose';
 export { executeTicketedActions } from './importTicketedActions';
 
+const NO_REPORT_FILE_MESSAGE = '_This review was not built from a report file I can re-read, so there is nothing to reload. Start the import again._\n\n';
+
 // Page size for the dedup search; fetchAllPages reads every page of each label chunk.
 const DEDUP_PAGE_SIZE = 100;
 
@@ -103,7 +105,6 @@ export async function buildImportTemplateSession<TItem, TRow extends ReviewRowBa
   jiraClient: IJiraClient,
   descriptor: ReportImportDescriptor<TItem, TRow>,
   rawItems: unknown[] = [],
-  // Waltz ticket merge (KTD9): where the report was read from, so the review can rebuild itself from it.
   reportFilePath?: string,
 ): Promise<ImportTemplateSelectionSession<TItem>> {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
@@ -551,7 +552,7 @@ type RefreshResult<TRow extends ReviewRowBase> = { ok: true; session: ReviewSess
  * groups, whether there is an overview, the page positions. The previous view stays only when its group
  * still exists. A file that is gone or no longer parses leaves the review as it was.
  */
-export async function refreshReview<TItem, TRow extends ReviewRowBase>(
+async function refreshReview<TItem, TRow extends ReviewRowBase>(
   session: ReviewSession<TRow>,
   filePath: string,
   ticketService: TicketService,
@@ -601,7 +602,7 @@ async function refreshInPlace<TItem, TRow extends ReviewRowBase>(
 ): Promise<{ ok: true } | { ok: false; missing: boolean }> {
   const filePath = filePathOverride ?? session.reportFilePath;
   if (!filePath) {
-    stream.markdown('_This review was not built from a report file I can re-read, so there is nothing to reload. Start the import again._\n\n');
+    stream.markdown(NO_REPORT_FILE_MESSAGE);
     return { ok: false, missing: false };
   }
   stream.markdown(`_Re-reading \`${neutralizeMarkdownLinks(path.basename(filePath))}\` and checking Jira again…_\n\n`);
@@ -763,7 +764,7 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
       return afterMerge(await startMerge(session, action.sources, action.target, ticketService, stream, descriptor, baseUrl));
     case 'reloadPrompt': {
       if (!session.reportFilePath) {
-        stream.markdown('_This review was not built from a report file I can re-read, so there is nothing to reload. Start the import again._\n\n');
+        stream.markdown(NO_REPORT_FILE_MESSAGE);
         return rerender();
       }
       const lost = hasUnfinishedChoices(session)

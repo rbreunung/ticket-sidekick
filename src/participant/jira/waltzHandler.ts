@@ -229,7 +229,6 @@ export async function buildWaltzTemplateSession(
   // through; defaults to `components` (already filtered) for any other caller, which degrades the
   // stale check gracefully rather than crashing.
   rawComponents: WaltzComponent[] = components,
-  // Waltz ticket merge (KTD9): where the report was read from, so the review can rebuild itself from it.
   reportFilePath?: string,
 ): Promise<WaltzTemplateSelectionSession> {
   return buildImportTemplateSession(components.map(component => [component]), fileName, projectKey, jiraClient, waltzDescriptor, rawComponents, reportFilePath);

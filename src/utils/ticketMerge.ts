@@ -20,7 +20,6 @@ export function mergedBanner(description: string | null | undefined, survivorKey
   return body === '' ? banner : `${banner}\n\n${body}`;
 }
 
-
 const ROW_ID = /^A\d+$/i;
 const TICKET_KEY = /^[A-Z][A-Z0-9]+-\d+$/i;
 

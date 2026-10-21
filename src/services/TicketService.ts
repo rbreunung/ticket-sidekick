@@ -475,9 +475,10 @@ export class TicketService {
    */
   async markTicketMerged(key: string, survivorKey: string): Promise<{ changed: boolean }> {
     const issue = await this.client.getIssue(key);
+    const currentDescription = extractTextFromAdf(issue.fields.description);
     const summary = mergedSummary(issue.fields.summary ?? '', survivorKey);
-    const description = mergedBanner(extractTextFromAdf(issue.fields.description), survivorKey);
-    if (summary === issue.fields.summary && description === extractTextFromAdf(issue.fields.description)) return { changed: false };
+    const description = mergedBanner(currentDescription, survivorKey);
+    if (summary === issue.fields.summary && description === currentDescription) return { changed: false };
     await this.client.updateIssue(key, { summary, description });
     this.onDiag?.('info', `Ticket marked as merged — ${key} into ${survivorKey}`, { issueKey: key, survivorKey });
     return { changed: true };

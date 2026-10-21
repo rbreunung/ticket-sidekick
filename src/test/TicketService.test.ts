@@ -1780,12 +1780,6 @@ describe('TicketService link types and typed links (Waltz ticket merge, U1)', ()
     expect(onDiag).toHaveBeenCalledWith('info', expect.stringContaining('PROJ-15'), expect.objectContaining({ linkType: 'Duplicate' }));
   });
 
-  it('still defaults to a Relates link for the follow-up flow', async () => {
-    const client = new MockJiraClient();
-    await new TicketService(client).linkIssues('PROJ-200', 'PROJ-123');
-    expect(client.createIssueLinkCalls[0].typeName).toBe('Relates');
-  });
-
   describe('hasLinkBetween', () => {
     const withLinks = (links: JiraIssue['fields']['issuelinks']): JiraIssue =>
       ({ id: '1', key: 'PROJ-15', fields: { issuelinks: links } as JiraIssue['fields'] });

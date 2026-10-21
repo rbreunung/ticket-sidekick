@@ -111,6 +111,13 @@ function parseReloadReply(reply: string): ImportReplyAction | null {
   return null;
 }
 
+/** New and Stale: the ticket form of `merge` points to the overview, and a single-group import can still reload from its only screen. */
+function parseMergeOffScreenReply(n: string, reply: string, ctx: ImportReplyContext): ImportReplyAction | null {
+  if (!ctx.canMergeTickets) return null;
+  if (/^merge .+ into /.test(n)) return { kind: 'invalid', reason: MERGE_ON_NEW_OR_STALE };
+  return ctx.singleGroup ? parseReloadReply(reply) : null;
+}
+
 /** What a waiting merge reads: the user's choice after a failed step, the close's target status, or its resolution (KTD3). */
 export type MergeRunReply =
   | { kind: 'retry' }
@@ -244,11 +251,8 @@ export function parseNewGroupReply(reply: string, ctx: ImportReplyContext): Impo
   if (nav) return { kind: 'pageNav', nav };
   const bulk = parseBulkNewRowReply(reply);
   if (bulk !== null) return { kind: 'bulk', include: bulk };
-  if (ctx.canMergeTickets) {
-    if (/^merge .+ into /.test(n)) return { kind: 'invalid', reason: MERGE_ON_NEW_OR_STALE };
-    const reload = ctx.singleGroup ? parseReloadReply(reply) : null;
-    if (reload) return reload;
-  }
+  const offScreen = parseMergeOffScreenReply(n, reply, ctx);
+  if (offScreen) return offScreen;
   if (ctx.canFold) {
     const fold = parseFoldReply(reply, ctx);
     if (fold) return fold;
@@ -335,9 +339,7 @@ export interface AddPromptInput {
  * dropped keys come from Jira, so each is neutralized before it lands in this trusted response.
  */
 export function buildAddPrompt(input: AddPromptInput): string {
-  // Jira-sourced text on a trusted screen: besides [text](url) links, angle-bracket autolinks
-  // (<command:…>) are defused too — backslashes first, so the text's own "\<" cannot un-escape ours.
-  const safe = (value: string) => neutralizeMarkdownLinks(value.replace(/\r?\n/g, ' ')).replace(/\\/g, '\\\\').replace(/</g, '\\<');
+  const safe = safeMarkdownText;
   const rows = input.ids.join(',');
   const command = (mode: AddMode) => `add ${rows} to ${input.key} as ${mode}`;
   const lines: string[] = [
@@ -361,7 +363,10 @@ export function buildAddPrompt(input: AddPromptInput): string {
   return lines.join('\n');
 }
 
-/** Jira-sourced text on a trusted screen: no links, no autolinks, one line (backslashes first, so the text's own "\<" cannot un-escape ours). */
+/**
+ * Jira-sourced text on a trusted screen: besides [text](url) links, angle-bracket autolinks (<command:…>) are defused too,
+ * on one line — backslashes first, so the text's own "\<" cannot un-escape ours.
+ */
 export function safeMarkdownText(value: string): string {
   return neutralizeMarkdownLinks(value.replace(/\r?\n/g, ' ')).replace(/\\/g, '\\\\').replace(/</g, '\\<');
 }
@@ -542,11 +547,8 @@ export function parseStaleGroupReply(reply: string, ctx: ImportReplyContext): Im
   if (exit) return exit;
   const listing = ctx.canAccept && ctx.singleGroup ? parseAcceptedListReply(reply) : null;
   if (listing) return listing;
-  if (ctx.canMergeTickets) {
-    if (/^merge .+ into /.test(n)) return { kind: 'invalid', reason: MERGE_ON_NEW_OR_STALE };
-    const reload = ctx.singleGroup ? parseReloadReply(reply) : null;
-    if (reload) return reload;
-  }
+  const offScreen = parseMergeOffScreenReply(n, reply, ctx);
+  if (offScreen) return offScreen;
   const nav = parseReviewPageNav(reply);
   if (nav) return { kind: 'pageNav', nav };
   if (!ctx.stale) return { kind: 'invalid' };
