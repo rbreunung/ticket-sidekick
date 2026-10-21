@@ -478,10 +478,12 @@ async function previewModelCheck(
   }
   const numberedBefore = numberEmailCleanupBlocks(session);
   const countBefore = numberedBefore.length;
-  if (await runModelCheck(session, eligible, 'preview', model, token, stream) === 'cancelled') {
+  const outcome = await runModelCheck(session, eligible, 'preview', model, token, stream);
+  // Rows finished before a cancel already added blocks, so the numbers shift on that path too.
+  session.savedBlocks = remapSavedBlocks(session.savedBlocks, numberedBefore, session);
+  if (outcome === 'cancelled') {
     return showCleanupScreen(session, stream, ws, '_Model check stopped — reply **model check** to continue._');
   }
-  session.savedBlocks = remapSavedBlocks(session.savedBlocks, numberedBefore, session);
   const added = numberEmailCleanupBlocks(session).length - countBefore;
   const failed = eligible.filter(r => r.modelStatus === 'failed').length;
   const failedNote = failed > 0 ? ` (model check failed for ${failed} email(s))` : '';

@@ -1210,6 +1210,30 @@ describe('email boilerplate cleanup step (U5 batch, U6 comment)', () => {
       expect(texts.join('\n')).toContain('Model check stopped');
     });
 
+    it('a pass cancelled after the first email keeps saved block numbers on their blocks', async () => {
+      h.patterns = [CONFIDENTIAL_FOOTER];
+      const token = { isCancellationRequested: false };
+      const model = {
+        sendRequest: vi.fn(async () => {
+          if (model.sendRequest.mock.calls.length === 2) {
+            token.isCancellationRequested = true;
+            throw Object.assign(new Error('Canceled'), { name: 'Canceled' });
+          }
+          return { text: (async function* () { yield SIGNATURE_REPLY; })() };
+        }),
+      };
+      const ws = makeMockWs();
+      await previewBatch(ws, [matched('One'), matched('Two')], model);
+      // Email 2's footer is #2 before the pass; email 1 then gains a signature above it.
+      sessionOf(ws).savedBlocks = [2];
+      sessionOf(ws).rows[1].blocks = [{ ...sessionOf(ws).rows[1].blocks[0], source: 'model' }];
+      await runCleanup('model check', ws, client, model, mockStream(), token);
+      const session = sessionOf(ws);
+      expect(session.rows[0].modelStatus).toBe('checked');
+      expect(session.rows[1].modelStatus).toBe('not-needed');
+      expect(session.savedBlocks).toEqual([3]);
+    });
+
     it('save on a model block found by the pass stores the pattern, strip removes both blocks', async () => {
       h.patterns = [CONFIDENTIAL_FOOTER];
       const model = fakeModel(SIGNATURE_REPLY);
