@@ -1765,3 +1765,121 @@ describe('TicketService.getRequirementsSource', () => {
     expect(result.ok && result.source.descriptionText).toBe('');
   });
 });
+
+describe('TicketService link types and typed links (Waltz ticket merge, U1)', () => {
+  it('lists the names of the link types the instance offers', async () => {
+    const service = new TicketService(new MockJiraClient());
+    expect(await service.getLinkTypeNames()).toEqual(['Blocks', 'Duplicate', 'Relates']);
+  });
+
+  it('links a source as Duplicate of the survivor: the survivor is the inward side', async () => {
+    const client = new MockJiraClient();
+    const onDiag = vi.fn();
+    await new TicketService(client, onDiag).linkIssues('PROJ-15', 'PROJ-12', 'Duplicate');
+    expect(client.createIssueLinkCalls).toEqual([{ inwardKey: 'PROJ-12', outwardKey: 'PROJ-15', typeName: 'Duplicate' }]);
+    expect(onDiag).toHaveBeenCalledWith('info', expect.stringContaining('PROJ-15'), expect.objectContaining({ linkType: 'Duplicate' }));
+  });
+
+  it('still defaults to a Relates link for the follow-up flow', async () => {
+    const client = new MockJiraClient();
+    await new TicketService(client).linkIssues('PROJ-200', 'PROJ-123');
+    expect(client.createIssueLinkCalls[0].typeName).toBe('Relates');
+  });
+
+  describe('hasLinkBetween', () => {
+    const withLinks = (links: JiraIssue['fields']['issuelinks']): JiraIssue =>
+      ({ id: '1', key: 'PROJ-15', fields: { issuelinks: links } as JiraIssue['fields'] });
+    const side = (key: string) => ({ key, fields: { summary: 's', status: { name: 'Open' } } });
+
+    it('is true when the ticket has an outward or an inward link to the other key', async () => {
+      const client = new MockJiraClient();
+      const service = new TicketService(client);
+      client.getIssue = async () => withLinks([{ id: '1', type: { name: 'Duplicate', inward: 'is duplicated by', outward: 'duplicates' }, outwardIssue: side('PROJ-12') }]);
+      expect(await service.hasLinkBetween('PROJ-15', 'PROJ-12')).toBe(true);
+      client.getIssue = async () => withLinks([{ id: '2', type: { name: 'Relates', inward: 'relates to', outward: 'relates to' }, inwardIssue: side('PROJ-12') }]);
+      expect(await service.hasLinkBetween('PROJ-15', 'PROJ-12')).toBe(true);
+    });
+
+    it('is false for a link to another ticket and for a ticket with no links', async () => {
+      const client = new MockJiraClient();
+      const service = new TicketService(client);
+      client.getIssue = async () => withLinks([{ id: '1', type: { name: 'Blocks', inward: 'is blocked by', outward: 'blocks' }, outwardIssue: side('PROJ-99') }]);
+      expect(await service.hasLinkBetween('PROJ-15', 'PROJ-12')).toBe(false);
+      client.getIssue = async () => withLinks(undefined);
+      expect(await service.hasLinkBetween('PROJ-15', 'PROJ-12')).toBe(false);
+    });
+  });
+});
+
+describe('TicketService.markTicketMerged (Waltz ticket merge, U1)', () => {
+  let client: MockJiraClient;
+  let service: TicketService;
+
+  beforeEach(() => {
+    client = new MockJiraClient();
+    service = new TicketService(client);
+  });
+
+  function issue(summary: string, description: unknown): JiraIssue {
+    return { id: '1', key: 'PROJ-15', fields: { summary, description } as JiraIssue['fields'] };
+  }
+
+  it('prefixes the summary and puts a banner above the unchanged body in one updateIssue call', async () => {
+    client.getIssue = async () => issue('[OSS] netty-codec:4.1.100 — High', 'h3. Known vulnerabilities\n* CVE-1');
+
+    const result = await service.markTicketMerged('PROJ-15', 'PROJ-12');
+
+    expect(result.changed).toBe(true);
+    expect(client.updateIssueCalls).toHaveLength(1);
+    const { issueKey, fields } = client.updateIssueCalls[0];
+    expect(issueKey).toBe('PROJ-15');
+    expect(fields.summary).toBe('[Merged into PROJ-12] [OSS] netty-codec:4.1.100 — High');
+    expect(String(fields.description)).toMatch(/^\{panel:title=Merged into PROJ-12\}/);
+    expect(String(fields.description)).toMatch(/\nh3\. Known vulnerabilities\n\* CVE-1$/);
+  });
+
+  it('writes nothing the second time, when the ticket already says it is merged into that survivor', async () => {
+    client.getIssue = async () => issue('[OSS] netty-codec:4.1.100 — High', 'body');
+    await service.markTicketMerged('PROJ-15', 'PROJ-12');
+    const written = client.updateIssueCalls[0].fields;
+
+    client.getIssue = async () => issue(String(written.summary), written.description);
+    const again = await service.markTicketMerged('PROJ-15', 'PROJ-12');
+
+    expect(again.changed).toBe(false);
+    expect(client.updateIssueCalls).toHaveLength(1);
+  });
+
+  it('replaces the marker of an earlier survivor instead of stacking a second one', async () => {
+    client.getIssue = async () => issue('[Merged into PROJ-7] Netty', '{panel:title=Merged into PROJ-7}\nold banner\n{panel}\n\nbody');
+
+    await service.markTicketMerged('PROJ-15', 'PROJ-12');
+
+    const { fields } = client.updateIssueCalls[0];
+    expect(fields.summary).toBe('[Merged into PROJ-12] Netty');
+    expect(String(fields.description)).not.toContain('PROJ-7');
+    expect(String(fields.description).match(/\{panel:title=Merged into/g)).toHaveLength(1);
+  });
+
+  it('keeps the whole summary within 255 characters by trimming the old summary, not the prefix', async () => {
+    client.getIssue = async () => issue('x'.repeat(255), 'body');
+
+    await service.markTicketMerged('PROJ-15', 'PROJ-12');
+
+    const summary = String(client.updateIssueCalls[0].fields.summary);
+    expect(summary).toHaveLength(255);
+    expect(summary.startsWith('[Merged into PROJ-12] ')).toBe(true);
+  });
+
+  it('writes the banner alone when the ticket has no description', async () => {
+    client.getIssue = async () => issue('Netty', null);
+    await service.markTicketMerged('PROJ-15', 'PROJ-12');
+    expect(String(client.updateIssueCalls[0].fields.description)).toMatch(/^\{panel:title=Merged into PROJ-12\}[\s\S]*\{panel\}$/);
+  });
+
+  it('does not write when the ticket cannot be read', async () => {
+    client.getIssue = async () => { throw new Error('Not found'); };
+    await expect(service.markTicketMerged('PROJ-404', 'PROJ-12')).rejects.toThrow('Not found');
+    expect(client.updateIssueCalls).toHaveLength(0);
+  });
+});

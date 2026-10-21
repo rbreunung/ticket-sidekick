@@ -10,6 +10,14 @@ export interface JiraIssueLink {
   outwardIssue?: { key: string; fields: { summary: string; status: { name: string } } };
 }
 
+/** One entry of Jira's `issueLinkType` list: `name` is what `createIssueLink` takes, `inward`/`outward` are the two directions' labels. */
+export interface JiraIssueLinkType {
+  id?: string;
+  name: string;
+  inward: string;
+  outward: string;
+}
+
 export interface JiraRemoteLink {
   id: number;
   object: { url: string; title: string };
@@ -156,6 +164,8 @@ export interface IJiraClient {
   addComment(issueKey: string, body: string): Promise<void>;
   /** Creates an issue link of the named type (e.g. "Relates") between two issues. */
   createIssueLink(inwardKey: string, outwardKey: string, typeName: string): Promise<void>;
+  /** The link types this instance offers (e.g. Blocks, Duplicate, Relates). */
+  getIssueLinkTypes(): Promise<JiraIssueLinkType[]>;
   searchJql(jql: string, maxResults?: number, startAt?: number, extraFields?: string[], pageToken?: string): Promise<JiraSearchResult>;
   findUser(query: string): Promise<JiraUser[]>;
   getCurrentUser(): Promise<JiraUser>;

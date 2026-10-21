@@ -4,6 +4,7 @@ import { formatJiraBody } from '../utils/markdownFormatter';
 import { ApiError } from '../utils/apiError';
 import { buildRequirementsSource, type RequirementsSource } from '../utils/requirementsSource';
 import { formatFileSize } from '../utils/attachmentEligibility';
+import { mergedBanner, mergedSummary } from '../utils/ticketMerge';
 import { renderReviewTable, neutralizeMarkdownLinks, buildChatCommandLink, type ReviewTableColumn } from '../participant/sessionState';
 
 export type FieldResolutionResult =
@@ -451,9 +452,35 @@ export class TicketService {
    * "Relates" link. "Relates" is symmetric, so direction only fixes which side Jira calls outward.
    * Errors propagate so the caller can surface a warning without undoing the created ticket.
    */
-  async linkIssues(fromKey: string, toKey: string): Promise<void> {
-    await this.client.createIssueLink(toKey, fromKey, 'Relates');
-    this.onDiag?.('info', `Issues linked — ${fromKey} relates to ${toKey}`, { fromKey, toKey, linkType: 'Relates' });
+  async linkIssues(fromKey: string, toKey: string, typeName = 'Relates'): Promise<void> {
+    await this.client.createIssueLink(toKey, fromKey, typeName);
+    this.onDiag?.('info', `Issues linked — ${fromKey} ${typeName} ${toKey}`, { fromKey, toKey, linkType: typeName });
+  }
+
+  /** The names of the link types this instance offers, so a merge can name a fallback before it writes. */
+  async getLinkTypeNames(): Promise<string[]> {
+    return (await this.client.getIssueLinkTypes()).map(t => t.name);
+  }
+
+  /** True when `key` already has a link, in either direction, to `otherKey` — lets a repeated merge skip the link step. */
+  async hasLinkBetween(key: string, otherKey: string): Promise<boolean> {
+    const issue = await this.client.getIssue(key);
+    return (issue.fields.issuelinks ?? []).some(l => l.inwardIssue?.key === otherKey || l.outwardIssue?.key === otherKey);
+  }
+
+  /**
+   * Waltz ticket merge (KTD6): marks `key` as merged into `survivorKey` — a `[Merged into KEY]` summary
+   * prefix and a banner above the unchanged description — in one `updateIssue` call. Applied once: a ticket
+   * that already carries this marker is not written again, and a marker naming another survivor is replaced.
+   */
+  async markTicketMerged(key: string, survivorKey: string): Promise<{ changed: boolean }> {
+    const issue = await this.client.getIssue(key);
+    const summary = mergedSummary(issue.fields.summary ?? '', survivorKey);
+    const description = mergedBanner(extractTextFromAdf(issue.fields.description), survivorKey);
+    if (summary === issue.fields.summary && description === extractTextFromAdf(issue.fields.description)) return { changed: false };
+    await this.client.updateIssue(key, { summary, description });
+    this.onDiag?.('info', `Ticket marked as merged — ${key} into ${survivorKey}`, { issueKey: key, survivorKey });
+    return { changed: true };
   }
 
   /**

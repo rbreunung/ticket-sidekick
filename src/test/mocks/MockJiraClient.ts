@@ -8,6 +8,7 @@ import type {
   JiraFieldMeta,
   JiraFilter,
   JiraIssue,
+  JiraIssueLinkType,
   JiraMyFiltersResult,
   JiraProject,
   JiraProjectStatus,
@@ -64,6 +65,10 @@ export class MockJiraClient implements IJiraClient {
   async createIssueLink(inwardKey: string, outwardKey: string, typeName: string): Promise<void> {
     if (this.createIssueLinkError) throw this.createIssueLinkError;
     this.createIssueLinkCalls.push({ inwardKey, outwardKey, typeName });
+  }
+
+  async getIssueLinkTypes(): Promise<JiraIssueLinkType[]> {
+    return loadFixture<{ issueLinkTypes: JiraIssueLinkType[] }>('issue-link-types.json').issueLinkTypes;
   }
 
   async searchJql(_jql: string, _maxResults?: number, _startAt?: number, _extraFields?: string[], _pageToken?: string): Promise<JiraSearchResult> {
