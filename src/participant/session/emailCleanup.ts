@@ -2,7 +2,7 @@
 // Pure (vscode-free); re-exported through ../sessionState.ts.
 
 import type { EmailImportItem } from '../../utils/emlParser';
-import { applyBoilerplateCleanup, computeDroppedImageNames, buildPatternFromBlock, BOILERPLATE_KINDS, type BoilerplatePattern, type DetectedBlock } from '../../utils/emailBoilerplate';
+import { applyBoilerplateCleanup, computeDroppedImageNames, buildPatternFromBlock, isTooLongForModelCheck, BOILERPLATE_KINDS, type BoilerplatePattern, type DetectedBlock } from '../../utils/emailBoilerplate';
 import { CURRENT_SESSION_SCHEMA_VERSION } from './importTypes';
 import { buildChatCommandLink, countedNoun, isCancellation, neutralizeMarkdownLinks } from './primitives';
 
@@ -11,7 +11,8 @@ import { buildChatCommandLink, countedNoun, isCancellation, neutralizeMarkdownLi
 // ticket creation and "add email as comment"). `pending`: the Command Palette stored parsed items and
 // the chat turn it opens runs detection; `consent`: some emails had no pattern match and the user is
 // asked whether the Copilot model may look at them (R3); `preview`: the per-email list of detected
-// blocks the user strips or keeps (R6-R8). Detection itself lives in src/utils/emailBoilerplate.ts;
+// blocks the user strips or keeps (R6-R8); it also offers a second model pass for emails the model
+// has not yet checked, including pattern-matched ones. Detection itself lives in src/utils/emailBoilerplate.ts;
 // these are the pure screen builders and reply parser, orchestrated by emailHandler.ts.
 // ---------------------------------------------------------------------------------------------
 
@@ -61,6 +62,27 @@ export function numberEmailCleanupBlocks(session: EmailCleanupSession): Numbered
   const out: NumberedCleanupBlock[] = [];
   for (const row of session.rows) for (const block of row.blocks) out.push({ n: out.length + 1, row, block });
   return out;
+}
+
+// Rows the preview's `model check` sends: not excluded, a non-empty body that fits the model limit, and
+// not yet checked. `declined` and `failed` rows count — replying on the preview is fresh consent, and a
+// failed call is a retry.
+export function listModelCheckEligibleRows(session: EmailCleanupSession): EmailCleanupRow[] {
+  return session.rows.filter(r =>
+    !r.excluded && r.modelStatus !== 'checked' && !!r.item.markdownBody.trim() && !isTooLongForModelCheck(r.item.markdownBody));
+}
+
+const blockIdentity = (entry: NumberedCleanupBlock): string =>
+  `${entry.row.id}:${entry.block.kind}:${entry.block.startLine}:${entry.block.endLine}`;
+
+// A model pass can add blocks above already-saved ones and so shift the preview's block numbers. Maps the
+// saved numbers from before the pass onto the same blocks afterwards; a saved block that is gone, or is
+// now found by a pattern (its own saved one), drops out.
+export function remapSavedBlocks(savedBefore: number[], numberedBefore: NumberedCleanupBlock[], session: EmailCleanupSession): number[] {
+  const saved = new Set(numberedBefore.filter(b => savedBefore.includes(b.n)).map(blockIdentity));
+  return numberEmailCleanupBlocks(session)
+    .filter(b => b.block.source === 'model' && saved.has(blockIdentity(b)))
+    .map(b => b.n);
 }
 
 // "3 footers, 1 signature" — kinds in header/footer/signature order.
@@ -143,7 +165,8 @@ export function buildEmailCleanupPreview(session: EmailCleanupSession, notice?: 
     const toggle = multi
       ? ` · ${buildChatCommandLink(row.excluded ? `Include ${row.id}` : `Exclude ${row.id}`, '@jira', row.id)}`
       : '';
-    const status = row.excluded ? ' — _excluded, imports unchanged_' : '';
+    const tooLong = row.modelStatus !== 'checked' && isTooLongForModelCheck(row.item.markdownBody) ? ' · _too long for model check_' : '';
+    const status = (row.excluded ? ' — _excluded, imports unchanged_' : '') + tooLong;
     out.push(`**${row.id}** · ${subject} — ${describeBlockKinds(row.blocks)}${imagePart}${status}${toggle}`);
     for (const { n, block } of numbered.filter(x => x.row === row)) {
       const lineInfo = `${block.nonEmptyLineCount} line${block.nonEmptyLineCount === 1 ? '' : 's'}${block.capped ? ', capped' : ''}`;
@@ -160,7 +183,13 @@ export function buildEmailCleanupPreview(session: EmailCleanupSession, notice?: 
     }
     out.push('');
   }
-  out.push(`${buildChatCommandLink('Strip', '@jira', 'strip')} · ${buildChatCommandLink('Keep', '@jira', 'keep')} · ` +
+  const eligible = listModelCheckEligibleRows(session);
+  if (eligible.length > 0) {
+    out.push(`Your patterns may have missed something: reply **model check** to let the Copilot model look for more boilerplate in ${eligible.length} email(s). ` +
+      'Nothing is sent unless you reply.', '');
+  }
+  const modelCheck = eligible.length > 0 ? `${buildChatCommandLink('Model check', '@jira', 'model check')} · ` : '';
+  out.push(`${buildChatCommandLink('Strip', '@jira', 'strip')} · ${buildChatCommandLink('Keep', '@jira', 'keep')} · ${modelCheck}` +
     buildChatCommandLink('Cancel', '@jira', 'cancel'));
   return out.join('\n');
 }
@@ -176,7 +205,7 @@ export type EmailCleanupReply =
   | { action: 'invalid' };
 
 // Replies per phase. Consent: `model check` (or yes) / `skip model` (or no, skip) / cancel.
-// Preview: `strip`, `keep`, row ids to toggle exclusion (`3`, `2, 4`), `save <n>` / `save #n`, cancel.
+// Preview: `strip`, `keep`, `model check` (not `yes`: ambiguous next to strip/keep), row ids to toggle exclusion (`3`, `2, 4`), `save <n>` / `save #n`, cancel.
 export function parseEmailCleanupReply(reply: string, phase: 'consent' | 'preview', rowIds: string[]): EmailCleanupReply {
   const text = reply.trim().toLowerCase().replace(/[.!]+$/, '');
   if (phase === 'consent') {
@@ -186,6 +215,7 @@ export function parseEmailCleanupReply(reply: string, phase: 'consent' | 'previe
     if (isCancellation(text)) return { action: 'cancel' };
     return { action: 'invalid' };
   }
+  if (/^model[\s-]*check$/.test(text)) return { action: 'model-check' };
   if (text === 'strip' || text === 'strip all' || text === 'remove') return { action: 'strip' };
   if (text === 'keep' || text === 'keep all') return { action: 'keep' };
   const save = /^save\s*#?\s*(\d+)$/.exec(text);

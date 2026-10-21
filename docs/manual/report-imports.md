@@ -35,7 +35,7 @@ Before an email becomes a ticket or a comment, `@jira` looks for boilerplate in 
 
 | Reply | What happens |
 |---|---|
-| `model check` (or `yes`) | Only the emails listed on that screen are sent to the model, one at a time. Emails that matched a pattern are never sent. An email longer than 30,000 characters is never sent and shows *too long for model check* |
+| `model check` (or `yes`) | Only the emails listed on that screen are sent to the model, one at a time. On this screen, emails that matched a pattern are not sent; you can still send them later with `model check` on the preview. An email longer than 30,000 characters is never sent and shows *too long for model check* |
 | `skip model` (or `no`) | Nothing is sent. Those emails show *nothing detected* and import unchanged |
 | `cancel` | Stops the import |
 
@@ -46,6 +46,7 @@ No email content goes to the model without this reply, and the answer is not rem
 | Reply | What happens |
 |---|---|
 | `strip` | Removes the listed blocks, then continues to the template pick (or the comment preview) |
+| `model check` | Sends every email the model has not looked at yet to the model, one at a time, to find boilerplate your patterns missed — including emails your patterns already matched. Excluded emails, empty emails and emails over 30,000 characters are not sent. New blocks appear in the same preview next to the pattern blocks. Shown only while at least one email can still be checked; nothing is sent unless you reply |
 | `keep` | Imports every email unchanged |
 | a row id, e.g. `3` (or `2, 4`) | Excludes that email from stripping; reply it again to include it. Excluded emails import unchanged |
 | `save <n>` | For a block the model found (numbered `#n`): saves it as a pattern in your user settings, so the next import finds it without the model. The preview shows the exact start and end phrases it will store before you save. Blocks your patterns found are already saved and cannot be saved again |

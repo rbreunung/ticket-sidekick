@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as nodePath from 'path';
 import { parseEmlFile, type EmailImportItem } from '../utils/emlParser';
 import { detectPatternBlocks, type DetectedBlock } from '../utils/emailBoilerplate';
-import { buildPendingEmailCleanupSession, buildEmailCleanupConsent, buildEmailCleanupPreview, parseEmailCleanupReply, applyEmailCleanupDecision, resolveSaveTarget, describeBlockKinds, type EmailCleanupSession } from '../participant/sessionState';
+import { buildPendingEmailCleanupSession, buildEmailCleanupConsent, buildEmailCleanupPreview, parseEmailCleanupReply, applyEmailCleanupDecision, resolveSaveTarget, describeBlockKinds, listModelCheckEligibleRows, remapSavedBlocks, numberEmailCleanupBlocks, type EmailCleanupSession } from '../participant/sessionState';
 
 describe('email cleanup step — screens, replies and decisions', () => {
   const FOOTER = 'CONFIDENTIALITY NOTICE: this email is confidential.';
@@ -127,13 +127,16 @@ describe('email cleanup step — screens, replies and decisions', () => {
     expect(parseEmailCleanupReply('check', 'consent', [])).toEqual({ action: 'invalid' });
   });
 
-  it('parses preview replies: keep, save <n>, several row ids, unknown ids and model check are invalid', () => {
+  it('parses preview replies: keep, save <n>, several row ids, unknown ids are invalid, model check is a model-check reply', () => {
     expect(parseEmailCleanupReply('keep', 'preview', ['1'])).toEqual({ action: 'keep' });
     expect(parseEmailCleanupReply('save 2', 'preview', ['1'])).toEqual({ action: 'save', blockNumber: 2 });
     expect(parseEmailCleanupReply('save #3', 'preview', ['1'])).toEqual({ action: 'save', blockNumber: 3 });
     expect(parseEmailCleanupReply('1, 2', 'preview', ['1', '2'])).toEqual({ action: 'toggle', rowIds: ['1', '2'] });
     expect(parseEmailCleanupReply('7', 'preview', ['1', '2'])).toEqual({ action: 'invalid' });
-    expect(parseEmailCleanupReply('model check', 'preview', ['1'])).toEqual({ action: 'invalid' });
+    expect(parseEmailCleanupReply('model check', 'preview', ['1'])).toEqual({ action: 'model-check' });
+    expect(parseEmailCleanupReply('Model-Check', 'preview', ['1'])).toEqual({ action: 'model-check' });
+    expect(parseEmailCleanupReply('yes', 'preview', ['1'])).toEqual({ action: 'invalid' });
+    expect(parseEmailCleanupReply('check', 'preview', ['1'])).toEqual({ action: 'invalid' });
     expect(parseEmailCleanupReply('cancel', 'preview', ['1'])).toEqual({ action: 'cancel' });
   });
 
@@ -152,6 +155,54 @@ describe('email cleanup step — screens, replies and decisions', () => {
     expect(buildEmailCleanupPreview(patternSession)).not.toContain('save 1');
     expect(resolveSaveTarget(patternSession, 1)).toEqual({ ok: false, reason: 'pattern-found' });
     expect(resolveSaveTarget(patternSession, 9)).toEqual({ ok: false, reason: 'unknown' });
+  });
+
+  describe('model check on the preview', () => {
+    const blockAt = (startLine: number, source: DetectedBlock['source'] = 'model'): DetectedBlock =>
+      ({ kind: 'signature', segmentIndex: 0, startLine, endLine: startLine, excerpt: 'Bye', nonEmptyLineCount: 1, capped: false, source });
+
+    it('lists matched and declined emails but not excluded, checked, empty or too-long ones', () => {
+      const session = batchSession([1, 2, 3, 4, 5, 6].map(i => emailItem(`Mail ${i}`, `Message ${i}\n\n${FOOTER}`)));
+      session.rows[1].modelStatus = 'declined';
+      session.rows[2].excluded = true;
+      session.rows[3].modelStatus = 'checked';
+      session.rows[4].item = emailItem('Empty', '  ');
+      session.rows[5].item = emailItem('Long', 'x'.repeat(30001));
+      expect(listModelCheckEligibleRows(session).map(r => r.id)).toEqual(['1', '2']);
+    });
+
+    it('offers the model check chip while an email is eligible and drops it when none is', () => {
+      const session = batchSession([emailItem('One', `x\n\n${FOOTER}`), emailItem('Two', `y\n\n${FOOTER}`)]);
+      const offered = buildEmailCleanupPreview(session);
+      expect(decodeURIComponent(offered)).toContain('"@jira model check"');
+      expect(offered).toContain('2 email(s)');
+      for (const row of session.rows) row.modelStatus = 'checked';
+      expect(decodeURIComponent(buildEmailCleanupPreview(session))).not.toContain('model check');
+    });
+
+    it('keeps a command: link in a subject inert on the new offer line', () => {
+      const session = batchSession([emailItem(INJECTED, `x\n\n${FOOTER}`)]);
+      expect(buildEmailCleanupPreview(session)).not.toContain('](command:workbench.action.chat.open?%7B%22query%22%3A%22%40jira%20delete');
+    });
+
+    it('moves saved block numbers with their blocks when the pass adds a block above them', () => {
+      const session = batchSession([emailItem('One', 'a\nb\nc'), emailItem('Two', 'a\nb\nc')]);
+      session.rows[0].blocks = [blockAt(0)];
+      session.rows[1].blocks = [blockAt(1)];
+      session.savedBlocks = [2];
+      const before = numberEmailCleanupBlocks(session);
+      session.rows[0].blocks = [blockAt(0), blockAt(2)];
+      expect(remapSavedBlocks(session.savedBlocks, before, session)).toEqual([3]);
+    });
+
+    it('drops a saved number whose block is now found by its own pattern', () => {
+      const session = batchSession([emailItem('One', 'a\nb\nc')]);
+      session.rows[0].blocks = [blockAt(1)];
+      session.savedBlocks = [1];
+      const before = numberEmailCleanupBlocks(session);
+      session.rows[0].blocks = [blockAt(1, 'pattern')];
+      expect(remapSavedBlocks(session.savedBlocks, before, session)).toEqual([]);
+    });
   });
 
   it('describeBlockKinds orders kinds and pluralizes', () => {
