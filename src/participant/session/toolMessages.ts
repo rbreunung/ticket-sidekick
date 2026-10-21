@@ -111,28 +111,40 @@ export function buildLoadTicketConfirmation(ticketKey: string): ToolConfirmation
   };
 }
 
-/** Result text for `jira_loadTicket` (R8/KTD4) — names the files it wrote as available for
- * follow-up reading and explicitly asks the calling model to check with the user before
- * reading them to analyze the ticket, rather than continuing on its own: Agent Mode tool
- * calls have no chip mechanism (chips are `@jira` chat-only), so this returned text is the
- * only channel available to steer that next step toward the user's decision. */
+/** Result text for `jira_loadTicket` (R8/KTD4) — names every file it wrote by its full
+ * workspace-relative path, so the calling model knows exactly where the ticket went and can
+ * read it without searching (the folder is git-ignored, which search tools may skip). Calls out
+ * `comments.md` explicitly, since comments often hold the decisive detail. Agent Mode tool calls
+ * have no chip mechanism (chips are `@jira` chat-only), so this returned text is the only channel
+ * to steer the next step: continue into analysis only when the user's request already asked for
+ * it, otherwise leave that decision to the user. */
 export function buildLoadTicketResultMessage(
   ticketKey: string,
   commentCount: number,
   downloadedCount: number,
   skipped: LoadSkippedSession['skipped'],
   writeErrors: string[],
+  downloadedFiles: string[] = [],
 ): string {
-  const files = ['ticket.md', 'comments.md'];
-  if (downloadedCount > 0) files.push('attachments/');
+  const dir = `.jira-context/${ticketKey}`;
+  const plural = (n: number, word: string) => `${n} ${word}${n !== 1 ? 's' : ''}`;
   const lines = [
-    `Loaded ${ticketKey} into \`.jira-context/${ticketKey}/\` (${files.join(', ')}) — ${commentCount} comment${commentCount !== 1 ? 's' : ''}` +
-      `${downloadedCount > 0 ? `, ${downloadedCount} attachment${downloadedCount !== 1 ? 's' : ''} downloaded` : ''}.`,
-    'Ask the user before reading these to analyze the ticket. Make no assumption.',
+    `Loaded ${ticketKey} into \`${dir}/\` in the workspace. This folder is now the local source of information for ${ticketKey}:`,
+    `- \`${dir}/ticket.md\` — fields, description, web links, attachment list`,
+    `- \`${dir}/comments.md\` — ${plural(commentCount, 'comment')}${commentCount > 0 ? ' (read these too: they often hold details missing from the description)' : ''}`,
   ];
+  if (downloadedCount > 0) {
+    lines.push(`- \`${dir}/attachments/\` — ${plural(downloadedCount, 'file')}:`);
+    for (const name of downloadedFiles) lines.push(`  - \`${dir}/attachments/${name}\``);
+  }
+  lines.push(
+    'Read these files by their exact paths above (the folder is git-ignored, so file search may not list it). ' +
+      'If the user\'s request already asks to analyze the ticket or write a report, continue now using these files as the ticket\'s content; ' +
+      'if the user only asked to download it, stop here and ask what to do next.',
+  );
   if (skipped.length > 0) {
     const names = skipped.map(s => s.filename).join(', ');
-    lines.push(`${skipped.length} attachment${skipped.length !== 1 ? 's' : ''} skipped (oversized or an unrecognized type): ${names}. Call jira_downloadAttachment to fetch one by name.`);
+    lines.push(`${plural(skipped.length, 'attachment')} skipped (oversized or an unrecognized type): ${names}. Call jira_downloadAttachment to fetch one by name.`);
   }
   if (writeErrors.length > 0) {
     lines.push(`Write errors: ${writeErrors.join('; ')}`);

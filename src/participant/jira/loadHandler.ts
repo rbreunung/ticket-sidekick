@@ -56,6 +56,8 @@ export async function ensureJiraContextGitignored(wsRoot: vscode.Uri): Promise<v
 
 export interface LoadTicketCoreResult {
   downloadedCount: number;
+  /** Filenames written to `attachments/`, so the `jira_loadTicket` result can name them. */
+  downloadedFiles: string[];
   skipped: LoadSkippedSession['skipped'];
   writeErrors: string[];
 }
@@ -195,7 +197,7 @@ export async function loadTicketToWorkspace(
     })),
   ];
 
-  return { downloadedCount: downloaded.size, skipped, writeErrors };
+  return { downloadedCount: downloaded.size, downloadedFiles: [...downloaded], skipped, writeErrors };
 }
 
 /** {@link handleLoadTicket}'s result: whether a skipped-attachments resume session started, plus

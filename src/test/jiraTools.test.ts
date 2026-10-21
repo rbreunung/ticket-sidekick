@@ -56,16 +56,20 @@ describe('jira_loadTicket confirmation (R4: names ticket and folder)', () => {
   });
 });
 
-describe('jira_loadTicket result message (R8/KTD4: ask the user, make no assumption)', () => {
-  it('names the written files and asks the user before reading them, without instructing the model to read them itself', () => {
-    const message = buildLoadTicketResultMessage('VSJI-38', 3, 2, [], []);
-    expect(message).toContain('VSJI-38');
-    expect(message).toContain('.jira-context/VSJI-38/');
-    expect(message).toContain('ticket.md');
-    expect(message).toContain('comments.md');
-    expect(message).toContain('attachments/');
-    expect(message).toMatch(/ask the user/i);
-    expect(message).not.toMatch(/read (these|them) (files )?to analyze/i);
+describe('jira_loadTicket result message (names exactly where the ticket went)', () => {
+  it('gives the full path of every written file, including comments and each downloaded attachment', () => {
+    const message = buildLoadTicketResultMessage('VSJI-38', 3, 2, [], [], ['error.log', 'shot.png']);
+    expect(message).toContain('.jira-context/VSJI-38/ticket.md');
+    expect(message).toContain('.jira-context/VSJI-38/comments.md');
+    expect(message).toContain('3 comments');
+    expect(message).toContain('.jira-context/VSJI-38/attachments/error.log');
+    expect(message).toContain('.jira-context/VSJI-38/attachments/shot.png');
+  });
+
+  it('continues into analysis only when the request already asked for it', () => {
+    const message = buildLoadTicketResultMessage('VSJI-38', 3, 2, [], [], ['error.log', 'shot.png']);
+    expect(message).toMatch(/already asks to analyze/i);
+    expect(message).toMatch(/only asked to download.*stop/i);
   });
 
   it('omits attachments/ from the file list when nothing was downloaded', () => {
