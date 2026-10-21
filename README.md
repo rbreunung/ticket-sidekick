@@ -401,7 +401,7 @@ To see more on the review screen (e.g. each ticket's fix version), add field IDs
 
 ### Report imports (email, Veracode, Waltz)
 
-Turn a `.eml` email, a Veracode Detailed Report, or a Waltz OSS Report into Jira tickets — creating a new ticket, or adding an email as a comment to an existing one. See [Report Imports](docs/manual/report-imports.md) for the full walkthrough and settings.
+Turn a `.eml` email, a Veracode Detailed Report, or a Waltz OSS Report into Jira tickets — creating a new ticket, or adding an email as a comment to an existing one. For OSS reports you can also merge related tickets (`merge A5 into A3`) and reload the report after changing the accepted list. See [Report Imports](docs/manual/report-imports.md) for the full walkthrough and settings.
 
 ### Templates and cleanup rules
 

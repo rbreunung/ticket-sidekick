@@ -20,6 +20,9 @@ A ticket an import creates for an already-ticketed item that holds only the find
 ### Fold
 A group of findings or components that an import turns into one review row and one ticket instead of one per finding. Veracode folds flaws that share a file and CWE, or a file and a line, automatically; in both importers the user can fold more with `merge`. A ticket created from a fold is a **Folded ticket**: its title says what it folds by count, and its description opens with a banner and an overview table so the fold is visible. A merge lasts only for the page and the import it was made on; the findings it folded stay recorded on the ticket as labels.
 
+### Ticket merge
+An import action that combines related tickets: several **source** tickets are cancelled as duplicates of one **survivor**. The survivor is rewritten from the report rows of all of them, each source is linked as a duplicate, marked as merged (a `[Merged into KEY]` title prefix and a banner above its text, original text kept) and closed with resolution Duplicate. Nothing is stored about it: the survivor carries the combined labels, so a later import targets it and leaves the resolved source alone. Distinct from a **Fold** (several findings in one row and one new ticket) and from a **Rewrite** (one ticket rebuilt, no ticket cancelled). Waltz only.
+
 ### Rewrite
 An import action that rebuilds an existing ticket's title, description and labels from the report as if the ticket had always been one fold, and posts a comment naming the findings it added and any it dropped. Offered when adding rows to a ticket (`add … to <KEY>`, as an alternative to a plain comment) and on Already-ticketed rows, where it covers all the rows that point to the ticket or none. Distinct from a re-created ticket, which is a new ticket, and from an update, which only adds labels and a comment.
 
