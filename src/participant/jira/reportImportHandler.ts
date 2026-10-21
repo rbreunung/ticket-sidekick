@@ -30,6 +30,7 @@ import { acceptComponents, acceptRows, showAcceptedList, unacceptEntry } from '.
 import { addToTicket, showAddPrompt } from './importAddToTicket';
 import { createNewRows } from './importCreate';
 import { IMPORT_SESSION_KINDS, afterGroupAction, streamImportReview } from './importReviewScreen';
+import { handleMergeRunReply, showMergePrompt, startMerge, type MergeTurn } from './importMerge';
 import { closeStaleTickets } from './importStaleClose';
 import { TICKETED_RUNS, executeTicketedActions } from './importTicketedActions';
 import type { ReportImportDescriptor } from './reportImportTypes';
@@ -671,8 +672,21 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
     canMergeTickets: descriptor.ticketMerge !== undefined,
     mergedRowIds: session.rows.filter(r => r.existingTicketKey === null && r.memberIds !== undefined).map(r => r.id),
   };
-  const action = parseImportReviewReply(view, reply, ctx);
   const rerender = () => streamImportReview(session, stream, ws, descriptor, baseUrl);
+  // A merge that is waiting for the user reads the reply first, ahead of the screen's own vocabulary (KTD3).
+  const afterMerge = async (turn: MergeTurn): Promise<vscode.ChatResult | void> => {
+    if (turn !== 'finished') {
+      if (turn === 'waiting') await ws.update(descriptor.sessionKeys.review, session);
+      return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
+    }
+    Object.assign(session, afterGroupAction(session));
+    if (descriptor.ticketMerge && session.reportFilePath) await syncAfterListChange(session, ticketService, stream, descriptor);
+    return rerender();
+  };
+  if (session.mergeRun && descriptor.ticketMerge) {
+    return afterMerge(await handleMergeRunReply(reply, session, ticketService, stream, descriptor, baseUrl));
+  }
+  const action = parseImportReviewReply(view, reply, ctx);
 
   switch (action.kind) {
     case 'invalid':
@@ -743,6 +757,10 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
       if (removed && willRefresh) await syncAfterListChange(session, ticketService, stream, descriptor);
       return rerender();
     }
+    case 'mergeTicketsPrompt':
+      return afterMerge(await showMergePrompt(session, action.sources, action.target, ticketService, stream, descriptor, baseUrl));
+    case 'mergeTickets':
+      return afterMerge(await startMerge(session, action.sources, action.target, ticketService, stream, descriptor, baseUrl));
     case 'reloadPrompt': {
       if (!session.reportFilePath) {
         stream.markdown('_This review was not built from a report file I can re-read, so there is nothing to reload. Start the import again._\n\n');

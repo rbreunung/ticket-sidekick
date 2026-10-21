@@ -75,7 +75,7 @@ export function makeSession(overrides: Partial<ImportTemplateSelectionSession<Te
   };
 }
 
-export interface FakeTicket { labels: string[]; summary?: string; description?: string; resolution?: { name: string } | null; created?: string; status?: string }
+export interface FakeTicket { labels: string[]; summary?: string; description?: string; resolution?: { name: string } | null; created?: string; status?: string; rejectResolution?: boolean }
 
 /** A small stateful Jira: getIssue/updateIssue/createIssue share one ticket store. */
 export function statefulJira(client: MockJiraClient, tickets: Record<string, FakeTicket>) {

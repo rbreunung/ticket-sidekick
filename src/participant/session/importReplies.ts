@@ -361,6 +361,60 @@ export function buildAddPrompt(input: AddPromptInput): string {
   return lines.join('\n');
 }
 
+/** Jira-sourced text on a trusted screen: no links, no autolinks, one line (backslashes first, so the text's own "\<" cannot un-escape ours). */
+export function safeMarkdownText(value: string): string {
+  return neutralizeMarkdownLinks(value.replace(/\r?\n/g, ' ')).replace(/\\/g, '\\\\').replace(/</g, '\\<');
+}
+
+export interface MergePromptTicket {
+  key: string;
+  summary: string;
+  status: string | null;
+}
+
+/** Everything the merge confirmation shows (R3): the tickets, what will happen, and every warning and fallback. */
+export interface MergePromptInput {
+  survivor: MergePromptTicket;
+  sources: MergePromptTicket[];
+  /** Sentences built from ticket keys only (R10). */
+  warnings: string[];
+  /** Findings the rewrite would no longer cover, from Jira labels; neutralized here. */
+  droppedKeys: string[];
+  baseUrl?: string;
+}
+
+/**
+ * Waltz ticket merge (KTD2): the confirmation for `merge … into …`. Writes nothing itself — the one link at the
+ * end resends the command with `confirm`, which is the user's go-ahead. Ticket text comes from Jira, so it is neutralized.
+ */
+export function buildMergePrompt(input: MergePromptInput): string {
+  const line = (t: MergePromptTicket) => `**${formatKeyLink(t.key, input.baseUrl)}** — ${safeMarkdownText(t.summary)}${t.status ? ` (${safeMarkdownText(t.status)})` : ''}`;
+  const count = input.sources.length;
+  const lines: string[] = [
+    `### Merge ${count} ${count === 1 ? 'ticket' : 'tickets'} into ${formatKeyLink(input.survivor.key, input.baseUrl)}`,
+    '',
+    `Kept: ${line(input.survivor)}`,
+    '',
+    'Cancelled as duplicates:',
+    ...input.sources.map(t => `- ${line(t)}`),
+    '',
+  ];
+  for (const warning of input.warnings) lines.push(`⚠ ${warning}`);
+  if (input.warnings.length > 0) lines.push('');
+  if (input.droppedKeys.length > 0) {
+    lines.push(`The rewrite would drop these findings the tickets currently record, because the report does not cover them: ${input.droppedKeys.map(safeMarkdownText).join(', ')}.`, '');
+  }
+  lines.push(
+    'In this order:',
+    `1. Rewrite ${input.survivor.key} (title, description, combined labels) from the report rows of all these tickets, and comment on what it took over.`,
+    '2. For each cancelled ticket: link it as a duplicate of the kept one, prefix its title with the merge marker and put a banner above its text (the old text stays).',
+    '3. Close each cancelled ticket as a duplicate. You pick the status to move each issue type to.',
+    '',
+    `${cmdLink('Merge', `merge ${input.sources.map(t => t.key).join(' ')} into ${input.survivor.key} confirm`)} — nothing is written until you click.`,
+  );
+  return lines.join('\n');
+}
+
 /**
  * Finding folding: after a page is rebuilt from `allRows` (which keeps the originals), puts each
  * of `merged` back in place of its members when all of them are still on the page. A merged row

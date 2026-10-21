@@ -314,8 +314,12 @@ export interface MergeRun {
   closeTarget?: StaleTargetOption;
   closeTargetOptions?: StaleTargetOption[];
   resolutionOptions?: string[];
-  /** Whether the project offers a Duplicate resolution; when it does the close sets it without asking. */
-  duplicateResolution?: boolean;
+  /** The project's Duplicate resolution (its exact name) when it offers one; the close then sets it without asking. */
+  duplicateResolution?: string;
+  /** The link type the link steps use: `Duplicate`, or `Relates` when the project has no Duplicate link type (R9). */
+  linkType?: string;
+  /** Findings the rewritten survivor no longer covers, kept from the rewrite step for its comment. */
+  droppedKeys?: string[];
   /** Sources the close skipped (no workflow graph, no path) with the reason, for the final report. */
   closeSkipped?: Array<{ key: string; reason: string }>;
 }
