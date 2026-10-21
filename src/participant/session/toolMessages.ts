@@ -143,8 +143,12 @@ export function buildLoadTicketResultMessage(
       'if the user only asked to download it, stop here and ask what to do next.',
   );
   if (skipped.length > 0) {
-    const names = skipped.map(s => s.filename).join(', ');
-    lines.push(`${plural(skipped.length, 'attachment')} skipped (oversized or an unrecognized type): ${names}. Call jira_downloadAttachment to fetch one by name.`);
+    lines.push(
+      `${plural(skipped.length, 'attachment')} on ${ticketKey} not downloaded by the load (this is only a default filter, none is blocked):`,
+      ...skipped.map(s => `- ${s.filename} (${formatFileSize(s.size)}, ${s.reason})`),
+      'If the analysis needs one of them, call jira_downloadAttachment with ticketKey and the exact filename; it is saved to ' +
+        `\`.jira-context/${ticketKey}/attachments/\` and can be read from there.`,
+    );
   }
   if (writeErrors.length > 0) {
     lines.push(`Write errors: ${writeErrors.join('; ')}`);

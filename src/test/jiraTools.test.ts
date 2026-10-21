@@ -77,13 +77,16 @@ describe('jira_loadTicket result message (names exactly where the ticket went)',
     expect(message).not.toContain('attachments/');
   });
 
-  it('names skipped attachments and points at jira_downloadAttachment to fetch one', () => {
+  it('lists skipped attachments with size and reason and says a follow-up download call is possible', () => {
     const skipped = [
       { filename: 'heap-dump.bin', content: 'https://jira.example.com/x', size: 52428800, mimeType: 'application/octet-stream', reason: 'unknown binary format' },
     ];
     const message = buildLoadTicketResultMessage('VSJI-38', 1, 1, skipped, []);
     expect(message).toContain('heap-dump.bin');
+    expect(message).toContain('unknown binary format');
+    expect(message).toMatch(/none is blocked/i);
     expect(message).toContain('jira_downloadAttachment');
+    expect(message).toMatch(/follow-up|if the analysis needs/i);
   });
 
   it('surfaces write errors when present', () => {
