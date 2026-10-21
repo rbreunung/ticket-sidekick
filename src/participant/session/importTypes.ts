@@ -251,6 +251,8 @@ export interface ReviewSession<TRow> {
   staleCandidates?: StaleCandidate[];
   // Which page (0-based) of the Stale screen is showing, 20 tickets per page; absent means the first.
   stalePage?: number;
+  // Which page (0-based) of the Already-ticketed screen is showing, 20 rows per page; absent means the first.
+  ticketedPage?: number;
   // Overview-hub KTD1/KTD7: the screen currently shown, the result groups that had rows when the
   // session was built (fixed for the session's life — R1's listing basis), whether exactly one
   // group had rows (then there is no overview, R4), and the accumulated action outcomes (R2).
