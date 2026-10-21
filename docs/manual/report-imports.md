@@ -48,7 +48,7 @@ No email content goes to the model without this reply, and the answer is not rem
 | `strip` | Removes the listed blocks, then continues to the template pick (or the comment preview) |
 | `model check` | Sends every email the model has not looked at yet to the model, one at a time, to find boilerplate your patterns missed — including emails your patterns already matched. Excluded emails, empty emails and emails over 30,000 characters are not sent. New blocks appear in the same preview next to the pattern blocks. Shown only while at least one email can still be checked; nothing is sent unless you reply |
 | `keep` | Imports every email unchanged |
-| a row id, e.g. `3` (or `2, 4`) | Excludes that email from stripping; reply it again to include it. Excluded emails import unchanged |
+| a row id, e.g. `3` (or `2, 4`) | Excludes that email from stripping and from `model check`; reply it again to include it. Excluded emails import unchanged. Emails with nothing detected show the same Exclude chip |
 | `save <n>` | For a block the model found (numbered `#n`): saves it as a pattern in your user settings, so the next import finds it without the model. The preview shows the exact start and end phrases it will store before you save. Blocks your patterns found are already saved and cannot be saved again |
 | `cancel` | Stops the import |
 
