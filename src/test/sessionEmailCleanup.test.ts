@@ -177,7 +177,17 @@ describe('email cleanup step — screens, replies and decisions', () => {
       expect(decodeURIComponent(offered)).toContain('"@jira model check"');
       expect(offered).toContain('2 email(s)');
       for (const row of session.rows) row.modelStatus = 'checked';
-      expect(decodeURIComponent(buildEmailCleanupPreview(session))).not.toContain('model check');
+      expect(decodeURIComponent(buildEmailCleanupPreview(session))).not.toContain('"@jira model check"');
+    });
+
+    it('an email with nothing detected shows its Exclude chip and, once excluded, its state', () => {
+      const session = batchSession([emailItem('One', `x\n\n${FOOTER}`), emailItem('Plain', 'Hello')]);
+      session.rows[1].modelStatus = 'declined';
+      expect(decodeURIComponent(buildEmailCleanupPreview(session))).toContain('"@jira 2"');
+      session.rows[1].excluded = true;
+      const text = buildEmailCleanupPreview(session);
+      expect(text).toContain('excluded, not sent to the model');
+      expect(decodeURIComponent(text)).toContain('Include 2');
     });
 
     it('keeps a command: link in a subject inert on the new offer line', () => {

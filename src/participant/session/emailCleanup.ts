@@ -151,13 +151,18 @@ export function buildEmailCleanupPreview(session: EmailCleanupSession, notice?: 
   out.push('### Email boilerplate found', '');
   out.push(session.target.kind === 'batch'
     ? 'Reply **strip** to remove the blocks below before the tickets are created, or **keep** to import the emails unchanged.' +
-      (multi ? ' Reply a row id to exclude that email from stripping (reply it again to include it).' : '')
+      (multi ? ' Reply a row id to exclude that email from stripping and from the model check (reply it again to include it).' : '')
     : `Reply **strip** to remove the blocks below from the comment for **${session.target.ticketKey}**, or **keep** to post the email unchanged.`);
   out.push('');
   for (const row of session.rows) {
     const subject = untrustedSnippet(row.item.subject);
     if (row.blocks.length === 0) {
-      out.push(`**${row.id}** · ${subject} — ${nothingDetectedLabel(row.modelStatus)}`, '');
+      // The exclude toggle also keeps an email from the preview's model check, so it shows here too.
+      const idleToggle = multi
+        ? ` · ${buildChatCommandLink(row.excluded ? `Include ${row.id}` : `Exclude ${row.id}`, '@jira', row.id)}`
+        : '';
+      const idleStatus = row.excluded ? ' — _excluded, not sent to the model_' : '';
+      out.push(`**${row.id}** · ${subject} — ${nothingDetectedLabel(row.modelStatus)}${idleStatus}${idleToggle}`, '');
       continue;
     }
     const dropped = computeDroppedImageNames(row.item, row.blocks).length;

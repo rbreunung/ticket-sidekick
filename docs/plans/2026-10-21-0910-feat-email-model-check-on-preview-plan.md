@@ -42,13 +42,14 @@ Today the model only sees emails that matched none of the user's patterns. An em
 - R4. Blocks the model finds appear in the same preview as numbered blocks marked as found by the model, next to the pattern blocks of that email; `save <n>`, `strip` and `keep` work on them as before.
 - R5. A failed model call for one email leaves that email's existing blocks untouched, logs metadata only and does not stop the other emails.
 - R6. Cancelling the chat request during the pass keeps finished emails checked, leaves the rest unchecked and stays on the preview; the user can reply `model check` again.
-- R7. Block numbers shown after the pass are consistent, and a block already saved as a pattern is not offered for saving again.
+- R7. Block numbers shown after the pass, finished or cancelled, are consistent, and a block already saved as a pattern is not offered for saving again.
+- R9. Every email row on the preview, including one with nothing detected, shows the Exclude/Include control, and an excluded row says it is not sent to the model.
 - R8. The user manual and developer docs no longer say matched emails are never sent, and describe the preview reply.
 
 ### Acceptance Examples
 
 - AE1. **Covers R1, R2, R4.** Given three emails where two matched a footer pattern and the user skipped the model for the third, when the user replies `model check` on the preview, then all three are sent once, and a signature the model finds in email 1 shows as a numbered model block under email 1, beside its pattern block, with a Save chip.
-- AE2. **Covers R2.** Given email 2 excluded, when the user replies `model check`, email 2 is not sent.
+- AE2. **Covers R2, R9.** Given email 2 excluded (including an email with nothing detected), when the user replies `model check`, email 2 is not sent and its row shows the excluded state.
 - AE3. **Covers R5.** Given a pattern-matched email whose model call fails, when the pass ends, its pattern blocks still show and a notice says the check failed for it.
 
 ### Scope Boundaries
@@ -66,7 +67,7 @@ Today the model only sees emails that matched none of the user's patterns. An em
 
 - KTD1. **Reuse the consent-phase pass.** `runModelCheck` takes the rows to check as a parameter instead of selecting `awaiting-consent` rows itself; consent calls it with those rows, the preview with the eligible rows. One pass, one prompt, one set of limits. Serves R2, R5, R6.
 - KTD2. **Eligibility is a pure function on the row.** Not excluded, non-empty body, not over `MODEL_CHECK_MAX_CHARS`, status not `checked`. `declined` and `failed` rows count as eligible because an explicit `model check` on the preview is fresh consent and a failed call is a retry. Serves R1, R2.
-- KTD3. **Remap saved block numbers by block identity.** Blocks are numbered across the whole preview in row order, so a model block added to email 1 shifts every later number and would corrupt `savedBlocks`. Before the pass the handler records each saved block as row id + kind + start/end line; after the pass it rebuilds `savedBlocks` from the blocks that still exist with `source: 'model'`. A saved block that is now found by its own pattern drops out and reads as a pattern block. Serves R4, R7. No schema change.
+- KTD3. **Remap saved block numbers by block identity.** Blocks are numbered across the whole preview in row order, so a model block added to email 1 shifts every later number and would corrupt `savedBlocks`. Before the pass the handler records each saved block as row id + kind + start/end line; after the pass, finished or cancelled, it rebuilds `savedBlocks` from the blocks that still exist with `source: 'model'`. A saved block that is now found by its own pattern drops out and reads as a pattern block. Serves R4, R7. No schema change.
 - KTD4. **A failed call keeps existing blocks.** Today a failure sets `blocks = []`, which is harmless at consent (the row has none) and would erase pattern blocks on the preview. The failure branch now only sets `modelStatus = 'failed'`. Serves R5.
 - KTD5. **`model check` is parsed on the preview only as the phrase itself.** Not `yes`, which already means something on the consent screen and would be ambiguous next to `strip`/`keep`. Serves R3.
 
@@ -81,13 +82,14 @@ None beyond the above; `verifyModelBlocks` merging pattern and model blocks was 
 ### U1. Preview eligibility, wording and reply parsing
 
 - **Goal:** The pure session module knows which rows are eligible, shows the offer, parses the reply and remaps saved numbers.
-- **Requirements:** R1, R2, R3, R7; KTD2, KTD3, KTD5.
+- **Requirements:** R1, R2, R3, R7, R9; KTD2, KTD3, KTD5.
 - **Dependencies:** none.
 - **Files:** `src/participant/session/emailCleanup.ts`, `src/test/sessionEmailCleanup.test.ts`.
 - **Approach:**
   - Add an exported eligibility helper over a session or row, using `isTooLongForModelCheck`.
   - In `buildEmailCleanupPreview`, add one line plus a `Model check` chip (via `buildChatCommandLink`) before the Strip chip when any row is eligible; name how many emails would be sent. Keep email-derived text neutralized as the file already does.
   - Show a short note on pattern-matched rows that are too long for the check, so their absence from the pass is explained.
+  - Show the Exclude/Include chip and the excluded marker on rows with nothing detected too, and word the preview's exclude hint as also keeping an email from the model check (R9).
   - In `parseEmailCleanupReply`, return `{ action: 'model-check' }` for the preview phase on `model check` / `model-check` only.
   - Add a pure helper that, given the saved numbers and the numbered blocks before, returns the saved numbers for the numbered blocks after (KTD3).
   - Update the file's header comment: the preview now also hosts the second model pass.
@@ -112,8 +114,8 @@ None beyond the above; `verifyModelBlocks` merging pattern and model blocks was 
   - In `handleEmailCleanupReply`, handle `model-check` in the preview branch of the switch:
     1. Without a model, re-show the preview with the "no Copilot model" notice.
     2. With no eligible row, re-show the preview with a "nothing left to check" notice.
-    3. Otherwise run the pass; on `cancelled`, store the session and keep the preview with a "Model check stopped" notice.
-    4. On `done`, remap `savedBlocks` (KTD3) and re-show the preview with a notice saying how many blocks were added, or that the model found nothing more, plus how many emails failed.
+    3. Otherwise run the pass, then remap `savedBlocks` on every exit (KTD3), cancelled included.
+    4. On `cancelled`, keep the preview with a "Model check stopped" notice; on `done`, re-show it with a notice saying how many blocks were added, or that the model found nothing more, plus how many emails failed.
   - Keep the session metadata and the `email-cleanup` follow-up kind unchanged.
 - **Patterns to follow:** the consent branch of `handleEmailCleanupReply` and `runModelCheck`'s retry and cancel handling.
 - **Execution note:** Start with a failing handler test for AE1, the highest-value path.
@@ -122,7 +124,7 @@ None beyond the above; `verifyModelBlocks` merging pattern and model blocks was 
   - Covers AE2. An excluded row is not sent.
   - Covers AE3. A failing call for a matched email leaves its pattern blocks, shows a failure notice and logs no body or reply text.
   - A second `model check` right after a finished one says nothing is left and sends nothing.
-  - Cancelling part-way keeps the finished row `checked`, leaves the rest as before, stays on the preview and the next `model check` sends only the unfinished rows.
+  - Cancelling part-way keeps the finished row `checked`, leaves the rest as before, stays on the preview and the next `model check` sends only the unfinished rows; a block saved before the cancel keeps its marker on the same block.
   - No model available keeps the preview and sends nothing.
   - `save <n>` after the pass saves the right block even though a model block was added above it; a block saved before the pass is not offered again.
   - `strip` after the pass removes pattern and model blocks and hands the cleaned items on, as before.
