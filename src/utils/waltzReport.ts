@@ -4,7 +4,7 @@ import { markdownToJiraWiki } from './markdownToJiraWiki';
 import type { DiagLogger } from './diagTypes';
 import {
   toCalendarDate, hasAnyDate, earliestDueDate, dateColumnTitles, diffRemediationDates, parseRecordedDates,
-  DATES_HEADING, NOT_REPORTED_TEXT, ABSENT_CELL,
+  DATES_HEADING, NOT_REPORTED_TEXT, ABSENT_CELL, COMPONENT_COLUMNS,
   type RemediationDates, type WaltzRemediation,
 } from './waltzDates';
 import {
@@ -699,7 +699,10 @@ function pushComponentDetail(lines: string[], component: WaltzComponent, h: stri
 // mistake a lone-asterisk span for italics.
 export function buildDescriptionWiki(component: WaltzComponent): string {
   const lines: string[] = [];
-  pushComponentDetail(lines, component, '###', FULL_CAPS, true);
+  // The same components table a folded ticket carries (one row), so one reader covers both; it holds the dates.
+  lines.push('### Components');
+  pushFoldedTable(lines, [component]);
+  pushComponentDetail(lines, component, '###', FULL_CAPS);
   lines.push('### Component');
   lines.push(sanitizeStandaloneLine(component.nameVersion));
 
@@ -748,10 +751,11 @@ const FOLD_LEVELS = FOLD_CAPS.length + 1;
 function pushFoldedTable(lines: string[], group: WaltzComponent[]): void {
   // R6: every member's dates and plan status, one row per component; a member without dates reads n/a.
   const reportDate = group.map(c => c.remediation?.reportDate ?? null).find(d => d !== null) ?? null;
-  lines.push(`| Component | Max rating | CVEs | Artifacts | ${dateColumnTitles(reportDate).join(' | ')} |`);
-  lines.push('| --- | --- | --- | --- | --- | --- | --- | --- |');
+  lines.push(`| ${COMPONENT_COLUMNS.join(' | ')} | ${dateColumnTitles(reportDate).join(' | ')} |`);
+  lines.push(`| ${[...COMPONENT_COLUMNS, ...dateColumnTitles(reportDate)].map(() => '---').join(' | ')} |`);
   for (const c of group) {
-    lines.push(`| ${sanitizeCellText(c.nameVersion)} | ${sanitizeCellText(c.maxVulnRating)} | ${c.vulnerabilities.length} | ${c.instancePaths.length} | ${dateCells(c.remediation).join(' | ')} |`);
+    const action = c.remediationAction ? sanitizeCellText(c.remediationAction).trim() : '';
+    lines.push(`| ${sanitizeCellText(c.nameVersion)} | ${sanitizeCellText(c.maxVulnRating)} | ${action === '' ? ABSENT_CELL : action} | ${c.vulnerabilities.length} | ${c.instancePaths.length} | ${dateCells(c.remediation).join(' | ')} |`);
   }
   lines.push('');
 }

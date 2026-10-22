@@ -607,10 +607,10 @@ describe('Waltz folded groups (R1, R3, R8-R11)', () => {
 
     it('has an overview table with component, rating, CVE count and artifact count, one row per component', () => {
       const wiki = buildGroupDescriptionWiki(group);
-      expect(wiki).toContain('||Component||Max rating||CVEs||Artifacts||');
+      expect(wiki).toContain('||Component||Max rating||Remediation action||CVEs||Artifacts||');
       // The cell goes through sanitizeCellText() like every report value; a hyphen inside a word survives it.
-      expect(wiki).toContain('|netty-codec:4.1.100|High|2|1|');
-      expect(wiki).toContain('|netty-handler:4.1.94|Critical|1|1|');
+      expect(wiki).toContain('|netty-codec:4.1.100|High|n/a|2|1|');
+      expect(wiki).toContain('|netty-handler:4.1.94|Critical|n/a|1|1|');
     });
 
     it('gives each component its own section with its vulnerabilities', () => {
@@ -626,7 +626,7 @@ describe('Waltz folded groups (R1, R3, R8-R11)', () => {
       expect(wiki).not.toContain('{quote}');
       expect(wiki).not.toContain('!http://evil.example/t.gif!');
       const row = wiki.split('\n').find(l => l.startsWith('|a / b'))!;
-      expect(row.split('|').length).toBe(10); // 8 cells: four overview columns plus four date columns
+      expect(row.split('|').length).toBe(11); // 9 cells: five overview columns plus four date columns
     });
   });
 
@@ -659,8 +659,8 @@ describe('Waltz folded groups (R1, R3, R8-R11)', () => {
     it('lists each added component with its CVE count under a banner', () => {
       const wiki = buildFoldedCommentWiki(group);
       expect(wiki.startsWith('These 2 components were added to this ticket.')).toBe(true);
-      expect(wiki).toContain('|netty-codec:4.1.100|High|2|1|');
-      expect(wiki).toContain('|netty-handler:4.1.100|High|1|1|');
+      expect(wiki).toContain('|netty-codec:4.1.100|High|n/a|2|1|');
+      expect(wiki).toContain('|netty-handler:4.1.100|High|n/a|1|1|');
     });
 
     it('names the component labels the ticket recorded that no longer appear in its description', () => {
@@ -780,18 +780,18 @@ describe('remediation dates in ticket content', () => {
   const withDates = (name: string, r: Partial<NonNullable<WaltzComponent['remediation']>>): WaltzComponent =>
     ({ ...makeComponent(name, 'High', ['CVE-2099-0001']), remediation: remediation(r) });
 
-  it('shows the policy and planned dates in a section after the rating (AE1)', () => {
+  it('shows the policy and planned dates in the one-row components table of a single-component ticket (AE1)', () => {
     const wiki = buildDescriptionWiki(withDates('example-lib:1.2.3', { policyDate: '2026-11-30', plannedDate: '2026-12-15' }));
-    expect(wiki).toContain('h3. Remediation dates');
-    expect(wiki).toContain('||Policy date||Planned date||Plan deadline||Plan status||');
-    expect(wiki).toContain('|2026-11-30|2026-12-15|n/a|n/a|');
-    expect(wiki.indexOf('h3. Max Vuln Rating')).toBeLessThan(wiki.indexOf('h3. Remediation dates'));
+    expect(wiki).toContain('h3. Components');
+    expect(wiki).toContain('||Component||Max rating||Remediation action||CVEs||Artifacts||Policy date||Planned date||Plan deadline||Plan status||');
+    expect(wiki).toContain('|example-lib:1.2.3|High|n/a|1|1|2026-11-30|2026-12-15|n/a|n/a|');
+    expect(wiki).not.toContain('Remediation dates');
   });
 
   it('shows the plan deadline and the report\'s own plan status labelled with the extraction date, and no day count (AE3)', () => {
     const wiki = buildDescriptionWiki(withDates('example-lib:1.2.3', { planDeadline: '2026-09-20', planStatus: 'Overdue', reportDate: '2026-10-22' }));
     expect(wiki).toContain('||Policy date||Planned date||Plan deadline||Plan status (as of 2026-10-22)||');
-    expect(wiki).toContain('|n/a|n/a|2026-09-20|Overdue|');
+    expect(wiki).toContain('|example-lib:1.2.3|High|n/a|1|1|n/a|n/a|2026-09-20|Overdue|');
     expect(wiki).not.toMatch(/\bdays?\b/i);
   });
 
@@ -801,20 +801,20 @@ describe('remediation dates in ticket content', () => {
     expect(wiki).not.toContain('as of');
   });
 
-  it('says "Not reported yet." with no table for a component without dates or status (AE4)', () => {
+  it('shows n/a in every date cell for a component without dates or status (AE4)', () => {
     const wiki = buildDescriptionWiki(withDates('example-lib:1.2.3', {}));
-    expect(wiki).toContain('h3. Remediation dates\nNot reported yet.');
-    expect(wiki).not.toContain('||Policy date');
+    expect(wiki).toContain('|example-lib:1.2.3|High|n/a|1|1|n/a|n/a|n/a|n/a|');
+    expect(wiki).not.toContain('Remediation dates');
   });
 
-  it('says "Not reported yet." for a component that carries no remediation object at all', () => {
-    expect(buildDescriptionWiki(makeComponent('example-lib:1.2.3', 'High', ['CVE-2099-0001']))).toContain('Not reported yet.');
+  it('shows n/a in every date cell for a component that carries no remediation object at all', () => {
+    expect(buildDescriptionWiki(makeComponent('example-lib:1.2.3', 'High', ['CVE-2099-0001']))).toContain('|example-lib:1.2.3|High|n/a|1|1|n/a|n/a|n/a|n/a|');
   });
 
   it('neutralizes a plan status that tries to inject markup or a table break', () => {
     const wiki = buildDescriptionWiki(withDates('example-lib:1.2.3', { planStatus: 'Over|due **x** {code}[evil|http://x]' }));
-    const row = wiki.split('\n').find(l => l.startsWith('|n/a|'))!;
-    expect(row.split('|').filter(c => c !== '')).toHaveLength(4);
+    const row = wiki.split('\n').find(l => l.startsWith('|example-lib'))!;
+    expect(row.split('|').filter(c => c !== '')).toHaveLength(9);
     expect(wiki).not.toContain('{code}');
     expect(wiki).not.toContain('[evil|');
   });
@@ -826,10 +826,10 @@ describe('remediation dates in ticket content', () => {
       withDates('example-c:3.0.0', {}),
     ];
     const wiki = buildGroupDescriptionWiki(group);
-    expect(wiki).toContain('||Component||Max rating||CVEs||Artifacts||Policy date||Planned date||Plan deadline||Plan status (as of 2026-10-22)||');
-    expect(wiki).toContain('|example-a:1.0.0|High|1|1|n/a|2026-12-15|n/a|Overdue|');
-    expect(wiki).toContain('|example-b:2.0.0|High|1|1|2026-11-30|n/a|n/a|n/a|');
-    expect(wiki).toContain('|example-c:3.0.0|High|1|1|n/a|n/a|n/a|n/a|');
+    expect(wiki).toContain('||Component||Max rating||Remediation action||CVEs||Artifacts||Policy date||Planned date||Plan deadline||Plan status (as of 2026-10-22)||');
+    expect(wiki).toContain('|example-a:1.0.0|High|n/a|1|1|n/a|2026-12-15|n/a|Overdue|');
+    expect(wiki).toContain('|example-b:2.0.0|High|n/a|1|1|2026-11-30|n/a|n/a|n/a|');
+    expect(wiki).toContain('|example-c:3.0.0|High|n/a|1|1|n/a|n/a|n/a|n/a|');
     expect(wiki).not.toContain('Remediation dates');
   });
 
@@ -841,12 +841,12 @@ describe('remediation dates in ticket content', () => {
     }));
     const wiki = buildGroupDescriptionWiki(big);
     expect(wiki.length).toBeLessThanOrEqual(30_000);
-    expect(wiki).toContain('|example-big-59:1.0.0|High|12|30|2026-11-30|n/a|n/a|n/a|');
+    expect(wiki).toContain('|example-big-59:1.0.0|High|n/a|12|30|2026-11-30|n/a|n/a|n/a|');
   });
 
   it('includes the added components\' dates in an add-to-ticket comment', () => {
     const wiki = buildFoldedCommentWiki([withDates('example-b:2.0.0', { policyDate: '2026-11-30' })]);
-    expect(wiki).toContain('|example-b:2.0.0|High|1|1|2026-11-30|n/a|n/a|n/a|');
+    expect(wiki).toContain('|example-b:2.0.0|High|n/a|1|1|2026-11-30|n/a|n/a|n/a|');
   });
 });
 
@@ -863,9 +863,14 @@ describe('parseRecordedDates round trip', () => {
     expect(parseRecordedDates(buildDescriptionWiki(part), part.nameVersion)).toEqual({ policyDate: '2026-11-30', plannedDate: null, planDeadline: null });
   });
 
-  it('reads an undated single-component description as no recorded dates', () => {
+  it('reads an undated single-component description as recorded dates that are all empty', () => {
     const none = comp('example-lib:1.2.3');
-    expect(parseRecordedDates(buildDescriptionWiki(none), none.nameVersion)).toBeNull();
+    expect(parseRecordedDates(buildDescriptionWiki(none), none.nameVersion)).toEqual({ policyDate: null, plannedDate: null, planDeadline: null });
+  });
+
+  it('still reads the older single-component description whose dates sit in a Remediation dates section', () => {
+    const legacy = 'h3. Remediation dates\n||Policy date||Planned date||Plan deadline||Plan status||\n|2026-11-30|2026-12-15|n/a|n/a|';
+    expect(parseRecordedDates(legacy, 'example-lib:1.2.3')).toEqual({ policyDate: '2026-11-30', plannedDate: '2026-12-15', planDeadline: null });
   });
 
   it('reads each member of a folded description by its own component name', () => {
