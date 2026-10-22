@@ -5,7 +5,34 @@ import { logDiag } from '../../utils/diagLog';
 import { formatKeyLink, type TicketService } from '../../services/TicketService';
 import { BATCH_LIMIT } from '../../utils/reportImport';
 import { buildReviewPage, emptyImportOutcomes, restoreMergedRows, type ReviewRowBase, type ReviewSession } from '../sessionState';
-import type { ReportImportDescriptor } from './reportImportTypes';
+import type { BuiltTicketFields, ReportImportDescriptor } from './reportImportTypes';
+
+const FIELD_NAMES: Record<string, string> = { duedate: 'Due Date' };
+
+/** The warning for optional fields Jira refused on a write that otherwise succeeded (KTD6). */
+function fieldNames(droppedFields: string[]): string {
+  return droppedFields.map(f => FIELD_NAMES[f] ?? f).join(', ');
+}
+
+/** The short note a merge step carries when Jira refused an optional field. */
+export function droppedFieldsNote(droppedFields: string[]): string {
+  return `Jira refused the ${fieldNames(droppedFields)}; written without it`;
+}
+
+export function droppedFieldsWarning(link: string, droppedFields: string[]): string {
+  const names = fieldNames(droppedFields);
+  return `_Warning: Jira refused the ${names} on ${link} (the field is probably not on the project's screen), so it was written without. The dates are in the description._\n\n`;
+}
+
+/** R11: the result line's note that a rewrite set the Due Date from the report, over any date edited by hand. */
+export function dueDateSetNote(dueDate: string | null): string {
+  return dueDate ? ` — Due Date set to ${dueDate} from the report (replaces any date edited by hand)` : '';
+}
+
+/** Logs the same refusal for the Output channel, tagged with the importer's scope. */
+export function logDroppedFields(scope: string, issueKey: string, droppedFields: string[]): void {
+  logDiag(scope, 'warn', `Jira refused ${droppedFields.join(', ')} — ${issueKey}; written without it`, { issueKey, refused: droppedFields });
+}
 
 /**
  * Creates one ticket for a row — its full ticket (`buildTicketFields`) unless `built` supplies other
@@ -18,12 +45,16 @@ export async function createOne<TItem, TRow extends ReviewRowBase>(
   stream: vscode.ChatResponseStream,
   descriptor: ReportImportDescriptor<TItem, TRow>,
   baseUrl?: string,
-  built?: { summary: string; fields: Record<string, unknown> },
+  built?: BuiltTicketFields,
 ): Promise<{ key: string } | { error: string }> {
-  const { summary: ticketSummary, fields } = built ?? descriptor.buildTicketFields(row, session.additionalFields);
+  const { summary: ticketSummary, fields, optionalFields } = built ?? descriptor.buildTicketFields(row, session.additionalFields);
   try {
-    const createdTicket = await ticketService.createTicket(session.projectKey, ticketSummary, session.issueType, fields, baseUrl);
+    const createdTicket = await ticketService.createTicket(session.projectKey, ticketSummary, session.issueType, fields, baseUrl, optionalFields);
     stream.markdown(`✓ ${formatKeyLink(createdTicket.key, baseUrl)} — ${ticketSummary}\n\n`);
+    if (createdTicket.droppedFields) {
+      logDroppedFields(descriptor.scope, createdTicket.key, createdTicket.droppedFields);
+      stream.markdown(droppedFieldsWarning(formatKeyLink(createdTicket.key, baseUrl), createdTicket.droppedFields));
+    }
     // KTD4 (import consolidation): optional per-row post-creation work (email uses this for
     // attachment upload). A rejection is shown as a warning but never fails the row — the ticket
     // already exists.

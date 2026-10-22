@@ -323,7 +323,7 @@ describe('Waltz per-row actions through the real descriptor (U5)', () => {
     return { session: ws.store['jira.session.waltzReview'] as WaltzReviewSession, ws };
   }
 
-  it('Covers AE1: open ticket with new CVEs → update, resolved ticket with a new CVE → follow-up, unchanged → leave', async () => {
+  it('Covers AE1: open ticket with new CVEs → rewrite, resolved ticket with a new CVE → follow-up (new ticket), unchanged → leave', async () => {
     const log4j = component('log4j-core 2.14.1', 'High', ['CVE-2021-1', 'CVE-2021-2', 'CVE-2021-3']);
     const jackson = component('jackson-databind 2.9', 'High', ['CVE-2019-1', 'CVE-2019-2']);
     const text = component('commons-text 1.9', 'High', ['CVE-2022-1']);
@@ -333,10 +333,10 @@ describe('Waltz per-row actions through the real descriptor (U5)', () => {
       'PROJ-3': { labels: [sanitizeComponentLabel(text.nameVersion), 'oss-cve-cve-2022-1', 'oss-rating-high'] },
     };
     const { session } = await importWaltz([log4j, jackson, text], tickets);
-    expect(session.allRows.map(r => r.action)).toEqual(['update', 'follow-up', 'leave']);
+    expect(session.allRows.map(r => r.action)).toEqual(['rewrite', 'follow-up', 'leave']);
   });
 
-  it('the follow-up carries the component label, only the new CVE labels, the current rating label and a "(follow-up to PROJ-8)" summary, linked to PROJ-8', async () => {
+  it('Covers AE10: a new ticket is a full ticket — every CVE, the component and rating labels, a "(follow-up to PROJ-8)" summary — linked Relates to PROJ-8', async () => {
     const jackson = component('jackson-databind 2.9', 'High', ['CVE-2019-1', 'CVE-2019-2']);
     const compLabel = sanitizeComponentLabel(jackson.nameVersion);
     const tickets: Record<string, FakeTicket> = {
@@ -349,20 +349,20 @@ describe('Waltz per-row actions through the real descriptor (U5)', () => {
     expect(client.createIssueCalls).toHaveLength(1);
     const call = client.createIssueCalls[0];
     expect(call.summary).toBe('[OSS] jackson-databind 2.9 — High (follow-up to PROJ-8)');
-    expect([...(call.additionalFields!.labels as string[])].sort()).toEqual(['oss-cve-cve-2019-2', 'oss-dependency', compLabel, 'oss-rating-high'].sort());
+    expect([...(call.additionalFields!.labels as string[])].sort()).toEqual(['oss-cve-cve-2019-1', 'oss-cve-cve-2019-2', 'oss-dependency', compLabel, 'oss-rating-high'].sort());
     // sanitizeCellText keeps a hyphen inside a word, so the CVE id stays readable.
     expect(call.additionalFields!.description).toContain('CVE-2019-2');
-    expect(call.additionalFields!.description).not.toContain('CVE-2019-1');
+    expect(call.additionalFields!.description).toContain('CVE-2019-1');
     expect(client.createIssueLinkCalls).toEqual([{ inwardKey: 'PROJ-8', outwardKey: 'PROJ-100', typeName: 'Relates' }]);
   });
 
-  it('Covers AE4: a rating rise rewrites the summary in the update and posts one comment; exactly one rating label remains', async () => {
+  it('Covers AE4: a rating rise is applied by a rewrite — the summary carries the new rating, exactly one rating label remains and one comment is posted', async () => {
     const log4j = component('log4j-core 2.14.1', 'Critical', ['CVE-2021-1']);
     const tickets: Record<string, FakeTicket> = {
       'PROJ-12': { labels: ['oss-dependency', sanitizeComponentLabel(log4j.nameVersion), 'oss-cve-cve-2021-1', 'oss-rating-high'], summary: '[OSS] log4j-core 2.14.1 — High' },
     };
     const { session, ws } = await importWaltz([log4j], tickets);
-    expect(session.allRows[0].action).toBe('update');
+    expect(session.allRows[0].action).toBe('rewrite');
 
     await handleWaltzReviewReply('apply', session, ticketService, mockStream() as never, ws as never);
 
@@ -370,39 +370,23 @@ describe('Waltz per-row actions through the real descriptor (U5)', () => {
     expect(client.updateIssueCalls[0].fields.summary).toBe('[OSS] log4j-core 2.14.1 — Critical');
     expect(tickets['PROJ-12'].labels.filter(l => l.startsWith('oss-rating-'))).toEqual(['oss-rating-critical']);
     expect(client.addCommentCalls).toHaveLength(1);
-    expect(client.addCommentCalls[0].body).toContain('High → Critical');
-    expect(client.addCommentCalls[0].body).not.toContain('summary was not changed');
   });
 
-  it('Covers AE4: a renamed summary is left alone and the comment says so', async () => {
-    const log4j = component('log4j-core 2.14.1', 'Critical', ['CVE-2021-1']);
-    const tickets: Record<string, FakeTicket> = {
-      'PROJ-12': { labels: [sanitizeComponentLabel(log4j.nameVersion), 'oss-cve-cve-2021-1', 'oss-rating-high'], summary: 'log4j upgrade' },
-    };
-    const { session, ws } = await importWaltz([log4j], tickets);
-
-    await handleWaltzReviewReply('apply', session, ticketService, mockStream() as never, ws as never);
-
-    expect(client.updateIssueCalls[0].fields.summary).toBeUndefined();
-    expect(tickets['PROJ-12'].summary).toBe('log4j upgrade');
-    expect(client.addCommentCalls[0].body).toContain('summary was not changed');
-  });
-
-  it('Covers AE3 for Waltz: a pre-feature ticket records its CVEs and rating on apply, with no comment', async () => {
+  it('Covers AE3 for Waltz: a pre-feature ticket (no record labels) defaults to rewrite, which records its CVEs and rating, and a rebuilt review then shows no change', async () => {
     const lib = component('lib 1.0', 'High', ['CVE-2020-1']);
     const tickets: Record<string, FakeTicket> = { 'PROJ-5': { labels: ['oss-dependency', sanitizeComponentLabel(lib.nameVersion)] } };
     const { session, ws } = await importWaltz([lib], tickets);
     expect(session.allRows[0].change).toEqual({ kind: 'baseline' });
+    expect(session.allRows[0].action).toBe('rewrite');
 
     await handleWaltzReviewReply('apply', session, ticketService, mockStream() as never, ws as never);
 
     expect(tickets['PROJ-5'].labels).toEqual(expect.arrayContaining(['oss-cve-cve-2020-1', 'oss-rating-high']));
-    expect(client.addCommentCalls).toHaveLength(0);
     const rebuilt = await importWaltz([lib], tickets, makeMockWs());
     expect(rebuilt.session.allRows[0].change).toBeNull();
   });
 
-  it('two rows that update the same ticket write one after the other, so neither overwrites the other\'s labels', async () => {
+  it('two rows that point to one ticket default to rewrite together, and one apply rewrites the ticket once with both components\' CVEs', async () => {
     const a = component('lib-a 1.0', 'High', ['CVE-2020-1', 'CVE-2020-2']);
     const b = component('lib-b 1.0', 'High', ['CVE-2021-1', 'CVE-2021-2']);
     const tickets: Record<string, FakeTicket> = {
@@ -411,13 +395,11 @@ describe('Waltz per-row actions through the real descriptor (U5)', () => {
       },
     };
     const { session, ws } = await importWaltz([a, b], tickets);
-    expect(session.allRows.map(r => r.action)).toEqual(['update', 'update']);
-    // A read that yields before answering: two parallel updates would both read the old labels.
-    const read = client.getIssue.bind(client);
-    client.getIssue = async (key: string) => { const issue = await read(key); await new Promise(r => setTimeout(r, 5)); return issue; };
+    expect(session.allRows.map(r => r.action)).toEqual(['rewrite', 'rewrite']);
 
     await handleWaltzReviewReply('apply', session, ticketService, mockStream() as never, ws as never);
 
+    expect(client.updateIssueCalls).toHaveLength(1);
     expect(tickets['PROJ-9'].labels).toEqual(expect.arrayContaining(['oss-cve-cve-2020-2', 'oss-cve-cve-2021-2']));
   });
 
@@ -639,5 +621,102 @@ describe('paging the Already-ticketed screen, 20 rows at a time', () => {
   it('the help for an unrecognized reply mentions paging', async () => {
     const { session, ws } = await buildMany(45);
     expect(await reply('what now', session, ws)).toContain('`next` / `prev` / `page <n>`');
+  });
+});
+
+describe('Waltz `new ticket` and its action policy (remediation dates, U5)', () => {
+  const component = (nameVersion: string, cves: string[], dates: Partial<{ policyDate: string; plannedDate: string }> = {}): WaltzComponent => ({
+    nameVersion, maxVulnRating: 'High', remediationAction: 'Remediate', instancePaths: ['app.jar'],
+    vulnerabilities: cves.map(cveId => ({ cveId, cveSummary: `Summary of ${cveId}`, overallSeverity: 'High', cvssV3Score: 7, fixedVersion: null })),
+    remediation: { policyDate: null, plannedDate: null, planDeadline: null, planStatus: null, reportDate: '2026-10-22', ...dates },
+  });
+  let client: MockJiraClient;
+  let ticketService: TicketService;
+  beforeEach(() => { client = new MockJiraClient(); ticketService = new TicketService(client); });
+
+  async function importWaltz(components: WaltzComponent[], tickets: Record<string, FakeTicket>) {
+    statefulJira(client, tickets);
+    searchFromStore(ticketService, tickets);
+    const templateSession = await buildWaltzTemplateSession(components, 'report.xlsx', 'PROJ', client);
+    const ws = makeMockWs();
+    await handleWaltzAwaitIssueType({
+      kind: 'reportImport', descriptorKind: 'waltz', pickedTemplateName: null, session: templateSession,
+    }, 'Bug', client, ticketService, mockStream() as never, ws as never);
+    return { session: ws.store['jira.session.waltzReview'] as WaltzReviewSession, ws };
+  }
+  const run = async (text: string, ws: ReturnType<typeof makeMockWs>) => {
+    const stream = mockStream();
+    await handleWaltzReviewReply(text, ws.store['jira.session.waltzReview'] as WaltzReviewSession, ticketService, stream as never, ws as never);
+    return streamText(stream);
+  };
+
+  it('AE10: a resolved ticket whose component has a new CVE defaults to new ticket; applying creates a full ticket with the dates and Due Date, linked Relates; update and re-create are refused', async () => {
+    const lib = component('example-lib:1.2.3', ['CVE-2099-1', 'CVE-2099-2'], { policyDate: '2026-11-30', plannedDate: '2026-12-15' });
+    const tickets: Record<string, FakeTicket> = {
+      'PROJ-1': { labels: ['oss-dependency', sanitizeComponentLabel(lib.nameVersion), 'oss-cve-cve-2099-1', 'oss-rating-high'], resolution: { name: 'Fixed' }, status: 'Done' },
+    };
+    const { session, ws } = await importWaltz([lib], tickets);
+    expect(session.allRows[0].action).toBe('follow-up');
+    expect(session.allRows[0].allowedActions).toEqual(['rewrite', 'leave', 'follow-up']);
+
+    expect(await run('A1 update', ws)).toMatch(/can't be set to `update`/);
+    expect(await run('A1 re-create', ws)).toMatch(/can't be set to `re-create`/);
+
+    const out = await run('apply', ws);
+
+    expect(client.createIssueCalls).toHaveLength(1);
+    const call = client.createIssueCalls[0];
+    expect(call.summary).toBe('[OSS] example-lib:1.2.3 — High (follow-up to PROJ-1)');
+    expect(call.additionalFields!.duedate).toBe('2026-12-15');
+    expect(String(call.additionalFields!.description)).toContain('CVE-2099-1');
+    expect(String(call.additionalFields!.description)).toContain('2026-11-30');
+    expect(client.createIssueLinkCalls).toEqual([{ inwardKey: 'PROJ-1', outwardKey: 'PROJ-100', typeName: 'Relates' }]);
+    expect(out).toContain('1 new ticket(s) created');
+    expect(out).not.toMatch(/follow-up\(s\)/);
+  });
+
+  it('a new ticket chosen on a resolved row with no change creates the ticket instead of failing with "no new findings"', async () => {
+    const lib = component('example-lib:1.2.3', ['CVE-2099-1']);
+    const tickets: Record<string, FakeTicket> = {
+      'PROJ-1': { labels: ['oss-dependency', sanitizeComponentLabel(lib.nameVersion), 'oss-cve-cve-2099-1', 'oss-rating-high'], resolution: { name: 'Fixed' }, status: 'Done', description: undefined },
+    };
+    const { session, ws } = await importWaltz([lib], tickets);
+    expect(session.allRows[0].change).toBeNull();
+    expect(session.allRows[0].action).toBe('leave');
+
+    await run('A1 new ticket', ws);
+    const out = await run('apply', ws);
+
+    expect(out).not.toContain('no new findings');
+    expect(client.createIssueCalls).toHaveLength(1);
+  });
+
+  it('a failed link keeps the new ticket, warns, and marks the result link-missing', async () => {
+    const lib = component('example-lib:1.2.3', ['CVE-2099-1', 'CVE-2099-2']);
+    const tickets: Record<string, FakeTicket> = {
+      'PROJ-1': { labels: ['oss-dependency', sanitizeComponentLabel(lib.nameVersion), 'oss-cve-cve-2099-1', 'oss-rating-high'], resolution: { name: 'Fixed' }, status: 'Done' },
+    };
+    const { ws } = await importWaltz([lib], tickets);
+    client.createIssueLinkError = new Error('Issue linking is disabled');
+
+    const out = await run('apply', ws);
+
+    expect(client.createIssueCalls).toHaveLength(1);
+    expect(out).toMatch(/could not be linked to PROJ-1/);
+    const row = (ws.store['jira.session.waltzReview'] as WaltzReviewSession).allRows[0];
+    expect(row.result).toMatchObject({ status: 'done', action: 'follow-up', linkMissing: true });
+  });
+
+  it('the table links the action `new ticket`, and the typed word reaches the row', async () => {
+    const lib = component('example-lib:1.2.3', ['CVE-2099-1', 'CVE-2099-2']);
+    const tickets: Record<string, FakeTicket> = {
+      'PROJ-1': { labels: ['oss-dependency', sanitizeComponentLabel(lib.nameVersion), 'oss-cve-cve-2099-1', 'oss-rating-high'], resolution: { name: 'Fixed' }, status: 'Done' },
+    };
+    const { ws } = await importWaltz([lib], tickets);
+    const screen = await run('A1 leave', ws);
+    expect(screen).toContain('new ticket');
+    expect(screen).not.toContain('follow-up');
+    await run('A1 new-ticket', ws);
+    expect((ws.store['jira.session.waltzReview'] as WaltzReviewSession).allRows[0].action).toBe('follow-up');
   });
 });

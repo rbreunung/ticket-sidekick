@@ -36,6 +36,7 @@ import { parseWaltzReport, sanitizeComponentLabel, type WaltzComponent } from '.
 import type { WaltzReviewSession } from '../participant/sessionState';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService } from '../services/TicketService';
+import { JiraApiError } from '../utils/apiError';
 import { mockStream, makeMockWs, descriptor as genericDescriptor, FakeTicket, statefulJira, searchFromStore, streamText } from './helpers/reportImportHarness';
 
 const comp = (nameVersion: string, rating = 'High'): WaltzComponent => ({
@@ -231,7 +232,7 @@ describe('running a merge (R5-R8, AE1)', () => {
 
   it('marks the screens out of date instead of rebuilding when the user has changed an Already-ticketed action', async () => {
     const { ws } = await importWaltz();
-    await reply('A3 rewrite', ws);
+    await reply('A3 leave', ws);
     const before = vi.mocked(parseWaltzReport).mock.calls.length;
     await reply('merge PROJ-15 into PROJ-12 confirm', ws);
     const out = await reply('1', ws);
@@ -394,7 +395,7 @@ describe('where the reply is not offered (R16)', () => {
     fakeJira();
     const ws = makeMockWs();
     const session = {
-      projectKey: 'PROJ', issueType: 'Task', templateName: null, additionalFields: {}, allRows: [], rows: [], page: 0, schemaVersion: 12,
+      projectKey: 'PROJ', issueType: 'Task', templateName: null, additionalFields: {}, allRows: [], rows: [], page: 0, schemaVersion: 13,
     } as never;
     const stream = mockStream();
     await handleImportReviewReply('merge A1 into A2', session, ticketService, stream as never, ws as never, genericDescriptor);
@@ -448,7 +449,7 @@ describe('review fixes: replay, retry, chaining and target names', () => {
 
   it('a second merge into the same survivor keeps the first source\'s components when the screens were not rebuilt', async () => {
     const { ws } = await importWaltz();
-    await reply('A3 rewrite', ws); // a changed choice, so the screens are marked out of date instead of rebuilt
+    await reply('A3 leave', ws); // a changed choice, so the screens are marked out of date instead of rebuilt
     await reply('merge PROJ-15 into PROJ-12 confirm', ws);
     const first = await reply('1', ws);
     expect(first.session.outOfDate).toBe(true);
@@ -469,5 +470,56 @@ describe('review fixes: replay, retry, chaining and target names', () => {
     await reply('Cancelled', ws);
 
     expect(client.executeTransitionCalls.map(c => c.transitionId)).toEqual(['41']);
+  });
+});
+
+describe('the survivor\'s Due Date (remediation dates, U3)', () => {
+  const dated = (c: WaltzComponent, policyDate: string | null, plannedDate: string | null = null): WaltzComponent => ({
+    ...c, remediation: { policyDate, plannedDate, planDeadline: null, planStatus: null, reportDate: '2026-10-22' },
+  });
+
+  it('is the earliest date over the combined group, and the source ticket\'s own Due Date is left alone', async () => {
+    report = [dated(libfoo, '2026-12-31'), dated(libbar, '2026-11-30', '2026-12-15'), libbaz];
+    const { ws } = await importWaltz();
+    await reply('merge PROJ-15 into PROJ-12 confirm', ws);
+    await reply('1', ws);
+
+    const survivorWrite = client.updateIssueCalls.find(c => c.issueKey === 'PROJ-12')!;
+    expect(survivorWrite.fields.duedate).toBe('2026-12-15');
+    expect(client.updateIssueCalls.filter(c => c.issueKey === 'PROJ-15').every(c => !('duedate' in c.fields))).toBe(true);
+  });
+
+  it('sends no Due Date when no member has a date', async () => {
+    const { ws } = await importWaltz();
+    await reply('merge PROJ-15 into PROJ-12 confirm', ws);
+    await reply('1', ws);
+    expect(client.updateIssueCalls.every(c => !('duedate' in c.fields))).toBe(true);
+  });
+});
+
+describe('a survivor whose Due Date Jira refuses (remediation dates, U3)', () => {
+  it('is still rewritten without it and the merge completes', async () => {
+    const dated = (c: WaltzComponent): WaltzComponent => ({
+      ...c, remediation: { policyDate: '2026-11-30', plannedDate: null, planDeadline: null, planStatus: null, reportDate: '2026-10-22' },
+    });
+    report = [dated(libfoo), dated(libbar), libbaz];
+    const { ws } = await importWaltz();
+    const update = client.updateIssue;
+    client.updateIssue = async (key, fields) => {
+      if ('duedate' in fields) {
+        client.updateIssueCalls.push({ issueKey: key, fields });
+        throw new JiraApiError('Jira API error 400', 400, 'https://jira.example.com/rest/api/2/issue/PROJ-12', JSON.stringify({ errors: { duedate: 'x' } }));
+      }
+      return update(key, fields);
+    };
+
+    await reply('merge PROJ-15 into PROJ-12 confirm', ws);
+    await reply('1', ws);
+
+    const survivorWrites = client.updateIssueCalls.filter(c => c.issueKey === 'PROJ-12');
+    expect(survivorWrites).toHaveLength(2);
+    expect(survivorWrites[1].fields).not.toHaveProperty('duedate');
+    expect(tickets['PROJ-12'].labels).toEqual(expect.arrayContaining(labelsFor(libbar)));
+    expect(log).toContain('close:PROJ-15');
   });
 });

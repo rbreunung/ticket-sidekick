@@ -3,11 +3,12 @@ import * as fs from 'fs';
 import type { TicketService } from '../../services/TicketService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import {
-  parseWaltzReport, filterComponents, sanitizeComponentLabel, buildGroupSummary, buildGroupLabels, buildGroupDescriptionWiki, buildFoldedCommentWiki,
-  describeWaltzRowChange, buildRecordLabels, buildCveLabel, buildRatingLabel, buildUpdateCommentWiki,
-  buildFollowUpDescriptionWiki, buildFollowUpSummary, rewriteSummaryRating, highestRating,
+  parseWaltzReport, filterComponents, dueDateFields, sanitizeComponentLabel, buildGroupSummary, buildGroupLabels, buildGroupDescriptionWiki, buildFoldedCommentWiki,
+  describeWaltzRowChange, deriveWaltzActions, buildRecordLabels, buildCveLabel, buildRatingLabel, buildUpdateCommentWiki,
+  buildFollowUpSummary, rewriteSummaryRating, highestRating,
   type WaltzComponent, type WaltzReviewRow,
 } from '../../utils/waltzReport';
+import { logDiag } from '../../utils/diagLog';
 import { AcceptedListService } from '../../services/AcceptedListService';
 import { narrowGroup, acceptedEntriesOf, acceptedComponentEntriesOf, acceptedComponentKeys, isComponentAccepted, type AcceptedEntry } from '../../utils/waltzAccepted';
 import type { WaltzTemplateSelectionSession, WaltzReviewSession, StaleCloseSession } from '../sessionState';
@@ -54,7 +55,7 @@ async function readAndFilterWaltzFile(filePath: string): Promise<{ items: WaltzC
   const { items, rawItems } = await readAndFilterReport(
     filePath,
     fp => fs.promises.readFile(fp),
-    raw => parseWaltzReport(raw, maxReportBytes),
+    raw => parseWaltzReport(raw, maxReportBytes, (level, message, details) => logDiag('jira.waltz', level, message, details)),
     components => filterComponents(components, filterConfig),
     maxReportBytes,
   );
@@ -134,10 +135,16 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
   }),
   reviewColumns: WALTZ_REVIEW_COLUMNS,
   itemRefFor: row => row.nameVersion,
-  buildTicketFields: (row, additionalFields) => ({
-    summary: row.summary,
-    fields: { ...additionalFields, labels: row.labels, description: row.descriptionWiki },
-  }),
+  // KTD5: the Due Date is written after the template fields so a template cannot override the report, only
+  // when the row has a date, and never cleared; KTD6: Jira may refuse it, which must not stop the ticket.
+  buildTicketFields: (row, additionalFields) => {
+    const due = dueDateFields(row.sourceGroup);
+    return {
+      summary: row.summary,
+      fields: { ...additionalFields, labels: row.labels, description: row.descriptionWiki, ...due.fields },
+      optionalFields: due.optionalFields,
+    };
+  },
   // Waltz has no issue-type-fetch-failure pop-up today — omitting onIssueTypeFetchFailed keeps that
   // path log-only, matching current behavior (KTD9).
   // U6: wires reportImportHandler.ts's reverse stale-ticket check up to U5's own marker
@@ -153,7 +160,7 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
     itemOf: row => row.sourceGroup,
     combine: groups => groups.flat(),
     recordLabelsOf: group => buildGroupLabels(group),
-    buildComment: (group, droppedKeys) => buildFoldedCommentWiki(group, droppedKeys),
+    buildComment: (group, droppedKeys, details) => buildFoldedCommentWiki(group, droppedKeys, details),
   },
   // Waltz ticket merge (KTD1): the survivor's comment opens by naming the tickets it absorbed.
   ticketMerge: {
@@ -184,7 +191,9 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
     findingNoun: 'CVE(s)',
     // Change tracking only ever sees Already-ticketed rows, and Waltz never folds those (merges act
     // on New rows only), so the group holds exactly one component here.
-    describe: (group, knownLabels) => describeWaltzRowChange(group[0], knownLabels),
+    describe: (group, knownLabels, context) => describeWaltzRowChange(group[0], knownLabels, context),
+    deriveActions: deriveWaltzActions,
+    reportKeysOf: rawItems => (rawItems as WaltzComponent[]).map(c => sanitizeComponentLabel(c.nameVersion)),
     recordLabelsOf: (row, change) => {
       if (change.kind === 'baseline') return buildRecordLabels(row.sourceGroup[0]);
       const labels = change.newIds.map(buildCveLabel);
@@ -198,18 +207,21 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
     rewriteSummary: (summary, change) => (change.ratingRise
       ? rewriteSummaryRating(summary, change.ratingRise.to)
       : undefined),
-    // KTD10/R14: the follow-up carries the item's dedup record (oss-dependency + component label),
-    // only the new CVE labels and the current rating label, plus the template's labels.
-    buildFollowUp: (row, change, originalKey, additionalFields) => {
-      const component = row.sourceGroup[0];
-      const templateLabels = templateLabelsOf(additionalFields);
-      const labels = [
-        WALTZ_STALE_MARKER_LABEL, sanitizeComponentLabel(component.nameVersion),
-        ...change.newIds.map(buildCveLabel), buildRatingLabel(component.maxVulnRating), ...templateLabels,
-      ].filter(l => l !== '');
+    // R12/KTD9: `new ticket` is a full ticket — the component's whole current content and dates, all its record labels and the
+    // template's, and the Due Date — whose title says which ticket it follows. The Relates link to that ticket is added by the caller.
+    actionLabels: { 'follow-up': 'new ticket' },
+    buildFollowUp: (row, _change, originalKey, additionalFields) => {
+      const group = row.sourceGroup;
+      const due = dueDateFields(group);
       return {
-        summary: buildFollowUpSummary(component, originalKey),
-        fields: { ...additionalFields, labels: [...new Set(labels)], description: buildFollowUpDescriptionWiki(component, change.newIds) },
+        summary: buildFollowUpSummary(group[0], originalKey),
+        fields: {
+          ...additionalFields,
+          labels: buildGroupLabels(group, templateLabelsOf(additionalFields)),
+          description: buildGroupDescriptionWiki(group),
+          ...due.fields,
+        },
+        optionalFields: due.optionalFields,
       };
     },
   },

@@ -1,10 +1,16 @@
 import { createHash } from 'crypto';
 import ExcelJS from 'exceljs';
 import { markdownToJiraWiki } from './markdownToJiraWiki';
+import type { DiagLogger } from './diagTypes';
+import {
+  toCalendarDate, hasAnyDate, earliestDueDate, dateColumnTitles, diffRemediationDates, parseRecordedDates,
+  DATES_HEADING, NOT_REPORTED_TEXT, ABSENT_CELL,
+  type RemediationDates, type WaltzRemediation,
+} from './waltzDates';
 import {
   MAX_REPORT_BYTES as SHARED_MAX_REPORT_BYTES, sanitizeCellText, sanitizeStandaloneLine,
   clampSummary, fitWiki,
-  type RowChange,
+  type RowChange, type ChangeContext, type TicketedActionChoice, type CommentDetails,
 } from './reportImport';
 
 export interface WaltzVulnerability {
@@ -21,6 +27,8 @@ export interface WaltzComponent {
   remediationAction: string | null;
   instancePaths: string[];
   vulnerabilities: WaltzVulnerability[];
+  /** Dates and plan status from the report; absent on components built without them (older fixtures, tests). */
+  remediation?: WaltzRemediation;
 }
 
 // Exported (rather than a local/duplicated constant) so waltzHandler.ts and extension.ts's file-size
@@ -42,6 +50,10 @@ interface ComponentRemediationsRow {
   nameVersion: string;
   maxVulnRating: string;
   remediationAction: string | null;
+  expectedRemediation: string | null;
+  targetDate: string | null;
+  planDueBy: string | null;
+  planReason: string | null;
 }
 
 interface VersionInstanceRow {
@@ -73,6 +85,12 @@ const componentRemediationsSchema: Schema<ComponentRemediationsRow> = {
   nameVersion: { column: 'Component name and version', type: String, required: true },
   maxVulnRating: { column: 'Max Vuln Rating', type: String, required: true },
   remediationAction: { column: 'Remediation Action', type: String, required: false },
+  // The four columns below are optional so an older export without them still parses. The overrun-days
+  // column is deliberately never read: it is 0 for a component without a plan (see docs/report-import.md).
+  expectedRemediation: { column: 'Expected Remediation', type: String, required: false },
+  targetDate: { column: 'Remediation Target Date', type: String, required: false },
+  planDueBy: { column: 'Attested Rem Plan Due By', type: String, required: false },
+  planReason: { column: 'Reason, where plan invalid', type: String, required: false },
 };
 
 const versionInstancesSchema: Schema<VersionInstanceRow> = {
@@ -227,11 +245,15 @@ const PARSE_TIMEOUT_MS = 15_000; // hard ceiling so a pathological file (e.g. a 
 // memory or hanging the extension host. Bounds wall-clock time, not memory directly, but a
 // hung/thrashing parse is exactly what this catches.
 
-export async function parseWaltzReport(buffer: Buffer, maxBytes: number = MAX_REPORT_BYTES): Promise<WaltzComponent[]> {
+export async function parseWaltzReport(
+  buffer: Buffer,
+  maxBytes: number = MAX_REPORT_BYTES,
+  onDiag?: DiagLogger,
+): Promise<WaltzComponent[]> {
   let timeoutHandle: ReturnType<typeof setTimeout>;
   try {
     return await Promise.race([
-      parseWaltzReportInner(buffer, maxBytes),
+      parseWaltzReportInner(buffer, maxBytes, onDiag),
       new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(
           () => reject(new Error(`OSS report parsing exceeded ${PARSE_TIMEOUT_MS / 1000}s — the file may be malformed or unusually large.`)),
@@ -244,7 +266,7 @@ export async function parseWaltzReport(buffer: Buffer, maxBytes: number = MAX_RE
   }
 }
 
-async function parseWaltzReportInner(buffer: Buffer, maxBytes: number): Promise<WaltzComponent[]> {
+async function parseWaltzReportInner(buffer: Buffer, maxBytes: number, onDiag?: DiagLogger): Promise<WaltzComponent[]> {
   assertSafeWaltzReportSize(buffer, maxBytes);
 
   // Unzip once — loadWaltzWorkbook() is the only step that can throw a "Could not read OSS
@@ -275,10 +297,25 @@ async function parseWaltzReportInner(buffer: Buffer, maxBytes: number): Promise<
     if (!uniqueRemediations.has(r.nameVersion)) uniqueRemediations.set(r.nameVersion, r);
   }
 
-  return [...uniqueRemediations.values()].map(r => ({
+  const reportDate = readReportDate(workbook);
+  let unreadableDateCells = 0;
+  const readDate = (raw: string | null): string | null => {
+    const date = toCalendarDate(raw);
+    if (raw !== null && date === null) unreadableDateCells++;
+    return date;
+  };
+
+  const components = [...uniqueRemediations.values()].map(r => ({
     nameVersion: r.nameVersion,
     maxVulnRating: r.maxVulnRating,
     remediationAction: r.remediationAction,
+    remediation: {
+      policyDate: readDate(r.expectedRemediation),
+      plannedDate: readDate(r.targetDate),
+      planDeadline: readDate(r.planDueBy),
+      planStatus: r.planReason,
+      reportDate,
+    },
     instancePaths: instances
       .filter(i => i.nameVersion === r.nameVersion && i.instancePath)
       .map(i => i.instancePath as string),
@@ -292,6 +329,31 @@ async function parseWaltzReportInner(buffer: Buffer, maxBytes: number): Promise<
         fixedVersion: v.fixedVersion,
       })),
   }));
+
+  // A format change in a newer export would otherwise show up only as "Not reported yet" on tickets.
+  // Only the count and the column names are logged, never a cell value.
+  if (unreadableDateCells > 0) {
+    onDiag?.('warn', 'Waltz report has date cells that could not be read as YYYY-MM-DD', {
+      unreadableDateCells,
+      columns: ['Expected Remediation', 'Remediation Target Date', 'Attested Rem Plan Due By'],
+    });
+  }
+  return components;
+}
+
+// `ReportDetails` is a short list of label and value pairs with no header row; the report's
+// "Extracted On" value is what a plan status is labelled with. Any miss gives null.
+function readReportDate(workbook: ExcelJS.Workbook): string | null {
+  const worksheet = workbook.getWorksheet('ReportDetails');
+  if (!worksheet) return null;
+  let found: string | null = null;
+  worksheet.eachRow(row => {
+    if (found !== null) return;
+    const label = cellToString(row.getCell(1));
+    if (label === null || label.replace(/:\s*$/, '').trim().toLowerCase() !== 'extracted on') return;
+    found = toCalendarDate(cellToString(row.getCell(2)));
+  });
+  return found;
 }
 
 export interface WaltzFilterOptions {
@@ -457,14 +519,42 @@ export function describeWaltzChange(component: WaltzComponent, knownLabels: stri
   return ratingRise ? { newCveIds, ratingRise } : { newCveIds };
 }
 
-/** U3: describeWaltzChange mapped to the shared RowChange shape buildReviewRows' change tracking uses. */
-export function describeWaltzRowChange(component: WaltzComponent, knownLabels: string[]): RowChange | null {
+const NO_DATES: RemediationDates = { policyDate: null, plannedDate: null, planDeadline: null };
+
+/**
+ * U3: describeWaltzChange mapped to the shared RowChange shape buildReviewRows' change tracking uses.
+ * With a `context`, the dates the target ticket's description records are also compared with the
+ * report's (KTD4: the three dates, never the plan status). A ticket created before dates were
+ * written records none, so it counts as changed once the report has dates for it. A description that
+ * could not be read (`undefined`) is unknown, not empty, so no date comparison is made for it.
+ */
+export function describeWaltzRowChange(component: WaltzComponent, knownLabels: string[], context?: ChangeContext): RowChange | null {
   const change = describeWaltzChange(component, knownLabels);
-  if (change === null) return null;
-  if ('baseline' in change) return { kind: 'baseline' };
-  return change.ratingRise
-    ? { kind: 'findings', newIds: change.newCveIds, ratingRise: change.ratingRise }
-    : { kind: 'findings', newIds: change.newCveIds };
+  if (change !== null && 'baseline' in change) return { kind: 'baseline' };
+
+  const dates = context && context.targetDescription !== undefined
+    ? diffRemediationDates(parseRecordedDates(context.targetDescription, component.nameVersion) ?? NO_DATES, component.remediation ?? NO_DATES)
+    : [];
+  if (change === null && dates.length === 0) return null;
+
+  return {
+    kind: 'findings',
+    newIds: change?.newCveIds ?? [],
+    ...(change?.ratingRise ? { ratingRise: change.ratingRise } : {}),
+    ...(dates.length > 0 ? { dates } : {}),
+  };
+}
+
+/**
+ * R13: the Waltz Already-ticketed policy. `rewrite` and `leave` are always offered, `new ticket` (the
+ * internal id `follow-up`) only when every ticket is resolved. A change or a baseline defaults to
+ * `rewrite` while some ticket is open and to `new ticket` when all are resolved; no change defaults to
+ * `leave`. `update` and `re-create` are never offered.
+ */
+export function deriveWaltzActions(change: RowChange | null, anyOpen: boolean): TicketedActionChoice {
+  const allowedActions: TicketedActionChoice['allowedActions'] = anyOpen ? ['rewrite', 'leave'] : ['rewrite', 'leave', 'follow-up'];
+  if (change === null) return { allowedActions, action: 'leave' };
+  return { allowedActions, action: anyOpen ? 'rewrite' : 'follow-up' };
 }
 
 const FOLLOW_UP_SUFFIX_PATTERN = / \(follow-up to [A-Z][A-Z0-9_]*-\d+\)$/;
@@ -513,15 +603,56 @@ interface DetailCaps { artifacts: number; cves: number }
 const FULL_CAPS: DetailCaps = { artifacts: MAX_ARTIFACTS_SHOWN, cves: MAX_CVES_SHOWN };
 
 /**
+ * The create/edit fields for a group's Due Date: `duedate` only when some member has a date (never cleared), and marked
+ * optional because Jira refuses it on a project whose screen lacks the field.
+ */
+export function dueDateFields(group: WaltzComponent[]): { fields: { duedate?: string }; optionalFields?: string[] } {
+  const dueDate = waltzDueDate(group);
+  return dueDate ? { fields: { duedate: dueDate }, optionalFields: ['duedate'] } : { fields: {} };
+}
+
+/** R7: the Jira Due Date for a row's components — the earliest planned (else policy) date of its members, null when none has one. */
+export function waltzDueDate(group: WaltzComponent[]): string | null {
+  return earliestDueDate(group.map(c => c.remediation));
+}
+
+// Dates are validated `YYYY-MM-DD` strings; the plan status is the report's own text and goes through the cell sanitizer.
+function dateCells(remediation: WaltzRemediation | undefined): string[] {
+  return [
+    remediation?.policyDate ?? ABSENT_CELL,
+    remediation?.plannedDate ?? ABSENT_CELL,
+    remediation?.planDeadline ?? ABSENT_CELL,
+    remediation?.planStatus ? sanitizeCellText(remediation.planStatus) : ABSENT_CELL,
+  ];
+}
+
+/** R3/R5: the policy date, planned date, plan deadline and plan status of one component, or "Not reported yet." */
+function pushDatesSection(lines: string[], component: WaltzComponent, h: string): void {
+  const r = component.remediation;
+  lines.push(`${h} ${DATES_HEADING}`);
+  if (!r || (!hasAnyDate(r) && !r.planStatus)) {
+    lines.push(NOT_REPORTED_TEXT);
+  } else {
+    lines.push(`| ${dateColumnTitles(r.reportDate).join(' | ')} |`);
+    lines.push('| --- | --- | --- | --- |');
+    lines.push(`| ${dateCells(r).join(' | ')} |`);
+  }
+  lines.push('');
+}
+
+/**
  * One component's rating, most critical CVE, affected artifacts and vulnerability table, under
  * headings of level `h` (`###` for a single-component ticket, `####` inside a folded section).
  */
-function pushComponentDetail(lines: string[], component: WaltzComponent, h: string, caps: DetailCaps): void {
+function pushComponentDetail(lines: string[], component: WaltzComponent, h: string, caps: DetailCaps, withDates = false): void {
   const sorted = sortVulnerabilities(component.vulnerabilities);
 
   lines.push(`${h} Max Vuln Rating`);
   lines.push(sanitizeStandaloneLine(component.maxVulnRating));
   lines.push('');
+
+  // A folded ticket's overview table carries every member's dates, so only a single-component ticket repeats them here.
+  if (withDates) pushDatesSection(lines, component, h);
 
   // Surfaces *why* this ticket exists at a glance, ahead of the full artifact/CVE lists below.
   lines.push(`${h} Most Critical Vulnerability`);
@@ -568,7 +699,7 @@ function pushComponentDetail(lines: string[], component: WaltzComponent, h: stri
 // mistake a lone-asterisk span for italics.
 export function buildDescriptionWiki(component: WaltzComponent): string {
   const lines: string[] = [];
-  pushComponentDetail(lines, component, '###', FULL_CAPS);
+  pushComponentDetail(lines, component, '###', FULL_CAPS, true);
   lines.push('### Component');
   lines.push(sanitizeStandaloneLine(component.nameVersion));
 
@@ -615,10 +746,12 @@ const FOLD_CAPS: DetailCaps[] = [FULL_CAPS, { artifacts: 10, cves: 5 }, { artifa
 const FOLD_LEVELS = FOLD_CAPS.length + 1;
 
 function pushFoldedTable(lines: string[], group: WaltzComponent[]): void {
-  lines.push('| Component | Max rating | CVEs | Artifacts |');
-  lines.push('| --- | --- | --- | --- |');
+  // R6: every member's dates and plan status, one row per component; a member without dates reads n/a.
+  const reportDate = group.map(c => c.remediation?.reportDate ?? null).find(d => d !== null) ?? null;
+  lines.push(`| Component | Max rating | CVEs | Artifacts | ${dateColumnTitles(reportDate).join(' | ')} |`);
+  lines.push('| --- | --- | --- | --- | --- | --- | --- | --- |');
   for (const c of group) {
-    lines.push(`| ${sanitizeCellText(c.nameVersion)} | ${sanitizeCellText(c.maxVulnRating)} | ${c.vulnerabilities.length} | ${c.instancePaths.length} |`);
+    lines.push(`| ${sanitizeCellText(c.nameVersion)} | ${sanitizeCellText(c.maxVulnRating)} | ${c.vulnerabilities.length} | ${c.instancePaths.length} | ${dateCells(c.remediation).join(' | ')} |`);
   }
   lines.push('');
 }
@@ -630,8 +763,25 @@ function droppedKeyText(key: string): string {
   return /^[A-Za-z0-9._-]{1,250}$/.test(key) ? `\`${key}\`` : sanitizeCellText(key);
 }
 
-function buildFoldedMarkdown(group: WaltzComponent[], banner: string, level: number, droppedKeys: string[]): string {
+/** KTD11: what a rewrite changed in the dates and the Due Date it set, above the table. Dates are validated; names are sanitized. */
+function pushDateDetails(lines: string[], details: CommentDetails): void {
+  const changed = (details.dateChanges ?? []).filter(c => c.changes.length > 0);
+  if (changed.length > 0) {
+    lines.push('**Remediation dates changed:**');
+    for (const { ref, changes } of changed) {
+      lines.push(`- ${sanitizeCellText(ref)}: ${changes.map(d => `${d.date} ${d.from ?? 'none'} → ${d.to ?? 'none'}`).join(', ')}`);
+    }
+    lines.push('');
+  }
+  if (details.dueDate) {
+    lines.push(`The Jira Due Date was set to ${details.dueDate} from the report.`);
+    lines.push('');
+  }
+}
+
+function buildFoldedMarkdown(group: WaltzComponent[], banner: string, level: number, droppedKeys: string[], details: CommentDetails = {}): string {
   const lines: string[] = [banner, ''];
+  pushDateDetails(lines, details);
   if (level > 0 && group.length > 0) {
     lines.push("Per-component detail was shortened to fit Jira's size limit; the table lists every component.");
     lines.push('');
@@ -652,8 +802,8 @@ function buildFoldedMarkdown(group: WaltzComponent[], banner: string, level: num
   return lines.join('\n');
 }
 
-function buildFoldedWiki(group: WaltzComponent[], banner: string, droppedKeys: string[] = []): string {
-  return fitWiki(level => markdownToJiraWiki(buildFoldedMarkdown(group, banner, level, droppedKeys)), FOLD_LEVELS).wiki;
+function buildFoldedWiki(group: WaltzComponent[], banner: string, droppedKeys: string[] = [], details: CommentDetails = {}): string {
+  return fitWiki(level => markdownToJiraWiki(buildFoldedMarkdown(group, banner, level, droppedKeys, details)), FOLD_LEVELS).wiki;
 }
 
 /**
@@ -670,13 +820,13 @@ export function buildGroupDescriptionWiki(group: WaltzComponent[]): string {
  * The comment an `add … to <KEY>` posts (R14, R15): the added components in the folded layout.
  * `droppedKeys` are component labels the ticket recorded that a rewrite no longer covers.
  */
-export function buildFoldedCommentWiki(group: WaltzComponent[], droppedKeys: string[] = []): string {
+export function buildFoldedCommentWiki(group: WaltzComponent[], droppedKeys: string[] = [], details: CommentDetails = {}): string {
   const banner = group.length === 0
     ? 'This ticket was rewritten from the latest report; no components were added.'
     : group.length === 1
       ? 'This component was added to this ticket.'
       : `These ${group.length} components were added to this ticket.`;
-  return buildFoldedWiki(group, banner, droppedKeys);
+  return buildFoldedWiki(group, banner, droppedKeys, details);
 }
 
 function vulnerabilitiesMatching(component: WaltzComponent, cveIds: string[]): WaltzVulnerability[] {
@@ -731,11 +881,6 @@ export function buildUpdateCommentWiki(
   lines.push(sanitizeStandaloneLine(component.nameVersion));
 
   return markdownToJiraWiki(lines.join('\n'));
-}
-
-/** R14/KTD10: a follow-up ticket's description — the standard description over only the new CVEs. */
-export function buildFollowUpDescriptionWiki(component: WaltzComponent, newCveIds: string[]): string {
-  return buildDescriptionWiki({ ...component, vulnerabilities: vulnerabilitiesMatching(component, newCveIds) });
 }
 
 // Lives here (rather than in sessionState.ts, where the other session-related types live) so that

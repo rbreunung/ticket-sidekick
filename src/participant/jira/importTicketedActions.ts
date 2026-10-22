@@ -5,9 +5,9 @@ import { logDiag } from '../../utils/diagLog';
 import { formatKeyLink, type TicketService } from '../../services/TicketService';
 import { BATCH_LIMIT } from '../../utils/reportImport';
 import { emptyImportOutcomes, findPartialRewrites, isTicketedRowFinished, ticketedRowActions, ticketedTargetKey, type ReviewRowBase, type ReviewSession, type TicketedAction, type TicketedRowResult } from '../sessionState';
-import { planRewrite, writeRewrite } from './importAddToTicket';
-import { createOne } from './importCreate';
-import type { ReportImportDescriptor } from './reportImportTypes';
+import { labelsToRemove, planRewrite, writeRewrite } from './importAddToTicket';
+import { createOne, droppedFieldsWarning, dueDateSetNote } from './importCreate';
+import type { BuiltTicketFields, ReportImportDescriptor } from './reportImportTypes';
 
 /** KTD5/KTD7: which row actions each Already-ticketed run reply runs, and the word to repeat for the rest. */
 export const TICKETED_RUNS: Record<'apply' | 'update' | 'recreate', { actions: ReadonlySet<TicketedAction>; command: string }> = {
@@ -123,7 +123,8 @@ export async function executeTicketedActions<TItem, TRow extends ReviewRowBase>(
   const recreateFailed = count('re-create', 'failed');
   const failed = updateFailed + followUpFailed + recreateFailed + rewriteFailedTickets;
 
-  let summary = `**${updated}** updated, ${followedUp} follow-up(s) created, ${recreated} re-created` +
+  const followUpWord = descriptor.changeTracking?.actionLabels?.['follow-up'] ?? 'follow-up';
+  let summary = `**${updated}** updated, ${followedUp} ${followUpWord}(s) created, ${recreated} re-created` +
     (rewrittenTickets > 0 ? `, ${rewrittenTickets} rewritten` : '') +
     (upToDate > 0 ? `, ${upToDate} already up to date` : '') + `, ${failed} failed.`;
   if (remaining > 0) {
@@ -177,6 +178,8 @@ async function rewriteTicketedGroup<TItem, TRow extends ReviewRowBase>(
   const fold = descriptor.fold;
   const link = formatKeyLink(key, baseUrl);
   let comment: string;
+  let droppedFields: string[] = [];
+  let dueDate: string | null = null;
   try {
     if (!fold) throw new Error('rewrite is not available for this import');
     const issue = await ticketService.getIssue(key);
@@ -188,8 +191,12 @@ async function rewriteTicketedGroup<TItem, TRow extends ReviewRowBase>(
     });
     const addedItem = fold.combine(added);
     const plan = planRewrite(session, descriptor, key, issue.fields.labels ?? [], []);
-    await writeRewrite(ticketService, descriptor, key, plan.regenItem);
-    comment = fold.buildComment(addedItem, plan.droppedKeys);
+    const written = await writeRewrite(ticketService, descriptor, key, plan.regenItem, labelsToRemove(session, descriptor, plan.droppedKeys));
+    droppedFields = written.droppedFields;
+    dueDate = written.dueDate;
+    const dateChanges = rows.flatMap(r => (r.change?.kind === 'findings' && r.change.dates?.length
+      ? [{ ref: descriptor.itemRefFor(r), changes: r.change.dates }] : []));
+    comment = fold.buildComment(addedItem, plan.droppedKeys, { dateChanges, dueDate });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logDiag(descriptor.scope, 'error', `Rewrite of existing ticket failed — ${key}`, { issueKey: key, error: message });
@@ -202,9 +209,11 @@ async function rewriteTicketedGroup<TItem, TRow extends ReviewRowBase>(
     const message = commentErr instanceof Error ? commentErr.message : String(commentErr);
     logDiag(descriptor.scope, 'warn', `Rewritten but the comment failed — ${key}`, { issueKey: key, error: message });
     stream.markdown(`⚠ ${link} — rewritten, but the comment could not be posted: ${message}\n\n`);
+    if (droppedFields.length > 0) stream.markdown(droppedFieldsWarning(link, droppedFields));
     return { status: 'done', action: 'rewrite', note: 'comment-failed' };
   }
-  stream.markdown(`✓ ${link} — rewritten from ${rows.length} row(s)\n\n`);
+  stream.markdown(`✓ ${link} — rewritten from ${rows.length} row(s)${dueDateSetNote(dueDate)}\n\n`);
+  if (droppedFields.length > 0) stream.markdown(droppedFieldsWarning(link, droppedFields));
   return { status: 'done', action: 'rewrite' };
 }
 
@@ -282,15 +291,18 @@ async function createForTicketedRow<TItem, TRow extends ReviewRowBase>(
       : { status: 'failed', action: 're-create', error: created.error };
   }
 
-  const change = row.change;
   const tracking = descriptor.changeTracking;
   const originalKey = ticketedTargetKey(row);
-  if (!tracking || change?.kind !== 'findings' || change.newIds.length === 0) {
+  // A follow-up that holds only the new findings needs some; an importer with its own action policy (Waltz) creates a
+  // full ticket instead, which is also offered on a row with no change, so it needs none.
+  const fullTicket = !!tracking?.deriveActions;
+  const change = row.change?.kind === 'findings' ? row.change : (fullTicket ? { kind: 'findings' as const, newIds: [] } : null);
+  if (!tracking || !change || (!fullTicket && change.newIds.length === 0)) {
     const error = 'no new findings for a follow-up';
     stream.markdown(`✗ ${descriptor.itemRefFor(row)} — ${error}\n\n`);
     return { status: 'failed', action: 'follow-up', error };
   }
-  let built: { summary: string; fields: Record<string, unknown> };
+  let built: BuiltTicketFields;
   try {
     built = tracking.buildFollowUp(row, change, originalKey, session.additionalFields);
   } catch (err) {

@@ -37,7 +37,7 @@ import * as vscode from 'vscode';
 import { handleWaltzAwaitIssueType, handleWaltzReviewReply, buildWaltzTemplateSession } from '../participant/jira/waltzHandler';
 import { parseWaltzReport, sanitizeComponentLabel, type WaltzComponent } from '../utils/waltzReport';
 import { ACCEPTED_FILE_NAME } from '../utils/waltzAccepted';
-import type { WaltzReviewSession } from '../participant/sessionState';
+import { CURRENT_SESSION_SCHEMA_VERSION, type WaltzReviewSession } from '../participant/sessionState';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService } from '../services/TicketService';
 import { buildImportTemplateSession } from '../participant/jira/reportImportHandler';
@@ -103,7 +103,7 @@ describe('the review remembers its report file (KTD9)', () => {
   it('stores the path the import was started from', async () => {
     const { session } = await importWaltz([comp('bar:1.0', 'High', [['CVE-9', 'High']])]);
     expect(session.reportFilePath).toBe(reportPath);
-    expect(session.schemaVersion).toBe(12);
+    expect(session.schemaVersion).toBe(CURRENT_SESSION_SCHEMA_VERSION);
   });
 });
 
@@ -289,5 +289,29 @@ describe('review fixes: the report file name in the reload prompt', () => {
 
     expect(out.text).not.toMatch(/(?<!\\)<command:/);
     expect(out.text).toContain('\\<command:');
+  });
+});
+
+describe('reload report reuses the descriptions already read (remediation dates, KTD1)', () => {
+  const ticketed = () => {
+    const lib = comp('bar:1.0', 'High', [['CVE-9', 'High']]);
+    return { lib, tickets: { 'PROJ-5': { labels: ['oss-dependency', sanitizeComponentLabel(lib.nameVersion), 'oss-cve-cve-9', 'oss-rating-high'], description: 'h3. Component\nbar:1.0' } as FakeTicket } };
+  };
+
+  it('does not read a ticket again on a reload, until this session has rewritten a ticket', async () => {
+    const { lib, tickets } = ticketed();
+    const { session, ws } = await importWaltz([lib], tickets);
+    const reads: string[] = [];
+    const getIssue = client.getIssue;
+    client.getIssue = async key => { reads.push(key); return getIssue.call(client, key); };
+    expect(Object.keys(session.ticketDescriptions ?? {})).toEqual(['PROJ-5']);
+
+    await reply('reload report confirm', session, ws);
+    expect(reads).toEqual([]);
+
+    const stored = ws.store['jira.session.waltzReview'] as WaltzReviewSession;
+    stored.outcomes = { ...stored.outcomes!, rewritten: 1 };
+    await reply('reload report confirm', stored, ws);
+    expect(reads).toEqual(['PROJ-5']);
   });
 });

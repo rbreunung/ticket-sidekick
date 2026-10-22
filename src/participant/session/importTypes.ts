@@ -45,7 +45,10 @@ import { TransitionBatchTicket } from './sessionTypes';
 // the open tickets the stale search did not flag (`staleCandidates`).
 // Waltz ticket merge (KTD3/KTD9): bumped 11 -> 12 — the review keeps the report file's path (`reportFilePath`),
 // the interrupted merge (`mergeRun`) and the out-of-date mark, and already-ticketed rows record `defaultAction`.
-export const CURRENT_SESSION_SCHEMA_VERSION = 12;
+// Waltz remediation dates (KTD12): bumped 12 -> 13 — a row's `change` can carry `dates` and `droppedMembers`, the review
+// keeps the descriptions it read (`ticketDescriptions`) and the report's component keys (`reportKeys`), and `follow-up`
+// means a full `new ticket` for Waltz.
+export const CURRENT_SESSION_SCHEMA_VERSION = 13;
 
 export interface ImportTemplateSelectionSession<TItem> {
   reportFileName: string;
@@ -144,6 +147,14 @@ export type AddMode = 'comment' | 'rewrite';
 
 /** U3/R6: the per-row actions on the Already-ticketed screen. */
 export type TicketedAction = 'update' | 'follow-up' | 'rewrite' | 're-create' | 'leave';
+
+/** An importer's own words for row actions, by action id (Waltz shows `follow-up` as `new ticket`). */
+export type ActionLabels = Partial<Record<TicketedAction, string>>;
+
+/** The word the user sees (and types) for a row action. */
+export function actionLabelOf(action: TicketedAction, labels?: ActionLabels): string {
+  return labels?.[action] ?? action;
+}
 
 /**
  * U4/R16: one already-ticketed row's outcome after an action ran. `update` notes: `baseline` — only
@@ -245,6 +256,12 @@ export interface ReviewSession<TRow> {
   // `rows` from this on every page change, which is what makes a "new" row's toggle page-local
   // (R7) — see applyReviewSessionToggle()'s own doc comment.
   allRows: TRow[];
+  // Remediation dates (KTD1): the target tickets' descriptions read for the date comparison, by ticket key (null = read but
+  // empty), so a rebuild after `accept component` or `reload report` does not read them all again.
+  ticketDescriptions?: Record<string, string | null>;
+  // Remediation dates (KTD10): the dedup keys of every component in the unfiltered report, so a rewrite takes a label
+  // off a ticket only for a component that really left the report, not one filtered or accepted away.
+  reportKeys?: string[];
   // The currently DISPLAYED page: every "already ticketed" row (always shown in full, R8 — never
   // paged) plus the current page's slice of "new" rows (BATCH_LIMIT per page, defaulted to
   // included). createNewRows reads this page's included new rows directly

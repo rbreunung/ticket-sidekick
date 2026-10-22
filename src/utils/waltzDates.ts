@@ -1,0 +1,160 @@
+import { sanitizeCellText } from './reportImport';
+
+// Pure, vscode-free date logic for the Waltz import's remediation dates (see docs/report-import.md).
+// Dates travel as `YYYY-MM-DD` strings from the parser to Jira so no time zone can shift a day.
+
+export interface RemediationDates {
+  /** Expected Remediation column: the date the policy requires the component to be fixed by. */
+  policyDate: string | null;
+  /** Remediation Target Date column: the team's own planned date, only present on `Remediate` rows. */
+  plannedDate: string | null;
+  /** Attested Rem Plan Due By column: the deadline for filing a remediation plan. */
+  planDeadline: string | null;
+}
+
+export interface WaltzRemediation extends RemediationDates {
+  /** The report's own plan-status reason (for example Overdue or Unplanned), as written; null when blank. */
+  planStatus: string | null;
+  /** The report's "Extracted On" date, which the plan status is labelled with; null when the report has none. */
+  reportDate: string | null;
+}
+
+export type DateKind = 'policy' | 'planned' | 'deadline';
+
+export interface DateChange {
+  date: DateKind;
+  from: string | null;
+  to: string | null;
+}
+
+const CALENDAR_DATE = /^(\d{4})-(\d{2})-(\d{2})/;
+
+/**
+ * Reads a cell value as a calendar date: a `Date` through its UTC parts, or a string whose first
+ * ten characters are a real `YYYY-MM-DD` date (so a time part is dropped). Anything else is no date.
+ */
+export function toCalendarDate(value: string | Date | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    return value.toISOString().slice(0, 10);
+  }
+  const match = CALENDAR_DATE.exec(value.trim());
+  if (!match) return null;
+  const [, year, month, day] = match;
+  // Build the date in UTC and compare the parts back, which rejects 2026-02-30 and 2026-13-01.
+  const built = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  const roundTrips = built.getUTCFullYear() === Number(year)
+    && built.getUTCMonth() === Number(month) - 1
+    && built.getUTCDate() === Number(day);
+  return roundTrips ? `${year}-${month}-${day}` : null;
+}
+
+export function hasAnyDate(dates: RemediationDates | null | undefined): boolean {
+  return !!dates && (dates.policyDate !== null || dates.plannedDate !== null || dates.planDeadline !== null);
+}
+
+/** The Jira Due Date for one component: the planned date, else the policy date. */
+export function effectiveDueDate(dates: RemediationDates | null | undefined): string | null {
+  return dates?.plannedDate ?? dates?.policyDate ?? null;
+}
+
+/** The Due Date for a folded or merged ticket: the earliest of its members' dates, null when none has one. */
+export function earliestDueDate(members: ReadonlyArray<RemediationDates | null | undefined>): string | null {
+  let earliest: string | null = null;
+  for (const member of members) {
+    const due = effectiveDueDate(member);
+    // `YYYY-MM-DD` strings order correctly as plain strings.
+    if (due !== null && (earliest === null || due < earliest)) earliest = due;
+  }
+  return earliest;
+}
+
+/**
+ * The dates that differ between what a ticket recorded and what the report says now. An absent value
+ * on one side against a date on the other is a difference. The plan status is deliberately not
+ * compared: it moves with the clock, so comparing it would flag unchanged rows.
+ */
+export function diffRemediationDates(recorded: RemediationDates, reported: RemediationDates): DateChange[] {
+  const pairs: Array<[DateKind, string | null, string | null]> = [
+    ['policy', recorded.policyDate, reported.policyDate],
+    ['planned', recorded.plannedDate, reported.plannedDate],
+    ['deadline', recorded.planDeadline, reported.planDeadline],
+  ];
+  return pairs.filter(([, from, to]) => from !== to).map(([date, from, to]) => ({ date, from, to }));
+}
+
+// --- The "Remediation dates" section of a ticket description ---------------------------------------
+// The headings and column titles are shared by the builder (waltzReport.ts) and the reader below, and a
+// round-trip test builds a description and reads it back, so a wording change cannot break the reader silently.
+
+export const DATES_HEADING = 'Remediation dates';
+export const NOT_REPORTED_TEXT = 'Not reported yet.';
+export const ABSENT_CELL = 'n/a';
+export const COLUMN_POLICY = 'Policy date';
+export const COLUMN_PLANNED = 'Planned date';
+export const COLUMN_DEADLINE = 'Plan deadline';
+export const COLUMN_STATUS = 'Plan status';
+export const COLUMN_COMPONENT = 'Component';
+
+/** The four date columns' titles; the plan-status title carries the report's extraction date when it has one. */
+export function dateColumnTitles(reportDate: string | null): string[] {
+  return [COLUMN_POLICY, COLUMN_PLANNED, COLUMN_DEADLINE, reportDate ? `${COLUMN_STATUS} (as of ${reportDate})` : COLUMN_STATUS];
+}
+
+const EXACT_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+function normalizeTitle(cell: string): string {
+  return cell.replace(/\([^)]*\)/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function splitHeaderRow(line: string): string[] | null {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('||')) return null;
+  return trimmed.replace(/^\|\|/, '').replace(/\|+$/, '').split('||');
+}
+
+function splitDataRow(line: string): string[] | null {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('|') || trimmed.startsWith('||')) return null;
+  return trimmed.replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+}
+
+function cellDate(cell: string | undefined): string | null {
+  const text = (cell ?? '').trim();
+  return EXACT_DATE.test(text) ? toCalendarDate(text) : null;
+}
+
+/**
+ * The dates a ticket's description records for one component, read back from its "Remediation dates"
+ * section or, on a folded ticket, from the overview-table row of that component. Lenient by design:
+ * cells are trimmed, column titles match case-insensitively, a cell that is not an exact `YYYY-MM-DD`
+ * date reads as no date, and a missing section, an unreadable table or a missing row gives null
+ * ("no recorded dates"), never an error. The text comes from Jira, so only validated dates leave here.
+ */
+export function parseRecordedDates(wiki: string | null | undefined, componentName: string): RemediationDates | null {
+  if (!wiki) return null;
+  const lines = wiki.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const header = splitHeaderRow(lines[i]);
+    if (!header) continue;
+    const titles = header.map(normalizeTitle);
+    const policy = titles.indexOf(COLUMN_POLICY.toLowerCase());
+    if (policy < 0) continue;
+    const planned = titles.indexOf(COLUMN_PLANNED.toLowerCase());
+    const deadline = titles.indexOf(COLUMN_DEADLINE.toLowerCase());
+    const component = titles.indexOf(COLUMN_COMPONENT.toLowerCase());
+
+    const rows: string[][] = [];
+    for (let j = i + 1; j < lines.length; j++) {
+      const row = splitDataRow(lines[j]);
+      if (!row) break;
+      rows.push(row);
+    }
+    const wanted = sanitizeCellText(componentName).trim();
+    const row = component < 0 ? rows[0] : rows.find(r => (r[component] ?? '').trim() === wanted);
+    if (!row) return null;
+    return { policyDate: cellDate(row[policy]), plannedDate: cellDate(row[planned]), planDeadline: cellDate(row[deadline]) };
+  }
+  return null;
+}

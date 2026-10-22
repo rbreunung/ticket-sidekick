@@ -3,7 +3,8 @@
 import type { TicketService } from '../../services/TicketService';
 import type { AcceptedListService } from '../../services/AcceptedListService';
 import type { AcceptedEntry } from '../../utils/waltzAccepted';
-import type { RowChange } from '../../utils/reportImport';
+import type { ChangeContext, CommentDetails, RowChange, TicketedActionChoice } from '../../utils/reportImport';
+import type { ActionLabels } from '../sessionState';
 import type { ReviewRowBase, ReviewTableColumn } from '../sessionState';
 
 export interface ReportImportRow extends ReviewRowBase {
@@ -63,7 +64,7 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   // KTD3: builds the ticket's summary + create-fields from a row (and the batch's resolved template
   // fields) — the only place a row's fields become a `createTicket()` call, so an importer with no
   // `labels`/`descriptionWiki` concept (email) never needs those fields at all.
-  buildTicketFields: (row: TRow, additionalFields: Record<string, unknown>) => { summary: string; fields: Record<string, unknown> };
+  buildTicketFields: (row: TRow, additionalFields: Record<string, unknown>) => BuiltTicketFields;
   // KTD4: optional per-row work after a ticket is created (email uses this for attachment upload).
   // A rejection is caught by the shared creation step (createOne) and shown as a warning — it never fails the row,
   // since the ticket already exists by the time this runs.
@@ -132,7 +133,7 @@ export interface ImportFold<TItem, TRow extends ReviewRowBase> {
   /** The record labels an `add` writes to the target ticket (no template labels: a foreign ticket is not ours to label). */
   recordLabelsOf: (item: TItem) => string[];
   /** The comment an `add` posts: the added item in the folded layout, plus findings a rewrite no longer covers. */
-  buildComment: (item: TItem, droppedKeys: string[]) => string;
+  buildComment: (item: TItem, droppedKeys: string[], details?: CommentDetails) => string;
   /**
    * Optional: narrows a row's item to the findings its ticket did not record yet, for a rewrite's
    * traceability comment (Veracode keeps only the new flaws). Without it the whole item is listed.
@@ -142,12 +143,32 @@ export interface ImportFold<TItem, TRow extends ReviewRowBase> {
 
 type FindingsChange = Extract<RowChange, { kind: 'findings' }>;
 
+/**
+ * A ticket's summary and create-fields. `optionalFields` names fields of `fields` that Jira may refuse
+ * (the Waltz Due Date, missing from a project's screen): a 400 naming one repeats the write without it.
+ */
+export interface BuiltTicketFields {
+  summary: string;
+  fields: Record<string, unknown>;
+  optionalFields?: string[];
+}
+
 /** Import ticket updates parity (KTD2): what an importer supplies so already-ticketed rows can be updated. */
 export interface ImportChangeTracking<TItem, TRow extends ReviewRowBase> {
   /** What one finding is called in the Change column, e.g. 'flaw(s)' / 'CVE(s)'. */
   findingNoun: string;
   /** R1/R2/R4: what changed on an item, given the union of labels across all of its tickets; null = no change. */
-  describe: (item: TItem, knownLabels: string[]) => RowChange | null;
+  describe: (item: TItem, knownLabels: string[], context?: ChangeContext) => RowChange | null;
+  /**
+   * The importer's own Already-ticketed action policy in place of the shared five-action one (Waltz). Its presence is also
+   * the switch for the Waltz-only review behavior in the shared code: reading each target ticket's description, the
+   * dropped-member pass and the shared `rewrite` default for rows that point to one ticket, so Veracode is untouched.
+   */
+  deriveActions?: (change: RowChange | null, anyOpen: boolean) => TicketedActionChoice;
+  /** The importer's own words for row actions, by action id (Waltz shows `follow-up` as `new ticket`). */
+  actionLabels?: ActionLabels;
+  /** With `deriveActions`: the dedup keys of every component in the unfiltered report, so a component only filtered or accepted away is not "dropped". */
+  reportKeysOf?: (rawItems: unknown[]) => string[];
   /** The record labels `update` adds to the target ticket: all of them for a baseline, only the new ones otherwise. */
   recordLabelsOf: (row: TRow, change: RowChange) => string[];
   /** KTD3: labels with this prefix are replaced, not accumulated, whenever `update` adds one (Waltz: `oss-rating-`). */
@@ -162,5 +183,5 @@ export interface ImportChangeTracking<TItem, TRow extends ReviewRowBase> {
   /** R14/KTD10: the follow-up ticket's summary and create-fields, covering only the new findings. */
   buildFollowUp: (
     row: TRow, change: FindingsChange, originalKey: string, additionalFields: Record<string, unknown>,
-  ) => { summary: string; fields: Record<string, unknown> };
+  ) => BuiltTicketFields;
 }

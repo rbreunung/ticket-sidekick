@@ -2,6 +2,7 @@ import type { IJiraClient, JiraAttachment, JiraComment, JiraEditMetaField, JiraF
 import type { DiagLogger } from '../utils/diagTypes';
 import { formatJiraBody } from '../utils/markdownFormatter';
 import { ApiError } from '../utils/apiError';
+import { refusedFieldsOf } from '../utils/jiraFieldErrors';
 import { buildRequirementsSource, type RequirementsSource } from '../utils/requirementsSource';
 import { formatFileSize } from '../utils/attachmentEligibility';
 import { mergedBanner, mergedSummary } from '../utils/ticketMerge';
@@ -17,6 +18,8 @@ export type FieldResolutionResult =
 export interface CreatedTicket {
   key: string;
   message: string;
+  /** Optional fields Jira refused (e.g. `duedate` missing from the project's screen), which the ticket was created without. */
+  droppedFields?: string[];
 }
 
 /** Thrown by `transitionAlongPath` when a multi-hop transition fails partway through. Each hop
@@ -393,11 +396,13 @@ function mergeLabels(
   current: string[],
   labelsToAdd: string[],
   removePrefix?: string,
+  removeLabels: readonly string[] = [],
 ): { added: string[]; removed: string[]; labels: string[] | null } {
   const toAdd = [...new Set(labelsToAdd)];
   const currentSet = new Set(current);
   const added = toAdd.filter(l => !currentSet.has(l));
-  const removed = removePrefix ? current.filter(l => l.startsWith(removePrefix) && !toAdd.includes(l)) : [];
+  // A label named in `removeLabels` goes unless the new set carries it; `removePrefix` drops a whole family the same way.
+  const removed = current.filter(l => !toAdd.includes(l) && ((!!removePrefix && l.startsWith(removePrefix)) || removeLabels.includes(l)));
   if (added.length === 0 && removed.length === 0) return { added, removed, labels: null };
   const removedSet = new Set(removed);
   return { added, removed, labels: [...current.filter(l => !removedSet.has(l)), ...added] };
@@ -533,16 +538,47 @@ export class TicketService {
    */
   async rewriteTicket(
     issueKey: string,
-    change: { summary: string; description: string; labelsToAdd: string[]; removePrefix?: string },
-  ): Promise<{ added: string[]; removed: string[] }> {
+    change: {
+      summary: string; description: string; labelsToAdd: string[]; removePrefix?: string;
+      /** Exact labels to take off in the same write (the Waltz components a rewrite no longer covers). */
+      removeLabels?: string[];
+      /** More fields to write in the same call (the Waltz Due Date). */
+      extraFields?: Record<string, unknown>;
+      /** The `extraFields` Jira may refuse; a 400 naming one repeats the write once without it. */
+      optionalFields?: string[];
+    },
+  ): Promise<{ added: string[]; removed: string[]; droppedFields?: string[] }> {
     const issue = await this.client.getIssue(issueKey);
-    const { added, removed, labels } = mergeLabels(issue.fields.labels ?? [], change.labelsToAdd, change.removePrefix);
+    const { added, removed, labels } = mergeLabels(issue.fields.labels ?? [], change.labelsToAdd, change.removePrefix, change.removeLabels);
 
-    const fields: Record<string, unknown> = { summary: change.summary, description: change.description };
+    const fields: Record<string, unknown> = { summary: change.summary, description: change.description, ...change.extraFields };
     if (labels) fields.labels = labels;
-    await this.client.updateIssue(issueKey, fields);
+    const { droppedFields } = await this.withOptionalFields(fields, change.optionalFields, `Ticket rewrite — ${issueKey}`,
+      attempt => this.client.updateIssue(issueKey, attempt));
     this.onDiag?.('info', `Ticket rewritten — ${issueKey}`, { issueKey, added, removed });
-    return { added, removed };
+    return droppedFields ? { added, removed, droppedFields } : { added, removed };
+  }
+
+  /**
+   * Runs `write(fields)`; when Jira answers 400 naming one of `optionalFields`, logs a warning and
+   * repeats the call once without the named fields. Jira's create and edit calls are all-or-nothing,
+   * so the retry cannot double-write. Any other failure, and a failure of the retry, is rethrown.
+   */
+  private async withOptionalFields<T>(
+    fields: Record<string, unknown>,
+    optionalFields: string[] | undefined,
+    what: string,
+    write: (fields: Record<string, unknown>) => Promise<T>,
+  ): Promise<{ result: T; droppedFields?: string[] }> {
+    try {
+      return { result: await write(fields) };
+    } catch (err) {
+      const refused = refusedFieldsOf(err, optionalFields ?? []);
+      if (refused.length === 0) throw err;
+      this.onDiag?.('warn', `${what} — Jira refused ${refused.join(', ')}; repeating without it`, { refused });
+      const reduced = Object.fromEntries(Object.entries(fields).filter(([name]) => !refused.includes(name)));
+      return { result: await write(reduced), droppedFields: refused };
+    }
   }
 
   async uploadAttachment(issueKey: string, filename: string, contentType: string, contentBytes: string): Promise<void> {
@@ -984,12 +1020,19 @@ export class TicketService {
     issueType: string,
     additionalFields?: Record<string, unknown>,
     baseUrl?: string,
+    /** Fields of `additionalFields` Jira may refuse (the Waltz Due Date); see `withOptionalFields`. */
+    optionalFields?: string[],
   ): Promise<CreatedTicket> {
-    const created = await this.client.createIssue(projectKey, summary, issueType, additionalFields);
+    const { result: created, droppedFields } = await this.withOptionalFields(
+      additionalFields ?? {}, optionalFields, `Ticket creation — ${projectKey}`,
+      attempt => this.client.createIssue(projectKey, summary, issueType, additionalFields === undefined ? undefined : attempt),
+    );
     this.onDiag?.('info', `Ticket created — ${created.key}`, { projectKey, issueType });
-    return {
+    const ticket: CreatedTicket = {
       key: created.key,
       message: `Created ${formatKeyLink(created.key, baseUrl)}: **${summary}** (${issueType} in ${projectKey})`,
     };
+    if (droppedFields) ticket.droppedFields = droppedFields;
+    return ticket;
   }
 }

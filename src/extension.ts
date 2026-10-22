@@ -333,7 +333,7 @@ export function activate(context: vscode.ExtensionContext): void {
       fileExtensions: ['xlsx'],
       filePickerTitle: 'Select OSS Report (.xlsx)',
       readContent: reportPath => fs.promises.readFile(reportPath),
-      parse: (raw, maxBytes) => parseWaltzReport(raw, maxBytes),
+      parse: (raw, maxBytes) => parseWaltzReport(raw, maxBytes, (level, message, details) => logDiag('jira.waltz', level, message, details)),
       filter: allComponents => {
         const waltzCfg = vscode.workspace.getConfiguration('ticketSidekick');
         return filterComponents(allComponents, {
