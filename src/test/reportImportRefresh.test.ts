@@ -103,7 +103,7 @@ describe('the review remembers its report file (KTD9)', () => {
   it('stores the path the import was started from', async () => {
     const { session } = await importWaltz([comp('bar:1.0', 'High', [['CVE-9', 'High']])]);
     expect(session.reportFilePath).toBe(reportPath);
-    expect(session.schemaVersion).toBe(12);
+    expect(session.schemaVersion).toBe(13);
   });
 });
 

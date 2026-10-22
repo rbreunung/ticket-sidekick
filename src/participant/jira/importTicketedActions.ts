@@ -7,7 +7,7 @@ import { BATCH_LIMIT } from '../../utils/reportImport';
 import { emptyImportOutcomes, findPartialRewrites, isTicketedRowFinished, ticketedRowActions, ticketedTargetKey, type ReviewRowBase, type ReviewSession, type TicketedAction, type TicketedRowResult } from '../sessionState';
 import { labelsToRemove, planRewrite, writeRewrite } from './importAddToTicket';
 import { createOne, droppedFieldsWarning } from './importCreate';
-import type { ReportImportDescriptor } from './reportImportTypes';
+import type { BuiltTicketFields, ReportImportDescriptor } from './reportImportTypes';
 
 /** KTD5/KTD7: which row actions each Already-ticketed run reply runs, and the word to repeat for the rest. */
 export const TICKETED_RUNS: Record<'apply' | 'update' | 'recreate', { actions: ReadonlySet<TicketedAction>; command: string }> = {
@@ -123,7 +123,8 @@ export async function executeTicketedActions<TItem, TRow extends ReviewRowBase>(
   const recreateFailed = count('re-create', 'failed');
   const failed = updateFailed + followUpFailed + recreateFailed + rewriteFailedTickets;
 
-  let summary = `**${updated}** updated, ${followedUp} follow-up(s) created, ${recreated} re-created` +
+  const followUpWord = descriptor.changeTracking?.actionLabels?.['follow-up'] ?? 'follow-up';
+  let summary = `**${updated}** updated, ${followedUp} ${followUpWord}(s) created, ${recreated} re-created` +
     (rewrittenTickets > 0 ? `, ${rewrittenTickets} rewritten` : '') +
     (upToDate > 0 ? `, ${upToDate} already up to date` : '') + `, ${failed} failed.`;
   if (remaining > 0) {
@@ -286,15 +287,18 @@ async function createForTicketedRow<TItem, TRow extends ReviewRowBase>(
       : { status: 'failed', action: 're-create', error: created.error };
   }
 
-  const change = row.change;
   const tracking = descriptor.changeTracking;
   const originalKey = ticketedTargetKey(row);
-  if (!tracking || change?.kind !== 'findings' || change.newIds.length === 0) {
+  // A follow-up that holds only the new findings needs some; an importer with its own action policy (Waltz) creates a
+  // full ticket instead, which is also offered on a row with no change, so it needs none.
+  const fullTicket = !!tracking?.deriveActions;
+  const change = row.change?.kind === 'findings' ? row.change : (fullTicket ? { kind: 'findings' as const, newIds: [] } : null);
+  if (!tracking || !change || (!fullTicket && change.newIds.length === 0)) {
     const error = 'no new findings for a follow-up';
     stream.markdown(`✗ ${descriptor.itemRefFor(row)} — ${error}\n\n`);
     return { status: 'failed', action: 'follow-up', error };
   }
-  let built: { summary: string; fields: Record<string, unknown> };
+  let built: BuiltTicketFields;
   try {
     built = tracking.buildFollowUp(row, change, originalKey, session.additionalFields);
   } catch (err) {

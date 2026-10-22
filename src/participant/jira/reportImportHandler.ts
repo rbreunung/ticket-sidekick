@@ -736,6 +736,7 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
     canFold: descriptor.fold !== undefined,
     canAccept: descriptor.accepted !== undefined,
     canMergeTickets: descriptor.ticketMerge !== undefined,
+    actionLabels: descriptor.changeTracking?.actionLabels,
     mergedRowIds: session.rows.filter(r => r.existingTicketKey === null && r.memberIds !== undefined).map(r => r.id),
   };
   const rerender = () => streamImportReview(session, stream, ws, descriptor, baseUrl);
@@ -769,7 +770,7 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
       await ws.update(descriptor.sessionKeys.review, undefined);
       const outcomes = session.outcomes!;
       logDiag(descriptor.scope, 'info', `${descriptor.importLabel} import finished`, { ...outcomes });
-      stream.markdown(buildImportDoneSummary(outcomes));
+      stream.markdown(buildImportDoneSummary(outcomes, descriptor.changeTracking?.actionLabels));
       return;
     }
     case 'pageNav': {

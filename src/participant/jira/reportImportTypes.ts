@@ -4,6 +4,7 @@ import type { TicketService } from '../../services/TicketService';
 import type { AcceptedListService } from '../../services/AcceptedListService';
 import type { AcceptedEntry } from '../../utils/waltzAccepted';
 import type { ChangeContext, RowChange, TicketedActionChoice } from '../../utils/reportImport';
+import type { ActionLabels } from '../sessionState';
 import type { ReviewRowBase, ReviewTableColumn } from '../sessionState';
 
 export interface ReportImportRow extends ReviewRowBase {
@@ -164,6 +165,8 @@ export interface ImportChangeTracking<TItem, TRow extends ReviewRowBase> {
    * dropped-member pass and the shared `rewrite` default for rows that point to one ticket, so Veracode is untouched.
    */
   deriveActions?: (change: RowChange | null, anyOpen: boolean) => TicketedActionChoice;
+  /** The importer's own words for row actions, by action id (Waltz shows `follow-up` as `new ticket`). */
+  actionLabels?: ActionLabels;
   /** With `deriveActions`: the dedup keys of every component in the unfiltered report, so a component only filtered or accepted away is not "dropped". */
   reportKeysOf?: (rawItems: unknown[]) => string[];
   /** The record labels `update` adds to the target ticket: all of them for a baseline, only the new ones otherwise. */

@@ -394,7 +394,7 @@ describe('where the reply is not offered (R16)', () => {
     fakeJira();
     const ws = makeMockWs();
     const session = {
-      projectKey: 'PROJ', issueType: 'Task', templateName: null, additionalFields: {}, allRows: [], rows: [], page: 0, schemaVersion: 12,
+      projectKey: 'PROJ', issueType: 'Task', templateName: null, additionalFields: {}, allRows: [], rows: [], page: 0, schemaVersion: 13,
     } as never;
     const stream = mockStream();
     await handleImportReviewReply('merge A1 into A2', session, ticketService, stream as never, ws as never, genericDescriptor);

@@ -5,7 +5,7 @@ import type { IJiraClient } from '../../jira/IJiraClient';
 import {
   parseWaltzReport, filterComponents, waltzDueDate, sanitizeComponentLabel, buildGroupSummary, buildGroupLabels, buildGroupDescriptionWiki, buildFoldedCommentWiki,
   describeWaltzRowChange, deriveWaltzActions, buildRecordLabels, buildCveLabel, buildRatingLabel, buildUpdateCommentWiki,
-  buildFollowUpDescriptionWiki, buildFollowUpSummary, rewriteSummaryRating, highestRating,
+  buildFollowUpSummary, rewriteSummaryRating, highestRating,
   type WaltzComponent, type WaltzReviewRow,
 } from '../../utils/waltzReport';
 import { logDiag } from '../../utils/diagLog';
@@ -207,18 +207,21 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
     rewriteSummary: (summary, change) => (change.ratingRise
       ? rewriteSummaryRating(summary, change.ratingRise.to)
       : undefined),
-    // KTD10/R14: the follow-up carries the item's dedup record (oss-dependency + component label),
-    // only the new CVE labels and the current rating label, plus the template's labels.
-    buildFollowUp: (row, change, originalKey, additionalFields) => {
-      const component = row.sourceGroup[0];
-      const templateLabels = templateLabelsOf(additionalFields);
-      const labels = [
-        WALTZ_STALE_MARKER_LABEL, sanitizeComponentLabel(component.nameVersion),
-        ...change.newIds.map(buildCveLabel), buildRatingLabel(component.maxVulnRating), ...templateLabels,
-      ].filter(l => l !== '');
+    // R12/KTD9: `new ticket` is a full ticket — the component's whole current content and dates, all its record labels and the
+    // template's, and the Due Date — whose title says which ticket it follows. The Relates link to that ticket is added by the caller.
+    actionLabels: { 'follow-up': 'new ticket' },
+    buildFollowUp: (row, _change, originalKey, additionalFields) => {
+      const group = row.sourceGroup;
+      const dueDate = waltzDueDate(group);
       return {
-        summary: buildFollowUpSummary(component, originalKey),
-        fields: { ...additionalFields, labels: [...new Set(labels)], description: buildFollowUpDescriptionWiki(component, change.newIds) },
+        summary: buildFollowUpSummary(group[0], originalKey),
+        fields: {
+          ...additionalFields,
+          labels: buildGroupLabels(group, templateLabelsOf(additionalFields)),
+          description: buildGroupDescriptionWiki(group),
+          ...(dueDate ? { duedate: dueDate } : {}),
+        },
+        ...(dueDate ? { optionalFields: ['duedate'] } : {}),
       };
     },
   },

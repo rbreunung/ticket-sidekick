@@ -4,7 +4,7 @@
 import { TICKETED_ACTION_ORDER } from '../../utils/reportImport';
 import { formatKeyLink } from '../../services/TicketService';
 import { IMPORT_COMMANDS, LEGACY_UPDATE_COMMAND, UNACCEPT_COMPONENT_WORD } from './importScreens';
-import { AddMode, ImportOutcomes, ImportResultGroup, ImportReviewView, MergeRun, ReviewRowBase, ReviewSessionStale, StaleTargetOption, TicketedAction } from './importTypes';
+import { AddMode, ImportOutcomes, ImportResultGroup, ImportReviewView, MergeRun, ReviewRowBase, ReviewSessionStale, StaleTargetOption, TicketedAction, ActionLabels, actionLabelOf } from './importTypes';
 import { cmdLink, isBackOrCancellation, isCancellation, isConfirmation, neutralizeMarkdownLinks, normalizeReply } from './primitives';
 import { parseResolutionSelection } from './core';
 import { ReviewPageNav, parseBulkNewRowReply, parseReviewPageNav } from './reviewPaging';
@@ -69,7 +69,10 @@ export interface ImportReplyContext {
   canAccept?: boolean;
   // Waltz ticket merge: whether the importer supports `merge … into …` and `reload report` (Waltz only).
   canMergeTickets?: boolean;
+  // How the importer names its row actions to the user (Waltz shows `follow-up` as `new ticket`); the id stays the same.
+  actionLabels?: ActionLabels;
 }
+
 
 /** Every token must be one of `ids` (case-insensitive) — a stray token makes the reply invalid
  * rather than half-applied, so a token from another screen's vocabulary is never acted on (R6). */
@@ -478,6 +481,7 @@ export function unmergeNewRow<TRow extends ReviewRowBase>(rows: TRow[], allRows:
 const TICKETED_ACTION_WORDS: Record<string, TicketedAction> = {
   'update': 'update',
   'follow-up': 'follow-up', 'followup': 'follow-up', 'follow up': 'follow-up',
+  'new ticket': 'follow-up', 'new-ticket': 'follow-up', 'newticket': 'follow-up',
   'rewrite': 'rewrite',
   're-create': 're-create', 'recreate': 're-create', 're create': 're-create',
   'leave': 'leave',
@@ -522,13 +526,13 @@ export function parseTicketedGroupReply(reply: string, ctx: ImportReplyContext):
     if (target === 'all') {
       return ctx.ticketedRows.some(r => r.allowedActions.includes(action))
         ? { kind: 'setAllActions', action }
-        : { kind: 'invalid', reason: `No row can be set to \`${action}\`.` };
+        : { kind: 'invalid', reason: `No row can be set to \`${actionLabelOf(action, ctx.actionLabels)}\`.` };
     }
     const row = ctx.ticketedRows.find(r => r.id.toLowerCase() === target);
     if (row) {
       return row.allowedActions.includes(action)
         ? { kind: 'setAction', id: row.id, action }
-        : { kind: 'invalid', reason: `${row.id} can't be set to \`${action}\` — it offers ${row.allowedActions.map(a => `\`${a}\``).join(', ')}.` };
+        : { kind: 'invalid', reason: `${row.id} can't be set to \`${actionLabelOf(action, ctx.actionLabels)}\` — it offers ${row.allowedActions.map(a => `\`${actionLabelOf(a, ctx.actionLabels)}\``).join(', ')}.` };
     }
   }
 
@@ -576,10 +580,17 @@ export function describeImportReplyVocabulary(view: ImportReviewView, ctx: Impor
       return `On this screen you can reply \`create tickets\`, row numbers to toggle (e.g. \`2 4\`), \`include all\` / \`exclude all\`, ` +
         `${ctx.canFold ? '`merge 2 4` / `unmerge 2`, `add 2 4 to PROJ-123`, ' : ''}` +
         `${ctx.canAccept ? '`accept 2 4`, `accept component 2 4`, `accepted` / `unaccept 2`, ' : ''}\`next\` / \`prev\`, or ${exit}.`;
-    case 'ticketed':
-      return 'On this screen you can reply `apply`, `<row> <action>` (e.g. `A2 follow-up` — actions are ' +
-        `${TICKETED_ACTION_ORDER.map(a => `\`${a}\``).join(', ')}), \`all <action>\` (e.g. \`all leave\`), ` +
-        `${ctx.canAccept ? '`accept component A2`, ' : ''}${ctx.canMergeTickets ? '`merge A5 into A3`, ' : ''}\`update tickets\`, \`re-create tickets\`, \`next\` / \`prev\` / \`page <n>\`, or ${exit}.`;
+    case 'ticketed': {
+      // An importer with its own action words lists only what its rows offer, and leaves out the bulk shortcuts none can use.
+      const offered = ctx.actionLabels
+        ? TICKETED_ACTION_ORDER.filter(a => ctx.ticketedRows.some(r => r.allowedActions.includes(a)))
+        : TICKETED_ACTION_ORDER;
+      const shortcutOffered = (a: TicketedAction) => !ctx.actionLabels || ctx.ticketedRows.some(r => r.allowedActions.includes(a));
+      const shortcuts = [shortcutOffered('update') ? '`update tickets`, ' : '', shortcutOffered('re-create') ? '`re-create tickets`, ' : ''].join('');
+      return `On this screen you can reply \`apply\`, \`<row> <action>\` (e.g. \`A2 ${actionLabelOf('follow-up', ctx.actionLabels)}\` — actions are ` +
+        `${offered.map(a => `\`${actionLabelOf(a, ctx.actionLabels)}\``).join(', ')}), \`all <action>\` (e.g. \`all leave\`), ` +
+        `${ctx.canAccept ? '`accept component A2`, ' : ''}${ctx.canMergeTickets ? '`merge A5 into A3`, ' : ''}${shortcuts}\`next\` / \`prev\` / \`page <n>\`, or ${exit}.`;
+    }
     case 'stale':
       return `On this screen you can reply \`close tickets\`, a stale ticket's key to toggle it (e.g. \`PROJ-123\`), \`next\` / \`prev\` / \`page <n>\`, or ${exit}.`;
     default: {
@@ -590,12 +601,12 @@ export function describeImportReplyVocabulary(view: ImportReviewView, ctx: Impor
 }
 
 /** Import summary streamed on "done" (R3), from the session's accumulated outcomes. */
-export function buildImportDoneSummary(outcomes: ImportOutcomes): string {
+export function buildImportDoneSummary(outcomes: ImportOutcomes, labels?: ActionLabels): string {
   const { followedUp } = outcomes;
   const parts = [
     `**${outcomes.created}** created`,
     `${outcomes.updated} updated`,
-    `${followedUp} follow-up${followedUp === 1 ? '' : 's'}`,
+    `${followedUp} ${actionLabelOf('follow-up', labels)}${followedUp === 1 ? '' : 's'}`,
     `${outcomes.recreated} re-created`,
     `${outcomes.closed} closed`,
   ];

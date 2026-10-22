@@ -5,7 +5,7 @@ import { BATCH_LIMIT } from '../../utils/reportImport';
 import type { RowChange } from '../../utils/reportImport';
 import { formatKeyLink } from '../../services/TicketService';
 import { isComponentEntry, type AcceptedEntry } from '../../utils/waltzAccepted';
-import { AcceptedHidden, ImportResultGroup, ImportReviewView, ReviewRowBase, ReviewSession, ReviewSessionStale, TicketedAction, TicketedRowResult, emptyImportOutcomes, isTicketedRowFinished, selectedStaleIssueTypes, ticketedRowActions, ticketedTargetKey } from './importTypes';
+import { AcceptedHidden, ActionLabels, actionLabelOf, ImportResultGroup, ImportReviewView, ReviewRowBase, ReviewSession, ReviewSessionStale, TicketedAction, TicketedRowResult, emptyImportOutcomes, isTicketedRowFinished, selectedStaleIssueTypes, ticketedRowActions, ticketedTargetKey } from './importTypes';
 import { ReviewTableColumn, cmdLink, countedNoun, neutralizeMarkdownLinks, pluralNoun, renderReviewTable, safeCellText } from './primitives';
 import { buildReviewPage } from './reviewPaging';
 
@@ -127,6 +127,8 @@ export interface ImportScreenOptions {
   canAccept?: boolean;
   // Waltz ticket merge: whether the review offers `merge … into …` and `reload report` (Waltz only).
   canMergeTickets?: boolean;
+  // How the importer names its row actions (Waltz shows `follow-up` as `new ticket`).
+  actionLabels?: ActionLabels;
 }
 
 function describeAcceptedHidden(hidden: AcceptedHidden): string {
@@ -192,7 +194,7 @@ export function buildImportOverview<TRow extends ReviewRowBase>(session: ReviewS
       parts.push(c.ticketedTotal === 0 ? 'none left' : countedNoun(c.ticketedTotal, opts.itemNoun));
       if (c.ticketedChanged > 0) parts.push(`${c.ticketedChanged} with changes`);
       if (o.updated > 0) parts.push(`${o.updated} updated`);
-      if (o.followedUp > 0) parts.push(`${o.followedUp} follow-up${o.followedUp === 1 ? '' : 's'}`);
+      if (o.followedUp > 0) parts.push(`${o.followedUp} ${actionLabelOf('follow-up', opts.actionLabels)}${o.followedUp === 1 ? '' : 's'}`);
       if (o.rewritten > 0) parts.push(`${o.rewritten} rewritten`);
       if (o.recreated > 0) parts.push(`${o.recreated} re-created`);
       if (o.merged > 0) parts.push(`${o.merged} merged`);
@@ -297,8 +299,8 @@ export function formatRowChange(change: RowChange | null | undefined, findingNou
 }
 
 /** U4/R16: a row's result as shown in its Action cell (and in the per-row progress lines). */
-export function formatTicketedRowResult(result: TicketedRowResult, baseUrl?: string): string {
-  if (result.status === 'failed') return `✗ ${result.action} failed: ${safeCellText(result.error)}`;
+export function formatTicketedRowResult(result: TicketedRowResult, baseUrl?: string, labels?: ActionLabels): string {
+  if (result.status === 'failed') return `✗ ${actionLabelOf(result.action, labels)} failed: ${safeCellText(result.error)}`;
   switch (result.action) {
     case 'update':
       if (result.note === 'baseline') return 'baseline recorded';
@@ -308,7 +310,7 @@ export function formatTicketedRowResult(result: TicketedRowResult, baseUrl?: str
     case 'rewrite':
       return result.note === 'comment-failed' ? 'rewritten (comment failed)' : 'rewritten';
     case 'follow-up':
-      return `follow-up ${formatKeyLink(result.key, baseUrl)}${result.linkMissing ? ' (link missing)' : ''}`;
+      return `${actionLabelOf('follow-up', labels)} ${formatKeyLink(result.key, baseUrl)}${result.linkMissing ? ' (link missing)' : ''}`;
     case 're-create':
       return `re-created as ${formatKeyLink(result.key, baseUrl)}`;
     case 'merge':
@@ -335,12 +337,13 @@ export function applyTicketedActionChange<TRow extends ReviewRowBase>(
 }
 
 /** KTD9: every allowed action as its own link (sending `<row id> <action>`), the current one first and bold. */
-function ticketedActionCell(row: ReviewRowBase, baseUrl?: string): string {
-  if (row.result?.status === 'done') return formatTicketedRowResult(row.result, baseUrl);
+function ticketedActionCell(row: ReviewRowBase, baseUrl?: string, labels?: ActionLabels): string {
+  if (row.result?.status === 'done') return formatTicketedRowResult(row.result, baseUrl, labels);
   const { allowedActions, action } = ticketedRowActions(row);
   const ordered = [action, ...allowedActions.filter(a => a !== action)];
-  const links = ordered.map(a => (a === action ? `**${cmdLink(a, `${row.id} ${a}`)}**` : cmdLink(a, `${row.id} ${a}`)));
-  const prefix = row.result?.status === 'failed' ? `${formatTicketedRowResult(row.result, baseUrl)} — ` : '';
+  const word = (a: TicketedAction) => actionLabelOf(a, labels);
+  const links = ordered.map(a => (a === action ? `**${cmdLink(word(a), `${row.id} ${word(a)}`)}**` : cmdLink(word(a), `${row.id} ${word(a)}`)));
+  const prefix = row.result?.status === 'failed' ? `${formatTicketedRowResult(row.result, baseUrl, labels)} — ` : '';
   return prefix + links.join(' · ');
 }
 
@@ -378,7 +381,7 @@ export function buildTicketedGroupScreen<TRow extends ReviewRowBase>(
     { header: 'Ticket', accessor: (r) => ticketedTicketCell(r, opts.baseUrl) },
     { header: 'Status', accessor: (r) => safeCellText(r.target?.status ?? '—') },
     { header: 'Change', accessor: (r) => formatRowChange(r.change, opts.findingNoun) },
-    { header: 'Action', accessor: (r) => ticketedActionCell(r, opts.baseUrl) },
+    { header: 'Action', accessor: (r) => ticketedActionCell(r, opts.baseUrl, opts.actionLabels) },
   ];
   const totalPages = groupTotalPages(ticketed.length);
   const page = clampGroupPage(s.ticketedPage ?? 0, ticketed.length);
@@ -404,7 +407,7 @@ export function buildTicketedGroupScreen<TRow extends ReviewRowBase>(
       : '_Every row has been handled — nothing to apply._');
   }
   if (c.ticketedOpen > 0) {
-    lines.push('Change a row with `<row> <action>` (e.g. `A2 follow-up`) or every row with `all <action>` (e.g. `all leave`), or click an action in the table.');
+    lines.push(`Change a row with \`<row> <action>\` (e.g. \`A2 ${actionLabelOf('follow-up', opts.actionLabels)}\`) or every row with \`all <action>\` (e.g. \`all leave\`), or click an action in the table.`);
     if (opts.canMergeTickets) {
       lines.push('Reply `merge A2 A3 into A1` (or ticket keys) to combine tickets: the ticket after `into` is kept, the others are linked as duplicates, rewritten and closed. You see the plan and confirm first.');
     }

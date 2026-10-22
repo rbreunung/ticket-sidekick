@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildReviewPage, parseReviewPageNav, applyReviewSessionToggle } from '../participant/sessionState';
-import { parseBulkNewRowReply, applyBulkNewRowSet, applyTicketedActionChange, formatRowChange, CURRENT_SESSION_SCHEMA_VERSION, isSessionExpired, describeImportReplyVocabulary, type TicketedAction, buildImportOverview, buildNewGroupScreen, buildTicketedGroupScreen, initImportViewState, ensureImportViewState, computeImportResultGroups, emptyImportOutcomes, buildImportDoneSummary, parseOverviewReply, parseNewGroupReply, parseTicketedGroupReply, parseStaleGroupReply, IMPORT_COMMANDS, isConfirmation, isCancellation, buildChatCommandLink, type ReviewSession, type ImportReplyContext } from '../participant/sessionState';
+import { parseBulkNewRowReply, applyBulkNewRowSet, applyTicketedActionChange, formatRowChange, CURRENT_SESSION_SCHEMA_VERSION, isSessionExpired, describeImportReplyVocabulary, type TicketedAction, buildImportOverview, buildNewGroupScreen, buildTicketedGroupScreen, initImportViewState, ensureImportViewState, computeImportResultGroups, emptyImportOutcomes, buildImportDoneSummary, parseOverviewReply, parseNewGroupReply, parseTicketedGroupReply, parseStaleGroupReply, IMPORT_COMMANDS, isConfirmation, isCancellation, buildChatCommandLink, formatTicketedRowResult as formatRowResult, type ReviewSession, type ImportReplyContext } from '../participant/sessionState';
 import { type ReviewSessionStale } from '../participant/sessionState';
 
 // U4: minimal ReviewRowBase-shaped row for the pageable-review-session tests below.
@@ -380,10 +380,10 @@ describe('Already-ticketed screen — per-row actions (U4/R5, R6, KTD9)', () => 
 });
 
 describe('Session schema version (U4/KTD8)', () => {
-  it('is 12, so a review built before the stored report path and merge run (version 11) expires', () => {
-    expect(CURRENT_SESSION_SCHEMA_VERSION).toBe(12);
-    expect(isSessionExpired({ schemaVersion: 11 })).toBe(true);
-    expect(isSessionExpired({ schemaVersion: 12 })).toBe(false);
+  it('is 13, so a review built before the remediation dates (version 12) expires', () => {
+    expect(CURRENT_SESSION_SCHEMA_VERSION).toBe(13);
+    expect(isSessionExpired({ schemaVersion: 12 })).toBe(true);
+    expect(isSessionExpired({ schemaVersion: 13 })).toBe(false);
   });
 });
 
@@ -684,5 +684,69 @@ describe('Per-screen reply parsing (KTD2, R6)', () => {
       expect(parseReviewPageNav(word)).toBeNull();
       expect(parseBulkNewRowReply(word)).toBeNull();
     }
+  });
+});
+
+describe('the Waltz action label `new ticket` (remediation dates, U5)', () => {
+  const labels = { 'follow-up': 'new ticket' } as const;
+  const waltzCtx = {
+    singleGroup: true, groups: ['ticketed' as const], newRowIds: [], actionLabels: labels,
+    ticketedRows: [{ id: 'A1', allowedActions: ['rewrite', 'leave', 'follow-up'] as TicketedAction[] }, { id: 'A2', allowedActions: ['rewrite', 'leave'] as TicketedAction[] }],
+  };
+
+  it.each(['A1 new ticket', 'a1 new-ticket', 'A1 newticket', 'A1 New Ticket'])('reads %j as the follow-up action', (reply) => {
+    expect(parseTicketedGroupReply(reply, waltzCtx)).toEqual({ kind: 'setAction', id: 'A1', action: 'follow-up' });
+  });
+
+  it('reads `all new ticket` when a row offers it, and refuses it when none does', () => {
+    expect(parseTicketedGroupReply('all new ticket', waltzCtx)).toEqual({ kind: 'setAllActions', action: 'follow-up' });
+    expect(parseTicketedGroupReply('all new ticket', { ...waltzCtx, ticketedRows: [waltzCtx.ticketedRows[1]] }).kind).toBe('invalid');
+  });
+
+  it('refuses `new ticket` on a row that does not offer it, naming the label', () => {
+    const out = parseTicketedGroupReply('A2 new ticket', waltzCtx) as { kind: string; reason?: string };
+    expect(out.kind).toBe('invalid');
+    expect(out.reason).toContain('`new ticket`');
+    expect(out.reason).not.toContain('follow-up');
+  });
+
+  it('does not read the bare words `new ticket` as an action or a confirmation', () => {
+    expect(parseTicketedGroupReply('new ticket', waltzCtx).kind).toBe('invalid');
+    expect(parseTicketedGroupReply('new', waltzCtx).kind).toBe('invalid');
+  });
+
+  it('refuses update and re-create, which a Waltz row never offers', () => {
+    expect(parseTicketedGroupReply('A1 update', waltzCtx).kind).toBe('invalid');
+    expect(parseTicketedGroupReply('A1 re-create', waltzCtx).kind).toBe('invalid');
+    expect(parseTicketedGroupReply('all update', waltzCtx).kind).toBe('invalid');
+  });
+
+  it('the vocabulary reminder uses the label and leaves out the shortcuts no row can use', () => {
+    const text = describeImportReplyVocabulary('ticketed', waltzCtx);
+    expect(text).toContain('`new ticket`');
+    expect(text).not.toContain('`follow-up`');
+    expect(text).not.toContain('update tickets');
+    expect(text).not.toContain('re-create tickets');
+  });
+
+  it('keeps the shortcuts in the reminder for an importer without labels', () => {
+    const text = describeImportReplyVocabulary('ticketed', { ...waltzCtx, actionLabels: undefined });
+    expect(text).toContain('`update tickets`');
+    expect(text).toContain('`re-create tickets`');
+  });
+
+  it('shows a created follow-up as "new ticket KEY" and the done summary counts new tickets', () => {
+    expect(formatRowResult({ status: 'done', action: 'follow-up', key: 'PROJ-9' }, undefined, labels)).toBe('new ticket PROJ-9');
+    expect(formatRowResult({ status: 'done', action: 'follow-up', key: 'PROJ-9' })).toBe('follow-up PROJ-9');
+    expect(buildImportDoneSummary({ ...emptyImportOutcomes(), followedUp: 2 }, labels)).toContain('2 new tickets');
+    expect(buildImportDoneSummary({ ...emptyImportOutcomes(), followedUp: 1 }, labels)).toContain('1 new ticket');
+    expect(buildImportDoneSummary({ ...emptyImportOutcomes(), followedUp: 2 })).toContain('2 follow-ups');
+  });
+
+  it('the Already-ticketed screen labels the action links `new ticket` and sends that word', () => {
+    const row = makeActionRow('A1', 'PROJ-1', { allowedActions: ['rewrite', 'leave', 'follow-up'], action: 'follow-up' });
+    const text = buildTicketedGroupScreen(screenSession([row]), [], { ...waltzOpts, actionLabels: labels });
+    expect(text).toContain(buildChatCommandLink('new ticket', '@jira', 'A1 new ticket'));
+    expect(text).not.toContain('follow-up');
   });
 });
