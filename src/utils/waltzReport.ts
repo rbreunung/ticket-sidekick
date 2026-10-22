@@ -3,7 +3,7 @@ import ExcelJS from 'exceljs';
 import { markdownToJiraWiki } from './markdownToJiraWiki';
 import type { DiagLogger } from './diagTypes';
 import {
-  toCalendarDate, hasAnyDate, dateColumnTitles, DATES_HEADING, NOT_REPORTED_TEXT, ABSENT_CELL,
+  toCalendarDate, hasAnyDate, earliestDueDate, dateColumnTitles, DATES_HEADING, NOT_REPORTED_TEXT, ABSENT_CELL,
   type WaltzRemediation,
 } from './waltzDates';
 import {
@@ -572,6 +572,11 @@ function sortVulnerabilities(vulns: WaltzVulnerability[]): WaltzVulnerability[] 
 // would exceed its size budget steps these down (R10) before dropping the sections altogether.
 interface DetailCaps { artifacts: number; cves: number }
 const FULL_CAPS: DetailCaps = { artifacts: MAX_ARTIFACTS_SHOWN, cves: MAX_CVES_SHOWN };
+
+/** R7: the Jira Due Date for a row's components — the earliest planned (else policy) date of its members, null when none has one. */
+export function waltzDueDate(group: WaltzComponent[]): string | null {
+  return earliestDueDate(group.map(c => c.remediation));
+}
 
 // Dates are validated `YYYY-MM-DD` strings; the plan status is the report's own text and goes through the cell sanitizer.
 function dateCells(remediation: WaltzRemediation | undefined): string[] {

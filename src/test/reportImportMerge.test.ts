@@ -471,3 +471,27 @@ describe('review fixes: replay, retry, chaining and target names', () => {
     expect(client.executeTransitionCalls.map(c => c.transitionId)).toEqual(['41']);
   });
 });
+
+describe('the survivor\'s Due Date (remediation dates, U3)', () => {
+  const dated = (c: WaltzComponent, policyDate: string | null, plannedDate: string | null = null): WaltzComponent => ({
+    ...c, remediation: { policyDate, plannedDate, planDeadline: null, planStatus: null, reportDate: '2026-10-22' },
+  });
+
+  it('is the earliest date over the combined group, and the source ticket\'s own Due Date is left alone', async () => {
+    report = [dated(libfoo, '2026-12-31'), dated(libbar, '2026-11-30', '2026-12-15'), libbaz];
+    const { ws } = await importWaltz();
+    await reply('merge PROJ-15 into PROJ-12 confirm', ws);
+    await reply('1', ws);
+
+    const survivorWrite = client.updateIssueCalls.find(c => c.issueKey === 'PROJ-12')!;
+    expect(survivorWrite.fields.duedate).toBe('2026-12-15');
+    expect(client.updateIssueCalls.filter(c => c.issueKey === 'PROJ-15').every(c => !('duedate' in c.fields))).toBe(true);
+  });
+
+  it('sends no Due Date when no member has a date', async () => {
+    const { ws } = await importWaltz();
+    await reply('merge PROJ-15 into PROJ-12 confirm', ws);
+    await reply('1', ws);
+    expect(client.updateIssueCalls.every(c => !('duedate' in c.fields))).toBe(true);
+  });
+});

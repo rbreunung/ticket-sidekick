@@ -5,6 +5,7 @@ import { logDiag } from '../../utils/diagLog';
 import { formatKeyLink, type TicketService } from '../../services/TicketService';
 import { buildAddPrompt, buildReviewPage, emptyImportOutcomes, isTicketedRowFinished, restoreMergedRows, ticketedTargetKey, type AddMode, type ReviewRowBase, type ReviewSession, type TicketedRowResult } from '../sessionState';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
+import { droppedFieldsWarning, logDroppedFields } from './importCreate';
 import type { ReportImportDescriptor } from './reportImportTypes';
 
 type AddTargetIssue = Awaited<ReturnType<TicketService['getIssue']>>;
@@ -30,21 +31,28 @@ export function planRewrite<TItem, TRow extends ReviewRowBase>(
   return { regenItem, droppedKeys: [...new Set(recorded.filter(k => !covered.has(k)))] };
 }
 
-/** KTD7: rebuilds `key` from `regenItem` — the importer's own summary, description and labels (no template labels) — in one write. */
+/**
+ * KTD7: rebuilds `key` from `regenItem` — the importer's own summary, description and labels (no template labels) — in one write.
+ * An importer's Due Date (Waltz) rides in the same write; `dueDate` is what was set, `droppedFields` what Jira refused.
+ */
 export async function writeRewrite<TItem, TRow extends ReviewRowBase>(
   ticketService: TicketService,
   descriptor: ReportImportDescriptor<TItem, TRow>,
   key: string,
   regenItem: TItem,
-): Promise<void> {
+): Promise<{ dueDate: string | null; droppedFields: string[] }> {
   const fields = descriptor.buildRowFields(regenItem, []);
   const built = descriptor.buildTicketFields({ ...fields, id: '0', existingTicketKey: null, included: true } as unknown as TRow, {});
-  await ticketService.rewriteTicket(key, {
+  const dueDate = typeof built.fields.duedate === 'string' ? built.fields.duedate : null;
+  const { droppedFields } = await ticketService.rewriteTicket(key, {
     summary: built.summary,
     description: String(built.fields.description ?? ''),
     labelsToAdd: (built.fields.labels as string[] | undefined) ?? [],
     removePrefix: descriptor.changeTracking?.removeLabelPrefix,
+    ...(dueDate ? { extraFields: { duedate: dueDate }, optionalFields: built.optionalFields } : {}),
   });
+  if (droppedFields) logDroppedFields(descriptor.scope, key, droppedFields);
+  return { dueDate: droppedFields?.includes('duedate') ? null : dueDate, droppedFields: droppedFields ?? [] };
 }
 
 /** The visible New rows an add names, or null (with a message) when the page no longer holds them. */
@@ -113,6 +121,7 @@ export async function addToTicket<TItem, TRow extends ReviewRowBase>(
   };
 
   let comment: string;
+  let droppedFields: string[] = [];
   try {
     const issue = await ticketService.getIssue(key);
     const labels = issue.fields.labels ?? [];
@@ -127,7 +136,8 @@ export async function addToTicket<TItem, TRow extends ReviewRowBase>(
       await ticketService.updateLabels(key, toAdd);
       comment = fold.buildComment(addedItem, []);
     } else {
-      await writeRewrite(ticketService, descriptor, key, plan.regenItem);
+      const written = await writeRewrite(ticketService, descriptor, key, plan.regenItem);
+      droppedFields = written.droppedFields;
       comment = fold.buildComment(addedItem, plan.droppedKeys);
     }
   } catch (err) {
@@ -145,6 +155,7 @@ export async function addToTicket<TItem, TRow extends ReviewRowBase>(
   stream.markdown(commentFailed
     ? `⚠ ${link} — ${mode === 'comment' ? 'labels added' : 'rewritten'}, comment failed: ${commentFailed}\n\n`
     : `✓ ${link} — ${done}\n\n`);
+  if (droppedFields.length > 0) stream.markdown(droppedFieldsWarning(link, droppedFields));
   logDiag(descriptor.scope, commentFailed ? 'warn' : 'info', `${descriptor.importLabel} import — ${rows.length} row(s) added to ${key} (${mode})`, { issueKey: key, mode });
 
   // The added rows leave New. Other rows on the page (merged ones included) are left as they are.

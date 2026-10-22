@@ -6,7 +6,7 @@ import { formatKeyLink, type TicketService } from '../../services/TicketService'
 import { BATCH_LIMIT } from '../../utils/reportImport';
 import { emptyImportOutcomes, findPartialRewrites, isTicketedRowFinished, ticketedRowActions, ticketedTargetKey, type ReviewRowBase, type ReviewSession, type TicketedAction, type TicketedRowResult } from '../sessionState';
 import { planRewrite, writeRewrite } from './importAddToTicket';
-import { createOne } from './importCreate';
+import { createOne, droppedFieldsWarning } from './importCreate';
 import type { ReportImportDescriptor } from './reportImportTypes';
 
 /** KTD5/KTD7: which row actions each Already-ticketed run reply runs, and the word to repeat for the rest. */
@@ -177,6 +177,7 @@ async function rewriteTicketedGroup<TItem, TRow extends ReviewRowBase>(
   const fold = descriptor.fold;
   const link = formatKeyLink(key, baseUrl);
   let comment: string;
+  let droppedFields: string[] = [];
   try {
     if (!fold) throw new Error('rewrite is not available for this import');
     const issue = await ticketService.getIssue(key);
@@ -188,7 +189,8 @@ async function rewriteTicketedGroup<TItem, TRow extends ReviewRowBase>(
     });
     const addedItem = fold.combine(added);
     const plan = planRewrite(session, descriptor, key, issue.fields.labels ?? [], []);
-    await writeRewrite(ticketService, descriptor, key, plan.regenItem);
+    const written = await writeRewrite(ticketService, descriptor, key, plan.regenItem);
+    droppedFields = written.droppedFields;
     comment = fold.buildComment(addedItem, plan.droppedKeys);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -202,9 +204,11 @@ async function rewriteTicketedGroup<TItem, TRow extends ReviewRowBase>(
     const message = commentErr instanceof Error ? commentErr.message : String(commentErr);
     logDiag(descriptor.scope, 'warn', `Rewritten but the comment failed — ${key}`, { issueKey: key, error: message });
     stream.markdown(`⚠ ${link} — rewritten, but the comment could not be posted: ${message}\n\n`);
+    if (droppedFields.length > 0) stream.markdown(droppedFieldsWarning(link, droppedFields));
     return { status: 'done', action: 'rewrite', note: 'comment-failed' };
   }
   stream.markdown(`✓ ${link} — rewritten from ${rows.length} row(s)\n\n`);
+  if (droppedFields.length > 0) stream.markdown(droppedFieldsWarning(link, droppedFields));
   return { status: 'done', action: 'rewrite' };
 }
 

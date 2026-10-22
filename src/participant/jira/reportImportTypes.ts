@@ -63,7 +63,7 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   // KTD3: builds the ticket's summary + create-fields from a row (and the batch's resolved template
   // fields) — the only place a row's fields become a `createTicket()` call, so an importer with no
   // `labels`/`descriptionWiki` concept (email) never needs those fields at all.
-  buildTicketFields: (row: TRow, additionalFields: Record<string, unknown>) => { summary: string; fields: Record<string, unknown> };
+  buildTicketFields: (row: TRow, additionalFields: Record<string, unknown>) => BuiltTicketFields;
   // KTD4: optional per-row work after a ticket is created (email uses this for attachment upload).
   // A rejection is caught by the shared creation step (createOne) and shown as a warning — it never fails the row,
   // since the ticket already exists by the time this runs.
@@ -142,6 +142,16 @@ export interface ImportFold<TItem, TRow extends ReviewRowBase> {
 
 type FindingsChange = Extract<RowChange, { kind: 'findings' }>;
 
+/**
+ * A ticket's summary and create-fields. `optionalFields` names fields of `fields` that Jira may refuse
+ * (the Waltz Due Date, missing from a project's screen): a 400 naming one repeats the write without it.
+ */
+export interface BuiltTicketFields {
+  summary: string;
+  fields: Record<string, unknown>;
+  optionalFields?: string[];
+}
+
 /** Import ticket updates parity (KTD2): what an importer supplies so already-ticketed rows can be updated. */
 export interface ImportChangeTracking<TItem, TRow extends ReviewRowBase> {
   /** What one finding is called in the Change column, e.g. 'flaw(s)' / 'CVE(s)'. */
@@ -162,5 +172,5 @@ export interface ImportChangeTracking<TItem, TRow extends ReviewRowBase> {
   /** R14/KTD10: the follow-up ticket's summary and create-fields, covering only the new findings. */
   buildFollowUp: (
     row: TRow, change: FindingsChange, originalKey: string, additionalFields: Record<string, unknown>,
-  ) => { summary: string; fields: Record<string, unknown> };
+  ) => BuiltTicketFields;
 }

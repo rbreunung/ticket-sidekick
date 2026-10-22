@@ -203,7 +203,8 @@ async function executeStep<TItem, TRow extends ReviewRowBase>(
     case 'survivor-rewrite': {
       const labels = await recordedLabels(ticketService, [run.survivor, ...run.sources]);
       const plan = planRewrite(session, descriptor, run.survivor, labels, sourceRows);
-      await writeRewrite(ticketService, descriptor, run.survivor, plan.regenItem);
+      const written = await writeRewrite(ticketService, descriptor, run.survivor, plan.regenItem);
+      if (written.droppedFields.length > 0) step.note = 'Jira refused the Due Date; written without it';
       run.droppedKeys = plan.droppedKeys;
       return;
     }

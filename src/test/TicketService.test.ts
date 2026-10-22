@@ -1906,3 +1906,99 @@ describe('TicketService.hasCommentStartingWith (Waltz ticket merge)', () => {
     expect(await new TicketService(client).hasCommentStartingWith('PROJ-12', 'x')).toBe(false);
   });
 });
+
+describe('TicketService optional fields Jira may refuse (Due Date)', () => {
+  const refusal = (field: string) => new JiraApiError(
+    'Jira API error 400', 400, 'https://jira.example.com/rest/api/2/issue',
+    JSON.stringify({ errorMessages: [], errors: { [field]: `Field '${field}' cannot be set. It is not on the appropriate screen, or unknown.` } }),
+  );
+  let client: MockJiraClient;
+  let service: TicketService;
+  let diag: Array<[string, string]>;
+
+  beforeEach(() => {
+    client = new MockJiraClient();
+    diag = [];
+    service = new TicketService(client, (level, message) => { diag.push([level, message]); });
+  });
+
+  describe('createTicket', () => {
+    it('sends the Due Date and reports nothing dropped when Jira accepts it', async () => {
+      const result = await service.createTicket('PROJ', 'T', 'Bug', { duedate: '2026-12-15' }, undefined, ['duedate']);
+      expect(client.createIssueCalls).toHaveLength(1);
+      expect(client.createIssueCalls[0].additionalFields).toEqual({ duedate: '2026-12-15' });
+      expect(result.droppedFields).toBeUndefined();
+    });
+
+    it('repeats the create once without the refused field, keeps the rest, and reports what was dropped', async () => {
+      const original = client.createIssue.bind(client);
+      let first = true;
+      client.createIssue = async (...args) => {
+        if (first) { first = false; client.createIssueCalls.push({ projectKey: args[0], summary: args[1], issueType: args[2], additionalFields: args[3] }); throw refusal('duedate'); }
+        return original(...args);
+      };
+      const result = await service.createTicket('PROJ', 'T', 'Bug', { duedate: '2026-12-15', labels: ['oss-dependency'] }, undefined, ['duedate']);
+      expect(client.createIssueCalls).toHaveLength(2);
+      expect(client.createIssueCalls[1].additionalFields).toEqual({ labels: ['oss-dependency'] });
+      expect(result.droppedFields).toEqual(['duedate']);
+      expect(result.key).toBeTruthy();
+      expect(diag.some(([level, message]) => level === 'warn' && message.includes('duedate'))).toBe(true);
+    });
+
+    it('rethrows a 400 about a field that was not marked optional, with no second call', async () => {
+      client.createIssue = async () => { client.createIssueCalls.push({ projectKey: 'PROJ', summary: 'T', issueType: 'Bug' }); throw refusal('summary'); };
+      await expect(service.createTicket('PROJ', 'T', 'Bug', { duedate: '2026-12-15' }, undefined, ['duedate'])).rejects.toThrow('400');
+      expect(client.createIssueCalls).toHaveLength(1);
+    });
+
+    it('rethrows when the field is refused but no optional field was named', async () => {
+      client.createIssue = async () => { throw refusal('duedate'); };
+      await expect(service.createTicket('PROJ', 'T', 'Bug', { duedate: '2026-12-15' })).rejects.toThrow('400');
+    });
+
+    it('rethrows a second failure after the retry', async () => {
+      let calls = 0;
+      client.createIssue = async () => { calls++; throw refusal('duedate'); };
+      await expect(service.createTicket('PROJ', 'T', 'Bug', { duedate: '2026-12-15' }, undefined, ['duedate'])).rejects.toThrow('400');
+      expect(calls).toBe(2);
+    });
+  });
+
+  describe('rewriteTicket', () => {
+    const issue = { id: '1', key: 'PROJ-1', fields: { labels: ['oss-dependency'], summary: 'Old' } } as unknown as JiraIssue;
+
+    it('writes the extra Due Date field together with summary, description and labels', async () => {
+      client.getIssue = async () => issue;
+      const result = await service.rewriteTicket('PROJ-1', {
+        summary: 'New', description: 'd', labelsToAdd: ['oss-dependency', 'oss-rating-high'], extraFields: { duedate: '2026-12-15' }, optionalFields: ['duedate'],
+      });
+      expect(client.updateIssueCalls).toHaveLength(1);
+      expect(client.updateIssueCalls[0].fields).toEqual({ summary: 'New', description: 'd', labels: ['oss-dependency', 'oss-rating-high'], duedate: '2026-12-15' });
+      expect(result.droppedFields).toBeUndefined();
+    });
+
+    it('repeats the write once without the refused field, keeping summary, description and labels', async () => {
+      client.getIssue = async () => issue;
+      const original = client.updateIssue.bind(client);
+      let first = true;
+      client.updateIssue = async (key, fields) => {
+        if (first) { first = false; client.updateIssueCalls.push({ issueKey: key, fields }); throw refusal('duedate'); }
+        return original(key, fields);
+      };
+      const result = await service.rewriteTicket('PROJ-1', {
+        summary: 'New', description: 'd', labelsToAdd: ['oss-rating-high'], extraFields: { duedate: '2026-12-15' }, optionalFields: ['duedate'],
+      });
+      expect(client.updateIssueCalls).toHaveLength(2);
+      expect(client.updateIssueCalls[1].fields).toEqual({ summary: 'New', description: 'd', labels: ['oss-dependency', 'oss-rating-high'] });
+      expect(result.droppedFields).toEqual(['duedate']);
+    });
+
+    it('rethrows any other failure unchanged', async () => {
+      client.getIssue = async () => issue;
+      client.updateIssue = async () => { throw refusal('summary'); };
+      await expect(service.rewriteTicket('PROJ-1', {
+        summary: 'New', description: 'd', labelsToAdd: [], extraFields: { duedate: '2026-12-15' }, optionalFields: ['duedate'],
+      })).rejects.toThrow('400');
+    });
+  });
+});

@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import type { TicketService } from '../../services/TicketService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import {
-  parseWaltzReport, filterComponents, sanitizeComponentLabel, buildGroupSummary, buildGroupLabels, buildGroupDescriptionWiki, buildFoldedCommentWiki,
+  parseWaltzReport, filterComponents, waltzDueDate, sanitizeComponentLabel, buildGroupSummary, buildGroupLabels, buildGroupDescriptionWiki, buildFoldedCommentWiki,
   describeWaltzRowChange, buildRecordLabels, buildCveLabel, buildRatingLabel, buildUpdateCommentWiki,
   buildFollowUpDescriptionWiki, buildFollowUpSummary, rewriteSummaryRating, highestRating,
   type WaltzComponent, type WaltzReviewRow,
@@ -135,10 +135,16 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
   }),
   reviewColumns: WALTZ_REVIEW_COLUMNS,
   itemRefFor: row => row.nameVersion,
-  buildTicketFields: (row, additionalFields) => ({
-    summary: row.summary,
-    fields: { ...additionalFields, labels: row.labels, description: row.descriptionWiki },
-  }),
+  // KTD5: the Due Date is written after the template fields so a template cannot override the report, only
+  // when the row has a date, and never cleared; KTD6: Jira may refuse it, which must not stop the ticket.
+  buildTicketFields: (row, additionalFields) => {
+    const dueDate = waltzDueDate(row.sourceGroup);
+    return {
+      summary: row.summary,
+      fields: { ...additionalFields, labels: row.labels, description: row.descriptionWiki, ...(dueDate ? { duedate: dueDate } : {}) },
+      ...(dueDate ? { optionalFields: ['duedate'] } : {}),
+    };
+  },
   // Waltz has no issue-type-fetch-failure pop-up today — omitting onIssueTypeFetchFailed keeps that
   // path log-only, matching current behavior (KTD9).
   // U6: wires reportImportHandler.ts's reverse stale-ticket check up to U5's own marker
