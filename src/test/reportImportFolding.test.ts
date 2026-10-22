@@ -615,13 +615,14 @@ describe('Rewrite on the Already-ticketed screen through the real descriptors (f
     expect(text(stream)).not.toContain('remain');
   });
 
-  it('a row already finished by update is outside the all-or-none set, and its findings still go into the rewrite', async () => {
+  it('a row already finished is outside the all-or-none set, and its findings still go into the rewrite', async () => {
     const tickets: Record<string, FakeTicket> = { 'PROJ-123': { labels: ['veracode', 'veracode-issue-1', 'veracode-issue-2'], summary: 'Old', status: 'Open' } };
     const flaws = [sqlA(), xssB(), makeFlaw('3', { sourceFile: 'A.java', cweId: '89', line: 77 })];
     const { session, ws } = await importVeracode(flaws, tickets);
-    expect(session.allRows.find(r => r.id === 'A1')?.action).toBe('update');
-    await reply('update tickets', session, ws);
-    expect(session.allRows.find(r => r.id === 'A1')?.result?.status).toBe('done');
+    const first = session.allRows.find(r => r.id === 'A1')!;
+    expect(first.action).toBe('rewrite');
+    // The row finished earlier in this review (shared code only looks at the result's status).
+    first.result = { status: 'done', action: 'update' };
     client.updateIssueCalls.length = 0;
     client.addCommentCalls.length = 0;
 

@@ -582,6 +582,18 @@ export function deriveTicketedActions(
   return { allowedActions: TICKETED_ACTION_ORDER.filter(a => allowed.has(a)), action };
 }
 
+/**
+ * The Already-ticketed policy both importers use: `rewrite` and `leave` are always offered, `new ticket` (the
+ * internal id `follow-up`) only when every ticket is resolved. A change or a baseline defaults to `rewrite`
+ * while some ticket is open and to `new ticket` when all are resolved; no change defaults to `leave`. `update`
+ * and `re-create` are never offered.
+ */
+export function deriveRewriteActions(change: RowChange | null, anyOpen: boolean): TicketedActionChoice {
+  const allowedActions: TicketedActionChoice['allowedActions'] = anyOpen ? ['rewrite', 'leave'] : ['rewrite', 'leave', 'follow-up'];
+  if (change === null) return { allowedActions, action: 'leave' };
+  return { allowedActions, action: anyOpen ? 'rewrite' : 'follow-up' };
+}
+
 /** Every distinct ticket across an item's dedup keys, in key-number order. */
 function collectTickets(dedupMap: DedupMap, keys: string[]): DedupTicket[] {
   const byKey = new Map<string, DedupTicket>();
@@ -657,7 +669,7 @@ export function buildReviewRows<TItem, TRow extends ReviewRowBase>(
 }
 
 // --- Waltz-style review passes (remediation dates plan, KTD1/KTD8/KTD10) ---------------------------
-// All three run only for an importer that supplies its own `deriveActions`, so Veracode's rows are untouched.
+// The first two run only for an importer whose change tracking sets `readsTargetDescriptions` (Waltz); the rewrite-default alignment runs for every importer with its own `deriveActions`.
 
 const DESCRIPTION_READ_CONCURRENCY = 8;
 

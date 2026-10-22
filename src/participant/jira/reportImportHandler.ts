@@ -412,7 +412,7 @@ async function buildImportReview<TItem, TRow extends ReviewRowBase>(
   // the report, so it reads those tickets' descriptions (the search cannot carry them: on Cloud it returns ADF).
   // A read that fails leaves that ticket's description unknown, which skips the date comparison for it and marks the
   // review degraded so a refresh does not replace a review built from complete data.
-  const waltzStyle = !!descriptor.changeTracking?.deriveActions && !!descriptor.dedupKeyOf;
+  const waltzStyle = !!descriptor.changeTracking?.readsTargetDescriptions && !!descriptor.dedupKeyOf;
   let ticketDescriptions: Record<string, string | null> | undefined;
   if (waltzStyle && dedupMap.size > 0) {
     const reads = await readTargetDescriptions<TItem>({
@@ -485,7 +485,7 @@ async function buildImportReview<TItem, TRow extends ReviewRowBase>(
   // KTD10/KTD8: a member that left the report counts as a change for every row of its ticket, and rows of one
   // ticket share a `rewrite` default because `rewrite` rebuilds the whole ticket.
   if (waltzStyle && descriptor.fold && descriptor.labelToDedupKey) {
-    allRows = alignRewriteDefaults(applyDroppedMembers<TItem, TRow>({
+    allRows = applyDroppedMembers<TItem, TRow>({
       rows: allRows,
       dedupMap,
       itemOf: descriptor.fold.itemOf,
@@ -493,8 +493,9 @@ async function buildImportReview<TItem, TRow extends ReviewRowBase>(
       labelToDedupKey: descriptor.labelToDedupKey,
       reportKeys: new Set(reportKeys),
       derive: descriptor.changeTracking!.deriveActions!,
-    }));
+    });
   }
+  if (descriptor.changeTracking?.deriveActions) allRows = alignRewriteDefaults(allRows);
   const initialPage = buildReviewPage(allRows, 0);
   const hiddenCounts = toAcceptedHidden(acceptedHidden);
 

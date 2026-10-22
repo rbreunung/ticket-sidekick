@@ -160,21 +160,26 @@ export interface ImportChangeTracking<TItem, TRow extends ReviewRowBase> {
   /** R1/R2/R4: what changed on an item, given the union of labels across all of its tickets; null = no change. */
   describe: (item: TItem, knownLabels: string[], context?: ChangeContext) => RowChange | null;
   /**
-   * The importer's own Already-ticketed action policy in place of the shared five-action one (Waltz). Its presence is also
-   * the switch for the Waltz-only review behavior in the shared code: reading each target ticket's description, the
-   * dropped-member pass and the shared `rewrite` default for rows that point to one ticket, so Veracode is untouched.
+   * The importer's own Already-ticketed action policy in place of the shared five-action one (Waltz and Veracode:
+   * `rewrite`, `leave` and `new ticket`). Its presence also switches on a full-ticket `new ticket` (which needs no new
+   * findings) and the shared `rewrite` default for rows that point to one ticket.
    */
   deriveActions?: (change: RowChange | null, anyOpen: boolean) => TicketedActionChoice;
+  /**
+   * With `deriveActions`: read each target ticket's description to compare what it recorded with the report, and run the
+   * dropped-member pass (Waltz). Veracode does not need either, so it leaves this off.
+   */
+  readsTargetDescriptions?: boolean;
   /** The importer's own words for row actions, by action id (Waltz shows `follow-up` as `new ticket`). */
   actionLabels?: ActionLabels;
-  /** With `deriveActions`: the dedup keys of every component in the unfiltered report, so a component only filtered or accepted away is not "dropped". */
+  /** With `readsTargetDescriptions`: the dedup keys of every component in the unfiltered report, so a component only filtered or accepted away is not "dropped". */
   reportKeysOf?: (rawItems: unknown[]) => string[];
-  /** The record labels `update` adds to the target ticket: all of them for a baseline, only the new ones otherwise. */
-  recordLabelsOf: (row: TRow, change: RowChange) => string[];
+  /** The record labels `update` adds to the target ticket: all of them for a baseline, only the new ones otherwise. Omitted by an importer whose policy never offers `update`. */
+  recordLabelsOf?: (row: TRow, change: RowChange) => string[];
   /** KTD3: labels with this prefix are replaced, not accumulated, whenever `update` adds one (Waltz: `oss-rating-`). */
   removeLabelPrefix?: string;
   /** R11/R12: the one comment `update` posts — Markdown converted to Jira wiki markup, every report value sanitized. */
-  buildUpdateComment: (row: TRow, change: FindingsChange, options: { summaryUnchanged: boolean }) => string;
+  buildUpdateComment?: (row: TRow, change: FindingsChange, options: { summaryUnchanged: boolean }) => string;
   /**
    * R12: the ticket's new summary for this change, `null` when this summary cannot be rewritten (the
    * user renamed it — the comment then says so), or `undefined` when no rewrite applies.

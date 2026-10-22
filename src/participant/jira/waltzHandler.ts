@@ -193,6 +193,7 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
     // on New rows only), so the group holds exactly one component here.
     describe: (group, knownLabels, context) => describeWaltzRowChange(group[0], knownLabels, context),
     deriveActions: deriveWaltzActions,
+    readsTargetDescriptions: true,
     reportKeysOf: rawItems => (rawItems as WaltzComponent[]).map(c => sanitizeComponentLabel(c.nameVersion)),
     recordLabelsOf: (row, change) => {
       if (change.kind === 'baseline') return buildRecordLabels(row.sourceGroup[0]);

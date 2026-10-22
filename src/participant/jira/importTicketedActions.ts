@@ -236,6 +236,7 @@ async function updateTicketedRow<TItem, TRow extends ReviewRowBase>(
   const link = formatKeyLink(ticketKey, baseUrl);
   try {
     if (!tracking || !change) throw new Error('nothing to update on this row');
+    if (!tracking.recordLabelsOf || !tracking.buildUpdateComment) throw new Error('update is not offered for this import');
     const labels = tracking.recordLabelsOf(row, change);
     const prefix = tracking.removeLabelPrefix;
     const removePrefix = prefix && labels.some(l => l.startsWith(prefix)) ? prefix : undefined;

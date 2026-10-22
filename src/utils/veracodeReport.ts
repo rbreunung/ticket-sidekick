@@ -202,7 +202,7 @@ function fullSourcePath(flaw: VeracodeFlaw): string | null {
 // unsanitized: issueId and cweId are already validated purely-numeric at parse time (ISSUE_ID_PATTERN
 // / CWE_ID_PATTERN) and severity is a locally-computed number, so none of the three can carry a
 // markdown-trigger character to begin with.
-// Shared by buildDescriptionWiki()/buildGroupDescriptionWiki()/buildNewFindingsCommentWiki() — the
+// Shared by buildDescriptionWiki()/buildGroupDescriptionWiki() — the
 // Severity/CWE/Description/Recommendation blocks render identically in all three (only the heading
 // level and which optional sections are included differ; the Location/Function layout around them
 // does not, so that part stays inline per caller rather than being forced into a shared shape).
@@ -525,31 +525,6 @@ export function buildFoldedCommentWiki(group: VeracodeFlaw[], droppedIds: string
       ? 'This Veracode finding was added to this ticket.'
       : `These ${group.length} Veracode findings were added to this ticket.`;
   return buildFoldedWiki(group, banner, droppedIds);
-}
-
-/**
- * Builds the `update` action's comment body for the given new flaws (already filtered by the caller
- * to the flaws newly added this run): one `### Issue <id>` block per flaw (severity, CWE,
- * description; no `### Location` — the ticket the comment is posted to already carries it). Every
- * untrusted field is sanitized via `sanitizeCellText()`/`sanitizeStandaloneLine()`, and the whole
- * body is authored as Markdown and converted via `markdownToJiraWiki()` exactly once at the end.
- * `addComment()` sends the body to Jira verbatim, so this sanitization is what prevents Jira
- * wiki-markup injection from crafted report fields.
- */
-export function buildNewFindingsCommentWiki(newFlaws: VeracodeFlaw[]): string {
-  const lines: string[] = [];
-  lines.push(`New finding(s) detected on this line since the ticket was created:`);
-  lines.push('');
-
-  for (const flaw of newFlaws) {
-    lines.push(`### Issue ${flaw.issueId}`);
-    lines.push('');
-
-    pushSeverityAndCwe(lines, flaw, '####');
-    pushDescription(lines, flaw, '####');
-  }
-
-  return markdownToJiraWiki(lines.join('\n'));
 }
 
 /**

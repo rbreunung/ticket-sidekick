@@ -33,7 +33,7 @@ export function planRewrite<TItem, TRow extends ReviewRowBase>(
 
 /**
  * KTD10: the labels a rewrite takes off the ticket — the components it recorded that the report no longer has.
- * Only for an importer with its own action policy (Waltz); a component merely filtered or accepted away is still in
+ * Only for an importer that reads its target tickets (Waltz); a component merely filtered or accepted away is still in
  * the report, so its label stays.
  */
 export function labelsToRemove<TItem, TRow extends ReviewRowBase>(
@@ -41,7 +41,7 @@ export function labelsToRemove<TItem, TRow extends ReviewRowBase>(
   descriptor: ReportImportDescriptor<TItem, TRow>,
   droppedKeys: string[],
 ): string[] {
-  if (!descriptor.changeTracking?.deriveActions) return [];
+  if (!descriptor.changeTracking?.readsTargetDescriptions) return [];
   const inReport = new Set(session.reportKeys ?? []);
   return droppedKeys.filter(k => !inReport.has(k));
 }

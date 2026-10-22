@@ -11,6 +11,7 @@ import {
   MAX_REPORT_BYTES as SHARED_MAX_REPORT_BYTES, sanitizeCellText, sanitizeStandaloneLine,
   clampSummary, fitWiki,
   type RowChange, type ChangeContext, type TicketedActionChoice, type CommentDetails,
+  deriveRewriteActions,
 } from './reportImport';
 
 export interface WaltzVulnerability {
@@ -552,9 +553,7 @@ export function describeWaltzRowChange(component: WaltzComponent, knownLabels: s
  * `leave`. `update` and `re-create` are never offered.
  */
 export function deriveWaltzActions(change: RowChange | null, anyOpen: boolean): TicketedActionChoice {
-  const allowedActions: TicketedActionChoice['allowedActions'] = anyOpen ? ['rewrite', 'leave'] : ['rewrite', 'leave', 'follow-up'];
-  if (change === null) return { allowedActions, action: 'leave' };
-  return { allowedActions, action: anyOpen ? 'rewrite' : 'follow-up' };
+  return deriveRewriteActions(change, anyOpen);
 }
 
 const FOLLOW_UP_SUFFIX_PATTERN = / \(follow-up to [A-Z][A-Z0-9_]*-\d+\)$/;
