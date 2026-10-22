@@ -274,7 +274,8 @@ describe('review fixes: a refresh never replaces a review with a partial rebuild
 });
 
 describe('review fixes: the report file name in the reload prompt', () => {
-  it('keeps a <command:…> autolink in the file name inert', async () => {
+  // `<`, `>` and `:` cannot appear in a Windows file name, so a report with such a name cannot exist there.
+  it.skipIf(process.platform === 'win32')('keeps a <command:…> autolink in the file name inert', async () => {
     const hostile = join(dir, '<command:workbench.action.chat.open>.xlsx');
     writeFileSync(hostile, 'placeholder');
     report = [comp('bar:1.0', 'High', [['CVE-9', 'High']])];
