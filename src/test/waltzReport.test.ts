@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import {
@@ -10,6 +10,7 @@ import {
   type WaltzComponent,
 } from '../utils/waltzReport';
 import { sanitizeCellText } from '../utils/reportImport';
+import { buildWaltzWorkbook, type WorkbookComponent } from './helpers/waltzWorkbook';
 
 const fixturePath = (name: string) => join(__dirname, 'fixtures', 'waltz', name);
 const fixtureBuffer = (name: string) => readFileSync(fixturePath(name));
@@ -693,5 +694,91 @@ describe('Waltz folded groups (R1, R3, R8-R11)', () => {
       expect(wiki).not.toContain('{quote}');
       expect(wiki).not.toContain('!http://evil.example/t.gif!');
     });
+  });
+});
+
+describe('parseWaltzReport remediation dates', () => {
+  const dated = (overrides: Partial<WorkbookComponent> = {}): WorkbookComponent => ({
+    nameVersion: 'example-lib:1.2.3', maxVulnRating: 'High', remediationAction: 'Remediate',
+    expectedRemediation: '2026-11-30', targetDate: '2026-12-15', planDueBy: '2026-09-20', planReason: 'Overdue', ...overrides,
+  });
+  const details: Array<[string, string]> = [['Extracted On:', '2026-10-22 14:30']];
+
+  it('reads the policy date, planned date, plan deadline, plan status and the report date', async () => {
+    const buffer = await buildWaltzWorkbook({ components: [dated()], reportDetails: details });
+    const [component] = await parseWaltzReport(buffer);
+    expect(component.remediation).toEqual({
+      policyDate: '2026-11-30', plannedDate: '2026-12-15', planDeadline: '2026-09-20', planStatus: 'Overdue', reportDate: '2026-10-22',
+    });
+  });
+
+  it('reads real date cells the same as text dates', async () => {
+    const text = await parseWaltzReport(await buildWaltzWorkbook({ components: [dated()], reportDetails: details }));
+    const cells = await parseWaltzReport(await buildWaltzWorkbook({
+      components: [dated({
+        expectedRemediation: new Date(Date.UTC(2026, 10, 30)), targetDate: new Date(Date.UTC(2026, 11, 15)), planDueBy: new Date(Date.UTC(2026, 8, 20)),
+      })],
+      reportDetails: [['Extracted On:', new Date(Date.UTC(2026, 9, 22, 14, 30)) as unknown as string]],
+    }));
+    expect(cells[0].remediation).toEqual(text[0].remediation);
+  });
+
+  it('gives a row without a planned date or plan status null for them', async () => {
+    const buffer = await buildWaltzWorkbook({
+      components: [dated({ remediationAction: null, targetDate: null, planReason: null })], reportDetails: details,
+    });
+    const [component] = await parseWaltzReport(buffer);
+    expect(component.remediation).toMatchObject({ policyDate: '2026-11-30', plannedDate: null, planStatus: null });
+  });
+
+  it('still parses an older export without the date columns, with all dates null', async () => {
+    const buffer = await buildWaltzWorkbook({ components: [dated()], omitDateColumns: true });
+    const [component] = await parseWaltzReport(buffer);
+    expect(component.remediation).toEqual({ policyDate: null, plannedDate: null, planDeadline: null, planStatus: null, reportDate: null });
+  });
+
+  it('has no report date when the ReportDetails sheet or its Extracted On row is missing', async () => {
+    const noSheet = await parseWaltzReport(await buildWaltzWorkbook({ components: [dated()] }));
+    const noRow = await parseWaltzReport(await buildWaltzWorkbook({ components: [dated()], reportDetails: [['Tool:', 'Waltz']] }));
+    expect(noSheet[0].remediation?.reportDate).toBeNull();
+    expect(noRow[0].remediation?.reportDate).toBeNull();
+  });
+
+  it('finds Extracted On whatever its case or trailing colon', async () => {
+    const buffer = await buildWaltzWorkbook({ components: [dated()], reportDetails: [['Tool:', 'Waltz'], ['extracted on', '2026-10-22']] });
+    const [component] = await parseWaltzReport(buffer);
+    expect(component.remediation?.reportDate).toBe('2026-10-22');
+  });
+
+  it('keeps the first row\'s dates when a component repeats', async () => {
+    const buffer = await buildWaltzWorkbook({ components: [dated(), dated({ expectedRemediation: '2030-01-01' })] });
+    const components = await parseWaltzReport(buffer);
+    expect(components).toHaveLength(1);
+    expect(components[0].remediation?.policyDate).toBe('2026-11-30');
+  });
+
+  it('logs how many date cells it could not read, never their values', async () => {
+    const onDiag = vi.fn();
+    const buffer = await buildWaltzWorkbook({
+      components: [dated({ expectedRemediation: '15.12.2026', targetDate: '31/01/2027' }), dated({ nameVersion: 'example-io:4.5.0' })],
+    });
+    const components = await parseWaltzReport(buffer, undefined, onDiag);
+    expect(components[0].remediation).toMatchObject({ policyDate: null, plannedDate: null, planDeadline: '2026-09-20' });
+    expect(onDiag).toHaveBeenCalledTimes(1);
+    const [level, , details] = onDiag.mock.calls[0];
+    expect(level).toBe('warn');
+    expect(details).toMatchObject({ unreadableDateCells: 2 });
+    expect(JSON.stringify(onDiag.mock.calls[0])).not.toContain('15.12.2026');
+  });
+
+  it('does not log when every date cell is readable', async () => {
+    const onDiag = vi.fn();
+    await parseWaltzReport(await buildWaltzWorkbook({ components: [dated()] }), undefined, onDiag);
+    expect(onDiag).not.toHaveBeenCalled();
+  });
+
+  it('leaves dates null on the committed sample report that predates the columns', async () => {
+    const components = await parseWaltzReport(fixtureBuffer('sample-report.xlsx'));
+    expect(components.every(c => !c.remediation || (c.remediation.policyDate === null && c.remediation.plannedDate === null))).toBe(true);
   });
 });

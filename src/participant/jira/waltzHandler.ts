@@ -8,6 +8,7 @@ import {
   buildFollowUpDescriptionWiki, buildFollowUpSummary, rewriteSummaryRating, highestRating,
   type WaltzComponent, type WaltzReviewRow,
 } from '../../utils/waltzReport';
+import { logDiag } from '../../utils/diagLog';
 import { AcceptedListService } from '../../services/AcceptedListService';
 import { narrowGroup, acceptedEntriesOf, acceptedComponentEntriesOf, acceptedComponentKeys, isComponentAccepted, type AcceptedEntry } from '../../utils/waltzAccepted';
 import type { WaltzTemplateSelectionSession, WaltzReviewSession, StaleCloseSession } from '../sessionState';
@@ -54,7 +55,7 @@ async function readAndFilterWaltzFile(filePath: string): Promise<{ items: WaltzC
   const { items, rawItems } = await readAndFilterReport(
     filePath,
     fp => fs.promises.readFile(fp),
-    raw => parseWaltzReport(raw, maxReportBytes),
+    raw => parseWaltzReport(raw, maxReportBytes, (level, message, details) => logDiag('jira.waltz', level, message, details)),
     components => filterComponents(components, filterConfig),
     maxReportBytes,
   );

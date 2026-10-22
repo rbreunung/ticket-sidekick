@@ -1,6 +1,8 @@
 import { createHash } from 'crypto';
 import ExcelJS from 'exceljs';
 import { markdownToJiraWiki } from './markdownToJiraWiki';
+import type { DiagLogger } from './diagTypes';
+import { toCalendarDate, type WaltzRemediation } from './waltzDates';
 import {
   MAX_REPORT_BYTES as SHARED_MAX_REPORT_BYTES, sanitizeCellText, sanitizeStandaloneLine,
   clampSummary, fitWiki,
@@ -21,6 +23,8 @@ export interface WaltzComponent {
   remediationAction: string | null;
   instancePaths: string[];
   vulnerabilities: WaltzVulnerability[];
+  /** Dates and plan status from the report; absent on components built without them (older fixtures, tests). */
+  remediation?: WaltzRemediation;
 }
 
 // Exported (rather than a local/duplicated constant) so waltzHandler.ts and extension.ts's file-size
@@ -42,6 +46,10 @@ interface ComponentRemediationsRow {
   nameVersion: string;
   maxVulnRating: string;
   remediationAction: string | null;
+  expectedRemediation: string | null;
+  targetDate: string | null;
+  planDueBy: string | null;
+  planReason: string | null;
 }
 
 interface VersionInstanceRow {
@@ -73,6 +81,12 @@ const componentRemediationsSchema: Schema<ComponentRemediationsRow> = {
   nameVersion: { column: 'Component name and version', type: String, required: true },
   maxVulnRating: { column: 'Max Vuln Rating', type: String, required: true },
   remediationAction: { column: 'Remediation Action', type: String, required: false },
+  // The four columns below are optional so an older export without them still parses. The overrun-days
+  // column is deliberately never read: it is 0 for a component without a plan (see docs/report-import.md).
+  expectedRemediation: { column: 'Expected Remediation', type: String, required: false },
+  targetDate: { column: 'Remediation Target Date', type: String, required: false },
+  planDueBy: { column: 'Attested Rem Plan Due By', type: String, required: false },
+  planReason: { column: 'Reason, where plan invalid', type: String, required: false },
 };
 
 const versionInstancesSchema: Schema<VersionInstanceRow> = {
@@ -227,11 +241,15 @@ const PARSE_TIMEOUT_MS = 15_000; // hard ceiling so a pathological file (e.g. a 
 // memory or hanging the extension host. Bounds wall-clock time, not memory directly, but a
 // hung/thrashing parse is exactly what this catches.
 
-export async function parseWaltzReport(buffer: Buffer, maxBytes: number = MAX_REPORT_BYTES): Promise<WaltzComponent[]> {
+export async function parseWaltzReport(
+  buffer: Buffer,
+  maxBytes: number = MAX_REPORT_BYTES,
+  onDiag?: DiagLogger,
+): Promise<WaltzComponent[]> {
   let timeoutHandle: ReturnType<typeof setTimeout>;
   try {
     return await Promise.race([
-      parseWaltzReportInner(buffer, maxBytes),
+      parseWaltzReportInner(buffer, maxBytes, onDiag),
       new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(
           () => reject(new Error(`OSS report parsing exceeded ${PARSE_TIMEOUT_MS / 1000}s — the file may be malformed or unusually large.`)),
@@ -244,7 +262,7 @@ export async function parseWaltzReport(buffer: Buffer, maxBytes: number = MAX_RE
   }
 }
 
-async function parseWaltzReportInner(buffer: Buffer, maxBytes: number): Promise<WaltzComponent[]> {
+async function parseWaltzReportInner(buffer: Buffer, maxBytes: number, onDiag?: DiagLogger): Promise<WaltzComponent[]> {
   assertSafeWaltzReportSize(buffer, maxBytes);
 
   // Unzip once — loadWaltzWorkbook() is the only step that can throw a "Could not read OSS
@@ -275,10 +293,25 @@ async function parseWaltzReportInner(buffer: Buffer, maxBytes: number): Promise<
     if (!uniqueRemediations.has(r.nameVersion)) uniqueRemediations.set(r.nameVersion, r);
   }
 
-  return [...uniqueRemediations.values()].map(r => ({
+  const reportDate = readReportDate(workbook);
+  let unreadableDateCells = 0;
+  const readDate = (raw: string | null): string | null => {
+    const date = toCalendarDate(raw);
+    if (raw !== null && date === null) unreadableDateCells++;
+    return date;
+  };
+
+  const components = [...uniqueRemediations.values()].map(r => ({
     nameVersion: r.nameVersion,
     maxVulnRating: r.maxVulnRating,
     remediationAction: r.remediationAction,
+    remediation: {
+      policyDate: readDate(r.expectedRemediation),
+      plannedDate: readDate(r.targetDate),
+      planDeadline: readDate(r.planDueBy),
+      planStatus: r.planReason,
+      reportDate,
+    },
     instancePaths: instances
       .filter(i => i.nameVersion === r.nameVersion && i.instancePath)
       .map(i => i.instancePath as string),
@@ -292,6 +325,31 @@ async function parseWaltzReportInner(buffer: Buffer, maxBytes: number): Promise<
         fixedVersion: v.fixedVersion,
       })),
   }));
+
+  // A format change in a newer export would otherwise show up only as "Not reported yet" on tickets.
+  // Only the count and the column names are logged, never a cell value.
+  if (unreadableDateCells > 0) {
+    onDiag?.('warn', 'Waltz report has date cells that could not be read as YYYY-MM-DD', {
+      unreadableDateCells,
+      columns: ['Expected Remediation', 'Remediation Target Date', 'Attested Rem Plan Due By'],
+    });
+  }
+  return components;
+}
+
+// `ReportDetails` is a short list of label and value pairs with no header row; the report's
+// "Extracted On" value is what a plan status is labelled with. Any miss gives null.
+function readReportDate(workbook: ExcelJS.Workbook): string | null {
+  const worksheet = workbook.getWorksheet('ReportDetails');
+  if (!worksheet) return null;
+  let found: string | null = null;
+  worksheet.eachRow(row => {
+    if (found !== null) return;
+    const label = cellToString(row.getCell(1));
+    if (label === null || label.replace(/:\s*$/, '').trim().toLowerCase() !== 'extracted on') return;
+    found = toCalendarDate(cellToString(row.getCell(2)));
+  });
+  return found;
 }
 
 export interface WaltzFilterOptions {
