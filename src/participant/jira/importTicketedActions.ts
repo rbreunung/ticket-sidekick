@@ -6,7 +6,7 @@ import { formatKeyLink, type TicketService } from '../../services/TicketService'
 import { BATCH_LIMIT } from '../../utils/reportImport';
 import { emptyImportOutcomes, findPartialRewrites, isTicketedRowFinished, ticketedRowActions, ticketedTargetKey, type ReviewRowBase, type ReviewSession, type TicketedAction, type TicketedRowResult } from '../sessionState';
 import { labelsToRemove, planRewrite, writeRewrite } from './importAddToTicket';
-import { createOne, droppedFieldsWarning } from './importCreate';
+import { createOne, droppedFieldsWarning, dueDateSetNote } from './importCreate';
 import type { BuiltTicketFields, ReportImportDescriptor } from './reportImportTypes';
 
 /** KTD5/KTD7: which row actions each Already-ticketed run reply runs, and the word to repeat for the rest. */
@@ -179,6 +179,7 @@ async function rewriteTicketedGroup<TItem, TRow extends ReviewRowBase>(
   const link = formatKeyLink(key, baseUrl);
   let comment: string;
   let droppedFields: string[] = [];
+  let dueDate: string | null = null;
   try {
     if (!fold) throw new Error('rewrite is not available for this import');
     const issue = await ticketService.getIssue(key);
@@ -192,7 +193,10 @@ async function rewriteTicketedGroup<TItem, TRow extends ReviewRowBase>(
     const plan = planRewrite(session, descriptor, key, issue.fields.labels ?? [], []);
     const written = await writeRewrite(ticketService, descriptor, key, plan.regenItem, labelsToRemove(session, descriptor, plan.droppedKeys));
     droppedFields = written.droppedFields;
-    comment = fold.buildComment(addedItem, plan.droppedKeys);
+    dueDate = written.dueDate;
+    const dateChanges = rows.flatMap(r => (r.change?.kind === 'findings' && r.change.dates?.length
+      ? [{ ref: descriptor.itemRefFor(r), changes: r.change.dates }] : []));
+    comment = fold.buildComment(addedItem, plan.droppedKeys, { dateChanges, dueDate });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logDiag(descriptor.scope, 'error', `Rewrite of existing ticket failed — ${key}`, { issueKey: key, error: message });
@@ -208,7 +212,7 @@ async function rewriteTicketedGroup<TItem, TRow extends ReviewRowBase>(
     if (droppedFields.length > 0) stream.markdown(droppedFieldsWarning(link, droppedFields));
     return { status: 'done', action: 'rewrite', note: 'comment-failed' };
   }
-  stream.markdown(`✓ ${link} — rewritten from ${rows.length} row(s)\n\n`);
+  stream.markdown(`✓ ${link} — rewritten from ${rows.length} row(s)${dueDateSetNote(dueDate)}\n\n`);
   if (droppedFields.length > 0) stream.markdown(droppedFieldsWarning(link, droppedFields));
   return { status: 'done', action: 'rewrite' };
 }

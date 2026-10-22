@@ -500,6 +500,14 @@ export type RowChange =
       droppedMembers?: number;
     };
 
+/** What a rewrite changed in the remediation dates, for the comment it posts (Waltz only; Veracode ignores it). */
+export interface CommentDetails {
+  /** Per component, the dates that differ between what the ticket recorded and the report (`ref` is the component's name). */
+  dateChanges?: Array<{ ref: string; changes: DateChange[] }>;
+  /** The Due Date the rewrite set from the report, when it set one. */
+  dueDate?: string | null;
+}
+
 /** What the row builder knows about an item's target ticket that a describer may need beyond its labels. */
 export interface ChangeContext {
   /** The target ticket's description; see {@link DedupTicket.description}. */

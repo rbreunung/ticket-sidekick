@@ -10,7 +10,7 @@ import {
 import {
   MAX_REPORT_BYTES as SHARED_MAX_REPORT_BYTES, sanitizeCellText, sanitizeStandaloneLine,
   clampSummary, fitWiki,
-  type RowChange, type ChangeContext, type TicketedActionChoice,
+  type RowChange, type ChangeContext, type TicketedActionChoice, type CommentDetails,
 } from './reportImport';
 
 export interface WaltzVulnerability {
@@ -754,8 +754,25 @@ function droppedKeyText(key: string): string {
   return /^[A-Za-z0-9._-]{1,250}$/.test(key) ? `\`${key}\`` : sanitizeCellText(key);
 }
 
-function buildFoldedMarkdown(group: WaltzComponent[], banner: string, level: number, droppedKeys: string[]): string {
+/** KTD11: what a rewrite changed in the dates and the Due Date it set, above the table. Dates are validated; names are sanitized. */
+function pushDateDetails(lines: string[], details: CommentDetails): void {
+  const changed = (details.dateChanges ?? []).filter(c => c.changes.length > 0);
+  if (changed.length > 0) {
+    lines.push('**Remediation dates changed:**');
+    for (const { ref, changes } of changed) {
+      lines.push(`- ${sanitizeCellText(ref)}: ${changes.map(d => `${d.date} ${d.from ?? 'none'} → ${d.to ?? 'none'}`).join(', ')}`);
+    }
+    lines.push('');
+  }
+  if (details.dueDate) {
+    lines.push(`The Jira Due Date was set to ${details.dueDate} from the report.`);
+    lines.push('');
+  }
+}
+
+function buildFoldedMarkdown(group: WaltzComponent[], banner: string, level: number, droppedKeys: string[], details: CommentDetails = {}): string {
   const lines: string[] = [banner, ''];
+  pushDateDetails(lines, details);
   if (level > 0 && group.length > 0) {
     lines.push("Per-component detail was shortened to fit Jira's size limit; the table lists every component.");
     lines.push('');
@@ -776,8 +793,8 @@ function buildFoldedMarkdown(group: WaltzComponent[], banner: string, level: num
   return lines.join('\n');
 }
 
-function buildFoldedWiki(group: WaltzComponent[], banner: string, droppedKeys: string[] = []): string {
-  return fitWiki(level => markdownToJiraWiki(buildFoldedMarkdown(group, banner, level, droppedKeys)), FOLD_LEVELS).wiki;
+function buildFoldedWiki(group: WaltzComponent[], banner: string, droppedKeys: string[] = [], details: CommentDetails = {}): string {
+  return fitWiki(level => markdownToJiraWiki(buildFoldedMarkdown(group, banner, level, droppedKeys, details)), FOLD_LEVELS).wiki;
 }
 
 /**
@@ -794,13 +811,13 @@ export function buildGroupDescriptionWiki(group: WaltzComponent[]): string {
  * The comment an `add … to <KEY>` posts (R14, R15): the added components in the folded layout.
  * `droppedKeys` are component labels the ticket recorded that a rewrite no longer covers.
  */
-export function buildFoldedCommentWiki(group: WaltzComponent[], droppedKeys: string[] = []): string {
+export function buildFoldedCommentWiki(group: WaltzComponent[], droppedKeys: string[] = [], details: CommentDetails = {}): string {
   const banner = group.length === 0
     ? 'This ticket was rewritten from the latest report; no components were added.'
     : group.length === 1
       ? 'This component was added to this ticket.'
       : `These ${group.length} components were added to this ticket.`;
-  return buildFoldedWiki(group, banner, droppedKeys);
+  return buildFoldedWiki(group, banner, droppedKeys, details);
 }
 
 function vulnerabilitiesMatching(component: WaltzComponent, cveIds: string[]): WaltzVulnerability[] {

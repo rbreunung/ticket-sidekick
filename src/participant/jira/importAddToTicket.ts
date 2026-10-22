@@ -5,7 +5,7 @@ import { logDiag } from '../../utils/diagLog';
 import { formatKeyLink, type TicketService } from '../../services/TicketService';
 import { buildAddPrompt, buildReviewPage, emptyImportOutcomes, isTicketedRowFinished, restoreMergedRows, ticketedTargetKey, type AddMode, type ReviewRowBase, type ReviewSession, type TicketedRowResult } from '../sessionState';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
-import { droppedFieldsWarning, logDroppedFields } from './importCreate';
+import { droppedFieldsWarning, dueDateSetNote, logDroppedFields } from './importCreate';
 import type { ReportImportDescriptor } from './reportImportTypes';
 
 type AddTargetIssue = Awaited<ReturnType<TicketService['getIssue']>>;
@@ -139,6 +139,7 @@ export async function addToTicket<TItem, TRow extends ReviewRowBase>(
 
   let comment: string;
   let droppedFields: string[] = [];
+  let dueDate: string | null = null;
   try {
     const issue = await ticketService.getIssue(key);
     const labels = issue.fields.labels ?? [];
@@ -155,7 +156,8 @@ export async function addToTicket<TItem, TRow extends ReviewRowBase>(
     } else {
       const written = await writeRewrite(ticketService, descriptor, key, plan.regenItem, labelsToRemove(session, descriptor, plan.droppedKeys));
       droppedFields = written.droppedFields;
-      comment = fold.buildComment(addedItem, plan.droppedKeys);
+      dueDate = written.dueDate;
+      comment = fold.buildComment(addedItem, plan.droppedKeys, { dueDate });
     }
   } catch (err) {
     return failWith(err instanceof Error ? err.message : String(err));
@@ -171,7 +173,7 @@ export async function addToTicket<TItem, TRow extends ReviewRowBase>(
   const done = mode === 'comment' ? 'labels added and comment posted' : 'rewritten and comment posted';
   stream.markdown(commentFailed
     ? `⚠ ${link} — ${mode === 'comment' ? 'labels added' : 'rewritten'}, comment failed: ${commentFailed}\n\n`
-    : `✓ ${link} — ${done}\n\n`);
+    : `✓ ${link} — ${done}${dueDateSetNote(dueDate)}\n\n`);
   if (droppedFields.length > 0) stream.markdown(droppedFieldsWarning(link, droppedFields));
   logDiag(descriptor.scope, commentFailed ? 'warn' : 'info', `${descriptor.importLabel} import — ${rows.length} row(s) added to ${key} (${mode})`, { issueKey: key, mode });
 

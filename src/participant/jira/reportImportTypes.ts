@@ -3,7 +3,7 @@
 import type { TicketService } from '../../services/TicketService';
 import type { AcceptedListService } from '../../services/AcceptedListService';
 import type { AcceptedEntry } from '../../utils/waltzAccepted';
-import type { ChangeContext, RowChange, TicketedActionChoice } from '../../utils/reportImport';
+import type { ChangeContext, CommentDetails, RowChange, TicketedActionChoice } from '../../utils/reportImport';
 import type { ActionLabels } from '../sessionState';
 import type { ReviewRowBase, ReviewTableColumn } from '../sessionState';
 
@@ -133,7 +133,7 @@ export interface ImportFold<TItem, TRow extends ReviewRowBase> {
   /** The record labels an `add` writes to the target ticket (no template labels: a foreign ticket is not ours to label). */
   recordLabelsOf: (item: TItem) => string[];
   /** The comment an `add` posts: the added item in the folded layout, plus findings a rewrite no longer covers. */
-  buildComment: (item: TItem, droppedKeys: string[]) => string;
+  buildComment: (item: TItem, droppedKeys: string[], details?: CommentDetails) => string;
   /**
    * Optional: narrows a row's item to the findings its ticket did not record yet, for a rewrite's
    * traceability comment (Veracode keeps only the new flaws). Without it the whole item is listed.

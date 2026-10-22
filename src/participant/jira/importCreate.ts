@@ -15,6 +15,11 @@ export function droppedFieldsWarning(link: string, droppedFields: string[]): str
   return `_Warning: Jira refused the ${names} on ${link} (the field is probably not on the project's screen), so it was written without. The dates are in the description._\n\n`;
 }
 
+/** R11: the result line's note that a rewrite set the Due Date from the report, over any date edited by hand. */
+export function dueDateSetNote(dueDate: string | null): string {
+  return dueDate ? ` — Due Date set to ${dueDate} from the report (replaces any date edited by hand)` : '';
+}
+
 /** Logs the same refusal for the Output channel, tagged with the importer's scope. */
 export function logDroppedFields(scope: string, issueKey: string, droppedFields: string[]): void {
   logDiag(scope, 'warn', `Jira refused ${droppedFields.join(', ')} — ${issueKey}; written without it`, { issueKey, refused: droppedFields });

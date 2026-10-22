@@ -15,7 +15,7 @@ vi.mock('vscode', () => ({
 }));
 
 vi.mock('../templates/TemplateService', () => ({
-  TemplateService: vi.fn().mockImplementation(function () { return ({ loadTemplates: vi.fn() }); }),
+  TemplateService: vi.fn().mockImplementation(function () { return ({ loadTemplates: vi.fn(() => ({ templates: [], cleanupRules: [] })) }); }),
 }));
 
 vi.mock('../services/WorkflowService', async (importOriginal) => ({
@@ -23,7 +23,8 @@ vi.mock('../services/WorkflowService', async (importOriginal) => ({
   loadWorkflowCache: vi.fn(),
 }));
 
-import { handleWaltzAwaitIssueType, handleWaltzReviewReply, buildWaltzTemplateSession } from '../participant/jira/waltzHandler';
+import { handleWaltzAwaitIssueType, handleWaltzReviewReply, handleWaltzStaleClose, buildWaltzTemplateSession } from '../participant/jira/waltzHandler';
+import { loadWorkflowCache } from '../services/WorkflowService';
 import { continueAfterImportIssueType } from '../participant/jira/reportImportHandler';
 import type { WaltzReviewSession } from '../participant/sessionState';
 import { MockJiraClient } from './mocks/MockJiraClient';
@@ -49,12 +50,14 @@ let client: MockJiraClient;
 let ticketService: TicketService;
 let tickets: Record<string, FakeTicket>;
 let reads: string[];
+let staleSearch: ((jql: string) => unknown) | undefined;
 
 beforeEach(() => {
   client = new MockJiraClient();
   ticketService = new TicketService(client);
   tickets = {};
   reads = [];
+  staleSearch = undefined;
 });
 
 async function importWaltz(report: WaltzComponent[], rawItems: WaltzComponent[] = report, failRead: string[] = []) {
@@ -67,7 +70,9 @@ async function importWaltz(report: WaltzComponent[], rawItems: WaltzComponent[] 
     issue.fields.description = tickets[key]?.description as never;
     return issue;
   };
-  searchFromStore(ticketService, tickets);
+  const search = searchFromStore(ticketService, tickets);
+  const dedupSearch = search.getMockImplementation()!;
+  search.mockImplementation(async (jql, ...rest) => (staleSearch?.(jql) ?? dedupSearch(jql, ...rest)) as never);
   const templateSession = await buildWaltzTemplateSession(report, 'r.xlsx', 'PROJ', client, rawItems);
   const ws = makeMockWs();
   const stream = mockStream();
@@ -247,5 +252,107 @@ describe('the date cell of an Already-ticketed change row', () => {
     tickets['PROJ-5'] = ticketFor([recorded]);
     const { stream } = await importWaltz([reported]);
     expect(streamText(stream)).toContain('planned 2026-12-15→2027-01-31');
+  });
+});
+
+describe('what a rewrite says about the dates (KTD11, U6)', () => {
+  it('AE8: the comment names each changed date and the Due Date set, and the result line says it replaces a hand-edited date', async () => {
+    const recorded = comp('example-lib:1.2.3', { policyDate: '2026-11-30', plannedDate: '2026-12-15' });
+    const reported = comp('example-lib:1.2.3', { policyDate: '2026-11-30', plannedDate: '2027-01-31' });
+    tickets['PROJ-5'] = ticketFor([recorded]);
+    const { ws } = await importWaltz([reported]);
+
+    const text = await reply('apply', ws);
+
+    expect(client.updateIssueCalls[0].fields.duedate).toBe('2027-01-31');
+    const comment = client.addCommentCalls[0].body;
+    expect(comment).toContain('example-lib:1.2.3');
+    expect(comment).toContain('planned 2026-12-15 → 2027-01-31');
+    expect(comment).toContain('Due Date');
+    expect(comment).toContain('2027-01-31');
+    expect(text).toMatch(/Due Date set to 2027-01-31 from the report/);
+    expect(text).toMatch(/replaces any date edited by hand/i);
+  });
+
+  it('AE9: a rewrite after a member left names the dropped label and sets the Due Date from the members that remain', async () => {
+    const a = comp('example-a:1.0.0', { plannedDate: '2026-10-30' });
+    const b = comp('example-b:2.0.0', { policyDate: '2026-12-31' });
+    const c = comp('example-c:3.0.0', { policyDate: '2026-11-30' });
+    tickets['PROJ-1'] = ticketFor([a, b, c]);
+    const { ws } = await importWaltz([b, c]);
+
+    await reply('apply', ws);
+
+    expect(client.updateIssueCalls[0].fields.duedate).toBe('2026-11-30');
+    expect(client.addCommentCalls[0].body).toContain(sanitizeComponentLabel(a.nameVersion));
+  });
+
+  it('a rewrite that changed no date writes no date lines into the comment and no notice into the result', async () => {
+    const same = comp('example-lib:1.2.3');
+    tickets['PROJ-5'] = ticketFor([same], { labels: ['oss-dependency', sanitizeComponentLabel(same.nameVersion)] });
+    const { ws } = await importWaltz([same]);
+
+    const text = await reply('apply', ws);
+
+    expect(client.addCommentCalls).toHaveLength(1);
+    expect(client.addCommentCalls[0].body).not.toContain('Remediation dates changed');
+    expect(client.addCommentCalls[0].body).not.toContain('Due Date');
+    expect(text).not.toMatch(/Due Date/);
+  });
+
+  it('add … as rewrite states the Due Date it set in the comment and the result line', async () => {
+    tickets['PROJ-5'] = { labels: ['oss-rating-medium'], summary: 'Hand made' };
+    const { ws } = await importWaltz([comp('example-a:1.0.0', { plannedDate: '2026-12-15' })]);
+
+    const text = await reply('add 1 to PROJ-5 as rewrite', ws);
+
+    expect(client.addCommentCalls[0].body).toContain('2026-12-15');
+    expect(text).toMatch(/Due Date set to 2026-12-15 from the report/);
+  });
+
+  it('add … as comment sets no Due Date and says nothing about one', async () => {
+    tickets['PROJ-5'] = { labels: ['oss-rating-medium'], summary: 'Hand made' };
+    const { ws } = await importWaltz([comp('example-a:1.0.0', { plannedDate: '2026-12-15' })]);
+
+    const text = await reply('add 1 to PROJ-5 as comment', ws);
+
+    expect(client.updateIssueCalls.every(c => !('duedate' in c.fields))).toBe(true);
+    expect(text).not.toMatch(/Due Date set/);
+  });
+
+  it('writes a component name from the report into the comment as inert text', async () => {
+    const recorded = { ...comp('evil|name [x](http://evil.example)', { policyDate: '2026-11-30' }) };
+    const reported = { ...recorded, remediation: { ...recorded.remediation!, policyDate: '2027-01-01' } };
+    tickets['PROJ-5'] = ticketFor([recorded]);
+    const { ws } = await importWaltz([reported]);
+
+    await reply('apply', ws);
+
+    expect(client.addCommentCalls[0].body).not.toContain('](http://evil.example)');
+  });
+
+  it('AE11: closing an open ticket from the Stale screen touches no Due Date and adds no date text to the close', async () => {
+    vi.mocked(loadWorkflowCache).mockReturnValue({ PROJ: { Bug: { discovered: '2024-01-01', graph: { Open: [{ id: '31', name: 'Close', to: 'Done' }], Done: [] } } } } as never);
+    const gone = comp('example-gone:1.0.0', { policyDate: '2026-11-30' });
+    tickets['PROJ-7'] = ticketFor([gone]);
+    staleSearch = jql => (jql.includes('resolution is EMPTY') && jql.includes('labels = "oss-dependency"')
+      ? { issues: [{ key: 'PROJ-7', fields: { summary: 'gone', status: { name: 'Open' }, issuetype: { name: 'Bug' }, labels: tickets['PROJ-7'].labels } }], total: 1, isLast: true }
+      : undefined);
+    const { ws } = await importWaltz([comp('example-other:1.0.0')]);
+    const issueGet = client.getIssue;
+    client.getIssue = async key => { const i = await issueGet(key); i.fields.issuetype = { id: '1', name: 'Bug' } as never; return i; };
+    const stored = ws.store['jira.session.waltzReview'] as WaltzReviewSession;
+    expect(stored.staleTickets?.groups.flatMap(g => g.tickets.map(t => t.key)) ?? []).toContain('PROJ-7');
+
+    await reply('open stale', ws);
+    await reply('PROJ-7', ws);
+    await reply('close tickets', ws);
+    for (let step = 0; step < 3 && ws.store['jira.session.staleResolution']; step++) {
+      await handleWaltzStaleClose(step === 0 ? 'Done' : 'none', ws.store['jira.session.staleResolution'] as never, ticketService, mockStream() as never, ws as never);
+    }
+
+    expect(client.executeTransitionCalls.length).toBeGreaterThan(0);
+    expect(client.updateIssueCalls.every(c => !('duedate' in c.fields))).toBe(true);
+    expect(client.addCommentCalls.every(c => !/Due Date|Remediation dates/.test(c.body))).toBe(true);
   });
 });

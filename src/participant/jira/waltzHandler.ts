@@ -160,7 +160,7 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
     itemOf: row => row.sourceGroup,
     combine: groups => groups.flat(),
     recordLabelsOf: group => buildGroupLabels(group),
-    buildComment: (group, droppedKeys) => buildFoldedCommentWiki(group, droppedKeys),
+    buildComment: (group, droppedKeys, details) => buildFoldedCommentWiki(group, droppedKeys, details),
   },
   // Waltz ticket merge (KTD1): the survivor's comment opens by naming the tickets it absorbed.
   ticketMerge: {
