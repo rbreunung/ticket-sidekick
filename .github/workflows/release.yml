@@ -49,14 +49,14 @@ jobs:
         run: |
           SHA=""
           for c in $(git rev-list --first-parent HEAD | head -20); do
-            if [ "$(git log -1 --format=%an "$c")" != "github-actions[bot]" ]; then SHA="$c"; break; fi
+            if [ "$(git log -1 --format=%ae "$c")" != "41898282+github-actions[bot]@users.noreply.github.com" ]; then SHA="$c"; break; fi
           done
           [ -n "$SHA" ] || { echo "::error::No non-bot commit found in the last 20 commits."; exit 1; }
           RESULT="$(gh api "repos/${{ github.repository }}/commits/${SHA}/check-runs?filter=latest&per_page=100" \
-            --jq '[.check_runs[] | select(.name == "ci-ok")] | sort_by(.started_at) | last | .conclusion // "missing"')"
+            --jq '[.check_runs[] | select(.name == "ci-ok")] | sort_by(.started_at) | last | if . == null then "not found" else (.conclusion // .status) end')"
           echo "ci-ok on ${SHA}: ${RESULT}"
           if [ "${RESULT}" != "success" ]; then
-            echo "::error::CI (ci-ok) is '${RESULT}' on ${SHA}. Wait for a green CI run on this commit, then release again."
+            echo "::error::CI (ci-ok) is '${RESULT}' on ${SHA}. 'in_progress' or 'queued' means CI is still running; 'not found' means it never ran. Wait for a green CI run on this commit, then release again."
             exit 1
           fi
 
