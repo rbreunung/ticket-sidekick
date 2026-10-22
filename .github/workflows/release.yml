@@ -39,6 +39,10 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+          # The version bump is pushed with this token. GITHUB_TOKEN cannot bypass a branch ruleset,
+          # so once `main` requires `ci-ok`, set RELEASE_PUSH_TOKEN to a fine-grained token of a
+          # repository admin (Contents: read and write). Without the secret the push uses GITHUB_TOKEN.
+          token: ${{ secrets.RELEASE_PUSH_TOKEN || github.token }}
 
       # A release must not ship from a commit whose CI is red or missing. Earlier releases ran
       # from a red main. The bump commits this workflow pushes with GITHUB_TOKEN start no CI of
