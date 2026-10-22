@@ -7,6 +7,7 @@ import { buildRequirementsSource, type RequirementsSource } from '../utils/requi
 import { formatFileSize } from '../utils/attachmentEligibility';
 import { mergedBanner, mergedSummary } from '../utils/ticketMerge';
 import { renderReviewTable, neutralizeMarkdownLinks, buildChatCommandLink, type ReviewTableColumn } from '../participant/sessionState';
+import { fetchAllPages } from '../utils/reportImport';
 
 export type FieldResolutionResult =
   | { kind: 'match'; field: JiraFieldMeta }
@@ -21,6 +22,39 @@ export interface CreatedTicket {
   /** Optional fields Jira refused (e.g. `duedate` missing from the project's screen), which the ticket was created without. */
   droppedFields?: string[];
 }
+
+/** One unresolved Veracode or Waltz ticket as the security overview needs it. */
+export interface OverviewTicket {
+  key: string;
+  summary: string;
+  /** Jira status name. */
+  status: string;
+  labels: string[];
+  /** `YYYY-MM-DD`, null when the ticket has no Due Date. */
+  dueDate: string | null;
+  fixVersions: string[];
+  source: 'veracode' | 'waltz';
+}
+
+export interface OverviewTicketList {
+  tickets: OverviewTicket[];
+  /** More unresolved tickets matched than were read (the safety bound was reached). */
+  truncated: boolean;
+}
+
+/** A Jira project version and its release date (`YYYY-MM-DD`), null when it has none. */
+export interface ProjectVersionInfo {
+  name: string;
+  releaseDate: string | null;
+}
+
+/** The marker labels the importers put on every ticket they create, and the safety bound on one overview. */
+export const OVERVIEW_MARKER_LABELS = { veracode: 'veracode', waltz: 'oss-dependency' } as const;
+export const MAX_OVERVIEW_TICKETS = 1000;
+const OVERVIEW_PAGE_SIZE = 100;
+const OVERVIEW_DESCRIPTION_CONCURRENCY = 8;
+const PROJECT_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/;
+const CALENDAR_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}/;
 
 /** Thrown by `transitionAlongPath` when a multi-hop transition fails partway through. Each hop
  * is a real Jira write, so a failure after hop 1 leaves the ticket at an intermediate status —
@@ -793,6 +827,70 @@ export class TicketService {
     return pageToken === undefined
       ? this.client.searchJql(jql, maxResults, startAt, extraFields)
       : this.client.searchJql(jql, maxResults, startAt, extraFields, pageToken);
+  }
+
+  /**
+   * The project's unresolved Veracode and Waltz tickets (the importers' marker labels) with the fields the
+   * security overview groups by. Reads every page up to {@link MAX_OVERVIEW_TICKETS}; a failed page rejects.
+   * The project key is validated before it is put into JQL.
+   */
+  async listOverviewTickets(projectKey: string): Promise<OverviewTicketList> {
+    if (!PROJECT_KEY_PATTERN.test(projectKey)) throw new Error(`"${projectKey}" is not a valid Jira project key.`);
+    const jql = `project = ${projectKey} AND resolution is EMPTY AND (labels = "${OVERVIEW_MARKER_LABELS.veracode}" OR labels = "${OVERVIEW_MARKER_LABELS.waltz}") ORDER BY key ASC`;
+    const issues = await fetchAllPages<JiraIssue>(
+      (startAt, pageToken) => this.searchTicketsRaw(jql, OVERVIEW_PAGE_SIZE, ['duedate', 'resolution'], startAt, pageToken),
+      OVERVIEW_PAGE_SIZE,
+      MAX_OVERVIEW_TICKETS,
+      issue => issue.key,
+    );
+    const tickets = issues.map((issue): OverviewTicket => {
+      const labels = issue.fields.labels ?? [];
+      const due = issue.fields.duedate;
+      return {
+        key: issue.key,
+        summary: issue.fields.summary ?? '',
+        status: issue.fields.status?.name ?? '',
+        labels,
+        dueDate: typeof due === 'string' && CALENDAR_DATE_PATTERN.test(due) ? due.slice(0, 10) : null,
+        fixVersions: (issue.fields.fixVersions ?? []).map(v => v.name),
+        source: labels.includes(OVERVIEW_MARKER_LABELS.veracode) ? 'veracode' : 'waltz',
+      };
+    });
+    return { tickets, truncated: issues.length >= MAX_OVERVIEW_TICKETS };
+  }
+
+  /** The project's versions with their release dates, for flagging a Due Date that falls before a release. */
+  async getProjectVersions(projectKey: string): Promise<ProjectVersionInfo[]> {
+    const project = await this.client.getProject(projectKey);
+    return (project.versions ?? []).map(v => ({
+      name: v.name,
+      releaseDate: typeof v.releaseDate === 'string' && CALENDAR_DATE_PATTERN.test(v.releaseDate) ? v.releaseDate.slice(0, 10) : null,
+    }));
+  }
+
+  /**
+   * Reads the description (Jira wiki text) of each ticket, at most 8 at a time. A ticket whose read fails, or whose
+   * description is not plain wiki text (ADF), reads as `null` and is listed in `failed` only when the read itself failed.
+   */
+  async readDescriptions(keys: string[], onFail?: (key: string, err: unknown) => void): Promise<{ texts: Record<string, string | null>; failed: string[] }> {
+    const texts: Record<string, string | null> = {};
+    const failed: string[] = [];
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (next < keys.length) {
+        const key = keys[next++];
+        try {
+          const description = (await this.client.getIssue(key)).fields.description as unknown;
+          texts[key] = typeof description === 'string' ? description : null;
+        } catch (err) {
+          texts[key] = null;
+          failed.push(key);
+          onFail?.(key, err);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(OVERVIEW_DESCRIPTION_CONCURRENCY, keys.length) }, worker));
+    return { texts, failed };
   }
 
   async getFilterById(id: string): Promise<JiraFilter> {
