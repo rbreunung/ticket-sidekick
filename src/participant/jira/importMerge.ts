@@ -11,7 +11,7 @@ import {
 } from '../sessionState';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import { buildStaleTicketGroups, transitionTickets } from './cleanupHandler';
-import { planRewrite, writeRewrite } from './importAddToTicket';
+import { labelsToRemove, planRewrite, writeRewrite } from './importAddToTicket';
 import type { ReportImportDescriptor } from './reportImportTypes';
 
 /** What a call leaves behind: a question is waiting (the session must be saved), the run is over, or the reply was refused with nothing started. */
@@ -203,7 +203,7 @@ async function executeStep<TItem, TRow extends ReviewRowBase>(
     case 'survivor-rewrite': {
       const labels = await recordedLabels(ticketService, [run.survivor, ...run.sources]);
       const plan = planRewrite(session, descriptor, run.survivor, labels, sourceRows);
-      const written = await writeRewrite(ticketService, descriptor, run.survivor, plan.regenItem);
+      const written = await writeRewrite(ticketService, descriptor, run.survivor, plan.regenItem, labelsToRemove(session, descriptor, plan.droppedKeys));
       if (written.droppedFields.length > 0) step.note = 'Jira refused the Due Date; written without it';
       run.droppedKeys = plan.droppedKeys;
       return;

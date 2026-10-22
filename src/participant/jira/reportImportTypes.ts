@@ -3,7 +3,7 @@
 import type { TicketService } from '../../services/TicketService';
 import type { AcceptedListService } from '../../services/AcceptedListService';
 import type { AcceptedEntry } from '../../utils/waltzAccepted';
-import type { RowChange } from '../../utils/reportImport';
+import type { ChangeContext, RowChange, TicketedActionChoice } from '../../utils/reportImport';
 import type { ReviewRowBase, ReviewTableColumn } from '../sessionState';
 
 export interface ReportImportRow extends ReviewRowBase {
@@ -157,7 +157,15 @@ export interface ImportChangeTracking<TItem, TRow extends ReviewRowBase> {
   /** What one finding is called in the Change column, e.g. 'flaw(s)' / 'CVE(s)'. */
   findingNoun: string;
   /** R1/R2/R4: what changed on an item, given the union of labels across all of its tickets; null = no change. */
-  describe: (item: TItem, knownLabels: string[]) => RowChange | null;
+  describe: (item: TItem, knownLabels: string[], context?: ChangeContext) => RowChange | null;
+  /**
+   * The importer's own Already-ticketed action policy in place of the shared five-action one (Waltz). Its presence is also
+   * the switch for the Waltz-only review behavior in the shared code: reading each target ticket's description, the
+   * dropped-member pass and the shared `rewrite` default for rows that point to one ticket, so Veracode is untouched.
+   */
+  deriveActions?: (change: RowChange | null, anyOpen: boolean) => TicketedActionChoice;
+  /** With `deriveActions`: the dedup keys of every component in the unfiltered report, so a component only filtered or accepted away is not "dropped". */
+  reportKeysOf?: (rawItems: unknown[]) => string[];
   /** The record labels `update` adds to the target ticket: all of them for a baseline, only the new ones otherwise. */
   recordLabelsOf: (row: TRow, change: RowChange) => string[];
   /** KTD3: labels with this prefix are replaced, not accumulated, whenever `update` adds one (Waltz: `oss-rating-`). */

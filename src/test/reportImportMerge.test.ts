@@ -231,7 +231,7 @@ describe('running a merge (R5-R8, AE1)', () => {
 
   it('marks the screens out of date instead of rebuilding when the user has changed an Already-ticketed action', async () => {
     const { ws } = await importWaltz();
-    await reply('A3 rewrite', ws);
+    await reply('A3 leave', ws);
     const before = vi.mocked(parseWaltzReport).mock.calls.length;
     await reply('merge PROJ-15 into PROJ-12 confirm', ws);
     const out = await reply('1', ws);
@@ -448,7 +448,7 @@ describe('review fixes: replay, retry, chaining and target names', () => {
 
   it('a second merge into the same survivor keeps the first source\'s components when the screens were not rebuilt', async () => {
     const { ws } = await importWaltz();
-    await reply('A3 rewrite', ws); // a changed choice, so the screens are marked out of date instead of rebuilt
+    await reply('A3 leave', ws); // a changed choice, so the screens are marked out of date instead of rebuilt
     await reply('merge PROJ-15 into PROJ-12 confirm', ws);
     const first = await reply('1', ws);
     expect(first.session.outOfDate).toBe(true);

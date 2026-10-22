@@ -396,11 +396,13 @@ function mergeLabels(
   current: string[],
   labelsToAdd: string[],
   removePrefix?: string,
+  removeLabels: readonly string[] = [],
 ): { added: string[]; removed: string[]; labels: string[] | null } {
   const toAdd = [...new Set(labelsToAdd)];
   const currentSet = new Set(current);
   const added = toAdd.filter(l => !currentSet.has(l));
-  const removed = removePrefix ? current.filter(l => l.startsWith(removePrefix) && !toAdd.includes(l)) : [];
+  // A label named in `removeLabels` goes unless the new set carries it; `removePrefix` drops a whole family the same way.
+  const removed = current.filter(l => !toAdd.includes(l) && ((!!removePrefix && l.startsWith(removePrefix)) || removeLabels.includes(l)));
   if (added.length === 0 && removed.length === 0) return { added, removed, labels: null };
   const removedSet = new Set(removed);
   return { added, removed, labels: [...current.filter(l => !removedSet.has(l)), ...added] };
@@ -538,6 +540,8 @@ export class TicketService {
     issueKey: string,
     change: {
       summary: string; description: string; labelsToAdd: string[]; removePrefix?: string;
+      /** Exact labels to take off in the same write (the Waltz components a rewrite no longer covers). */
+      removeLabels?: string[];
       /** More fields to write in the same call (the Waltz Due Date). */
       extraFields?: Record<string, unknown>;
       /** The `extraFields` Jira may refuse; a 400 naming one repeats the write once without it. */
@@ -545,7 +549,7 @@ export class TicketService {
     },
   ): Promise<{ added: string[]; removed: string[]; droppedFields?: string[] }> {
     const issue = await this.client.getIssue(issueKey);
-    const { added, removed, labels } = mergeLabels(issue.fields.labels ?? [], change.labelsToAdd, change.removePrefix);
+    const { added, removed, labels } = mergeLabels(issue.fields.labels ?? [], change.labelsToAdd, change.removePrefix, change.removeLabels);
 
     const fields: Record<string, unknown> = { summary: change.summary, description: change.description, ...change.extraFields };
     if (labels) fields.labels = labels;

@@ -245,6 +245,12 @@ export interface ReviewSession<TRow> {
   // `rows` from this on every page change, which is what makes a "new" row's toggle page-local
   // (R7) — see applyReviewSessionToggle()'s own doc comment.
   allRows: TRow[];
+  // Remediation dates (KTD1): the target tickets' descriptions read for the date comparison, by ticket key (null = read but
+  // empty), so a rebuild after `accept component` or `reload report` does not read them all again.
+  ticketDescriptions?: Record<string, string | null>;
+  // Remediation dates (KTD10): the dedup keys of every component in the unfiltered report, so a rewrite takes a label
+  // off a ticket only for a component that really left the report, not one filtered or accepted away.
+  reportKeys?: string[];
   // The currently DISPLAYED page: every "already ticketed" row (always shown in full, R8 — never
   // paged) plus the current page's slice of "new" rows (BATCH_LIMIT per page, defaulted to
   // included). createNewRows reads this page's included new rows directly

@@ -7,7 +7,9 @@ import {
   REPORT_SIZE_LIMITS_MB, resolveSizeLimitSetting, pickTargetTicket,
   type JqlIssueLike, type DedupTicket, type DedupMap, type RowChange,
   fetchAllPages, clampSummary, fitWiki, MAX_SUMMARY_CHARS, MAX_DESCRIPTION_CHARS,
+  applyDroppedMembers, alignRewriteDefaults, readTargetDescriptions,
 } from '../utils/reportImport';
+import { deriveWaltzActions } from '../utils/waltzReport';
 import type { ReviewRowBase } from '../participant/sessionState';
 import { TRIGGER_CHARS } from '../utils/markdownToJiraWiki';
 
@@ -1028,5 +1030,181 @@ describe('findStaleTickets — Cloud-style token paging', () => {
     expect(result.checked).toBe(100);
     expect(result.stale).toHaveLength(100);
     expect(result.truncated).toBe(true);
+  });
+});
+
+describe('the Waltz-style review passes (remediation dates, U4)', () => {
+  interface Comp { key: string }
+  interface CompRow extends ReviewRowBase { key: string }
+  const dedupKeyOf = (c: Comp) => [c.key];
+  const labelToDedupKey = (l: string) => (l.startsWith('dep-') ? l.slice(4) : null);
+  const tracking = {
+    describe: (): RowChange | null => ({ kind: 'findings', newIds: ['CVE-1'] }),
+    deriveActions: deriveWaltzActions,
+  };
+  const build = (items: Comp[], dedupMap: DedupMap, trackingOverride: Partial<typeof tracking> = {}) =>
+    buildReviewRows<Comp, CompRow>(items, dedupMap, dedupKeyOf, c => ({ key: c.key }), { ...tracking, ...trackingOverride });
+
+  describe('buildReviewRows with its own action policy', () => {
+    it('uses the importer\'s deriveActions in place of the shared five-action policy', () => {
+      const rows = build([{ key: 'a' }], new Map([['a', [ticket('PROJ-1', ['dep-a'])]]]));
+      expect(rows[0].allowedActions).toEqual(['rewrite', 'leave']);
+      expect(rows[0].action).toBe('rewrite');
+      expect(rows[0].defaultAction).toBe('rewrite');
+    });
+
+    it('hands the describer the target ticket\'s description', () => {
+      const describe = vi.fn((): RowChange | null => null);
+      const target = { ...ticket('PROJ-1', ['dep-a']), description: 'h3. Remediation dates' };
+      build([{ key: 'a' }], new Map([['a', [target]]]), { describe });
+      expect(describe).toHaveBeenCalledWith({ key: 'a' }, ['dep-a'], { targetDescription: 'h3. Remediation dates' });
+    });
+
+    it('passes an unread description as undefined', () => {
+      const describe = vi.fn((): RowChange | null => null);
+      build([{ key: 'a' }], new Map([['a', [ticket('PROJ-1', ['dep-a'])]]]), { describe });
+      expect(describe).toHaveBeenCalledWith({ key: 'a' }, ['dep-a'], { targetDescription: undefined });
+    });
+  });
+
+  describe('applyDroppedMembers', () => {
+    const folded = ticket('PROJ-1', ['dep-a', 'dep-b', 'dep-c']);
+    const dedup = (): DedupMap => new Map([['a', [folded]], ['b', [folded]], ['c', [folded]]]);
+    const apply = (rows: CompRow[], reportKeys: string[] = [], dedupMap: DedupMap = dedup()) => applyDroppedMembers<Comp, CompRow>({
+      rows, dedupMap, itemOf: r => ({ key: r.key }), dedupKeyOf, labelToDedupKey, reportKeys: new Set(reportKeys), derive: deriveWaltzActions,
+    });
+
+    it('AE9: marks every row of a ticket whose member left the report, and re-derives their actions', () => {
+      const none = { describe: () => null, deriveActions: deriveWaltzActions };
+      const rows = build([{ key: 'b' }, { key: 'c' }], dedup(), none);
+      expect(rows.every(r => r.action === 'leave')).toBe(true);
+
+      const out = apply(rows);
+
+      expect(out.map(r => r.change)).toEqual([
+        { kind: 'findings', newIds: [], droppedMembers: 1 },
+        { kind: 'findings', newIds: [], droppedMembers: 1 },
+      ]);
+      expect(out.every(r => r.action === 'rewrite' && r.defaultAction === 'rewrite')).toBe(true);
+    });
+
+    it('keeps an existing finding change and adds the count next to it', () => {
+      const out = apply(build([{ key: 'b' }, { key: 'c' }], dedup()));
+      expect(out[0].change).toEqual({ kind: 'findings', newIds: ['CVE-1'], droppedMembers: 1 });
+    });
+
+    it('does not count a member the rows cover, or one that is only filtered or accepted away but still in the report', () => {
+      expect(apply(build([{ key: 'a' }, { key: 'b' }, { key: 'c' }], dedup()))[0].change).toEqual({ kind: 'findings', newIds: ['CVE-1'] });
+      const withReportKeys = apply(build([{ key: 'b' }, { key: 'c' }], dedup()), ['a']);
+      expect(withReportKeys[0].change).toEqual({ kind: 'findings', newIds: ['CVE-1'] });
+    });
+
+    it('leaves a baseline row as a baseline', () => {
+      const rows = build([{ key: 'b' }, { key: 'c' }], dedup(), { describe: () => ({ kind: 'baseline' }) });
+      expect(apply(rows).every(r => r.change?.kind === 'baseline')).toBe(true);
+    });
+
+    it('does not touch rows that point to other tickets', () => {
+      const other = ticket('PROJ-2', ['dep-z']);
+      const dedupMap: DedupMap = new Map([...dedup(), ['z', [other]]]);
+      const rows = build([{ key: 'b' }, { key: 'c' }, { key: 'z' }], dedupMap);
+      const out = apply(rows, [], dedupMap);
+      expect(out.find(r => r.key === 'z')!.change).toEqual({ kind: 'findings', newIds: ['CVE-1'] });
+    });
+
+    it('defaults to new ticket for a resolved ticket that lost a member', () => {
+      const resolved = { ...ticket('PROJ-1', ['dep-a', 'dep-b'], { resolved: true }) };
+      const dedupMap: DedupMap = new Map([['b', [resolved]]]);
+      const rows = build([{ key: 'b' }], dedupMap, { describe: () => null });
+      const out = apply(rows, [], dedupMap);
+      expect(out[0].action).toBe('follow-up');
+    });
+  });
+
+  describe('alignRewriteDefaults (KTD8)', () => {
+    it('AE13: when one row of a ticket defaults to rewrite, every row of that ticket does', () => {
+      const folded = ticket('PROJ-1', ['dep-a', 'dep-b', 'dep-c']);
+      const dedupMap: DedupMap = new Map([['a', [folded]], ['b', [folded]], ['c', [folded]]]);
+      const rows = build([{ key: 'a' }, { key: 'b' }, { key: 'c' }], dedupMap, {
+        describe: (item: Comp) => (item.key === 'a' ? { kind: 'findings', newIds: ['CVE-9'] } : null),
+      } as never);
+      expect(rows.map(r => r.action)).toEqual(['rewrite', 'leave', 'leave']);
+
+      const out = alignRewriteDefaults(rows);
+
+      expect(out.map(r => r.action)).toEqual(['rewrite', 'rewrite', 'rewrite']);
+      expect(out.map(r => r.defaultAction)).toEqual(['rewrite', 'rewrite', 'rewrite']);
+    });
+
+    it('leaves other tickets alone, and a resolved ticket\'s new-ticket rows where they are', () => {
+      const open = ticket('PROJ-1', ['dep-a', 'dep-b']);
+      const done = ticket('PROJ-2', ['dep-c', 'dep-d'], { resolved: true });
+      const dedupMap: DedupMap = new Map([['a', [open]], ['b', [open]], ['c', [done]], ['d', [done]]]);
+      const rows = build([{ key: 'a' }, { key: 'b' }, { key: 'c' }, { key: 'd' }], dedupMap, {
+        describe: (item: Comp) => (item.key === 'a' || item.key === 'c' ? { kind: 'findings', newIds: ['CVE-9'] } : null),
+      } as never);
+      const out = alignRewriteDefaults(rows);
+      expect(out.map(r => r.action)).toEqual(['rewrite', 'rewrite', 'follow-up', 'leave']);
+    });
+
+    it('does nothing for a ticket with no rewrite default', () => {
+      const t = ticket('PROJ-1', ['dep-a', 'dep-b']);
+      const dedupMap: DedupMap = new Map([['a', [t]], ['b', [t]]]);
+      const rows = build([{ key: 'a' }, { key: 'b' }], dedupMap, { describe: () => null });
+      expect(alignRewriteDefaults(rows).map(r => r.action)).toEqual(['leave', 'leave']);
+    });
+  });
+
+  describe('readTargetDescriptions', () => {
+    const items: Comp[] = [{ key: 'a' }, { key: 'b' }, { key: 'c' }];
+    const t1 = ticket('PROJ-1', ['dep-a', 'dep-b']);
+    const t2 = ticket('PROJ-2', ['dep-c']);
+    const dedupMap = (): DedupMap => new Map([['a', [{ ...t1 }]], ['b', [{ ...t1 }]], ['c', [{ ...t2 }]]]);
+
+    it('reads each distinct target ticket once and stores the text on the ticket', async () => {
+      const map = dedupMap();
+      const read = vi.fn(async (key: string) => `description of ${key}`);
+      await readTargetDescriptions<Comp>({ items, dedupMap: map, dedupKeyOf, read });
+      expect(read.mock.calls.map(c => c[0]).sort()).toEqual(['PROJ-1', 'PROJ-2']);
+      expect(map.get('a')![0].description).toBe('description of PROJ-1');
+      expect(map.get('b')![0].description).toBe('description of PROJ-1');
+      expect(map.get('c')![0].description).toBe('description of PROJ-2');
+    });
+
+    it('reads at most eight at a time', async () => {
+      const many = Array.from({ length: 30 }, (_, i) => ({ key: `k${i}` }));
+      const map: DedupMap = new Map(many.map((c, i) => [c.key, [ticket(`PROJ-${i + 1}`, [`dep-${c.key}`])]]));
+      let active = 0; let peak = 0;
+      const read = async () => { active++; peak = Math.max(peak, active); await new Promise(r => setTimeout(r, 2)); active--; return 'x'; };
+      await readTargetDescriptions<Comp>({ items: many, dedupMap: map, dedupKeyOf, read });
+      expect(peak).toBeGreaterThan(1);
+      expect(peak).toBeLessThanOrEqual(8);
+    });
+
+    it('leaves a failed read unread (undefined), counts it, and still reads the others', async () => {
+      const map = dedupMap();
+      const onFail = vi.fn();
+      const read = async (key: string) => { if (key === 'PROJ-1') throw new Error('Forbidden'); return 'ok'; };
+      const result = await readTargetDescriptions<Comp>({ items, dedupMap: map, dedupKeyOf, read, onFail });
+      expect(map.get('a')![0].description).toBeUndefined();
+      expect(map.get('c')![0].description).toBe('ok');
+      expect(result.failed).toBe(1);
+      expect(onFail).toHaveBeenCalledWith('PROJ-1', expect.any(Error));
+    });
+
+    it('takes a ticket\'s text from the cache without reading it, and returns what it read', async () => {
+      const map = dedupMap();
+      const read = vi.fn(async (key: string) => `fresh ${key}`);
+      const result = await readTargetDescriptions<Comp>({ items, dedupMap: map, dedupKeyOf, read, cache: { 'PROJ-1': 'cached' } });
+      expect(read.mock.calls.map(c => c[0])).toEqual(['PROJ-2']);
+      expect(map.get('a')![0].description).toBe('cached');
+      expect(result.read).toEqual({ 'PROJ-1': 'cached', 'PROJ-2': 'fresh PROJ-2' });
+    });
+
+    it('reads nothing for an item with no ticket', async () => {
+      const read = vi.fn(async () => 'x');
+      await readTargetDescriptions<Comp>({ items: [{ key: 'new' }], dedupMap: new Map(), dedupKeyOf, read });
+      expect(read).not.toHaveBeenCalled();
+    });
   });
 });

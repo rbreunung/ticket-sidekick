@@ -3,13 +3,14 @@ import ExcelJS from 'exceljs';
 import { markdownToJiraWiki } from './markdownToJiraWiki';
 import type { DiagLogger } from './diagTypes';
 import {
-  toCalendarDate, hasAnyDate, earliestDueDate, dateColumnTitles, DATES_HEADING, NOT_REPORTED_TEXT, ABSENT_CELL,
-  type WaltzRemediation,
+  toCalendarDate, hasAnyDate, earliestDueDate, dateColumnTitles, diffRemediationDates, parseRecordedDates,
+  DATES_HEADING, NOT_REPORTED_TEXT, ABSENT_CELL,
+  type RemediationDates, type WaltzRemediation,
 } from './waltzDates';
 import {
   MAX_REPORT_BYTES as SHARED_MAX_REPORT_BYTES, sanitizeCellText, sanitizeStandaloneLine,
   clampSummary, fitWiki,
-  type RowChange,
+  type RowChange, type ChangeContext, type TicketedActionChoice,
 } from './reportImport';
 
 export interface WaltzVulnerability {
@@ -518,14 +519,42 @@ export function describeWaltzChange(component: WaltzComponent, knownLabels: stri
   return ratingRise ? { newCveIds, ratingRise } : { newCveIds };
 }
 
-/** U3: describeWaltzChange mapped to the shared RowChange shape buildReviewRows' change tracking uses. */
-export function describeWaltzRowChange(component: WaltzComponent, knownLabels: string[]): RowChange | null {
+const NO_DATES: RemediationDates = { policyDate: null, plannedDate: null, planDeadline: null };
+
+/**
+ * U3: describeWaltzChange mapped to the shared RowChange shape buildReviewRows' change tracking uses.
+ * With a `context`, the dates the target ticket's description records are also compared with the
+ * report's (KTD4: the three dates, never the plan status). A ticket created before dates were
+ * written records none, so it counts as changed once the report has dates for it. A description that
+ * could not be read (`undefined`) is unknown, not empty, so no date comparison is made for it.
+ */
+export function describeWaltzRowChange(component: WaltzComponent, knownLabels: string[], context?: ChangeContext): RowChange | null {
   const change = describeWaltzChange(component, knownLabels);
-  if (change === null) return null;
-  if ('baseline' in change) return { kind: 'baseline' };
-  return change.ratingRise
-    ? { kind: 'findings', newIds: change.newCveIds, ratingRise: change.ratingRise }
-    : { kind: 'findings', newIds: change.newCveIds };
+  if (change !== null && 'baseline' in change) return { kind: 'baseline' };
+
+  const dates = context && context.targetDescription !== undefined
+    ? diffRemediationDates(parseRecordedDates(context.targetDescription, component.nameVersion) ?? NO_DATES, component.remediation ?? NO_DATES)
+    : [];
+  if (change === null && dates.length === 0) return null;
+
+  return {
+    kind: 'findings',
+    newIds: change?.newCveIds ?? [],
+    ...(change?.ratingRise ? { ratingRise: change.ratingRise } : {}),
+    ...(dates.length > 0 ? { dates } : {}),
+  };
+}
+
+/**
+ * R13: the Waltz Already-ticketed policy. `rewrite` and `leave` are always offered, `new ticket` (the
+ * internal id `follow-up`) only when every ticket is resolved. A change or a baseline defaults to
+ * `rewrite` while some ticket is open and to `new ticket` when all are resolved; no change defaults to
+ * `leave`. `update` and `re-create` are never offered.
+ */
+export function deriveWaltzActions(change: RowChange | null, anyOpen: boolean): TicketedActionChoice {
+  const allowedActions: TicketedActionChoice['allowedActions'] = anyOpen ? ['rewrite', 'leave'] : ['rewrite', 'leave', 'follow-up'];
+  if (change === null) return { allowedActions, action: 'leave' };
+  return { allowedActions, action: anyOpen ? 'rewrite' : 'follow-up' };
 }
 
 const FOLLOW_UP_SUFFIX_PATTERN = / \(follow-up to [A-Z][A-Z0-9_]*-\d+\)$/;

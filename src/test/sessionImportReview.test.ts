@@ -397,6 +397,16 @@ describe('formatRowChange (U4/R5)', () => {
     expect(formatRowChange(undefined, 'CVE(s)')).toBe('—');
   });
 
+  it('shows each changed remediation date as recorded→reported, with none for an absent side, and a count of dropped components', () => {
+    expect(formatRowChange({ kind: 'findings', newIds: [], dates: [{ date: 'policy', from: '2026-11-30', to: '2027-02-28' }] }, 'CVE(s)')).toBe('policy 2026-11-30→2027-02-28');
+    expect(formatRowChange({ kind: 'findings', newIds: [], dates: [{ date: 'planned', from: null, to: '2026-12-15' }, { date: 'deadline', from: '2026-09-20', to: null }] }, 'CVE(s)'))
+      .toBe('planned none→2026-12-15, deadline 2026-09-20→none');
+    expect(formatRowChange({ kind: 'findings', newIds: [], droppedMembers: 1 }, 'CVE(s)')).toBe('−1 component');
+    expect(formatRowChange({ kind: 'findings', newIds: [], droppedMembers: 3 }, 'CVE(s)')).toBe('−3 components');
+    expect(formatRowChange({ kind: 'findings', newIds: ['a'], ratingRise: { from: 'High', to: 'Critical' }, dates: [{ date: 'policy', from: null, to: '2026-11-30' }], droppedMembers: 1 }, 'CVE(s)'))
+      .toBe('+1 CVE, High→Critical, policy none→2026-11-30, −1 component');
+  });
+
   it('renders a Jira-label-derived rating as inert cell text: no live link, no table-cell break', () => {
     const link = formatRowChange({ kind: 'findings', newIds: [], ratingRise: { from: '[Apply](command:workbench.action.chat.open?x)', to: 'Critical' } }, 'CVE(s)');
     expect(link).not.toMatch(/\[[^\]]*\]\([^)]*\)/);

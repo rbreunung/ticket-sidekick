@@ -20,7 +20,7 @@ import type { TicketService } from '../../services/TicketService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import { TemplateService } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
-import { BATCH_LIMIT, DEFAULT_DEDUP_CHUNK_SIZE, MAX_REPORT_BYTES, buildDedupJql, buildReviewRows, fetchAllPages, findAlreadyTicketed, findStaleTickets, templateLabelsOf, type DedupMap, type JqlIssueLike } from '../../utils/reportImport';
+import { BATCH_LIMIT, DEFAULT_DEDUP_CHUNK_SIZE, MAX_REPORT_BYTES, buildDedupJql, buildReviewRows, applyDroppedMembers, alignRewriteDefaults, readTargetDescriptions, fetchAllPages, findAlreadyTicketed, findStaleTickets, templateLabelsOf, type DedupMap, type JqlIssueLike } from '../../utils/reportImport';
 import { CURRENT_SESSION_SCHEMA_VERSION, NO_ISSUE_TYPE, SESSION_EXPIRED_MESSAGE, applyBulkNewRowSet, applyReviewSessionToggle, applyStaleTicketToggle, applyTicketedActionChange, buildAllHiddenMessage, buildChatCommandLink, buildImportDoneSummary, buildReviewPage, clampStalePage, clampTicketedPage, computeImportResultGroups, describeImportReplyVocabulary, ensureImportViewState, IMPORT_COMMANDS, formatIssueTypeOptionLabel, initImportViewState, isCancellation, isSessionExpired, isTicketedRowFinished, mergeNewRows, neutralizeMarkdownLinks, parseImportReviewReply, pickEmailOption, resolveTemplateIssueType, safeMarkdownText, ticketedRowActions, toAcceptedHidden, unmergeNewRow, type ImportReplyContext, type ImportTemplateSelectionSession, type ReviewRowBase, type ReviewSession, type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession } from '../sessionState';
 import { resolveIssueTypeOrPrompt, resolveProjectKey, sessionWasSuperseded } from './ticketContext';
 import { buildStaleTicketGroups } from './cleanupHandler';
@@ -335,6 +335,8 @@ interface ImportReviewInput<TItem> {
   issueType: string;
   templateName: string | null;
   additionalFields: Record<string, unknown>;
+  /** Target-ticket descriptions already read for this review (remediation dates, KTD1), reused by a rebuild. */
+  descriptionCache?: Record<string, string | null>;
 }
 
 /**
@@ -406,6 +408,33 @@ async function buildImportReview<TItem, TRow extends ReviewRowBase>(
     }
   }
 
+  // Remediation dates (KTD1): an importer with its own action policy compares what each target ticket recorded with
+  // the report, so it reads those tickets' descriptions (the search cannot carry them: on Cloud it returns ADF).
+  // A read that fails leaves that ticket's description unknown, which skips the date comparison for it and marks the
+  // review degraded so a refresh does not replace a review built from complete data.
+  const waltzStyle = !!descriptor.changeTracking?.deriveActions && !!descriptor.dedupKeyOf;
+  let ticketDescriptions: Record<string, string | null> | undefined;
+  if (waltzStyle && dedupMap.size > 0) {
+    const reads = await readTargetDescriptions<TItem>({
+      items: input.items,
+      dedupMap,
+      dedupKeyOf: descriptor.dedupKeyOf!,
+      cache: input.descriptionCache,
+      read: async key => {
+        const description = (await ticketService.getIssue(key)).fields.description as unknown;
+        return typeof description === 'string' ? description : null;
+      },
+      onFail: (key, err) => logDiag(descriptor.scope, 'warn', `Could not read the description of ${key} — its dates are not compared`, {
+        issueKey: key, error: err instanceof Error ? err.message : String(err),
+      }),
+    });
+    ticketDescriptions = reads.read;
+    if (reads.failed > 0) {
+      degraded = true;
+      stream.markdown(`_Warning: could not read ${reads.failed} ticket(s) to compare their dates — those rows are not checked for date changes._\n\n`);
+    }
+  }
+
   // U4: every matched item gets its lightweight row fields built eagerly (severity/CWE/summary/
   // labels) — no pre-build cap here anymore. The review screen pages through the full "new" set
   // instead of silently dropping the remainder of a run (buildReviewPage below); an importer whose
@@ -443,7 +472,8 @@ async function buildImportReview<TItem, TRow extends ReviewRowBase>(
       };
     }
   }
-  const allRows = buildReviewRows<TItem, TRow>(
+  const reportKeys = waltzStyle ? descriptor.changeTracking!.reportKeysOf?.(input.rawItems) ?? [] : undefined;
+  let allRows = buildReviewRows<TItem, TRow>(
     input.items,
     dedupMap,
     dedupKeyOf,
@@ -452,6 +482,19 @@ async function buildImportReview<TItem, TRow extends ReviewRowBase>(
     narrowNew,
     dropTicketed,
   );
+  // KTD10/KTD8: a member that left the report counts as a change for every row of its ticket, and rows of one
+  // ticket share a `rewrite` default because `rewrite` rebuilds the whole ticket.
+  if (waltzStyle && descriptor.fold && descriptor.labelToDedupKey) {
+    allRows = alignRewriteDefaults(applyDroppedMembers<TItem, TRow>({
+      rows: allRows,
+      dedupMap,
+      itemOf: descriptor.fold.itemOf,
+      dedupKeyOf,
+      labelToDedupKey: descriptor.labelToDedupKey,
+      reportKeys: new Set(reportKeys),
+      derive: descriptor.changeTracking!.deriveActions!,
+    }));
+  }
   const initialPage = buildReviewPage(allRows, 0);
   const hiddenCounts = toAcceptedHidden(acceptedHidden);
 
@@ -464,6 +507,8 @@ async function buildImportReview<TItem, TRow extends ReviewRowBase>(
     allRows,
     rows: initialPage.rows,
     page: initialPage.page,
+    ...(ticketDescriptions ? { ticketDescriptions } : {}),
+    ...(reportKeys ? { reportKeys } : {}),
     ...(hiddenCounts ? { acceptedHidden: hiddenCounts } : {}),
     schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
   };
@@ -550,6 +595,15 @@ async function buildImportReview<TItem, TRow extends ReviewRowBase>(
   return { session: reviewSession, degraded };
 }
 
+/**
+ * The descriptions read for a review stay valid across a rebuild until this session rewrites, adds to or merges a
+ * ticket (the writes that change a description), whether or not that write succeeded in full.
+ */
+function canReuseDescriptions<TRow extends ReviewRowBase>(session: ReviewSession<TRow>): boolean {
+  const o = session.outcomes;
+  return !o || o.rewritten + o.rewriteFailed + o.added + o.addFailed + o.merged + o.mergeFailed === 0;
+}
+
 type RefreshResult<TRow extends ReviewRowBase> = { ok: true; session: ReviewSession<TRow> } | { ok: false; missing: boolean; message: string };
 
 /**
@@ -577,6 +631,7 @@ async function refreshReview<TItem, TRow extends ReviewRowBase>(
   const { session: built, degraded } = await buildImportReview<TItem, TRow>({
     projectKey: session.projectKey, items: parsed.items, rawItems: parsed.rawItems, reportFilePath: filePath,
     issueType: session.issueType, templateName: session.templateName, additionalFields: session.additionalFields,
+    ...(canReuseDescriptions(session) ? { descriptionCache: session.ticketDescriptions } : {}),
   }, { getResolutions: () => ticketService.getResolutions() }, ticketService, stream, descriptor);
   if (degraded) {
     logDiag(descriptor.scope, 'warn', 'Refresh left the review as it was: a Jira search failed, so a rebuild would show items as New that already have tickets', { path: filePath });

@@ -7,6 +7,7 @@
 // (what a "label" means, how a row's own fields are built) are injected via callbacks, not
 // duplicated. R9: only what Veracode and Waltz need today is here — no speculative generality.
 import type { DiagLogger } from './diagTypes';
+import type { DateChange } from './waltzDates';
 import { TRIGGER_CHARS } from './markdownToJiraWiki';
 // Type-only import: erased at compile time (no runtime `require`), so this does not create the
 // circular *runtime* import that sessionState.ts's own value import of this file (BATCH_LIMIT,
@@ -109,6 +110,11 @@ export interface DedupTicket {
   created: string | null;
   /** The ticket's status name, or null when the search did not return one. */
   status: string | null;
+  /**
+   * The ticket's description (Jira wiki text), read separately for importers that compare what a ticket
+   * recorded (Waltz dates): `null` = read but empty, `undefined` = not read, or the read failed.
+   */
+  description?: string | null;
 }
 
 /** Dedup key -> every ticket carrying it (U3/KTD1 — no longer "first match wins"). */
@@ -486,11 +492,31 @@ export function fitWiki(
  */
 export type RowChange =
   | { kind: 'baseline' }
-  | { kind: 'findings'; newIds: string[]; ratingRise?: { from: string; to: string } };
+  | {
+      kind: 'findings'; newIds: string[]; ratingRise?: { from: string; to: string };
+      /** Waltz: remediation dates that differ between the ticket's recorded dates and the report (validated dates only). */
+      dates?: DateChange[];
+      /** Waltz: how many components the target ticket records that the report no longer has. */
+      droppedMembers?: number;
+    };
+
+/** What the row builder knows about an item's target ticket that a describer may need beyond its labels. */
+export interface ChangeContext {
+  /** The target ticket's description; see {@link DedupTicket.description}. */
+  targetDescription: string | null | undefined;
+}
+
+/** What a row offers and proposes: the allowed actions in display order, and the default among them. */
+export interface TicketedActionChoice {
+  allowedActions: TicketedAction[];
+  action: TicketedAction;
+}
 
 /** U3/KTD2: the importer's change describer, given the union of labels across all of an item's tickets. */
 export interface RowChangeTracking<TItem> {
-  describe(item: TItem, knownLabels: string[]): RowChange | null;
+  describe(item: TItem, knownLabels: string[], context?: ChangeContext): RowChange | null;
+  /** Replaces {@link deriveTicketedActions} for importers with their own action policy (Waltz). */
+  deriveActions?: (change: RowChange | null, anyOpen: boolean) => TicketedActionChoice;
 }
 
 /** A template's `labels` field as a string array, or [] when it has none. */
@@ -535,7 +561,7 @@ export function pickTargetTicket(tickets: DedupTicket[]): DedupTicket {
 export function deriveTicketedActions(
   change: RowChange | null,
   anyOpen: boolean,
-): { allowedActions: TicketedAction[]; action: TicketedAction } {
+): TicketedActionChoice {
   const hasNewFindings = change?.kind === 'findings' && change.newIds.length > 0;
   // `rewrite` (finding folding) is always offered: it rebuilds the target ticket from the report.
   const allowed = new Set<TicketedAction>(['re-create', 'rewrite', 'leave']);
@@ -607,8 +633,9 @@ export function buildReviewRows<TItem, TRow extends ReviewRowBase>(
     };
     if (target && changeTracking) {
       const knownLabels = [...new Set(tickets.flatMap(t => t.labels))];
-      const change = changeTracking.describe(item, knownLabels);
-      const { allowedActions, action } = deriveTicketedActions(change, tickets.some(t => !t.resolved));
+      const change = changeTracking.describe(item, knownLabels, { targetDescription: target.description });
+      const derive = changeTracking.deriveActions ?? deriveTicketedActions;
+      const { allowedActions, action } = derive(change, tickets.some(t => !t.resolved));
       base.ticketKeys = tickets.map(t => t.key);
       base.target = { key: target.key, status: target.status, resolved: target.resolved };
       base.change = change;
@@ -619,4 +646,126 @@ export function buildReviewRows<TItem, TRow extends ReviewRowBase>(
     rows.push({ ...base, ...rowBuilder(item) } as TRow);
   }
   return rows;
+}
+
+// --- Waltz-style review passes (remediation dates plan, KTD1/KTD8/KTD10) ---------------------------
+// All three run only for an importer that supplies its own `deriveActions`, so Veracode's rows are untouched.
+
+const DESCRIPTION_READ_CONCURRENCY = 8;
+
+/** The target ticket of every item that has any ticket, one entry per distinct ticket key. */
+function distinctTargets<TItem>(items: TItem[], dedupMap: DedupMap, dedupKeyOf: (item: TItem) => string[]): string[] {
+  const keys = new Set<string>();
+  for (const item of items) {
+    const tickets = collectTickets(dedupMap, dedupKeyOf(item));
+    if (tickets.length > 0) keys.add(pickTargetTicket(tickets).key);
+  }
+  return [...keys];
+}
+
+/**
+ * KTD1: reads the description of each item's target ticket once (at most 8 at a time) and stores it on
+ * that ticket, for the describer to compare what the ticket recorded with the report. A read that
+ * fails leaves the ticket's description `undefined` (unknown, not empty) and is counted. `cache` supplies
+ * text read earlier in the same review; `read` in the result is everything now known, for the next rebuild.
+ */
+export async function readTargetDescriptions<TItem>(params: {
+  items: TItem[];
+  dedupMap: DedupMap;
+  dedupKeyOf: (item: TItem) => string[];
+  read: (key: string) => Promise<string | null>;
+  cache?: Record<string, string | null>;
+  onFail?: (key: string, err: unknown) => void;
+}): Promise<{ failed: number; read: Record<string, string | null> }> {
+  const { items, dedupMap, dedupKeyOf, read, onFail } = params;
+  const known: Record<string, string | null> = {};
+  const toRead: string[] = [];
+  for (const key of distinctTargets(items, dedupMap, dedupKeyOf)) {
+    if (params.cache && key in params.cache) known[key] = params.cache[key];
+    else toRead.push(key);
+  }
+
+  let failed = 0;
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < toRead.length) {
+      const key = toRead[next++];
+      try {
+        known[key] = await read(key);
+      } catch (err) {
+        failed++;
+        onFail?.(key, err);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(DESCRIPTION_READ_CONCURRENCY, toRead.length) }, worker));
+
+  for (const tickets of dedupMap.values()) {
+    for (const ticket of tickets) {
+      if (ticket.key in known) ticket.description = known[ticket.key];
+    }
+  }
+  return { failed, read: known };
+}
+
+/**
+ * KTD10: finds the components a target ticket records (its dedup labels) that no row points to it any more and
+ * that are not in the report at all, and marks every row of that ticket with how many (`droppedMembers`). A
+ * member only filtered or accepted away is still in `reportKeys`, so it is not dropped. The affected rows'
+ * actions are derived again. A baseline row keeps its baseline; `rewrite` is its default anyway.
+ */
+export function applyDroppedMembers<TItem, TRow extends ReviewRowBase>(params: {
+  rows: TRow[];
+  dedupMap: DedupMap;
+  itemOf: (row: TRow) => TItem;
+  dedupKeyOf: (item: TItem) => string[];
+  labelToDedupKey: (label: string) => string | null;
+  reportKeys: ReadonlySet<string>;
+  derive: (change: RowChange | null, anyOpen: boolean) => TicketedActionChoice;
+}): TRow[] {
+  const { rows, dedupMap, itemOf, dedupKeyOf, labelToDedupKey, reportKeys, derive } = params;
+  const ticketByKey = new Map<string, DedupTicket>();
+  for (const tickets of dedupMap.values()) for (const t of tickets) ticketByKey.set(t.key, t);
+
+  const rowsByTarget = new Map<string, TRow[]>();
+  for (const row of rows) {
+    if (row.existingTicketKey === null || row.allowedActions === undefined) continue;
+    const group = rowsByTarget.get(row.existingTicketKey) ?? [];
+    group.push(row);
+    rowsByTarget.set(row.existingTicketKey, group);
+  }
+
+  const updated = new Map<TRow, TRow>();
+  for (const [targetKey, group] of rowsByTarget) {
+    const target = ticketByKey.get(targetKey);
+    if (!target) continue;
+    const covered = new Set(group.flatMap(row => dedupKeyOf(itemOf(row))));
+    const dropped = new Set(
+      target.labels.map(labelToDedupKey).filter((k): k is string => k !== null && !covered.has(k) && !reportKeys.has(k)),
+    );
+    if (dropped.size === 0) continue;
+    for (const row of group) {
+      const current = row.change;
+      if (current?.kind === 'baseline') continue;
+      const change: RowChange = { ...(current ?? { kind: 'findings', newIds: [] }), droppedMembers: dropped.size } as RowChange;
+      const anyOpen = collectTickets(dedupMap, dedupKeyOf(itemOf(row))).some(t => !t.resolved);
+      const { allowedActions, action } = derive(change, anyOpen);
+      updated.set(row, { ...row, change, allowedActions, action, defaultAction: action });
+    }
+  }
+  return rows.map(row => updated.get(row) ?? row);
+}
+
+/**
+ * KTD8: `rewrite` rebuilds a whole ticket and an Apply that covers only some of its rows is refused, so when any
+ * row of a ticket defaults to `rewrite` every row of that ticket that offers it defaults to it too.
+ */
+export function alignRewriteDefaults<TRow extends ReviewRowBase>(rows: TRow[]): TRow[] {
+  const rewriting = new Set(rows.filter(r => r.existingTicketKey !== null && r.action === 'rewrite').map(r => r.existingTicketKey));
+  if (rewriting.size === 0) return rows;
+  return rows.map(row => (
+    row.existingTicketKey !== null && rewriting.has(row.existingTicketKey) && row.action !== 'rewrite' && row.allowedActions?.includes('rewrite')
+      ? { ...row, action: 'rewrite' as const, defaultAction: 'rewrite' as const }
+      : row
+  ));
 }

@@ -4,7 +4,7 @@ import type { TicketService } from '../../services/TicketService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import {
   parseWaltzReport, filterComponents, waltzDueDate, sanitizeComponentLabel, buildGroupSummary, buildGroupLabels, buildGroupDescriptionWiki, buildFoldedCommentWiki,
-  describeWaltzRowChange, buildRecordLabels, buildCveLabel, buildRatingLabel, buildUpdateCommentWiki,
+  describeWaltzRowChange, deriveWaltzActions, buildRecordLabels, buildCveLabel, buildRatingLabel, buildUpdateCommentWiki,
   buildFollowUpDescriptionWiki, buildFollowUpSummary, rewriteSummaryRating, highestRating,
   type WaltzComponent, type WaltzReviewRow,
 } from '../../utils/waltzReport';
@@ -191,7 +191,9 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
     findingNoun: 'CVE(s)',
     // Change tracking only ever sees Already-ticketed rows, and Waltz never folds those (merges act
     // on New rows only), so the group holds exactly one component here.
-    describe: (group, knownLabels) => describeWaltzRowChange(group[0], knownLabels),
+    describe: (group, knownLabels, context) => describeWaltzRowChange(group[0], knownLabels, context),
+    deriveActions: deriveWaltzActions,
+    reportKeysOf: rawItems => (rawItems as WaltzComponent[]).map(c => sanitizeComponentLabel(c.nameVersion)),
     recordLabelsOf: (row, change) => {
       if (change.kind === 'baseline') return buildRecordLabels(row.sourceGroup[0]);
       const labels = change.newIds.map(buildCveLabel);

@@ -7,6 +7,7 @@ import {
   buildCveLabel, buildRatingLabel, buildRecordLabels, parseRecordLabels, describeWaltzChange, describeWaltzRowChange,
   buildUpdateCommentWiki, buildFollowUpDescriptionWiki, buildFollowUpSummary, rewriteSummaryRating,
   buildGroupSummary, buildGroupLabels, buildGroupDescriptionWiki, buildFoldedCommentWiki,
+  deriveWaltzActions,
   type WaltzComponent,
 } from '../utils/waltzReport';
 import { sanitizeCellText } from '../utils/reportImport';
@@ -912,5 +913,108 @@ describe('parseRecordedDates round trip', () => {
   it('tolerates extra spaces in cells and different capitalization in the column titles', () => {
     const wiki = '|| policy DATE || Planned date ||Plan Deadline|| Plan status (as of 2026-10-22) ||\n| 2026-11-30 |  2026-12-15 |n/a| Overdue |';
     expect(parseRecordedDates(wiki, 'example-lib:1.2.3')).toEqual({ policyDate: '2026-11-30', plannedDate: '2026-12-15', planDeadline: null });
+  });
+});
+
+describe('describeWaltzRowChange with the dates a ticket recorded (U4)', () => {
+  const withRemediation = (r: Partial<NonNullable<WaltzComponent['remediation']>>): WaltzComponent => ({
+    ...makeComponent('example-lib:1.2.3', 'High', ['CVE-2099-0001']),
+    remediation: { policyDate: null, plannedDate: null, planDeadline: null, planStatus: null, reportDate: '2026-10-22', ...r },
+  });
+  const known = (c: WaltzComponent) => buildRecordLabels(c);
+  const descriptionOf = (r: Partial<NonNullable<WaltzComponent['remediation']>>) => buildDescriptionWiki(withRemediation(r));
+
+  it('AE7: a ticket from before the feature counts as changed once the report has dates for it', () => {
+    const c = withRemediation({ policyDate: '2026-11-30', plannedDate: '2026-12-15' });
+    const change = describeWaltzRowChange(c, known(c), { targetDescription: 'h3. Max Vuln Rating\nHigh\n\nh3. Component\nexample-lib:1.2.3' });
+    expect(change).toEqual({
+      kind: 'findings', newIds: [],
+      dates: [{ date: 'policy', from: null, to: '2026-11-30' }, { date: 'planned', from: null, to: '2026-12-15' }],
+    });
+  });
+
+  it('AE8: a moved planned date shows the recorded and the reported date', () => {
+    const c = withRemediation({ policyDate: '2026-11-30', plannedDate: '2027-01-31' });
+    const change = describeWaltzRowChange(c, known(c), { targetDescription: descriptionOf({ policyDate: '2026-11-30', plannedDate: '2026-12-15' }) });
+    expect(change).toEqual({ kind: 'findings', newIds: [], dates: [{ date: 'planned', from: '2026-12-15', to: '2027-01-31' }] });
+  });
+
+  it('is no change when the recorded and reported dates are equal', () => {
+    const c = withRemediation({ policyDate: '2026-11-30', plannedDate: '2026-12-15' });
+    expect(describeWaltzRowChange(c, known(c), { targetDescription: descriptionOf({ policyDate: '2026-11-30', plannedDate: '2026-12-15' }) })).toBeNull();
+  });
+
+  it('is a change when the report lost a date the ticket recorded', () => {
+    const c = withRemediation({});
+    const change = describeWaltzRowChange(c, known(c), { targetDescription: descriptionOf({ policyDate: '2026-11-30' }) });
+    expect(change).toEqual({ kind: 'findings', newIds: [], dates: [{ date: 'policy', from: '2026-11-30', to: null }] });
+  });
+
+  it('is no change when neither the report nor the ticket has dates', () => {
+    const c = withRemediation({});
+    expect(describeWaltzRowChange(c, known(c), { targetDescription: descriptionOf({}) })).toBeNull();
+    expect(describeWaltzRowChange(c, known(c), { targetDescription: null })).toBeNull();
+  });
+
+  it('does not compare the plan status, which moves with the clock', () => {
+    const c = withRemediation({ policyDate: '2026-11-30', planStatus: 'Unplanned' });
+    expect(describeWaltzRowChange(c, known(c), { targetDescription: descriptionOf({ policyDate: '2026-11-30', planStatus: 'Overdue' }) })).toBeNull();
+  });
+
+  it('keeps a baseline a baseline, with no dates', () => {
+    const c = withRemediation({ policyDate: '2026-11-30' });
+    expect(describeWaltzRowChange(c, [], { targetDescription: null })).toEqual({ kind: 'baseline' });
+  });
+
+  it('compares no dates without a description context, or when the description could not be read', () => {
+    const c = withRemediation({ policyDate: '2026-11-30' });
+    expect(describeWaltzRowChange(c, known(c))).toBeNull();
+    expect(describeWaltzRowChange(c, known(c), { targetDescription: undefined })).toBeNull();
+  });
+
+  it('still reports a new CVE and a rating rise from an unread description, and adds date changes next to them', () => {
+    const c = { ...withRemediation({ policyDate: '2026-11-30' }), maxVulnRating: 'Critical' };
+    const olderLabels = ['oss-cve-cve-2099-0099', 'oss-rating-high'];
+    expect(describeWaltzRowChange(c, olderLabels, { targetDescription: undefined })).toEqual({
+      kind: 'findings', newIds: ['CVE-2099-0001'], ratingRise: { from: 'High', to: 'Critical' },
+    });
+    expect(describeWaltzRowChange(c, olderLabels, { targetDescription: null })).toEqual({
+      kind: 'findings', newIds: ['CVE-2099-0001'], ratingRise: { from: 'High', to: 'Critical' },
+      dates: [{ date: 'policy', from: null, to: '2026-11-30' }],
+    });
+  });
+
+  it('reads the recorded dates of its own component out of a folded ticket\'s description', () => {
+    const a = withRemediation({ policyDate: '2026-11-30' });
+    const b = { ...withRemediation({ policyDate: '2026-12-31' }), nameVersion: 'example-b:2.0.0' };
+    const folded = buildGroupDescriptionWiki([a, b]);
+    expect(describeWaltzRowChange(b, known(b), { targetDescription: folded })).toBeNull();
+    const movedB = { ...b, remediation: { ...b.remediation!, policyDate: '2027-02-01' } };
+    expect(describeWaltzRowChange(movedB, known(movedB), { targetDescription: folded })).toEqual({
+      kind: 'findings', newIds: [], dates: [{ date: 'policy', from: '2026-12-31', to: '2027-02-01' }],
+    });
+  });
+});
+
+describe('deriveWaltzActions (U4)', () => {
+  const change = { kind: 'findings' as const, newIds: [], dates: [{ date: 'policy' as const, from: null, to: '2026-11-30' }] };
+
+  it('no change: rewrite and leave, default leave; plus new ticket when every ticket is resolved', () => {
+    expect(deriveWaltzActions(null, true)).toEqual({ allowedActions: ['rewrite', 'leave'], action: 'leave' });
+    expect(deriveWaltzActions(null, false)).toEqual({ allowedActions: ['rewrite', 'leave', 'follow-up'], action: 'leave' });
+  });
+
+  it('a change with some ticket open defaults to rewrite and never offers update or re-create', () => {
+    const derived = deriveWaltzActions(change, true);
+    expect(derived).toEqual({ allowedActions: ['rewrite', 'leave'], action: 'rewrite' });
+  });
+
+  it('a change with every ticket resolved defaults to new ticket (AE10, AE12)', () => {
+    expect(deriveWaltzActions(change, false)).toEqual({ allowedActions: ['rewrite', 'leave', 'follow-up'], action: 'follow-up' });
+  });
+
+  it('a baseline defaults like a change', () => {
+    expect(deriveWaltzActions({ kind: 'baseline' }, true).action).toBe('rewrite');
+    expect(deriveWaltzActions({ kind: 'baseline' }, false).action).toBe('follow-up');
   });
 });

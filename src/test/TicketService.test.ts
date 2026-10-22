@@ -1709,6 +1709,17 @@ describe('TicketService.rewriteTicket (finding folding, KTD7)', () => {
     expect(result.removed).toEqual(['oss-rating-medium']);
   });
 
+  it('takes the named labels off in the same write, unless the new set carries them', async () => {
+    client.getIssue = async () => issue(['oss-dependency', 'oss-dep-a', 'oss-dep-b']);
+
+    const result = await service.rewriteTicket('PROJ-1', {
+      summary: 's', description: 'd', labelsToAdd: ['oss-dependency', 'oss-dep-b'], removeLabels: ['oss-dep-a', 'oss-dep-b'],
+    });
+
+    expect(client.updateIssueCalls[0].fields.labels).toEqual(['oss-dependency', 'oss-dep-b']);
+    expect(result.removed).toEqual(['oss-dep-a']);
+  });
+
   it('leaves labels out of the write when none change', async () => {
     client.getIssue = async () => issue(['veracode']);
 

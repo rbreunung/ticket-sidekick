@@ -5,7 +5,7 @@ import { logDiag } from '../../utils/diagLog';
 import { formatKeyLink, type TicketService } from '../../services/TicketService';
 import { BATCH_LIMIT } from '../../utils/reportImport';
 import { emptyImportOutcomes, findPartialRewrites, isTicketedRowFinished, ticketedRowActions, ticketedTargetKey, type ReviewRowBase, type ReviewSession, type TicketedAction, type TicketedRowResult } from '../sessionState';
-import { planRewrite, writeRewrite } from './importAddToTicket';
+import { labelsToRemove, planRewrite, writeRewrite } from './importAddToTicket';
 import { createOne, droppedFieldsWarning } from './importCreate';
 import type { ReportImportDescriptor } from './reportImportTypes';
 
@@ -189,7 +189,7 @@ async function rewriteTicketedGroup<TItem, TRow extends ReviewRowBase>(
     });
     const addedItem = fold.combine(added);
     const plan = planRewrite(session, descriptor, key, issue.fields.labels ?? [], []);
-    const written = await writeRewrite(ticketService, descriptor, key, plan.regenItem);
+    const written = await writeRewrite(ticketService, descriptor, key, plan.regenItem, labelsToRemove(session, descriptor, plan.droppedKeys));
     droppedFields = written.droppedFields;
     comment = fold.buildComment(addedItem, plan.droppedKeys);
   } catch (err) {

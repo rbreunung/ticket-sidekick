@@ -290,6 +290,9 @@ export function formatRowChange(change: RowChange | null | undefined, findingNou
   if (change.newIds.length > 0) parts.push(`+${countedNoun(change.newIds.length, findingNoun)}`);
   // Rating text derives from Jira labels (untrusted) and lands in a trusted table cell.
   if (change.ratingRise) parts.push(`${safeCellText(change.ratingRise.from)}→${safeCellText(change.ratingRise.to)}`);
+  // Waltz remediation dates: recorded on the ticket → reported now. Both sides are validated dates, never raw cell text.
+  for (const d of change.dates ?? []) parts.push(`${d.date} ${d.from ?? 'none'}→${d.to ?? 'none'}`);
+  if (change.droppedMembers) parts.push(`−${change.droppedMembers} component${change.droppedMembers === 1 ? '' : 's'}`);
   return parts.length > 0 ? parts.join(', ') : '—';
 }
 

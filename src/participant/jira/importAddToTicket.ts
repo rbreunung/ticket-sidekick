@@ -32,6 +32,21 @@ export function planRewrite<TItem, TRow extends ReviewRowBase>(
 }
 
 /**
+ * KTD10: the labels a rewrite takes off the ticket — the components it recorded that the report no longer has.
+ * Only for an importer with its own action policy (Waltz); a component merely filtered or accepted away is still in
+ * the report, so its label stays.
+ */
+export function labelsToRemove<TItem, TRow extends ReviewRowBase>(
+  session: ReviewSession<TRow>,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+  droppedKeys: string[],
+): string[] {
+  if (!descriptor.changeTracking?.deriveActions) return [];
+  const inReport = new Set(session.reportKeys ?? []);
+  return droppedKeys.filter(k => !inReport.has(k));
+}
+
+/**
  * KTD7: rebuilds `key` from `regenItem` — the importer's own summary, description and labels (no template labels) — in one write.
  * An importer's Due Date (Waltz) rides in the same write; `dueDate` is what was set, `droppedFields` what Jira refused.
  */
@@ -40,6 +55,7 @@ export async function writeRewrite<TItem, TRow extends ReviewRowBase>(
   descriptor: ReportImportDescriptor<TItem, TRow>,
   key: string,
   regenItem: TItem,
+  removeLabels: string[] = [],
 ): Promise<{ dueDate: string | null; droppedFields: string[] }> {
   const fields = descriptor.buildRowFields(regenItem, []);
   const built = descriptor.buildTicketFields({ ...fields, id: '0', existingTicketKey: null, included: true } as unknown as TRow, {});
@@ -49,6 +65,7 @@ export async function writeRewrite<TItem, TRow extends ReviewRowBase>(
     description: String(built.fields.description ?? ''),
     labelsToAdd: (built.fields.labels as string[] | undefined) ?? [],
     removePrefix: descriptor.changeTracking?.removeLabelPrefix,
+    ...(removeLabels.length > 0 ? { removeLabels } : {}),
     ...(dueDate ? { extraFields: { duedate: dueDate }, optionalFields: built.optionalFields } : {}),
   });
   if (droppedFields) logDroppedFields(descriptor.scope, key, droppedFields);
@@ -136,7 +153,7 @@ export async function addToTicket<TItem, TRow extends ReviewRowBase>(
       await ticketService.updateLabels(key, toAdd);
       comment = fold.buildComment(addedItem, []);
     } else {
-      const written = await writeRewrite(ticketService, descriptor, key, plan.regenItem);
+      const written = await writeRewrite(ticketService, descriptor, key, plan.regenItem, labelsToRemove(session, descriptor, plan.droppedKeys));
       droppedFields = written.droppedFields;
       comment = fold.buildComment(addedItem, plan.droppedKeys);
     }
