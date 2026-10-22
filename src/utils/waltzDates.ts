@@ -1,4 +1,5 @@
 import { sanitizeCellText } from './reportImport';
+import { normalizeTitle, splitHeaderRow, splitDataRow } from './wikiTableRead';
 
 // Pure, vscode-free date logic for the Waltz import's remediation dates (see docs/report-import.md).
 // Dates travel as `YYYY-MM-DD` strings from the parser to Jira so no time zone can shift a day.
@@ -103,22 +104,6 @@ export function dateColumnTitles(reportDate: string | null): string[] {
 }
 
 const EXACT_DATE = /^\d{4}-\d{2}-\d{2}$/;
-
-function normalizeTitle(cell: string): string {
-  return cell.replace(/\([^)]*\)/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
-}
-
-function splitHeaderRow(line: string): string[] | null {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith('||')) return null;
-  return trimmed.replace(/^\|\|/, '').replace(/\|+$/, '').split('||');
-}
-
-function splitDataRow(line: string): string[] | null {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith('|') || trimmed.startsWith('||')) return null;
-  return trimmed.replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
-}
 
 function cellDate(cell: string | undefined): string | null {
   const text = (cell ?? '').trim();

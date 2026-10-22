@@ -5,6 +5,7 @@ import {
   clampSummary, fitWiki,
   type RowChange,
 } from './reportImport';
+import { FINDINGS_COLUMNS, ABSENT_CELL } from './veracodeFindingsTable';
 
 export interface VeracodeFlaw {
   issueId: string;
@@ -393,18 +394,33 @@ function severityText(flaw: VeracodeFlaw): string {
   return `${severityLabel(flaw.severity)} (${flaw.severity})`;
 }
 
-function locationText(flaw: VeracodeFlaw): string {
-  const path = fullSourcePath(flaw);
-  return path ? `${path}${flaw.line != null ? `:${flaw.line}` : ''}` : sanitizeCellText(fileRef(flaw));
+// A table cell's text: sanitized, or `n/a` when there is nothing (left) to show.
+function tableCell(value: string | null | undefined): string {
+  const text = value ? sanitizeCellText(value).trim() : '';
+  return text === '' ? ABSENT_CELL : text;
 }
 
-function pushFoldedTable(lines: string[], group: VeracodeFlaw[]): void {
-  lines.push('| Issue ID | Severity | CWE | Location | Function |');
-  lines.push('| --- | --- | --- | --- | --- |');
+/**
+ * The findings table (one row per finding, every ticket): path, file and line stay separate cells so
+ * a reader can rebuild a finding's location from Jira alone (see veracodeFindingsTable.ts, which owns the
+ * column titles and reads this back).
+ */
+function pushFindingsTable(lines: string[], group: VeracodeFlaw[]): void {
+  lines.push(`| ${FINDINGS_COLUMNS.join(' | ')} |`);
+  lines.push(`| ${FINDINGS_COLUMNS.map(() => '---').join(' | ')} |`);
   for (const flaw of group) {
-    const cwe = flaw.cweId ? `CWE-${flaw.cweId}` : 'n/a';
-    const fn = flaw.functionPrototype ? sanitizeCellText(flaw.functionPrototype) : 'n/a';
-    lines.push(`| ${flaw.issueId} | ${severityText(flaw)} | ${cwe} | ${locationText(flaw)} | ${fn} |`);
+    const cells = [
+      flaw.issueId,
+      severityText(flaw),
+      flaw.cweId ? `CWE-${flaw.cweId}` : ABSENT_CELL,
+      tableCell(flaw.cweName),
+      tableCell(flaw.module),
+      tableCell(flaw.sourceFilePath),
+      tableCell(flaw.sourceFile),
+      flaw.line != null ? String(flaw.line) : ABSENT_CELL,
+      tableCell(flaw.functionPrototype),
+    ];
+    lines.push(`| ${cells.join(' | ')} |`);
   }
   lines.push('');
 }
@@ -440,7 +456,7 @@ function buildFoldedMarkdown(group: VeracodeFlaw[], banner: string, level: numbe
     lines.push("Per-finding text was shortened to fit Jira's size limit; the table lists every finding.");
     lines.push('');
   }
-  if (group.length > 0) pushFoldedTable(lines, group);
+  if (group.length > 0) pushFindingsTable(lines, group);
   if (group.length > 0 && level < FOLD_LEVELS - 1) {
     const cap = FOLD_TEXT_CAPS[level];
     for (const flaw of group) pushFoldedSection(lines, flaw, cap);
@@ -460,6 +476,9 @@ function buildFoldedWiki(group: VeracodeFlaw[], banner: string, droppedIds: stri
 /** A one-flaw ticket: hoisted Location, then the flaw's own sections — the layout before folding existed. */
 function buildSingleFlawDescriptionWiki(flaw: VeracodeFlaw): string {
   const lines: string[] = [];
+
+  lines.push('### Findings');
+  pushFindingsTable(lines, [flaw]);
 
   lines.push('### Location');
   pushModuleAndFile(lines, flaw);
