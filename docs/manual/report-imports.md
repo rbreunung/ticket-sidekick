@@ -125,12 +125,12 @@ When an import finds more than one kind of result, `@jira` first shows an **over
 - **New** — findings without a ticket yet. Open it to toggle rows (reply row numbers, `include all` / `exclude all`, `next` / `prev` for more pages), fold rows together (`merge 2 4`, `unmerge 2`) or add them to an existing ticket (`add 2 4 to PROJ-123`) — see [Folding findings into one ticket](#folding-findings-into-one-ticket) — hide CVEs you have decided to accept (`accept 2 4`, OSS reports only — see [Accepting CVEs](#accepting-cves-you-have-decided-to-live-with)) — and reply **Create N tickets** (or **ok**) to create the included rows on the visible page.
 - **Already ticketed** — findings that already have a ticket. Each row shows its ticket, the ticket's status, what changed since the ticket was made (for example "+2 CVEs, High→Critical" or "+1 flaw"), and a proposed action. The screen lists 20 rows per page: reply `next`, `prev` or `page 3` to move between pages. Click another action in the row, or reply e.g. `A2 follow-up` (for a row on any page) or `all leave`, then reply **Apply** (or **ok**); **Apply**, **Update tickets** and **Re-create tickets** act on the rows of every page:
   - **update** — adds the new findings to the existing ticket as labels and one comment. For an OSS report, a higher rating also updates the rating at the end of the ticket's summary, unless you renamed the summary.
-  - **follow-up** — creates a new ticket with only the new findings and links it to the existing one. Offered only when there are new findings.
+  - **follow-up** — creates a new ticket with only the new findings and links it to the existing one. Offered only when there are new findings. (OSS reports have no `follow-up`, `update` or `re-create`; they offer **new ticket** instead — see [Keeping OSS tickets up to date](#keeping-oss-tickets-up-to-date).)
   - **rewrite** — rebuilds the existing ticket's title, description and labels from the report and posts a comment naming what was added and what dropped out (see [Folding findings into one ticket](#folding-findings-into-one-ticket)). It rebuilds the whole ticket, so set it on all the rows that point to the same ticket or on none of them; **Apply** stops with nothing written otherwise.
   - **re-create** — creates a fresh, complete ticket.
   - **leave** — does nothing.
 
-  Rows without changes propose **leave**. Changes on an open ticket propose **update**; changes whose tickets are all resolved propose **follow-up** (or **update** when only the rating rose). OSS tickets created before this version show "baseline" the first time: **update** then just records their current CVEs and rating, with no comment. **Update tickets** and **Re-create tickets** run only the rows set to that action.
+  For OSS reports the actions are **rewrite**, **leave** and **new ticket**, described under [Keeping OSS tickets up to date](#keeping-oss-tickets-up-to-date). For Veracode: rows without changes propose **leave**. Changes on an open ticket propose **update**; changes whose tickets are all resolved propose **follow-up** (or **update** when only the rating rose). **Update tickets** and **Re-create tickets** run only the rows set to that action.
 - **Stale tickets** — open tickets whose finding is no longer in the report. The screen lists 20 tickets per page: reply `next`, `prev` or `page 3` to move between pages. Toggle a ticket by its key (e.g. `PROJ-123`) and reply **Close N tickets** (or **ok**); tickets marked on any page are closed together. You then pick where the tickets go: one of your matching cleanup rules (listed first), or any status your workflow can reach, such as a review status like "Verification". Each run handles one issue type; if your selection mixes issue types, you are asked which one to close first. A resolution is asked only when the target is a closing status and no rule supplies one. Reply **Back** at any point to return without changing anything. A ticket needs a discovered workflow (`@jira discover workflow <project> <issue type>`) to be selectable. Tickets you move to a status that isn't final stay open, so later imports list them again as stale.
 
 Each screen only understands its own replies, and each action only affects its own group — nothing is created, updated or closed until you choose that group's action. Reply **Back to overview** to switch groups and **Done** to finish; the overview keeps track of what you already did (e.g. "50 created · 12 left"). When an import has only one kind of result (always the case for email batches), that screen opens directly and offers **Done** instead of an overview.
@@ -198,7 +198,7 @@ Export an "OSS Report" from Waltz (or a compatible SCA tool) as `.xlsx`, then:
 2. Select the `.xlsx` file
 3. Pick a template or issue type in the `@jira` chat
 4. Review the results (see [Reviewing an import](#reviewing-an-import) below), the same way as a Veracode import
-5. Tickets are created one per component (use `merge` to fold related components such as a family of `netty-*` artifacts into one ticket — see [Folding findings into one ticket](#folding-findings-into-one-ticket)), with the max vulnerability rating, the single most critical CVE up front, affected artifact paths, and a table of known vulnerabilities
+5. Tickets are created one per component (use `merge` to fold related components such as a family of `netty-*` artifacts into one ticket — see [Folding findings into one ticket](#folding-findings-into-one-ticket)), with the max vulnerability rating, the dates by which the component must be fixed, the single most critical CVE up front, affected artifact paths, and a table of known vulnerabilities
 
 You can also trigger the import from the chat directly:
 
@@ -209,6 +209,38 @@ You can also trigger the import from the chat directly:
 A file picker opens, and you proceed as above.
 
 Each ticket is labeled `oss-dependency` and a sanitized, collision-safe version of the component's name (plus any labels from your chosen template), so re-running the import will not create duplicate tickets for components that already have one.
+
+### Remediation dates and the Jira Due Date
+
+The report says by when each vulnerable component has to be fixed. Each ticket shows these in a **Remediation dates** section after the rating:
+
+- **Policy date** — when the policy requires the component to be fixed.
+- **Planned date** — your own target, present only for components marked `Remediate`.
+- **Plan deadline** — the deadline for filing a remediation plan.
+- **Plan status** — the report's own reason when its plan is not valid (for example `Overdue` or `Unplanned`), shown as written and labelled "as of" the date the report was extracted. No overdue-days number is shown anywhere.
+
+A component without dates shows "Not reported yet." In a ticket that folds several components, one table lists every component with its dates (`n/a` where it has none).
+
+The ticket's Jira **Due Date** is the planned date, or the policy date when there is no planned date; a folded or merged ticket takes the earliest of its components. No Due Date is set when no component has a date, and an existing Due Date is never cleared. If your project does not show the Due Date field, the ticket is still created or rewritten without it: you get a warning, and the dates stay in the description.
+
+### Keeping OSS tickets up to date
+
+Import a newer report and the **Already ticketed** screen compares it with your tickets. A row is a **change** when its component has a new CVE, a higher rating, different dates than the ticket's description records (the plan status is not compared), or when a component that a combined ticket covers is no longer in the report. A ticket made before dates existed records none, so it counts as changed as soon as the report has dates for it. A component that is only hidden by your rating or action settings, or that you accepted, has not left the report.
+
+| Action | What it does | When it is offered |
+|---|---|---|
+| **rewrite** | Rebuilds the ticket from the report — title, description, labels and **Due Date** — and posts a comment naming the new components, the changed dates, the Due Date it set and any component that dropped out (whose label is taken off). | Always |
+| **leave** | Does nothing. | Always |
+| **new ticket** | Creates a complete new ticket for the component, with its current content, dates and Due Date, titled `… (follow-up to PROJ-123)` and linked to the resolved ticket. | Only when every ticket of the component is resolved |
+
+A change on an open ticket proposes **rewrite**; a change where every ticket is resolved proposes **new ticket**, because a component that is still in the report is still open work; no change proposes **leave**. Rows that point to the same ticket always propose the same action, because **rewrite** rebuilds the whole ticket. Each changed row shows the dates side by side, for example `planned 2026-12-15→2027-01-31`, so importing an older report over a newer one is visible before you **Apply**. Type the action as e.g. `A2 new ticket`.
+
+Things to know:
+
+- **A rewrite sets the Due Date from the report, even over a date you changed by hand in Jira**, and the result line says so. It also replaces text you added to the description by hand.
+- A component that disappears from the report is handled by the **Stale tickets** group, which does not touch the Due Date.
+- The first import after upgrading can propose many actions: every open ticket whose component now has dates proposes **rewrite**, and every resolved one that is still in the report proposes **new ticket**. **Apply** runs at most 50 per reply, so repeat it, and look through the **new ticket** rows before you apply them.
+- **update** and **re-create** are no longer offered for OSS reports.
 
 **Settings:**
 
