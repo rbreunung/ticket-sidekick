@@ -5,7 +5,7 @@ import {
   parseWaltzReport, assertSafeWaltzReportSize, filterComponents,
   buildSummary, buildDescriptionWiki, buildLabels, sanitizeComponentLabel,
   buildCveLabel, buildRatingLabel, buildRecordLabels, parseRecordLabels, describeWaltzChange, describeWaltzRowChange,
-  buildUpdateCommentWiki, buildFollowUpDescriptionWiki, buildFollowUpSummary, rewriteSummaryRating,
+  buildUpdateCommentWiki, buildFollowUpSummary, rewriteSummaryRating,
   buildGroupSummary, buildGroupLabels, buildGroupDescriptionWiki, buildFoldedCommentWiki,
   deriveWaltzActions,
   type WaltzComponent,
@@ -497,23 +497,11 @@ describe('buildUpdateCommentWiki', () => {
   });
 });
 
-describe('buildFollowUpDescriptionWiki', () => {
-  it('describes only the new CVEs', () => {
-    const c = makeComponent('jackson-databind 2.9', 'Critical', ['CVE-A', 'CVE-B', 'CVE-C']);
-    const wiki = buildFollowUpDescriptionWiki(c, ['CVE-C']);
-    expect(wiki).toContain('h3. Known vulnerabilities (1 total)');
-    expect(wiki).toContain(sanitizeCellText('CVE-C'));
-    expect(wiki).not.toContain(`|${sanitizeCellText('CVE-A')}|`);
-    expect(wiki).not.toContain(`|${sanitizeCellText('CVE-B')}|`);
-  });
-});
-
-describe('update comment and follow-up description neutralize crafted CVE summaries', () => {
+describe('update comment neutralizes crafted CVE summaries', () => {
   const evil = makeComponent('evil 1.0', 'Critical', ['CVE-X'], () => 'Pwn {code}alert(1){code}\nh1. Fake heading\n| a | b |');
 
   for (const [name, build] of [
     ['update comment', () => buildUpdateCommentWiki(evil, { newCveIds: ['CVE-X'] })],
-    ['follow-up description', () => buildFollowUpDescriptionWiki(evil, ['CVE-X'])],
   ] as const) {
     it(`in the ${name}`, () => {
       const wiki = build();

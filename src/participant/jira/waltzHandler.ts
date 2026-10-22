@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import type { TicketService } from '../../services/TicketService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import {
-  parseWaltzReport, filterComponents, waltzDueDate, sanitizeComponentLabel, buildGroupSummary, buildGroupLabels, buildGroupDescriptionWiki, buildFoldedCommentWiki,
+  parseWaltzReport, filterComponents, dueDateFields, sanitizeComponentLabel, buildGroupSummary, buildGroupLabels, buildGroupDescriptionWiki, buildFoldedCommentWiki,
   describeWaltzRowChange, deriveWaltzActions, buildRecordLabels, buildCveLabel, buildRatingLabel, buildUpdateCommentWiki,
   buildFollowUpSummary, rewriteSummaryRating, highestRating,
   type WaltzComponent, type WaltzReviewRow,
@@ -138,11 +138,11 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
   // KTD5: the Due Date is written after the template fields so a template cannot override the report, only
   // when the row has a date, and never cleared; KTD6: Jira may refuse it, which must not stop the ticket.
   buildTicketFields: (row, additionalFields) => {
-    const dueDate = waltzDueDate(row.sourceGroup);
+    const due = dueDateFields(row.sourceGroup);
     return {
       summary: row.summary,
-      fields: { ...additionalFields, labels: row.labels, description: row.descriptionWiki, ...(dueDate ? { duedate: dueDate } : {}) },
-      ...(dueDate ? { optionalFields: ['duedate'] } : {}),
+      fields: { ...additionalFields, labels: row.labels, description: row.descriptionWiki, ...due.fields },
+      optionalFields: due.optionalFields,
     };
   },
   // Waltz has no issue-type-fetch-failure pop-up today — omitting onIssueTypeFetchFailed keeps that
@@ -212,16 +212,16 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
     actionLabels: { 'follow-up': 'new ticket' },
     buildFollowUp: (row, _change, originalKey, additionalFields) => {
       const group = row.sourceGroup;
-      const dueDate = waltzDueDate(group);
+      const due = dueDateFields(group);
       return {
         summary: buildFollowUpSummary(group[0], originalKey),
         fields: {
           ...additionalFields,
           labels: buildGroupLabels(group, templateLabelsOf(additionalFields)),
           description: buildGroupDescriptionWiki(group),
-          ...(dueDate ? { duedate: dueDate } : {}),
+          ...due.fields,
         },
-        ...(dueDate ? { optionalFields: ['duedate'] } : {}),
+        optionalFields: due.optionalFields,
       };
     },
   },

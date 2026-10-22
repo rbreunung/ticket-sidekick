@@ -73,7 +73,6 @@ export interface ImportReplyContext {
   actionLabels?: ActionLabels;
 }
 
-
 /** Every token must be one of `ids` (case-insensitive) — a stray token makes the reply invalid
  * rather than half-applied, so a token from another screen's vocabulary is never acted on (R6). */
 function parseStrictRowToggle(reply: string, ids: string[]): string[] | null {

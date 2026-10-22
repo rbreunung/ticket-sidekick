@@ -37,7 +37,7 @@ import * as vscode from 'vscode';
 import { handleWaltzAwaitIssueType, handleWaltzReviewReply, buildWaltzTemplateSession } from '../participant/jira/waltzHandler';
 import { parseWaltzReport, sanitizeComponentLabel, type WaltzComponent } from '../utils/waltzReport';
 import { ACCEPTED_FILE_NAME } from '../utils/waltzAccepted';
-import type { WaltzReviewSession } from '../participant/sessionState';
+import { CURRENT_SESSION_SCHEMA_VERSION, type WaltzReviewSession } from '../participant/sessionState';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService } from '../services/TicketService';
 import { buildImportTemplateSession } from '../participant/jira/reportImportHandler';
@@ -103,7 +103,7 @@ describe('the review remembers its report file (KTD9)', () => {
   it('stores the path the import was started from', async () => {
     const { session } = await importWaltz([comp('bar:1.0', 'High', [['CVE-9', 'High']])]);
     expect(session.reportFilePath).toBe(reportPath);
-    expect(session.schemaVersion).toBe(13);
+    expect(session.schemaVersion).toBe(CURRENT_SESSION_SCHEMA_VERSION);
   });
 });
 

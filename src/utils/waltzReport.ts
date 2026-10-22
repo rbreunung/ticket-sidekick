@@ -602,6 +602,15 @@ function sortVulnerabilities(vulns: WaltzVulnerability[]): WaltzVulnerability[] 
 interface DetailCaps { artifacts: number; cves: number }
 const FULL_CAPS: DetailCaps = { artifacts: MAX_ARTIFACTS_SHOWN, cves: MAX_CVES_SHOWN };
 
+/**
+ * The create/edit fields for a group's Due Date: `duedate` only when some member has a date (never cleared), and marked
+ * optional because Jira refuses it on a project whose screen lacks the field.
+ */
+export function dueDateFields(group: WaltzComponent[]): { fields: { duedate?: string }; optionalFields?: string[] } {
+  const dueDate = waltzDueDate(group);
+  return dueDate ? { fields: { duedate: dueDate }, optionalFields: ['duedate'] } : { fields: {} };
+}
+
 /** R7: the Jira Due Date for a row's components — the earliest planned (else policy) date of its members, null when none has one. */
 export function waltzDueDate(group: WaltzComponent[]): string | null {
   return earliestDueDate(group.map(c => c.remediation));
@@ -872,11 +881,6 @@ export function buildUpdateCommentWiki(
   lines.push(sanitizeStandaloneLine(component.nameVersion));
 
   return markdownToJiraWiki(lines.join('\n'));
-}
-
-/** R14/KTD10: a follow-up ticket's description — the standard description over only the new CVEs. */
-export function buildFollowUpDescriptionWiki(component: WaltzComponent, newCveIds: string[]): string {
-  return buildDescriptionWiki({ ...component, vulnerabilities: vulnerabilitiesMatching(component, newCveIds) });
 }
 
 // Lives here (rather than in sessionState.ts, where the other session-related types live) so that

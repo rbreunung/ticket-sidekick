@@ -10,8 +10,17 @@ import type { BuiltTicketFields, ReportImportDescriptor } from './reportImportTy
 const FIELD_NAMES: Record<string, string> = { duedate: 'Due Date' };
 
 /** The warning for optional fields Jira refused on a write that otherwise succeeded (KTD6). */
+function fieldNames(droppedFields: string[]): string {
+  return droppedFields.map(f => FIELD_NAMES[f] ?? f).join(', ');
+}
+
+/** The short note a merge step carries when Jira refused an optional field. */
+export function droppedFieldsNote(droppedFields: string[]): string {
+  return `Jira refused the ${fieldNames(droppedFields)}; written without it`;
+}
+
 export function droppedFieldsWarning(link: string, droppedFields: string[]): string {
-  const names = droppedFields.map(f => FIELD_NAMES[f] ?? f).join(', ');
+  const names = fieldNames(droppedFields);
   return `_Warning: Jira refused the ${names} on ${link} (the field is probably not on the project's screen), so it was written without. The dates are in the description._\n\n`;
 }
 
