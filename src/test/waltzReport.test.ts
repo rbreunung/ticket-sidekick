@@ -10,6 +10,7 @@ import {
   type WaltzComponent,
 } from '../utils/waltzReport';
 import { sanitizeCellText } from '../utils/reportImport';
+import { parseRecordedDates } from '../utils/waltzDates';
 import { buildWaltzWorkbook, type WorkbookComponent } from './helpers/waltzWorkbook';
 
 const fixturePath = (name: string) => join(__dirname, 'fixtures', 'waltz', name);
@@ -636,7 +637,7 @@ describe('Waltz folded groups (R1, R3, R8-R11)', () => {
       expect(wiki).not.toContain('{quote}');
       expect(wiki).not.toContain('!http://evil.example/t.gif!');
       const row = wiki.split('\n').find(l => l.startsWith('|a / b'))!;
-      expect(row.split('|').length).toBe(6);
+      expect(row.split('|').length).toBe(10); // 8 cells: four overview columns plus four date columns
     });
   });
 
@@ -780,5 +781,136 @@ describe('parseWaltzReport remediation dates', () => {
   it('leaves dates null on the committed sample report that predates the columns', async () => {
     const components = await parseWaltzReport(fixtureBuffer('sample-report.xlsx'));
     expect(components.every(c => !c.remediation || (c.remediation.policyDate === null && c.remediation.plannedDate === null))).toBe(true);
+  });
+});
+
+describe('remediation dates in ticket content', () => {
+  const remediation = (over: Partial<NonNullable<WaltzComponent['remediation']>> = {}): NonNullable<WaltzComponent['remediation']> => ({
+    policyDate: null, plannedDate: null, planDeadline: null, planStatus: null, reportDate: null, ...over,
+  });
+  const withDates = (name: string, r: Partial<NonNullable<WaltzComponent['remediation']>>): WaltzComponent =>
+    ({ ...makeComponent(name, 'High', ['CVE-2099-0001']), remediation: remediation(r) });
+
+  it('shows the policy and planned dates in a section after the rating (AE1)', () => {
+    const wiki = buildDescriptionWiki(withDates('example-lib:1.2.3', { policyDate: '2026-11-30', plannedDate: '2026-12-15' }));
+    expect(wiki).toContain('h3. Remediation dates');
+    expect(wiki).toContain('||Policy date||Planned date||Plan deadline||Plan status||');
+    expect(wiki).toContain('|2026-11-30|2026-12-15|n/a|n/a|');
+    expect(wiki.indexOf('h3. Max Vuln Rating')).toBeLessThan(wiki.indexOf('h3. Remediation dates'));
+  });
+
+  it('shows the plan deadline and the report\'s own plan status labelled with the extraction date, and no day count (AE3)', () => {
+    const wiki = buildDescriptionWiki(withDates('example-lib:1.2.3', { planDeadline: '2026-09-20', planStatus: 'Overdue', reportDate: '2026-10-22' }));
+    expect(wiki).toContain('||Policy date||Planned date||Plan deadline||Plan status (as of 2026-10-22)||');
+    expect(wiki).toContain('|n/a|n/a|2026-09-20|Overdue|');
+    expect(wiki).not.toMatch(/\bdays?\b/i);
+  });
+
+  it('shows the plan status without an "as of" label when the report has no extraction date', () => {
+    const wiki = buildDescriptionWiki(withDates('example-lib:1.2.3', { policyDate: '2026-11-30', planStatus: 'Unplanned' }));
+    expect(wiki).toContain('||Policy date||Planned date||Plan deadline||Plan status||');
+    expect(wiki).not.toContain('as of');
+  });
+
+  it('says "Not reported yet." with no table for a component without dates or status (AE4)', () => {
+    const wiki = buildDescriptionWiki(withDates('example-lib:1.2.3', {}));
+    expect(wiki).toContain('h3. Remediation dates\nNot reported yet.');
+    expect(wiki).not.toContain('||Policy date');
+  });
+
+  it('says "Not reported yet." for a component that carries no remediation object at all', () => {
+    expect(buildDescriptionWiki(makeComponent('example-lib:1.2.3', 'High', ['CVE-2099-0001']))).toContain('Not reported yet.');
+  });
+
+  it('neutralizes a plan status that tries to inject markup or a table break', () => {
+    const wiki = buildDescriptionWiki(withDates('example-lib:1.2.3', { planStatus: 'Over|due **x** {code}[evil|http://x]' }));
+    const row = wiki.split('\n').find(l => l.startsWith('|n/a|'))!;
+    expect(row.split('|').filter(c => c !== '')).toHaveLength(4);
+    expect(wiki).not.toContain('{code}');
+    expect(wiki).not.toContain('[evil|');
+  });
+
+  it('lists every member with its dates in a folded ticket and repeats no per-component dates section (AE5)', () => {
+    const group = [
+      withDates('example-a:1.0.0', { plannedDate: '2026-12-15', planStatus: 'Overdue', reportDate: '2026-10-22' }),
+      withDates('example-b:2.0.0', { policyDate: '2026-11-30' }),
+      withDates('example-c:3.0.0', {}),
+    ];
+    const wiki = buildGroupDescriptionWiki(group);
+    expect(wiki).toContain('||Component||Max rating||CVEs||Artifacts||Policy date||Planned date||Plan deadline||Plan status (as of 2026-10-22)||');
+    expect(wiki).toContain('|example-a:1.0.0|High|1|1|n/a|2026-12-15|n/a|Overdue|');
+    expect(wiki).toContain('|example-b:2.0.0|High|1|1|2026-11-30|n/a|n/a|n/a|');
+    expect(wiki).toContain('|example-c:3.0.0|High|1|1|n/a|n/a|n/a|n/a|');
+    expect(wiki).not.toContain('Remediation dates');
+  });
+
+  it('keeps the dates in the overview table at the last size-budget level', () => {
+    const big = Array.from({ length: 60 }, (_, i) => ({
+      ...makeComponent(`example-big-${i}:1.0.0`, 'High', Array.from({ length: 12 }, (_, k) => `CVE-2099-${i}${k}`), () => 'x'.repeat(2000)),
+      instancePaths: Array.from({ length: 30 }, (_, k) => `/app/p${i}/${k}/package-lock.json`),
+      remediation: remediation({ policyDate: '2026-11-30' }),
+    }));
+    const wiki = buildGroupDescriptionWiki(big);
+    expect(wiki.length).toBeLessThanOrEqual(30_000);
+    expect(wiki).toContain('|example-big-59:1.0.0|High|12|30|2026-11-30|n/a|n/a|n/a|');
+  });
+
+  it('includes the added components\' dates in an add-to-ticket comment', () => {
+    const wiki = buildFoldedCommentWiki([withDates('example-b:2.0.0', { policyDate: '2026-11-30' })]);
+    expect(wiki).toContain('|example-b:2.0.0|High|1|1|2026-11-30|n/a|n/a|n/a|');
+  });
+});
+
+describe('parseRecordedDates round trip', () => {
+  const comp = (name: string, r?: Partial<NonNullable<WaltzComponent['remediation']>>): WaltzComponent => ({
+    ...makeComponent(name, 'High', ['CVE-2099-0001']),
+    remediation: { policyDate: null, plannedDate: null, planDeadline: null, planStatus: null, reportDate: '2026-10-22', ...r },
+  });
+
+  it('reads back the dates of a single-component description, fully and partly dated', () => {
+    const full = comp('example-lib:1.2.3', { policyDate: '2026-11-30', plannedDate: '2026-12-15', planDeadline: '2026-09-20', planStatus: 'Overdue' });
+    expect(parseRecordedDates(buildDescriptionWiki(full), full.nameVersion)).toEqual({ policyDate: '2026-11-30', plannedDate: '2026-12-15', planDeadline: '2026-09-20' });
+    const part = comp('example-lib:1.2.3', { policyDate: '2026-11-30' });
+    expect(parseRecordedDates(buildDescriptionWiki(part), part.nameVersion)).toEqual({ policyDate: '2026-11-30', plannedDate: null, planDeadline: null });
+  });
+
+  it('reads an undated single-component description as no recorded dates', () => {
+    const none = comp('example-lib:1.2.3');
+    expect(parseRecordedDates(buildDescriptionWiki(none), none.nameVersion)).toBeNull();
+  });
+
+  it('reads each member of a folded description by its own component name', () => {
+    const group = [
+      comp('example-a:1.0.0', { plannedDate: '2026-12-15' }),
+      comp('example-b:2.0.0', { policyDate: '2026-11-30', planDeadline: '2026-09-20' }),
+      comp('example-c:3.0.0'),
+    ];
+    const wiki = buildGroupDescriptionWiki(group);
+    expect(parseRecordedDates(wiki, 'example-a:1.0.0')).toEqual({ policyDate: null, plannedDate: '2026-12-15', planDeadline: null });
+    expect(parseRecordedDates(wiki, 'example-b:2.0.0')).toEqual({ policyDate: '2026-11-30', plannedDate: null, planDeadline: '2026-09-20' });
+    expect(parseRecordedDates(wiki, 'example-c:3.0.0')).toEqual({ policyDate: null, plannedDate: null, planDeadline: null });
+  });
+
+  it('reads null for the old pre-feature text, an empty string, a hand-edited table and a name that is not in the table', () => {
+    expect(parseRecordedDates('h3. Max Vuln Rating\nHigh\n\nh3. Component\nexample-lib:1.2.3', 'example-lib:1.2.3')).toBeNull();
+    expect(parseRecordedDates('', 'example-lib:1.2.3')).toBeNull();
+    expect(parseRecordedDates('||Policy date||\nsomething else', 'example-lib:1.2.3')).toBeNull();
+    const wiki = buildGroupDescriptionWiki([comp('example-a:1.0.0', { policyDate: '2026-11-30' }), comp('example-b:2.0.0')]);
+    expect(parseRecordedDates(wiki, 'example-z:9.9.9')).toBeNull();
+  });
+
+  it('reads an old folded description whose overview table has no date columns as no recorded dates', () => {
+    const old = '||Component||Max rating||CVEs||Artifacts||\n|example-a:1.0.0|High|1|1|';
+    expect(parseRecordedDates(old, 'example-a:1.0.0')).toBeNull();
+  });
+
+  it('reads a cell holding text instead of a date as no date for that date only', () => {
+    const wiki = '||Policy date||Planned date||Plan deadline||Plan status||\n|soon|2026-12-15|n/a|Overdue|';
+    expect(parseRecordedDates(wiki, 'example-lib:1.2.3')).toEqual({ policyDate: null, plannedDate: '2026-12-15', planDeadline: null });
+  });
+
+  it('tolerates extra spaces in cells and different capitalization in the column titles', () => {
+    const wiki = '|| policy DATE || Planned date ||Plan Deadline|| Plan status (as of 2026-10-22) ||\n| 2026-11-30 |  2026-12-15 |n/a| Overdue |';
+    expect(parseRecordedDates(wiki, 'example-lib:1.2.3')).toEqual({ policyDate: '2026-11-30', plannedDate: '2026-12-15', planDeadline: null });
   });
 });

@@ -1,3 +1,5 @@
+import { sanitizeCellText } from './reportImport';
+
 // Pure, vscode-free date logic for the Waltz import's remediation dates (see docs/report-import.md).
 // Dates travel as `YYYY-MM-DD` strings from the parser to Jira so no time zone can shift a day.
 
@@ -80,4 +82,79 @@ export function diffRemediationDates(recorded: RemediationDates, reported: Remed
     ['deadline', recorded.planDeadline, reported.planDeadline],
   ];
   return pairs.filter(([, from, to]) => from !== to).map(([date, from, to]) => ({ date, from, to }));
+}
+
+// --- The "Remediation dates" section of a ticket description ---------------------------------------
+// The headings and column titles are shared by the builder (waltzReport.ts) and the reader below, and a
+// round-trip test builds a description and reads it back, so a wording change cannot break the reader silently.
+
+export const DATES_HEADING = 'Remediation dates';
+export const NOT_REPORTED_TEXT = 'Not reported yet.';
+export const ABSENT_CELL = 'n/a';
+export const COLUMN_POLICY = 'Policy date';
+export const COLUMN_PLANNED = 'Planned date';
+export const COLUMN_DEADLINE = 'Plan deadline';
+export const COLUMN_STATUS = 'Plan status';
+export const COLUMN_COMPONENT = 'Component';
+
+/** The four date columns' titles; the plan-status title carries the report's extraction date when it has one. */
+export function dateColumnTitles(reportDate: string | null): string[] {
+  return [COLUMN_POLICY, COLUMN_PLANNED, COLUMN_DEADLINE, reportDate ? `${COLUMN_STATUS} (as of ${reportDate})` : COLUMN_STATUS];
+}
+
+const EXACT_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+function normalizeTitle(cell: string): string {
+  return cell.replace(/\([^)]*\)/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function splitHeaderRow(line: string): string[] | null {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('||')) return null;
+  return trimmed.replace(/^\|\|/, '').replace(/\|+$/, '').split('||');
+}
+
+function splitDataRow(line: string): string[] | null {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('|') || trimmed.startsWith('||')) return null;
+  return trimmed.replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+}
+
+function cellDate(cell: string | undefined): string | null {
+  const text = (cell ?? '').trim();
+  return EXACT_DATE.test(text) ? toCalendarDate(text) : null;
+}
+
+/**
+ * The dates a ticket's description records for one component, read back from its "Remediation dates"
+ * section or, on a folded ticket, from the overview-table row of that component. Lenient by design:
+ * cells are trimmed, column titles match case-insensitively, a cell that is not an exact `YYYY-MM-DD`
+ * date reads as no date, and a missing section, an unreadable table or a missing row gives null
+ * ("no recorded dates"), never an error. The text comes from Jira, so only validated dates leave here.
+ */
+export function parseRecordedDates(wiki: string | null | undefined, componentName: string): RemediationDates | null {
+  if (!wiki) return null;
+  const lines = wiki.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const header = splitHeaderRow(lines[i]);
+    if (!header) continue;
+    const titles = header.map(normalizeTitle);
+    const policy = titles.indexOf(COLUMN_POLICY.toLowerCase());
+    if (policy < 0) continue;
+    const planned = titles.indexOf(COLUMN_PLANNED.toLowerCase());
+    const deadline = titles.indexOf(COLUMN_DEADLINE.toLowerCase());
+    const component = titles.indexOf(COLUMN_COMPONENT.toLowerCase());
+
+    const rows: string[][] = [];
+    for (let j = i + 1; j < lines.length; j++) {
+      const row = splitDataRow(lines[j]);
+      if (!row) break;
+      rows.push(row);
+    }
+    const wanted = sanitizeCellText(componentName).trim();
+    const row = component < 0 ? rows[0] : rows.find(r => (r[component] ?? '').trim() === wanted);
+    if (!row) return null;
+    return { policyDate: cellDate(row[policy]), plannedDate: cellDate(row[planned]), planDeadline: cellDate(row[deadline]) };
+  }
+  return null;
 }
