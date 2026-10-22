@@ -164,7 +164,7 @@ Product Contract preservation: unchanged, except additions made before planning 
 - KTD3. **One pure overview model serves both entry points.** The entry points differ only in how they assemble its input: Jira tickets alone, or Jira tickets plus the import session's rows. Flags, counts, ordering, JQL links, chat text and CSV text are all derived in the model and its renderers. Governs R1 to R5, R9 to R12.
 - KTD4. **Release dates come from the project's version list (`getProject`), not from the tickets.** `JiraProjectVersion` gains an optional release date, which the real API response already carries. A Fix Version missing from the list, or listed without a date, is never flagged. Governs R4.
 - KTD5. **A table's Jira link uses an explicit key list when it has a bounded number of keys and falls back to the label-based query with a note above that.** The import export always starts from keys so stale tickets are included. The cap is fixed in U5 from Jira's practical JQL length. Governs R5.
-- KTD6. **The CSV reply rebuilds the export instead of storing it.** This follows the project's stateless two-step replies and avoids a session schema bump. A rebuild costs another round of Jira reads. Governs R8.
+- KTD6. **The CSV step rebuilds the export instead of storing it.** In an import it is the `export csv` reply inside the existing review session. For the standalone command the CSV link is a full re-run command (`@jira /overview <PROJECT> csv`), so no session or stored state is added. A rebuild costs another round of Jira reads. Governs R8.
 - KTD7. **The Waltz-only review behaviors currently keyed on having an action policy become separate descriptor capabilities.** Reading target descriptions and the dropped-member pass stay Waltz-only. The action policy and the shared `rewrite` default apply to both importers. Governs R18, R19.
 - KTD8. **Detail reads for the standalone export reuse the bounded concurrency of the Waltz description reads (8 at a time).** A failed read leaves that ticket at the title and labels layer and is counted in the summary. Governs R16.
 - KTD9. **CSV cells are quoted per RFC 4180, and any cell starting with `=`, `+`, `-` or `@` is prefixed so a spreadsheet cannot evaluate it.** Chat tables pass Jira and report text through the chat neutralizers already used by `@jira`. Governs R12.
@@ -200,7 +200,7 @@ flowchart TB
 - Veracode users lose `update`, `follow-up` and `re-create`. The manual, the Already-ticketed screen hints and the stored action words all change.
 - Every Veracode and Waltz ticket written after this change has a larger description. Ticket descriptions stay under the existing 30,000-character budget (`MAX_DESCRIPTION_CHARS` in `src/utils/reportImport.ts`).
 - The standalone export adds Jira load: one search, one project fetch and one read per ticket.
-- No session schema field changes, so in-flight sessions are not expired.
+- No session or schema field is added, so in-flight sessions are not expired.
 
 ### Risks & Dependencies
 
@@ -365,19 +365,18 @@ flowchart TB
   - Modify `src/participant/jira/llmHelpers.ts` (operation and command mapping)
   - Modify `src/participant/JiraParticipant.ts` (route)
   - Create `src/participant/jira/overviewHandler.ts`
-  - Modify `src/participant/session/sessionTypes.ts` and `src/participant/sessionState.ts` barrel only if a reply kind is stored
   - Create `src/test/overviewHandler.test.ts`; modify `src/test/llmHelpers.test.ts`
 - **Approach:**
   - Resolve the project from the prompt or the default (`resolveProjectKey`), ask when none.
   - Stream a progress line, run U4's search, version fetch and bounded description reads, build the model, stream the tables, and add a CSV link as a clickable reply through `trustedChatMarkdown`.
-  - The CSV reply (KTD6) rebuilds the export and writes it through a save dialog, then reports the saved path.
+  - A prompt that ends in the word `csv` (the CSV link, KTD6) rebuilds the export and writes it through a save dialog, then reports the saved path.
   - Log through `logDiag` with scope `jira.overview`.
   - A failed read count and a skipped-flag note appear in the summary.
 - **Patterns to follow:** `src/participant/jira/loadHandler.ts` (file writes), `src/participant/jira/uploadHandler.ts` (file and ticket resolution), `src/participant/jira/workflowHandler.ts` (thin handler).
 - **Test scenarios:**
   - `@jira /overview PROJ` streams the tables and a CSV link for a project with tickets.
   - No project in the prompt and no default asks which project.
-  - The CSV reply writes the chosen file and reports its path; cancelling the dialog writes nothing and says so.
+  - A `csv` prompt writes the chosen file and reports its path; cancelling the dialog writes nothing and says so.
   - A search failure shows the error and writes nothing.
   - 3 of 40 description reads failing shows a count and still renders the tables.
   - `mapCommandToOperation('overview')` returns the new operation.
@@ -387,7 +386,7 @@ flowchart TB
 
 - **Goal:** On an import's overview, `export` shows that one report's items by release, and `export csv` saves the CSV.
 - **Requirements:** R1 to R3, R6, R8, R9, R10
-- **Dependencies:** U5, U3
+- **Dependencies:** U5
 - **Files:**
   - Modify `src/participant/session/importScreens.ts` (reply word, hints)
   - Modify `src/participant/session/importReplies.ts` (reply parsing)
