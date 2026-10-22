@@ -29,6 +29,7 @@ import { continueAfterImportIssueType } from '../participant/jira/reportImportHa
 import type { WaltzReviewSession } from '../participant/sessionState';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService } from '../services/TicketService';
+import { JiraApiError } from '../utils/apiError';
 import { buildGroupDescriptionWiki, buildGroupLabels, sanitizeComponentLabel, type WaltzComponent } from '../utils/waltzReport';
 import type { RemediationDates } from '../utils/waltzDates';
 import {
@@ -272,6 +273,29 @@ describe('what a rewrite says about the dates (KTD11, U6)', () => {
     expect(comment).toContain('2027-01-31');
     expect(text).toMatch(/Due Date set to 2027-01-31 from the report/);
     expect(text).toMatch(/replaces any date edited by hand/i);
+  });
+
+  it('a project that refuses the Due Date still gets the rewrite, without it, and the user is warned', async () => {
+    const recorded = comp('example-lib:1.2.3', { policyDate: '2026-11-30' });
+    const reported = comp('example-lib:1.2.3', { policyDate: '2027-01-31' });
+    tickets['PROJ-5'] = ticketFor([recorded]);
+    const { ws } = await importWaltz([reported]);
+    const update = client.updateIssue;
+    client.updateIssue = async (key, fields) => {
+      if ('duedate' in fields) {
+        client.updateIssueCalls.push({ issueKey: key, fields });
+        throw new JiraApiError('Jira API error 400', 400, 'https://jira.example.com/rest/api/2/issue/PROJ-5', JSON.stringify({ errors: { duedate: 'not on the screen' } }));
+      }
+      return update(key, fields);
+    };
+
+    const text = await reply('apply', ws);
+
+    expect(client.updateIssueCalls).toHaveLength(2);
+    expect(client.updateIssueCalls[1].fields).not.toHaveProperty('duedate');
+    expect(String(client.updateIssueCalls[1].fields.description)).toContain('2027-01-31');
+    expect(text).toMatch(/Jira refused the Due Date/);
+    expect(client.addCommentCalls[0].body).not.toContain('Due Date was set');
   });
 
   it('AE9: a rewrite after a member left names the dropped label and sets the Due Date from the members that remain', async () => {
