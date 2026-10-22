@@ -22,7 +22,7 @@ execution: code
 
 An overview export groups open Veracode and Waltz items by Jira Fix Version, with a final table for items not assigned to a release. Each row is one ticket, with its Due Date and a flag when the deadline is passed or falls before the release. It shows in chat and saves as a CSV. It starts from an `export` reply in a Veracode or Waltz import (one report, compared with Jira) or from a standalone Jira-only command that lists both tools together.
 
-To make Veracode and Waltz tickets readable without their report, every ticket the import creates or rewrites also carries a table with one row per finding or component, and the export reads it back.
+To make Veracode and Waltz tickets readable without their report, every ticket the import creates or rewrites also carries a table with one row per finding or component, and the export reads it back. Veracode's Already-ticketed actions become the same three as Waltz's (`rewrite`, `leave`, `new ticket`), so a changed ticket is always rebuilt with its table.
 
 ### Problem Frame
 
@@ -44,6 +44,7 @@ A Veracode ticket does not keep a finding's file, line and module in a form that
 - **Every ticket gets the table, single-finding ones included.** One reader then covers all new and rewritten tickets. Governs R13, R14. (session-settled: user-directed — chosen over tables only for folded tickets: two layouts would need two readers.)
 - **The table is display-sanitized, and an exact raw-data block is deferred.** Text fields may differ slightly from the report, so the reader marks them approximate. Governs R15. (session-settled: user-directed — chosen over a raw JSON block in the description or a hidden issue property: smaller first version, and the reader's layers allow adding it later.)
 - **Veracode's CSV has one row per finding.** File and line are how people scan findings, and per-row output filters and sorts in Excel. Governs R9. (session-settled: user-approved — chosen over a `;`-joined location column or aligned columns: sorting and filtering by file and line.)
+- **Veracode and Waltz offer the same Already-ticketed actions.** Both offer `rewrite`, `leave` and `new ticket`, so every change rebuilds the ticket and its table is always current. Governs R18, R19. (session-settled: user-directed — chosen over keeping Veracode's `update`, `follow-up` and `re-create`, and over a Veracode `new ticket` that carries only the new findings: one policy for both importers.)
 
 ### Requirements
 
@@ -76,6 +77,11 @@ A Veracode ticket does not keep a finding's file, line and module in a form that
 - R16. The standalone export reads each ticket's description, 8 at a time like the Waltz import does. A read that fails leaves that ticket at the title and labels level.
 - R17. Tickets created before the tables existed are read best-effort and are not migrated in bulk. A rewrite upgrades them.
 
+**Import actions**
+
+- R18. On the Already-ticketed screen, Veracode offers the same actions as Waltz: `rewrite`, `leave` and `new ticket`. `update`, `follow-up` and `re-create` are removed for Veracode.
+- R19. A Veracode `new ticket` is a complete new ticket with the finding's current content, linked to the resolved ticket and titled `… (follow-up to PROJ-123)`. It is offered only when every ticket for the finding is resolved, as for Waltz.
+
 ### Key Flows
 
 - F1. Export from an import
@@ -100,6 +106,7 @@ A Veracode ticket does not keep a finding's file, line and module in a form that
 - AE4. **Covers R3, R9.** Given a folded Veracode ticket with 7 findings, the chat table shows one row for it, and the CSV has 7 rows with the ticket key repeated and each finding's file and line.
 - AE5. **Covers R10.** Given a merged Waltz ticket with 7 components, the CSV has one row whose Members column lists the 7 component names joined by `;`.
 - AE6. **Covers R15, R11.** Given an older single-finding Veracode ticket with no table, the export reads the file and line from its Location block and sets Detail source to legacy layout. If the Location block is also gone, the row shows only the file from the title and labels' ids, with Detail source "title and labels".
+- AE8. **Covers R18, R19.** Given a Veracode import where a finding's only ticket is resolved, the Already-ticketed row offers `rewrite`, `leave` and `new ticket`. For a finding whose ticket is still open, `new ticket` is not offered.
 - AE7. **Covers R12.** Given a file name that starts with `=`, the CSV cell is neutralized so a spreadsheet does not evaluate it.
 
 ### Success Criteria
@@ -118,6 +125,8 @@ A Veracode ticket does not keep a finding's file, line and module in a form that
 - Scheduled or recurring exports.
 
 **Outside this work**
+
+- Changing the Waltz Already-ticketed actions, which stay as they are.
 
 - Sources other than Veracode and Waltz.
 - The Waltz "Fixed Version" and CVE details beyond what the tickets already record.
