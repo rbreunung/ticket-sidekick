@@ -29,6 +29,7 @@ on:
 
 permissions:
   contents: write
+  checks: read
 
 jobs:
   release:
@@ -38,6 +39,26 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+
+      # A release must not ship from a commit whose CI is red or missing. Earlier releases ran
+      # from a red main. The bump commits this workflow pushes with GITHUB_TOKEN start no CI of
+      # their own, so the check looks at the newest commit not authored by github-actions[bot].
+      - name: Require green CI on the released commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA=""
+          for c in $(git rev-list --first-parent HEAD | head -20); do
+            if [ "$(git log -1 --format=%an "$c")" != "github-actions[bot]" ]; then SHA="$c"; break; fi
+          done
+          [ -n "$SHA" ] || { echo "::error::No non-bot commit found in the last 20 commits."; exit 1; }
+          RESULT="$(gh api "repos/${{ github.repository }}/commits/${SHA}/check-runs?filter=latest&per_page=100" \
+            --jq '[.check_runs[] | select(.name == "ci-ok")] | sort_by(.started_at) | last | .conclusion // "missing"')"
+          echo "ci-ok on ${SHA}: ${RESULT}"
+          if [ "${RESULT}" != "success" ]; then
+            echo "::error::CI (ci-ok) is '${RESULT}' on ${SHA}. Wait for a green CI run on this commit, then release again."
+            exit 1
+          fi
 
       - uses: actions/setup-node@v7.1.0
         with:
