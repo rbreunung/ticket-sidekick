@@ -6,7 +6,7 @@ import {
   parseVeracodeReport, filterFlaws, severityLabel, groupFlawsByLocation,
   buildGroupSummary, buildGroupDescriptionWiki, buildGroupLabels, buildFoldedCommentWiki,
   describeVeracodeChange, flawsWithIds, buildFollowUpSummary,
-  type VeracodeFlaw, type VeracodeReviewRow, type DueContext,
+  type VeracodeFlaw, type VeracodeReviewRow,
 } from '../../utils/veracodeReport';
 import type { VeracodeTemplateSelectionSession, VeracodeReviewSession, StaleCloseSession } from '../sessionState';
 import { VERACODE_REVIEW_COLUMNS } from '../sessionState';
@@ -18,8 +18,8 @@ import {
 } from './reportImportHandler';
 import { resolveSizeLimitSetting, templateLabelsOf, deriveRewriteActions } from '../../utils/reportImport';
 import { findingFromFlaw, localDate } from '../../utils/securityOverview';
-import { resolveSlaDays, groupDueDate, SLA_SEVERITY_NAMES, type ResolvedSla, type SlaDays } from '../../utils/veracodeDates';
-import { toCalendarDate } from '../../utils/waltzDates';
+import { resolveSlaDays, groupDueDate, SLA_SEVERITY_NAMES, type DueContext, type ResolvedSla, type SlaDays } from '../../utils/veracodeDates';
+import { toCalendarDate } from '../../utils/calendarDate';
 import { logDiag } from '../../utils/diagLog';
 import type { AwaitIssueTypeResume } from '../sessionState';
 import { sessionWasSuperseded } from './ticketContext';
@@ -60,8 +60,7 @@ function veracodeDue(ticketCreated?: string | null): DueContext {
 
 /** A group's due date under the SLA table, counting a flaw with no first-found date from `ticketCreated` (else today). */
 function veracodeGroupDue(group: VeracodeFlaw[], ticketCreated?: string | null): string | null {
-  const due = veracodeDue(ticketCreated);
-  return groupDueDate(group, due.days, due.fallbackStart);
+  return groupDueDate(group, veracodeDue(ticketCreated));
 }
 
 // A problem with the setting is logged once per import, when its session is built, never once per row.
@@ -177,7 +176,7 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
   // has one, and never cleared; Jira may refuse it, which must not stop the ticket (optionalFields).
   buildTicketFields: (row, additionalFields, context) => {
     const due = veracodeDue(context?.ticketCreated);
-    const dueDate = groupDueDate(row.sourceGroup, due.days, due.fallbackStart);
+    const dueDate = groupDueDate(row.sourceGroup, due);
     return {
       summary: row.summary,
       fields: { ...additionalFields, labels: row.labels, description: buildGroupDescriptionWiki(row.sourceGroup, due), ...(dueDate ? { duedate: dueDate } : {}) },
@@ -236,7 +235,7 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
     buildFollowUp: (row, _change, originalKey, additionalFields) => {
       const group = row.sourceGroup;
       const due = veracodeDue();
-      const dueDate = groupDueDate(group, due.days, due.fallbackStart);
+      const dueDate = groupDueDate(group, due);
       return {
         summary: buildFollowUpSummary(group, originalKey),
         fields: {

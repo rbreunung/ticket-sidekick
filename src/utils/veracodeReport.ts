@@ -6,8 +6,8 @@ import {
   type RowChange,
 } from './reportImport';
 import { FINDINGS_COLUMNS, SLIM_FINDINGS_COLUMNS, ABSENT_CELL } from './veracodeFindingsTable';
-import { toCalendarDate } from './waltzDates';
-import { flawDueDate, type SlaDays } from './veracodeDates';
+import { toCalendarDate } from './calendarDate';
+import { flawDueDate, NO_DUE, type DueContext } from './veracodeDates';
 
 export interface VeracodeFlaw {
   issueId: string;
@@ -356,17 +356,6 @@ export function buildGroupLabels(group: VeracodeFlaw[], templateLabels: string[]
   return [...new Set([...own, ...templateLabels])];
 }
 
-/**
- * What a description needs to show each flaw's due date: the SLA day counts (see veracodeDates.ts) and the start
- * for a flaw with no first-found date. Callers that pass none get `n/a` under Due date.
- */
-export interface DueContext {
-  days: SlaDays;
-  fallbackStart: string | null;
-}
-
-const NO_DUE: DueContext = { days: {}, fallbackStart: null };
-
 // --- Folded ticket content (finding folding plan: R8-R10, R14, R15) ------------------------------
 
 /**
@@ -446,7 +435,7 @@ function pushFindingsTable(lines: string[], group: VeracodeFlaw[], slim: boolean
       flaw.line != null ? String(flaw.line) : ABSENT_CELL,
       tableCell(flaw.functionPrototype),
       flaw.firstFoundDate ?? ABSENT_CELL,
-      flawDueDate(flaw, due.days, due.fallbackStart) ?? ABSENT_CELL,
+      flawDueDate(flaw, due) ?? ABSENT_CELL,
     ];
     lines.push(`| ${cells.join(' | ')} |`);
   }

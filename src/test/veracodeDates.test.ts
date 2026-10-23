@@ -73,29 +73,29 @@ describe('addCalendarDays', () => {
 describe('flawDueDate', () => {
   it('is the first-found date plus the days for the severity', () => {
     const { days } = resolveSlaDays({ 'Very High': 30 });
-    expect(flawDueDate(flaw(5, '2026-09-01'), days, '2026-10-23')).toBe('2026-10-01');
+    expect(flawDueDate(flaw(5, '2026-09-01'), { days, fallbackStart: '2026-10-23' })).toBe('2026-10-01');
   });
 
   it('is already in the past when the flaw is old, and is not clamped', () => {
     const { days } = resolveSlaDays(SHIPPED);
-    expect(flawDueDate(flaw(5, '2026-01-01'), days, '2026-10-23')).toBe('2026-01-15');
+    expect(flawDueDate(flaw(5, '2026-01-01'), { days, fallbackStart: '2026-10-23' })).toBe('2026-01-15');
   });
 
   it('under the shipped table gives a High flaw first found on 2026-10-01 the due date 2026-10-29', () => {
     const { days } = resolveSlaDays(SHIPPED);
-    expect(flawDueDate(flaw(4, '2026-10-01'), days, '2026-10-23')).toBe('2026-10-29');
+    expect(flawDueDate(flaw(4, '2026-10-01'), { days, fallbackStart: '2026-10-23' })).toBe('2026-10-29');
   });
 
   it('counts a flaw with no first-found date from the fallback start', () => {
     const { days } = resolveSlaDays({ High: 60 });
-    expect(flawDueDate(flaw(4), days, '2026-10-23')).toBe('2026-12-22');
+    expect(flawDueDate(flaw(4), { days, fallbackStart: '2026-10-23' })).toBe('2026-12-22');
   });
 
   it('has no due date for a severity at 0 or missing, and none when there is no start at all', () => {
     const { days } = resolveSlaDays({ High: 60, Low: 0 });
-    expect(flawDueDate(flaw(2, '2026-09-01'), days, '2026-10-23')).toBeNull();
-    expect(flawDueDate(flaw(3, '2026-09-01'), days, '2026-10-23')).toBeNull();
-    expect(flawDueDate(flaw(4), days, null)).toBeNull();
+    expect(flawDueDate(flaw(2, '2026-09-01'), { days, fallbackStart: '2026-10-23' })).toBeNull();
+    expect(flawDueDate(flaw(3, '2026-09-01'), { days, fallbackStart: '2026-10-23' })).toBeNull();
+    expect(flawDueDate(flaw(4), { days, fallbackStart: null })).toBeNull();
   });
 });
 
@@ -104,13 +104,13 @@ describe('groupDueDate', () => {
     const { days } = resolveSlaDays({ 'Very High': 14, High: 60, Low: 0 });
     // due 2026-12-01 (High, 2026-10-02 + 60), 2026-11-15 (Very High, 2026-11-01 + 14), none (Low).
     const group = [flaw(4, '2026-10-02'), flaw(5, '2026-11-01'), flaw(2, '2026-09-01')];
-    expect(groupDueDate(group, days, '2026-10-23')).toBe('2026-11-15');
+    expect(groupDueDate(group, { days, fallbackStart: '2026-10-23' })).toBe('2026-11-15');
   });
 
   it('is null when no flaw has a due date', () => {
     const { days } = resolveSlaDays({ Low: 0 });
-    expect(groupDueDate([flaw(2, '2026-09-01')], days, '2026-10-23')).toBeNull();
-    expect(groupDueDate([], days, '2026-10-23')).toBeNull();
+    expect(groupDueDate([flaw(2, '2026-09-01')], { days, fallbackStart: '2026-10-23' })).toBeNull();
+    expect(groupDueDate([], { days, fallbackStart: '2026-10-23' })).toBeNull();
   });
 });
 

@@ -11,6 +11,15 @@ export const MAX_SLA_DAYS = 3650;
 /** Days by severity number. A severity with no due date is absent. */
 export type SlaDays = Partial<Record<number, number>>;
 
+/** What turns a flaw into a due date: the policy and the start date for a flaw with no first-found date. */
+export interface DueContext {
+  days: SlaDays;
+  fallbackStart: string | null;
+}
+
+/** No policy: no flaw has a due date. */
+export const NO_DUE: DueContext = { days: {}, fallbackStart: null };
+
 export interface ResolvedSla {
   days: SlaDays;
   /** Keys of the setting that name no severity; they change nothing. */
@@ -56,10 +65,10 @@ export function addCalendarDays(date: string, days: number): string {
  * One flaw's due date: its first-found date (else `fallbackStart`) plus the days for its severity. Null when
  * the severity has no days or there is no start date at all.
  */
-export function flawDueDate(flaw: DatedFlaw, days: SlaDays, fallbackStart: string | null): string | null {
-  const count = days[flaw.severity];
+export function flawDueDate(flaw: DatedFlaw, due: DueContext): string | null {
+  const count = due.days[flaw.severity];
   if (count === undefined) return null;
-  const start = flaw.firstFoundDate ?? fallbackStart;
+  const start = flaw.firstFoundDate ?? due.fallbackStart;
   return start ? addCalendarDays(start, count) : null;
 }
 
@@ -71,6 +80,6 @@ export function earlierOf(a: string | null, b: string | null): string | null {
 }
 
 /** A group's due date: the earliest due date of its flaws, each with its own severity; null when none has one. */
-export function groupDueDate(group: DatedFlaw[], days: SlaDays, fallbackStart: string | null): string | null {
-  return group.reduce<string | null>((earliest, flaw) => earlierOf(earliest, flawDueDate(flaw, days, fallbackStart)), null);
+export function groupDueDate(group: DatedFlaw[], due: DueContext): string | null {
+  return group.reduce<string | null>((earliest, flaw) => earlierOf(earliest, flawDueDate(flaw, due)), null);
 }
