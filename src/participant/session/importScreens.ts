@@ -129,6 +129,8 @@ export interface ImportScreenOptions {
   canAccept?: boolean;
   // Waltz ticket merge: whether the review offers `merge … into …` and `reload report` (Waltz only).
   canMergeTickets?: boolean;
+  // Whether the importer has the `export` reply (Veracode, Waltz; not email): the screens then show a link for it.
+  canExport?: boolean;
   // How the importer names its row actions (Waltz shows `follow-up` as `new ticket`).
   actionLabels?: ActionLabels;
 }
@@ -158,12 +160,26 @@ export function buildAllHiddenMessage(hidden: AcceptedHidden): string {
 }
 
 /** "Back to overview" normally; "Done" when the import has a single group and no overview (R4). */
-function groupScreenExitLine(singleGroup: boolean, outOfDate = false): string {
-  const exit = singleGroup
+function groupScreenExitLine(singleGroup: boolean, outOfDate = false, canExport = false): string {
+  const done = singleGroup
     ? `Reply ${cmdLink('Done', IMPORT_COMMANDS.done)} when you are finished with this import.`
     : `Reply ${cmdLink('Back to overview', IMPORT_COMMANDS.back)} to see the other results.`;
+  // `export` works from a group screen only when it is the only screen; with an overview, the link lives there.
+  const exit = singleGroup && canExport ? `${exportLine()}\n\n${done}` : done;
   // With no overview to carry the mark, a single-group import shows it here.
   return singleGroup && outOfDate ? `${outOfDateLine()}\n\n${exit}` : exit;
+}
+
+/** The link that starts the `export` reply: this report's items by Fix Version, compared with Jira. */
+function exportLine(): string {
+  return `Reply ${cmdLink('Export', IMPORT_COMMANDS.export)} (\`${IMPORT_COMMANDS.export}\`) to list this report's items by Fix Version, compared with Jira.`;
+}
+
+/** What ends an `export` preview, so the screen the user came from is not printed over it: the way on, as a link. */
+export function buildExportFollowUp(singleGroup: boolean): string {
+  return singleGroup
+    ? `Reply ${cmdLink('Done', IMPORT_COMMANDS.done)} when you are finished with this import, or pick another action from the screen above.`
+    : `Reply ${cmdLink('Back to overview', IMPORT_COMMANDS.back)} to return to the import results.`;
 }
 
 /** Waltz ticket merge (KTD10): the screens no longer match Jira or the ignore list; the link starts the reload. */
@@ -221,6 +237,7 @@ export function buildImportOverview<TRow extends ReviewRowBase>(session: ReviewS
   lines.push('');
   lines.push('_Open a group to review it. Nothing is created, updated or closed until you choose an action inside that group._');
   lines.push('');
+  if (opts.canExport) lines.push(exportLine(), '');
   lines.push(`Reply ${cmdLink('Done', IMPORT_COMMANDS.done)} to finish this import.`);
   return lines.join('\n');
 }
@@ -241,7 +258,7 @@ export function buildNewGroupScreen<TRow extends ReviewRowBase>(
     lines.push(`_No new ${pluralNoun(opts.itemNoun)} left to create._`);
     lines.push('');
     if (hiddenLine) lines.push(hiddenLine, '');
-    lines.push(groupScreenExitLine(s.singleGroup!, s.outOfDate));
+    lines.push(groupScreenExitLine(s.singleGroup!, s.outOfDate, opts.canExport));
     return lines.join('\n');
   }
 
@@ -282,7 +299,7 @@ export function buildNewGroupScreen<TRow extends ReviewRowBase>(
     (n > 0 ? `Reply ${cmdLink(`Create ${n} tickets`, IMPORT_COMMANDS.create)} to create them, or ` : 'Reply ') +
     'a list of row numbers to toggle (e.g. `2 4`).',
   );
-  lines.push(groupScreenExitLine(s.singleGroup!, s.outOfDate));
+  lines.push(groupScreenExitLine(s.singleGroup!, s.outOfDate, opts.canExport));
   return lines.join('\n');
 }
 
@@ -373,7 +390,7 @@ export function buildTicketedGroupScreen<TRow extends ReviewRowBase>(
 
   // Every row accepted away (or none ever matched): say so rather than render an empty table.
   if (ticketed.length === 0) {
-    lines.push(`_Nothing is left under Already ticketed._`, '', groupScreenExitLine(s.singleGroup!, s.outOfDate));
+    lines.push(`_Nothing is left under Already ticketed._`, '', groupScreenExitLine(s.singleGroup!, s.outOfDate, opts.canExport));
     return lines.join('\n');
   }
 
@@ -417,7 +434,7 @@ export function buildTicketedGroupScreen<TRow extends ReviewRowBase>(
       lines.push('Reply `accept component A2 A3` to stop offering those components at that exact version (add `because …` to record why): they leave this list, and an open ticket is offered for closing under Stale.');
     }
   }
-  lines.push(groupScreenExitLine(s.singleGroup!, s.outOfDate));
+  lines.push(groupScreenExitLine(s.singleGroup!, s.outOfDate, opts.canExport));
   return lines.join('\n');
 }
 
@@ -518,7 +535,7 @@ export function buildStaleGroupScreen<TRow extends ReviewRowBase>(session: Revie
       lines.push('Close 0 tickets — reply a ticket key (e.g. `PROJ-123`) to mark it for closing.');
     }
   }
-  lines.push(groupScreenExitLine(s.singleGroup!, s.outOfDate));
+  lines.push(groupScreenExitLine(s.singleGroup!, s.outOfDate, opts.canExport));
   return lines.join('\n');
 }
 

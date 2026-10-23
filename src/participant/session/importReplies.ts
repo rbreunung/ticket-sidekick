@@ -597,11 +597,13 @@ export function parseImportReviewReply(view: ImportReviewView, reply: string, ct
 /** One-line reminder of what the current screen accepts, for the "didn't understand" reply. */
 export function describeImportReplyVocabulary(view: ImportReviewView, ctx: ImportReplyContext): string {
   const exit = ctx.singleGroup ? '`done`' : '`back`';
+  // On a group screen of a multi-group import `export` only points back to the overview, so it is not offered there.
+  const exportHint = ctx.canExport && ctx.singleGroup ? '`export` / `export csv`, ' : '';
   switch (view) {
     case 'new':
       return `On this screen you can reply \`create tickets\`, row numbers to toggle (e.g. \`2 4\`), \`include all\` / \`exclude all\`, ` +
         `${ctx.canFold ? '`merge 2 4` / `unmerge 2`, `add 2 4 to PROJ-123`, ' : ''}` +
-        `${ctx.canAccept ? '`accept 2 4`, `accept component 2 4`, `accepted` / `unaccept 2`, ' : ''}\`next\` / \`prev\`, or ${exit}.`;
+        `${ctx.canAccept ? '`accept 2 4`, `accept component 2 4`, `accepted` / `unaccept 2`, ' : ''}${exportHint}\`next\` / \`prev\`, or ${exit}.`;
     case 'ticketed': {
       // An importer with its own action words lists only what its rows offer, and leaves out the bulk shortcuts none can use.
       const offered = ctx.actionLabels
@@ -611,10 +613,10 @@ export function describeImportReplyVocabulary(view: ImportReviewView, ctx: Impor
       const shortcuts = [shortcutOffered('update') ? '`update tickets`, ' : '', shortcutOffered('re-create') ? '`re-create tickets`, ' : ''].join('');
       return `On this screen you can reply \`apply\`, \`<row> <action>\` (e.g. \`A2 ${actionLabelOf('follow-up', ctx.actionLabels)}\` — actions are ` +
         `${offered.map(a => `\`${actionLabelOf(a, ctx.actionLabels)}\``).join(', ')}), \`all <action>\` (e.g. \`all leave\`), ` +
-        `${ctx.canAccept ? '`accept component A2`, ' : ''}${ctx.canMergeTickets ? '`merge A5 into A3`, ' : ''}${shortcuts}\`next\` / \`prev\` / \`page <n>\`, or ${exit}.`;
+        `${ctx.canAccept ? '`accept component A2`, ' : ''}${ctx.canMergeTickets ? '`merge A5 into A3`, ' : ''}${exportHint}${shortcuts}\`next\` / \`prev\` / \`page <n>\`, or ${exit}.`;
     }
     case 'stale':
-      return `On this screen you can reply \`close tickets\`, a stale ticket's key to toggle it (e.g. \`PROJ-123\`), \`next\` / \`prev\` / \`page <n>\`, or ${exit}.`;
+      return `On this screen you can reply \`close tickets\`, a stale ticket's key to toggle it (e.g. \`PROJ-123\`), ${exportHint}\`next\` / \`prev\` / \`page <n>\`, or ${exit}.`;
     default: {
       const opens = ctx.groups.map(g => `\`${g === 'new' ? IMPORT_COMMANDS.openNew : g === 'ticketed' ? IMPORT_COMMANDS.openTicketed : IMPORT_COMMANDS.openStale}\``);
       return `On the overview you can reply ${[...opens, ...(ctx.canExport ? ['`export`'] : []), ...(ctx.canAccept ? ['`accepted`', '`unaccept 2`'] : []), ...(ctx.canMergeTickets ? ['`merge A5 into A3`', `\`${IMPORT_COMMANDS.reload}\``] : []), '`done`'].join(', ')}.`;

@@ -224,7 +224,7 @@ The report says by when each vulnerable component has to be fixed. Each ticket l
 
 - **Policy date** — when the policy requires the component to be fixed.
 - **Planned date** — your own target, present only for components marked `Remediate`.
-- **Plan deadline** — the deadline for filing a remediation plan.
+- **Attestation date** — the date shown as the attestation date in Waltz (the report's `Attested Rem Plan Due By` column). Tickets created before this column was named correctly list it under the old title "Plan deadline"; the import does not read that title back, so such a ticket shows as changed once against a newer report, and a rewrite records it under the new title.
 - **Plan status** — the report's own reason when its plan is not valid (for example `Overdue` or `Unplanned`), shown as written and labelled "as of" the date the report was extracted. No overdue-days number is shown anywhere.
 
 A component without dates shows `n/a` in the date cells. A ticket that folds several components lists every component in the same table.
@@ -330,7 +330,7 @@ The overview shows "2 accepted components hidden" with a **Show accepted** link.
 `@jira` can list the unresolved Veracode and Waltz tickets of a project by the release they are planned for, with each ticket's Due Date, so you can see what blocks a release and which tickets have no release yet. There are two ways to start it.
 
 - **`@jira /overview PROJ`** searches Jira for the project's unresolved Veracode (`veracode` label) and Waltz (`oss-dependency` label) tickets, with both tools in the same tables. Without a project key it uses your `ticketSidekick.jira.defaultProject`, or asks.
-- **`export`** on the overview of a Veracode or Waltz import (or on the only screen of an import with a single kind of result) does the same for that one report and compares it with Jira. Each row also gets a **Report match**: *tracked* (an open ticket for an item of the report), *stale* (an open ticket whose item is no longer in the report) or *in report, no ticket* (a New row, or an item whose tickets are all resolved).
+- **`export`** on the overview of a Veracode or Waltz import (or on the only screen of an import with a single kind of result) does the same for that one report and compares it with Jira. The overview, and a screen that is the only one, offer it as an **Export** link. The export is the last thing in the chat: the review screen is not printed again, and a link under it leads back (**Back to overview**, or **Done** when there is no overview). The review stays open. Each row also gets a **Report match**: *tracked* (an open ticket for an item of the report), *stale* (an open ticket whose item is no longer in the report) or *in report, no ticket* (a New row, or an item whose tickets are all resolved).
 
 The result is one table per Jira **Fix Version**, ordered by release date, and a last table **Not assigned to a release** for tickets without a Fix Version and, in an import, for report items without a ticket. Each table has a count line and a link to the matching list in Jira. An import's links list the tickets by key, so stale tickets are included; items without a ticket cannot be in a Jira list, and the table says how many there are.
 

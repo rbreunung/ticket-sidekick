@@ -7,6 +7,8 @@ import { buildOverview, localDate, type ReportOnlyItem } from '../../utils/secur
 import type { ReviewRowBase, ReviewSession } from '../sessionState';
 import type { ReportImportDescriptor } from './reportImportTypes';
 import { saveOverviewCsv, streamOverview } from './overviewHandler';
+import { buildExportFollowUp } from '../session/importScreens';
+import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 
 /** The report's records for one ticket: the findings or components of every row that points to it, each once. */
 function mergeDetail(into: { findings?: TicketFinding[]; components?: TicketComponent[] }, from: { findings?: TicketFinding[]; components?: TicketComponent[] }): void {
@@ -27,6 +29,19 @@ function mergeDetail(into: { findings?: TicketFinding[]; components?: TicketComp
  * description. With `csv` the same overview is saved as a file. Nothing in the review session changes.
  */
 export async function exportImportOverview<TItem, TRow extends ReviewRowBase>(
+  session: ReviewSession<TRow>,
+  csv: boolean,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+  baseUrl?: string,
+): Promise<void> {
+  await buildAndStreamExport(session, csv, ticketService, stream, descriptor, baseUrl);
+  // The export is the last thing on screen: the review screen is not printed again, so say how to go on.
+  stream.markdown(trustedChatMarkdown(`\n\n${buildExportFollowUp(session.singleGroup === true)}`));
+}
+
+async function buildAndStreamExport<TItem, TRow extends ReviewRowBase>(
   session: ReviewSession<TRow>,
   csv: boolean,
   ticketService: TicketService,

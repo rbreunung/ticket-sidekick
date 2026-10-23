@@ -22,7 +22,7 @@ export function makeComponent(nameVersion: string, overrides: Partial<WaltzCompo
   return {
     nameVersion, maxVulnRating: 'High', remediationAction: 'Remediate', instancePaths: ['/app/a.jar'],
     vulnerabilities: [{ cveId: 'CVE-2099-0001', cveSummary: null, overallSeverity: 'High', cvssV3Score: 7, fixedVersion: null }],
-    remediation: { policyDate: '2026-11-30', plannedDate: null, planDeadline: null, planStatus: null, reportDate: null },
+    remediation: { policyDate: '2026-11-30', plannedDate: null, attestationDate: null, planStatus: null, reportDate: null },
     ...overrides,
   };
 }

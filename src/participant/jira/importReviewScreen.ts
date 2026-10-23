@@ -16,7 +16,7 @@ export const IMPORT_SESSION_KINDS: Record<ReportImportDescriptor<unknown, Review
 };
 
 function screenOptions<TItem, TRow extends ReviewRowBase>(descriptor: ReportImportDescriptor<TItem, TRow>, baseUrl?: string): ImportScreenOptions {
-  return { baseUrl, itemNoun: descriptor.itemNoun, findingNoun: descriptor.changeTracking?.findingNoun, canFold: descriptor.fold !== undefined, canAccept: descriptor.accepted !== undefined, canMergeTickets: descriptor.ticketMerge !== undefined, actionLabels: descriptor.changeTracking?.actionLabels };
+  return { baseUrl, itemNoun: descriptor.itemNoun, findingNoun: descriptor.changeTracking?.findingNoun, canFold: descriptor.fold !== undefined, canAccept: descriptor.accepted !== undefined, canMergeTickets: descriptor.ticketMerge !== undefined, canExport: descriptor.overviewExport !== undefined, actionLabels: descriptor.changeTracking?.actionLabels };
 }
 
 /** R10: after a group action, back to the overview — or the same group when there is no overview. */

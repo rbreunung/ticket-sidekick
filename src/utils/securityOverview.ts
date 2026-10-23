@@ -158,7 +158,7 @@ export function componentFromWaltz(component: WaltzComponent): TicketComponent {
     artifactCount: component.instancePaths.length,
     policyDate: r?.policyDate ?? null,
     plannedDate: r?.plannedDate ?? null,
-    planDeadline: r?.planDeadline ?? null,
+    attestationDate: r?.attestationDate ?? null,
     planStatus: r?.planStatus ?? null,
     approximate: false,
     detailSource: 'table',

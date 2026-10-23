@@ -10,7 +10,7 @@ export interface WorkbookComponent {
   expectedRemediation?: string | Date | null;
   /** Remediation Target Date (the planned date). */
   targetDate?: string | Date | null;
-  /** Attested Rem Plan Due By (the plan deadline). */
+  /** Attested Rem Plan Due By (the attestation date). */
   planDueBy?: string | Date | null;
   /** Reason, where plan invalid (the plan status). */
   planReason?: string | null;

@@ -11,7 +11,7 @@ import {
   type WaltzComponent,
 } from '../utils/waltzReport';
 import { sanitizeCellText } from '../utils/reportImport';
-import { parseRecordedDates } from '../utils/waltzDates';
+import { parseRecordedDates, diffRemediationDates } from '../utils/waltzDates';
 import { buildWaltzWorkbook, type WorkbookComponent } from './helpers/waltzWorkbook';
 
 const fixturePath = (name: string) => join(__dirname, 'fixtures', 'waltz', name);
@@ -694,11 +694,11 @@ describe('parseWaltzReport remediation dates', () => {
   });
   const details: Array<[string, string]> = [['Extracted On:', '2026-10-22 14:30']];
 
-  it('reads the policy date, planned date, plan deadline, plan status and the report date', async () => {
+  it('reads the policy date, planned date, attestation date, plan status and the report date', async () => {
     const buffer = await buildWaltzWorkbook({ components: [dated()], reportDetails: details });
     const [component] = await parseWaltzReport(buffer);
     expect(component.remediation).toEqual({
-      policyDate: '2026-11-30', plannedDate: '2026-12-15', planDeadline: '2026-09-20', planStatus: 'Overdue', reportDate: '2026-10-22',
+      policyDate: '2026-11-30', plannedDate: '2026-12-15', attestationDate: '2026-09-20', planStatus: 'Overdue', reportDate: '2026-10-22',
     });
   });
 
@@ -724,7 +724,7 @@ describe('parseWaltzReport remediation dates', () => {
   it('still parses an older export without the date columns, with all dates null', async () => {
     const buffer = await buildWaltzWorkbook({ components: [dated()], omitDateColumns: true });
     const [component] = await parseWaltzReport(buffer);
-    expect(component.remediation).toEqual({ policyDate: null, plannedDate: null, planDeadline: null, planStatus: null, reportDate: null });
+    expect(component.remediation).toEqual({ policyDate: null, plannedDate: null, attestationDate: null, planStatus: null, reportDate: null });
   });
 
   it('has no report date when the ReportDetails sheet or its Extracted On row is missing', async () => {
@@ -753,7 +753,7 @@ describe('parseWaltzReport remediation dates', () => {
       components: [dated({ expectedRemediation: '15.12.2026', targetDate: '31/01/2027' }), dated({ nameVersion: 'example-io:4.5.0' })],
     });
     const components = await parseWaltzReport(buffer, undefined, onDiag);
-    expect(components[0].remediation).toMatchObject({ policyDate: null, plannedDate: null, planDeadline: '2026-09-20' });
+    expect(components[0].remediation).toMatchObject({ policyDate: null, plannedDate: null, attestationDate: '2026-09-20' });
     expect(onDiag).toHaveBeenCalledTimes(1);
     const [level, , details] = onDiag.mock.calls[0];
     expect(level).toBe('warn');
@@ -775,7 +775,7 @@ describe('parseWaltzReport remediation dates', () => {
 
 describe('remediation dates in ticket content', () => {
   const remediation = (over: Partial<NonNullable<WaltzComponent['remediation']>> = {}): NonNullable<WaltzComponent['remediation']> => ({
-    policyDate: null, plannedDate: null, planDeadline: null, planStatus: null, reportDate: null, ...over,
+    policyDate: null, plannedDate: null, attestationDate: null, planStatus: null, reportDate: null, ...over,
   });
   const withDates = (name: string, r: Partial<NonNullable<WaltzComponent['remediation']>>): WaltzComponent =>
     ({ ...makeComponent(name, 'High', ['CVE-2099-0001']), remediation: remediation(r) });
@@ -783,21 +783,21 @@ describe('remediation dates in ticket content', () => {
   it('shows the policy and planned dates in the one-row components table of a single-component ticket (AE1)', () => {
     const wiki = buildDescriptionWiki(withDates('example-lib:1.2.3', { policyDate: '2026-11-30', plannedDate: '2026-12-15' }));
     expect(wiki).toContain('h3. Components');
-    expect(wiki).toContain('||Component||Max rating||Remediation action||CVEs||Artifacts||Policy date||Planned date||Plan deadline||Plan status||');
+    expect(wiki).toContain('||Component||Max rating||Remediation action||CVEs||Artifacts||Policy date||Planned date||Attestation date||Plan status||');
     expect(wiki).toContain('|example-lib:1.2.3|High|n/a|1|1|2026-11-30|2026-12-15|n/a|n/a|');
     expect(wiki).not.toContain('Remediation dates');
   });
 
-  it('shows the plan deadline and the report\'s own plan status labelled with the extraction date, and no day count (AE3)', () => {
-    const wiki = buildDescriptionWiki(withDates('example-lib:1.2.3', { planDeadline: '2026-09-20', planStatus: 'Overdue', reportDate: '2026-10-22' }));
-    expect(wiki).toContain('||Policy date||Planned date||Plan deadline||Plan status (as of 2026-10-22)||');
+  it('shows the attestation date and the report\'s own plan status labelled with the extraction date, and no day count (AE3)', () => {
+    const wiki = buildDescriptionWiki(withDates('example-lib:1.2.3', { attestationDate: '2026-09-20', planStatus: 'Overdue', reportDate: '2026-10-22' }));
+    expect(wiki).toContain('||Policy date||Planned date||Attestation date||Plan status (as of 2026-10-22)||');
     expect(wiki).toContain('|example-lib:1.2.3|High|n/a|1|1|n/a|n/a|2026-09-20|Overdue|');
     expect(wiki).not.toMatch(/\bdays?\b/i);
   });
 
   it('shows the plan status without an "as of" label when the report has no extraction date', () => {
     const wiki = buildDescriptionWiki(withDates('example-lib:1.2.3', { policyDate: '2026-11-30', planStatus: 'Unplanned' }));
-    expect(wiki).toContain('||Policy date||Planned date||Plan deadline||Plan status||');
+    expect(wiki).toContain('||Policy date||Planned date||Attestation date||Plan status||');
     expect(wiki).not.toContain('as of');
   });
 
@@ -826,7 +826,7 @@ describe('remediation dates in ticket content', () => {
       withDates('example-c:3.0.0', {}),
     ];
     const wiki = buildGroupDescriptionWiki(group);
-    expect(wiki).toContain('||Component||Max rating||Remediation action||CVEs||Artifacts||Policy date||Planned date||Plan deadline||Plan status (as of 2026-10-22)||');
+    expect(wiki).toContain('||Component||Max rating||Remediation action||CVEs||Artifacts||Policy date||Planned date||Attestation date||Plan status (as of 2026-10-22)||');
     expect(wiki).toContain('|example-a:1.0.0|High|n/a|1|1|n/a|2026-12-15|n/a|Overdue|');
     expect(wiki).toContain('|example-b:2.0.0|High|n/a|1|1|2026-11-30|n/a|n/a|n/a|');
     expect(wiki).toContain('|example-c:3.0.0|High|n/a|1|1|n/a|n/a|n/a|n/a|');
@@ -853,36 +853,45 @@ describe('remediation dates in ticket content', () => {
 describe('parseRecordedDates round trip', () => {
   const comp = (name: string, r?: Partial<NonNullable<WaltzComponent['remediation']>>): WaltzComponent => ({
     ...makeComponent(name, 'High', ['CVE-2099-0001']),
-    remediation: { policyDate: null, plannedDate: null, planDeadline: null, planStatus: null, reportDate: '2026-10-22', ...r },
+    remediation: { policyDate: null, plannedDate: null, attestationDate: null, planStatus: null, reportDate: '2026-10-22', ...r },
   });
 
   it('reads back the dates of a single-component description, fully and partly dated', () => {
-    const full = comp('example-lib:1.2.3', { policyDate: '2026-11-30', plannedDate: '2026-12-15', planDeadline: '2026-09-20', planStatus: 'Overdue' });
-    expect(parseRecordedDates(buildDescriptionWiki(full), full.nameVersion)).toEqual({ policyDate: '2026-11-30', plannedDate: '2026-12-15', planDeadline: '2026-09-20' });
+    const full = comp('example-lib:1.2.3', { policyDate: '2026-11-30', plannedDate: '2026-12-15', attestationDate: '2026-09-20', planStatus: 'Overdue' });
+    expect(parseRecordedDates(buildDescriptionWiki(full), full.nameVersion)).toEqual({ policyDate: '2026-11-30', plannedDate: '2026-12-15', attestationDate: '2026-09-20' });
     const part = comp('example-lib:1.2.3', { policyDate: '2026-11-30' });
-    expect(parseRecordedDates(buildDescriptionWiki(part), part.nameVersion)).toEqual({ policyDate: '2026-11-30', plannedDate: null, planDeadline: null });
+    expect(parseRecordedDates(buildDescriptionWiki(part), part.nameVersion)).toEqual({ policyDate: '2026-11-30', plannedDate: null, attestationDate: null });
   });
 
   it('reads an undated single-component description as recorded dates that are all empty', () => {
     const none = comp('example-lib:1.2.3');
-    expect(parseRecordedDates(buildDescriptionWiki(none), none.nameVersion)).toEqual({ policyDate: null, plannedDate: null, planDeadline: null });
+    expect(parseRecordedDates(buildDescriptionWiki(none), none.nameVersion)).toEqual({ policyDate: null, plannedDate: null, attestationDate: null });
   });
 
   it('still reads the older single-component description whose dates sit in a Remediation dates section', () => {
-    const legacy = 'h3. Remediation dates\n||Policy date||Planned date||Plan deadline||Plan status||\n|2026-11-30|2026-12-15|n/a|n/a|';
-    expect(parseRecordedDates(legacy, 'example-lib:1.2.3')).toEqual({ policyDate: '2026-11-30', plannedDate: '2026-12-15', planDeadline: null });
+    const legacy = 'h3. Remediation dates\n||Policy date||Planned date||Attestation date||Plan status||\n|2026-11-30|2026-12-15|n/a|n/a|';
+    expect(parseRecordedDates(legacy, 'example-lib:1.2.3')).toEqual({ policyDate: '2026-11-30', plannedDate: '2026-12-15', attestationDate: null });
+  });
+
+  it('does not read a date under the old "Plan deadline" title, so such a ticket records no attestation date', () => {
+    const old = 'h3. Remediation dates\n||Policy date||Planned date||Plan deadline||Plan status||\n|2026-11-30|2026-12-15|2026-09-20|n/a|';
+    const recorded = parseRecordedDates(old, 'example-lib:1.2.3');
+    expect(recorded).toEqual({ policyDate: '2026-11-30', plannedDate: '2026-12-15', attestationDate: null });
+    // Against a report that has the date, the ticket reads as changed (once; a rewrite records the new title).
+    expect(diffRemediationDates(recorded!, { policyDate: '2026-11-30', plannedDate: '2026-12-15', attestationDate: '2026-09-20' }))
+      .toEqual([{ date: 'attestation', from: null, to: '2026-09-20' }]);
   });
 
   it('reads each member of a folded description by its own component name', () => {
     const group = [
       comp('example-a:1.0.0', { plannedDate: '2026-12-15' }),
-      comp('example-b:2.0.0', { policyDate: '2026-11-30', planDeadline: '2026-09-20' }),
+      comp('example-b:2.0.0', { policyDate: '2026-11-30', attestationDate: '2026-09-20' }),
       comp('example-c:3.0.0'),
     ];
     const wiki = buildGroupDescriptionWiki(group);
-    expect(parseRecordedDates(wiki, 'example-a:1.0.0')).toEqual({ policyDate: null, plannedDate: '2026-12-15', planDeadline: null });
-    expect(parseRecordedDates(wiki, 'example-b:2.0.0')).toEqual({ policyDate: '2026-11-30', plannedDate: null, planDeadline: '2026-09-20' });
-    expect(parseRecordedDates(wiki, 'example-c:3.0.0')).toEqual({ policyDate: null, plannedDate: null, planDeadline: null });
+    expect(parseRecordedDates(wiki, 'example-a:1.0.0')).toEqual({ policyDate: null, plannedDate: '2026-12-15', attestationDate: null });
+    expect(parseRecordedDates(wiki, 'example-b:2.0.0')).toEqual({ policyDate: '2026-11-30', plannedDate: null, attestationDate: '2026-09-20' });
+    expect(parseRecordedDates(wiki, 'example-c:3.0.0')).toEqual({ policyDate: null, plannedDate: null, attestationDate: null });
   });
 
   it('reads null for the old pre-feature text, an empty string, a hand-edited table and a name that is not in the table', () => {
@@ -899,20 +908,20 @@ describe('parseRecordedDates round trip', () => {
   });
 
   it('reads a cell holding text instead of a date as no date for that date only', () => {
-    const wiki = '||Policy date||Planned date||Plan deadline||Plan status||\n|soon|2026-12-15|n/a|Overdue|';
-    expect(parseRecordedDates(wiki, 'example-lib:1.2.3')).toEqual({ policyDate: null, plannedDate: '2026-12-15', planDeadline: null });
+    const wiki = '||Policy date||Planned date||Attestation date||Plan status||\n|soon|2026-12-15|n/a|Overdue|';
+    expect(parseRecordedDates(wiki, 'example-lib:1.2.3')).toEqual({ policyDate: null, plannedDate: '2026-12-15', attestationDate: null });
   });
 
   it('tolerates extra spaces in cells and different capitalization in the column titles', () => {
-    const wiki = '|| policy DATE || Planned date ||Plan Deadline|| Plan status (as of 2026-10-22) ||\n| 2026-11-30 |  2026-12-15 |n/a| Overdue |';
-    expect(parseRecordedDates(wiki, 'example-lib:1.2.3')).toEqual({ policyDate: '2026-11-30', plannedDate: '2026-12-15', planDeadline: null });
+    const wiki = '|| policy DATE || Planned date ||Attestation Date|| Plan status (as of 2026-10-22) ||\n| 2026-11-30 |  2026-12-15 |n/a| Overdue |';
+    expect(parseRecordedDates(wiki, 'example-lib:1.2.3')).toEqual({ policyDate: '2026-11-30', plannedDate: '2026-12-15', attestationDate: null });
   });
 });
 
 describe('describeWaltzRowChange with the dates a ticket recorded (U4)', () => {
   const withRemediation = (r: Partial<NonNullable<WaltzComponent['remediation']>>): WaltzComponent => ({
     ...makeComponent('example-lib:1.2.3', 'High', ['CVE-2099-0001']),
-    remediation: { policyDate: null, plannedDate: null, planDeadline: null, planStatus: null, reportDate: '2026-10-22', ...r },
+    remediation: { policyDate: null, plannedDate: null, attestationDate: null, planStatus: null, reportDate: '2026-10-22', ...r },
   });
   const known = (c: WaltzComponent) => buildRecordLabels(c);
   const descriptionOf = (r: Partial<NonNullable<WaltzComponent['remediation']>>) => buildDescriptionWiki(withRemediation(r));
