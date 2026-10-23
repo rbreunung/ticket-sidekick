@@ -187,6 +187,22 @@ Related Waltz tickets are combined with `merge <sources> into <survivor>` on the
 
 **Later imports.** Nothing is stored. The survivor carries the union of the labels and is open, so it is the target; the cancelled ticket keeps its marker labels but is resolved, so it never wins.
 
+#### Duplicate open tickets and Veracode ticket merge
+
+Plan: `docs/plans/2026-10-23-2042-feat-duplicate-open-tickets-merge-plan.md`.
+
+**Ticket cell.** `buildReviewRows` records `ReviewRowBase.openTicketKeys`: the tickets other than the target that carry one of the row's keys and have no resolution (the `resolved` flag). `ticketedTicketCell` shows `<target> · also open: KEY[, KEY…]` (three keys, then `+N`). A row saved before the field existed shows the target alone. `ticketKeys` is unchanged and still feeds change detection and target choice (closed tickets' labels keep their items known).
+
+**Hint.** With `canMergeTickets`, the Already ticketed screen shows a merge reply built from the first unfinished row with an open extra ticket (`merge <other> into <target>`, with a note that swapping the two keeps the other), else the generic form.
+
+**Close mode.** `ImportTicketMerge` is a union: Waltz keeps the rewrite mode above (survivor rewrite and comment, per-source link and `markTicketMerged`); Veracode sets `mode: 'close'` with `itemNoun` and `buildSourceComment` (`buildMergedSourceComment` in `veracodeReport.ts`, numeric flaw ids only). The same engine (`importMerge.ts`) runs both: confirmation click, status and resolution questions, `retry`/`ignore`, final report.
+
+- `analyzeSourceMoves` (`ticketMerge.ts`) reads each source's labels through the descriptor's `labelToDedupKey`. Keys only the source records are `movable` when the rewrite plan still covers them and `unlisted` when `planRewrite` reports them dropped (the report no longer lists them). The same analysis feeds `buildCloseMergePrompt` and the run (`MergeRun.sourceMoves`).
+- `buildCloseMergePlan` lists the steps: `survivor-rewrite` only when some source has movable items, then per source `link` (type fixed per step: `Relates` if items moved, else `Duplicate`, falling back to the other type when the project lacks the wanted one) and `source-comment` (idempotent: skipped when a comment starting with the same line exists), then the `close` steps.
+- The Veracode survivor rewrite passes the kept ticket's creation time and Due Date to `writeRewrite`, with the movable flaws (cut by `fold.narrowToNew`) as the joining item, so `rewriteDueDate` keeps its set-once, move-earlier rule.
+- Closed rows are marked `merge` when their `close` step is done (rewrite mode marks them when the source rewrite is done).
+- `canMergeTickets` stays one switch, so Veracode also gets `reload report` and the post-merge refresh.
+
 #### Component labels
 
 `sanitizeComponentLabel()` lowercases and hyphenates disallowed separators (dots pass through unchanged, so version numbers like `1.2.3` stay readable), then appends a 6-hex-char SHA-256-derived hash of the *raw* `nameVersion` — this keeps the label human-readable while making it collision-safe as the sole dedup key, since two distinct components (e.g. differing only in a separator character) can otherwise sanitize to the identical readable text.
