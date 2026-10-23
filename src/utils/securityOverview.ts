@@ -99,6 +99,23 @@ export interface Overview {
   unreadCount: number;
 }
 
+/** What a `@jira /overview` prompt asks for: the project (an upper-case key, or a lone lower-case word) and whether to save the CSV. */
+export function parseOverviewPrompt(prompt: string): { projectKey: string | null; csv: boolean } {
+  const tokens = prompt.split(/[\s,;]+/).filter(Boolean);
+  const csv = tokens.some(t => t.toLowerCase() === 'csv');
+  const rest = tokens.filter(t => t.toLowerCase() !== 'csv');
+  const upper = rest.find(t => /^[A-Z][A-Z0-9_]+$/.test(t));
+  if (upper) return { projectKey: upper, csv };
+  const lone = rest.length === 1 && /^[A-Za-z][A-Za-z0-9_]+$/.test(rest[0]) ? rest[0].toUpperCase() : null;
+  return { projectKey: lone, csv };
+}
+
+/** Today's date in local time as `YYYY-MM-DD`, which is how Due Dates and release dates compare. */
+export function localDate(now: Date = new Date()): string {
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
 /** A key-list query above this many keys is replaced by the label-based query. */
 export const JQL_KEY_CAP = 100;
 

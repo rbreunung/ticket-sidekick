@@ -9,6 +9,7 @@ Full `ticketSidekick.*` settings for both `@jira` and `@bitbucket`. See the main
 | Base URL | `ticketSidekick.jira.baseUrl` | _(required)_ |
 | Auth type | `ticketSidekick.jira.authType` | `"datacenter"` |
 | Default project | `ticketSidekick.jira.defaultProject` | _(empty)_ |
+| Overview CSV separator | `ticketSidekick.jira.overviewCsvDelimiter` | `"comma"` |
 | Sprint board ID | `ticketSidekick.jira.sprintBoardId` | _(auto)_ |
 | Required fields | `ticketSidekick.jira.requiredFields` | `[]` |
 | Always-show fields | `ticketSidekick.jira.additionalDisplayFields` | `[]` |

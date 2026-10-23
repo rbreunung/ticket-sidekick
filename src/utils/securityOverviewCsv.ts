@@ -4,7 +4,14 @@
 import type { Overview, OverviewRow, OverviewTable } from './securityOverview';
 import { severityLabel } from './veracodeReport';
 
-export const CSV_BOM = '﻿';
+export const CSV_BOM = '\uFEFF';
+
+const DELIMITERS: Record<string, string> = { comma: ',', semicolon: ';', tab: '\t' };
+
+/** The `ticketSidekick.jira.overviewCsvDelimiter` setting as a character; anything unknown reads as a comma. */
+export function resolveCsvDelimiter(setting: unknown): string {
+  return typeof setting === 'string' ? DELIMITERS[setting] ?? ',' : ',';
+}
 
 const COMMON_COLUMNS = ['Source', 'Ticket', 'Status', 'Summary', 'Rating', 'Due Date', 'Fix Version', 'Release Date', 'Other Fix Versions', 'Flag'];
 const VERACODE_COLUMNS = ['Issue ID', 'Severity', 'CWE ID', 'CWE name', 'Module', 'Path', 'File', 'Line', 'Function'];

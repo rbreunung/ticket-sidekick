@@ -38,6 +38,7 @@ import { serializeCommentsForLLM, handleLoadTicket, attachmentsDirFor } from './
 import { formatFileSize } from '../utils/attachmentEligibility';
 import { streamReviewScreen, executeCleanupBatch, handleRunCleanup, extractExtraFields } from './jira/cleanupHandler';
 import { handleDiscoverWorkflow } from './jira/workflowHandler';
+import { handleSecurityOverview } from './jira/overviewHandler';
 import {
   handleCreateFromEmail, handleAddEmailFromChat, handleEmailContentSession,
   handleEmailTemplateSelection, handleEmailReviewReply, handleEmailCleanupReply, EMAIL_CLEANUP_SESSION_KEY,
@@ -1730,6 +1731,19 @@ export function createJiraParticipant(
       // current branch actually resolves to one.
       const greetingState: JiraFollowupState = { kind: 'greeting', branchKey: resolveTicketFromBranch() ?? undefined };
       return { metadata: { jiraFollowup: greetingState } };
+    }
+
+    // `/overview` has its own project/csv parsing and never needs the LLM intent parser; like every other slash
+    // command it runs only after a session in flight (above) has had its chance to claim the turn.
+    if (request.command === 'overview') {
+      try {
+        await handleSecurityOverview(request, stream, ticketService, config.baseUrl);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logDiag('jira.overview', 'error', 'Overview failed', { error: message });
+        stream.markdown(`Could not build the overview: ${message}`);
+      }
+      return;
     }
 
     let intent: ParsedIntent;

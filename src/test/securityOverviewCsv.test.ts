@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildOverview, componentFromWaltz, findingFromFlaw } from '../utils/securityOverview';
-import { csvCell, renderOverviewCsv, CSV_BOM } from '../utils/securityOverviewCsv';
+import { csvCell, renderOverviewCsv, resolveCsvDelimiter, CSV_BOM } from '../utils/securityOverviewCsv';
 import { descriptionsOf, makeComponent, makeFlaw, veracodeTicket, waltzTicket } from './helpers/overviewFixtures';
 
 const VERSIONS = [{ name: '2026.11', releaseDate: '2026-11-15' }];
@@ -114,5 +114,15 @@ describe('renderOverviewCsv', () => {
   it('keeps a Waltz component record from the report exact', () => {
     const c = componentFromWaltz(makeComponent('guava:31.0'));
     expect(c).toMatchObject({ nameVersion: 'guava:31.0', approximate: false, policyDate: '2026-11-30' });
+  });
+});
+
+describe('resolveCsvDelimiter', () => {
+  it('maps the setting values to their characters and reads anything else as a comma', () => {
+    expect(resolveCsvDelimiter('comma')).toBe(',');
+    expect(resolveCsvDelimiter('semicolon')).toBe(';');
+    expect(resolveCsvDelimiter('tab')).toBe('\t');
+    expect(resolveCsvDelimiter('pipe')).toBe(',');
+    expect(resolveCsvDelimiter(undefined)).toBe(',');
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildOverview, renderOverviewMarkdown, findingFromFlaw, componentFromWaltz, JQL_KEY_CAP, type OverviewInput } from '../utils/securityOverview';
+import { buildOverview, renderOverviewMarkdown, findingFromFlaw, componentFromWaltz, parseOverviewPrompt, localDate, JQL_KEY_CAP, type OverviewInput } from '../utils/securityOverview';
 import { descriptionsOf, makeComponent, makeFlaw, veracodeTicket, waltzTicket } from './helpers/overviewFixtures';
 
 const TODAY = '2026-10-22';
@@ -240,5 +240,26 @@ describe('renderOverviewMarkdown', () => {
   it('notes tickets that could not be read in full', () => {
     const t = veracodeTicket('SEC-1', [makeFlaw('1')], { fixVersions: ['2026.11'] });
     expect(renderOverviewMarkdown(buildOverview({ ...input([t]), descriptions: {} }))).toContain('could not be read in full');
+  });
+});
+
+describe('parseOverviewPrompt', () => {
+  it('reads an upper-case project key and the csv word in either order', () => {
+    expect(parseOverviewPrompt('SEC')).toEqual({ projectKey: 'SEC', csv: false });
+    expect(parseOverviewPrompt('SEC csv')).toEqual({ projectKey: 'SEC', csv: true });
+    expect(parseOverviewPrompt('csv SEC')).toEqual({ projectKey: 'SEC', csv: true });
+    expect(parseOverviewPrompt('for project SEC, CSV please')).toEqual({ projectKey: 'SEC', csv: true });
+  });
+
+  it('accepts a lone lower-case word as the project and finds none in a sentence', () => {
+    expect(parseOverviewPrompt('sec')).toEqual({ projectKey: 'SEC', csv: false });
+    expect(parseOverviewPrompt('show me everything')).toEqual({ projectKey: null, csv: false });
+    expect(parseOverviewPrompt('')).toEqual({ projectKey: null, csv: false });
+  });
+});
+
+describe('localDate', () => {
+  it('formats the local calendar date with zero padding', () => {
+    expect(localDate(new Date(2026, 0, 5, 23, 59))).toBe('2026-01-05');
   });
 });
