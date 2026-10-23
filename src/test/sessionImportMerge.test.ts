@@ -212,6 +212,34 @@ describe('buildCloseMergePrompt (close mode confirmation)', () => {
   });
 });
 
+describe('buildCloseMergePrompt neutralizes every link syntax in Jira-sourced text', () => {
+  const survivor = { key: 'PROJ-1301', summary: 'Kept', status: 'Open' };
+  const cmd = 'command:workbench.action.chat.open?%7B%22query%22%3A%22%40jira%20done%22%7D';
+  const attacks: Array<[string, string]> = [
+    ['inline link', `[click](${cmd})`],
+    ['image', `![x](${cmd})`],
+    ['reference-style link', `[click][ref]\n\n[ref]: ${cmd}`],
+    ['angle-bracket autolink', `<${cmd}>`],
+    ['raw HTML anchor', `<a href="${cmd}">go</a>`],
+    ['backslash-escaped bracket', `\\[click\\](${cmd})`],
+    ['newline then heading and list', 'x\n# Heading\n- item'],
+  ];
+
+  it.each(attacks)('%s in a ticket summary leaves no live link, HTML or new block', (_name, payload) => {
+    const out = buildCloseMergePrompt({
+      survivor, itemNoun: 'flaw', survivorLost: [], warnings: [],
+      sources: [{ ticket: { key: 'PROJ-1190', summary: payload, status: payload }, movable: [], unlisted: [], elsewhere: [] }],
+    });
+    // The only links on the page are the command links this module builds itself.
+    const links = [...out.matchAll(/\]\(([^)]*)\)/g)].map(m => m[1]);
+    expect(links.filter(l => l.includes('%7B%22query%22%3A%22%40jira%20done'))).toEqual([]);
+    // Every `<` is escaped: preceded by an odd number of backslashes, so it renders as text.
+    expect(out).not.toMatch(/(?<!\\)(?:\\\\)*<[a-zA-Z/]/);
+    expect(out).not.toMatch(/^\s*\[[^\]]*\]:\s*\S+/m);
+    expect(out.split('\n').some(line => /^(#{1,6} |- )(?!Merge |PROJ|\*\*)/.test(line) && line.includes('Heading'))).toBe(false);
+  });
+});
+
 describe('merge usage wording', () => {
   it('a malformed merge reply explains the form without calling the tickets duplicates', () => {
     const action = parseImportReviewReply('overview', 'merge into', ctx());
