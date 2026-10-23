@@ -475,7 +475,7 @@ describe('review fixes: replay, retry, chaining and target names', () => {
 
 describe('the survivor\'s Due Date (remediation dates, U3)', () => {
   const dated = (c: WaltzComponent, policyDate: string | null, plannedDate: string | null = null): WaltzComponent => ({
-    ...c, remediation: { policyDate, plannedDate, planDeadline: null, planStatus: null, reportDate: '2026-10-22' },
+    ...c, remediation: { policyDate, plannedDate, attestationDate: null, planStatus: null, reportDate: '2026-10-22' },
   });
 
   it('is the earliest date over the combined group, and the source ticket\'s own Due Date is left alone', async () => {
@@ -500,7 +500,7 @@ describe('the survivor\'s Due Date (remediation dates, U3)', () => {
 describe('a survivor whose Due Date Jira refuses (remediation dates, U3)', () => {
   it('is still rewritten without it and the merge completes', async () => {
     const dated = (c: WaltzComponent): WaltzComponent => ({
-      ...c, remediation: { policyDate: '2026-11-30', plannedDate: null, planDeadline: null, planStatus: null, reportDate: '2026-10-22' },
+      ...c, remediation: { policyDate: '2026-11-30', plannedDate: null, attestationDate: null, planStatus: null, reportDate: '2026-10-22' },
     });
     report = [dated(libfoo), dated(libbar), libbaz];
     const { ws } = await importWaltz();

@@ -58,14 +58,14 @@ describe('renderOverviewCsv', () => {
   });
 
   it('takes the earliest of the members for each Waltz date', () => {
-    const a = makeComponent('a:1', { remediation: { policyDate: '2026-12-01', plannedDate: '2026-12-15', planDeadline: null, planStatus: 'Overdue', reportDate: null } });
-    const b = makeComponent('b:2', { remediation: { policyDate: '2026-11-01', plannedDate: null, planDeadline: '2026-09-20', planStatus: null, reportDate: null } });
+    const a = makeComponent('a:1', { remediation: { policyDate: '2026-12-01', plannedDate: '2026-12-15', attestationDate: null, planStatus: 'Overdue', reportDate: null } });
+    const b = makeComponent('b:2', { remediation: { policyDate: '2026-11-01', plannedDate: null, attestationDate: '2026-09-20', planStatus: null, reportDate: null } });
     const cells = csvOf([waltzTicket('SEC-2', [a, b])])[1].split(',');
     const header = csvOf([waltzTicket('SEC-2', [a, b])])[0].split(',');
 
     expect(cells[header.indexOf('Policy date')]).toBe('2026-11-01');
     expect(cells[header.indexOf('Planned date')]).toBe('2026-12-15');
-    expect(cells[header.indexOf('Plan deadline')]).toBe('2026-09-20');
+    expect(cells[header.indexOf('Attestation date')]).toBe('2026-09-20');
     expect(cells[header.indexOf('Plan status')]).toBe('Overdue');
   });
 

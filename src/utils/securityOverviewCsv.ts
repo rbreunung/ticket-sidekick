@@ -15,7 +15,7 @@ export function resolveCsvDelimiter(setting: unknown): string {
 
 const COMMON_COLUMNS = ['Source', 'Ticket', 'Status', 'Summary', 'Rating', 'Due Date', 'Fix Version', 'Release Date', 'Other Fix Versions', 'Flag'];
 const VERACODE_COLUMNS = ['Issue ID', 'Severity', 'CWE ID', 'CWE name', 'Module', 'Path', 'File', 'Line', 'Function'];
-const WALTZ_COLUMNS = ['Members', 'Remediation action', 'Policy date', 'Planned date', 'Plan deadline', 'Plan status'];
+const WALTZ_COLUMNS = ['Members', 'Remediation action', 'Policy date', 'Planned date', 'Attestation date', 'Plan status'];
 
 const FLAG_TEXT = { overdue: 'overdue', 'due-before-release': 'due before release' } as const;
 const MATCH_TEXT = { tracked: 'tracked', stale: 'stale', 'in-report-no-ticket': 'in report, no ticket' } as const;
@@ -80,7 +80,7 @@ export function renderOverviewCsv(overview: Overview, delimiter = ','): string {
           distinct(c.map(m => m.remediationAction)),
           earliest(c.map(m => m.policyDate)),
           earliest(c.map(m => m.plannedDate)),
-          earliest(c.map(m => m.planDeadline)),
+          earliest(c.map(m => m.attestationDate)),
           distinct(c.map(m => m.planStatus)),
         ]);
       }

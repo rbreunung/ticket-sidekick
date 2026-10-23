@@ -36,7 +36,7 @@ vi.mock('../services/WorkflowService', async (importOriginal) => ({
 import * as vscode from 'vscode';
 import { handleVeracodeAwaitIssueType, buildVeracodeTemplateSession, handleVeracodeReviewReply } from '../participant/jira/veracodeHandler';
 import { handleWaltzAwaitIssueType, buildWaltzTemplateSession, handleWaltzReviewReply } from '../participant/jira/waltzHandler';
-import { parseImportReviewReply, type AwaitIssueTypeResume, type ImportReplyContext, type VeracodeReviewSession, type WaltzReviewSession } from '../participant/sessionState';
+import { parseImportReviewReply, describeImportReplyVocabulary, buildImportOverview, buildImportScreen, VERACODE_REVIEW_COLUMNS, type AwaitIssueTypeResume, type ImportReplyContext, type VeracodeReviewSession, type WaltzReviewSession } from '../participant/sessionState';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService } from '../services/TicketService';
 import { sanitizeComponentLabel } from '../utils/waltzReport';
@@ -206,6 +206,94 @@ describe('export reply of a report import', () => {
     expect(JSON.stringify({ rows: session.allRows, outcomes: session.outcomes })).toBe(before);
     expect(client.updateIssueCalls).toHaveLength(0);
     expect(client.createIssueCalls).toHaveLength(0);
+  });
+});
+
+describe('export preview ends the turn', () => {
+  it('leaves the preview as the last thing on screen on the overview, with a way back, and keeps the session', async () => {
+    const tickets: Record<string, FakeTicket> = { 'PROJ-1': { labels: ['veracode', 'veracode-issue-101'] } };
+    const { session, ws } = await importVeracode([makeFlaw('101'), makeFlaw('201', { sourceFile: 'Other.java', line: 5 })], tickets);
+    answerKeySearch({ 'PROJ-1': { labels: ['veracode', 'veracode-issue-101'] } });
+    const stream = mockStream();
+
+    const result = await handleVeracodeReviewReply('export', session, service, stream as never, ws as never);
+
+    const text = decodeURIComponent(streamText(stream));
+    expect(text).toContain('Not assigned to a release');
+    expect(text).not.toContain('### Import results');
+    expect(text).toContain('Back to overview');
+    expect(result).toMatchObject({ metadata: { jiraSession: { kinds: ['veracode-review'] } } });
+    expect(ws.store['jira.session.veracodeReview']).toBeDefined();
+  });
+
+  it('does not print the Already-ticketed screen again when it is the only screen, and reads the next reply against it', async () => {
+    const tickets: Record<string, FakeTicket> = { 'PROJ-1': { labels: ['veracode', 'veracode-issue-101'] } };
+    const { session, ws } = await importVeracode([makeFlaw('101')], tickets);
+    expect(session.singleGroup).toBe(true);
+    expect(session.view).toBe('ticketed');
+    answerKeySearch({ 'PROJ-1': { labels: ['veracode', 'veracode-issue-101'] } });
+    const stream = mockStream();
+
+    const result = await handleVeracodeReviewReply('export', session, service, stream as never, ws as never);
+
+    const text = decodeURIComponent(streamText(stream));
+    expect(text).not.toContain('### Already ticketed');
+    expect(text).toContain('Done');
+    expect(result).toMatchObject({ metadata: { jiraSession: { kinds: ['veracode-review'] } } });
+
+    const next = mockStream();
+    await handleVeracodeReviewReply('all leave', session, service, next as never, ws as never);
+    expect(streamText(next)).toContain('### Already ticketed');
+  });
+
+  it('keeps the session and shows the way on when Jira cannot be read', async () => {
+    const { session, ws } = await importVeracode([makeFlaw('101'), makeFlaw('201', { sourceFile: 'Other.java', line: 5 })], { 'PROJ-1': { labels: ['veracode', 'veracode-issue-101'] } });
+    vi.spyOn(service, 'getOverviewTicketsByKeys').mockRejectedValue(new Error('Jira is down'));
+    const stream = mockStream();
+
+    const result = await handleVeracodeReviewReply('export', session, service, stream as never, ws as never);
+
+    expect(decodeURIComponent(streamText(stream))).toContain('Back to overview');
+    expect(result).toMatchObject({ metadata: { jiraSession: { kinds: ['veracode-review'] } } });
+  });
+});
+
+describe('export link on the review screens', () => {
+  it('is on the overview of a Veracode import and on the only screen of a single-group one', async () => {
+    const multi = await importVeracode([makeFlaw('101'), makeFlaw('201', { sourceFile: 'Other.java', line: 5 })], { 'PROJ-1': { labels: ['veracode', 'veracode-issue-101'] } });
+    const overview = mockStream();
+    await handleVeracodeReviewReply('open new', multi.session, service, mockStream() as never, multi.ws as never);
+    await handleVeracodeReviewReply('back', multi.session, service, overview as never, multi.ws as never);
+    expect(decodeURIComponent(streamText(overview))).toMatch(/\[Export\]\(command:[^)]*@jira export/);
+
+    const group = mockStream();
+    await handleVeracodeReviewReply('open new', multi.session, service, group as never, multi.ws as never);
+    expect(decodeURIComponent(streamText(group))).not.toContain('Export');
+
+    const single = await importVeracode([makeFlaw('301')], {});
+    const screen = mockStream();
+    await handleVeracodeReviewReply('include all', single.session, service, screen as never, single.ws as never);
+    expect(decodeURIComponent(streamText(screen))).toMatch(/\[Export\]\(command:[^)]*@jira export/);
+  });
+
+  it('is on the Already-ticketed screen of a Waltz import that has only that screen', async () => {
+    const tickets: Record<string, FakeTicket> = { 'PROJ-1': { labels: ['oss-dependency', sanitizeComponentLabel('guava:31.0')] } };
+    const { session, ws } = await importWaltz([makeComponent('guava:31.0')], tickets);
+    expect(session.view).toBe('ticketed');
+    const stream = mockStream();
+
+    await handleWaltzReviewReply('all leave', session, service, stream as never, ws as never);
+
+    const text = decodeURIComponent(streamText(stream));
+    expect(text).toMatch(/\[Export\]\(command:[^)]*@jira export/);
+    expect(describeImportReplyVocabulary('ticketed', { singleGroup: true, groups: ['ticketed'], newRowIds: [], ticketedRows: [], canExport: true })).toContain('`export`');
+  });
+
+  it('is not offered by an import without export (email)', async () => {
+    const { session } = await importVeracode([makeFlaw('301')], {});
+    expect(buildImportOverview(session, { itemNoun: 'email(s)' })).not.toContain('Export');
+    expect(buildImportScreen(session, VERACODE_REVIEW_COLUMNS, { itemNoun: 'email(s)' })).not.toContain('Export');
+    expect(describeImportReplyVocabulary('new', { singleGroup: true, groups: ['new'], newRowIds: [], ticketedRows: [] })).not.toContain('export');
   });
 });
 

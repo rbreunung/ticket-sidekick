@@ -35,7 +35,7 @@ import { mockStream, makeMockWs, FakeTicket, statefulJira, searchFromStore, stre
 const comp = (nameVersion: string, dates: Partial<RemediationDates> = {}, status: string | null = null): WaltzComponent => ({
   nameVersion, maxVulnRating: 'High', remediationAction: 'Remediate', instancePaths: ['app.jar'],
   vulnerabilities: [{ cveId: 'CVE-2099-0001', cveSummary: null, overallSeverity: 'High', cvssV3Score: 7, fixedVersion: null }],
-  remediation: { policyDate: null, plannedDate: null, planDeadline: null, planStatus: status, reportDate: '2026-10-22', ...dates },
+  remediation: { policyDate: null, plannedDate: null, attestationDate: null, planStatus: status, reportDate: '2026-10-22', ...dates },
 });
 const labelsFor = (c: WaltzComponent) => ['oss-dependency', sanitizeComponentLabel(c.nameVersion)];
 

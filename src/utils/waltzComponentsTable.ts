@@ -8,7 +8,7 @@
 // the dates (exact `YYYY-MM-DD` cells) are exact.
 import { readWikiTables, normalizeTitle } from './wikiTableRead';
 import {
-  ABSENT_CELL, COLUMN_ACTION, COLUMN_ARTIFACTS, COLUMN_COMPONENT, COLUMN_CVES, COLUMN_DEADLINE, COLUMN_PLANNED,
+  ABSENT_CELL, COLUMN_ACTION, COLUMN_ARTIFACTS, COLUMN_COMPONENT, COLUMN_CVES, COLUMN_ATTESTATION, COLUMN_PLANNED,
   COLUMN_POLICY, COLUMN_RATING, COLUMN_STATUS, cellDate,
 } from './waltzDates';
 
@@ -23,7 +23,7 @@ export interface TicketComponent {
   artifactCount: number | null;
   policyDate: string | null;
   plannedDate: string | null;
-  planDeadline: string | null;
+  attestationDate: string | null;
   planStatus: string | null;
   /** True when a text field may differ from the report because of sanitizing. */
   approximate: boolean;
@@ -80,7 +80,7 @@ function fromTable(titles: string[], rows: string[][], hasActionColumn: boolean)
     artifacts: indexOfTitle(titles, COLUMN_ARTIFACTS),
     policy: indexOfTitle(titles, COLUMN_POLICY),
     planned: indexOfTitle(titles, COLUMN_PLANNED),
-    deadline: indexOfTitle(titles, COLUMN_DEADLINE),
+    attestation: indexOfTitle(titles, COLUMN_ATTESTATION),
     status: indexOfTitle(titles, COLUMN_STATUS),
   };
   return rows
@@ -93,7 +93,7 @@ function fromTable(titles: string[], rows: string[][], hasActionColumn: boolean)
       artifactCount: countOrNull(r[at.artifacts]),
       policyDate: cellDate(r[at.policy]),
       plannedDate: cellDate(r[at.planned]),
-      planDeadline: cellDate(r[at.deadline]),
+      attestationDate: cellDate(r[at.attestation]),
       planStatus: cellOrNull(r[at.status]),
       approximate: true,
       detailSource: hasActionColumn ? 'table' as const : 'legacy' as const,
@@ -117,7 +117,7 @@ function fromLegacySection(wiki: string, context: WaltzTicketTextContext): Ticke
     artifactCount: null,
     policyDate: date(COLUMN_POLICY),
     plannedDate: date(COLUMN_PLANNED),
-    planDeadline: date(COLUMN_DEADLINE),
+    attestationDate: date(COLUMN_ATTESTATION),
     planStatus: cellOrNull(row[indexOfTitle(table.titles, COLUMN_STATUS)]),
     approximate: true,
     detailSource: 'legacy',
@@ -137,7 +137,7 @@ function fromTitleAndLabels(context: WaltzTicketTextContext): TicketComponent[] 
     artifactCount: null,
     policyDate: null,
     plannedDate: null,
-    planDeadline: null,
+    attestationDate: null,
     planStatus: null,
     approximate: true,
     detailSource: 'title-labels',

@@ -649,7 +649,7 @@ describe('Waltz `new ticket` and its action policy (remediation dates, U5)', () 
   const component = (nameVersion: string, cves: string[], dates: Partial<{ policyDate: string; plannedDate: string }> = {}): WaltzComponent => ({
     nameVersion, maxVulnRating: 'High', remediationAction: 'Remediate', instancePaths: ['app.jar'],
     vulnerabilities: cves.map(cveId => ({ cveId, cveSummary: `Summary of ${cveId}`, overallSeverity: 'High', cvssV3Score: 7, fixedVersion: null })),
-    remediation: { policyDate: null, plannedDate: null, planDeadline: null, planStatus: null, reportDate: '2026-10-22', ...dates },
+    remediation: { policyDate: null, plannedDate: null, attestationDate: null, planStatus: null, reportDate: '2026-10-22', ...dates },
   });
   let client: MockJiraClient;
   let ticketService: TicketService;

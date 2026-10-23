@@ -12,7 +12,7 @@ function comp(nameVersion: string, over: Partial<WaltzComponent> = {}): WaltzCom
     remediationAction: 'Remediate',
     instancePaths: ['/app/a.jar'],
     vulnerabilities: [{ cveId: 'CVE-2099-0001', cveSummary: null, overallSeverity: 'High', cvssV3Score: 7, fixedVersion: null }],
-    remediation: { policyDate: '2026-11-30', plannedDate: '2026-12-15', planDeadline: null, planStatus: 'Overdue', reportDate: '2026-10-22' },
+    remediation: { policyDate: '2026-11-30', plannedDate: '2026-12-15', attestationDate: null, planStatus: 'Overdue', reportDate: '2026-10-22' },
     ...over,
   };
 }
@@ -31,13 +31,13 @@ describe('readWaltzComponents', () => {
     expect(result.edited).toBe(false);
     expect(result.components).toEqual([expect.objectContaining({
       nameVersion: 'example-lib:1.2.3', rating: 'High', remediationAction: 'Remediate', cveCount: 1, artifactCount: 1,
-      policyDate: '2026-11-30', plannedDate: '2026-12-15', planDeadline: null, planStatus: 'Overdue', detailSource: 'table',
+      policyDate: '2026-11-30', plannedDate: '2026-12-15', attestationDate: null, planStatus: 'Overdue', detailSource: 'table',
     })]);
   });
 
   it('reads a merged ticket with 7 components back to 7 records', () => {
     const names = ['netty-codec', 'netty-handler', 'netty-buffer', 'netty-common', 'netty-transport', 'netty-resolver', 'netty-codec-http'];
-    const group = names.map((n, i) => comp(`${n}:4.1.100`, { remediation: { policyDate: `2026-11-0${i + 1}`, plannedDate: null, planDeadline: null, planStatus: null, reportDate: null } }));
+    const group = names.map((n, i) => comp(`${n}:4.1.100`, { remediation: { policyDate: `2026-11-0${i + 1}`, plannedDate: null, attestationDate: null, planStatus: null, reportDate: null } }));
     const { wiki, summary, labels } = ticketOf(group);
 
     const result = readWaltzComponents(wiki, { summary, labels });
@@ -52,12 +52,12 @@ describe('readWaltzComponents', () => {
 
     const [c] = readWaltzComponents(wiki, { summary, labels }).components;
 
-    expect(c).toMatchObject({ policyDate: null, plannedDate: null, planDeadline: null, planStatus: null, remediationAction: null });
+    expect(c).toMatchObject({ policyDate: null, plannedDate: null, attestationDate: null, planStatus: null, remediationAction: null });
   });
 
   it('reads the previous folded table, which has no action column, as legacy', () => {
     const old = [
-      '||Component||Max rating||CVEs||Artifacts||Policy date||Planned date||Plan deadline||Plan status||',
+      '||Component||Max rating||CVEs||Artifacts||Policy date||Planned date||Attestation date||Plan status||',
       '|example-a:1.0.0|High|2|1|n/a|2026-12-15|n/a|Overdue|',
     ].join('\n');
 
@@ -68,7 +68,7 @@ describe('readWaltzComponents', () => {
   });
 
   it('reads the older single-component ticket whose dates sit in a Remediation dates section, with name and rating from the title', () => {
-    const legacy = 'h3. Max Vuln Rating\nHigh\n\nh3. Remediation dates\n||Policy date||Planned date||Plan deadline||Plan status||\n|2026-11-30|2026-12-15|n/a|n/a|';
+    const legacy = 'h3. Max Vuln Rating\nHigh\n\nh3. Remediation dates\n||Policy date||Planned date||Attestation date||Plan status||\n|2026-11-30|2026-12-15|n/a|n/a|';
 
     const result = readWaltzComponents(legacy, { summary: '[OSS] example-lib:1.2.3 — High', labels: ['oss-dependency'] });
 
@@ -99,7 +99,7 @@ describe('readWaltzComponents', () => {
   });
 
   it('reads a cell holding text instead of a date as no date for that date only', () => {
-    const wiki = '||Component||Max rating||Remediation action||CVEs||Artifacts||Policy date||Planned date||Plan deadline||Plan status||\n|a:1|High|n/a|1|1|soon|2026-12-15|n/a|n/a|';
+    const wiki = '||Component||Max rating||Remediation action||CVEs||Artifacts||Policy date||Planned date||Attestation date||Plan status||\n|a:1|High|n/a|1|1|soon|2026-12-15|n/a|n/a|';
     const [c] = readWaltzComponents(wiki, { summary: null, labels: [] }).components;
     expect(c).toMatchObject({ policyDate: null, plannedDate: '2026-12-15' });
   });

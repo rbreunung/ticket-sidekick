@@ -39,7 +39,7 @@ import {
 const comp = (nameVersion: string, dates: Partial<RemediationDates> = {}, cve = 'CVE-2099-0001'): WaltzComponent => ({
   nameVersion, maxVulnRating: 'High', remediationAction: 'Remediate', instancePaths: ['app.jar'],
   vulnerabilities: [{ cveId: cve, cveSummary: null, overallSeverity: 'High', cvssV3Score: 7, fixedVersion: null }],
-  remediation: { policyDate: null, plannedDate: null, planDeadline: null, planStatus: null, reportDate: '2026-10-22', ...dates },
+  remediation: { policyDate: null, plannedDate: null, attestationDate: null, planStatus: null, reportDate: '2026-10-22', ...dates },
 });
 
 /** A ticket as an earlier import left it: component and record labels, and the description it wrote. */

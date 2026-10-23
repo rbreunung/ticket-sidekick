@@ -10,8 +10,8 @@ export interface RemediationDates {
   policyDate: string | null;
   /** Remediation Target Date column: the team's own planned date, only present on `Remediate` rows. */
   plannedDate: string | null;
-  /** Attested Rem Plan Due By column: the deadline for filing a remediation plan. */
-  planDeadline: string | null;
+  /** Attested Rem Plan Due By column: the date the remediation plan was attested. */
+  attestationDate: string | null;
 }
 
 export interface WaltzRemediation extends RemediationDates {
@@ -21,7 +21,7 @@ export interface WaltzRemediation extends RemediationDates {
   reportDate: string | null;
 }
 
-export type DateKind = 'policy' | 'planned' | 'deadline' | 'due';
+export type DateKind = 'policy' | 'planned' | 'attestation' | 'due';
 
 export interface DateChange {
   date: DateKind;
@@ -30,7 +30,7 @@ export interface DateChange {
 }
 
 export function hasAnyDate(dates: RemediationDates | null | undefined): boolean {
-  return !!dates && (dates.policyDate !== null || dates.plannedDate !== null || dates.planDeadline !== null);
+  return !!dates && (dates.policyDate !== null || dates.plannedDate !== null || dates.attestationDate !== null);
 }
 
 /** The Jira Due Date for one component: the planned date, else the policy date. */
@@ -58,7 +58,7 @@ export function diffRemediationDates(recorded: RemediationDates, reported: Remed
   const pairs: Array<[DateKind, string | null, string | null]> = [
     ['policy', recorded.policyDate, reported.policyDate],
     ['planned', recorded.plannedDate, reported.plannedDate],
-    ['deadline', recorded.planDeadline, reported.planDeadline],
+    ['attestation', recorded.attestationDate, reported.attestationDate],
   ];
   return pairs.filter(([, from, to]) => from !== to).map(([date, from, to]) => ({ date, from, to }));
 }
@@ -70,7 +70,7 @@ export function diffRemediationDates(recorded: RemediationDates, reported: Remed
 export const ABSENT_CELL = 'n/a';
 export const COLUMN_POLICY = 'Policy date';
 export const COLUMN_PLANNED = 'Planned date';
-export const COLUMN_DEADLINE = 'Plan deadline';
+export const COLUMN_ATTESTATION = 'Attestation date';
 export const COLUMN_STATUS = 'Plan status';
 export const COLUMN_COMPONENT = 'Component';
 export const COLUMN_RATING = 'Max rating';
@@ -82,7 +82,7 @@ export const COMPONENT_COLUMNS = [COLUMN_COMPONENT, COLUMN_RATING, COLUMN_ACTION
 
 /** The four date columns' titles; the plan-status title carries the report's extraction date when it has one. */
 export function dateColumnTitles(reportDate: string | null): string[] {
-  return [COLUMN_POLICY, COLUMN_PLANNED, COLUMN_DEADLINE, reportDate ? `${COLUMN_STATUS} (as of ${reportDate})` : COLUMN_STATUS];
+  return [COLUMN_POLICY, COLUMN_PLANNED, COLUMN_ATTESTATION, reportDate ? `${COLUMN_STATUS} (as of ${reportDate})` : COLUMN_STATUS];
 }
 
 const EXACT_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -110,7 +110,7 @@ export function parseRecordedDates(wiki: string | null | undefined, componentNam
     const policy = titles.indexOf(COLUMN_POLICY.toLowerCase());
     if (policy < 0) continue;
     const planned = titles.indexOf(COLUMN_PLANNED.toLowerCase());
-    const deadline = titles.indexOf(COLUMN_DEADLINE.toLowerCase());
+    const attestation = titles.indexOf(COLUMN_ATTESTATION.toLowerCase());
     const component = titles.indexOf(COLUMN_COMPONENT.toLowerCase());
 
     const rows: string[][] = [];
@@ -122,7 +122,7 @@ export function parseRecordedDates(wiki: string | null | undefined, componentNam
     const wanted = sanitizeCellText(componentName).trim();
     const row = component < 0 ? rows[0] : rows.find(r => (r[component] ?? '').trim() === wanted);
     if (!row) return null;
-    return { policyDate: cellDate(row[policy]), plannedDate: cellDate(row[planned]), planDeadline: cellDate(row[deadline]) };
+    return { policyDate: cellDate(row[policy]), plannedDate: cellDate(row[planned]), attestationDate: cellDate(row[attestation]) };
   }
   return null;
 }

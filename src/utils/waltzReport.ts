@@ -314,7 +314,7 @@ async function parseWaltzReportInner(buffer: Buffer, maxBytes: number, onDiag?: 
     remediation: {
       policyDate: readDate(r.expectedRemediation),
       plannedDate: readDate(r.targetDate),
-      planDeadline: readDate(r.planDueBy),
+      attestationDate: readDate(r.planDueBy),
       planStatus: r.planReason,
       reportDate,
     },
@@ -521,7 +521,7 @@ export function describeWaltzChange(component: WaltzComponent, knownLabels: stri
   return ratingRise ? { newCveIds, ratingRise } : { newCveIds };
 }
 
-const NO_DATES: RemediationDates = { policyDate: null, plannedDate: null, planDeadline: null };
+const NO_DATES: RemediationDates = { policyDate: null, plannedDate: null, attestationDate: null };
 
 /**
  * U3: describeWaltzChange mapped to the shared RowChange shape buildReviewRows' change tracking uses.
@@ -621,7 +621,7 @@ function dateCells(remediation: WaltzRemediation | undefined): string[] {
   return [
     remediation?.policyDate ?? ABSENT_CELL,
     remediation?.plannedDate ?? ABSENT_CELL,
-    remediation?.planDeadline ?? ABSENT_CELL,
+    remediation?.attestationDate ?? ABSENT_CELL,
     remediation?.planStatus ? sanitizeCellText(remediation.planStatus) : ABSENT_CELL,
   ];
 }

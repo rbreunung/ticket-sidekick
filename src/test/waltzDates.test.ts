@@ -5,8 +5,8 @@ import {
   type RemediationDates,
 } from '../utils/waltzDates';
 
-const dates = (policyDate: string | null, plannedDate: string | null = null, planDeadline: string | null = null): RemediationDates =>
-  ({ policyDate, plannedDate, planDeadline });
+const dates = (policyDate: string | null, plannedDate: string | null = null, attestationDate: string | null = null): RemediationDates =>
+  ({ policyDate, plannedDate, attestationDate });
 
 describe('toCalendarDate', () => {
   it('keeps a plain calendar date', () => {
@@ -45,7 +45,7 @@ describe('effectiveDueDate', () => {
     expect(effectiveDueDate(dates('2026-11-30'))).toBe('2026-11-30');
   });
 
-  it('does not use the plan deadline as a due date', () => {
+  it('does not use the attestation date as a due date', () => {
     expect(effectiveDueDate(dates(null, null, '2026-09-20'))).toBeNull();
   });
 
@@ -81,9 +81,9 @@ describe('diffRemediationDates', () => {
     expect(diffRemediationDates(dates('2026-11-30', null, '2026-09-20'), dates('2026-11-30', null, '2026-09-20'))).toEqual([]);
   });
 
-  it('orders the entries policy, planned, deadline', () => {
+  it('orders the entries policy, planned, attestation', () => {
     const diff = diffRemediationDates(dates(null), dates('2026-01-01', '2026-02-02', '2026-03-03'));
-    expect(diff.map(d => d.date)).toEqual(['policy', 'planned', 'deadline']);
+    expect(diff.map(d => d.date)).toEqual(['policy', 'planned', 'attestation']);
   });
 });
 
