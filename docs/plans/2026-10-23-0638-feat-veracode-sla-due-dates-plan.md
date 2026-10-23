@@ -41,7 +41,7 @@ The Veracode Detailed Report records when each flaw was first found, and the pol
 **The due date**
 
 - R3. A flaw's due date is its first-found date plus the configured days for its severity. The first-found date is the calendar date Veracode records in the report.
-- R4. A flaw whose report entry has no readable first-found date uses the import date as its start.
+- R4. A flaw whose report entry has no readable first-found date uses the creation date of its ticket as its start: the import date for a new ticket, the Jira creation date for an existing one.
 - R5. A due date already in the past is written as it is.
 - R6. A folded ticket takes the earliest due date of its flaws, each flaw counted with its own severity and first-found date. A fold in which no flaw has a due date gets none.
 
@@ -56,7 +56,7 @@ The Veracode Detailed Report records when each flaw was first found, and the pol
 - R10. The Already ticketed screen counts an open ticket as changed when its Jira Due Date is empty or differs from the date the policy gives its flaws. This covers tickets created before this feature and tickets affected by a changed setting.
 - R11. For an open ticket changed under R10, `rewrite` is the default action. It sets the Due Date from the policy, including over a date edited by hand, and the user manual and the result message say so.
 - R12. A date difference alone does not change a ticket whose targets are all resolved. Such a ticket keeps its existing handling.
-- R13. A flaw's severity, first-found date and the table are the only inputs to the date, so an unchanged table and report give the same date on every import.
+- R13. A flaw's severity, its start date (R3, R4) and the table are the only inputs to the date, and a start date does not move once the ticket exists, so an unchanged table and report give the same date on every import.
 - R14. A ticket whose flaws have no due date (R2) is never flagged under R10 and never has its Due Date cleared.
 
 **Overview and export**
@@ -72,7 +72,7 @@ The Veracode Detailed Report records when each flaw was first found, and the pol
 
 - **The date comes from a company table in settings, not from the report.** Chosen over using Veracode's own grace-period dates and over a report-first fallback: the written policy is the authority, and it works with any report. Governs R1, R3.
 - **The clock starts at the flaw's first-found date.** Chosen over the import date and the report date: the policy runs from discovery, and counting from the import would hand out extra time on a late or repeated import. Governs R3, R4.
-- **A flaw without a first-found date falls back to the import date.** The flaw still gets a date, which is better than none. Governs R4.
+- **A flaw without a first-found date starts at its ticket's creation date.** Chosen over no due date and over the date of each import: the flaw still gets a date, and the date stays stable across imports. A report field that dates these flaws, if one turns up, would replace the fallback. Governs R4, R13.
 - **No built-in day counts.** Numbers are the company's to set; shipping guesses would put wrong deadlines on real tickets. Governs R1, R2.
 - **Existing tickets are backfilled through the Already ticketed screen.** Chosen over new tickets only and over a separate command: one place, one set of actions, and the date is deterministic so the refresh needs no newer-report logic. Governs R10, R11.
 - **The backfill action is `rewrite`.** Chosen over a Due-Date-only action and over filling empty dates only: Veracode and Waltz keep one action set. The cost is that `rewrite` replaces hand-added description text and a hand-edited Due Date; the manual says so. Governs R11.
@@ -110,12 +110,14 @@ The dates and day counts below are invented.
 - AE10. **Covers R9.** Given an `add … to <KEY>` with `as comment`, when it is applied, then the comment lists the added flaws' dates and the ticket's Due Date is not written.
 - AE11. **Covers R16.** Given a New row whose due date is before today, when the user replies `export`, then the row shows its due date and the overdue flag and carries no due-before-release flag.
 - AE12. **Covers R15.** Given a Veracode ticket created with a Due Date before today's date, when `@jira /overview` runs, then it shows the overdue flag.
+- AE13. **Covers R4, R13.** Given an open ticket created on 2026-10-23 for a flaw with no readable first-found date, High set to 60 days and the ticket's Due Date 2026-12-22, when the same report is imported on 2026-11-20, then the row is not a change.
 
 ### Scope Boundaries
 
 **Deferred for later**
 
 - Using Veracode's own grace-period dates from the report, alone or as a fallback.
+- Finding a report field that dates flaws with no first-found timestamp, to replace the creation-date fallback (R4).
 - A Due-Date-only action, so a backfill can leave the description alone.
 - Protection for a Due Date edited by hand, such as keeping it or asking per row.
 - A setting to turn the Due Date write off.
@@ -140,7 +142,7 @@ The dates and day counts below are invented.
 **Deferred to Planning**
 
 - The setting's key and shape (keyed by severity label or number), its validation, and how it is documented in `docs/manual/settings-reference.md`.
-- How the backfill reads a ticket's current Due Date: from Jira's field through the dedup search or the issue read, or from the description as Waltz does (see KL18).
+- How the backfill reads a ticket's current Due Date and creation date (R4, R10): from Jira's fields through the dedup search or the issue read, or from the description as Waltz does (see KL18). The Waltz description-read switch (`readsTargetDescriptions`) also runs a dropped-member pass, so reusing it must not change Veracode's other Already ticketed behavior (R17).
 - Where the dates sit in the description and the Findings table, given the readers that accept older layouts in `src/utils/veracodeFindingsTable.ts`.
 - The calendar date of a first-found timestamp when its offset differs from local time.
 
