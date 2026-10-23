@@ -66,7 +66,7 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   // KTD3: builds the ticket's summary + create-fields from a row (and the batch's resolved template
   // fields) — the only place a row's fields become a `createTicket()` call, so an importer with no
   // `labels`/`descriptionWiki` concept (email) never needs those fields at all.
-  buildTicketFields: (row: TRow, additionalFields: Record<string, unknown>) => BuiltTicketFields;
+  buildTicketFields: (row: TRow, additionalFields: Record<string, unknown>, context?: TicketWriteContext) => BuiltTicketFields;
   // KTD4: optional per-row work after a ticket is created (email uses this for attachment upload).
   // A rejection is caught by the shared creation step (createOne) and shown as a warning — it never fails the row,
   // since the ticket already exists by the time this runs.
@@ -105,6 +105,21 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   // Security overview export (KTD3): optional `export` reply that lists this report's items by Fix Version. Veracode and Waltz
   // supply it; email omits it and has no `export` reply.
   overviewExport?: ImportOverviewExport<TRow>;
+  /**
+   * Veracode: replaces the Due Date a rewrite would take from `buildTicketFields`, because a Due Date is set once and
+   * a later import only moves it earlier. Returns the date to write, or null to leave the ticket's own alone. Without
+   * it a rewrite writes whatever `buildTicketFields` returns (Waltz).
+   */
+  rewriteDueDate?: (params: {
+    regenItem: TItem; joiningItem: TItem | null; currentDueDate: string | null; ticketCreated: string | null;
+  }) => string | null;
+  /** The result-line note after a rewrite wrote this Due Date; the default is Waltz's "from the report … replaces any date edited by hand". */
+  dueDateNote?: (dueDate: string) => string;
+}
+
+/** What a ticket write knows about the ticket beyond the row: an existing ticket's creation time (a rewrite), absent for a new ticket. */
+export interface TicketWriteContext {
+  ticketCreated?: string | null;
 }
 
 /** What an importer supplies so the `export` reply can list a row's report-side detail. */

@@ -6,7 +6,7 @@ import {
   parseVeracodeReport, filterFlaws, severityLabel, groupFlawsByLocation,
   buildGroupSummary, buildGroupDescriptionWiki, buildGroupLabels, buildFoldedCommentWiki,
   describeVeracodeChange, flawsWithIds, buildFollowUpSummary,
-  type VeracodeFlaw, type VeracodeReviewRow,
+  type VeracodeFlaw, type VeracodeReviewRow, type DueContext,
 } from '../../utils/veracodeReport';
 import type { VeracodeTemplateSelectionSession, VeracodeReviewSession, StaleCloseSession } from '../sessionState';
 import { VERACODE_REVIEW_COLUMNS } from '../sessionState';
@@ -17,8 +17,9 @@ import {
   type ReportImportDescriptor,
 } from './reportImportHandler';
 import { resolveSizeLimitSetting, templateLabelsOf, deriveRewriteActions } from '../../utils/reportImport';
-import { findingFromFlaw } from '../../utils/securityOverview';
-import { resolveSlaDays, SLA_SEVERITY_NAMES, type ResolvedSla, type SlaDays } from '../../utils/veracodeDates';
+import { findingFromFlaw, localDate } from '../../utils/securityOverview';
+import { resolveSlaDays, groupDueDate, SLA_SEVERITY_NAMES, type ResolvedSla, type SlaDays } from '../../utils/veracodeDates';
+import { toCalendarDate } from '../../utils/waltzDates';
 import { logDiag } from '../../utils/diagLog';
 import type { AwaitIssueTypeResume } from '../sessionState';
 import { sessionWasSuperseded } from './ticketContext';
@@ -47,6 +48,14 @@ function readVeracodeSla(): ResolvedSla {
 /** The SLA table (`ticketSidekick.veracode.slaDays`) as days by severity number; a severity with no days is absent. */
 export function getVeracodeSlaDays(): SlaDays {
   return readVeracodeSla().days;
+}
+
+/**
+ * The SLA day counts and the start for a flaw with no first-found date: the existing ticket's creation date when one is
+ * being rewritten, else the import date.
+ */
+function veracodeDue(ticketCreated?: string | null): DueContext {
+  return { days: getVeracodeSlaDays(), fallbackStart: toCalendarDate(ticketCreated) ?? localDate() };
 }
 
 // A problem with the setting is logged once per import, when its session is built, never once per row.
@@ -158,10 +167,27 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
   },
   reviewColumns: VERACODE_REVIEW_COLUMNS,
   itemRefFor: row => `Flaw ${row.issueIds.join(', ')}`,
-  buildTicketFields: (row, additionalFields) => ({
-    summary: row.summary,
-    fields: { ...additionalFields, labels: row.labels, description: buildGroupDescriptionWiki(row.sourceGroup) },
-  }),
+  // The Due Date is written after the template fields so a template cannot override the policy, only when some flaw
+  // has one, and never cleared; Jira may refuse it, which must not stop the ticket (optionalFields).
+  buildTicketFields: (row, additionalFields, context) => {
+    const due = veracodeDue(context?.ticketCreated);
+    const dueDate = groupDueDate(row.sourceGroup, due.days, due.fallbackStart);
+    return {
+      summary: row.summary,
+      fields: { ...additionalFields, labels: row.labels, description: buildGroupDescriptionWiki(row.sourceGroup, due), ...(dueDate ? { duedate: dueDate } : {}) },
+      optionalFields: dueDate ? ['duedate'] : undefined,
+    };
+  },
+  // A Due Date is set once (an empty one gets the policy date over the whole ticket) and flaws joining a ticket can only
+  // move it earlier; anything else leaves it alone.
+  rewriteDueDate: ({ regenItem, joiningItem, currentDueDate, ticketCreated }) => {
+    const due = veracodeDue(ticketCreated);
+    if (currentDueDate === null) return groupDueDate(regenItem, due.days, due.fallbackStart);
+    if (joiningItem === null) return null;
+    const joining = groupDueDate(joiningItem, due.days, due.fallbackStart);
+    return joining !== null && joining < currentDueDate ? joining : null;
+  },
+  dueDateNote: dueDate => `Due Date set to ${dueDate} from your SLA table`,
   // KTD9: this pop-up previously lived only in extension.ts's own (pre-consolidation) duplicate of
   // this flow; wiring it through the descriptor keeps it alive for both the command-triggered and
   // chat-only entry points once extension.ts is switched onto this shared session builder.
@@ -183,7 +209,7 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
     itemOf: row => row.sourceGroup,
     combine: groups => groups.flat(),
     recordLabelsOf: group => buildGroupLabels(group),
-    buildComment: (group, droppedKeys) => buildFoldedCommentWiki(group, droppedKeys),
+    buildComment: (group, droppedKeys, details) => buildFoldedCommentWiki(group, droppedKeys, veracodeDue(details?.ticketCreated)),
     narrowToNew: (group, change) => flawsWithIds(group, change.newIds),
   },
   // Security overview export (KTD3): the report's own flaws are the exact detail; a Veracode report carries no dates.
@@ -205,9 +231,15 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
     actionLabels: { 'follow-up': 'new ticket' },
     buildFollowUp: (row, _change, originalKey, additionalFields) => {
       const group = row.sourceGroup;
+      const due = veracodeDue();
+      const dueDate = groupDueDate(group, due.days, due.fallbackStart);
       return {
         summary: buildFollowUpSummary(group, originalKey),
-        fields: { ...additionalFields, labels: buildGroupLabels(group, templateLabelsOf(additionalFields)), description: buildGroupDescriptionWiki(group) },
+        fields: {
+          ...additionalFields, labels: buildGroupLabels(group, templateLabelsOf(additionalFields)),
+          description: buildGroupDescriptionWiki(group, due), ...(dueDate ? { duedate: dueDate } : {}),
+        },
+        optionalFields: dueDate ? ['duedate'] : undefined,
       };
     },
   },

@@ -25,8 +25,9 @@ export function droppedFieldsWarning(link: string, droppedFields: string[]): str
 }
 
 /** R11: the result line's note that a rewrite set the Due Date from the report, over any date edited by hand. */
-export function dueDateSetNote(dueDate: string | null): string {
-  return dueDate ? ` — Due Date set to ${dueDate} from the report (replaces any date edited by hand)` : '';
+export function dueDateSetNote(dueDate: string | null, descriptor?: { dueDateNote?: (dueDate: string) => string }): string {
+  if (!dueDate) return '';
+  return descriptor?.dueDateNote ? ` — ${descriptor.dueDateNote(dueDate)}` : ` — Due Date set to ${dueDate} from the report (replaces any date edited by hand)`;
 }
 
 /** Logs the same refusal for the Output channel, tagged with the importer's scope. */

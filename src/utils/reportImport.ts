@@ -506,6 +506,8 @@ export interface CommentDetails {
   dateChanges?: Array<{ ref: string; changes: DateChange[] }>;
   /** The Due Date the rewrite set from the report, when it set one. */
   dueDate?: string | null;
+  /** The target ticket's Jira creation time, so an importer can date an undated finding from it (Veracode). */
+  ticketCreated?: string | null;
 }
 
 /** What the row builder knows about an item's target ticket that a describer may need beyond its labels. */
@@ -525,6 +527,11 @@ export interface RowChangeTracking<TItem> {
   describe(item: TItem, knownLabels: string[], context?: ChangeContext): RowChange | null;
   /** Replaces {@link deriveTicketedActions} for importers with their own action policy (Waltz). */
   deriveActions?: (change: RowChange | null, anyOpen: boolean) => TicketedActionChoice;
+}
+
+/** A Jira field value that should be a string (a date such as `created` or `duedate`), else null. */
+export function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
 }
 
 /** A template's `labels` field as a string array, or [] when it has none. */
