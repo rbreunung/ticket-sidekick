@@ -212,12 +212,15 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
     buildComment: (group, droppedKeys, details) => buildFoldedCommentWiki(group, droppedKeys, veracodeDue(details?.ticketCreated)),
     narrowToNew: (group, change) => flawsWithIds(group, change.newIds),
   },
-  // Security overview export (KTD3): the report's own flaws are the exact detail; a Veracode report carries no dates.
+  // Security overview export (KTD3): the report's own flaws are the exact detail, and the SLA table implies the same Due Date a ticket would get.
   overviewExport: {
     source: 'veracode',
     detailOf: row => ({ findings: row.sourceGroup.map(findingFromFlaw) }),
     summaryOf: row => row.summary,
-    dueDateOf: () => null,
+    dueDateOf: row => {
+      const due = veracodeDue();
+      return groupDueDate(row.sourceGroup, due.days, due.fallbackStart);
+    },
   },
   // Import ticket updates parity (KTD2): a folded group's findings are its flaw ids, recorded as
   // `veracode-issue-<id>` labels. Veracode offers the same three actions as Waltz (`rewrite`, `leave`, `new ticket`), so a

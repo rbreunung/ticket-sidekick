@@ -131,6 +131,17 @@ describe('@jira /overview', () => {
     expect(textOf(stream)).toContain('SEC-1');
   });
 
+  it('AE12: flags a Veracode ticket whose Due Date is already past as overdue', async () => {
+    seed([veracodeTicket('SEC-1', [makeFlaw('1')], { fixVersions: ['2026.11'], dueDate: '2020-01-29' })]);
+    const stream = streamOf();
+
+    await handleSecurityOverview(request('SEC'), stream as never, service, 'https://jira.example.com');
+
+    const text = textOf(stream);
+    expect(text).toContain('2020-01-29');
+    expect(text).toContain('⚠ overdue');
+  });
+
   it('warns and flags only overdue when the project versions cannot be read', async () => {
     seed([veracodeTicket('SEC-1', [makeFlaw('1')], { fixVersions: ['2026.11'], dueDate: '2026-11-01' })]);
     vi.spyOn(client, 'getProject').mockRejectedValue(new Error('boom'));
