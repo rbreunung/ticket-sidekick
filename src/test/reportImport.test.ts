@@ -1269,6 +1269,17 @@ describe('applyMissingDueDate (Veracode SLA due dates, U4)', () => {
     expect(out[0].change?.kind === 'findings' && out[0].change.dates).toEqual([{ date: 'due', from: null, to: '2026-12-01' }]);
   });
 
+  it('leaves a baseline row as a baseline, whatever the policy gives', () => {
+    dueByKey.a = '2026-12-01';
+    const map = dedupOf(withDueDate('PROJ-1', ['dep-a'], null), 'a');
+    const rows = buildReviewRows<Flaws, FlawRow>([{ key: 'a' }], map, dedupKeyOf, c => ({ key: c.key }), {
+      describe: () => ({ kind: 'baseline' }), deriveActions: deriveRewriteActions,
+    });
+    const out = apply(rows, map);
+    expect(out[0].change).toEqual({ kind: 'baseline' });
+    expect(out[0].action).toBe(rows[0].action);
+  });
+
   it('does not flag a row whose flaws have no due date', () => {
     dueByKey.a = null;
     const map = dedupOf(withDueDate('PROJ-1', ['dep-a'], null), 'a');

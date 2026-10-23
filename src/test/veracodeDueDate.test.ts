@@ -118,6 +118,26 @@ describe('the Due Date of a new Veracode ticket', () => {
     expect(created()).not.toHaveProperty('duedate');
   });
 
+  it('AE3: with every severity at 0 no ticket gets a Due Date', async () => {
+    sla.value = { 'Very High': 0, High: 0, Medium: 0, Low: 0, 'Very Low': 0, Informational: 0 };
+    const ws = await importVeracode([flaw({ severity: 5, firstFoundDate: '2026-09-01' }), flaw({ severity: 4, firstFoundDate: '2026-09-01' })]);
+    await reply('create tickets', ws);
+    expect(client.createIssueCalls).toHaveLength(2);
+    expect(client.createIssueCalls.every(c => !('duedate' in (c.additionalFields ?? {})))).toBe(true);
+  });
+
+  it('logs unknown and invalid slaDays entries once per import', async () => {
+    const ignored = () => diagLines().filter(l => l.includes('slaDays has entries that were ignored')).length;
+    const before = ignored();
+    sla.value = { 'Very Hgh': 5, High: 'soon' };
+    await importVeracode([flaw({ severity: 4, firstFoundDate: '2026-10-01' })]);
+    expect(ignored()).toBe(before + 1);
+    const line = diagLines().filter(l => l.includes('slaDays has entries that were ignored')).at(-1)!;
+    const details = JSON.parse(diagLines()[diagLines().lastIndexOf(line) + 1]);
+    expect(details.unknownKeys).toEqual(['Very Hgh']);
+    expect(details.invalidKeys).toEqual(['High']);
+  });
+
   it('counts a flaw with no first-found date from the import date', async () => {
     sla.value = { High: 60 };
     const ws = await importVeracode([flaw({ severity: 4, firstFoundDate: null })]);
@@ -230,7 +250,9 @@ describe('the Due Date written by add … as rewrite and as comment', () => {
     const text = await reply('add 1 to PROJ-5 as rewrite', ws);
     expect(client.updateIssueCalls).toHaveLength(2);
     expect(client.updateIssueCalls[1].fields).not.toHaveProperty('duedate');
-    expect(text).toMatch(/Due Date/i);
+    expect(String(client.updateIssueCalls[1].fields.description)).toContain('2026-11-01');
+    expect(text).toContain('Jira refused the Due Date');
+    expect(text).toContain('The dates are in the description');
   });
 
   it('AE10: as comment writes no Due Date and the comment lists the added flaw\'s dates', async () => {
