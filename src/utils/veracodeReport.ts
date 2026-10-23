@@ -5,6 +5,7 @@ import {
   clampSummary, fitWiki,
   type RowChange,
 } from './reportImport';
+import { FINDINGS_COLUMNS, SLIM_FINDINGS_COLUMNS, ABSENT_CELL } from './veracodeFindingsTable';
 
 export interface VeracodeFlaw {
   issueId: string;
@@ -201,7 +202,7 @@ function fullSourcePath(flaw: VeracodeFlaw): string | null {
 // unsanitized: issueId and cweId are already validated purely-numeric at parse time (ISSUE_ID_PATTERN
 // / CWE_ID_PATTERN) and severity is a locally-computed number, so none of the three can carry a
 // markdown-trigger character to begin with.
-// Shared by buildDescriptionWiki()/buildGroupDescriptionWiki()/buildNewFindingsCommentWiki() — the
+// Shared by buildDescriptionWiki()/buildGroupDescriptionWiki() — the
 // Severity/CWE/Description/Recommendation blocks render identically in all three (only the heading
 // level and which optional sections are included differ; the Location/Function layout around them
 // does not, so that part stays inline per caller rather than being forced into a shared shape).
@@ -386,25 +387,50 @@ export function buildGroupSummary(group: VeracodeFlaw[]): string {
 
 // Per-finding description/recommendation caps by detail level (R10); the last level drops the
 // per-finding sections altogether and leaves the (always complete) overview table.
+// Then two table-only levels: the full findings table, and — when even that exceeds the budget (several hundred
+// findings) — the slim table, which keeps the identifiers (issue id, severity, CWE, file, line) and drops the rest.
 const FOLD_TEXT_CAPS = [Infinity, 400, 120];
-const FOLD_LEVELS = FOLD_TEXT_CAPS.length + 1;
+const FOLD_LEVELS = FOLD_TEXT_CAPS.length + 2;
+const SLIM_TABLE_LEVEL = FOLD_LEVELS - 1;
 
 function severityText(flaw: VeracodeFlaw): string {
   return `${severityLabel(flaw.severity)} (${flaw.severity})`;
 }
 
-function locationText(flaw: VeracodeFlaw): string {
-  const path = fullSourcePath(flaw);
-  return path ? `${path}${flaw.line != null ? `:${flaw.line}` : ''}` : sanitizeCellText(fileRef(flaw));
+// A table cell's text: sanitized, or `n/a` when there is nothing (left) to show.
+function tableCell(value: string | null | undefined): string {
+  const text = value ? sanitizeCellText(value).trim() : '';
+  return text === '' ? ABSENT_CELL : text;
 }
 
-function pushFoldedTable(lines: string[], group: VeracodeFlaw[]): void {
-  lines.push('| Issue ID | Severity | CWE | Location | Function |');
-  lines.push('| --- | --- | --- | --- | --- |');
+/**
+ * The findings table (one row per finding, every ticket): path, file and line stay separate cells so
+ * a reader can rebuild a finding's location from Jira alone (see veracodeFindingsTable.ts, which owns the
+ * column titles and reads this back).
+ */
+function pushFindingsTable(lines: string[], group: VeracodeFlaw[], slim = false): void {
+  const columns = slim ? SLIM_FINDINGS_COLUMNS : FINDINGS_COLUMNS;
+  lines.push(`| ${columns.join(' | ')} |`);
+  lines.push(`| ${columns.map(() => '---').join(' | ')} |`);
   for (const flaw of group) {
-    const cwe = flaw.cweId ? `CWE-${flaw.cweId}` : 'n/a';
-    const fn = flaw.functionPrototype ? sanitizeCellText(flaw.functionPrototype) : 'n/a';
-    lines.push(`| ${flaw.issueId} | ${severityText(flaw)} | ${cwe} | ${locationText(flaw)} | ${fn} |`);
+    const cells = slim ? [
+      flaw.issueId,
+      severityText(flaw),
+      flaw.cweId ? `CWE-${flaw.cweId}` : ABSENT_CELL,
+      tableCell(flaw.sourceFile),
+      flaw.line != null ? String(flaw.line) : ABSENT_CELL,
+    ] : [
+      flaw.issueId,
+      severityText(flaw),
+      flaw.cweId ? `CWE-${flaw.cweId}` : ABSENT_CELL,
+      tableCell(flaw.cweName),
+      tableCell(flaw.module),
+      tableCell(flaw.sourceFilePath),
+      tableCell(flaw.sourceFile),
+      flaw.line != null ? String(flaw.line) : ABSENT_CELL,
+      tableCell(flaw.functionPrototype),
+    ];
+    lines.push(`| ${cells.join(' | ')} |`);
   }
   lines.push('');
 }
@@ -440,8 +466,12 @@ function buildFoldedMarkdown(group: VeracodeFlaw[], banner: string, level: numbe
     lines.push("Per-finding text was shortened to fit Jira's size limit; the table lists every finding.");
     lines.push('');
   }
-  if (group.length > 0) pushFoldedTable(lines, group);
-  if (group.length > 0 && level < FOLD_LEVELS - 1) {
+  if (level === SLIM_TABLE_LEVEL && group.length > 0) {
+    lines.push("The table leaves out the module, path, CWE name and function of each finding to fit Jira's size limit.");
+    lines.push('');
+  }
+  if (group.length > 0) pushFindingsTable(lines, group, level === SLIM_TABLE_LEVEL);
+  if (group.length > 0 && level < FOLD_TEXT_CAPS.length) {
     const cap = FOLD_TEXT_CAPS[level];
     for (const flaw of group) pushFoldedSection(lines, flaw, cap);
   }
@@ -460,6 +490,9 @@ function buildFoldedWiki(group: VeracodeFlaw[], banner: string, droppedIds: stri
 /** A one-flaw ticket: hoisted Location, then the flaw's own sections — the layout before folding existed. */
 function buildSingleFlawDescriptionWiki(flaw: VeracodeFlaw): string {
   const lines: string[] = [];
+
+  lines.push('### Findings');
+  pushFindingsTable(lines, [flaw]);
 
   lines.push('### Location');
   pushModuleAndFile(lines, flaw);
@@ -506,31 +539,6 @@ export function buildFoldedCommentWiki(group: VeracodeFlaw[], droppedIds: string
       ? 'This Veracode finding was added to this ticket.'
       : `These ${group.length} Veracode findings were added to this ticket.`;
   return buildFoldedWiki(group, banner, droppedIds);
-}
-
-/**
- * Builds the `update` action's comment body for the given new flaws (already filtered by the caller
- * to the flaws newly added this run): one `### Issue <id>` block per flaw (severity, CWE,
- * description; no `### Location` — the ticket the comment is posted to already carries it). Every
- * untrusted field is sanitized via `sanitizeCellText()`/`sanitizeStandaloneLine()`, and the whole
- * body is authored as Markdown and converted via `markdownToJiraWiki()` exactly once at the end.
- * `addComment()` sends the body to Jira verbatim, so this sanitization is what prevents Jira
- * wiki-markup injection from crafted report fields.
- */
-export function buildNewFindingsCommentWiki(newFlaws: VeracodeFlaw[]): string {
-  const lines: string[] = [];
-  lines.push(`New finding(s) detected on this line since the ticket was created:`);
-  lines.push('');
-
-  for (const flaw of newFlaws) {
-    lines.push(`### Issue ${flaw.issueId}`);
-    lines.push('');
-
-    pushSeverityAndCwe(lines, flaw, '####');
-    pushDescription(lines, flaw, '####');
-  }
-
-  return markdownToJiraWiki(lines.join('\n'));
 }
 
 /**

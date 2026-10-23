@@ -9,6 +9,7 @@ import {
   type WaltzComponent, type WaltzReviewRow,
 } from '../../utils/waltzReport';
 import { logDiag } from '../../utils/diagLog';
+import { componentFromWaltz } from '../../utils/securityOverview';
 import { AcceptedListService } from '../../services/AcceptedListService';
 import { narrowGroup, acceptedEntriesOf, acceptedComponentEntriesOf, acceptedComponentKeys, isComponentAccepted, type AcceptedEntry } from '../../utils/waltzAccepted';
 import type { WaltzTemplateSelectionSession, WaltzReviewSession, StaleCloseSession } from '../sessionState';
@@ -162,6 +163,13 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
     recordLabelsOf: group => buildGroupLabels(group),
     buildComment: (group, droppedKeys, details) => buildFoldedCommentWiki(group, droppedKeys, details),
   },
+  // Security overview export (KTD3): the report's own components are the exact detail, and the report implies the same Due Date a ticket would get.
+  overviewExport: {
+    source: 'waltz',
+    detailOf: row => ({ components: row.sourceGroup.map(componentFromWaltz) }),
+    summaryOf: row => row.summary,
+    dueDateOf: row => dueDateFields(row.sourceGroup).fields.duedate ?? null,
+  },
   // Waltz ticket merge (KTD1): the survivor's comment opens by naming the tickets it absorbed.
   ticketMerge: {
     buildCommentPreface: absorbedKeys => `h4. Merged tickets\nThis ticket took over the items of ${absorbedKeys.join(', ')}, which were closed as duplicates of it.`,
@@ -193,6 +201,7 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
     // on New rows only), so the group holds exactly one component here.
     describe: (group, knownLabels, context) => describeWaltzRowChange(group[0], knownLabels, context),
     deriveActions: deriveWaltzActions,
+    readsTargetDescriptions: true,
     reportKeysOf: rawItems => (rawItems as WaltzComponent[]).map(c => sanitizeComponentLabel(c.nameVersion)),
     recordLabelsOf: (row, change) => {
       if (change.kind === 'baseline') return buildRecordLabels(row.sourceGroup[0]);

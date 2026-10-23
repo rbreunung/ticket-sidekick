@@ -3,14 +3,15 @@ import ExcelJS from 'exceljs';
 import { markdownToJiraWiki } from './markdownToJiraWiki';
 import type { DiagLogger } from './diagTypes';
 import {
-  toCalendarDate, hasAnyDate, earliestDueDate, dateColumnTitles, diffRemediationDates, parseRecordedDates,
-  DATES_HEADING, NOT_REPORTED_TEXT, ABSENT_CELL,
+  toCalendarDate, earliestDueDate, dateColumnTitles, diffRemediationDates, parseRecordedDates,
+  ABSENT_CELL, COMPONENT_COLUMNS,
   type RemediationDates, type WaltzRemediation,
 } from './waltzDates';
 import {
   MAX_REPORT_BYTES as SHARED_MAX_REPORT_BYTES, sanitizeCellText, sanitizeStandaloneLine,
   clampSummary, fitWiki,
   type RowChange, type ChangeContext, type TicketedActionChoice, type CommentDetails,
+  deriveRewriteActions,
 } from './reportImport';
 
 export interface WaltzVulnerability {
@@ -552,9 +553,7 @@ export function describeWaltzRowChange(component: WaltzComponent, knownLabels: s
  * `leave`. `update` and `re-create` are never offered.
  */
 export function deriveWaltzActions(change: RowChange | null, anyOpen: boolean): TicketedActionChoice {
-  const allowedActions: TicketedActionChoice['allowedActions'] = anyOpen ? ['rewrite', 'leave'] : ['rewrite', 'leave', 'follow-up'];
-  if (change === null) return { allowedActions, action: 'leave' };
-  return { allowedActions, action: anyOpen ? 'rewrite' : 'follow-up' };
+  return deriveRewriteActions(change, anyOpen);
 }
 
 const FOLLOW_UP_SUFFIX_PATTERN = / \(follow-up to [A-Z][A-Z0-9_]*-\d+\)$/;
@@ -626,33 +625,16 @@ function dateCells(remediation: WaltzRemediation | undefined): string[] {
   ];
 }
 
-/** R3/R5: the policy date, planned date, plan deadline and plan status of one component, or "Not reported yet." */
-function pushDatesSection(lines: string[], component: WaltzComponent, h: string): void {
-  const r = component.remediation;
-  lines.push(`${h} ${DATES_HEADING}`);
-  if (!r || (!hasAnyDate(r) && !r.planStatus)) {
-    lines.push(NOT_REPORTED_TEXT);
-  } else {
-    lines.push(`| ${dateColumnTitles(r.reportDate).join(' | ')} |`);
-    lines.push('| --- | --- | --- | --- |');
-    lines.push(`| ${dateCells(r).join(' | ')} |`);
-  }
-  lines.push('');
-}
-
 /**
  * One component's rating, most critical CVE, affected artifacts and vulnerability table, under
  * headings of level `h` (`###` for a single-component ticket, `####` inside a folded section).
  */
-function pushComponentDetail(lines: string[], component: WaltzComponent, h: string, caps: DetailCaps, withDates = false): void {
+function pushComponentDetail(lines: string[], component: WaltzComponent, h: string, caps: DetailCaps): void {
   const sorted = sortVulnerabilities(component.vulnerabilities);
 
   lines.push(`${h} Max Vuln Rating`);
   lines.push(sanitizeStandaloneLine(component.maxVulnRating));
   lines.push('');
-
-  // A folded ticket's overview table carries every member's dates, so only a single-component ticket repeats them here.
-  if (withDates) pushDatesSection(lines, component, h);
 
   // Surfaces *why* this ticket exists at a glance, ahead of the full artifact/CVE lists below.
   lines.push(`${h} Most Critical Vulnerability`);
@@ -699,7 +681,10 @@ function pushComponentDetail(lines: string[], component: WaltzComponent, h: stri
 // mistake a lone-asterisk span for italics.
 export function buildDescriptionWiki(component: WaltzComponent): string {
   const lines: string[] = [];
-  pushComponentDetail(lines, component, '###', FULL_CAPS, true);
+  // The same components table a folded ticket carries (one row), so one reader covers both; it holds the dates.
+  lines.push('### Components');
+  pushFoldedTable(lines, [component]);
+  pushComponentDetail(lines, component, '###', FULL_CAPS);
   lines.push('### Component');
   lines.push(sanitizeStandaloneLine(component.nameVersion));
 
@@ -748,10 +733,11 @@ const FOLD_LEVELS = FOLD_CAPS.length + 1;
 function pushFoldedTable(lines: string[], group: WaltzComponent[]): void {
   // R6: every member's dates and plan status, one row per component; a member without dates reads n/a.
   const reportDate = group.map(c => c.remediation?.reportDate ?? null).find(d => d !== null) ?? null;
-  lines.push(`| Component | Max rating | CVEs | Artifacts | ${dateColumnTitles(reportDate).join(' | ')} |`);
-  lines.push('| --- | --- | --- | --- | --- | --- | --- | --- |');
+  lines.push(`| ${COMPONENT_COLUMNS.join(' | ')} | ${dateColumnTitles(reportDate).join(' | ')} |`);
+  lines.push(`| ${[...COMPONENT_COLUMNS, ...dateColumnTitles(reportDate)].map(() => '---').join(' | ')} |`);
   for (const c of group) {
-    lines.push(`| ${sanitizeCellText(c.nameVersion)} | ${sanitizeCellText(c.maxVulnRating)} | ${c.vulnerabilities.length} | ${c.instancePaths.length} | ${dateCells(c.remediation).join(' | ')} |`);
+    const action = c.remediationAction ? sanitizeCellText(c.remediationAction).trim() : '';
+    lines.push(`| ${sanitizeCellText(c.nameVersion)} | ${sanitizeCellText(c.maxVulnRating)} | ${action === '' ? ABSENT_CELL : action} | ${c.vulnerabilities.length} | ${c.instancePaths.length} | ${dateCells(c.remediation).join(' | ')} |`);
   }
   lines.push('');
 }

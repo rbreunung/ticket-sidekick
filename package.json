@@ -69,6 +69,11 @@
             "name": "search",
             "description": "Search tickets with JQL or natural language",
             "sampleRequest": "my open bugs in PROJ"
+          },
+          {
+            "name": "overview",
+            "description": "List a project's open Veracode and Waltz tickets by release, with Due Dates",
+            "sampleRequest": "PROJ"
           }
         ],
         "disambiguation": [
@@ -711,6 +716,12 @@
             "type": "string",
             "default": "",
             "description": "Default Jira project key (e.g. 'PROJ'). Used when creating tickets if no project is specified in your prompt."
+          },
+          "ticketSidekick.jira.overviewCsvDelimiter": {
+            "type": "string",
+            "enum": ["comma", "semicolon", "tab"],
+            "default": "comma",
+            "description": "Column separator in the CSV that `@jira /overview` and the `export` reply of a report import save. Excel with a German (or other comma-decimal) locale opens a semicolon-separated file in columns, and a comma-separated one in a single column."
           },
           "ticketSidekick.jira.sprintBoardId": {
             "type": "number",

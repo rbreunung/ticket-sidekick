@@ -4,7 +4,7 @@ import type { TicketService } from '../../services/TicketService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import {
   parseVeracodeReport, filterFlaws, severityLabel, groupFlawsByLocation,
-  buildGroupSummary, buildGroupDescriptionWiki, buildGroupLabels, buildNewFindingsCommentWiki, buildFoldedCommentWiki,
+  buildGroupSummary, buildGroupDescriptionWiki, buildGroupLabels, buildFoldedCommentWiki,
   describeVeracodeChange, flawsWithIds, buildFollowUpSummary,
   type VeracodeFlaw, type VeracodeReviewRow,
 } from '../../utils/veracodeReport';
@@ -16,7 +16,8 @@ import {
   continueStaleClose,
   type ReportImportDescriptor,
 } from './reportImportHandler';
-import { resolveSizeLimitSetting, templateLabelsOf } from '../../utils/reportImport';
+import { resolveSizeLimitSetting, templateLabelsOf, deriveRewriteActions } from '../../utils/reportImport';
+import { findingFromFlaw } from '../../utils/securityOverview';
 import type { AwaitIssueTypeResume } from '../sessionState';
 import { sessionWasSuperseded } from './ticketContext';
 
@@ -164,21 +165,28 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
     buildComment: (group, droppedKeys) => buildFoldedCommentWiki(group, droppedKeys),
     narrowToNew: (group, change) => flawsWithIds(group, change.newIds),
   },
+  // Security overview export (KTD3): the report's own flaws are the exact detail; a Veracode report carries no dates.
+  overviewExport: {
+    source: 'veracode',
+    detailOf: row => ({ findings: row.sourceGroup.map(findingFromFlaw) }),
+    summaryOf: row => row.summary,
+    dueDateOf: () => null,
+  },
   // Import ticket updates parity (KTD2): a folded group's findings are its flaw ids, recorded as
-  // `veracode-issue-<id>` labels. No baseline, no rating and no summary rewrite for Veracode.
+  // `veracode-issue-<id>` labels. Veracode offers the same three actions as Waltz (`rewrite`, `leave`, `new ticket`), so a
+  // changed ticket is always rebuilt with its findings table; there is no `update` and no baseline, rating or summary rewrite.
   changeTracking: {
     findingNoun: 'flaw(s)',
     describe: describeVeracodeChange,
-    recordLabelsOf: (_row, change) => (change.kind === 'findings' ? change.newIds.map(id => `veracode-issue-${id}`) : []),
-    buildUpdateComment: (row, change) => buildNewFindingsCommentWiki(flawsWithIds(row.sourceGroup, change.newIds)),
-    // KTD10: the follow-up covers only the new flaws — its own labels (veracode, their
-    // veracode-issue-<id> and cwe-<id> labels) plus the template's, its summary and description.
-    buildFollowUp: (row, change, originalKey, additionalFields) => {
-      const subset = flawsWithIds(row.sourceGroup, change.newIds);
-      const templateLabels = templateLabelsOf(additionalFields);
+    deriveActions: deriveRewriteActions,
+    // `new ticket` is a full ticket — the group's whole current content, all its labels and the template's — whose
+    // title says which ticket it follows. The Relates link to that ticket is added by the caller.
+    actionLabels: { 'follow-up': 'new ticket' },
+    buildFollowUp: (row, _change, originalKey, additionalFields) => {
+      const group = row.sourceGroup;
       return {
-        summary: buildFollowUpSummary(subset, originalKey),
-        fields: { ...additionalFields, labels: buildGroupLabels(subset, templateLabels), description: buildGroupDescriptionWiki(subset) },
+        summary: buildFollowUpSummary(group, originalKey),
+        fields: { ...additionalFields, labels: buildGroupLabels(group, templateLabelsOf(additionalFields)), description: buildGroupDescriptionWiki(group) },
       };
     },
   },

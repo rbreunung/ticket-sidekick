@@ -443,18 +443,39 @@ describe('Veracode per-row actions through the real descriptor (U5)', () => {
     return { session: ws.store['jira.session.veracodeReview'] as VeracodeReviewSession, ws };
   }
 
-  it('update adds only the new flaw label and a comment about the new flaw only', async () => {
+  it('a changed open ticket proposes rewrite, offers only rewrite and leave, and the rewrite carries every finding', async () => {
     const tickets: Record<string, FakeTicket> = { 'PROJ-1': { labels: ['veracode', 'veracode-issue-101'] } };
     const { session, ws } = await importVeracode([makeFlaw('101'), makeFlaw('102')], tickets);
-    expect(session.allRows[0].action).toBe('update');
+    expect(session.allRows[0].action).toBe('rewrite');
+    expect(session.allRows[0].allowedActions).toEqual(['rewrite', 'leave']);
 
-    await handleVeracodeReviewReply('update tickets', session, ticketService, mockStream() as never, ws as never);
+    await handleVeracodeReviewReply('apply', session, ticketService, mockStream() as never, ws as never);
 
-    expect(client.updateIssueCalls[0].fields.labels).toEqual(['veracode', 'veracode-issue-101', 'veracode-issue-102']);
-    expect(client.addCommentCalls).toHaveLength(1);
-    expect(client.addCommentCalls[0].body).toContain('Issue 102');
-    expect(client.addCommentCalls[0].body).not.toContain('Issue 101');
+    expect(client.updateIssueCalls).toHaveLength(1);
+    expect(client.updateIssueCalls[0].fields.labels).toEqual(expect.arrayContaining(['veracode-issue-101', 'veracode-issue-102']));
+    expect(String(client.updateIssueCalls[0].fields.description)).toContain('Issue 101');
+    expect(String(client.updateIssueCalls[0].fields.description)).toContain('Issue 102');
     expect(client.createIssueCalls).toHaveLength(0);
+  });
+
+  it('typing update on a Veracode row is answered with the actions it does offer', async () => {
+    const tickets: Record<string, FakeTicket> = { 'PROJ-1': { labels: ['veracode', 'veracode-issue-101'] } };
+    const { session, ws } = await importVeracode([makeFlaw('101'), makeFlaw('102')], tickets);
+    const stream = mockStream();
+
+    await handleVeracodeReviewReply('A1 update', session, ticketService, stream as never, ws as never);
+
+    expect(streamText(stream)).toContain("A1 can't be set to `update` — it offers `rewrite`, `leave`.");
+    expect(client.updateIssueCalls).toHaveLength(0);
+  });
+
+  it('update, follow-up and re-create are not offered on a Veracode row', async () => {
+    const tickets: Record<string, FakeTicket> = { 'PROJ-1': { labels: ['veracode', 'veracode-issue-101'], resolution: { name: 'Done' }, status: 'Done' } };
+    const { session } = await importVeracode([makeFlaw('101'), makeFlaw('102')], tickets);
+
+    expect(session.allRows[0].allowedActions).toEqual(['rewrite', 'leave', 'follow-up']);
+    expect(session.allRows[0].allowedActions).not.toContain('update');
+    expect(session.allRows[0].allowedActions).not.toContain('re-create');
   });
 
   it('a crafted flaw description cannot survive into the posted comment as Jira markup', async () => {
@@ -467,7 +488,7 @@ describe('Veracode per-row actions through the real descriptor (U5)', () => {
     expect(client.addCommentCalls[0].body).not.toContain('!http://evil.example/t.gif!');
   });
 
-  it('AE4 (overview hub): update touches only the tickets missing a finding and creates nothing', async () => {
+  it('AE4 (overview hub): apply rewrites only the tickets missing a finding and creates nothing', async () => {
     // One CWE per line, so the three line groups stay three groups under file + CWE folding too.
     const flaws = [
       makeFlaw('101', { line: 10, cweId: '89' }), makeFlaw('102', { line: 10, cweId: '89' }),
@@ -480,11 +501,11 @@ describe('Veracode per-row actions through the real descriptor (U5)', () => {
     const { session, ws } = await importVeracode(flaws, tickets);
     expect(session.view).toBe('ticketed');
 
-    await handleVeracodeReviewReply('update tickets', session, ticketService, mockStream() as never, ws as never);
+    await handleVeracodeReviewReply('apply', session, ticketService, mockStream() as never, ws as never);
 
     expect(client.updateIssueCalls.map(c => c.issueKey).sort()).toEqual(['PROJ-1', 'PROJ-2']);
     expect(client.createIssueCalls).toHaveLength(0);
-    expect(session.outcomes?.updated).toBe(2);
+    expect(session.outcomes?.rewritten).toBe(2);
   });
 
   it('a fold of flaws with different severities shows its most severe member on the row', async () => {
@@ -495,7 +516,7 @@ describe('Veracode per-row actions through the real descriptor (U5)', () => {
     expect(session.allRows[0].issueIds).toEqual(['101', '102']);
   });
 
-  it('AE8: ten same-file, same-CWE flaws with one already ticketed form one Already-ticketed row proposing update, and none in New', async () => {
+  it('AE8: ten same-file, same-CWE flaws with one already ticketed form one Already-ticketed row proposing rewrite, and none in New', async () => {
     const flaws = Array.from({ length: 10 }, (_, i) => makeFlaw(String(101 + i), { line: i + 1, cweId: '89' }));
     const tickets: Record<string, FakeTicket> = { 'PROJ-50': { labels: ['veracode', 'veracode-issue-101'] } };
     const { session } = await importVeracode(flaws, tickets);
@@ -503,13 +524,13 @@ describe('Veracode per-row actions through the real descriptor (U5)', () => {
     expect(session.allRows).toHaveLength(1);
     const [row] = session.allRows;
     expect(row.existingTicketKey).toBe('PROJ-50');
-    expect(row.action).toBe('update');
+    expect(row.action).toBe('rewrite');
     expect(row.change).toMatchObject({ kind: 'findings' });
     expect((row.change as { newIds: string[] }).newIds).toHaveLength(9);
     expect(session.allRows.filter(r => r.existingTicketKey === null)).toHaveLength(0);
   });
 
-  it('a follow-up covers only the new flaws: its labels, summary and description', async () => {
+  it('a new ticket is a complete ticket for the finding, titled as a follow-up and linked to the resolved one', async () => {
     const tickets: Record<string, FakeTicket> = { 'PROJ-8': { labels: ['veracode', 'veracode-issue-101', 'cwe-89'], resolution: { name: 'Done' }, status: 'Done' } };
     const { session, ws } = await importVeracode([makeFlaw('101'), makeFlaw('102', { cweId: '79' })], tickets);
     expect(session.allRows[0].action).toBe('follow-up');
@@ -517,10 +538,10 @@ describe('Veracode per-row actions through the real descriptor (U5)', () => {
     await handleVeracodeReviewReply('apply', session, ticketService, mockStream() as never, ws as never);
 
     const call = client.createIssueCalls[0];
-    expect(call.summary).toMatch(/^102 .*\(follow-up to PROJ-8\)$/);
-    expect([...(call.additionalFields!.labels as string[])].sort()).toEqual(['cwe-79', 'veracode', 'veracode-issue-102']);
+    expect(call.summary).toMatch(/\(follow-up to PROJ-8\)$/);
+    expect([...(call.additionalFields!.labels as string[])].sort()).toEqual(['cwe-79', 'cwe-89', 'veracode', 'veracode-issue-101', 'veracode-issue-102']);
+    expect(call.additionalFields!.description).toContain('Issue 101');
     expect(call.additionalFields!.description).toContain('Issue 102');
-    expect(call.additionalFields!.description).not.toContain('Issue 101');
     expect(client.createIssueLinkCalls).toEqual([{ inwardKey: 'PROJ-8', outwardKey: 'PROJ-100', typeName: 'Relates' }]);
   });
 });

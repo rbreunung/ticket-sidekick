@@ -123,14 +123,12 @@ Only `<staticflaws>` are imported (dynamic/manual analysis findings are out of s
 When an import finds more than one kind of result, `@jira` first shows an **overview** listing each group with its count:
 
 - **New** — findings without a ticket yet. Open it to toggle rows (reply row numbers, `include all` / `exclude all`, `next` / `prev` for more pages), fold rows together (`merge 2 4`, `unmerge 2`) or add them to an existing ticket (`add 2 4 to PROJ-123`) — see [Folding findings into one ticket](#folding-findings-into-one-ticket) — hide CVEs you have decided to accept (`accept 2 4`, OSS reports only — see [Accepting CVEs](#accepting-cves-you-have-decided-to-live-with)) — and reply **Create N tickets** (or **ok**) to create the included rows on the visible page.
-- **Already ticketed** — findings that already have a ticket. Each row shows its ticket, the ticket's status, what changed since the ticket was made (for example "+2 CVEs, High→Critical" or "+1 flaw"), and a proposed action. The screen lists 20 rows per page: reply `next`, `prev` or `page 3` to move between pages. Click another action in the row, or reply e.g. `A2 follow-up` (for a row on any page) or `all leave`, then reply **Apply** (or **ok**); **Apply**, **Update tickets** and **Re-create tickets** act on the rows of every page:
-  - **update** — adds the new findings to the existing ticket as labels and one comment. For an OSS report, a higher rating also updates the rating at the end of the ticket's summary, unless you renamed the summary.
-  - **follow-up** — creates a new ticket with only the new findings and links it to the existing one. Offered only when there are new findings. (OSS reports have no `follow-up`, `update` or `re-create`; they offer **new ticket** instead — see [Keeping OSS tickets up to date](#keeping-oss-tickets-up-to-date).)
-  - **rewrite** — rebuilds the existing ticket's title, description and labels from the report and posts a comment naming what was added and what dropped out (see [Folding findings into one ticket](#folding-findings-into-one-ticket)). It rebuilds the whole ticket, so set it on all the rows that point to the same ticket or on none of them; **Apply** stops with nothing written otherwise.
-  - **re-create** — creates a fresh, complete ticket.
+- **Already ticketed** — findings that already have a ticket. Each row shows its ticket, the ticket's status, what changed since the ticket was made (for example "+2 CVEs, High→Critical" or "+1 flaw"), and a proposed action. The screen lists 20 rows per page: reply `next`, `prev` or `page 3` to move between pages. Click another action in the row, or reply e.g. `A2 new ticket` (for a row on any page) or `all leave`, then reply **Apply** (or **ok**); **Apply** acts on the rows of every page. Veracode and OSS reports offer the same three actions:
+  - **rewrite** — rebuilds the existing ticket's title, description and labels from the report and posts a comment naming what was added and what dropped out (see [Folding findings into one ticket](#folding-findings-into-one-ticket)). It replaces text you added to the description by hand. It rebuilds the whole ticket, so set it on all the rows that point to the same ticket or on none of them; **Apply** stops with nothing written otherwise.
+  - **new ticket** — creates a complete new ticket for the finding with its current content, titled `… (follow-up to PROJ-123)` and linked to the resolved ticket. Offered only when every ticket for the finding is resolved. See also [Keeping OSS tickets up to date](#keeping-oss-tickets-up-to-date).
   - **leave** — does nothing.
 
-  For OSS reports the actions are **rewrite**, **leave** and **new ticket**, described under [Keeping OSS tickets up to date](#keeping-oss-tickets-up-to-date). For Veracode: rows without changes propose **leave**. Changes on an open ticket propose **update**; changes whose tickets are all resolved propose **follow-up** (or **update** when only the rating rose). **Update tickets** and **Re-create tickets** run only the rows set to that action.
+  Rows without changes propose **leave**. A change on an open ticket proposes **rewrite**; a change whose tickets are all resolved proposes **new ticket**.
 - **Stale tickets** — open tickets whose finding is no longer in the report. The screen lists 20 tickets per page: reply `next`, `prev` or `page 3` to move between pages. Toggle a ticket by its key (e.g. `PROJ-123`) and reply **Close N tickets** (or **ok**); tickets marked on any page are closed together. You then pick where the tickets go: one of your matching cleanup rules (listed first), or any status your workflow can reach, such as a review status like "Verification". Each run handles one issue type; if your selection mixes issue types, you are asked which one to close first. A resolution is asked only when the target is a closing status and no rule supplies one. Reply **Back** at any point to return without changing anything. A ticket needs a discovered workflow (`@jira discover workflow <project> <issue type>`) to be selectable. Tickets you move to a status that isn't final stay open, so later imports list them again as stale.
 
 Each screen only understands its own replies, and each action only affects its own group — nothing is created, updated or closed until you choose that group's action. Reply **Back to overview** to switch groups and **Done** to finish; the overview keeps track of what you already did (e.g. "50 created · 12 left"). When an import has only one kind of result (always the case for email batches), that screen opens directly and offers **Done** instead of an overview.
@@ -212,14 +210,14 @@ Each ticket is labeled `oss-dependency` and a sanitized, collision-safe version 
 
 ### Remediation dates and the Jira Due Date
 
-The report says by when each vulnerable component has to be fixed. Each ticket shows these in a **Remediation dates** section after the rating:
+The report says by when each vulnerable component has to be fixed. Each ticket lists these in its **Components** table, which has one row per component with its name, rating, remediation action and these dates:
 
 - **Policy date** — when the policy requires the component to be fixed.
 - **Planned date** — your own target, present only for components marked `Remediate`.
 - **Plan deadline** — the deadline for filing a remediation plan.
 - **Plan status** — the report's own reason when its plan is not valid (for example `Overdue` or `Unplanned`), shown as written and labelled "as of" the date the report was extracted. No overdue-days number is shown anywhere.
 
-A component without dates shows "Not reported yet." In a ticket that folds several components, one table lists every component with its dates (`n/a` where it has none).
+A component without dates shows `n/a` in the date cells. A ticket that folds several components lists every component in the same table.
 
 The ticket's Jira **Due Date** is the planned date, or the policy date when there is no planned date; a folded or merged ticket takes the earliest of its components. No Due Date is set when no component has a date, and an existing Due Date is never cleared. If your project does not show the Due Date field, the ticket is still created or rewritten without it: you get a warning, and the dates stay in the description.
 
@@ -316,3 +314,28 @@ What happens to an accepted component:
 - **Jira is not changed** by accepting. Only closing a stale ticket changes Jira, and only when you ask for it.
 
 The overview shows "2 accepted components hidden" with a **Show accepted** link. The `accepted` list shows component entries as "whole component" with a **Remove** link, which sends `unaccept-component netty-codec 4.1.100`. A removed entry is offered again right away: OSS reviews rebuild themselves from the report (or, if you have unfinished choices on the screens, mark themselves out of date and offer **Reload report**). A version of the extension without this feature skips component entries with a warning and leaves the file alone, so update the extension for the whole team.
+
+## Open Veracode and Waltz tickets by release
+
+`@jira` can list the unresolved Veracode and Waltz tickets of a project by the release they are planned for, with each ticket's Due Date, so you can see what blocks a release and which tickets have no release yet. There are two ways to start it.
+
+- **`@jira /overview PROJ`** searches Jira for the project's unresolved Veracode (`veracode` label) and Waltz (`oss-dependency` label) tickets, with both tools in the same tables. Without a project key it uses your `ticketSidekick.jira.defaultProject`, or asks.
+- **`export`** on the overview of a Veracode or Waltz import (or on the only screen of an import with a single kind of result) does the same for that one report and compares it with Jira. Each row also gets a **Report match**: *tracked* (an open ticket for an item of the report), *stale* (an open ticket whose item is no longer in the report) or *in report, no ticket* (a New row, or an item whose tickets are all resolved).
+
+The result is one table per Jira **Fix Version**, ordered by release date, and a last table **Not assigned to a release** for tickets without a Fix Version and, in an import, for report items without a ticket. Each table has a count line and a link to the matching list in Jira. An import's links list the tickets by key, so stale tickets are included; items without a ticket cannot be in a Jira list, and the table says how many there are.
+
+| Column | Meaning |
+|---|---|
+| Item | The ticket's title (a folded or merged ticket is one row) |
+| Rating | The most severe finding (Veracode) or the highest rating (Waltz) |
+| Ticket | Key and Jira status |
+| Due | The ticket's Jira Due Date |
+| Flag | **⚠ overdue** when the Due Date has passed; **⚠ due before release** when the Due Date is earlier than the release date of the ticket's Fix Version, so the release ships after the deadline. A Due Date after the release is not flagged, and a Fix Version without a release date is never flagged. |
+
+A ticket with several Fix Versions appears once, under the earliest release, and names the others. Release dates come from the project's version list in Jira.
+
+Reply with the **Save as CSV** link (in an import: `export csv`) to save the same overview through a save dialog. Veracode tickets give one row per finding (issue id, CWE, module, path, file, line, function), Waltz tickets one row per ticket with its components in the **Members** column and the earliest of their dates. Every row has a **Detail source** column: *report* (the loaded report), *table* (the ticket's findings or components table), *legacy* (an older ticket layout) or *title and labels* (only the ticket's title and labels could be read). Text from tickets is shown as the ticket holds it, which can differ slightly from the report for unusual characters. If Excel opens the file in one column, set `ticketSidekick.jira.overviewCsvDelimiter` to `semicolon`.
+
+### What the tickets record
+
+Every Veracode ticket carries a **Findings** table (issue id, severity, CWE and its name, module, path, file, line, function) and every Waltz ticket a **Components** table (component, rating, remediation action, CVE and artifact counts and the four remediation dates), single-finding and single-component tickets included. The overview reads them back. A very large Veracode ticket (several hundred findings) keeps only issue id, severity, CWE, file and line in its table so it fits Jira's size limit, and says so. A ticket created before these tables existed is read from its older layout or from its title and labels, with less detail; a **rewrite** upgrades it. A ticket whose table disagrees with its labels (for example after a hand edit) is marked *edited*.

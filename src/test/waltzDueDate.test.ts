@@ -99,7 +99,7 @@ describe('the Due Date of a new Waltz ticket', () => {
     const ws = await importWaltz([comp('example-lib:1.2.3')]);
     await reply('create tickets', ws);
     expect(client.createIssueCalls[0].additionalFields).not.toHaveProperty('duedate');
-    expect(String(client.createIssueCalls[0].additionalFields?.description)).toContain('Not reported yet.');
+    expect(String(client.createIssueCalls[0].additionalFields?.description)).toContain('|example-lib:1.2.3|High|Remediate|1|1|n/a|n/a|n/a|n/a|');
   });
 
   it('a template\'s own duedate is overridden by the report\'s date, and kept when the report has none', async () => {

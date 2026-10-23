@@ -5,7 +5,7 @@ import { parseVeracodeReport, filterFlaws, assertSafeVeracodeXml } from '../util
 import { deriveShortLabel, buildSummary, buildDescriptionWiki, buildLabels } from '../utils/veracodeReport';
 import {
   groupFlawsByLocation, buildGroupLabels, buildGroupDescriptionWiki, buildGroupSummary,
-  buildNewFindingsCommentWiki, describeVeracodeChange, flawsWithIds, buildFollowUpSummary, buildFoldedCommentWiki,
+  describeVeracodeChange, flawsWithIds, buildFollowUpSummary, buildFoldedCommentWiki,
   type VeracodeFlaw,
 } from '../utils/veracodeReport';
 
@@ -570,26 +570,27 @@ describe('buildGroupDescriptionWiki', () => {
       expect(buildGroupDescriptionWiki(group).startsWith('This ticket folds 2 Veracode findings.')).toBe(true);
     });
 
-    it('lists every finding in an overview table with issue id, severity, CWE, file:line and function', () => {
+    it('lists every finding in a findings table with its location in separate cells', () => {
       const wiki = buildGroupDescriptionWiki(group);
-      expect(wiki).toContain('||Issue ID||Severity||CWE||Location||Function||');
-      expect(wiki).toContain('|1001|Very High (5)|CWE-89|com/example/webapp/dao/ExampleOrderDao.java:10|void a()|');
-      expect(wiki).toContain('|1002|Medium (3)|CWE-79|com/example/webapp/dao/Other.java:20|n/a|');
+      expect(wiki).toContain('||Issue ID||Severity||CWE||CWE name||Module||Path||File||Line||Function||');
+      expect(wiki).toContain("|1001|Very High (5)|CWE-89|Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')|ExampleApp.war|com/example/webapp/dao/|ExampleOrderDao.java|10|void a()|");
+      expect(wiki).toContain("|1002|Medium (3)|CWE-79|Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')|ExampleApp.war|com/example/webapp/dao/|Other.java|20|n/a|");
     });
 
     it('cannot be broken or injected through a pipe or macro character in a table cell', () => {
       const evil = makeFlaw({ issueId: '1', functionPrototype: 'a | b {quote}x{quote} !http://evil.example/t.gif!' });
       const wiki = buildGroupDescriptionWiki([evil, makeFlaw({ issueId: '2', line: 5 })]);
       const row = wiki.split('\n').find(l => l.startsWith('|1|'))!;
-      expect(row.split('|').length).toBe(7); // leading empty + 5 cells + trailing empty
+      expect(row.split('|').length).toBe(11); // leading empty + 9 cells + trailing empty
       expect(wiki).not.toContain('{quote}');
       expect(wiki).not.toContain('!http://evil.example/t.gif!');
     });
 
-    it('a one-flaw group has no banner and no table, matching the unfolded layout', () => {
+    it('a one-flaw group has no banner but carries a one-row findings table above the unfolded layout', () => {
       const wiki = buildGroupDescriptionWiki([makeFlaw({ issueId: '1' })]);
       expect(wiki).not.toContain('This ticket folds');
-      expect(wiki).not.toContain('||Issue ID||');
+      expect(wiki.match(/^\|1\|/gm)).toHaveLength(1);
+      expect(wiki).toContain('h3. Location');
     });
   });
 
@@ -651,55 +652,6 @@ describe('buildGroupDescriptionWiki', () => {
     const wiki = buildGroupDescriptionWiki([a]);
     expect(wiki).toContain('h3. Issue 1');
     expect(wiki).toContain('h4. Severity');
-  });
-});
-
-describe('buildNewFindingsCommentWiki (U3/R13)', () => {
-  it('renders one "Issue <id>" section per newly-added flaw with its severity, CWE, and description', () => {
-    const a = makeFlaw({ issueId: '1', severity: 5, cweId: '89', cweName: 'SQL Injection', description: 'Untrusted input reaches a query.' });
-    const wiki = buildNewFindingsCommentWiki([a]);
-
-    expect(wiki).toContain('h3. Issue 1');
-    expect(wiki).toContain('h4. Severity\nVery High (5)');
-    expect(wiki).toContain('[CWE-89|https://cwe.mitre.org/data/definitions/89.html]');
-    expect(wiki).toContain(': Untrusted input reaches a query.');
-    // No Location section — the ticket the comment is posted to already carries it.
-    expect(wiki).not.toContain('Location');
-  });
-
-  it('renders one section per flaw when multiple new ids are given', () => {
-    const a = makeFlaw({ issueId: '1' });
-    const b = makeFlaw({ issueId: '2' });
-    const wiki = buildNewFindingsCommentWiki([a, b]);
-    expect(wiki).toContain('h3. Issue 1');
-    expect(wiki).toContain('h3. Issue 2');
-  });
-
-  it('omits the CWE section for a flaw with no cweId', () => {
-    const a = makeFlaw({ issueId: '1', cweId: null });
-    const wiki = buildNewFindingsCommentWiki([a]);
-    expect(wiki).not.toContain('h4. CWE');
-  });
-
-  it('renders nothing but the intro line for an empty list', () => {
-    const wiki = buildNewFindingsCommentWiki([]);
-    expect(wiki).not.toContain('h3. Issue');
-  });
-
-  it('a crafted description containing a Jira-native markup trigger cannot survive into the comment body', () => {
-    const payload = 'Injected\n# Fake Heading\n| a | b |\n[click me](http://evil.example) *bold* ~~strike~~'
-      + '\n-struck- +underline+ ^super^ ??cite?? {quote}FAKE{quote} !http://evil.example/t.gif!';
-    const a = makeFlaw({ issueId: '1', cweName: `Evil | a | b | [click me](http://evil.example)`, description: payload });
-    const wiki = buildNewFindingsCommentWiki([a]);
-
-    expect(wiki).not.toContain('h1. Fake Heading');
-    expect(wiki).not.toContain('||a||b||');
-    expect(wiki).not.toContain('[click me|http://evil.example]');
-    expect(wiki).not.toContain('*bold*');
-    expect(wiki).not.toContain('~~strike~~');
-    expect(wiki).not.toContain('-strike-');
-    expect(wiki).not.toContain('{quote}');
-    expect(wiki).not.toMatch(/[+^?{}!]/);
   });
 });
 

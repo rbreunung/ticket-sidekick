@@ -101,6 +101,8 @@ export interface JiraProjectVersion {
   name: string;
   released?: boolean;
   archived?: boolean;
+  /** `YYYY-MM-DD`; the real `GET /project/{key}` response carries it for a version that has a release date. */
+  releaseDate?: string;
 }
 
 export interface JiraProject {

@@ -2013,3 +2013,137 @@ describe('TicketService optional fields Jira may refuse (Due Date)', () => {
     });
   });
 });
+
+describe('security overview data', () => {
+  let client: MockJiraClient;
+  let service: TicketService;
+  beforeEach(() => {
+    client = new MockJiraClient();
+    service = new TicketService(client);
+  });
+
+  const issue = (key: string, fields: Record<string, unknown>) => ({ id: key, key, fields: { summary: `Summary ${key}`, status: { name: 'Open' }, labels: [], fixVersions: [], ...fields } });
+
+  describe('listOverviewTickets', () => {
+    it('returns the Veracode and Waltz tickets of a project with Fix Versions, Due Date, status and source', async () => {
+      const spy = vi.spyOn(client, 'searchJql').mockResolvedValue({
+        issues: [
+          issue('PROJ-1', { labels: ['veracode', 'veracode-issue-101'], duedate: '2026-11-01', fixVersions: [{ name: '2026.11' }] }),
+          issue('PROJ-2', { labels: ['oss-dependency', 'oss-dep-x'], status: { name: 'In Progress' } }),
+        ] as never,
+        total: 2, isLast: true,
+      });
+
+      const result = await service.listOverviewTickets('PROJ');
+
+      expect(result.truncated).toBe(false);
+      expect(result.tickets).toEqual([
+        expect.objectContaining({ key: 'PROJ-1', source: 'veracode', dueDate: '2026-11-01', fixVersions: ['2026.11'], status: 'Open' }),
+        expect.objectContaining({ key: 'PROJ-2', source: 'waltz', dueDate: null, fixVersions: [], status: 'In Progress' }),
+      ]);
+      const [jql, , , extraFields] = spy.mock.calls[0];
+      expect(jql).toContain('project = PROJ');
+      expect(jql).toContain('resolution is EMPTY');
+      expect(jql).toContain('labels = "veracode" OR labels = "oss-dependency"');
+      expect(extraFields).toEqual(expect.arrayContaining(['duedate', 'resolution']));
+    });
+
+    it('reads every page and lists each ticket once', async () => {
+      const page = (from: number, count: number, last: boolean) => ({
+        issues: Array.from({ length: count }, (_, i) => issue(`PROJ-${from + i}`, { labels: ['veracode'] })) as never,
+        total: 150, isLast: last,
+      });
+      const spy = vi.spyOn(client, 'searchJql')
+        .mockResolvedValueOnce(page(1, 100, false))
+        .mockResolvedValueOnce(page(101, 50, true));
+
+      const result = await service.listOverviewTickets('PROJ');
+
+      expect(result.tickets).toHaveLength(150);
+      expect(new Set(result.tickets.map(t => t.key)).size).toBe(150);
+      expect(spy).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps a ticket with no Fix Version, Due Date or summary as empty values, not an error', async () => {
+      vi.spyOn(client, 'searchJql').mockResolvedValue({ issues: [{ id: '1', key: 'PROJ-9', fields: { labels: ['veracode'] } }] as never, total: 1, isLast: true });
+
+      const [ticket] = (await service.listOverviewTickets('PROJ')).tickets;
+
+      expect(ticket).toMatchObject({ key: 'PROJ-9', dueDate: null, fixVersions: [], summary: '', status: '' });
+    });
+
+    it('ignores a Due Date that is not a calendar date', async () => {
+      vi.spyOn(client, 'searchJql').mockResolvedValue({ issues: [issue('PROJ-3', { labels: ['veracode'], duedate: 'soon' })] as never, total: 1, isLast: true });
+      expect((await service.listOverviewTickets('PROJ')).tickets[0].dueDate).toBeNull();
+    });
+
+    it('refuses a project key that could carry more JQL', async () => {
+      const spy = vi.spyOn(client, 'searchJql');
+      await expect(service.listOverviewTickets('PROJ OR project = X')).rejects.toThrow('not a valid Jira project key');
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('propagates an authentication failure from the search', async () => {
+      vi.spyOn(client, 'searchJql').mockRejectedValue(new JiraApiError('Jira API error 401', 401, 'https://jira.example.com/rest/api/2/search'));
+      await expect(service.listOverviewTickets('PROJ')).rejects.toMatchObject({ status: 401 });
+    });
+  });
+
+  describe('getProjectVersions', () => {
+    it('returns each version with its release date, and null for a version without one', async () => {
+      vi.spyOn(client, 'getProject').mockResolvedValue({
+        id: '1', key: 'PROJ', name: 'P', issueTypes: [],
+        versions: [{ id: '1', name: '2026.11', releaseDate: '2026-11-15' }, { id: '2', name: 'Backlog' }],
+      });
+
+      expect(await service.getProjectVersions('PROJ')).toEqual([
+        { name: '2026.11', releaseDate: '2026-11-15' },
+        { name: 'Backlog', releaseDate: null },
+      ]);
+    });
+
+    it('returns an empty list for a project that lists no versions', async () => {
+      expect(await service.getProjectVersions('PROJ')).toEqual([]);
+    });
+  });
+
+  describe('readDescriptions', () => {
+    it('reads the wiki text of each ticket, and keeps the others when one read fails', async () => {
+      vi.spyOn(client, 'getIssue').mockImplementation(async key => {
+        if (key === 'PROJ-2') throw new Error('forbidden');
+        return issue(key, { description: `text of ${key}` }) as never;
+      });
+      const onFail = vi.fn();
+
+      const result = await service.readDescriptions(['PROJ-1', 'PROJ-2', 'PROJ-3'], onFail);
+
+      expect(result.texts).toEqual({ 'PROJ-1': 'text of PROJ-1', 'PROJ-2': null, 'PROJ-3': 'text of PROJ-3' });
+      expect(result.failed).toEqual(['PROJ-2']);
+      expect(onFail).toHaveBeenCalledTimes(1);
+    });
+
+    it('reads a rich-content description as unknown instead of failing', async () => {
+      vi.spyOn(client, 'getIssue').mockResolvedValue(issue('PROJ-1', { description: { type: 'doc', content: [] } }) as never);
+      const result = await service.readDescriptions(['PROJ-1']);
+      expect(result.texts['PROJ-1']).toBeNull();
+      expect(result.failed).toEqual([]);
+    });
+
+    it('reads no more than 8 tickets at a time', async () => {
+      let running = 0;
+      let peak = 0;
+      vi.spyOn(client, 'getIssue').mockImplementation(async key => {
+        running++;
+        peak = Math.max(peak, running);
+        await new Promise(r => setTimeout(r, 2));
+        running--;
+        return issue(key, { description: 'x' }) as never;
+      });
+
+      await service.readDescriptions(Array.from({ length: 30 }, (_, i) => `PROJ-${i + 1}`));
+
+      expect(peak).toBeLessThanOrEqual(8);
+      expect(peak).toBeGreaterThan(1);
+    });
+  });
+});
