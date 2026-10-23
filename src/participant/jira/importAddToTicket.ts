@@ -62,19 +62,16 @@ export async function writeRewrite<TItem, TRow extends ReviewRowBase>(
 ): Promise<{ dueDate: string | null; droppedFields: string[] }> {
   const fields = descriptor.buildRowFields(regenItem, []);
   const built = descriptor.buildTicketFields({ ...fields, id: '0', existingTicketKey: null, included: true } as unknown as TRow, {}, { ticketCreated: target.ticketCreated });
-  const dueDate = descriptor.rewriteDueDate
-    ? descriptor.rewriteDueDate({
-      regenItem, joiningItem: target.joiningItem ?? null, currentDueDate: target.currentDueDate ?? null, ticketCreated: target.ticketCreated ?? null,
-    })
-    : stringOrNull(built.fields.duedate);
-  const optionalFields = descriptor.rewriteDueDate ? ['duedate'] : built.optionalFields;
+  const dueDate = descriptor.rewriteDueDate?.({
+    regenItem, joiningItem: target.joiningItem ?? null, currentDueDate: target.currentDueDate ?? null, ticketCreated: target.ticketCreated ?? null,
+  }) ?? null;
   const { droppedFields } = await ticketService.rewriteTicket(key, {
     summary: built.summary,
     description: String(built.fields.description ?? ''),
     labelsToAdd: (built.fields.labels as string[] | undefined) ?? [],
     removePrefix: descriptor.changeTracking?.removeLabelPrefix,
     ...(removeLabels.length > 0 ? { removeLabels } : {}),
-    ...(dueDate ? { extraFields: { duedate: dueDate }, optionalFields } : {}),
+    ...(dueDate ? { extraFields: { duedate: dueDate }, optionalFields: ['duedate'] } : {}),
   });
   if (droppedFields) logDroppedFields(descriptor.scope, key, droppedFields);
   return { dueDate: droppedFields?.includes('duedate') ? null : dueDate, droppedFields: droppedFields ?? [] };

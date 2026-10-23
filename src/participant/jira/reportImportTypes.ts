@@ -106,14 +106,14 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   // supply it; email omits it and has no `export` reply.
   overviewExport?: ImportOverviewExport<TRow>;
   /**
-   * Veracode: replaces the Due Date a rewrite would take from `buildTicketFields`, because a Due Date is set once and
-   * a later import only moves it earlier. Returns the date to write, or null to leave the ticket's own alone. Without
-   * it a rewrite writes whatever `buildTicketFields` returns (Waltz).
+   * The Due Date a rewrite writes: Veracode sets it once and a later import only moves it earlier, Waltz overwrites it
+   * with the regenerated group's date. Returns the date to write, or null to leave the ticket's own alone. Without
+   * it a rewrite writes no Due Date (email).
    */
   rewriteDueDate?: (params: {
     regenItem: TItem; joiningItem: TItem | null; currentDueDate: string | null; ticketCreated: string | null;
   }) => string | null;
-  /** The result-line note after a rewrite wrote this Due Date; the default is Waltz's "from the report … replaces any date edited by hand". */
+  /** The result-line note after a rewrite wrote this Due Date; without it the line says only that the date was set. */
   dueDateNote?: (dueDate: string) => string;
 }
 
