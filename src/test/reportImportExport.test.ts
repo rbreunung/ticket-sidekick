@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const sla = vi.hoisted(() => ({ value: undefined as unknown }));
+
 vi.mock('vscode', () => {
   class Uri {
     constructor(public fsPath = '') {}
@@ -10,7 +12,7 @@ vi.mock('vscode', () => {
     Uri,
     workspace: {
       workspaceFolders: undefined,
-      getConfiguration: vi.fn(() => ({ get: () => undefined })),
+      getConfiguration: vi.fn(() => ({ get: (key: string) => (key === 'veracode.slaDays' ? sla.value : undefined) })),
       fs: { writeFile: vi.fn() },
     },
     window: {
@@ -48,6 +50,7 @@ let service: TicketService;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  sla.value = undefined;
   client = new MockJiraClient();
   service = new TicketService(client);
 });
@@ -220,5 +223,54 @@ describe('export reply vocabulary', () => {
       expect(parseImportReviewReply(view, 'export', ctx({ canExport: true }))).toMatchObject({ kind: 'invalid', reason: expect.stringContaining('overview') });
       expect(parseImportReviewReply(view, 'export', ctx({ canExport: true, singleGroup: true }))).toEqual({ kind: 'export', csv: false });
     }
+  });
+});
+
+describe('export reply: the Due Date of a Veracode item with no ticket yet (SLA due dates, U5)', () => {
+  // A report-only row has no Fix Version, so it can be overdue but never due before its release.
+  const exportText = async (flaws: ReturnType<typeof makeFlaw>[]) => {
+    const { session, ws } = await importVeracode(flaws, {});
+    answerKeySearch({});
+    vi.spyOn(client, 'getProject').mockResolvedValue({ id: '1', key: 'PROJ', name: 'P', issueTypes: [], versions: [] });
+    const stream = mockStream();
+    await handleVeracodeReviewReply('export', session, service, stream as never, ws as never);
+    return streamText(stream);
+  };
+  const flawFoundOn = (date: string | null, severity = 4) => makeFlaw('101', { severity, firstFoundDate: date });
+
+  it('AE11: shows the policy due date and the overdue flag for an item whose date is already past, and no due-before-release flag', async () => {
+    sla.value = { High: 28 };
+    const text = await exportText([flawFoundOn('2020-01-01')]);
+    expect(text).toContain('2020-01-29');
+    expect(text).toContain('⚠ overdue');
+    expect(text).not.toContain('⚠ due before release');
+  });
+
+  it('shows the date without a flag when it is still in the future', async () => {
+    sla.value = { High: 28 };
+    const text = await exportText([flawFoundOn('2099-01-01')]);
+    expect(text).toContain('2099-01-29');
+    expect(text).not.toContain('⚠');
+  });
+
+  it('shows a dash for an item whose severity is at 0, and when the setting is absent', async () => {
+    sla.value = { High: 0 };
+    expect(await exportText([flawFoundOn('2020-01-01')])).not.toContain('2020-01');
+    sla.value = undefined;
+    expect(await exportText([flawFoundOn('2020-01-01')])).not.toContain('2020-01');
+  });
+
+  it('writes the policy due date of a report-only item into the CSV\'s due-date column', async () => {
+    sla.value = { High: 28 };
+    const { session, ws } = await importVeracode([makeFlaw('101', { severity: 4, firstFoundDate: '2020-01-01' })], {});
+    answerKeySearch({});
+    vi.spyOn(client, 'getProject').mockResolvedValue({ id: '1', key: 'PROJ', name: 'P', issueTypes: [], versions: [] });
+    vi.mocked(vscode.window.showSaveDialog).mockResolvedValue(vscode.Uri.file('/out/overview.csv'));
+
+    await handleVeracodeReviewReply('export csv', session, service, mockStream() as never, ws as never);
+
+    const [, bytes] = vi.mocked(vscode.workspace.fs.writeFile).mock.calls[0];
+    const csv = new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes as Uint8Array);
+    expect(csv).toContain('2020-01-29');
   });
 });

@@ -75,7 +75,7 @@ export function makeSession(overrides: Partial<ImportTemplateSelectionSession<Te
   };
 }
 
-export interface FakeTicket { labels: string[]; summary?: string; description?: string; resolution?: { name: string } | null; created?: string; status?: string; rejectResolution?: boolean }
+export interface FakeTicket { labels: string[]; summary?: string; description?: string; resolution?: { name: string } | null; created?: string; status?: string; rejectResolution?: boolean; duedate?: string | null }
 
 /** A small stateful Jira: getIssue/updateIssue/createIssue share one ticket store. */
 export function statefulJira(client: MockJiraClient, tickets: Record<string, FakeTicket>) {
@@ -83,6 +83,7 @@ export function statefulJira(client: MockJiraClient, tickets: Record<string, Fak
     id: '1', key, fields: {
       labels: tickets[key]?.labels ?? [], summary: tickets[key]?.summary ?? `Summary of ${key}`,
       status: { name: tickets[key]?.status ?? 'Open' }, resolution: tickets[key]?.resolution ?? null,
+      created: tickets[key]?.created ?? '2026-01-01T09:00:00.000+0000', duedate: tickets[key]?.duedate ?? null,
     } as JiraIssue['fields'],
   });
   client.updateIssue = async (key: string, fields: Record<string, unknown>) => {
@@ -90,12 +91,13 @@ export function statefulJira(client: MockJiraClient, tickets: Record<string, Fak
     if (Array.isArray(fields.labels)) tickets[key].labels = fields.labels as string[];
     if (typeof fields.summary === 'string') tickets[key].summary = fields.summary;
     if (typeof fields.description === 'string') tickets[key].description = fields.description;
+    if (typeof fields.duedate === 'string') tickets[key].duedate = fields.duedate;
   };
   let next = 100;
   client.createIssue = async (projectKey: string, summary: string, issueType: string, additionalFields?: Record<string, unknown>) => {
     client.createIssueCalls.push({ projectKey, summary, issueType, additionalFields });
     const key = `PROJ-${next++}`;
-    tickets[key] = { labels: (additionalFields?.labels as string[]) ?? [], summary, resolution: null, status: 'Open' };
+    tickets[key] = { labels: (additionalFields?.labels as string[]) ?? [], summary, resolution: null, status: 'Open', duedate: (additionalFields?.duedate as string | undefined) ?? null };
     return { id: key, key };
   };
 }
@@ -110,7 +112,7 @@ export function searchFromStore(ticketService: TicketService, tickets: Record<st
         key,
         fields: {
           labels: t.labels, resolution: t.resolution ?? null, created: t.created ?? '2026-01-01T09:00:00.000+0000',
-          status: { name: t.status ?? 'Open' },
+          status: { name: t.status ?? 'Open' }, duedate: t.duedate ?? null,
         },
       }));
     return { issues, total: issues.length, isLast: true } as never;

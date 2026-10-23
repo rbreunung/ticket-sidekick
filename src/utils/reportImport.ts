@@ -97,6 +97,8 @@ export interface JqlIssueLike {
     resolution?: unknown;
     created?: string | null;
     status?: { name?: string } | null;
+    /** The ticket's Due Date (`YYYY-MM-DD`); null = empty, absent = the search did not return the field. */
+    duedate?: string | null;
   };
 }
 
@@ -115,6 +117,8 @@ export interface DedupTicket {
    * recorded (Waltz dates): `null` = read but empty, `undefined` = not read, or the read failed.
    */
   description?: string | null;
+  /** Jira's Due Date: `null` = the field is empty, `undefined` = the search did not return it (never treated as empty). */
+  dueDate?: string | null;
 }
 
 /** Dedup key -> every ticket carrying it (U3/KTD1 — no longer "first match wins"). */
@@ -126,8 +130,9 @@ function toDedupTicket(issue: JqlIssueLike): DedupTicket {
     key: issue.key,
     labels: fields.labels ?? [],
     resolved: fields.resolution !== undefined && fields.resolution !== null,
-    created: typeof fields.created === 'string' ? fields.created : null,
-    status: typeof fields.status?.name === 'string' ? fields.status.name : null,
+    created: stringOrNull(fields.created),
+    status: stringOrNull(fields.status?.name),
+    ...(fields.duedate === undefined ? {} : { dueDate: stringOrNull(fields.duedate) }),
   };
 }
 
@@ -506,6 +511,8 @@ export interface CommentDetails {
   dateChanges?: Array<{ ref: string; changes: DateChange[] }>;
   /** The Due Date the rewrite set from the report, when it set one. */
   dueDate?: string | null;
+  /** The target ticket's Jira creation time, so an importer can date an undated finding from it (Veracode). */
+  ticketCreated?: string | null;
 }
 
 /** What the row builder knows about an item's target ticket that a describer may need beyond its labels. */
@@ -525,6 +532,11 @@ export interface RowChangeTracking<TItem> {
   describe(item: TItem, knownLabels: string[], context?: ChangeContext): RowChange | null;
   /** Replaces {@link deriveTicketedActions} for importers with their own action policy (Waltz). */
   deriveActions?: (change: RowChange | null, anyOpen: boolean) => TicketedActionChoice;
+}
+
+/** A Jira field value that should be a string (a date such as `created` or `duedate`), else null. */
+export function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
 }
 
 /** A template's `labels` field as a string array, or [] when it has none. */
@@ -592,6 +604,13 @@ export function deriveRewriteActions(change: RowChange | null, anyOpen: boolean)
   const allowedActions: TicketedActionChoice['allowedActions'] = anyOpen ? ['rewrite', 'leave'] : ['rewrite', 'leave', 'follow-up'];
   if (change === null) return { allowedActions, action: 'leave' };
   return { allowedActions, action: anyOpen ? 'rewrite' : 'follow-up' };
+}
+
+/** Every ticket in the dedup map, by its key. */
+function ticketsByKey(dedupMap: DedupMap): Map<string, DedupTicket> {
+  const byKey = new Map<string, DedupTicket>();
+  for (const tickets of dedupMap.values()) for (const t of tickets) byKey.set(t.key, t);
+  return byKey;
 }
 
 /** Every distinct ticket across an item's dedup keys, in key-number order. */
@@ -744,8 +763,7 @@ export function applyDroppedMembers<TItem, TRow extends ReviewRowBase>(params: {
   derive: (change: RowChange | null, anyOpen: boolean) => TicketedActionChoice;
 }): TRow[] {
   const { rows, dedupMap, itemOf, dedupKeyOf, labelToDedupKey, reportKeys, derive } = params;
-  const ticketByKey = new Map<string, DedupTicket>();
-  for (const tickets of dedupMap.values()) for (const t of tickets) ticketByKey.set(t.key, t);
+  const ticketByKey = ticketsByKey(dedupMap);
 
   const rowsByTarget = new Map<string, TRow[]>();
   for (const row of rows) {
@@ -774,6 +792,48 @@ export function applyDroppedMembers<TItem, TRow extends ReviewRowBase>(params: {
     }
   }
   return rows.map(row => updated.get(row) ?? row);
+}
+
+/**
+ * A Due Date is set once (Veracode): an open target ticket whose Due Date is empty counts as changed for dates when the
+ * importer's policy gives any item of the ticket's rows a due date, shown on every row of the ticket as
+ * `due none→<earliest date>`, and its actions are derived again. A target that has any Due Date, one whose search
+ * result did not return the field, a resolved target and a ticket none of whose items has a due date are left alone. A baseline row stays a baseline.
+ */
+export function applyMissingDueDate<TItem, TRow extends ReviewRowBase>(params: {
+  rows: TRow[];
+  dedupMap: DedupMap;
+  itemOf: (row: TRow) => TItem;
+  expectedFor: (item: TItem, ticketCreated: string | null) => string | null;
+  derive: (change: RowChange | null, anyOpen: boolean) => TicketedActionChoice;
+}): TRow[] {
+  const { rows, dedupMap, itemOf, expectedFor, derive } = params;
+  const ticketByKey = ticketsByKey(dedupMap);
+
+  // A rewrite sets one Due Date for the whole ticket, so every row of a ticket shows the earliest date over its rows.
+  const expectedByTicket = new Map<string, string>();
+  for (const row of rows) {
+    if (row.existingTicketKey === null || row.allowedActions === undefined || !row.target || row.target.resolved) continue;
+    const target = ticketByKey.get(row.target.key);
+    if (!target || target.dueDate !== null) continue;
+    const date = expectedFor(itemOf(row), target.created);
+    const known = expectedByTicket.get(row.target.key);
+    if (date !== null && (known === undefined || date < known)) expectedByTicket.set(row.target.key, date);
+  }
+
+  return rows.map(row => {
+    if (row.existingTicketKey === null || row.allowedActions === undefined || !row.target || row.target.resolved) return row;
+    const expected = expectedByTicket.get(row.target.key);
+    if (expected === undefined) return row;
+    const current = row.change;
+    if (current?.kind === 'baseline') return row;
+    const change: RowChange = {
+      ...(current ?? { kind: 'findings', newIds: [] }),
+      dates: [...(current?.dates ?? []), { date: 'due', from: null, to: expected }],
+    };
+    const { allowedActions, action } = derive(change, true);
+    return { ...row, change, allowedActions, action, defaultAction: action };
+  });
 }
 
 /**

@@ -66,7 +66,7 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   // KTD3: builds the ticket's summary + create-fields from a row (and the batch's resolved template
   // fields) — the only place a row's fields become a `createTicket()` call, so an importer with no
   // `labels`/`descriptionWiki` concept (email) never needs those fields at all.
-  buildTicketFields: (row: TRow, additionalFields: Record<string, unknown>) => BuiltTicketFields;
+  buildTicketFields: (row: TRow, additionalFields: Record<string, unknown>, context?: TicketWriteContext) => BuiltTicketFields;
   // KTD4: optional per-row work after a ticket is created (email uses this for attachment upload).
   // A rejection is caught by the shared creation step (createOne) and shown as a warning — it never fails the row,
   // since the ticket already exists by the time this runs.
@@ -105,6 +105,21 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   // Security overview export (KTD3): optional `export` reply that lists this report's items by Fix Version. Veracode and Waltz
   // supply it; email omits it and has no `export` reply.
   overviewExport?: ImportOverviewExport<TRow>;
+  /**
+   * The Due Date a rewrite writes: Veracode sets it once and a later import only moves it earlier, Waltz overwrites it
+   * with the regenerated group's date. Returns the date to write, or null to leave the ticket's own alone. Without
+   * it a rewrite writes no Due Date (email).
+   */
+  rewriteDueDate?: (params: {
+    regenItem: TItem; joiningItem: TItem | null; currentDueDate: string | null; ticketCreated: string | null;
+  }) => string | null;
+  /** The result-line note after a rewrite wrote this Due Date; without it the line says only that the date was set. */
+  dueDateNote?: (dueDate: string) => string;
+}
+
+/** What a ticket write knows about the ticket beyond the row: an existing ticket's creation time (a rewrite), absent for a new ticket. */
+export interface TicketWriteContext {
+  ticketCreated?: string | null;
 }
 
 /** What an importer supplies so the `export` reply can list a row's report-side detail. */
@@ -186,6 +201,11 @@ export interface ImportChangeTracking<TItem, TRow extends ReviewRowBase> {
    * dropped-member pass (Waltz). Veracode does not need either, so it leaves this off.
    */
   readsTargetDescriptions?: boolean;
+  /**
+   * Veracode: an open target ticket with an empty Due Date counts as changed for dates when `expectedFor` gives the row's item
+   * a due date (it gets the target's Jira creation timestamp to date an undated finding). Needs `deriveActions`.
+   */
+  dueDateBackfill?: { expectedFor: (item: TItem, ticketCreated: string | null) => string | null };
   /** The importer's own words for row actions, by action id (Waltz shows `follow-up` as `new ticket`). */
   actionLabels?: ActionLabels;
   /** With `readsTargetDescriptions`: the dedup keys of every component in the unfiltered report, so a component only filtered or accepted away is not "dropped". */

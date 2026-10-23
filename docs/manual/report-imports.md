@@ -115,8 +115,18 @@ Each ticket is labeled `veracode`, `veracode-issue-<id>`, and `cwe-<id>` (plus a
 | `ticketSidekick.veracode.minSeverity` | `4` | Minimum severity (0–5) included by default |
 | `ticketSidekick.veracode.includeRemediationStatuses` | `["New", "Open", "Reopened"]` | Remediation statuses included by default |
 | `ticketSidekick.veracode.maxReportSizeMB` | `50` | Largest report file (1–200 MB) accepted; a larger file is rejected before it is read |
+| `ticketSidekick.veracode.slaDays` | Very High 14, High 28, the rest 0 | Calendar days from first found to the Jira Due Date, per severity; 0 means no Due Date (see [Due dates from your SLA table](#due-dates-from-your-sla-table)) |
 
 Only `<staticflaws>` are imported (dynamic/manual analysis findings are out of scope). Each **Create N tickets** creates at most 50 tickets (one page) — reply `next` on the New screen and create again for the remainder of a larger report.
+
+### Due dates from your SLA table
+
+Each flaw's due date is the date Veracode first found it plus the number of days for its severity in `ticketSidekick.veracode.slaDays` (see the [settings reference](settings-reference.md#report-import-settings)). The table ships with Very High 14 days and High 28 days; the other severities are 0, which means no due date. Change the numbers to your company's policy.
+
+- **On a new ticket**, the Jira **Due Date** is the earliest due date of the ticket's flaws, written as it is even when already past. The ticket's Findings table shows each flaw's **First found** date and **Due date**; a very large fold's slimmer table leaves them out, but the Due Date field still carries the date. A flaw whose report entry has no first-found date counts from the ticket's creation date (today, for a new ticket). A severity at 0 gets no Due Date, and an existing Due Date is never cleared. If your project does not show the Due Date field, the ticket is still created or rewritten without it: you get a warning, and the dates stay in the description.
+- **A Due Date is set once.** Later imports do not recalculate or overwrite it, so a date you moved by hand, such as an agreed extension, stays, and changing the table does not reach tickets that already have a Due Date. The one exception is flaws joining a ticket: with `add … to <KEY>` and `as rewrite`, or new findings on the ticket, the Due Date becomes the earlier of its current date and the earliest due date of the joining flaws, and never later. `as comment` never touches the Due Date.
+- **Tickets that have no Due Date.** On the Already ticketed screen, an open ticket with an empty Due Date whose flaws have a due date shows as changed (for example `due none→2026-12-01`) and defaults to `rewrite`, which sets it. `rewrite` also rebuilds the ticket's description and replaces any text added by hand, so check the rows before you apply. Apply runs at most 50 actions per reply: repeat it, especially on the first import after the upgrade. A resolved ticket is not offered a change for a missing date alone.
+- **Export and overview.** `export` and `export csv` show the same due dates and the overdue flag for items that have no ticket yet (they have no Fix Version, so never the due-before-release flag), and `@jira /overview` flags Veracode tickets by their Jira Due Date like OSS tickets, see [Open Veracode and Waltz tickets by release](#open-veracode-and-waltz-tickets-by-release).
 
 ### Reviewing an import
 

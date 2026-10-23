@@ -17,7 +17,10 @@ import {
   type ReportImportDescriptor,
 } from './reportImportHandler';
 import { resolveSizeLimitSetting, templateLabelsOf, deriveRewriteActions } from '../../utils/reportImport';
-import { findingFromFlaw } from '../../utils/securityOverview';
+import { findingFromFlaw, localDate } from '../../utils/securityOverview';
+import { resolveSlaDays, groupDueDate, SLA_SEVERITY_NAMES, type DueContext, type ResolvedSla } from '../../utils/veracodeDates';
+import { toCalendarDate } from '../../utils/calendarDate';
+import { logDiag } from '../../utils/diagLog';
 import type { AwaitIssueTypeResume } from '../sessionState';
 import { sessionWasSuperseded } from './ticketContext';
 
@@ -38,6 +41,32 @@ function getVeracodeConfig(): { minSeverity: number; includeStatuses: string[]; 
   };
 }
 
+function readVeracodeSla(): ResolvedSla {
+  return resolveSlaDays(vscode.workspace.getConfiguration('ticketSidekick').get('veracode.slaDays'));
+}
+
+/**
+ * The SLA day counts and the start for a flaw with no first-found date: the existing ticket's creation date when one is
+ * being rewritten, else the import date.
+ */
+function veracodeDue(ticketCreated?: string | null): DueContext {
+  return { days: readVeracodeSla().days, fallbackStart: toCalendarDate(ticketCreated) ?? localDate() };
+}
+
+/** A group's due date under the SLA table, counting a flaw with no first-found date from `ticketCreated` (else today). */
+function veracodeGroupDue(group: VeracodeFlaw[], ticketCreated?: string | null): string | null {
+  return groupDueDate(group, veracodeDue(ticketCreated));
+}
+
+// A problem with the setting is logged once per import, when its session is built, never once per row.
+function logVeracodeSlaProblems(): void {
+  const { unknownKeys, invalidKeys } = readVeracodeSla();
+  if (unknownKeys.length === 0 && invalidKeys.length === 0) return;
+  logDiag('jira.veracode', 'warn', 'ticketSidekick.veracode.slaDays has entries that were ignored', {
+    unknownKeys, invalidKeys, validNames: [...SLA_SEVERITY_NAMES],
+  });
+}
+
 // U2: folds immediately after parse+filter — before dedup ever runs (KTD1) — so every downstream
 // step (dedup search, review-row building, ticket creation) operates on folded groups
 // (VeracodeFlaw[], one or more flaws sharing a source file + line, R9) rather than individual
@@ -47,6 +76,7 @@ async function readAndFilterVeracodeFile(filePath: string): Promise<{ items: Ver
   // parseVeracodeReport() itself also re-checks size + rejects DOCTYPE/ENTITY (defense in depth,
   // and it's the single source of truth used by the pure unit tests too) — both checks share the
   // same resolved maxReportBytes so they agree with each other and with the user's setting.
+  logVeracodeSlaProblems();
   const { maxReportBytes, ...filterConfig } = getVeracodeConfig();
   // U6: buildVeracodeActiveFlawPredicate needs the raw, unfiltered flaws (before
   // minSeverity/includeRemediationStatuses) — readAndFilterReport returns them directly as
@@ -137,10 +167,24 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
   },
   reviewColumns: VERACODE_REVIEW_COLUMNS,
   itemRefFor: row => `Flaw ${row.issueIds.join(', ')}`,
-  buildTicketFields: (row, additionalFields) => ({
-    summary: row.summary,
-    fields: { ...additionalFields, labels: row.labels, description: buildGroupDescriptionWiki(row.sourceGroup) },
-  }),
+  // The Due Date is written after the template fields so a template cannot override the policy, only when some flaw
+  // has one, and never cleared; Jira may refuse it, which must not stop the ticket (optionalFields).
+  buildTicketFields: (row, additionalFields, context) => {
+    const due = veracodeDue(context?.ticketCreated);
+    const dueDate = groupDueDate(row.sourceGroup, due);
+    return {
+      summary: row.summary,
+      fields: { ...additionalFields, labels: row.labels, description: buildGroupDescriptionWiki(row.sourceGroup, due), ...(dueDate ? { duedate: dueDate } : {}) },
+      optionalFields: dueDate ? ['duedate'] : undefined,
+    };
+  },
+  rewriteDueDate: ({ regenItem, joiningItem, currentDueDate, ticketCreated }) => {
+    if (currentDueDate === null) return veracodeGroupDue(regenItem, ticketCreated);
+    if (joiningItem === null) return null;
+    const joining = veracodeGroupDue(joiningItem, ticketCreated);
+    return joining !== null && joining < currentDueDate ? joining : null;
+  },
+  dueDateNote: dueDate => `Due Date set to ${dueDate} from your SLA table`,
   // KTD9: this pop-up previously lived only in extension.ts's own (pre-consolidation) duplicate of
   // this flow; wiring it through the descriptor keeps it alive for both the command-triggered and
   // chat-only entry points once extension.ts is switched onto this shared session builder.
@@ -162,15 +206,15 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
     itemOf: row => row.sourceGroup,
     combine: groups => groups.flat(),
     recordLabelsOf: group => buildGroupLabels(group),
-    buildComment: (group, droppedKeys) => buildFoldedCommentWiki(group, droppedKeys),
+    buildComment: (group, droppedKeys, details) => buildFoldedCommentWiki(group, droppedKeys, veracodeDue(details?.ticketCreated)),
     narrowToNew: (group, change) => flawsWithIds(group, change.newIds),
   },
-  // Security overview export (KTD3): the report's own flaws are the exact detail; a Veracode report carries no dates.
+  // Security overview export (KTD3): the report's own flaws are the exact detail, and the SLA table implies the same Due Date a ticket would get.
   overviewExport: {
     source: 'veracode',
     detailOf: row => ({ findings: row.sourceGroup.map(findingFromFlaw) }),
     summaryOf: row => row.summary,
-    dueDateOf: () => null,
+    dueDateOf: row => veracodeGroupDue(row.sourceGroup),
   },
   // Import ticket updates parity (KTD2): a folded group's findings are its flaw ids, recorded as
   // `veracode-issue-<id>` labels. Veracode offers the same three actions as Waltz (`rewrite`, `leave`, `new ticket`), so a
@@ -179,14 +223,21 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
     findingNoun: 'flaw(s)',
     describe: describeVeracodeChange,
     deriveActions: deriveRewriteActions,
+    dueDateBackfill: { expectedFor: veracodeGroupDue },
     // `new ticket` is a full ticket — the group's whole current content, all its labels and the template's — whose
     // title says which ticket it follows. The Relates link to that ticket is added by the caller.
     actionLabels: { 'follow-up': 'new ticket' },
     buildFollowUp: (row, _change, originalKey, additionalFields) => {
       const group = row.sourceGroup;
+      const due = veracodeDue();
+      const dueDate = groupDueDate(group, due);
       return {
         summary: buildFollowUpSummary(group, originalKey),
-        fields: { ...additionalFields, labels: buildGroupLabels(group, templateLabelsOf(additionalFields)), description: buildGroupDescriptionWiki(group) },
+        fields: {
+          ...additionalFields, labels: buildGroupLabels(group, templateLabelsOf(additionalFields)),
+          description: buildGroupDescriptionWiki(group, due), ...(dueDate ? { duedate: dueDate } : {}),
+        },
+        optionalFields: dueDate ? ['duedate'] : undefined,
       };
     },
   },
@@ -210,6 +261,7 @@ export async function buildVeracodeTemplateSession(
   // stale check gracefully rather than crashing (a filtered-out flaw would just look "inactive").
   rawFlaws: VeracodeFlaw[] = flaws,
 ): Promise<VeracodeTemplateSelectionSession> {
+  logVeracodeSlaProblems();
   return buildImportTemplateSession(groupFlawsByLocation(flaws), fileName, projectKey, jiraClient, veracodeDescriptor, rawFlaws);
 }
 

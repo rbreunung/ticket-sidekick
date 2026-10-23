@@ -20,7 +20,7 @@ import {
   continueStaleClose,
   type ReportImportDescriptor,
 } from './reportImportHandler';
-import { resolveSizeLimitSetting, templateLabelsOf } from '../../utils/reportImport';
+import { resolveSizeLimitSetting, stringOrNull, templateLabelsOf } from '../../utils/reportImport';
 import type { AwaitIssueTypeResume } from '../sessionState';
 import { sessionWasSuperseded } from './ticketContext';
 
@@ -146,6 +146,9 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
       optionalFields: due.optionalFields,
     };
   },
+  // A rewrite overwrites the Due Date with the regenerated group's date, whatever the ticket holds (KTD5).
+  rewriteDueDate: ({ regenItem }) => stringOrNull(dueDateFields(regenItem).fields.duedate),
+  dueDateNote: dueDate => `Due Date set to ${dueDate} from the report (replaces any date edited by hand)`,
   // Waltz has no issue-type-fetch-failure pop-up today — omitting onIssueTypeFetchFailed keeps that
   // path log-only, matching current behavior (KTD9).
   // U6: wires reportImportHandler.ts's reverse stale-ticket check up to U5's own marker

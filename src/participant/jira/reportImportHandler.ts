@@ -20,7 +20,7 @@ import type { TicketService } from '../../services/TicketService';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import { TemplateService } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
-import { BATCH_LIMIT, DEFAULT_DEDUP_CHUNK_SIZE, MAX_REPORT_BYTES, buildDedupJql, buildReviewRows, applyDroppedMembers, alignRewriteDefaults, readTargetDescriptions, fetchAllPages, findAlreadyTicketed, findStaleTickets, templateLabelsOf, type DedupMap, type JqlIssueLike } from '../../utils/reportImport';
+import { BATCH_LIMIT, DEFAULT_DEDUP_CHUNK_SIZE, MAX_REPORT_BYTES, buildDedupJql, buildReviewRows, applyDroppedMembers, applyMissingDueDate, alignRewriteDefaults, readTargetDescriptions, fetchAllPages, findAlreadyTicketed, findStaleTickets, templateLabelsOf, type DedupMap, type JqlIssueLike } from '../../utils/reportImport';
 import { CURRENT_SESSION_SCHEMA_VERSION, NO_ISSUE_TYPE, SESSION_EXPIRED_MESSAGE, applyBulkNewRowSet, applyReviewSessionToggle, applyStaleTicketToggle, applyTicketedActionChange, buildAllHiddenMessage, buildChatCommandLink, buildImportDoneSummary, buildReviewPage, clampStalePage, clampTicketedPage, computeImportResultGroups, describeImportReplyVocabulary, ensureImportViewState, IMPORT_COMMANDS, formatIssueTypeOptionLabel, initImportViewState, isCancellation, isSessionExpired, isTicketedRowFinished, mergeNewRows, neutralizeMarkdownLinks, parseImportReviewReply, pickEmailOption, resolveTemplateIssueType, safeMarkdownText, ticketedRowActions, toAcceptedHidden, unmergeNewRow, type ImportReplyContext, type ImportTemplateSelectionSession, type ReviewRowBase, type ReviewSession, type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession } from '../sessionState';
 import { resolveIssueTypeOrPrompt, resolveProjectKey, sessionWasSuperseded } from './ticketContext';
 import { buildStaleTicketGroups } from './cleanupHandler';
@@ -378,10 +378,10 @@ async function buildImportReview<TItem, TRow extends ReviewRowBase>(
       const result = await findAlreadyTicketed(
         searchLabels,
         DEFAULT_DEDUP_CHUNK_SIZE,
-        // U3/KTD1: resolution + created let buildReviewRows pick each item's newest open ticket.
+        // U3/KTD1: resolution + created let buildReviewRows pick each item's newest open ticket; duedate lets Veracode see which have none.
         // Every page is read: the union of an item's tickets decides its target and known findings.
         chunk => fetchAllPages(
-          (startAt, pageToken) => ticketService.searchTicketsRaw(buildDedupJql(input.projectKey, chunk), DEDUP_PAGE_SIZE, ['resolution', 'created'], startAt, pageToken)
+          (startAt, pageToken) => ticketService.searchTicketsRaw(buildDedupJql(input.projectKey, chunk), DEDUP_PAGE_SIZE, ['resolution', 'created', 'duedate'], startAt, pageToken)
             .then(r => ({ ...r, issues: r.issues as JqlIssueLike[] })),
           DEDUP_PAGE_SIZE,
           undefined,
@@ -494,6 +494,13 @@ async function buildImportReview<TItem, TRow extends ReviewRowBase>(
       labelToDedupKey: descriptor.labelToDedupKey,
       reportKeys: new Set(reportKeys),
       derive: descriptor.changeTracking!.deriveActions!,
+    });
+  }
+  // A Due Date is set once (Veracode): an open ticket without one is a change for dates, before the shared rewrite defaults align.
+  const backfill = descriptor.changeTracking?.dueDateBackfill;
+  if (backfill && descriptor.fold && descriptor.changeTracking?.deriveActions) {
+    allRows = applyMissingDueDate<TItem, TRow>({
+      rows: allRows, dedupMap, itemOf: descriptor.fold.itemOf, expectedFor: backfill.expectedFor, derive: descriptor.changeTracking.deriveActions,
     });
   }
   if (descriptor.changeTracking?.deriveActions) allRows = alignRewriteDefaults(allRows);

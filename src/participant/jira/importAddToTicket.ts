@@ -5,6 +5,7 @@ import { logDiag } from '../../utils/diagLog';
 import { formatKeyLink, type TicketService } from '../../services/TicketService';
 import { buildAddPrompt, buildReviewPage, emptyImportOutcomes, isTicketedRowFinished, restoreMergedRows, ticketedTargetKey, type AddMode, type ReviewRowBase, type ReviewSession, type TicketedRowResult } from '../sessionState';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
+import { stringOrNull } from '../../utils/reportImport';
 import { droppedFieldsWarning, dueDateSetNote, logDroppedFields } from './importCreate';
 import type { ReportImportDescriptor } from './reportImportTypes';
 
@@ -48,7 +49,8 @@ export function labelsToRemove<TItem, TRow extends ReviewRowBase>(
 
 /**
  * KTD7: rebuilds `key` from `regenItem` — the importer's own summary, description and labels (no template labels) — in one write.
- * An importer's Due Date (Waltz) rides in the same write; `dueDate` is what was set, `droppedFields` what Jira refused.
+ * An importer's Due Date rides in the same write; `dueDate` is what was set, `droppedFields` what Jira refused.
+ * `target` is what the caller already read from the ticket and which part of `regenItem` is joining it.
  */
 export async function writeRewrite<TItem, TRow extends ReviewRowBase>(
   ticketService: TicketService,
@@ -56,17 +58,20 @@ export async function writeRewrite<TItem, TRow extends ReviewRowBase>(
   key: string,
   regenItem: TItem,
   removeLabels: string[] = [],
+  target: { ticketCreated?: string | null; currentDueDate?: string | null; joiningItem?: TItem | null } = {},
 ): Promise<{ dueDate: string | null; droppedFields: string[] }> {
   const fields = descriptor.buildRowFields(regenItem, []);
-  const built = descriptor.buildTicketFields({ ...fields, id: '0', existingTicketKey: null, included: true } as unknown as TRow, {});
-  const dueDate = typeof built.fields.duedate === 'string' ? built.fields.duedate : null;
+  const built = descriptor.buildTicketFields({ ...fields, id: '0', existingTicketKey: null, included: true } as unknown as TRow, {}, { ticketCreated: target.ticketCreated });
+  const dueDate = descriptor.rewriteDueDate?.({
+    regenItem, joiningItem: target.joiningItem ?? null, currentDueDate: target.currentDueDate ?? null, ticketCreated: target.ticketCreated ?? null,
+  }) ?? null;
   const { droppedFields } = await ticketService.rewriteTicket(key, {
     summary: built.summary,
     description: String(built.fields.description ?? ''),
     labelsToAdd: (built.fields.labels as string[] | undefined) ?? [],
     removePrefix: descriptor.changeTracking?.removeLabelPrefix,
     ...(removeLabels.length > 0 ? { removeLabels } : {}),
-    ...(dueDate ? { extraFields: { duedate: dueDate }, optionalFields: built.optionalFields } : {}),
+    ...(dueDate ? { extraFields: { duedate: dueDate }, optionalFields: ['duedate'] } : {}),
   });
   if (droppedFields) logDroppedFields(descriptor.scope, key, droppedFields);
   return { dueDate: droppedFields?.includes('duedate') ? null : dueDate, droppedFields: droppedFields ?? [] };
@@ -142,6 +147,7 @@ export async function addToTicket<TItem, TRow extends ReviewRowBase>(
   let dueDate: string | null = null;
   try {
     const issue = await ticketService.getIssue(key);
+    const ticketCreated = stringOrNull(issue.fields.created);
     const labels = issue.fields.labels ?? [];
     const addedItem = fold.combine(rows.map(fold.itemOf));
     const plan = planRewrite(session, descriptor, key, labels, rows);
@@ -152,12 +158,14 @@ export async function addToTicket<TItem, TRow extends ReviewRowBase>(
       const toAdd = ratingPrefix && labels.some(l => l.startsWith(ratingPrefix))
         ? recordLabels.filter(l => !l.startsWith(ratingPrefix)) : recordLabels;
       await ticketService.updateLabels(key, toAdd);
-      comment = fold.buildComment(addedItem, []);
+      comment = fold.buildComment(addedItem, [], { ticketCreated });
     } else {
-      const written = await writeRewrite(ticketService, descriptor, key, plan.regenItem, labelsToRemove(session, descriptor, plan.droppedKeys));
+      const written = await writeRewrite(ticketService, descriptor, key, plan.regenItem, labelsToRemove(session, descriptor, plan.droppedKeys), {
+        ticketCreated, currentDueDate: stringOrNull(issue.fields.duedate), joiningItem: addedItem,
+      });
       droppedFields = written.droppedFields;
       dueDate = written.dueDate;
-      comment = fold.buildComment(addedItem, plan.droppedKeys, { dueDate });
+      comment = fold.buildComment(addedItem, plan.droppedKeys, { dueDate, ticketCreated });
     }
   } catch (err) {
     return failWith(err instanceof Error ? err.message : String(err));
@@ -173,7 +181,7 @@ export async function addToTicket<TItem, TRow extends ReviewRowBase>(
   const done = mode === 'comment' ? 'labels added and comment posted' : 'rewritten and comment posted';
   stream.markdown(commentFailed
     ? `⚠ ${link} — ${mode === 'comment' ? 'labels added' : 'rewritten'}, comment failed: ${commentFailed}\n\n`
-    : `✓ ${link} — ${done}${dueDateSetNote(dueDate)}\n\n`);
+    : `✓ ${link} — ${done}${dueDateSetNote(dueDate, descriptor)}\n\n`);
   if (droppedFields.length > 0) stream.markdown(droppedFieldsWarning(link, droppedFields));
   logDiag(descriptor.scope, commentFailed ? 'warn' : 'info', `${descriptor.importLabel} import — ${rows.length} row(s) added to ${key} (${mode})`, { issueKey: key, mode });
 

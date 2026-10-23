@@ -7,7 +7,7 @@ import {
   REPORT_SIZE_LIMITS_MB, resolveSizeLimitSetting, pickTargetTicket,
   type JqlIssueLike, type DedupTicket, type DedupMap, type RowChange,
   fetchAllPages, clampSummary, fitWiki, MAX_SUMMARY_CHARS, MAX_DESCRIPTION_CHARS,
-  applyDroppedMembers, alignRewriteDefaults, readTargetDescriptions,
+  applyDroppedMembers, alignRewriteDefaults, readTargetDescriptions, applyMissingDueDate, deriveRewriteActions,
 } from '../utils/reportImport';
 import { deriveWaltzActions } from '../utils/waltzReport';
 import type { ReviewRowBase } from '../participant/sessionState';
@@ -1206,5 +1206,111 @@ describe('the Waltz-style review passes (remediation dates, U4)', () => {
       await readTargetDescriptions<Comp>({ items: [{ key: 'new' }], dedupMap: new Map(), dedupKeyOf, read });
       expect(read).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('applyMissingDueDate (Veracode SLA due dates, U4)', () => {
+  interface Flaws { key: string; due?: string | null }
+  interface FlawRow extends ReviewRowBase { key: string }
+  const dedupKeyOf = (c: Flaws) => [c.key];
+  const withDueDate = (key: string, labels: string[], dueDate: string | null | undefined, opts: { resolved?: boolean; created?: string | null } = {}): DedupTicket =>
+    ({ ...ticket(key, labels, opts), dueDate });
+  const build = (items: Flaws[], dedupMap: DedupMap) =>
+    buildReviewRows<Flaws, FlawRow>(items, dedupMap, dedupKeyOf, c => ({ key: c.key }), { describe: () => null, deriveActions: deriveRewriteActions });
+  // The expected date is whatever the item carries; it receives the target's creation timestamp so the importer can count undated flaws from it.
+  const apply = (rows: FlawRow[], dedupMap: DedupMap, expectedFor = (item: Flaws) => item.due ?? null) => applyMissingDueDate<Flaws, FlawRow>({
+    rows, dedupMap, itemOf: r => ({ key: r.key, due: dueByKey[r.key] }), expectedFor, derive: deriveRewriteActions,
+  });
+  const dueByKey: Record<string, string | null> = {};
+
+  const dedupOf = (t: DedupTicket, ...keys: string[]): DedupMap => new Map(keys.map(k => [k, [t]]));
+
+  it('AE7: flags an open ticket whose Due Date is empty, shows none to the policy date, and defaults to rewrite', () => {
+    dueByKey.a = '2026-12-01';
+    const map = dedupOf(withDueDate('PROJ-1', ['dep-a'], null), 'a');
+    const out = apply(build([{ key: 'a' }], map), map);
+    expect(out[0].change).toEqual({ kind: 'findings', newIds: [], dates: [{ date: 'due', from: null, to: '2026-12-01' }] });
+    expect(out[0].action).toBe('rewrite');
+    expect(out[0].defaultAction).toBe('rewrite');
+    expect(out[0].allowedActions).toEqual(['rewrite', 'leave']);
+  });
+
+  it('AE8: never flags a ticket that already has a Due Date, whatever the policy gives now', () => {
+    dueByKey.a = '2026-11-01';
+    const map = dedupOf(withDueDate('PROJ-1', ['dep-a'], '2026-12-01'), 'a');
+    const out = apply(build([{ key: 'a' }], map), map);
+    expect(out[0].change).toBeNull();
+    expect(out[0].action).toBe('leave');
+  });
+
+  it('never flags a ticket whose search result did not return the Due Date field', () => {
+    dueByKey.a = '2026-12-01';
+    const map = dedupOf(withDueDate('PROJ-1', ['dep-a'], undefined), 'a');
+    const out = apply(build([{ key: 'a' }], map), map);
+    expect(out[0].change).toBeNull();
+    expect(out[0].action).toBe('leave');
+  });
+
+  it('AE9: a date alone does not change a row whose tickets are all resolved', () => {
+    dueByKey.a = '2026-12-01';
+    const map = dedupOf(withDueDate('PROJ-1', ['dep-a'], null, { resolved: true }), 'a');
+    const out = apply(build([{ key: 'a' }], map), map);
+    expect(out[0].change).toBeNull();
+    expect(out[0].action).toBe('leave');
+  });
+
+  it('only the open target decides when a newer resolved ticket exists for the same item', () => {
+    dueByKey.a = '2026-12-01';
+    const open = withDueDate('PROJ-1', ['dep-a'], null);
+    const resolved = withDueDate('PROJ-2', ['dep-a'], '2026-11-01', { resolved: true });
+    const map: DedupMap = new Map([['a', [open, resolved]]]);
+    const out = apply(build([{ key: 'a' }], map), map);
+    expect(out[0].existingTicketKey).toBe('PROJ-1');
+    expect(out[0].change?.kind === 'findings' && out[0].change.dates).toEqual([{ date: 'due', from: null, to: '2026-12-01' }]);
+  });
+
+  it('leaves a baseline row as a baseline, whatever the policy gives', () => {
+    dueByKey.a = '2026-12-01';
+    const map = dedupOf(withDueDate('PROJ-1', ['dep-a'], null), 'a');
+    const rows = buildReviewRows<Flaws, FlawRow>([{ key: 'a' }], map, dedupKeyOf, c => ({ key: c.key }), {
+      describe: () => ({ kind: 'baseline' }), deriveActions: deriveRewriteActions,
+    });
+    const out = apply(rows, map);
+    expect(out[0].change).toEqual({ kind: 'baseline' });
+    expect(out[0].action).toBe(rows[0].action);
+  });
+
+  it('does not flag a row whose flaws have no due date', () => {
+    dueByKey.a = null;
+    const map = dedupOf(withDueDate('PROJ-1', ['dep-a'], null), 'a');
+    const out = apply(build([{ key: 'a' }], map), map);
+    expect(out[0].change).toBeNull();
+  });
+
+  it('hands the importer the target ticket\'s creation timestamp', () => {
+    dueByKey.a = '2026-12-01';
+    const map = dedupOf(withDueDate('PROJ-1', ['dep-a'], null, { created: '2026-10-01T09:00:00.000+0000' }), 'a');
+    const expectedFor = vi.fn(() => '2026-12-01');
+    apply(build([{ key: 'a' }], map), map, expectedFor);
+    expect(expectedFor).toHaveBeenCalledWith({ key: 'a', due: '2026-12-01' }, '2026-10-01T09:00:00.000+0000');
+  });
+
+  it('keeps an existing finding change and adds the date next to it', () => {
+    dueByKey.a = '2026-12-01';
+    const map = dedupOf(withDueDate('PROJ-1', ['dep-a'], null), 'a');
+    const rows = buildReviewRows<Flaws, FlawRow>([{ key: 'a' }], map, dedupKeyOf, c => ({ key: c.key }), {
+      describe: () => ({ kind: 'findings', newIds: ['902'] }), deriveActions: deriveRewriteActions,
+    });
+    const out = apply(rows, map);
+    expect(out[0].change).toEqual({ kind: 'findings', newIds: ['902'], dates: [{ date: 'due', from: null, to: '2026-12-01' }] });
+  });
+
+  it('after alignment, every row of a ticket with an empty Due Date defaults to rewrite', () => {
+    dueByKey.a = '2026-12-01';
+    dueByKey.b = null;
+    const t = withDueDate('PROJ-1', ['dep-a', 'dep-b'], null);
+    const map = dedupOf(t, 'a', 'b');
+    const out = alignRewriteDefaults(apply(build([{ key: 'a' }, { key: 'b' }], map), map));
+    expect(out.map(r => r.action)).toEqual(['rewrite', 'rewrite']);
   });
 });

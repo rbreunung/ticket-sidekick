@@ -215,7 +215,7 @@ describe('handleImportReviewReply — bulk include/exclude (toggle-all)', () => 
     expect(session.rows.every(r => r.included)).toBe(true);
   });
 
-  it('asks the dedup search for each ticket\'s resolution and creation date (U3/KTD1)', async () => {
+  it('asks the dedup search for each ticket\'s resolution, creation date and Due Date (U3/KTD1)', async () => {
     const spy = vi.spyOn(ticketService, 'searchTicketsRaw').mockResolvedValue({
       issues: [{ key: 'PROJ-999', fields: { labels: ['test-1'], resolution: null, created: '2026-01-01T09:00:00.000+0000', status: { name: 'Open' } } }],
       total: 1, isLast: true,
@@ -224,7 +224,7 @@ describe('handleImportReviewReply — bulk include/exclude (toggle-all)', () => 
     await continueAfterImportIssueType('Bug', null, makeSession({ items: [{ ref: '1' }], availableIssueTypes: ['Bug'] }), client, ticketService, mockStream() as never, ws as never, descriptor);
 
     const dedupCall = spy.mock.calls.find(([jql]) => jql.includes('labels in ('))!;
-    expect(dedupCall[2]).toEqual(['resolution', 'created']);
+    expect(dedupCall[2]).toEqual(['resolution', 'created', 'duedate']);
     const session = ws.store[descriptor.sessionKeys.review] as ReviewSession<TestRow>;
     expect(session.allRows.find(r => r.id === 'A1')!.existingTicketKey).toBe('PROJ-999');
   });

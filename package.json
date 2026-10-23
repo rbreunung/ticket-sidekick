@@ -951,6 +951,57 @@
             "minimum": 1,
             "maximum": 200,
             "description": "Maximum size, in MB, of a Veracode Detailed Report XML file. Raise this if your report is rejected for exceeding the size limit."
+          },
+          "ticketSidekick.veracode.slaDays": {
+            "type": "object",
+            "default": {
+              "Very High": 14,
+              "High": 28,
+              "Medium": 0,
+              "Low": 0,
+              "Very Low": 0,
+              "Informational": 0
+            },
+            "properties": {
+              "Very High": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3650,
+                "description": "Calendar days from the first-found date to the due date for Very High flaws. 0 means no Due Date."
+              },
+              "High": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3650,
+                "description": "Calendar days from the first-found date to the due date for High flaws. 0 means no Due Date."
+              },
+              "Medium": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3650,
+                "description": "Calendar days from the first-found date to the due date for Medium flaws. 0 means no Due Date."
+              },
+              "Low": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3650,
+                "description": "Calendar days from the first-found date to the due date for Low flaws. 0 means no Due Date."
+              },
+              "Very Low": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3650,
+                "description": "Calendar days from the first-found date to the due date for Very Low flaws. 0 means no Due Date."
+              },
+              "Informational": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3650,
+                "description": "Calendar days from the first-found date to the due date for Informational flaws. 0 means no Due Date."
+              }
+            },
+            "additionalProperties": false,
+            "description": "Calendar days from the date Veracode first found a flaw to the Jira Due Date of its ticket, per severity. 0 means no Due Date for that severity. A ticket's Due Date is set once and never overwritten by a later import; flaws added to a ticket can only move it earlier."
           }
         }
       },
