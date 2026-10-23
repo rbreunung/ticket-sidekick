@@ -130,9 +130,9 @@ function toDedupTicket(issue: JqlIssueLike): DedupTicket {
     key: issue.key,
     labels: fields.labels ?? [],
     resolved: fields.resolution !== undefined && fields.resolution !== null,
-    created: typeof fields.created === 'string' ? fields.created : null,
-    status: typeof fields.status?.name === 'string' ? fields.status.name : null,
-    ...(fields.duedate === undefined ? {} : { dueDate: typeof fields.duedate === 'string' ? fields.duedate : null }),
+    created: stringOrNull(fields.created),
+    status: stringOrNull(fields.status?.name),
+    ...(fields.duedate === undefined ? {} : { dueDate: stringOrNull(fields.duedate) }),
   };
 }
 
@@ -606,6 +606,13 @@ export function deriveRewriteActions(change: RowChange | null, anyOpen: boolean)
   return { allowedActions, action: anyOpen ? 'rewrite' : 'follow-up' };
 }
 
+/** Every ticket in the dedup map, by its key. */
+function ticketsByKey(dedupMap: DedupMap): Map<string, DedupTicket> {
+  const byKey = new Map<string, DedupTicket>();
+  for (const tickets of dedupMap.values()) for (const t of tickets) byKey.set(t.key, t);
+  return byKey;
+}
+
 /** Every distinct ticket across an item's dedup keys, in key-number order. */
 function collectTickets(dedupMap: DedupMap, keys: string[]): DedupTicket[] {
   const byKey = new Map<string, DedupTicket>();
@@ -756,8 +763,7 @@ export function applyDroppedMembers<TItem, TRow extends ReviewRowBase>(params: {
   derive: (change: RowChange | null, anyOpen: boolean) => TicketedActionChoice;
 }): TRow[] {
   const { rows, dedupMap, itemOf, dedupKeyOf, labelToDedupKey, reportKeys, derive } = params;
-  const ticketByKey = new Map<string, DedupTicket>();
-  for (const tickets of dedupMap.values()) for (const t of tickets) ticketByKey.set(t.key, t);
+  const ticketByKey = ticketsByKey(dedupMap);
 
   const rowsByTarget = new Map<string, TRow[]>();
   for (const row of rows) {
@@ -802,8 +808,7 @@ export function applyMissingDueDate<TItem, TRow extends ReviewRowBase>(params: {
   derive: (change: RowChange | null, anyOpen: boolean) => TicketedActionChoice;
 }): TRow[] {
   const { rows, dedupMap, itemOf, expectedFor, derive } = params;
-  const ticketByKey = new Map<string, DedupTicket>();
-  for (const tickets of dedupMap.values()) for (const t of tickets) ticketByKey.set(t.key, t);
+  const ticketByKey = ticketsByKey(dedupMap);
 
   return rows.map(row => {
     if (row.existingTicketKey === null || row.allowedActions === undefined || !row.target || row.target.resolved) return row;

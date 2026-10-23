@@ -62,12 +62,11 @@ export async function writeRewrite<TItem, TRow extends ReviewRowBase>(
 ): Promise<{ dueDate: string | null; droppedFields: string[] }> {
   const fields = descriptor.buildRowFields(regenItem, []);
   const built = descriptor.buildTicketFields({ ...fields, id: '0', existingTicketKey: null, included: true } as unknown as TRow, {}, { ticketCreated: target.ticketCreated });
-  // An importer with its own rule (Veracode: set once, only moved earlier) decides the Due Date itself.
   const dueDate = descriptor.rewriteDueDate
     ? descriptor.rewriteDueDate({
       regenItem, joiningItem: target.joiningItem ?? null, currentDueDate: target.currentDueDate ?? null, ticketCreated: target.ticketCreated ?? null,
     })
-    : typeof built.fields.duedate === 'string' ? built.fields.duedate : null;
+    : stringOrNull(built.fields.duedate);
   const optionalFields = descriptor.rewriteDueDate ? ['duedate'] : built.optionalFields;
   const { droppedFields } = await ticketService.rewriteTicket(key, {
     summary: built.summary,
@@ -151,6 +150,7 @@ export async function addToTicket<TItem, TRow extends ReviewRowBase>(
   let dueDate: string | null = null;
   try {
     const issue = await ticketService.getIssue(key);
+    const ticketCreated = stringOrNull(issue.fields.created);
     const labels = issue.fields.labels ?? [];
     const addedItem = fold.combine(rows.map(fold.itemOf));
     const plan = planRewrite(session, descriptor, key, labels, rows);
@@ -161,14 +161,14 @@ export async function addToTicket<TItem, TRow extends ReviewRowBase>(
       const toAdd = ratingPrefix && labels.some(l => l.startsWith(ratingPrefix))
         ? recordLabels.filter(l => !l.startsWith(ratingPrefix)) : recordLabels;
       await ticketService.updateLabels(key, toAdd);
-      comment = fold.buildComment(addedItem, [], { ticketCreated: stringOrNull(issue.fields.created) });
+      comment = fold.buildComment(addedItem, [], { ticketCreated });
     } else {
       const written = await writeRewrite(ticketService, descriptor, key, plan.regenItem, labelsToRemove(session, descriptor, plan.droppedKeys), {
-        ticketCreated: stringOrNull(issue.fields.created), currentDueDate: stringOrNull(issue.fields.duedate), joiningItem: addedItem,
+        ticketCreated, currentDueDate: stringOrNull(issue.fields.duedate), joiningItem: addedItem,
       });
       droppedFields = written.droppedFields;
       dueDate = written.dueDate;
-      comment = fold.buildComment(addedItem, plan.droppedKeys, { dueDate, ticketCreated: stringOrNull(issue.fields.created) });
+      comment = fold.buildComment(addedItem, plan.droppedKeys, { dueDate, ticketCreated });
     }
   } catch (err) {
     return failWith(err instanceof Error ? err.message : String(err));

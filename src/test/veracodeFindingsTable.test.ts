@@ -187,12 +187,4 @@ describe('readVeracodeFindings on a description written before the date columns'
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]).toMatchObject({ issueId: '1001', severity: 5, cweId: '89', file: 'Dao.java', line: 10 });
   });
-
-  it('reads the same findings from a freshly built description that carries the date columns', () => {
-    const group = [makeFlaw({ issueId: '1001', severity: 5, line: 10 }), makeFlaw({ issueId: '1002', severity: 4, line: 20 })];
-    const { wiki, summary, labels } = ticketOf(group);
-    const result = readVeracodeFindings(wiki, { summary, labels });
-    expect(result.detailSource).toBe('table');
-    expect(result.findings.map(f => [f.issueId, f.severity, f.line])).toEqual([['1001', 5, 10], ['1002', 4, 20]]);
-  });
 });

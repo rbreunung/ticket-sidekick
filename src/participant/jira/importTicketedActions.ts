@@ -183,6 +183,7 @@ async function rewriteTicketedGroup<TItem, TRow extends ReviewRowBase>(
   try {
     if (!fold) throw new Error('rewrite is not available for this import');
     const issue = await ticketService.getIssue(key);
+    const ticketCreated = stringOrNull(issue.fields.created);
     const added = rows.flatMap(r => {
       const change = r.change;
       if (change?.kind !== 'findings' || change.newIds.length === 0) return [];
@@ -192,13 +193,13 @@ async function rewriteTicketedGroup<TItem, TRow extends ReviewRowBase>(
     const addedItem = fold.combine(added);
     const plan = planRewrite(session, descriptor, key, issue.fields.labels ?? [], []);
     const written = await writeRewrite(ticketService, descriptor, key, plan.regenItem, labelsToRemove(session, descriptor, plan.droppedKeys), {
-      ticketCreated: stringOrNull(issue.fields.created), currentDueDate: stringOrNull(issue.fields.duedate), joiningItem: addedItem,
+      ticketCreated, currentDueDate: stringOrNull(issue.fields.duedate), joiningItem: addedItem,
     });
     droppedFields = written.droppedFields;
     dueDate = written.dueDate;
     const dateChanges = rows.flatMap(r => (r.change?.kind === 'findings' && r.change.dates?.length
       ? [{ ref: descriptor.itemRefFor(r), changes: r.change.dates }] : []));
-    comment = fold.buildComment(addedItem, plan.droppedKeys, { dateChanges, dueDate, ticketCreated: stringOrNull(issue.fields.created) });
+    comment = fold.buildComment(addedItem, plan.droppedKeys, { dateChanges, dueDate, ticketCreated });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logDiag(descriptor.scope, 'error', `Rewrite of existing ticket failed — ${key}`, { issueKey: key, error: message });

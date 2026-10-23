@@ -46,7 +46,7 @@ function readVeracodeSla(): ResolvedSla {
 }
 
 /** The SLA table (`ticketSidekick.veracode.slaDays`) as days by severity number; a severity with no days is absent. */
-export function getVeracodeSlaDays(): SlaDays {
+function getVeracodeSlaDays(): SlaDays {
   return readVeracodeSla().days;
 }
 
@@ -56,6 +56,12 @@ export function getVeracodeSlaDays(): SlaDays {
  */
 function veracodeDue(ticketCreated?: string | null): DueContext {
   return { days: getVeracodeSlaDays(), fallbackStart: toCalendarDate(ticketCreated) ?? localDate() };
+}
+
+/** A group's due date under the SLA table, counting a flaw with no first-found date from `ticketCreated` (else today). */
+function veracodeGroupDue(group: VeracodeFlaw[], ticketCreated?: string | null): string | null {
+  const due = veracodeDue(ticketCreated);
+  return groupDueDate(group, due.days, due.fallbackStart);
 }
 
 // A problem with the setting is logged once per import, when its session is built, never once per row.
@@ -178,13 +184,10 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
       optionalFields: dueDate ? ['duedate'] : undefined,
     };
   },
-  // A Due Date is set once (an empty one gets the policy date over the whole ticket) and flaws joining a ticket can only
-  // move it earlier; anything else leaves it alone.
   rewriteDueDate: ({ regenItem, joiningItem, currentDueDate, ticketCreated }) => {
-    const due = veracodeDue(ticketCreated);
-    if (currentDueDate === null) return groupDueDate(regenItem, due.days, due.fallbackStart);
+    if (currentDueDate === null) return veracodeGroupDue(regenItem, ticketCreated);
     if (joiningItem === null) return null;
-    const joining = groupDueDate(joiningItem, due.days, due.fallbackStart);
+    const joining = veracodeGroupDue(joiningItem, ticketCreated);
     return joining !== null && joining < currentDueDate ? joining : null;
   },
   dueDateNote: dueDate => `Due Date set to ${dueDate} from your SLA table`,
@@ -217,10 +220,7 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
     source: 'veracode',
     detailOf: row => ({ findings: row.sourceGroup.map(findingFromFlaw) }),
     summaryOf: row => row.summary,
-    dueDateOf: row => {
-      const due = veracodeDue();
-      return groupDueDate(row.sourceGroup, due.days, due.fallbackStart);
-    },
+    dueDateOf: row => veracodeGroupDue(row.sourceGroup),
   },
   // Import ticket updates parity (KTD2): a folded group's findings are its flaw ids, recorded as
   // `veracode-issue-<id>` labels. Veracode offers the same three actions as Waltz (`rewrite`, `leave`, `new ticket`), so a
@@ -229,13 +229,7 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
     findingNoun: 'flaw(s)',
     describe: describeVeracodeChange,
     deriveActions: deriveRewriteActions,
-    // A Due Date is set once: an open ticket with an empty one is offered a rewrite that sets it (an undated flaw counts from the ticket's creation).
-    dueDateBackfill: {
-      expectedFor: (group, ticketCreated) => {
-        const due = veracodeDue(ticketCreated);
-        return groupDueDate(group, due.days, due.fallbackStart);
-      },
-    },
+    dueDateBackfill: { expectedFor: veracodeGroupDue },
     // `new ticket` is a full ticket — the group's whole current content, all its labels and the template's — whose
     // title says which ticket it follows. The Relates link to that ticket is added by the caller.
     actionLabels: { 'follow-up': 'new ticket' },
