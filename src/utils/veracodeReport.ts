@@ -5,7 +5,7 @@ import {
   clampSummary, fitWiki,
   type RowChange,
 } from './reportImport';
-import { FINDINGS_COLUMNS, ABSENT_CELL } from './veracodeFindingsTable';
+import { FINDINGS_COLUMNS, SLIM_FINDINGS_COLUMNS, ABSENT_CELL } from './veracodeFindingsTable';
 
 export interface VeracodeFlaw {
   issueId: string;
@@ -387,8 +387,11 @@ export function buildGroupSummary(group: VeracodeFlaw[]): string {
 
 // Per-finding description/recommendation caps by detail level (R10); the last level drops the
 // per-finding sections altogether and leaves the (always complete) overview table.
+// Then two table-only levels: the full findings table, and — when even that exceeds the budget (several hundred
+// findings) — the slim table, which keeps the identifiers (issue id, severity, CWE, file, line) and drops the rest.
 const FOLD_TEXT_CAPS = [Infinity, 400, 120];
-const FOLD_LEVELS = FOLD_TEXT_CAPS.length + 1;
+const FOLD_LEVELS = FOLD_TEXT_CAPS.length + 2;
+const SLIM_TABLE_LEVEL = FOLD_LEVELS - 1;
 
 function severityText(flaw: VeracodeFlaw): string {
   return `${severityLabel(flaw.severity)} (${flaw.severity})`;
@@ -405,11 +408,18 @@ function tableCell(value: string | null | undefined): string {
  * a reader can rebuild a finding's location from Jira alone (see veracodeFindingsTable.ts, which owns the
  * column titles and reads this back).
  */
-function pushFindingsTable(lines: string[], group: VeracodeFlaw[]): void {
-  lines.push(`| ${FINDINGS_COLUMNS.join(' | ')} |`);
-  lines.push(`| ${FINDINGS_COLUMNS.map(() => '---').join(' | ')} |`);
+function pushFindingsTable(lines: string[], group: VeracodeFlaw[], slim = false): void {
+  const columns = slim ? SLIM_FINDINGS_COLUMNS : FINDINGS_COLUMNS;
+  lines.push(`| ${columns.join(' | ')} |`);
+  lines.push(`| ${columns.map(() => '---').join(' | ')} |`);
   for (const flaw of group) {
-    const cells = [
+    const cells = slim ? [
+      flaw.issueId,
+      severityText(flaw),
+      flaw.cweId ? `CWE-${flaw.cweId}` : ABSENT_CELL,
+      tableCell(flaw.sourceFile),
+      flaw.line != null ? String(flaw.line) : ABSENT_CELL,
+    ] : [
       flaw.issueId,
       severityText(flaw),
       flaw.cweId ? `CWE-${flaw.cweId}` : ABSENT_CELL,
@@ -456,8 +466,12 @@ function buildFoldedMarkdown(group: VeracodeFlaw[], banner: string, level: numbe
     lines.push("Per-finding text was shortened to fit Jira's size limit; the table lists every finding.");
     lines.push('');
   }
-  if (group.length > 0) pushFindingsTable(lines, group);
-  if (group.length > 0 && level < FOLD_LEVELS - 1) {
+  if (level === SLIM_TABLE_LEVEL && group.length > 0) {
+    lines.push("The table leaves out the module, path, CWE name and function of each finding to fit Jira's size limit.");
+    lines.push('');
+  }
+  if (group.length > 0) pushFindingsTable(lines, group, level === SLIM_TABLE_LEVEL);
+  if (group.length > 0 && level < FOLD_TEXT_CAPS.length) {
     const cap = FOLD_TEXT_CAPS[level];
     for (const flaw of group) pushFoldedSection(lines, flaw, cap);
   }

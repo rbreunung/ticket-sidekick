@@ -148,4 +148,28 @@ describe('readVeracodeFindings', () => {
     expect(result.detailSource).toBe('table');
     expect(result.findings.map(f => f.issueId)).toEqual(big.map(f => f.issueId));
   });
+
+  describe('a fold too large for the full table', () => {
+    const huge = Array.from({ length: 400 }, (_, i) => makeFlaw({
+      issueId: String(5000 + i), line: i + 1, functionPrototype: 'void aFairlyLongFunctionName(String firstArgument, int secondArgument)', description: 'x'.repeat(200),
+    }));
+
+    it('falls back to a slimmer table that still lists every finding and fits Jira\'s limit', () => {
+      const { wiki, summary, labels } = ticketOf(huge);
+
+      expect(wiki.length).toBeLessThanOrEqual(30_000);
+      expect(wiki).toContain('leaves out the module, path, CWE name and function');
+      const result = readVeracodeFindings(wiki, { summary, labels });
+      expect(result.detailSource).toBe('table');
+      expect(result.edited).toBe(false);
+      expect(result.findings.map(f => f.issueId)).toEqual(huge.map(f => f.issueId));
+      expect(result.findings[7]).toMatchObject({ severity: 4, cweId: '89', file: 'ExampleOrderDao.java', line: 8, module: null, path: null, functionName: null, cweName: null });
+    });
+
+    it('keeps the full table when it fits, and says nothing about leaving columns out', () => {
+      const { wiki } = ticketOf(huge.slice(0, 20));
+      expect(wiki).toContain('||Issue ID||Severity||CWE||CWE name||Module||Path||File||Line||Function||');
+      expect(wiki).not.toContain('leaves out');
+    });
+  });
 });

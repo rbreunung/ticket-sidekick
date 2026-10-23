@@ -9,6 +9,8 @@
 import { readWikiTables, normalizeTitle } from './wikiTableRead';
 
 export const FINDINGS_COLUMNS = ['Issue ID', 'Severity', 'CWE', 'CWE name', 'Module', 'Path', 'File', 'Line', 'Function'] as const;
+/** The columns of the slimmer table a very large fold falls back to when even the full table exceeds the size budget. */
+export const SLIM_FINDINGS_COLUMNS = ['Issue ID', 'Severity', 'CWE', 'File', 'Line'] as const;
 export const ABSENT_CELL = 'n/a';
 
 /** Where a finding's detail was read from, best first. `report` is added by the import export. */
@@ -209,7 +211,8 @@ export function readVeracodeFindings(wiki: string | null | undefined, context: T
 
   for (const table of readWikiTables(text)) {
     if (columnIndex(table.titles, 'Issue ID') < 0) continue;
-    if (columnIndex(table.titles, 'Path') >= 0 && columnIndex(table.titles, 'File') >= 0) {
+    // The full table, or the slim one a very large fold falls back to (no Path, Module, CWE name or Function column).
+    if (columnIndex(table.titles, 'File') >= 0) {
       findings = fromCurrentTable(table.titles, table.rows);
     } else if (columnIndex(table.titles, 'Location') >= 0) {
       findings = fromLegacyTable(table.titles, table.rows);

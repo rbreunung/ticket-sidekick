@@ -137,13 +137,6 @@ A Veracode ticket does not keep a finding's file, line and module in a form that
 - The Jira search cannot return Veracode descriptions in a usable form on every instance (on Jira Cloud they come back as ADF), so a per-ticket read is assumed.
 - The description size budget (about 30,000 characters) still applies to the added tables.
 
-### Outstanding Questions
-
-**Deferred to Planning**
-
-- A slimmer last-resort table for a very large fold that exceeds the description budget even with only the table.
-- The CSV delimiter and encoding: a comma-separated file opens in one column in Excel with a German locale, while a semicolon suits that locale but not others.
-
 ### Sources / Research
 
 - `docs/report-import.md` and `docs/manual/report-imports.md`: the overview hub, Already ticketed / Stale split, folding, and the Waltz Due Date and remediation dates.
@@ -168,6 +161,7 @@ Product Contract preservation: unchanged, except additions made before planning 
 - KTD7. **The Waltz-only review behaviors currently keyed on having an action policy become separate descriptor capabilities.** Reading target descriptions and the dropped-member pass stay Waltz-only. The action policy and the shared `rewrite` default apply to both importers. Governs R18, R19.
 - KTD8. **Detail reads for the standalone export reuse the bounded concurrency of the Waltz description reads (8 at a time).** A failed read leaves that ticket at the title and labels layer and is counted in the summary. Governs R16.
 - KTD9. **CSV cells are quoted per RFC 4180, and any cell starting with `=`, `+`, `-` or `@` is prefixed so a spreadsheet cannot evaluate it.** Chat tables pass Jira and report text through the chat neutralizers already used by `@jira`. Governs R12.
+- KTD10. **The CSV separator is the setting `ticketSidekick.jira.overviewCsvDelimiter` (comma, semicolon or tab; default comma), because Excel with a comma-decimal locale opens a comma-separated file in one column.** The file starts with a byte-order mark. Governs R8.
 
 ### Assumptions
 
@@ -204,7 +198,7 @@ flowchart TB
 
 ### Risks & Dependencies
 
-- A very large fold may not fit the budget even with only the findings table. U1 and U2 keep every finding in the table and decide the slimmer last-resort layout when a real size is hit.
+- A very large Veracode fold may not fit the budget even with only the findings table. The Veracode builder falls back to a slim table (issue id, severity, CWE, file, line) with a note; past about 600 findings the description still exceeds the budget (KL13). The Waltz table has no such fallback.
 - The new Waltz table must not change what the date comparison reads. Mitigated by the existing round-trip and change-detection suites staying unmodified and green.
 - Veracode `rewrite` overwrites hand edits to the description. The manual says so, as it does for Waltz.
 - The reader trusts Jira text that anyone can edit. Mismatched ids are reported as an edited ticket, and nothing from a ticket is ever interpreted as markup or a formula.
