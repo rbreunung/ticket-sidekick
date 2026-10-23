@@ -2,7 +2,7 @@
   "name": "ticket-sidekick",
   "displayName": "Ticket Sidekick",
   "description": "Manage Jira tickets with GitHub Copilot Chat",
-  "version": "0.7.7",
+  "version": "0.7.8",
   "license": "MIT",
   "publisher": "RobertBreunung",
   "engines": {
@@ -719,7 +719,11 @@
           },
           "ticketSidekick.jira.overviewCsvDelimiter": {
             "type": "string",
-            "enum": ["comma", "semicolon", "tab"],
+            "enum": [
+              "comma",
+              "semicolon",
+              "tab"
+            ],
             "default": "comma",
             "description": "Column separator in the CSV that `@jira /overview` and the `export` reply of a report import save. Excel with a German (or other comma-decimal) locale opens a semicolon-separated file in columns, and a comma-separated one in a single column."
           },
