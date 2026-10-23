@@ -55,6 +55,22 @@ const OVERVIEW_PAGE_SIZE = 100;
 const OVERVIEW_DESCRIPTION_CONCURRENCY = 8;
 const PROJECT_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/;
 const CALENDAR_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}/;
+const ISSUE_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
+const OVERVIEW_KEY_CHUNK = 50;
+
+function toOverviewTicket(issue: JiraIssue, fallbackSource: OverviewTicket['source']): OverviewTicket {
+  const labels = issue.fields.labels ?? [];
+  const due = issue.fields.duedate;
+  return {
+    key: issue.key,
+    summary: issue.fields.summary ?? '',
+    status: issue.fields.status?.name ?? '',
+    labels,
+    dueDate: typeof due === 'string' && CALENDAR_DATE_PATTERN.test(due) ? due.slice(0, 10) : null,
+    fixVersions: (issue.fields.fixVersions ?? []).map(v => v.name),
+    source: labels.includes(OVERVIEW_MARKER_LABELS.veracode) ? 'veracode' : labels.includes(OVERVIEW_MARKER_LABELS.waltz) ? 'waltz' : fallbackSource,
+  };
+}
 
 /** Thrown by `transitionAlongPath` when a multi-hop transition fails partway through. Each hop
  * is a real Jira write, so a failure after hop 1 leaves the ticket at an intermediate status —
@@ -843,20 +859,29 @@ export class TicketService {
       MAX_OVERVIEW_TICKETS,
       issue => issue.key,
     );
-    const tickets = issues.map((issue): OverviewTicket => {
-      const labels = issue.fields.labels ?? [];
-      const due = issue.fields.duedate;
-      return {
-        key: issue.key,
-        summary: issue.fields.summary ?? '',
-        status: issue.fields.status?.name ?? '',
-        labels,
-        dueDate: typeof due === 'string' && CALENDAR_DATE_PATTERN.test(due) ? due.slice(0, 10) : null,
-        fixVersions: (issue.fields.fixVersions ?? []).map(v => v.name),
-        source: labels.includes(OVERVIEW_MARKER_LABELS.veracode) ? 'veracode' : 'waltz',
-      };
-    });
+    const tickets = issues.map(issue => toOverviewTicket(issue, 'waltz'));
     return { tickets, truncated: issues.length >= MAX_OVERVIEW_TICKETS };
+  }
+
+  /**
+   * The named tickets as overview tickets (the import export lists the tickets its review already knows). Keys are
+   * validated before they reach JQL and read 50 at a time; `fallbackSource` names the importer when a ticket has
+   * lost its marker label.
+   */
+  async getOverviewTicketsByKeys(keys: string[], fallbackSource: OverviewTicket['source']): Promise<OverviewTicket[]> {
+    const valid = [...new Set(keys)].filter(k => ISSUE_KEY_PATTERN.test(k));
+    const tickets: OverviewTicket[] = [];
+    for (let i = 0; i < valid.length; i += OVERVIEW_KEY_CHUNK) {
+      const chunk = valid.slice(i, i + OVERVIEW_KEY_CHUNK);
+      const issues = await fetchAllPages<JiraIssue>(
+        (startAt, pageToken) => this.searchTicketsRaw(`key in (${chunk.join(', ')}) ORDER BY key ASC`, OVERVIEW_KEY_CHUNK, ['duedate', 'resolution'], startAt, pageToken),
+        OVERVIEW_KEY_CHUNK,
+        OVERVIEW_KEY_CHUNK,
+        issue => issue.key,
+      );
+      tickets.push(...issues.map(issue => toOverviewTicket(issue, fallbackSource)));
+    }
+    return tickets;
   }
 
   /** The project's versions with their release dates, for flagging a Due Date that falls before a release. */

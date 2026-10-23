@@ -17,6 +17,7 @@ import {
   type ReportImportDescriptor,
 } from './reportImportHandler';
 import { resolveSizeLimitSetting, templateLabelsOf, deriveRewriteActions } from '../../utils/reportImport';
+import { findingFromFlaw } from '../../utils/securityOverview';
 import type { AwaitIssueTypeResume } from '../sessionState';
 import { sessionWasSuperseded } from './ticketContext';
 
@@ -163,6 +164,13 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
     recordLabelsOf: group => buildGroupLabels(group),
     buildComment: (group, droppedKeys) => buildFoldedCommentWiki(group, droppedKeys),
     narrowToNew: (group, change) => flawsWithIds(group, change.newIds),
+  },
+  // Security overview export (KTD3): the report's own flaws are the exact detail; a Veracode report carries no dates.
+  overviewExport: {
+    source: 'veracode',
+    detailOf: row => ({ findings: row.sourceGroup.map(findingFromFlaw) }),
+    summaryOf: row => row.summary,
+    dueDateOf: () => null,
   },
   // Import ticket updates parity (KTD2): a folded group's findings are its flaw ids, recorded as
   // `veracode-issue-<id>` labels. Veracode offers the same three actions as Waltz (`rewrite`, `leave`, `new ticket`), so a

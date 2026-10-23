@@ -47,6 +47,8 @@ export type ImportReplyAction =
   // Waltz ticket merge: re-read the report file and rebuild the screens; the prompt warns, the confirmed form runs.
   | { kind: 'reloadPrompt' }
   | { kind: 'reload' }
+  // Security overview: list this report's items by Fix Version; with `csv` also save them as a file.
+  | { kind: 'export'; csv: boolean }
   | { kind: 'toggleRows'; ids: string[] }
   | { kind: 'toggleStale'; keys: string[] }
   // `reason`, when present, says specifically why (e.g. an action a row does not offer, AE6).
@@ -69,6 +71,8 @@ export interface ImportReplyContext {
   canAccept?: boolean;
   // Waltz ticket merge: whether the importer supports `merge … into …` and `reload report` (Waltz only).
   canMergeTickets?: boolean;
+  // Security overview: whether the importer supports the `export` reply (Veracode and Waltz).
+  canExport?: boolean;
   // How the importer names its row actions to the user (Waltz shows `follow-up` as `new ticket`); the id stays the same.
   actionLabels?: ActionLabels;
 }
@@ -148,9 +152,22 @@ export function parseMergeRunReply(reply: string, run: MergeRun): MergeRunReply 
   return isBackOrCancellation(reply) ? { kind: 'cancel' } : { kind: 'invalid' };
 }
 
+const EXPORT_ON_GROUP_SCREEN = 'Export works from the overview — reply `back` first, then `export`.';
+
+/** `export` and `export csv`, where the importer supports them; on a group screen of a multi-group import the reply says where it works. */
+function parseExportReply(reply: string, ctx: ImportReplyContext, onGroupScreen: boolean): ImportReplyAction | null {
+  if (!ctx.canExport) return null;
+  const n = normalizeReply(reply);
+  if (n !== IMPORT_COMMANDS.export && n !== IMPORT_COMMANDS.exportCsv) return null;
+  if (onGroupScreen && !ctx.singleGroup) return { kind: 'invalid', reason: EXPORT_ON_GROUP_SCREEN };
+  return { kind: 'export', csv: n === IMPORT_COMMANDS.exportCsv };
+}
+
 export function parseOverviewReply(reply: string, ctx: ImportReplyContext): ImportReplyAction {
   const n = normalizeReply(reply);
   if (n === IMPORT_COMMANDS.done || isCancellation(reply)) return { kind: 'done' };
+  const exported = parseExportReply(reply, ctx, false);
+  if (exported) return exported;
   if (n === IMPORT_COMMANDS.openNew && ctx.groups.includes('new')) return { kind: 'open', view: 'new' };
   if (n === IMPORT_COMMANDS.openTicketed && ctx.groups.includes('ticketed')) return { kind: 'open', view: 'ticketed' };
   if (n === IMPORT_COMMANDS.openStale && ctx.groups.includes('stale')) return { kind: 'open', view: 'stale' };
@@ -247,6 +264,8 @@ function parseGroupExit(reply: string, ctx: ImportReplyContext): ImportReplyActi
 export function parseNewGroupReply(reply: string, ctx: ImportReplyContext): ImportReplyAction {
   const n = normalizeReply(reply);
   if (n === IMPORT_COMMANDS.create || isConfirmation(reply)) return { kind: 'create' };
+  const exported = parseExportReply(reply, ctx, true);
+  if (exported) return exported;
   const exit = parseGroupExit(reply, ctx);
   if (exit) return exit;
   const nav = parseReviewPageNav(reply);
@@ -503,6 +522,8 @@ export function parseTicketedGroupReply(reply: string, ctx: ImportReplyContext):
   if (n === IMPORT_COMMANDS.apply || assent) return { kind: 'apply' };
   if (n === IMPORT_COMMANDS.update || n === LEGACY_UPDATE_COMMAND) return { kind: 'update' };
   if (n === IMPORT_COMMANDS.recreate) return { kind: 'recreate' };
+  const exported = parseExportReply(reply, ctx, true);
+  if (exported) return exported;
   const nav = parseReviewPageNav(reply);
   if (nav) return { kind: 'pageNav', nav };
 
@@ -548,6 +569,8 @@ export function parseStaleGroupReply(reply: string, ctx: ImportReplyContext): Im
   if (n === IMPORT_COMMANDS.close || isConfirmation(reply)) return { kind: 'close' };
   const exit = parseGroupExit(reply, ctx);
   if (exit) return exit;
+  const exported = parseExportReply(reply, ctx, true);
+  if (exported) return exported;
   const listing = ctx.canAccept && ctx.singleGroup ? parseAcceptedListReply(reply) : null;
   if (listing) return listing;
   const offScreen = parseMergeOffScreenReply(n, reply, ctx);
@@ -594,7 +617,7 @@ export function describeImportReplyVocabulary(view: ImportReviewView, ctx: Impor
       return `On this screen you can reply \`close tickets\`, a stale ticket's key to toggle it (e.g. \`PROJ-123\`), \`next\` / \`prev\` / \`page <n>\`, or ${exit}.`;
     default: {
       const opens = ctx.groups.map(g => `\`${g === 'new' ? IMPORT_COMMANDS.openNew : g === 'ticketed' ? IMPORT_COMMANDS.openTicketed : IMPORT_COMMANDS.openStale}\``);
-      return `On the overview you can reply ${[...opens, ...(ctx.canAccept ? ['`accepted`', '`unaccept 2`'] : []), ...(ctx.canMergeTickets ? ['`merge A5 into A3`', `\`${IMPORT_COMMANDS.reload}\``] : []), '`done`'].join(', ')}.`;
+      return `On the overview you can reply ${[...opens, ...(ctx.canExport ? ['`export`'] : []), ...(ctx.canAccept ? ['`accepted`', '`unaccept 2`'] : []), ...(ctx.canMergeTickets ? ['`merge A5 into A3`', `\`${IMPORT_COMMANDS.reload}\``] : []), '`done`'].join(', ')}.`;
     }
   }
 }

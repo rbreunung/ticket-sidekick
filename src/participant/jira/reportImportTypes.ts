@@ -5,6 +5,8 @@ import type { AcceptedListService } from '../../services/AcceptedListService';
 import type { AcceptedEntry } from '../../utils/waltzAccepted';
 import type { ChangeContext, CommentDetails, RowChange, TicketedActionChoice } from '../../utils/reportImport';
 import type { ActionLabels } from '../sessionState';
+import type { TicketFinding } from '../../utils/veracodeFindingsTable';
+import type { TicketComponent } from '../../utils/waltzComponentsTable';
 import type { ReviewRowBase, ReviewTableColumn } from '../sessionState';
 
 export interface ReportImportRow extends ReviewRowBase {
@@ -100,6 +102,20 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   // Waltz ticket merge (KTD1): optional `merge … into …`, `reload report` and the refresh after an `unaccept`.
   // Waltz supplies it; Veracode and email omit it and behave exactly as before.
   ticketMerge?: ImportTicketMerge;
+  // Security overview export (KTD3): optional `export` reply that lists this report's items by Fix Version. Veracode and Waltz
+  // supply it; email omits it and has no `export` reply.
+  overviewExport?: ImportOverviewExport<TRow>;
+}
+
+/** What an importer supplies so the `export` reply can list a row's report-side detail. */
+export interface ImportOverviewExport<TRow extends ReviewRowBase> {
+  source: 'veracode' | 'waltz';
+  /** The row's report items as records (exact: they come straight from the parsed report). */
+  detailOf: (row: TRow) => { findings?: TicketFinding[]; components?: TicketComponent[] };
+  /** The row's one-line description for the overview. */
+  summaryOf: (row: TRow) => string;
+  /** The Due Date the report implies for the row, null when it has none. */
+  dueDateOf: (row: TRow) => string | null;
 }
 
 /** Waltz ticket merge: the importer's wording for the one comment the survivor receives (Jira wiki markup). */

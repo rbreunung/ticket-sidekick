@@ -27,6 +27,7 @@ import { buildStaleTicketGroups } from './cleanupHandler';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import type { AcceptedEntry } from '../../utils/waltzAccepted';
 import { acceptComponents, acceptRows, showAcceptedList, unacceptEntry } from './importAccept';
+import { exportImportOverview } from './importExport';
 import { addToTicket, showAddPrompt } from './importAddToTicket';
 import { createNewRows } from './importCreate';
 import { IMPORT_SESSION_KINDS, afterGroupAction, streamImportReview } from './importReviewScreen';
@@ -737,6 +738,7 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
     canFold: descriptor.fold !== undefined,
     canAccept: descriptor.accepted !== undefined,
     canMergeTickets: descriptor.ticketMerge !== undefined,
+    canExport: descriptor.overviewExport !== undefined,
     actionLabels: descriptor.changeTracking?.actionLabels,
     mergedRowIds: session.rows.filter(r => r.existingTicketKey === null && r.memberIds !== undefined).map(r => r.id),
   };
@@ -817,6 +819,9 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
       return rerender();
     case 'listAccepted':
       showAcceptedList(descriptor, stream);
+      return rerender();
+    case 'export':
+      await exportImportOverview(session, action.csv, ticketService, stream, descriptor, baseUrl);
       return rerender();
     case 'unaccept':
     case 'unacceptEntry':

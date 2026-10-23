@@ -32,6 +32,8 @@ export const IMPORT_COMMANDS = {
   close: 'close tickets',
   accepted: 'accepted',
   reload: 'reload report',
+  export: 'export',
+  exportCsv: 'export csv',
 } as const;
 
 /** The reply word a component entry's Remove link sends; one token, so it never reads as the `unaccept <component> <CVE>` form. */

@@ -9,6 +9,7 @@ import {
   type WaltzComponent, type WaltzReviewRow,
 } from '../../utils/waltzReport';
 import { logDiag } from '../../utils/diagLog';
+import { componentFromWaltz } from '../../utils/securityOverview';
 import { AcceptedListService } from '../../services/AcceptedListService';
 import { narrowGroup, acceptedEntriesOf, acceptedComponentEntriesOf, acceptedComponentKeys, isComponentAccepted, type AcceptedEntry } from '../../utils/waltzAccepted';
 import type { WaltzTemplateSelectionSession, WaltzReviewSession, StaleCloseSession } from '../sessionState';
@@ -161,6 +162,13 @@ const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> 
     combine: groups => groups.flat(),
     recordLabelsOf: group => buildGroupLabels(group),
     buildComment: (group, droppedKeys, details) => buildFoldedCommentWiki(group, droppedKeys, details),
+  },
+  // Security overview export (KTD3): the report's own components are the exact detail, and the report implies the same Due Date a ticket would get.
+  overviewExport: {
+    source: 'waltz',
+    detailOf: row => ({ components: row.sourceGroup.map(componentFromWaltz) }),
+    summaryOf: row => row.summary,
+    dueDateOf: row => dueDateFields(row.sourceGroup).fields.duedate ?? null,
   },
   // Waltz ticket merge (KTD1): the survivor's comment opens by naming the tickets it absorbed.
   ticketMerge: {
