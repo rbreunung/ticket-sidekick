@@ -7,6 +7,7 @@ import {
 } from './reportImport';
 import { FINDINGS_COLUMNS, SLIM_FINDINGS_COLUMNS, ABSENT_CELL } from './veracodeFindingsTable';
 import { toCalendarDate } from './waltzDates';
+import { flawDueDate, type SlaDays } from './veracodeDates';
 
 export interface VeracodeFlaw {
   issueId: string;
@@ -355,6 +356,17 @@ export function buildGroupLabels(group: VeracodeFlaw[], templateLabels: string[]
   return [...new Set([...own, ...templateLabels])];
 }
 
+/**
+ * What a description needs to show each flaw's due date: the SLA day counts (see veracodeDates.ts) and the start
+ * for a flaw with no first-found date. Callers that pass none get `n/a` under Due date.
+ */
+export interface DueContext {
+  days: SlaDays;
+  fallbackStart: string | null;
+}
+
+const NO_DUE: DueContext = { days: {}, fallbackStart: null };
+
 // --- Folded ticket content (finding folding plan: R8-R10, R14, R15) ------------------------------
 
 /**
@@ -412,7 +424,7 @@ function tableCell(value: string | null | undefined): string {
  * a reader can rebuild a finding's location from Jira alone (see veracodeFindingsTable.ts, which owns the
  * column titles and reads this back).
  */
-function pushFindingsTable(lines: string[], group: VeracodeFlaw[], slim = false): void {
+function pushFindingsTable(lines: string[], group: VeracodeFlaw[], slim: boolean, due: DueContext): void {
   const columns = slim ? SLIM_FINDINGS_COLUMNS : FINDINGS_COLUMNS;
   lines.push(`| ${columns.join(' | ')} |`);
   lines.push(`| ${columns.map(() => '---').join(' | ')} |`);
@@ -433,6 +445,8 @@ function pushFindingsTable(lines: string[], group: VeracodeFlaw[], slim = false)
       tableCell(flaw.sourceFile),
       flaw.line != null ? String(flaw.line) : ABSENT_CELL,
       tableCell(flaw.functionPrototype),
+      flaw.firstFoundDate ?? ABSENT_CELL,
+      flawDueDate(flaw, due.days, due.fallbackStart) ?? ABSENT_CELL,
     ];
     lines.push(`| ${cells.join(' | ')} |`);
   }
@@ -464,17 +478,17 @@ function pushFoldedSection(lines: string[], flaw: VeracodeFlaw, cap: number): vo
  * per-finding text down (R10) until the output fits; `droppedIds` names findings a rewritten ticket
  * recorded that its new description no longer covers (R15).
  */
-function buildFoldedMarkdown(group: VeracodeFlaw[], banner: string, level: number, droppedIds: string[]): string {
+function buildFoldedMarkdown(group: VeracodeFlaw[], banner: string, level: number, droppedIds: string[], due: DueContext): string {
   const lines: string[] = [banner, ''];
   if (level > 0 && group.length > 0) {
     lines.push("Per-finding text was shortened to fit Jira's size limit; the table lists every finding.");
     lines.push('');
   }
   if (level === SLIM_TABLE_LEVEL && group.length > 0) {
-    lines.push("The table leaves out the module, path, CWE name and function of each finding to fit Jira's size limit.");
+    lines.push("The table leaves out the module, path, CWE name, function and dates of each finding to fit Jira's size limit.");
     lines.push('');
   }
-  if (group.length > 0) pushFindingsTable(lines, group, level === SLIM_TABLE_LEVEL);
+  if (group.length > 0) pushFindingsTable(lines, group, level === SLIM_TABLE_LEVEL, due);
   if (group.length > 0 && level < FOLD_TEXT_CAPS.length) {
     const cap = FOLD_TEXT_CAPS[level];
     for (const flaw of group) pushFoldedSection(lines, flaw, cap);
@@ -487,16 +501,16 @@ function buildFoldedMarkdown(group: VeracodeFlaw[], banner: string, level: numbe
   return lines.join('\n');
 }
 
-function buildFoldedWiki(group: VeracodeFlaw[], banner: string, droppedIds: string[] = []): string {
-  return fitWiki(level => markdownToJiraWiki(buildFoldedMarkdown(group, banner, level, droppedIds)), FOLD_LEVELS).wiki;
+function buildFoldedWiki(group: VeracodeFlaw[], banner: string, droppedIds: string[], due: DueContext): string {
+  return fitWiki(level => markdownToJiraWiki(buildFoldedMarkdown(group, banner, level, droppedIds, due)), FOLD_LEVELS).wiki;
 }
 
 /** A one-flaw ticket: hoisted Location, then the flaw's own sections — the layout before folding existed. */
-function buildSingleFlawDescriptionWiki(flaw: VeracodeFlaw): string {
+function buildSingleFlawDescriptionWiki(flaw: VeracodeFlaw, due: DueContext): string {
   const lines: string[] = [];
 
   lines.push('### Findings');
-  pushFindingsTable(lines, [flaw]);
+  pushFindingsTable(lines, [flaw], false, due);
 
   lines.push('### Location');
   pushModuleAndFile(lines, flaw);
@@ -526,9 +540,9 @@ function buildSingleFlawDescriptionWiki(flaw: VeracodeFlaw): string {
  * `sanitizeStandaloneLine()` sanitizers as the single-flaw path, and the Markdown is converted once
  * via `markdownToJiraWiki()` at the end.
  */
-export function buildGroupDescriptionWiki(group: VeracodeFlaw[]): string {
-  if (group.length === 1) return buildSingleFlawDescriptionWiki(group[0]);
-  return buildFoldedWiki(group, `This ticket folds ${group.length} Veracode findings.`);
+export function buildGroupDescriptionWiki(group: VeracodeFlaw[], due: DueContext = NO_DUE): string {
+  if (group.length === 1) return buildSingleFlawDescriptionWiki(group[0], due);
+  return buildFoldedWiki(group, `This ticket folds ${group.length} Veracode findings.`, [], due);
 }
 
 /**
@@ -536,13 +550,13 @@ export function buildGroupDescriptionWiki(group: VeracodeFlaw[]): string {
  * sections form as a folded description, each with its own file and line. `droppedIds` are issue
  * ids the ticket recorded that a rewrite no longer covers.
  */
-export function buildFoldedCommentWiki(group: VeracodeFlaw[], droppedIds: string[] = []): string {
+export function buildFoldedCommentWiki(group: VeracodeFlaw[], droppedIds: string[] = [], due: DueContext = NO_DUE): string {
   const banner = group.length === 0
     ? 'This ticket was rewritten from the latest report; no findings were added.'
     : group.length === 1
       ? 'This Veracode finding was added to this ticket.'
       : `These ${group.length} Veracode findings were added to this ticket.`;
-  return buildFoldedWiki(group, banner, droppedIds);
+  return buildFoldedWiki(group, banner, droppedIds, due);
 }
 
 /**

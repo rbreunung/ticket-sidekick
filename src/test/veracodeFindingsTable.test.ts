@@ -158,7 +158,7 @@ describe('readVeracodeFindings', () => {
       const { wiki, summary, labels } = ticketOf(huge);
 
       expect(wiki.length).toBeLessThanOrEqual(30_000);
-      expect(wiki).toContain('leaves out the module, path, CWE name and function');
+      expect(wiki).toContain('leaves out the module, path, CWE name, function and dates');
       const result = readVeracodeFindings(wiki, { summary, labels });
       expect(result.detailSource).toBe('table');
       expect(result.edited).toBe(false);
@@ -168,8 +168,31 @@ describe('readVeracodeFindings', () => {
 
     it('keeps the full table when it fits, and says nothing about leaving columns out', () => {
       const { wiki } = ticketOf(huge.slice(0, 20));
-      expect(wiki).toContain('||Issue ID||Severity||CWE||CWE name||Module||Path||File||Line||Function||');
+      expect(wiki).toContain('||Issue ID||Severity||CWE||CWE name||Module||Path||File||Line||Function||First found||Due date||');
       expect(wiki).not.toContain('leaves out');
     });
+  });
+});
+
+describe('readVeracodeFindings on a description written before the date columns', () => {
+  const oldWiki = [
+    '||Issue ID||Severity||CWE||CWE name||Module||Path||File||Line||Function||',
+    '|1001|Very High (5)|CWE-89|SQL Injection|ExampleApp.war|com/example/|Dao.java|10|void a()|',
+  ].join('\n');
+
+  it('still reads it from the table layer, with the missing columns simply absent', () => {
+    const result = readVeracodeFindings(oldWiki, { summary: null, labels: ['veracode-issue-1001'] });
+    expect(result.detailSource).toBe('table');
+    expect(result.edited).toBe(false);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]).toMatchObject({ issueId: '1001', severity: 5, cweId: '89', file: 'Dao.java', line: 10 });
+  });
+
+  it('reads the same findings from a freshly built description that carries the date columns', () => {
+    const group = [makeFlaw({ issueId: '1001', severity: 5, line: 10 }), makeFlaw({ issueId: '1002', severity: 4, line: 20 })];
+    const { wiki, summary, labels } = ticketOf(group);
+    const result = readVeracodeFindings(wiki, { summary, labels });
+    expect(result.detailSource).toBe('table');
+    expect(result.findings.map(f => [f.issueId, f.severity, f.line])).toEqual([['1001', 5, 10], ['1002', 4, 20]]);
   });
 });

@@ -8,8 +8,8 @@
 // CWE id, severity and line are validated numeric when the report is parsed, so they are exact.
 import { readWikiTables, normalizeTitle } from './wikiTableRead';
 
-export const FINDINGS_COLUMNS = ['Issue ID', 'Severity', 'CWE', 'CWE name', 'Module', 'Path', 'File', 'Line', 'Function'] as const;
-/** The columns of the slimmer table a very large fold falls back to when even the full table exceeds the size budget. */
+export const FINDINGS_COLUMNS = ['Issue ID', 'Severity', 'CWE', 'CWE name', 'Module', 'Path', 'File', 'Line', 'Function', 'First found', 'Due date'] as const;
+/** The columns of the slimmer table a very large fold falls back to when even the full table exceeds the size budget (it omits the two date columns too). */
 export const SLIM_FINDINGS_COLUMNS = ['Issue ID', 'Severity', 'CWE', 'File', 'Line'] as const;
 export const ABSENT_CELL = 'n/a';
 

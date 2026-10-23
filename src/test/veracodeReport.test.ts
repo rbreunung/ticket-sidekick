@@ -8,6 +8,8 @@ import {
   describeVeracodeChange, flawsWithIds, buildFollowUpSummary, buildFoldedCommentWiki,
   type VeracodeFlaw,
 } from '../utils/veracodeReport';
+import { readWikiTables, normalizeTitle } from '../utils/wikiTableRead';
+import { resolveSlaDays } from '../utils/veracodeDates';
 
 const fixture = (name: string) =>
   readFileSync(join(__dirname, 'fixtures', 'veracode', name), 'utf-8');
@@ -572,16 +574,16 @@ describe('buildGroupDescriptionWiki', () => {
 
     it('lists every finding in a findings table with its location in separate cells', () => {
       const wiki = buildGroupDescriptionWiki(group);
-      expect(wiki).toContain('||Issue ID||Severity||CWE||CWE name||Module||Path||File||Line||Function||');
-      expect(wiki).toContain("|1001|Very High (5)|CWE-89|Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')|ExampleApp.war|com/example/webapp/dao/|ExampleOrderDao.java|10|void a()|");
-      expect(wiki).toContain("|1002|Medium (3)|CWE-79|Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')|ExampleApp.war|com/example/webapp/dao/|Other.java|20|n/a|");
+      expect(wiki).toContain('||Issue ID||Severity||CWE||CWE name||Module||Path||File||Line||Function||First found||Due date||');
+      expect(wiki).toContain("|1001|Very High (5)|CWE-89|Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')|ExampleApp.war|com/example/webapp/dao/|ExampleOrderDao.java|10|void a()|n/a|n/a|");
+      expect(wiki).toContain("|1002|Medium (3)|CWE-79|Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')|ExampleApp.war|com/example/webapp/dao/|Other.java|20|n/a|n/a|n/a|");
     });
 
     it('cannot be broken or injected through a pipe or macro character in a table cell', () => {
       const evil = makeFlaw({ issueId: '1', functionPrototype: 'a | b {quote}x{quote} !http://evil.example/t.gif!' });
       const wiki = buildGroupDescriptionWiki([evil, makeFlaw({ issueId: '2', line: 5 })]);
       const row = wiki.split('\n').find(l => l.startsWith('|1|'))!;
-      expect(row.split('|').length).toBe(11); // leading empty + 9 cells + trailing empty
+      expect(row.split('|').length).toBe(13); // leading empty + 11 cells + trailing empty
       expect(wiki).not.toContain('{quote}');
       expect(wiki).not.toContain('!http://evil.example/t.gif!');
     });
@@ -828,5 +830,74 @@ describe('parseVeracodeReport first-found date', () => {
     expect(parseVeracodeReport(reportWith(''))[0].firstFoundDate).toBeNull();
     expect(parseVeracodeReport(reportWith('date_first_occurrence="yesterday"'))[0].firstFoundDate).toBeNull();
     expect(parseVeracodeReport(reportWith('date_first_occurrence="2026-02-30T00:00:00.000-0000"'))[0].firstFoundDate).toBeNull();
+  });
+});
+
+describe('Findings table dates (First found, Due date)', () => {
+  const table = (wiki: string) => {
+    const found = readWikiTables(wiki).find(t => t.titles.includes(normalizeTitle('Issue ID')))!;
+    const col = (name: string) => found.titles.indexOf(normalizeTitle(name));
+    return { found, col };
+  };
+  const cell = (wiki: string, issueId: string, column: string): string => {
+    const { found, col } = table(wiki);
+    return found.rows.find(r => r[col('Issue ID')] === issueId)![col(column)];
+  };
+
+  it('shows a flaw\'s first-found date and the due date from the table (a Very High flaw at 30 days)', () => {
+    const { days } = resolveSlaDays({ 'Very High': 30 });
+    const wiki = buildGroupDescriptionWiki([makeFlaw({ issueId: '1', severity: 5, firstFoundDate: '2026-09-01' })], { days, fallbackStart: '2026-10-23' });
+    expect(cell(wiki, '1', 'First found')).toBe('2026-09-01');
+    expect(cell(wiki, '1', 'Due date')).toBe('2026-10-01');
+  });
+
+  it('shows n/a for First found and counts the due date from the fallback start when the report has no first-found date', () => {
+    const { days } = resolveSlaDays({ High: 60 });
+    const wiki = buildGroupDescriptionWiki([makeFlaw({ issueId: '1', severity: 4, firstFoundDate: null })], { days, fallbackStart: '2026-10-23' });
+    expect(cell(wiki, '1', 'First found')).toBe('n/a');
+    expect(cell(wiki, '1', 'Due date')).toBe('2026-12-22');
+  });
+
+  it('shows the first-found date and n/a for Due date when the severity is at 0', () => {
+    const { days } = resolveSlaDays({ High: 60, Low: 0 });
+    const wiki = buildGroupDescriptionWiki([makeFlaw({ issueId: '1', severity: 2, firstFoundDate: '2026-09-01' })], { days, fallbackStart: '2026-10-23' });
+    expect(cell(wiki, '1', 'First found')).toBe('2026-09-01');
+    expect(cell(wiki, '1', 'Due date')).toBe('n/a');
+  });
+
+  it('gives every flaw of a fold its own dates, and the per-flaw sections do not repeat them', () => {
+    const { days } = resolveSlaDays({ 'Very High': 14, High: 60 });
+    const group = [
+      makeFlaw({ issueId: '1', severity: 4, firstFoundDate: '2026-10-02', line: 1 }),
+      makeFlaw({ issueId: '2', severity: 5, firstFoundDate: '2026-11-01', line: 2 }),
+    ];
+    const wiki = buildGroupDescriptionWiki(group, { days, fallbackStart: '2026-10-23' });
+    expect(cell(wiki, '1', 'Due date')).toBe('2026-12-01');
+    expect(cell(wiki, '2', 'Due date')).toBe('2026-11-15');
+    expect(wiki.match(/2026-11-15/g)).toHaveLength(1);
+  });
+
+  it('shows n/a under Due date for every flaw when no due-date context is given (the existing callers)', () => {
+    const wiki = buildGroupDescriptionWiki([makeFlaw({ issueId: '1', severity: 5, firstFoundDate: '2026-09-01' })]);
+    expect(cell(wiki, '1', 'First found')).toBe('2026-09-01');
+    expect(cell(wiki, '1', 'Due date')).toBe('n/a');
+  });
+
+  it('adds the same two columns to the comment an add-to-ticket posts', () => {
+    const { days } = resolveSlaDays({ 'Very High': 30 });
+    const wiki = buildFoldedCommentWiki([makeFlaw({ issueId: '7', severity: 5, firstFoundDate: '2026-09-01' })], [], { days, fallbackStart: '2026-10-23' });
+    expect(cell(wiki, '7', 'First found')).toBe('2026-09-01');
+    expect(cell(wiki, '7', 'Due date')).toBe('2026-10-01');
+  });
+
+  it('leaves the dates out of the slimmer table of a very large fold and says so', () => {
+    const { days } = resolveSlaDays({ High: 28 });
+    const huge = Array.from({ length: 400 }, (_, i) => makeFlaw({
+      issueId: String(5000 + i), line: i + 1, firstFoundDate: '2026-09-01', functionPrototype: 'void aFairlyLongFunctionName(String firstArgument, int secondArgument)', description: 'x'.repeat(200),
+    }));
+    const wiki = buildGroupDescriptionWiki(huge, { days, fallbackStart: '2026-10-23' });
+    expect(wiki.length).toBeLessThanOrEqual(30_000);
+    expect(wiki).toContain('||Issue ID||Severity||CWE||File||Line||');
+    expect(wiki).toContain('leaves out the module, path, CWE name, function and dates');
   });
 });
