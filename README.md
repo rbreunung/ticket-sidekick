@@ -402,7 +402,7 @@ To see more on the review screen (e.g. each ticket's fix version), add field IDs
 
 ### Report imports (email, Veracode, Waltz)
 
-Turn a `.eml` email, a Veracode Detailed Report, or a Waltz OSS Report into Jira tickets — creating a new ticket, or adding an email as a comment to an existing one. For OSS reports the tickets also show the remediation dates and carry the Jira Due Date, a newer report refreshes existing tickets with `rewrite` or `new ticket`, and you can merge related tickets (`merge A5 into A3`) and reload the report after changing the accepted list. See [Report Imports](docs/manual/report-imports.md) for the full walkthrough and settings.
+Turn a `.eml` email, a Veracode Detailed Report, or a Waltz OSS Report into Jira tickets — creating a new ticket, or adding an email as a comment to an existing one. For OSS reports the tickets also show the remediation dates and carry the Jira Due Date, a newer report refreshes existing tickets with `rewrite` or `new ticket`, and you can merge related tickets (`merge A5 into A3`) and reload the report after changing the accepted list. Veracode tickets get their Jira Due Date from a per-severity day table in the `ticketSidekick.veracode.slaDays` setting; it is set once and never overwritten by a later import. See [Report Imports](docs/manual/report-imports.md) for the full walkthrough and settings.
 
 ### Templates and cleanup rules
 

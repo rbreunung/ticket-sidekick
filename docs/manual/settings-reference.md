@@ -117,6 +117,23 @@ When enabled, every `@jira` response starts with an italic line showing the acti
 
 What the filter settings do is described with each import in [Report Imports](report-imports.md).
 
+**Veracode SLA days**
+
+`ticketSidekick.veracode.slaDays` is the number of calendar days from the date Veracode first found a flaw to the Jira Due Date of its ticket, per severity. It ships with Very High 14, High 28, and 0 for Medium, Low, Very Low and Informational, where 0 means no Due Date. These are starting values, not your company's policy: change them to match it. In the Settings screen search for "Veracode SLA days", or edit `settings.json`:
+
+```json
+"ticketSidekick.veracode.slaDays": {
+  "Very High": 14,
+  "High": 28,
+  "Medium": 0,
+  "Low": 0,
+  "Very Low": 0,
+  "Informational": 0
+}
+```
+
+Put it in workspace settings (`.vscode/settings.json`) to share it with everyone who opens the repository. Only the six severity names are allowed. A misspelled name is underlined in `settings.json` and listed in the "Ticket Sidekick" Output channel when an import starts, and a value that is not a whole number of zero or more gives that severity no Due Date. A ticket's Due Date is set once, so changing the table later does not touch tickets that already have one. How the dates are used is described in [Due dates from your SLA table](report-imports.md#due-dates-from-your-sla-table).
+
 **Optional: size limits**
 
 ```json
