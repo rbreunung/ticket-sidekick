@@ -793,3 +793,40 @@ describe('buildFoldedCommentWiki (R14, R15)', () => {
     for (const flaw of big) expect(wiki).toContain(`|${flaw.issueId}|`);
   });
 });
+
+describe('parseVeracodeReport first-found date', () => {
+  const reportWith = (attribute: string) => `<?xml version="1.0" encoding="UTF-8"?>
+    <detailedreport report_format_version="1.5" app_name="ExampleApp">
+      <severity level="5">
+        <category categoryid="18" categoryname="SQL Injection">
+          <desc/>
+          <recommendations/>
+          <cwe cweid="89" cwename="SQL Injection">
+            <description/>
+            <staticflaws>
+              <flaw severity="5" categoryname="SQL Injection" issueid="1234" module="App.war" description="d"
+                    ${attribute} remediation_status="New" sourcefile="A.java" line="1" sourcefilepath="x/"/>
+            </staticflaws>
+          </cwe>
+        </category>
+      </severity>
+    </detailedreport>`;
+
+  it('reads the date part of date_first_occurrence as written in the report, with no time zone shift', () => {
+    const flaws = parseVeracodeReport(fixture('sample-report.xml'));
+    expect(flaws.find(f => f.issueId === '10101')!.firstFoundDate).toBe('2026-05-01');
+    expect(flaws.find(f => f.issueId === '10102')!.firstFoundDate).toBe('2026-03-11');
+    expect(flaws.find(f => f.issueId === '10103')!.firstFoundDate).toBe('2026-04-20');
+  });
+
+  it('keeps the calendar date of a timestamp whose offset would move it in another time zone', () => {
+    const flaws = parseVeracodeReport(reportWith('date_first_occurrence="2026-05-01T23:30:00.000-0800"'));
+    expect(flaws[0].firstFoundDate).toBe('2026-05-01');
+  });
+
+  it('gives null when the attribute is missing or not a date', () => {
+    expect(parseVeracodeReport(reportWith(''))[0].firstFoundDate).toBeNull();
+    expect(parseVeracodeReport(reportWith('date_first_occurrence="yesterday"'))[0].firstFoundDate).toBeNull();
+    expect(parseVeracodeReport(reportWith('date_first_occurrence="2026-02-30T00:00:00.000-0000"'))[0].firstFoundDate).toBeNull();
+  });
+});

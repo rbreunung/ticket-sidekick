@@ -110,6 +110,7 @@ When enabled, every `@jira` response starts with an italic line showing the acti
 | Veracode min severity | `ticketSidekick.veracode.minSeverity` | `4` |
 | Veracode included statuses | `ticketSidekick.veracode.includeRemediationStatuses` | `["New", "Open", "Reopened"]` |
 | Veracode report size limit (MB) | `ticketSidekick.veracode.maxReportSizeMB` | `50` |
+| Veracode SLA days | `ticketSidekick.veracode.slaDays` | `{"Very High": 14, "High": 28, "Medium": 0, "Low": 0, "Very Low": 0, "Informational": 0}` |
 | OSS report min vulnerability rating | `ticketSidekick.waltz.minVulnRating` | `"High"` |
 | OSS report included remediation actions | `ticketSidekick.waltz.includeRemediationActions` | `["", "Remediate"]` |
 | OSS report size limit (MB) | `ticketSidekick.waltz.maxReportSizeMB` | `50` |

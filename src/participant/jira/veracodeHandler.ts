@@ -18,6 +18,8 @@ import {
 } from './reportImportHandler';
 import { resolveSizeLimitSetting, templateLabelsOf, deriveRewriteActions } from '../../utils/reportImport';
 import { findingFromFlaw } from '../../utils/securityOverview';
+import { resolveSlaDays, SLA_SEVERITY_NAMES, type ResolvedSla, type SlaDays } from '../../utils/veracodeDates';
+import { logDiag } from '../../utils/diagLog';
 import type { AwaitIssueTypeResume } from '../sessionState';
 import { sessionWasSuperseded } from './ticketContext';
 
@@ -38,6 +40,24 @@ function getVeracodeConfig(): { minSeverity: number; includeStatuses: string[]; 
   };
 }
 
+function readVeracodeSla(): ResolvedSla {
+  return resolveSlaDays(vscode.workspace.getConfiguration('ticketSidekick').get('veracode.slaDays'));
+}
+
+/** The SLA table (`ticketSidekick.veracode.slaDays`) as days by severity number; a severity with no days is absent. */
+export function getVeracodeSlaDays(): SlaDays {
+  return readVeracodeSla().days;
+}
+
+// A problem with the setting is logged once per import, when its session is built, never once per row.
+function logVeracodeSlaProblems(): void {
+  const { unknownKeys, invalidKeys } = readVeracodeSla();
+  if (unknownKeys.length === 0 && invalidKeys.length === 0) return;
+  logDiag('jira.veracode', 'warn', 'ticketSidekick.veracode.slaDays has entries that were ignored', {
+    unknownKeys, invalidKeys, validNames: [...SLA_SEVERITY_NAMES],
+  });
+}
+
 // U2: folds immediately after parse+filter — before dedup ever runs (KTD1) — so every downstream
 // step (dedup search, review-row building, ticket creation) operates on folded groups
 // (VeracodeFlaw[], one or more flaws sharing a source file + line, R9) rather than individual
@@ -47,6 +67,7 @@ async function readAndFilterVeracodeFile(filePath: string): Promise<{ items: Ver
   // parseVeracodeReport() itself also re-checks size + rejects DOCTYPE/ENTITY (defense in depth,
   // and it's the single source of truth used by the pure unit tests too) — both checks share the
   // same resolved maxReportBytes so they agree with each other and with the user's setting.
+  logVeracodeSlaProblems();
   const { maxReportBytes, ...filterConfig } = getVeracodeConfig();
   // U6: buildVeracodeActiveFlawPredicate needs the raw, unfiltered flaws (before
   // minSeverity/includeRemediationStatuses) — readAndFilterReport returns them directly as
@@ -210,6 +231,7 @@ export async function buildVeracodeTemplateSession(
   // stale check gracefully rather than crashing (a filtered-out flaw would just look "inactive").
   rawFlaws: VeracodeFlaw[] = flaws,
 ): Promise<VeracodeTemplateSelectionSession> {
+  logVeracodeSlaProblems();
   return buildImportTemplateSession(groupFlawsByLocation(flaws), fileName, projectKey, jiraClient, veracodeDescriptor, rawFlaws);
 }
 

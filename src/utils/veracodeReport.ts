@@ -6,6 +6,7 @@ import {
   type RowChange,
 } from './reportImport';
 import { FINDINGS_COLUMNS, SLIM_FINDINGS_COLUMNS, ABSENT_CELL } from './veracodeFindingsTable';
+import { toCalendarDate } from './waltzDates';
 
 export interface VeracodeFlaw {
   issueId: string;
@@ -22,6 +23,8 @@ export interface VeracodeFlaw {
   scope: string | null;
   functionPrototype: string | null;
   remediationStatus: string;
+  /** The calendar date Veracode first found the flaw (`date_first_occurrence`, as written); null when missing or unreadable. */
+  firstFoundDate?: string | null;
 }
 
 export const SEVERITY_LABELS = ['Informational', 'Very Low', 'Low', 'Medium', 'High', 'Very High'];
@@ -136,6 +139,7 @@ export function parseVeracodeReport(xml: string, maxBytes: number = MAX_REPORT_B
             scope: flaw.scope ?? null,
             functionPrototype: flaw.functionprototype ?? null,
             remediationStatus: flaw.remediation_status,
+            firstFoundDate: toCalendarDate(flaw.date_first_occurrence),
           });
         }
       }
