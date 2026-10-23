@@ -341,8 +341,15 @@ describe('backfilling a Due Date on the Already ticketed screen', () => {
   it('AE13: an undated flaw is dated from the ticket\'s creation date, and the ticket then settles', async () => {
     sla.value = { High: 60 };
     tickets = { 'PROJ-1': onTicket() };
-    const ws = await importVeracode([flaw({ issueId: '901', severity: 4, firstFoundDate: null })]);
+    const report = [flaw({ issueId: '901', severity: 4, firstFoundDate: null })];
+    const ws = await importVeracode(report);
     expect(session(ws).allRows[0].change).toMatchObject({ dates: [{ date: 'due', from: null, to: '2026-11-30' }] });
+
+    await reply('apply', ws);
+    expect(tickets['PROJ-1'].duedate).toBe('2026-11-30');
+    const again = await importVeracode(report);
+    expect(session(again).allRows[0].change).toBeNull();
+    expect(session(again).allRows[0].action).toBe('leave');
   });
 
   it('AE8: a ticket that already has a Due Date is not a change, whatever the policy gives now', async () => {
