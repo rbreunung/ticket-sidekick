@@ -433,7 +433,10 @@ export function buildTicketedGroupScreen<TRow extends ReviewRowBase>(
   if (c.ticketedOpen > 0) {
     lines.push(`Change a row with \`<row> <action>\` (e.g. \`A2 ${actionLabelOf('follow-up', opts.actionLabels)}\`) or every row with \`all <action>\` (e.g. \`all leave\`), or click an action in the table.`);
     if (opts.canMergeTickets) {
-      lines.push('Reply `merge A2 A3 into A1` (or ticket keys) to combine tickets: the ticket after `into` is kept, the others are linked as duplicates, rewritten and closed. You see the plan and confirm first.');
+      const alsoOpen = ticketed.find(r => !isTicketedRowFinished(r) && (r.openTicketKeys?.length ?? 0) > 0);
+      lines.push(alsoOpen
+        ? `Reply \`merge ${alsoOpen.openTicketKeys![0]} into ${ticketedTargetKey(alsoOpen)}\` to keep ${ticketedTargetKey(alsoOpen)} and close ${alsoOpen.openTicketKeys![0]} (swap them to keep the other). You confirm first.`
+        : 'Reply `merge A2 A3 into A1` (or ticket keys) to combine tickets into one: the ticket after `into` is kept, the others are closed. You confirm first.');
     }
     if (opts.canAccept) {
       lines.push('Reply `accept component A2 A3` to stop offering those components at that exact version (add `because …` to record why): they leave this list, and an open ticket is offered for closing under Stale.');

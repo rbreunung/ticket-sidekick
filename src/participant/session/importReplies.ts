@@ -92,7 +92,7 @@ function parseStrictRowToggle(reply: string, ids: string[]): string[] | null {
   return matched;
 }
 
-const MERGE_USAGE = 'Merge tickets like this: `merge A5 A6 into A3` (or ticket keys, `merge PROJ-15 into PROJ-12`). The ticket after `into` is kept; the others are cancelled as duplicates of it.';
+const MERGE_USAGE = 'Merge tickets like this: `merge A5 A6 into A3` (or ticket keys, `merge PROJ-15 into PROJ-12`). The ticket after `into` is kept; the others are closed.';
 const MERGE_ON_NEW_OR_STALE = 'Merging tickets is done from the overview or the Already ticketed screen, not here. On the New screen `merge 2 4` still combines New rows.';
 
 /**

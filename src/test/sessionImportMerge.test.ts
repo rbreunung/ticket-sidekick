@@ -205,3 +205,13 @@ describe('buildCloseMergePrompt (close mode confirmation)', () => {
     expect(out.toLowerCase()).not.toContain('duplicate');
   });
 });
+
+describe('merge usage wording', () => {
+  it('a malformed merge reply explains the form without calling the tickets duplicates', () => {
+    const action = parseImportReviewReply('overview', 'merge into', ctx());
+    expect(action.kind).toBe('invalid');
+    const reason = (action as { reason?: string }).reason ?? '';
+    expect(reason).toContain('The ticket after `into` is kept; the others are closed.');
+    expect(reason.toLowerCase()).not.toContain('duplicate');
+  });
+});
