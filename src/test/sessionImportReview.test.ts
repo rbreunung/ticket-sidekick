@@ -332,6 +332,32 @@ describe('Already-ticketed screen — per-row actions (U4/R5, R6, KTD9)', () => 
     expect(rowLine(text, 'A3')).toContain('| PROJ-3 | In Progress | — |');
   });
 
+  it('Covers AE1: the Ticket cell shows the target alone when the other tickets are closed', () => {
+    const text = buildTicketedGroupScreen(screenSession([makeActionRow('A1', 'PROJ-12', { ticketKeys: ['PROJ-12', 'PROJ-8'], openTicketKeys: [] })]), [], waltzOpts);
+
+    expect(rowLine(text, 'A1')).toContain('| PROJ-12 | In Progress |');
+    expect(rowLine(text, 'A1')).not.toContain('also open');
+    expect(rowLine(text, 'A1')).not.toContain('more');
+  });
+
+  it('Covers AE2: the Ticket cell names another open ticket', () => {
+    const text = buildTicketedGroupScreen(screenSession([makeActionRow('A1', 'PROJ-12', { openTicketKeys: ['PROJ-8'] })]), [], waltzOpts);
+
+    expect(rowLine(text, 'A1')).toContain('| PROJ-12 · also open: PROJ-8 | In Progress |');
+  });
+
+  it('lists up to three also-open tickets and counts the rest', () => {
+    const text = buildTicketedGroupScreen(screenSession([makeActionRow('A1', 'PROJ-12', { openTicketKeys: ['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4'] })]), [], waltzOpts);
+
+    expect(rowLine(text, 'A1')).toContain('| PROJ-12 · also open: PROJ-1, PROJ-2, PROJ-3 +1 | In Progress |');
+  });
+
+  it('shows the target alone for a row saved before openTicketKeys existed', () => {
+    const text = buildTicketedGroupScreen(screenSession([makeActionRow('A1', 'PROJ-12', { ticketKeys: ['PROJ-12', 'PROJ-8'] })]), [], waltzOpts);
+
+    expect(rowLine(text, 'A1')).toContain('| PROJ-12 | In Progress |');
+  });
+
   it('a finished row shows its result instead of links; a failed row shows the error and keeps its links', () => {
     const text = buildTicketedGroupScreen(screenSession([
       changedRow('A1', 'PROJ-12', { result: { status: 'done', action: 'update' } }),

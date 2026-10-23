@@ -589,6 +589,41 @@ describe('buildReviewRows', () => {
       expect(row.action).toBe('update');
     });
 
+    it('Covers AE1: a resolved extra ticket is not listed as also open', () => {
+      const dedupMap: DedupMap = new Map([['jackson', [
+        ticket('PROJ-8', ['jackson', 'f-A', 'r-3'], { resolved: true, status: 'Done', created: '2026-01-01T09:00:00.000+0000' }),
+        ticket('PROJ-30', ['jackson', 'f-B', 'r-3'], { status: 'Open', created: '2026-05-01T09:00:00.000+0000' }),
+      ]]]);
+
+      const [row] = build([{ key: 'jackson', findings: ['A', 'B'], rating: 3 }], dedupMap);
+
+      expect(row.openTicketKeys).toEqual([]);
+    });
+
+    it('Covers AE2: another open ticket is listed as also open, the target is not', () => {
+      const dedupMap: DedupMap = new Map([['jackson', [
+        ticket('PROJ-8', ['jackson', 'f-A', 'r-3'], { status: 'Open', created: '2026-01-01T09:00:00.000+0000' }),
+        ticket('PROJ-30', ['jackson', 'f-B', 'r-3'], { status: 'Open', created: '2026-05-01T09:00:00.000+0000' }),
+        ticket('PROJ-12', ['jackson', 'f-C', 'r-3'], { resolved: true, status: 'Done', created: '2026-03-01T09:00:00.000+0000' }),
+      ]]]);
+
+      const [row] = build([{ key: 'jackson', findings: ['A', 'B', 'C'], rating: 3 }], dedupMap);
+
+      expect(row.existingTicketKey).toBe('PROJ-30');
+      expect(row.openTicketKeys).toEqual(['PROJ-8']);
+    });
+
+    it('lists no also-open ticket when every ticket is resolved', () => {
+      const dedupMap: DedupMap = new Map([['jackson', [
+        ticket('PROJ-8', ['jackson', 'f-A', 'r-3'], { resolved: true, status: 'Done', created: '2026-01-01T09:00:00.000+0000' }),
+        ticket('PROJ-30', ['jackson', 'f-B', 'r-3'], { resolved: true, status: 'Done', created: '2026-05-01T09:00:00.000+0000' }),
+      ]]]);
+
+      const [row] = build([{ key: 'jackson', findings: ['A', 'B'], rating: 3 }], dedupMap);
+
+      expect(row.openTicketKeys).toEqual([]);
+    });
+
     it('targets the later-created of two open tickets, and the higher key number on a created tie', () => {
       const dedupMap: DedupMap = new Map([
         ['a', [

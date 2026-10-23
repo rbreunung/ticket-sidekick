@@ -122,6 +122,8 @@ export interface ReviewRowBase {
   // tracking (Veracode, Waltz) — never on email rows or new rows.
   /** Every ticket carrying one of the row's dedup keys. */
   ticketKeys?: string[];
+  /** The tickets other than the target that carry one of the row's dedup keys and have no resolution (closed ones are left out); absent on a row saved before this field existed. */
+  openTicketKeys?: string[];
   /** The ticket `update` writes to: the newest open one, or the newest overall when all are resolved. */
   target?: { key: string; status: string | null; resolved: boolean };
   /** What changed since the tickets were made; null = no change. */

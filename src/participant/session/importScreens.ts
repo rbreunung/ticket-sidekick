@@ -366,10 +366,15 @@ function ticketedActionCell(row: ReviewRowBase, baseUrl?: string, labels?: Actio
   return prefix + links.join(' · ');
 }
 
+/** How many other open tickets the Ticket cell names before it counts the rest. */
+const MAX_ALSO_OPEN_SHOWN = 3;
+
 function ticketedTicketCell(row: ReviewRowBase, baseUrl?: string): string {
-  const key = ticketedTargetKey(row);
-  const others = (row.ticketKeys?.length ?? 1) - 1;
-  return `${formatKeyLink(key, baseUrl)}${others > 0 ? ` (+${others} more)` : ''}`;
+  const open = row.openTicketKeys ?? [];
+  const shown = open.slice(0, MAX_ALSO_OPEN_SHOWN).map(k => formatKeyLink(k, baseUrl)).join(', ');
+  const rest = open.length - MAX_ALSO_OPEN_SHOWN;
+  const alsoOpen = open.length > 0 ? ` · also open: ${shown}${rest > 0 ? ` +${rest}` : ''}` : '';
+  return `${formatKeyLink(ticketedTargetKey(row), baseUrl)}${alsoOpen}`;
 }
 
 /**
