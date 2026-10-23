@@ -99,8 +99,8 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   // Accepted-CVE list (KTD8): optional, like `fold` and `stale`. Waltz supplies it; Veracode and email
   // omit it and behave exactly as before.
   accepted?: ImportAccepted<TItem, TRow>;
-  // Waltz ticket merge (KTD1): optional `merge … into …`, `reload report` and the refresh after an `unaccept`.
-  // Waltz supplies it; Veracode and email omit it and behave exactly as before.
+  // Ticket merge (KTD1): optional `merge … into …`, `reload report` and the refresh after an `unaccept`.
+  // Waltz supplies it in rewrite mode, Veracode in close mode; email omits it and behaves exactly as before.
   ticketMerge?: ImportTicketMerge;
   // Security overview export (KTD3): optional `export` reply that lists this report's items by Fix Version. Veracode and Waltz
   // supply it; email omits it and has no `export` reply.

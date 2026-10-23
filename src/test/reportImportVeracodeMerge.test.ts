@@ -62,7 +62,7 @@ let client: MockJiraClient;
 let ticketService: TicketService;
 let tickets: Record<string, FakeTicket>;
 let log: string[];
-let existingLinks: Array<[string, string]>;
+let existingLinks: Array<[string, string, string?]>;
 let comments: Record<string, string[]>;
 
 beforeEach(() => {
@@ -97,8 +97,8 @@ function fakeJira() {
     const issue = await getIssue(key);
     issue.fields.issuetype = { id: '1', name: 'Bug' } as never;
     issue.fields.description = tickets[key]?.description as never;
-    issue.fields.issuelinks = existingLinks.filter(([a]) => a === key).map(([, b], i) => ({
-      id: String(i), type: { name: 'Duplicate', inward: 'is duplicated by', outward: 'duplicates' }, outwardIssue: { key: b, fields: { summary: '', status: { name: 'Open' } } },
+    issue.fields.issuelinks = existingLinks.filter(([a]) => a === key).map(([, b, type], i) => ({
+      id: String(i), type: { name: type ?? 'Duplicate', inward: 'is duplicated by', outward: 'duplicates' }, outwardIssue: { key: b, fields: { summary: '', status: { name: 'Open' } } },
     }));
     return issue;
   };
@@ -282,6 +282,28 @@ describe('running the merge', () => {
     await reply('1', ws);
     expect(client.createIssueLinkCalls).toEqual([]);
     expect(log).toEqual(['close:PROJ-2']);
+  });
+
+  it('a replay does not add a second link of another type when the two tickets are already linked', async () => {
+    existingLinks = [['PROJ-2', 'PROJ-1', 'Relates']];
+    const { ws } = await importVeracode();
+    await reply('merge PROJ-2 into PROJ-1 confirm', ws);
+    await reply('1', ws);
+    expect(client.createIssueLinkCalls).toEqual([]);
+    expect(log).toEqual(['comment:PROJ-2', 'close:PROJ-2']);
+  });
+
+  it('a confirm link clicked again while the merge waits is not read as a new merge', async () => {
+    const { ws } = await importVeracode();
+    const asked = await reply('merge PROJ-2 into PROJ-1 confirm', ws);
+    expect(asked.session.mergeRun?.awaiting).toBe('target');
+    const writesBefore = [...log];
+
+    const again = await reply('merge PROJ-2 into PROJ-1 confirm', ws);
+
+    expect(again.text).toMatch(/Didn't understand/);
+    expect(again.session.mergeRun?.awaiting).toBe('target');
+    expect(log).toEqual(writesBefore);
   });
 
   it('without a Duplicate link type, links as Relates and says so', async () => {

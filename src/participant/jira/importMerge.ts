@@ -360,7 +360,8 @@ async function executeStep<TItem, TRow extends ReviewRowBase>(
     }
     case 'link': {
       const linkType = step.linkType ?? run.linkType ?? 'Duplicate';
-      if (await ticketService.hasLinkBetween(step.key, run.survivor, linkType)) {
+      // Close mode picks the type from what moved, which can differ between runs, so any link between the two counts.
+      if (await ticketService.hasLinkBetween(step.key, run.survivor, step.linkType ? undefined : linkType)) {
         step.note = 'already linked';
         return;
       }

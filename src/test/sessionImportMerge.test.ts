@@ -180,7 +180,7 @@ describe('buildCloseMergePrompt (close mode confirmation)', () => {
   it('Covers AE4: names the items that move and says the kept ticket is rebuilt from the report', () => {
     const out = buildCloseMergePrompt({ ...base, sources: [{ ticket: source, movable: ['4711', '4712'], unlisted: [], elsewhere: [] }] });
     expect(out).toContain('PROJ-1190 also records 2 flaws (4711, 4712)');
-    expect(out).toContain('rebuilding its title, description and labels from the report');
+    expect(out).toContain('rebuilding its title, description and labels from the report (text added by hand is replaced)');
   });
 
   it('Covers AE5: names items the report no longer lists and says they are not moved', () => {

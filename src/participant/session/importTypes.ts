@@ -168,7 +168,7 @@ export type TicketedRowResult =
   | { status: 'done'; action: 'follow-up'; key: string; linkMissing?: boolean }
   | { status: 'done'; action: 'rewrite'; note?: 'comment-failed' }
   | { status: 'done'; action: 're-create'; key: string }
-  // Waltz ticket merge (KTD12): the row's ticket was cancelled as a duplicate of `into`.
+  // Ticket merge (KTD12): the row's ticket was merged into `into` and closed.
   | { status: 'done'; action: 'merge'; into: string }
   | { status: 'failed'; action: TicketedAction; error: string };
 
@@ -233,7 +233,7 @@ export interface ImportOutcomes {
   // Finding folding: tickets rebuilt by `rewrite` on the Already-ticketed screen, and ones that failed.
   rewritten: number;
   rewriteFailed: number;
-  // Waltz ticket merge: source tickets cancelled as duplicates, and ones whose merge ended with a failed step.
+  // Ticket merge: source tickets closed by a merge, and ones whose merge ended with a failed step.
   merged: number;
   mergeFailed: number;
 }

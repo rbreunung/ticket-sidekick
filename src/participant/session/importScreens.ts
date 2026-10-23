@@ -127,7 +127,7 @@ export interface ImportScreenOptions {
   canFold?: boolean;
   // Accepted-CVE list: whether the New screen offers `accept` (Waltz only).
   canAccept?: boolean;
-  // Waltz ticket merge: whether the review offers `merge … into …` and `reload report` (Waltz only).
+  // Ticket merge: whether the review offers `merge … into …` and `reload report` (Waltz and Veracode).
   canMergeTickets?: boolean;
   // Whether the importer has the `export` reply (Veracode, Waltz; not email): the screens then show a link for it.
   canExport?: boolean;

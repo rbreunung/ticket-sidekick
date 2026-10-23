@@ -69,7 +69,7 @@ export interface ImportReplyContext {
   // Accepted-CVE list: whether the importer supports it (Waltz), which turns on `accept`, `accepted`
   // and `unaccept`.
   canAccept?: boolean;
-  // Waltz ticket merge: whether the importer supports `merge … into …` and `reload report` (Waltz only).
+  // Ticket merge: whether the importer supports `merge … into …` and `reload report` (Waltz and Veracode).
   canMergeTickets?: boolean;
   // Security overview: whether the importer supports the `export` reply (Veracode and Waltz).
   canExport?: boolean;
@@ -487,7 +487,7 @@ export function buildCloseMergePrompt(input: CloseMergePromptInput): string {
   for (const s of input.sources) {
     const key = s.ticket.key;
     if (s.movable.length > 0) {
-      lines.push(`${key} also records ${s.movable.length} ${items(s.movable.length)} (${ids(s.movable)}); ${survivorKey} takes them over by rebuilding its title, description and labels from the report.`);
+      lines.push(`${key} also records ${s.movable.length} ${items(s.movable.length)} (${ids(s.movable)}); ${survivorKey} takes them over by rebuilding its title, description and labels from the report (text added by hand is replaced).`);
     } else {
       lines.push(`${key} has no ${items(2)} ${survivorKey} lacks, so ${survivorKey} stays as it is.`);
     }
