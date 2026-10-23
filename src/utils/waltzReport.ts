@@ -3,8 +3,8 @@ import ExcelJS from 'exceljs';
 import { markdownToJiraWiki } from './markdownToJiraWiki';
 import type { DiagLogger } from './diagTypes';
 import {
-  toCalendarDate, hasAnyDate, earliestDueDate, dateColumnTitles, diffRemediationDates, parseRecordedDates,
-  DATES_HEADING, NOT_REPORTED_TEXT, ABSENT_CELL, COMPONENT_COLUMNS,
+  toCalendarDate, earliestDueDate, dateColumnTitles, diffRemediationDates, parseRecordedDates,
+  ABSENT_CELL, COMPONENT_COLUMNS,
   type RemediationDates, type WaltzRemediation,
 } from './waltzDates';
 import {
@@ -625,33 +625,16 @@ function dateCells(remediation: WaltzRemediation | undefined): string[] {
   ];
 }
 
-/** R3/R5: the policy date, planned date, plan deadline and plan status of one component, or "Not reported yet." */
-function pushDatesSection(lines: string[], component: WaltzComponent, h: string): void {
-  const r = component.remediation;
-  lines.push(`${h} ${DATES_HEADING}`);
-  if (!r || (!hasAnyDate(r) && !r.planStatus)) {
-    lines.push(NOT_REPORTED_TEXT);
-  } else {
-    lines.push(`| ${dateColumnTitles(r.reportDate).join(' | ')} |`);
-    lines.push('| --- | --- | --- | --- |');
-    lines.push(`| ${dateCells(r).join(' | ')} |`);
-  }
-  lines.push('');
-}
-
 /**
  * One component's rating, most critical CVE, affected artifacts and vulnerability table, under
  * headings of level `h` (`###` for a single-component ticket, `####` inside a folded section).
  */
-function pushComponentDetail(lines: string[], component: WaltzComponent, h: string, caps: DetailCaps, withDates = false): void {
+function pushComponentDetail(lines: string[], component: WaltzComponent, h: string, caps: DetailCaps): void {
   const sorted = sortVulnerabilities(component.vulnerabilities);
 
   lines.push(`${h} Max Vuln Rating`);
   lines.push(sanitizeStandaloneLine(component.maxVulnRating));
   lines.push('');
-
-  // A folded ticket's overview table carries every member's dates, so only a single-component ticket repeats them here.
-  if (withDates) pushDatesSection(lines, component, h);
 
   // Surfaces *why* this ticket exists at a glance, ahead of the full artifact/CVE lists below.
   lines.push(`${h} Most Critical Vulnerability`);

@@ -85,12 +85,10 @@ export function diffRemediationDates(recorded: RemediationDates, reported: Remed
   return pairs.filter(([, from, to]) => from !== to).map(([date, from, to]) => ({ date, from, to }));
 }
 
-// --- The "Remediation dates" section of a ticket description ---------------------------------------
-// The headings and column titles are shared by the builder (waltzReport.ts) and the reader below, and a
+// --- The date columns of a ticket description's components table -------------------------------------
+// The column titles are shared by the builder (waltzReport.ts) and the reader below, and a
 // round-trip test builds a description and reads it back, so a wording change cannot break the reader silently.
 
-export const DATES_HEADING = 'Remediation dates';
-export const NOT_REPORTED_TEXT = 'Not reported yet.';
 export const ABSENT_CELL = 'n/a';
 export const COLUMN_POLICY = 'Policy date';
 export const COLUMN_PLANNED = 'Planned date';
