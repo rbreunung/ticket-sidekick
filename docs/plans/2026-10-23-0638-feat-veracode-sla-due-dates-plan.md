@@ -39,7 +39,7 @@ A date edited by hand in Jira usually records an agreed extension. The importer 
 **The policy table**
 
 - R1. A setting maps each Veracode severity to a number of days. It ships with Very High 14, High 28 and 0 for Medium, Low, Very Low and Informational.
-- R2. A severity at 0, or with a value that is not a whole number of zero or more, gets no due date. With every severity at 0, imports behave as they do today.
+- R2. A severity at 0, or with a value that is not a whole number of zero or more, gets no due date. With every severity at 0, no Due Date is sent and no ticket is flagged for dates.
 
 **The due date**
 
@@ -50,7 +50,7 @@ A date edited by hand in Jira usually records an agreed extension. The importer 
 
 **On the ticket**
 
-- R7. A new ticket's Jira Due Date is the ticket's due date (R6), and its description shows each flaw's first-found date and due date.
+- R7. A new ticket's Jira Due Date is the ticket's due date (R6), and its description shows each flaw's first-found date and due date. A very large fold's slimmer table, which already leaves out other columns to fit Jira's size limit, omits these two; the Jira Due Date still carries the date.
 - R8. When Jira refuses the Due Date, the ticket is still created or rewritten without it, the result warns, and the dates stay in the description.
 - R9. Creating a ticket and `new ticket` write the Due Date. `add … to <KEY>` with `as comment` adds the dates of the added flaws to the comment and leaves the Due Date alone. A `rewrite` writes it as R10, R11 and R18 say.
 
@@ -59,7 +59,7 @@ A date edited by hand in Jira usually records an agreed extension. The importer 
 - R10. The Already ticketed screen counts an open ticket as changed for dates when its Jira Due Date is empty and the policy gives its flaws a due date. A ticket that has any Due Date is never changed for dates.
 - R11. For an open ticket changed under R10, `rewrite` is the default action. It sets the Due Date to the earliest due date of the ticket's flaws.
 - R12. A date alone does not change a ticket whose targets are all resolved. Such a ticket keeps its existing handling.
-- R13. Once a ticket has a Due Date, a later import does not recalculate or overwrite it, whether the date came from the policy or from a hand edit. A later change to the table does not reach existing tickets.
+- R13. Once a ticket has a Due Date, a later import does not recalculate or overwrite it, whether the date came from the policy or from a hand edit, except where R18 moves it earlier. A later change to the table does not reach existing tickets.
 - R14. A ticket whose flaws have no due date (R2) is never flagged under R10 and never has its Due Date cleared.
 - R18. When flaws join an existing ticket through a rewrite (`add … to <KEY>` with `as rewrite`, or new findings on the ticket), its Due Date becomes the earlier of its current date and the earliest due date of the joining flaws. A rewrite that adds no flaws leaves the Due Date as it is, and a Due Date is never moved later.
 
@@ -78,7 +78,7 @@ A date edited by hand in Jira usually records an agreed extension. The importer 
 - **The table ships with defaults: Very High 14, High 28, the rest 0.** Chosen over an empty table: all six severity names are visible in the Settings screen so nobody types them, and the numbers are easy to change. Governs R1, R2.
 - **The clock starts at the flaw's first-found date.** Chosen over the import date and the report date: the policy runs from discovery, and counting from the import would hand out extra time on a late or repeated import. Governs R3, R4.
 - **A flaw without a first-found date starts at its ticket's creation date.** Chosen over no due date and over the date of each import: the flaw still gets a date, and the date does not move between imports. A report field that dates these flaws, if one turns up, would replace the fallback. Governs R4.
-- **A Due Date is set once.** Chosen over recalculating on every import: a hand-edited date records an agreed extension, and recalculating would overwrite it every time. Governs R10, R13.
+- **A Due Date is set once.** Chosen over recalculating on every import: a hand-edited date records an agreed extension, and recalculating would overwrite it every time. Only R18 can move it, and only earlier. Governs R10, R13.
 - **Flaws joining a ticket can only move its Due Date earlier.** Chosen over recomputing from the combined set: the ticket is due when its most urgent flaw is, and a join must not push a deadline out. Governs R18.
 - **Existing tickets are backfilled through the Already ticketed screen.** Chosen over new tickets only and over a separate command: one place, one set of actions. Governs R10, R11.
 - **The backfill action is `rewrite`.** Chosen over a Due-Date-only action and over a new command: Veracode and Waltz keep one action set. The cost is that `rewrite` replaces hand-added description text; the manual says so. Governs R11.
@@ -155,15 +155,15 @@ The dates and day counts below are invented. AE1, AE4, AE5 and AE8 use configure
 
 ## Planning Contract
 
-**Product Contract preservation:** Changed, at the user's direction during planning. R1, R2, R9, R10, R11 and R13 changed meaning (shipped defaults; a Due Date is set once and never overwritten; backfill covers only tickets with an empty Due Date); R18 and AE14, AE15 are new; AE2, AE3, AE5, AE7 and AE8 were reworded to match. The shipped-defaults and set-once Key Decisions replace the earlier "no built-in day counts" and rewrite-overwrites decisions. The Outstanding Questions section was removed because KTD3, KTD4, KTD5 and KTD7 answer all four. All other R, F and AE IDs and their meaning are unchanged.
+**Product Contract preservation:** Changed, at the user's direction during planning. R1, R2, R9, R10, R11 and R13 changed meaning (shipped defaults; a Due Date is set once and never overwritten; backfill covers only tickets with an empty Due Date); R18 and AE14, AE15 are new; AE2, AE3, AE5, AE7 and AE8 were reworded to match. After document review, R2, R7 and R13 were clarified without changing what the user confirmed: the zero-severity promise covers due-date behavior only, the slimmer table of a very large fold omits the date columns, and R18 is the one exception to set-once. The shipped-defaults and set-once Key Decisions replace the earlier "no built-in day counts" and rewrite-overwrites decisions. The Outstanding Questions section was removed because KTD3, KTD4, KTD5 and KTD7 answer all four. All other R, F and AE IDs and their meaning are unchanged.
 
 ### Key Technical Decisions
 
 - KTD1. **Dates travel as `YYYY-MM-DD` strings.** A new vscode-free leaf, `src/utils/veracodeDates.ts`, holds the severity-name table, `resolveSlaDays`, `addCalendarDays` (UTC arithmetic, calendar days), `flawDueDate`, `groupDueDate` (earliest, null when none has one) and `earlierOf`. It reuses `toCalendarDate` from `src/utils/waltzDates.ts` rather than moving it, so a timestamp keeps the date as written in the report (first ten characters) and no time zone can shift a day. Extracting a neutral date module can follow. Callers pass the fallback start in (the import date from `localDate()` in `src/utils/securityOverview.ts`, or a ticket's creation date), so the module needs no clock. Realizes R3, R4, R5, R6.
 - KTD2. **The parser reads the first-found date onto the flaw.** `VeracodeFlaw` gains an optional `firstFoundDate` set from the `date_first_occurrence` attribute in `parseVeracodeReport`; it is optional so existing literals and fixtures compile. An unreadable or missing value is null and falls back per R4. Realizes R3, R4.
-- KTD3. **The setting is `ticketSidekick.veracode.slaDays`.** An object whose six properties are the severity names from `SEVERITY_LABELS` (`Very High`, `High`, `Medium`, `Low`, `Very Low`, `Informational`), each an integer with minimum 0, `additionalProperties` false, default Very High 14, High 28, the rest 0. `resolveSlaDays` is lenient: names match ignoring case and surrounding spaces, 0 means no date, and an unknown key or an invalid value is ignored and returned in a list. `veracodeHandler.ts` reads the setting once per import and logs that list once through `logDiag` at warn level, naming the keys and the valid names, so a typo is never silent. Realizes R1, R2.
+- KTD3. **The setting is `ticketSidekick.veracode.slaDays`.** An object whose six properties are the severity names from `SEVERITY_LABELS` (`Very High`, `High`, `Medium`, `Low`, `Very Low`, `Informational`), each an integer with minimum 0, `additionalProperties` false, default Very High 14, High 28, the rest 0. `resolveSlaDays` is lenient: names match ignoring case and surrounding spaces, 0 means no date. A known severity with an invalid value gets no due date, as R2 says, and does not fall back to the shipped default; an unknown key changes nothing. Both are returned in a list. A raw value that is undefined, null or not an object means no policy for every severity: a real run always receives the `package.json` default, so only an absent setting, as in tests that stub the configuration, reads this way. `veracodeHandler.ts` reads the setting once per import and logs that list once through `logDiag` at warn level, naming the keys and the valid names, so a typo is never silent. Realizes R1, R2.
 - KTD4. **A rewrite decides its own Due Date through a descriptor hook.** The descriptor gains an optional `rewriteDueDate({ regenItem, joiningItem, currentDueDate, ticketCreated })` returning the value to write, or null to leave the field alone; when present, `writeRewrite` uses it instead of the Due Date in `buildTicketFields`. Veracode returns the earliest due date over the whole ticket when `currentDueDate` is empty, the earlier of the current and the joining flaws' earliest when that is earlier, and null otherwise (R11, R13, R18, R14). `buildTicketFields` gains an optional third argument carrying the ticket's creation timestamp, so the description's dates and the creation-time Due Date use the same fallback start; a new ticket's start is the import date. Waltz sets neither, so its overwrite behavior is untouched. Callers that already read the ticket (`rewriteTicketedGroup`, the `add … to <KEY>` rewrite) pass `created`, the current Due Date and the joining item they already hold. Realizes R4, R9, R11, R13, R14, R18.
-- KTD5. **Backfill detection is one shared post-pass over the built rows.** The dedup search requests `duedate` next to `resolution` and `created`; `DedupTicket` gains `dueDate`. A new pure function in `src/utils/reportImport.ts`, enabled by an optional `changeTracking.dueDateBackfill` capability that only Veracode sets, marks every row whose target ticket is open and has an empty Due Date, and whose own flaws have a due date (computed from the target's creation date for undated flaws), as changed with a `due none→<date>` entry, derives its actions again, and runs before `alignRewriteDefaults`. A target with any Due Date, a resolved target, and a row with no due date are skipped. Reading the field from the search avoids the per-ticket description reads Waltz needs and works for tickets of any age. Realizes R10, R11, R12, R13, R14.
+- KTD5. **Backfill detection is one shared post-pass over the built rows.** The dedup search requests `duedate` next to `resolution` and `created`; `DedupTicket` gains `dueDate`, read from Jira's `duedate` field as `string | null | undefined`: undefined means the search did not return the field and is never flagged, null means the field is empty. A new pure function in `src/utils/reportImport.ts`, enabled by an optional `changeTracking.dueDateBackfill` capability that only Veracode sets, marks every row whose target ticket is open and has a null Due Date, and whose own flaws have a due date (computed from the target's creation date for undated flaws), as changed with a `due none→<date>` entry, derives its actions again, and runs before `alignRewriteDefaults`. A target with any Due Date, a resolved target, and a row with no due date are skipped. Reading the field from the search avoids the per-ticket description reads Waltz needs and works for tickets of any age. Realizes R10, R11, R12, R13, R14.
 - KTD6. **The change cell reuses the Waltz date entry.** `DateKind` in `src/utils/waltzDates.ts` gains `'due'` as a type-only change; `formatRowChange` already prints `<kind> <from>→<to>`, so a row reads `due none→2026-12-22`. Realizes R10.
 - KTD7. **The dates go into the Findings table as two trailing columns.** `FINDINGS_COLUMNS` in `src/utils/veracodeFindingsTable.ts` gains `First found` and `Due date`; each cell is a validated date or `n/a`. `SLIM_FINDINGS_COLUMNS` is unchanged, so a very large fold's description omits them like its other columns and the existing note stays accurate; the Jira Due Date still carries the date. The reader keeps accepting tickets that have the nine older columns and does not return the new cells. Realizes R7.
 - KTD8. **Overview and export need one line of wiring.** `overviewExport.dueDateOf` returns `groupDueDate` of the row's flaws with today as the fallback start. `buildOverview`, `flagFor` and the renderers are not touched. Realizes R15, R16.
@@ -225,7 +225,8 @@ Every branch that finds no due date (a severity at 0, R2) sends nothing and neve
   - `resolveSlaDays` on the shipped default returns 14 for Very High, 28 for High and no date for the other four.
   - Covers AE14. A High flaw first found on 2026-10-01 under the shipped table has due date 2026-10-29.
   - Names match ignoring case and spaces: `very high` and ` High ` resolve; `Very Hgh` is returned as unknown and no severity changes.
-  - A value of -1, 2.5, `"30"` or null is ignored and listed; 0 gives no date.
+  - A known severity with -1, 2.5, `"30"` or null gets no due date, not the shipped default, and is listed; 0 gives no date; an unknown key is only listed.
+  - An undefined, null or non-object setting gives no date for every severity.
   - `addCalendarDays` handles month ends, a year end (2026-12-31 plus 1) and a leap day (2028-02-28 plus 1).
   - Covers AE2. A Low flaw at 0 has no due date.
   - Covers AE4. A flaw with no first-found date and High at 60, with fallback start 2026-10-23, is due 2026-12-22.
@@ -247,7 +248,7 @@ Every branch that finds no due date (a severity at 0, R2) sends nothing and neve
 - **Patterns to follow:** `pushFoldedTable` and the date columns in `src/utils/waltzReport.ts`; the round-trip tests in `src/test/veracodeFindingsTable.test.ts`.
 - **Test scenarios:**
   - Covers AE1. A one-flaw description's table has First found 2026-09-01 and Due date 2026-10-01 for Very High at 30.
-  - A flaw with no first-found date shows `n/a` in First found and a due date counted from the fallback start; a flaw at 0 days shows `n/a` in both date cells it cannot fill.
+  - A flaw with no first-found date shows `n/a` in First found and a due date counted from the fallback start; a flaw whose severity is at 0 shows its First found date and `n/a` in Due date.
   - A fold lists one row per flaw with its own dates, and the per-flaw sections are unchanged.
   - The slim table for a very large fold has the original five columns and the existing note.
   - Round trip: `readVeracodeFindings` on a freshly built description returns the same findings as before the change, and on a description with the nine old columns returns them from the table layer, not the legacy layer.
@@ -266,6 +267,7 @@ Every branch that finds no due date (a severity at 0, R2) sends nothing and neve
   - In `veracodeHandler.ts`, make `buildTicketFields` and `buildFollowUp` return `duedate` and `optionalFields: ['duedate']` from `groupDueDate` with today as the start, only when a date exists, after the template fields spread; implement `rewriteDueDate` per KTD4; give the description builders their due-date context.
   - In `writeRewrite`, call the hook when the descriptor has one, and send the returned date through the existing `extraFields`/`optionalFields` path; with no hook, behavior is unchanged. Have `rewriteTicketedGroup` and the add-to-ticket rewrite pass the ticket's `created`, its current Due Date and the joining item.
   - Parameterize `dueDateSetNote` per KTD10.
+  - The `add … to <KEY>` comment mode calls `fold.buildComment` without details today, so pass `ticketCreated` there too for the undated flaws' dates. `importMerge.ts` also calls `writeRewrite`; with no hook it must behave as before.
 - **Execution note:** Test-first. Model the handler tests on `src/test/waltzDueDate.test.ts` and reuse `reportImportHarness.ts`, following the per-test-file `vscode` mock convention in `docs/solutions/workflow-issues/vscode-mock-testing-convention-not-checked-before-inventing-new-one.md`.
 - **Patterns to follow:** `dueDateFields` use in `src/participant/jira/waltzHandler.ts`; `TicketService.withOptionalFields`.
 - **Test scenarios:**
@@ -286,7 +288,7 @@ Every branch that finds no due date (a severity at 0, R2) sends nothing and neve
 - **Goal:** An open ticket with an empty Due Date is flagged for a date change and defaults to `rewrite`; tickets that have a date, resolved tickets and undated flaws are left alone.
 - **Requirements:** R10, R11, R12, R13, R14, AE3, AE7, AE8, AE9, AE13. KTD5, KTD6, KTD9.
 - **Dependencies:** U1, U3.
-- **Files:** `src/utils/reportImport.ts`, `src/participant/jira/reportImportHandler.ts`, `src/participant/jira/reportImportTypes.ts`, `src/participant/jira/veracodeHandler.ts`, `src/utils/waltzDates.ts`, `src/participant/session/importScreens.ts`, `src/test/reportImport.test.ts`, `src/test/sessionImportReview.test.ts`, `src/test/reportImportHandler.test.ts`, `src/test/waltzChangeDetection.test.ts`.
+- **Files:** `src/utils/reportImport.ts`, `src/participant/jira/reportImportHandler.ts`, `src/participant/jira/reportImportTypes.ts`, `src/participant/jira/veracodeHandler.ts`, `src/utils/waltzDates.ts`, `src/participant/session/importScreens.ts`, `src/test/reportImport.test.ts`, `src/test/sessionImportReview.test.ts`, `src/test/reportImportHandler.test.ts`, `src/test/reportImportReviewPaging.test.ts`, `src/test/waltzChangeDetection.test.ts`.
 - **Approach:**
   - Add `duedate` to the dedup search's field list, `dueDate` to `JqlIssueLike` and `DedupTicket`, and its mapping in `toDedupTicket`; update tests that assert the field list.
   - Add the pure backfill pass and the `changeTracking.dueDateBackfill` capability; call the pass in `buildImportReview` after `buildReviewRows` and before `alignRewriteDefaults`, only for a descriptor that sets the capability.
@@ -299,6 +301,7 @@ Every branch that finds no due date (a severity at 0, R2) sends nothing and neve
   - Covers AE8. An open ticket with any Due Date is not a change for dates, whatever the policy now gives.
   - Covers AE9. A resolved target with an empty Due Date is not a change for dates; one with a new flaw id is still a change through the existing path.
   - Covers AE3. With every severity at 0, no row is flagged and no default changes.
+  - A search result that does not return the `duedate` field (undefined) is never flagged; only an explicit null is. Existing handler tests that stub the configuration and the search keep their expectations.
   - A row whose flaws have no due date (R14) is not flagged even with an empty Due Date.
   - Covers AE13. An undated flaw on an open ticket with a Due Date is not a change.
   - Two rows pointing at one empty-date ticket both default to `rewrite` after alignment.
@@ -332,7 +335,7 @@ Every branch that finds no due date (a severity at 0, R2) sends nothing and neve
   - `docs/manual/settings-reference.md`: add the `ticketSidekick.veracode.slaDays` row to the report import table with the same default as `package.json`, written as JSON in the same key order, and a short paragraph: severity names, 0 means no due date, calendar days, a changed table does not reach tickets that already have a Due Date, and the Settings screen versus `settings.json`.
   - `docs/manual/report-imports.md`: a Veracode subsection covering the dates in a ticket, the fallback for flaws without a first-found date, that a Due Date is set once and never overwritten, that joining flaws can only move it earlier, the backfill on the Already ticketed screen and that `rewrite` replaces hand-added description text, and a line telling users to repeat Apply on the first import after the upgrade. Mention the new setting in the README where Veracode is described, if it lists settings.
   - `docs/report-import.md`: the Veracode section and "Already-ticketed rows" for the backfill pass, the set-once rule and the earlier-only rule; "Ticket tables and readers" for the two new columns; "Security overview" for the Veracode `dueDateOf`.
-  - `CONCEPTS.md`: SLA days and the set-once Due Date. `CLAUDE.md`: one index row for `src/utils/veracodeDates.ts` and a short mention in the `veracodeHandler.ts` row. `docs/known-limitations.md`: extend KL17 to the Veracode Due Date write and add rows for the unverified first-found field and for the project-without-the-field repeat flag.
+  - `CONCEPTS.md`: SLA days and the set-once Due Date. `CLAUDE.md`: one index row for `src/utils/veracodeDates.ts` and a short mention in the `veracodeHandler.ts` row. `docs/known-limitations.md`: extend KL17 to the Veracode Due Date write and add rows for the unverified first-found field and for the project-without-the-field repeat flag. Update KL13's capacity figure for the full findings table (about 150 findings) now that it has two more columns.
 - **Test expectation:** none -- documentation only; `src/test/userDocsSync.test.ts` checks the new setting is listed with a matching default.
 - **Verification:** `npx vitest run src/test/userDocsSync.test.ts` passes; every new reply, setting and rule appears in the manual.
 
@@ -344,7 +347,7 @@ Every branch that finds no due date (a severity at 0, R2) sends nothing and neve
 |---|---|---|
 | Type check | `npm run compile` | every unit |
 | Unit tests | `npm test` | every unit; green before every commit |
-| Targeted runs | `npx vitest run src/test/veracodeDates.test.ts src/test/veracodeReport.test.ts src/test/veracodeFindingsTable.test.ts src/test/veracodeDueDate.test.ts src/test/reportImport.test.ts src/test/reportImportHandler.test.ts src/test/reportImportTicketedActions.test.ts src/test/reportImportFolding.test.ts src/test/sessionImportReview.test.ts src/test/reportImportExport.test.ts src/test/overviewHandler.test.ts src/test/waltzDueDate.test.ts src/test/waltzChangeDetection.test.ts` | U1–U5 while developing |
+| Targeted runs | `npx vitest run src/test/veracodeDates.test.ts src/test/veracodeReport.test.ts src/test/veracodeFindingsTable.test.ts src/test/veracodeDueDate.test.ts src/test/reportImport.test.ts src/test/reportImportHandler.test.ts src/test/reportImportTicketedActions.test.ts src/test/reportImportFolding.test.ts src/test/sessionImportReview.test.ts src/test/reportImportReviewPaging.test.ts src/test/reportImportExport.test.ts src/test/overviewHandler.test.ts src/test/waltzDueDate.test.ts src/test/waltzChangeDetection.test.ts` | U1–U5 while developing |
 | Docs sync | `npx vitest run src/test/userDocsSync.test.ts` | U6 |
 
 Chat flows and real Jira writes are not covered by `npm test` or `npm run test:e2e`. One manual check against a Jira sandbox extends the open checks in KL13 and KL17: a create and a rewrite that set the Due Date, a project whose screen lacks the field, a rewrite that moves a date earlier, and the backfill on a ticket created before the feature, on Data Center and Cloud if both are available.
@@ -352,7 +355,7 @@ Chat flows and real Jira writes are not covered by `npm test` or `npm run test:e
 ## Definition of Done
 
 - Every R in the Product Contract is true in behavior, and AE1–AE15 each have a covering test.
-- With every severity at 0, a Veracode import and every Already ticketed reply behave as they did before this change.
+- With every severity at 0, no Due Date is sent or flagged and every Already ticketed reply behaves as before; descriptions still gain the two date columns.
 - A Waltz or email import behaves exactly as before, including its tests apart from the dedup field list.
 - A Due Date, once set, is never overwritten or cleared by a later import; only joining flaws move it, and only earlier.
 - `npm run compile` and `npm test` are green, and `docs/report-import.md`, `CLAUDE.md`, the README, the manual, `CONCEPTS.md` and `docs/known-limitations.md` describe the final behavior.
