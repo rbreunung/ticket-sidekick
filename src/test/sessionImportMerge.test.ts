@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseImportReviewReply, parseMergeRunReply, describeImportReplyVocabulary, buildImportOverview, buildTicketedGroupScreen,
   buildImportDoneSummary, formatTicketedRowResult, emptyImportOutcomes, IMPORT_COMMANDS,
-  type ImportReplyContext, type ReviewSession, type ReviewRowBase, type ReviewTableColumn, type MergeRun,
+  type ImportReplyContext, type ReviewSession, type ReviewRowBase, type ReviewTableColumn, type MergeRun, buildCloseMergePrompt,
 } from '../participant/sessionState';
 
 function ctx(over: Partial<ImportReplyContext> = {}): ImportReplyContext {
@@ -161,5 +161,47 @@ describe('vocabulary and screens', () => {
 
   it('a merged row shows where its ticket went', () => {
     expect(formatTicketedRowResult({ status: 'done', action: 'merge', into: 'PROJ-12' })).toContain('merged into PROJ-12');
+  });
+});
+
+describe('buildCloseMergePrompt (close mode confirmation)', () => {
+  const survivor = { key: 'PROJ-1301', summary: 'XSS in Bar.java', status: 'Open' };
+  const source = { key: 'PROJ-1190', summary: 'XSS in Bar.java', status: 'Open' };
+  const base = { survivor, itemNoun: 'flaw', survivorLost: [] as string[], warnings: [] as string[] };
+
+  it('Covers AE3: with nothing to move it says the kept ticket stays as it is', () => {
+    const out = buildCloseMergePrompt({ ...base, sources: [{ ticket: source, movable: [], unlisted: [] }] });
+    expect(out).toContain('### Merge 1 ticket into PROJ-1301');
+    expect(out).toContain('PROJ-1190 has no flaws PROJ-1301 lacks, so PROJ-1301 stays as it is.');
+    expect(out).toMatch(/merge(%20| )PROJ-1190(%20| )into(%20| )PROJ-1301(%20| )confirm/i);
+    expect(out).toMatch(/nothing is written until/i);
+  });
+
+  it('Covers AE4: names the items that move and says the kept ticket is rebuilt from the report', () => {
+    const out = buildCloseMergePrompt({ ...base, sources: [{ ticket: source, movable: ['4711', '4712'], unlisted: [] }] });
+    expect(out).toContain('PROJ-1190 also records 2 flaws (4711, 4712)');
+    expect(out).toContain('rebuilding its title, description and labels from the report');
+  });
+
+  it('Covers AE5: names items the report no longer lists and says they are not moved', () => {
+    const out = buildCloseMergePrompt({ ...base, sources: [{ ticket: source, movable: [], unlisted: ['4690'] }] });
+    expect(out).toContain('4690');
+    expect(out).toMatch(/no longer in the report/);
+    expect(out).toMatch(/named in the comment on PROJ-1190/);
+  });
+
+  it('warns when rebuilding the kept ticket will stop showing a flaw it records', () => {
+    const out = buildCloseMergePrompt({ ...base, survivorLost: ['4500'], sources: [{ ticket: source, movable: ['4711'], unlisted: [] }] });
+    expect(out).toMatch(/stop showing 4500/);
+  });
+
+  it('shows warnings, defuses Jira-sourced markup, and says "duplicate" nowhere', () => {
+    const out = buildCloseMergePrompt({
+      ...base, warnings: ['PROJ-1190 is already resolved.'],
+      sources: [{ ticket: { ...source, summary: 'click [here](http://evil.example)' }, movable: [], unlisted: [] }],
+    });
+    expect(out).toContain('⚠ PROJ-1190 is already resolved.');
+    expect(out).not.toContain('](http://evil.example)');
+    expect(out.toLowerCase()).not.toContain('duplicate');
   });
 });

@@ -441,6 +441,70 @@ export function buildMergePrompt(input: MergePromptInput): string {
   return lines.join('\n');
 }
 
+/** Close mode: one source of the confirmation — the ticket and what is (not) moved from it. */
+export interface CloseMergePromptSource {
+  ticket: MergePromptTicket;
+  /** Items only this ticket records that the kept ticket will carry after its rebuild. */
+  movable: string[];
+  /** Items only this ticket records that the report no longer lists. */
+  unlisted: string[];
+}
+
+export interface CloseMergePromptInput {
+  survivor: MergePromptTicket;
+  sources: CloseMergePromptSource[];
+  /** One item in the importer's words, e.g. `flaw`. */
+  itemNoun: string;
+  /** Items the kept ticket records that the report no longer lists, which its rebuilt description stops showing. */
+  survivorLost: string[];
+  warnings: string[];
+  baseUrl?: string;
+}
+
+/**
+ * Close-mode ticket merge: the confirmation for `merge … into …`. Writes nothing — the one link resends the command with
+ * `confirm`. States per source whether items move, so the page cannot promise a plan the run does not execute.
+ */
+export function buildCloseMergePrompt(input: CloseMergePromptInput): string {
+  const line = (t: MergePromptTicket) => `**${formatKeyLink(t.key, input.baseUrl)}** — ${safeMarkdownText(t.summary)}${t.status ? ` (${safeMarkdownText(t.status)})` : ''}`;
+  const items = (n: number) => `${input.itemNoun}${n === 1 ? '' : 's'}`;
+  const ids = (list: string[]) => list.map(safeMarkdownText).join(', ');
+  const survivorKey = input.survivor.key;
+  const count = input.sources.length;
+  const lines: string[] = [
+    `### Merge ${count} ${count === 1 ? 'ticket' : 'tickets'} into ${formatKeyLink(survivorKey, input.baseUrl)}`,
+    '',
+    `Keep: ${line(input.survivor)}`,
+    '',
+    'Close:',
+    ...input.sources.map(s => `- ${line(s.ticket)}`),
+    '',
+  ];
+  for (const warning of input.warnings) lines.push(`⚠ ${warning}`);
+  if (input.warnings.length > 0) lines.push('');
+  for (const s of input.sources) {
+    const key = s.ticket.key;
+    if (s.movable.length > 0) {
+      lines.push(`${key} also records ${s.movable.length} ${items(s.movable.length)} (${ids(s.movable)}); ${survivorKey} takes them over by rebuilding its title, description and labels from the report.`);
+    } else {
+      lines.push(`${key} has no ${items(2)} ${survivorKey} lacks, so ${survivorKey} stays as it is.`);
+    }
+    if (s.unlisted.length > 0) {
+      lines.push(`${ids(s.unlisted)} ${s.unlisted.length === 1 ? 'is' : 'are'} no longer in the report, so ${s.unlisted.length === 1 ? 'it is' : 'they are'} not moved; named in the comment on ${key}.`);
+    }
+  }
+  if (input.survivorLost.length > 0) {
+    lines.push(`Rebuilding ${survivorKey} will stop showing ${ids(input.survivorLost)}, which it records but the report no longer lists.`);
+  }
+  lines.push(
+    '',
+    'Each closed ticket gets a link and a comment, then you pick its closing status.',
+    '',
+    `${cmdLink('Merge', `merge ${input.sources.map(s => s.ticket.key).join(' ')} into ${survivorKey} confirm`)} — nothing is written until you click.`,
+  );
+  return lines.join('\n');
+}
+
 /**
  * Finding folding: after a page is rebuilt from `allRows` (which keeps the originals), puts each
  * of `merged` back in place of its members when all of them are still on the page. A merged row

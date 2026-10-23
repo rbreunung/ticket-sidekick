@@ -1,7 +1,7 @@
 // Waltz ticket merge: pure helpers (vscode-free) — the text a cancelled ticket is marked with, the reference
 // resolution, the step plan and the rule that decides between refreshing the review and marking it out of date.
 import { BATCH_LIMIT, MAX_SUMMARY_CHARS, clampSummary } from './reportImport';
-import { isTicketedRowFinished, ticketedTargetKey, type MergeStep, type ReviewRowBase } from '../participant/session/importTypes';
+import { isTicketedRowFinished, ticketedTargetKey, type MergeStep, type ReviewRowBase, type SourceMove } from '../participant/session/importTypes';
 
 const MERGED_PREFIX = /^\[Merged into [A-Z][A-Z0-9]+-\d+\] /;
 const BANNER = /^\{panel:title=Merged into [A-Z][A-Z0-9]+-\d+\}[\s\S]*?\{panel\}\n*/;
@@ -68,6 +68,47 @@ export function buildMergePlan(survivor: string, sources: string[]): MergeStep[]
     step('survivor-comment', survivor),
     ...sources.flatMap(key => [step('link', key), step('source-rewrite', key)]),
     ...sources.map(key => step('close', key)),
+  ];
+}
+
+/**
+ * Close mode (KTD2): for each source, the items only it records (its dedup keys minus the kept ticket's). An item the
+ * rebuilt kept ticket still covers is `movable`; one the report no longer lists (`droppedKeys`, from the rewrite plan)
+ * is `unlisted` and is named in the comment on the closed source instead of moved. Pure.
+ */
+export function analyzeSourceMoves(params: {
+  survivorLabels: string[];
+  sources: Array<{ key: string; labels: string[] }>;
+  labelToKey: (label: string) => string | null;
+  droppedKeys: string[];
+}): SourceMove[] {
+  const keysOf = (labels: string[]) => [...new Set(labels.map(params.labelToKey).filter((k): k is string => k !== null))];
+  const onSurvivor = new Set(keysOf(params.survivorLabels));
+  const dropped = new Set(params.droppedKeys);
+  return params.sources.map(source => {
+    const only = keysOf(source.labels).filter(k => !onSurvivor.has(k));
+    return { key: source.key, movable: only.filter(k => !dropped.has(k)), unlisted: only.filter(k => dropped.has(k)) };
+  });
+}
+
+/** Close mode (KTD3): `Relates` when items moved from the source, `Duplicate` when none did; the other one when the project lacks the wanted type. */
+export function closeLinkType(itemsMoved: boolean, linkTypeNames: string[]): 'Relates' | 'Duplicate' {
+  const wanted = itemsMoved ? 'Relates' : 'Duplicate';
+  const other = itemsMoved ? 'Duplicate' : 'Relates';
+  const has = (name: string) => linkTypeNames.some(n => n.toLowerCase() === name.toLowerCase());
+  return has(wanted) || !has(other) ? wanted : other;
+}
+
+/**
+ * Close mode (KTD3): the kept ticket is rewritten first, only when some source has items to move; then each source is
+ * linked (its link type fixed here from whether items moved) and commented on; every close comes last.
+ */
+export function buildCloseMergePlan(survivor: string, moves: SourceMove[], linkTypeNames: string[]): MergeStep[] {
+  const step = (kind: MergeStep['kind'], key: string, linkType?: string): MergeStep => ({ kind, key, status: 'pending', ...(linkType ? { linkType } : {}) });
+  return [
+    ...(moves.some(m => m.movable.length > 0) ? [step('survivor-rewrite', survivor)] : []),
+    ...moves.flatMap(m => [step('link', m.key, closeLinkType(m.movable.length > 0, linkTypeNames)), step('source-comment', m.key)]),
+    ...moves.map(m => step('close', m.key)),
   ];
 }
 

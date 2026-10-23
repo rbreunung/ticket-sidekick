@@ -305,7 +305,7 @@ export interface ReviewSession<TRow> {
   schemaVersion: number;
 }
 
-export type MergeStepKind = 'survivor-rewrite' | 'survivor-comment' | 'link' | 'source-rewrite' | 'close';
+export type MergeStepKind = 'survivor-rewrite' | 'survivor-comment' | 'link' | 'source-rewrite' | 'source-comment' | 'close';
 
 /** One step of a merge. `key` is the ticket the step writes to. A `done` step is never run again; `skipped` was ignored after a failure. */
 export interface MergeStep {
@@ -315,6 +315,15 @@ export interface MergeStep {
   error?: string;
   /** A short result worth showing in the final report, e.g. that a close left no Duplicate resolution or fell back to Relates. */
   note?: string;
+  /** Close mode: the link type this `link` step uses, chosen from whether items moved from its source. */
+  linkType?: string;
+}
+
+/** Close mode: what a source ticket carries that the kept ticket lacks — items the rewrite can move, and items the report no longer lists. */
+export interface SourceMove {
+  key: string;
+  movable: string[];
+  unlisted: string[];
 }
 
 /**
@@ -339,6 +348,8 @@ export interface MergeRun {
   linkType?: string;
   /** Findings the rewritten survivor no longer covers, kept from the rewrite step for its comment. */
   droppedKeys?: string[];
+  /** Close mode: per source, the items that move to the kept ticket and the ones the report no longer lists (fixed when the run starts). */
+  sourceMoves?: SourceMove[];
   /** Sources the close skipped (no workflow graph, no path) with the reason, for the final report. */
   closeSkipped?: Array<{ key: string; reason: string }>;
 }

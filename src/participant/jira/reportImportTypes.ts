@@ -133,11 +133,24 @@ export interface ImportOverviewExport<TRow extends ReviewRowBase> {
   dueDateOf: (row: TRow) => string | null;
 }
 
-/** Waltz ticket merge: the importer's wording for the one comment the survivor receives (Jira wiki markup). */
-export interface ImportTicketMerge {
-  /** Opens the survivor's comment, naming the tickets it absorbed. */
-  buildCommentPreface: (absorbedKeys: string[]) => string;
-}
+/**
+ * Ticket merge (`merge … into …`). Rewrite mode (Waltz, the default) rewrites the kept ticket, comments on it and marks each
+ * closed ticket with a banner; close mode (Veracode) moves items across only when the kept ticket lacks them, then links,
+ * comments on and closes each source without editing its text.
+ */
+export type ImportTicketMerge =
+  | {
+    mode?: 'rewrite';
+    /** Opens the survivor's comment (Jira wiki markup), naming the tickets it absorbed. */
+    buildCommentPreface: (absorbedKeys: string[]) => string;
+  }
+  | {
+    mode: 'close';
+    /** One item in the importer's words for the confirmation page, e.g. `flaw`. */
+    itemNoun: string;
+    /** The comment on a closed source (Jira wiki markup): `preface` is its opening line, `unlistedKeys` the items the report no longer lists. */
+    buildSourceComment: (survivorKey: string, unlistedKeys: string[]) => { preface: string; text: string };
+  };
 
 /** Accepted-CVE list: what an importer supplies so findings the team accepted stay off the New screen. */
 export interface ImportAccepted<TItem, TRow extends ReviewRowBase> {

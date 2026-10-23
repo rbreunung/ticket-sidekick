@@ -3,11 +3,12 @@
 import * as vscode from 'vscode';
 import { logDiag } from '../../utils/diagLog';
 import { formatKeyLink, type TicketService } from '../../services/TicketService';
-import { buildMergePlan, resolveMergeSides } from '../../utils/ticketMerge';
+import { analyzeSourceMoves, buildCloseMergePlan, buildMergePlan, resolveMergeSides } from '../../utils/ticketMerge';
+import { stringOrNull } from '../../utils/reportImport';
 import {
-  buildChatCommandLink, buildMergePrompt, buildStaleTargetOptions, emptyImportOutcomes, formatStaleTargetOption, isTicketedRowFinished, parseMergeRunReply,
+  buildChatCommandLink, buildCloseMergePrompt, buildMergePrompt, buildStaleTargetOptions, emptyImportOutcomes, formatStaleTargetOption, isTicketedRowFinished, parseMergeRunReply,
   planStaleTransitions, safeMarkdownText, staleTargetState, ticketedTargetKey,
-  type MergeRun, type MergeStep, type ReviewRowBase, type ReviewSession, type StaleTicketGroup,
+  type MergeRun, type MergeStep, type ReviewRowBase, type ReviewSession, type SourceMove, type StaleTicketGroup,
 } from '../sessionState';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import { buildStaleTicketGroups, transitionTickets } from './cleanupHandler';
@@ -33,6 +34,35 @@ async function recordedLabels(ticketService: TicketService, keys: string[]): Pro
   const labels: string[] = [];
   for (const key of keys) labels.push(...((await ticketService.getIssue(key)).fields.labels ?? []));
   return [...new Set(labels)];
+}
+
+type CloseMerge = Extract<NonNullable<ReportImportDescriptor<unknown, ReviewRowBase>['ticketMerge']>, { mode: 'close' }>;
+
+/** The importer's close-mode merge, or undefined for the rewrite mode (Waltz). */
+function closeModeOf<TItem, TRow extends ReviewRowBase>(descriptor: ReportImportDescriptor<TItem, TRow>): CloseMerge | undefined {
+  const merge = descriptor.ticketMerge;
+  return merge?.mode === 'close' ? merge : undefined;
+}
+
+/** Close mode: what each source records that the kept ticket lacks, judged against the rewrite the run would do. */
+function planCloseMoves<TItem, TRow extends ReviewRowBase>(
+  session: ReviewSession<TRow>,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+  survivor: string,
+  sources: string[],
+  labelsByKey: Map<string, string[]>,
+): { moves: SourceMove[]; survivorLost: string[] } {
+  const labelToKey = (label: string) => descriptor.labelToDedupKey?.(label) ?? null;
+  const allLabels = [...new Set([...labelsByKey.values()].flat())];
+  const plan = planRewrite(session, descriptor, survivor, allLabels, sourceRowsOf(session, sources));
+  const moves = analyzeSourceMoves({
+    survivorLabels: labelsByKey.get(survivor) ?? [],
+    sources: sources.map(key => ({ key, labels: labelsByKey.get(key) ?? [] })),
+    labelToKey,
+    droppedKeys: plan.droppedKeys,
+  });
+  const onSurvivor = new Set((labelsByKey.get(survivor) ?? []).map(labelToKey).filter((k): k is string => k !== null));
+  return { moves, survivorLost: plan.droppedKeys.filter(k => onSurvivor.has(k)) };
 }
 
 /**
@@ -63,6 +93,9 @@ export async function showMergePrompt<TItem, TRow extends ReviewRowBase>(
     return 'refused';
   }
 
+  const closeMode = closeModeOf(descriptor);
+  if (closeMode) return showCloseMergePrompt(session, sides, issues, ticketService, stream, descriptor, closeMode, baseUrl);
+
   const warnings: string[] = [];
   const marker = descriptor.stale?.markerLabel;
   for (const key of keys) {
@@ -77,11 +110,24 @@ export async function showMergePrompt<TItem, TRow extends ReviewRowBase>(
       warnings.push(`${key} was not created by an import, so rewriting from the report replaces text the report does not know.`);
     }
   }
+  warnings.push(...await linkAndResolutionWarnings(ticketService));
+
+  const labels = [...new Set(keys.flatMap(key => issues.get(key)!.fields.labels ?? []))];
+  const rewrite = planRewrite(session, descriptor, sides.survivor, labels, sourceRowsOf(session, sides.sources));
+  const ticket = (key: string) => ({ key, summary: issues.get(key)!.fields.summary ?? '', status: issues.get(key)!.fields.status?.name ?? null });
+  stream.markdown(trustedChatMarkdown(buildMergePrompt({
+    survivor: ticket(sides.survivor), sources: sides.sources.map(ticket), warnings, droppedKeys: rewrite.droppedKeys, baseUrl,
+  })));
+  return 'waiting';
+}
+
+async function linkAndResolutionWarnings(ticketService: TicketService): Promise<string[]> {
+  const warnings: string[] = [];
   try {
     if (!(await ticketService.getLinkTypeNames()).some(n => n.toLowerCase() === 'duplicate')) {
       warnings.push('This project has no Duplicate link type, so the tickets are linked as Relates instead.');
     }
-  } catch { /* an unreadable list is not a reason to refuse; the link step tries Duplicate */ }
+  } catch { /* an unreadable list is not a reason to refuse; the link step tries the wanted type */ }
   try {
     if (!(await ticketService.getResolutions()).some(r => r.name.toLowerCase() === 'duplicate')) {
       warnings.push('This project has no Duplicate resolution, so you pick the resolution from its list when the tickets are closed.');
@@ -89,12 +135,46 @@ export async function showMergePrompt<TItem, TRow extends ReviewRowBase>(
   } catch {
     warnings.push('The resolutions could not be read, so the tickets may be closed without one.');
   }
+  return warnings;
+}
 
-  const labels = [...new Set(keys.flatMap(key => issues.get(key)!.fields.labels ?? []))];
-  const rewrite = planRewrite(session, descriptor, sides.survivor, labels, sourceRowsOf(session, sides.sources));
+/** Close mode: the confirmation for `merge … into …` — what moves, what stays, the warnings; writes nothing. */
+async function showCloseMergePrompt<TItem, TRow extends ReviewRowBase>(
+  session: ReviewSession<TRow>,
+  sides: { survivor: string; sources: string[] },
+  issues: Map<string, Issue>,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+  closeMode: CloseMerge,
+  baseUrl?: string,
+): Promise<MergeTurn> {
+  const labelsByKey = new Map([...issues].map(([key, issue]) => [key, issue.fields.labels ?? []]));
+  const { moves, survivorLost } = planCloseMoves(session, descriptor, sides.survivor, sides.sources, labelsByKey);
+  const rewrites = moves.some(m => m.movable.length > 0);
+
+  const warnings: string[] = [];
+  const marker = descriptor.stale?.markerLabel;
+  const survivorIssue = issues.get(sides.survivor)!;
+  if (survivorIssue.fields.resolution != null) {
+    warnings.push(`${sides.survivor} is resolved. You can still merge into it, but nobody may be watching it.`);
+  }
+  if (rewrites && marker && !(survivorIssue.fields.labels ?? []).includes(marker)) {
+    warnings.push(`${sides.survivor} was not created by an import, so rebuilding it from the report replaces text the report does not know.`);
+  }
+  for (const key of sides.sources) {
+    if (issues.get(key)!.fields.resolution != null) warnings.push(`${key} is already resolved, so it is linked and commented on but not closed.`);
+  }
+  warnings.push(...await linkAndResolutionWarnings(ticketService));
+
   const ticket = (key: string) => ({ key, summary: issues.get(key)!.fields.summary ?? '', status: issues.get(key)!.fields.status?.name ?? null });
-  stream.markdown(trustedChatMarkdown(buildMergePrompt({
-    survivor: ticket(sides.survivor), sources: sides.sources.map(ticket), warnings, droppedKeys: rewrite.droppedKeys, baseUrl,
+  stream.markdown(trustedChatMarkdown(buildCloseMergePrompt({
+    survivor: ticket(sides.survivor),
+    sources: moves.map(m => ({ ticket: ticket(m.key), movable: m.movable, unlisted: m.unlisted })),
+    itemNoun: closeMode.itemNoun,
+    survivorLost: rewrites ? survivorLost : [],
+    warnings,
+    baseUrl,
   })));
   return 'waiting';
 }
@@ -114,6 +194,8 @@ export async function startMerge<TItem, TRow extends ReviewRowBase>(
     stream.markdown(`_Nothing was written. ${safeMarkdownText(sides.reason)}_\n\n`);
     return 'refused';
   }
+  const closeMode = closeModeOf(descriptor);
+  if (closeMode) return startCloseMerge(session, sides, ticketService, stream, descriptor, baseUrl);
   let linkType = 'Duplicate';
   try {
     const names = await ticketService.getLinkTypeNames();
@@ -121,6 +203,33 @@ export async function startMerge<TItem, TRow extends ReviewRowBase>(
   } catch { /* try Duplicate; a refusal is a failed step */ }
   session.mergeRun = { survivor: sides.survivor, sources: sides.sources, steps: buildMergePlan(sides.survivor, sides.sources), linkType };
   logDiag(descriptor.scope, 'info', `${descriptor.importLabel} import — merge started`, { survivor: sides.survivor, sources: sides.sources, linkType });
+  return advance(session, ticketService, stream, descriptor, baseUrl);
+}
+
+/** Close mode: reads the tickets, fixes the plan (what moves, each link type) and starts the run. */
+async function startCloseMerge<TItem, TRow extends ReviewRowBase>(
+  session: ReviewSession<TRow>,
+  sides: { survivor: string; sources: string[] },
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+  baseUrl?: string,
+): Promise<MergeTurn> {
+  const labelsByKey = new Map<string, string[]>();
+  try {
+    for (const key of [sides.survivor, ...sides.sources]) labelsByKey.set(key, (await ticketService.getIssue(key)).fields.labels ?? []);
+  } catch (err) {
+    logDiag(descriptor.scope, 'warn', 'Could not read the tickets to merge', { survivor: sides.survivor, sources: sides.sources, error: errorText(err) });
+    stream.markdown(`✗ Could not read all the tickets, so nothing was written: ${safeMarkdownText(errorText(err))}\n\n`);
+    return 'refused';
+  }
+  let linkTypeNames: string[] = [];
+  try { linkTypeNames = await ticketService.getLinkTypeNames(); } catch { /* the wanted type is tried; a refusal is a failed step */ }
+  const { moves } = planCloseMoves(session, descriptor, sides.survivor, sides.sources, labelsByKey);
+  session.mergeRun = { survivor: sides.survivor, sources: sides.sources, steps: buildCloseMergePlan(sides.survivor, moves, linkTypeNames), sourceMoves: moves };
+  logDiag(descriptor.scope, 'info', `${descriptor.importLabel} import — merge started`, {
+    survivor: sides.survivor, sources: sides.sources, moved: moves.map(m => m.movable.length), unlisted: moves.map(m => m.unlisted.length),
+  });
   return advance(session, ticketService, stream, descriptor, baseUrl);
 }
 
@@ -204,13 +313,26 @@ async function executeStep<TItem, TRow extends ReviewRowBase>(
     case 'survivor-rewrite': {
       const labels = await recordedLabels(ticketService, [run.survivor, ...run.sources]);
       const plan = planRewrite(session, descriptor, run.survivor, labels, sourceRows);
-      const written = await writeRewrite(ticketService, descriptor, run.survivor, plan.regenItem, labelsToRemove(session, descriptor, plan.droppedKeys));
+      // Close mode keeps the importer's own Due Date rule: the movable items are what joins the kept ticket.
+      let target: { ticketCreated?: string | null; currentDueDate?: string | null; joiningItem?: TItem | null } | undefined;
+      if (closeModeOf(descriptor)) {
+        const issue = await ticketService.getIssue(run.survivor);
+        const newIds = (run.sourceMoves ?? []).flatMap(m => m.movable);
+        target = {
+          ticketCreated: stringOrNull(issue.fields.created),
+          currentDueDate: stringOrNull(issue.fields.duedate),
+          joiningItem: fold.narrowToNew ? fold.narrowToNew(plan.regenItem, { kind: 'findings', newIds }) : null,
+        };
+      }
+      const written = await writeRewrite(ticketService, descriptor, run.survivor, plan.regenItem, labelsToRemove(session, descriptor, plan.droppedKeys), target);
       if (written.droppedFields.length > 0) step.note = droppedFieldsNote(written.droppedFields);
       run.droppedKeys = plan.droppedKeys;
       return;
     }
     case 'survivor-comment': {
-      const preface = descriptor.ticketMerge!.buildCommentPreface(run.sources);
+      const merge = descriptor.ticketMerge!;
+      if (merge.mode === 'close') return;
+      const preface = merge.buildCommentPreface(run.sources);
       // A replayed confirmation (a second click, an old link) would post the same comment again.
       if (await ticketService.hasCommentStartingWith(run.survivor, preface)) {
         step.note = 'already commented';
@@ -221,12 +343,29 @@ async function executeStep<TItem, TRow extends ReviewRowBase>(
       return;
     }
     case 'link': {
-      if (await ticketService.hasLinkBetween(step.key, run.survivor, run.linkType ?? 'Duplicate')) {
+      const linkType = step.linkType ?? run.linkType ?? 'Duplicate';
+      if (await ticketService.hasLinkBetween(step.key, run.survivor, linkType)) {
         step.note = 'already linked';
         return;
       }
-      await ticketService.linkIssues(step.key, run.survivor, run.linkType ?? 'Duplicate');
-      if (run.linkType === 'Relates') step.note = 'linked as Relates (no Duplicate link type)';
+      await ticketService.linkIssues(step.key, run.survivor, linkType);
+      if (step.linkType) {
+        const wanted = (run.sourceMoves?.find(m => m.key === step.key)?.movable.length ?? 0) > 0 ? 'Relates' : 'Duplicate';
+        if (wanted !== linkType) step.note = `linked as ${linkType} (no ${wanted} link type)`;
+      } else if (run.linkType === 'Relates') {
+        step.note = 'linked as Relates (no Duplicate link type)';
+      }
+      return;
+    }
+    case 'source-comment': {
+      const merge = closeModeOf(descriptor)!;
+      const { preface, text } = merge.buildSourceComment(run.survivor, run.sourceMoves?.find(m => m.key === step.key)?.unlisted ?? []);
+      // A replayed confirmation (a second click, an old link) would post the same comment again.
+      if (await ticketService.hasCommentStartingWith(step.key, preface)) {
+        step.note = 'already commented';
+        return;
+      }
+      await ticketService.addComment(step.key, text, baseUrl);
       return;
     }
     case 'source-rewrite':
@@ -256,8 +395,9 @@ async function failStep<TItem, TRow extends ReviewRowBase>(
 const STEP_LABEL: Record<MergeStep['kind'], string> = {
   'survivor-rewrite': 'rewrite the kept ticket',
   'survivor-comment': 'comment on the kept ticket',
-  link: 'link as a duplicate',
+  link: 'link the tickets',
   'source-rewrite': 'mark the ticket as merged',
+  'source-comment': 'comment on the closed ticket',
   close: 'close',
 };
 
@@ -272,7 +412,7 @@ function ticketLines(run: MergeRun, baseUrl?: string): string[] {
   return [
     `**${formatKeyLink(run.survivor, baseUrl)}** (kept)`,
     ...forKey(run.survivor).map(l => `  - ${l}`),
-    ...run.sources.flatMap(key => [`**${formatKeyLink(key, baseUrl)}** (cancelled)`, ...forKey(key).map(l => `  - ${l}`)]),
+    ...run.sources.flatMap(key => [`**${formatKeyLink(key, baseUrl)}** (closing)`, ...forKey(key).map(l => `  - ${l}`)]),
   ];
 }
 
@@ -284,14 +424,14 @@ async function askAgain(run: MergeRun, stream: vscode.ChatResponseStream, baseUr
     const group = run.closeGroups?.find(g => g.issueType === run.closeIssueType);
     const keys = group?.tickets.map(t => formatKeyLink(t.key, baseUrl)).join(', ') ?? '';
     stream.markdown(trustedChatMarkdown(
-      `Which status should the **${safeMarkdownText(run.closeIssueType ?? '')}** tickets ${keys} move to?` +
-      `${run.duplicateResolution ? ` They are closed with resolution ${safeMarkdownText(run.duplicateResolution)}.` : ''}\n\n` +
-      `${numbered((run.closeTargetOptions ?? []).map(formatStaleTargetOption))}\n\nReply with the name or number, or ${stop} to leave them open.`,
+      `Move ${keys} (${safeMarkdownText(run.closeIssueType ?? '')}) to which status?` +
+      `${run.duplicateResolution ? ` It is closed with resolution ${safeMarkdownText(run.duplicateResolution)}.` : ''}\n\n` +
+      `${numbered((run.closeTargetOptions ?? []).map(formatStaleTargetOption))}\n\nReply with a number or name, or ${stop} to leave it open.`,
     ));
   } else if (run.awaiting === 'resolution') {
     stream.markdown(trustedChatMarkdown(
-      `This project has no Duplicate resolution. Which resolution should the tickets get?\n\n${numbered(run.resolutionOptions ?? [])}\n\n` +
-      `Reply with the name or number, ${buildChatCommandLink('None', '@jira', 'none')} for no resolution, or ${stop}.`,
+      `No Duplicate resolution in this project. Pick one:\n\n${numbered(run.resolutionOptions ?? [])}\n\n` +
+      `Reply with a number or name, ${buildChatCommandLink('None', '@jira', 'none')} for no resolution, or ${stop}.`,
     ));
   } else {
     const failed = run.steps.find(s => s.status === 'failed');
@@ -438,7 +578,7 @@ function finish<TItem, TRow extends ReviewRowBase>(
 ): MergeTurn {
   const run = session.mergeRun!;
   const done = (kind: MergeStep['kind'], key: string) => stepOf(run, kind, key)?.status === 'done';
-  const mergedSources = run.sources.filter(key => done('source-rewrite', key));
+  const mergedSources = run.sources.filter(key => done(closeModeOf(descriptor) ? 'close' : 'source-rewrite', key));
   const closedSources = run.sources.filter(key => done('close', key));
   const survivorRewritten = done('survivor-rewrite', run.survivor);
 
