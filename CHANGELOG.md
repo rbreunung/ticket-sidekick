@@ -1,3 +1,19 @@
+## [0.8.0] - 2026-10-23
+
+## What's Changed
+* feat(tools): steer agents to jira_loadTicket and name where the ticket landed
+* feat: page the Already-ticketed import screen by 20
+* feat(email): let the model search for more boilerplate from the cleanup preview
+* feat: merge related tickets in the Waltz review
+* ci: fix the red Windows test and add a ci-ok gate for merges and releases
+* feat(waltz): remediation due dates, Jira Due Date and ticket refresh from a newer report
+* Security overview of open Veracode and Waltz tickets by release
+* feat(veracode): SLA-table Due Dates for Veracode tickets
+* fix(waltz): attestation date label, export link, and export preview stays last
+
+
+**Full Changelog**: https://github.com/rbreunung/ticket-sidekick/compare/0.7.5...0.8.0
+
 ## [0.7.5] - 2026-10-20
 
 ## What's Changed
