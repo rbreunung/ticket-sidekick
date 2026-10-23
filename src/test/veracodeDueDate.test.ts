@@ -71,6 +71,8 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+let screen = '';
+
 async function importVeracode(report: VeracodeFlaw[]) {
   statefulJira(client, tickets);
   searchFromStore(ticketService, tickets);
@@ -79,7 +81,9 @@ async function importVeracode(report: VeracodeFlaw[]) {
   const resume: Extract<AwaitIssueTypeResume, { kind: 'reportImport' }> = {
     kind: 'reportImport', descriptorKind: 'veracode', pickedTemplateName: null, session: templateSession,
   };
-  await handleVeracodeAwaitIssueType(resume, 'Bug', client, ticketService, mockStream() as never, ws as never);
+  const stream = mockStream();
+  await handleVeracodeAwaitIssueType(resume, 'Bug', client, ticketService, stream as never, ws as never);
+  screen = streamText(stream);
   return ws;
 }
 
@@ -299,5 +303,99 @@ describe('the Due Date of an Already-ticketed rewrite and of a new ticket', () =
     expect(text).toContain('Due Date set to 2026-12-01');
     expect(text).toContain('SLA');
     expect(text).not.toContain('edited by hand');
+  });
+});
+
+describe('backfilling a Due Date on the Already ticketed screen', () => {
+  const session = (ws: ReturnType<typeof makeMockWs>) => ws.store['jira.session.veracodeReview'] as VeracodeReviewSession;
+  const onTicket = (extra: Partial<FakeTicket> = {}, ids = ['901']) => ({
+    labels: ['veracode', ...ids.map(id => `veracode-issue-${id}`)], created: '2026-10-01T09:00:00.000+0000', ...extra,
+  }) as FakeTicket;
+
+  it('AE7: an open ticket with an empty Due Date is a change, shown as none to the policy date, and defaults to rewrite', async () => {
+    sla.value = { High: 60 };
+    tickets = { 'PROJ-1': onTicket() };
+    const ws = await importVeracode([flaw({ issueId: '901', severity: 4, firstFoundDate: '2026-10-02' })]);
+    const row = session(ws).allRows[0];
+    expect(row.change).toEqual({ kind: 'findings', newIds: [], dates: [{ date: 'due', from: null, to: '2026-12-01' }] });
+    expect(row.action).toBe('rewrite');
+    expect(row.allowedActions).toEqual(['rewrite', 'leave']);
+    expect(screen).toContain('due none→2026-12-01');
+  });
+
+  it('applying the default sets the Due Date, and a rebuilt review then shows no change', async () => {
+    sla.value = { High: 60 };
+    tickets = { 'PROJ-1': onTicket() };
+    const report = [flaw({ issueId: '901', severity: 4, firstFoundDate: '2026-10-02' })];
+    const ws = await importVeracode(report);
+    await reply('apply', ws);
+    expect(client.updateIssueCalls).toHaveLength(1);
+    expect(client.updateIssueCalls[0].fields.duedate).toBe('2026-12-01');
+    expect(tickets['PROJ-1'].duedate).toBe('2026-12-01');
+
+    const again = await importVeracode(report);
+    expect(session(again).allRows[0].change).toBeNull();
+    expect(session(again).allRows[0].action).toBe('leave');
+  });
+
+  it('AE13: an undated flaw is dated from the ticket\'s creation date, and the ticket then settles', async () => {
+    sla.value = { High: 60 };
+    tickets = { 'PROJ-1': onTicket() };
+    const ws = await importVeracode([flaw({ issueId: '901', severity: 4, firstFoundDate: null })]);
+    expect(session(ws).allRows[0].change).toMatchObject({ dates: [{ date: 'due', from: null, to: '2026-11-30' }] });
+  });
+
+  it('AE8: a ticket that already has a Due Date is not a change, whatever the policy gives now', async () => {
+    sla.value = { High: 14 };
+    tickets = { 'PROJ-1': onTicket({ duedate: '2026-12-31' }) };
+    const ws = await importVeracode([flaw({ issueId: '901', severity: 4, firstFoundDate: '2026-10-02' })]);
+    expect(session(ws).allRows[0].change).toBeNull();
+    expect(session(ws).allRows[0].action).toBe('leave');
+  });
+
+  it('AE9: a resolved ticket with no Due Date is not a change for dates', async () => {
+    sla.value = { High: 60 };
+    tickets = { 'PROJ-1': onTicket({ resolution: { name: 'Done' } }) };
+    const ws = await importVeracode([flaw({ issueId: '901', severity: 4, firstFoundDate: '2026-10-02' })]);
+    expect(session(ws).allRows[0].change).toBeNull();
+    expect(session(ws).allRows[0].action).toBe('leave');
+  });
+
+  it('AE3: with every severity at 0 nothing is flagged for dates', async () => {
+    sla.value = { 'Very High': 0, High: 0, Medium: 0, Low: 0, 'Very Low': 0, Informational: 0 };
+    tickets = { 'PROJ-1': onTicket() };
+    const ws = await importVeracode([flaw({ issueId: '901', severity: 4, firstFoundDate: '2026-10-02' })]);
+    expect(session(ws).allRows[0].change).toBeNull();
+  });
+
+  it('a ticket whose flaws have no due date is never flagged', async () => {
+    sla.value = { High: 60, Low: 0 };
+    tickets = { 'PROJ-1': onTicket() };
+    const ws = await importVeracode([flaw({ issueId: '901', severity: 2, firstFoundDate: '2026-10-02' })]);
+    expect(session(ws).allRows[0].change).toBeNull();
+  });
+
+  it('rows pointing at one ticket share the rewrite default, and one apply rewrites the ticket once', async () => {
+    sla.value = { High: 60, Low: 0 };
+    tickets = { 'PROJ-1': onTicket({}, ['901', '902']) };
+    const ws = await importVeracode([
+      flaw({ issueId: '901', severity: 4, firstFoundDate: '2026-10-02' }),
+      flaw({ issueId: '902', severity: 2, firstFoundDate: '2026-10-02' }),
+    ]);
+    expect(session(ws).allRows.map(r => r.action)).toEqual(['rewrite', 'rewrite']);
+    await reply('apply', ws);
+    expect(client.updateIssueCalls).toHaveLength(1);
+    expect(client.updateIssueCalls[0].fields.duedate).toBe('2026-12-01');
+  });
+
+  it('a later change to the table does not reach a ticket that already has a Due Date', async () => {
+    sla.value = { High: 60 };
+    tickets = { 'PROJ-1': onTicket() };
+    const report = [flaw({ issueId: '901', severity: 4, firstFoundDate: '2026-10-02' })];
+    await reply('apply', await importVeracode(report));
+    sla.value = { High: 14 };
+    const again = await importVeracode(report);
+    expect(session(again).allRows[0].change).toBeNull();
+    expect(tickets['PROJ-1'].duedate).toBe('2026-12-01');
   });
 });

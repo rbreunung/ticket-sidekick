@@ -97,6 +97,8 @@ export interface JqlIssueLike {
     resolution?: unknown;
     created?: string | null;
     status?: { name?: string } | null;
+    /** The ticket's Due Date (`YYYY-MM-DD`); null = empty, absent = the search did not return the field. */
+    duedate?: string | null;
   };
 }
 
@@ -115,6 +117,8 @@ export interface DedupTicket {
    * recorded (Waltz dates): `null` = read but empty, `undefined` = not read, or the read failed.
    */
   description?: string | null;
+  /** Jira's Due Date: `null` = the field is empty, `undefined` = the search did not return it (never treated as empty). */
+  dueDate?: string | null;
 }
 
 /** Dedup key -> every ticket carrying it (U3/KTD1 — no longer "first match wins"). */
@@ -128,6 +132,7 @@ function toDedupTicket(issue: JqlIssueLike): DedupTicket {
     resolved: fields.resolution !== undefined && fields.resolution !== null,
     created: typeof fields.created === 'string' ? fields.created : null,
     status: typeof fields.status?.name === 'string' ? fields.status.name : null,
+    ...(fields.duedate === undefined ? {} : { dueDate: typeof fields.duedate === 'string' ? fields.duedate : null }),
   };
 }
 
@@ -781,6 +786,40 @@ export function applyDroppedMembers<TItem, TRow extends ReviewRowBase>(params: {
     }
   }
   return rows.map(row => updated.get(row) ?? row);
+}
+
+/**
+ * A Due Date is set once (Veracode): an open target ticket whose Due Date is empty counts as changed for dates when the
+ * importer's policy gives the row's own item a due date, shown as `due none→<date>`, and its actions are derived again.
+ * A target that has any Due Date, one whose search result did not return the field, a resolved target and an item with no
+ * due date are left alone. A baseline row stays a baseline.
+ */
+export function applyMissingDueDate<TItem, TRow extends ReviewRowBase>(params: {
+  rows: TRow[];
+  dedupMap: DedupMap;
+  itemOf: (row: TRow) => TItem;
+  expectedFor: (item: TItem, ticketCreated: string | null) => string | null;
+  derive: (change: RowChange | null, anyOpen: boolean) => TicketedActionChoice;
+}): TRow[] {
+  const { rows, dedupMap, itemOf, expectedFor, derive } = params;
+  const ticketByKey = new Map<string, DedupTicket>();
+  for (const tickets of dedupMap.values()) for (const t of tickets) ticketByKey.set(t.key, t);
+
+  return rows.map(row => {
+    if (row.existingTicketKey === null || row.allowedActions === undefined || !row.target || row.target.resolved) return row;
+    const target = ticketByKey.get(row.target.key);
+    if (!target || target.dueDate !== null) return row;
+    const expected = expectedFor(itemOf(row), target.created);
+    if (expected === null) return row;
+    const current = row.change;
+    if (current?.kind === 'baseline') return row;
+    const change: RowChange = {
+      ...(current ?? { kind: 'findings', newIds: [] }),
+      dates: [...(current?.dates ?? []), { date: 'due', from: null, to: expected }],
+    };
+    const { allowedActions, action } = derive(change, true);
+    return { ...row, change, allowedActions, action, defaultAction: action };
+  });
 }
 
 /**

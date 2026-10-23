@@ -226,6 +226,13 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
     findingNoun: 'flaw(s)',
     describe: describeVeracodeChange,
     deriveActions: deriveRewriteActions,
+    // A Due Date is set once: an open ticket with an empty one is offered a rewrite that sets it (an undated flaw counts from the ticket's creation).
+    dueDateBackfill: {
+      expectedFor: (group, ticketCreated) => {
+        const due = veracodeDue(ticketCreated);
+        return groupDueDate(group, due.days, due.fallbackStart);
+      },
+    },
     // `new ticket` is a full ticket — the group's whole current content, all its labels and the template's — whose
     // title says which ticket it follows. The Relates link to that ticket is added by the caller.
     actionLabels: { 'follow-up': 'new ticket' },

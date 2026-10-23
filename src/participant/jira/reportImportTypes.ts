@@ -201,6 +201,11 @@ export interface ImportChangeTracking<TItem, TRow extends ReviewRowBase> {
    * dropped-member pass (Waltz). Veracode does not need either, so it leaves this off.
    */
   readsTargetDescriptions?: boolean;
+  /**
+   * Veracode: an open target ticket with an empty Due Date counts as changed for dates when `expectedFor` gives the row's item
+   * a due date (it gets the target's Jira creation timestamp to date an undated finding). Needs `deriveActions`.
+   */
+  dueDateBackfill?: { expectedFor: (item: TItem, ticketCreated: string | null) => string | null };
   /** The importer's own words for row actions, by action id (Waltz shows `follow-up` as `new ticket`). */
   actionLabels?: ActionLabels;
   /** With `readsTargetDescriptions`: the dedup keys of every component in the unfiltered report, so a component only filtered or accepted away is not "dropped". */

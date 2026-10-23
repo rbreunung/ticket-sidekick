@@ -20,7 +20,7 @@ export interface WaltzRemediation extends RemediationDates {
   reportDate: string | null;
 }
 
-export type DateKind = 'policy' | 'planned' | 'deadline';
+export type DateKind = 'policy' | 'planned' | 'deadline' | 'due';
 
 export interface DateChange {
   date: DateKind;
