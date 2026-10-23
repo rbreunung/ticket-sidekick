@@ -37,7 +37,7 @@ describe('resolveSlaDays', () => {
     expect(days).toEqual({ 4: 28 });
   });
 
-  it.each([-1, 2.5, '30', null, true])('gives a known severity with %j no due date, lists it, and does not fall back to a default', (value) => {
+  it.each([-1, 2.5, '30', null, true, 3651, 1e9])('gives a known severity with %j no due date, lists it, and does not fall back to a default', (value) => {
     const { days, invalidKeys } = resolveSlaDays({ High: value });
     expect(days).toEqual({});
     expect(invalidKeys).toEqual(['High']);

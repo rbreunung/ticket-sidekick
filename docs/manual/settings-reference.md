@@ -132,7 +132,7 @@ What the filter settings do is described with each import in [Report Imports](re
 }
 ```
 
-Put it in workspace settings (`.vscode/settings.json`) to share it with everyone who opens the repository. Only the six severity names are allowed. A misspelled name is underlined in `settings.json` and listed in the "Ticket Sidekick" Output channel when an import starts, and a value that is not a whole number of zero or more gives that severity no Due Date. A ticket's Due Date is set once, so changing the table later does not touch tickets that already have one. How the dates are used is described in [Due dates from your SLA table](report-imports.md#due-dates-from-your-sla-table).
+Put it in workspace settings (`.vscode/settings.json`) to share it with everyone who opens the repository. Only the six severity names are allowed. A misspelled name is underlined in `settings.json` and listed in the "Ticket Sidekick" Output channel when an import starts, and a value that is not a whole number from 0 to 3650 gives that severity no Due Date. A ticket's Due Date is set once, so changing the table later does not touch tickets that already have one. How the dates are used is described in [Due dates from your SLA table](report-imports.md#due-dates-from-your-sla-table).
 
 **Optional: size limits**
 

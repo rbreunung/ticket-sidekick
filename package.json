@@ -966,31 +966,37 @@
               "Very High": {
                 "type": "integer",
                 "minimum": 0,
+                "maximum": 3650,
                 "description": "Calendar days from the first-found date to the due date for Very High flaws. 0 means no Due Date."
               },
               "High": {
                 "type": "integer",
                 "minimum": 0,
+                "maximum": 3650,
                 "description": "Calendar days from the first-found date to the due date for High flaws. 0 means no Due Date."
               },
               "Medium": {
                 "type": "integer",
                 "minimum": 0,
+                "maximum": 3650,
                 "description": "Calendar days from the first-found date to the due date for Medium flaws. 0 means no Due Date."
               },
               "Low": {
                 "type": "integer",
                 "minimum": 0,
+                "maximum": 3650,
                 "description": "Calendar days from the first-found date to the due date for Low flaws. 0 means no Due Date."
               },
               "Very Low": {
                 "type": "integer",
                 "minimum": 0,
+                "maximum": 3650,
                 "description": "Calendar days from the first-found date to the due date for Very Low flaws. 0 means no Due Date."
               },
               "Informational": {
                 "type": "integer",
                 "minimum": 0,
+                "maximum": 3650,
                 "description": "Calendar days from the first-found date to the due date for Informational flaws. 0 means no Due Date."
               }
             },

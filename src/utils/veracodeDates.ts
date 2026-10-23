@@ -5,6 +5,9 @@
 /** Severity names in the order of the report's numeric severity (0..5): the index is the severity number. */
 export const SLA_SEVERITY_NAMES = ['Informational', 'Very Low', 'Low', 'Medium', 'High', 'Very High'] as const;
 
+/** Largest accepted day count (about ten years); a bigger value would overflow the date arithmetic. */
+export const MAX_SLA_DAYS = 3650;
+
 /** Days by severity number. A severity with no due date is absent. */
 export type SlaDays = Partial<Record<number, number>>;
 
@@ -12,7 +15,7 @@ export interface ResolvedSla {
   days: SlaDays;
   /** Keys of the setting that name no severity; they change nothing. */
   unknownKeys: string[];
-  /** Known severities whose value is not a whole number of zero or more; they get no due date. */
+  /** Known severities whose value is not a whole number from 0 to `MAX_SLA_DAYS`; they get no due date. */
   invalidKeys: string[];
 }
 
@@ -34,7 +37,7 @@ export function resolveSlaDays(raw: unknown): ResolvedSla {
     const severity = SLA_SEVERITY_NAMES.findIndex(name => name.toLowerCase() === key.trim().toLowerCase());
     if (severity < 0) {
       result.unknownKeys.push(key);
-    } else if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    } else if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > MAX_SLA_DAYS) {
       result.invalidKeys.push(SLA_SEVERITY_NAMES[severity]);
     } else if (value > 0) {
       result.days[severity] = value;
