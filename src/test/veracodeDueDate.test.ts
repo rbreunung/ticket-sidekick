@@ -405,6 +405,18 @@ describe('backfilling a Due Date on the Already ticketed screen', () => {
     expect(session(ws).allRows[0].action).toBe('leave');
   });
 
+  it('a resolved ticket defaults to leave, never rewrite, with or without a policy date', async () => {
+    sla.value = { High: 60 };
+    tickets = { 'PROJ-1': onTicket({ resolution: { name: 'Done' } }), 'PROJ-2': onTicket({ resolution: { name: 'Done' }, duedate: '2026-12-31' }, ['902']) };
+    const ws = await importVeracode([
+      flaw({ issueId: '901', severity: 4, firstFoundDate: '2026-10-02' }),
+      flaw({ issueId: '902', severity: 4, firstFoundDate: '2026-10-02' }),
+    ]);
+    expect(session(ws).allRows.map(r => [r.existingTicketKey, r.action])).toEqual([['PROJ-1', 'leave'], ['PROJ-2', 'leave']]);
+    await reply('apply', ws);
+    expect(client.updateIssueCalls).toHaveLength(0);
+  });
+
   it('AE3: with every severity at 0 nothing is flagged for dates', async () => {
     sla.value = { 'Very High': 0, High: 0, Medium: 0, Low: 0, 'Very Low': 0, Informational: 0 };
     tickets = { 'PROJ-1': onTicket() };
