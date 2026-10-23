@@ -796,9 +796,9 @@ export function applyDroppedMembers<TItem, TRow extends ReviewRowBase>(params: {
 
 /**
  * A Due Date is set once (Veracode): an open target ticket whose Due Date is empty counts as changed for dates when the
- * importer's policy gives the row's own item a due date, shown as `due none→<date>`, and its actions are derived again.
- * A target that has any Due Date, one whose search result did not return the field, a resolved target and an item with no
- * due date are left alone. A baseline row stays a baseline.
+ * importer's policy gives any item of the ticket's rows a due date, shown on every row of the ticket as
+ * `due none→<earliest date>`, and its actions are derived again. A target that has any Due Date, one whose search
+ * result did not return the field, a resolved target and a ticket none of whose items has a due date are left alone. A baseline row stays a baseline.
  */
 export function applyMissingDueDate<TItem, TRow extends ReviewRowBase>(params: {
   rows: TRow[];
@@ -810,12 +810,21 @@ export function applyMissingDueDate<TItem, TRow extends ReviewRowBase>(params: {
   const { rows, dedupMap, itemOf, expectedFor, derive } = params;
   const ticketByKey = ticketsByKey(dedupMap);
 
+  // A rewrite sets one Due Date for the whole ticket, so every row of a ticket shows the earliest date over its rows.
+  const expectedByTicket = new Map<string, string>();
+  for (const row of rows) {
+    if (row.existingTicketKey === null || row.allowedActions === undefined || !row.target || row.target.resolved) continue;
+    const target = ticketByKey.get(row.target.key);
+    if (!target || target.dueDate !== null) continue;
+    const date = expectedFor(itemOf(row), target.created);
+    const known = expectedByTicket.get(row.target.key);
+    if (date !== null && (known === undefined || date < known)) expectedByTicket.set(row.target.key, date);
+  }
+
   return rows.map(row => {
     if (row.existingTicketKey === null || row.allowedActions === undefined || !row.target || row.target.resolved) return row;
-    const target = ticketByKey.get(row.target.key);
-    if (!target || target.dueDate !== null) return row;
-    const expected = expectedFor(itemOf(row), target.created);
-    if (expected === null) return row;
+    const expected = expectedByTicket.get(row.target.key);
+    if (expected === undefined) return row;
     const current = row.change;
     if (current?.kind === 'baseline') return row;
     const change: RowChange = {

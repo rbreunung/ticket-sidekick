@@ -352,6 +352,21 @@ describe('backfilling a Due Date on the Already ticketed screen', () => {
     expect(session(again).allRows[0].action).toBe('leave');
   });
 
+  it('every row of a ticket shows the earliest due date, the one the rewrite writes', async () => {
+    sla.value = { 'Very High': 14, High: 60 };
+    tickets = { 'PROJ-1': onTicket({}, ['901', '902']) };
+    const ws = await importVeracode([
+      flaw({ issueId: '901', severity: 4, firstFoundDate: '2026-10-02', sourceFile: 'a.java', cweId: '79' }),
+      flaw({ issueId: '902', severity: 5, firstFoundDate: '2026-10-02', sourceFile: 'b.java', cweId: '89' }),
+    ]);
+    expect(session(ws).allRows.map(r => r.change?.dates)).toEqual([
+      [{ date: 'due', from: null, to: '2026-10-16' }],
+      [{ date: 'due', from: null, to: '2026-10-16' }],
+    ]);
+    await reply('apply', ws);
+    expect(client.updateIssueCalls.map(c => c.fields.duedate)).toEqual(['2026-10-16']);
+  });
+
   it('AE8: a ticket that already has a Due Date is not a change, whatever the policy gives now', async () => {
     sla.value = { High: 14 };
     tickets = { 'PROJ-1': onTicket({ duedate: '2026-12-31' }) };
