@@ -170,7 +170,7 @@ describe('buildCloseMergePrompt (close mode confirmation)', () => {
   const base = { survivor, itemNoun: 'flaw', survivorLost: [] as string[], warnings: [] as string[] };
 
   it('Covers AE3: with nothing to move it says the kept ticket stays as it is', () => {
-    const out = buildCloseMergePrompt({ ...base, sources: [{ ticket: source, movable: [], unlisted: [] }] });
+    const out = buildCloseMergePrompt({ ...base, sources: [{ ticket: source, movable: [], unlisted: [], elsewhere: [] }] });
     expect(out).toContain('### Merge 1 ticket into PROJ-1301');
     expect(out).toContain('PROJ-1190 has no flaws PROJ-1301 lacks, so PROJ-1301 stays as it is.');
     expect(out).toMatch(/merge(%20| )PROJ-1190(%20| )into(%20| )PROJ-1301(%20| )confirm/i);
@@ -178,27 +178,33 @@ describe('buildCloseMergePrompt (close mode confirmation)', () => {
   });
 
   it('Covers AE4: names the items that move and says the kept ticket is rebuilt from the report', () => {
-    const out = buildCloseMergePrompt({ ...base, sources: [{ ticket: source, movable: ['4711', '4712'], unlisted: [] }] });
+    const out = buildCloseMergePrompt({ ...base, sources: [{ ticket: source, movable: ['4711', '4712'], unlisted: [], elsewhere: [] }] });
     expect(out).toContain('PROJ-1190 also records 2 flaws (4711, 4712)');
     expect(out).toContain('rebuilding its title, description and labels from the report');
   });
 
   it('Covers AE5: names items the report no longer lists and says they are not moved', () => {
-    const out = buildCloseMergePrompt({ ...base, sources: [{ ticket: source, movable: [], unlisted: ['4690'] }] });
+    const out = buildCloseMergePrompt({ ...base, sources: [{ ticket: source, movable: [], unlisted: ['4690'], elsewhere: [] }] });
     expect(out).toContain('4690');
     expect(out).toMatch(/no longer in the report/);
     expect(out).toMatch(/named in the comment on PROJ-1190/);
   });
 
+  it('Covers AE5: says a flaw still in the report but outside the kept ticket\'s rows is not moved, without calling it gone', () => {
+    const out = buildCloseMergePrompt({ ...base, sources: [{ ticket: source, movable: [], unlisted: [], elsewhere: ['4800'] }] });
+    expect(out).toMatch(/4800 is still in the report but not part of PROJ-1301's rows/);
+    expect(out).not.toMatch(/no longer in the report/);
+  });
+
   it('warns when rebuilding the kept ticket will stop showing a flaw it records', () => {
-    const out = buildCloseMergePrompt({ ...base, survivorLost: ['4500'], sources: [{ ticket: source, movable: ['4711'], unlisted: [] }] });
+    const out = buildCloseMergePrompt({ ...base, survivorLost: ['4500'], sources: [{ ticket: source, movable: ['4711'], unlisted: [], elsewhere: [] }] });
     expect(out).toMatch(/stop showing 4500/);
   });
 
   it('shows warnings, defuses Jira-sourced markup, and says "duplicate" nowhere', () => {
     const out = buildCloseMergePrompt({
       ...base, warnings: ['PROJ-1190 is already resolved.'],
-      sources: [{ ticket: { ...source, summary: 'click [here](http://evil.example)' }, movable: [], unlisted: [] }],
+      sources: [{ ticket: { ...source, summary: 'click [here](http://evil.example)' }, movable: [], unlisted: [], elsewhere: [] }],
     });
     expect(out).toContain('⚠ PROJ-1190 is already resolved.');
     expect(out).not.toContain('](http://evil.example)');

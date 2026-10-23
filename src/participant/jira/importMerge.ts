@@ -1,9 +1,9 @@
-// Report import: merging Waltz tickets (`merge <sources> into <survivor>`) — the confirmation, the writes in
+// Report import: merging tickets (`merge <sources> into <survivor>`; Waltz rewrites, Veracode closes) — the confirmation, the writes in
 // order, the target-status question, retry or ignore after a failed step, and the final report.
 import * as vscode from 'vscode';
 import { logDiag } from '../../utils/diagLog';
 import { formatKeyLink, type TicketService } from '../../services/TicketService';
-import { analyzeSourceMoves, buildCloseMergePlan, buildMergePlan, resolveMergeSides } from '../../utils/ticketMerge';
+import { analyzeSourceMoves, buildCloseMergePlan, buildMergePlan, resolveMergeSides, survivorItemsLost } from '../../utils/ticketMerge';
 import { stringOrNull } from '../../utils/reportImport';
 import {
   buildChatCommandLink, buildCloseMergePrompt, buildMergePrompt, buildStaleTargetOptions, emptyImportOutcomes, formatStaleTargetOption, isTicketedRowFinished, parseMergeRunReply,
@@ -12,9 +12,9 @@ import {
 } from '../sessionState';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import { buildStaleTicketGroups, transitionTickets } from './cleanupHandler';
-import { labelsToRemove, planRewrite, writeRewrite } from './importAddToTicket';
+import { labelsToRemove, planRewrite, writeRewrite, type RewriteTarget } from './importAddToTicket';
 import { droppedFieldsNote } from './importCreate';
-import type { ReportImportDescriptor } from './reportImportTypes';
+import type { CloseTicketMerge, ReportImportDescriptor } from './reportImportTypes';
 
 /** What a call leaves behind: a question is waiting (the session must be saved), the run is over, or the reply was refused with nothing started. */
 export type MergeTurn = 'waiting' | 'finished' | 'refused';
@@ -36,10 +36,8 @@ async function recordedLabels(ticketService: TicketService, keys: string[]): Pro
   return [...new Set(labels)];
 }
 
-type CloseMerge = Extract<NonNullable<ReportImportDescriptor<unknown, ReviewRowBase>['ticketMerge']>, { mode: 'close' }>;
-
 /** The importer's close-mode merge, or undefined for the rewrite mode (Waltz). */
-function closeModeOf<TItem, TRow extends ReviewRowBase>(descriptor: ReportImportDescriptor<TItem, TRow>): CloseMerge | undefined {
+function closeModeOf<TItem, TRow extends ReviewRowBase>(descriptor: ReportImportDescriptor<TItem, TRow>): CloseTicketMerge | undefined {
   const merge = descriptor.ticketMerge;
   return merge?.mode === 'close' ? merge : undefined;
 }
@@ -55,14 +53,15 @@ function planCloseMoves<TItem, TRow extends ReviewRowBase>(
   const labelToKey = (label: string) => descriptor.labelToDedupKey?.(label) ?? null;
   const allLabels = [...new Set([...labelsByKey.values()].flat())];
   const plan = planRewrite(session, descriptor, survivor, allLabels, sourceRowsOf(session, sources));
+  const survivorLabels = labelsByKey.get(survivor) ?? [];
   const moves = analyzeSourceMoves({
-    survivorLabels: labelsByKey.get(survivor) ?? [],
+    survivorLabels,
     sources: sources.map(key => ({ key, labels: labelsByKey.get(key) ?? [] })),
     labelToKey,
     droppedKeys: plan.droppedKeys,
+    reportKeys: session.reportKeys,
   });
-  const onSurvivor = new Set((labelsByKey.get(survivor) ?? []).map(labelToKey).filter((k): k is string => k !== null));
-  return { moves, survivorLost: plan.droppedKeys.filter(k => onSurvivor.has(k)) };
+  return { moves, survivorLost: survivorItemsLost(survivorLabels, labelToKey, plan.droppedKeys) };
 }
 
 /**
@@ -146,7 +145,7 @@ async function showCloseMergePrompt<TItem, TRow extends ReviewRowBase>(
   ticketService: TicketService,
   stream: vscode.ChatResponseStream,
   descriptor: ReportImportDescriptor<TItem, TRow>,
-  closeMode: CloseMerge,
+  closeMode: CloseTicketMerge,
   baseUrl?: string,
 ): Promise<MergeTurn> {
   const labelsByKey = new Map([...issues].map(([key, issue]) => [key, issue.fields.labels ?? []]));
@@ -170,7 +169,7 @@ async function showCloseMergePrompt<TItem, TRow extends ReviewRowBase>(
   const ticket = (key: string) => ({ key, summary: issues.get(key)!.fields.summary ?? '', status: issues.get(key)!.fields.status?.name ?? null });
   stream.markdown(trustedChatMarkdown(buildCloseMergePrompt({
     survivor: ticket(sides.survivor),
-    sources: moves.map(m => ({ ticket: ticket(m.key), movable: m.movable, unlisted: m.unlisted })),
+    sources: moves.map(m => ({ ticket: ticket(m.key), movable: m.movable, unlisted: m.unlisted, elsewhere: m.elsewhere })),
     itemNoun: closeMode.itemNoun,
     survivorLost: rewrites ? survivorLost : [],
     warnings,
@@ -277,6 +276,22 @@ export async function handleMergeRunReply<TItem, TRow extends ReviewRowBase>(
   }
 }
 
+/**
+ * Close mode: a source whose items were meant to move is only linked, commented on and closed once the kept ticket was
+ * rebuilt. When that rewrite was skipped (after a failure, `ignore`), those sources' steps are skipped too, so their
+ * items never end up only on a closed ticket; the final report lists the skipped steps as still missing.
+ */
+function holdSourcesWithoutRewrite(run: MergeRun): void {
+  const rewrite = run.steps.find(s => s.kind === 'survivor-rewrite');
+  if (rewrite?.status !== 'skipped') return;
+  const holding = new Set((run.sourceMoves ?? []).filter(m => m.movable.length > 0).map(m => m.key));
+  for (const step of run.steps) {
+    if (step.status !== 'pending' || !holding.has(step.key)) continue;
+    step.status = 'skipped';
+    step.note = `${run.survivor} was not rebuilt, so this ticket keeps its items and stays open`;
+  }
+}
+
 /** Runs the pending steps in order until one fails, the close needs the user, or everything is done. */
 async function advance<TItem, TRow extends ReviewRowBase>(
   session: ReviewSession<TRow>,
@@ -286,6 +301,7 @@ async function advance<TItem, TRow extends ReviewRowBase>(
   baseUrl?: string,
 ): Promise<MergeTurn> {
   const run = session.mergeRun!;
+  holdSourcesWithoutRewrite(run);
   for (const step of run.steps) {
     if (step.status !== 'pending') continue;
     if (step.kind === 'close') break; // the closes are asked for and run together below
@@ -314,7 +330,7 @@ async function executeStep<TItem, TRow extends ReviewRowBase>(
       const labels = await recordedLabels(ticketService, [run.survivor, ...run.sources]);
       const plan = planRewrite(session, descriptor, run.survivor, labels, sourceRows);
       // Close mode keeps the importer's own Due Date rule: the movable items are what joins the kept ticket.
-      let target: { ticketCreated?: string | null; currentDueDate?: string | null; joiningItem?: TItem | null } | undefined;
+      let target: RewriteTarget<TItem> | undefined;
       if (closeModeOf(descriptor)) {
         const issue = await ticketService.getIssue(run.survivor);
         const newIds = (run.sourceMoves ?? []).flatMap(m => m.movable);
@@ -349,9 +365,8 @@ async function executeStep<TItem, TRow extends ReviewRowBase>(
         return;
       }
       await ticketService.linkIssues(step.key, run.survivor, linkType);
-      if (step.linkType) {
-        const wanted = (run.sourceMoves?.find(m => m.key === step.key)?.movable.length ?? 0) > 0 ? 'Relates' : 'Duplicate';
-        if (wanted !== linkType) step.note = `linked as ${linkType} (no ${wanted} link type)`;
+      if (step.wantedLinkType) {
+        if (step.wantedLinkType !== linkType) step.note = `linked as ${linkType} (no ${step.wantedLinkType} link type)`;
       } else if (run.linkType === 'Relates') {
         step.note = 'linked as Relates (no Duplicate link type)';
       }
@@ -359,7 +374,8 @@ async function executeStep<TItem, TRow extends ReviewRowBase>(
     }
     case 'source-comment': {
       const merge = closeModeOf(descriptor)!;
-      const { preface, text } = merge.buildSourceComment(run.survivor, run.sourceMoves?.find(m => m.key === step.key)?.unlisted ?? []);
+      const move = run.sourceMoves?.find(m => m.key === step.key);
+      const { preface, text } = merge.buildSourceComment(run.survivor, move?.unlisted ?? [], move?.elsewhere ?? []);
       // A replayed confirmation (a second click, an old link) would post the same comment again.
       if (await ticketService.hasCommentStartingWith(step.key, preface)) {
         step.note = 'already commented';
@@ -589,8 +605,12 @@ function finish<TItem, TRow extends ReviewRowBase>(
     if (key === run.survivor && survivorRewritten) return { ...r, result: { status: 'done', action: 'rewrite' } };
     return r;
   };
-  session.allRows = session.allRows.map(mark);
-  session.rows = session.rows.map(mark);
+  // A source that is now closed no longer counts as another open ticket on any row that listed it.
+  const dropClosed = (r: TRow): TRow => (r.openTicketKeys?.some(k => closedSources.includes(k))
+    ? { ...r, openTicketKeys: r.openTicketKeys.filter(k => !closedSources.includes(k)) }
+    : r);
+  session.allRows = session.allRows.map(mark).map(dropClosed);
+  session.rows = session.rows.map(mark).map(dropClosed);
   const outcomes = session.outcomes ?? emptyImportOutcomes();
   session.outcomes = { ...outcomes, merged: outcomes.merged + closedSources.length, mergeFailed: outcomes.mergeFailed + (run.sources.length - closedSources.length) };
 

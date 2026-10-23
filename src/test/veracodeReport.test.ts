@@ -906,7 +906,18 @@ describe('buildMergedSourceComment', () => {
   it('names the kept ticket and says the items are tracked there', () => {
     const { preface, text } = buildMergedSourceComment('PROJ-1301', []);
     expect(preface).toBe('h4. Merged into PROJ-1301');
-    expect(text).toBe('h4. Merged into PROJ-1301\nThis ticket was closed and merged into PROJ-1301. Its items are tracked there.');
+    expect(text).toBe('h4. Merged into PROJ-1301\nThis ticket was merged into PROJ-1301. Its items are tracked there.');
+  });
+
+  it('does not claim the ticket is already closed, because the comment is posted before the close runs', () => {
+    expect(buildMergedSourceComment('PROJ-1301', []).text).not.toMatch(/closed/i);
+  });
+
+  it('Covers AE5: names flaws still in the report but outside the kept ticket\'s rows separately', () => {
+    const { text } = buildMergedSourceComment('PROJ-1301', ['4690'], ['4800', 'x{panel}']);
+    expect(text).toContain('Not copied (no longer in the report): 4690.');
+    expect(text).toContain("Not copied (still in the report, but not part of PROJ-1301's rows): 4800.");
+    expect(text).not.toContain('panel');
   });
 
   it('Covers AE5: names flaws the report no longer lists', () => {

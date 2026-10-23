@@ -1,4 +1,4 @@
-// Waltz ticket merge: pure helpers (vscode-free) — the text a cancelled ticket is marked with, the reference
+// Report import ticket merge (rewrite mode: Waltz; close mode: Veracode): pure helpers (vscode-free) — the text a cancelled ticket is marked with, the reference
 // resolution, the step plan and the rule that decides between refreshing the review and marking it out of date.
 import { BATCH_LIMIT, MAX_SUMMARY_CHARS, clampSummary } from './reportImport';
 import { isTicketedRowFinished, ticketedTargetKey, type MergeStep, type ReviewRowBase, type SourceMove } from '../participant/session/importTypes';
@@ -73,22 +73,41 @@ export function buildMergePlan(survivor: string, sources: string[]): MergeStep[]
 
 /**
  * Close mode (KTD2): for each source, the items only it records (its dedup keys minus the kept ticket's). An item the
- * rebuilt kept ticket still covers is `movable`; one the report no longer lists (`droppedKeys`, from the rewrite plan)
- * is `unlisted` and is named in the comment on the closed source instead of moved. Pure.
+ * rebuilt kept ticket still covers is `movable`. One the rebuild does not cover (`droppedKeys`, from the rewrite plan) is
+ * `unlisted` when the report no longer lists it, and `elsewhere` when `reportKeys` (every key in the unfiltered report)
+ * shows it is still there; neither is moved, both are named in the comment on the closed source. Without `reportKeys`
+ * every dropped key counts as unlisted. Pure.
  */
 export function analyzeSourceMoves(params: {
   survivorLabels: string[];
   sources: Array<{ key: string; labels: string[] }>;
   labelToKey: (label: string) => string | null;
   droppedKeys: string[];
+  reportKeys?: string[];
 }): SourceMove[] {
-  const keysOf = (labels: string[]) => [...new Set(labels.map(params.labelToKey).filter((k): k is string => k !== null))];
-  const onSurvivor = new Set(keysOf(params.survivorLabels));
+  const onSurvivor = new Set(itemKeysOf(params.survivorLabels, params.labelToKey));
   const dropped = new Set(params.droppedKeys);
+  const inReport = new Set(params.reportKeys ?? []);
   return params.sources.map(source => {
-    const only = keysOf(source.labels).filter(k => !onSurvivor.has(k));
-    return { key: source.key, movable: only.filter(k => !dropped.has(k)), unlisted: only.filter(k => dropped.has(k)) };
+    const only = itemKeysOf(source.labels, params.labelToKey).filter(k => !onSurvivor.has(k));
+    const notCovered = only.filter(k => dropped.has(k));
+    return {
+      key: source.key,
+      movable: only.filter(k => !dropped.has(k)),
+      unlisted: notCovered.filter(k => !inReport.has(k)),
+      elsewhere: notCovered.filter(k => inReport.has(k)),
+    };
   });
+}
+
+function itemKeysOf(labels: string[], labelToKey: (label: string) => string | null): string[] {
+  return [...new Set(labels.map(labelToKey).filter((k): k is string => k !== null))];
+}
+
+/** Close mode: items the kept ticket itself records that a rebuild from the report would stop showing. */
+export function survivorItemsLost(survivorLabels: string[], labelToKey: (label: string) => string | null, droppedKeys: string[]): string[] {
+  const dropped = new Set(droppedKeys);
+  return itemKeysOf(survivorLabels, labelToKey).filter(k => dropped.has(k));
 }
 
 /** Close mode (KTD3): `Relates` when items moved from the source, `Duplicate` when none did; the other one when the project lacks the wanted type. */
@@ -104,10 +123,14 @@ export function closeLinkType(itemsMoved: boolean, linkTypeNames: string[]): 'Re
  * linked (its link type fixed here from whether items moved) and commented on; every close comes last.
  */
 export function buildCloseMergePlan(survivor: string, moves: SourceMove[], linkTypeNames: string[]): MergeStep[] {
-  const step = (kind: MergeStep['kind'], key: string, linkType?: string): MergeStep => ({ kind, key, status: 'pending', ...(linkType ? { linkType } : {}) });
+  const step = (kind: MergeStep['kind'], key: string, link?: { linkType: string; wantedLinkType: string }): MergeStep => ({ kind, key, status: 'pending', ...link });
+  const linkStep = (m: SourceMove) => step('link', m.key, {
+    linkType: closeLinkType(m.movable.length > 0, linkTypeNames),
+    wantedLinkType: m.movable.length > 0 ? 'Relates' : 'Duplicate',
+  });
   return [
     ...(moves.some(m => m.movable.length > 0) ? [step('survivor-rewrite', survivor)] : []),
-    ...moves.flatMap(m => [step('link', m.key, closeLinkType(m.movable.length > 0, linkTypeNames)), step('source-comment', m.key)]),
+    ...moves.flatMap(m => [linkStep(m), step('source-comment', m.key)]),
     ...moves.map(m => step('close', m.key)),
   ];
 }

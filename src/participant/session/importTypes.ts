@@ -317,13 +317,18 @@ export interface MergeStep {
   note?: string;
   /** Close mode: the link type this `link` step uses, chosen from whether items moved from its source. */
   linkType?: string;
+  /** Close mode: the link type this `link` step wanted before any fallback to the other type. */
+  wantedLinkType?: string;
 }
 
 /** Close mode: what a source ticket carries that the kept ticket lacks — items the rewrite can move, and items the report no longer lists. */
 export interface SourceMove {
   key: string;
   movable: string[];
+  /** Items the report no longer lists. */
   unlisted: string[];
+  /** Items the report still lists but outside the rows the kept ticket is rebuilt from (filtered by settings, or grouped under another ticket). */
+  elsewhere: string[];
 }
 
 /**

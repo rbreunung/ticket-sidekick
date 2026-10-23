@@ -214,7 +214,7 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
   ticketMerge: {
     mode: 'close',
     itemNoun: 'flaw',
-    buildSourceComment: (survivorKey, unlistedKeys) => buildMergedSourceComment(survivorKey, unlistedKeys),
+    buildSourceComment: buildMergedSourceComment,
   },
   // Security overview export (KTD3): the report's own flaws are the exact detail, and the SLA table implies the same Due Date a ticket would get.
   overviewExport: {
@@ -228,6 +228,7 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
   // changed ticket is always rebuilt with its findings table; there is no `update` and no baseline, rating or summary rewrite.
   changeTracking: {
     findingNoun: 'flaw(s)',
+    reportKeysOf: rawItems => (rawItems as VeracodeFlaw[]).map(flaw => flaw.issueId),
     describe: describeVeracodeChange,
     deriveActions: deriveRewriteActions,
     dueDateBackfill: { expectedFor: veracodeGroupDue },

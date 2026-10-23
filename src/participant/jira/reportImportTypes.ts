@@ -138,19 +138,24 @@ export interface ImportOverviewExport<TRow extends ReviewRowBase> {
  * closed ticket with a banner; close mode (Veracode) moves items across only when the kept ticket lacks them, then links,
  * comments on and closes each source without editing its text.
  */
-export type ImportTicketMerge =
-  | {
-    mode?: 'rewrite';
-    /** Opens the survivor's comment (Jira wiki markup), naming the tickets it absorbed. */
-    buildCommentPreface: (absorbedKeys: string[]) => string;
-  }
-  | {
-    mode: 'close';
-    /** One item in the importer's words for the confirmation page, e.g. `flaw`. */
-    itemNoun: string;
-    /** The comment on a closed source (Jira wiki markup): `preface` is its opening line, `unlistedKeys` the items the report no longer lists. */
-    buildSourceComment: (survivorKey: string, unlistedKeys: string[]) => { preface: string; text: string };
-  };
+export interface RewriteTicketMerge {
+  mode?: 'rewrite';
+  /** Opens the survivor's comment (Jira wiki markup), naming the tickets it absorbed. */
+  buildCommentPreface: (absorbedKeys: string[]) => string;
+}
+
+export interface CloseTicketMerge {
+  mode: 'close';
+  /** One item in the importer's words for the confirmation page, e.g. `flaw`. */
+  itemNoun: string;
+  /**
+   * The comment on a closed source (Jira wiki markup): `preface` is its opening line, `unlistedKeys` the items the report
+   * no longer lists and `elsewhereKeys` the ones it still lists outside the rebuilt ticket.
+   */
+  buildSourceComment: (survivorKey: string, unlistedKeys: string[], elsewhereKeys: string[]) => { preface: string; text: string };
+}
+
+export type ImportTicketMerge = RewriteTicketMerge | CloseTicketMerge;
 
 /** Accepted-CVE list: what an importer supplies so findings the team accepted stay off the New screen. */
 export interface ImportAccepted<TItem, TRow extends ReviewRowBase> {

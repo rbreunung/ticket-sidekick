@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergedSummary, mergedBanner, resolveMergeSides, buildMergePlan, hasUnfinishedChoices, analyzeSourceMoves, buildCloseMergePlan, closeLinkType } from '../utils/ticketMerge';
+import { mergedSummary, mergedBanner, resolveMergeSides, buildMergePlan, hasUnfinishedChoices, analyzeSourceMoves, buildCloseMergePlan, closeLinkType, survivorItemsLost } from '../utils/ticketMerge';
 import type { ReviewRowBase } from '../participant/sessionState';
 
 describe('mergedSummary', () => {
@@ -149,7 +149,7 @@ describe('analyzeSourceMoves', () => {
     const [move] = analyzeSourceMoves({
       survivorLabels: ['veracode', 'v-1', 'v-2'], sources: [{ key: 'PROJ-9', labels: ['veracode', 'v-1', 'v-2'] }], labelToKey: toKey, droppedKeys: [],
     });
-    expect(move).toEqual({ key: 'PROJ-9', movable: [], unlisted: [] });
+    expect(move).toEqual({ key: 'PROJ-9', movable: [], unlisted: [], elsewhere: [] });
   });
 
   it('Covers AE4: an item only the source records, which the rebuilt ticket still covers, is movable', () => {
@@ -164,7 +164,14 @@ describe('analyzeSourceMoves', () => {
     const [move] = analyzeSourceMoves({
       survivorLabels: ['v-1'], sources: [{ key: 'PROJ-9', labels: ['v-1', 'v-2', 'v-3'] }], labelToKey: toKey, droppedKeys: ['3'],
     });
-    expect(move).toEqual({ key: 'PROJ-9', movable: ['2'], unlisted: ['3'] });
+    expect(move).toEqual({ key: 'PROJ-9', movable: ['2'], unlisted: ['3'], elsewhere: [] });
+  });
+
+  it('Covers AE5: an item the rebuild does not cover but the unfiltered report still lists is elsewhere, not unlisted', () => {
+    const [move] = analyzeSourceMoves({
+      survivorLabels: ['v-1'], sources: [{ key: 'PROJ-9', labels: ['v-1', 'v-2', 'v-3'] }], labelToKey: toKey, droppedKeys: ['2', '3'], reportKeys: ['1', '2'],
+    });
+    expect(move).toEqual({ key: 'PROJ-9', movable: [], unlisted: ['3'], elsewhere: ['2'] });
   });
 
   it('judges each source on its own', () => {
@@ -180,7 +187,13 @@ describe('analyzeSourceMoves', () => {
     const [move] = analyzeSourceMoves({
       survivorLabels: [], sources: [{ key: 'PROJ-9', labels: ['veracode', 'team-x'] }], labelToKey: toKey, droppedKeys: [],
     });
-    expect(move).toEqual({ key: 'PROJ-9', movable: [], unlisted: [] });
+    expect(move).toEqual({ key: 'PROJ-9', movable: [], unlisted: [], elsewhere: [] });
+  });
+});
+
+describe('survivorItemsLost', () => {
+  it('names the kept ticket\'s own items that a rebuild from the report would stop showing', () => {
+    expect(survivorItemsLost(['veracode', 'v-1', 'v-998'], (l: string) => (l.startsWith('v-') ? l.slice(2) : null), ['998', '5'])).toEqual(['998']);
   });
 });
 
@@ -208,15 +221,16 @@ describe('closeLinkType', () => {
 
 describe('buildCloseMergePlan', () => {
   it('Covers AE3: with nothing to move the steps are link, comment, close per source — no rewrite', () => {
-    const steps = buildCloseMergePlan('PROJ-1', [{ key: 'PROJ-9', movable: [], unlisted: [] }], ['Duplicate']);
+    const steps = buildCloseMergePlan('PROJ-1', [{ key: 'PROJ-9', movable: [], unlisted: [], elsewhere: [] }], ['Duplicate']);
     expect(steps.map(s => `${s.kind}:${s.key}`)).toEqual(['link:PROJ-9', 'source-comment:PROJ-9', 'close:PROJ-9']);
     expect(steps[0].linkType).toBe('Duplicate');
+    expect(steps[0].wantedLinkType).toBe('Duplicate');
   });
 
   it('Covers AE4: items to move put the survivor rewrite first and use Relates for that source only', () => {
     const steps = buildCloseMergePlan('PROJ-1', [
-      { key: 'PROJ-9', movable: ['2'], unlisted: [] },
-      { key: 'PROJ-10', movable: [], unlisted: [] },
+      { key: 'PROJ-9', movable: ['2'], unlisted: [], elsewhere: [] },
+      { key: 'PROJ-10', movable: [], unlisted: [], elsewhere: [] },
     ], ['Duplicate', 'Relates']);
     expect(steps.map(s => `${s.kind}:${s.key}`)).toEqual([
       'survivor-rewrite:PROJ-1', 'link:PROJ-9', 'source-comment:PROJ-9', 'link:PROJ-10', 'source-comment:PROJ-10', 'close:PROJ-9', 'close:PROJ-10',
@@ -224,8 +238,13 @@ describe('buildCloseMergePlan', () => {
     expect(steps.filter(s => s.kind === 'link').map(s => s.linkType)).toEqual(['Relates', 'Duplicate']);
   });
 
+  it('records the wanted link type apart from the fallback the project forces', () => {
+    const [link] = buildCloseMergePlan('PROJ-1', [{ key: 'PROJ-9', movable: ['2'], unlisted: [], elsewhere: [] }], ['Duplicate']).filter(s => s.kind === 'link');
+    expect(link).toMatchObject({ wantedLinkType: 'Relates', linkType: 'Duplicate' });
+  });
+
   it('runs no rewrite when the only difference is items the report no longer lists', () => {
-    const steps = buildCloseMergePlan('PROJ-1', [{ key: 'PROJ-9', movable: [], unlisted: ['3'] }], ['Duplicate']);
+    const steps = buildCloseMergePlan('PROJ-1', [{ key: 'PROJ-9', movable: [], unlisted: ['3'], elsewhere: [] }], ['Duplicate']);
     expect(steps.some(s => s.kind === 'survivor-rewrite')).toBe(false);
   });
 });

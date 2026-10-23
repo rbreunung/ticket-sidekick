@@ -6,11 +6,12 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 const workspace = vi.hoisted(() => ({ dir: undefined as string | undefined }));
+const sla = vi.hoisted(() => ({ value: undefined as unknown }));
 
 vi.mock('vscode', () => ({
   workspace: {
     get workspaceFolders() { return workspace.dir ? [{ uri: { fsPath: workspace.dir } }] : undefined; },
-    getConfiguration: vi.fn(() => ({ get: () => undefined })),
+    getConfiguration: vi.fn(() => ({ get: (key: string) => (key === 'veracode.slaDays' ? sla.value : undefined) })),
   },
   window: { showInputBox: vi.fn(), showOpenDialog: vi.fn(), showWarningMessage: vi.fn(), createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
   Uri: { file: (p: string) => ({ fsPath: p }) },
@@ -70,7 +71,8 @@ beforeEach(() => {
   reportPath = join(dir, 'r.xml');
   writeFileSync(reportPath, '<placeholder/>');
   // Flaws 101 and 102 share a file and CWE, so they fold into one row; 103 is a row of its own.
-  report = [flaw('101'), flaw('102', { line: 20 }), flaw('103', { sourceFile: 'Bar.java', sourceFilePath: 'src/Bar.java', cweId: '79', cweName: 'XSS' })];
+  sla.value = undefined;
+  report = [flaw('101'), flaw('102', { line: 20, firstFoundDate: '2026-01-01' }), flaw('103', { sourceFile: 'Bar.java', sourceFilePath: 'src/Bar.java', cweId: '79', cweName: 'XSS' })];
   vi.mocked(parseVeracodeReport).mockReset();
   vi.mocked(parseVeracodeReport).mockImplementation((() => report) as never);
   vi.mocked(loadWorkflowCache).mockReset();
@@ -224,14 +226,29 @@ describe('running the merge', () => {
     expect(tickets['PROJ-1'].labels).not.toContain('veracode-issue-999');
   });
 
-  it('keeps the kept ticket\'s own Due Date when the rewrite runs', async () => {
-    tickets['PROJ-1'].duedate = '2027-01-31';
-    tickets['PROJ-2'].labels = ['veracode', 'veracode-issue-101', 'veracode-issue-102'];
-    const { ws } = await importVeracode();
-    await reply('merge PROJ-2 into PROJ-1 confirm', ws);
-    await reply('1', ws);
+  describe('Due Date on the kept ticket (SLA policy: High = 28 days)', () => {
+    beforeEach(() => {
+      sla.value = { 'Very High': 7, High: 28, Medium: 90, Low: 180 };
+      tickets['PROJ-2'].labels = ['veracode', 'veracode-issue-101', 'veracode-issue-102'];
+    });
 
-    expect(client.updateIssueCalls.some(c => 'duedate' in c.fields)).toBe(false);
+    it('keeps an earlier Due Date when the moved flaw is due later', async () => {
+      tickets['PROJ-1'].duedate = '2026-01-10';
+      const { ws } = await importVeracode();
+      await reply('merge PROJ-2 into PROJ-1 confirm', ws);
+      await reply('1', ws);
+      const rewrite = client.updateIssueCalls.find(c => c.issueKey === 'PROJ-1');
+      expect(rewrite).toBeDefined();
+      expect(rewrite!.fields).not.toHaveProperty('duedate');
+    });
+
+    it('moves the Due Date earlier when the moved flaw is due sooner (first found 2026-01-01 + 28 days)', async () => {
+      tickets['PROJ-1'].duedate = '2027-01-31';
+      const { ws } = await importVeracode();
+      await reply('merge PROJ-2 into PROJ-1 confirm', ws);
+      await reply('1', ws);
+      expect(client.updateIssueCalls.find(c => c.issueKey === 'PROJ-1')!.fields.duedate).toBe('2026-01-29');
+    });
   });
 
   it('marks the source row merged and counts the merge', async () => {
@@ -277,14 +294,108 @@ describe('running the merge', () => {
   });
 });
 
+describe('when a step does not take effect', () => {
+  beforeEach(() => {
+    tickets['PROJ-2'].labels = ['veracode', 'veracode-issue-101', 'veracode-issue-102'];
+  });
+
+  it('Covers AE4: ignoring a failed rebuild of the kept ticket does not link, comment on or close a source whose flaws never moved', async () => {
+    const { ws } = await importVeracode();
+    client.updateIssue = async () => { throw new Error('Field refused'); };
+    const failed = await reply('merge PROJ-2 into PROJ-1 confirm', ws);
+    expect(failed.session.mergeRun?.awaiting).toBe('decision');
+
+    const done = await reply('ignore', ws);
+
+    expect(log).toEqual([]);
+    expect(client.executeTransitionCalls).toEqual([]);
+    expect(done.session.mergeRun).toBeUndefined();
+    expect(done.session.outcomes?.merged).toBe(0);
+    expect(done.session.outcomes?.mergeFailed).toBe(1);
+    expect(done.text).toMatch(/Still missing/);
+    expect(done.text).toContain('PROJ-2');
+    expect(done.session.allRows.every(r => r.result?.status !== 'done' || r.result.action !== 'merge')).toBe(true);
+  });
+
+  it('still closes a source that has nothing to move when the rebuild is ignored', async () => {
+    tickets['PROJ-2'].labels = ['veracode', 'veracode-issue-101'];
+    tickets['PROJ-4'] = { labels: ['veracode', 'veracode-issue-101', 'veracode-issue-102'], summary: 'Foo oldest', status: 'Open', created: '2025-12-01T09:00:00.000+0000' };
+    const { ws } = await importVeracode();
+    client.updateIssue = async () => { throw new Error('Field refused'); };
+    await reply('merge PROJ-2 PROJ-4 into PROJ-1 confirm', ws);
+    await reply('ignore', ws);
+    await reply('1', ws);
+    expect(log).toEqual(['link:PROJ-2:Duplicate', 'comment:PROJ-2', 'close:PROJ-2']);
+  });
+
+  it('Stopping at the status question leaves the source open, and its comment does not claim it is closed', async () => {
+    const { ws } = await importVeracode();
+    const asked = await reply('merge PROJ-2 into PROJ-1 confirm', ws);
+    expect(asked.session.mergeRun?.awaiting).toBe('target');
+
+    const stopped = await reply('cancel', ws);
+
+    expect(log).toEqual(['rewrite:PROJ-1', 'link:PROJ-2:Relates', 'comment:PROJ-2']);
+    expect(comments['PROJ-2'][0]).not.toMatch(/closed/i);
+    expect(stopped.session.outcomes?.merged).toBe(0);
+    expect(tickets['PROJ-2'].status).toBe('Open');
+  });
+});
+
+describe('items the report still lists but the kept ticket is not rebuilt from', () => {
+  beforeEach(() => {
+    // Flaw 103 is on the source and on a newer third ticket, so its row targets PROJ-3, not PROJ-1 or PROJ-2.
+    tickets['PROJ-2'].labels = ['veracode', 'veracode-issue-101', 'veracode-issue-103'];
+    tickets['PROJ-3'] = { labels: ['veracode', 'veracode-issue-103'], summary: 'Bar ticket', status: 'Open', created: '2026-06-01T09:00:00.000+0000' };
+  });
+
+  it('Covers AE5: the confirmation and the comment say the flaw is still in the report, and it is not moved', async () => {
+    const { ws } = await importVeracode();
+    const prompt = await reply('merge PROJ-2 into PROJ-1', ws);
+    expect(prompt.text).toMatch(/103 is still in the report but not part of PROJ-1's rows/);
+    expect(prompt.text).not.toMatch(/no longer in the report/);
+
+    await reply('merge PROJ-2 into PROJ-1 confirm', ws);
+    await reply('1', ws);
+
+    expect(comments['PROJ-2'][0]).toContain("Not copied (still in the report, but not part of PROJ-1's rows): 103.");
+    expect(tickets['PROJ-1'].labels).not.toContain('veracode-issue-103');
+  });
+});
+
+describe('several sources and link-type fallbacks', () => {
+  it('Covers AE3/AE4: one rebuild, Duplicate for the source with nothing to move and Relates for the one with flaws to move', async () => {
+    tickets['PROJ-4'] = { labels: ['veracode', 'veracode-issue-101', 'veracode-issue-102'], summary: 'Foo oldest', status: 'Open', created: '2025-12-01T09:00:00.000+0000' };
+    const { ws } = await importVeracode();
+    await reply('merge PROJ-2 PROJ-4 into PROJ-1 confirm', ws);
+    await reply('1', ws);
+
+    expect(log).toEqual([
+      'rewrite:PROJ-1', 'link:PROJ-2:Duplicate', 'comment:PROJ-2', 'link:PROJ-4:Relates', 'comment:PROJ-4', 'close:PROJ-2', 'close:PROJ-4',
+    ]);
+  });
+
+  it('with flaws to move but no Relates link type, links as Duplicate and says so', async () => {
+    tickets['PROJ-2'].labels = ['veracode', 'veracode-issue-101', 'veracode-issue-102'];
+    client.getIssueLinkTypes = async () => [{ name: 'Duplicate', inward: 'is duplicated by', outward: 'duplicates' }];
+    const { ws } = await importVeracode();
+    await reply('merge PROJ-2 into PROJ-1 confirm', ws);
+    const out = await reply('1', ws);
+    expect(log).toContain('link:PROJ-2:Duplicate');
+    expect(out.text).toMatch(/linked as Duplicate \(no Relates link type\)/);
+  });
+});
+
 describe('where merge works on Veracode', () => {
   it('the New screen answers the ticket form of merge with a pointer to the overview', async () => {
     tickets = {};
-    const { ws } = await importVeracode();
-    const out = await reply('open new', ws);
+    const { ws, session } = await importVeracode();
+    expect(session.allRows.every(r => r.existingTicketKey === null)).toBe(true);
+
     const merge = await reply('merge PROJ-2 into PROJ-1', ws);
-    expect(out.text.length).toBeGreaterThan(0);
+
     expect(merge.text).toMatch(/overview or the Already ticketed screen/);
+    expect(log).toEqual([]);
   });
 
   it('reload report is offered, because merge is on', async () => {

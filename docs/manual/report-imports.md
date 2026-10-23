@@ -187,18 +187,18 @@ merge PROJ-15 PROJ-18 into PROJ-12
 2. Each cancelled ticket is linked as a duplicate of the kept one, gets `[Merged into PROJ-12]` in front of its title, and a banner above its text. The original text stays below the banner.
 3. Each cancelled ticket is closed with resolution Duplicate. You pick the status to move each issue type to.
 
-What to expect:
-
 **Veracode reports.** The tickets are not rewritten or renamed. For each ticket you close:
 
 1. If it records flaws the kept ticket lacks and the report still lists them, the kept ticket is rebuilt once from the report so it carries them all (its Due Date follows the usual rule: set only when empty, moved earlier only when the added flaws are due sooner). If every flaw is already on the kept ticket, nothing is rewritten.
 2. The two tickets are linked: `Duplicate` when nothing moved, `Relates` when flaws moved.
-3. A comment on the closed ticket names the kept one. A flaw the report no longer lists is not moved; its id is named in that comment.
+3. A comment on the closed ticket names the kept one. A flaw that is not moved is named in that comment: one the report no longer lists, or one the report still lists but outside the kept ticket's rows (filtered by your settings, or grouped under another ticket). The confirmation says which.
 4. The ticket is closed. You pick the status; the resolution is Duplicate when your project has it, otherwise you pick one.
+
+If the kept ticket cannot be rebuilt (the step fails and you reply **Ignore**), the sources that had flaws to move are not linked, commented on or closed, so their flaws never end up only on a closed ticket; the final report lists those steps as still missing.
 
 What to expect:
 
-- **Warnings before you click.** A resolved kept ticket, a ticket that no import created (a rewrite replaces its text, and the finding it would drop are listed), and an already-resolved cancelled ticket (it is rewritten and linked but not closed).
+- **Warnings before you click.** A resolved kept ticket, a ticket that no import created (a rewrite replaces its text, and the finding it would drop are listed), and an already-resolved cancelled ticket (OSS reports: it is rewritten and linked but not closed; Veracode: it is linked and commented on but not closed).
 - **Missing Jira pieces.** Without a Duplicate link type the tickets are linked as Relates. Without a Duplicate resolution you pick the resolution from your project's list. The confirmation says so up front.
 - **If a step fails,** the merge stops and lists every ticket with its link, the step that failed and the error. Reply **Retry** to run that step again, **Ignore** to skip it and carry on with the rest (the final report lists what is missing), or **Stop here** to end the merge. Steps already done stay done.
 - **A ticket Jira closes without the Duplicate resolution** (some workflows reject the field) is named in the final report.

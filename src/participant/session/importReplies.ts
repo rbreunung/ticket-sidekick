@@ -448,6 +448,8 @@ export interface CloseMergePromptSource {
   movable: string[];
   /** Items only this ticket records that the report no longer lists. */
   unlisted: string[];
+  /** Items only this ticket records that the report still lists, but outside the rows the kept ticket is rebuilt from. */
+  elsewhere: string[];
 }
 
 export interface CloseMergePromptInput {
@@ -491,6 +493,9 @@ export function buildCloseMergePrompt(input: CloseMergePromptInput): string {
     }
     if (s.unlisted.length > 0) {
       lines.push(`${ids(s.unlisted)} ${s.unlisted.length === 1 ? 'is' : 'are'} no longer in the report, so ${s.unlisted.length === 1 ? 'it is' : 'they are'} not moved; named in the comment on ${key}.`);
+    }
+    if (s.elsewhere.length > 0) {
+      lines.push(`${ids(s.elsewhere)} ${s.elsewhere.length === 1 ? 'is' : 'are'} still in the report but not part of ${survivorKey}'s rows (filtered by your settings or grouped under another ticket), so ${s.elsewhere.length === 1 ? 'it is' : 'they are'} not moved; named in the comment on ${key}.`);
     }
   }
   if (input.survivorLost.length > 0) {
