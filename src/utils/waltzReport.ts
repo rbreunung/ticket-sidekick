@@ -1,9 +1,10 @@
 import { createHash } from 'crypto';
 import ExcelJS from 'exceljs';
 import { markdownToJiraWiki } from './markdownToJiraWiki';
+import { toCalendarDate } from './calendarDate';
 import type { DiagLogger } from './diagTypes';
 import {
-  toCalendarDate, earliestDueDate, dateColumnTitles, diffRemediationDates, parseRecordedDates,
+  earliestDueDate, dateColumnTitles, diffRemediationDates, parseRecordedDates,
   ABSENT_CELL, COMPONENT_COLUMNS,
   type RemediationDates, type WaltzRemediation,
 } from './waltzDates';

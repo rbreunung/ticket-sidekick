@@ -5,8 +5,6 @@ import { normalizeTitle, splitHeaderRow, splitDataRow } from './wikiTableRead';
 // Pure, vscode-free date logic for the Waltz import's remediation dates (see docs/report-import.md).
 // Dates travel as `YYYY-MM-DD` strings from the parser to Jira so no time zone can shift a day.
 
-export { toCalendarDate };
-
 export interface RemediationDates {
   /** Expected Remediation column: the date the policy requires the component to be fixed by. */
   policyDate: string | null;

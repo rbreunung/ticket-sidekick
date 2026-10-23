@@ -18,7 +18,7 @@ import {
 } from './reportImportHandler';
 import { resolveSizeLimitSetting, templateLabelsOf, deriveRewriteActions } from '../../utils/reportImport';
 import { findingFromFlaw, localDate } from '../../utils/securityOverview';
-import { resolveSlaDays, groupDueDate, SLA_SEVERITY_NAMES, type DueContext, type ResolvedSla, type SlaDays } from '../../utils/veracodeDates';
+import { resolveSlaDays, groupDueDate, SLA_SEVERITY_NAMES, type DueContext, type ResolvedSla } from '../../utils/veracodeDates';
 import { toCalendarDate } from '../../utils/calendarDate';
 import { logDiag } from '../../utils/diagLog';
 import type { AwaitIssueTypeResume } from '../sessionState';
@@ -45,17 +45,12 @@ function readVeracodeSla(): ResolvedSla {
   return resolveSlaDays(vscode.workspace.getConfiguration('ticketSidekick').get('veracode.slaDays'));
 }
 
-/** The SLA table (`ticketSidekick.veracode.slaDays`) as days by severity number; a severity with no days is absent. */
-function getVeracodeSlaDays(): SlaDays {
-  return readVeracodeSla().days;
-}
-
 /**
  * The SLA day counts and the start for a flaw with no first-found date: the existing ticket's creation date when one is
  * being rewritten, else the import date.
  */
 function veracodeDue(ticketCreated?: string | null): DueContext {
-  return { days: getVeracodeSlaDays(), fallbackStart: toCalendarDate(ticketCreated) ?? localDate() };
+  return { days: readVeracodeSla().days, fallbackStart: toCalendarDate(ticketCreated) ?? localDate() };
 }
 
 /** A group's due date under the SLA table, counting a flaw with no first-found date from `ticketCreated` (else today). */

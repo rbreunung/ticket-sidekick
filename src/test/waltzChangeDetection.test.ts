@@ -275,6 +275,18 @@ describe('what a rewrite says about the dates (KTD11, U6)', () => {
     expect(text).toMatch(/replaces any date edited by hand/i);
   });
 
+  it.each([['later', '2028-06-30'], ['earlier', '2026-01-15']])('a rewrite overwrites a Due Date that is %s than the report\'s, because Waltz is not set-once', async (_label, existing) => {
+    const recorded = comp('example-lib:1.2.3', { policyDate: '2026-11-30', plannedDate: '2026-12-15' });
+    const reported = comp('example-lib:1.2.3', { policyDate: '2026-11-30', plannedDate: '2027-01-31' });
+    tickets['PROJ-5'] = ticketFor([recorded], { duedate: existing });
+    const { ws } = await importWaltz([reported]);
+
+    await reply('apply', ws);
+
+    expect(client.updateIssueCalls[0].fields.duedate).toBe('2027-01-31');
+    expect(tickets['PROJ-5'].duedate).toBe('2027-01-31');
+  });
+
   it('a project that refuses the Due Date still gets the rewrite, without it, and the user is warned', async () => {
     const recorded = comp('example-lib:1.2.3', { policyDate: '2026-11-30' });
     const reported = comp('example-lib:1.2.3', { policyDate: '2027-01-31' });
