@@ -108,6 +108,19 @@ describe('export reply of a report import', () => {
     expect(text).toContain('| Item | Rating | Ticket | Due | Flag | Report match |');
   });
 
+  it('lists a finding whose only ticket is resolved as in report, no ticket, and not as that ticket', async () => {
+    const tickets: Record<string, FakeTicket> = { 'PROJ-7': { labels: ['veracode', 'veracode-issue-101'], resolution: { name: 'Done' }, status: 'Done' } };
+    const { session, ws } = await importVeracode([makeFlaw('101'), makeFlaw('201', { sourceFile: 'Other.java', line: 5 })], tickets);
+    answerKeySearch({ 'PROJ-7': { labels: ['veracode', 'veracode-issue-101'], status: 'Done' } });
+    const stream = mockStream();
+
+    await handleVeracodeReviewReply('export', session, service, stream as never, ws as never);
+
+    const text = streamText(stream);
+    expect(text).not.toContain('PROJ-7');
+    expect(text).toContain('2 items have no ticket yet');
+  });
+
   it('marks a stale ticket and reads its detail from the ticket, since the report does not hold it', async () => {
     const { session, ws } = await importWaltz([makeComponent('guava:31.0')], {});
     session.staleTickets = {

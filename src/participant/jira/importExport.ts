@@ -22,8 +22,8 @@ function mergeDetail(into: { findings?: TicketFinding[]; components?: TicketComp
 
 /**
  * The `export` reply of a report import (KTD3): this one report's items by Fix Version, compared with Jira. The tickets are the
- * open targets of the Already-ticketed rows (tracked) and the Stale tickets (not in this report); the New rows are the report's
- * items with no ticket yet. The report supplies the detail of every row it holds; a stale ticket's detail is read from its
+ * open targets of the Already-ticketed rows (tracked) and the Stale tickets (not in this report); the New rows, and the
+ * Already-ticketed rows whose tickets are all resolved, are the report's items with no open ticket. The report supplies the detail of every row it holds; a stale ticket's detail is read from its
  * description. With `csv` the same overview is saved as a file. Nothing in the review session changes.
  */
 export async function exportImportOverview<TItem, TRow extends ReviewRowBase>(
@@ -44,12 +44,12 @@ export async function exportImportOverview<TItem, TRow extends ReviewRowBase>(
   const detailByKey: Record<string, { findings?: TicketFinding[]; components?: TicketComponent[] }> = {};
   const reportOnly: ReportOnlyItem[] = [];
   for (const row of session.allRows) {
-    if (row.existingTicketKey === null) {
-      const detail = exporter.detailOf(row);
-      reportOnly.push({ source: exporter.source, summary: exporter.summaryOf(row), dueDate: exporter.dueDateOf(row), ...detail });
-    } else if (row.target && !row.target.resolved) {
+    if (row.target && !row.target.resolved) {
       matchByKey[row.target.key] = 'tracked';
       mergeDetail(detailByKey[row.target.key] ??= {}, exporter.detailOf(row));
+    } else {
+      // No ticket yet, or every ticket of the item is resolved: the report still holds the item, and nothing open tracks it.
+      reportOnly.push({ source: exporter.source, summary: exporter.summaryOf(row), dueDate: exporter.dueDateOf(row), ...exporter.detailOf(row) });
     }
   }
   const staleKeys = [
