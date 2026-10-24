@@ -262,6 +262,11 @@ describe('parseOverviewPrompt', () => {
     expect(parseOverviewPrompt('SEC csv xlsx')).toEqual({ projectKey: 'SEC', format: 'csv' });
   });
 
+  it('does not read an Object property name such as constructor as a format', () => {
+    expect(parseOverviewPrompt('SEC constructor')).toEqual({ projectKey: 'SEC', format: null });
+    expect(parseOverviewPrompt('toString')).toEqual({ projectKey: 'TOSTRING', format: null });
+  });
+
   it('accepts a lone lower-case word as the project and finds none in a sentence', () => {
     expect(parseOverviewPrompt('sec')).toEqual({ projectKey: 'SEC', format: null });
     expect(parseOverviewPrompt('show me everything')).toEqual({ projectKey: null, format: null });

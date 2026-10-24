@@ -102,13 +102,13 @@ export interface Overview {
 /** The file formats the overview can be saved as. */
 export type OverviewFormat = 'csv' | 'xlsx';
 
-const FORMAT_WORDS: Record<string, OverviewFormat> = { csv: 'csv', xlsx: 'xlsx', excel: 'xlsx' };
+const FORMAT_WORDS = new Map<string, OverviewFormat>([['csv', 'csv'], ['xlsx', 'xlsx'], ['excel', 'xlsx']]);
 
 /** What a `@jira /overview` prompt asks for: the project (an upper-case key, or a lone lower-case word) and the file format to save, if any (`csv`, or `xlsx` / `excel`; the first one named wins). */
 export function parseOverviewPrompt(prompt: string): { projectKey: string | null; format: OverviewFormat | null } {
   const tokens = prompt.split(/[\s,;]+/).filter(Boolean);
-  const format = tokens.map(t => FORMAT_WORDS[t.toLowerCase()]).find((f): f is OverviewFormat => f !== undefined) ?? null;
-  const rest = tokens.filter(t => !(t.toLowerCase() in FORMAT_WORDS));
+  const format = tokens.map(t => FORMAT_WORDS.get(t.toLowerCase())).find((f): f is OverviewFormat => f !== undefined) ?? null;
+  const rest = tokens.filter(t => !FORMAT_WORDS.has(t.toLowerCase()));
   const upper = rest.find(t => /^[A-Z][A-Z0-9_]+$/.test(t));
   if (upper) return { projectKey: upper, format };
   const lone = rest.length === 1 && /^[A-Za-z][A-Za-z0-9_]+$/.test(rest[0]) ? rest[0].toUpperCase() : null;

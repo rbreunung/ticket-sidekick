@@ -346,6 +346,12 @@ describe('export reply vocabulary', () => {
     expect(parseImportReviewReply('overview', 'export', ctx())).toEqual({ kind: 'invalid' });
   });
 
+  it('does not read an Object property name such as constructor as an export reply', () => {
+    for (const word of ['constructor', 'toString', 'hasOwnProperty']) {
+      expect(parseImportReviewReply('overview', word, ctx({ canExport: true }))).toEqual({ kind: 'invalid' });
+    }
+  });
+
   it('is rejected on a group screen of a multi-group import and accepted on a single-group one', () => {
     for (const view of ['new', 'ticketed', 'stale'] as const) {
       expect(parseImportReviewReply(view, 'export', ctx({ canExport: true }))).toMatchObject({ kind: 'invalid', reason: expect.stringContaining('overview') });
@@ -355,7 +361,7 @@ describe('export reply vocabulary', () => {
 });
 
 describe('export reply: the Due Date of a Veracode item with no ticket yet (SLA due dates, U5)', () => {
-  // A report-only row has no Fix Version, so it can be overdue but never due before its release.
+  // A report-only row has no Fix Version, so it can be overdue; it is due before a release only when a dated unreleased version exists, which this fixture does not have.
   const exportText = async (flaws: ReturnType<typeof makeFlaw>[]) => {
     const { session, ws } = await importVeracode(flaws, {});
     answerKeySearch({});

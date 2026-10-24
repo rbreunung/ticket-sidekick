@@ -125,7 +125,7 @@ Execution streams one line per ticket (subtasks first), then a summary. Failures
 
 ## Security overview
 
-`@jira /overview [PROJECT] [csv]` lists a project's unresolved Veracode and Waltz tickets by Fix Version; the same overview is available as the `export` reply of a report import. It keeps no session: the CSV link re-runs the command. Detail in `docs/report-import.md` "Security overview (Veracode + Waltz)".
+`@jira /overview [PROJECT] [csv|xlsx]` lists a project's unresolved Veracode and Waltz tickets by Fix Version; the same overview is available as the `export` reply of a report import. It keeps no session: the Save as CSV and Save as Excel links re-run the command. Detail in `docs/report-import.md` "Security overview (Veracode + Waltz)".
 
 ## Jira sessions
 

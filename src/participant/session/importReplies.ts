@@ -198,12 +198,12 @@ function parseMergeIntoTicketReply(n: string, ctx: ImportReplyContext): ImportRe
   return { kind: 'addPrompt', ids: rows.ids, key };
 }
 
-const EXPORT_FORMATS: Record<string, OverviewFormat | null> = {
-  [IMPORT_COMMANDS.export]: null,
-  [IMPORT_COMMANDS.exportCsv]: 'csv',
-  [IMPORT_COMMANDS.exportXlsx]: 'xlsx',
-  [IMPORT_COMMANDS.exportExcel]: 'xlsx',
-};
+const EXPORT_FORMATS = new Map<string, OverviewFormat | null>([
+  [IMPORT_COMMANDS.export, null],
+  [IMPORT_COMMANDS.exportCsv, 'csv'],
+  [IMPORT_COMMANDS.exportXlsx, 'xlsx'],
+  [IMPORT_COMMANDS.exportExcel, 'xlsx'],
+]);
 
 const EXPORT_ON_GROUP_SCREEN = 'Export works from the overview — reply `back` first, then `export`.';
 
@@ -211,8 +211,8 @@ const EXPORT_ON_GROUP_SCREEN = 'Export works from the overview — reply `back` 
 function parseExportReply(reply: string, ctx: ImportReplyContext, onGroupScreen: boolean): ImportReplyAction | null {
   if (!ctx.canExport) return null;
   const n = normalizeReply(reply);
-  const format = EXPORT_FORMATS[n];
-  if (format === undefined) return null;
+  if (!EXPORT_FORMATS.has(n)) return null;
+  const format = EXPORT_FORMATS.get(n) ?? null;
   if (onGroupScreen && !ctx.singleGroup) return { kind: 'invalid', reason: EXPORT_ON_GROUP_SCREEN };
   return { kind: 'export', format };
 }
