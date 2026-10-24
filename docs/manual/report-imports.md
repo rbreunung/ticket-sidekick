@@ -189,7 +189,7 @@ merge PROJ-15 PROJ-18 into PROJ-12
 
 **Veracode reports.** The tickets are not rewritten or renamed. For each ticket you close:
 
-1. If it records flaws the kept ticket lacks and the report still lists them, the kept ticket is rebuilt once from the report so it carries them all (its Due Date follows the usual rule: set only when empty, moved earlier only when the added flaws are due sooner). If every flaw is already on the kept ticket, nothing is rewritten.
+1. If it records flaws the kept ticket lacks and the report still lists them, or the report lists a flaw no ticket records yet, the kept ticket is rebuilt once from the report so it carries them all (its Due Date follows the usual rule: set only when empty, moved earlier only when the added flaws are due sooner). If every flaw is already on the kept ticket, nothing is rewritten.
 2. The two tickets are linked: `Duplicate` when nothing moved, `Relates` when flaws moved.
 3. A comment on the closed ticket names the kept one. A flaw that is not moved is named in that comment: one the report no longer lists, or one the report still lists but outside the kept ticket's rows (filtered by your settings, or grouped under another ticket). The confirmation says which.
 4. The ticket is closed. You pick the status; the resolution is Duplicate when your project has it, otherwise you pick one.

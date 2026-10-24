@@ -459,6 +459,10 @@ export interface CloseMergePromptInput {
   itemNoun: string;
   /** Items the kept ticket records that the report no longer lists, which its rebuilt description stops showing. */
   survivorLost: string[];
+  /** Items the kept ticket records that the report still lists, but outside the rows it is rebuilt from. */
+  survivorElsewhere: string[];
+  /** Items in the report that no ticket records yet; the kept ticket is rebuilt to include them. */
+  newItems: string[];
   warnings: string[];
   baseUrl?: string;
 }
@@ -473,6 +477,7 @@ export function buildCloseMergePrompt(input: CloseMergePromptInput): string {
   const ids = (list: string[]) => list.map(safeMarkdownText).join(', ');
   const survivorKey = input.survivor.key;
   const count = input.sources.length;
+  const rebuilt = input.newItems.length > 0 || input.sources.some(s => s.movable.length > 0);
   const lines: string[] = [
     `### Merge ${count} ${count === 1 ? 'ticket' : 'tickets'} into ${formatKeyLink(survivorKey, input.baseUrl)}`,
     '',
@@ -488,6 +493,8 @@ export function buildCloseMergePrompt(input: CloseMergePromptInput): string {
     const key = s.ticket.key;
     if (s.movable.length > 0) {
       lines.push(`${key} also records ${s.movable.length} ${items(s.movable.length)} (${ids(s.movable)}); ${survivorKey} takes them over by rebuilding its title, description and labels from the report (text added by hand is replaced).`);
+    } else if (rebuilt) {
+      lines.push(`${key} has no ${items(2)} ${survivorKey} lacks.`);
     } else {
       lines.push(`${key} has no ${items(2)} ${survivorKey} lacks, so ${survivorKey} stays as it is.`);
     }
@@ -498,8 +505,14 @@ export function buildCloseMergePrompt(input: CloseMergePromptInput): string {
       lines.push(`${ids(s.elsewhere)} ${s.elsewhere.length === 1 ? 'is' : 'are'} still in the report but not part of ${survivorKey}'s rows (filtered by your settings or grouped under another ticket), so ${s.elsewhere.length === 1 ? 'it is' : 'they are'} not moved; named in the comment on ${key}.`);
     }
   }
+  if (input.newItems.length > 0) {
+    lines.push(`${ids(input.newItems)} ${input.newItems.length === 1 ? 'is' : 'are'} in the report but on no ticket yet, so ${survivorKey} is rebuilt to include ${input.newItems.length === 1 ? 'it' : 'them'}.`);
+  }
   if (input.survivorLost.length > 0) {
     lines.push(`Rebuilding ${survivorKey} will stop showing ${ids(input.survivorLost)}, which it records but the report no longer lists.`);
+  }
+  if (input.survivorElsewhere.length > 0) {
+    lines.push(`Rebuilding ${survivorKey} will stop showing ${ids(input.survivorElsewhere)}, which it records and the report still lists, but outside ${survivorKey}'s rows (filtered by your settings or grouped under another ticket).`);
   }
   lines.push(
     '',

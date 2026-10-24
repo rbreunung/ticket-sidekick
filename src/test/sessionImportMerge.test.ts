@@ -167,7 +167,7 @@ describe('vocabulary and screens', () => {
 describe('buildCloseMergePrompt (close mode confirmation)', () => {
   const survivor = { key: 'PROJ-1301', summary: 'XSS in Bar.java', status: 'Open' };
   const source = { key: 'PROJ-1190', summary: 'XSS in Bar.java', status: 'Open' };
-  const base = { survivor, itemNoun: 'flaw', survivorLost: [] as string[], warnings: [] as string[] };
+  const base = { survivor, itemNoun: 'flaw', survivorLost: [] as string[], survivorElsewhere: [] as string[], newItems: [] as string[], warnings: [] as string[] };
 
   it('Covers AE3: with nothing to move it says the kept ticket stays as it is', () => {
     const out = buildCloseMergePrompt({ ...base, sources: [{ ticket: source, movable: [], unlisted: [], elsewhere: [] }] });
@@ -194,6 +194,18 @@ describe('buildCloseMergePrompt (close mode confirmation)', () => {
     const out = buildCloseMergePrompt({ ...base, sources: [{ ticket: source, movable: [], unlisted: [], elsewhere: ['4800'] }] });
     expect(out).toMatch(/4800 is still in the report but not part of PROJ-1301's rows/);
     expect(out).not.toMatch(/no longer in the report/);
+  });
+
+  it('Covers AE4: says report items no ticket records yet are added by the rebuild, and does not claim the kept ticket stays as it is', () => {
+    const out = buildCloseMergePrompt({ ...base, newItems: ['4900'], sources: [{ ticket: source, movable: [], unlisted: [], elsewhere: [] }] });
+    expect(out).toMatch(/4900 is in the report but on no ticket yet, so PROJ-1301 is rebuilt to include it/);
+    expect(out).not.toMatch(/stays as it is/);
+  });
+
+  it('says a flaw the kept ticket records and the report still lists, outside its rows, will stop showing', () => {
+    const out = buildCloseMergePrompt({ ...base, survivorElsewhere: ['4800'], sources: [{ ticket: source, movable: ['4711'], unlisted: [], elsewhere: [] }] });
+    expect(out).toMatch(/stop showing 4800, which it records and the report still lists, but outside PROJ-1301's rows/);
+    expect(out).not.toMatch(/4800.*no longer lists/);
   });
 
   it('warns when rebuilding the kept ticket will stop showing a flaw it records', () => {
@@ -227,7 +239,7 @@ describe('buildCloseMergePrompt neutralizes every link syntax in Jira-sourced te
 
   it.each(attacks)('%s in a ticket summary leaves no live link, HTML or new block', (_name, payload) => {
     const out = buildCloseMergePrompt({
-      survivor, itemNoun: 'flaw', survivorLost: [], warnings: [],
+      survivor, itemNoun: 'flaw', survivorLost: [], survivorElsewhere: [], newItems: [], warnings: [],
       sources: [{ ticket: { key: 'PROJ-1190', summary: payload, status: payload }, movable: [], unlisted: [], elsewhere: [] }],
     });
     // The only links on the page are the command links this module builds itself.

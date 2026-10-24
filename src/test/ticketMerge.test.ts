@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergedSummary, mergedBanner, resolveMergeSides, buildMergePlan, hasUnfinishedChoices, analyzeSourceMoves, buildCloseMergePlan, closeLinkType, survivorItemsLost } from '../utils/ticketMerge';
+import { mergedSummary, mergedBanner, resolveMergeSides, buildMergePlan, hasUnfinishedChoices, analyzeSourceMoves, buildCloseMergePlan, closeLinkType, survivorItemsLost, itemsOnNoTicket } from '../utils/ticketMerge';
 import type { ReviewRowBase } from '../participant/sessionState';
 
 describe('mergedSummary', () => {
@@ -192,8 +192,26 @@ describe('analyzeSourceMoves', () => {
 });
 
 describe('survivorItemsLost', () => {
+  const toKey = (l: string) => (l.startsWith('v-') ? l.slice(2) : null);
+
   it('names the kept ticket\'s own items that a rebuild from the report would stop showing', () => {
-    expect(survivorItemsLost(['veracode', 'v-1', 'v-998'], (l: string) => (l.startsWith('v-') ? l.slice(2) : null), ['998', '5'])).toEqual(['998']);
+    expect(survivorItemsLost(['veracode', 'v-1', 'v-998'], toKey, ['998', '5'])).toEqual({ unlisted: ['998'], elsewhere: [] });
+  });
+
+  it('Covers AE5: separates items the report still lists from items it no longer lists', () => {
+    expect(survivorItemsLost(['v-1', 'v-2', 'v-3'], toKey, ['2', '3'], ['1', '2'])).toEqual({ unlisted: ['3'], elsewhere: ['2'] });
+  });
+});
+
+describe('itemsOnNoTicket', () => {
+  const toKey = (l: string) => (l.startsWith('v-') ? l.slice(2) : null);
+
+  it('names report items that no ticket in the merge records yet', () => {
+    expect(itemsOnNoTicket(['1', '2', '3'], ['veracode', 'v-1', 'v-2'], toKey)).toEqual(['3']);
+  });
+
+  it('is empty when every item is already recorded', () => {
+    expect(itemsOnNoTicket(['1', '1'], ['v-1'], toKey)).toEqual([]);
   });
 });
 
@@ -241,6 +259,12 @@ describe('buildCloseMergePlan', () => {
   it('records the wanted link type apart from the fallback the project forces', () => {
     const [link] = buildCloseMergePlan('PROJ-1', [{ key: 'PROJ-9', movable: ['2'], unlisted: [], elsewhere: [] }], ['Duplicate']).filter(s => s.kind === 'link');
     expect(link).toMatchObject({ wantedLinkType: 'Relates', linkType: 'Duplicate' });
+  });
+
+  it('Covers AE4: runs the rewrite for report items no ticket records yet, even with nothing to move', () => {
+    const steps = buildCloseMergePlan('PROJ-1', [{ key: 'PROJ-9', movable: [], unlisted: [], elsewhere: [] }], ['Duplicate'], true);
+    expect(steps.map(s => `${s.kind}:${s.key}`)).toEqual(['survivor-rewrite:PROJ-1', 'link:PROJ-9', 'source-comment:PROJ-9', 'close:PROJ-9']);
+    expect(steps.find(s => s.kind === 'link')?.linkType).toBe('Duplicate');
   });
 
   it('runs no rewrite when the only difference is items the report no longer lists', () => {

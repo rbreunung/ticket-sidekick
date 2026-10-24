@@ -3,7 +3,7 @@
 import * as vscode from 'vscode';
 import { logDiag } from '../../utils/diagLog';
 import { formatKeyLink, type TicketService } from '../../services/TicketService';
-import { analyzeSourceMoves, buildCloseMergePlan, buildMergePlan, resolveMergeSides, survivorItemsLost } from '../../utils/ticketMerge';
+import { analyzeSourceMoves, buildCloseMergePlan, buildMergePlan, itemsOnNoTicket, resolveMergeSides, survivorItemsLost } from '../../utils/ticketMerge';
 import { stringOrNull } from '../../utils/reportImport';
 import {
   buildChatCommandLink, buildCloseMergePrompt, buildMergePrompt, buildStaleTargetOptions, emptyImportOutcomes, formatStaleTargetOption, isTicketedRowFinished, parseMergeRunReply,
@@ -49,7 +49,7 @@ function planCloseMoves<TItem, TRow extends ReviewRowBase>(
   survivor: string,
   sources: string[],
   labelsByKey: Map<string, string[]>,
-): { moves: SourceMove[]; survivorLost: string[] } {
+): { moves: SourceMove[]; survivorLost: { unlisted: string[]; elsewhere: string[] }; newItems: string[] } {
   const labelToKey = (label: string) => descriptor.labelToDedupKey?.(label) ?? null;
   const allLabels = [...new Set([...labelsByKey.values()].flat())];
   const plan = planRewrite(session, descriptor, survivor, allLabels, sourceRowsOf(session, sources));
@@ -61,7 +61,11 @@ function planCloseMoves<TItem, TRow extends ReviewRowBase>(
     droppedKeys: plan.droppedKeys,
     reportKeys: session.reportKeys,
   });
-  return { moves, survivorLost: survivorItemsLost(survivorLabels, labelToKey, plan.droppedKeys) };
+  return {
+    moves,
+    survivorLost: survivorItemsLost(survivorLabels, labelToKey, plan.droppedKeys, session.reportKeys),
+    newItems: itemsOnNoTicket(descriptor.dedupKeyOf?.(plan.regenItem) ?? [], allLabels, labelToKey),
+  };
 }
 
 /**
@@ -124,8 +128,8 @@ async function showCloseMergePrompt<TItem, TRow extends ReviewRowBase>(
   baseUrl?: string,
 ): Promise<MergeTurn> {
   const labelsByKey = new Map([...issues].map(([key, issue]) => [key, issue.fields.labels ?? []]));
-  const { moves, survivorLost } = planCloseMoves(session, descriptor, sides.survivor, sides.sources, labelsByKey);
-  const rewrites = moves.some(m => m.movable.length > 0);
+  const { moves, survivorLost, newItems } = planCloseMoves(session, descriptor, sides.survivor, sides.sources, labelsByKey);
+  const rewrites = newItems.length > 0 || moves.some(m => m.movable.length > 0);
 
   const warnings: string[] = [];
   const marker = descriptor.stale?.markerLabel;
@@ -146,7 +150,9 @@ async function showCloseMergePrompt<TItem, TRow extends ReviewRowBase>(
     survivor: ticket(sides.survivor),
     sources: moves.map(m => ({ ticket: ticket(m.key), movable: m.movable, unlisted: m.unlisted, elsewhere: m.elsewhere })),
     itemNoun: closeMode.itemNoun,
-    survivorLost: rewrites ? survivorLost : [],
+    survivorLost: rewrites ? survivorLost.unlisted : [],
+    survivorElsewhere: rewrites ? survivorLost.elsewhere : [],
+    newItems,
     warnings,
     baseUrl,
   })));
@@ -270,11 +276,11 @@ function closeMergeMode<TItem, TRow extends ReviewRowBase>(closeMerge: CloseTick
       }
       let linkTypeNames: string[] = [];
       try { linkTypeNames = await ticketService.getLinkTypeNames(); } catch { /* the wanted type is tried; a refusal is a failed step */ }
-      const { moves } = planCloseMoves(session, descriptor, sides.survivor, sides.sources, labelsByKey);
+      const { moves, newItems } = planCloseMoves(session, descriptor, sides.survivor, sides.sources, labelsByKey);
       logDiag(descriptor.scope, 'info', `${descriptor.importLabel} import — merge started`, {
-        survivor: sides.survivor, sources: sides.sources, moved: moves.map(m => m.movable.length), unlisted: moves.map(m => m.unlisted.length),
+        survivor: sides.survivor, sources: sides.sources, moved: moves.map(m => m.movable.length), unlisted: moves.map(m => m.unlisted.length), newItems: newItems.length,
       });
-      return { survivor: sides.survivor, sources: sides.sources, steps: buildCloseMergePlan(sides.survivor, moves, linkTypeNames), sourceMoves: moves };
+      return { survivor: sides.survivor, sources: sides.sources, steps: buildCloseMergePlan(sides.survivor, moves, linkTypeNames, newItems.length > 0), sourceMoves: moves };
     },
     // The importer's own Due Date rule applies: the movable items are what joins the kept ticket.
     async rewriteTarget(ticketService, run, regenItem, fold) {
