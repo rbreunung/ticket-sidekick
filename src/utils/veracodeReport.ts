@@ -597,3 +597,19 @@ export interface VeracodeReviewRow {
   existingTicketKey: string | null;
   included: boolean; // whether this row will be (re)created if the batch runs
 }
+
+/**
+ * Veracode ticket merge, close mode: the comment on the ticket that is closed. `preface` is its opening line, which the
+ * merge uses to skip a replayed confirmation. Only numeric flaw ids are written (they come from Jira labels).
+ */
+export function buildMergedSourceComment(survivorKey: string, unlistedIds: string[], elsewhereIds: string[] = []): { preface: string; text: string } {
+  const preface = `h4. Merged into ${survivorKey}`;
+  const numeric = (ids: string[]) => ids.filter(id => ISSUE_ID_PATTERN.test(id));
+  const unlisted = numeric(unlistedIds);
+  const elsewhere = numeric(elsewhereIds);
+  // The comment is posted before the ticket is closed, so it says what the merge did, not that the ticket is already closed.
+  const lines = [preface, `This ticket was merged into ${survivorKey}. Its items are tracked there.`];
+  if (unlisted.length > 0) lines.push(`Not copied (no longer in the report): ${unlisted.join(', ')}.`);
+  if (elsewhere.length > 0) lines.push(`Not copied (still in the report, but not part of ${survivorKey}'s rows): ${elsewhere.join(', ')}.`);
+  return { preface, text: lines.join('\n') };
+}

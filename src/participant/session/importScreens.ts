@@ -127,7 +127,7 @@ export interface ImportScreenOptions {
   canFold?: boolean;
   // Accepted-CVE list: whether the New screen offers `accept` (Waltz only).
   canAccept?: boolean;
-  // Waltz ticket merge: whether the review offers `merge … into …` and `reload report` (Waltz only).
+  // Ticket merge: whether the review offers `merge … into …` and `reload report` (Waltz and Veracode).
   canMergeTickets?: boolean;
   // Whether the importer has the `export` reply (Veracode, Waltz; not email): the screens then show a link for it.
   canExport?: boolean;
@@ -366,10 +366,15 @@ function ticketedActionCell(row: ReviewRowBase, baseUrl?: string, labels?: Actio
   return prefix + links.join(' · ');
 }
 
+/** How many other open tickets the Ticket cell names before it counts the rest. */
+const MAX_ALSO_OPEN_SHOWN = 3;
+
 function ticketedTicketCell(row: ReviewRowBase, baseUrl?: string): string {
-  const key = ticketedTargetKey(row);
-  const others = (row.ticketKeys?.length ?? 1) - 1;
-  return `${formatKeyLink(key, baseUrl)}${others > 0 ? ` (+${others} more)` : ''}`;
+  const open = row.openTicketKeys ?? [];
+  const shown = open.slice(0, MAX_ALSO_OPEN_SHOWN).map(k => formatKeyLink(k, baseUrl)).join(', ');
+  const rest = open.length - MAX_ALSO_OPEN_SHOWN;
+  const alsoOpen = open.length > 0 ? ` · also open: ${shown}${rest > 0 ? ` +${rest}` : ''}` : '';
+  return `${formatKeyLink(ticketedTargetKey(row), baseUrl)}${alsoOpen}`;
 }
 
 /**
@@ -428,7 +433,10 @@ export function buildTicketedGroupScreen<TRow extends ReviewRowBase>(
   if (c.ticketedOpen > 0) {
     lines.push(`Change a row with \`<row> <action>\` (e.g. \`A2 ${actionLabelOf('follow-up', opts.actionLabels)}\`) or every row with \`all <action>\` (e.g. \`all leave\`), or click an action in the table.`);
     if (opts.canMergeTickets) {
-      lines.push('Reply `merge A2 A3 into A1` (or ticket keys) to combine tickets: the ticket after `into` is kept, the others are linked as duplicates, rewritten and closed. You see the plan and confirm first.');
+      const alsoOpen = ticketed.find(r => !isTicketedRowFinished(r) && (r.openTicketKeys?.length ?? 0) > 0);
+      lines.push(alsoOpen
+        ? `Reply \`merge ${alsoOpen.openTicketKeys![0]} into ${ticketedTargetKey(alsoOpen)}\` to keep ${ticketedTargetKey(alsoOpen)} and close ${alsoOpen.openTicketKeys![0]} (swap them to keep the other). You confirm first.`
+        : 'Reply `merge A2 A3 into A1` (or ticket keys) to combine tickets into one: the ticket after `into` is kept, the others are closed. You confirm first.');
     }
     if (opts.canAccept) {
       lines.push('Reply `accept component A2 A3` to stop offering those components at that exact version (add `because …` to record why): they leave this list, and an open ticket is offered for closing under Stale.');

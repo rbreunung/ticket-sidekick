@@ -1,7 +1,7 @@
-// Waltz ticket merge: pure helpers (vscode-free) — the text a cancelled ticket is marked with, the reference
+// Report import ticket merge (rewrite mode: Waltz; close mode: Veracode): pure helpers (vscode-free) — the text a cancelled ticket is marked with, the reference
 // resolution, the step plan and the rule that decides between refreshing the review and marking it out of date.
 import { BATCH_LIMIT, MAX_SUMMARY_CHARS, clampSummary } from './reportImport';
-import { isTicketedRowFinished, ticketedTargetKey, type MergeStep, type ReviewRowBase } from '../participant/session/importTypes';
+import { isTicketedRowFinished, ticketedTargetKey, type MergeStep, type ReviewRowBase, type SourceMove } from '../participant/session/importTypes';
 
 const MERGED_PREFIX = /^\[Merged into [A-Z][A-Z0-9]+-\d+\] /;
 const BANNER = /^\{panel:title=Merged into [A-Z][A-Z0-9]+-\d+\}[\s\S]*?\{panel\}\n*/;
@@ -68,6 +68,85 @@ export function buildMergePlan(survivor: string, sources: string[]): MergeStep[]
     step('survivor-comment', survivor),
     ...sources.flatMap(key => [step('link', key), step('source-rewrite', key)]),
     ...sources.map(key => step('close', key)),
+  ];
+}
+
+/**
+ * Close mode (KTD2): for each source, the items only it records (its dedup keys minus the kept ticket's). An item the
+ * rebuilt kept ticket still covers is `movable`. One the rebuild does not cover (`droppedKeys`, from the rewrite plan) is
+ * `unlisted` when the report no longer lists it, and `elsewhere` when `reportKeys` (every key in the unfiltered report)
+ * shows it is still there; neither is moved, both are named in the comment on the closed source. Without `reportKeys`
+ * every dropped key counts as unlisted. Pure.
+ */
+export function analyzeSourceMoves(params: {
+  survivorLabels: string[];
+  sources: Array<{ key: string; labels: string[] }>;
+  labelToKey: (label: string) => string | null;
+  droppedKeys: string[];
+  reportKeys?: string[];
+}): SourceMove[] {
+  const onSurvivor = new Set(itemKeysOf(params.survivorLabels, params.labelToKey));
+  const dropped = new Set(params.droppedKeys);
+  const inReport = new Set(params.reportKeys ?? []);
+  return params.sources.map(source => {
+    const only = itemKeysOf(source.labels, params.labelToKey).filter(k => !onSurvivor.has(k));
+    const notCovered = only.filter(k => dropped.has(k));
+    return {
+      key: source.key,
+      movable: only.filter(k => !dropped.has(k)),
+      unlisted: notCovered.filter(k => !inReport.has(k)),
+      elsewhere: notCovered.filter(k => inReport.has(k)),
+    };
+  });
+}
+
+function itemKeysOf(labels: string[], labelToKey: (label: string) => string | null): string[] {
+  return [...new Set(labels.map(labelToKey).filter((k): k is string => k !== null))];
+}
+
+/**
+ * Close mode: items the kept ticket itself records that a rebuild from the report would stop showing. `unlisted` are no
+ * longer in the report; `elsewhere` are still in it (`reportKeys`) but outside the rows the rebuild uses. Without
+ * `reportKeys` every one counts as unlisted.
+ */
+export function survivorItemsLost(
+  survivorLabels: string[], labelToKey: (label: string) => string | null, droppedKeys: string[], reportKeys?: string[],
+): { unlisted: string[]; elsewhere: string[] } {
+  const dropped = new Set(droppedKeys);
+  const inReport = new Set(reportKeys ?? []);
+  const lost = itemKeysOf(survivorLabels, labelToKey).filter(k => dropped.has(k));
+  return { unlisted: lost.filter(k => !inReport.has(k)), elsewhere: lost.filter(k => inReport.has(k)) };
+}
+
+/** Close mode: items the rebuilt kept ticket covers that no ticket in the merge records yet (new in the report). */
+export function itemsOnNoTicket(coveredKeys: string[], allLabels: string[], labelToKey: (label: string) => string | null): string[] {
+  const known = new Set(itemKeysOf(allLabels, labelToKey));
+  return [...new Set(coveredKeys)].filter(k => !known.has(k));
+}
+
+/** Close mode (KTD3): `Relates` when items moved from the source, `Duplicate` when none did; the other one when the project lacks the wanted type. */
+export function closeLinkType(itemsMoved: boolean, linkTypeNames: string[]): 'Relates' | 'Duplicate' {
+  const wanted = itemsMoved ? 'Relates' : 'Duplicate';
+  const other = itemsMoved ? 'Duplicate' : 'Relates';
+  const has = (name: string) => linkTypeNames.some(n => n.toLowerCase() === name.toLowerCase());
+  return has(wanted) || !has(other) ? wanted : other;
+}
+
+/**
+ * Close mode (KTD3): the kept ticket is rewritten first, only when some source has items to move or the report has items no
+ * ticket records yet (`rewriteForNewItems`); then each source is
+ * linked (its link type fixed here from whether items moved) and commented on; every close comes last.
+ */
+export function buildCloseMergePlan(survivor: string, moves: SourceMove[], linkTypeNames: string[], rewriteForNewItems = false): MergeStep[] {
+  const step = (kind: MergeStep['kind'], key: string, link?: { linkType: string; wantedLinkType: string }): MergeStep => ({ kind, key, status: 'pending', ...link });
+  const linkStep = (m: SourceMove) => step('link', m.key, {
+    linkType: closeLinkType(m.movable.length > 0, linkTypeNames),
+    wantedLinkType: m.movable.length > 0 ? 'Relates' : 'Duplicate',
+  });
+  return [
+    ...(rewriteForNewItems || moves.some(m => m.movable.length > 0) ? [step('survivor-rewrite', survivor)] : []),
+    ...moves.flatMap(m => [linkStep(m), step('source-comment', m.key)]),
+    ...moves.map(m => step('close', m.key)),
   ];
 }
 

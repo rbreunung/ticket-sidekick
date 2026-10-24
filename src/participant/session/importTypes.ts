@@ -122,6 +122,8 @@ export interface ReviewRowBase {
   // tracking (Veracode, Waltz) — never on email rows or new rows.
   /** Every ticket carrying one of the row's dedup keys. */
   ticketKeys?: string[];
+  /** The tickets other than the target that carry one of the row's dedup keys and have no resolution (closed ones are left out); absent on a row saved before this field existed. */
+  openTicketKeys?: string[];
   /** The ticket `update` writes to: the newest open one, or the newest overall when all are resolved. */
   target?: { key: string; status: string | null; resolved: boolean };
   /** What changed since the tickets were made; null = no change. */
@@ -166,7 +168,7 @@ export type TicketedRowResult =
   | { status: 'done'; action: 'follow-up'; key: string; linkMissing?: boolean }
   | { status: 'done'; action: 'rewrite'; note?: 'comment-failed' }
   | { status: 'done'; action: 're-create'; key: string }
-  // Waltz ticket merge (KTD12): the row's ticket was cancelled as a duplicate of `into`.
+  // Ticket merge (KTD12): the row's ticket was merged into `into` and closed.
   | { status: 'done'; action: 'merge'; into: string }
   | { status: 'failed'; action: TicketedAction; error: string };
 
@@ -231,7 +233,7 @@ export interface ImportOutcomes {
   // Finding folding: tickets rebuilt by `rewrite` on the Already-ticketed screen, and ones that failed.
   rewritten: number;
   rewriteFailed: number;
-  // Waltz ticket merge: source tickets cancelled as duplicates, and ones whose merge ended with a failed step.
+  // Ticket merge: source tickets closed by a merge, and ones whose merge ended with a failed step.
   merged: number;
   mergeFailed: number;
 }
@@ -303,7 +305,7 @@ export interface ReviewSession<TRow> {
   schemaVersion: number;
 }
 
-export type MergeStepKind = 'survivor-rewrite' | 'survivor-comment' | 'link' | 'source-rewrite' | 'close';
+export type MergeStepKind = 'survivor-rewrite' | 'survivor-comment' | 'link' | 'source-rewrite' | 'source-comment' | 'close';
 
 /** One step of a merge. `key` is the ticket the step writes to. A `done` step is never run again; `skipped` was ignored after a failure. */
 export interface MergeStep {
@@ -313,6 +315,20 @@ export interface MergeStep {
   error?: string;
   /** A short result worth showing in the final report, e.g. that a close left no Duplicate resolution or fell back to Relates. */
   note?: string;
+  /** Close mode: the link type this `link` step uses, chosen from whether items moved from its source. */
+  linkType?: string;
+  /** Close mode: the link type this `link` step wanted before any fallback to the other type. */
+  wantedLinkType?: string;
+}
+
+/** Close mode: what a source ticket carries that the kept ticket lacks — items the rewrite can move, and items the report no longer lists. */
+export interface SourceMove {
+  key: string;
+  movable: string[];
+  /** Items the report no longer lists. */
+  unlisted: string[];
+  /** Items the report still lists but outside the rows the kept ticket is rebuilt from (filtered by settings, or grouped under another ticket). */
+  elsewhere: string[];
 }
 
 /**
@@ -337,6 +353,8 @@ export interface MergeRun {
   linkType?: string;
   /** Findings the rewritten survivor no longer covers, kept from the rewrite step for its comment. */
   droppedKeys?: string[];
+  /** Close mode: per source, the items that move to the kept ticket and the ones the report no longer lists (fixed when the run starts). */
+  sourceMoves?: SourceMove[];
   /** Sources the close skipped (no workflow graph, no path) with the reason, for the final report. */
   closeSkipped?: Array<{ key: string; reason: string }>;
 }

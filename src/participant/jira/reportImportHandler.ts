@@ -473,7 +473,8 @@ async function buildImportReview<TItem, TRow extends ReviewRowBase>(
       };
     }
   }
-  const reportKeys = waltzStyle ? descriptor.changeTracking!.reportKeysOf?.(input.rawItems) ?? [] : undefined;
+  // Waltz reads them to tell a filtered component from a dropped one; Veracode's close-mode merge to tell a filtered flaw from a gone one.
+  const reportKeys = waltzStyle || descriptor.ticketMerge?.mode === 'close' ? descriptor.changeTracking?.reportKeysOf?.(input.rawItems) ?? [] : undefined;
   let allRows = buildReviewRows<TItem, TRow>(
     input.items,
     dedupMap,

@@ -47,6 +47,13 @@ export function labelsToRemove<TItem, TRow extends ReviewRowBase>(
   return droppedKeys.filter(k => !inReport.has(k));
 }
 
+/** What a rewrite knows about the ticket it rebuilds: its creation time and Due Date, and which part of the rebuilt item is joining it. */
+export interface RewriteTarget<TItem> {
+  ticketCreated?: string | null;
+  currentDueDate?: string | null;
+  joiningItem?: TItem | null;
+}
+
 /**
  * KTD7: rebuilds `key` from `regenItem` — the importer's own summary, description and labels (no template labels) — in one write.
  * An importer's Due Date rides in the same write; `dueDate` is what was set, `droppedFields` what Jira refused.
@@ -58,7 +65,7 @@ export async function writeRewrite<TItem, TRow extends ReviewRowBase>(
   key: string,
   regenItem: TItem,
   removeLabels: string[] = [],
-  target: { ticketCreated?: string | null; currentDueDate?: string | null; joiningItem?: TItem | null } = {},
+  target: RewriteTarget<TItem> = {},
 ): Promise<{ dueDate: string | null; droppedFields: string[] }> {
   const fields = descriptor.buildRowFields(regenItem, []);
   const built = descriptor.buildTicketFields({ ...fields, id: '0', existingTicketKey: null, included: true } as unknown as TRow, {}, { ticketCreated: target.ticketCreated });

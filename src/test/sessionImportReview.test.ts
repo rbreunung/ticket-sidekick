@@ -332,6 +332,57 @@ describe('Already-ticketed screen — per-row actions (U4/R5, R6, KTD9)', () => 
     expect(rowLine(text, 'A3')).toContain('| PROJ-3 | In Progress | — |');
   });
 
+  it('Covers AE1: the Ticket cell shows the target alone when the other tickets are closed', () => {
+    const text = buildTicketedGroupScreen(screenSession([makeActionRow('A1', 'PROJ-12', { ticketKeys: ['PROJ-12', 'PROJ-8'], openTicketKeys: [] })]), [], waltzOpts);
+
+    expect(rowLine(text, 'A1')).toContain('| PROJ-12 | In Progress |');
+    expect(rowLine(text, 'A1')).not.toContain('also open');
+    expect(rowLine(text, 'A1')).not.toContain('more');
+  });
+
+  it('Covers AE2: the Ticket cell names another open ticket', () => {
+    const text = buildTicketedGroupScreen(screenSession([makeActionRow('A1', 'PROJ-12', { openTicketKeys: ['PROJ-8'] })]), [], waltzOpts);
+
+    expect(rowLine(text, 'A1')).toContain('| PROJ-12 · also open: PROJ-8 | In Progress |');
+  });
+
+  it('lists up to three also-open tickets and counts the rest', () => {
+    const text = buildTicketedGroupScreen(screenSession([makeActionRow('A1', 'PROJ-12', { openTicketKeys: ['PROJ-1', 'PROJ-2', 'PROJ-3', 'PROJ-4'] })]), [], waltzOpts);
+
+    expect(rowLine(text, 'A1')).toContain('| PROJ-12 · also open: PROJ-1, PROJ-2, PROJ-3 +1 | In Progress |');
+  });
+
+  it('Covers AE2: the merge hint uses the first row with another open ticket and says either order works', () => {
+    const text = buildTicketedGroupScreen(screenSession([
+      makeActionRow('A1', 'PROJ-5'),
+      makeActionRow('A2', 'PROJ-12', { openTicketKeys: ['PROJ-8'] }),
+    ]), [], { ...waltzOpts, canMergeTickets: true });
+
+    expect(text).toContain('`merge PROJ-8 into PROJ-12`');
+    expect(text).toContain('to keep PROJ-12 and close PROJ-8');
+    expect(text).toContain('swap them to keep the other');
+    expect(text.toLowerCase()).not.toContain('duplicate');
+  });
+
+  it('shows the generic merge hint when no row has another open ticket', () => {
+    const text = buildTicketedGroupScreen(screenSession([makeActionRow('A1', 'PROJ-5')]), [], { ...waltzOpts, canMergeTickets: true });
+
+    expect(text).toContain('`merge A2 A3 into A1`');
+    expect(text).not.toContain('swap them');
+  });
+
+  it('shows no merge hint where merge is not available', () => {
+    const text = buildTicketedGroupScreen(screenSession([makeActionRow('A2', 'PROJ-12', { openTicketKeys: ['PROJ-8'] })]), [], waltzOpts);
+
+    expect(text).not.toContain('merge');
+  });
+
+  it('shows the target alone for a row saved before openTicketKeys existed', () => {
+    const text = buildTicketedGroupScreen(screenSession([makeActionRow('A1', 'PROJ-12', { ticketKeys: ['PROJ-12', 'PROJ-8'] })]), [], waltzOpts);
+
+    expect(rowLine(text, 'A1')).toContain('| PROJ-12 | In Progress |');
+  });
+
   it('a finished row shows its result instead of links; a failed row shows the error and keeps its links', () => {
     const text = buildTicketedGroupScreen(screenSession([
       changedRow('A1', 'PROJ-12', { result: { status: 'done', action: 'update' } }),

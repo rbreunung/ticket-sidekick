@@ -69,7 +69,7 @@ export interface ImportReplyContext {
   // Accepted-CVE list: whether the importer supports it (Waltz), which turns on `accept`, `accepted`
   // and `unaccept`.
   canAccept?: boolean;
-  // Waltz ticket merge: whether the importer supports `merge … into …` and `reload report` (Waltz only).
+  // Ticket merge: whether the importer supports `merge … into …` and `reload report` (Waltz and Veracode).
   canMergeTickets?: boolean;
   // Security overview: whether the importer supports the `export` reply (Veracode and Waltz).
   canExport?: boolean;
@@ -92,7 +92,7 @@ function parseStrictRowToggle(reply: string, ids: string[]): string[] | null {
   return matched;
 }
 
-const MERGE_USAGE = 'Merge tickets like this: `merge A5 A6 into A3` (or ticket keys, `merge PROJ-15 into PROJ-12`). The ticket after `into` is kept; the others are cancelled as duplicates of it.';
+const MERGE_USAGE = 'Merge tickets like this: `merge A5 A6 into A3` (or ticket keys, `merge PROJ-15 into PROJ-12`). The ticket after `into` is kept; the others are closed.';
 const MERGE_ON_NEW_OR_STALE = 'Merging tickets is done from the overview or the Already ticketed screen, not here. On the New screen `merge 2 4` still combines New rows.';
 
 /**
@@ -437,6 +437,88 @@ export function buildMergePrompt(input: MergePromptInput): string {
     '3. Close each cancelled ticket as a duplicate. You pick the status to move each issue type to.',
     '',
     `${cmdLink('Merge', `merge ${input.sources.map(t => t.key).join(' ')} into ${input.survivor.key} confirm`)} — nothing is written until you click.`,
+  );
+  return lines.join('\n');
+}
+
+/** Close mode: one source of the confirmation — the ticket and what is (not) moved from it. */
+export interface CloseMergePromptSource {
+  ticket: MergePromptTicket;
+  /** Items only this ticket records that the kept ticket will carry after its rebuild. */
+  movable: string[];
+  /** Items only this ticket records that the report no longer lists. */
+  unlisted: string[];
+  /** Items only this ticket records that the report still lists, but outside the rows the kept ticket is rebuilt from. */
+  elsewhere: string[];
+}
+
+export interface CloseMergePromptInput {
+  survivor: MergePromptTicket;
+  sources: CloseMergePromptSource[];
+  /** One item in the importer's words, e.g. `flaw`. */
+  itemNoun: string;
+  /** Items the kept ticket records that the report no longer lists, which its rebuilt description stops showing. */
+  survivorLost: string[];
+  /** Items the kept ticket records that the report still lists, but outside the rows it is rebuilt from. */
+  survivorElsewhere: string[];
+  /** Items in the report that no ticket records yet; the kept ticket is rebuilt to include them. */
+  newItems: string[];
+  warnings: string[];
+  baseUrl?: string;
+}
+
+/**
+ * Close-mode ticket merge: the confirmation for `merge … into …`. Writes nothing — the one link resends the command with
+ * `confirm`. States per source whether items move, so the page cannot promise a plan the run does not execute.
+ */
+export function buildCloseMergePrompt(input: CloseMergePromptInput): string {
+  const line = (t: MergePromptTicket) => `**${formatKeyLink(t.key, input.baseUrl)}** — ${safeMarkdownText(t.summary)}${t.status ? ` (${safeMarkdownText(t.status)})` : ''}`;
+  const items = (n: number) => `${input.itemNoun}${n === 1 ? '' : 's'}`;
+  const ids = (list: string[]) => list.map(safeMarkdownText).join(', ');
+  const survivorKey = input.survivor.key;
+  const count = input.sources.length;
+  const rebuilt = input.newItems.length > 0 || input.sources.some(s => s.movable.length > 0);
+  const lines: string[] = [
+    `### Merge ${count} ${count === 1 ? 'ticket' : 'tickets'} into ${formatKeyLink(survivorKey, input.baseUrl)}`,
+    '',
+    `Keep: ${line(input.survivor)}`,
+    '',
+    'Close:',
+    ...input.sources.map(s => `- ${line(s.ticket)}`),
+    '',
+  ];
+  for (const warning of input.warnings) lines.push(`⚠ ${warning}`);
+  if (input.warnings.length > 0) lines.push('');
+  for (const s of input.sources) {
+    const key = s.ticket.key;
+    if (s.movable.length > 0) {
+      lines.push(`${key} also records ${s.movable.length} ${items(s.movable.length)} (${ids(s.movable)}); ${survivorKey} takes them over by rebuilding its title, description and labels from the report (text added by hand is replaced).`);
+    } else if (rebuilt) {
+      lines.push(`${key} has no ${items(2)} ${survivorKey} lacks.`);
+    } else {
+      lines.push(`${key} has no ${items(2)} ${survivorKey} lacks, so ${survivorKey} stays as it is.`);
+    }
+    if (s.unlisted.length > 0) {
+      lines.push(`${ids(s.unlisted)} ${s.unlisted.length === 1 ? 'is' : 'are'} no longer in the report, so ${s.unlisted.length === 1 ? 'it is' : 'they are'} not moved; named in the comment on ${key}.`);
+    }
+    if (s.elsewhere.length > 0) {
+      lines.push(`${ids(s.elsewhere)} ${s.elsewhere.length === 1 ? 'is' : 'are'} still in the report but not part of ${survivorKey}'s rows (filtered by your settings or grouped under another ticket), so ${s.elsewhere.length === 1 ? 'it is' : 'they are'} not moved; named in the comment on ${key}.`);
+    }
+  }
+  if (input.newItems.length > 0) {
+    lines.push(`${ids(input.newItems)} ${input.newItems.length === 1 ? 'is' : 'are'} in the report but on no ticket yet, so ${survivorKey} is rebuilt to include ${input.newItems.length === 1 ? 'it' : 'them'}.`);
+  }
+  if (input.survivorLost.length > 0) {
+    lines.push(`Rebuilding ${survivorKey} will stop showing ${ids(input.survivorLost)}, which it records but the report no longer lists.`);
+  }
+  if (input.survivorElsewhere.length > 0) {
+    lines.push(`Rebuilding ${survivorKey} will stop showing ${ids(input.survivorElsewhere)}, which it records and the report still lists, but outside ${survivorKey}'s rows (filtered by your settings or grouped under another ticket).`);
+  }
+  lines.push(
+    '',
+    'Each closed ticket gets a link and a comment, then you pick its closing status.',
+    '',
+    `${cmdLink('Merge', `merge ${input.sources.map(s => s.ticket.key).join(' ')} into ${survivorKey} confirm`)} — nothing is written until you click.`,
   );
   return lines.join('\n');
 }

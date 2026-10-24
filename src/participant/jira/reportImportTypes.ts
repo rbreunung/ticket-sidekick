@@ -99,8 +99,8 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   // Accepted-CVE list (KTD8): optional, like `fold` and `stale`. Waltz supplies it; Veracode and email
   // omit it and behave exactly as before.
   accepted?: ImportAccepted<TItem, TRow>;
-  // Waltz ticket merge (KTD1): optional `merge … into …`, `reload report` and the refresh after an `unaccept`.
-  // Waltz supplies it; Veracode and email omit it and behave exactly as before.
+  // Ticket merge (KTD1): optional `merge … into …`, `reload report` and the refresh after an `unaccept`.
+  // Waltz supplies it in rewrite mode, Veracode in close mode; email omits it and behaves exactly as before.
   ticketMerge?: ImportTicketMerge;
   // Security overview export (KTD3): optional `export` reply that lists this report's items by Fix Version. Veracode and Waltz
   // supply it; email omits it and has no `export` reply.
@@ -133,11 +133,29 @@ export interface ImportOverviewExport<TRow extends ReviewRowBase> {
   dueDateOf: (row: TRow) => string | null;
 }
 
-/** Waltz ticket merge: the importer's wording for the one comment the survivor receives (Jira wiki markup). */
-export interface ImportTicketMerge {
-  /** Opens the survivor's comment, naming the tickets it absorbed. */
+/**
+ * Ticket merge (`merge … into …`). Rewrite mode (Waltz, the default) rewrites the kept ticket, comments on it and marks each
+ * closed ticket with a banner; close mode (Veracode) moves items across only when the kept ticket lacks them, then links,
+ * comments on and closes each source without editing its text.
+ */
+export interface RewriteTicketMerge {
+  mode?: 'rewrite';
+  /** Opens the survivor's comment (Jira wiki markup), naming the tickets it absorbed. */
   buildCommentPreface: (absorbedKeys: string[]) => string;
 }
+
+export interface CloseTicketMerge {
+  mode: 'close';
+  /** One item in the importer's words for the confirmation page, e.g. `flaw`. */
+  itemNoun: string;
+  /**
+   * The comment on a closed source (Jira wiki markup): `preface` is its opening line, `unlistedKeys` the items the report
+   * no longer lists and `elsewhereKeys` the ones it still lists outside the rebuilt ticket.
+   */
+  buildSourceComment: (survivorKey: string, unlistedKeys: string[], elsewhereKeys: string[]) => { preface: string; text: string };
+}
+
+export type ImportTicketMerge = RewriteTicketMerge | CloseTicketMerge;
 
 /** Accepted-CVE list: what an importer supplies so findings the team accepted stay off the New screen. */
 export interface ImportAccepted<TItem, TRow extends ReviewRowBase> {

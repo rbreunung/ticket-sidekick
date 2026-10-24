@@ -1,19 +1,20 @@
-// Report import: merging Waltz tickets (`merge <sources> into <survivor>`) — the confirmation, the writes in
+// Report import: merging tickets (`merge <sources> into <survivor>`; Waltz rewrites, Veracode closes) — the confirmation, the writes in
 // order, the target-status question, retry or ignore after a failed step, and the final report.
 import * as vscode from 'vscode';
 import { logDiag } from '../../utils/diagLog';
 import { formatKeyLink, type TicketService } from '../../services/TicketService';
-import { buildMergePlan, resolveMergeSides } from '../../utils/ticketMerge';
+import { analyzeSourceMoves, buildCloseMergePlan, buildMergePlan, itemsOnNoTicket, resolveMergeSides, survivorItemsLost } from '../../utils/ticketMerge';
+import { stringOrNull } from '../../utils/reportImport';
 import {
-  buildChatCommandLink, buildMergePrompt, buildStaleTargetOptions, emptyImportOutcomes, formatStaleTargetOption, isTicketedRowFinished, parseMergeRunReply,
+  buildChatCommandLink, buildCloseMergePrompt, buildMergePrompt, buildStaleTargetOptions, emptyImportOutcomes, formatStaleTargetOption, isTicketedRowFinished, parseMergeRunReply,
   planStaleTransitions, safeMarkdownText, staleTargetState, ticketedTargetKey,
-  type MergeRun, type MergeStep, type ReviewRowBase, type ReviewSession, type StaleTicketGroup,
+  type MergeRun, type MergeStep, type ReviewRowBase, type ReviewSession, type SourceMove, type StaleTicketGroup,
 } from '../sessionState';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import { buildStaleTicketGroups, transitionTickets } from './cleanupHandler';
-import { labelsToRemove, planRewrite, writeRewrite } from './importAddToTicket';
+import { labelsToRemove, planRewrite, writeRewrite, type RewriteTarget } from './importAddToTicket';
 import { droppedFieldsNote } from './importCreate';
-import type { ReportImportDescriptor } from './reportImportTypes';
+import type { CloseTicketMerge, ReportImportDescriptor } from './reportImportTypes';
 
 /** What a call leaves behind: a question is waiting (the session must be saved), the run is over, or the reply was refused with nothing started. */
 export type MergeTurn = 'waiting' | 'finished' | 'refused';
@@ -33,6 +34,38 @@ async function recordedLabels(ticketService: TicketService, keys: string[]): Pro
   const labels: string[] = [];
   for (const key of keys) labels.push(...((await ticketService.getIssue(key)).fields.labels ?? []));
   return [...new Set(labels)];
+}
+
+/** The importer's close-mode merge, or undefined for the rewrite mode (Waltz). */
+function closeModeOf<TItem, TRow extends ReviewRowBase>(descriptor: ReportImportDescriptor<TItem, TRow>): CloseTicketMerge | undefined {
+  const merge = descriptor.ticketMerge;
+  return merge?.mode === 'close' ? merge : undefined;
+}
+
+/** Close mode: what each source records that the kept ticket lacks, judged against the rewrite the run would do. */
+function planCloseMoves<TItem, TRow extends ReviewRowBase>(
+  session: ReviewSession<TRow>,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+  survivor: string,
+  sources: string[],
+  labelsByKey: Map<string, string[]>,
+): { moves: SourceMove[]; survivorLost: { unlisted: string[]; elsewhere: string[] }; newItems: string[] } {
+  const labelToKey = (label: string) => descriptor.labelToDedupKey?.(label) ?? null;
+  const allLabels = [...new Set([...labelsByKey.values()].flat())];
+  const plan = planRewrite(session, descriptor, survivor, allLabels, sourceRowsOf(session, sources));
+  const survivorLabels = labelsByKey.get(survivor) ?? [];
+  const moves = analyzeSourceMoves({
+    survivorLabels,
+    sources: sources.map(key => ({ key, labels: labelsByKey.get(key) ?? [] })),
+    labelToKey,
+    droppedKeys: plan.droppedKeys,
+    reportKeys: session.reportKeys,
+  });
+  return {
+    moves,
+    survivorLost: survivorItemsLost(survivorLabels, labelToKey, plan.droppedKeys, session.reportKeys),
+    newItems: itemsOnNoTicket(descriptor.dedupKeyOf?.(plan.regenItem) ?? [], allLabels, labelToKey),
+  };
 }
 
 /**
@@ -63,25 +96,16 @@ export async function showMergePrompt<TItem, TRow extends ReviewRowBase>(
     return 'refused';
   }
 
+  return mergeModeOf(descriptor).showPrompt(session, sides, issues, ticketService, stream, descriptor, baseUrl);
+}
+
+async function linkAndResolutionWarnings(ticketService: TicketService): Promise<string[]> {
   const warnings: string[] = [];
-  const marker = descriptor.stale?.markerLabel;
-  for (const key of keys) {
-    const issue = issues.get(key)!;
-    const isSurvivor = key === sides.survivor;
-    if (issue.fields.resolution != null) {
-      warnings.push(isSurvivor
-        ? `${key} is resolved. You can still merge into it, but nobody may be watching it.`
-        : `${key} is already resolved, so it is rewritten and linked but not closed.`);
-    }
-    if (marker && !(issue.fields.labels ?? []).includes(marker)) {
-      warnings.push(`${key} was not created by an import, so rewriting from the report replaces text the report does not know.`);
-    }
-  }
   try {
     if (!(await ticketService.getLinkTypeNames()).some(n => n.toLowerCase() === 'duplicate')) {
       warnings.push('This project has no Duplicate link type, so the tickets are linked as Relates instead.');
     }
-  } catch { /* an unreadable list is not a reason to refuse; the link step tries Duplicate */ }
+  } catch { /* an unreadable list is not a reason to refuse; the link step tries the wanted type */ }
   try {
     if (!(await ticketService.getResolutions()).some(r => r.name.toLowerCase() === 'duplicate')) {
       warnings.push('This project has no Duplicate resolution, so you pick the resolution from its list when the tickets are closed.');
@@ -89,12 +113,48 @@ export async function showMergePrompt<TItem, TRow extends ReviewRowBase>(
   } catch {
     warnings.push('The resolutions could not be read, so the tickets may be closed without one.');
   }
+  return warnings;
+}
 
-  const labels = [...new Set(keys.flatMap(key => issues.get(key)!.fields.labels ?? []))];
-  const rewrite = planRewrite(session, descriptor, sides.survivor, labels, sourceRowsOf(session, sides.sources));
+/** Close mode: the confirmation for `merge … into …` — what moves, what stays, the warnings; writes nothing. */
+async function showCloseMergePrompt<TItem, TRow extends ReviewRowBase>(
+  session: ReviewSession<TRow>,
+  sides: MergeSideKeys,
+  issues: Map<string, Issue>,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+  closeMode: CloseTicketMerge,
+  baseUrl?: string,
+): Promise<MergeTurn> {
+  const labelsByKey = new Map([...issues].map(([key, issue]) => [key, issue.fields.labels ?? []]));
+  const { moves, survivorLost, newItems } = planCloseMoves(session, descriptor, sides.survivor, sides.sources, labelsByKey);
+  const rewrites = newItems.length > 0 || moves.some(m => m.movable.length > 0);
+
+  const warnings: string[] = [];
+  const marker = descriptor.stale?.markerLabel;
+  const survivorIssue = issues.get(sides.survivor)!;
+  if (survivorIssue.fields.resolution != null) {
+    warnings.push(`${sides.survivor} is resolved. You can still merge into it, but nobody may be watching it.`);
+  }
+  if (rewrites && marker && !(survivorIssue.fields.labels ?? []).includes(marker)) {
+    warnings.push(`${sides.survivor} was not created by an import, so rebuilding it from the report replaces text the report does not know.`);
+  }
+  for (const key of sides.sources) {
+    if (issues.get(key)!.fields.resolution != null) warnings.push(`${key} is already resolved, so it is linked and commented on but not closed.`);
+  }
+  warnings.push(...await linkAndResolutionWarnings(ticketService));
+
   const ticket = (key: string) => ({ key, summary: issues.get(key)!.fields.summary ?? '', status: issues.get(key)!.fields.status?.name ?? null });
-  stream.markdown(trustedChatMarkdown(buildMergePrompt({
-    survivor: ticket(sides.survivor), sources: sides.sources.map(ticket), warnings, droppedKeys: rewrite.droppedKeys, baseUrl,
+  stream.markdown(trustedChatMarkdown(buildCloseMergePrompt({
+    survivor: ticket(sides.survivor),
+    sources: moves.map(m => ({ ticket: ticket(m.key), movable: m.movable, unlisted: m.unlisted, elsewhere: m.elsewhere })),
+    itemNoun: closeMode.itemNoun,
+    survivorLost: rewrites ? survivorLost.unlisted : [],
+    survivorElsewhere: rewrites ? survivorLost.elsewhere : [],
+    newItems,
+    warnings,
+    baseUrl,
   })));
   return 'waiting';
 }
@@ -114,14 +174,131 @@ export async function startMerge<TItem, TRow extends ReviewRowBase>(
     stream.markdown(`_Nothing was written. ${safeMarkdownText(sides.reason)}_\n\n`);
     return 'refused';
   }
-  let linkType = 'Duplicate';
-  try {
-    const names = await ticketService.getLinkTypeNames();
-    if (!names.some(n => n.toLowerCase() === 'duplicate') && names.includes('Relates')) linkType = 'Relates';
-  } catch { /* try Duplicate; a refusal is a failed step */ }
-  session.mergeRun = { survivor: sides.survivor, sources: sides.sources, steps: buildMergePlan(sides.survivor, sides.sources), linkType };
-  logDiag(descriptor.scope, 'info', `${descriptor.importLabel} import — merge started`, { survivor: sides.survivor, sources: sides.sources, linkType });
+  const run = await mergeModeOf(descriptor).startRun(session, sides, ticketService, stream, descriptor);
+  if (!run) return 'refused';
+  session.mergeRun = run;
   return advance(session, ticketService, stream, descriptor, baseUrl);
+}
+
+/** The tickets `merge … into …` names, resolved to keys. */
+interface MergeSideKeys {
+  survivor: string;
+  sources: string[];
+}
+
+/** Rewrite mode (Waltz): the confirmation shows the rewrite, the marker on each source and the closes. */
+async function showRewriteMergePrompt<TItem, TRow extends ReviewRowBase>(
+  session: ReviewSession<TRow>,
+  sides: MergeSideKeys,
+  issues: Map<string, Issue>,
+  ticketService: TicketService,
+  stream: vscode.ChatResponseStream,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+  baseUrl?: string,
+): Promise<MergeTurn> {
+  const keys = [sides.survivor, ...sides.sources];
+  const warnings: string[] = [];
+  const marker = descriptor.stale?.markerLabel;
+  for (const key of keys) {
+    const issue = issues.get(key)!;
+    const isSurvivor = key === sides.survivor;
+    if (issue.fields.resolution != null) {
+      warnings.push(isSurvivor
+        ? `${key} is resolved. You can still merge into it, but nobody may be watching it.`
+        : `${key} is already resolved, so it is rewritten and linked but not closed.`);
+    }
+    if (marker && !(issue.fields.labels ?? []).includes(marker)) {
+      warnings.push(`${key} was not created by an import, so rewriting from the report replaces text the report does not know.`);
+    }
+  }
+  warnings.push(...await linkAndResolutionWarnings(ticketService));
+
+  const labels = [...new Set(keys.flatMap(key => issues.get(key)!.fields.labels ?? []))];
+  const rewrite = planRewrite(session, descriptor, sides.survivor, labels, sourceRowsOf(session, sides.sources));
+  const ticket = (key: string) => ({ key, summary: issues.get(key)!.fields.summary ?? '', status: issues.get(key)!.fields.status?.name ?? null });
+  stream.markdown(trustedChatMarkdown(buildMergePrompt({
+    survivor: ticket(sides.survivor), sources: sides.sources.map(ticket), warnings, droppedKeys: rewrite.droppedKeys, baseUrl,
+  })));
+  return 'waiting';
+}
+
+/**
+ * The few things that differ between the two merge modes (rewrite: Waltz; close: Veracode). {@link mergeModeOf} is the one
+ * place that chooses; everything else in this file works the same for both.
+ */
+interface MergeMode<TItem, TRow extends ReviewRowBase> {
+  /** Writes the confirmation page (the tickets are already read). */
+  showPrompt(
+    session: ReviewSession<TRow>, sides: MergeSideKeys, issues: Map<string, Issue>, ticketService: TicketService,
+    stream: vscode.ChatResponseStream, descriptor: ReportImportDescriptor<TItem, TRow>, baseUrl?: string,
+  ): Promise<MergeTurn>;
+  /** Fixes the plan for a confirmed merge; null when it was refused (the message is already shown). */
+  startRun(
+    session: ReviewSession<TRow>, sides: MergeSideKeys, ticketService: TicketService, stream: vscode.ChatResponseStream,
+    descriptor: ReportImportDescriptor<TItem, TRow>,
+  ): Promise<MergeRun | null>;
+  /** What the kept-ticket rewrite also knows about the ticket (the importer's Due Date rule), if the mode uses it. */
+  rewriteTarget(ticketService: TicketService, run: MergeRun, regenItem: TItem, fold: NonNullable<ReportImportDescriptor<TItem, TRow>['fold']>): Promise<RewriteTarget<TItem> | undefined>;
+  /** The step whose completion marks a source row merged. */
+  mergedStep: MergeStep['kind'];
+}
+
+function rewriteMergeMode<TItem, TRow extends ReviewRowBase>(): MergeMode<TItem, TRow> {
+  return {
+    showPrompt: showRewriteMergePrompt,
+    async startRun(_session, sides, ticketService, _stream, descriptor) {
+      let linkType = 'Duplicate';
+      try {
+        const names = await ticketService.getLinkTypeNames();
+        if (!names.some(n => n.toLowerCase() === 'duplicate') && names.includes('Relates')) linkType = 'Relates';
+      } catch { /* try Duplicate; a refusal is a failed step */ }
+      logDiag(descriptor.scope, 'info', `${descriptor.importLabel} import — merge started`, { survivor: sides.survivor, sources: sides.sources, linkType });
+      return { survivor: sides.survivor, sources: sides.sources, steps: buildMergePlan(sides.survivor, sides.sources), linkType };
+    },
+    rewriteTarget: async () => undefined,
+    mergedStep: 'source-rewrite',
+  };
+}
+
+/** Close mode (Veracode): reads the tickets, fixes the plan (what moves, each link type) and returns the run. */
+function closeMergeMode<TItem, TRow extends ReviewRowBase>(closeMerge: CloseTicketMerge): MergeMode<TItem, TRow> {
+  return {
+    showPrompt: (session, sides, issues, ticketService, stream, descriptor, baseUrl) =>
+      showCloseMergePrompt(session, sides, issues, ticketService, stream, descriptor, closeMerge, baseUrl),
+    async startRun(session, sides, ticketService, stream, descriptor) {
+      const labelsByKey = new Map<string, string[]>();
+      try {
+        for (const key of [sides.survivor, ...sides.sources]) labelsByKey.set(key, (await ticketService.getIssue(key)).fields.labels ?? []);
+      } catch (err) {
+        logDiag(descriptor.scope, 'warn', 'Could not read the tickets to merge', { survivor: sides.survivor, sources: sides.sources, error: errorText(err) });
+        stream.markdown(`✗ Could not read all the tickets, so nothing was written: ${safeMarkdownText(errorText(err))}\n\n`);
+        return null;
+      }
+      let linkTypeNames: string[] = [];
+      try { linkTypeNames = await ticketService.getLinkTypeNames(); } catch { /* the wanted type is tried; a refusal is a failed step */ }
+      const { moves, newItems } = planCloseMoves(session, descriptor, sides.survivor, sides.sources, labelsByKey);
+      logDiag(descriptor.scope, 'info', `${descriptor.importLabel} import — merge started`, {
+        survivor: sides.survivor, sources: sides.sources, moved: moves.map(m => m.movable.length), unlisted: moves.map(m => m.unlisted.length), newItems: newItems.length,
+      });
+      return { survivor: sides.survivor, sources: sides.sources, steps: buildCloseMergePlan(sides.survivor, moves, linkTypeNames, newItems.length > 0), sourceMoves: moves };
+    },
+    // The importer's own Due Date rule applies: the movable items are what joins the kept ticket.
+    async rewriteTarget(ticketService, run, regenItem, fold) {
+      const issue = await ticketService.getIssue(run.survivor);
+      const newIds = (run.sourceMoves ?? []).flatMap(m => m.movable);
+      return {
+        ticketCreated: stringOrNull(issue.fields.created),
+        currentDueDate: stringOrNull(issue.fields.duedate),
+        joiningItem: fold.narrowToNew ? fold.narrowToNew(regenItem, { kind: 'findings', newIds }) : null,
+      };
+    },
+    mergedStep: 'close',
+  };
+}
+
+function mergeModeOf<TItem, TRow extends ReviewRowBase>(descriptor: ReportImportDescriptor<TItem, TRow>): MergeMode<TItem, TRow> {
+  const closeMerge = closeModeOf(descriptor);
+  return closeMerge ? closeMergeMode<TItem, TRow>(closeMerge) : rewriteMergeMode<TItem, TRow>();
 }
 
 /** KTD3: a reply while a merge waits — a retry or ignore after a failed step, a target status, a resolution, or stop. */
@@ -168,6 +345,22 @@ export async function handleMergeRunReply<TItem, TRow extends ReviewRowBase>(
   }
 }
 
+/**
+ * Close mode: a source whose items were meant to move is only linked, commented on and closed once the kept ticket was
+ * rebuilt. When that rewrite was skipped (after a failure, `ignore`), those sources' steps are skipped too, so their
+ * items never end up only on a closed ticket; the final report lists the skipped steps as still missing.
+ */
+function holdSourcesWithoutRewrite(run: MergeRun): void {
+  const rewrite = run.steps.find(s => s.kind === 'survivor-rewrite');
+  if (rewrite?.status !== 'skipped') return;
+  const holding = new Set((run.sourceMoves ?? []).filter(m => m.movable.length > 0).map(m => m.key));
+  for (const step of run.steps) {
+    if (step.status !== 'pending' || !holding.has(step.key)) continue;
+    step.status = 'skipped';
+    step.note = `${run.survivor} was not rebuilt, so this ticket keeps its items and stays open`;
+  }
+}
+
 /** Runs the pending steps in order until one fails, the close needs the user, or everything is done. */
 async function advance<TItem, TRow extends ReviewRowBase>(
   session: ReviewSession<TRow>,
@@ -177,6 +370,7 @@ async function advance<TItem, TRow extends ReviewRowBase>(
   baseUrl?: string,
 ): Promise<MergeTurn> {
   const run = session.mergeRun!;
+  holdSourcesWithoutRewrite(run);
   for (const step of run.steps) {
     if (step.status !== 'pending') continue;
     if (step.kind === 'close') break; // the closes are asked for and run together below
@@ -204,13 +398,16 @@ async function executeStep<TItem, TRow extends ReviewRowBase>(
     case 'survivor-rewrite': {
       const labels = await recordedLabels(ticketService, [run.survivor, ...run.sources]);
       const plan = planRewrite(session, descriptor, run.survivor, labels, sourceRows);
-      const written = await writeRewrite(ticketService, descriptor, run.survivor, plan.regenItem, labelsToRemove(session, descriptor, plan.droppedKeys));
+      const target = await mergeModeOf(descriptor).rewriteTarget(ticketService, run, plan.regenItem, fold);
+      const written = await writeRewrite(ticketService, descriptor, run.survivor, plan.regenItem, labelsToRemove(session, descriptor, plan.droppedKeys), target);
       if (written.droppedFields.length > 0) step.note = droppedFieldsNote(written.droppedFields);
       run.droppedKeys = plan.droppedKeys;
       return;
     }
     case 'survivor-comment': {
-      const preface = descriptor.ticketMerge!.buildCommentPreface(run.sources);
+      const merge = descriptor.ticketMerge!;
+      if (merge.mode === 'close') return;
+      const preface = merge.buildCommentPreface(run.sources);
       // A replayed confirmation (a second click, an old link) would post the same comment again.
       if (await ticketService.hasCommentStartingWith(run.survivor, preface)) {
         step.note = 'already commented';
@@ -221,12 +418,30 @@ async function executeStep<TItem, TRow extends ReviewRowBase>(
       return;
     }
     case 'link': {
-      if (await ticketService.hasLinkBetween(step.key, run.survivor, run.linkType ?? 'Duplicate')) {
+      const linkType = step.linkType ?? run.linkType ?? 'Duplicate';
+      // Close mode picks the type from what moved, which can differ between runs, so any link between the two counts.
+      if (await ticketService.hasLinkBetween(step.key, run.survivor, step.linkType ? undefined : linkType)) {
         step.note = 'already linked';
         return;
       }
-      await ticketService.linkIssues(step.key, run.survivor, run.linkType ?? 'Duplicate');
-      if (run.linkType === 'Relates') step.note = 'linked as Relates (no Duplicate link type)';
+      await ticketService.linkIssues(step.key, run.survivor, linkType);
+      if (step.wantedLinkType) {
+        if (step.wantedLinkType !== linkType) step.note = `linked as ${linkType} (no ${step.wantedLinkType} link type)`;
+      } else if (run.linkType === 'Relates') {
+        step.note = 'linked as Relates (no Duplicate link type)';
+      }
+      return;
+    }
+    case 'source-comment': {
+      const merge = closeModeOf(descriptor)!;
+      const move = run.sourceMoves?.find(m => m.key === step.key);
+      const { preface, text } = merge.buildSourceComment(run.survivor, move?.unlisted ?? [], move?.elsewhere ?? []);
+      // A replayed confirmation (a second click, an old link) would post the same comment again.
+      if (await ticketService.hasCommentStartingWith(step.key, preface)) {
+        step.note = 'already commented';
+        return;
+      }
+      await ticketService.addComment(step.key, text, baseUrl);
       return;
     }
     case 'source-rewrite':
@@ -256,8 +471,9 @@ async function failStep<TItem, TRow extends ReviewRowBase>(
 const STEP_LABEL: Record<MergeStep['kind'], string> = {
   'survivor-rewrite': 'rewrite the kept ticket',
   'survivor-comment': 'comment on the kept ticket',
-  link: 'link as a duplicate',
+  link: 'link the tickets',
   'source-rewrite': 'mark the ticket as merged',
+  'source-comment': 'comment on the closed ticket',
   close: 'close',
 };
 
@@ -272,7 +488,7 @@ function ticketLines(run: MergeRun, baseUrl?: string): string[] {
   return [
     `**${formatKeyLink(run.survivor, baseUrl)}** (kept)`,
     ...forKey(run.survivor).map(l => `  - ${l}`),
-    ...run.sources.flatMap(key => [`**${formatKeyLink(key, baseUrl)}** (cancelled)`, ...forKey(key).map(l => `  - ${l}`)]),
+    ...run.sources.flatMap(key => [`**${formatKeyLink(key, baseUrl)}** (closing)`, ...forKey(key).map(l => `  - ${l}`)]),
   ];
 }
 
@@ -284,14 +500,14 @@ async function askAgain(run: MergeRun, stream: vscode.ChatResponseStream, baseUr
     const group = run.closeGroups?.find(g => g.issueType === run.closeIssueType);
     const keys = group?.tickets.map(t => formatKeyLink(t.key, baseUrl)).join(', ') ?? '';
     stream.markdown(trustedChatMarkdown(
-      `Which status should the **${safeMarkdownText(run.closeIssueType ?? '')}** tickets ${keys} move to?` +
-      `${run.duplicateResolution ? ` They are closed with resolution ${safeMarkdownText(run.duplicateResolution)}.` : ''}\n\n` +
-      `${numbered((run.closeTargetOptions ?? []).map(formatStaleTargetOption))}\n\nReply with the name or number, or ${stop} to leave them open.`,
+      `Move ${keys} (${safeMarkdownText(run.closeIssueType ?? '')}) to which status?` +
+      `${run.duplicateResolution ? ` It is closed with resolution ${safeMarkdownText(run.duplicateResolution)}.` : ''}\n\n` +
+      `${numbered((run.closeTargetOptions ?? []).map(formatStaleTargetOption))}\n\nReply with a number or name, or ${stop} to leave it open.`,
     ));
   } else if (run.awaiting === 'resolution') {
     stream.markdown(trustedChatMarkdown(
-      `This project has no Duplicate resolution. Which resolution should the tickets get?\n\n${numbered(run.resolutionOptions ?? [])}\n\n` +
-      `Reply with the name or number, ${buildChatCommandLink('None', '@jira', 'none')} for no resolution, or ${stop}.`,
+      `No Duplicate resolution in this project. Pick one:\n\n${numbered(run.resolutionOptions ?? [])}\n\n` +
+      `Reply with a number or name, ${buildChatCommandLink('None', '@jira', 'none')} for no resolution, or ${stop}.`,
     ));
   } else {
     const failed = run.steps.find(s => s.status === 'failed');
@@ -438,7 +654,7 @@ function finish<TItem, TRow extends ReviewRowBase>(
 ): MergeTurn {
   const run = session.mergeRun!;
   const done = (kind: MergeStep['kind'], key: string) => stepOf(run, kind, key)?.status === 'done';
-  const mergedSources = run.sources.filter(key => done('source-rewrite', key));
+  const mergedSources = run.sources.filter(key => done(mergeModeOf(descriptor).mergedStep, key));
   const closedSources = run.sources.filter(key => done('close', key));
   const survivorRewritten = done('survivor-rewrite', run.survivor);
 
@@ -449,8 +665,12 @@ function finish<TItem, TRow extends ReviewRowBase>(
     if (key === run.survivor && survivorRewritten) return { ...r, result: { status: 'done', action: 'rewrite' } };
     return r;
   };
-  session.allRows = session.allRows.map(mark);
-  session.rows = session.rows.map(mark);
+  // A source that is now closed no longer counts as another open ticket on any row that listed it.
+  const dropClosed = (r: TRow): TRow => (r.openTicketKeys?.some(k => closedSources.includes(k))
+    ? { ...r, openTicketKeys: r.openTicketKeys.filter(k => !closedSources.includes(k)) }
+    : r);
+  session.allRows = session.allRows.map(mark).map(dropClosed);
+  session.rows = session.rows.map(mark).map(dropClosed);
   const outcomes = session.outcomes ?? emptyImportOutcomes();
   session.outcomes = { ...outcomes, merged: outcomes.merged + closedSources.length, mergeFailed: outcomes.mergeFailed + (run.sources.length - closedSources.length) };
 

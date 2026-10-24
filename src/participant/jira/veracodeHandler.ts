@@ -5,7 +5,7 @@ import type { IJiraClient } from '../../jira/IJiraClient';
 import {
   parseVeracodeReport, filterFlaws, severityLabel, groupFlawsByLocation,
   buildGroupSummary, buildGroupDescriptionWiki, buildGroupLabels, buildFoldedCommentWiki,
-  describeVeracodeChange, flawsWithIds, buildFollowUpSummary,
+  describeVeracodeChange, flawsWithIds, buildFollowUpSummary, buildMergedSourceComment,
   type VeracodeFlaw, type VeracodeReviewRow,
 } from '../../utils/veracodeReport';
 import type { VeracodeTemplateSelectionSession, VeracodeReviewSession, StaleCloseSession } from '../sessionState';
@@ -209,6 +209,13 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
     buildComment: (group, droppedKeys, details) => buildFoldedCommentWiki(group, droppedKeys, veracodeDue(details?.ticketCreated)),
     narrowToNew: (group, change) => flawsWithIds(group, change.newIds),
   },
+  // Ticket merge, close mode (KTD1): items move to the kept ticket only when it lacks them; each source is linked,
+  // commented on and closed without editing its text.
+  ticketMerge: {
+    mode: 'close',
+    itemNoun: 'flaw',
+    buildSourceComment: buildMergedSourceComment,
+  },
   // Security overview export (KTD3): the report's own flaws are the exact detail, and the SLA table implies the same Due Date a ticket would get.
   overviewExport: {
     source: 'veracode',
@@ -221,6 +228,7 @@ const veracodeDescriptor: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewR
   // changed ticket is always rebuilt with its findings table; there is no `update` and no baseline, rating or summary rewrite.
   changeTracking: {
     findingNoun: 'flaw(s)',
+    reportKeysOf: rawItems => (rawItems as VeracodeFlaw[]).map(flaw => flaw.issueId),
     describe: describeVeracodeChange,
     deriveActions: deriveRewriteActions,
     dueDateBackfill: { expectedFor: veracodeGroupDue },

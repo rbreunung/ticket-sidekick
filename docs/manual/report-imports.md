@@ -168,29 +168,43 @@ A merge is not saved between pages or between imports: moving to another page di
 
 Both choices change the ticket's labels. Nothing is written until you click one. If a write fails, the rows stay in New; if only the comment fails, the write stands and the rows leave New.
 
-### Merging related tickets (OSS reports)
+### Merging tickets
 
-Two or more tickets for the same piece of work can be combined. On the overview or the **Already ticketed** screen, reply `merge` with the tickets to cancel, then `into` and the ticket to keep. Name tickets by their `A` number or their key:
+The **Ticket** cell on the Already ticketed screen shows the ticket a row points to. When another ticket for the same item is still open, the cell names it, for example `PROJ-1301 · also open: PROJ-1190` (up to three keys, then `+N`). Closed tickets (a resolution is set) are not shown. The screen then offers a `merge` reply built from that row's tickets.
+
+Two or more tickets for the same piece of work can be combined. On the overview or the **Already ticketed** screen, reply `merge` with the tickets to close, then `into` and the ticket to keep. Name tickets by their `A` number or their key. You choose the direction; `merge PROJ-1190 into PROJ-1301` keeps PROJ-1301, and swapping the two keeps PROJ-1190:
 
 ```text
 merge A5 A6 into A3
 merge PROJ-15 PROJ-18 into PROJ-12
 ```
 
-`@jira` first shows the tickets, the steps and any warnings, and writes nothing. Click **Merge** to go ahead. Then:
+`@jira` first shows the tickets, the steps and any warnings, and writes nothing. Click **Merge** to go ahead. Merging works differently for the two kinds of report.
+
+**OSS reports.** Then:
 
 1. The kept ticket is rewritten once from the report rows of all the tickets (title, description and the combined labels), and a comment names the tickets it took over and any finding the new text no longer covers.
 2. Each cancelled ticket is linked as a duplicate of the kept one, gets `[Merged into PROJ-12]` in front of its title, and a banner above its text. The original text stays below the banner.
 3. Each cancelled ticket is closed with resolution Duplicate. You pick the status to move each issue type to.
 
+**Veracode reports.** The tickets are not rewritten or renamed. For each ticket you close:
+
+1. If it records flaws the kept ticket lacks and the report still lists them, or the report lists a flaw no ticket records yet, the kept ticket is rebuilt once from the report so it carries them all (its Due Date follows the usual rule: set only when empty, moved earlier only when the added flaws are due sooner). If every flaw is already on the kept ticket, nothing is rewritten.
+2. The two tickets are linked: `Duplicate` when nothing moved, `Relates` when flaws moved.
+3. A comment on the closed ticket names the kept one. A flaw that is not moved is named in that comment: one the report no longer lists, or one the report still lists but outside the kept ticket's rows (filtered by your settings, or grouped under another ticket). The confirmation says which.
+4. The ticket is closed. You pick the status; the resolution is Duplicate when your project has it, otherwise you pick one.
+
+If the kept ticket cannot be rebuilt (the step fails and you reply **Ignore**), the sources that had flaws to move are not linked, commented on or closed, so their flaws never end up only on a closed ticket; the final report lists those steps as still missing.
+
 What to expect:
 
-- **Warnings before you click.** A resolved kept ticket, a ticket that no import created (a rewrite replaces its text, and the finding it would drop are listed), and an already-resolved cancelled ticket (it is rewritten and linked but not closed).
+- **Warnings before you click.** A resolved kept ticket, a ticket that no import created (a rewrite replaces its text, and the finding it would drop are listed), and an already-resolved cancelled ticket (OSS reports: it is rewritten and linked but not closed; Veracode: it is linked and commented on but not closed).
 - **Missing Jira pieces.** Without a Duplicate link type the tickets are linked as Relates. Without a Duplicate resolution you pick the resolution from your project's list. The confirmation says so up front.
 - **If a step fails,** the merge stops and lists every ticket with its link, the step that failed and the error. Reply **Retry** to run that step again, **Ignore** to skip it and carry on with the rest (the final report lists what is missing), or **Stop here** to end the merge. Steps already done stay done.
 - **A ticket Jira closes without the Duplicate resolution** (some workflows reject the field) is named in the final report.
+- **Reload report.** Merge also turns on `reload report` for Veracode imports, because the screens go out of date after a merge.
 - **Where it works.** The overview and the Already ticketed screen. On the New screen `merge 2 4` still combines rows, and `add 2 4 to PROJ-123` still adds rows to a ticket. The Stale screen has its own **Close tickets**.
-- **Later imports.** Nothing is stored. The kept ticket carries every label and stays open, so it is the one later imports propose changes for; the cancelled ticket is resolved and is left alone.
+- **Later imports.** Nothing is stored. The kept ticket stays open, so it is the one later imports propose changes for; the closed ticket is resolved and is left alone, and its labels still count as known, so its items do not come back as new.
 
 After a merge the review refreshes itself from Jira, unless you have unfinished choices on the screen (excluded or merged New rows, or Already-ticketed actions you changed). In that case the overview says the screens are out of date and offers **Reload report**.
 

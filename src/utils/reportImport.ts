@@ -676,6 +676,7 @@ export function buildReviewRows<TItem, TRow extends ReviewRowBase>(
       const derive = changeTracking.deriveActions ?? deriveTicketedActions;
       const { allowedActions, action } = derive(change, tickets.some(t => !t.resolved));
       base.ticketKeys = tickets.map(t => t.key);
+      base.openTicketKeys = tickets.filter(t => !t.resolved && t.key !== target.key).map(t => t.key);
       base.target = { key: target.key, status: target.status, resolved: target.resolved };
       base.change = change;
       base.allowedActions = allowedActions;

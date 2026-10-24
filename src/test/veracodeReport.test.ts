@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { parseVeracodeReport, filterFlaws, assertSafeVeracodeXml } from '../utils/veracodeReport';
-import { deriveShortLabel, buildSummary, buildDescriptionWiki, buildLabels } from '../utils/veracodeReport';
+import { deriveShortLabel, buildSummary, buildDescriptionWiki, buildLabels, buildMergedSourceComment } from '../utils/veracodeReport';
 import {
   groupFlawsByLocation, buildGroupLabels, buildGroupDescriptionWiki, buildGroupSummary,
   describeVeracodeChange, flawsWithIds, buildFollowUpSummary, buildFoldedCommentWiki,
@@ -899,5 +899,36 @@ describe('Findings table dates (First found, Due date)', () => {
     expect(wiki.length).toBeLessThanOrEqual(30_000);
     expect(wiki).toContain('||Issue ID||Severity||CWE||File||Line||');
     expect(wiki).toContain('leaves out the module, path, CWE name, function and dates');
+  });
+});
+
+describe('buildMergedSourceComment', () => {
+  it('names the kept ticket and says the items are tracked there', () => {
+    const { preface, text } = buildMergedSourceComment('PROJ-1301', []);
+    expect(preface).toBe('h4. Merged into PROJ-1301');
+    expect(text).toBe('h4. Merged into PROJ-1301\nThis ticket was merged into PROJ-1301. Its items are tracked there.');
+  });
+
+  it('does not claim the ticket is already closed, because the comment is posted before the close runs', () => {
+    expect(buildMergedSourceComment('PROJ-1301', []).text).not.toMatch(/closed/i);
+  });
+
+  it('Covers AE5: names flaws still in the report but outside the kept ticket\'s rows separately', () => {
+    const { text } = buildMergedSourceComment('PROJ-1301', ['4690'], ['4800', 'x{panel}']);
+    expect(text).toContain('Not copied (no longer in the report): 4690.');
+    expect(text).toContain("Not copied (still in the report, but not part of PROJ-1301's rows): 4800.");
+    expect(text).not.toContain('panel');
+  });
+
+  it('Covers AE5: names flaws the report no longer lists', () => {
+    const { text } = buildMergedSourceComment('PROJ-1301', ['4690', '4691']);
+    expect(text).toContain('Not copied (no longer in the report): 4690, 4691.');
+  });
+
+  it('writes only numeric flaw ids, so a crafted label cannot put markup into the comment', () => {
+    const { text } = buildMergedSourceComment('PROJ-1301', ['4690', '{panel}x', '12 [evil|http://x]']);
+    expect(text).toContain('4690');
+    expect(text).not.toContain('panel');
+    expect(text).not.toContain('evil');
   });
 });
