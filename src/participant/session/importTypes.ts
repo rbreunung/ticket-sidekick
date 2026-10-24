@@ -261,6 +261,9 @@ export interface ReviewSession<TRow> {
   // Remediation dates (KTD1): the target tickets' descriptions read for the date comparison, by ticket key (null = read but
   // empty), so a rebuild after `accept component` or `reload report` does not read them all again.
   ticketDescriptions?: Record<string, string | null>;
+  // Ticket search: summary and build-time status of every ticket the dedup search matched, by key, for the `search` reply.
+  // Absent on a session saved before the field existed (and for email).
+  ticketInfo?: Record<string, { summary: string; status: string | null }>;
   // Remediation dates (KTD10): the dedup keys of every component in the unfiltered report, so a rewrite takes a label
   // off a ticket only for a component that really left the report, not one filtered or accepted away.
   reportKeys?: string[];

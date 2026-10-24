@@ -113,6 +113,7 @@ export function searchFromStore(ticketService: TicketService, tickets: Record<st
         fields: {
           labels: t.labels, resolution: t.resolution ?? null, created: t.created ?? '2026-01-01T09:00:00.000+0000',
           status: { name: t.status ?? 'Open' }, duedate: t.duedate ?? null,
+          ...(t.summary === undefined ? {} : { summary: t.summary }),
         },
       }));
     return { issues, total: issues.length, isLast: true } as never;

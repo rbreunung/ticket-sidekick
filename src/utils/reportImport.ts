@@ -97,6 +97,8 @@ export interface JqlIssueLike {
     resolution?: unknown;
     created?: string | null;
     status?: { name?: string } | null;
+    /** The ticket's summary; absent when the search did not return it. */
+    summary?: string;
     /** The ticket's Due Date (`YYYY-MM-DD`); null = empty, absent = the search did not return the field. */
     duedate?: string | null;
   };
@@ -119,6 +121,22 @@ export interface DedupTicket {
   description?: string | null;
   /** Jira's Due Date: `null` = the field is empty, `undefined` = the search did not return it (never treated as empty). */
   dueDate?: string | null;
+  /** The ticket's summary, when the search returned it (the review's ticket search matches against it). */
+  summary?: string;
+}
+
+/** What the review keeps about a matched ticket for its `search` reply: summary and the status at build time. */
+export type TicketInfo = Record<string, { summary: string; status: string | null }>;
+
+/** One summary and status per ticket in the dedup map; a ticket the search returned no summary for is left out. */
+export function buildTicketInfo(map: DedupMap): TicketInfo {
+  const info: TicketInfo = {};
+  for (const tickets of map.values()) {
+    for (const ticket of tickets) {
+      if (ticket.summary !== undefined) info[ticket.key] = { summary: ticket.summary, status: ticket.status };
+    }
+  }
+  return info;
 }
 
 /** Dedup key -> every ticket carrying it (U3/KTD1 — no longer "first match wins"). */
@@ -133,6 +151,7 @@ function toDedupTicket(issue: JqlIssueLike): DedupTicket {
     created: stringOrNull(fields.created),
     status: stringOrNull(fields.status?.name),
     ...(fields.duedate === undefined ? {} : { dueDate: stringOrNull(fields.duedate) }),
+    ...(typeof fields.summary === 'string' ? { summary: fields.summary } : {}),
   };
 }
 
