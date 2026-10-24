@@ -27,6 +27,11 @@ describe('search reply (import ticket search, U3)', () => {
     expect(parseNewGroupReply(reply, ctx())).toEqual({ kind: 'search', keyword });
   });
 
+  it.each(['search cancel', 'search stop', 'search no', 'search yes', 'search done'])('"%s" is a search for that word, not a cancel or confirm', (reply) => {
+    expect(parseNewGroupReply(reply, ctx())).toMatchObject({ kind: 'search' });
+    expect(parseTicketedGroupReply(reply, ctx())).toMatchObject({ kind: 'search' });
+  });
+
   it('searches from the Already ticketed screen too', () => {
     expect(parseTicketedGroupReply('search netty', ctx())).toEqual({ kind: 'search', keyword: 'netty' });
   });
@@ -86,6 +91,15 @@ describe('merge … into <ticket> on the New screen (alias of add … to, U3)', 
     const action = parseNewGroupReply('merge 7 8 into A3', ctx());
     expect(action.kind).toBe('invalid');
     expect(action.kind === 'invalid' && action.reason).toContain('7');
+  });
+
+  it.each(['constructor', '__proto__', 'tostring'])('"%s" is not an A id, even though it is a property name on every object', (target) => {
+    const action = parseNewGroupReply(`merge 1 into ${target}`, ctx());
+    expect(action.kind).toBe('invalid');
+  });
+
+  it('accepts a comma-separated left side', () => {
+    expect(parseNewGroupReply('merge 1,2 into A3', ctx())).toEqual({ kind: 'addPrompt', ids: ['1', '2'], key: 'PROJ-12' });
   });
 
   it('a target that is neither a key nor an A id is refused', () => {

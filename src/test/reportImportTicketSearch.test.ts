@@ -144,6 +144,14 @@ describe('search reply (import ticket search, U4)', () => {
     expect(out.text).toContain('reload report');
   });
 
+  it('on a fresh review where nothing matched, says no tickets matched instead of asking for a reload', async () => {
+    const { session, ws } = await importWaltz([fresh], {});
+    const opened = await reply('open new', session, ws);
+    const out = await reply('search anything', opened.session, ws);
+    expect(out.text).toMatch(/No open tickets/);
+    expect(out.text).not.toContain('reload report');
+  });
+
   it('on the overview, points to the screens that have search', async () => {
     const { session, ws } = await importWaltz([lib, fresh], ticketedTickets());
     const out = await reply('search bar', session, ws);

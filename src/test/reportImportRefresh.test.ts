@@ -325,9 +325,9 @@ describe('the review keeps each matched ticket\'s summary and status for the sea
     expect(session.ticketInfo).toEqual({ 'PROJ-5': { summary: '[OSS] bar:1.0 — High', status: 'In Progress' } });
   });
 
-  it('stores nothing when no ticket matched', async () => {
+  it('stores an empty map when no ticket matched, so search says nothing matched rather than "reload"', async () => {
     const { session } = await importWaltz([lib], {});
-    expect(session.ticketInfo).toBeUndefined();
+    expect(session.ticketInfo).toEqual({});
   });
 
   it('rebuilds the map from the new search on reload report', async () => {

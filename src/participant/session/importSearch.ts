@@ -2,15 +2,14 @@
 // summary contains the keyword. Pure (vscode-free); no Jira call is made here.
 
 import { formatKeyLink } from '../../services/TicketService';
-import { IMPORT_COMMANDS } from './importScreens';
+import { IMPORT_COMMANDS, SEARCH_USAGE } from './importScreens';
+import { safeMarkdownText } from './importReplies';
 import { ReviewRowBase } from './importTypes';
-import { neutralizeMarkdownLinks } from './primitives';
+import type { TicketInfo } from '../../utils/reportImport';
 
 /** How many matching tickets one `search` reply lists. */
 export const SEARCH_RESULT_LIMIT = 20;
 
-/** Summary and build-time status of the tickets the dedup search matched, by key (`ReviewSession.ticketInfo`). */
-export type TicketInfoMap = Record<string, { summary: string; status: string | null }>;
 
 export interface TicketSearchResult {
   key: string;
@@ -35,7 +34,7 @@ function isFinishedMerge(row: ReviewRowBase): boolean {
  * each word as a substring). A ticket is listed once, in the order its first row appears, with the ids of the rows it
  * is the main ticket of; an extra open ticket of a row carries no id, because an id resolves to its row's main ticket only.
  */
-export function findTicketsBySummary(rows: ReviewRowBase[], ticketInfo: TicketInfoMap | undefined, keyword: string): TicketSearchOutcome {
+export function findTicketsBySummary(rows: ReviewRowBase[], ticketInfo: TicketInfo | undefined, keyword: string): TicketSearchOutcome {
   const words = keyword.toLowerCase().split(/\s+/).filter(Boolean);
   if (words.length === 0) return { kind: 'usage' };
   if (!ticketInfo) return { kind: 'no-info' };
@@ -62,18 +61,18 @@ export function findTicketsBySummary(rows: ReviewRowBase[], ticketInfo: TicketIn
   return { kind: 'results', results: matches.slice(0, SEARCH_RESULT_LIMIT), total: matches.length };
 }
 
-/** The chat text for a search outcome. Summaries are untrusted Jira text: markdown link syntax is neutralized. */
+/** The chat text for a search outcome. Summaries and statuses are untrusted Jira text on a trusted screen: `safeMarkdownText` defuses links, autolinks and line breaks. */
 export function buildSearchResults(outcome: TicketSearchOutcome, keyword: string, baseUrl?: string): string {
-  if (outcome.kind === 'usage') return 'Search the matched tickets like this: `search <keyword>` (a class or component name, for example).';
+  if (outcome.kind === 'usage') return SEARCH_USAGE;
   if (outcome.kind === 'no-info') {
     return `_This review holds no ticket summaries to search (it was saved by an older version). Reply \`${IMPORT_COMMANDS.reload}\` to read them again._`;
   }
-  const shown = neutralizeMarkdownLinks(keyword.trim());
+  const shown = safeMarkdownText(keyword.trim());
   if (outcome.results.length === 0) return `No open tickets in this review have a summary containing “${shown}”.`;
   const lines = outcome.results.map(r => {
     const ids = r.ids.length > 0 ? `${r.ids.join(', ')} · ` : '';
-    const status = r.status ? ` · ${neutralizeMarkdownLinks(r.status)}` : '';
-    return `- ${ids}${formatKeyLink(r.key, baseUrl)}${status} · ${neutralizeMarkdownLinks(r.summary)}`;
+    const status = r.status ? ` · ${safeMarkdownText(r.status)}` : '';
+    return `- ${ids}${formatKeyLink(r.key, baseUrl)}${status} · ${safeMarkdownText(r.summary)}`;
   });
   const more = outcome.total > outcome.results.length ? `\n\n_${outcome.total - outcome.results.length} more match — narrow the keyword to see them._` : '';
   const plural = outcome.total === 1 ? 'ticket' : 'tickets';

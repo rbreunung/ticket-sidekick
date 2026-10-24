@@ -518,7 +518,7 @@ async function buildImportReview<TItem, TRow extends ReviewRowBase>(
     rows: initialPage.rows,
     page: initialPage.page,
     ...(ticketDescriptions ? { ticketDescriptions } : {}),
-    ...(dedupMap.size > 0 ? { ticketInfo: buildTicketInfo(dedupMap) } : {}),
+    ...(descriptor.dedupKeyOf ? { ticketInfo: buildTicketInfo(dedupMap) } : {}),
     ...(reportKeys ? { reportKeys } : {}),
     ...(hiddenCounts ? { acceptedHidden: hiddenCounts } : {}),
     schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,

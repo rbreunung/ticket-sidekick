@@ -38,6 +38,9 @@ export const IMPORT_COMMANDS = {
   search: 'search',
 } as const;
 
+/** The usage line for a `search` reply with no keyword (shared by the parser and the results builder). */
+export const SEARCH_USAGE = 'Search the matched tickets like this: `search <keyword>` (a class or component name, for example).';
+
 /** The reply word a component entry's Remove link sends; one token, so it never reads as the `unaccept <component> <CVE>` form. */
 export const UNACCEPT_COMPONENT_WORD = 'unaccept-component';
 

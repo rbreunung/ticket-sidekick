@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { type ReviewRowBase } from '../participant/sessionState';
-import { findTicketsBySummary, buildSearchResults, SEARCH_RESULT_LIMIT, type TicketInfoMap } from '../participant/session/importSearch';
+import { findTicketsBySummary, buildSearchResults, SEARCH_RESULT_LIMIT } from '../participant/session/importSearch';
+import type { TicketInfo as TicketInfoMap } from '../utils/reportImport';
 
 const row = (id: string, target: { key: string; resolved?: boolean; status?: string | null } | null, extra: Partial<ReviewRowBase> = {}): ReviewRowBase => ({
   id,
@@ -131,6 +132,28 @@ describe('buildSearchResults', () => {
   it('neutralizes markdown link syntax in a summary', () => {
     const text = buildSearchResults({ kind: 'results', total: 1, results: [{ key: 'PROJ-1', ids: [], status: 'Open', summary: '[click](http://evil.example)' }] }, 'click');
     expect(text).not.toContain('[click](http://evil.example)');
+  });
+
+  const cmd = 'command:workbench.action.chat.open?%7B%22query%22%3A%22%40jira%20done%22%7D';
+  const attacks: Array<[string, string]> = [
+    ['inline link', `[click](${cmd})`],
+    ['image', `![x](${cmd})`],
+    ['reference-style link', `[click][ref]\n\n[ref]: ${cmd}`],
+    ['angle-bracket autolink', `<${cmd}>`],
+    ['raw HTML anchor', `<a href="${cmd}">go</a>`],
+    ['backslash-escaped bracket', `\\[click\\](${cmd})`],
+    ['newline then heading and list', 'x\n# Heading\n- item'],
+  ];
+
+  it.each(attacks)('%s in a summary, status or keyword leaves no live link, HTML or new block', (_name, payload) => {
+    const text = buildSearchResults(
+      { kind: 'results', total: 1, results: [{ key: 'PROJ-1', ids: ['A1'], status: payload, summary: payload }] },
+      payload,
+    );
+    expect(text).not.toMatch(/\]\(command:/);
+    expect(text).not.toMatch(/(^|[^\\])</);
+    expect(text).not.toMatch(/\n#/);
+    expect(text.split('\n').filter(l => l.startsWith('- '))).toHaveLength(1);
   });
 
   it('Covers AE3: says no tickets matched', () => {

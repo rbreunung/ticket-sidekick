@@ -3,9 +3,9 @@
 
 import { TICKETED_ACTION_ORDER } from '../../utils/reportImport';
 import { formatKeyLink } from '../../services/TicketService';
-import { IMPORT_COMMANDS, LEGACY_UPDATE_COMMAND, UNACCEPT_COMPONENT_WORD } from './importScreens';
+import { IMPORT_COMMANDS, LEGACY_UPDATE_COMMAND, SEARCH_USAGE, UNACCEPT_COMPONENT_WORD } from './importScreens';
 import { AddMode, ImportOutcomes, ImportResultGroup, ImportReviewView, MergeRun, ReviewRowBase, ReviewSessionStale, StaleTargetOption, TicketedAction, ActionLabels, actionLabelOf } from './importTypes';
-import { cmdLink, isBackOrCancellation, isCancellation, isConfirmation, neutralizeMarkdownLinks, normalizeReply } from './primitives';
+import { TICKET_KEY_TOKEN, cmdLink, isBackOrCancellation, isCancellation, isConfirmation, neutralizeMarkdownLinks, normalizeReply } from './primitives';
 import { parseResolutionSelection } from './core';
 import { ReviewPageNav, parseBulkNewRowReply, parseReviewPageNav } from './reviewPaging';
 import { parseStaleTargetPick, parseStaleTicketToggle } from './staleTargets';
@@ -159,7 +159,6 @@ export function parseMergeRunReply(reply: string, run: MergeRun): MergeRunReply 
   return isBackOrCancellation(reply) ? { kind: 'cancel' } : { kind: 'invalid' };
 }
 
-const SEARCH_USAGE = 'Search the matched tickets like this: `search <keyword>` (a class or component name, for example).';
 const SEARCH_ON_OTHER_SCREEN = 'Search works on the New and Already ticketed screens — open one of them first, then `search <keyword>`.';
 
 /** `show` re-prints the screen the session is on, wherever the importer supports search. */
@@ -180,8 +179,6 @@ function parseSearchReply(reply: string, ctx: ImportReplyContext, available: boo
   return keyword ? { kind: 'search', keyword } : { kind: 'invalid', reason: SEARCH_USAGE };
 }
 
-const TICKET_KEY_PATTERN = /^[a-z][a-z0-9_]*-\d+$/;
-
 /**
  * `merge <New rows> into <KEY or A id>` on the New screen: the add flow under another name. The left side counts as New rows only
  * when every token is a plain number, so `merge A5 into A3` (a ticket merge) keeps its pointer to the overview.
@@ -194,7 +191,8 @@ function parseMergeIntoTicketReply(n: string, ctx: ImportReplyContext): ImportRe
   const rows = matchVisibleNewRows(tokens, ctx, 'added');
   if ('reason' in rows) return { kind: 'invalid', reason: rows.reason };
   const target = match[2];
-  const key = TICKET_KEY_PATTERN.test(target) ? target.toUpperCase() : ctx.ticketTargetKeys?.[target];
+  const targets = ctx.ticketTargetKeys ?? {};
+  const key = TICKET_KEY_TOKEN.test(target) ? target.toUpperCase() : Object.hasOwn(targets, target) ? targets[target] : undefined;
   if (!key) return { kind: 'invalid', reason: `${target.toUpperCase()} isn't a ticket key or an Already-ticketed row id, so there is no ticket to merge into.` };
   return { kind: 'addPrompt', ids: rows.ids, key };
 }
