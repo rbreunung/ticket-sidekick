@@ -845,7 +845,7 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
       return rerender();
     case 'export':
       // The export stays the last thing on screen (no review screen printed over it); the session stays open on the screen it was on.
-      await exportImportOverview(session, action.csv, ticketService, stream, descriptor, baseUrl);
+      await exportImportOverview(session, action.format, ticketService, stream, descriptor, baseUrl);
       await ws.update(descriptor.sessionKeys.review, session);
       return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
     case 'unaccept':

@@ -245,16 +245,27 @@ describe('renderOverviewMarkdown', () => {
 
 describe('parseOverviewPrompt', () => {
   it('reads an upper-case project key and the csv word in either order', () => {
-    expect(parseOverviewPrompt('SEC')).toEqual({ projectKey: 'SEC', csv: false });
-    expect(parseOverviewPrompt('SEC csv')).toEqual({ projectKey: 'SEC', csv: true });
-    expect(parseOverviewPrompt('csv SEC')).toEqual({ projectKey: 'SEC', csv: true });
-    expect(parseOverviewPrompt('for project SEC, CSV please')).toEqual({ projectKey: 'SEC', csv: true });
+    expect(parseOverviewPrompt('SEC')).toEqual({ projectKey: 'SEC', format: null });
+    expect(parseOverviewPrompt('SEC csv')).toEqual({ projectKey: 'SEC', format: 'csv' });
+    expect(parseOverviewPrompt('csv SEC')).toEqual({ projectKey: 'SEC', format: 'csv' });
+    expect(parseOverviewPrompt('for project SEC, CSV please')).toEqual({ projectKey: 'SEC', format: 'csv' });
+  });
+
+  it('reads xlsx or excel as the Excel format', () => {
+    expect(parseOverviewPrompt('SEC xlsx')).toEqual({ projectKey: 'SEC', format: 'xlsx' });
+    expect(parseOverviewPrompt('xlsx SEC')).toEqual({ projectKey: 'SEC', format: 'xlsx' });
+    expect(parseOverviewPrompt('SEC as Excel')).toEqual({ projectKey: 'SEC', format: 'xlsx' });
+  });
+
+  it('takes the first format word when the prompt names both', () => {
+    expect(parseOverviewPrompt('SEC xlsx csv')).toEqual({ projectKey: 'SEC', format: 'xlsx' });
+    expect(parseOverviewPrompt('SEC csv xlsx')).toEqual({ projectKey: 'SEC', format: 'csv' });
   });
 
   it('accepts a lone lower-case word as the project and finds none in a sentence', () => {
-    expect(parseOverviewPrompt('sec')).toEqual({ projectKey: 'SEC', csv: false });
-    expect(parseOverviewPrompt('show me everything')).toEqual({ projectKey: null, csv: false });
-    expect(parseOverviewPrompt('')).toEqual({ projectKey: null, csv: false });
+    expect(parseOverviewPrompt('sec')).toEqual({ projectKey: 'SEC', format: null });
+    expect(parseOverviewPrompt('show me everything')).toEqual({ projectKey: null, format: null });
+    expect(parseOverviewPrompt('')).toEqual({ projectKey: null, format: null });
   });
 });
 

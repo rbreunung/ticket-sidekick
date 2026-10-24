@@ -2,9 +2,10 @@ import * as vscode from 'vscode';
 import { logDiag } from '../../utils/diagLog';
 import type { TicketService } from '../../services/TicketService';
 import {
-  buildOverview, renderOverviewMarkdown, parseOverviewPrompt, localDate, type Overview, type OverviewInput,
+  buildOverview, renderOverviewMarkdown, parseOverviewPrompt, localDate, type Overview, type OverviewFormat, type OverviewInput,
 } from '../../utils/securityOverview';
 import { renderOverviewCsv, resolveCsvDelimiter } from '../../utils/securityOverviewCsv';
+import { renderOverviewXlsx } from '../../utils/securityOverviewXlsx';
 import { buildChatCommandLink } from '../sessionState';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import { resolveProjectKey } from './ticketContext';
@@ -16,16 +17,22 @@ export function getOverviewCsvDelimiter(): string {
   return resolveCsvDelimiter(vscode.workspace.getConfiguration('ticketSidekick').get('jira.overviewCsvDelimiter'));
 }
 
+const FILE_FORMATS: Record<OverviewFormat, { extension: string; filterName: string; label: string }> = {
+  csv: { extension: 'csv', filterName: 'CSV', label: 'CSV' },
+  xlsx: { extension: 'xlsx', filterName: 'Excel', label: 'Excel file' },
+};
+
 /**
- * Writes the overview as CSV through a save dialog and tells the user where it went. A cancelled dialog writes
- * nothing and says so. Shared by the standalone command and the `export csv` reply of a report import.
+ * Writes the overview as CSV or Excel through a save dialog and tells the user where it went. A cancelled dialog writes
+ * nothing and says so. Shared by the standalone command and the `export csv` / `export xlsx` replies of a report import.
  */
-export async function saveOverviewCsv(overview: Overview, fileLabel: string, stream: vscode.ChatResponseStream): Promise<boolean> {
-  const name = `security-overview-${fileLabel}-${localDate()}.csv`;
+export async function saveOverviewFile(overview: Overview, fileLabel: string, format: OverviewFormat, stream: vscode.ChatResponseStream): Promise<boolean> {
+  const { extension, filterName, label } = FILE_FORMATS[format];
+  const name = `security-overview-${fileLabel}-${localDate()}.${extension}`;
   const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
   const target = await vscode.window.showSaveDialog({
     defaultUri: folder ? vscode.Uri.joinPath(folder, name) : vscode.Uri.file(name),
-    filters: { CSV: ['csv'] },
+    filters: { [filterName]: [extension] },
     saveLabel: 'Save overview',
   });
   if (!target) {
@@ -33,25 +40,28 @@ export async function saveOverviewCsv(overview: Overview, fileLabel: string, str
     return false;
   }
   try {
-    await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(renderOverviewCsv(overview, getOverviewCsvDelimiter())));
+    const bytes = format === 'xlsx'
+      ? await renderOverviewXlsx(overview)
+      : new TextEncoder().encode(renderOverviewCsv(overview, getOverviewCsvDelimiter()));
+    await vscode.workspace.fs.writeFile(target, bytes);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    logDiag(SCOPE, 'error', 'Could not write the overview CSV', { error: message });
+    logDiag(SCOPE, 'error', `Could not write the overview ${label}`, { format, error: message });
     stream.markdown(`Could not save the file: ${message}`);
     return false;
   }
-  logDiag(SCOPE, 'info', 'Overview CSV saved', { file: name });
+  logDiag(SCOPE, 'info', `Overview ${label} saved`, { format, file: name });
   stream.markdown(`Saved the overview to \`${target.fsPath}\`.`);
   return true;
 }
 
-/** Streams the overview tables followed by a clickable "Save as CSV" link that re-runs `csvCommand`. */
-export function streamOverview(overview: Overview, stream: vscode.ChatResponseStream, baseUrl: string | undefined, csvCommand: { participantReply: string } | null): void {
+/** Streams the overview tables followed by clickable "Save as CSV" and "Save as Excel" links that send the given `@jira` replies. */
+export function streamOverview(overview: Overview, stream: vscode.ChatResponseStream, baseUrl: string | undefined, saveReplies: { csv: string; xlsx: string } | null): void {
   const text = renderOverviewMarkdown(overview, baseUrl);
-  const link = csvCommand && overview.tables.length > 0
-    ? `\n\n${buildChatCommandLink('Save as CSV', '@jira', csvCommand.participantReply)}`
+  const links = saveReplies && overview.tables.length > 0
+    ? `\n\n${buildChatCommandLink('Save as CSV', '@jira', saveReplies.csv)} · ${buildChatCommandLink('Save as Excel', '@jira', saveReplies.xlsx)}`
     : '';
-  stream.markdown(trustedChatMarkdown(text + link));
+  stream.markdown(trustedChatMarkdown(text + links));
 }
 
 /** Everything the overview needs from Jira for one project: tickets, release dates and descriptions. Null when the search fails. */
@@ -92,8 +102,8 @@ export async function gatherOverviewInput(
 }
 
 /**
- * `@jira /overview [PROJECT] [csv]`: the project's unresolved Veracode and Waltz tickets by Fix Version. A prompt ending in
- * `csv` (the "Save as CSV" link) builds the same overview again and saves it as a file, so nothing is stored between turns.
+ * `@jira /overview [PROJECT] [csv|xlsx]`: the project's unresolved Veracode and Waltz tickets by Fix Version. A prompt naming
+ * `csv` or `xlsx` (the "Save as" links) builds the same overview again and saves it as a file, so nothing is stored between turns.
  */
 export async function handleSecurityOverview(
   request: vscode.ChatRequest,
@@ -112,15 +122,15 @@ export async function handleSecurityOverview(
 
   const overview = buildOverview(input);
   logDiag(SCOPE, 'info', `Overview built — ${projectKey}`, {
-    projectKey, tickets: overview.ticketCount, tables: overview.tables.length, unread: overview.unreadCount, csv: parsed.csv,
+    projectKey, tickets: overview.ticketCount, tables: overview.tables.length, unread: overview.unreadCount, format: parsed.format,
   });
-  if (parsed.csv) {
+  if (parsed.format) {
     if (overview.tables.length === 0) {
       stream.markdown(renderOverviewMarkdown(overview, baseUrl));
       return;
     }
-    await saveOverviewCsv(overview, projectKey, stream);
+    await saveOverviewFile(overview, projectKey, parsed.format, stream);
     return;
   }
-  streamOverview(overview, stream, baseUrl, { participantReply: `/overview ${projectKey} csv` });
+  streamOverview(overview, stream, baseUrl, { csv: `/overview ${projectKey} csv`, xlsx: `/overview ${projectKey} xlsx` });
 }

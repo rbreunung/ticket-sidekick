@@ -6,6 +6,7 @@ import { formatKeyLink } from '../../services/TicketService';
 import { IMPORT_COMMANDS, LEGACY_UPDATE_COMMAND, SEARCH_USAGE, UNACCEPT_COMPONENT_WORD } from './importScreens';
 import { AddMode, ImportOutcomes, ImportResultGroup, ImportReviewView, MergeRun, ReviewRowBase, ReviewSessionStale, StaleTargetOption, TicketedAction, ActionLabels, actionLabelOf } from './importTypes';
 import { TICKET_KEY_TOKEN, cmdLink, isBackOrCancellation, isCancellation, isConfirmation, neutralizeMarkdownLinks, normalizeReply } from './primitives';
+import type { OverviewFormat } from '../../utils/securityOverview';
 import { parseResolutionSelection } from './core';
 import { ReviewPageNav, parseBulkNewRowReply, parseReviewPageNav } from './reviewPaging';
 import { parseStaleTargetPick, parseStaleTicketToggle } from './staleTargets';
@@ -47,8 +48,8 @@ export type ImportReplyAction =
   // Waltz ticket merge: re-read the report file and rebuild the screens; the prompt warns, the confirmed form runs.
   | { kind: 'reloadPrompt' }
   | { kind: 'reload' }
-  // Security overview: list this report's items by Fix Version; with `csv` also save them as a file.
-  | { kind: 'export'; csv: boolean }
+  // Security overview: list this report's items by Fix Version; with a format also save them as a file.
+  | { kind: 'export'; format: OverviewFormat | null }
   // Ticket search: list the review's matched open tickets whose summary contains the keyword, and re-print the current screen.
   | { kind: 'search'; keyword: string }
   | { kind: 'show' }
@@ -197,15 +198,23 @@ function parseMergeIntoTicketReply(n: string, ctx: ImportReplyContext): ImportRe
   return { kind: 'addPrompt', ids: rows.ids, key };
 }
 
+const EXPORT_FORMATS: Record<string, OverviewFormat | null> = {
+  [IMPORT_COMMANDS.export]: null,
+  [IMPORT_COMMANDS.exportCsv]: 'csv',
+  [IMPORT_COMMANDS.exportXlsx]: 'xlsx',
+  [IMPORT_COMMANDS.exportExcel]: 'xlsx',
+};
+
 const EXPORT_ON_GROUP_SCREEN = 'Export works from the overview — reply `back` first, then `export`.';
 
-/** `export` and `export csv`, where the importer supports them; on a group screen of a multi-group import the reply says where it works. */
+/** `export`, `export csv` and `export xlsx` (or `export excel`), where the importer supports them; on a group screen of a multi-group import the reply says where it works. */
 function parseExportReply(reply: string, ctx: ImportReplyContext, onGroupScreen: boolean): ImportReplyAction | null {
   if (!ctx.canExport) return null;
   const n = normalizeReply(reply);
-  if (n !== IMPORT_COMMANDS.export && n !== IMPORT_COMMANDS.exportCsv) return null;
+  const format = EXPORT_FORMATS[n];
+  if (format === undefined) return null;
   if (onGroupScreen && !ctx.singleGroup) return { kind: 'invalid', reason: EXPORT_ON_GROUP_SCREEN };
-  return { kind: 'export', csv: n === IMPORT_COMMANDS.exportCsv };
+  return { kind: 'export', format };
 }
 
 export function parseOverviewReply(reply: string, ctx: ImportReplyContext): ImportReplyAction {
@@ -735,7 +744,7 @@ export function parseImportReviewReply(view: ImportReviewView, reply: string, ct
 export function describeImportReplyVocabulary(view: ImportReviewView, ctx: ImportReplyContext): string {
   const exit = ctx.singleGroup ? '`done`' : '`back`';
   // On a group screen of a multi-group import `export` only points back to the overview, so it is not offered there.
-  const exportHint = ctx.canExport && ctx.singleGroup ? '`export` / `export csv`, ' : '';
+  const exportHint = ctx.canExport && ctx.singleGroup ? '`export` / `export csv` / `export xlsx`, ' : '';
   switch (view) {
     case 'new':
       return `On this screen you can reply \`create tickets\`, row numbers to toggle (e.g. \`2 4\`), \`include all\` / \`exclude all\`, ` +

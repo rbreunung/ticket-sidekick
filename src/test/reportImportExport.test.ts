@@ -1,3 +1,4 @@
+import ExcelJS from 'exceljs';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const sla = vi.hoisted(() => ({ value: undefined as unknown }));
@@ -108,6 +109,8 @@ describe('export reply of a report import', () => {
     expect(text).toContain('in report, no ticket');
     expect(text).toContain('1 item has no ticket yet');
     expect(decodeURIComponent(text)).toContain('@jira export csv');
+    expect(text).toContain('Save as Excel');
+    expect(decodeURIComponent(text)).toContain('@jira export xlsx');
     expect(text).toContain('| Item | Rating | Ticket | Due | Flag | Report match |');
   });
 
@@ -158,6 +161,26 @@ describe('export reply of a report import', () => {
     expect(lines).toHaveLength(3);
     expect(lines.slice(1).every(l => l.includes('PROJ-1') && l.includes(',report,'))).toBe(true);
     expect(streamText(stream)).toContain('Saved the overview to `/out/overview.csv`');
+  });
+
+  it('saves the same rows as an Excel workbook on export xlsx', async () => {
+    const tickets: Record<string, FakeTicket> = { 'PROJ-1': { labels: ['veracode', 'veracode-issue-101'] } };
+    const { session, ws } = await importVeracode([makeFlaw('101'), makeFlaw('102', { line: 99 })], tickets);
+    answerKeySearch({ 'PROJ-1': { labels: ['veracode', 'veracode-issue-101'], fixVersions: ['2026.11'] } });
+    const target = vscode.Uri.file('/out/overview.xlsx');
+    vi.mocked(vscode.window.showSaveDialog).mockResolvedValue(target);
+    const stream = mockStream();
+
+    await handleVeracodeReviewReply('export xlsx', session, service, stream as never, ws as never);
+
+    const [uri, bytes] = vi.mocked(vscode.workspace.fs.writeFile).mock.calls[0];
+    expect(uri).toBe(target);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(Buffer.from(bytes as Uint8Array) as never);
+    const sheet = workbook.getWorksheet('Security overview')!;
+    expect(sheet.rowCount).toBe(3);
+    expect(sheet.getRow(1).values).toContain('Report match');
+    expect(streamText(stream)).toContain('Saved the overview to `/out/overview.xlsx`');
   });
 
   it('answers export on a group screen of a multi-group import with where it works', async () => {
@@ -301,7 +324,7 @@ describe('export link on the review screens', () => {
 
     const text = decodeURIComponent(streamText(stream));
     expect(text).toMatch(/\[Export\]\(command:[^)]*@jira export/);
-    expect(describeImportReplyVocabulary('ticketed', { singleGroup: true, groups: ['ticketed'], newRowIds: [], ticketedRows: [], canExport: true })).toContain('`export`');
+    expect(describeImportReplyVocabulary('ticketed', { singleGroup: true, groups: ['ticketed'], newRowIds: [], ticketedRows: [], canExport: true })).toContain('`export xlsx`');
   });
 
   it('is not offered by an import without export (email)', async () => {
@@ -316,15 +339,17 @@ describe('export reply vocabulary', () => {
   const ctx = (over: Partial<ImportReplyContext> = {}): ImportReplyContext => ({ singleGroup: false, groups: ['new', 'ticketed'], newRowIds: [], ticketedRows: [], ...over });
 
   it('is understood on the overview only where the importer supports it', () => {
-    expect(parseImportReviewReply('overview', 'export', ctx({ canExport: true }))).toEqual({ kind: 'export', csv: false });
-    expect(parseImportReviewReply('overview', 'Export CSV', ctx({ canExport: true }))).toEqual({ kind: 'export', csv: true });
+    expect(parseImportReviewReply('overview', 'export', ctx({ canExport: true }))).toEqual({ kind: 'export', format: null });
+    expect(parseImportReviewReply('overview', 'Export CSV', ctx({ canExport: true }))).toEqual({ kind: 'export', format: 'csv' });
+    expect(parseImportReviewReply('overview', 'export xlsx', ctx({ canExport: true }))).toEqual({ kind: 'export', format: 'xlsx' });
+    expect(parseImportReviewReply('overview', 'Export Excel', ctx({ canExport: true }))).toEqual({ kind: 'export', format: 'xlsx' });
     expect(parseImportReviewReply('overview', 'export', ctx())).toEqual({ kind: 'invalid' });
   });
 
   it('is rejected on a group screen of a multi-group import and accepted on a single-group one', () => {
     for (const view of ['new', 'ticketed', 'stale'] as const) {
       expect(parseImportReviewReply(view, 'export', ctx({ canExport: true }))).toMatchObject({ kind: 'invalid', reason: expect.stringContaining('overview') });
-      expect(parseImportReviewReply(view, 'export', ctx({ canExport: true, singleGroup: true }))).toEqual({ kind: 'export', csv: false });
+      expect(parseImportReviewReply(view, 'export', ctx({ canExport: true, singleGroup: true }))).toEqual({ kind: 'export', format: null });
     }
   });
 });

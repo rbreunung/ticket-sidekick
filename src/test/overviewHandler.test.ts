@@ -1,3 +1,4 @@
+import ExcelJS from 'exceljs';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const config: Record<string, unknown> = {};
@@ -80,6 +81,8 @@ describe('@jira /overview', () => {
     const withLink = stream.markdown.mock.calls.map(c => c[0]).find(a => markdownText(a).includes('command:workbench.action.chat.open')) as { isTrusted?: { enabledCommands: string[] } };
     expect(withLink.isTrusted).toEqual({ enabledCommands: ['workbench.action.chat.open'] });
     expect(decodeURIComponent(text)).toContain('@jira /overview SEC csv');
+    expect(text).toContain('Save as Excel');
+    expect(decodeURIComponent(text)).toContain('@jira /overview SEC xlsx');
   });
 
   it('uses the default project when the prompt names none, and asks when there is none', async () => {
@@ -211,6 +214,76 @@ describe('@jira /overview … csv', () => {
     const stream = streamOf();
 
     await handleSecurityOverview(request('SEC csv'), stream as never, service);
+
+    expect(vscode.window.showSaveDialog).not.toHaveBeenCalled();
+    expect(textOf(stream)).toContain('No unresolved Veracode or Waltz tickets');
+  });
+});
+
+describe('@jira /overview … xlsx', () => {
+  beforeEach(() => { vi.mocked(vscode.workspace.fs.writeFile).mockResolvedValue(undefined); });
+
+  async function savedWorkbook(): Promise<ExcelJS.Workbook> {
+    const bytes = vi.mocked(vscode.workspace.fs.writeFile).mock.calls[0][1] as Uint8Array;
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(Buffer.from(bytes) as never);
+    return workbook;
+  }
+
+  it('writes an Excel workbook to the file the user picked, offering .xlsx files, and reports the path', async () => {
+    seed([veracodeTicket('SEC-1', [makeFlaw('1')], { fixVersions: ['2026.11'], dueDate: '2026-11-01' })]);
+    const target = vscode.Uri.file('/workspace/out.xlsx');
+    vi.mocked(vscode.window.showSaveDialog).mockResolvedValue(target);
+    const stream = streamOf();
+
+    await handleSecurityOverview(request('SEC xlsx'), stream as never, service);
+
+    expect(vi.mocked(vscode.window.showSaveDialog).mock.calls[0][0]).toMatchObject({ filters: { Excel: ['xlsx'] } });
+    expect(vi.mocked(vscode.window.showSaveDialog).mock.calls[0][0]?.defaultUri?.fsPath).toMatch(/security-overview-SEC-\d{4}-\d{2}-\d{2}\.xlsx$/);
+    expect(vi.mocked(vscode.workspace.fs.writeFile).mock.calls[0][0]).toBe(target);
+    const sheet = (await savedWorkbook()).getWorksheet('Security overview')!;
+    expect(sheet.getRow(2).values).toContain('SEC-1');
+    expect(textOf(stream)).toContain('Saved the overview to `/workspace/out.xlsx`');
+  });
+
+  it('ignores the CSV delimiter setting', async () => {
+    config['jira.overviewCsvDelimiter'] = 'semicolon';
+    seed([veracodeTicket('SEC-1', [makeFlaw('1')], { fixVersions: ['2026.11'] })]);
+    vi.mocked(vscode.window.showSaveDialog).mockResolvedValue(vscode.Uri.file('/workspace/out.xlsx'));
+
+    await handleSecurityOverview(request('SEC xlsx'), streamOf() as never, service);
+
+    expect((await savedWorkbook()).getWorksheet('Security overview')!.getRow(1).getCell(1).value).toBe('Source');
+  });
+
+  it('writes nothing and says so when the dialog is cancelled', async () => {
+    seed([veracodeTicket('SEC-1', [makeFlaw('1')], { fixVersions: ['2026.11'] })]);
+    vi.mocked(vscode.window.showSaveDialog).mockResolvedValue(undefined);
+    const stream = streamOf();
+
+    await handleSecurityOverview(request('SEC xlsx'), stream as never, service);
+
+    expect(vscode.workspace.fs.writeFile).not.toHaveBeenCalled();
+    expect(textOf(stream)).toContain('Save cancelled');
+  });
+
+  it('reports a failed write instead of claiming the file was saved', async () => {
+    seed([veracodeTicket('SEC-1', [makeFlaw('1')], { fixVersions: ['2026.11'] })]);
+    vi.mocked(vscode.window.showSaveDialog).mockResolvedValue(vscode.Uri.file('/readonly/out.xlsx'));
+    vi.mocked(vscode.workspace.fs.writeFile).mockRejectedValue(new Error('EACCES'));
+    const stream = streamOf();
+
+    await handleSecurityOverview(request('SEC xlsx'), stream as never, service);
+
+    expect(textOf(stream)).toContain('Could not save the file: EACCES');
+    expect(textOf(stream)).not.toContain('Saved the overview');
+  });
+
+  it('does not open a save dialog for a project with nothing to save', async () => {
+    seed([]);
+    const stream = streamOf();
+
+    await handleSecurityOverview(request('SEC xlsx'), stream as never, service);
 
     expect(vscode.window.showSaveDialog).not.toHaveBeenCalled();
     expect(textOf(stream)).toContain('No unresolved Veracode or Waltz tickets');
