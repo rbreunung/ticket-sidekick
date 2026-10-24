@@ -35,8 +35,8 @@ The export today scatters its dates: Release Date follows Fix Version, the Waltz
 - **Excel is one sheet with the CSV's rows, plus real Excel formatting.** (session-settled: user-directed — chosen over a plain text mirror and over one sheet per Fix Version: dates must sort and filter, and the CSV row model is already known to work.) Governs R5, R6, R7.
 - **Release Date sits next to its Fix Version, and Fix Version sits in front of Due Date.** (session-settled: user-directed — chosen over keeping Release Date among the date block after Due Date: the release date belongs beside its version name, and in front of Due Date it is still adjacent to the other dates.) Governs R1, R2.
 - **Overdue rows are orange and due-before-release rows yellow.** (session-settled: user-directed — chosen over red and amber.) Governs R8.
-- **"Last known release" means the latest release date among unreleased versions.** (session-settled: user-directed — chosen over all dated versions: released versions should hold only closed tickets and lie in the past.) Governs R9, R10.
-- **The unplanned-ticket rule applies in the shared overview model, so the chat overview and counts change with it.** Inferred, confirmed by the user at the scoping check. Governs R9, R11.
+- **"Last known release" means the latest release date among unreleased versions.** (session-settled: user-directed — chosen over all dated versions: released versions should hold only closed tickets and lie in the past.) Governs R11, R12.
+- **The unplanned-ticket rule applies in the shared overview model, so the chat overview and counts change with it.** Inferred, confirmed by the user at the scoping check. Governs R11, R12.
 
 ### Requirements
 
@@ -204,7 +204,7 @@ U1 (flag rule) and U2 (column model and CSV order) are independent. U3 (Excel re
 - **Requirements:** R1–R12 as user-visible changes.
 - **Dependencies:** U1–U4.
 - **Files:** `README.md` (the `/overview` row), `docs/manual/report-imports.md` (the export notes around the existing CSV paragraph and the "never the due-before-release flag" sentence), `docs/report-import.md` ("Security overview" section), `CLAUDE.md` (key-files rows for `securityOverviewColumns.ts` and `securityOverviewXlsx.ts`, and the CSV row), `package.json` (`overviewCsvDelimiter` description only if it should say it applies to CSV only; keep `docs/manual/settings-reference.md` in step).
-- **Approach:** State the new order, the Excel file and its colours, the `xlsx` / `export xlsx` words, the unplanned-ticket rule and its "latest unreleased release" meaning, and that the CSV's column positions changed. Remove or correct the manual sentence saying items without a Fix Version never get the due-before-release flag.
+- **Approach:** State the new order, the Excel file and its colours, the `xlsx` / `export xlsx` words, the unplanned-ticket rule and its "latest unreleased release" meaning (including that a late-dated unreleased placeholder version moves the cutoff later), and that the CSV's column positions changed. Remove or correct the manual sentence saying items without a Fix Version never get the due-before-release flag.
 - **Test expectation:** none — documentation. `src/test/userDocsSync.test.ts` must still pass.
 - **Verification:** `npm test` (including `userDocsSync`); a read-through of each edited paragraph against the behaviour.
 
@@ -231,7 +231,7 @@ An Excel file written by the renderer should also be opened once by hand in Exce
 
 - **CSV consumers that read columns by position break.** The order changes on purpose; the manual states it. Consumers that read by header name are unaffected.
 - **Excel limits and illegal characters.** A very long Members cell or a control character in a Jira value can make a workbook invalid; KTD5 and its tests cover both.
-- **Version data quality.** If a project marks versions released inconsistently, the cutoff moves; the rule degrades to no flag, never to a wrong overdue.
+- **Version data quality.** The cutoff is the latest dated unreleased version, so a far-future placeholder version (or an old version nobody marked released) moves it later and flags more unplanned tickets as due before release. A project with no unreleased dated version gets no flag. The manual says which versions drive the cutoff.
 - **`exceljs` typing.** Its `Buffer` re-declaration can conflict with `@types/node`; `waltzReport.ts` shows the workaround.
 
 ## Sources
