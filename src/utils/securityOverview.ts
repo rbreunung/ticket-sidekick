@@ -196,6 +196,15 @@ function flagFor(dueDate: string | null, releaseDate: string | null, today: stri
   return null;
 }
 
+/**
+ * The release a ticket without a Fix Version is compared with: the latest release date among the project's unreleased
+ * versions. Released versions are in the past and hold closed tickets, so they never move it. Null when there is none.
+ */
+function lastUnreleasedRelease(versions: ProjectVersionInfo[]): string | null {
+  const dates = versions.filter(v => v.released !== true && v.releaseDate !== null).map(v => v.releaseDate as string);
+  return dates.length === 0 ? null : dates.reduce((a, b) => (b > a ? b : a));
+}
+
 function countsOf(rows: OverviewRow[]): OverviewCounts {
   return {
     tickets: rows.filter(r => r.ticketKey !== null).length,
@@ -238,7 +247,7 @@ function jiraFor(table: { fixVersion: string | null; rows: OverviewRow[] }, inpu
   return { jql, kind, fellBack, url: input.baseUrl ? `${input.baseUrl}/issues/?jql=${encodeURIComponent(jql)}` : null };
 }
 
-function rowFromTicket(ticket: OverviewTicket, input: OverviewInput, placement: Placement): OverviewRow {
+function rowFromTicket(ticket: OverviewTicket, input: OverviewInput, placement: Placement, unplannedRelease: string | null): OverviewRow {
   const description = input.descriptions[ticket.key] ?? null;
   const reported = input.report?.detailByKey?.[ticket.key];
   const base = {
@@ -249,7 +258,7 @@ function rowFromTicket(ticket: OverviewTicket, input: OverviewInput, placement: 
     dueDate: ticket.dueDate,
     fixVersion: placement.fixVersion,
     otherFixVersions: placement.others,
-    flag: flagFor(ticket.dueDate, placement.releaseDate, input.today),
+    flag: flagFor(ticket.dueDate, placement.fixVersion === null ? unplannedRelease : placement.releaseDate, input.today),
     reportMatch: input.report ? (input.report.matchByKey[ticket.key] ?? 'tracked') : null,
   };
   if (ticket.source === 'veracode') {
@@ -262,7 +271,7 @@ function rowFromTicket(ticket: OverviewTicket, input: OverviewInput, placement: 
   return { ...base, rating: waltzRating(components), findings: [], components, detailSource: reported?.components ? 'report' : read.detailSource, edited: reported?.components ? false : read.edited };
 }
 
-function rowFromReportOnly(item: ReportOnlyItem, today: string): OverviewRow {
+function rowFromReportOnly(item: ReportOnlyItem, today: string, unplannedRelease: string | null): OverviewRow {
   const findings = item.findings ?? [];
   const components = item.components ?? [];
   return {
@@ -274,7 +283,7 @@ function rowFromReportOnly(item: ReportOnlyItem, today: string): OverviewRow {
     dueDate: item.dueDate,
     fixVersion: null,
     otherFixVersions: [],
-    flag: flagFor(item.dueDate, null, today),
+    flag: flagFor(item.dueDate, unplannedRelease, today),
     reportMatch: 'in-report-no-ticket',
     detailSource: 'report',
     edited: false,
@@ -290,13 +299,14 @@ function rowFromReportOnly(item: ReportOnlyItem, today: string): OverviewRow {
  */
 export function buildOverview(input: OverviewInput): Overview {
   const releaseByName = new Map(input.versions.map(v => [v.name, v.releaseDate] as const));
+  const unplannedRelease = lastUnreleasedRelease(input.versions);
   const byVersion = new Map<string, OverviewRow[]>();
   const unassigned: OverviewRow[] = [];
   const releaseOf = new Map<string, string | null>();
 
   for (const ticket of input.tickets) {
     const placement = placeTicket(ticket.fixVersions, releaseByName);
-    const row = rowFromTicket(ticket, input, placement);
+    const row = rowFromTicket(ticket, input, placement, unplannedRelease);
     if (placement.fixVersion === null) {
       unassigned.push(row);
     } else {
@@ -306,7 +316,7 @@ export function buildOverview(input: OverviewInput): Overview {
       releaseOf.set(placement.fixVersion, placement.releaseDate);
     }
   }
-  for (const item of input.report?.reportOnly ?? []) unassigned.push(rowFromReportOnly(item, input.today));
+  for (const item of input.report?.reportOnly ?? []) unassigned.push(rowFromReportOnly(item, input.today, unplannedRelease));
 
   const versionNames = [...byVersion.keys()].sort((a, b) => {
     const da = releaseOf.get(a) ?? null;
@@ -396,7 +406,7 @@ export function renderOverviewMarkdown(overview: Overview, baseUrl?: string): st
   lines.push('| Fix Version | Assigned | Overdue | Due before release | No Due Date |', '| --- | --- | --- | --- | --- |');
   for (const t of overview.tables) {
     const assigned = t.fixVersion === null ? `${t.counts.items} item${t.counts.items === 1 ? '' : 's'}` : String(t.counts.tickets);
-    lines.push(`| ${releaseTitle(t)} | ${assigned} | ${t.counts.overdue} | ${t.fixVersion === null ? '–' : t.counts.dueBeforeRelease} | ${t.counts.noDueDate} |`);
+    lines.push(`| ${releaseTitle(t)} | ${assigned} | ${t.counts.overdue} | ${t.counts.dueBeforeRelease} | ${t.counts.noDueDate} |`);
   }
   lines.push('');
   for (const table of overview.tables) {

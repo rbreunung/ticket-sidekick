@@ -2090,15 +2090,15 @@ describe('security overview data', () => {
   });
 
   describe('getProjectVersions', () => {
-    it('returns each version with its release date, and null for a version without one', async () => {
+    it('returns each version with its release date and released flag, null for a version without a date and false when Jira omits the flag', async () => {
       vi.spyOn(client, 'getProject').mockResolvedValue({
         id: '1', key: 'PROJ', name: 'P', issueTypes: [],
-        versions: [{ id: '1', name: '2026.11', releaseDate: '2026-11-15' }, { id: '2', name: 'Backlog' }],
+        versions: [{ id: '1', name: '2026.11', releaseDate: '2026-11-15', released: true }, { id: '2', name: 'Backlog' }],
       });
 
       expect(await service.getProjectVersions('PROJ')).toEqual([
-        { name: '2026.11', releaseDate: '2026-11-15' },
-        { name: 'Backlog', releaseDate: null },
+        { name: '2026.11', releaseDate: '2026-11-15', released: true },
+        { name: 'Backlog', releaseDate: null, released: false },
       ]);
     });
 

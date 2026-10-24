@@ -263,3 +263,66 @@ describe('localDate', () => {
     expect(localDate(new Date(2026, 0, 5, 23, 59))).toBe('2026-01-05');
   });
 });
+
+describe('buildOverview flags for tickets without a Fix Version', () => {
+  const versions = [
+    { name: '2026.12', releaseDate: '2026-12-01', released: false },
+    { name: '2027.03', releaseDate: '2027-03-01', released: false },
+    { name: '2026.09', releaseDate: '2026-09-01', released: true },
+    { name: '2029.01', releaseDate: '2029-01-01', released: true },
+    { name: 'Backlog', releaseDate: null, released: false },
+  ];
+  const unplanned = (key: string, dueDate: string | null) => veracodeTicket(key, [makeFlaw(key, { line: 1 })], { dueDate, fixVersions: [] });
+  const rowOf = (key: string, over: Partial<OverviewInput> = {}) => {
+    const tables = buildOverview(input([unplanned(key, dueDates[key])], { versions, ...over })).tables;
+    return tables[0].rows[0];
+  };
+  const dueDates: Record<string, string | null> = {
+    'SEC-1': '2027-02-01', 'SEC-2': '2027-04-01', 'SEC-3': '2026-10-21', 'SEC-4': null, 'SEC-5': '2027-02-01',
+  };
+
+  it('flags a Due Date before the latest unreleased release as due before release', () => {
+    expect(rowOf('SEC-1').flag).toBe('due-before-release');
+  });
+
+  it('does not flag a Due Date after the latest unreleased release, and ignores a later release that is already released', () => {
+    expect(rowOf('SEC-2').flag).toBeNull();
+  });
+
+  it('lets a passed Due Date win with overdue', () => {
+    expect(rowOf('SEC-3').flag).toBe('overdue');
+  });
+
+  it('does not flag a ticket without a Due Date', () => {
+    expect(rowOf('SEC-4').flag).toBeNull();
+  });
+
+  it('flags nothing when every version is released or undated', () => {
+    const none = [{ name: 'a', releaseDate: '2027-06-01', released: true }, { name: 'Backlog', releaseDate: null, released: false }];
+    expect(rowOf('SEC-5', { versions: none }).flag).toBeNull();
+  });
+
+  it('treats a version without a released flag as unreleased', () => {
+    expect(rowOf('SEC-5', { versions: [{ name: 'x', releaseDate: '2027-03-01' } as never] }).flag).toBe('due-before-release');
+  });
+
+  it('flags a report-only item by the same rule', () => {
+    const overview = buildOverview({
+      ...input([], { versions }),
+      report: { matchByKey: {}, reportOnly: [{ source: 'veracode', summary: 'New', dueDate: '2027-02-01', findings: [] }] },
+    });
+    expect(overview.tables[0].rows[0].flag).toBe('due-before-release');
+  });
+
+  it('keeps the Fix Version comparison for a ticket that has one', () => {
+    const t = veracodeTicket('SEC-9', [makeFlaw('9')], { dueDate: '2026-12-15', fixVersions: ['2027.03'] });
+    expect(buildOverview(input([t], { versions })).tables[0].rows[0].flag).toBe('due-before-release');
+    const later = veracodeTicket('SEC-8', [makeFlaw('8')], { dueDate: '2027-03-02', fixVersions: ['2027.03'] });
+    expect(buildOverview(input([later], { versions })).tables[0].rows[0].flag).toBeNull();
+  });
+
+  it('shows the Not assigned due-before-release count in the summary table', () => {
+    const text = renderOverviewMarkdown(buildOverview(input([unplanned('SEC-1', '2027-02-01')], { versions })));
+    expect(text).toMatch(/Not assigned to a release \| 1 item \| 0 \| 1 \| 0 \|/);
+  });
+});
