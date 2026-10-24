@@ -246,6 +246,21 @@ describe('export preview ends the turn', () => {
     expect(streamText(next)).toContain('### Already ticketed');
   });
 
+  it('ends with a Show link, and replying show prints the screen the export came from again (import ticket search)', async () => {
+    const tickets: Record<string, FakeTicket> = { 'PROJ-1': { labels: ['veracode', 'veracode-issue-101'] } };
+    const { session, ws } = await importVeracode([makeFlaw('101'), makeFlaw('201', { sourceFile: 'Other.java', line: 5 })], tickets);
+    answerKeySearch({ 'PROJ-1': { labels: ['veracode', 'veracode-issue-101'] } });
+    const exported = mockStream();
+    await handleVeracodeReviewReply('export', session, service, exported as never, ws as never);
+    expect(decodeURIComponent(streamText(exported))).toMatch(/\[Show\]\(command:[^)]*@jira show/);
+
+    const shown = mockStream();
+    await handleVeracodeReviewReply('show', ws.store['jira.session.veracodeReview'] as VeracodeReviewSession, service, shown as never, ws as never);
+
+    expect(streamText(shown)).toContain('Import results');
+    expect((ws.store['jira.session.veracodeReview'] as VeracodeReviewSession).view).toBe('overview');
+  });
+
   it('keeps the session and shows the way on when Jira cannot be read', async () => {
     const { session, ws } = await importVeracode([makeFlaw('101'), makeFlaw('201', { sourceFile: 'Other.java', line: 5 })], { 'PROJ-1': { labels: ['veracode', 'veracode-issue-101'] } });
     vi.spyOn(service, 'getOverviewTicketsByKeys').mockRejectedValue(new Error('Jira is down'));
