@@ -114,7 +114,7 @@ async function buildAndStreamExport<TItem, TRow extends ReviewRowBase>(
     await saveOverviewFile(overview, exporter.source, format, stream);
     return;
   }
-  streamOverview(overview, stream, baseUrl, { csv: IMPORT_EXPORT_REPLIES.csv, xlsx: IMPORT_EXPORT_REPLIES.xlsx });
+  streamOverview(overview, stream, baseUrl, IMPORT_EXPORT_REPLIES);
 }
 
 /** What the "Save as CSV" and "Save as Excel" links send back into the review session. */

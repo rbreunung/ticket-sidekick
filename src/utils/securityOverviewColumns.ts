@@ -26,6 +26,7 @@ export interface OverviewSheet {
 
 const text = (title: string): OverviewColumn => ({ title, kind: 'text' });
 const date = (title: string): OverviewColumn => ({ title, kind: 'date' });
+const number = (title: string): OverviewColumn => ({ title, kind: 'number' });
 
 const LEAD_COLUMNS = [
   text('Source'), text('Ticket'), text('Status'), text('Summary'), text('Rating'),
@@ -36,7 +37,7 @@ const REPORT_COLUMNS = [text('Report match')];
 const DETAIL_COLUMNS = [text('Detail source')];
 const VERACODE_COLUMNS = [
   text('Issue ID'), text('Severity'), text('CWE ID'), text('CWE name'), text('Module'), text('Path'), text('File'),
-  { title: 'Line', kind: 'number' } as OverviewColumn, text('Function'),
+  number('Line'), text('Function'),
 ];
 const WALTZ_COLUMNS = [text('Remediation action'), text('Plan status'), text('Members')];
 
