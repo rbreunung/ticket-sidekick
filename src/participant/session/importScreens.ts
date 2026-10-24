@@ -34,6 +34,8 @@ export const IMPORT_COMMANDS = {
   reload: 'reload report',
   export: 'export',
   exportCsv: 'export csv',
+  show: 'show',
+  search: 'search',
 } as const;
 
 /** The reply word a component entry's Remove link sends; one token, so it never reads as the `unaccept <component> <CVE>` form. */

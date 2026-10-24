@@ -49,6 +49,9 @@ export type ImportReplyAction =
   | { kind: 'reload' }
   // Security overview: list this report's items by Fix Version; with `csv` also save them as a file.
   | { kind: 'export'; csv: boolean }
+  // Ticket search: list the review's matched open tickets whose summary contains the keyword, and re-print the current screen.
+  | { kind: 'search'; keyword: string }
+  | { kind: 'show' }
   | { kind: 'toggleRows'; ids: string[] }
   | { kind: 'toggleStale'; keys: string[] }
   // `reason`, when present, says specifically why (e.g. an action a row does not offer, AE6).
@@ -73,6 +76,10 @@ export interface ImportReplyContext {
   canMergeTickets?: boolean;
   // Security overview: whether the importer supports the `export` reply (Veracode and Waltz).
   canExport?: boolean;
+  // Ticket search: whether the importer supports `search` and `show` (Veracode and Waltz; not email).
+  canSearch?: boolean;
+  // Ticket search: each Already-ticketed row id (lower-cased) to the key of its main ticket, so `merge <rows> into A3` resolves.
+  ticketTargetKeys?: Record<string, string>;
   // How the importer names its row actions to the user (Waltz shows `follow-up` as `new ticket`); the id stays the same.
   actionLabels?: ActionLabels;
 }
@@ -152,6 +159,46 @@ export function parseMergeRunReply(reply: string, run: MergeRun): MergeRunReply 
   return isBackOrCancellation(reply) ? { kind: 'cancel' } : { kind: 'invalid' };
 }
 
+const SEARCH_USAGE = 'Search the matched tickets like this: `search <keyword>` (a class or component name, for example).';
+const SEARCH_ON_OTHER_SCREEN = 'Search works on the New and Already ticketed screens — open one of them first, then `search <keyword>`.';
+
+/** `show` re-prints the screen the session is on, wherever the importer supports search. */
+function parseShowReply(reply: string, ctx: ImportReplyContext): ImportReplyAction | null {
+  return ctx.canSearch && normalizeReply(reply) === IMPORT_COMMANDS.show ? { kind: 'show' } : null;
+}
+
+/**
+ * `search <keyword>`: the word is detected on the normalized reply, the keyword is cut from the original text so its case
+ * survives. A reply starting with `search` is always answered here. `available` is false on the screens that have no search.
+ */
+function parseSearchReply(reply: string, ctx: ImportReplyContext, available: boolean): ImportReplyAction | null {
+  if (!ctx.canSearch) return null;
+  const n = normalizeReply(reply);
+  if (n !== IMPORT_COMMANDS.search && !n.startsWith(`${IMPORT_COMMANDS.search} `)) return null;
+  if (!available) return { kind: 'invalid', reason: SEARCH_ON_OTHER_SCREEN };
+  const keyword = reply.trim().slice(IMPORT_COMMANDS.search.length).trim();
+  return keyword ? { kind: 'search', keyword } : { kind: 'invalid', reason: SEARCH_USAGE };
+}
+
+const TICKET_KEY_PATTERN = /^[a-z][a-z0-9_]*-\d+$/;
+
+/**
+ * `merge <New rows> into <KEY or A id>` on the New screen: the add flow under another name. The left side counts as New rows only
+ * when every token is a plain number, so `merge A5 into A3` (a ticket merge) keeps its pointer to the overview.
+ */
+function parseMergeIntoTicketReply(n: string, ctx: ImportReplyContext): ImportReplyAction | null {
+  const match = n.match(/^merge (.+?) into (\S+)$/);
+  if (!match) return null;
+  const tokens = match[1].split(/[\s,]+/).filter(Boolean);
+  if (tokens.length === 0 || !tokens.every(t => /^\d+$/.test(t))) return null;
+  const rows = matchVisibleNewRows(tokens, ctx, 'added');
+  if ('reason' in rows) return { kind: 'invalid', reason: rows.reason };
+  const target = match[2];
+  const key = TICKET_KEY_PATTERN.test(target) ? target.toUpperCase() : ctx.ticketTargetKeys?.[target];
+  if (!key) return { kind: 'invalid', reason: `${target.toUpperCase()} isn't a ticket key or an Already-ticketed row id, so there is no ticket to merge into.` };
+  return { kind: 'addPrompt', ids: rows.ids, key };
+}
+
 const EXPORT_ON_GROUP_SCREEN = 'Export works from the overview — reply `back` first, then `export`.';
 
 /** `export` and `export csv`, where the importer supports them; on a group screen of a multi-group import the reply says where it works. */
@@ -168,6 +215,8 @@ export function parseOverviewReply(reply: string, ctx: ImportReplyContext): Impo
   if (n === IMPORT_COMMANDS.done || isCancellation(reply)) return { kind: 'done' };
   const exported = parseExportReply(reply, ctx, false);
   if (exported) return exported;
+  const overviewTicketReply = parseShowReply(reply, ctx) ?? parseSearchReply(reply, ctx, false);
+  if (overviewTicketReply) return overviewTicketReply;
   if (n === IMPORT_COMMANDS.openNew && ctx.groups.includes('new')) return { kind: 'open', view: 'new' };
   if (n === IMPORT_COMMANDS.openTicketed && ctx.groups.includes('ticketed')) return { kind: 'open', view: 'ticketed' };
   if (n === IMPORT_COMMANDS.openStale && ctx.groups.includes('stale')) return { kind: 'open', view: 'stale' };
@@ -266,12 +315,16 @@ export function parseNewGroupReply(reply: string, ctx: ImportReplyContext): Impo
   if (n === IMPORT_COMMANDS.create || isConfirmation(reply)) return { kind: 'create' };
   const exported = parseExportReply(reply, ctx, true);
   if (exported) return exported;
+  const ticketReply = parseShowReply(reply, ctx) ?? parseSearchReply(reply, ctx, true);
+  if (ticketReply) return ticketReply;
   const exit = parseGroupExit(reply, ctx);
   if (exit) return exit;
   const nav = parseReviewPageNav(reply);
   if (nav) return { kind: 'pageNav', nav };
   const bulk = parseBulkNewRowReply(reply);
   if (bulk !== null) return { kind: 'bulk', include: bulk };
+  const mergeInto = ctx.canFold ? parseMergeIntoTicketReply(n, ctx) : null;
+  if (mergeInto) return mergeInto;
   const offScreen = parseMergeOffScreenReply(n, reply, ctx);
   if (offScreen) return offScreen;
   if (ctx.canFold) {
@@ -606,6 +659,8 @@ export function parseTicketedGroupReply(reply: string, ctx: ImportReplyContext):
   if (n === IMPORT_COMMANDS.recreate) return { kind: 'recreate' };
   const exported = parseExportReply(reply, ctx, true);
   if (exported) return exported;
+  const ticketReply = parseShowReply(reply, ctx) ?? parseSearchReply(reply, ctx, true);
+  if (ticketReply) return ticketReply;
   const nav = parseReviewPageNav(reply);
   if (nav) return { kind: 'pageNav', nav };
 
@@ -653,6 +708,8 @@ export function parseStaleGroupReply(reply: string, ctx: ImportReplyContext): Im
   if (exit) return exit;
   const exported = parseExportReply(reply, ctx, true);
   if (exported) return exported;
+  const staleTicketReply = parseShowReply(reply, ctx) ?? parseSearchReply(reply, ctx, false);
+  if (staleTicketReply) return staleTicketReply;
   const listing = ctx.canAccept && ctx.singleGroup ? parseAcceptedListReply(reply) : null;
   if (listing) return listing;
   const offScreen = parseMergeOffScreenReply(n, reply, ctx);
@@ -685,6 +742,7 @@ export function describeImportReplyVocabulary(view: ImportReviewView, ctx: Impor
     case 'new':
       return `On this screen you can reply \`create tickets\`, row numbers to toggle (e.g. \`2 4\`), \`include all\` / \`exclude all\`, ` +
         `${ctx.canFold ? '`merge 2 4` / `unmerge 2`, `add 2 4 to PROJ-123`, ' : ''}` +
+        `${ctx.canSearch ? '`search netty`, `merge 2 4 into A3`, `show`, ' : ''}` +
         `${ctx.canAccept ? '`accept 2 4`, `accept component 2 4`, `accepted` / `unaccept 2`, ' : ''}${exportHint}\`next\` / \`prev\`, or ${exit}.`;
     case 'ticketed': {
       // An importer with its own action words lists only what its rows offer, and leaves out the bulk shortcuts none can use.
@@ -695,7 +753,7 @@ export function describeImportReplyVocabulary(view: ImportReviewView, ctx: Impor
       const shortcuts = [shortcutOffered('update') ? '`update tickets`, ' : '', shortcutOffered('re-create') ? '`re-create tickets`, ' : ''].join('');
       return `On this screen you can reply \`apply\`, \`<row> <action>\` (e.g. \`A2 ${actionLabelOf('follow-up', ctx.actionLabels)}\` — actions are ` +
         `${offered.map(a => `\`${actionLabelOf(a, ctx.actionLabels)}\``).join(', ')}), \`all <action>\` (e.g. \`all leave\`), ` +
-        `${ctx.canAccept ? '`accept component A2`, ' : ''}${ctx.canMergeTickets ? '`merge A5 into A3`, ' : ''}${exportHint}${shortcuts}\`next\` / \`prev\` / \`page <n>\`, or ${exit}.`;
+        `${ctx.canAccept ? '`accept component A2`, ' : ''}${ctx.canMergeTickets ? '`merge A5 into A3`, ' : ''}${ctx.canSearch ? '`search netty`, `show`, ' : ''}${exportHint}${shortcuts}\`next\` / \`prev\` / \`page <n>\`, or ${exit}.`;
     }
     case 'stale':
       return `On this screen you can reply \`close tickets\`, a stale ticket's key to toggle it (e.g. \`PROJ-123\`), ${exportHint}\`next\` / \`prev\` / \`page <n>\`, or ${exit}.`;
