@@ -42,10 +42,11 @@ export interface OverviewTicketList {
   truncated: boolean;
 }
 
-/** A Jira project version and its release date (`YYYY-MM-DD`), null when it has none. */
+/** A Jira project version, its release date (`YYYY-MM-DD`; null when it has none) and whether Jira marks it released. */
 export interface ProjectVersionInfo {
   name: string;
   releaseDate: string | null;
+  released: boolean;
 }
 
 /** The marker labels the importers put on every ticket they create, and the safety bound on one overview. */
@@ -884,12 +885,13 @@ export class TicketService {
     return tickets;
   }
 
-  /** The project's versions with their release dates, for flagging a Due Date that falls before a release. */
+  /** The project's versions with their release dates and released flags, for flagging a Due Date that falls before a release. */
   async getProjectVersions(projectKey: string): Promise<ProjectVersionInfo[]> {
     const project = await this.client.getProject(projectKey);
     return (project.versions ?? []).map(v => ({
       name: v.name,
       releaseDate: typeof v.releaseDate === 'string' && CALENDAR_DATE_PATTERN.test(v.releaseDate) ? v.releaseDate.slice(0, 10) : null,
+      released: v.released === true,
     }));
   }
 
