@@ -315,3 +315,26 @@ describe('reload report reuses the descriptions already read (remediation dates,
     expect(reads).toEqual(['PROJ-5']);
   });
 });
+
+describe('the review keeps each matched ticket\'s summary and status for the search reply (import ticket search, U1)', () => {
+  const lib = comp('bar:1.0', 'High', [['CVE-9', 'High']]);
+  const labels = ['oss-dependency', sanitizeComponentLabel(lib.nameVersion), 'oss-cve-cve-9', 'oss-rating-high'];
+
+  it('stores summary and status of a matched ticket', async () => {
+    const { session } = await importWaltz([lib], { 'PROJ-5': { labels, summary: '[OSS] bar:1.0 — High', status: 'In Progress' } });
+    expect(session.ticketInfo).toEqual({ 'PROJ-5': { summary: '[OSS] bar:1.0 — High', status: 'In Progress' } });
+  });
+
+  it('stores an empty map when no ticket matched, so search says nothing matched rather than "reload"', async () => {
+    const { session } = await importWaltz([lib], {});
+    expect(session.ticketInfo).toEqual({});
+  });
+
+  it('rebuilds the map from the new search on reload report', async () => {
+    const tickets = { 'PROJ-5': { labels, summary: 'Old title', status: 'Open' } as FakeTicket };
+    const { session, ws } = await importWaltz([lib], tickets);
+    tickets['PROJ-5'].summary = 'New title';
+    const out = await reply('reload report confirm', session, ws);
+    expect(out.session.ticketInfo).toEqual({ 'PROJ-5': { summary: 'New title', status: 'Open' } });
+  });
+});

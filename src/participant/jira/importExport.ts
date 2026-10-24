@@ -38,7 +38,7 @@ export async function exportImportOverview<TItem, TRow extends ReviewRowBase>(
 ): Promise<void> {
   await buildAndStreamExport(session, csv, ticketService, stream, descriptor, baseUrl);
   // The export is the last thing on screen: the review screen is not printed again, so say how to go on.
-  stream.markdown(trustedChatMarkdown(`\n\n${buildExportFollowUp(session.singleGroup === true)}`));
+  stream.markdown(trustedChatMarkdown(`\n\n${buildExportFollowUp(session.singleGroup === true, descriptor.dedupKeyOf !== undefined)}`));
 }
 
 async function buildAndStreamExport<TItem, TRow extends ReviewRowBase>(

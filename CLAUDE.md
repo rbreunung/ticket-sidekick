@@ -298,7 +298,7 @@ sync with any change to the review pipeline.**
 `@jira` turns one or more `.eml` emails, a Veracode Detailed Report, or a
 Waltz OSS Report into Jira tickets — all three sharing the same
 template-pick/review/batch-creation flow via `reportImportHandler.ts`'s
-`ReportImportDescriptor` (email as a dedup-less third kind). Documented in
+`ReportImportDescriptor` (email as a dedup-less third kind). The Veracode/Waltz review also offers `search <keyword>` over the tickets it already matched, `merge <rows> into <ticket>` (an alias of `add … to`), and `show` (pure logic in `src/participant/session/importSearch.ts`). Documented in
 [`docs/report-import.md`](docs/report-import.md).
 Emails first pass through a boilerplate cleanup step (patterns, consented model check, strip/keep preview) in both the batch and add-as-comment flows — see [`docs/report-import.md`](docs/report-import.md#eml-email-import-batch).
 

@@ -8,6 +8,7 @@ import {
   type JqlIssueLike, type DedupTicket, type DedupMap, type RowChange,
   fetchAllPages, clampSummary, fitWiki, MAX_SUMMARY_CHARS, MAX_DESCRIPTION_CHARS,
   applyDroppedMembers, alignRewriteDefaults, readTargetDescriptions, applyMissingDueDate, deriveRewriteActions,
+  buildTicketInfo,
 } from '../utils/reportImport';
 import { deriveWaltzActions } from '../utils/waltzReport';
 import type { ReviewRowBase } from '../participant/sessionState';
@@ -295,6 +296,16 @@ describe('extractDedupMap', () => {
     ];
     const tickets = extractDedupMap(issues, labelToDedupKey).get('oss-dep-jackson')!;
     expect(tickets.map(t => [t.key, t.resolved, t.status])).toEqual([['PROJ-8', true, 'Done'], ['PROJ-30', false, 'Open']]);
+  });
+
+  it('keeps the ticket summary the search returned, and leaves it off when the search returned none', () => {
+    const issues: JqlIssueLike[] = [
+      { key: 'PROJ-1', fields: { labels: ['oss-dep-a'], summary: '[OSS] netty-codec:4.1.100 — High' } },
+      { key: 'PROJ-2', fields: { labels: ['oss-dep-b'] } },
+    ];
+    const map = extractDedupMap(issues, labelToDedupKey);
+    expect(map.get('oss-dep-a')![0].summary).toBe('[OSS] netty-codec:4.1.100 — High');
+    expect(map.get('oss-dep-b')![0]).not.toHaveProperty('summary');
   });
 
   it('lists a ticket once per key even when it carries the key label twice', () => {
@@ -1347,5 +1358,31 @@ describe('applyMissingDueDate (Veracode SLA due dates, U4)', () => {
     const map = dedupOf(t, 'a', 'b');
     const out = alignRewriteDefaults(apply(build([{ key: 'a' }, { key: 'b' }], map), map));
     expect(out.map(r => r.action)).toEqual(['rewrite', 'rewrite']);
+  });
+});
+
+describe('buildTicketInfo (summaries and statuses kept for the review search)', () => {
+  const ticket = (key: string, summary: string | undefined, status: string | null): DedupTicket => ({
+    key, labels: [], resolved: false, created: null, status, ...(summary === undefined ? {} : { summary }),
+  });
+
+  it('keeps one summary and status per ticket, even when the ticket matches several dedup keys', () => {
+    const map: DedupMap = new Map([
+      ['k1', [ticket('PROJ-1', 'OrderRepository.java - SQL Injection', 'Open')]],
+      ['k2', [ticket('PROJ-1', 'OrderRepository.java - SQL Injection', 'Open'), ticket('PROJ-2', 'Other', 'In Progress')]],
+    ]);
+    expect(buildTicketInfo(map)).toEqual({
+      'PROJ-1': { summary: 'OrderRepository.java - SQL Injection', status: 'Open' },
+      'PROJ-2': { summary: 'Other', status: 'In Progress' },
+    });
+  });
+
+  it('skips a ticket the search returned no summary for', () => {
+    const map: DedupMap = new Map([['k1', [ticket('PROJ-1', undefined, 'Open')]]]);
+    expect(buildTicketInfo(map)).toEqual({});
+  });
+
+  it('is empty for an empty dedup map', () => {
+    expect(buildTicketInfo(new Map())).toEqual({});
   });
 });

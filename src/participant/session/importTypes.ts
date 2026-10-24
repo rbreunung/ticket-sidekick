@@ -4,7 +4,7 @@
 import type { VeracodeFlaw, VeracodeReviewRow } from '../../utils/veracodeReport';
 import type { WaltzComponent, WaltzReviewRow } from '../../utils/waltzReport';
 import type { EmailImportItem, EmailReviewRow } from '../../utils/emlParser';
-import type { RowChange } from '../../utils/reportImport';
+import type { RowChange, TicketInfo } from '../../utils/reportImport';
 import { findPath, type WorkflowGraph } from '../../services/WorkflowService';
 import { TransitionBatchTicket } from './sessionTypes';
 
@@ -261,6 +261,9 @@ export interface ReviewSession<TRow> {
   // Remediation dates (KTD1): the target tickets' descriptions read for the date comparison, by ticket key (null = read but
   // empty), so a rebuild after `accept component` or `reload report` does not read them all again.
   ticketDescriptions?: Record<string, string | null>;
+  // Ticket search: summary and build-time status of every ticket the dedup search matched, by key, for the `search` reply.
+  // Absent on a session saved before the field existed (and for email).
+  ticketInfo?: TicketInfo;
   // Remediation dates (KTD10): the dedup keys of every component in the unfiltered report, so a rewrite takes a label
   // off a ticket only for a component that really left the report, not one filtered or accepted away.
   reportKeys?: string[];

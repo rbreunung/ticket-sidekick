@@ -34,7 +34,12 @@ export const IMPORT_COMMANDS = {
   reload: 'reload report',
   export: 'export',
   exportCsv: 'export csv',
+  show: 'show',
+  search: 'search',
 } as const;
+
+/** The usage line for a `search` reply with no keyword (shared by the parser and the results builder). */
+export const SEARCH_USAGE = 'Search the matched tickets like this: `search <keyword>` (a class or component name, for example).';
 
 /** The reply word a component entry's Remove link sends; one token, so it never reads as the `unaccept <component> <CVE>` form. */
 export const UNACCEPT_COMPONENT_WORD = 'unaccept-component';
@@ -175,11 +180,33 @@ function exportLine(): string {
   return `Reply ${cmdLink('Export', IMPORT_COMMANDS.export)} (\`${IMPORT_COMMANDS.export}\`) to list this report's items by Fix Version, compared with Jira.`;
 }
 
+/** The link that re-prints the screen the session is on (the `show` reply). */
+function showLine(): string {
+  return `Reply ${cmdLink('Show', IMPORT_COMMANDS.show)} (\`${IMPORT_COMMANDS.show}\`) to print the screen you came from again.`;
+}
+
 /** What ends an `export` preview, so the screen the user came from is not printed over it: the way on, as a link. */
-export function buildExportFollowUp(singleGroup: boolean): string {
-  return singleGroup
+export function buildExportFollowUp(singleGroup: boolean, canShow = false): string {
+  const exit = singleGroup
     ? `Reply ${cmdLink('Done', IMPORT_COMMANDS.done)} when you are finished with this import, or pick another action from the screen above.`
     : `Reply ${cmdLink('Back to overview', IMPORT_COMMANDS.back)} to return to the import results.`;
+  return canShow ? `${showLine()}\n\n${exit}` : exit;
+}
+
+/**
+ * What ends a `search` reply: the replies that act on a found ticket (only the ones this screen and importer accept), then the
+ * way back to the screen. An A id in the results resolves to that row's main ticket; any ticket key works with `merge … into`.
+ */
+export function buildSearchFollowUp(view: 'new' | 'ticketed', opts: { canFold: boolean; canMergeTickets: boolean }, hasResults: boolean): string {
+  const lines: string[] = [];
+  if (hasResults && view === 'new' && opts.canFold) {
+    lines.push('Add New rows to a ticket from the list with `merge 1 2 into A3` (or `merge 1 2 into PROJ-12`); `add 1 2 to PROJ-12` does the same.');
+  }
+  if (hasResults && view === 'ticketed' && opts.canMergeTickets) {
+    lines.push('Merge tickets from the list with `merge A5 into A3`; the ticket after `into` is kept.');
+  }
+  lines.push(showLine());
+  return lines.join('\n\n');
 }
 
 /** Waltz ticket merge (KTD10): the screens no longer match Jira or the ignore list; the link starts the reload. */
