@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   parseNewGroupReply, parseTicketedGroupReply, parseStaleGroupReply, parseOverviewReply, describeImportReplyVocabulary,
+  buildExportFollowUp, buildSearchFollowUp,
   type ImportReplyContext,
 } from '../participant/sessionState';
 
@@ -142,5 +143,44 @@ describe('screen vocabulary hint (import ticket search, U3)', () => {
     const text = describeImportReplyVocabulary('new', ctx({ canSearch: false, canFold: false }));
     expect(text).not.toContain('search');
     expect(text).not.toContain('`show`');
+  });
+});
+
+describe('follow-up lines (import ticket search, U4)', () => {
+  const decoded = (text: string) => decodeURIComponent(text);
+
+  it('Covers R7: the export follow-up offers Show before the way back, when the importer supports it', () => {
+    expect(decoded(buildExportFollowUp(false, true))).toMatch(/\[Show\]\(command:[^)]*@jira show[\s\S]*Back to overview/);
+    expect(decoded(buildExportFollowUp(true, true))).toMatch(/\[Show\][\s\S]*Done/);
+  });
+
+  it('the export follow-up is unchanged without Show', () => {
+    expect(buildExportFollowUp(false)).not.toContain('Show');
+    expect(decoded(buildExportFollowUp(false))).toContain('Back to overview');
+  });
+
+  it('after a search on the New screen: the merge and add forms, then Show', () => {
+    const text = decoded(buildSearchFollowUp('new', { canFold: true, canMergeTickets: true }, true));
+    expect(text).toContain('merge 1 2 into A3');
+    expect(text).toContain('add 1 2 to PROJ-12');
+    expect(text).toContain('[Show]');
+  });
+
+  it('after a search on the Already ticketed screen: the ticket merge form, then Show', () => {
+    const text = decoded(buildSearchFollowUp('ticketed', { canFold: true, canMergeTickets: true }, true));
+    expect(text).toContain('merge A5 into A3');
+    expect(text).not.toContain('merge 1 2 into');
+    expect(text).toContain('[Show]');
+  });
+
+  it('with no results only Show is offered', () => {
+    const text = decoded(buildSearchFollowUp('new', { canFold: true, canMergeTickets: true }, false));
+    expect(text).not.toContain('merge');
+    expect(text).toContain('[Show]');
+  });
+
+  it('an importer that cannot merge tickets is not shown the ticket merge form', () => {
+    const text = decoded(buildSearchFollowUp('ticketed', { canFold: true, canMergeTickets: false }, true));
+    expect(text).not.toContain('merge A5');
   });
 });
