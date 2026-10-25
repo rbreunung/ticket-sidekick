@@ -72,7 +72,7 @@
           },
           {
             "name": "overview",
-            "description": "List a project's open Veracode and Waltz tickets by release, with Due Dates",
+            "description": "List a project's open Veracode and Waltz tickets by release, with Due Dates; add csv or xlsx to save them as a file",
             "sampleRequest": "PROJ"
           }
         ],

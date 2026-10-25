@@ -34,6 +34,8 @@ export const IMPORT_COMMANDS = {
   reload: 'reload report',
   export: 'export',
   exportCsv: 'export csv',
+  exportXlsx: 'export xlsx',
+  exportExcel: 'export excel',
   show: 'show',
   search: 'search',
 } as const;

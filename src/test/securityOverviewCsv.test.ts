@@ -79,6 +79,19 @@ describe('renderOverviewCsv', () => {
     expect(lines.join('\n')).toContain('"a,b.java"');
   });
 
+  it('writes the release date right after the Fix Version and Members as the last column', () => {
+    const a = makeComponent('a:1');
+    const cells = csvOf([waltzTicket('SEC-2', [a], { fixVersions: ['2026.11'], dueDate: '2026-11-01' })]);
+    const header = cells[0].split(',');
+    const row = cells[1].split(',');
+
+    expect(header.indexOf('Release Date')).toBe(header.indexOf('Fix Version') + 1);
+    expect(header.indexOf('Due Date')).toBe(header.indexOf('Release Date') + 1);
+    expect(header.at(-1)).toBe('Members');
+    expect(row.at(-1)).toBe('a:1');
+    expect(row[header.indexOf('Release Date')]).toBe('2026-11-15');
+  });
+
   it('uses the chosen delimiter', () => {
     const lines = csvOf([veracodeTicket('SEC-1', [makeFlaw('1')], { fixVersions: ['2026.11'] })], ';');
     expect(lines[0].split(';')).toContain('Ticket');

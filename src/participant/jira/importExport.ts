@@ -3,10 +3,10 @@ import { logDiag } from '../../utils/diagLog';
 import type { TicketService, OverviewTicket } from '../../services/TicketService';
 import type { TicketFinding } from '../../utils/veracodeFindingsTable';
 import type { TicketComponent } from '../../utils/waltzComponentsTable';
-import { buildOverview, localDate, type ReportOnlyItem } from '../../utils/securityOverview';
+import { buildOverview, localDate, type OverviewFormat, type ReportOnlyItem } from '../../utils/securityOverview';
 import type { ReviewRowBase, ReviewSession } from '../sessionState';
 import type { ReportImportDescriptor } from './reportImportTypes';
-import { saveOverviewCsv, streamOverview } from './overviewHandler';
+import { saveOverviewFile, streamOverview } from './overviewHandler';
 import { buildExportFollowUp } from '../session/importScreens';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 
@@ -26,24 +26,24 @@ function mergeDetail(into: { findings?: TicketFinding[]; components?: TicketComp
  * The `export` reply of a report import (KTD3): this one report's items by Fix Version, compared with Jira. The tickets are the
  * open targets of the Already-ticketed rows (tracked) and the Stale tickets (not in this report); the New rows, and the
  * Already-ticketed rows whose tickets are all resolved, are the report's items with no open ticket. The report supplies the detail of every row it holds; a stale ticket's detail is read from its
- * description. With `csv` the same overview is saved as a file. Nothing in the review session changes.
+ * description. With a format (`csv` or `xlsx`) the same overview is saved as a file. Nothing in the review session changes.
  */
 export async function exportImportOverview<TItem, TRow extends ReviewRowBase>(
   session: ReviewSession<TRow>,
-  csv: boolean,
+  format: OverviewFormat | null,
   ticketService: TicketService,
   stream: vscode.ChatResponseStream,
   descriptor: ReportImportDescriptor<TItem, TRow>,
   baseUrl?: string,
 ): Promise<void> {
-  await buildAndStreamExport(session, csv, ticketService, stream, descriptor, baseUrl);
+  await buildAndStreamExport(session, format, ticketService, stream, descriptor, baseUrl);
   // The export is the last thing on screen: the review screen is not printed again, so say how to go on.
   stream.markdown(trustedChatMarkdown(`\n\n${buildExportFollowUp(session.singleGroup === true, descriptor.dedupKeyOf !== undefined)}`));
 }
 
 async function buildAndStreamExport<TItem, TRow extends ReviewRowBase>(
   session: ReviewSession<TRow>,
-  csv: boolean,
+  format: OverviewFormat | null,
   ticketService: TicketService,
   stream: vscode.ChatResponseStream,
   descriptor: ReportImportDescriptor<TItem, TRow>,
@@ -108,14 +108,14 @@ async function buildAndStreamExport<TItem, TRow extends ReviewRowBase>(
     report: { matchByKey, reportOnly, detailByKey },
   });
   logDiag(descriptor.scope, 'info', `${descriptor.importLabel} export built`, {
-    tickets: tickets.length, reportOnly: reportOnly.length, stale: staleKeys.length, csv,
+    tickets: tickets.length, reportOnly: reportOnly.length, stale: staleKeys.length, format,
   });
-  if (csv && overview.tables.length > 0) {
-    await saveOverviewCsv(overview, exporter.source, stream);
+  if (format && overview.tables.length > 0) {
+    await saveOverviewFile(overview, exporter.source, format, stream);
     return;
   }
-  streamOverview(overview, stream, baseUrl, { participantReply: IMPORT_EXPORT_CSV_REPLY });
+  streamOverview(overview, stream, baseUrl, IMPORT_EXPORT_REPLIES);
 }
 
-/** What the "Save as CSV" link sends back into the review session. */
-export const IMPORT_EXPORT_CSV_REPLY = 'export csv';
+/** What the "Save as CSV" and "Save as Excel" links send back into the review session. */
+export const IMPORT_EXPORT_REPLIES = { csv: 'export csv', xlsx: 'export xlsx' } as const;

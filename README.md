@@ -104,7 +104,7 @@ Open GitHub Copilot Chat and use `@jira`:
 | `@jira /field` | `@jira /field PROJ-123 set priority to High` | Update a field |
 | `@jira /move` | `@jira /move PROJ-123 to In Progress` | Move a ticket to a new status |
 | `@jira /search` | `@jira /search my open bugs in PROJ` | Search with JQL or plain language |
-| `@jira /overview` | `@jira /overview PROJ` | List a project's open Veracode and Waltz tickets by release, with Due Dates, and save them as CSV |
+| `@jira /overview` | `@jira /overview PROJ` | List a project's open Veracode and Waltz tickets by release, with Due Dates, and save them as CSV or Excel |
 
 ### Reading tickets
 
