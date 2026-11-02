@@ -23,11 +23,11 @@ execution: code
 
 ## Product Contract
 
-**Product Contract preservation:** changed: R7 and AE5 (a refused reply now prints the screen's help, user-directed), the Summary and Key Decisions lines that mention it, and the email-preview assumption (now checked against the code); R1–R6 and R8–R14 unchanged. The Outstanding Questions section is gone because planning resolved both questions (line wording in U1, email preview mapping in U5).
+**Product Contract preservation:** changed: R7 and AE5 (a refused reply now prints the screen's help, user-directed), R1 and R12 (the overview shows only a `help` link, as in the overview example confirmed during the brainstorm), the Summary and Key Decisions lines that mention them, and the email-preview assumption (now checked against the code); R2–R6, R8–R11, R13 and R14 unchanged. The Outstanding Questions section is gone because planning resolved both questions (line wording in U1, email preview mapping in U5).
 
 ### Summary
 
-Every import review screen keeps its clickable primary actions and replaces the stacked hint paragraphs with one grouped `Commands:` line that lists only what that screen accepts for that importer. A `help` reply or link prints the full explanations for the current screen once, and a refused reply prints the same help. Paging controls show only for directions that exist. `accept` is renamed `accept CVE`, and a bare `accept` writes nothing.
+Every import review screen keeps its clickable primary actions and replaces the stacked hint paragraphs with one grouped `Commands:` line that lists only what that screen accepts for that importer; the overview and the add and merge prompts show a `help` link instead of the line. A `help` reply or link prints the full explanations for the current screen once, and a refused reply prints the same help. Paging controls show only for directions that exist. `accept` is renamed `accept CVE`, and a bare `accept` writes nothing.
 
 ### Problem Frame
 
@@ -49,7 +49,7 @@ The accept words add a second problem. `accept` hides CVEs on the New screen onl
 
 **Screen layout**
 
-- R1. Each in-scope screen keeps its clickable primary actions and shows one `Commands:` line, grouped by purpose and ending with a clickable `help`, in place of the explanatory hint paragraphs.
+- R1. Each in-scope screen keeps its clickable primary actions and, except the overview and the add and merge prompts (R12), shows one `Commands:` line, grouped by purpose and ending with a clickable `help`, in place of the explanatory hint paragraphs.
 - R2. The `Commands:` line lists only commands the screen accepts for that importer: `search` on New and Already ticketed for Veracode and Waltz and not for email, the accept words for Waltz only.
 - R3. A command that takes arguments appears as its bare name in the line, and `help` gives the syntax.
 - R4. `next` shows only when a later page exists and `prev` only when an earlier one exists. `page <n>` shows only with three or more pages. A single page shows no paging control. These words are the existing clickable controls on the page line beside the primary actions, not part of the `Commands:` line, and `help` explains them. The words stay valid at the boundary and answer that the user is on the first or last page, changing nothing.
@@ -69,7 +69,7 @@ The accept words add a second problem. `accept` hides CVEs on the New screen onl
 
 **Coverage and guards**
 
-- R12. The compact line and `help` apply to the overview, New, Already ticketed and Stale screens and the email cleanup preview. The add and merge prompts show a single `help` link instead of the full line.
+- R12. The compact line applies to the New, Already ticketed and Stale screens and the email cleanup preview, and `help` applies to all of them and to the overview. The overview and the add and merge prompts show a single `help` link instead of the full line.
 - R13. The user manual and README tables describe the `Commands:` line, `help`, `search`, `show` and the new accept words.
 - R14. A test fails when a command a screen's reply parser accepts appears in neither that screen's `Commands:` line nor its `help` text, or when the line lists a command the parser rejects.
 
@@ -182,6 +182,7 @@ Directional only: group labels and wording are fixed in U1, and the parsers keep
 - Ticketed row-action names go through `actionLabelOf` so Waltz shows `new ticket`, and only actions some open row offers are listed, as `describeImportReplyVocabulary` does today.
 - Builders: the `Commands:` line with a trailing `help` link, the full help block, and the refused reply (defused quote, optional reason, help; KTD5).
 - Include the email preview's entries here (mapped in U5) so one module owns every command list.
+- The overview has no `Commands:` line group (R12): its typed commands (`accepted`, `unaccept`, `export` forms, `reload report`) are help-only entries, so the help builder lists them and the line builder does not.
 
 **Patterns to follow:** `describeImportReplyVocabulary` in `src/participant/session/importReplies.ts` for capability gating, `cmdLink` and `neutralizeMarkdownLinks` in `src/participant/session/primitives.ts`.
 
@@ -386,16 +387,3 @@ The chat flows themselves are not covered by `npm run test:e2e`, so the handler 
 - The old `accept <rows>` form is gone from code, tests and docs, and a bare `accept` writes nothing.
 - The manual, `docs/report-import.md` and `CLAUDE.md` describe the new behavior.
 - Code or test scaffolding left from abandoned attempts is removed from the diff.
-
----
-
-## Deferred / Open Questions
-
-Review items left for the author; they do not block implementation.
-
-### From 2026-11-02 review
-
-- **The overview gets only a `help` link, but the layout and coverage requirements read as if it gets a `Commands:` line** — Requirements (screen layout and coverage) and U3 (P2, coherence, confidence 75)
-
-  Implementers cannot tell whether the overview shows a `Commands:` line. The layout requirement (R1) says each in-scope screen shows one and the coverage requirement (R12) names the overview, while U3 gives the overview only a `help` link, as in the overview example confirmed during the brainstorm. The overview lists typed commands today (`accepted`, `reload report`, `export`), so the catalog and the guard test need to know whether they belong on a line.
-  Change: narrow R1 and R12 so the overview, like the add and merge prompts, shows only the `help` link, and have the catalog add no overview line group.
