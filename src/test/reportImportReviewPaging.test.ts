@@ -103,8 +103,13 @@ describe('handleImportReviewReply — paging (U4/R6-R8)', () => {
     expect(session.page).toBe(2); // last page (20 rows)
     expect(session.rows).toHaveLength(20);
 
-    await handleImportReviewReply('next', session, ticketService, mockStream() as never, ws as never, descriptor);
-    expect(session.page).toBe(2); // clamped — "next" past the last page is a no-op
+    const pastEnd = mockStream();
+    await handleImportReviewReply('next', session, ticketService, pastEnd as never, ws as never, descriptor);
+    expect(session.page).toBe(2); // "next" past the last page changes nothing
+    expect((pastEnd.markdown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+    const pastEndText = markdownText((pastEnd.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0]);
+    expect(pastEndText).toContain('last page');
+    expect(pastEndText).not.toContain('### New'); // answered in one line, not redrawn
 
     await handleImportReviewReply('prev', session, ticketService, mockStream() as never, ws as never, descriptor);
     expect(session.page).toBe(1);
@@ -112,8 +117,19 @@ describe('handleImportReviewReply — paging (U4/R6-R8)', () => {
     await handleImportReviewReply('prev', session, ticketService, mockStream() as never, ws as never, descriptor);
     expect(session.page).toBe(0); // first page
 
-    await handleImportReviewReply('prev', session, ticketService, mockStream() as never, ws as never, descriptor);
-    expect(session.page).toBe(0); // clamped — "prev" before the first page is a no-op
+    const beforeStart = mockStream();
+    await handleImportReviewReply('prev', session, ticketService, beforeStart as never, ws as never, descriptor);
+    expect(session.page).toBe(0); // "prev" before the first page changes nothing
+    expect(markdownText((beforeStart.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain('first page');
+  });
+
+  it('answers a paging word on a single page in one line', async () => {
+    const ws = makeMockWs();
+    const session = await buildBigReviewSession(10, ws);
+    const stream = mockStream();
+    await handleImportReviewReply('next', session, ticketService, stream as never, ws as never, descriptor);
+    expect(markdownText((stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain('only one page');
+    expect(session.page).toBe(0);
   });
 
   it('a bare numeric reply toggles the row only when it is on the currently visible page', async () => {

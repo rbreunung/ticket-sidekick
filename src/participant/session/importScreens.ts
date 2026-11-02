@@ -7,7 +7,7 @@ import { formatKeyLink } from '../../services/TicketService';
 import { isComponentEntry, type AcceptedEntry } from '../../utils/waltzAccepted';
 import { AcceptedHidden, ActionLabels, actionLabelOf, ImportResultGroup, ImportReviewView, ReviewRowBase, ReviewSession, ReviewSessionStale, TicketedAction, TicketedRowResult, emptyImportOutcomes, isTicketedRowFinished, selectedStaleIssueTypes, ticketedRowActions, ticketedTargetKey } from './importTypes';
 import { ReviewTableColumn, cmdLink, countedNoun, neutralizeMarkdownLinks, pluralNoun, renderReviewTable, safeCellText } from './primitives';
-import { buildReviewPage } from './reviewPaging';
+import { buildReviewPage, type ReviewPageNav } from './reviewPaging';
 import { HELP_WORD, buildCommandsLine, buildHelpLink, type ImportCommandCaps } from './importCommands';
 
 // ---------------------------------------------------------------------------------------------
@@ -522,6 +522,22 @@ export function staleTotalPages(stale: ReviewSessionStale | undefined): number {
 /** The 0-based Stale page `target` clamped to the pages that exist. */
 export function clampStalePage(target: number, stale: ReviewSessionStale | undefined): number {
   return clampGroupPage(target, staleRowCount(stale));
+}
+
+export function ticketedTotalPages<TRow extends ReviewRowBase>(allRows: TRow[]): number {
+  return groupTotalPages(allRows.filter(r => r.existingTicketKey !== null).length);
+}
+
+/**
+ * The one-line answer to a paging word that has nowhere to go: `next` on the last page, `prev` on the first, or either on a
+ * single page. Null when the move is possible or is a `page <n>` (which keeps clamping to the nearest page).
+ */
+export function pageBoundaryAnswer(nav: ReviewPageNav, page: number, totalPages: number): string | null {
+  if (nav.kind === 'goto') return null;
+  if (totalPages <= 1) return '_There is only one page._';
+  if (nav.kind === 'next' && page >= totalPages - 1) return '_You are on the last page._';
+  if (nav.kind === 'prev' && page <= 0) return '_You are on the first page._';
+  return null;
 }
 
 /** The 0-based Already-ticketed page `target` clamped to the pages that exist. */

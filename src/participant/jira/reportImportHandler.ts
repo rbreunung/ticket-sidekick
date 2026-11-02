@@ -21,7 +21,7 @@ import type { IJiraClient } from '../../jira/IJiraClient';
 import { TemplateService } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
 import { BATCH_LIMIT, DEFAULT_DEDUP_CHUNK_SIZE, MAX_REPORT_BYTES, buildDedupJql, buildReviewRows, applyDroppedMembers, applyMissingDueDate, alignRewriteDefaults, readTargetDescriptions, fetchAllPages, findAlreadyTicketed, findStaleTickets, templateLabelsOf, buildTicketInfo, type DedupMap, type JqlIssueLike } from '../../utils/reportImport';
-import { CURRENT_SESSION_SCHEMA_VERSION, NO_ISSUE_TYPE, SESSION_EXPIRED_MESSAGE, applyBulkNewRowSet, buildSearchFollowUp, buildSearchResults, findTicketsBySummary, ticketedTargetKey, applyReviewSessionToggle, applyStaleTicketToggle, applyTicketedActionChange, buildAllHiddenMessage, buildChatCommandLink, buildImportDoneSummary, buildReviewPage, clampStalePage, clampTicketedPage, buildImportHelp, buildRefusedReply, computeImportResultGroups, ensureImportViewState, importCommandCaps, IMPORT_COMMANDS, formatIssueTypeOptionLabel, initImportViewState, isCancellation, isSessionExpired, isTicketedRowFinished, mergeNewRows, neutralizeMarkdownLinks, parseImportReviewReply, pickEmailOption, resolveTemplateIssueType, safeMarkdownText, ticketedRowActions, toAcceptedHidden, unmergeNewRow, type ImportReplyContext, type ImportTemplateSelectionSession, type ReviewRowBase, type ReviewSession, type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession } from '../sessionState';
+import { CURRENT_SESSION_SCHEMA_VERSION, NO_ISSUE_TYPE, SESSION_EXPIRED_MESSAGE, applyBulkNewRowSet, buildSearchFollowUp, buildSearchResults, findTicketsBySummary, ticketedTargetKey, applyReviewSessionToggle, applyStaleTicketToggle, applyTicketedActionChange, buildAllHiddenMessage, buildChatCommandLink, buildImportDoneSummary, buildReviewPage, clampStalePage, clampTicketedPage, pageBoundaryAnswer, staleTotalPages, ticketedTotalPages, buildImportHelp, buildRefusedReply, computeImportResultGroups, ensureImportViewState, importCommandCaps, IMPORT_COMMANDS, formatIssueTypeOptionLabel, initImportViewState, isCancellation, isSessionExpired, isTicketedRowFinished, mergeNewRows, neutralizeMarkdownLinks, parseImportReviewReply, pickEmailOption, resolveTemplateIssueType, safeMarkdownText, ticketedRowActions, toAcceptedHidden, unmergeNewRow, type ImportReplyContext, type ImportTemplateSelectionSession, type ReviewRowBase, type ReviewSession, type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession } from '../sessionState';
 import { resolveIssueTypeOrPrompt, resolveProjectKey, sessionWasSuperseded } from './ticketContext';
 import { buildStaleTicketGroups } from './cleanupHandler';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
@@ -794,6 +794,17 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
       return;
     }
     case 'pageNav': {
+      // A move with nowhere to go is answered in one line: no redraw, nothing in the session changes.
+      const bounds = view === 'stale'
+        ? { page: clampStalePage(session.stalePage ?? 0, session.staleTickets), totalPages: staleTotalPages(session.staleTickets) }
+        : view === 'ticketed'
+          ? { page: clampTicketedPage(session.ticketedPage ?? 0, session.allRows), totalPages: ticketedTotalPages(session.allRows) }
+          : buildReviewPage(session.allRows, session.page);
+      const boundary = pageBoundaryAnswer(action.nav, bounds.page, bounds.totalPages);
+      if (boundary) {
+        stream.markdown(boundary);
+        return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
+      }
       if (view === 'stale') {
         const from = clampStalePage(session.stalePage ?? 0, session.staleTickets);
         const target = action.nav.kind === 'next' ? from + 1 : action.nav.kind === 'prev' ? from - 1 : action.nav.page;

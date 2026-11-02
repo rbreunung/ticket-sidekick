@@ -588,11 +588,21 @@ describe('paging the Already-ticketed screen, 20 rows at a time', () => {
     const { session, ws } = await buildMany(45);
     const last = await reply('page 3', session, ws);
     expect(idsIn(last)).toEqual([41, 42, 43, 44, 45]);
-    expect(await reply('next', session, ws)).toContain('Page 3 of 3');
+    const pastEnd = await reply('next', session, ws);
+    expect(pastEnd).toContain('last page');
+    expect(idsIn(pastEnd)).toEqual([]); // answered in one line, not redrawn
+    expect(session.ticketedPage).toBe(2);
     expect(await reply('prev', session, ws)).toContain('Page 2 of 3');
     expect(await reply('page 99', session, ws)).toContain('Page 3 of 3');
     expect(await reply('page 1', session, ws)).toContain('Page 1 of 3');
-    expect(await reply('prev', session, ws)).toContain('Page 1 of 3');
+    const beforeStart = await reply('prev', session, ws);
+    expect(beforeStart).toContain('first page');
+    expect(session.ticketedPage).toBe(0);
+  });
+
+  it('a single page answers a paging word in one line', async () => {
+    const { session, ws } = await buildMany(20);
+    expect(await reply('next', session, ws)).toContain('only one page');
   });
 
   it('a single page shows every row and no page line', async () => {

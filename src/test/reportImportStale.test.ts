@@ -505,9 +505,23 @@ describe('Stale-ticket review + close with a picked target', () => {
       expect(second).toContain('Page 2 of 3');
       const last = await reply('page 3', ws);
       expect(keysIn(last).filter(n => n <= 45)).toEqual([41, 42, 43, 44, 45]);
-      expect(await reply('next', ws)).toContain('Page 3 of 3');
+      const pastEnd = await reply('next', ws);
+      expect(pastEnd).toContain('last page');
+      expect(pastEnd).not.toContain('Page 3 of 3'); // answered in one line, not redrawn
       expect(await reply('prev', ws)).toContain('Page 2 of 3');
       expect(await reply('page 99', ws)).toContain('Page 3 of 3');
+    });
+
+    it('prev before the first page and any paging word on a single page answer in one line', async () => {
+      const ws = makeMockWs();
+      await importStale(manyIssues(45), ws);
+      const beforeStart = await reply('prev', ws);
+      expect(beforeStart).toContain('first page');
+      expect(beforeStart).not.toContain('PROJ-1');
+      const wsOne = makeMockWs();
+      await importStale(manyIssues(5), wsOne);
+      expect(await reply('next', wsOne)).toContain('only one page');
+      expect(await reply('prev', wsOne)).toContain('only one page');
     });
 
     it('a single page shows no page line, and a ticket marked on another page still counts', async () => {
