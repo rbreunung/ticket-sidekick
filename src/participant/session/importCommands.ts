@@ -25,9 +25,9 @@ export interface ImportCommandCaps {
   actionLabels?: ActionLabels;
   /** The actions some open Already-ticketed row offers; unset means every action (an importer with no labels of its own). */
   ticketedActions?: readonly TicketedAction[];
-  /** Email cleanup preview: how many emails it lists, and whether `model check` and `save` still have something to act on. */
+  /** Email cleanup preview: how many emails it lists, how many `model check` would still send, and whether a model-found block can still be saved. */
   emailRows?: number;
-  emailCanModelCheck?: boolean;
+  emailModelCheckCount?: number;
   emailCanSave?: boolean;
 }
 
@@ -217,9 +217,9 @@ export const IMPORT_COMMAND_ENTRIES: readonly ImportCommandEntry[] = [
     kinds: ['keep'], samples: () => ['keep'],
   },
   {
-    id: 'email-model-check', views: ['email-preview'], group: 'clean up', when: caps => caps.emailCanModelCheck === true,
+    id: 'email-model-check', views: ['email-preview'], group: 'clean up', when: caps => (caps.emailModelCheckCount ?? 0) > 0,
     line: () => ['model check'],
-    help: () => `${code('model check')} lets the Copilot model look for more boilerplate in the emails it has not checked yet; nothing is sent unless you reply.`,
+    help: caps => `${code('model check')} lets the Copilot model look for more boilerplate in the ${caps.emailModelCheckCount} email(s) it has not checked yet; nothing is sent unless you reply.`,
     kinds: ['model-check'], samples: () => ['model check'],
   },
   {

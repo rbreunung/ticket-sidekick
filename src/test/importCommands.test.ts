@@ -50,7 +50,7 @@ describe('Commands line', () => {
   });
 
   it('lists the email preview commands, dropping model check, row ids and save when they have nothing to act on', () => {
-    const full = buildCommandsLine('email-preview', { emailRows: 3, emailCanModelCheck: true, emailCanSave: true });
+    const full = buildCommandsLine('email-preview', { emailRows: 3, emailModelCheckCount: 2, emailCanSave: true });
     expect(full).toMatch(/clean up `strip` `keep` `model check` · rows `3` · patterns `save <n>`/);
     const bare = buildCommandsLine('email-preview', { emailRows: 1 });
     expect(bare).toContain('`strip` `keep`');

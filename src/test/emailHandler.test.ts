@@ -961,7 +961,7 @@ describe('email boilerplate cleanup step (U5 batch, U6 comment)', () => {
       client, ticketService, undefined as never, ws as never,
     );
     expect(firstResult?.metadata?.jiraSession?.kinds).toEqual(['email-cleanup']);
-    expect(streamTexts(first).join('\n')).toContain('from the comment for **PROJ-42**');
+    expect(streamTexts(first).join('\n')).toContain('comment on **PROJ-42**');
 
     const stripped = await runCleanup('strip', ws, client);
     expect(stripped.result?.metadata?.jiraSession?.kinds).toEqual(['email-content']);
@@ -999,12 +999,13 @@ describe('email boilerplate cleanup step (U5 batch, U6 comment)', () => {
     expect(ws.store['jira.session.emailTemplateSelection']).toBeUndefined();
   });
 
-  it('an unrecognized reply re-shows the current screen with a hint', async () => {
+  it('an unrecognized reply says what was not understood and prints the preview help', async () => {
     h.patterns = [CONFIDENTIAL_FOOTER];
     const ws = makeMockWs();
     await startBatch([EML('chain-owa-en.eml')], client, ticketService, ws);
     const { texts, result } = await runCleanup('banana', ws, client);
-    expect(texts.join('\n')).toContain('Email boilerplate found');
+    expect(texts.join('\n')).toContain("Didn't understand `banana`.");
+    expect(texts.join('\n')).toContain('**Help — Email cleanup preview**');
     expect(result?.metadata?.jiraSession?.kinds).toEqual(['email-cleanup']);
   });
   // ── Review fixes: cancellation, consent edge cases, save failures, last-ticket metadata ──────────
@@ -1088,6 +1089,36 @@ describe('email boilerplate cleanup step (U5 batch, U6 comment)', () => {
     await handleCreateFromEmail({ prompt: 'x', model } as never, mockStream() as never, undefined as never, client, ticketService, undefined as never, ws as never);
     await runCleanup('model check', ws, client, model);
   }
+
+  it('help in the preview prints the preview help and changes nothing', async () => {
+    const ws = makeMockWs();
+    await previewWithModelBlock(ws);
+    const before = JSON.stringify(ws.store[EMAIL_CLEANUP_SESSION_KEY]);
+
+    const { texts, result } = await runCleanup('help', ws, client);
+
+    expect(texts.join('\n')).toContain('**Help — Email cleanup preview**');
+    expect(texts.join('\n')).not.toContain('### Email boilerplate found');
+    expect(JSON.stringify(ws.store[EMAIL_CLEANUP_SESSION_KEY])).toBe(before);
+    expect(result?.metadata?.jiraSession?.kinds).toEqual(['email-cleanup']);
+  });
+
+  it('an unreadable reply in the preview quotes it and prints the help', async () => {
+    const ws = makeMockWs();
+    await previewWithModelBlock(ws);
+    const { texts, result } = await runCleanup('banana', ws, client);
+    const text = texts.join('\n');
+    expect(text).toContain("Didn't understand `banana`.");
+    expect(text).toContain('**Help — Email cleanup preview**');
+    expect(result?.metadata?.jiraSession?.kinds).toEqual(['email-cleanup']);
+    expect((ws.store[EMAIL_CLEANUP_SESSION_KEY] as EmailCleanupSession).phase).toBe('preview');
+  });
+
+  it('a row id that does not exist is refused the same way', async () => {
+    const ws = makeMockWs();
+    await previewWithModelBlock(ws);
+    expect((await runCleanup('9', ws, client)).texts.join('\n')).toContain("Didn't understand `9`.");
+  });
 
   it('save 2 whose settings write fails shows "Could not save the pattern" and logs no pattern text', async () => {
     const ws = makeMockWs();
