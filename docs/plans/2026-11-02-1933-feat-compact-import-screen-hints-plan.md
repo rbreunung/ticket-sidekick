@@ -12,7 +12,7 @@ execution: code
 
 ## Goal Capsule
 
-- **Objective:** A user reviewing a Veracode, Waltz or email import sees every typed command a screen accepts in one glance, can find a command such as `search` without the manual, and gets the longer explanation only when asking for it. The accept words say what they hide.
+- **Objective:** A user reviewing a Veracode, Waltz or email import sees the typed commands a screen offers in one glance (the rest are explained in `help`), can find a command such as `search` without the manual, and gets the longer explanation only when asking for it. The accept words say what they hide.
 - **Product authority:** The requesting user (rbreunung); decisions marked `session-settled` are theirs.
 - **Open blockers:** None.
 
@@ -46,7 +46,7 @@ The accept words add a second problem. `accept` hides CVEs on the New screen onl
 - R1. Each in-scope screen keeps its clickable primary actions and shows one `Commands:` line, grouped by purpose and ending with a clickable `help`, in place of the explanatory hint paragraphs.
 - R2. The `Commands:` line lists only commands the screen accepts for that importer: `search` on New and Already ticketed for Veracode and Waltz and not for email, the accept words for Waltz only.
 - R3. A command that takes arguments appears as its bare name in the line, and `help` gives the syntax.
-- R4. `next` shows only when a later page exists and `prev` only when an earlier one exists. `page <n>` shows only with three or more pages. A single page shows no paging control and no paging group. The words stay valid at the boundary and answer that the user is on the first or last page, changing nothing.
+- R4. `next` shows only when a later page exists and `prev` only when an earlier one exists. `page <n>` shows only with three or more pages. A single page shows no paging control. These words are the existing clickable controls on the page line beside the primary actions, not part of the `Commands:` line, and `help` explains them. The words stay valid at the boundary and answer that the user is on the first or last page, changing nothing.
 - R5. The strip, `help` and the "didn't understand" reply come from one list of commands per screen, so they cannot disagree with each other or with what the screen accepts.
 
 **Help and discoverability**
@@ -63,9 +63,9 @@ The accept words add a second problem. `accept` hides CVEs on the New screen onl
 
 **Coverage and guards**
 
-- R12. The compact line and `help` apply to the overview, New, Already ticketed and Stale screens, the add and merge prompts, and the email cleanup preview.
+- R12. The compact line and `help` apply to the overview, New, Already ticketed and Stale screens and the email cleanup preview. The add and merge prompts show a single `help` link instead of the full line.
 - R13. The user manual and README tables describe the `Commands:` line, `help`, `search`, `show` and the new accept words.
-- R14. A test fails when a screen's `Commands:` line and the commands its reply parser accepts differ.
+- R14. A test fails when a command a screen's reply parser accepts appears in neither that screen's `Commands:` line nor its `help` text, or when the line lists a command the parser rejects.
 
 ### Acceptance Examples
 
@@ -106,7 +106,6 @@ Outside this plan:
 #### Deferred to Planning
 
 - The exact group labels and wording of each screen's `Commands:` line.
-- Whether the add and merge confirmation prompts show the line or only offer `help`.
 - How the email cleanup preview's commands map onto the shared line.
 
 ### Sources / Research
