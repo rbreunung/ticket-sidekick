@@ -123,11 +123,11 @@ Outside this plan:
 ### Key Technical Decisions
 
 - KTD1. **One command catalog per screen kind, in a pure module.** The Commands line, `help` and the refused-reply help are all built from it. The reply parsers stay hand-written and are checked against the catalog rather than generated from it. The drift that hid `search` came from separate strings per screen; one list removes that class of drift. Governs R1, R5, R6, R7.
-- KTD2. **The guard test drives the real parsers from the catalog.** Each catalog entry declares the reply kinds it covers and sample replies. The test feeds every sample to the real parser, expects a non-refused action, and maps every reply kind the parser can return to a catalog entry through a typed exhaustive record, so a new reply kind fails to compile until it has an entry. Chosen over snapshotting rendered text, which breaks on every wording change and proves nothing about the parser. Governs R14.
+- KTD2. **The guard test drives the real parsers from the catalog.** Each catalog entry declares the reply kinds it covers and sample replies. The test feeds every sample to the real parser, expects a non-refused action, and maps every reply kind the parser can return to a catalog entry through a typed exhaustive record, so a new reply kind fails to compile until it has an entry. The catalog types its reply kinds as plain strings and the typed record lives in the guard test, so the catalog imports neither the reply parsers nor the screens and the module graph stays acyclic. Chosen over snapshotting rendered text, which breaks on every wording change and proves nothing about the parser. Governs R14.
 - KTD3. **`help` is a reply kind on every screen, handled like `search`.** The handler prints the help, writes no session state and returns the review session's metadata so the review stays open. A session in flight claims the turn before the generic greeting and help detection in `src/participant/JiraParticipant.ts`, so a `help` typed during a review is not read as the greeting. Governs R6.
 - KTD4. **Boundary paging answers come from the handler, not the parser.** The handler knows the current page and page count per view, so a `next` past the last page, a `prev` before the first, or any paging word on a single page answers in one line and neither re-renders nor changes the session. `page <n>` out of range keeps today's clamp to the nearest page, because R4 asks only for the first-page and last-page answers. Governs R4.
 - KTD5. **The refused reply quotes the typed text through the existing untrusted-text neutralizer** and goes out as trusted chat markdown, as the refused reply does today, because the help block carries command links. The quote is single-line and capped so pasted text cannot flood the reply or render as a link. Governs R7.
-- KTD6. **Bare `accept` is answered per screen.** On New it names both spellings. On Already ticketed, where only the component form exists, it names `accept component` and says `accept CVE` works from New. Neither writes anything. Governs R10.
+- KTD6. **Bare `accept` is answered per screen.** On New it names both spellings. On Already ticketed, where only the component form works, it still names both spellings and says `accept CVE` works from New only. Neither writes anything. Governs R10.
 
 ### High-Level Technical Design
 
@@ -176,7 +176,7 @@ Directional only: group labels and wording are fixed in U1, and the parsers keep
 - Test `src/test/importCommands.test.ts`
 
 **Approach:**
-- Define a capabilities type from the flags `ImportScreenOptions` and `ImportReplyContext` already share (`canFold`, `canAccept`, `canMergeTickets`, `canExport`, `canSearch`, `actionLabels`, `singleGroup`), so both pass it without conversion.
+- Define a capabilities type with the flag names `ImportReplyContext` already carries (`canFold`, `canAccept`, `canMergeTickets`, `canExport`, `canSearch`, `actionLabels`, `singleGroup`). `ImportScreenOptions` has all of them except `canSearch`, which U3 adds, so both pass it without conversion. The catalog imports only the import types and the shared primitives and types its reply kinds as plain strings, so it sits below the reply parsers and the screen builders (KTD2).
 - One entry per command: group, bare name for the line, syntax and one-sentence effect for `help`, the reply kinds it covers, sample replies, the views and capabilities that enable it, and a help-only flag.
 - Group labels follow the confirmed examples: rows, group, hide, find on New; row, all, tickets, hide on Already ticketed; toggle on Stale. `show`, the paging words and the typed `export` forms are help-only; the Export link line stays on the screens.
 - Ticketed row-action names go through `actionLabelOf` so Waltz shows `new ticket`, and only actions some open row offers are listed, as `describeImportReplyVocabulary` does today.
@@ -194,34 +194,41 @@ Directional only: group labels and wording are fixed in U1, and the parsers keep
 
 **Verification:** `npm test -- importCommands` passes; the module imports no `vscode`.
 
-### U2. Reply parsing: `help` and the accept words
+### U2. Reply parsing and review handler: `help`, refused replies and the accept words
 
-**Goal:** Add the `help` reply on every screen, rename `accept` to `accept CVE`, and make a bare `accept` a no-op answer.
+**Goal:** Add the `help` reply on every screen, print the help after a refused reply, rename `accept` to `accept CVE`, and make a bare `accept` a no-op answer, with the tree compiling at the end of the unit.
 
-**Requirements:** R6, R9, R10, R11
+**Requirements:** R6, R7, R9, R10, R11
 
 **Dependencies:** U1
 
 **Files:**
 - Modify `src/participant/session/importReplies.ts`
-- Test `src/test/reportImportAcceptReplies.test.ts`, `src/test/sessionImportSearchReplies.test.ts`, `src/test/sessionImportReview.test.ts`, `src/test/sessionImportFolding.test.ts`, `src/test/sessionImportMerge.test.ts`
+- Modify `src/participant/session/importScreens.ts` (the `help` word in `IMPORT_COMMANDS`)
+- Modify `src/participant/jira/reportImportHandler.ts` (the `help` case and the refused-reply case)
+- Test `src/test/reportImportAcceptReplies.test.ts`, `src/test/sessionImportSearchReplies.test.ts`, `src/test/sessionImportReview.test.ts`, `src/test/sessionImportFolding.test.ts`, `src/test/sessionImportMerge.test.ts`, `src/test/reportImportExport.test.ts`, `src/test/reportImportHandler.test.ts`
 
 **Approach:**
 - Add a `help` kind to `ImportReplyAction`; recognize the word on the overview, New, Already ticketed and Stale parsers ahead of the exit words, for every importer (no capability gate).
 - `parseAcceptReply` requires the `accept CVE` form, case-insensitively, with the same row matching and `because` handling. Any other `accept …` that is not `accept component` is refused with the per-screen bare-`accept` reason (KTD6); refused usage strings name the new spelling.
-- Remove `describeImportReplyVocabulary`; its callers use the catalog builders from U1.
+- Add `help` to `IMPORT_COMMANDS`. Remove `describeImportReplyVocabulary` together with its only production caller, the refused-reply case in the review handler, which now streams the refused-reply builder from U1 with the typed text and the parser's reason (KTD5).
+- Add a `help` case to the same handler `switch`: stream the catalog help for the current view as trusted chat markdown, persist the session unchanged, return the review session metadata, and log one `logDiag` info line (KTD3). A reply typed while a merge run is waiting is still read by the merge flow first.
 - Leave `accept component`, `accepted`, `unaccept` and `unaccept-component` untouched.
 
 **Patterns to follow:** `parseSearchReply` and `parseShowReply` for the always-answered-here reply shape.
 
 **Test scenarios:**
 - Covers AE6. `accept cve 2 because not reachable` and `Accept CVE 2` return an `accept` action with ids `["2"]` and the reason; the old `accept 2 4` returns a refusal and no action.
-- Covers AE3. Bare `accept 2 4` on New refuses with both spellings; on Already ticketed it refuses naming `accept component` and says `accept CVE` works from New; neither returns an accept action.
+- Covers AE3. Bare `accept 2 4` on New refuses with both spellings; on Already ticketed it refuses naming both spellings and says `accept CVE` works from New only; neither returns an accept action.
 - `accept component 2 4` and `accept component A2` still return `acceptComponent` actions.
 - `help` returns a `help` action on all four views for a Veracode, a Waltz and an email-style context; `HELP` and ` help ` do too.
 - A row id that happens to be typed after `accept cve` but is not on the page is refused with the existing row reason.
+- Covers AE2. `help` on the New screen streams the help, leaves `session.rows`, `page` and `view` unchanged, keeps the review session open, and the next `show` renders the compact screen.
+- Covers AE5. `2x` on New streams the quote, then the full help; `5` when row 5 is not on the page streams the reason, then the same help.
+- `help` typed during a review is answered by the review, not by the generic greeting.
+- The quote of a reply containing a markdown link renders as plain text.
 
-**Verification:** the listed suites pass; no parser test still pins the old `accept 2 4` form.
+**Verification:** the listed suites pass, `npm run compile` passes with `describeImportReplyVocabulary` gone, and no parser test still pins the old `accept 2 4` form.
 
 ### U3. Screens and prompts
 
@@ -256,11 +263,11 @@ Directional only: group labels and wording are fixed in U1, and the parsers keep
 
 **Verification:** the listed suites pass with the line and links asserted, not the old sentences.
 
-### U4. Review handler: `help`, refused replies, page boundaries
+### U4. Review handler: page boundaries
 
-**Goal:** Make the review handler print help on request and after a refused reply, and answer paging words at a boundary.
+**Goal:** Answer paging words at a boundary without redrawing the screen or changing the session.
 
-**Requirements:** R4, R6, R7
+**Requirements:** R4
 
 **Dependencies:** U2, U3
 
@@ -269,20 +276,13 @@ Directional only: group labels and wording are fixed in U1, and the parsers keep
 - Test `src/test/reportImportHandler.test.ts`, `src/test/reportImportReviewPaging.test.ts`, `src/test/reportImportStale.test.ts`, `src/test/reportImportTicketedActions.test.ts`
 
 **Approach:**
-- `help`: stream the catalog help for the current view as trusted chat markdown, persist the session unchanged, return the review session metadata, and log one `logDiag` info line (KTD3).
-- Refused replies: replace the "Didn't understand that." plus vocabulary line with the refused-reply builder, passing the typed text and the parser's reason (KTD5).
 - Page navigation: compute the current page and page count per view with the existing clamp helpers, answer `next` past the last page, `prev` before the first and any paging word on a single page in one line with no re-render, and leave `goto` out of range clamping as today (KTD4).
-- A reply typed while a merge run is waiting is still read by the merge flow first; this unit does not change that order.
 
 **Patterns to follow:** the `search` and `export` cases in the same `switch`, which end with the session persisted and the metadata returned.
 
 **Test scenarios:**
-- Covers AE2. `help` on the New screen streams the help, leaves `session.rows`, `page` and `view` unchanged, keeps the review session open, and the next `show` renders the compact screen.
-- Covers AE5. `2x` on New streams the quote, then the full help; `5` when row 5 is not on the page streams the reason, then the same help.
 - Covers AE4. `next` on the last page of Already ticketed, Stale and New streams the last-page line and does not re-render or change the page; `prev` on page 1 streams the first-page line; `next` on a single page says there is one page.
 - `page 9` on a three-page New screen still lands on page 3.
-- `help` typed during a review is answered by the review, not by the generic greeting.
-- The quote of a reply containing a markdown link renders as plain text.
 
 **Verification:** the listed suites pass; the handler tests assert the streamed text and the unchanged session.
 
@@ -381,8 +381,21 @@ The chat flows themselves are not covered by `npm run test:e2e`, so the handler 
 ## Definition of Done
 
 - `npm run compile` and `npm test` pass.
-- Every requirement R1 to R14 is covered by a unit's scenarios, and each acceptance example (AE1 to AE6) has a scenario that names it.
+- Every requirement R1 to R12 and R14 is covered by a unit's scenarios, R13 is verified by U7's docs search and `userDocsSync` run, and each acceptance example (AE1 to AE6) has a scenario that names it.
 - No screen shows a hint paragraph that only explains how to type a command, and no refused reply repeats a vocabulary line instead of the help.
 - The old `accept <rows>` form is gone from code, tests and docs, and a bare `accept` writes nothing.
 - The manual, `docs/report-import.md` and `CLAUDE.md` describe the new behavior.
 - Code or test scaffolding left from abandoned attempts is removed from the diff.
+
+---
+
+## Deferred / Open Questions
+
+Review items left for the author; they do not block implementation.
+
+### From 2026-11-02 review
+
+- **The overview gets only a `help` link, but the layout and coverage requirements read as if it gets a `Commands:` line** — Requirements (screen layout and coverage) and U3 (P2, coherence, confidence 75)
+
+  Implementers cannot tell whether the overview shows a `Commands:` line. The layout requirement (R1) says each in-scope screen shows one and the coverage requirement (R12) names the overview, while U3 gives the overview only a `help` link, as in the overview example confirmed during the brainstorm. The overview lists typed commands today (`accepted`, `reload report`, `export`), so the catalog and the guard test need to know whether they belong on a line.
+  Change: narrow R1 and R12 so the overview, like the add and merge prompts, shows only the `help` link, and have the catalog add no overview line group.
