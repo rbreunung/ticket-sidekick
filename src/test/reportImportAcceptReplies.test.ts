@@ -14,7 +14,7 @@ function ctx(over: Partial<ImportReplyContext> = {}): ImportReplyContext {
   };
 }
 
-describe('accept CVE replies on the New screen (R5)', () => {
+describe('accept CVE replies on the New screen', () => {
   it('reads row numbers with no reason', () => {
     expect(parseImportReviewReply('new', 'accept CVE 2 3', ctx())).toEqual({ kind: 'accept', ids: ['2', '3'] });
   });
@@ -234,11 +234,6 @@ describe('accept component replies (accepted-components plan, U4)', () => {
     expect(parseImportReviewReply('new', 'accept component 2 3', ctx())).toEqual({ kind: 'acceptComponent', ids: ['2', '3'] });
     expect(parseImportReviewReply('new', 'Accept Component 2 because No newer version', ctx()))
       .toEqual({ kind: 'acceptComponent', ids: ['2'], reason: 'No newer version' });
-  });
-
-  it('New: "accept CVE <rows>" accepts the rows\' CVEs and "accept component <rows>" the whole components', () => {
-    expect(parseImportReviewReply('new', 'accept CVE 2', ctx())).toEqual({ kind: 'accept', ids: ['2'] });
-    expect(parseImportReviewReply('new', 'accept component 2', ctx())).toEqual({ kind: 'acceptComponent', ids: ['2'] });
   });
 
   it('New: rejects a row that is not on the visible page, naming it, and a missing row list', () => {

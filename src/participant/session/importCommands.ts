@@ -9,7 +9,6 @@ import { TICKETED_ACTION_ORDER } from '../../utils/reportImport';
 import { ActionLabels, TicketedAction, actionLabelOf } from './importTypes';
 import { cmdLink, neutralizeMarkdownLinks } from './primitives';
 
-/** The reply word that prints the current screen's help. */
 export const HELP_WORD = 'help';
 
 export type CommandView = 'overview' | 'new' | 'ticketed' | 'stale' | 'email-preview';
@@ -45,6 +44,17 @@ export interface ImportCommandEntry {
   /** Replies that must parse to one of `kinds` on a screen that offers the entry. */
   samples: (caps: ImportCommandCaps, view: CommandView) => string[];
   when?: (caps: ImportCommandCaps, view: CommandView) => boolean;
+}
+
+/**
+ * The actions some open Already-ticketed row offers, for an importer with its own action words; unset for one without,
+ * which lists them all. Both the screens and the reply handler derive it here so the line and the help cannot disagree.
+ */
+export function offeredTicketedActions(
+  actionLabels: ActionLabels | undefined,
+  openRows: ReadonlyArray<{ allowedActions: readonly TicketedAction[] }>,
+): TicketedAction[] | undefined {
+  return actionLabels ? TICKETED_ACTION_ORDER.filter(a => openRows.some(r => r.allowedActions.includes(a))) : undefined;
 }
 
 const code = (text: string): string => `\`${text}\``;
@@ -241,7 +251,6 @@ export const IMPORT_COMMAND_ENTRIES: readonly ImportCommandEntry[] = [
   },
 ];
 
-/** The entries a screen offers for an importer, in catalog order. */
 export function commandEntriesFor(view: CommandView, caps: ImportCommandCaps): ImportCommandEntry[] {
   return IMPORT_COMMAND_ENTRIES.filter(e => e.views.includes(view) && (e.when ? e.when(caps, view) : true));
 }
@@ -254,7 +263,6 @@ const VIEW_TITLES: Record<CommandView, string> = {
   'email-preview': 'Email cleanup preview',
 };
 
-/** The clickable `help` link every in-scope screen ends its commands with. */
 export function buildHelpLink(): string {
   return cmdLink('help', HELP_WORD);
 }
@@ -273,7 +281,6 @@ export function buildCommandsLine(view: CommandView, caps: ImportCommandCaps): s
   return groups.size === 0 ? buildHelpLink() : `Commands: ${[...parts, buildHelpLink()].join(' · ')}`;
 }
 
-/** The full help for a screen: every command it offers, with syntax and effect, line-listed or not. */
 export function buildImportHelp(view: CommandView, caps: ImportCommandCaps): string {
   const bullets = commandEntriesFor(view, caps).map(e => `- ${e.help(caps, view)}`);
   return [`**Help — ${VIEW_TITLES[view]}**`, '', ...bullets].join('\n');

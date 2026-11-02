@@ -6,7 +6,7 @@ import {
   type CommandView, type ImportCommandCaps, type ImportReplyAction, type ImportReplyContext, type TicketedAction,
 } from '../participant/sessionState';
 
-// Guard for the command catalog (compact import screen hints plan, U6): what a screen's Commands line and help list must match
+// Guard for the command catalog: what a screen's Commands line and help list must match
 // what its reply parser accepts, so a reply word cannot be added to a parser and go unadvertised the way `search` once did.
 // src/test is outside the compile project, so the exhaustive record below is also checked against the parser's source.
 

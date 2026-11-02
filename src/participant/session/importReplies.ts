@@ -1,10 +1,9 @@
 // Report-import per-screen reply parsing, merge/unmerge/add helpers, reply vocabulary and done summary.
 // Pure (vscode-free); re-exported through ../sessionState.ts.
 
-import { TICKETED_ACTION_ORDER } from '../../utils/reportImport';
 import { formatKeyLink } from '../../services/TicketService';
 import { IMPORT_COMMANDS, LEGACY_UPDATE_COMMAND, SEARCH_USAGE, UNACCEPT_COMPONENT_WORD } from './importScreens';
-import { buildHelpLink, type ImportCommandCaps } from './importCommands';
+import { buildHelpLink, offeredTicketedActions, type ImportCommandCaps } from './importCommands';
 import { AddMode, ImportOutcomes, ImportResultGroup, ImportReviewView, MergeRun, ReviewRowBase, ReviewSessionStale, StaleTargetOption, TicketedAction, ActionLabels, actionLabelOf } from './importTypes';
 import { TICKET_KEY_TOKEN, cmdLink, isBackOrCancellation, isCancellation, isConfirmation, neutralizeMarkdownLinks, normalizeReply } from './primitives';
 import type { OverviewFormat } from '../../utils/securityOverview';
@@ -54,7 +53,6 @@ export type ImportReplyAction =
   // Ticket search: list the review's matched open tickets whose summary contains the keyword, and re-print the current screen.
   | { kind: 'search'; keyword: string }
   | { kind: 'show' }
-  // Help: print the full explanation of the current screen once.
   | { kind: 'help' }
   | { kind: 'toggleRows'; ids: string[] }
   | { kind: 'toggleStale'; keys: string[] }
@@ -168,7 +166,7 @@ function parseHelpReply(reply: string): ImportReplyAction | null {
   return normalizeReply(reply) === IMPORT_COMMANDS.help ? { kind: 'help' } : null;
 }
 
-const SEARCH_ON_OTHER_SCREEN ='Search works on the New and Already ticketed screens — open one of them first, then `search <keyword>`.';
+const SEARCH_ON_OTHER_SCREEN = 'Search works on the New and Already ticketed screens — open one of them first, then `search <keyword>`.';
 
 /** `show` re-prints the screen the session is on, wherever the importer supports search. */
 function parseShowReply(reply: string, ctx: ImportReplyContext): ImportReplyAction | null {
@@ -778,7 +776,7 @@ export function importCommandCaps(ctx: ImportReplyContext): ImportCommandCaps {
     canExport: ctx.canExport,
     canSearch: ctx.canSearch,
     actionLabels: ctx.actionLabels,
-    ticketedActions: ctx.actionLabels ? TICKETED_ACTION_ORDER.filter(a => ctx.ticketedRows.some(r => r.allowedActions.includes(a))) : undefined,
+    ticketedActions: offeredTicketedActions(ctx.actionLabels, ctx.ticketedRows),
   };
 }
 

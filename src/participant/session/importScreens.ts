@@ -1,14 +1,14 @@
 // Report-import overview hub: view state, group counts and the New/Already-ticketed/Stale screens.
 // Pure (vscode-free); re-exported through ../sessionState.ts.
 
-import { BATCH_LIMIT, TICKETED_ACTION_ORDER } from '../../utils/reportImport';
+import { BATCH_LIMIT } from '../../utils/reportImport';
 import type { RowChange } from '../../utils/reportImport';
 import { formatKeyLink } from '../../services/TicketService';
 import { isComponentEntry, type AcceptedEntry } from '../../utils/waltzAccepted';
 import { AcceptedHidden, ActionLabels, actionLabelOf, ImportResultGroup, ImportReviewView, ReviewRowBase, ReviewSession, ReviewSessionStale, TicketedAction, TicketedRowResult, emptyImportOutcomes, isTicketedRowFinished, selectedStaleIssueTypes, ticketedRowActions, ticketedTargetKey } from './importTypes';
 import { ReviewTableColumn, cmdLink, countedNoun, neutralizeMarkdownLinks, pluralNoun, renderReviewTable, safeCellText } from './primitives';
 import { buildReviewPage, type ReviewPageNav } from './reviewPaging';
-import { HELP_WORD, buildCommandsLine, buildHelpLink, type ImportCommandCaps } from './importCommands';
+import { HELP_WORD, buildCommandsLine, buildHelpLink, offeredTicketedActions, type ImportCommandCaps } from './importCommands';
 
 // ---------------------------------------------------------------------------------------------
 // Overview hub (docs/plans/2026-09-23-1400-feat-report-import-overview-hub-plan.md): an import's
@@ -206,7 +206,7 @@ function commandCapsOf<TRow extends ReviewRowBase>(s: ReviewSession<TRow>, opts:
     canExport: opts.canExport,
     canSearch: opts.canSearch,
     actionLabels: opts.actionLabels,
-    ticketedActions: opts.actionLabels ? TICKETED_ACTION_ORDER.filter(a => open.some(r => ticketedRowActions(r).allowedActions.includes(a))) : undefined,
+    ticketedActions: offeredTicketedActions(opts.actionLabels, open.map(r => ticketedRowActions(r))),
   };
 }
 

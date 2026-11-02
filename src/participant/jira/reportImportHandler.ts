@@ -775,7 +775,6 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
       stream.markdown(trustedChatMarkdown(buildRefusedReply({ view, caps: importCommandCaps(ctx), typed: reply, reason: action.reason })));
       return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
     case 'help':
-      // Like `search`: the help is the last thing on screen, and nothing in the session changes.
       logDiag(descriptor.scope, 'info', `${descriptor.importLabel} help`, { view });
       stream.markdown(trustedChatMarkdown(buildImportHelp(view, importCommandCaps(ctx))));
       await ws.update(descriptor.sessionKeys.review, session);
@@ -794,7 +793,6 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
       return;
     }
     case 'pageNav': {
-      // A move with nowhere to go is answered in one line: no redraw, nothing in the session changes.
       const bounds = view === 'stale'
         ? { page: clampStalePage(session.stalePage ?? 0, session.staleTickets), totalPages: staleTotalPages(session.staleTickets) }
         : view === 'ticketed'
@@ -805,20 +803,15 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
         stream.markdown(boundary);
         return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
       }
+      const target = action.nav.kind === 'next' ? bounds.page + 1 : action.nav.kind === 'prev' ? bounds.page - 1 : action.nav.page;
       if (view === 'stale') {
-        const from = clampStalePage(session.stalePage ?? 0, session.staleTickets);
-        const target = action.nav.kind === 'next' ? from + 1 : action.nav.kind === 'prev' ? from - 1 : action.nav.page;
         session.stalePage = clampStalePage(target, session.staleTickets);
         return rerender();
       }
       if (view === 'ticketed') {
-        const from = clampTicketedPage(session.ticketedPage ?? 0, session.allRows);
-        const target = action.nav.kind === 'next' ? from + 1 : action.nav.kind === 'prev' ? from - 1 : action.nav.page;
         session.ticketedPage = clampTicketedPage(target, session.allRows);
         return rerender();
       }
-      const current = buildReviewPage(session.allRows, session.page);
-      const target = action.nav.kind === 'next' ? current.page + 1 : action.nav.kind === 'prev' ? current.page - 1 : action.nav.page;
       const next = buildReviewPage(session.allRows, target);
       session.rows = next.rows;
       session.page = next.page;

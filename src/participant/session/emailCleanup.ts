@@ -5,7 +5,7 @@ import type { EmailImportItem } from '../../utils/emlParser';
 import { applyBoilerplateCleanup, computeDroppedImageNames, buildPatternFromBlock, isTooLongForModelCheck, BOILERPLATE_KINDS, type BoilerplatePattern, type DetectedBlock } from '../../utils/emailBoilerplate';
 import { CURRENT_SESSION_SCHEMA_VERSION } from './importTypes';
 import { buildChatCommandLink, countedNoun, isCancellation, neutralizeMarkdownLinks } from './primitives';
-import { buildCommandsLine, type ImportCommandCaps } from './importCommands';
+import { HELP_WORD, buildCommandsLine, type ImportCommandCaps } from './importCommands';
 
 // ---------------------------------------------------------------------------------------------
 // Email boilerplate cleanup step (KTD8) — one session step in front of both email flows (batch
@@ -186,10 +186,11 @@ export function buildEmailCleanupPreview(session: EmailCleanupSession, notice?: 
     }
     out.push('');
   }
-  const modelCheck = listModelCheckEligibleRows(session).length > 0 ? `${buildChatCommandLink('Model check', '@jira', 'model check')} · ` : '';
+  const caps = emailPreviewCaps(session);
+  const modelCheck = (caps.emailModelCheckCount ?? 0) > 0 ? `${buildChatCommandLink('Model check', '@jira', 'model check')} · ` : '';
   out.push(`${buildChatCommandLink('Strip', '@jira', 'strip')} · ${buildChatCommandLink('Keep', '@jira', 'keep')} · ${modelCheck}` +
     buildChatCommandLink('Cancel', '@jira', 'cancel'));
-  out.push('', buildCommandsLine('email-preview', emailPreviewCaps(session)));
+  out.push('', buildCommandsLine('email-preview', caps));
   return out.join('\n');
 }
 
@@ -224,7 +225,7 @@ export function parseEmailCleanupReply(reply: string, phase: 'consent' | 'previe
     if (isCancellation(text)) return { action: 'cancel' };
     return { action: 'invalid' };
   }
-  if (text === 'help') return { action: 'help' };
+  if (text === HELP_WORD) return { action: 'help' };
   if (/^model[\s-]*check$/.test(text)) return { action: 'model-check' };
   if (text === 'strip' || text === 'strip all' || text === 'remove') return { action: 'strip' };
   if (text === 'keep' || text === 'keep all') return { action: 'keep' };

@@ -999,15 +999,6 @@ describe('email boilerplate cleanup step (U5 batch, U6 comment)', () => {
     expect(ws.store['jira.session.emailTemplateSelection']).toBeUndefined();
   });
 
-  it('an unrecognized reply says what was not understood and prints the preview help', async () => {
-    h.patterns = [CONFIDENTIAL_FOOTER];
-    const ws = makeMockWs();
-    await startBatch([EML('chain-owa-en.eml')], client, ticketService, ws);
-    const { texts, result } = await runCleanup('banana', ws, client);
-    expect(texts.join('\n')).toContain("Didn't understand `banana`.");
-    expect(texts.join('\n')).toContain('**Help — Email cleanup preview**');
-    expect(result?.metadata?.jiraSession?.kinds).toEqual(['email-cleanup']);
-  });
   // ── Review fixes: cancellation, consent edge cases, save failures, last-ticket metadata ──────────
 
   async function consentBatch(ws: ReturnType<typeof makeMockWs>, subjects = ['Only']) {

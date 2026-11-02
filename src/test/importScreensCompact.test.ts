@@ -4,7 +4,7 @@ import {
   buildReviewPage, type ReviewSession, type ReviewRowBase, type ReviewTableColumn, type ImportScreenOptions,
 } from '../participant/sessionState';
 
-// The compact import screens (compact import screen hints plan, U3): one Commands line and a help link in place of the
+// The compact import screens: one Commands line and a help link in place of the
 // hint paragraphs, and paging controls only for directions that exist.
 
 interface R extends ReviewRowBase { label: string }

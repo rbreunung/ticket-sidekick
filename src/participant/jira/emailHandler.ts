@@ -455,7 +455,6 @@ export async function handleEmailCleanupReply(
     case 'model-check':
       return previewModelCheck(session, model, token, stream, ws);
     case 'help':
-      // Like the import review's `help`: it is the last thing on screen, and nothing in the session changes.
       logDiag('jira.email', 'info', 'Email cleanup help', { phase: session.phase });
       stream.markdown(trustedChatMarkdown(buildImportHelp('email-preview', emailPreviewCaps(session))));
       return cleanupResult(session);
