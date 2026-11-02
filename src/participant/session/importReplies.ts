@@ -4,7 +4,7 @@
 import { TICKETED_ACTION_ORDER } from '../../utils/reportImport';
 import { formatKeyLink } from '../../services/TicketService';
 import { IMPORT_COMMANDS, LEGACY_UPDATE_COMMAND, SEARCH_USAGE, UNACCEPT_COMPONENT_WORD } from './importScreens';
-import type { ImportCommandCaps } from './importCommands';
+import { buildHelpLink, type ImportCommandCaps } from './importCommands';
 import { AddMode, ImportOutcomes, ImportResultGroup, ImportReviewView, MergeRun, ReviewRowBase, ReviewSessionStale, StaleTargetOption, TicketedAction, ActionLabels, actionLabelOf } from './importTypes';
 import { TICKET_KEY_TOKEN, cmdLink, isBackOrCancellation, isCancellation, isConfirmation, neutralizeMarkdownLinks, normalizeReply } from './primitives';
 import type { OverviewFormat } from '../../utils/securityOverview';
@@ -457,6 +457,7 @@ export function buildAddPrompt(input: AddPromptInput): string {
   }
   lines.push('');
   lines.push('Either choice also changes this ticket\'s labels. Nothing is written until you pick one.');
+  lines.push('', buildHelpLink());
   return lines.join('\n');
 }
 
@@ -513,6 +514,8 @@ export function buildMergePrompt(input: MergePromptInput): string {
     '3. Close each cancelled ticket as a duplicate. You pick the status to move each issue type to.',
     '',
     `${cmdLink('Merge', `merge ${input.sources.map(t => t.key).join(' ')} into ${input.survivor.key} confirm`)} — nothing is written until you click.`,
+    '',
+    buildHelpLink(),
   );
   return lines.join('\n');
 }
@@ -595,6 +598,8 @@ export function buildCloseMergePrompt(input: CloseMergePromptInput): string {
     'Each closed ticket gets a link and a comment, then you pick its closing status.',
     '',
     `${cmdLink('Merge', `merge ${input.sources.map(s => s.ticket.key).join(' ')} into ${survivorKey} confirm`)} — nothing is written until you click.`,
+    '',
+    buildHelpLink(),
   );
   return lines.join('\n');
 }

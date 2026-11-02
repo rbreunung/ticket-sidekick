@@ -84,6 +84,17 @@ describe('help on a review', () => {
     expect(out.result).toMatchObject({ metadata: { jiraSession: { kinds: [expect.any(String)] } } });
   });
 
+  it('does not stick: the next screen is the compact one again', async () => {
+    const { session, ws } = await importVeracode(flaws(), ticketed);
+    const opened = await reply('open new', session, ws);
+    const helped = await reply('help', opened.session, ws);
+
+    const shown = await reply('show', helped.session, ws);
+
+    expect(shown.text).toContain('Commands:');
+    expect(shown.text).not.toContain('**Help');
+  });
+
   it('prints the help of whichever screen the session is on', async () => {
     const { session, ws } = await importVeracode(flaws(), ticketed);
     const overview = await reply('help', session, ws);

@@ -180,8 +180,8 @@ describe('screens', () => {
 
   it('the New screen mentions `accept` only for an importer that has the list', () => {
     const s = session({ view: 'new', singleGroup: false, groups: ['new', 'ticketed'] });
-    expect(buildNewGroupScreen(s, columns, opts)).toContain('accept 2');
-    expect(buildNewGroupScreen(s, columns, { itemNoun: 'component(s)' })).not.toContain('accept 2');
+    expect(buildNewGroupScreen(s, columns, opts)).toContain('hide `accept CVE` `accept component`');
+    expect(buildNewGroupScreen(s, columns, { itemNoun: 'component(s)' })).not.toContain('accept');
   });
 
   it('the vocabulary reminder names the new replies only when they are offered', () => {
@@ -339,7 +339,7 @@ describe('screens with accepted components (accepted-components plan, U4)', () =
   it('the New screen and the Already ticketed screen tell how to accept a component', () => {
     const s = session({ view: 'new', groups: ['new', 'ticketed'], singleGroup: false });
     expect(buildNewGroupScreen(s, columns, opts)).toContain('accept component');
-    expect(buildTicketedGroupScreen({ ...s, view: 'ticketed' }, columns, opts)).toContain('accept component A');
+    expect(buildTicketedGroupScreen({ ...s, view: 'ticketed' }, columns, opts)).toContain('hide `accept component`');
   });
 
   it('the Already ticketed screen says nothing about it for an importer without the accepted list', () => {

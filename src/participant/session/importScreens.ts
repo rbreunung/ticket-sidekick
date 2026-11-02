@@ -1,14 +1,14 @@
 // Report-import overview hub: view state, group counts and the New/Already-ticketed/Stale screens.
 // Pure (vscode-free); re-exported through ../sessionState.ts.
 
-import { BATCH_LIMIT } from '../../utils/reportImport';
+import { BATCH_LIMIT, TICKETED_ACTION_ORDER } from '../../utils/reportImport';
 import type { RowChange } from '../../utils/reportImport';
 import { formatKeyLink } from '../../services/TicketService';
 import { isComponentEntry, type AcceptedEntry } from '../../utils/waltzAccepted';
 import { AcceptedHidden, ActionLabels, actionLabelOf, ImportResultGroup, ImportReviewView, ReviewRowBase, ReviewSession, ReviewSessionStale, TicketedAction, TicketedRowResult, emptyImportOutcomes, isTicketedRowFinished, selectedStaleIssueTypes, ticketedRowActions, ticketedTargetKey } from './importTypes';
 import { ReviewTableColumn, cmdLink, countedNoun, neutralizeMarkdownLinks, pluralNoun, renderReviewTable, safeCellText } from './primitives';
 import { buildReviewPage } from './reviewPaging';
-import { HELP_WORD } from './importCommands';
+import { HELP_WORD, buildCommandsLine, buildHelpLink, type ImportCommandCaps } from './importCommands';
 
 // ---------------------------------------------------------------------------------------------
 // Overview hub (docs/plans/2026-09-23-1400-feat-report-import-overview-hub-plan.md): an import's
@@ -140,6 +140,8 @@ export interface ImportScreenOptions {
   canMergeTickets?: boolean;
   // Whether the importer has the `export` reply (Veracode, Waltz; not email): the screens then show a link for it.
   canExport?: boolean;
+  // Ticket search: whether the importer has `search` and `show` (Veracode, Waltz; not email): the Commands line then lists `search`.
+  canSearch?: boolean;
   // How the importer names its row actions (Waltz shows `follow-up` as `new ticket`).
   actionLabels?: ActionLabels;
 }
@@ -170,31 +172,55 @@ export function buildAllHiddenMessage(hidden: AcceptedHidden): string {
 
 /** "Back to overview" normally; "Done" when the import has a single group and no overview (R4). */
 function groupScreenExitLine(singleGroup: boolean, outOfDate = false, canExport = false): string {
-  const done = singleGroup
-    ? `Reply ${cmdLink('Done', IMPORT_COMMANDS.done)} when you are finished with this import.`
-    : `Reply ${cmdLink('Back to overview', IMPORT_COMMANDS.back)} to see the other results.`;
+  const done = singleGroup ? cmdLink('Done', IMPORT_COMMANDS.done) : cmdLink('Back to overview', IMPORT_COMMANDS.back);
   // `export` works from a group screen only when it is the only screen; with an overview, the link lives there.
-  const exit = singleGroup && canExport ? `${exportLine()}\n\n${done}` : done;
+  const exit = singleGroup && canExport ? `${exportLine()} · ${done}` : done;
   // With no overview to carry the mark, a single-group import shows it here.
   return singleGroup && outOfDate ? `${outOfDateLine()}\n\n${exit}` : exit;
 }
 
-/** The link that starts the `export` reply: this report's items by Fix Version, compared with Jira. */
+/** The link that starts the `export` reply (`help` says what it lists). */
 function exportLine(): string {
-  return `Reply ${cmdLink('Export', IMPORT_COMMANDS.export)} (\`${IMPORT_COMMANDS.export}\`) to list this report's items by Fix Version, compared with Jira.`;
+  return cmdLink('Export', IMPORT_COMMANDS.export);
 }
 
 /** The link that re-prints the screen the session is on (the `show` reply). */
 function showLine(): string {
-  return `Reply ${cmdLink('Show', IMPORT_COMMANDS.show)} (\`${IMPORT_COMMANDS.show}\`) to print the screen you came from again.`;
+  return cmdLink('Show', IMPORT_COMMANDS.show);
 }
 
 /** What ends an `export` preview, so the screen the user came from is not printed over it: the way on, as a link. */
 export function buildExportFollowUp(singleGroup: boolean, canShow = false): string {
-  const exit = singleGroup
-    ? `Reply ${cmdLink('Done', IMPORT_COMMANDS.done)} when you are finished with this import, or pick another action from the screen above.`
-    : `Reply ${cmdLink('Back to overview', IMPORT_COMMANDS.back)} to return to the import results.`;
-  return canShow ? `${showLine()}\n\n${exit}` : exit;
+  const exit = singleGroup ? cmdLink('Done', IMPORT_COMMANDS.done) : cmdLink('Back to overview', IMPORT_COMMANDS.back);
+  return canShow ? `${showLine()} · ${exit}` : exit;
+}
+
+/** What the command catalog needs from a screen's options and rows. */
+function commandCapsOf<TRow extends ReviewRowBase>(s: ReviewSession<TRow>, opts: ImportScreenOptions): ImportCommandCaps {
+  const open = s.allRows.filter(r => r.existingTicketKey !== null && !isTicketedRowFinished(r));
+  return {
+    singleGroup: s.singleGroup,
+    canFold: opts.canFold,
+    canAccept: opts.canAccept,
+    canMergeTickets: opts.canMergeTickets,
+    canExport: opts.canExport,
+    canSearch: opts.canSearch,
+    actionLabels: opts.actionLabels,
+    ticketedActions: opts.actionLabels ? TICKETED_ACTION_ORDER.filter(a => open.some(r => ticketedRowActions(r).allowedActions.includes(a))) : undefined,
+  };
+}
+
+/**
+ * The page line of a paged screen: where you are and a control for each direction that exists, plus `page <n>` once there
+ * are three or more pages. Empty for a single page.
+ */
+function buildPageLine(page: number, totalPages: number): string {
+  if (totalPages <= 1) return '';
+  const controls: string[] = [];
+  if (page > 0) controls.push(cmdLink('prev', 'prev'));
+  if (page < totalPages - 1) controls.push(cmdLink('next', 'next'));
+  if (totalPages >= 3) controls.push('`page <n>`');
+  return `_Page ${page + 1} of ${totalPages}._ ${controls.join(' · ')}`;
 }
 
 /**
@@ -264,12 +290,17 @@ export function buildImportOverview<TRow extends ReviewRowBase>(session: ReviewS
   const hiddenLine = buildAcceptedHiddenLine(s.acceptedHidden);
   if (hiddenLine) lines.push('', hiddenLine);
   if (s.outOfDate) lines.push('', outOfDateLine());
-  else if (opts.canMergeTickets) lines.push('', `Reply ${cmdLink('Reload report', IMPORT_COMMANDS.reload)} (\`${IMPORT_COMMANDS.reload}\`) to re-read the report file and refresh these screens.`);
   lines.push('');
   lines.push('_Open a group to review it. Nothing is created, updated or closed until you choose an action inside that group._');
   lines.push('');
-  if (opts.canExport) lines.push(exportLine(), '');
-  lines.push(`Reply ${cmdLink('Done', IMPORT_COMMANDS.done)} to finish this import.`);
+  // The reload link is already inside the out-of-date notice when the screens are out of date.
+  const actions = [
+    ...(opts.canMergeTickets && !s.outOfDate ? [cmdLink('Reload report', IMPORT_COMMANDS.reload)] : []),
+    ...(opts.canExport ? [exportLine()] : []),
+    cmdLink('Done', IMPORT_COMMANDS.done),
+    buildHelpLink(),
+  ];
+  lines.push(actions.join(' · '));
   return lines.join('\n');
 }
 
@@ -281,7 +312,7 @@ export function buildNewGroupScreen<TRow extends ReviewRowBase>(
 ): string {
   const s = ensureImportViewState(session);
   const fresh = s.rows.filter(r => r.existingTicketKey === null);
-  const { totalPages } = buildReviewPage(s.allRows, s.page);
+  const { totalPages, page: pageIndex } = buildReviewPage(s.allRows, s.page);
   const lines: string[] = ['### New — will create'];
 
   const hiddenLine = buildAcceptedHiddenLine(s.acceptedHidden);
@@ -299,37 +330,26 @@ export function buildNewGroupScreen<TRow extends ReviewRowBase>(
     { header: 'Include?', accessor: (r) => cmdLink(r.included ? '✓' : '_excluded_', r.id) },
   ];
   lines.push(renderReviewTable(freshColumns, fresh));
-  lines.push(
-    `Reply ${cmdLink('Include all', 'include all')} / ${cmdLink('Exclude all', 'exclude all')} to set every row on this page.`,
-  );
+  lines.push(`${cmdLink('Include all', 'include all')} / ${cmdLink('Exclude all', 'exclude all')}`);
   lines.push('');
-  if (opts.canFold) {
-    lines.push('Reply `merge 2 4` to combine rows on this page into one ticket, `unmerge 2` to split a merged row, or `add 2 4 to PROJ-123` to add rows to an existing ticket.');
-    lines.push('');
-  }
-  if (opts.canAccept) {
-    lines.push('Reply `accept 2 4` to hide those rows\' CVEs from this and future imports (add `because …` to record why), or `accepted` to list what is accepted.');
-    lines.push('');
-    lines.push('Reply `accept component 2 4` to stop offering those components at that exact version for good: they also leave Already ticketed, and an open ticket is offered for closing under Stale.');
-    lines.push('');
-  }
   if (hiddenLine) {
     lines.push(hiddenLine);
     lines.push('');
   }
-  if (totalPages > 1) {
-    lines.push(
-      `_Page ${s.page + 1} of ${totalPages}._ Reply ${cmdLink('next', 'next')} / ${cmdLink('prev', 'prev')} or \`page <n>\` to navigate.`,
-    );
+  const pageLine = buildPageLine(pageIndex, totalPages);
+  if (pageLine) {
+    lines.push(pageLine);
     lines.push('');
   }
   const n = fresh.filter(r => r.included).length;
   lines.push(`**${n}** ticket(s) will be created.`);
   lines.push('');
-  lines.push(
-    (n > 0 ? `Reply ${cmdLink(`Create ${n} tickets`, IMPORT_COMMANDS.create)} to create them, or ` : 'Reply ') +
-    'a list of row numbers to toggle (e.g. `2 4`).',
-  );
+  if (n > 0) {
+    lines.push(cmdLink(`Create ${n} tickets`, IMPORT_COMMANDS.create));
+    lines.push('');
+  }
+  lines.push(buildCommandsLine('new', commandCapsOf(s, opts)));
+  lines.push('');
   lines.push(groupScreenExitLine(s.singleGroup!, s.outOfDate, opts.canExport));
   return lines.join('\n');
 }
@@ -442,13 +462,14 @@ export function buildTicketedGroupScreen<TRow extends ReviewRowBase>(
   const page = clampGroupPage(s.ticketedPage ?? 0, ticketed.length);
   lines.push(renderReviewTable(ticketedColumns, ticketed.slice(page * GROUP_PAGE_SIZE, (page + 1) * GROUP_PAGE_SIZE)));
   lines.push('');
-  if (totalPages > 1) {
-    lines.push(`_Page ${page + 1} of ${totalPages}._ Reply ${cmdLink('next', 'next')} / ${cmdLink('prev', 'prev')} or \`page <n>\` to navigate; actions apply to rows on every page.`);
+  const pageLine = buildPageLine(page, totalPages);
+  if (pageLine) {
+    lines.push(pageLine);
     lines.push('');
   }
 
   if (c.pendingActions > 0) {
-    lines.push(`Reply ${cmdLink(`Apply ${c.pendingActions} actions`, IMPORT_COMMANDS.apply)} to run every row not set to leave.`);
+    lines.push(cmdLink(`Apply ${c.pendingActions} actions`, IMPORT_COMMANDS.apply));
     if (c.pendingActions > BATCH_LIMIT) {
       lines.push(`_Only the first ${BATCH_LIMIT} rows run per reply — reply \`apply\` again for the rest._`);
     }
@@ -461,17 +482,16 @@ export function buildTicketedGroupScreen<TRow extends ReviewRowBase>(
       ? '_Every row is set to leave — nothing to apply._'
       : '_Every row has been handled — nothing to apply._');
   }
+  lines.push('');
   if (c.ticketedOpen > 0) {
-    lines.push(`Change a row with \`<row> <action>\` (e.g. \`A2 ${actionLabelOf('follow-up', opts.actionLabels)}\`) or every row with \`all <action>\` (e.g. \`all leave\`), or click an action in the table.`);
-    if (opts.canMergeTickets) {
-      const alsoOpen = ticketed.find(r => !isTicketedRowFinished(r) && (r.openTicketKeys?.length ?? 0) > 0);
-      lines.push(alsoOpen
-        ? `Reply \`merge ${alsoOpen.openTicketKeys![0]} into ${ticketedTargetKey(alsoOpen)}\` to keep ${ticketedTargetKey(alsoOpen)} and close ${alsoOpen.openTicketKeys![0]} (swap them to keep the other). You confirm first.`
-        : 'Reply `merge A2 A3 into A1` (or ticket keys) to combine tickets into one: the ticket after `into` is kept, the others are closed. You confirm first.');
+    // A suggestion built from this review's own tickets, not a how-to: it names the keys of a row that has a second open ticket.
+    const alsoOpen = opts.canMergeTickets ? ticketed.find(r => !isTicketedRowFinished(r) && (r.openTicketKeys?.length ?? 0) > 0) : undefined;
+    if (alsoOpen) {
+      lines.push(`Reply \`merge ${alsoOpen.openTicketKeys![0]} into ${ticketedTargetKey(alsoOpen)}\` to keep ${ticketedTargetKey(alsoOpen)} and close ${alsoOpen.openTicketKeys![0]} (swap them to keep the other). You confirm first.`);
+      lines.push('');
     }
-    if (opts.canAccept) {
-      lines.push('Reply `accept component A2 A3` to stop offering those components at that exact version (add `because …` to record why): they leave this list, and an open ticket is offered for closing under Stale.');
-    }
+    lines.push(buildCommandsLine('ticketed', commandCapsOf(s, opts)));
+    lines.push('');
   }
   lines.push(groupScreenExitLine(s.singleGroup!, s.outOfDate, opts.canExport));
   return lines.join('\n');
@@ -560,19 +580,24 @@ export function buildStaleGroupScreen<TRow extends ReviewRowBase>(session: Revie
   const lines: string[] = ['### Stale — no longer in the report, may be closed'];
   lines.push(renderReviewTable(columns, rows.slice(page * GROUP_PAGE_SIZE, (page + 1) * GROUP_PAGE_SIZE)));
   lines.push('');
-  if (totalPages > 1) {
-    lines.push(`_Page ${page + 1} of ${totalPages}._ Reply ${cmdLink('next', 'next')} / ${cmdLink('prev', 'prev')} or \`page <n>\` to navigate; tickets marked on any page are closed together.`);
+  const pageLine = buildPageLine(page, totalPages);
+  if (pageLine) {
+    lines.push(pageLine);
     lines.push('');
   }
   if (c.staleOpen > 0) {
     if (c.staleSelected > 0) {
-      lines.push(`Reply ${cmdLink(`Close ${c.staleSelected} tickets`, IMPORT_COMMANDS.close)} to transition the tickets marked ✓ close — you pick the target status next.`);
+      lines.push(`${cmdLink(`Close ${c.staleSelected} tickets`, IMPORT_COMMANDS.close)} — you pick the target status next.`);
       if (selectedStaleIssueTypes(stale).length > 1) {
+        lines.push('');
         lines.push('The selection spans several issue types: each run closes one issue type, and you are asked which one first.');
       }
     } else {
-      lines.push('Close 0 tickets — reply a ticket key (e.g. `PROJ-123`) to mark it for closing.');
+      lines.push('_Nothing marked to close._');
     }
+    lines.push('');
+    lines.push(buildCommandsLine('stale', commandCapsOf(s, opts)));
+    lines.push('');
   }
   lines.push(groupScreenExitLine(s.singleGroup!, s.outOfDate, opts.canExport));
   return lines.join('\n');

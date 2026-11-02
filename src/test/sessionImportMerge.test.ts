@@ -136,7 +136,7 @@ describe('vocabulary and screens', () => {
   });
 
   it('the overview offers the reload, and says the screens are out of date when they are', () => {
-    expect(buildImportOverview(session(), opts)).toContain('reload report');
+    expect(buildImportOverview(session(), opts)).toContain('Reload report');
     expect(buildImportOverview(session(), opts)).not.toMatch(/out of date/i);
     const stale = buildImportOverview(session({ outOfDate: true }), opts);
     expect(stale).toMatch(/out of date/i);
@@ -154,8 +154,8 @@ describe('vocabulary and screens', () => {
     expect(text).toContain('1 failed');
   });
 
-  it('the Already ticketed screen explains the merge reply', () => {
-    expect(buildTicketedGroupScreen(session(), columns, opts)).toContain('merge A2 A3 into A1');
+  it('the Already ticketed screen lists the merge reply in its Commands line', () => {
+    expect(buildTicketedGroupScreen(session(), columns, opts)).toContain('`merge A5 into A3`');
   });
 
   it('the done summary lists merged tickets only when there are any', () => {

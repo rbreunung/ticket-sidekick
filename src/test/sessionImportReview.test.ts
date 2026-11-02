@@ -242,7 +242,7 @@ describe('New screen — "Include all" / "Exclude all" links (review-table toggl
 
   it('offers merge and unmerge on the New screen only for an importer that can fold (finding folding)', () => {
     const rows = makeFreshRows(3);
-    expect(buildNewGroupScreen(screenSession(rows), [], { ...itemOpts, canFold: true })).toContain('`merge 2 4`');
+    expect(buildNewGroupScreen(screenSession(rows), [], { ...itemOpts, canFold: true })).toContain('group `merge` `unmerge` `add … to KEY`');
     expect(buildNewGroupScreen(screenSession(rows), [], itemOpts)).not.toContain('merge');
   });
 
@@ -366,10 +366,10 @@ describe('Already-ticketed screen — per-row actions (U4/R5, R6, KTD9)', () => 
     expect(text.toLowerCase()).not.toContain('duplicate');
   });
 
-  it('shows the generic merge hint when no row has another open ticket', () => {
+  it('lists the merge reply in the Commands line, with no tailored suggestion, when no row has another open ticket', () => {
     const text = buildTicketedGroupScreen(screenSession([makeActionRow('A1', 'PROJ-5')]), [], { ...waltzOpts, canMergeTickets: true });
 
-    expect(text).toContain('`merge A2 A3 into A1`');
+    expect(text).toContain('`merge A5 into A3`');
     expect(text).not.toContain('swap them');
   });
 
