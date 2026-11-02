@@ -114,14 +114,14 @@ export const IMPORT_COMMAND_ENTRIES: readonly ImportCommandEntry[] = [
 
   // --- Already ticketed ---
   {
-    id: 'row-action', views: ['ticketed'], group: 'row',
+    id: 'row-action', views: ['ticketed'], group: 'row', when: caps => offeredActions(caps).length > 0,
     line: caps => offeredActions(caps).map(a => `A2 ${label(a, caps)}`),
     help: caps => `${code(`A2 ${label(offeredActions(caps).includes('follow-up') ? 'follow-up' : offeredActions(caps)[0], caps)}`)} sets one row's action ` +
       `(${offeredActions(caps).map(a => code(label(a, caps))).join(', ')}); you can also click an action in the table.`,
     kinds: ['setAction'], samples: caps => offeredActions(caps).map(a => `A1 ${label(a, caps)}`),
   },
   {
-    id: 'all-action', views: ['ticketed'], group: 'all',
+    id: 'all-action', views: ['ticketed'], group: 'all', when: caps => offeredActions(caps).length > 0,
     line: caps => [`all ${label(offeredActions(caps).includes('leave') ? 'leave' : offeredActions(caps)[0], caps)}`],
     help: () => `${code('all <action>')} sets every row that offers that action, for example ${code('all leave')}.`,
     kinds: ['setAllActions'], samples: caps => [`all ${label(offeredActions(caps).includes('leave') ? 'leave' : offeredActions(caps)[0], caps)}`],

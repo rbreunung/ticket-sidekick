@@ -80,6 +80,16 @@ describe('help', () => {
     expect(buildImportHelp('overview', { ...waltz, singleGroup: false })).toContain('export xlsx');
   });
 
+  it('says nothing about row actions once no Already-ticketed row is open', () => {
+    const allDone: ImportCommandCaps = { ...waltz, ticketedActions: [] };
+    const help = buildImportHelp('ticketed', allDone);
+    const line = buildCommandsLine('ticketed', allDone);
+    expect(help + line).not.toContain('undefined');
+    expect(help).not.toContain('sets one row');
+    expect(line).not.toContain('A2');
+    expect(line).not.toContain('all ');
+  });
+
   it('leaves out the shortcut runs no row offers', () => {
     const help = buildImportHelp('ticketed', waltz);
     expect(help).not.toContain('update tickets');
