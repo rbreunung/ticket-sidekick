@@ -102,7 +102,7 @@ describe('Already-ticketed per-row actions — apply executor (U5)', () => {
     // A finished row can no longer be changed either.
     const again = mockStream();
     await reply('A1 re-create', session, ws, again);
-    expect(streamText(again)).toContain("Didn't understand that");
+    expect(streamText(again)).toContain("Didn't understand `A1 re-create`");
   });
 
   it('an update whose target already carries every record label writes nothing, posts no comment and counts as already up to date', async () => {
@@ -641,7 +641,7 @@ describe('paging the Already-ticketed screen, 20 rows at a time', () => {
 
   it('the help for an unrecognized reply mentions paging', async () => {
     const { session, ws } = await buildMany(45);
-    expect(await reply('what now', session, ws)).toContain('`next` / `prev` / `page <n>`');
+    expect(await reply('what now', session, ws)).toContain('`next` / `prev` / `page 3`');
   });
 });
 

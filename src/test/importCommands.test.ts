@@ -98,14 +98,14 @@ describe('help', () => {
 describe('refused reply', () => {
   it('quotes what was typed once and then prints the screen help', () => {
     const reply = buildRefusedReply({ view: 'new', caps: waltz, typed: '2x' });
-    expect(reply.startsWith("I didn't understand `2x`.")).toBe(true);
+    expect(reply.startsWith("Didn't understand `2x`.")).toBe(true);
     expect(reply).toContain('**Help — New screen**');
   });
 
   it('shows the specific reason, not a quote, before the help', () => {
     const reply = buildRefusedReply({ view: 'new', caps: waltz, typed: '9', reason: "Row 9 isn't a New row on this page, so it can't be accepted." });
     expect(reply.startsWith("Row 9 isn't a New row on this page")).toBe(true);
-    expect(reply).not.toContain("I didn't understand");
+    expect(reply).not.toContain("Didn't understand");
     expect(reply).toContain('**Help — New screen**');
   });
 
@@ -113,7 +113,7 @@ describe('refused reply', () => {
     const reply = buildRefusedReply({ view: 'new', caps: waltz, typed: '[x](command:workbench.action.chat.open) `evil`' });
     const lead = reply.split('\n\n')[0];
     expect(lead).not.toContain('`evil`');
-    expect(lead).toBe("I didn't understand `[x](command:workbench.action.chat.open) 'evil'`.");
+    expect(lead).toBe("Didn't understand `[x](command:workbench.action.chat.open) 'evil'`.");
   });
 
   it('defuses link brackets in a parser reason', () => {
@@ -123,10 +123,10 @@ describe('refused reply', () => {
 
   it('caps a very long reply and flattens line breaks', () => {
     const lead = buildRefusedReply({ view: 'new', caps: waltz, typed: `${'a'.repeat(300)}\nsecond` }).split('\n\n')[0];
-    expect(lead).toBe(`I didn't understand \`${'a'.repeat(80)}…\`.`);
+    expect(lead).toBe(`Didn't understand \`${'a'.repeat(80)}…\`.`);
   });
 
   it('falls back to a plain sentence when nothing was typed', () => {
-    expect(buildRefusedReply({ view: 'stale', caps: waltz }).startsWith("I didn't understand that.")).toBe(true);
+    expect(buildRefusedReply({ view: 'stale', caps: waltz }).startsWith("Didn't understand that.")).toBe(true);
   });
 });

@@ -21,7 +21,7 @@ import type { IJiraClient } from '../../jira/IJiraClient';
 import { TemplateService } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
 import { BATCH_LIMIT, DEFAULT_DEDUP_CHUNK_SIZE, MAX_REPORT_BYTES, buildDedupJql, buildReviewRows, applyDroppedMembers, applyMissingDueDate, alignRewriteDefaults, readTargetDescriptions, fetchAllPages, findAlreadyTicketed, findStaleTickets, templateLabelsOf, buildTicketInfo, type DedupMap, type JqlIssueLike } from '../../utils/reportImport';
-import { CURRENT_SESSION_SCHEMA_VERSION, NO_ISSUE_TYPE, SESSION_EXPIRED_MESSAGE, applyBulkNewRowSet, buildSearchFollowUp, buildSearchResults, findTicketsBySummary, ticketedTargetKey, applyReviewSessionToggle, applyStaleTicketToggle, applyTicketedActionChange, buildAllHiddenMessage, buildChatCommandLink, buildImportDoneSummary, buildReviewPage, clampStalePage, clampTicketedPage, computeImportResultGroups, describeImportReplyVocabulary, ensureImportViewState, IMPORT_COMMANDS, formatIssueTypeOptionLabel, initImportViewState, isCancellation, isSessionExpired, isTicketedRowFinished, mergeNewRows, neutralizeMarkdownLinks, parseImportReviewReply, pickEmailOption, resolveTemplateIssueType, safeMarkdownText, ticketedRowActions, toAcceptedHidden, unmergeNewRow, type ImportReplyContext, type ImportTemplateSelectionSession, type ReviewRowBase, type ReviewSession, type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession } from '../sessionState';
+import { CURRENT_SESSION_SCHEMA_VERSION, NO_ISSUE_TYPE, SESSION_EXPIRED_MESSAGE, applyBulkNewRowSet, buildSearchFollowUp, buildSearchResults, findTicketsBySummary, ticketedTargetKey, applyReviewSessionToggle, applyStaleTicketToggle, applyTicketedActionChange, buildAllHiddenMessage, buildChatCommandLink, buildImportDoneSummary, buildReviewPage, clampStalePage, clampTicketedPage, buildImportHelp, buildRefusedReply, computeImportResultGroups, ensureImportViewState, importCommandCaps, IMPORT_COMMANDS, formatIssueTypeOptionLabel, initImportViewState, isCancellation, isSessionExpired, isTicketedRowFinished, mergeNewRows, neutralizeMarkdownLinks, parseImportReviewReply, pickEmailOption, resolveTemplateIssueType, safeMarkdownText, ticketedRowActions, toAcceptedHidden, unmergeNewRow, type ImportReplyContext, type ImportTemplateSelectionSession, type ReviewRowBase, type ReviewSession, type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession } from '../sessionState';
 import { resolveIssueTypeOrPrompt, resolveProjectKey, sessionWasSuperseded } from './ticketContext';
 import { buildStaleTicketGroups } from './cleanupHandler';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
@@ -772,7 +772,13 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
 
   switch (action.kind) {
     case 'invalid':
-      stream.markdown(trustedChatMarkdown(`${action.reason ?? "Didn't understand that."} ${describeImportReplyVocabulary(view, ctx)}`));
+      stream.markdown(trustedChatMarkdown(buildRefusedReply({ view, caps: importCommandCaps(ctx), typed: reply, reason: action.reason })));
+      return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
+    case 'help':
+      // Like `search`: the help is the last thing on screen, and nothing in the session changes.
+      logDiag(descriptor.scope, 'info', `${descriptor.importLabel} help`, { view });
+      stream.markdown(trustedChatMarkdown(buildImportHelp(view, importCommandCaps(ctx))));
+      await ws.update(descriptor.sessionKeys.review, session);
       return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
     case 'open':
       session.view = action.view;

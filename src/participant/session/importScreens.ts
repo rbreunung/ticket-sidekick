@@ -8,6 +8,7 @@ import { isComponentEntry, type AcceptedEntry } from '../../utils/waltzAccepted'
 import { AcceptedHidden, ActionLabels, actionLabelOf, ImportResultGroup, ImportReviewView, ReviewRowBase, ReviewSession, ReviewSessionStale, TicketedAction, TicketedRowResult, emptyImportOutcomes, isTicketedRowFinished, selectedStaleIssueTypes, ticketedRowActions, ticketedTargetKey } from './importTypes';
 import { ReviewTableColumn, cmdLink, countedNoun, neutralizeMarkdownLinks, pluralNoun, renderReviewTable, safeCellText } from './primitives';
 import { buildReviewPage } from './reviewPaging';
+import { HELP_WORD } from './importCommands';
 
 // ---------------------------------------------------------------------------------------------
 // Overview hub (docs/plans/2026-09-23-1400-feat-report-import-overview-hub-plan.md): an import's
@@ -38,6 +39,7 @@ export const IMPORT_COMMANDS = {
   exportExcel: 'export excel',
   show: 'show',
   search: 'search',
+  help: HELP_WORD,
 } as const;
 
 /** The usage line for a `search` reply with no keyword (shared by the parser and the results builder). */

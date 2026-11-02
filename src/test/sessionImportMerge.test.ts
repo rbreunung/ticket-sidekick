@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
-  parseImportReviewReply, parseMergeRunReply, describeImportReplyVocabulary, buildImportOverview, buildTicketedGroupScreen,
+  parseImportReviewReply, parseMergeRunReply, buildImportHelp, buildCommandsLine, importCommandCaps, buildImportOverview, buildTicketedGroupScreen,
   buildImportDoneSummary, formatTicketedRowResult, emptyImportOutcomes, IMPORT_COMMANDS,
   type ImportReplyContext, type ReviewSession, type ReviewRowBase, type ReviewTableColumn, type MergeRun, buildCloseMergePrompt,
 } from '../participant/sessionState';
+
+const helpOf = (view: 'overview' | 'new' | 'ticketed' | 'stale', c: ImportReplyContext): string => buildImportHelp(view, importCommandCaps(c));
+const lineOf = (view: 'overview' | 'new' | 'ticketed' | 'stale', c: ImportReplyContext): string => buildCommandsLine(view, importCommandCaps(c));
 
 function ctx(over: Partial<ImportReplyContext> = {}): ImportReplyContext {
   return {
@@ -126,9 +129,10 @@ describe('vocabulary and screens', () => {
   const opts = { itemNoun: 'component(s)', canMergeTickets: true };
 
   it('the overview and ticketed hints mention the merge and the reload only for an importer that has them', () => {
-    expect(describeImportReplyVocabulary('overview', ctx())).toContain('reload report');
-    expect(describeImportReplyVocabulary('ticketed', ctx())).toContain('merge A5 into A3');
-    expect(describeImportReplyVocabulary('ticketed', ctx({ canMergeTickets: false }))).not.toContain('merge');
+    expect(helpOf('overview', ctx())).toContain('reload report');
+    expect(lineOf('ticketed', ctx())).toContain('merge A5 into A3');
+    expect(helpOf('ticketed', ctx())).toContain('merge A5 A6 into A3');
+    expect(helpOf('ticketed', ctx({ canMergeTickets: false }))).not.toContain('merge');
   });
 
   it('the overview offers the reload, and says the screens are out of date when they are', () => {

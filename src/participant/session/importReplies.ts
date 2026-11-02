@@ -4,6 +4,7 @@
 import { TICKETED_ACTION_ORDER } from '../../utils/reportImport';
 import { formatKeyLink } from '../../services/TicketService';
 import { IMPORT_COMMANDS, LEGACY_UPDATE_COMMAND, SEARCH_USAGE, UNACCEPT_COMPONENT_WORD } from './importScreens';
+import type { ImportCommandCaps } from './importCommands';
 import { AddMode, ImportOutcomes, ImportResultGroup, ImportReviewView, MergeRun, ReviewRowBase, ReviewSessionStale, StaleTargetOption, TicketedAction, ActionLabels, actionLabelOf } from './importTypes';
 import { TICKET_KEY_TOKEN, cmdLink, isBackOrCancellation, isCancellation, isConfirmation, neutralizeMarkdownLinks, normalizeReply } from './primitives';
 import type { OverviewFormat } from '../../utils/securityOverview';
@@ -53,6 +54,8 @@ export type ImportReplyAction =
   // Ticket search: list the review's matched open tickets whose summary contains the keyword, and re-print the current screen.
   | { kind: 'search'; keyword: string }
   | { kind: 'show' }
+  // Help: print the full explanation of the current screen once.
+  | { kind: 'help' }
   | { kind: 'toggleRows'; ids: string[] }
   | { kind: 'toggleStale'; keys: string[] }
   // `reason`, when present, says specifically why (e.g. an action a row does not offer, AE6).
@@ -160,7 +163,12 @@ export function parseMergeRunReply(reply: string, run: MergeRun): MergeRunReply 
   return isBackOrCancellation(reply) ? { kind: 'cancel' } : { kind: 'invalid' };
 }
 
-const SEARCH_ON_OTHER_SCREEN = 'Search works on the New and Already ticketed screens — open one of them first, then `search <keyword>`.';
+/** `help` prints the current screen's help, on every screen of every importer. */
+function parseHelpReply(reply: string): ImportReplyAction | null {
+  return normalizeReply(reply) === IMPORT_COMMANDS.help ? { kind: 'help' } : null;
+}
+
+const SEARCH_ON_OTHER_SCREEN ='Search works on the New and Already ticketed screens — open one of them first, then `search <keyword>`.';
 
 /** `show` re-prints the screen the session is on, wherever the importer supports search. */
 function parseShowReply(reply: string, ctx: ImportReplyContext): ImportReplyAction | null {
@@ -219,6 +227,8 @@ function parseExportReply(reply: string, ctx: ImportReplyContext, onGroupScreen:
 
 export function parseOverviewReply(reply: string, ctx: ImportReplyContext): ImportReplyAction {
   const n = normalizeReply(reply);
+  const help = parseHelpReply(reply);
+  if (help) return help;
   if (n === IMPORT_COMMANDS.done || isCancellation(reply)) return { kind: 'done' };
   const exported = parseExportReply(reply, ctx, false);
   if (exported) return exported;
@@ -237,7 +247,9 @@ export function parseOverviewReply(reply: string, ctx: ImportReplyContext): Impo
 const UNACCEPT_USAGE = 'Remove an accepted entry by its number, e.g. `unaccept 2` (reply `accepted` to see the numbers).';
 // `unaccept <component> <CVE>`: the CVE is the last word, the component everything before it.
 const UNACCEPT_ENTRY_PATTERN = /^unaccept (.+) (\S+)$/;
-const ACCEPT_USAGE = 'Accept the CVEs of rows like this: `accept 2 4`, optionally with a reason: `accept 2 because not reachable`.';
+const ACCEPT_USAGE = 'Accept the CVEs of rows like this: `accept CVE 2 4`, optionally with a reason: `accept CVE 2 because not reachable`.';
+const ACCEPT_BARE_NEW = 'Nothing was accepted. Say what to hide: `accept CVE 2 4` hides those rows\' CVEs, `accept component 2 4` hides the whole component at that version. Add `because …` to record why.';
+const ACCEPT_BARE_TICKETED = 'Nothing was accepted. `accept component A2` hides the whole component at that version; `accept CVE 2 4` hides the CVEs of New rows and works from the New screen only.';
 const ACCEPT_COMPONENT_USAGE = 'Accept whole components at their version like this: `accept component 2 4` (Already ticketed: `accept component A2`), optionally with a reason: `accept component 2 because no newer version`.';
 const UNACCEPT_COMPONENT_USAGE = `Remove an accepted component with the Remove link in the \`accepted\` list, or by name and version: \`${UNACCEPT_COMPONENT_WORD} netty-codec 4.1.100\`.`;
 // `unaccept-component <component> <version>`: the version is the last word, the component everything before it.
@@ -262,7 +274,6 @@ function parseAcceptedListReply(reply: string): ImportReplyAction | null {
   return position > 0 ? { kind: 'unaccept', position } : { kind: 'invalid', reason: UNACCEPT_USAGE };
 }
 
-/** `accept <rows> [because <reason>]` on the New screen; the reason keeps the casing the user typed. */
 /** Splits what follows an accept word into lower-cased row tokens and the reason after `because`, which keeps the casing typed. */
 function splitRowsAndReason(rest: string | undefined): { tokens: string[]; reason: string } {
   const [rowsPart, ...reasonParts] = (rest ?? '').split(/ because /i);
@@ -270,9 +281,10 @@ function splitRowsAndReason(rest: string | undefined): { tokens: string[]; reaso
   return { tokens, reason: reasonParts.join(' because ').trim() };
 }
 
+/** `accept CVE <rows> [because <reason>]` on the New screen; the reason keeps the casing the user typed. */
 function parseAcceptReply(reply: string, ctx: ImportReplyContext): ImportReplyAction | null {
   const trimmed = reply.trim().replace(/\s+/g, ' ');
-  const match = trimmed.match(/^accept(?: (.*))?$/i);
+  const match = trimmed.match(/^accept cve(?: (.*))?$/i);
   if (!match) return null;
   const { tokens, reason } = splitRowsAndReason(match[1]);
   if (tokens.length === 0) return { kind: 'invalid', reason: ACCEPT_USAGE };
@@ -319,6 +331,8 @@ function parseGroupExit(reply: string, ctx: ImportReplyContext): ImportReplyActi
 
 export function parseNewGroupReply(reply: string, ctx: ImportReplyContext): ImportReplyAction {
   const n = normalizeReply(reply);
+  const help = parseHelpReply(reply);
+  if (help) return help;
   if (n === IMPORT_COMMANDS.create || isConfirmation(reply)) return { kind: 'create' };
   const exported = parseExportReply(reply, ctx, true);
   if (exported) return exported;
@@ -341,6 +355,8 @@ export function parseNewGroupReply(reply: string, ctx: ImportReplyContext): Impo
   if (ctx.canAccept) {
     const accepted = parseAcceptComponentReply(reply, ctx, 'new') ?? parseAcceptReply(reply, ctx) ?? parseAcceptedListReply(reply);
     if (accepted) return accepted;
+    // A bare `accept` names no kind, so it records nothing and says what the two spellings are.
+    if (n === 'accept' || n.startsWith('accept ')) return { kind: 'invalid', reason: ACCEPT_BARE_NEW };
   }
   const ids = parseStrictRowToggle(reply, ctx.newRowIds);
   return ids ? { kind: 'toggleRows', ids } : { kind: 'invalid' };
@@ -660,6 +676,8 @@ const NON_ASSENT_CONFIRMATIONS = new Set(['load all', 'load more', 'show all', '
  */
 export function parseTicketedGroupReply(reply: string, ctx: ImportReplyContext): ImportReplyAction {
   const n = normalizeReply(reply);
+  const help = parseHelpReply(reply);
+  if (help) return help;
   const assent = isConfirmation(reply) && !NON_ASSENT_CONFIRMATIONS.has(reply.trim().toLowerCase());
   if (n === IMPORT_COMMANDS.apply || assent) return { kind: 'apply' };
   if (n === IMPORT_COMMANDS.update || n === LEGACY_UPDATE_COMMAND) return { kind: 'update' };
@@ -672,10 +690,10 @@ export function parseTicketedGroupReply(reply: string, ctx: ImportReplyContext):
   if (nav) return { kind: 'pageNav', nav };
 
   if (ctx.canAccept) {
-    // Only the whole-component form exists here; plain `accept` is answered with the usage rather than read as a row action.
+    // Only the whole-component form exists here; any other `accept` is answered with both spellings rather than read as a row action.
     const accept = parseAcceptComponentReply(reply, ctx, 'ticketed');
     if (accept) return accept;
-    if (n === 'accept' || n.startsWith('accept ')) return { kind: 'invalid', reason: ACCEPT_COMPONENT_USAGE };
+    if (n === 'accept' || n.startsWith('accept ')) return { kind: 'invalid', reason: ACCEPT_BARE_TICKETED };
   }
 
   if (ctx.canMergeTickets) {
@@ -710,6 +728,8 @@ export function parseTicketedGroupReply(reply: string, ctx: ImportReplyContext):
 
 export function parseStaleGroupReply(reply: string, ctx: ImportReplyContext): ImportReplyAction {
   const n = normalizeReply(reply);
+  const help = parseHelpReply(reply);
+  if (help) return help;
   if (n === IMPORT_COMMANDS.close || isConfirmation(reply)) return { kind: 'close' };
   const exit = parseGroupExit(reply, ctx);
   if (exit) return exit;
@@ -740,35 +760,21 @@ export function parseImportReviewReply(view: ImportReviewView, reply: string, ct
   }
 }
 
-/** One-line reminder of what the current screen accepts, for the "didn't understand" reply. */
-export function describeImportReplyVocabulary(view: ImportReviewView, ctx: ImportReplyContext): string {
-  const exit = ctx.singleGroup ? '`done`' : '`back`';
-  // On a group screen of a multi-group import `export` only points back to the overview, so it is not offered there.
-  const exportHint = ctx.canExport && ctx.singleGroup ? '`export` / `export csv` / `export xlsx`, ' : '';
-  switch (view) {
-    case 'new':
-      return `On this screen you can reply \`create tickets\`, row numbers to toggle (e.g. \`2 4\`), \`include all\` / \`exclude all\`, ` +
-        `${ctx.canFold ? '`merge 2 4` / `unmerge 2`, `add 2 4 to PROJ-123`, ' : ''}` +
-        `${ctx.canSearch ? '`search netty`, `merge 2 4 into A3`, `show`, ' : ''}` +
-        `${ctx.canAccept ? '`accept 2 4`, `accept component 2 4`, `accepted` / `unaccept 2`, ' : ''}${exportHint}\`next\` / \`prev\`, or ${exit}.`;
-    case 'ticketed': {
-      // An importer with its own action words lists only what its rows offer, and leaves out the bulk shortcuts none can use.
-      const offered = ctx.actionLabels
-        ? TICKETED_ACTION_ORDER.filter(a => ctx.ticketedRows.some(r => r.allowedActions.includes(a)))
-        : TICKETED_ACTION_ORDER;
-      const shortcutOffered = (a: TicketedAction) => !ctx.actionLabels || ctx.ticketedRows.some(r => r.allowedActions.includes(a));
-      const shortcuts = [shortcutOffered('update') ? '`update tickets`, ' : '', shortcutOffered('re-create') ? '`re-create tickets`, ' : ''].join('');
-      return `On this screen you can reply \`apply\`, \`<row> <action>\` (e.g. \`A2 ${actionLabelOf('follow-up', ctx.actionLabels)}\` — actions are ` +
-        `${offered.map(a => `\`${actionLabelOf(a, ctx.actionLabels)}\``).join(', ')}), \`all <action>\` (e.g. \`all leave\`), ` +
-        `${ctx.canAccept ? '`accept component A2`, ' : ''}${ctx.canMergeTickets ? '`merge A5 into A3`, ' : ''}${ctx.canSearch ? '`search netty`, `show`, ' : ''}${exportHint}${shortcuts}\`next\` / \`prev\` / \`page <n>\`, or ${exit}.`;
-    }
-    case 'stale':
-      return `On this screen you can reply \`close tickets\`, a stale ticket's key to toggle it (e.g. \`PROJ-123\`), ${exportHint}\`next\` / \`prev\` / \`page <n>\`, or ${exit}.`;
-    default: {
-      const opens = ctx.groups.map(g => `\`${g === 'new' ? IMPORT_COMMANDS.openNew : g === 'ticketed' ? IMPORT_COMMANDS.openTicketed : IMPORT_COMMANDS.openStale}\``);
-      return `On the overview you can reply ${[...opens, ...(ctx.canExport ? ['`export`'] : []), ...(ctx.canAccept ? ['`accepted`', '`unaccept 2`'] : []), ...(ctx.canMergeTickets ? ['`merge A5 into A3`', `\`${IMPORT_COMMANDS.reload}\``] : []), '`done`'].join(', ')}.`;
-    }
-  }
+/**
+ * What the command catalog needs to know about a review's reply context. An importer with its own action words lists only
+ * the actions some open row offers; one without lists them all.
+ */
+export function importCommandCaps(ctx: ImportReplyContext): ImportCommandCaps {
+  return {
+    singleGroup: ctx.singleGroup,
+    canFold: ctx.canFold,
+    canAccept: ctx.canAccept,
+    canMergeTickets: ctx.canMergeTickets,
+    canExport: ctx.canExport,
+    canSearch: ctx.canSearch,
+    actionLabels: ctx.actionLabels,
+    ticketedActions: ctx.actionLabels ? TICKETED_ACTION_ORDER.filter(a => ctx.ticketedRows.some(r => r.allowedActions.includes(a))) : undefined,
+  };
 }
 
 /** Import summary streamed on "done" (R3), from the session's accumulated outcomes. */

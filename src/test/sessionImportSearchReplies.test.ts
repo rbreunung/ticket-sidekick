@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
-  parseNewGroupReply, parseTicketedGroupReply, parseStaleGroupReply, parseOverviewReply, describeImportReplyVocabulary,
+  parseNewGroupReply, parseTicketedGroupReply, parseStaleGroupReply, parseOverviewReply, buildImportHelp, importCommandCaps,
   buildExportFollowUp, buildSearchFollowUp,
   type ImportReplyContext,
 } from '../participant/sessionState';
+
+const helpOf = (view: 'overview' | 'new' | 'ticketed' | 'stale', c: ImportReplyContext): string => buildImportHelp(view, importCommandCaps(c));
 
 const ctx = (overrides: Partial<ImportReplyContext> = {}): ImportReplyContext => ({
   singleGroup: false,
@@ -141,20 +143,20 @@ describe('merge … into <ticket> on the New screen (alias of add … to, U3)', 
 
 describe('screen vocabulary hint (import ticket search, U3)', () => {
   it('lists search, the merge alias and show on the New screen', () => {
-    const text = describeImportReplyVocabulary('new', ctx());
+    const text = helpOf('new', ctx());
     expect(text).toContain('`search netty`');
     expect(text).toContain('`merge 2 4 into A3`');
     expect(text).toContain('`show`');
   });
 
   it('lists search and show on the Already ticketed screen', () => {
-    const text = describeImportReplyVocabulary('ticketed', ctx());
+    const text = helpOf('ticketed', ctx());
     expect(text).toContain('`search netty`');
     expect(text).toContain('`show`');
   });
 
   it('lists none of them for an importer without search', () => {
-    const text = describeImportReplyVocabulary('new', ctx({ canSearch: false, canFold: false }));
+    const text = helpOf('new', ctx({ canSearch: false, canFold: false }));
     expect(text).not.toContain('search');
     expect(text).not.toContain('`show`');
   });

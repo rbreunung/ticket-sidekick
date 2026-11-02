@@ -181,8 +181,10 @@ export const IMPORT_COMMAND_ENTRIES: readonly ImportCommandEntry[] = [
   },
   {
     id: 'paging', views: ['new', 'ticketed', 'stale'], line: null,
-    help: (_caps, view) => `${code('next')} / ${code('prev')} / ${code('page 3')} move between pages` +
-      (view === 'ticketed' ? '; actions apply to rows on every page.' : view === 'stale' ? '; tickets marked on any page are closed together.' : '; a toggle or merge lasts only for its page.'),
+    help: (caps, view) => `${code('next')} / ${code('prev')} / ${code('page 3')} move between pages` +
+      (view === 'ticketed' ? '; actions apply to rows on every page.'
+        : view === 'stale' ? '; tickets marked on any page are closed together.'
+          : caps.canFold ? '; a toggle or merge lasts only for its page.' : '; a toggle lasts only for its page.'),
     kinds: ['pageNav'], samples: () => ['next', 'prev', 'page 2'],
   },
   {
@@ -293,6 +295,6 @@ export function buildRefusedReply(input: { view: CommandView; caps: ImportComman
   const typed = input.typed ? quoteTyped(input.typed) : '';
   const lead = input.reason
     ? neutralizeMarkdownLinks(input.reason)
-    : typed ? `I didn't understand ${code(typed)}.` : "I didn't understand that.";
+    : typed ? `Didn't understand ${code(typed)}.` : "Didn't understand that.";
   return `${lead}\n\n${buildImportHelp(input.view, input.caps)}`;
 }

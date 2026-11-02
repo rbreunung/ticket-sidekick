@@ -126,7 +126,7 @@ describe('handleImportReviewReply — paging (U4/R6-R8)', () => {
 
     expect(result).toBeDefined();
     const text = markdownText((stream.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0]);
-    expect(text).toContain("Didn't understand that");
+    expect(text).toContain("Didn't understand `75`");
     // Confirm row '75' was never toggled — still default-included in allRows.
     expect(session.allRows.find(r => r.id === '75')!.included).toBe(true);
   });

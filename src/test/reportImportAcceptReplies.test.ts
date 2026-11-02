@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
-  parseImportReviewReply, describeImportReplyVocabulary, buildImportOverview, buildNewGroupScreen, buildImportScreen,
+  parseImportReviewReply, buildImportHelp, importCommandCaps, buildImportOverview, buildNewGroupScreen, buildImportScreen,
   buildAcceptedList, buildTicketedGroupScreen, IMPORT_COMMANDS, UNACCEPT_COMPONENT_WORD, isConfirmation, isCancellation, parseReviewPageNav, parseBulkNewRowReply,
   type ImportReplyContext, type ReviewSession, type ReviewRowBase, type ReviewTableColumn,
 } from '../participant/sessionState';
+
+const helpOf = (view: 'overview' | 'new' | 'ticketed' | 'stale', c: ImportReplyContext): string => buildImportHelp(view, importCommandCaps(c));
 
 function ctx(over: Partial<ImportReplyContext> = {}): ImportReplyContext {
   return {
@@ -12,34 +14,72 @@ function ctx(over: Partial<ImportReplyContext> = {}): ImportReplyContext {
   };
 }
 
-describe('accept replies on the New screen (R5)', () => {
+describe('accept CVE replies on the New screen (R5)', () => {
   it('reads row numbers with no reason', () => {
-    expect(parseImportReviewReply('new', 'accept 2 3', ctx())).toEqual({ kind: 'accept', ids: ['2', '3'] });
+    expect(parseImportReviewReply('new', 'accept CVE 2 3', ctx())).toEqual({ kind: 'accept', ids: ['2', '3'] });
   });
 
   it('reads a reason after "because" and keeps its casing', () => {
-    expect(parseImportReviewReply('new', 'Accept 2 because Not reachable behind the proxy', ctx()))
+    expect(parseImportReviewReply('new', 'Accept cve 2 because Not reachable behind the proxy', ctx()))
       .toEqual({ kind: 'accept', ids: ['2'], reason: 'Not reachable behind the proxy' });
   });
 
   it('rejects a row that is not on the visible page, naming it', () => {
-    const action = parseImportReviewReply('new', 'accept 9', ctx());
+    const action = parseImportReviewReply('new', 'accept CVE 9', ctx());
     expect(action).toMatchObject({ kind: 'invalid' });
     expect((action as { reason?: string }).reason).toMatch(/Row 9/);
   });
 
-  it('rejects "accept" with no rows and shows how to use it', () => {
-    const action = parseImportReviewReply('new', 'accept', ctx());
+  it('rejects "accept CVE" with no rows and shows how to use it', () => {
+    const action = parseImportReviewReply('new', 'accept CVE', ctx());
     expect(action).toMatchObject({ kind: 'invalid' });
-    expect((action as { reason?: string }).reason).toMatch(/accept 2/);
+    expect((action as { reason?: string }).reason).toMatch(/accept CVE 2/);
   });
 
   it('is not offered to an importer without the accepted list', () => {
-    expect(parseImportReviewReply('new', 'accept 2', ctx({ canAccept: false }))).toMatchObject({ kind: 'invalid' });
+    expect(parseImportReviewReply('new', 'accept CVE 2', ctx({ canAccept: false }))).toMatchObject({ kind: 'invalid' });
   });
 
   it('is not valid on the overview', () => {
-    expect(parseImportReviewReply('overview', 'accept 2', ctx())).toMatchObject({ kind: 'invalid' });
+    expect(parseImportReviewReply('overview', 'accept CVE 2', ctx())).toMatchObject({ kind: 'invalid' });
+  });
+});
+
+describe('a bare accept records nothing and names both spellings', () => {
+  it('New: "accept 2 4" is refused, not read as the CVE form', () => {
+    const action = parseImportReviewReply('new', 'accept 2 4', ctx());
+    expect(action).toMatchObject({ kind: 'invalid' });
+    const reason = (action as { reason?: string }).reason ?? '';
+    expect(reason).toContain('accept CVE');
+    expect(reason).toContain('accept component');
+  });
+
+  it('New: a bare "accept" is refused the same way', () => {
+    const reason = (parseImportReviewReply('new', 'accept', ctx()) as { reason?: string }).reason ?? '';
+    expect(reason).toContain('accept CVE');
+    expect(reason).toContain('accept component');
+  });
+
+  it('Already ticketed: names both spellings and says the CVE form works from New only', () => {
+    const c = ctx({ ticketedRows: [{ id: 'A1', allowedActions: ['rewrite', 'leave'] }] });
+    for (const text of ['accept', 'accept A1', 'accept CVE 2']) {
+      const action = parseImportReviewReply('ticketed', text, c);
+      expect(action, text).toMatchObject({ kind: 'invalid' });
+      const reason = (action as { reason?: string }).reason ?? '';
+      expect(reason, text).toContain('accept component');
+      expect(reason, text).toContain('accept CVE');
+      expect(reason, text).toContain('New');
+    }
+  });
+});
+
+describe('help replies', () => {
+  it('are read on every screen, for an importer with and without the optional capabilities', () => {
+    const bare = ctx({ canFold: false, canAccept: false });
+    for (const view of ['overview', 'new', 'ticketed', 'stale'] as const) {
+      expect(parseImportReviewReply(view, 'help', ctx()), view).toEqual({ kind: 'help' });
+      expect(parseImportReviewReply(view, ' HELP ', bare), view).toEqual({ kind: 'help' });
+    }
   });
 });
 
@@ -145,9 +185,9 @@ describe('screens', () => {
   });
 
   it('the vocabulary reminder names the new replies only when they are offered', () => {
-    expect(describeImportReplyVocabulary('new', ctx())).toContain('accept');
-    expect(describeImportReplyVocabulary('new', ctx({ canAccept: false }))).not.toContain('accept');
-    expect(describeImportReplyVocabulary('overview', ctx())).toContain('accepted');
+    expect(helpOf('new', ctx())).toContain('accept');
+    expect(helpOf('new', ctx({ canAccept: false }))).not.toContain('accept');
+    expect(helpOf('overview', ctx())).toContain('accepted');
   });
 });
 
@@ -196,8 +236,9 @@ describe('accept component replies (accepted-components plan, U4)', () => {
       .toEqual({ kind: 'acceptComponent', ids: ['2'], reason: 'No newer version' });
   });
 
-  it('New: plain "accept <rows>" still accepts the rows\' CVEs', () => {
-    expect(parseImportReviewReply('new', 'accept 2', ctx())).toEqual({ kind: 'accept', ids: ['2'] });
+  it('New: "accept CVE <rows>" accepts the rows\' CVEs and "accept component <rows>" the whole components', () => {
+    expect(parseImportReviewReply('new', 'accept CVE 2', ctx())).toEqual({ kind: 'accept', ids: ['2'] });
+    expect(parseImportReviewReply('new', 'accept component 2', ctx())).toEqual({ kind: 'acceptComponent', ids: ['2'] });
   });
 
   it('New: rejects a row that is not on the visible page, naming it, and a missing row list', () => {
@@ -313,9 +354,9 @@ describe('screens with accepted components (accepted-components plan, U4)', () =
   });
 
   it('the "didn\'t understand" reminder names the component reply where it applies', () => {
-    expect(describeImportReplyVocabulary('new', ctx())).toContain('accept component');
-    expect(describeImportReplyVocabulary('ticketed', ctx())).toContain('accept component');
-    expect(describeImportReplyVocabulary('ticketed', ctx({ canAccept: false }))).not.toContain('accept component');
+    expect(helpOf('new', ctx())).toContain('accept component');
+    expect(helpOf('ticketed', ctx())).toContain('accept component');
+    expect(helpOf('ticketed', ctx({ canAccept: false }))).not.toContain('accept component');
   });
 });
 
@@ -328,6 +369,6 @@ describe('Stale screen page replies', () => {
   });
 
   it('the "didn\'t understand" reminder names them', () => {
-    expect(describeImportReplyVocabulary('stale', ctx())).toContain('`next`');
+    expect(helpOf('stale', ctx())).toContain('`next`');
   });
 });

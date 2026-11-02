@@ -222,7 +222,7 @@ describe('Stale-ticket review + close with a picked target', () => {
     expect(session.staleTickets?.ineligible[0]).toMatchObject({ key: 'PROJ-2' });
     expect(session.staleTickets?.ineligible[0].note).toContain('@jira discover workflow PROJ Task');
 
-    expect(await reply('PROJ-2', ws)).toContain("Didn't understand that");
+    expect(await reply('PROJ-2', ws)).toContain("Didn't understand `PROJ-2`");
   });
 
   it('a resolution whose name is also a cancel word is set, not treated as going back', async () => {
@@ -470,14 +470,14 @@ describe('Stale-ticket review + close with a picked target', () => {
     await handleImportReviewReply('open new', session, ticketService, mockStream() as never, ws as never, staleDescriptor);
     const streamNew = mockStream();
     await handleImportReviewReply('PROJ-123', session, ticketService, streamNew as never, ws as never, staleDescriptor);
-    expect(markdownText((streamNew.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain("Didn't understand that");
+    expect(markdownText((streamNew.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain("Didn't understand `PROJ-123`");
     expect(session.staleTickets?.groups[0].tickets[0].included).toBe(false);
 
     await handleImportReviewReply('back', session, ticketService, mockStream() as never, ws as never, staleDescriptor);
     await handleImportReviewReply('open stale', session, ticketService, mockStream() as never, ws as never, staleDescriptor);
     const streamStale = mockStream();
     await handleImportReviewReply('1', session, ticketService, streamStale as never, ws as never, staleDescriptor);
-    expect(markdownText((streamStale.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain("Didn't understand that");
+    expect(markdownText((streamStale.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain("Didn't understand `1`");
     expect(session.rows.find(r => r.id === '1')!.included).toBe(true); // untouched
 
     // A mixed reply is rejected whole rather than half-applied.
