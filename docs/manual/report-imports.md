@@ -52,6 +52,8 @@ No email content goes to the model without this reply, and the answer is not rem
 | `save <n>` | For a block the model found (numbered `#n`): saves it as a pattern in your user settings, so the next import finds it without the model. The preview shows the exact start and end phrases it will store before you save. Blocks your patterns found are already saved and cannot be saved again |
 | `cancel` | Stops the import |
 
+The preview ends with a `Commands:` line for the replies that still apply (`model check` disappears once every email is checked, `save` once no model-found block is left to save). Reply `help` to see them explained; a reply the preview cannot read prints the same help.
+
 **What stripping keeps.** A stripped signature keeps the author's name line when it can be recognized (the sender's name, or a name right after a closing such as "Best regards"); a signature with no recognizable name, such as "BR" and a logo, is removed completely. An inline image that appears only inside stripped blocks is removed from the text and not uploaded; an image also used in the kept text stays. With `ticketSidekick.email.deleteEmlAfterImport` on, the stripped text is gone for good.
 
 ## Add an email as a comment to an existing ticket
@@ -132,7 +134,7 @@ Each flaw's due date is the date Veracode first found it plus the number of days
 
 When an import finds more than one kind of result, `@jira` first shows an **overview** listing each group with its count:
 
-- **New** — findings without a ticket yet. Open it to toggle rows (reply row numbers, `include all` / `exclude all`, `next` / `prev` for more pages), fold rows together (`merge 2 4`, `unmerge 2`) or add them to an existing ticket (`add 2 4 to PROJ-123`) — see [Folding findings into one ticket](#folding-findings-into-one-ticket) — hide CVEs you have decided to accept (`accept 2 4`, OSS reports only — see [Accepting CVEs](#accepting-cves-you-have-decided-to-live-with)) — and reply **Create N tickets** (or **ok**) to create the included rows on the visible page.
+- **New** — findings without a ticket yet. Open it to toggle rows (reply row numbers, `include all` / `exclude all`, `next` / `prev` for more pages), fold rows together (`merge 2 4`, `unmerge 2`) or add them to an existing ticket (`add 2 4 to PROJ-123`) — see [Folding findings into one ticket](#folding-findings-into-one-ticket) — hide CVEs you have decided to accept (`accept CVE 2 4`, OSS reports only — see [Accepting CVEs](#accepting-cves-you-have-decided-to-live-with)) — and reply **Create N tickets** (or **ok**) to create the included rows on the visible page.
 - **Already ticketed** — findings that already have a ticket. Each row shows its ticket, the ticket's status, what changed since the ticket was made (for example "+2 CVEs, High→Critical" or "+1 flaw"), and a proposed action. The screen lists 20 rows per page: reply `next`, `prev` or `page 3` to move between pages. Click another action in the row, or reply e.g. `A2 new ticket` (for a row on any page) or `all leave`, then reply **Apply** (or **ok**); **Apply** acts on the rows of every page. Veracode and OSS reports offer the same three actions:
   - **rewrite** — rebuilds the existing ticket's title, description and labels from the report and posts a comment naming what was added and what dropped out (see [Folding findings into one ticket](#folding-findings-into-one-ticket)). It replaces text you added to the description by hand. It rebuilds the whole ticket, so set it on all the rows that point to the same ticket or on none of them; **Apply** stops with nothing written otherwise.
   - **new ticket** — creates a complete new ticket for the finding with its current content, titled `… (follow-up to PROJ-123)` and linked to the resolved ticket. Offered only when every ticket for the finding is resolved. See also [Keeping OSS tickets up to date](#keeping-oss-tickets-up-to-date).
@@ -142,6 +144,15 @@ When an import finds more than one kind of result, `@jira` first shows an **over
 - **Stale tickets** — open tickets whose finding is no longer in the report. The screen lists 20 tickets per page: reply `next`, `prev` or `page 3` to move between pages. Toggle a ticket by its key (e.g. `PROJ-123`) and reply **Close N tickets** (or **ok**); tickets marked on any page are closed together. You then pick where the tickets go: one of your matching cleanup rules (listed first), or any status your workflow can reach, such as a review status like "Verification". Each run handles one issue type; if your selection mixes issue types, you are asked which one to close first. A resolution is asked only when the target is a closing status and no rule supplies one. Reply **Back** at any point to return without changing anything. A ticket needs a discovered workflow (`@jira discover workflow <project> <issue type>`) to be selectable. Tickets you move to a status that isn't final stay open, so later imports list them again as stale.
 
 Each screen only understands its own replies, and each action only affects its own group — nothing is created, updated or closed until you choose that group's action. Reply **Back to overview** to switch groups and **Done** to finish; the overview keeps track of what you already did (e.g. "50 created · 12 left"). When an import has only one kind of result (always the case for email batches), that screen opens directly and offers **Done** instead of an overview.
+
+### The Commands line, help and finding a ticket
+
+Each review screen keeps its buttons (**Create**, **Apply**, **Close**, **Back to overview**, **Done**) and ends with one `Commands:` line listing the typed commands that screen understands, grouped by purpose, for example `rows`, `group`, `hide` and `find` on the New screen. The line shows only what your report type supports: `search` for Veracode and OSS reports, the accept commands for OSS reports only. The overview and the add and merge confirmations show just a **help** link.
+
+Reply `help` (or click **help**) to see every command of the current screen with its syntax and what it does. The help is printed once; the next screen is compact again. A reply the screen cannot use prints the same help, after one line saying what was not understood, or why it was refused (for example "Row 9 isn't a New row on this page").
+
+- **Paging.** The page line shows a control only for a direction that exists: `next` on the first page, `prev` on the last, both in between, and `page <n>` once there are three or more pages. `next` on the last page or `prev` on the first answers "You are on the last page" or "You are on the first page" and changes nothing.
+- **Finding the ticket to add to.** On the New and Already ticketed screens (Veracode and OSS reports), `search netty` lists the open tickets this review already matched whose summary contains every word, each with the row ids it belongs to. `merge 2 4 into A3` (or a ticket key) then adds those New rows to a listed ticket, the same as `add 2 4 to PROJ-123`. `show` prints the screen you came from again after a search or an export. Search only reads tickets the import already found; for any other ticket use `add 2 4 to PROJ-123` with its key.
 
 ### Folding findings into one ticket
 
@@ -278,12 +289,14 @@ Each **Create N tickets** creates at most 50 tickets (one page) — reply `next`
 
 Some CVEs are known and accepted (not reachable in your setup, no fix available yet). Record them once and the OSS import stops offering them in **New**.
 
-On the New screen, reply `accept` and the row numbers:
+On the New screen, reply `accept CVE` and the row numbers:
 
 ```text
-accept 2 4
-accept 2 because only reachable from the internal network
+accept CVE 2 4
+accept CVE 2 because only reachable from the internal network
 ```
+
+A bare `accept 2 4` records nothing: it answers with the two spellings, `accept CVE <rows>` for the rows' CVEs and `accept component <rows>` for whole components (below).
 
 The CVEs listed on those rows are written to `.jira-oss-accepted.json` in the workspace root, next to `.jira-templates.json`. The reason is optional. Commit the file and your team shares the same decisions; you can also edit it by hand:
 
@@ -301,7 +314,7 @@ How it applies:
 - **Matched by component name and CVE, not version.** `netty-codec:4.1.100` and `netty-codec:4.1.101` are the same component, so an upgrade that still reports the accepted CVE stays hidden. A new CVE on the same component is offered again.
 - **A partly accepted component stays in New** with only its remaining CVEs: the ticket's description, CVE labels and rating cover just those, and the rating is recomputed from them. A component whose CVEs are all accepted disappears from New.
 - **The rating floor still applies.** If a component's remaining CVEs rate below `ticketSidekick.waltz.minVulnRating` after the accepted ones are dropped, it is hidden too.
-- **Merged rows.** `accept` on a merged row accepts the CVEs of every component in it.
+- **Merged rows.** `accept CVE` on a merged row accepts the CVEs of every component in it.
 - **CVE entries affect the New screen only.** The Already ticketed and Stale screens are unchanged by them, so a later import can still propose adding an accepted CVE to an existing ticket. To take a whole component off all three screens, accept it as a component (below).
 
 Nothing is hidden silently: the overview (or the New screen, when the import has only one group) shows a line such as "3 accepted CVEs hidden · 1 component below the rating floor". Reply `accepted` to list the entries with their reasons, and `unaccept 2` (or click **Remove**) to delete an entry. A **Remove** link names the entry itself (`unaccept netty-codec CVE-2024-1234`), so a link from an older list never deletes a different entry after the list has changed. A removed entry is offered again right away: OSS reviews rebuild themselves from the report (or, if you have unfinished choices on the screens, mark themselves out of date and offer **Reload report**).
