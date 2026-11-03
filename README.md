@@ -57,6 +57,8 @@ Omit this setting for Data Center (default).
 
 ### Core commands
 
+Type `@jira help` (or just `@jira`) for the full list of commands and flows, grouped by purpose, with the extension version. Inside a Veracode, Waltz or email import, `help` lists the commands of the screen you are on.
+
 Open GitHub Copilot Chat and use `@jira`:
 
 | What you type | What happens |
