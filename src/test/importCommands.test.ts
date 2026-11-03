@@ -80,6 +80,14 @@ describe('help', () => {
     expect(buildImportHelp('overview', { ...waltz, singleGroup: false })).toContain('export xlsx');
   });
 
+  it('tells a Veracode or Waltz import that its export is the same report as @jira /security-report, and an email import nothing about it', () => {
+    expect(buildImportHelp('overview', waltz)).toContain('`@jira /security-report`');
+    expect(buildImportHelp('overview', veracode)).toContain('`@jira /security-report`');
+    expect(buildImportHelp('new', { ...veracode, singleGroup: true })).toContain('`@jira /security-report`');
+    expect(buildImportHelp('overview', email)).not.toContain('security-report');
+    expect(buildImportHelp('overview', email)).not.toContain('export');
+  });
+
   it('says nothing about row actions once no Already-ticketed row is open', () => {
     const allDone: ImportCommandCaps = { ...waltz, ticketedActions: [] };
     const help = buildImportHelp('ticketed', allDone);
