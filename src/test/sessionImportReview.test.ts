@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { buildReviewPage, parseReviewPageNav, applyReviewSessionToggle } from '../participant/sessionState';
 
 const helpOf = (view: 'overview' | 'new' | 'ticketed' | 'stale', c: ImportReplyContext): string => buildImportHelp(view, importCommandCaps(c));
-import { parseBulkNewRowReply, applyBulkNewRowSet, applyTicketedActionChange, formatRowChange, CURRENT_SESSION_SCHEMA_VERSION, isSessionExpired, buildImportHelp, importCommandCaps, type TicketedAction, buildImportOverview, buildNewGroupScreen, buildTicketedGroupScreen, initImportViewState, ensureImportViewState, computeImportResultGroups, emptyImportOutcomes, buildImportDoneSummary, parseOverviewReply, parseNewGroupReply, parseTicketedGroupReply, parseStaleGroupReply, IMPORT_COMMANDS, isConfirmation, isCancellation, buildChatCommandLink, formatTicketedRowResult as formatRowResult, type ReviewSession, type ImportReplyContext } from '../participant/sessionState';
+import { parseBulkNewRowReply, applyBulkNewRowSet, applyTicketedActionChange, formatRowChange, CURRENT_SESSION_SCHEMA_VERSION, isSessionExpired, buildImportHelp, importCommandCaps, type TicketedAction, buildImportOverview, buildNewGroupScreen, isNewGroupDrained, buildTicketedGroupScreen, initImportViewState, ensureImportViewState, computeImportResultGroups, emptyImportOutcomes, buildImportDoneSummary, parseOverviewReply, parseNewGroupReply, parseTicketedGroupReply, parseStaleGroupReply, IMPORT_COMMANDS, isConfirmation, isCancellation, buildChatCommandLink, formatTicketedRowResult as formatRowResult, type ReviewSession, type ImportReplyContext } from '../participant/sessionState';
 import { type ReviewSessionStale } from '../participant/sessionState';
 
 // U4: minimal ReviewRowBase-shaped row for the pageable-review-session tests below.
@@ -228,6 +228,34 @@ function screenSession(allRows: PageRow[], extra: Partial<ReviewSession<PageRow>
 }
 
 const itemOpts = { itemNoun: 'item(s)' };
+
+describe('isNewGroupDrained — an import with nothing left to act on', () => {
+  // A single-group New session after its rows were created: the view stays on 'new', allRows no longer holds a New row.
+  const afterCreate = (remaining: PageRow[]) => ({ ...screenSession(makeFreshRows(2)), allRows: remaining });
+
+  it('is true when every New row was created and the screen would offer only Done', () => {
+    expect(isNewGroupDrained(afterCreate([]), itemOpts)).toBe(true);
+  });
+
+  it('is false while a New row is left, whether it failed to create or the user excluded it', () => {
+    expect(isNewGroupDrained(afterCreate([{ id: '2', existingTicketKey: null, included: true }]), itemOpts)).toBe(false);
+    expect(isNewGroupDrained(afterCreate([{ id: '2', existingTicketKey: null, included: false }]), itemOpts)).toBe(false);
+  });
+
+  it.each(['canExport', 'canAccept', 'canMergeTickets'] as const)('is false when the importer offers %s, because the empty screen still has a command', (cap) => {
+    expect(isNewGroupDrained(afterCreate([]), { ...itemOpts, [cap]: true })).toBe(false);
+  });
+
+  it('is false for an import with several groups, which returns to the overview', () => {
+    const multi = screenSession([...makeFreshRows(1), makeTicketedRow('A1', 'PROJ-1')]);
+    expect(multi.singleGroup).toBe(false);
+    expect(isNewGroupDrained({ ...multi, allRows: [makeTicketedRow('A1', 'PROJ-1')] }, itemOpts)).toBe(false);
+  });
+
+  it('is false when the only group is Already ticketed', () => {
+    expect(isNewGroupDrained(screenSession([makeTicketedRow('A1', 'PROJ-1')]), itemOpts)).toBe(false);
+  });
+});
 
 describe('New screen — "Include all" / "Exclude all" links (review-table toggle-all)', () => {
   it('renders both bulk links when New rows exist, each resubmitting its exact token', () => {

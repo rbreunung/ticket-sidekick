@@ -15,7 +15,7 @@ export const IMPORT_SESSION_KINDS: Record<ReportImportDescriptor<unknown, Review
   email: { template: 'email-template', review: 'email-review' },
 };
 
-function screenOptions<TItem, TRow extends ReviewRowBase>(descriptor: ReportImportDescriptor<TItem, TRow>, baseUrl?: string): ImportScreenOptions {
+export function screenOptions<TItem, TRow extends ReviewRowBase>(descriptor: ReportImportDescriptor<TItem, TRow>, baseUrl?: string): ImportScreenOptions {
   return { baseUrl, itemNoun: descriptor.itemNoun, findingNoun: descriptor.changeTracking?.findingNoun, canFold: descriptor.fold !== undefined, canAccept: descriptor.accepted !== undefined, canMergeTickets: descriptor.ticketMerge !== undefined, canExport: descriptor.overviewExport !== undefined, canSearch: descriptor.dedupKeyOf !== undefined, actionLabels: descriptor.changeTracking?.actionLabels };
 }
 

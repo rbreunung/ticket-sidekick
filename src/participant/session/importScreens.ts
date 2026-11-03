@@ -304,6 +304,18 @@ export function buildImportOverview<TRow extends ReviewRowBase>(session: ReviewS
   return lines.join('\n');
 }
 
+/**
+ * KTD1: true when a single-group New import has nothing left to act on: no New row remains (a failed
+ * or excluded row stays in `allRows` as a New row) and the importer offers no command besides Done
+ * (export, the accepted list, reload report). The create action then ends the import by itself.
+ */
+export function isNewGroupDrained<TRow extends ReviewRowBase>(session: ReviewSession<TRow>, opts: ImportScreenOptions): boolean {
+  const s = ensureImportViewState(session);
+  if (!s.singleGroup || s.view !== 'new') return false;
+  if (opts.canExport || opts.canAccept || opts.canMergeTickets) return false;
+  return !s.allRows.some(r => r.existingTicketKey === null);
+}
+
 /** R5/R7: the New group — table, per-row toggles, include/exclude all, paging, "Create N tickets". */
 export function buildNewGroupScreen<TRow extends ReviewRowBase>(
   session: ReviewSession<TRow>,
