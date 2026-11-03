@@ -1,5 +1,5 @@
 import ExcelJS from 'exceljs';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const config: Record<string, unknown> = {};
 vi.mock('vscode', () => {
@@ -57,11 +57,15 @@ function seed(tickets: ReturnType<typeof veracodeTicket>[]) {
 }
 
 beforeEach(() => {
+  // The fixtures' due dates (2026-11-01) and release (2026-11-15) only mean "due before release" while today is before them.
+  vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-15T12:00:00Z') });
   vi.clearAllMocks();
   for (const key of Object.keys(config)) delete config[key];
   client = new MockJiraClient();
   service = new TicketService(client);
 });
+
+afterEach(() => { vi.useRealTimers(); });
 
 describe('@jira /overview', () => {
   it('streams the tables for the named project with a trusted Save as CSV link', async () => {
