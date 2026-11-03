@@ -1,3 +1,16 @@
+## [0.8.4] - 2026-11-03
+
+## What's Changed
+* feat(import): show only open duplicate tickets and add Veracode ticket merge
+* feat(import): search matched tickets and merge report rows into them
+* feat(overview): Excel export, shared column order and unplanned-ticket flag
+* feat(import): compact import screen hints with a Commands line and help
+* chore(deps): Bump postal-mime from 4.0.11 to 4.1.4 by @dependabot[bot] in https://github.com/rbreunung/ticket-sidekick/pull/105
+* chore(deps-dev): Bump vite from 8.3.4 to 8.3.5 by @dependabot[bot] in https://github.com/rbreunung/ticket-sidekick/pull/106
+
+
+**Full Changelog**: https://github.com/rbreunung/ticket-sidekick/compare/0.8.0...0.8.4
+
 ## [0.8.0] - 2026-10-23
 
 ## What's Changed
