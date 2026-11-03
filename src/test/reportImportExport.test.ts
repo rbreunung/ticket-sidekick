@@ -37,7 +37,9 @@ vi.mock('../services/WorkflowService', async (importOriginal) => ({
 import * as vscode from 'vscode';
 import { handleVeracodeAwaitIssueType, buildVeracodeTemplateSession, handleVeracodeReviewReply } from '../participant/jira/veracodeHandler';
 import { handleWaltzAwaitIssueType, buildWaltzTemplateSession, handleWaltzReviewReply } from '../participant/jira/waltzHandler';
-import { parseImportReviewReply, describeImportReplyVocabulary, buildImportOverview, buildImportScreen, VERACODE_REVIEW_COLUMNS, type AwaitIssueTypeResume, type ImportReplyContext, type VeracodeReviewSession, type WaltzReviewSession } from '../participant/sessionState';
+import { parseImportReviewReply, buildImportHelp, importCommandCaps, buildImportOverview, buildImportScreen, VERACODE_REVIEW_COLUMNS, type AwaitIssueTypeResume, type ImportReplyContext, type VeracodeReviewSession, type WaltzReviewSession } from '../participant/sessionState';
+
+const helpOf = (view: 'overview' | 'new' | 'ticketed' | 'stale', c: ImportReplyContext): string => buildImportHelp(view, importCommandCaps(c));
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService } from '../services/TicketService';
 import { sanitizeComponentLabel } from '../utils/waltzReport';
@@ -324,14 +326,14 @@ describe('export link on the review screens', () => {
 
     const text = decodeURIComponent(streamText(stream));
     expect(text).toMatch(/\[Export\]\(command:[^)]*@jira export/);
-    expect(describeImportReplyVocabulary('ticketed', { singleGroup: true, groups: ['ticketed'], newRowIds: [], ticketedRows: [], canExport: true })).toContain('`export xlsx`');
+    expect(helpOf('ticketed', { singleGroup: true, groups: ['ticketed'], newRowIds: [], ticketedRows: [], canExport: true })).toContain('`export xlsx`');
   });
 
   it('is not offered by an import without export (email)', async () => {
     const { session } = await importVeracode([makeFlaw('301')], {});
     expect(buildImportOverview(session, { itemNoun: 'email(s)' })).not.toContain('Export');
     expect(buildImportScreen(session, VERACODE_REVIEW_COLUMNS, { itemNoun: 'email(s)' })).not.toContain('Export');
-    expect(describeImportReplyVocabulary('new', { singleGroup: true, groups: ['new'], newRowIds: [], ticketedRows: [] })).not.toContain('export');
+    expect(helpOf('new', { singleGroup: true, groups: ['new'], newRowIds: [], ticketedRows: [] })).not.toContain('export');
   });
 });
 

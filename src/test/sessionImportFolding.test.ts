@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { type ReviewRowBase } from '../participant/sessionState';
-import { describeImportReplyVocabulary, type TicketedAction, emptyImportOutcomes, buildImportDoneSummary, parseNewGroupReply, parseTicketedGroupReply, isConfirmation, isCancellation, mergeNewRows, unmergeNewRow, restoreMergedRows, buildAddPrompt, buildChatCommandLink, findPartialRewrites, formatTicketedRowResult, type ImportReplyContext } from '../participant/sessionState';
+
+const helpOf = (view: 'overview' | 'new' | 'ticketed' | 'stale', c: ImportReplyContext): string => buildImportHelp(view, importCommandCaps(c));
+import { buildImportHelp, importCommandCaps, type TicketedAction, emptyImportOutcomes, buildImportDoneSummary, parseNewGroupReply, parseTicketedGroupReply, isConfirmation, isCancellation, mergeNewRows, unmergeNewRow, restoreMergedRows, buildAddPrompt, buildChatCommandLink, findPartialRewrites, formatTicketedRowResult, type ImportReplyContext } from '../participant/sessionState';
 
 describe('merge and unmerge replies on the New screen (finding folding, U4)', () => {
   const ctx = (overrides: Partial<ImportReplyContext> = {}): ImportReplyContext => ({
@@ -58,8 +60,8 @@ describe('merge and unmerge replies on the New screen (finding folding, U4)', ()
   });
 
   it('the vocabulary hint names merge and unmerge only for an importer that can fold', () => {
-    expect(describeImportReplyVocabulary('new', ctx())).toContain('merge');
-    expect(describeImportReplyVocabulary('new', ctx({ canFold: false }))).not.toContain('merge');
+    expect(helpOf('new', ctx())).toContain('merge');
+    expect(helpOf('new', ctx({ canFold: false }))).not.toContain('merge');
   });
 });
 
@@ -144,8 +146,8 @@ describe('add replies on the New screen (finding folding, U5)', () => {
   });
 
   it('the vocabulary hint names add only for an importer that can fold', () => {
-    expect(describeImportReplyVocabulary('new', ctx())).toContain('add 2 4 to PROJ-123');
-    expect(describeImportReplyVocabulary('new', ctx({ canFold: false }))).not.toContain('add 2');
+    expect(helpOf('new', ctx())).toContain('add 2 4 to PROJ-123');
+    expect(helpOf('new', ctx({ canFold: false }))).not.toContain('add 2');
   });
 });
 

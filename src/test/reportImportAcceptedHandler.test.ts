@@ -175,7 +175,7 @@ describe('accept on the New screen (R5, R7)', () => {
 
   it('writes one entry per CVE of the row, with the reason, and removes the row', async () => {
     const { session, ws } = await importWaltz(report());
-    const after = await reply('accept 2 because not reachable behind the proxy', session!, ws);
+    const after = await reply('accept CVE 2 because not reachable behind the proxy', session!, ws);
     expect(readList()).toEqual([
       { component: 'b', cve: 'CVE-2099-2', reason: 'not reachable behind the proxy' },
       { component: 'b', cve: 'CVE-2099-3', reason: 'not reachable behind the proxy' },
@@ -189,7 +189,7 @@ describe('accept on the New screen (R5, R7)', () => {
   it('accepting a merged row writes the CVEs of every member (AE4)', async () => {
     const { session, ws } = await importWaltz(report());
     const merged = await reply('merge 1 2', session!, ws);
-    await reply('accept 1', merged.session, ws);
+    await reply('accept CVE 1', merged.session, ws);
     expect(readList().map(e => `${e.component}:${e.cve}`)).toEqual(['a:CVE-2099-1', 'b:CVE-2099-2', 'b:CVE-2099-3']);
     expect(newRows(ws.store['jira.session.waltzReview'] as WaltzReviewSession).map(r => r.nameVersion)).toEqual(['c:1.0']);
   });
@@ -201,7 +201,7 @@ describe('accept on the New screen (R5, R7)', () => {
       comp('c:1.0', 'High', [['CVE-2099-4', 'High']]),
     ]);
     const merged = await reply('merge 2 3', session!, ws);
-    const after = await reply('accept 1', merged.session, ws);
+    const after = await reply('accept CVE 1', merged.session, ws);
     const mergedRow = after.session.rows.find(r => r.memberIds !== undefined)!;
     expect(mergedRow.id).toBe('2');
     expect(mergedRow.memberIds).toEqual(['2', '3']);
@@ -216,7 +216,7 @@ describe('accept on the New screen (R5, R7)', () => {
       comp('x:3.0', 'High', [['CVE-2099-1', 'High']]),
     ]);
     const merged = await reply('merge 2 3', session!, ws);
-    const after = await reply('accept 1', merged.session, ws);
+    const after = await reply('accept CVE 1', merged.session, ws);
     expect(newRows(after.session)).toEqual([]);
     expect(after.session.rows.filter(r => r.existingTicketKey === null)).toEqual([]);
     expect(after.text).toContain('No new component');
@@ -229,7 +229,7 @@ describe('accept on the New screen (R5, R7)', () => {
       comp('y:1.0', 'High', [['CVE-2099-7', 'High']]),
     ]);
     const merged = await reply('merge 2 3', session!, ws);
-    const after = await reply('accept 1', merged.session, ws);
+    const after = await reply('accept CVE 1', merged.session, ws);
     const rows = after.session.rows.filter(r => r.existingTicketKey === null);
     expect(rows.map(r => ({ id: r.id, name: r.nameVersion, merged: r.memberIds !== undefined }))).toEqual([{ id: '3', name: 'y:1.0', merged: false }]);
   });
@@ -237,7 +237,7 @@ describe('accept on the New screen (R5, R7)', () => {
   it('refuses to accept over a file that is not valid JSON and leaves the session as it was', async () => {
     const { session, ws } = await importWaltz(report());
     writeFileSync(fileOn(), '{ nope');
-    const after = await reply('accept 1', session!, ws);
+    const after = await reply('accept CVE 1', session!, ws);
     expect(after.text).toMatch(/not valid JSON/);
     expect(readFileSync(fileOn(), 'utf8')).toBe('{ nope');
     expect(newRows(after.session)).toHaveLength(3);
@@ -247,7 +247,7 @@ describe('accept on the New screen (R5, R7)', () => {
     const { session, ws } = await importWaltz(report());
     const original = JSON.stringify({ accepted: [{ component: 'typo', cves: 'CVE-1' }, { component: 'kept', cve: 'CVE-2', ticket: 'PROJ-9' }] });
     writeFileSync(fileOn(), original);
-    const after = await reply('accept 1', session!, ws);
+    const after = await reply('accept CVE 1', session!, ws);
     expect(after.text).toContain('left as it is');
     expect(readFileSync(fileOn(), 'utf8')).toBe(original);
     expect(newRows(after.session)).toHaveLength(3);
@@ -256,7 +256,7 @@ describe('accept on the New screen (R5, R7)', () => {
   it('says so when no workspace folder is open, and writes nothing', async () => {
     const { session, ws } = await importWaltz(report());
     workspace.dir = undefined;
-    const after = await reply('accept 1', session!, ws);
+    const after = await reply('accept CVE 1', session!, ws);
     expect(after.text).toMatch(/workspace/i);
     expect(newRows(after.session)).toHaveLength(3);
     expect(existsSync(fileOn())).toBe(false);

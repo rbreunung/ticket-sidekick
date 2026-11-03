@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as nodePath from 'path';
 import { parseEmlFile, type EmailImportItem } from '../utils/emlParser';
 import { detectPatternBlocks, type DetectedBlock } from '../utils/emailBoilerplate';
-import { buildPendingEmailCleanupSession, buildEmailCleanupConsent, buildEmailCleanupPreview, parseEmailCleanupReply, applyEmailCleanupDecision, resolveSaveTarget, describeBlockKinds, listModelCheckEligibleRows, remapSavedBlocks, numberEmailCleanupBlocks, type EmailCleanupSession } from '../participant/sessionState';
+import { buildPendingEmailCleanupSession, buildEmailCleanupConsent, buildEmailCleanupPreview, parseEmailCleanupReply, applyEmailCleanupDecision, resolveSaveTarget, describeBlockKinds, listModelCheckEligibleRows, remapSavedBlocks, numberEmailCleanupBlocks, buildImportHelp, emailPreviewCaps, type EmailCleanupSession } from '../participant/sessionState';
 
 describe('email cleanup step — screens, replies and decisions', () => {
   const FOOTER = 'CONFIDENTIALITY NOTICE: this email is confidential.';
@@ -175,7 +175,7 @@ describe('email cleanup step — screens, replies and decisions', () => {
       const session = batchSession([emailItem('One', `x\n\n${FOOTER}`), emailItem('Two', `y\n\n${FOOTER}`)]);
       const offered = buildEmailCleanupPreview(session);
       expect(decodeURIComponent(offered)).toContain('"@jira model check"');
-      expect(offered).toContain('2 email(s)');
+      expect(buildImportHelp('email-preview', emailPreviewCaps(session))).toContain('the 2 email(s) it has not checked yet');
       for (const row of session.rows) row.modelStatus = 'checked';
       expect(decodeURIComponent(buildEmailCleanupPreview(session))).not.toContain('"@jira model check"');
     });
@@ -212,6 +212,52 @@ describe('email cleanup step — screens, replies and decisions', () => {
       const before = numberEmailCleanupBlocks(session);
       session.rows[0].blocks = [blockAt(1, 'pattern')];
       expect(remapSavedBlocks(session.savedBlocks, before, session)).toEqual([]);
+    });
+  });
+
+  describe('the preview Commands line and help (compact import screen hints)', () => {
+    const modelBlock: DetectedBlock = { kind: 'footer', segmentIndex: 0, startLine: 2, endLine: 3, excerpt: 'This mail and attachments are private.', nonEmptyLineCount: 2, capped: false, source: 'model' };
+    const privateBody = 'Hi\n\nThis mail and attachments are private.\nDelete it if misdirected.';
+
+    it('a batch shows one Commands line with the row ids and model check, and none of the old paragraphs', () => {
+      const text = buildEmailCleanupPreview(batchSession([emailItem('One', `x\n\n${FOOTER}`), emailItem('Two', `y\n\n${FOOTER}`)]));
+      expect(text.match(/Commands:/g)).toHaveLength(1);
+      expect(text).toMatch(/clean up `strip` `keep` `model check` · rows `3`/);
+      for (const gone of ['to remove the blocks below', 'Reply a row id to exclude', 'Your patterns may have missed something']) expect(text, gone).not.toContain(gone);
+      expect(decodeURIComponent(text)).toContain('"@jira strip"');
+    });
+
+    it('a single email lists no row ids', () => {
+      const session = buildPendingEmailCleanupSession([emailItem('One', `x\n\n${FOOTER}`)], { kind: 'comment', ticketKey: 'PROJ-9' } as never);
+      session.rows[0].blocks = footerBlocks(session.rows[0].item.markdownBody);
+      const text = buildEmailCleanupPreview(session);
+      expect(text).not.toContain('rows `');
+      expect(text).toContain('Commands:');
+    });
+
+    it('model check leaves the line once every email is checked, and save appears only while a model block can be saved', () => {
+      const session = batchSession([emailItem('One', privateBody)]);
+      expect(buildEmailCleanupPreview(session)).not.toContain('save');
+      session.rows[0].blocks = [modelBlock];
+      expect(buildEmailCleanupPreview(session)).toContain('patterns `save <n>`');
+      session.savedBlocks = [1];
+      expect(buildEmailCleanupPreview(session)).not.toContain('patterns `save');
+      session.rows[0].modelStatus = 'checked';
+      expect(buildEmailCleanupPreview(session)).not.toContain('model check`');
+    });
+
+    it('help explains strip, keep and save', () => {
+      const session = batchSession([emailItem('One', privateBody), emailItem('Two', 'plain')]);
+      session.rows[0].blocks = [modelBlock];
+      const help = buildImportHelp('email-preview', emailPreviewCaps(session));
+      expect(help).toContain('**Help — Email cleanup preview**');
+      for (const word of ['`strip`', '`keep`', '`save 2`', '`cancel`', '`3`']) expect(help, word).toContain(word);
+    });
+
+    it('reads help in the preview and refuses it on the consent screen', () => {
+      expect(parseEmailCleanupReply('help', 'preview', ['1'])).toEqual({ action: 'help' });
+      expect(parseEmailCleanupReply(' HELP ', 'preview', ['1'])).toEqual({ action: 'help' });
+      expect(parseEmailCleanupReply('help', 'consent', ['1'])).toEqual({ action: 'invalid' });
     });
   });
 

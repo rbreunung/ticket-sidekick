@@ -109,7 +109,7 @@ describe('Stale-ticket review section (U6)', () => {
       expect(rendered).toContain('PROJ-9');
       expect(rendered).toContain('no cleanup rule configured for PROJ/Task');
       expect(rendered).toContain('Stale');
-      expect(rendered).toContain('Close 0 tickets');
+      expect(rendered).toContain('Nothing marked to close');
       expect(decodeURIComponent(rendered)).toContain('"@jira done"'); // stale is the only group
     });
 

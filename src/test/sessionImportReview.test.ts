@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { buildReviewPage, parseReviewPageNav, applyReviewSessionToggle } from '../participant/sessionState';
-import { parseBulkNewRowReply, applyBulkNewRowSet, applyTicketedActionChange, formatRowChange, CURRENT_SESSION_SCHEMA_VERSION, isSessionExpired, describeImportReplyVocabulary, type TicketedAction, buildImportOverview, buildNewGroupScreen, buildTicketedGroupScreen, initImportViewState, ensureImportViewState, computeImportResultGroups, emptyImportOutcomes, buildImportDoneSummary, parseOverviewReply, parseNewGroupReply, parseTicketedGroupReply, parseStaleGroupReply, IMPORT_COMMANDS, isConfirmation, isCancellation, buildChatCommandLink, formatTicketedRowResult as formatRowResult, type ReviewSession, type ImportReplyContext } from '../participant/sessionState';
+
+const helpOf = (view: 'overview' | 'new' | 'ticketed' | 'stale', c: ImportReplyContext): string => buildImportHelp(view, importCommandCaps(c));
+import { parseBulkNewRowReply, applyBulkNewRowSet, applyTicketedActionChange, formatRowChange, CURRENT_SESSION_SCHEMA_VERSION, isSessionExpired, buildImportHelp, importCommandCaps, type TicketedAction, buildImportOverview, buildNewGroupScreen, buildTicketedGroupScreen, initImportViewState, ensureImportViewState, computeImportResultGroups, emptyImportOutcomes, buildImportDoneSummary, parseOverviewReply, parseNewGroupReply, parseTicketedGroupReply, parseStaleGroupReply, IMPORT_COMMANDS, isConfirmation, isCancellation, buildChatCommandLink, formatTicketedRowResult as formatRowResult, type ReviewSession, type ImportReplyContext } from '../participant/sessionState';
 import { type ReviewSessionStale } from '../participant/sessionState';
 
 // U4: minimal ReviewRowBase-shaped row for the pageable-review-session tests below.
@@ -240,7 +242,7 @@ describe('New screen — "Include all" / "Exclude all" links (review-table toggl
 
   it('offers merge and unmerge on the New screen only for an importer that can fold (finding folding)', () => {
     const rows = makeFreshRows(3);
-    expect(buildNewGroupScreen(screenSession(rows), [], { ...itemOpts, canFold: true })).toContain('`merge 2 4`');
+    expect(buildNewGroupScreen(screenSession(rows), [], { ...itemOpts, canFold: true })).toContain('group `merge` `unmerge` `add … to KEY`');
     expect(buildNewGroupScreen(screenSession(rows), [], itemOpts)).not.toContain('merge');
   });
 
@@ -364,10 +366,10 @@ describe('Already-ticketed screen — per-row actions (U4/R5, R6, KTD9)', () => 
     expect(text.toLowerCase()).not.toContain('duplicate');
   });
 
-  it('shows the generic merge hint when no row has another open ticket', () => {
+  it('lists the merge reply in the Commands line, with no tailored suggestion, when no row has another open ticket', () => {
     const text = buildTicketedGroupScreen(screenSession([makeActionRow('A1', 'PROJ-5')]), [], { ...waltzOpts, canMergeTickets: true });
 
-    expect(text).toContain('`merge A2 A3 into A1`');
+    expect(text).toContain('`merge A5 into A3`');
     expect(text).not.toContain('swap them');
   });
 
@@ -704,7 +706,7 @@ describe('Per-screen reply parsing (KTD2, R6)', () => {
   });
 
   it('the vocabulary reminder names the per-row replies', () => {
-    const text = describeImportReplyVocabulary('ticketed', ctx);
+    const text = helpOf('ticketed', ctx);
     expect(text).toContain('`apply`');
     expect(text).toContain('`A2 follow-up`');
     expect(text).toContain('`all leave`');
@@ -773,7 +775,7 @@ describe('the Waltz action label `new ticket` (remediation dates, U5)', () => {
   });
 
   it('the vocabulary reminder uses the label and leaves out the shortcuts no row can use', () => {
-    const text = describeImportReplyVocabulary('ticketed', waltzCtx);
+    const text = helpOf('ticketed', waltzCtx);
     expect(text).toContain('`new ticket`');
     expect(text).not.toContain('`follow-up`');
     expect(text).not.toContain('update tickets');
@@ -781,7 +783,7 @@ describe('the Waltz action label `new ticket` (remediation dates, U5)', () => {
   });
 
   it('keeps the shortcuts in the reminder for an importer without labels', () => {
-    const text = describeImportReplyVocabulary('ticketed', { ...waltzCtx, actionLabels: undefined });
+    const text = helpOf('ticketed', { ...waltzCtx, actionLabels: undefined });
     expect(text).toContain('`update tickets`');
     expect(text).toContain('`re-create tickets`');
   });

@@ -5,6 +5,7 @@ import type { EmailImportItem } from '../../utils/emlParser';
 import { applyBoilerplateCleanup, computeDroppedImageNames, buildPatternFromBlock, isTooLongForModelCheck, BOILERPLATE_KINDS, type BoilerplatePattern, type DetectedBlock } from '../../utils/emailBoilerplate';
 import { CURRENT_SESSION_SCHEMA_VERSION } from './importTypes';
 import { buildChatCommandLink, countedNoun, isCancellation, neutralizeMarkdownLinks } from './primitives';
+import { HELP_WORD, buildCommandsLine, type ImportCommandCaps } from './importCommands';
 
 // ---------------------------------------------------------------------------------------------
 // Email boilerplate cleanup step (KTD8) — one session step in front of both email flows (batch
@@ -149,11 +150,8 @@ export function buildEmailCleanupPreview(session: EmailCleanupSession, notice?: 
   const out: string[] = [];
   if (notice) out.push(notice, '');
   out.push('### Email boilerplate found', '');
-  out.push(session.target.kind === 'batch'
-    ? 'Reply **strip** to remove the blocks below before the tickets are created, or **keep** to import the emails unchanged.' +
-      (multi ? ' Reply a row id to exclude that email from stripping and from the model check (reply it again to include it).' : '')
-    : `Reply **strip** to remove the blocks below from the comment for **${session.target.ticketKey}**, or **keep** to post the email unchanged.`);
-  out.push('');
+  // Which ticket the cleaned email goes to is information, not a how-to, so it stays on the screen.
+  if (session.target.kind === 'comment') out.push(`_For the comment on **${session.target.ticketKey}**._`, '');
   for (const row of session.rows) {
     const subject = untrustedSnippet(row.item.subject);
     if (row.blocks.length === 0) {
@@ -188,15 +186,21 @@ export function buildEmailCleanupPreview(session: EmailCleanupSession, notice?: 
     }
     out.push('');
   }
-  const eligible = listModelCheckEligibleRows(session);
-  if (eligible.length > 0) {
-    out.push(`Your patterns may have missed something: reply **model check** to let the Copilot model look for more boilerplate in ${eligible.length} email(s). ` +
-      'Nothing is sent unless you reply.', '');
-  }
-  const modelCheck = eligible.length > 0 ? `${buildChatCommandLink('Model check', '@jira', 'model check')} · ` : '';
+  const caps = emailPreviewCaps(session);
+  const modelCheck = (caps.emailModelCheckCount ?? 0) > 0 ? `${buildChatCommandLink('Model check', '@jira', 'model check')} · ` : '';
   out.push(`${buildChatCommandLink('Strip', '@jira', 'strip')} · ${buildChatCommandLink('Keep', '@jira', 'keep')} · ${modelCheck}` +
     buildChatCommandLink('Cancel', '@jira', 'cancel'));
+  out.push('', buildCommandsLine('email-preview', caps));
   return out.join('\n');
+}
+
+/** What the command catalog needs to know about a preview: how many emails it lists and what `model check` and `save` could still act on. */
+export function emailPreviewCaps(session: EmailCleanupSession): ImportCommandCaps {
+  return {
+    emailRows: session.rows.length,
+    emailModelCheckCount: listModelCheckEligibleRows(session).length,
+    emailCanSave: numberEmailCleanupBlocks(session).some(b => resolveSaveTarget(session, b.n).ok),
+  };
 }
 
 export type EmailCleanupReply =
@@ -207,6 +211,7 @@ export type EmailCleanupReply =
   | { action: 'toggle'; rowIds: string[] }
   | { action: 'save'; blockNumber: number }
   | { action: 'cancel' }
+  | { action: 'help' }
   | { action: 'invalid' };
 
 // Replies per phase. Consent: `model check` (or yes) / `skip model` (or no, skip) / cancel.
@@ -220,6 +225,7 @@ export function parseEmailCleanupReply(reply: string, phase: 'consent' | 'previe
     if (isCancellation(text)) return { action: 'cancel' };
     return { action: 'invalid' };
   }
+  if (text === HELP_WORD) return { action: 'help' };
   if (/^model[\s-]*check$/.test(text)) return { action: 'model-check' };
   if (text === 'strip' || text === 'strip all' || text === 'remove') return { action: 'strip' };
   if (text === 'keep' || text === 'keep all') return { action: 'keep' };

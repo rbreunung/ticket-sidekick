@@ -1090,7 +1090,7 @@ describe('New screen — paging (U4/R6-R7)', () => {
     const text = buildNewGroupScreen(importSession(manyRows), VERACODE_REVIEW_COLUMNS, veracodeOpts);
     expect(text).toContain('Page 1 of 3');
     expect(text).toContain(linkTo('next', 'next'));
-    expect(text).toContain(linkTo('prev', 'prev'));
+    expect(text).not.toContain(linkTo('prev', 'prev')); // nothing before page 1
   });
 
   it('renders the current 1-based page number, not the 0-based index', () => {

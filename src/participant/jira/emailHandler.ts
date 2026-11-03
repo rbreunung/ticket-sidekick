@@ -16,6 +16,7 @@ import {
   isCancellation, isConfirmation, isSessionExpired, SESSION_EXPIRED_MESSAGE, buildChatCommandLink, neutralizeMarkdownLinks, withLastTicket,
   buildPendingEmailCleanupSession, buildEmailCleanupConsent, buildEmailCleanupPreview, parseEmailCleanupReply,
   applyEmailCleanupDecision, resolveSaveTarget, listModelCheckEligibleRows, numberEmailCleanupBlocks, remapSavedBlocks,
+  buildImportHelp, buildRefusedReply, emailPreviewCaps,
 } from '../sessionState';
 import {
   detectPatternBlocks, resolveBoilerplatePatterns, isTooLongForModelCheck, buildModelCheckPrompt, parseModelCheckReply,
@@ -453,9 +454,13 @@ export async function handleEmailCleanupReply(
       return saveBlockAsPattern(session, parsed.blockNumber, stream, ws);
     case 'model-check':
       return previewModelCheck(session, model, token, stream, ws);
+    case 'help':
+      logDiag('jira.email', 'info', 'Email cleanup help', { phase: session.phase });
+      stream.markdown(trustedChatMarkdown(buildImportHelp('email-preview', emailPreviewCaps(session))));
+      return cleanupResult(session);
     default:
-      return showCleanupScreen(session, stream, ws,
-        '_Reply **strip**, **keep**, **model check** to let the model look for more, a row id to exclude or include an email, or **save <n>** for a block the model found._');
+      stream.markdown(trustedChatMarkdown(buildRefusedReply({ view: 'email-preview', caps: emailPreviewCaps(session), typed: reply })));
+      return cleanupResult(session);
   }
 }
 

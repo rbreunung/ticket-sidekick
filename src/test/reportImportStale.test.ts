@@ -222,7 +222,7 @@ describe('Stale-ticket review + close with a picked target', () => {
     expect(session.staleTickets?.ineligible[0]).toMatchObject({ key: 'PROJ-2' });
     expect(session.staleTickets?.ineligible[0].note).toContain('@jira discover workflow PROJ Task');
 
-    expect(await reply('PROJ-2', ws)).toContain("Didn't understand that");
+    expect(await reply('PROJ-2', ws)).toContain("Didn't understand `PROJ-2`");
   });
 
   it('a resolution whose name is also a cancel word is set, not treated as going back', async () => {
@@ -470,14 +470,14 @@ describe('Stale-ticket review + close with a picked target', () => {
     await handleImportReviewReply('open new', session, ticketService, mockStream() as never, ws as never, staleDescriptor);
     const streamNew = mockStream();
     await handleImportReviewReply('PROJ-123', session, ticketService, streamNew as never, ws as never, staleDescriptor);
-    expect(markdownText((streamNew.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain("Didn't understand that");
+    expect(markdownText((streamNew.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain("Didn't understand `PROJ-123`");
     expect(session.staleTickets?.groups[0].tickets[0].included).toBe(false);
 
     await handleImportReviewReply('back', session, ticketService, mockStream() as never, ws as never, staleDescriptor);
     await handleImportReviewReply('open stale', session, ticketService, mockStream() as never, ws as never, staleDescriptor);
     const streamStale = mockStream();
     await handleImportReviewReply('1', session, ticketService, streamStale as never, ws as never, staleDescriptor);
-    expect(markdownText((streamStale.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain("Didn't understand that");
+    expect(markdownText((streamStale.markdown as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain("Didn't understand `1`");
     expect(session.rows.find(r => r.id === '1')!.included).toBe(true); // untouched
 
     // A mixed reply is rejected whole rather than half-applied.
@@ -505,9 +505,23 @@ describe('Stale-ticket review + close with a picked target', () => {
       expect(second).toContain('Page 2 of 3');
       const last = await reply('page 3', ws);
       expect(keysIn(last).filter(n => n <= 45)).toEqual([41, 42, 43, 44, 45]);
-      expect(await reply('next', ws)).toContain('Page 3 of 3');
+      const pastEnd = await reply('next', ws);
+      expect(pastEnd).toContain('last page');
+      expect(pastEnd).not.toContain('Page 3 of 3'); // answered in one line, not redrawn
       expect(await reply('prev', ws)).toContain('Page 2 of 3');
       expect(await reply('page 99', ws)).toContain('Page 3 of 3');
+    });
+
+    it('prev before the first page and any paging word on a single page answer in one line', async () => {
+      const ws = makeMockWs();
+      await importStale(manyIssues(45), ws);
+      const beforeStart = await reply('prev', ws);
+      expect(beforeStart).toContain('first page');
+      expect(beforeStart).not.toContain('PROJ-1');
+      const wsOne = makeMockWs();
+      await importStale(manyIssues(5), wsOne);
+      expect(await reply('next', wsOne)).toContain('only one page');
+      expect(await reply('prev', wsOne)).toContain('only one page');
     });
 
     it('a single page shows no page line, and a ticket marked on another page still counts', async () => {
