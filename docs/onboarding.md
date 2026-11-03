@@ -384,6 +384,12 @@ prompt ("update HI-1 status") is never misclassified; see
 for the general specific-before-generic principle this sidesteps by
 construction.
 
+For `@jira`, every phrase in that set prints the same single help screen: the tool name and version (read from
+`context.extension.packageJSON` when the help is shown, `unknown` when missing) and every command and flow in groups,
+built from the catalog in `src/participant/session/jiraCommands.ts`. There is no separate greeting. The catalog follows
+the import screens' help conventions (`importCommands.ts`), and `src/test/jiraCommandsGuard.test.ts` fails when a slash
+command in `package.json` or an intent operation has no entry. The suggestion chips below the screen are unchanged.
+
 **Unclassifiable-prompt fallback (R8, `@jira` only).** The old bare
 `"Unrecognised operation."` message (the `default:` case of `@jira`'s
 operation switch) is replaced with a short, helpful line plus follow-up
@@ -395,7 +401,8 @@ a non-greeting, non-URL prompt.
 **KTD14.** Both the greeting response and the unclassifiable-prompt fallback
 deliver their example prompts *only* as follow-up chips, capped at 2-3 and
 phrased as literal next prompts a user could send — never duplicated as a
-bulleted list in the response's own markdown.
+bulleted list in the response's own markdown. The `@jira` help screen lists
+commands, not example prompts to click, so the rule still holds.
 
 ## Getting-Started walkthrough: Jira
 

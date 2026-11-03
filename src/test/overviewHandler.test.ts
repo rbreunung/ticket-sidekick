@@ -1,4 +1,6 @@
 import ExcelJS from 'exceljs';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const config: Record<string, unknown> = {};
@@ -67,7 +69,7 @@ beforeEach(() => {
 
 afterEach(() => { vi.useRealTimers(); });
 
-describe('@jira /overview', () => {
+describe('@jira /security-report', () => {
   it('streams the tables for the named project with a trusted Save as CSV link', async () => {
     seed([
       veracodeTicket('SEC-1', [makeFlaw('1')], { fixVersions: ['2026.11'], dueDate: '2026-11-01' }),
@@ -84,9 +86,9 @@ describe('@jira /overview', () => {
     expect(text).toContain('Save as CSV');
     const withLink = stream.markdown.mock.calls.map(c => c[0]).find(a => markdownText(a).includes('command:workbench.action.chat.open')) as { isTrusted?: { enabledCommands: string[] } };
     expect(withLink.isTrusted).toEqual({ enabledCommands: ['workbench.action.chat.open'] });
-    expect(decodeURIComponent(text)).toContain('@jira /overview SEC csv');
+    expect(decodeURIComponent(text)).toContain('@jira /security-report SEC csv');
     expect(text).toContain('Save as Excel');
-    expect(decodeURIComponent(text)).toContain('@jira /overview SEC xlsx');
+    expect(decodeURIComponent(text)).toContain('@jira /security-report SEC xlsx');
   });
 
   it('uses the default project when the prompt names none, and asks when there is none', async () => {
@@ -101,6 +103,16 @@ describe('@jira /overview', () => {
     const second = streamOf();
     await handleSecurityOverview(request(''), second as never, service);
     expect(textOf(second)).toContain('Please name a project');
+    expect(textOf(second)).toContain('@jira /security-report PROJ');
+  });
+
+  it('is registered as /security-report, and /overview is no longer a slash command', () => {
+    const pkg = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf-8')) as { contributes: { chatParticipants: Array<{ name: string; commands?: Array<{ name: string; description: string }> }> } };
+    const commands = pkg.contributes.chatParticipants.find(p => p.name === 'jira')?.commands ?? [];
+    const names = commands.map(c => c.name);
+    expect(names).toContain('security-report');
+    expect(names).not.toContain('overview');
+    expect(commands.find(c => c.name === 'security-report')?.description).toMatch(/Veracode and Waltz/);
   });
 
   it('says so when the project has no Veracode or Waltz tickets, and offers no CSV', async () => {
@@ -161,7 +173,7 @@ describe('@jira /overview', () => {
   });
 });
 
-describe('@jira /overview … csv', () => {
+describe('@jira /security-report … csv', () => {
   it('writes the CSV to the file the user picked and reports the path', async () => {
     seed([veracodeTicket('SEC-1', [makeFlaw('1')], { fixVersions: ['2026.11'] })]);
     const target = vscode.Uri.file('/workspace/out.csv');
@@ -176,7 +188,7 @@ describe('@jira /overview … csv', () => {
     const csv = new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes as Uint8Array);
     expect(csv.startsWith('﻿Source,Ticket,')).toBe(true);
     expect(csv).toContain('SEC-1');
-    expect(textOf(stream)).toContain('Saved the overview to `/workspace/out.csv`');
+    expect(textOf(stream)).toContain('Saved the security report to `/workspace/out.csv`');
   });
 
   it('uses the semicolon separator when that setting is chosen', async () => {
@@ -210,7 +222,7 @@ describe('@jira /overview … csv', () => {
     await handleSecurityOverview(request('SEC csv'), stream as never, service);
 
     expect(textOf(stream)).toContain('Could not save the file: EACCES');
-    expect(textOf(stream)).not.toContain('Saved the overview');
+    expect(textOf(stream)).not.toContain('Saved the security report');
   });
 
   it('does not open a save dialog for a project with nothing to save', async () => {
@@ -224,7 +236,7 @@ describe('@jira /overview … csv', () => {
   });
 });
 
-describe('@jira /overview … xlsx', () => {
+describe('@jira /security-report … xlsx', () => {
   beforeEach(() => { vi.mocked(vscode.workspace.fs.writeFile).mockResolvedValue(undefined); });
 
   async function savedWorkbook(): Promise<ExcelJS.Workbook> {
@@ -247,7 +259,7 @@ describe('@jira /overview … xlsx', () => {
     expect(vi.mocked(vscode.workspace.fs.writeFile).mock.calls[0][0]).toBe(target);
     const sheet = (await savedWorkbook()).getWorksheet('Security overview')!;
     expect(sheet.getRow(2).values).toContain('SEC-1');
-    expect(textOf(stream)).toContain('Saved the overview to `/workspace/out.xlsx`');
+    expect(textOf(stream)).toContain('Saved the security report to `/workspace/out.xlsx`');
   });
 
   it('ignores the CSV delimiter setting', async () => {
@@ -280,7 +292,7 @@ describe('@jira /overview … xlsx', () => {
     await handleSecurityOverview(request('SEC xlsx'), stream as never, service);
 
     expect(textOf(stream)).toContain('Could not save the file: EACCES');
-    expect(textOf(stream)).not.toContain('Saved the overview');
+    expect(textOf(stream)).not.toContain('Saved the security report');
   });
 
   it('does not open a save dialog for a project with nothing to save', async () => {

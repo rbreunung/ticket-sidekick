@@ -8,7 +8,7 @@ import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { tokenStatus } from '../utils/diagUtils';
 import { logDiag } from '../utils/diagLog';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type ListedFiltersSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, type JiraFollowupState, type JiraSessionKind, isConfirmation, isCancellation, isGreetingOrEmpty, computeJiraFollowups, buildFilterFailureNote, pickEmailOption, parseSkipInput, applyTicketToggle, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseListedFiltersSelection, parseBulkUpdateReview, applyBulkUpdateToggle, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewMessage } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type ListedFiltersSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, type JiraFollowupState, type JiraSessionKind, isConfirmation, isCancellation, isGreetingOrEmpty, buildJiraHelp, computeJiraFollowups, buildFilterFailureNote, pickEmailOption, parseSkipInput, applyTicketToggle, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseListedFiltersSelection, parseBulkUpdateReview, applyBulkUpdateToggle, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewMessage } from './sessionState';
 import {
   type ConstraintAmbiguitySession, type ConstraintMatchOption, type PendingSearchConstraints,
   type JqlConstraints, buildConstraintJql, parseConstraintMatchSelection, extractProjectKeyFromJql,
@@ -1722,20 +1722,19 @@ export function createJiraParticipant(
     // command override follows: a session in flight always wins), and only when no `/command`
     // was used (an explicit slash command is never ambiguous, so it skips this check entirely).
     if (!request.command && isGreetingOrEmpty(request.prompt)) {
-      stream.markdown(
-        '**@jira** manages Jira tickets in natural language — create, view, comment, update ' +
-        'fields, transition, and search. Tell me what you need, or try one of the suggestions ' +
-        'below.\n\n' + SAVED_FILTER_TIP,
-      );
+      // One full help screen for every greeting-shaped prompt. The version is read here, not at construction, so a
+      // context without `extension.packageJSON` (the bundle smoke test's stub) cannot break activation.
+      const version = (context.extension?.packageJSON as { version?: string } | undefined)?.version ?? 'unknown';
+      stream.markdown(buildJiraHelp(version));
       // R4/AE3: never fabricate a placeholder ticket key — the third chip only appears when the
       // current branch actually resolves to one.
       const greetingState: JiraFollowupState = { kind: 'greeting', branchKey: resolveTicketFromBranch() ?? undefined };
       return { metadata: { jiraFollowup: greetingState } };
     }
 
-    // `/overview` has its own project/csv parsing and never needs the LLM intent parser; like every other slash
+    // `/security-report` has its own project/csv parsing and never needs the LLM intent parser; like every other slash
     // command it runs only after a session in flight (above) has had its chance to claim the turn.
-    if (request.command === 'overview') {
+    if (request.command === 'security-report') {
       try {
         await handleSecurityOverview(request, stream, ticketService, config.baseUrl);
       } catch (err) {

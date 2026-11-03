@@ -57,6 +57,8 @@ Omit this setting for Data Center (default).
 
 ### Core commands
 
+Type `@jira help` (or just `@jira`) for the full list of commands and flows, grouped by purpose, with the extension version. Inside a Veracode, Waltz or email import, `help` lists the commands of the screen you are on.
+
 Open GitHub Copilot Chat and use `@jira`:
 
 | What you type | What happens |
@@ -104,7 +106,7 @@ Open GitHub Copilot Chat and use `@jira`:
 | `@jira /field` | `@jira /field PROJ-123 set priority to High` | Update a field |
 | `@jira /move` | `@jira /move PROJ-123 to In Progress` | Move a ticket to a new status |
 | `@jira /search` | `@jira /search my open bugs in PROJ` | Search with JQL or plain language |
-| `@jira /overview` | `@jira /overview PROJ` | List a project's open Veracode and Waltz tickets by release, with Due Dates, and save them as CSV or Excel |
+| `@jira /security-report` | `@jira /security-report PROJ` | List a project's open Veracode and Waltz tickets by release, with Due Dates, and save them as CSV or Excel |
 
 ### Reading tickets
 

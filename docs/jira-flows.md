@@ -123,9 +123,9 @@ Execution streams one line per ticket (subtasks first), then a summary. Failures
 
 `@jira upload` attaches one or more local files to a ticket — resolving the file from an explicit path, a chat-attached reference, or the active editor, falling back to a multi-select file picker, and the ticket from text, filename, or last-ticket context, falling back to an explicit ask — with a confirmation before any upload runs. The same underlying upload is exposed to Agent Mode as `jira_uploadAttachment`, taking a fully explicit ticket key and file path with no auto-resolution. See [`docs/plans/2026-09-20-1901-feat-upload-attachment-to-ticket-plan.md`](plans/2026-09-20-1901-feat-upload-attachment-to-ticket-plan.md) and [`src/participant/jira/uploadHandler.ts`](../src/participant/jira/uploadHandler.ts).
 
-## Security overview
+## Security report
 
-`@jira /overview [PROJECT] [csv|xlsx]` lists a project's unresolved Veracode and Waltz tickets by Fix Version; the same overview is available as the `export` reply of a report import. It keeps no session: the Save as CSV and Save as Excel links re-run the command. Detail in `docs/report-import.md` "Security overview (Veracode + Waltz)".
+`@jira /security-report [PROJECT] [csv|xlsx]` lists a project's unresolved Veracode and Waltz tickets by Fix Version; the same report is available as the `export` reply of a report import. It keeps no session: the Save as CSV and Save as Excel links re-run the command. Detail in `docs/report-import.md` "Security overview (Veracode + Waltz)".
 
 ## Jira sessions
 

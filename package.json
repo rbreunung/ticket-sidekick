@@ -71,7 +71,7 @@
             "sampleRequest": "my open bugs in PROJ"
           },
           {
-            "name": "overview",
+            "name": "security-report",
             "description": "List a project's open Veracode and Waltz tickets by release, with Due Dates; add csv or xlsx to save them as a file",
             "sampleRequest": "PROJ"
           }
@@ -725,7 +725,7 @@
               "tab"
             ],
             "default": "comma",
-            "description": "Column separator in the CSV that `@jira /overview` and the `export` reply of a report import save. Excel with a German (or other comma-decimal) locale opens a semicolon-separated file in columns, and a comma-separated one in a single column."
+            "description": "Column separator in the CSV that `@jira /security-report` and the `export` reply of a report import save. Excel with a German (or other comma-decimal) locale opens a semicolon-separated file in columns, and a comma-separated one in a single column."
           },
           "ticketSidekick.jira.sprintBoardId": {
             "type": "number",

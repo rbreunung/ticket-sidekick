@@ -181,7 +181,7 @@ export const IMPORT_COMMAND_ENTRIES: readonly ImportCommandEntry[] = [
   // --- Shared by the group screens and the overview ---
   {
     id: 'export', views: SCREEN_VIEWS, line: null, when: (caps, view) => caps.canExport === true && onOverviewOrOnly(caps, view),
-    help: () => `${code('export')} lists this report's items by Fix Version, compared with Jira; ${code('export csv')} and ${code('export xlsx')} also save a file.`,
+    help: () => `${code('export')} lists this report's items by Fix Version, compared with Jira (the same report as ${code('@jira /security-report')}); ${code('export csv')} and ${code('export xlsx')} also save a file.`,
     kinds: ['export'], samples: () => ['export', 'export csv', 'export xlsx'],
   },
   {

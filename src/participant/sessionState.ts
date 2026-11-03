@@ -14,6 +14,7 @@ export * from './session/constraints';
 export * from './session/importTypes';
 export * from './session/reviewPaging';
 export * from './session/importCommands';
+export * from './session/jiraCommands';
 export * from './session/importScreens';
 export * from './session/importReplies';
 export * from './session/importSearch';
