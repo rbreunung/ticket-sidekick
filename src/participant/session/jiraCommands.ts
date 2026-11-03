@@ -78,7 +78,7 @@ export const JIRA_COMMAND_ENTRIES: readonly JiraCommandEntry[] = [
   // --- Import ---
   {
     id: 'email', group: 'Import', covers: ['createFromEmail', 'addEmailComment'],
-    help: '`create from email` imports `.eml` files as tickets, and `add email to PROJ-42` adds one as a comment; signatures and boilerplate are stripped first, after a preview.',
+    help: '`create from email` imports `.eml` files as tickets, and `add email to PROJ-42` adds one as a comment; a preview first lets you strip signatures and boilerplate or keep the email unchanged.',
   },
   {
     id: 'veracode', group: 'Import', covers: ['importVeracode'],

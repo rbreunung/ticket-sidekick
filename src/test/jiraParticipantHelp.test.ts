@@ -87,7 +87,7 @@ describe('@jira help screen', () => {
   });
 
   it('does not show the help for an operation prompt that merely contains a greeting word', async () => {
-    const { text } = await turn('update HI-1 status', { packageJSON: { version: '9.9.9' } }).catch(() => ({ text: '' }));
+    const { text } = await turn('update HI-1 status');
 
     expect(text).not.toContain('— Help**');
   });
