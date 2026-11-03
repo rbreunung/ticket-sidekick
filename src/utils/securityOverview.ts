@@ -104,7 +104,7 @@ export type OverviewFormat = 'csv' | 'xlsx';
 
 const FORMAT_WORDS = new Map<string, OverviewFormat>([['csv', 'csv'], ['xlsx', 'xlsx'], ['excel', 'xlsx']]);
 
-/** What a `@jira /overview` prompt asks for: the project (an upper-case key, or a lone lower-case word) and the file format to save, if any (`csv`, or `xlsx` / `excel`; the first one named wins). */
+/** What a `@jira /security-report` prompt asks for: the project (an upper-case key, or a lone lower-case word) and the file format to save, if any (`csv`, or `xlsx` / `excel`; the first one named wins). */
 export function parseOverviewPrompt(prompt: string): { projectKey: string | null; format: OverviewFormat | null } {
   const tokens = prompt.split(/[\s,;]+/).filter(Boolean);
   const format = tokens.map(t => FORMAT_WORDS.get(t.toLowerCase())).find((f): f is OverviewFormat => f !== undefined) ?? null;

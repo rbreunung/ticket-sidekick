@@ -51,7 +51,7 @@ export async function saveOverviewFile(overview: Overview, fileLabel: string, fo
     return false;
   }
   logDiag(SCOPE, 'info', `Overview ${label} saved`, { format, file: name });
-  stream.markdown(`Saved the overview to \`${target.fsPath}\`.`);
+  stream.markdown(`Saved the security report to \`${target.fsPath}\`.`);
   return true;
 }
 
@@ -102,7 +102,7 @@ export async function gatherOverviewInput(
 }
 
 /**
- * `@jira /overview [PROJECT] [csv|xlsx]`: the project's unresolved Veracode and Waltz tickets by Fix Version. A prompt naming
+ * `@jira /security-report [PROJECT] [csv|xlsx]`: the project's unresolved Veracode and Waltz tickets by Fix Version. A prompt naming
  * `csv` or `xlsx` (the "Save as" links) builds the same overview again and saves it as a file, so nothing is stored between turns.
  */
 export async function handleSecurityOverview(
@@ -114,7 +114,7 @@ export async function handleSecurityOverview(
   const parsed = parseOverviewPrompt(request.prompt);
   const projectKey = await resolveProjectKey(parsed.projectKey, stream);
   if (!projectKey) {
-    stream.markdown('Please name a project, e.g. `@jira /overview PROJ`.');
+    stream.markdown('Please name a project, e.g. `@jira /security-report PROJ`.');
     return;
   }
   const input = await gatherOverviewInput(ticketService, projectKey, stream, baseUrl);
@@ -132,5 +132,5 @@ export async function handleSecurityOverview(
     await saveOverviewFile(overview, projectKey, parsed.format, stream);
     return;
   }
-  streamOverview(overview, stream, baseUrl, { csv: `/overview ${projectKey} csv`, xlsx: `/overview ${projectKey} xlsx` });
+  streamOverview(overview, stream, baseUrl, { csv: `/security-report ${projectKey} csv`, xlsx: `/security-report ${projectKey} xlsx` });
 }

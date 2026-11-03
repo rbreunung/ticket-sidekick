@@ -1733,9 +1733,9 @@ export function createJiraParticipant(
       return { metadata: { jiraFollowup: greetingState } };
     }
 
-    // `/overview` has its own project/csv parsing and never needs the LLM intent parser; like every other slash
+    // `/security-report` has its own project/csv parsing and never needs the LLM intent parser; like every other slash
     // command it runs only after a session in flight (above) has had its chance to claim the turn.
-    if (request.command === 'overview') {
+    if (request.command === 'security-report') {
       try {
         await handleSecurityOverview(request, stream, ticketService, config.baseUrl);
       } catch (err) {

@@ -162,7 +162,7 @@ describe('export reply of a report import', () => {
     expect(lines[0]).toContain('Report match');
     expect(lines).toHaveLength(3);
     expect(lines.slice(1).every(l => l.includes('PROJ-1') && l.includes(',report,'))).toBe(true);
-    expect(streamText(stream)).toContain('Saved the overview to `/out/overview.csv`');
+    expect(streamText(stream)).toContain('Saved the security report to `/out/overview.csv`');
   });
 
   it('saves the same rows as an Excel workbook on export xlsx', async () => {
@@ -182,7 +182,7 @@ describe('export reply of a report import', () => {
     const sheet = workbook.getWorksheet('Security overview')!;
     expect(sheet.rowCount).toBe(3);
     expect(sheet.getRow(1).values).toContain('Report match');
-    expect(streamText(stream)).toContain('Saved the overview to `/out/overview.xlsx`');
+    expect(streamText(stream)).toContain('Saved the security report to `/out/overview.xlsx`');
   });
 
   it('answers export on a group screen of a multi-group import with where it works', async () => {
