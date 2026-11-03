@@ -585,7 +585,7 @@ describe('batch email creation (U3/U4, via the shared reportImportHandler flow)'
     expect(summaryLine).toContain('Email One');
   });
 
-  it('AE1 (overview hub): an email batch opens straight on the New screen with Done, "ok" creates, and "done" ends it', async () => {
+  it('AE1 (overview hub): an email batch opens straight on the New screen with Done, and "ok" creates and finishes it by itself', async () => {
     const templateSession = makeTemplateSession();
     const ws = makeMockWs();
     const first = mockStream();
@@ -598,14 +598,57 @@ describe('batch email creation (U3/U4, via the shared reportImportHandler flow)'
 
     const reviewSession = ws.store['jira.session.emailReview'];
     const second = mockStream();
-    await handleEmailReviewReply('ok', reviewSession as never, ticketService, second as never, ws as never);
+    const result = await handleEmailReviewReply('ok', reviewSession as never, ticketService, second as never, ws as never);
     expect(client.createIssueCalls).toHaveLength(2);
-    expect(markdownText((second.markdown as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0])).toContain('No new emails left to create');
-
-    const third = mockStream();
-    await handleEmailReviewReply('done', ws.store['jira.session.emailReview'] as never, ticketService, third as never, ws as never);
+    // Nothing is left to act on, so no empty screen follows: the summary does, and the session is gone without a "done".
+    const secondText = (second.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => markdownText(c[0])).join('');
+    expect(secondText).not.toContain('No new emails left to create');
+    expect(markdownText((second.markdown as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0])).toContain('Import finished — **2** created');
     expect(ws.store['jira.session.emailReview']).toBeUndefined();
-    expect(markdownText((third.markdown as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0])).toContain('**2** created');
+    expect(result).toBeUndefined();
+  });
+
+  it('keeps the review open after a failed creation, and finishes when the retry succeeds (Covers AE2, F2)', async () => {
+    let calls = 0;
+    const realCreate = client.createIssue.bind(client);
+    client.createIssue = async (...args: Parameters<typeof client.createIssue>) => {
+      calls++;
+      if (calls === 1) throw new Error('Jira is down');
+      return realCreate(...args);
+    };
+    ticketService = new TicketService(client);
+    const ws = makeMockWs();
+    await handleEmailTemplateSelection('1', makeTemplateSession(), client, ticketService, mockStream() as never, ws as never);
+
+    const first = mockStream();
+    await handleEmailReviewReply('ok', ws.store['jira.session.emailReview'] as never, ticketService, first as never, ws as never);
+    const firstText = (first.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => markdownText(c[0])).join('');
+    expect(firstText).not.toContain('Import finished');
+    expect(ws.store['jira.session.emailReview']).toBeDefined();
+
+    const retry = mockStream();
+    await handleEmailReviewReply('ok', ws.store['jira.session.emailReview'] as never, ticketService, retry as never, ws as never);
+    expect(markdownText((retry.markdown as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0])).toContain('Import finished — **2** created');
+    expect(ws.store['jira.session.emailReview']).toBeUndefined();
+  });
+
+  it('keeps the review open while a row the user excluded is still listed (Covers AE3)', async () => {
+    const ws = makeMockWs();
+    await handleEmailTemplateSelection('1', makeTemplateSession(), client, ticketService, mockStream() as never, ws as never);
+    await handleEmailReviewReply('2', ws.store['jira.session.emailReview'] as never, ticketService, mockStream() as never, ws as never); // exclude row 2
+
+    const stream = mockStream();
+    await handleEmailReviewReply('ok', ws.store['jira.session.emailReview'] as never, ticketService, stream as never, ws as never);
+
+    expect(client.createIssueCalls).toHaveLength(1);
+    expect(ws.store['jira.session.emailReview']).toBeDefined();
+    const text = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => markdownText(c[0])).join('');
+    expect(text).not.toContain('Import finished');
+
+    const done = mockStream();
+    await handleEmailReviewReply('done', ws.store['jira.session.emailReview'] as never, ticketService, done as never, ws as never);
+    expect(ws.store['jira.session.emailReview']).toBeUndefined();
+    expect(markdownText((done.markdown as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0])).toContain('**1** created');
   });
 
   it('excluding a row on the review screen keeps it out of the created batch (Covers AE2)', async () => {

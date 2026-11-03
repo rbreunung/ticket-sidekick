@@ -29,7 +29,7 @@ vi.mock('../services/WorkflowService', async (importOriginal) => ({
 }));
 
 import * as vscode from 'vscode';
-import { buildImportTemplateSession, streamImportTemplateSelection, handleImportTemplateSelection, continueAfterImportIssueType } from '../participant/jira/reportImportHandler';
+import { buildImportTemplateSession, streamImportTemplateSelection, handleImportTemplateSelection, continueAfterImportIssueType, handleImportReviewReply } from '../participant/jira/reportImportHandler';
 import { handleVeracodeAwaitIssueType } from '../participant/jira/veracodeHandler';
 import { handleWaltzAwaitIssueType } from '../participant/jira/waltzHandler';
 import { type ReviewSession, type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession, type AwaitIssueTypeResume } from '../participant/sessionState';
@@ -190,6 +190,62 @@ describe('continueAfterImportIssueType (R6/KTD4 resume continuation)', () => {
     } finally {
       (vscode.workspace as { workspaceFolders?: unknown }).workspaceFolders = undefined;
     }
+  });
+});
+
+describe('create tickets ends an import with nothing left to act on (auto-finish)', () => {
+  let client: MockJiraClient;
+  let ticketService: TicketService;
+
+  beforeEach(() => {
+    client = new MockJiraClient();
+    ticketService = new TicketService(client);
+  });
+
+  async function openReview(desc = descriptor) {
+    const ws = makeMockWs();
+    await continueAfterImportIssueType('Spike', null, makeSession({ availableIssueTypes: [''] }), client, ticketService, mockStream() as never, ws as never, desc);
+    return { ws, review: ws.store[desc.sessionKeys.review] as ReviewSession<TestRow> };
+  }
+
+  it('finishes a single-group import by itself and clears the session (AE1)', async () => {
+    const { ws, review } = await openReview();
+    const stream = mockStream();
+
+    const result = await handleImportReviewReply('create tickets', review, ticketService, stream as never, ws as never, descriptor);
+
+    expect(result).toBeUndefined();
+    expect(ws.store[descriptor.sessionKeys.review]).toBeUndefined();
+    expect(markdownText(stream.markdown.mock.calls.at(-1)?.[0])).toContain('Import finished — **1** created');
+  });
+
+  it('keeps the empty New screen with its Done link when the importer offers export (AE4)', async () => {
+    const withExport = { ...descriptor, overviewExport: {} } as unknown as typeof descriptor;
+    const { ws, review } = await openReview(withExport);
+    const stream = mockStream();
+
+    await handleImportReviewReply('create tickets', review, ticketService, stream as never, ws as never, withExport);
+
+    expect(ws.store[withExport.sessionKeys.review]).toBeDefined();
+    const text = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('');
+    expect(text).toContain('No new items left to create');
+    expect(text).not.toContain('Import finished');
+  });
+
+  it('returns to the overview, not the summary, when the import has other groups (AE5)', async () => {
+    const { ws, review } = await openReview();
+    const multi: ReviewSession<TestRow> = {
+      ...review,
+      allRows: [...review.allRows, { ...review.allRows[0], id: 'T1', existingTicketKey: 'PROJ-1', included: false }],
+      groups: ['new', 'ticketed'], singleGroup: false, view: 'new',
+    };
+    const stream = mockStream();
+
+    await handleImportReviewReply('create tickets', multi, ticketService, stream as never, ws as never, descriptor);
+
+    expect(ws.store[descriptor.sessionKeys.review]).toBeDefined();
+    const text = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('');
+    expect(text).not.toContain('Import finished');
   });
 });
 

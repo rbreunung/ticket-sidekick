@@ -21,7 +21,7 @@ import type { IJiraClient } from '../../jira/IJiraClient';
 import { TemplateService } from '../../templates/TemplateService';
 import { FieldResolver } from '../../templates/FieldResolver';
 import { BATCH_LIMIT, DEFAULT_DEDUP_CHUNK_SIZE, MAX_REPORT_BYTES, buildDedupJql, buildReviewRows, applyDroppedMembers, applyMissingDueDate, alignRewriteDefaults, readTargetDescriptions, fetchAllPages, findAlreadyTicketed, findStaleTickets, templateLabelsOf, buildTicketInfo, type DedupMap, type JqlIssueLike } from '../../utils/reportImport';
-import { CURRENT_SESSION_SCHEMA_VERSION, NO_ISSUE_TYPE, SESSION_EXPIRED_MESSAGE, applyBulkNewRowSet, buildSearchFollowUp, buildSearchResults, findTicketsBySummary, ticketedTargetKey, applyReviewSessionToggle, applyStaleTicketToggle, applyTicketedActionChange, buildAllHiddenMessage, buildChatCommandLink, buildImportDoneSummary, buildReviewPage, clampStalePage, clampTicketedPage, pageBoundaryAnswer, staleTotalPages, ticketedTotalPages, buildImportHelp, buildRefusedReply, computeImportResultGroups, ensureImportViewState, importCommandCaps, IMPORT_COMMANDS, formatIssueTypeOptionLabel, initImportViewState, isCancellation, isSessionExpired, isTicketedRowFinished, mergeNewRows, neutralizeMarkdownLinks, parseImportReviewReply, pickEmailOption, resolveTemplateIssueType, safeMarkdownText, ticketedRowActions, toAcceptedHidden, unmergeNewRow, type ImportReplyContext, type ImportTemplateSelectionSession, type ReviewRowBase, type ReviewSession, type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession } from '../sessionState';
+import { CURRENT_SESSION_SCHEMA_VERSION, NO_ISSUE_TYPE, SESSION_EXPIRED_MESSAGE, applyBulkNewRowSet, buildSearchFollowUp, buildSearchResults, findTicketsBySummary, ticketedTargetKey, applyReviewSessionToggle, applyStaleTicketToggle, applyTicketedActionChange, buildAllHiddenMessage, buildChatCommandLink, buildImportDoneSummary, buildReviewPage, clampStalePage, clampTicketedPage, pageBoundaryAnswer, staleTotalPages, ticketedTotalPages, buildImportHelp, buildRefusedReply, computeImportResultGroups, ensureImportViewState, importCommandCaps, IMPORT_COMMANDS, formatIssueTypeOptionLabel, initImportViewState, isCancellation, isNewGroupDrained, isSessionExpired, isTicketedRowFinished, mergeNewRows, neutralizeMarkdownLinks, parseImportReviewReply, pickEmailOption, resolveTemplateIssueType, safeMarkdownText, ticketedRowActions, toAcceptedHidden, unmergeNewRow, type ImportReplyContext, type ImportTemplateSelectionSession, type ReviewRowBase, type ReviewSession, type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession } from '../sessionState';
 import { resolveIssueTypeOrPrompt, resolveProjectKey, sessionWasSuperseded } from './ticketContext';
 import { buildStaleTicketGroups } from './cleanupHandler';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
@@ -30,7 +30,7 @@ import { acceptComponents, acceptRows, showAcceptedList, unacceptEntry } from '.
 import { exportImportOverview } from './importExport';
 import { addToTicket, showAddPrompt } from './importAddToTicket';
 import { createNewRows } from './importCreate';
-import { IMPORT_SESSION_KINDS, afterGroupAction, streamImportReview } from './importReviewScreen';
+import { IMPORT_SESSION_KINDS, afterGroupAction, screenOptions, streamImportReview } from './importReviewScreen';
 import { handleMergeRunReply, showMergePrompt, startMerge, type MergeTurn } from './importMerge';
 import { closeStaleTickets } from './importStaleClose';
 import { TICKETED_RUNS, executeTicketedActions } from './importTicketedActions';
@@ -708,6 +708,19 @@ async function syncAfterListChange<TItem, TRow extends ReviewRowBase>(
   if (!outcome.ok) session.outOfDate = true;
 }
 
+/** Ends an import: clears the stored review, logs it and streams the summary. Used by `done` and by the auto-finish after `create`. */
+async function finishImport<TItem, TRow extends ReviewRowBase>(
+  session: ReviewSession<TRow>,
+  ws: vscode.Memento,
+  stream: vscode.ChatResponseStream,
+  descriptor: ReportImportDescriptor<TItem, TRow>,
+): Promise<void> {
+  await ws.update(descriptor.sessionKeys.review, undefined);
+  const outcomes = session.outcomes!;
+  logDiag(descriptor.scope, 'info', `${descriptor.importLabel} import finished`, { ...outcomes });
+  stream.markdown(buildImportDoneSummary(outcomes, descriptor.changeTracking?.actionLabels));
+}
+
 /**
  * Overview-hub dispatch (KTD2): a reply is parsed against the vocabulary of the screen currently
  * shown — and only that screen (R6) — then applied. Toggles and page moves re-render the same
@@ -785,13 +798,8 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
     case 'back':
       session.view = 'overview';
       return rerender();
-    case 'done': {
-      await ws.update(descriptor.sessionKeys.review, undefined);
-      const outcomes = session.outcomes!;
-      logDiag(descriptor.scope, 'info', `${descriptor.importLabel} import finished`, { ...outcomes });
-      stream.markdown(buildImportDoneSummary(outcomes, descriptor.changeTracking?.actionLabels));
-      return;
-    }
+    case 'done':
+      return finishImport(session, ws, stream, descriptor);
     case 'pageNav': {
       const bounds = view === 'stale'
         ? { page: clampStalePage(session.stalePage ?? 0, session.staleTickets), totalPages: staleTotalPages(session.staleTickets) }
@@ -916,6 +924,8 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
       return rerender();
     case 'create':
       Object.assign(session, afterGroupAction(await createNewRows(session, ticketService, stream, descriptor, baseUrl)));
+      // Nothing left to act on (no New row, no other command to offer): end the import now instead of showing a Done-only screen.
+      if (isNewGroupDrained(session, screenOptions(descriptor, baseUrl))) return finishImport(session, ws, stream, descriptor);
       return rerender();
     case 'setAction':
     case 'setAllActions': {
