@@ -15,7 +15,7 @@ execution: code
 - **Means:** rename `/overview` to `/security-report` and replace the two-sentence greeting with one full grouped help screen built from a single catalog (KTD1).
 - **Authority:** Product Contract requirements win on behavior; KTDs win on mechanism; units override neither.
 - **Execution profile:** one pull request. Its title carries the breaking removal of `/overview`.
-- **Stop conditions:** stop and ask if renaming the slash command breaks the `bundleSmoke` activation test in a way that is not a plain name change, or if `help` typed inside a non-import session turns out to be swallowed and fixing it looks like more than a one-line guard (it is out of scope, see Deferred to Follow-Up Work).
+- **Stop conditions:** stop and ask if renaming the slash command breaks the `bundleSmoke` activation test in a way that is not a plain name change.
 - **Finished and shipped by:** `ce-work` opens the PR; the user reviews and merges.
 
 ---
@@ -64,6 +64,7 @@ The command that exports open Veracode and Waltz tickets straight from Jira was 
 
 - A `/overview` alias: KD1.
 - Natural-language routing of "export my veracode tickets" to the security report: not requested, and the slash command plus the help now surface it. Revisit if users still miss it.
+- Extra help trigger phrases such as "commands" and "list commands": nobody asked for them, "help" and "what can you do" already reach the screen, and `isGreetingOrEmpty` is shared with `@bitbucket` (`BitbucketParticipant.ts`), so a new phrase would change that participant too. Revisit if users type those words and get nothing.
 - Renaming internal files and symbols (`overviewHandler.ts`, `securityOverview*.ts`, `handleSecurityOverview`): no user sees them, and renaming would churn every test import. Revisit if the mismatch confuses contributors.
 - Editing `CHANGELOG.md`: the release workflow generates it from the PR title.
 
@@ -77,10 +78,10 @@ The command that exports open Veracode and Waltz tickets straight from Jira was 
 
 ### Key Technical Decisions
 
-- KTD1. **A sibling catalog module, `src/participant/session/jiraCommands.ts`, not new entries in `IMPORT_COMMAND_ENTRIES`.** The import catalog's entries take `ImportCommandCaps` and screen views; the top level has neither. The new module reuses the entry shape (`id`, `group`, `help`, `kinds`, `samples`, `when`), `code()`/`cmdLink` helpers from `primitives.ts`, and the `**Help — …**` title and closing sentence, so the two read alike. It is pure, `vscode`-free, and re-exported through `sessionState.ts`. Governs R3-R5.
-- KTD2. **The version is passed in, not read inside the builder.** `createJiraParticipant(context, …)` already holds the `ExtensionContext`; it passes `context.extension.packageJSON.version` to the pure `buildJiraHelp(version)`. This keeps the module loadable by Vitest. Governs R3.
+- KTD1. **A sibling catalog module, `src/participant/session/jiraCommands.ts`, not new entries in `IMPORT_COMMAND_ENTRIES`.** The import catalog's entries take `ImportCommandCaps` and screen views; the top level has neither. The new module keeps only the entry fields the top level uses (`id`, `group`, `help`, and the operations or slash commands it covers), reuses the `code()` helper from `primitives.ts`, and uses the `**Help — …**` title and closing sentence, so the two read alike. It has no `samples` or `when`: nothing at the top level gates an entry or renders a sample. It is pure, `vscode`-free, and re-exported through `sessionState.ts`. Governs R3-R5.
+- KTD2. **The version is passed in, not read inside the builder, and is read when the help is shown.** `createJiraParticipant(context, …)` already holds the `ExtensionContext`; the greeting/help branch reads `context.extension?.packageJSON?.version ?? 'unknown'` and passes it to the pure `buildJiraHelp(version)`. Reading at that point, not at construction, keeps activation safe: the `bundleSmoke` context stub has no `packageJSON`. The pure builder stays loadable by Vitest. Governs R3.
 - KTD3. **The guard test reads sources as text, like `importCommandsGuard.test.ts`.** `src/test` is outside the compile project, so the test parses the `Operation` union in `llmHelpers.ts` and the `package.json` commands and compares them to a record mapping each to a catalog entry id, or to an explicit internal-only marker. A new operation or slash command then fails the test until it is advertised. Governs R4.
-- KTD4. **The help is the greeting.** `isGreetingOrEmpty` still routes to the one branch in `JiraParticipant.ts`; that branch streams `buildJiraHelp(version)` instead of the blurb, and still returns the `greeting` follow-up state so the chips remain. `GREETING_OR_HELP_PHRASES` gains "commands" and "list commands" (exact-set membership only, per `docs/solutions/logic-errors/confirm-cancel-word-list-broadening-swallows-domain-name-collisions.md`). Governs R3, R6.
+- KTD4. **The help is the greeting.** `isGreetingOrEmpty` still routes to the one branch in `JiraParticipant.ts`; that branch streams `buildJiraHelp(version)` instead of the blurb, and still returns the `greeting` follow-up state so the chips remain. `GREETING_OR_HELP_PHRASES` is not changed (see the extra-phrases non-goal). Governs R3, R6.
 - KTD5. **Bullet phrasings come from the intent parser's own triggers.** The bulk-work bullets (`cleanup`, workflow discovery, spell check, templates, upload) use the trigger wording in `INTENT_PROMPT` so the text matches what actually works. Governs R4.
 
 ### High-Level Technical Design
@@ -105,18 +106,18 @@ flowchart TB
 - **Goal:** `/overview` becomes `/security-report` everywhere a user or a re-run link sees it.
 - **Requirements:** R1, R2.
 - **Dependencies:** none.
-- **Files:** `package.json` (the `jira` command entry and the `overviewCsvDelimiter` description), `src/participant/JiraParticipant.ts` (the `request.command` route and its comment), `src/participant/jira/overviewHandler.ts` (the "Please name a project" reply, the csv/xlsx re-run commands, doc comment), `src/utils/securityOverview.ts` (comment), `src/test/overviewHandler.test.ts`.
+- **Files:** `package.json` (the `jira` command entry and the `overviewCsvDelimiter` description), `src/participant/JiraParticipant.ts` (the `request.command` route and its comment), `src/participant/jira/overviewHandler.ts` (the "Please name a project" reply, the csv/xlsx re-run commands, the "Saved the overview to …" reply, doc comment), `src/utils/securityOverview.ts` (comment), `src/test/overviewHandler.test.ts`, `src/test/reportImportExport.test.ts` (asserts the saved-file reply).
 - **Approach:**
   - Rename the command `name` and update its `description` so it names Veracode and Waltz first.
   - Replace `command === 'overview'` and every `/overview …` string the handler emits, including the two save links, so the links re-run `/security-report`.
-  - Say "security report" in user-facing replies; leave identifiers and filenames alone.
+  - Say "security report" in user-facing replies, including "Saved the security report to …", which `importExport.ts` reuses through `saveOverviewFile`; leave identifiers and filenames alone.
 - **Patterns to follow:** the existing slash-command registration in `package.json`; `buildChatCommandLink()` for the save links.
 - **Test scenarios:**
   - `@jira /security-report SEC` streams the same tables as before and its Save as CSV / Save as Excel links decode to `@jira /security-report SEC csv` and `… xlsx`.
   - With no project and no default project, the reply tells the user to run `@jira /security-report PROJ`.
   - `request.command === 'overview'` is no longer routed (the handler falls through to the intent parser).
-  - The existing csv/xlsx save and delimiter scenarios pass under the new command name.
-- **Verification:** `npm test` passes; a repo-wide search for `/overview` finds only the unrelated Bitbucket PR URL suffix.
+  - The existing csv/xlsx save and delimiter scenarios pass under the new command name, and the saved-file reply reads "Saved the security report to …" for both the slash command and an import's `export csv`.
+- **Verification:** `npm test` passes; a search for `@jira /overview` and for the handler's `/overview <PROJECT>` command strings finds nothing in `src/`, `package.json` and the user-facing docs (earlier plan files excluded).
 
 ### U2. The `@jira` help catalog and its guard test
 
@@ -125,7 +126,7 @@ flowchart TB
 - **Dependencies:** none (U1 supplies the final command name; the catalog can be written against it).
 - **Files:** `src/participant/session/jiraCommands.ts` (new), `src/participant/sessionState.ts` (re-export), `src/test/jiraCommands.test.ts` (new), `src/test/jiraCommandsGuard.test.ts` (new).
 - **Approach:**
-  - Entries grouped as Tickets, Bulk work and setup, Import, Security report; each entry has `id`, `group`, one help sentence with code-span commands, the operations it covers (plain strings), and sample prompts.
+  - Entries grouped as Tickets, Bulk work and setup, Import, Security report; each entry has `id`, `group`, one help sentence with code-span commands, and the operations or slash commands it covers (plain strings).
   - `buildJiraHelp(version)` returns the title line with name and version, the groups with bullets, and the closing sentence. Phrasings follow KTD5.
   - The Import group notes that `help` inside an import lists that screen's commands, and that `export` there gives the same report as `/security-report` (R7). The Security report group names the csv/xlsx forms.
   - The guard maps every slash command in `package.json` and every `Operation` to an entry id or an explicit internal-only marker (KTD3).
@@ -135,7 +136,6 @@ flowchart TB
   - Every group heading appears, in order, and every bullet is a flat code-span bullet with no markdown link.
   - The Security report bullets mention `/security-report`, `csv` and `xlsx`; the Import group mentions `export`.
   - Guard: removing an entry for an existing slash command or operation makes the guard fail with that name; an operation marked internal-only does not need a bullet.
-  - Guard: a sample prompt for an operation entry is accepted by `isGreetingOrEmpty` only for the help phrases, never for an operation prompt like `update HI-1 status`.
 - **Verification:** both new test files pass; `npm run compile` is clean.
 
 ### U3. Replace the greeting with the help screen
@@ -143,19 +143,21 @@ flowchart TB
 - **Goal:** the greeting branch streams the catalog help with the version.
 - **Requirements:** R3, R6, KD3.
 - **Dependencies:** U1, U2.
-- **Files:** `src/participant/JiraParticipant.ts` (the greeting branch and `createJiraParticipant`), `src/participant/session/followups.ts` (`GREETING_OR_HELP_PHRASES`), `src/test/sessionState.test.ts`, `src/test/JiraParticipant.test.ts`.
+- **Files:** `src/participant/JiraParticipant.ts` (the greeting branch and `createJiraParticipant`), `src/test/jiraParticipantGreeting.test.ts` (new), `src/test/bundleSmoke.test.ts` (run unchanged; it must still pass).
 - **Approach:**
-  - Read the version from `context.extension.packageJSON.version` (KTD2) and stream `buildJiraHelp(version)` through `trustedChatMarkdown` if it contains any command links, plain markdown otherwise.
-  - Keep returning the `greeting` follow-up state so the chips stay (KTD4).
-  - Add "commands" and "list commands" to the exact-match set.
+  - Read the version inside the greeting/help branch (KTD2) and stream `buildJiraHelp(version)` as plain markdown; use `trustedChatMarkdown` only if the help ever contains command links.
+  - Keep returning the `greeting` follow-up state so the chips stay (KTD4). Leave `GREETING_OR_HELP_PHRASES` alone.
+  - No test file drives `createJiraParticipant` today, so add a handler-level test with a mocked `vscode`, modeled on `src/test/bitbucketReviewFlow.test.ts`. If that harness proves much larger than the branch it tests, extract the branch into a small pure function and test that instead.
+  - R6 is existing behavior (an in-flight session claims the turn before the greeting check), so the existing import help tests (`reportImportHelp.test.ts`) cover it; the new test adds one case only if the harness makes it cheap.
   - While testing, observe whether `help` typed with a creation or cleanup session open is swallowed as an answer; record the finding for the deferred follow-up, do not fix it here.
-- **Patterns to follow:** the existing greeting branch; `trustedChatMarkdown` usage in `reportImportHandler.ts` for the import help.
+- **Execution note:** run `bundleSmoke.test.ts` right after wiring the version read; it is the activation check.
+- **Patterns to follow:** the existing greeting branch; `bitbucketReviewFlow.test.ts` for the mocked-`vscode` handler harness.
 - **Test scenarios:**
   - An empty prompt, "hi", "help" and "what can you do" each stream the help with the version and return the `greeting` follow-up metadata.
-  - "commands" and "list commands" show the help; "update HI-1 status" and "show commands for PROJ-1" do not.
-  - With an import review session in flight, `help` still prints that screen's help, not the top-level one (R6).
+  - When the context has no `packageJSON`, the help still streams and its title shows version `unknown` instead of throwing.
+  - A prompt like "update HI-1 status" does not show the help.
   - The old blurb text ("manages Jira tickets in natural language") no longer appears.
-- **Verification:** `npm test` passes; the suggestion chips still render for a greeting.
+- **Verification:** `npm test` passes, including `bundleSmoke.test.ts`; the suggestion chips still render for a greeting.
 
 ### U4. Cross-pointers in the import screens' help
 
