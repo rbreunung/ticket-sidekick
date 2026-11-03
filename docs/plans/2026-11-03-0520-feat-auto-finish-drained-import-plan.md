@@ -13,12 +13,17 @@ execution: code
 ## Goal Capsule
 
 - **Objective:** A user who has created every ticket of an import does not have to type `done` (or click Done) to close it; the import ends on its own with its summary. A review that still has something to act on stays open exactly as today.
+- **Means:** One predicate decides "drained" and the `create` branch reuses the `done` finish (KTD1, KTD2).
 - **Product authority:** The requesting user (rbreunung).
+- **Execution profile:** One pull request; the predicate, the handler change and the tests ship together.
+- **Finishes:** `ce-work` implements on `claude/auto-finish-drained-import-plan`; opening a PR is a separate request.
 - **Open blockers:** None.
 
 ---
 
 ## Product Contract
+
+**Product Contract preservation:** restructured, no scope change: the single Outstanding Question (how R5 is decided) is resolved in KTD1 and removed from this section; R1–R8, F1–F2 and AE1–AE5 are unchanged.
 
 ### Summary
 
@@ -82,8 +87,102 @@ For an email batch where every ticket was created, the next screen is a dead end
 
 Update the "Single group" bullet in `docs/report-import.md` and any user-manual text that tells email users to reply `done` after creating tickets.
 
-### Outstanding Questions
+---
 
-#### Deferred to Planning
+## Planning Contract
 
-- Whether R5 is best decided from the importer descriptor's capabilities or by asking the screen builder what it would offer.
+### Key Technical Decisions
+
+- KTD1. **"Drained" is a pure predicate over the session and the screen options, not a rendered-screen probe.** `isNewGroupDrained(session, opts)` in `src/participant/session/importScreens.ts` is true when the session is single-group on the New view, `allRows` holds no row with `existingTicketKey === null`, and none of `opts.canExport`, `opts.canAccept`, `opts.canMergeTickets` is set. Governs R1, R4, R5, R6. Why: a failed row and an excluded row both stay in `allRows` as New rows (`createNewRows` removes only created ones), so "no New row left" already covers R4 without reading outcome counters; the three capability flags are exactly what gives the empty New screen a command besides Done (export link, `accept` list and unaccept, `reload report`). Rejected: asking `buildNewGroupScreen` what it would show, which needs a render and couples the decision to markdown. In practice only email satisfies the capability test today, since Veracode and Waltz both declare `overviewExport`.
+- KTD2. **Finishing is one shared helper, not a copy of the `done` case.** `finishImport(session, ws, stream, descriptor)` in `src/participant/jira/reportImportHandler.ts` clears `descriptor.sessionKeys.review`, logs `import finished` and streams `buildImportDoneSummary`. The `done` case and the `create` case both call it. Governs R2, R7. The auto-finished turn returns no `jiraSession` metadata, as `done` does, so the session ends for the chat as well.
+- KTD3. **The check runs after `createNewRows` and before `rerender()`** in the `create` case, so the per-ticket result lines and the "N on this page — X created, Y failed" line stream first and the summary follows (R3). No re-render of the empty screen happens on the finishing turn.
+- KTD4. **`screenOptions` becomes exported from `src/participant/jira/importReviewScreen.ts`** so the handler builds the capability flags in one place instead of re-deriving them from the descriptor.
+
+### Assumptions
+
+- The email "add as a comment" flow (`EmailContentSession`) and the cleanup step never reach the `create` case of `handleImportReviewReply`, so R8 needs no code, only a test that the entry points still behave. Verify while implementing U2.
+- A `create` turn with nothing selected ("Nothing selected — no tickets were created.") leaves New rows in `allRows`, so the predicate is false and the review stays open.
+
+### Scope and Sequencing
+
+U1 first (pure, testable alone), U2 wires it in and updates the existing email test, U3 updates documentation. One pull request.
+
+---
+
+## Implementation Units
+
+### U1. Drained-import predicate
+
+- **Goal:** Provide `isNewGroupDrained` as the single source of the "nothing left to act on" decision.
+- **Requirements:** R1, R4, R5, R6; AE3, AE4, AE5.
+- **Dependencies:** None.
+- **Files:** `src/participant/session/importScreens.ts`; test in `src/test/sessionImportReview.test.ts`.
+- **Approach:**
+  - Add the function next to `buildNewGroupScreen`; it reads `singleGroup`, `view`, `allRows` and the three capability flags (KTD1).
+  - It is re-exported through the `sessionState.ts` barrel like its neighbours; no new module.
+- **Patterns to follow:** The existing builders in `importScreens.ts` take `ReviewSession` plus `ImportScreenOptions` and call `ensureImportViewState` first.
+- **Test scenarios:**
+  - Single-group New session, every row created (no New row in `allRows`), no capabilities: true.
+  - Same session with one failed row still in `allRows`: false.
+  - Same session with one excluded row still in `allRows`: false.
+  - Same drained session with `canExport` set: false; likewise `canAccept` alone and `canMergeTickets` alone.
+  - Multi-group session (`singleGroup` false) with no New rows: false.
+  - Single-group session whose only group is Already ticketed (view `ticketed`): false.
+- **Verification:** The predicate's table of cases passes and `npm run compile` is clean.
+
+### U2. Auto-finish after `create`
+
+- **Goal:** End a drained import in the same turn as the last successful `create tickets`.
+- **Requirements:** R1, R2, R3, R4, R6, R7; F1, F2; AE1, AE2, AE3, AE5.
+- **Dependencies:** U1.
+- **Files:** `src/participant/jira/reportImportHandler.ts`; `src/participant/jira/importReviewScreen.ts` (export `screenOptions`); tests in `src/test/emailHandler.test.ts` and `src/test/reportImportHandler.test.ts`.
+- **Approach:**
+  - Extract `finishImport` from the `done` case and call it there (KTD2).
+  - In the `create` case, after `Object.assign(session, afterGroupAction(await createNewRows(...)))`, return `finishImport(...)` when `isNewGroupDrained(session, screenOptions(descriptor, baseUrl))`; otherwise `rerender()` as today (KTD3).
+  - The finishing turn returns no review metadata.
+- **Execution note:** Start by changing the existing email test (below) to the new expectation and watch it fail.
+- **Patterns to follow:** The `done` case and `buildImportDoneSummary`; `createNewRows` already adds the created and failed counts to `outcomes`, so the summary needs no extra bookkeeping.
+- **Test scenarios:**
+  - Rewrite the AE1 test in `src/test/emailHandler.test.ts` ("an email batch opens straight on the New screen with Done, "ok" creates, and "done" ends it"): after `ok` creates both tickets, the last streamed text contains `**2** created` and not `No new emails left to create`, and `ws.store['jira.session.emailReview']` is undefined without a `done` reply. Covers AE1.
+  - Email batch where the first creation throws (the existing failure test with `Jira is down`): the review stays open, the failed row is listed and `ws.store` still holds the session. Covers AE2.
+  - Email batch with one row excluded: `ok` creates the others and the session stays open with the excluded row. Covers AE3.
+  - A retry after a failure (`ok` again, creation now succeeds) finishes the import, and the summary adds the counts of both turns (one failed then one created). Covers F2.
+  - Import with a New and a Stale group (reportImportHandler fixtures): after the New rows are created the overview returns. Covers AE5.
+  - Waltz-shaped descriptor (export capability present) with only New rows: after creation the empty New screen renders with Done. Covers AE4.
+  - `done` typed on a still-open review ends it with the same summary text as before. Covers R7.
+- **Verification:** The email, handler and review tests pass; no test that types `done` after a fully successful email batch remains.
+
+### U3. Documentation
+
+- **Goal:** Keep the developer and user docs true to the new behaviour.
+- **Requirements:** R1–R5 (behaviour changes users can see).
+- **Dependencies:** U2.
+- **Files:** `docs/report-import.md` ("Single group" bullet, line 231); `docs/manual/report-imports.md` (line 146); `CLAUDE.md` row for `reportImportHandler.ts` gets a short clause only if the final shape warrants it.
+- **Approach:**
+  - `docs/report-import.md`: replace "re-shows itself after an action" with the auto-finish rule and the cases that keep the screen open, citing `isNewGroupDrained`.
+  - `docs/manual/report-imports.md`: say that an email batch finishes by itself once every ticket is created, and that **Done** stays for failed or excluded emails.
+  - Check README and `docs/manual/` for other text telling email users to reply `done` (grep found none beyond the manual line above).
+- **Test scenarios:** Test expectation: none — documentation only; `src/test/userDocsSync.test.ts` must keep passing.
+- **Verification:** The docs describe exactly the conditions in KTD1.
+
+---
+
+## Verification Contract
+
+- `npm run compile` — type check clean.
+- `npm test` — green before the commit; the tests that prove the plan are the U1 cases in `sessionImportReview.test.ts`, the rewritten email test and the new handler cases in `emailHandler.test.ts` / `reportImportHandler.test.ts`. These mock `vscode` and run in Vitest; they do not exercise a real chat, so one manual check in VS Code with an `.eml` batch against a test Jira is advisable but not a gate.
+
+## Definition of Done
+
+- Every unit's verification holds and AE1–AE5 are each covered by a passing test.
+- `npm run compile` and `npm test` are green.
+- The old email test that typed `done` after a clean batch is replaced, not left alongside a duplicate.
+- Docs match the behaviour (U3); no dead code from the extraction remains.
+
+---
+
+## Sources & Research
+
+- Code read: `src/participant/jira/reportImportHandler.ts` (`done` and `create` cases), `importCreate.ts` (`createNewRows`), `importReviewScreen.ts` (`afterGroupAction`, `screenOptions`), `src/participant/session/importScreens.ts` (`buildNewGroupScreen`, `ImportScreenOptions`), `src/test/emailHandler.test.ts` (existing AE1 test).
+- Docs: `docs/report-import.md` "Overview and group screens"; `docs/manual/report-imports.md`.
+- No external research and no `docs/solutions/` entry applied.
