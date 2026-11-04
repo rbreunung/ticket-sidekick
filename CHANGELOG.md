@@ -1,3 +1,16 @@
+## [0.8.5] - 2026-11-04
+
+## What's Changed
+* feat(import): finish a drained import without a done reply
+* chore(deps-dev): Bump @types/node from 26.6.5 to 26.6.6 by @dependabot[bot] in https://github.com/rbreunung/ticket-sidekick/pull/112
+* chore(deps-dev): Bump @vscode/vsce from 4.0.0 to 4.1.0 by @dependabot[bot] in https://github.com/rbreunung/ticket-sidekick/pull/109
+* chore(deps): Bump postal-mime from 4.1.4 to 4.2.0 by @dependabot[bot] in https://github.com/rbreunung/ticket-sidekick/pull/110
+* feat(jira): full @jira help and /overview renamed /security-report
+* chore(deps): Bump minimatch from 10.2.6 to 11.0.3 by @dependabot[bot] in https://github.com/rbreunung/ticket-sidekick/pull/111
+
+
+**Full Changelog**: https://github.com/rbreunung/ticket-sidekick/compare/0.8.4...0.8.5
+
 ## [0.8.4] - 2026-11-03
 
 ## What's Changed
