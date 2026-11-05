@@ -28,6 +28,11 @@ export interface McpEndpointDeps {
 
 const TICKET_KEY = /^[A-Z][A-Z0-9]+-\d+$/;
 
+/** Whether a value has the shape of a Jira issue key, such as PROJ-123. */
+export function isTicketKey(value: string): boolean {
+  return TICKET_KEY.test(value);
+}
+
 function text(value: string) {
   return { content: [{ type: 'text' as const, text: value }] };
 }
@@ -57,7 +62,7 @@ export function buildMcpServer(deps: McpEndpointDeps): McpServer {
     },
     async ({ ticketKey }) => {
       const key = ticketKey.trim();
-      if (!TICKET_KEY.test(key)) return text(`"${key}" is not a valid ticket key.`);
+      if (!isTicketKey(key)) return text(`"${key}" is not a valid ticket key.`);
       const jira = await deps.getJira();
       if (!jira.configured) return text(jira.message);
       try {
@@ -65,7 +70,7 @@ export function buildMcpServer(deps: McpEndpointDeps): McpServer {
           jira.ticketService.getTicket(key, undefined, undefined, undefined, jira.baseUrl),
           jira.ticketService.getIssue(key),
         ]);
-        const status = (issue.fields as { status?: { name?: string } }).status?.name ?? '';
+        const status = issue.fields.status?.name ?? '';
         return {
           ...text(markdown),
           structuredContent: { key: issue.key, summary: issue.fields.summary, status, url: `${jira.baseUrl}/browse/${issue.key}` },
@@ -92,7 +97,7 @@ export function buildMcpServer(deps: McpEndpointDeps): McpServer {
     async ({ ticketKey, comment }) => {
       const key = ticketKey.trim();
       const body = comment.trim();
-      if (!TICKET_KEY.test(key)) return text(`"${key}" is not a valid ticket key.`);
+      if (!isTicketKey(key)) return text(`"${key}" is not a valid ticket key.`);
       if (!body) return text('Comment text is required.');
       const jira = await deps.getJira();
       if (!jira.configured) return text(jira.message);

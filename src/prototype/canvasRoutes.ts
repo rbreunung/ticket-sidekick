@@ -1,6 +1,6 @@
 import type * as http from 'http';
 import type { JiraAccess } from './mcpEndpoint';
-import { buildCommentPreview } from './mcpEndpoint';
+import { buildCommentPreview, isTicketKey } from './mcpEndpoint';
 import type { PlanStore } from './planStore';
 import { buildBoardHtml } from './boardPage';
 
@@ -20,7 +20,6 @@ export interface CanvasDeps {
   onError?(message: string): void;
 }
 
-const TICKET_KEY = /^[A-Z][A-Z0-9]+-\d+$/;
 const PROJECT_KEY = /^[A-Z][A-Z0-9_]*$/;
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_TICKETS = 50;
@@ -73,7 +72,7 @@ export function createCanvasHandler(deps: CanvasDeps): (req: http.IncomingMessag
       const tickets = result.issues.map(issue => ({
         key: issue.key,
         summary: issue.fields.summary ?? '',
-        status: (issue.fields as { status?: { name?: string } }).status?.name ?? '',
+        status: issue.fields.status?.name ?? '',
       }));
       sendJson(res, 200, { project, tickets });
       return;
@@ -92,7 +91,7 @@ export function createCanvasHandler(deps: CanvasDeps): (req: http.IncomingMessag
       if (subPath === '/api/plan') {
         const ticketKey = typeof body.ticketKey === 'string' ? body.ticketKey.trim() : '';
         const comment = typeof body.comment === 'string' ? body.comment.trim() : '';
-        if (!TICKET_KEY.test(ticketKey)) { sendJson(res, 400, { error: 'Pick a ticket first.' }); return; }
+        if (!isTicketKey(ticketKey)) { sendJson(res, 400, { error: 'Pick a ticket first.' }); return; }
         if (!comment) { sendJson(res, 400, { error: 'Write a comment first.' }); return; }
         const planId = deps.plans.add({ ticketKey, comment });
         sendJson(res, 200, { planId, preview: buildCommentPreview(ticketKey, comment) });
