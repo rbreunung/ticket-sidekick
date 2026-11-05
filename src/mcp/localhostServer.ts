@@ -1,6 +1,6 @@
 import * as http from 'http';
 import type { AddressInfo } from 'net';
-import { checkRequest, maskPath, type GuardExpectation } from './requestGuard';
+import { bearerOf, checkRequest, maskPath, type GuardExpectation } from './requestGuard';
 
 // The extension's one HTTP server: bound to 127.0.0.1 on a random port, every request through the
 // guard before it reaches the MCP handler. Counters and the recently seen Host/Origin values stay
@@ -13,6 +13,20 @@ export interface LocalhostServerOptions {
   /** Checked on every MCP request after the guard; false refuses it (403) before the handler runs. */
   allowMcp?: () => boolean;
   onError?: (message: string) => void;
+  /** Called for every refused request with its reason code and masked path, for logging. */
+  onRefused?: (reason: string, path: string) => void;
+  /**
+   * Whether a refused bearer key is one this server accepted at an earlier start. Such a refusal
+   * is counted as `mcp-key-earlier-start` (a client still holding an old definition) instead of
+   * `mcp-key-invalid`.
+   */
+  isEarlierKey?: (key: string) => boolean;
+}
+
+export interface ClientSeen {
+  userAgent: string;
+  /** ISO time of this client's last request with a valid key. */
+  lastSeen: string;
 }
 
 export interface ServerStats {
@@ -21,7 +35,7 @@ export interface ServerStats {
   recentHosts: string[];
   recentOrigins: string[];
   recentPaths: string[];
-  userAgents: string[];
+  clients: ClientSeen[];
 }
 
 const RECENT_LIMIT = 10;
@@ -41,6 +55,13 @@ function sanitizeOrigin(origin: string | undefined): string {
   } catch {
     return '(unparsable)';
   }
+}
+
+function noteClient(clients: ClientSeen[], userAgent: string): void {
+  const index = clients.findIndex(c => c.userAgent === userAgent);
+  if (index >= 0) clients.splice(index, 1);
+  clients.push({ userAgent, lastSeen: new Date().toISOString() });
+  if (clients.length > RECENT_LIMIT) clients.shift();
 }
 
 function sanitizeShort(value: string | undefined): string {
@@ -93,8 +114,9 @@ export class LocalhostServer {
     return JSON.parse(JSON.stringify(this.counters)) as ServerStats;
   }
 
-  private refuse(res: http.ServerResponse, status: 401 | 403 | 404, reason: string): void {
+  private refuse(res: http.ServerResponse, status: 401 | 403 | 404, reason: string, path: string): void {
     this.counters.refused[reason] = (this.counters.refused[reason] ?? 0) + 1;
+    this.options.onRefused?.(reason, maskPath(path));
     res.statusCode = status;
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.end(status === 401 ? 'Unauthorized' : status === 403 ? 'Forbidden' : 'Not found');
@@ -121,15 +143,17 @@ export class LocalhostServer {
       expectation,
     );
     if (!decision.allowed) {
-      this.refuse(res, decision.status, decision.reason);
+      const bearer = bearerOf(header('authorization'));
+      const earlier = decision.reason === 'mcp-key-invalid' && bearer !== undefined && this.options.isEarlierKey?.(bearer) === true;
+      this.refuse(res, decision.status, earlier ? 'mcp-key-earlier-start' : decision.reason, path);
       return;
     }
     if (this.options.allowMcp && !this.options.allowMcp()) {
-      this.refuse(res, 403, 'mcp-disabled');
+      this.refuse(res, 403, 'mcp-disabled', path);
       return;
     }
     this.counters.allowed.mcp = (this.counters.allowed.mcp ?? 0) + 1;
-    pushRecent(this.counters.userAgents, sanitizeShort(header('user-agent')));
+    noteClient(this.counters.clients, sanitizeShort(header('user-agent')));
     try {
       await this.options.onMcp(req, res);
     } catch (err) {
@@ -145,5 +169,5 @@ export class LocalhostServer {
 }
 
 function emptyStats(): ServerStats {
-  return { allowed: {}, refused: {}, recentHosts: [], recentOrigins: [], recentPaths: [], userAgents: [] };
+  return { allowed: {}, refused: {}, recentHosts: [], recentOrigins: [], recentPaths: [], clients: [] };
 }

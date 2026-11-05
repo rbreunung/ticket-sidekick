@@ -157,6 +157,10 @@
       {
         "command": "ticket-sidekick.importWaltzReport",
         "title": "Ticket Sidekick: Create Jira tickets from OSS report (.xlsx)"
+      },
+      {
+        "command": "ticket-sidekick.mcp.copyDiagnostics",
+        "title": "Ticket Sidekick: Copy MCP diagnostics"
       }
     ],
     "languageModelTools": [
@@ -1105,6 +1109,17 @@
             "completionEvents": [
               "onContext:ticketSidekick.firstTicketCreated"
             ]
+          },
+          {
+            "id": "jiraCopilotTools",
+            "title": "Use the Jira tools in Copilot chats",
+            "description": "Copilot-harness chats reach Ticket Sidekick's Jira tools on this computer. Add `127.0.0.1` to `http.noProxy` so those local requests do not go through your network proxy.\n[Open setting](command:workbench.action.openSettings?%22http.noProxy%22)",
+            "media": {
+              "markdown": "walkthroughs/jira/copilot-tools.md"
+            },
+            "completionEvents": [
+              "onSettingChanged:http.noProxy"
+            ]
           }
         ]
       },
@@ -1147,6 +1162,12 @@
             ]
           }
         ]
+      }
+    ],
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "ticket-sidekick.mcp",
+        "label": "Ticket Sidekick"
       }
     ]
   },

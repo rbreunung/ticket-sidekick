@@ -421,6 +421,7 @@ setting/command it describes.
 | 3 | `jiraDefaultProject` | `ticketSidekick.jira.defaultProject` setting | `onSettingChanged:ticketSidekick.jira.defaultProject` |
 | 4 | `jiraWorkflow` | Running `@jira discover workflow <PROJ> <IssueType>` | `onContext:ticketSidekick.workflowViewed` — set in `handleDiscoverWorkflow` (`workflowHandler.ts`) right after the workflow graph is actually cached, not on an attempted-but-empty sample |
 | 5 | `jiraFirstTicket` | Generating a template (`@jira generate a template`) and creating a ticket from it, or `@jira create` directly | `onContext:ticketSidekick.firstTicketCreated` — set at every real `ticketService.createTicket()` success point reachable from chat: `contentHandler.ts`'s `createTicket`-operation branch (backs the `createHandler.ts` flow) and `templateGenerationHandler.ts`'s `createFirstTicket()` |
+| 6 | `jiraCopilotTools` | Adding `127.0.0.1` to `http.noProxy`, so the MCP server for Copilot-harness chats starts (`src/mcp/register.ts`); the extension never writes the setting | `onSettingChanged:http.noProxy` |
 
 **First-touch auto-open (KTD11).** `extension.ts`'s `activate()` opens this
 walkthrough automatically once, guarded by the `globalState` flag

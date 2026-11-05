@@ -304,6 +304,10 @@ template-pick/review/batch-creation flow via `reportImportHandler.ts`'s
 [`docs/report-import.md`](docs/report-import.md).
 Emails first pass through a boilerplate cleanup step (patterns, consented model check, strip/keep preview) in both the batch and add-as-comment flows — see [`docs/report-import.md`](docs/report-import.md#eml-email-import-batch).
 
+## Copilot harness and the MCP server
+
+Chat participants do not run in VS Code's Copilot harness, so the Jira tools move to an MCP server inside the extension: `src/mcp/` holds vscode-free modules (request guard, keys, `http.noProxy` check, localhost server, MCP server builder, tool catalog in `jiraTools/`, lifecycle controller, diagnostics report) plus `src/mcp/register.ts`, the only one that imports `vscode` at runtime (provider, lifecycle on `http.noProxy`, notice, `Ticket Sidekick: Copy MCP diagnostics`); `vscodeMcpTypes.ts` declares the MCP provider API locally, since `@types/vscode` stays at the 1.95 floor. Design and decision log: [`docs/architecture/copilot-harness-migration.md`](docs/architecture/copilot-harness-migration.md); plan: [`docs/plans/2026-11-05-2037-feat-jira-mcp-tools-copilot-harness-plan.md`](docs/plans/2026-11-05-2037-feat-jira-mcp-tools-copilot-harness-plan.md).
+
 ## Onboarding
 
 Language Model tools (`contributes.languageModelTools`, letting Copilot Agent

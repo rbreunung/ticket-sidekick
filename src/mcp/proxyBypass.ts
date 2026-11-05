@@ -12,3 +12,50 @@ export function loopbackBypassConfigured(noProxy: unknown): boolean {
   if (!Array.isArray(noProxy)) return false;
   return noProxy.some(entry => typeof entry === 'string' && entry.trim() === LOOPBACK_HOST);
 }
+
+/** One loopback-related `http.noProxy` entry and whether it makes the server reachable. */
+export interface LoopbackEntry {
+  entry: string;
+  counts: boolean;
+  reason: string;
+}
+
+export interface NoProxyEvaluation {
+  loopbackEntries: LoopbackEntry[];
+  /** Every other entry is only counted: such entries may name internal hosts. */
+  otherEntries: number;
+}
+
+function loopbackReason(entry: string): LoopbackEntry | undefined {
+  const value = entry.trim().toLowerCase();
+  if (value === LOOPBACK_HOST) return { entry: value, counts: true, reason: 'the server\'s address, for every port' };
+  if (value.startsWith(`${LOOPBACK_HOST}:`)) {
+    return { entry: value, counts: false, reason: 'has a port, so it covers that one port only; the server\'s port changes at every start' };
+  }
+  if (value === 'localhost' || value.startsWith('localhost:')) {
+    return { entry: value, counts: false, reason: 'names localhost; the server is reached at 127.0.0.1' };
+  }
+  if (value === '::1' || value.startsWith('[::1]')) {
+    return { entry: value, counts: false, reason: 'IPv6 loopback; the server listens on 127.0.0.1' };
+  }
+  if (value === '*' || value.startsWith('127.')) {
+    return { entry: value, counts: false, reason: 'only the exact entry 127.0.0.1 is checked' };
+  }
+  return undefined;
+}
+
+/**
+ * Explains a `http.noProxy` value for the diagnostics report: each loopback-related entry with
+ * whether it counts and why, and the number of all other entries, which are never listed.
+ */
+export function evaluateNoProxy(noProxy: unknown): NoProxyEvaluation {
+  const entries = Array.isArray(noProxy) ? noProxy : [];
+  const loopbackEntries: LoopbackEntry[] = [];
+  let otherEntries = 0;
+  for (const entry of entries) {
+    const loopback = typeof entry === 'string' ? loopbackReason(entry) : undefined;
+    if (loopback) loopbackEntries.push({ ...loopback, entry: loopback.entry.replace(/[^\x20-\x7e]/g, '?').slice(0, 60) });
+    else otherEntries++;
+  }
+  return { loopbackEntries, otherEntries };
+}

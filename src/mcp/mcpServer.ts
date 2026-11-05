@@ -38,15 +38,46 @@ export interface McpServerInfo {
   version: string;
 }
 
-export function buildMcpServer<Deps>(tools: readonly McpToolDefinition<Deps>[], deps: Deps, info: McpServerInfo): McpServer {
+/**
+ * How one tool call ended, without its arguments or result: a handler that answered with text is
+ * `ok`; one that threw is `failed`, labelled with the HTTP status the error carries (a Jira or
+ * Bitbucket API error) or else its error class.
+ */
+export type ToolCallOutcome = { tool: string; ok: true } | { tool: string; ok: false; error: string };
+
+export interface McpHandlerHooks {
+  onToolCall?(outcome: ToolCallOutcome): void;
+}
+
+export function toolErrorLabel(err: unknown): string {
+  const status = (err as { status?: unknown } | null)?.status;
+  if (typeof status === 'number') return `HTTP ${status}`;
+  if (err instanceof Error) return err.name || 'Error';
+  return typeof err;
+}
+
+export function buildMcpServer<Deps>(
+  tools: readonly McpToolDefinition<Deps>[],
+  deps: Deps,
+  info: McpServerInfo,
+  hooks: McpHandlerHooks = {},
+): McpServer {
   const server = new McpServer(info);
   for (const tool of tools) {
     server.registerTool(
       tool.name,
       { title: tool.title, description: tool.description, inputSchema: tool.inputSchema, annotations: tool.annotations },
-      async (args: z.objectOutputType<z.ZodRawShape, z.ZodTypeAny>) => ({
-        content: [{ type: 'text' as const, text: await tool.handler(args, deps) }],
-      }),
+      async (args: z.objectOutputType<z.ZodRawShape, z.ZodTypeAny>) => {
+        let text: string;
+        try {
+          text = await tool.handler(args, deps);
+        } catch (err) {
+          hooks.onToolCall?.({ tool: tool.name, ok: false, error: toolErrorLabel(err) });
+          throw err;
+        }
+        hooks.onToolCall?.({ tool: tool.name, ok: true });
+        return { content: [{ type: 'text' as const, text }] };
+      },
     );
   }
   return server;
@@ -57,9 +88,10 @@ export function createMcpHandler<Deps>(
   tools: readonly McpToolDefinition<Deps>[],
   deps: Deps,
   info: McpServerInfo,
+  hooks: McpHandlerHooks = {},
 ): (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void> {
   return async (req, res) => {
-    const server = buildMcpServer(tools, deps, info);
+    const server = buildMcpServer(tools, deps, info, hooks);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on('close', () => {
       void transport.close();

@@ -34,11 +34,15 @@ export function checkRequest(req: GuardRequest, expected: GuardExpectation): Gua
   const path = req.path.split('?')[0];
   if (path !== MCP_PATH) return { allowed: false, status: 404, reason: 'unknown-path' };
 
-  const auth = req.headers.authorization ?? '';
-  const bearer = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : undefined;
-  return keysMatch(bearer, expected.mcpKey)
+  return keysMatch(bearerOf(req.headers.authorization), expected.mcpKey)
     ? { allowed: true }
     : { allowed: false, status: 401, reason: 'mcp-key-invalid' };
+}
+
+/** The key an `Authorization: Bearer <key>` header carries, or undefined for any other header. */
+export function bearerOf(authorization: string | undefined): string | undefined {
+  const auth = authorization ?? '';
+  return auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : undefined;
 }
 
 /**
