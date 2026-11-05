@@ -306,7 +306,7 @@ Emails first pass through a boilerplate cleanup step (patterns, consented model 
 
 ## Copilot harness migration (draft)
 
-Chat participants are deprecated and not supported in VS Code's Copilot harness; `@jira`/`@bitbucket` only run in the Local harness. The current design, the deprecation inventory, and the migration options (extension tools + skills, stdio MCP, canvas, session engine) are drafted in [`docs/architecture/copilot-harness-migration.md`](docs/architecture/copilot-harness-migration.md). No decision is recorded yet.
+Chat participants are deprecated and not supported in VS Code's Copilot harness; `@jira`/`@bitbucket` only run in the Local harness. The current design, the deprecation inventory, and the migration options (extension tools + skills, stdio MCP, canvas, session engine) are drafted in [`docs/architecture/copilot-harness-migration.md`](docs/architecture/copilot-harness-migration.md); its decision log (§11) records the direction: MCP and canvas served by the extension on a key-protected `127.0.0.1` port.
 
 ## Onboarding
 

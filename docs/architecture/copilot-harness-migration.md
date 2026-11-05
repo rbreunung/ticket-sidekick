@@ -1,6 +1,6 @@
 # Copilot harness migration: current design, deprecations, and options
 
-Status: **Draft for discussion**. No decision is recorded here yet.
+Status: **Draft for discussion**. Decisions made so far are recorded in [§11](#11-decision-log).
 Date: 2026-11-05. Based on VS Code 1.144 docs and `@github/copilot-sdk` 1.0.28.
 
 This document explains why Ticket Sidekick has to change, what the extension looks like today, which parts the new Copilot harness no longer supports, and which architectures could replace them. It ends with a recommendation, a phased path, and the spikes that must run before anything is planned in detail.
@@ -184,7 +184,7 @@ What does **not** change: `TicketService`, `PrReviewService`, `WorkflowService`,
 
 ## 4. Constraints for the target design
 
-1. **Local only, no listening ports.** Not even on loopback. Processes talk over stdio (or, if ever needed, an OS pipe), never over TCP.
+1. **Local only; a listening port only on loopback and only with a key.** A TCP port is allowed when it is bound to `127.0.0.1` only and every request must carry a random per-session key (D2). Nothing may be reachable from the network.
 2. **Credentials stay in OS-encrypted storage.** No tokens in `.mcp.json`, settings, or workspace files.
 3. **Writes are deterministic and confirmed.** Our code computes what to write; the user approves it; the model only chooses *when*. An approval gate must be enforced in our code, not by prompt wording.
 4. **Works in the Copilot harness**, with a Local fallback during the transition.
@@ -314,7 +314,9 @@ How it works:
 
 Surfaces then become thin and replaceable: **Local participant now → tools + skills (A) → MCP App (B) → canvas (C′) only if constraint 1 is relaxed to allow a token-protected loopback server.** One engine, one test suite.
 
-### 6.5 Credential broker (credentials for Option B)
+### 6.5 Credential broker (credentials for Option B, not chosen)
+
+> Superseded by D1: the extension serves MCP itself over a key-protected localhost port (§6.6), so it reads SecretStorage directly and needs no broker. Kept for reference, in case a portless MCP channel becomes a requirement again.
 
 The MCP server never holds a token. The extension is the only process that reads SecretStorage, and it performs every Jira and Bitbucket call on the server's behalf.
 
@@ -349,6 +351,41 @@ sequenceDiagram
 - **Access control:** on Unix, the socket lives in a `0700` directory. On Windows, libuv creates the pipe with default security attributes and `FILE_FLAG_FIRST_PIPE_INSTANCE` ([libuv `src/win/pipe.c`](https://github.com/libuv/libuv/blob/v1.x/src/win/pipe.c)); the default named-pipe permissions give full control to the creating user, SYSTEM and administrators and only read access to everyone else, so other users can't send requests or create a rogue instance of the same name. Same-user processes can connect, but they can't obtain the token and still hit the allowlist and the write modal. That is the trust level SecretStorage has today.
 - **Lifetime:** the broker lives with the window's extension host. If no window is open, the server answers with an actionable error. Nothing secret goes into `args` (visible to other users on Linux) or `env`.
 
+### 6.6 Localhost server in the extension (decided direction)
+
+One HTTP server inside the VS Code extension serves the MCP endpoint (including MCP Apps) and the canvas page. It reads SecretStorage and runs the session engine in-process, so there is no second process and no broker.
+
+```mermaid
+flowchart LR
+  AH["Agent Host<br/>(Copilot runtime)"] -->|"POST /mcp<br/>Authorization: Bearer mcpKey"| SRV
+  CT["Canvas tab"] -->|"GET/POST /canvasKey/…"| SRV
+  CL["Canvas launcher<br/>~/.copilot/extensions/ticket-sidekick"] -.->|"reads port + canvasKey"| RF[("Rendezvous file<br/>user-only, deleted on shutdown")]
+  CL -->|"open() returns URL"| CT
+  subgraph EXT["VS Code extension"]
+    SRV["Localhost server<br/>127.0.0.1:random port"]
+    ENG["Session engine"]
+    SVC["Services / clients"]
+    SEC[("SecretStorage")]
+  end
+  SRV --> ENG --> SVC --> SEC
+  SVC --> REM[("Jira / Bitbucket")]
+  EXT -.->|"writes at activation"| RF
+```
+
+Security rules (defaults chosen during the discussion; the prototype confirms them):
+
+| Rule | Detail |
+| --- | --- |
+| Bind | `127.0.0.1` explicitly, port `0` (random). Never `0.0.0.0` or `localhost` (which may resolve to another interface). |
+| Keys | Two independent 256-bit keys from `crypto.randomBytes`, one for MCP and one for the canvas, held in memory only and new at every activation. Compared in constant time. Always required; there is no setting to turn them off (D2). |
+| MCP key | Sent as `Authorization: Bearer` from the server definition's `headers` (forwarded to the Agent Host, [`agentHostMcpServerSupport.ts`](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/contrib/chat/browser/agentSessions/agentHost/agentHostMcpServerSupport.ts)). When the key rotates, `onDidChangeMcpServerDefinitions` fires and the runtime relaunches at the next turn boundary. |
+| Canvas key | Part of the URL path (`/<canvasKey>/…`): the only thing the canvas host passes on. The agent-host protocol already requires canvas URLs to be redacted from logs and never reused after a restart. |
+| Request checks | `Host` must be exactly `127.0.0.1:<port>` (blocks DNS rebinding); `Origin` must be absent (Agent Host) or our own origin (canvas page), otherwise 403, as the MCP transport spec requires. No CORS headers, so other web origins can't read responses. Size and rate limits per request. |
+| Rendezvous file | Port and canvas key only (never Jira/Bitbucket tokens), in a user-only location, overwritten at each activation and deleted on deactivation. The launcher reads it in `open()`. |
+| Writes | Canvas: a click shows the plan as a preview in the canvas and a second **Apply** click executes it. Agent tool calls: the VS Code modal (D4). |
+
+The canvas launcher is a small Copilot SDK extension (`extension.mjs`) that declares the canvases and returns the extension's URL from `open()`. The extension installs it on request (D5).
+
 ---
 
 ## 7. Concepts from published design guidance
@@ -371,7 +408,7 @@ sequenceDiagram
 
 | Criterion | A: tools + skills | B: stdio MCP | C: canvas process | C′: canvas as view | **D: engine + thin surfaces** |
 | --- | --- | --- | --- | --- | --- |
-| No listening ports | ✅ | ✅ | ❌ (loopback HTTP) | ❌ | ✅ (canvas surface optional) |
+| No listening ports (original constraint; relaxed to "loopback + key" by D1–D2) | ✅ | ✅ | ❌ (loopback HTTP) | ❌ | ✅ (canvas surface optional) |
 | Credentials in SecretStorage | ✅ | ✅ via broker | ❌ env from user | ✅ (canvas holds none) | ✅ |
 | Copilot harness | ✅ **[doc]** | ✅ forwarded **[source]** | ✅ | ✅ | ✅ via A or B |
 | Local fallback during transition | ✅ | ✅ | ❌ | ❌ | ✅ (participant as a surface) |
@@ -386,7 +423,7 @@ sequenceDiagram
 
 ## 9. Recommendation and phased path
 
-**Direction: Option D.** Build the session engine first, host it behind extension tools (A) for the Jira basics, and add an MCP App surface (B), with the credential broker (§6.5), for the import and review screens. Treat the canvas (C′) as a later, optional view: it can never render without an HTTP server (S5).
+**Direction: Option D on the localhost server of §6.6.** Build the session engine first, host it behind extension tools (A) for the Jira basics, then serve MCP (with MCP Apps) and an extension-hosted canvas page from the extension's key-protected localhost server for the import and review screens.
 
 | Phase | Content | Exit condition |
 | --- | --- | --- |
@@ -417,6 +454,24 @@ sequenceDiagram
 - Where should the journal live for an MCP-hosted engine, given that report data can be sensitive and must not land in the repository?
 - How much of the hand-written screen text (`importScreens.ts`, `importCommands.ts`) should survive as tool-result text versus move into an MCP App?
 - Do we keep the 17 CRUD tools public once task-oriented tools exist, or narrow them to reduce the agent's choice?
+
+## 11. Decision log
+
+| # | Decision | Chosen | Rejected alternatives and why |
+| --- | --- | --- | --- |
+| D1 | Where the MCP server lives | **Inside the VS Code extension, over HTTP on `127.0.0.1`.** It shares the localhost server with the canvas page. First chosen as "prototype both", then revised once the canvas made the localhost server necessary anyway. | Stdio process + pipe broker (§6.5): a second process, a second protocol and open spike S7, with no gain once a port exists. |
+| D2 | Access key on the localhost port | **Always on**, random per activation, in memory only, no setting | Optional key: adds a way to weaken the setup. Loopback only: any local user (VDI, terminal servers) and browser pages could reach the port. |
+| D3 | Canvas data path | **Extension-hosted page.** The extension serves the canvas page and its data; a thin launcher returns the URL, found through a user-only rendezvous file | Display-only canvas (C′): one model turn per click, and large imports flow through the model. No canvas: loses the persistent board. |
+| D4 | Approval for writes started on the canvas | **Click + confirm step**: preview of the plan in the canvas, then **Apply**. Agent-initiated writes still need the VS Code modal. | Always the modal: a second prompt after a deliberate click. Click only: a mis-click writes to Jira. |
+| D5 | Distribution of the canvas launcher | **Installed by the extension, opt-in.** A command **Ticket Sidekick: Enable canvas** copies the launcher to `~/.copilot/extensions/ticket-sidekick` and **Disable** removes it. The onboarding walkthrough has a step for it. A startup check shows a notification when canvases are enabled (`chat.canvases.enabled`) but the launcher is missing or outdated, explaining what it is for (Enable / Not now / Don't ask again). | Separate agent plugin: two installs and a second release channel. Repository scope: every repository needs a copy, and versions drift. |
+
+### Still to settle in the prototype
+
+- The Agent Host does not persist the forwarded `Authorization` header (it omits header values in `/mcp show`, but persistence is not verified).
+- A managed sandbox policy (`allowLocalNetwork`, `sandboxMcpServers`) does not block the Agent Host's or the launcher's connection to `127.0.0.1`.
+- Several VS Code windows: one server per window, so the rendezvous file needs one entry per window, and the launcher must pick the window that owns the session.
+- Where exactly the rendezvous file lives on each OS, and how "user-only" is enforced on Windows (an ACL on the folder rather than `0600`).
+- S6 (the organisation's Local-harness plans) stays open.
 
 ---
 
