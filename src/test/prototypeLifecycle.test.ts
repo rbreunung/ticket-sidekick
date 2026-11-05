@@ -54,7 +54,9 @@ vi.mock('vscode', () => {
       },
       showWarningMessage: async () => undefined,
       showErrorMessage: async (message: string) => { h.infoMessages.push(message); return undefined; },
+      withProgress: (_options: unknown, task: () => Promise<unknown>) => task(),
     },
+    ProgressLocation: { Notification: 15 },
     workspace: {
       workspaceFolders: [{ uri: { fsPath: '/work/a' } }],
       getConfiguration: () => configuration,

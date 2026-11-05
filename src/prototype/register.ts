@@ -157,7 +157,10 @@ export function registerPrototype(context: vscode.ExtensionContext, configServic
     }),
 
     vscode.commands.registerCommand(PROTOTYPE_COMMANDS.copyReport, async () => {
-      const text = await buildPrototypeReport(context, configService, controller, Boolean(mcp), prototypeFolder);
+      const text = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'Ticket Sidekick: building the prototype report (searching for stored keys)…' },
+        () => buildPrototypeReport(context, configService, controller, Boolean(mcp), prototypeFolder),
+      );
       await vscode.env.clipboard.writeText(text);
       void vscode.window.showInformationMessage('Ticket Sidekick prototype report copied to the clipboard. It contains no keys or tokens.');
     }),

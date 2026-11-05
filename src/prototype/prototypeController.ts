@@ -38,6 +38,7 @@ export class PrototypeController {
   private readonly server: LocalhostServer;
   private readonly plans = new PlanStore<CommentPlan>();
   private running: Running | undefined;
+  private starting: Promise<void> | undefined;
   private readonly listeners = new Set<() => void>();
 
   constructor(private readonly deps: ControllerDeps) {
@@ -62,8 +63,16 @@ export class PrototypeController {
     return { dispose: () => { this.listeners.delete(listener); } };
   }
 
-  async start(): Promise<void> {
-    if (this.running) return;
+  /** Starts the prototype; a start requested while one is already under way joins it. */
+  start(): Promise<void> {
+    if (this.running) return Promise.resolve();
+    if (!this.starting) {
+      this.starting = this.doStart().finally(() => { this.starting = undefined; });
+    }
+    return this.starting;
+  }
+
+  private async doStart(): Promise<void> {
     const keys = { mcpKey: generateKey(), canvasKey: generateKey() };
     const port = await this.server.start(keys);
     try {

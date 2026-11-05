@@ -46,4 +46,4 @@ While it runs, the prototype keeps one folder in the Copilot home: `~/.copilot/e
 11. Run **Remove prototype leftovers**, then check that the folder from "What it places outside VS Code" is gone.
 12. Install the release build of Ticket Sidekick again. Check that the four prototype commands are gone, and that **MCP: List Servers** shows no Ticket Sidekick entry.
 
-**What to send back:** both reports from step 9, and for steps 4–8 and 10–12 one line each: worked or failed, plus any error text you saw. Never send a key, a token or an `Authorization` header.
+**What to send back:** both reports from step 9, and for steps 4–8 and 10–12 one line each: worked or failed, plus any error text you saw. Never send a key, a token or an `Authorization` header. The report removes keys and tokens itself, but it does contain folder paths and, on Windows, the account names that may open the prototype folder; read it once before sending it on.

@@ -113,6 +113,15 @@ describe('PrototypeController', () => {
     expect(fs.existsSync(other)).toBe(false);
   });
 
+  it('starts only one server when start is triggered twice at once', async () => {
+    const { controller: c, changes } = make();
+    await Promise.all([c.start(), c.start()]);
+    const port = c.port();
+    await c.stop();
+    expect(changes).toHaveLength(2);
+    await expect(fetch(`http://127.0.0.1:${port}/mcp`)).rejects.toThrow();
+  });
+
   it('rolls back the server when the launcher cannot be placed', async () => {
     const { controller: c } = make({ launcherSourceDir: path.join(tmp, 'missing') });
     await expect(c.start()).rejects.toThrow();
