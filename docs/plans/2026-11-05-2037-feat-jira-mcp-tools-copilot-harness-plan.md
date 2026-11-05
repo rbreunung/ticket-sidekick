@@ -14,9 +14,9 @@ execution: code
 - **Objective:** In a Copilot-harness chat, where `@jira` is not available, a developer can view, find, load, comment on, update, move and create Jira tickets, check the connection, and get a structured developer brief of a ticket, through one set of tools that is never offered twice. `@jira` keeps working unchanged in the Local harness.
 - **Means:** an MCP server inside the extension on a key-protected `127.0.0.1` port (KTD1), carrying 12 Jira tools that replace the 14 Agent Mode Jira tools, plus two skills (KTD11). Direction settled in [`docs/architecture/copilot-harness-migration.md`](../architecture/copilot-harness-migration.md), decision log §11.
 - **Authority:** Product Contract requirements win on behavior; KTDs win on mechanism; units override neither.
-- **Execution profile:** three pull requests, merged in order (see Implementation Units). Each moved tool is removed as an Agent Mode tool in the same PR that adds it to MCP, so no merge state offers a tool twice. PR1 starts from `main`, not from the prototype branch; it brings along the architecture document and the two plans, but not `src/prototype/` or the prototype manual page.
-- **Stop conditions:** stop and ask if a moved tool cannot keep a safeguard its Agent Mode version has (for example the never-guess issue type, the duplicate-comment guard or the workspace-only upload path), or if VS Code refuses the MCP server definition the extension provides.
-- **Finished by:** `ce-work` implements, verifies and opens each PR; the user reviews and merges, and runs the manual checklist in the user manual.
+- **Execution profile:** one feature branch, built in three review steps (PR1, PR2, PR3, each a pull request into the feature branch, merged in order; see Implementation Units), then one merge of the feature branch into `main`. `main` therefore never holds a half-moved tool set and stays releasable throughout. Each moved tool is removed as an Agent Mode tool in the same step that adds it to MCP, so no state offers a tool twice. The feature branch starts from `main`, not from the prototype branch; it brings along the architecture document and the two plans, but not `src/prototype/` or the prototype manual page.
+- **Stop conditions:** stop and ask if a moved tool cannot keep a safeguard its Agent Mode version has (for example the never-guess issue type or the duplicate-comment guard), if VS Code refuses the MCP server definition the extension provides, or if the manual checklist fails on a managed Mac or a managed Windows machine.
+- **Finished by:** `ce-work` implements, verifies and opens each PR into the feature branch; the user reviews and merges them, runs the manual checklist with a `.vsix` built from the feature branch on a managed Mac and a managed Windows machine, and then merges the feature branch into `main`.
 
 ---
 
@@ -55,9 +55,9 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 - R2. At no merged state is the same Jira capability offered both as an MCP tool and as an Agent Mode tool.
 - R3. The MCP server runs on `127.0.0.1` with a random port and a random per-start bearer key, and is offered to VS Code only while `127.0.0.1` is in `http.noProxy`.
 - R4. The server starts at activation when the entry is present, stops when it is removed, starts again when it is added, and refuses MCP requests whenever the entry is missing; it does not depend on Jira being configured.
-- R5. While the entry is missing, every VS Code start shows a notice that explains what the entry is for and offers to open the setting, and the Jira onboarding walkthrough has a step for it.
+- R5. While the entry is missing, every VS Code start on a version with the MCP provider API (1.101 or later) shows a notice that explains what the entry is for and offers to open the setting, and the Jira onboarding walkthrough has a step for it.
 - R6. Every request passes the ported request guard: exact `Host` `127.0.0.1:<port>`, no foreign `Origin`, and the bearer key, before any Jira call; no response or log line contains the key or a Jira token.
-- R7. Write tools are marked as destructive and read tools as read-only, so the harness asks before each write and shows the tool's arguments; the extension adds no confirmation of its own.
+- R7. Write tools are marked as destructive, and the tools that only read Jira (view, find, list filters, workflow, check connection, list templates) as read-only; load ticket carries neither marking, since it writes local files. The harness asks before each write and shows the tool's arguments; the extension adds no confirmation of its own. Because that approval shows only the arguments, not the values the extension looks up, list templates shows each template's default fields, and the results of create, update field and move report what changed: the previous value, the previous status and the template fields applied.
 
 **The 12 tools**
 
@@ -65,13 +65,13 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 - R9. View ticket returns the fields defined by the display settings (`additionalDisplayFields`, `hiddenDisplayFields`), the full description, all comments newest first up to 100 with a note when there are more, and the attachments with name, size and type.
 - R10. Find tickets takes either JQL or a saved filter (id or name), with optional narrowing by fix version, sprint, assignee and the team JQL, supports paging, and shows the columns from `searchFields`.
 - R11. Find tickets' description tells the agent that "my team" means the `myTeamJql` setting and to prefer a matching saved filter over new JQL; list my filters returns the user's favourite and owned filters.
-- R12. Load ticket always writes `ticket.md`, `comments.md` and the eligible attachments into `.jira-context/<KEY>/`, lists every skipped attachment with size and reason, and additionally downloads attachments named in an optional list without the type filter; the size limit still applies.
-- R13. Move ticket moves a ticket to a target status, directly or along a workflow path; it discovers the workflow itself when no path is cached, and rediscovers once when a cached path fails.
+- R12. Load ticket always writes `ticket.md`, `comments.md` and the eligible attachments into `.jira-context/<KEY>/`, reports the files it wrote as absolute paths, lists every skipped attachment with size and reason, and additionally downloads attachments named in an optional list without the type filter; the size limit still applies.
+- R13. Move ticket moves a ticket to a target status, directly or along a workflow path; it discovers the workflow itself when no workflow is cached or the cached one has no path to the target. A move that stops partway is reported with the status the ticket landed in and is never retried.
 - R14. Workflow lists the statuses a ticket can reach and refreshes the workflow cache on request.
 - R15. Check connection reports base URL, auth type, token presence and the signed-in user, or a setup hint naming what is wrong; it gives the same answer as `@jira check`.
-- R16. View ticket and load ticket take the ticket key as optional; without one they use the key in the current git branch of the workspace folder and say so in the result, or say that the branch holds no key. Write tools always require an explicit key.
+- R16. View ticket and load ticket take the ticket key as optional; without one they use the key in the current git branch of the first workspace folder and name that folder and branch in the result, or say that the branch holds no key. Write tools always require an explicit key.
 - R17. List templates returns the workspace templates; create ticket creates one ticket, prefers a template over a bare issue type, and never guesses an issue type.
-- R18. Add comment, update field and upload attachment keep today's behavior: the duplicate-comment guard, the supported field list with name resolution, and the workspace-only upload path with its size limit.
+- R18. Add comment, update field and upload attachment keep today's behavior: the duplicate-comment guard, the supported field list with name resolution, and the size limit. Upload accepts only files that, after resolving symlinks, lie inside an open workspace folder (wherever that folder is) and have no dotfile or dotfolder segment; this deliberately narrows today's home-folder rule for MCP, while `@jira upload` keeps today's rule.
 - R19. Free-text inputs (comment text, create description, update-field text values) are taken as Markdown and sent to Jira as wiki markup through the same conversion `@jira` uses.
 - R20. Every tool that fails because Jira is not configured answers with the setup hint `@jira` gives, never a raw error.
 
@@ -94,7 +94,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 
 ### Acceptance Examples
 
-- AE1. **Covers R4, R5.** Given `http.noProxy` lacks `127.0.0.1`, when VS Code starts, then no server listens, no MCP server is offered, and the notice appears; when the user adds the entry, the server starts and the tools appear without a restart.
+- AE1. **Covers R4, R5.** Given VS Code 1.101 or later and `http.noProxy` lacking `127.0.0.1`, when VS Code starts, then no server listens, no MCP server is offered, and the notice appears; when the user adds the entry, the server starts and the tools appear without a restart.
 - AE2. **Covers R16.** Given the branch `feature/PROJ-123-login`, when the agent calls view ticket without a key, then it returns PROJ-123 and states that the key came from the branch; on `main` it answers that the branch holds no key.
 - AE3. **Covers R12.** Given a ticket with `design.pdf` (binary) and `log.txt`, when load runs without a list, then `log.txt` is written and `design.pdf` is listed as skipped; with `["design.pdf"]` both are written, along with `ticket.md` and `comments.md`.
 - AE4. **Covers R13.** Given no cached workflow and a target two transitions away, when move ticket runs, then it discovers the workflow, moves through both steps and names them in its result.
@@ -104,7 +104,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 
 ### Success Criteria
 
-- The manual checklist passes in a Copilot-harness chat on a machine with `127.0.0.1` in `http.noProxy`: every R8 tool answers, both skills run, and no Jira Agent Mode tool is listed.
+- The manual checklist passes in a Copilot-harness chat on a managed Mac and a managed Windows machine, each with `127.0.0.1` in `http.noProxy`: every R8 tool answers, both skills run, and no Jira Agent Mode tool is listed.
 - The model's tool list in a Copilot-harness session contains each Jira capability once.
 
 ### Scope Boundaries
@@ -116,6 +116,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 ### Deferred to Follow-Up Work
 
 - A nightly or on-demand e2e workflow against a real Jira Cloud test site, once the user has created the site and stored a token as a GitHub Actions secret. It covers the shared and Cloud-specific paths, not Data Center specifics.
+- Checking the tools with a second VS Code window open and in remote windows (Remote-SSH, WSL, Dev Containers), when a use case needs them.
 
 ### Dependencies / Assumptions
 
@@ -137,10 +138,10 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 - KTD1. **Product code lives in `src/mcp/`: vscode-free modules plus one glue file, `src/mcp/register.ts`.** The ported modules are the request guard, keys, `http.noProxy` check, localhost server, MCP server builder and report from `src/prototype/`. The prototype branch is not merged; its code is copied and trimmed. Governs the mechanism of R3, R6, R26.
 - KTD2. **One bearer key, no canvas key.** The canvas route and its key leave with the canvas (deferred), so the guard only knows `/mcp`. A later canvas phase adds its route back.
 - KTD3. **A single tool catalog drives the server, the docs-sync test and the skill guard.** `src/mcp/jiraTools/catalog.ts` exports each tool's name, title, description, input schema, read-only or destructive annotation and handler. The server registers from it, `userDocsSync.test.ts` checks the manual against it, and the skill guard checks skill text against it.
-- KTD4. **Handlers reuse today's services and formatters instead of reimplementing them.** `TicketService`, `WorkflowService`, `TemplateService`, `FieldResolver`, `attachmentEligibility`, `pathSafety`, `RecentCallGuard` and the pure message builders in `src/participant/session/toolMessages.ts` stay the single implementation; the MCP handlers are thin, as `jiraTools.ts` is today.
+- KTD4. **Handlers reuse today's services and formatters instead of reimplementing them.** `TicketService`, `WorkflowService`, `TemplateService`, `FieldResolver`, `attachmentEligibility`, `pathSafety`, `RecentCallGuard` and the pure message builders in `src/participant/session/toolMessages.ts` stay the single implementation; the MCP handlers are thin, as `jiraTools.ts` is today. Any builder text that names a tool takes the name from the catalog (KTD3), so no message an agent reads points at a removed or renamed tool; skipped attachments are fetched by calling load ticket with their names.
 - KTD5. **Tool names keep the `jira_` prefix in snake case** (`jira_view_ticket`, `jira_find_tickets`, …), so a later Bitbucket phase can share the same server without name clashes.
 - KTD6. **The load core moves to Node `fs` behind a small writer interface,** so it becomes vscode-free and testable. `@jira load` and the MCP load tool both use it; `.gitignore` handling for `.jira-context/` is kept.
-- KTD7. **The branch lookup runs `git branch --show-current` with the first workspace folder as working directory** (`execFile`, no shell, short timeout) and extracts the key with `extractTicketId`.
+- KTD7. **The branch lookup runs `git branch --show-current` with the first workspace folder as working directory** (`execFile`, no shell, short timeout) and extracts the key with `extractTicketId`. The result names the folder and branch used, so a multi-root mismatch is visible.
 - KTD8. **Annotations decide the harness approval:** reads carry `readOnlyHint: true`; Jira writes carry `destructiveHint: true`; load carries neither, since it writes only local files. No extension modal.
 - KTD9. **Markdown conversion happens in the handlers** of add comment, create ticket (description) and update field (text values), with `markdownToJiraWiki()`; the tool descriptions say "Markdown".
 - KTD10. **The connection check becomes a pure function shared with `@jira check`,** so both give the same answer from the same code.
@@ -234,7 +235,7 @@ src/test/mcp*.test.ts
 | U15 | Retire the remaining Jira tools; docs | `src/tools/jiraTools.ts`, `package.json`, `docs/manual/*` | U14 |
 | U16 | `/jira-create` skill and command coverage | `skills/jira-create/SKILL.md`, `src/test/mcpSkillsGuard.test.ts` | U14, U12 |
 
-### PR1: MCP server and check connection
+### PR1 (into the feature branch): MCP server and check connection
 
 Waits on: nothing.
 
@@ -248,6 +249,7 @@ Waits on: nothing.
   1. Copy the prototype modules from `src/prototype/` on the prototype branch; drop the canvas route, the canvas key and the plan store.
   2. `mcpServer.ts` builds a stateless MCP server per request from a catalog of tool definitions (KTD3), registering each with its annotations.
   3. The server's `allowMcp` gate calls the `http.noProxy` check on every request.
+  4. The `http.noProxy` check counts only the bare `127.0.0.1` entry (a port wildcard only if U6 shows VS Code and the Copilot runtime honour it for every port). An entry such as `127.0.0.1:8080` bypasses the proxy for that port only, so it counts as missing: no start, and the notice appears.
 - **Patterns to follow:** the prototype's tests (`prototypeGuard.test.ts`, `prototypeServer.test.ts`, `prototypeProxyBypass.test.ts`), copied and trimmed.
 - **Test scenarios:**
   - A request without the bearer key is refused with 401 and reaches no handler.
@@ -255,6 +257,7 @@ Waits on: nothing.
   - A foreign `Origin` is refused with 403.
   - With `allowMcp` false, a valid request is refused with 403 and counted as `mcp-disabled`.
   - The server listens on `127.0.0.1` with a non-zero port and stops accepting after stop.
+  - `["127.0.0.1"]` counts as bypassed; `["127.0.0.1:8080"]` does not.
   - A catalog of one test tool is listed and callable through the official MCP client.
 - **Verification:** the ported tests pass; no module imports `vscode`.
 
@@ -342,7 +345,7 @@ Waits on: nothing.
   - After removing the entry, the tool is gone from `vscode.lm.tools`.
 - **Verification:** `xvfb-run -a npm run test:e2e` passes locally and in the CI `e2e` job.
 
-### PR2: Read tools and `/jira-brief`
+### PR2 (into the feature branch): Read tools and `/jira-brief`
 
 Waits on: PR1, merge order only.
 
@@ -352,10 +355,11 @@ Waits on: PR1, merge order only.
 - **Requirements:** R9, R16, R20; KTD4, KTD7.
 - **Dependencies:** U4.
 - **Files:** `src/mcp/branchTicket.ts`, `src/mcp/jiraTools/viewTicket.ts`, `src/test/mcpTools.test.ts`, `src/test/mcpBranchTicket.test.ts`.
-- **Approach:** fields through `TicketService.getTicket` with the display settings as `jira_getTicket` does; comments through the paged comment reader up to 100, newest first, with a "more comments" note; attachments with name, size and type; branch key per KTD7 with the source named in the result.
+- **Approach:** fields through `TicketService.getTicket` with the display settings as `jira_getTicket` does; comments read in full (`getAllComments`), sorted newest first as the requirements source does, cut to 100, with a note saying how many older ones were left out (the paged reader returns oldest first and cannot be used); attachments with name, size and type; branch key per KTD7 with the source named in the result.
 - **Test scenarios:**
   - View returns description, all fixture comments newest first and the attachment list.
-  - With more than 100 comments, the result says how many were left out.
+  - With 150 comments, view shows the newest 100 and says 50 older ones were left out.
+  - Without a key, the result names the folder and branch the key came from.
   - Covers AE2. Without a key on `feature/PROJ-123-login`, view returns PROJ-123 and names the branch.
   - Covers AE2. On `main`, view says the branch holds no key.
   - Not configured gives the setup hint.
@@ -381,14 +385,16 @@ Waits on: PR1, merge order only.
 - **Requirements:** R12, R16; KTD6.
 - **Dependencies:** U7.
 - **Files:** `src/participant/jira/loadHandler.ts` (core moved to Node `fs` behind a writer), `src/mcp/jiraTools/loadTicket.ts`, `src/test/mcpTools.test.ts`, `src/test/loadTicketCore.test.ts`.
-- **Approach:** the core writes `ticket.md`, `comments.md` and eligible attachments and returns written and skipped files; an optional list adds named attachments without the type filter, respecting `ATTACHMENT_SIZE_LIMIT`; `@jira load` keeps its behavior on the same core.
+- **Approach:** the core writes `ticket.md`, `comments.md` and eligible attachments and returns written and skipped files; an optional list adds named attachments without the type filter, respecting `ATTACHMENT_SIZE_LIMIT`; an attachment whose Jira filename fails `isSafeFilename`, or whose resolved path is not inside `.jira-context/<KEY>/attachments/`, is skipped with the reason "unsafe filename"; written files are reported as absolute paths; `@jira load` keeps its behavior on the same core.
 - **Execution note:** keep `loadTicketCore.test.ts` passing unchanged before moving the core.
 - **Test scenarios:**
   - Covers AE3. Without a list, the text attachment is written and the binary one is listed as skipped with size and reason.
   - Covers AE3. With `["design.pdf"]`, both are written along with the ticket files.
   - A named attachment that does not exist is reported, and the rest of the load still happens.
   - An attachment over the size limit is reported and not written.
+  - Attachments named `../../evil.txt` and `..\..\evil.txt` are skipped as unsafe filenames, nothing is written outside the attachments folder, and the other attachments are still written.
   - Without a key, load uses the branch ticket.
+  - The load result names no tool outside the catalog (it points skipped attachments at load ticket, not at a removed download tool).
 - **Verification:** tests pass; `@jira load` behaves as before.
 
 ### U10. Workflow and list templates
@@ -397,11 +403,11 @@ Waits on: PR1, merge order only.
 - **Requirements:** R14, R17.
 - **Dependencies:** U4.
 - **Files:** `src/mcp/jiraTools/workflow.ts`, `src/mcp/jiraTools/templates.ts`, `src/test/mcpTools.test.ts`.
-- **Approach:** workflow wraps `discoverAndCacheWorkflow` (refresh on request) and lists reachable statuses from the cache for a ticket; list templates wraps `TemplateService` as `jira_listTemplates` does.
+- **Approach:** workflow wraps `discoverAndCacheWorkflow` (refresh on request) and lists reachable statuses from the cache for a ticket; list templates wraps `TemplateService` as `jira_listTemplates` does and shows each template's default fields (R7).
 - **Test scenarios:**
   - Workflow lists the statuses reachable from the fixture ticket's status.
   - Refresh rediscovers and rewrites the cache.
-  - List templates returns the workspace templates; a missing file gives the existing "no templates" answer.
+  - List templates returns the workspace templates with their default fields; a missing file gives the existing "no templates" answer.
 - **Verification:** tests pass.
 
 ### U11. Retire the moved read tools; docs
@@ -432,9 +438,9 @@ Waits on: PR1, merge order only.
   - Covers AE7. The skill text names all eight sections in order and the "not stated in the ticket" rule.
 - **Verification:** tests pass; the packaged `.vsix` contains `skills/jira-brief/SKILL.md`.
 
-### PR3: Write tools and `/jira-create`
+### PR3 (into the feature branch): Write tools and `/jira-create`
 
-Waits on: PR2, merge order only.
+Waits on: PR2, merge order only. After PR3, the feature branch merges into `main` once the manual checklist passes (Verification Contract).
 
 ### U13. Markdown conversion for text inputs
 
@@ -455,19 +461,20 @@ Waits on: PR2, merge order only.
 - **Dependencies:** U10, U13.
 - **Files:** `src/mcp/jiraTools/moveTicket.ts`, `createTicket.ts`, `addComment.ts`, `updateField.ts`, `uploadAttachment.ts`, `src/test/mcpTools.test.ts`.
 - **Approach:**
-  1. Each handler re-validates its inputs and reuses the logic of its `jira_*` counterpart: `resolveAndApplyTransition`, template field resolution with never-guess issue type, `RecentCallGuard`, `isAllowedUploadPath` and the size check.
-  2. Move discovers the workflow when no path is cached and rediscovers once after a failed cached path.
-  3. All five carry `destructiveHint: true`.
-  4. The MCP server is built per request (U1), so state that must outlive a request, such as the `RecentCallGuard` of add comment, lives in the long-lived handler dependencies created once in `register.ts`, not in the per-request server.
+  1. Each handler re-validates its inputs and reuses the logic of its `jira_*` counterpart: `resolveAndApplyTransition`, template field resolution with never-guess issue type, `RecentCallGuard` and the size check. Upload uses its own workspace-folder rule (R18) instead of `isAllowedUploadPath`.
+  2. Move discovers the workflow when none is cached or the cached one has no path to the target; a `partialFailure` is reported with the landed status and never retried.
+  3. Create, update field and move report what changed in their result (previous value, previous status, template fields applied), using the facts today's confirmation builders look up (R7).
+  4. All five carry `destructiveHint: true`.
+  5. The MCP server is built per request (U1), so state that must outlive a request, such as the `RecentCallGuard` of add comment, lives in the long-lived handler dependencies created once in `register.ts`, not in the per-request server.
 - **Test scenarios:**
   - Covers AE4. Move to a status two steps away without a cache discovers, moves twice and names both steps.
-  - A failed cached path triggers exactly one rediscovery.
+  - A cached workflow with no path to the target triggers one discovery; a move that stops partway is reported with its landed status and not retried.
   - Create without a template and an ambiguous issue type returns the available types and creates nothing.
-  - Create with a template applies its fields and converts the description.
+  - Create with a template applies its fields, converts the description and lists the template fields it set.
   - An identical comment sent in a second, separate MCP request within a minute is skipped.
-  - Update field refuses an unsupported field name.
-  - Upload refuses a path outside the workspace and a file over 25 MB.
-  - Each write tool's definition carries `destructiveHint: true`.
+  - Update field refuses an unsupported field name, and a successful update reports the previous value.
+  - Upload accepts a file inside a workspace folder that lies outside the home folder, and refuses a home-folder file outside the workspace, a path under a dotfolder, a symlink pointing out of the workspace and a file over 25 MB.
+  - Each write tool's definition carries `destructiveHint: true`, and no write tool carries `readOnlyHint` (VS Code's default approval then always applies).
 - **Verification:** tests pass.
 
 ### U15. Retire the remaining Jira tools; docs
@@ -504,13 +511,13 @@ Waits on: PR2, merge order only.
 | Unit and integration | `npm test` | U1–U16 scenarios, guards, docs sync, bundle smoke |
 | E2E | `xvfb-run -a npm run test:e2e` (CI `e2e` job) | U6 through VS Code's MCP client, or the recorded reduced form |
 | Package | `npm run package` | `.vsix` contains `out/extension.js` and both skills |
-| Manual | The checklist in `docs/manual/copilot-tools.md` in a Copilot-harness chat | R8 tools answer, both skills run, no duplicate tools |
+| Manual | The checklist in `docs/manual/copilot-tools.md` in a Copilot-harness chat, with a `.vsix` from the feature branch, on a managed Mac and a managed Windows machine | R8 tools answer, both skills run, no duplicate tools; gates the merge into `main` |
 
 ---
 
 ## Definition of Done
 
-- All three PRs are merged in order, and each left `main` with no capability offered twice.
+- All three PRs are merged into the feature branch in order, each leaving it with no capability offered twice, and the feature branch is merged into `main` after the manual checklist passed on a managed Mac and a managed Windows machine.
 - `npm run compile`, `npm test` and the CI `e2e` job pass on `main`.
 - No `jira_` entry remains in `contributes.languageModelTools`.
 - The manual documents the MCP tools, both skills, the `http.noProxy` requirement and the checklist.
