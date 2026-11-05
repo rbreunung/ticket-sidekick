@@ -5,7 +5,7 @@ Date: 2026-11-05. Based on VS Code 1.144 docs and `@github/copilot-sdk` 1.0.28.
 
 This document explains why Ticket Sidekick has to change, what the extension looks like today, which parts the new Copilot harness no longer supports, and which architectures could replace them. It ends with a recommendation, a phased path, and the spikes that must run before anything is planned in detail.
 
-Every external fact is marked **[doc]** (stated in official docs or SDK types, linked under [Sources](#sources)) or **[unverified]** (an inference that a spike must confirm).
+Every external fact is marked **[doc]** (stated in official docs or SDK types, linked under [Sources](#sources)), **[source]** (read in VS Code's source code) or **[unverified]** (an inference that a spike must confirm).
 
 ---
 
@@ -205,12 +205,12 @@ What does **not** change: `TicketService`, `PrReviewService`, `WorkflowService`,
 | **MCP sampling** | The server asks the client's model for a completion, under the user's model-access rules | Through the MCP client | None | n/a | Supported in VS Code **[doc]**; in the Copilot harness **[unverified]** |
 | **MCP elicitation** | The server pauses and asks the user a structured question (accept / decline / cancel) | Through the MCP client | None | n/a | Supported in VS Code **[doc]**; in the Copilot harness **[unverified]** |
 | **MCP Apps** | Interactive HTML returned by a tool, inline in chat; `callServerTool` calls our tools directly | Sandboxed iframe | None (`ui://` resource) | Never in the UI | Recommended for participant migration **[doc]**; inline display only **[doc]** |
-| **Canvas** (Copilot SDK `createCanvas`) | Editor-tab surface; agent-callable `actions`; `session.send` back to chat | Separate Node process (`extension.mjs`) | **Renders from `url`**: in practice a loopback HTTP server **[doc + samples]** | `requestedEnvironmentVariables` (user-approved env) **[doc]** | Copilot harness only; Preview; types marked `@experimental` **[doc]** |
+| **Canvas** (Copilot SDK `createCanvas`) | Editor-tab surface; agent-callable `actions`; `session.send` back to chat | Separate Node process (`extension.mjs`) | **Renders only an `http:`/`https:` URL**: in practice a loopback HTTP server **[source]** | `requestedEnvironmentVariables` (user-approved env) **[doc]** | Copilot harness only; Preview; types marked `@experimental` **[doc]** |
 | **Dynamic Workflows** (Copilot SDK `defineWorkflow`) | Durable runs: `ctx.step` (memoised), `ctx.pause` (checkpoint), `ctx.agent(prompt, { schema })`, `parallel`, `pipeline`, progress phases | Same SDK extension process | None by itself | As above | `@experimental` **[doc]** |
 
 Two consequences:
 
-- **Canvas conflicts with constraint 1.** `CanvasProviderOpenResult` has only `url`, `title` and `status`, and the samples start `createServer().listen(0, "127.0.0.1")`. A spike must check whether a non-HTTP URL (for example `file:` or `data:`) is accepted. Until then, a canvas means opening a loopback port.
+- **Canvas conflicts with constraint 1 (confirmed from source).** `CanvasProviderOpenResult` has only `url`, `title` and `status`. The agent-host protocol defines the canvas `url` as an "absolute HTTP(S) source URL", and VS Code's renderer ([`agentHostCanvas.ts`](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/contrib/canvases/common/agentHostCanvas.ts)) accepts a source only when its scheme is `http` or `https` and it has an authority. Anything else is dropped with the warning "Unsupported canvas source", and a unit test checks that a `file:` URL is rejected. So a canvas always needs an HTTP server: a loopback one (what every sample does, `createServer().listen(0, "127.0.0.1")`), or a remotely hosted page. `file:`, `data:` and webview URIs are not options. A loopback server can also be reached by any local process of any user, so it would need at least an unguessable per-instance token in the URL.
 - **A Copilot SDK extension can't reach SecretStorage.** It runs outside VS Code. Credentials would arrive as environment variables the user approves, which is weaker than today.
 
 ---
@@ -270,7 +270,7 @@ flowchart LR
 ```
 
 - **For:** the best fit for the domain. The import review really is a board, and PR findings really are a list across files. The state persists across turns, sessions and handoffs, and `nextActions` can be shown permanently instead of as chips that scroll away. Dynamic Workflows add durable steps and pause points.
-- **Against:** violates "no ports" unless a non-HTTP URL works. It is Preview and `@experimental`. It needs a separate runtime, distributed as an agent plugin under `.github/extensions` or `~/.copilot/extensions` rather than through the Marketplace. Credentials would move from SecretStorage to user-approved environment variables. It works in neither the Local harness nor browser clients **[doc]**.
+- **Against:** violates "no ports": the renderer only loads `http:`/`https:` URLs (see §5). It is Preview and `@experimental`. It needs a separate runtime, distributed as an agent plugin under `.github/extensions` or `~/.copilot/extensions` rather than through the Marketplace. Credentials would move from SecretStorage to user-approved environment variables. It works in neither the Local harness nor browser clients **[doc]**.
 - **Safer variant C′:** the canvas is **display and decision capture only**. It never holds credentials and never writes to Jira. Decisions go back through `session.send` to the agent, which calls our tools (A or B) to do the writes. That keeps credentials and approvals in one place, at the cost of one model turn per decision.
 
 ### Option D (recommended direction): a surface-agnostic session engine + thin surfaces
@@ -310,7 +310,7 @@ How it works:
 5. **A journal, not just a snapshot.** Decisions and writes are appended (who, when, what, Jira keys). The current state is derived from it. This gives resume after a crash or window close, an audit trail, and idempotent batch creation (a replayed `apply` sees what it already wrote).
 6. **Storage:** the journal lives where the surface host can read it: `workspaceState`/`globalStorageUri` for in-extension hosting, or a file under the extension's storage directory for an MCP process. It never goes into the repository (report data can be sensitive), and it never contains credentials.
 
-Surfaces then become thin and replaceable: **Local participant now → tools + skills (A) → MCP App (B) → canvas (C′) once it is stable and port-free.** One engine, one test suite.
+Surfaces then become thin and replaceable: **Local participant now → tools + skills (A) → MCP App (B) → canvas (C′) only if constraint 1 is relaxed to allow a token-protected loopback server.** One engine, one test suite.
 
 ---
 
@@ -358,7 +358,7 @@ Surfaces then become thin and replaceable: **Local participant now → tools + s
 | **2. Session engine** | Extract the import state machine, `nextActions`, plan → apply and the journal into vscode-free code; the Local participant becomes its first surface (no user-visible change) | Existing import tests pass against the engine |
 | **3. Imports without the participant** | Engine tools + skills; optional MCP App review screen | Veracode/Waltz/EML imports work end-to-end in the Copilot harness |
 | **4. Bitbucket review** | Pipeline as engine flow; model access via sampling or in-tool LM (per S3/S4) | Review parity: quick, smart, deep, follow-ups |
-| **5. Optional canvas view** | C′ if S5 shows a port-free rendering path | Board view reads the same engine state |
+| **5. Optional canvas view** | C′, only if the "no ports" constraint is relaxed for a token-protected loopback server (S5 showed there is no port-free path) | Board view reads the same engine state |
 | **6. Retire participants** | Remove `chatParticipants` when Local disappears for our users | No participant code left |
 
 ### Spikes (phase 0)
@@ -369,7 +369,7 @@ Surfaces then become thin and replaceable: **Local participant now → tools + s
 | S2 | Do **MCP Apps** and **elicitation** render and work in Copilot-harness sessions in the editor window? | Rich screens and server-enforced approval |
 | S3 | Does **MCP sampling** work from a stdio server in the Copilot harness, and how does model choice and access look? | Review pipeline in Option B |
 | S4 | Can an **extension LM tool** call `vscode.lm.selectChatModels` + `sendRequest` during a Copilot-harness session? | Review pipeline in Option A |
-| S5 | Does a canvas accept a **non-HTTP URL** (`file:`, `data:`, `vscode-webview:`)? | Whether a canvas can ever meet "no ports" |
+| S5 | ~~Does a canvas accept a non-HTTP URL?~~ **Answered from source: no.** Only `http:`/`https:` with an authority ([`agentHostCanvas.ts`](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/contrib/canvases/common/agentHostCanvas.ts)) | A canvas can't meet "no ports"; it stays optional and needs an explicit exception |
 | S6 | Do our organisation's managed settings plan `vscode.temporaryAllowLocalHarness: false`, and when? | Urgency and order of phases |
 
 ---
@@ -389,6 +389,7 @@ Surfaces then become thin and replaceable: **Local participant now → tools + s
 - VS Code API: [MCP developer guide](https://github.com/microsoft/vscode-docs/blob/main/api/extension-guides/ai/mcp.md) (stdio, sampling, elicitation, MCP Apps, `registerMcpServerDefinitionProvider`), [Language model tools](https://github.com/microsoft/vscode-docs/blob/main/api/extension-guides/ai/tools.md)
 - Release notes: [1.142](https://github.com/microsoft/vscode-docs/blob/main/release-notes/v1_142.md), [1.143](https://github.com/microsoft/vscode-docs/blob/main/release-notes/v1_143.md), [1.144](https://github.com/microsoft/vscode-docs/blob/main/release-notes/v1_144.md)
 - GitHub: [Working with canvas extensions](https://github.com/github/docs/blob/main/content/copilot/how-tos/github-copilot-app/working-with-canvas-extensions.md); sample canvas [backlog-swipe-triage](https://github.com/github/awesome-copilot/tree/main/extensions/backlog-swipe-triage)
+- VS Code source: [`agentHostCanvas.ts`](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/contrib/canvases/common/agentHostCanvas.ts) (canvas source scheme check) and [its test](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/contrib/canvases/test/common/agentHostCanvas.test.ts); agent-host protocol [`channels-canvas/state.ts`](https://github.com/microsoft/vscode/blob/main/src/vs/platform/agentHost/common/state/protocol/channels-canvas/state.ts)
 - Copilot SDK: [`@github/copilot-sdk` 1.0.28 on npm](https://www.npmjs.com/package/@github/copilot-sdk) (`dist/canvas.d.ts`, `dist/workflow.d.ts`, `dist/extension.d.ts`)
 - MCP Apps: [specification](https://modelcontextprotocol.github.io/ext-apps/api/), [SDK and examples](https://github.com/modelcontextprotocol/ext-apps)
 - Design guidance: [Anthropic: Writing effective tools for agents](https://www.anthropic.com/engineering/writing-tools-for-agents), [Microsoft MCP development best practices](https://microsoft.github.io/mcp-azure-security-guide/adoption/development-best-practices), [Workato: MCP server tool design](https://docs.workato.com/en/mcp/mcp-server-tool-design.html), [12-Factor Agents](https://github.com/humanlayer/12-factor-agents), [MCP confirmation / dry-run safety pattern example](https://cappylab.github.io/discord-mcp/architecture/confirmation/)
