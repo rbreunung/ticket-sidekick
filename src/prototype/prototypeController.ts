@@ -38,6 +38,8 @@ export class PrototypeController {
   private readonly server: LocalhostServer;
   private readonly plans = new PlanStore<CommentPlan>();
   private running: Running | undefined;
+  /** The MCP key of the last run, kept in memory after a stop so the report can check whether it was stored. */
+  private lastMcpKey: string | undefined;
   private starting: Promise<void> | undefined;
   private readonly listeners = new Set<() => void>();
 
@@ -96,6 +98,7 @@ export class PrototypeController {
   /** Stops the server and removes this window's traces; the folder goes when no other window uses it. */
   async stop(): Promise<{ folderRemoved: boolean }> {
     const wasRunning = this.running !== undefined;
+    if (this.running) this.lastMcpKey = this.running.mcpKey;
     this.running = undefined;
     this.plans.clear();
     await this.server.stop();
@@ -122,14 +125,19 @@ export class PrototypeController {
     };
   }
 
-  /** The secrets a report must never contain: both current keys. */
+  /** The secrets a report must never contain: the current keys and the last run's MCP key. */
   secrets(): string[] {
-    return this.running ? [this.running.mcpKey, this.running.canvasKey] : [];
+    const current = this.running ? [this.running.mcpKey, this.running.canvasKey] : [];
+    return this.lastMcpKey ? [...current, this.lastMcpKey] : current;
   }
 
-  /** The current MCP key, for the report's search of places the Agent Host might have stored it. */
-  mcpKey(): string | undefined {
-    return this.running?.mcpKey;
+  /**
+   * The MCP key the report searches stored files for: the current one while running, otherwise the
+   * one from the last run in this window (to see whether a stored copy outlives a stop).
+   */
+  keyToSearch(): { key: string; kind: 'current' | 'last-run' } | undefined {
+    if (this.running) return { key: this.running.mcpKey, kind: 'current' };
+    return this.lastMcpKey ? { key: this.lastMcpKey, kind: 'last-run' } : undefined;
   }
 
   stats(): ServerStats {

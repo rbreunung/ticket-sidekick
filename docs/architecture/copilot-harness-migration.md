@@ -469,10 +469,17 @@ The canvas launcher is a small Copilot SDK extension (`extension.mjs`) that decl
 
 The prototype is planned in [`docs/plans/2026-11-05-1230-feat-copilot-harness-localhost-prototype-plan.md`](../plans/2026-11-05-1230-feat-copilot-harness-localhost-prototype-plan.md); its test protocol is in [`docs/manual/copilot-harness-prototype.md`](../manual/copilot-harness-prototype.md).
 
-- The Agent Host does not persist the forwarded `Authorization` header (it omits header values in `/mcp show`, but persistence is not verified).
-- A managed sandbox policy (`allowLocalNetwork`, `sandboxMcpServers`) does not block the Agent Host's or the launcher's connection to `127.0.0.1`.
-- Several VS Code windows: one server per window, so the rendezvous file needs one entry per window, and the launcher must pick the window that owns the session.
-- Where exactly the rendezvous file lives on each OS, and how "user-only" is enforced on Windows (an ACL on the folder rather than `0600`).
+Results of the first test run (one window, one POSIX machine, agent sandbox off):
+
+| Check | Result | Consequence |
+| --- | --- | --- |
+| Canvas end to end | **Works.** The launcher matched the session's working directory to the window, the board loaded, and preview then apply wrote the comment. | D3 and D4 confirmed for one window. |
+| MCP endpoint used by the Copilot harness | **Not exercised.** No request with the bearer key reached the server; the agent most likely used the extension's existing Agent Mode tools instead. | F1/F3 over MCP still open; the next run must make the agent call the prototype's tools by name. |
+| Key stored on disk (R15) | **Yes.** While running, VS Code kept the provided server definition, `Authorization` header included, in its per-workspace storage database. | The key is at rest in a user-only file for as long as it is valid; equal to the rendezvous file under D2's threat model. Open: whether the stored copy is removed when the prototype stops (the report now also searches for the last run's key after a stop), and whether moving the header to `resolveMcpServerDefinition` avoids storing it without breaking forwarding to the Agent Host. |
+| Sandbox (R16) | **Not tested.** The agent sandbox was off. | Retest with the agent sandbox on, especially with local network access denied. |
+| Several windows (R17) | **Not tested.** One window only. | Retest with a second window on any other folder. |
+| Folder protection (R18) | **POSIX: confirmed** (`700` folder and rendezvous directory). Windows: not tested. | Windows still open. |
+
 - S6 (the organisation's Local-harness plans) stays open.
 
 ---

@@ -16,6 +16,8 @@ export interface ReportEntry {
 }
 
 export interface KeyScanResult {
+  /** Which key was searched: the running server's, or the last run's after a stop. */
+  keyKind?: 'current' | 'last-run';
   matches: string[];
   filesScanned: number;
   capped: boolean;
@@ -66,6 +68,7 @@ export function buildReport(f: ReportFacts): string {
   lines.push(`Workspace folders: ${list(f.workspaceFolders)}`, '');
 
   lines.push('## Requests');
+  lines.push(`MCP requests with a valid key: ${f.stats.allowed.mcp ?? 0}`);
   lines.push(`Allowed: ${counts(f.stats.allowed)}`);
   lines.push(`Refused: ${counts(f.stats.refused)}`);
   lines.push(`Host headers seen: ${list(f.stats.recentHosts)}`);
@@ -98,13 +101,14 @@ export function buildReport(f: ReportFacts): string {
 
   lines.push('## Stored key search');
   if (!f.keyScan) {
-    lines.push('Not run: the prototype is not running, so there is no current key to search for.');
+    lines.push('Not run: the prototype has not run in this window since VS Code started, so there is no key to search for.');
   } else {
     const s = f.keyScan;
     lines.push(`Searched: ${list(s.roots)}`);
     if (s.missingRoots.length) lines.push(`Missing: ${list(s.missingRoots)}`);
     lines.push(`Files scanned: ${s.filesScanned}${s.capped ? ` (stopped after ${s.filesScanned} files)` : ''}`);
-    lines.push(s.matches.length ? `Current MCP key FOUND in: ${list(s.matches)}` : 'Current MCP key: not found');
+    const label = s.keyKind === 'last-run' ? 'MCP key of the last run (prototype stopped)' : 'Current MCP key';
+    lines.push(s.matches.length ? `${label} FOUND in: ${list(s.matches)}` : `${label}: not found`);
   }
   if (f.recentNote) lines.push('', f.recentNote);
   return lines.join('\n');

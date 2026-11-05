@@ -245,15 +245,15 @@ async function buildPrototypeReport(
   prototypeFolder: string,
 ): Promise<string> {
   const { entries, skipped } = await readEntries(prototypeFolder);
-  const mcpKey = controller.mcpKey();
+  const searched = controller.keyToSearch();
   const roots = [
     copilotHome(process.env, os.homedir()),
     logsRoot(context.logUri.fsPath),
     path.dirname(context.globalStorageUri.fsPath),
     ...(context.storageUri ? [path.dirname(path.dirname(context.storageUri.fsPath))] : []),
   ];
-  const keyScan = mcpKey
-    ? await scanForSecret(roots, mcpKey, { maxFiles: 20000, maxFileBytes: 64 * 1024 * 1024, skip: [prototypeFolder] })
+  const keyScan = searched
+    ? { ...(await scanForSecret(roots, searched.key, { maxFiles: 20000, maxFileBytes: 64 * 1024 * 1024, skip: [prototypeFolder] })), keyKind: searched.kind }
     : undefined;
 
   const facts: ReportFacts = {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { generateKey, keysMatch } from '../prototype/keys';
-import { checkRequest, type GuardExpectation } from '../prototype/requestGuard';
+import { checkRequest, maskPath, type GuardExpectation } from '../prototype/requestGuard';
 import { PlanStore } from '../prototype/planStore';
 
 const PORT = 43123;
@@ -92,6 +92,18 @@ describe('checkRequest — canvas route', () => {
   it('does not accept the MCP key as a canvas path', () => {
     const result = canvas(`/${expectation.mcpKey}/api/plan`, { host, origin: ownOrigin });
     expect(result).toMatchObject({ allowed: false, status: 401 });
+  });
+});
+
+describe('maskPath', () => {
+  it('masks a key-length first segment', () => {
+    expect(maskPath(`/${expectation.canvasKey}/api/plan`)).toBe('/[key]/api/plan');
+  });
+
+  it('keeps short paths such as /favicon.ico readable', () => {
+    expect(maskPath('/favicon.ico')).toBe('/favicon.ico');
+    expect(maskPath('/.well-known/oauth-protected-resource')).toBe('/.well-known/oauth-protected-resource');
+    expect(maskPath('/mcp?x=1')).toBe('/mcp');
   });
 });
 

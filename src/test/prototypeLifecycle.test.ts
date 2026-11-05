@@ -202,6 +202,18 @@ describe('prototype glue with the MCP provider API', () => {
     expect(h.clipboard).not.toContain(entry.canvasKey);
   });
 
+  it('after a stop, the report searches for the last run’s key and still never shows it', async () => {
+    await activate({ withApi: true, choice: 'Start for this session' });
+    const bearer = offeredDefinitions()[0].headers?.Authorization?.slice('Bearer '.length) ?? '';
+    const stored = path.join(process.env.COPILOT_HOME as string, 'session-cache.json');
+    fs.writeFileSync(stored, `{"headers":{"Authorization":"Bearer ${bearer}"}}`);
+    await h.commands.get(PROTOTYPE_COMMANDS.stop)!();
+    await h.commands.get(PROTOTYPE_COMMANDS.copyReport)!();
+    expect(h.clipboard).toContain('State: stopped');
+    expect(h.clipboard).toContain(`MCP key of the last run (prototype stopped) FOUND in: ${stored}`);
+    expect(h.clipboard).not.toContain(bearer);
+  });
+
   it('deactivation stops the prototype and removes its folder', async () => {
     await activate({ withApi: true, choice: 'Start for this session' });
     await deactivatePrototype();

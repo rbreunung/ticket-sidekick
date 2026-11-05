@@ -50,9 +50,12 @@ export function checkRequest(req: GuardRequest, expected: GuardExpectation): Gua
   return { allowed: true, route: 'canvas', subPath: match[2] ?? '/' };
 }
 
-/** A request path safe to log or count: the first segment (a canvas key) is masked. */
+/**
+ * A request path safe to log or count. A first segment as long as a key (keys are 43 characters)
+ * is masked, so a canvas path never shows its key; short paths such as /favicon.ico stay readable.
+ * The query string is dropped.
+ */
 export function maskPath(path: string): string {
   const bare = path.split('?')[0];
-  if (bare === MCP_PATH) return MCP_PATH;
-  return bare.replace(/^\/[^/]+/, '/[key]');
+  return bare.replace(/^\/[^/]{32,}/, '/[key]');
 }
