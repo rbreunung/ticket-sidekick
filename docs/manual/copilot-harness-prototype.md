@@ -26,7 +26,7 @@ It never starts by itself and remembers nothing. Every time VS Code starts, a no
 - VS Code 1.144 or later, with the Copilot harness available. On older versions the commands only explain that they need a newer VS Code.
 - Jira credentials and `ticketSidekick.jira.defaultProject` set, ideally to a test project, because the prototype can add comments.
 - For the ticket board: the VS Code setting `chat.canvases.enabled` turned on.
-- For the MCP tools: `127.0.0.1` in the VS Code setting `http.noProxy`. Without it, Copilot may send the prototype's local requests to your network proxy, which blocks them. The prototype then keeps its MCP tools off, so no such request is ever made, and says so when you start it; the ticket board works either way. Add the entry yourself: the prototype never changes your settings.
+- `127.0.0.1` in the VS Code setting `http.noProxy`. Without it, Copilot may send the prototype's local requests to your network proxy, which blocks them. So the prototype does not start without this entry, stops if you remove it while it runs, and refuses MCP requests whenever it is missing. Add the entry yourself: the prototype never changes your settings.
 
 ## What it places outside VS Code
 

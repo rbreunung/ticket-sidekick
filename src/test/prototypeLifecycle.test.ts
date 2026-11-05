@@ -21,7 +21,7 @@ const h = vi.hoisted(() => ({
   warnings: [] as string[],
   warningChoice: undefined as string | undefined,
   executed: [] as unknown[][],
-  configListeners: [] as Array<(e: { affectsConfiguration(key: string): boolean }) => void>,
+  configListeners: [] as Array<(e: { affectsConfiguration(key: string): boolean }) => unknown>,
 }));
 
 vi.mock('vscode', () => {
@@ -72,7 +72,7 @@ vi.mock('vscode', () => {
     workspace: {
       workspaceFolders: [{ uri: { fsPath: '/work/a' } }],
       getConfiguration: (section?: string) => configuration(section),
-      onDidChangeConfiguration: (listener: (e: { affectsConfiguration(key: string): boolean }) => void) => {
+      onDidChangeConfiguration: (listener: (e: { affectsConfiguration(key: string): boolean }) => unknown) => {
         h.configListeners.push(listener);
         return { dispose: () => undefined };
       },
@@ -235,24 +235,30 @@ describe('prototype glue with the MCP provider API', () => {
     expect(h.clipboard).not.toContain(bearer);
   });
 
-  it('without 127.0.0.1 in http.noProxy, runs the board but offers no MCP server and says why', async () => {
+  it('without 127.0.0.1 in http.noProxy, refuses to start and offers to open the setting', async () => {
     h.noProxy = [];
     h.warningChoice = 'Open Setting';
     await activate({ withApi: true, choice: 'Start for this session' });
-    expect(offeredDefinitions()).toEqual([]);
-    expect(fs.existsSync(path.join(prototypeFolder(), 'extension.mjs'))).toBe(true);
-    expect(h.warnings.join('\n')).toMatch(/MCP tools are off: 127\.0\.0\.1 is not in the http\.noProxy setting/);
+    expect(h.warnings.join('\n')).toMatch(/did not start: add 127\.0\.0\.1 to the http\.noProxy setting first/);
     expect(h.executed).toContainEqual(['workbench.action.openSettings', 'http.noProxy']);
+    expect(offeredDefinitions()).toEqual([]);
+    expect(fs.existsSync(prototypeFolder())).toBe(false);
     expect(h.configUpdates).toBe(0);
   });
 
-  it('offers the MCP server as soon as 127.0.0.1 is added to http.noProxy while running', async () => {
-    h.noProxy = [];
+  it('stops a running prototype when 127.0.0.1 is removed from http.noProxy', async () => {
     await activate({ withApi: true, choice: 'Start for this session' });
-    const before = h.changeEvents;
-    h.noProxy = ['127.0.0.1'];
-    h.configListeners.forEach(l => l({ affectsConfiguration: key => key === 'http.noProxy' }));
-    expect(h.changeEvents).toBe(before + 1);
+    expect(offeredDefinitions()).toHaveLength(1);
+    h.noProxy = [];
+    await Promise.all(h.configListeners.map(l => l({ affectsConfiguration: key => key === 'http.noProxy' })));
+    expect(offeredDefinitions()).toEqual([]);
+    expect(fs.existsSync(prototypeFolder())).toBe(false);
+    expect(h.warnings.join('\n')).toMatch(/stopped: 127\.0\.0\.1 was removed from http\.noProxy/);
+  });
+
+  it('keeps running when another setting changes', async () => {
+    await activate({ withApi: true, choice: 'Start for this session' });
+    await Promise.all(h.configListeners.map(l => l({ affectsConfiguration: key => key === 'editor.fontSize' })));
     expect(offeredDefinitions()).toHaveLength(1);
   });
 

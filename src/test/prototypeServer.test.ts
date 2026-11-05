@@ -128,6 +128,23 @@ describe('prototype localhost server — MCP endpoint', () => {
     await client.close();
   });
 
+  it('refuses MCP requests with a valid key while MCP is not allowed, before any Jira call', async () => {
+    const jira = new MockJiraClient();
+    const mcpKey = generateKey();
+    let handled = 0;
+    server = new LocalhostServer({
+      onMcp: async (_req, res) => { handled++; res.end(); },
+      onCanvas: async (_req, res) => { res.end(); },
+      allowMcp: () => false,
+    });
+    const port = await server.start({ mcpKey, canvasKey: generateKey() });
+    const res = await fetch(`http://127.0.0.1:${port}/mcp`, { method: 'POST', headers: { Authorization: `Bearer ${mcpKey}` } });
+    expect(res.status).toBe(403);
+    expect(handled).toBe(0);
+    expect(jira.addCommentCalls).toEqual([]);
+    expect(server.stats().refused['mcp-disabled']).toBe(1);
+  });
+
   it('stops accepting connections after stop', async () => {
     const { url, mcpKey } = await startServer();
     await server?.stop();

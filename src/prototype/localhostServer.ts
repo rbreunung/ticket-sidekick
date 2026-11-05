@@ -13,6 +13,8 @@ export type CanvasHandler = (req: http.IncomingMessage, res: http.ServerResponse
 export interface LocalhostServerOptions {
   onMcp: RouteHandler;
   onCanvas: CanvasHandler;
+  /** Checked on every MCP request after the guard; false refuses it (403) before the handler runs. */
+  allowMcp?: () => boolean;
   onError?: (message: string) => void;
 }
 
@@ -119,6 +121,13 @@ export class LocalhostServer {
       res.statusCode = decision.status;
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
       res.end(decision.status === 401 ? 'Unauthorized' : decision.status === 403 ? 'Forbidden' : 'Not found');
+      return;
+    }
+    if (decision.route === 'mcp' && this.options.allowMcp && !this.options.allowMcp()) {
+      this.counters.refused['mcp-disabled'] = (this.counters.refused['mcp-disabled'] ?? 0) + 1;
+      res.statusCode = 403;
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.end('Forbidden');
       return;
     }
     this.counters.allowed[decision.route] = (this.counters.allowed[decision.route] ?? 0) + 1;

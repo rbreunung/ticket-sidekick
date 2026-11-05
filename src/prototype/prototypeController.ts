@@ -20,6 +20,8 @@ export interface ControllerDeps {
   prototypeFolder: string;
   pid: number;
   isAlive?(pid: number): boolean;
+  /** Whether MCP requests may be served right now; the server refuses them otherwise. */
+  isMcpAllowed?(): boolean;
   onError?(message: string): void;
 }
 
@@ -47,6 +49,7 @@ export class PrototypeController {
     this.server = new LocalhostServer({
       onMcp: createMcpHandler({ getJira: deps.getJira, confirmWrite: deps.confirmWrite, onError: deps.onError }),
       onCanvas: createCanvasHandler({ getJira: deps.getJira, getProjectKey: deps.getProjectKey, plans: this.plans, onError: deps.onError }),
+      allowMcp: deps.isMcpAllowed,
       onError: deps.onError,
     });
   }
