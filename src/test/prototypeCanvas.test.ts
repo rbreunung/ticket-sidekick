@@ -51,6 +51,12 @@ describe('prototype canvas board', () => {
     expect(html).not.toContain('innerHTML');
   });
 
+  it('embeds its own icon, so the browser does not ask the server for /favicon.ico', async () => {
+    const { base } = await start();
+    const html = await (await fetch(`${base}/`)).text();
+    expect(html).toMatch(/<link rel="icon" href="data:image\/svg\+xml,/);
+  });
+
   it('lists the default project’s unresolved tickets, most recently updated first', async () => {
     const { base, jira } = await start('PROJ');
     const res = await fetch(`${base}/api/tickets`);

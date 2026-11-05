@@ -17,6 +17,11 @@ const h = vi.hoisted(() => ({
   lm: {} as Record<string, unknown>,
   providers: [] as Array<{ provideMcpServerDefinitions: () => unknown; onDidChangeMcpServerDefinitions?: (l: () => void) => unknown }>,
   changeEvents: 0,
+  noProxy: ['127.0.0.1'] as unknown,
+  warnings: [] as string[],
+  warningChoice: undefined as string | undefined,
+  executed: [] as unknown[][],
+  configListeners: [] as Array<(e: { affectsConfiguration(key: string): boolean }) => void>,
 }));
 
 vi.mock('vscode', () => {
@@ -29,12 +34,15 @@ vi.mock('vscode', () => {
   class McpHttpServerDefinition {
     constructor(public label: string, public uri: { toString(): string }, public headers?: Record<string, string>, public version?: string) {}
   }
-  const configuration = {
-    get: (_key: string, fallback?: unknown) => (_key === 'jira.defaultProject' ? 'PROJ' : fallback),
+  const configuration = (section?: string) => ({
+    get: (key: string, fallback?: unknown) => {
+      if (section === 'http' && key === 'noProxy') return h.noProxy;
+      return key === 'jira.defaultProject' ? 'PROJ' : fallback;
+    },
     update: async () => { h.configUpdates++; },
     has: () => false,
     inspect: () => undefined,
-  };
+  });
   return {
     version: '1.144.0',
     EventEmitter,
@@ -43,6 +51,7 @@ vi.mock('vscode', () => {
     lm: h.lm,
     commands: {
       registerCommand: (id: string, fn: (...args: unknown[]) => unknown) => { h.commands.set(id, fn); return { dispose: () => undefined }; },
+      executeCommand: async (...args: unknown[]) => { h.executed.push(args); },
     },
     window: {
       createOutputChannel: () => ({ appendLine: () => undefined }),
@@ -52,14 +61,21 @@ vi.mock('vscode', () => {
         if (choices.length) h.pendingNotification = result;
         return result;
       },
-      showWarningMessage: async () => undefined,
+      showWarningMessage: async (message: string, ...rest: unknown[]) => {
+        h.warnings.push(message);
+        return rest.some(r => r === h.warningChoice) ? h.warningChoice : undefined;
+      },
       showErrorMessage: async (message: string) => { h.infoMessages.push(message); return undefined; },
       withProgress: (_options: unknown, task: () => Promise<unknown>) => task(),
     },
     ProgressLocation: { Notification: 15 },
     workspace: {
       workspaceFolders: [{ uri: { fsPath: '/work/a' } }],
-      getConfiguration: () => configuration,
+      getConfiguration: (section?: string) => configuration(section),
+      onDidChangeConfiguration: (listener: (e: { affectsConfiguration(key: string): boolean }) => void) => {
+        h.configListeners.push(listener);
+        return { dispose: () => undefined };
+      },
     },
     env: { clipboard: { writeText: async (text: string) => { h.clipboard = text; } } },
   };
@@ -127,6 +143,11 @@ beforeEach(() => {
   h.changeEvents = 0;
   h.configUpdates = 0;
   h.clipboard = undefined;
+  h.noProxy = ['127.0.0.1'];
+  h.warnings = [];
+  h.warningChoice = undefined;
+  h.executed = [];
+  h.configListeners = [];
 });
 
 afterEach(async () => {
@@ -212,6 +233,27 @@ describe('prototype glue with the MCP provider API', () => {
     expect(h.clipboard).toContain('State: stopped');
     expect(h.clipboard).toContain(`MCP key of the last run (prototype stopped) FOUND in: ${stored}`);
     expect(h.clipboard).not.toContain(bearer);
+  });
+
+  it('without 127.0.0.1 in http.noProxy, runs the board but offers no MCP server and says why', async () => {
+    h.noProxy = [];
+    h.warningChoice = 'Open Setting';
+    await activate({ withApi: true, choice: 'Start for this session' });
+    expect(offeredDefinitions()).toEqual([]);
+    expect(fs.existsSync(path.join(prototypeFolder(), 'extension.mjs'))).toBe(true);
+    expect(h.warnings.join('\n')).toMatch(/MCP tools are off: 127\.0\.0\.1 is not in the http\.noProxy setting/);
+    expect(h.executed).toContainEqual(['workbench.action.openSettings', 'http.noProxy']);
+    expect(h.configUpdates).toBe(0);
+  });
+
+  it('offers the MCP server as soon as 127.0.0.1 is added to http.noProxy while running', async () => {
+    h.noProxy = [];
+    await activate({ withApi: true, choice: 'Start for this session' });
+    const before = h.changeEvents;
+    h.noProxy = ['127.0.0.1'];
+    h.configListeners.forEach(l => l({ affectsConfiguration: key => key === 'http.noProxy' }));
+    expect(h.changeEvents).toBe(before + 1);
+    expect(offeredDefinitions()).toHaveLength(1);
   });
 
   it('deactivation stops the prototype and removes its folder', async () => {

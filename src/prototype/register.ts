@@ -12,6 +12,7 @@ import { PrototypeController } from './prototypeController';
 import { copilotHome, prototypeFolderPath, readEntries, isProcessAlive, LAUNCHER_LOG } from './prototypeFolder';
 import { buildReport, redact, scanForSecret, type ReportFacts } from './report';
 import { detectMcpApi } from './vscodeMcpTypes';
+import { loopbackBypassConfigured } from './proxyBypass';
 import type { JiraAccess } from './mcpEndpoint';
 
 // VS Code glue for the Copilot harness prototype. Nothing starts on its own: each VS Code start
@@ -31,6 +32,7 @@ const SERVER_LABEL = 'Ticket Sidekick (prototype)';
 const START_CHOICE = 'Start for this session';
 const NOT_NOW_CHOICE = 'Not now';
 const ADD_COMMENT_CHOICE = 'Add comment';
+const OPEN_SETTING_CHOICE = 'Open Setting';
 
 let active: PrototypeController | undefined;
 
@@ -88,18 +90,29 @@ export function registerPrototype(context: vscode.ExtensionContext, configServic
   });
   active = controller;
 
+  // The MCP server is offered to Copilot only when 127.0.0.1 bypasses the network proxy. Otherwise
+  // the Copilot runtime may send every connection attempt to a corporate web proxy, which blocks it
+  // and logs it; the canvas is unaffected because VS Code's window connects to 127.0.0.1 directly.
+  const mcpAllowed = () => loopbackBypassConfigured(vscode.workspace.getConfiguration('http').get<unknown>('noProxy'));
+
   if (mcp) {
     const changed = new vscode.EventEmitter<void>();
-    context.subscriptions.push(changed, controller.onDidChange(() => changed.fire()));
+    context.subscriptions.push(
+      changed,
+      controller.onDidChange(() => changed.fire()),
+      vscode.workspace.onDidChangeConfiguration(e => {
+        if (e.affectsConfiguration('http.noProxy') && controller.isRunning()) changed.fire();
+      }),
+    );
     context.subscriptions.push(mcp.registerMcpServerDefinitionProvider(PROVIDER_ID, {
       onDidChangeMcpServerDefinitions: changed.event,
       provideMcpServerDefinitions: () => {
         const definition = controller.mcpDefinition();
-        return definition
+        return definition && mcpAllowed()
           ? [new mcp.McpHttpServerDefinition(SERVER_LABEL, vscode.Uri.parse(definition.url), definition.headers, '0.0.1')]
           : [];
       },
-      resolveMcpServerDefinition: server => (controller.isRunning() ? server : undefined),
+      resolveMcpServerDefinition: server => (controller.isRunning() && mcpAllowed() ? server : undefined),
     }));
   }
 
@@ -117,11 +130,23 @@ export function registerPrototype(context: vscode.ExtensionContext, configServic
       await controller.start();
       log('info', `Prototype started on 127.0.0.1:${controller.port()}`, { folder: prototypeFolder });
       const canvases = vscode.workspace.getConfiguration('chat').get<boolean>('canvases.enabled') === true;
-      void vscode.window.showInformationMessage(
-        `Ticket Sidekick prototype is running on 127.0.0.1:${controller.port()} for this VS Code session. ` +
-        'Open a new chat, choose the Copilot harness in Session Target, and send a first message.' +
-        (canvases ? '' : ' To try the ticket board, also turn on chat.canvases.enabled.'),
-      );
+      const canvasHint = canvases ? '' : ' To try the ticket board, also turn on chat.canvases.enabled.';
+      if (mcpAllowed()) {
+        void vscode.window.showInformationMessage(
+          `Ticket Sidekick prototype is running on 127.0.0.1:${controller.port()} for this VS Code session. ` +
+          'Open a new chat, choose the Copilot harness in Session Target, and send a first message.' + canvasHint,
+        );
+      } else {
+        const choice = await vscode.window.showWarningMessage(
+          `Ticket Sidekick prototype is running on 127.0.0.1:${controller.port()}, but its MCP tools are off: ` +
+          '127.0.0.1 is not in the http.noProxy setting, so Copilot could send these local requests to your network proxy. ' +
+          'Add 127.0.0.1 to http.noProxy to turn them on; the ticket board works either way.' + canvasHint,
+          OPEN_SETTING_CHOICE,
+        );
+        if (choice === OPEN_SETTING_CHOICE) {
+          void vscode.commands.executeCommand('workbench.action.openSettings', 'http.noProxy');
+        }
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log('error', `Prototype could not start: ${message}`);
@@ -159,7 +184,7 @@ export function registerPrototype(context: vscode.ExtensionContext, configServic
     vscode.commands.registerCommand(PROTOTYPE_COMMANDS.copyReport, async () => {
       const text = await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'Ticket Sidekick: building the prototype report (searching for stored keys)…' },
-        () => buildPrototypeReport(context, configService, controller, Boolean(mcp), prototypeFolder),
+        () => buildPrototypeReport(context, configService, controller, Boolean(mcp), mcpAllowed(), prototypeFolder),
       );
       await vscode.env.clipboard.writeText(text);
       void vscode.window.showInformationMessage('Ticket Sidekick prototype report copied to the clipboard. It contains no keys or tokens.');
@@ -242,6 +267,7 @@ async function buildPrototypeReport(
   configService: ConfigService,
   controller: PrototypeController,
   providerApiAvailable: boolean,
+  loopbackBypass: boolean,
   prototypeFolder: string,
 ): Promise<string> {
   const { entries, skipped } = await readEntries(prototypeFolder);
@@ -262,6 +288,7 @@ async function buildPrototypeReport(
     extensionVersion: String((context.extension.packageJSON as { version?: string }).version ?? 'unknown'),
     os: `${os.platform()} ${os.release()}`,
     providerApiAvailable,
+    loopbackBypass,
     running: controller.isRunning(),
     port: controller.port(),
     pid: process.pid,

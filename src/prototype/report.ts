@@ -31,6 +31,8 @@ export interface ReportFacts {
   extensionVersion: string;
   os: string;
   providerApiAvailable: boolean;
+  /** Whether 127.0.0.1 is in http.noProxy; the MCP server is offered to Copilot only then. */
+  loopbackBypass: boolean;
   running: boolean;
   port: number | undefined;
   pid: number;
@@ -65,6 +67,7 @@ export function buildReport(f: ReportFacts): string {
 
   lines.push('## Server');
   lines.push(`State: ${f.running ? 'running' : 'stopped'}${f.port ? ` on 127.0.0.1:${f.port}` : ''}; window pid ${f.pid}`);
+  lines.push(`MCP server offered to Copilot: ${f.running && f.loopbackBypass ? 'yes' : 'no'} (127.0.0.1 in http.noProxy: ${f.loopbackBypass ? 'yes' : 'no'})`);
   lines.push(`Workspace folders: ${list(f.workspaceFolders)}`, '');
 
   lines.push('## Requests');

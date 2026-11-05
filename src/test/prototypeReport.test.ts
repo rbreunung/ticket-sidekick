@@ -16,6 +16,7 @@ function facts(overrides: Partial<ReportFacts> = {}): ReportFacts {
     extensionVersion: '0.8.5',
     os: 'linux 6.1',
     providerApiAvailable: true,
+    loopbackBypass: true,
     running: true,
     port: 43123,
     pid: 4242,
@@ -60,6 +61,11 @@ describe('prototype report', () => {
     }
     expect(text).toContain('/[key]/api/plan');
     expect(text).toContain('not found');
+  });
+
+  it('says the MCP server is not offered when 127.0.0.1 is missing from http.noProxy', () => {
+    expect(buildReport(facts({ loopbackBypass: false }))).toContain('MCP server offered to Copilot: no (127.0.0.1 in http.noProxy: no)');
+    expect(buildReport(facts())).toContain('MCP server offered to Copilot: yes');
   });
 
   it('says there was no launcher activity when the log is empty', () => {

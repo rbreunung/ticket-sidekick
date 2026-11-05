@@ -26,6 +26,7 @@ It never starts by itself and remembers nothing. Every time VS Code starts, a no
 - VS Code 1.144 or later, with the Copilot harness available. On older versions the commands only explain that they need a newer VS Code.
 - Jira credentials and `ticketSidekick.jira.defaultProject` set, ideally to a test project, because the prototype can add comments.
 - For the ticket board: the VS Code setting `chat.canvases.enabled` turned on.
+- For the MCP tools: `127.0.0.1` in the VS Code setting `http.noProxy`. Without it, Copilot may send the prototype's local requests to your network proxy, which blocks them. The prototype then keeps its MCP tools off, so no such request is ever made, and says so when you start it; the ticket board works either way. Add the entry yourself: the prototype never changes your settings.
 
 ## What it places outside VS Code
 
@@ -34,7 +35,7 @@ While it runs, the prototype keeps one folder in the Copilot home: `~/.copilot/e
 ## Test protocol
 
 1. Build the extension from the prototype branch: run `npm ci`, then `npm run package`. Install the resulting `.vsix` with **Extensions: Install from VSIX…** and reload VS Code.
-2. Turn on `chat.canvases.enabled`. Check that Jira credentials and `ticketSidekick.jira.defaultProject` (a test project) are set.
+2. Turn on `chat.canvases.enabled` and add `127.0.0.1` to `http.noProxy`. Check that Jira credentials and `ticketSidekick.jira.defaultProject` (a test project) are set.
 3. When the notification appears, choose **Start for this session**.
 4. Open a new chat, choose **Copilot** in **Session Target**, and send any first message. Run **MCP: List Servers** and check that **Ticket Sidekick (prototype)** is listed and running. Then ask: "Call the ticket_sidekick_show_ticket tool for KEY-1", using a real ticket key. The chat names each tool it calls; note whether it was `ticket_sidekick_show_ticket` (the prototype) or a `jira_…` tool (the extension's regular Agent Mode tools). Look for the small inline ticket view.
 5. Ask: "Call the ticket_sidekick_add_comment tool to add 'prototype test' to KEY-1". The prototype's approval is a VS Code dialog titled "the agent wants to write to Jira". Click **Cancel** once, then ask again and approve it.
