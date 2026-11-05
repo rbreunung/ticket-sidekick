@@ -1,0 +1,146 @@
+import { describe, it, expect, afterEach } from 'vitest';
+import * as http from 'http';
+import { z } from 'zod';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { LocalhostServer } from '../mcp/localhostServer';
+import { createMcpHandler, defineTool, type McpToolDefinition } from '../mcp/mcpServer';
+import { generateKey } from '../mcp/keys';
+
+interface TestDeps { calls: string[] }
+
+const echoTool = defineTool<TestDeps, { text: z.ZodString }>({
+  name: 'test_echo',
+  title: 'Echo',
+  description: 'Answers with the text it was given.',
+  inputSchema: { text: z.string().describe('Text to echo') },
+  annotations: { readOnlyHint: true },
+  handler: async ({ text }, deps) => {
+    deps.calls.push(text);
+    return `echo: ${text}`;
+  },
+});
+
+const catalog: McpToolDefinition<TestDeps>[] = [echoTool];
+
+let server: LocalhostServer | undefined;
+
+afterEach(async () => {
+  await server?.stop();
+  server = undefined;
+});
+
+async function startServer(opts: { allowMcp?: () => boolean } = {}) {
+  const deps: TestDeps = { calls: [] };
+  let handled = 0;
+  const handler = createMcpHandler(catalog, deps, { name: 'ticket-sidekick', version: '0.0.0-test' });
+  server = new LocalhostServer({
+    onMcp: async (req, res) => { handled++; await handler(req, res); },
+    allowMcp: opts.allowMcp,
+  });
+  const mcpKey = generateKey();
+  const port = await server.start(mcpKey);
+  return { port, url: `http://127.0.0.1:${port}/mcp`, mcpKey, deps, handled: () => handled };
+}
+
+async function connect(url: string, key: string | undefined): Promise<Client> {
+  const client = new Client({ name: 'test', version: '0.0.0' });
+  const headers: Record<string, string> = key ? { Authorization: `Bearer ${key}` } : {};
+  await client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers } }));
+  return client;
+}
+
+/** A raw POST with full control over the Host header, which fetch does not allow setting. */
+function rawPost(port: number, headers: Record<string, string>): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, path: '/mcp', method: 'POST', headers }, res => {
+      res.resume();
+      resolve(res.statusCode ?? 0);
+    });
+    req.on('error', reject);
+    req.end('{}');
+  });
+}
+
+function textOf(result: unknown): string {
+  const content = (result as { content?: Array<{ type: string; text?: string }> }).content ?? [];
+  return content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+}
+
+describe('localhost MCP server', () => {
+  it('listens on 127.0.0.1 with a non-zero port', async () => {
+    const { port } = await startServer();
+    expect(port).toBeGreaterThan(0);
+    expect(server?.address()?.address).toBe('127.0.0.1');
+    expect(server?.isRunning()).toBe(true);
+  });
+
+  it('lists the catalog tool with its annotations and calls it through the official MCP client', async () => {
+    const { url, mcpKey, deps } = await startServer();
+    const client = await connect(url, mcpKey);
+
+    const tools = (await client.listTools()).tools;
+    expect(tools.map(t => t.name)).toEqual(['test_echo']);
+    expect(tools[0]).toMatchObject({ title: 'Echo', description: 'Answers with the text it was given.', annotations: { readOnlyHint: true } });
+
+    const result = await client.callTool({ name: 'test_echo', arguments: { text: 'hello' } });
+    expect(textOf(result)).toBe('echo: hello');
+    expect(deps.calls).toEqual(['hello']);
+    expect(server?.stats().allowed.mcp).toBeGreaterThan(0);
+    await client.close();
+  });
+
+  it('refuses a client without the key, or with a wrong key, with 401 before any handler runs', async () => {
+    const { port, url, mcpKey, deps, handled } = await startServer();
+    expect(await rawPost(port, { host: `127.0.0.1:${port}`, 'content-type': 'application/json' })).toBe(401);
+    await expect(connect(url, generateKey())).rejects.toThrow();
+    expect(handled()).toBe(0);
+    expect(deps.calls).toEqual([]);
+    expect(server?.stats().refused['mcp-key-invalid']).toBeGreaterThanOrEqual(2);
+    expect(JSON.stringify(server?.stats())).not.toContain(mcpKey);
+  });
+
+  it('refuses Host localhost:<port> with 403 even with the right key', async () => {
+    const { port, mcpKey, handled } = await startServer();
+    const status = await rawPost(port, { host: `localhost:${port}`, authorization: `Bearer ${mcpKey}`, 'content-type': 'application/json' });
+    expect(status).toBe(403);
+    expect(handled()).toBe(0);
+    expect(server?.stats().refused['host-mismatch']).toBe(1);
+  });
+
+  it('refuses a foreign Origin with 403 even with the right key', async () => {
+    const { port, mcpKey, handled } = await startServer();
+    const status = await rawPost(port, {
+      host: `127.0.0.1:${port}`, origin: 'https://evil.example', authorization: `Bearer ${mcpKey}`, 'content-type': 'application/json',
+    });
+    expect(status).toBe(403);
+    expect(handled()).toBe(0);
+    expect(server?.stats().recentOrigins).toContain('https://evil.example');
+  });
+
+  it('refuses a valid request with 403 while MCP is not allowed, and counts it as mcp-disabled', async () => {
+    const { port, mcpKey, handled } = await startServer({ allowMcp: () => false });
+    const status = await rawPost(port, { host: `127.0.0.1:${port}`, authorization: `Bearer ${mcpKey}`, 'content-type': 'application/json' });
+    expect(status).toBe(403);
+    expect(handled()).toBe(0);
+    expect(server?.stats().refused['mcp-disabled']).toBe(1);
+  });
+
+  it('asks the allow gate on every request, so allowing it again takes effect at once', async () => {
+    let allowed = false;
+    const { url, mcpKey } = await startServer({ allowMcp: () => allowed });
+    await expect(connect(url, mcpKey)).rejects.toThrow();
+    allowed = true;
+    const client = await connect(url, mcpKey);
+    expect((await client.listTools()).tools).toHaveLength(1);
+    await client.close();
+  });
+
+  it('stops accepting connections after stop', async () => {
+    const { url, mcpKey } = await startServer();
+    await server?.stop();
+    expect(server?.isRunning()).toBe(false);
+    server = undefined;
+    await expect(connect(url, mcpKey)).rejects.toThrow();
+  });
+});
