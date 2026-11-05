@@ -121,7 +121,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 ### Dependencies / Assumptions
 
 - VS Code 1.101 or later for the MCP provider API; the prototype was built and tested against 1.144 with the Copilot harness. On older versions the extension offers no Jira tools to agents; `@jira` still works.
-- Users who want the tools add `127.0.0.1` to `http.noProxy` themselves; the extension never writes settings.
+- Users who want the tools add `127.0.0.1` to `http.noProxy` themselves; the extension never writes settings. On the managed Mac and Windows machines in scope, users can edit this setting (confirmed by the user; IT does not lock it).
 
 ### Sources / Research
 
@@ -147,7 +147,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 - KTD10. **The connection check becomes a pure function shared with `@jira check`,** so both give the same answer from the same code.
 - KTD11. **Skills are contributed through `contributes.chatSkills`** from `skills/jira-brief/SKILL.md` and `skills/jira-create/SKILL.md`, with `name` equal to the folder name and no `disable-model-invocation`.
 - KTD12. **The e2e test drives VS Code's own MCP client.** It writes `http.noProxy` and tool auto-approval into the throwaway profile in `src/e2e/runTest.ts`, starts the server through VS Code, waits for the tools in `vscode.lm.tools`, invokes check connection with `vscode.lm.invokeTool`, then removes the entry and expects the tools to disappear. If VS Code does not expose MCP tools to extensions that way, the test is reduced to activation and server lifecycle, and the plan's coverage note says so.
-- KTD13. **The diagnostic report becomes `Ticket Sidekick: Copy MCP diagnostics`,** without the prototype's rendezvous and launcher sections, keeping the stored-key search over the Copilot home, VS Code logs and VS Code storage.
+- KTD13. **The diagnostic report becomes `Ticket Sidekick: Copy MCP diagnostics`,** without the prototype's rendezvous and launcher sections, keeping the stored-key search over the Copilot home, VS Code logs and VS Code storage, and adding the restart, client, proxy-evaluation and tool-outcome sections of U5.
 
 ### High-Level Technical Design
 
@@ -270,7 +270,7 @@ Waits on: nothing.
 - **Approach:**
   1. At activation, feature-detect the MCP provider API (prototype `vscodeMcpTypes.ts`); without it, register nothing and log once.
   2. Start the server when `http.noProxy` holds `127.0.0.1`; on `onDidChangeConfiguration` for `http.noProxy`, start or stop accordingly and fire the provider's change event.
-  3. The provider returns one HTTP definition (URL plus `Authorization` header) while running, otherwise none; `deactivate` stops the server.
+  3. The provider returns one HTTP definition (URL plus `Authorization` header) while running, otherwise none; `deactivate` stops the server. It also implements the resolve hook VS Code calls just before connecting (`resolveMcpServerDefinition`, as the prototype does): it returns the current URL and key while running and refuses while stopped, so no client connects with a stale port or key.
   4. Jira configuration is not a start condition: tools read it per call (R20).
   5. Start, stop and refused requests are logged through `logDiag('mcp', …)`; tool calls are logged by tool name and outcome only, never with arguments, keys or tokens.
 - **Patterns to follow:** the prototype's `register.ts` and `prototypeLifecycle.test.ts` (per-file `vi.mock('vscode')`).
@@ -279,6 +279,7 @@ Waits on: nothing.
   - Covers AE1. Adding the entry starts the server, fires the change event and makes the provider offer one definition with a bearer header.
   - Removing the entry stops the server and the provider offers nothing.
   - A restart of the server yields a different bearer key.
+  - After a restart, the resolve hook returns the new port and key, never the old ones; while stopped it refuses.
   - Without the provider API, activation registers nothing and does not throw.
   - Across start, stop and restart, no setting is written.
 - **Verification:** lifecycle tests pass; `bundleSmoke.test.ts` still passes.
@@ -320,11 +321,23 @@ Waits on: nothing.
 - **Requirements:** R26; KTD13.
 - **Dependencies:** U2.
 - **Files:** `src/mcp/report.ts`, `src/mcp/register.ts`, `package.json` (command), `src/test/mcpReport.test.ts`.
-- **Approach:** port the prototype report without rendezvous and launcher sections; keep server state, offered yes/no with the reason, request counts, Host and Origin values, `chat.mcp.*` and sandbox settings, and the stored-key search; redact keys and tokens at the end.
+- **Approach:** port the prototype report without rendezvous and launcher sections; keep server state, offered yes/no with the reason, request counts, Host and Origin values, `chat.mcp.*` and sandbox settings, and the stored-key search. Add, from in-memory counters only:
+  1. VS Code and extension versions, and whether the MCP provider API is present.
+  2. Server history this session: each start and stop with time and trigger (activation, entry added, entry removed, deactivate), the current port and earlier ports.
+  3. Definition handshake: change announcements fired, resolve-hook calls served and refused.
+  4. Refused key checks split into "key from an earlier start" (a stale client, recognised by short fingerprints of this session's earlier keys, never the keys) and "unknown key".
+  5. MCP clients seen: user-agent and time of last request.
+  6. Proxy evaluation: the loopback-related `http.noProxy` entries and why each counts or not; other entries only counted, since they may name internal hosts; whether `http.proxy` is set and system proxy discovery is on (yes/no).
+  7. Tool calls per tool: success and failure counts, failures by error class or Jira HTTP status; never arguments or results.
+  8. Jira configuration: configured yes/no, auth type, token present yes/no; no base URL.
+  Redact keys and tokens at the end.
 - **Test scenarios:**
   - A report built from facts containing the key and the Jira token contains neither.
   - The key search reports a planted key by file path only.
   - The report states "offered: no (127.0.0.1 in http.noProxy: no)" when the entry is missing.
+  - After a restart, a request with the earlier key is counted as "key from an earlier start", and the report lists both ports.
+  - With `127.0.0.1:8080` and an internal host in `http.noProxy`, the report shows the port entry as ignored and the internal host only as a count.
+  - A failed tool call appears as its tool name and HTTP status, with no argument text.
 - **Verification:** tests pass; the command is documented (R25).
 
 ### U6. E2E through VS Code's MCP client
@@ -384,9 +397,9 @@ Waits on: PR1, merge order only.
 - **Goal:** one load tool with optional extra attachments, on a vscode-free core.
 - **Requirements:** R12, R16; KTD6.
 - **Dependencies:** U7.
-- **Files:** `src/participant/jira/loadHandler.ts` (core moved to Node `fs` behind a writer), `src/mcp/jiraTools/loadTicket.ts`, `src/test/mcpTools.test.ts`, `src/test/loadTicketCore.test.ts`.
+- **Files:** `src/participant/jira/loadCore.ts` (new, vscode-free: the core behind a writer and an optional `onDiag` logger), `src/participant/jira/loadHandler.ts` (keeps only the `@jira load` chat flow and calls the core), `src/mcp/jiraTools/loadTicket.ts`, `src/test/mcpTools.test.ts`, `src/test/loadTicketCore.test.ts`.
 - **Approach:** the core writes `ticket.md`, `comments.md` and eligible attachments and returns written and skipped files; an optional list adds named attachments without the type filter, respecting `ATTACHMENT_SIZE_LIMIT`; an attachment whose Jira filename fails `isSafeFilename`, or whose resolved path is not inside `.jira-context/<KEY>/attachments/`, is skipped with the reason "unsafe filename"; written files are reported as absolute paths; `@jira load` keeps its behavior on the same core.
-- **Execution note:** keep `loadTicketCore.test.ts` passing unchanged before moving the core.
+- **Execution note:** first confirm `loadTicketCore.test.ts` passes as it is, then move the core and switch the test's checks from the mocked `vscode.workspace.fs` to an in-memory writer, keeping the same scenarios and expected results.
 - **Test scenarios:**
   - Covers AE3. Without a list, the text attachment is written and the binary one is listed as skipped with size and reason.
   - Covers AE3. With `["design.pdf"]`, both are written along with the ticket files.
@@ -419,7 +432,7 @@ Waits on: PR1, merge order only.
 - **Approach:**
   1. Remove `jira_getTicket`, `jira_getComments`, `jira_searchTickets`, `jira_searchByFilter`, `jira_listMyFilters`, `jira_loadTicket`, `jira_downloadAttachment`, `jira_discoverWorkflow`, `jira_listTemplates` from `package.json` and their registrations and tests.
   2. Switch the docs-sync check to the MCP catalog for Jira tools; Bitbucket stays on `languageModelTools`.
-  3. Add the MCP tools page with the `http.noProxy` requirement and the manual checklist.
+  3. Add the MCP tools page with the `http.noProxy` requirement, the manual checklist and a troubleshooting note: if the Jira tools stop answering after changing `http.noProxy` or reloading the window, start a new chat; if that does not help, run **Copy MCP diagnostics** and send the report.
 - **Test scenarios:**
   - Docs-sync fails when a catalog tool is missing from the manual.
   - Bundle smoke registers exactly the remaining declared Agent Mode tools.
