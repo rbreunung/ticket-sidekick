@@ -144,4 +144,16 @@ describe('bundled extension (out/extension.js)', () => {
     expect(declared.length).toBeGreaterThan(0);
     expect([...registered.tools].sort()).toEqual(declared);
   });
+
+  it('builds the canvas launcher as one file that needs nothing but Node built-ins', () => {
+    const launcherDir = path.join(root, 'out', 'prototype-launcher');
+    const pkg = JSON.parse(fs.readFileSync(path.join(launcherDir, 'package.json'), 'utf-8')) as { type: string; main: string };
+    expect(pkg).toMatchObject({ type: 'module', main: 'extension.mjs' });
+    const code = fs.readFileSync(path.join(launcherDir, 'extension.mjs'), 'utf-8');
+    const specifiers = [...code.matchAll(/^import [^;]*? from ["']([^"']+)["']/gm)].map(m => m[1]);
+    expect(specifiers.length).toBeGreaterThan(0);
+    const builtins = new Set(nodeRequire('node:module').builtinModules as string[]);
+    const outside = specifiers.filter(s => !s.startsWith('node:') && !builtins.has(s));
+    expect(outside).toEqual([]);
+  });
 });
