@@ -167,12 +167,12 @@ Chat participants are deprecated and unsupported in the Copilot harness, so `@ji
 - KTD3. **The MCP provider API is feature-detected at runtime; the `engines.vscode` floor stays at 1.95.** `registerMcpServerDefinitionProvider` and `McpHttpServerDefinition` are read from the `vscode` module at runtime through local type declarations, because `@types/vscode` 1.95 lacks them. Without the API the extension behaves exactly as today, with no notification. The provider is registered at activation, returns no server until the prototype starts, and fires its change event on start and stop.
 - KTD4. **Keys are 32 random bytes from `crypto.randomBytes`, base64url-encoded, new at every start and compared with `crypto.timingSafeEqual`.** A length mismatch is a plain refusal, never an exception. Governs the mechanism of R2.
 - KTD5. **The canvas launcher is a second esbuild entry that bundles `@github/copilot-sdk/extension` into one self-contained `extension.mjs` with a minimal `package.json`, shipped inside the `.vsix`.** Starting the prototype copies it into the launcher folder (R13). It doesn't depend on an SDK copy the Copilot runtime may or may not provide. Risk: the runtime may expect the SDK it injects (`extensionSdkPath`); if a bundled launcher cannot join a session, stop (Goal Capsule).
-- KTD6. **The launcher and the rendezvous files share one folder, `~/.copilot/extensions/ticket-sidekick/`.** Rendezvous entries live in `rendezvous/window-<pid>.json`, so cleanup (R21) is one folder delete. On POSIX the folders are created `0700` and files `0600`. On Windows they inherit the user profile's permissions, which R18 checks.
+- KTD6. **The launcher and the rendezvous files share one folder, `<Copilot home>/extensions/ticket-sidekick/`.** The Copilot home is `COPILOT_HOME` when set, else `~/.copilot`, matching how the Copilot runtime finds user-scope configuration; the folder named in R13 is that default. Rendezvous entries live in `rendezvous/window-<pid>.json`, so cleanup (R21) is one folder delete, and **Remove prototype leftovers** checks both locations. On POSIX the folders are created `0700` and files `0600`. On Windows they inherit the user profile's permissions, which R18 checks.
 - KTD7. **The launcher picks the window whose workspace folder matches the canvas request's `session.workingDirectory`.** An entry counts only while its process is alive. With no match it falls back to the single live entry; with none, or several unmatched, it returns a "not running" or "ambiguous" status page instead of guessing. The pure `selectWindow` function is shared by the launcher and the report.
 - KTD8. **Writes go through an in-memory, single-use plan store.** The canvas posts a plan, gets a preview and a `planId`, then posts **Apply** with that id (R11). A second Apply with the same id is refused, so a double click can't post a comment twice. The agent's write tool shows the modal through an injected `confirmWrite` before calling `TicketService.addComment` (R12). Plans are dropped when the prototype stops.
-- KTD9. **The report is built by a pure function and passes a final redaction step that replaces both current keys and the Jira token with `[redacted]`.** For R15 it scans a capped list of candidate folders (Copilot home except our own folder, and the VS Code logs folder) for the current MCP key and reports only file paths and "found"/"not found". It never copies file contents.
+- KTD9. **The report is built by a pure function and passes a final redaction step that replaces both current keys and the Jira token with `[redacted]`.** For R15 it scans a capped list of candidate folders for the current MCP key: the Copilot home except our own folder, the VS Code logs folder, and VS Code's user-data storage (the global storage folder with `state.vscdb`, and the workspace storage folder), because VS Code may cache extension-provided MCP definitions there, headers included. It reports only file paths and "found"/"not found", and never copies file contents.
 - KTD10. **The prototype persists nothing.** No setting, no `globalState`, no `workspaceState`; request counters and recent Host/Origin values live in memory for the report. Governs the mechanism of R20.
-- KTD11. **Logging goes through `logDiag('prototype', …)`, and no call passes a key.** The automatic redaction in `logRedaction.ts` catches `token`/`bearer`/`authorization` fields but not a field named `key`, so the rule is to never hand a key to the logger at all.
+- KTD11. **Logging goes through `logDiag('prototype', …)`, and no call passes a key.** The automatic redaction in `logRedaction.ts` catches `token`/`bearer`/`authorization` fields but not a field named `key`, so the rule is to never hand a key to the logger at all. Request paths that reach a log line or the report's counters have their first segment replaced with `[key]`, since a canvas path carries the canvas key.
 
 ### High-Level Technical Design
 
@@ -361,7 +361,7 @@ docs/manual/copilot-harness-prototype.md
 - **Goal:** the user-facing lifecycle that ties the parts together and leaves nothing behind.
 - **Requirements:** R5, R12, R13, R14, R20, R21; F4; AE4, AE8; KTD3, KTD10.
 - **Dependencies:** U2, U3, U4.
-- **Files:** `src/prototype/register.ts`, `src/prototype/vscodeMcpTypes.ts`, `src/extension.ts`, `package.json` (commands, `contributes.mcpServerDefinitionProviders`), `src/test/bundleSmoke.test.ts` (only if the stub needs a new name).
+- **Files:** `src/prototype/register.ts`, `src/prototype/vscodeMcpTypes.ts`, `src/extension.ts`, `package.json` (commands, `contributes.mcpServerDefinitionProviders`), `src/test/prototypeLifecycle.test.ts` (Vitest with a mocked `vscode`, catches lifecycle and state-write regressions but not the real Agent Host wiring), `src/test/bundleSmoke.test.ts` (only if the stub needs a new name).
 - **Approach:**
   1. At activation, if the provider API exists: register the provider (empty until running), register the four commands and show the R14 notification. Without the API, register the commands only; they report that this VS Code version doesn't support the prototype.
   2. **Start:** new keys, start the server, place the launcher and entry, fire the provider change with an HTTP definition (URL and `Authorization` header).
@@ -369,11 +369,16 @@ docs/manual/copilot-harness-prototype.md
   4. **Remove prototype leftovers:** stop if running, then delete the whole launcher folder regardless of other entries, and confirm in a message.
   5. `confirmWrite` shows a modal warning with the preview and an **Add comment** button.
   6. Nothing is written to settings or state (KTD10).
-- **Patterns to follow:** command registration and `context.subscriptions` use in `src/extension.ts`; secret change handling around `context.secrets.onDidChange`.
+- **Patterns to follow:** command registration and `context.subscriptions` use in `src/extension.ts`; mocked-`vscode` flow suites such as `src/test/bitbucketReviewFlow.test.ts`.
 - **Test scenarios:**
   - Activation against the bundle-smoke stub (no provider API) registers every declared command and starts nothing.
+  - Covers AE8. With the provider API mocked, choosing **Not now** opens no port, creates no folder and leaves the provider returning no server.
+  - **Start** writes this window's rendezvous entry, places the launcher and makes the provider return one HTTP definition with an `Authorization` header.
+  - Covers AE4. Stop then Start makes the provider return a definition whose header differs from the first.
+  - **Stop** removes the entry and the folder and makes the provider return no server.
+  - Across Start, Stop and Remove prototype leftovers, no `globalState.update`, `workspaceState.update` or configuration `update` call happens (R20).
   - `deactivate` with the prototype stopped does nothing and does not throw.
-  - Test expectation for the live notification, modal and provider wiring: manual, in the Appendix steps, because they need a real VS Code with the Copilot harness.
+  - The live notification, modal and Agent Host wiring are checked manually in the Appendix steps, because they need a real VS Code with the Copilot harness.
 - **Verification:** `bundleSmoke` and the e2e smoke still pass; manual steps 3–9 in the Appendix succeed.
 
 ### U6. Prototype report
@@ -384,13 +389,14 @@ docs/manual/copilot-harness-prototype.md
 - **Files:** `src/prototype/report.ts`, `src/prototype/register.ts`, `src/test/prototypeReport.test.ts`.
 - **Approach:**
   1. Collected facts: VS Code and extension versions, OS, whether the provider API exists, prototype state and port, request counters by route and outcome, recent Host and Origin values (scheme and host only), MCP client user-agent, the folder path and its permissions (POSIX mode, or `icacls` output on Windows), the rendezvous entries without keys, the tail of `launcher-log.jsonl`, the current `chat.*` settings whose names contain `sandbox` or `canvases`, and the R15 key-scan result.
-  2. The key scan reads files under the candidate folders with caps on file count and size, compares against the current MCP key in memory, and records only matching paths.
+  2. The key scan reads files under the KTD9 candidate folders, with caps on file count and size, compares against the current MCP key in memory, and records only matching paths.
   3. The final redaction step replaces both keys and the Jira token wherever they occur.
 - **Test scenarios:**
   - Covers AE10. A fact set that contains both keys and the token produces a report containing none of them.
   - The key scan finds a planted key in a temporary folder and reports its path only.
   - The key scan stops at the file-count cap and says so in the report.
   - A missing `launcher-log.jsonl` yields "no launcher activity" instead of an error.
+  - A recorded canvas request path appears in the report as `/[key]/api/plan`, never with the canvas key (KTD11).
 - **Verification:** report tests pass; the report from a manual run is readable plain text.
 
 ### U7. Documentation
