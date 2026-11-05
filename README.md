@@ -11,6 +11,8 @@ Neither participant requires the other to be configured.
 
 Most operations are also available as GitHub Copilot **Agent Mode** tools (`jira_*`, `bitbucket_*`), so an agent can read and create tickets, update fields, read pull requests, and post comments without you typing `@jira`/`@bitbucket` — see [Agent Mode Tools](docs/manual/agent-mode-tools.md) for the list and which tools ask before changing anything.
 
+Builds from the Copilot harness prototype branch also contain an experimental prototype for VS Code's newer Copilot harness, started by hand per session — see [Copilot Harness Prototype](docs/manual/copilot-harness-prototype.md).
+
 ---
 
 ## @jira — Jira

@@ -308,6 +308,8 @@ Emails first pass through a boilerplate cleanup step (patterns, consented model 
 
 Chat participants are deprecated and not supported in VS Code's Copilot harness; `@jira`/`@bitbucket` only run in the Local harness. The current design, the deprecation inventory, and the migration options (extension tools + skills, stdio MCP, canvas, session engine) are drafted in [`docs/architecture/copilot-harness-migration.md`](docs/architecture/copilot-harness-migration.md); its decision log (§11) records the direction: MCP and canvas served by the extension on a key-protected `127.0.0.1` port.
 
+The experimental prototype of that direction lives in `src/prototype/` (vscode-free modules plus `register.ts` as the only `vscode` glue, the canvas launcher bundled separately by `esbuild.js` into `out/prototype-launcher/`); it starts only when the user triggers it per session and persists nothing. User-facing description and test protocol: [`docs/manual/copilot-harness-prototype.md`](docs/manual/copilot-harness-prototype.md).
+
 ## Onboarding
 
 Language Model tools (`contributes.languageModelTools`, letting Copilot Agent

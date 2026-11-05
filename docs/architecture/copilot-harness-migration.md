@@ -467,6 +467,8 @@ The canvas launcher is a small Copilot SDK extension (`extension.mjs`) that decl
 
 ### Still to settle in the prototype
 
+The prototype is planned in [`docs/plans/2026-11-05-1230-feat-copilot-harness-localhost-prototype-plan.md`](../plans/2026-11-05-1230-feat-copilot-harness-localhost-prototype-plan.md); its test protocol is in [`docs/manual/copilot-harness-prototype.md`](../manual/copilot-harness-prototype.md).
+
 - The Agent Host does not persist the forwarded `Authorization` header (it omits header values in `/mcp show`, but persistence is not verified).
 - A managed sandbox policy (`allowLocalNetwork`, `sandboxMcpServers`) does not block the Agent Host's or the launcher's connection to `127.0.0.1`.
 - Several VS Code windows: one server per window, so the rendezvous file needs one entry per window, and the launcher must pick the window that owns the session.
