@@ -217,7 +217,7 @@ function chatSettings(): Record<string, unknown> {
   const walk = (value: unknown, prefix: string) => {
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       for (const [k, v] of Object.entries(value as Record<string, unknown>)) walk(v, `${prefix}.${k}`);
-    } else if (/sandbox|canvas/i.test(prefix)) {
+    } else if (/sandbox|canvas|^chat\.mcp\./i.test(prefix)) {
       flat[prefix] = value;
     }
   };

@@ -95,7 +95,7 @@ export function buildReport(f: ReportFacts): string {
 
   lines.push('## Settings');
   const settings = Object.entries(f.chatSettings);
-  if (settings.length === 0) lines.push('(no chat sandbox or canvas settings found)');
+  if (settings.length === 0) lines.push('(no chat sandbox, canvas or MCP settings found)');
   for (const [key, value] of settings) lines.push(`${key} = ${JSON.stringify(value)}`);
   lines.push('');
 
