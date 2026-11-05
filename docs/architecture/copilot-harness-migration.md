@@ -171,7 +171,7 @@ This state lives in `workspaceState` and is found again through the chat history
 | `ChatResult.metadata` + `chatContext.history` session detection | "Is a session still active?" | No participant turns, so no metadata | Replace with **explicit session ids** owned by our code |
 | `followupProvider` chips | Next-step suggestions | Participant-only | Replace with `nextActions` in tool results / UI buttons |
 | Clickable reply links (`workbench.action.chat.open` → `@jira …`) | Discrete choices on screens | They target a participant | Replace with UI buttons or explicit tool calls |
-| `request.model` + `tokenMeter.ts` | Review passes, intent parsing, content generation | No request model in tools | Replace with **MCP sampling**, `vscode.lm.selectChatModels` inside a tool **[unverified]**, or agent-side reasoning |
+| `request.model` + `tokenMeter.ts` | Review passes, intent parsing, content generation | No request model in tools | Replace with **MCP sampling** **[source]** or `vscode.lm.selectChatModels` inside a tool **[doc]** (see S3/S4) |
 | `disambiguation` metadata | Auto-routing to `@jira` | Participant-only | Replace with tool/skill descriptions |
 | `languageModelTools` (17 tools) | Agent Mode | **Supported** while the VS Code window is connected **[doc]** | Keep and extend |
 | `SecretStorage` | Tokens | Reachable only from extension code | Keep; must not be copied into files |
@@ -201,10 +201,10 @@ What does **not** change: `TicketService`, `PrReviewService`, `WorkflowService`,
 | **Extension LM tools** (`languageModelTools`) | Typed actions with `prepareInvocation` confirmation | Extension host, in-process | None | SecretStorage directly | Copilot harness while the window is connected **[doc]** |
 | **Skills** (contributed by the extension or a plugin) | Slash-command-like workflows; instructions loaded on demand; `disable-model-invocation: true` for explicit-only | Instructions only | None | n/a | Recommended replacement for slash commands **[doc]** |
 | **Custom agent** | A persistent "Jira specialist" or "PR reviewer" role with a tool list | Instructions only | None | n/a | Supported **[doc]** |
-| **MCP server over stdio** (`McpStdioServerDefinition` from `registerMcpServerDefinitionProvider`, or portable `.mcp.json`) | Tools, resources, prompts, **elicitation**, **sampling**, **MCP Apps** | Child process spawned by VS Code | **None (stdio)** | Env injected by the extension at `resolveMcpServerDefinition` | Portable config: yes **[doc]**. Extension-provided servers forwarded to the Copilot harness: **[unverified]** |
-| **MCP sampling** | The server asks the client's model for a completion, under the user's model-access rules | Through the MCP client | None | n/a | Supported in VS Code **[doc]**; in the Copilot harness **[unverified]** |
-| **MCP elicitation** | The server pauses and asks the user a structured question (accept / decline / cancel) | Through the MCP client | None | n/a | Supported in VS Code **[doc]**; in the Copilot harness **[unverified]** |
-| **MCP Apps** | Interactive HTML returned by a tool, inline in chat; `callServerTool` calls our tools directly | Sandboxed iframe | None (`ui://` resource) | Never in the UI | Recommended for participant migration **[doc]**; inline display only **[doc]** |
+| **MCP server over stdio** (`McpStdioServerDefinition` from `registerMcpServerDefinitionProvider`, or portable `.mcp.json`) | Tools, resources, prompts, **elicitation**, **sampling**, **MCP Apps** | Child process launched by the Copilot runtime in the **Agent Host**, not by the window **[source]** | **None (stdio)** | Credential broker over a local pipe (§6.5); the token never leaves the extension | Extension-provided servers are forwarded (`ClientForwarded`) from the session's active window **[source]** |
+| **MCP sampling** | The server asks the client's model for a completion, under the user's model-access rules | Through the MCP client | None | n/a | Supported in the Copilot harness: each request is confirmed as an `mcp_sampling` tool call (once / always for this server / skip); the SDK picks the model **[source]** |
+| **MCP elicitation** | The server pauses and asks the user a structured question (accept / decline / cancel) | Through the MCP client | None | n/a | Supported in the Copilot harness (`onElicitationRequest`, `form` and `url` modes, source = MCP server name) **[source]** |
+| **MCP Apps** | Interactive HTML returned by a tool, inline in chat; `callServerTool` calls our tools directly | Sandboxed iframe | None (`ui://` resource) | Never in the UI | Enabled in Copilot-harness sessions (`enableMcpApps: true`) **[source]**; inline display only **[doc]** |
 | **Canvas** (Copilot SDK `createCanvas`) | Editor-tab surface; agent-callable `actions`; `session.send` back to chat | Separate Node process (`extension.mjs`) | **Renders only an `http:`/`https:` URL**: in practice a loopback HTTP server **[source]** | `requestedEnvironmentVariables` (user-approved env) **[doc]** | Copilot harness only; Preview; types marked `@experimental` **[doc]** |
 | **Dynamic Workflows** (Copilot SDK `defineWorkflow`) | Durable runs: `ctx.step` (memoised), `ctx.pause` (checkpoint), `ctx.agent(prompt, { schema })`, `parallel`, `pipeline`, progress phases | Same SDK extension process | None by itself | As above | `@experimental` **[doc]** |
 
@@ -233,7 +233,7 @@ flowchart LR
 ```
 
 - **For:** smallest step; no new process; SecretStorage stays reachable; `prepareInvocation` confirmations; fully testable.
-- **Against:** text-only screens rendered by the agent, which may paraphrase or reorder them. No buttons. Review passes need model access inside a tool **[unverified]**. Works only while a VS Code window is connected.
+- **Against:** text-only screens rendered by the agent, which may paraphrase or reorder them. No buttons. Review passes can call `vscode.lm` inside the tool, since the Language Model API is window-level and documented for non-chat code such as commands **[doc]**. Works only while a VS Code window is connected.
 
 ### Option B: Extension-launched stdio MCP server (+ skills, MCP Apps, elicitation, sampling)
 
@@ -243,8 +243,10 @@ Move the tool surface into an MCP server that the extension starts as a **child 
 flowchart LR
   U["User"] --> AG["Copilot agent"]
   AG <-->|"MCP over stdio<br/>(no port)"| MS["ticket-sidekick MCP server<br/>(child process)"]
-  EXT["VS Code extension"] -->|"registerMcpServerDefinitionProvider<br/>resolveMcpServerDefinition: env from SecretStorage"| MS
-  MS --> SVC["Services / clients<br/>(same code)"] --> REM[("Jira / Bitbucket")]
+  EXT["VS Code extension<br/>(SecretStorage, credential broker)"] -->|"registerMcpServerDefinitionProvider<br/>(pipe path as argument)"| MS
+  MS <-->|"local pipe, no TCP"| EXT
+  MS --> SVC["Services<br/>(same code)"]
+  EXT --> CL["API clients"] --> REM[("Jira / Bitbucket")]
   MS -->|"tool result + ui:// resource"| APP["MCP App<br/>(review screen, inline)"]
   APP -->|"callServerTool (deterministic)"| MS
   MS -->|"elicitation: confirm write"| U
@@ -252,8 +254,8 @@ flowchart LR
 ```
 
 - **For:** Microsoft's recommended path for participant authors **[doc]**. Real interactive screens (MCP Apps) whose buttons call our tools *directly*, with no model turn in between. Elicitation gives a server-enforced confirmation step. Sampling gives the review pipeline model access under the user's model rules. The same server can later run in Copilot CLI or the GitHub Copilot app.
-- **Against:** a second process to build, bundle and debug. The token is passed as an environment variable, which is visible to processes of the same OS user. MCP Apps show inline only, so long screens scroll away. Several pieces are unverified in the Copilot harness (see §8).
-- **Credential variants:** (1) env injection at `resolveMcpServerDefinition` (documented pattern); (2) the server reads the OS keychain itself (no env, but a native dependency); (3) a one-time token over an OS pipe (no TCP, but more moving parts). (1) is the baseline; (2) is the hardened variant.
+- **Against:** a second process to build, bundle and debug, plus the broker protocol (§6.5). MCP Apps show inline only, so long screens scroll away. The server works only while a VS Code window with the extension is open, because the broker lives there.
+- **Credentials: the credential broker (chosen direction, §6.5).** The extension keeps the tokens in SecretStorage and performs every Jira/Bitbucket call; the MCP server reaches it over a local pipe. Rejected alternatives: environment variables (visible to same-user processes, inherited by children); the server reading the OS keychain itself (a native dependency, only worth it outside VS Code); MCP OAuth (the spec defines it for HTTP servers only and tells stdio servers to read the environment).
 
 ### Option C: Canvas-centred stateful process (the "living board")
 
@@ -312,6 +314,41 @@ How it works:
 
 Surfaces then become thin and replaceable: **Local participant now → tools + skills (A) → MCP App (B) → canvas (C′) only if constraint 1 is relaxed to allow a token-protected loopback server.** One engine, one test suite.
 
+### 6.5 Credential broker (credentials for Option B)
+
+The MCP server never holds a token. The extension is the only process that reads SecretStorage, and it performs every Jira and Bitbucket call on the server's behalf.
+
+```mermaid
+sequenceDiagram
+  participant A as Copilot agent
+  participant M as MCP server (Agent Host child)
+  participant E as Extension broker
+  participant J as Jira / Bitbucket
+  E->>E: activate: listen on pipe in a 0700 dir (Unix) / random named pipe (Windows)
+  E-->>M: definition args: --broker <pipe path>
+  M->>E: broker/hello {protocolVersion}
+  E-->>M: configured products, allowed operations (no token)
+  A->>M: tool call (read)
+  M->>E: jira/searchIssues {jql, fields}
+  E->>J: REST with token from SecretStorage
+  J-->>E: result
+  E-->>M: result
+  A->>M: tool call (apply plan)
+  M->>E: broker/beginWriteBatch {summary, maxWrites}
+  E->>E: VS Code modal: approve?
+  E-->>M: batchId (in memory, short-lived)
+  M->>E: jira/createIssue {fields, batchId}
+  E->>J: POST
+```
+
+- **Shape:** the broker is a remote `IJiraClient` / `IBitbucketClient`. The server uses `BrokeredJiraClient implements IJiraClient`, so `TicketService` and `PrReviewService` stay unchanged and the three-layer rule holds. The protocol has one operation per interface method (29 Jira, 7 Bitbucket).
+- **Transport:** JSON-RPC 2.0 with Content-Length framing (`vscode-jsonrpc`, which also brings `$/cancelRequest`). The extension listens with `net.createServer().listen(path)`, the server connects. No TCP port.
+- **Validation:** an allowlist of operations, no generic HTTP passthrough, parameters schema-checked, size limits. The base URL comes from the extension's settings only; `downloadAttachment(content)` must check that the URL's scheme and host match the configured Jira base URL, or a crafted URL would carry the token to a foreign host.
+- **Writes:** every write carries a `batchId` from `broker/beginWriteBatch`, which shows a VS Code modal. Neither the agent nor the MCP server can skip it.
+- **Errors:** HTTP failures keep their status (`data.status`), so the server rebuilds `JiraApiError` / `BitbucketApiError`. A dropped pipe during a write is reported as "outcome unknown", never as failed; the session engine's dedup settles it on resume.
+- **Access control:** on Unix, the socket lives in a `0700` directory. On Windows, libuv creates the pipe with default security attributes and `FILE_FLAG_FIRST_PIPE_INSTANCE` ([libuv `src/win/pipe.c`](https://github.com/libuv/libuv/blob/v1.x/src/win/pipe.c)); the default named-pipe permissions give full control to the creating user, SYSTEM and administrators and only read access to everyone else, so other users can't send requests or create a rogue instance of the same name. Same-user processes can connect, but they can't obtain the token and still hit the allowlist and the write modal. That is the trust level SecretStorage has today.
+- **Lifetime:** the broker lives with the window's extension host. If no window is open, the server answers with an actionable error. Nothing secret goes into `args` (visible to other users on Linux) or `env`.
+
 ---
 
 ## 7. Concepts from published design guidance
@@ -335,25 +372,25 @@ Surfaces then become thin and replaceable: **Local participant now → tools + s
 | Criterion | A: tools + skills | B: stdio MCP | C: canvas process | C′: canvas as view | **D: engine + thin surfaces** |
 | --- | --- | --- | --- | --- | --- |
 | No listening ports | ✅ | ✅ | ❌ (loopback HTTP) | ❌ | ✅ (canvas surface optional) |
-| Credentials in SecretStorage | ✅ | ⚠️ env handoff | ❌ env from user | ✅ (canvas holds none) | ✅ |
-| Copilot harness | ✅ **[doc]** | ⚠️ **[unverified]** for extension-provided | ✅ | ✅ | ✅ via A or B |
+| Credentials in SecretStorage | ✅ | ✅ via broker | ❌ env from user | ✅ (canvas holds none) | ✅ |
+| Copilot harness | ✅ **[doc]** | ✅ forwarded **[source]** | ✅ | ✅ | ✅ via A or B |
 | Local fallback during transition | ✅ | ✅ | ❌ | ❌ | ✅ (participant as a surface) |
 | Deterministic writes + enforced approval | ⚠️ tool confirm | ✅ elicitation + plan | ⚠️ | ✅ via tools | ✅ plan → apply |
 | Rich, persistent review screens | ❌ | ⚠️ inline only | ✅ | ✅ | ✅ when a rich surface is added |
-| Review pipeline model access | ⚠️ **[unverified]** | ✅ sampling | ✅ workflow agent | n/a | depends on host |
+| Review pipeline model access | ✅ `vscode.lm` **[doc]** | ✅ sampling **[source]** | ✅ workflow agent | n/a | depends on host |
 | Works outside VS Code (CLI, Copilot app) | ❌ | ✅ (portable server) | ✅ | ✅ | ✅ if hosted in B |
-| Maturity | Stable APIs | Stable MCP; harness parts unverified | Preview, `@experimental` | Preview | Built on A/B |
+| Maturity | Stable APIs | Stable MCP; harness support present in source | Preview, `@experimental` | Preview | Built on A/B |
 | Effort | Low–medium | Medium–high | High | Medium | Medium (engine), then per surface |
 
 ---
 
 ## 9. Recommendation and phased path
 
-**Direction: Option D.** Build the session engine first, host it behind extension tools (A) for the Jira basics, and add an MCP App surface (B) for the import and review screens once the spikes pass. Treat the canvas (C′) as a later, optional view, introduced only once it can render without opening a port.
+**Direction: Option D.** Build the session engine first, host it behind extension tools (A) for the Jira basics, and add an MCP App surface (B), with the credential broker (§6.5), for the import and review screens. Treat the canvas (C′) as a later, optional view: it can never render without an HTTP server (S5).
 
 | Phase | Content | Exit condition |
 | --- | --- | --- |
-| **0. Spikes** | Run S1–S6 below | Each spike answered with a recorded yes/no |
+| **0. Spikes** | S1–S5 answered from source and docs; confirm S1–S4 and S7 hands-on with a throw-away server, answer S6 with the organisation | A minimal broker + MCP App prototype runs in a Copilot-harness session on a managed machine |
 | **1. Jira basics in the Copilot harness** | Skills over the existing 17 tools (view, search, comment, field, move, guided create) | A Copilot-harness user can do today's core `@jira` commands |
 | **2. Session engine** | Extract the import state machine, `nextActions`, plan → apply and the journal into vscode-free code; the Local participant becomes its first surface (no user-visible change) | Existing import tests pass against the engine |
 | **3. Imports without the participant** | Engine tools + skills; optional MCP App review screen | Veracode/Waltz/EML imports work end-to-end in the Copilot harness |
@@ -363,14 +400,14 @@ Surfaces then become thin and replaceable: **Local participant now → tools + s
 
 ### Spikes (phase 0)
 
-| # | Question | Why it matters |
+| # | Question | Answer |
 | --- | --- | --- |
-| S1 | Does an MCP server registered through `registerMcpServerDefinitionProvider` appear in a **Copilot-harness** session, with env injected in `resolveMcpServerDefinition`? | Decides whether Option B keeps the extension as credential source |
-| S2 | Do **MCP Apps** and **elicitation** render and work in Copilot-harness sessions in the editor window? | Rich screens and server-enforced approval |
-| S3 | Does **MCP sampling** work from a stdio server in the Copilot harness, and how does model choice and access look? | Review pipeline in Option B |
-| S4 | Can an **extension LM tool** call `vscode.lm.selectChatModels` + `sendRequest` during a Copilot-harness session? | Review pipeline in Option A |
-| S5 | ~~Does a canvas accept a non-HTTP URL?~~ **Answered from source: no.** Only `http:`/`https:` with an authority ([`agentHostCanvas.ts`](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/contrib/canvases/common/agentHostCanvas.ts)) | A canvas can't meet "no ports"; it stays optional and needs an explicit exception |
-| S6 | Do our organisation's managed settings plan `vscode.temporaryAllowLocalHarness: false`, and when? | Urgency and order of phases |
+| S1 | Does an MCP server registered through `registerMcpServerDefinitionProvider` reach a **Copilot-harness** session? | **Answered from source: yes.** Extension-provided servers resolve to `ClientForwarded`: VS Code projects the definition's `command`, `args` and `env` and hands them to the Agent Host, whose Copilot runtime launches the process ([`agentHostMcpServerSupport.ts`](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/contrib/chat/browser/agentSessions/agentHost/agentHostMcpServerSupport.ts), [`agentHostLocalCustomizations.ts`](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/contrib/chat/browser/agentSessions/agentHost/agentHostLocalCustomizations.ts), [`copilotSessionLauncher.ts`](https://github.com/microsoft/vscode/blob/main/src/vs/platform/agentHost/node/copilot/copilotSessionLauncher.ts)). The **static** definition from `provideMcpServerDefinitions` is forwarded; `${input:…}`/`${command:…}` variables block forwarding, `cwd` and `envFile` are not portable. The session's **active window** supplies the definitions; when the session's owner changes, the runtime relaunches at the next turn boundary ([Agent Host `AGENTS.md`](https://github.com/microsoft/vscode/blob/main/src/vs/platform/agentHost/AGENTS.md)). So the broker's pipe path goes into `args` at provide time, with absolute paths. |
+| S2 | Do **MCP Apps** and **elicitation** work in Copilot-harness sessions? | **Answered from source: yes.** Normal sessions launch with `enableMcpApps: true` and an `onElicitationRequest` handler ([`copilotSessionLauncher.ts`](https://github.com/microsoft/vscode/blob/main/src/vs/platform/agentHost/node/copilot/copilotSessionLauncher.ts)); the SDK's `ElicitationContext` carries the MCP server name and supports `form` and `url` modes. The host also proxies tools, resources and sampling for MCP Apps. |
+| S3 | Does **MCP sampling** work from a stdio server in the Copilot harness? | **Answered from source: yes.** Each request appears as an `mcp_sampling` confirmation (allow once, always allow this server, skip); "always" is stored per server identity in `mcpSamplingAllowedServers`. Unattended requests are rejected unless the server was approved; the SDK picks the model ([Agent Host `AGENTS.md`](https://github.com/microsoft/vscode/blob/main/src/vs/platform/agentHost/AGENTS.md)). For a multi-pass review that means one approval per server, then silent calls. |
+| S4 | Can an **extension LM tool** use `vscode.lm`? | **Answered from docs: yes.** The Language Model API is window-level and documented for commands, tasks and other non-chat code ([Language Model API guide](https://github.com/microsoft/vscode-docs/blob/main/api/extension-guides/ai/language-model.md)); extension tools run in the window's extension host. |
+| S6 | Do our organisation's managed settings plan `vscode.temporaryAllowLocalHarness: false`, and when? | **Open: only the organisation can answer.** Decides urgency and the order of phases. |
+| S7 | If the organisation turns on **MCP server sandboxing** (`sandboxMcpServers` in the resolved sandbox policy), may the server still connect to the broker's Unix socket or named pipe? | **Open.** Sandbox rules restrict file and network access, and a socket connect may count as either. Test on a managed machine. |
 
 ---
 
@@ -386,9 +423,12 @@ Surfaces then become thin and replaceable: **Local participant now → tools + s
 ## Sources
 
 - VS Code docs: [Choose an agent harness](https://github.com/microsoft/vscode-docs/blob/main/docs/agents/run/agent-harnesses.md), [Move from the Local to the Copilot harness](https://github.com/microsoft/vscode-docs/blob/main/docs/agents/run/move-to-copilot.md), [Migrate customizations](https://github.com/microsoft/vscode-docs/blob/main/docs/agent-customization/migrate-customizations.md) ("Replace chat participants", "If you maintain a participant"), [Agent Host](https://github.com/microsoft/vscode-docs/blob/main/docs/agents/concepts/agent-host.md), [Tools](https://github.com/microsoft/vscode-docs/blob/main/docs/agents/run/tools.md), [Use canvases with agents](https://github.com/microsoft/vscode-docs/blob/main/docs/agents/run/canvases.md), [MCP configuration reference](https://github.com/microsoft/vscode-docs/blob/main/docs/agents/reference/mcp-configuration.md)
-- VS Code API: [MCP developer guide](https://github.com/microsoft/vscode-docs/blob/main/api/extension-guides/ai/mcp.md) (stdio, sampling, elicitation, MCP Apps, `registerMcpServerDefinitionProvider`), [Language model tools](https://github.com/microsoft/vscode-docs/blob/main/api/extension-guides/ai/tools.md)
+- VS Code API: [MCP developer guide](https://github.com/microsoft/vscode-docs/blob/main/api/extension-guides/ai/mcp.md) (stdio, sampling, elicitation, MCP Apps, `registerMcpServerDefinitionProvider`), [Language model tools](https://github.com/microsoft/vscode-docs/blob/main/api/extension-guides/ai/tools.md), [Language Model API guide](https://github.com/microsoft/vscode-docs/blob/main/api/extension-guides/ai/language-model.md)
 - Release notes: [1.142](https://github.com/microsoft/vscode-docs/blob/main/release-notes/v1_142.md), [1.143](https://github.com/microsoft/vscode-docs/blob/main/release-notes/v1_143.md), [1.144](https://github.com/microsoft/vscode-docs/blob/main/release-notes/v1_144.md)
 - GitHub: [Working with canvas extensions](https://github.com/github/docs/blob/main/content/copilot/how-tos/github-copilot-app/working-with-canvas-extensions.md); sample canvas [backlog-swipe-triage](https://github.com/github/awesome-copilot/tree/main/extensions/backlog-swipe-triage)
+- VS Code source (MCP in the Agent Host): [`agentHostMcpServerSupport.ts`](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/contrib/chat/browser/agentSessions/agentHost/agentHostMcpServerSupport.ts), [`agentHostLocalCustomizations.ts`](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/contrib/chat/browser/agentSessions/agentHost/agentHostLocalCustomizations.ts), [`copilotSessionLauncher.ts`](https://github.com/microsoft/vscode/blob/main/src/vs/platform/agentHost/node/copilot/copilotSessionLauncher.ts), [Agent Host `AGENTS.md`](https://github.com/microsoft/vscode/blob/main/src/vs/platform/agentHost/AGENTS.md)
+- Node/libuv: [libuv `src/win/pipe.c`](https://github.com/libuv/libuv/blob/v1.x/src/win/pipe.c) (named pipe creation)
+- MCP spec 2025-11-25: [Authorization](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-11-25/basic/authorization.mdx) (stdio servers read credentials from the environment), [Elicitation](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-11-25/client/elicitation.mdx) (no secrets in form mode)
 - VS Code source: [`agentHostCanvas.ts`](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/contrib/canvases/common/agentHostCanvas.ts) (canvas source scheme check) and [its test](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/contrib/canvases/test/common/agentHostCanvas.test.ts); agent-host protocol [`channels-canvas/state.ts`](https://github.com/microsoft/vscode/blob/main/src/vs/platform/agentHost/common/state/protocol/channels-canvas/state.ts)
 - Copilot SDK: [`@github/copilot-sdk` 1.0.28 on npm](https://www.npmjs.com/package/@github/copilot-sdk) (`dist/canvas.d.ts`, `dist/workflow.d.ts`, `dist/extension.d.ts`)
 - MCP Apps: [specification](https://modelcontextprotocol.github.io/ext-apps/api/), [SDK and examples](https://github.com/modelcontextprotocol/ext-apps)
