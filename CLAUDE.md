@@ -304,6 +304,10 @@ template-pick/review/batch-creation flow via `reportImportHandler.ts`'s
 [`docs/report-import.md`](docs/report-import.md).
 Emails first pass through a boilerplate cleanup step (patterns, consented model check, strip/keep preview) in both the batch and add-as-comment flows — see [`docs/report-import.md`](docs/report-import.md#eml-email-import-batch).
 
+## Copilot harness migration (draft)
+
+Chat participants are deprecated and not supported in VS Code's Copilot harness; `@jira`/`@bitbucket` only run in the Local harness. The current design, the deprecation inventory, and the migration options (extension tools + skills, stdio MCP, canvas, session engine) are drafted in [`docs/architecture/copilot-harness-migration.md`](docs/architecture/copilot-harness-migration.md). No decision is recorded yet.
+
 ## Onboarding
 
 Language Model tools (`contributes.languageModelTools`, letting Copilot Agent
