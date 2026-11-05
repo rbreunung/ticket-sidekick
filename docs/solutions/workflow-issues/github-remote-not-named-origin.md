@@ -34,8 +34,8 @@ During an automated `ce-work` -> `ce-commit-push-pr` shipping run, several git c
 `git remote -v` (verified live in this repo) shows:
 
 ```text
-Bitbucket-Cloud  https://breurob-admin@bitbucket.org/breurob/jira-copilot-extension.git (fetch)
-Bitbucket-Cloud  https://breurob-admin@bitbucket.org/breurob/jira-copilot-extension.git (push)
+Bitbucket-Cloud  https://<user>@bitbucket.org/<workspace>/<repo>.git (fetch)
+Bitbucket-Cloud  https://<user>@bitbucket.org/<workspace>/<repo>.git (push)
 Github           https://github.com/rbreunung/ticket-sidekick.git (fetch)
 Github           https://github.com/rbreunung/ticket-sidekick.git (push)
 ```
@@ -113,8 +113,8 @@ git push -u origin HEAD
 ```bash
 # 1. See what remotes actually exist locally
 git remote -v
-# Bitbucket-Cloud  https://breurob-admin@bitbucket.org/breurob/jira-copilot-extension.git (fetch)
-# Bitbucket-Cloud  https://breurob-admin@bitbucket.org/breurob/jira-copilot-extension.git (push)
+# Bitbucket-Cloud  https://<user>@bitbucket.org/<workspace>/<repo>.git (fetch)
+# Bitbucket-Cloud  https://<user>@bitbucket.org/<workspace>/<repo>.git (push)
 # Github           https://github.com/rbreunung/ticket-sidekick.git (fetch)
 # Github           https://github.com/rbreunung/ticket-sidekick.git (push)
 
