@@ -98,6 +98,15 @@ describe('prototype canvas board', () => {
     expect(jira.addCommentCalls).toEqual([{ issueKey: 'PROJ-123', body: 'Looks good' }]);
   });
 
+  it('records the board path for the report with the canvas key masked', async () => {
+    const { base } = await start();
+    const canvasKey = base.split('/').pop() as string;
+    await fetch(`${base}/api/tickets`);
+    const stats = server?.stats();
+    expect(stats?.recentPaths).toContain('/[key]/api/tickets');
+    expect(JSON.stringify(stats)).not.toContain(canvasKey);
+  });
+
   it('answers 404 for an unknown board path', async () => {
     const { base } = await start();
     expect((await fetch(`${base}/api/nothing`)).status).toBe(404);
