@@ -2,45 +2,31 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { JiraApiClient, MAX_ATTACHMENT_BYTES } from '../jira/JiraApiClient';
-import type { JiraFilter } from '../jira/IJiraClient';
 import { ConfigService, type JiraConfig } from '../services/ConfigService';
 import { buildJiraNotConfiguredMessage } from '../services/setupHints';
 import { TicketService, renderFieldValue } from '../services/TicketService';
 import { TemplateService } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
-import { discoverAndCacheWorkflow, resolveAndApplyTransition } from '../services/WorkflowService';
-import { logLoadDiag, workspaceFsWriter } from '../participant/jira/loadHandler';
-import { attachmentPath, attachmentsDir, ensureJiraContextGitignored, loadTicketToWorkspace } from '../participant/jira/loadCore';
+import { resolveAndApplyTransition } from '../services/WorkflowService';
 import { logDiag } from '../utils/diagLog';
+import { WORKFLOW_TOOL } from '../mcp/jiraTools/toolNames';
 import { isAllowedUploadPath, isSafePathSegment } from './pathSafety';
 import { RecentCallGuard, fingerprint } from './recentCallGuard';
-import { ATTACHMENT_SIZE_LIMIT, findAttachmentByFilename, formatFileSize, inferContentType } from '../utils/attachmentEligibility';
+import { formatFileSize, inferContentType } from '../utils/attachmentEligibility';
 import {
-  formatCommentsInFull,
   buildUpdateFieldConfirmation,
   buildAddCommentConfirmation,
   buildCreateTicketConfirmation,
   buildTransitionConfirmation,
-  buildLoadTicketConfirmation,
-  buildLoadTicketResultMessage,
-  buildDownloadAttachmentConfirmation,
-  buildAttachmentNotFoundMessage,
-  buildDownloadAttachmentResultMessage,
   buildUploadAttachmentConfirmation,
   formatIssueTypeOptionsMessage,
-  formatTemplateListMessage,
-  formatWorkflowDiscoveryMessage,
-  formatMyFiltersList,
-  formatFilterCandidateList,
-  formatBulletList,
-  resolveNamedConstraints,
-  buildConstraintJql,
-  type PendingSearchConstraints,
 } from '../participant/sessionState';
 
 // ---------------------------------------------------------------------------------------------
 // Language Model tools (Agent Mode) for @jira, registered via `vscode.lm.registerTool` in
 // `registerJiraTools()` below and declared in package.json's `contributes.languageModelTools`.
+// Only the Jira write tools are left here; the tools that read Jira (view, find, filters,
+// workflow, templates, load) are served by the extension's MCP server (src/mcp/jiraTools/).
 //
 // Every tool here is thin glue: it resolves live data through the same three-layer stack the
 // `@jira` chat participant uses (TicketService → IJiraClient → JiraApiClient) and hands the
@@ -106,316 +92,6 @@ function isNotConfiguredResult(value: ConfiguredContext | vscode.LanguageModelTo
 
 function currentWorkspaceRoot(): string {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-}
-
-// -------------------------------------------------------------------------------------------
-// Read tools
-// -------------------------------------------------------------------------------------------
-
-interface GetTicketInput {
-  ticketKey: string;
-}
-
-class GetTicketTool implements vscode.LanguageModelTool<GetTicketInput> {
-  constructor(private readonly configService: ConfigService) {}
-
-  async prepareInvocation(
-    options: vscode.LanguageModelToolInvocationPrepareOptions<GetTicketInput>,
-  ): Promise<vscode.PreparedToolInvocation> {
-    return { invocationMessage: `Fetching ${options.input.ticketKey}…` };
-  }
-
-  async invoke(options: vscode.LanguageModelToolInvocationOptions<GetTicketInput>): Promise<vscode.LanguageModelToolResult> {
-    const ticketKey = options.input.ticketKey?.trim();
-    if (!ticketKey) return textResult('A ticket key is required, e.g. PROJ-123.');
-    if (!isSafePathSegment(ticketKey)) return textResult(`"${ticketKey}" is not a valid ticket key.`);
-
-    const ctx = await tryGetConfiguredContext(this.configService);
-    if (isNotConfiguredResult(ctx)) return ctx;
-    const { config, ticketService } = ctx;
-
-    try {
-      const fieldMeta = await ticketService.getFieldMeta();
-      const alwaysShowIds = new Set<string>(config.additionalDisplayFields);
-      const hiddenIds = new Set<string>(config.hiddenDisplayFields);
-      const text = await ticketService.getTicket(ticketKey, fieldMeta, alwaysShowIds, hiddenIds, config.baseUrl);
-      return textResult(text);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logDiag('jira.tools', 'error', `jira_getTicket failed — ${ticketKey}`, { ticketKey, error: message });
-      return textResult(`Could not fetch ${ticketKey}: ${message}`);
-    }
-  }
-}
-
-interface SearchTicketsInput {
-  jql: string;
-}
-
-class SearchTicketsTool implements vscode.LanguageModelTool<SearchTicketsInput> {
-  constructor(private readonly configService: ConfigService) {}
-
-  async prepareInvocation(): Promise<vscode.PreparedToolInvocation> {
-    return { invocationMessage: 'Searching Jira…' };
-  }
-
-  async invoke(options: vscode.LanguageModelToolInvocationOptions<SearchTicketsInput>): Promise<vscode.LanguageModelToolResult> {
-    const jql = options.input.jql?.trim();
-    if (!jql) return textResult('A JQL query is required, e.g. "project = PROJ AND status = \\"In Progress\\"".');
-
-    const ctx = await tryGetConfiguredContext(this.configService);
-    if (isNotConfiguredResult(ctx)) return ctx;
-    const { config, ticketService } = ctx;
-
-    try {
-      const fieldMeta = config.searchFields.length > 0 ? await ticketService.getFieldMeta() : [];
-      const text = await ticketService.searchTickets(jql, config.baseUrl, config.searchFields, fieldMeta);
-      return textResult(text);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logDiag('jira.tools', 'error', 'jira_searchTickets failed', { jql, error: message });
-      return textResult(`Search failed: ${message}`);
-    }
-  }
-}
-
-interface GetCommentsInput {
-  ticketKey: string;
-  maxResults?: number;
-}
-
-class GetCommentsTool implements vscode.LanguageModelTool<GetCommentsInput> {
-  constructor(private readonly configService: ConfigService) {}
-
-  async prepareInvocation(
-    options: vscode.LanguageModelToolInvocationPrepareOptions<GetCommentsInput>,
-  ): Promise<vscode.PreparedToolInvocation> {
-    return { invocationMessage: `Fetching comments on ${options.input.ticketKey}…` };
-  }
-
-  async invoke(options: vscode.LanguageModelToolInvocationOptions<GetCommentsInput>): Promise<vscode.LanguageModelToolResult> {
-    const ticketKey = options.input.ticketKey?.trim();
-    if (!ticketKey) return textResult('A ticket key is required, e.g. PROJ-123.');
-    if (!isSafePathSegment(ticketKey)) return textResult(`"${ticketKey}" is not a valid ticket key.`);
-    const maxResults = options.input.maxResults && options.input.maxResults > 0 ? options.input.maxResults : 20;
-
-    const ctx = await tryGetConfiguredContext(this.configService);
-    if (isNotConfiguredResult(ctx)) return ctx;
-    const { ticketService } = ctx;
-
-    try {
-      const { comments, total } = await ticketService.getIssueComments(ticketKey, maxResults);
-      if (comments.length === 0) return textResult(`No comments on ${ticketKey}.`);
-      const header = `## Comments on ${ticketKey} (${total})\n\n`;
-      const note = total > comments.length
-        ? `\n\n_${total - comments.length} older comment(s) not shown — call again with a larger maxResults to see more._`
-        : '';
-      return textResult(header + formatCommentsInFull(comments) + note);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logDiag('jira.tools', 'error', `jira_getComments failed — ${ticketKey}`, { ticketKey, error: message });
-      return textResult(`Could not fetch comments on ${ticketKey}: ${message}`);
-    }
-  }
-}
-
-// inputSchema is `{ type: 'object', properties: {} }` — no fields to declare.
-type ListTemplatesInput = Record<string, never>;
-
-class ListTemplatesTool implements vscode.LanguageModelTool<ListTemplatesInput> {
-  constructor(private readonly configService: ConfigService) {}
-
-  async prepareInvocation(): Promise<vscode.PreparedToolInvocation> {
-    return { invocationMessage: 'Listing Jira ticket templates…' };
-  }
-
-  async invoke(): Promise<vscode.LanguageModelToolResult> {
-    const ctx = await tryGetConfiguredContext(this.configService);
-    if (isNotConfiguredResult(ctx)) return ctx;
-
-    const workspaceRoot = currentWorkspaceRoot();
-    if (!workspaceRoot) return textResult('No workspace folder is open — templates are read from .jira-templates.json in the workspace root.');
-
-    try {
-      const { templates } = new TemplateService(workspaceRoot).loadTemplates();
-      return textResult(formatTemplateListMessage(templates));
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logDiag('jira.tools', 'error', 'jira_listTemplates failed', { error: message });
-      return textResult(`Could not load templates: ${message}`);
-    }
-  }
-}
-
-interface DiscoverWorkflowInput {
-  projectKey: string;
-  issueType: string;
-}
-
-class DiscoverWorkflowTool implements vscode.LanguageModelTool<DiscoverWorkflowInput> {
-  constructor(private readonly configService: ConfigService) {}
-
-  async prepareInvocation(
-    options: vscode.LanguageModelToolInvocationPrepareOptions<DiscoverWorkflowInput>,
-  ): Promise<vscode.PreparedToolInvocation> {
-    return { invocationMessage: `Discovering workflow for ${options.input.projectKey} / ${options.input.issueType}…` };
-  }
-
-  async invoke(options: vscode.LanguageModelToolInvocationOptions<DiscoverWorkflowInput>): Promise<vscode.LanguageModelToolResult> {
-    const projectKey = options.input.projectKey?.trim();
-    const issueType = options.input.issueType?.trim();
-    if (!projectKey || !issueType) {
-      return textResult('Both a project key and an issue type are required, e.g. { "projectKey": "PROJ", "issueType": "Bug" }.');
-    }
-    if (!isSafePathSegment(projectKey)) return textResult(`"${projectKey}" is not a valid project key.`);
-
-    const ctx = await tryGetConfiguredContext(this.configService);
-    if (isNotConfiguredResult(ctx)) return ctx;
-    const { jiraClient } = ctx;
-
-    try {
-      // Same discover-then-cache sequence the chat 'discoverWorkflow' operation uses
-      // (src/participant/jira/workflowHandler.ts, src/services/WorkflowService.ts) — R3.
-      const workspaceRoot = currentWorkspaceRoot();
-      const { graph, skippedStatuses, preserved } = await discoverAndCacheWorkflow(jiraClient, workspaceRoot, projectKey, issueType);
-      if (Object.keys(graph).length === 0) {
-        return textResult(formatWorkflowDiscoveryMessage(projectKey, issueType, graph, skippedStatuses, []));
-      }
-
-      logDiag('jira.tools', 'info', `Workflow discovered — ${projectKey}/${issueType}`, {
-        projectKey, issueType, statusCount: Object.keys(graph).length,
-      });
-      return textResult(formatWorkflowDiscoveryMessage(projectKey, issueType, graph, skippedStatuses, preserved));
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logDiag('jira.tools', 'error', `jira_discoverWorkflow failed — ${projectKey}/${issueType}`, { projectKey, issueType, error: message });
-      return textResult(`Could not discover workflow: ${message}`);
-    }
-  }
-}
-
-// inputSchema is `{ type: 'object', properties: {} }` — no fields to declare.
-type ListMyFiltersInput = Record<string, never>;
-
-/** U7/R1: `jira_listMyFilters` — the read-only tool equivalent of `@jira`'s "show my filters"
- * chat flow (`handleListMyFilters` in `JiraParticipant.ts`). Unlike that flow, this never opens
- * a numbered pick-list (KTD6: tools carry no session memory to resume one against) — it just
- * lists every favourite/owned filter as plain text via the shared `formatMyFiltersList()`
- * (sessionState.ts), so the calling model can pick a name/id to pass to `jira_searchByFilter`. */
-class ListMyFiltersTool implements vscode.LanguageModelTool<ListMyFiltersInput> {
-  constructor(private readonly configService: ConfigService) {}
-
-  async prepareInvocation(): Promise<vscode.PreparedToolInvocation> {
-    return { invocationMessage: 'Listing your Jira filters…' };
-  }
-
-  async invoke(): Promise<vscode.LanguageModelToolResult> {
-    const ctx = await tryGetConfiguredContext(this.configService);
-    if (isNotConfiguredResult(ctx)) return ctx;
-    const { ticketService } = ctx;
-
-    try {
-      const { filters, failedSources } = await ticketService.getMyFilters();
-      return textResult(formatMyFiltersList(filters, failedSources));
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logDiag('jira.tools', 'error', 'jira_listMyFilters failed', { error: message });
-      return textResult(`Could not list filters: ${message}`);
-    }
-  }
-}
-
-interface SearchByFilterInput {
-  filterId?: string;
-  filterName?: string;
-  fixVersion?: string;
-  sprint?: string;
-  assignee?: string;
-}
-
-/** U7/R4/R6/R11: `jira_searchByFilter` — resolves a saved filter (by id or name) and, when a
- * fixVersion/sprint/assignee is given, narrows it via the same `resolveNamedConstraints()`
- * (sessionState.ts) the chat flow's `resolveConstraintsAndSearch()` uses (R3). R6 is enforced by
- * this tool's input schema itself (`package.json`) declaring only those three constraint
- * properties — there is no way to pass any other narrowing criterion. R11: an ambiguous filter
- * name OR an ambiguous constraint match returns the candidates as plain text and never runs the
- * search — this tool has no session memory to resume an interactive pick against (KTD6), unlike
- * the chat flow's numbered pick-list. */
-class SearchByFilterTool implements vscode.LanguageModelTool<SearchByFilterInput> {
-  constructor(private readonly configService: ConfigService) {}
-
-  async prepareInvocation(
-    options: vscode.LanguageModelToolInvocationPrepareOptions<SearchByFilterInput>,
-  ): Promise<vscode.PreparedToolInvocation> {
-    const label = options.input.filterName || options.input.filterId || '(unknown filter)';
-    return { invocationMessage: `Running filter ${label}…` };
-  }
-
-  async invoke(options: vscode.LanguageModelToolInvocationOptions<SearchByFilterInput>): Promise<vscode.LanguageModelToolResult> {
-    const filterId = options.input.filterId?.trim() || undefined;
-    const filterName = options.input.filterName?.trim() || undefined;
-    const fixVersion = options.input.fixVersion?.trim() || undefined;
-    const sprint = options.input.sprint?.trim() || undefined;
-    const assignee = options.input.assignee?.trim() || undefined;
-    if (!filterId && !filterName) return textResult('A filterId or filterName is required.');
-
-    const ctx = await tryGetConfiguredContext(this.configService);
-    if (isNotConfiguredResult(ctx)) return ctx;
-    const { config, jiraClient, ticketService } = ctx;
-
-    let filter: JiraFilter;
-    try {
-      if (filterId) {
-        filter = await ticketService.getFilterById(filterId);
-      } else {
-        const filters = await ticketService.searchFiltersByName(filterName!);
-        if (filters.length === 0) return textResult(`No saved filters found matching "${filterName}".`);
-        if (filters.length > 1) {
-          return textResult(`Multiple filters match "${filterName}":\n\n${formatFilterCandidateList(filters)}\n\nCall again with a specific filterId, or a more exact filterName.`);
-        }
-        filter = filters[0];
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logDiag('jira.tools', 'error', 'jira_searchByFilter failed to resolve filter', { filterId, filterName, error: message });
-      return textResult(`Could not resolve filter: ${message}`);
-    }
-
-    let finalJql = filter.jql;
-    const namedConstraints: PendingSearchConstraints = { fixVersion, sprint, assignee };
-    if (fixVersion || sprint || assignee) {
-      try {
-        const resolution = await resolveNamedConstraints(filter.jql, namedConstraints, jiraClient);
-        switch (resolution.kind) {
-          case 'noProjectScope':
-          case 'notFound':
-            return textResult(resolution.message);
-          case 'ambiguous': {
-            const kindLabel = resolution.constraintKind === 'fixVersion' ? 'fix version' : resolution.constraintKind;
-            const list = formatBulletList(resolution.options.map(o => o.label));
-            return textResult(`Multiple ${kindLabel} matches for filter "${filter.name}":\n\n${list}\n\nCall again with a more exact ${kindLabel} value.`);
-          }
-          case 'resolved':
-            finalJql = buildConstraintJql(filter.jql, resolution.constraints);
-            break;
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        logDiag('jira.tools', 'error', 'jira_searchByFilter failed to resolve constraints', { filterId, filterName, error: message });
-        return textResult(`Could not resolve the given fixVersion/sprint/assignee: ${message}`);
-      }
-    }
-
-    try {
-      const fieldMeta = config.searchFields.length > 0 ? await ticketService.getFieldMeta() : [];
-      const text = await ticketService.searchTickets(finalJql, config.baseUrl, config.searchFields, fieldMeta);
-      return textResult(`_Using filter: **${filter.name}**_\n\n${text}`);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logDiag('jira.tools', 'error', 'jira_searchByFilter search failed', { jql: finalJql, error: message });
-      return textResult(`Search failed: ${message}`);
-    }
-  }
 }
 
 // -------------------------------------------------------------------------------------------
@@ -772,7 +448,7 @@ class TransitionTicketTool implements vscode.LanguageModelTool<TransitionTicketI
           const available = transResult.available.join(', ');
           const cacheHint = transResult.hasCache
             ? ''
-            : ` Call jira_discoverWorkflow for ${transResult.projectKey} / ${transResult.issueType || '<issuetype>'} to enable multi-hop transitions.`;
+            : ` No workflow is cached for ${transResult.projectKey} / ${transResult.issueType || '<issuetype>'}: call ${WORKFLOW_TOOL} with ticketKey "${ticketKey}" to discover it, then retry, so the move can take several steps.`;
           return textResult(
             `No transition to ${targetStatus} available from ${transResult.currentStatus}.${available ? ` Available: ${available}.` : ''}${cacheHint}`,
           );
@@ -786,152 +462,6 @@ class TransitionTicketTool implements vscode.LanguageModelTool<TransitionTicketI
   }
 }
 
-/** Shared entry guard for `jira_loadTicket`/`jira_downloadAttachment`: validates `ticketKey`
- * and resolves the open workspace folder before any Jira call, in that order (R6/R10) — both
- * tools write to workspace disk and need the identical two checks (code-review fix: this was
- * previously copy-pasted in each tool's `invoke()`). */
-type WorkspaceGuardResult =
-  | { ok: true; ticketKey: string; workspaceFolder: vscode.WorkspaceFolder }
-  | { ok: false; result: vscode.LanguageModelToolResult };
-
-function requireTicketKeyAndWorkspace(rawTicketKey: string | undefined, toolName: string): WorkspaceGuardResult {
-  const ticketKey = rawTicketKey?.trim();
-  if (!ticketKey) return { ok: false, result: textResult('A ticket key is required, e.g. PROJ-123.') };
-  if (!isSafePathSegment(ticketKey)) return { ok: false, result: textResult(`"${ticketKey}" is not a valid ticket key.`) };
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-  if (!workspaceFolder) return { ok: false, result: textResult(`No workspace folder is open. Open a folder to use ${toolName}.`) };
-  return { ok: true, ticketKey, workspaceFolder };
-}
-
-interface LoadTicketInput {
-  ticketKey: string;
-}
-
-class LoadTicketTool implements vscode.LanguageModelTool<LoadTicketInput> {
-  // Writes to workspace disk rather than to Jira, but treated as a write tool requiring
-  // confirmation like every other one here (Key Decision) — no `RecentCallGuard`, though
-  // (KTD3): a repeat load overwrites the same files, so there's nothing to de-duplicate.
-  constructor(private readonly configService: ConfigService) {}
-
-  async prepareInvocation(
-    options: vscode.LanguageModelToolInvocationPrepareOptions<LoadTicketInput>,
-  ): Promise<vscode.PreparedToolInvocation> {
-    const { ticketKey } = options.input;
-    const confirmation = buildLoadTicketConfirmation(ticketKey || '(unknown ticket)');
-    return {
-      invocationMessage: `Loading ${ticketKey}…`,
-      confirmationMessages: confirmation,
-    };
-  }
-
-  async invoke(options: vscode.LanguageModelToolInvocationOptions<LoadTicketInput>): Promise<vscode.LanguageModelToolResult> {
-    // R5/R6: ticketKey validated and the workspace-folder check made before any Jira call.
-    const guard = requireTicketKeyAndWorkspace(options.input.ticketKey, 'jira_loadTicket');
-    if (!guard.ok) return guard.result;
-    const { ticketKey, workspaceFolder } = guard;
-
-    const ctx = await tryGetConfiguredContext(this.configService);
-    if (isNotConfiguredResult(ctx)) return ctx;
-    const { config, ticketService } = ctx;
-
-    try {
-      // Fetched once here (not inside loadTicketToWorkspace) — this tool has no ticket
-      // preview to stream, unlike @jira load, so there's no reason to split the fetch.
-      // The three ticketKey-scoped calls are independent, so they run in parallel;
-      // getAttachments needs the resolved issue, so it stays outside the batch.
-      const [issue, comments, fieldMeta, remoteLinks] = await Promise.all([
-        ticketService.getIssue(ticketKey),
-        ticketService.getAllComments(ticketKey),
-        ticketService.getFieldMeta(),
-        ticketService.getRemoteLinks(ticketKey),
-      ]);
-      const attachments = ticketService.getAttachments(issue);
-      const alwaysShowIds = new Set<string>(config.additionalDisplayFields);
-      const hiddenIds = new Set<string>(config.hiddenDisplayFields);
-      const { downloadedCount, downloadedFiles, skipped, writeErrors } = await loadTicketToWorkspace(
-        ticketKey, ticketService,
-        { issue, comments, attachments, remoteLinks },
-        { fieldMeta, alwaysShowIds, hiddenIds, baseUrl: config.baseUrl },
-        workspaceFsWriter(workspaceFolder.uri),
-        { onDiag: logLoadDiag },
-      );
-      logDiag('jira.tools', 'info', `Loaded — ${ticketKey}`, { ticketKey, downloadedCount, skippedCount: skipped.length });
-      return textResult(buildLoadTicketResultMessage(ticketKey, comments.length, downloadedCount, skipped, writeErrors, downloadedFiles));
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logDiag('jira.tools', 'error', `jira_loadTicket failed — ${ticketKey}`, { ticketKey, error: message });
-      return textResult(`Could not load ${ticketKey}: ${message}`);
-    }
-  }
-}
-
-interface DownloadAttachmentInput {
-  ticketKey: string;
-  filename: string;
-}
-
-class DownloadAttachmentTool implements vscode.LanguageModelTool<DownloadAttachmentInput> {
-  // No RecentCallGuard (KTD3): a repeat download overwrites the same file, nothing to
-  // de-duplicate.
-  constructor(private readonly configService: ConfigService) {}
-
-  async prepareInvocation(
-    options: vscode.LanguageModelToolInvocationPrepareOptions<DownloadAttachmentInput>,
-  ): Promise<vscode.PreparedToolInvocation> {
-    const { ticketKey, filename } = options.input;
-    const confirmation = buildDownloadAttachmentConfirmation(ticketKey || '(unknown ticket)', filename || '(unknown file)');
-    return {
-      invocationMessage: `Downloading ${filename} from ${ticketKey}…`,
-      confirmationMessages: confirmation,
-    };
-  }
-
-  async invoke(options: vscode.LanguageModelToolInvocationOptions<DownloadAttachmentInput>): Promise<vscode.LanguageModelToolResult> {
-    // R10: ticketKey validated and the workspace-folder check made before any Jira call.
-    const guard = requireTicketKeyAndWorkspace(options.input.ticketKey, 'jira_downloadAttachment');
-    if (!guard.ok) return guard.result;
-    const { ticketKey, workspaceFolder } = guard;
-
-    const filename = options.input.filename?.trim();
-    if (!filename) return textResult('A filename is required, e.g. error.log.');
-    // The filename check the load uses: a filename may contain ".." as a substring
-    // (e.g. "v1..2-notes.txt") without being a traversal attempt.
-    const target = attachmentPath(ticketKey, filename);
-    if (!target) return textResult(`"${filename}" is not a valid filename.`);
-
-    const ctx = await tryGetConfiguredContext(this.configService);
-    if (isNotConfiguredResult(ctx)) return ctx;
-    const { ticketService } = ctx;
-
-    try {
-      // KTD5: always re-derives the ticket's attachment list live — no session/cache of a
-      // prior load's skip list — so this works whether or not a load ever ran for this ticket.
-      const issue = await ticketService.getIssue(ticketKey);
-      const attachments = ticketService.getAttachments(issue);
-      const { attachment, matchCount } = findAttachmentByFilename(attachments, filename);
-      if (!attachment) {
-        return textResult(buildAttachmentNotFoundMessage(ticketKey, filename, attachments.map(a => a.filename)));
-      }
-      if (attachment.size > ATTACHMENT_SIZE_LIMIT) {
-        return textResult(`"${filename}" is ${formatFileSize(attachment.size)}, over the 100 MB size limit — not downloaded.`);
-      }
-
-      const bytes = await ticketService.downloadAttachment(attachment.content);
-      const writer = workspaceFsWriter(workspaceFolder.uri);
-      await writer.createDirectory(attachmentsDir(ticketKey));
-      await writer.writeFile(target, bytes);
-      await ensureJiraContextGitignored(writer, logLoadDiag);
-
-      logDiag('jira.tools', 'info', `Downloaded attachment — ${ticketKey}/${filename}`, { ticketKey, filename, matchCount });
-      return textResult(buildDownloadAttachmentResultMessage(ticketKey, filename, matchCount));
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logDiag('jira.tools', 'error', `jira_downloadAttachment failed — ${ticketKey}/${filename}`, { ticketKey, filename, error: message });
-      return textResult(`Could not download ${filename} from ${ticketKey}: ${message}`);
-    }
-  }
-}
-
 interface UploadAttachmentInput {
   ticketKey: string;
   filePath: string;
@@ -941,8 +471,8 @@ interface UploadAttachmentInput {
  * (upload-attachment-to-ticket plan). KTD5: takes a fully explicit `filePath` (workspace-relative
  * or absolute) with no auto-resolution and no picker — matching every other `jira_*` tool's
  * statelessness (KTD6 above). KTD7: uses a `RecentCallGuard` like `AddCommentTool`/`CreateTicketTool`,
- * since Jira does not dedupe attachments by filename (see `findAttachmentByFilename`'s doc comment
- * in `attachmentEligibility.ts`) — a retried call would otherwise create a duplicate attachment. */
+ * since Jira does not dedupe attachments by filename — a retried call would otherwise create a
+ * duplicate attachment. */
 class UploadAttachmentTool implements vscode.LanguageModelTool<UploadAttachmentInput> {
   private readonly recentCalls = new RecentCallGuard();
 
@@ -1031,19 +561,10 @@ class UploadAttachmentTool implements vscode.LanguageModelTool<UploadAttachmentI
  * lifecycle via `context.subscriptions`. Called once from `activate()` in `extension.ts`. */
 export function registerJiraTools(context: vscode.ExtensionContext, configService: ConfigService): void {
   context.subscriptions.push(
-    vscode.lm.registerTool('jira_getTicket', new GetTicketTool(configService)),
-    vscode.lm.registerTool('jira_searchTickets', new SearchTicketsTool(configService)),
-    vscode.lm.registerTool('jira_getComments', new GetCommentsTool(configService)),
-    vscode.lm.registerTool('jira_listTemplates', new ListTemplatesTool(configService)),
-    vscode.lm.registerTool('jira_discoverWorkflow', new DiscoverWorkflowTool(configService)),
-    vscode.lm.registerTool('jira_listMyFilters', new ListMyFiltersTool(configService)),
-    vscode.lm.registerTool('jira_searchByFilter', new SearchByFilterTool(configService)),
     vscode.lm.registerTool('jira_addComment', new AddCommentTool(configService)),
     vscode.lm.registerTool('jira_updateField', new UpdateFieldTool(configService)),
     vscode.lm.registerTool('jira_createTicket', new CreateTicketTool(configService)),
     vscode.lm.registerTool('jira_transitionTicket', new TransitionTicketTool(configService)),
-    vscode.lm.registerTool('jira_loadTicket', new LoadTicketTool(configService)),
-    vscode.lm.registerTool('jira_downloadAttachment', new DownloadAttachmentTool(configService)),
     vscode.lm.registerTool('jira_uploadAttachment', new UploadAttachmentTool(configService)),
   );
 }

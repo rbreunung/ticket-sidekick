@@ -31,10 +31,6 @@ const loadShape = {
 /** Skipped attachments that calling the tool again with their names can still fetch. */
 const FETCHABLE: ReadonlySet<SkippedAttachment['cause']> = new Set(['not-default-type', 'download-failed']);
 
-function skipReason(s: SkippedAttachment): string {
-  return s.cause === 'duplicate' ? 'duplicate filename; only the newest attachment with this name is downloaded' : s.reason;
-}
-
 function resultMessage(key: string, folder: string, commentCount: number, allNames: string[], result: LoadTicketCoreResult): string {
   const abs = (rel: string) => absolutePathIn(folder, rel);
   const plural = (n: number, word: string) => `${n} ${word}${n !== 1 ? 's' : ''}`;
@@ -64,7 +60,7 @@ function resultMessage(key: string, folder: string, commentCount: number, allNam
     lines.push(
       '',
       `${plural(result.skipped.length, 'attachment')} not downloaded:`,
-      ...result.skipped.map(s => `- ${s.filename} (${formatFileSize(s.size)}): ${skipReason(s)}`),
+      ...result.skipped.map(s => `- ${s.filename} (${formatFileSize(s.size)}): ${s.reason}`),
     );
     const fetchable = [...new Set(result.skipped.filter(s => FETCHABLE.has(s.cause)).map(s => s.filename))];
     if (fetchable.length > 0) {

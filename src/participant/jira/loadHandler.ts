@@ -30,7 +30,7 @@ export function workspaceFsWriter(root: vscode.Uri): LoadWriter {
 }
 
 /** Load diagnostics go to the Output channel under the `jira.load` scope. */
-export const logLoadDiag: DiagLogger = (level, message, details) => logDiag('jira.load', level, message, details);
+const logLoadDiag: DiagLogger = (level, message, details) => logDiag('jira.load', level, message, details);
 
 /** {@link handleLoadTicket}'s result: whether a skipped-attachments resume session started, plus
  * the loaded ticket's own project key/issue type — read off the issue this function

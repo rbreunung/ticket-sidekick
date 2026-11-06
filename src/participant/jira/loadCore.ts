@@ -73,7 +73,7 @@ export function attachmentPath(ticketKey: string, filename: string): string | un
  * `.gitignore` when missing. Returns whether `.gitignore` was changed; a failure is logged and
  * does not stop the load.
  */
-export async function ensureJiraContextGitignored(writer: LoadWriter, onDiag?: DiagLogger): Promise<boolean> {
+async function ensureJiraContextGitignored(writer: LoadWriter, onDiag?: DiagLogger): Promise<boolean> {
   try {
     let existing = '';
     try {
@@ -136,7 +136,7 @@ export interface LoadOptions {
 const SKIP_REASONS: Record<SkipCause, string> = {
   'too-large': 'over 100 MB size limit',
   'not-default-type': 'unknown binary format',
-  duplicate: 'duplicate filename — use jira_downloadAttachment to fetch it by name',
+  duplicate: 'duplicate filename; only the newest attachment with this name is downloaded',
   'download-failed': 'download failed',
   'unsafe-filename': 'unsafe filename',
 };

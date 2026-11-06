@@ -160,7 +160,7 @@ describe('loadTicketToWorkspace', () => {
     expect(result.downloadedCount).toBe(1);
     expect(writer.text('.jira-context/PROJ-123/attachments/notes.txt')).toBe('newer content');
     expect(result.skipped).toEqual([
-      expect.objectContaining({ filename: 'notes.txt', reason: 'duplicate filename — use jira_downloadAttachment to fetch it by name' }),
+      expect.objectContaining({ filename: 'notes.txt', reason: 'duplicate filename; only the newest attachment with this name is downloaded' }),
     ]);
   });
 

@@ -1,0 +1,144 @@
+import { describe, it, expect } from 'vitest';
+import { existsSync, readdirSync, readFileSync } from 'fs';
+import { basename, dirname, resolve } from 'path';
+import { JIRA_TOOLS, LOAD_TICKET_TOOL, VIEW_TICKET_TOOL } from '../mcp/jiraTools/catalog';
+
+// The skills the extension contributes (package.json `contributes.chatSkills`) are prose an agent
+// follows, so nothing else notices when one names a tool that does not exist, or when VS Code
+// would refuse or hide it. This guard reads every contributed skill and checks what can be
+// checked: the frontmatter VS Code needs, model invocation left on, and every `jira_` tool name
+// it uses being one the MCP server offers.
+
+const root = process.cwd();
+const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf-8'));
+const contributedSkills: Array<{ path: string }> = pkg.contributes.chatSkills ?? [];
+const catalogNames = JIRA_TOOLS.map(t => t.name);
+
+/** The `key: value` lines between the opening and closing `---` of a SKILL.md. */
+function parseFrontmatter(text: string): Record<string, string> | undefined {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
+  if (!match) return undefined;
+  const fields: Record<string, string> = {};
+  for (const line of match[1].split(/\r?\n/)) {
+    const field = /^([A-Za-z][\w-]*):\s*(.*)$/.exec(line);
+    if (field) fields[field[1]] = field[2].trim().replace(/^(['"])(.*)\1$/, '$2');
+  }
+  return fields;
+}
+
+/** What is wrong with one skill: its folder name, its SKILL.md text, the tool names that exist. */
+function skillProblems(folder: string, text: string, toolNames: readonly string[]): string[] {
+  const problems: string[] = [];
+  const front = parseFrontmatter(text);
+  if (!front) return ['has no frontmatter'];
+  if (front.name !== folder) problems.push(`frontmatter name "${front.name ?? ''}" differs from its folder "${folder}"`);
+  if (!front.description) problems.push('has no description');
+  if ('disable-model-invocation' in front) problems.push('sets disable-model-invocation, so the agent cannot run it by itself');
+  for (const tool of new Set(text.match(/\bjira_[A-Za-z_]+/g) ?? [])) {
+    if (!toolNames.includes(tool)) problems.push(`names ${tool}, which the MCP server does not offer`);
+  }
+  return problems;
+}
+
+/** Positions of `names` in `text`, in the order given; -1 for one that is missing. */
+function positions(text: string, names: readonly string[]): number[] {
+  return names.map(name => text.indexOf(name));
+}
+
+describe('contributed skills', () => {
+  it('contributes at least one skill, each from a SKILL.md that exists', () => {
+    expect(contributedSkills.length).toBeGreaterThan(0);
+    const missing = contributedSkills.map(s => s.path).filter(p => basename(p) !== 'SKILL.md' || !existsSync(resolve(root, p)));
+    expect(missing).toEqual([]);
+  });
+
+  it('contributes every skill in skills/', () => {
+    const contributed = contributedSkills.map(s => basename(dirname(resolve(root, s.path)))).sort();
+    const onDisk = readdirSync(resolve(root, 'skills'), { withFileTypes: true })
+      .filter(e => e.isDirectory() && existsSync(resolve(root, 'skills', e.name, 'SKILL.md')))
+      .map(e => e.name)
+      .sort();
+    expect(contributed).toEqual(onDisk);
+  });
+
+  it.each(contributedSkills.map(s => s.path))('%s passes the guard', skillPath => {
+    const file = resolve(root, skillPath);
+    expect(skillProblems(basename(dirname(file)), readFileSync(file, 'utf-8'), catalogNames)).toEqual([]);
+  });
+});
+
+describe('the skill guard', () => {
+  const good = '---\nname: jira-sample\ndescription: Does a sample thing.\n---\n\nCall `jira_view_ticket`.\n';
+
+  it('passes a skill that names only tools the MCP server offers', () => {
+    expect(skillProblems('jira-sample', good, catalogNames)).toEqual([]);
+  });
+
+  it('fails a skill that names a tool that does not exist', () => {
+    const text = good.replace('`jira_view_ticket`', '`jira_view_ticket`, then `jira_summarize_ticket`');
+    expect(skillProblems('jira-sample', text, catalogNames)).toEqual(['names jira_summarize_ticket, which the MCP server does not offer']);
+  });
+
+  it('fails a skill that names a removed Agent Mode tool', () => {
+    const text = good.replace('`jira_view_ticket`', '`jira_getTicket`');
+    expect(skillProblems('jira-sample', text, catalogNames)).toEqual(['names jira_getTicket, which the MCP server does not offer']);
+  });
+
+  it('fails a skill whose name differs from its folder', () => {
+    expect(skillProblems('jira-other', good, catalogNames)).toEqual(['frontmatter name "jira-sample" differs from its folder "jira-other"']);
+  });
+
+  it('fails a skill that turns off model invocation', () => {
+    const text = good.replace('description:', 'disable-model-invocation: true\ndescription:');
+    expect(skillProblems('jira-sample', text, catalogNames)).toEqual(['sets disable-model-invocation, so the agent cannot run it by itself']);
+  });
+
+  it('fails a skill without frontmatter', () => {
+    expect(skillProblems('jira-sample', 'Call `jira_view_ticket`.', catalogNames)).toEqual(['has no frontmatter']);
+  });
+});
+
+describe('the /jira-brief skill', () => {
+  const brief = readFileSync(resolve(root, 'skills/jira-brief/SKILL.md'), 'utf-8');
+  const sections = [
+    'Problem or goal',
+    'Context',
+    'Steps to reproduce',
+    'Acceptance criteria',
+    'Decisions and findings from comments',
+    'Current state',
+    'Open questions and missing information',
+    'Sources used',
+  ];
+
+  it('names all eight sections, in order', () => {
+    const at = positions(brief, sections);
+    expect(at.filter(p => p < 0), 'a section is missing').toEqual([]);
+    expect(at).toEqual([...at].sort((a, b) => a - b));
+  });
+
+  it('asks for the expected and actual result with the steps to reproduce, and the author and date of each decision', () => {
+    expect(brief).toMatch(/expected result and the actual result/);
+    expect(brief).toMatch(/author and date/);
+  });
+
+  it('says what an uncovered section says, marks derived acceptance criteria, and lists unreadable attachments', () => {
+    expect(brief).toContain('"not stated in the ticket"');
+    expect(brief).toContain('"(derived)"');
+    expect(brief).toMatch(/attachment you could not read/);
+  });
+
+  it('views the ticket, then loads the picked attachments and reads them from .jira-context', () => {
+    const at = positions(brief, [VIEW_TICKET_TOOL, LOAD_TICKET_TOOL, '.jira-context/']);
+    expect(at.every(p => p >= 0)).toBe(true);
+    expect(at).toEqual([...at].sort((a, b) => a - b));
+    expect(brief).toContain('`attachments`');
+  });
+});
+
+describe('the section-order check', () => {
+  it('notices sections out of order', () => {
+    const at = positions('Context, then Problem or goal', ['Problem or goal', 'Context']);
+    expect(at).not.toEqual([...at].sort((a, b) => a - b));
+  });
+});
