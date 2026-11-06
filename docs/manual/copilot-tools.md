@@ -1,6 +1,6 @@
 # Jira Tools for Copilot Chats (MCP)
 
-Part of `@jira` — gives Copilot chats that cannot use `@jira` a set of Jira tools and a developer-brief skill. See the main [README](../../README.md) for the Jira setup first.
+Part of `@jira` — gives Copilot chats that cannot use `@jira` a set of Jira tools and two skills: a developer brief and a guided ticket create. See the main [README](../../README.md) for the Jira setup first.
 
 ## What it is and when it runs
 
@@ -55,6 +55,7 @@ A skill is a set of instructions Copilot follows, using the tools above. Type it
 | Skill | What it does |
 | --- | --- |
 | `/jira-brief` | Writes a developer brief of one ticket, e.g. `/jira-brief PROJ-123`. It reads the ticket with `jira_view_ticket`, loads the attachments that matter with `jira_load_ticket`, and writes eight sections: problem or goal; context; steps to reproduce with expected and actual result; acceptance criteria; decisions and findings from comments, with author and date; current state; open questions and missing information; and the sources it used. A section the ticket does not cover says "not stated in the ticket", acceptance criteria it worked out itself are marked "(derived)", and it lists the attachments it could not read |
+| `/jira-create` | Creates one ticket with you, e.g. `/jira-create a bug for the failing login in PROJ`. It looks for a template in `.jira-templates.json` that fits, asks only for what it cannot tell from your request (such as the project or, without a template, the issue type), drafts the summary and the description, shows you the draft and creates the ticket with `jira_create_ticket` once you agree |
 
 ## Approvals
 
@@ -89,4 +90,5 @@ Use this after installing a new build, in a chat that runs in the Copilot harnes
 11. Ask "move PROJ-123 to <a status two steps away>": `jira_move_ticket` asks first and names both transitions.
 12. Ask "create a ticket in PROJ from the template <one of yours> with the summary 'Checklist ticket'": `jira_create_ticket` asks first and lists the template fields it applied. Delete the ticket afterwards.
 13. Ask "attach README.md to PROJ-123": `jira_upload_attachment` asks first and uploads it. Ask to attach a file from outside the workspace: it is refused.
-14. Open the chat's tool list: no Jira capability is listed twice, for example both a comment tool from this server and one from Agent Mode.
+14. Type `/jira-create a task in PROJ to update the onboarding guide`: it picks or asks for a template, shows the draft and creates the ticket only after you agree. Delete the ticket afterwards.
+15. Open the chat's tool list: no Jira capability is listed twice, for example both a comment tool from this server and one from Agent Mode.
