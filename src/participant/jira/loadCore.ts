@@ -12,7 +12,6 @@ import {
 } from '../../utils/attachmentEligibility';
 import type { DiagLogger } from '../../utils/diagTypes';
 import { formatJiraBody } from '../../utils/markdownFormatter';
-import type { LoadSkippedSession } from '../sessionState';
 import { rewriteAttachmentLinks } from '../sessionState';
 
 // Loads a Jira ticket into `.jira-context/<KEY>/` under a workspace folder: `ticket.md`,
@@ -92,7 +91,16 @@ async function ensureJiraContextGitignored(writer: LoadWriter, onDiag?: DiagLogg
 /** Why an attachment was not written. */
 export type SkipCause = 'too-large' | 'not-default-type' | 'duplicate' | 'download-failed' | 'unsafe-filename';
 
-export type SkippedAttachment = LoadSkippedSession['skipped'][number] & { cause: SkipCause };
+/** An attachment the load did not write, with the reason shown to the user. */
+export interface SkippedAttachment {
+  filename: string;
+  /** Jira download URL. */
+  content: string;
+  size: number;
+  mimeType: string;
+  reason: string;
+  cause: SkipCause;
+}
 
 export interface LoadTicketCoreResult {
   downloadedCount: number;

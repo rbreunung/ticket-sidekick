@@ -205,47 +205,43 @@ describe('loadTicketToWorkspace', () => {
   });
 });
 
-// handleLoadTicket() is the chat entry point that owns the 'load-skipped' resume session: it
-// reports back whether that session is now live, so the participant can carry the matching
-// session metadata, and returns the loaded ticket's project key and issue type, read off the same
-// `getIssue` call, so the follow-up chips never need a second fetch.
-describe('handleLoadTicket — load-skipped session liveness', () => {
+// handleLoadTicket() is the chat entry point: it returns the loaded ticket's project key and issue
+// type, read off the same `getIssue` call, so the follow-up chips never need a second fetch.
+describe('handleLoadTicket — result', () => {
   beforeEach(() => {
     resetFakeFiles();
   });
 
-  const mockStream = () => ({ markdown: vi.fn() });
-  const mockWs = () => ({ get: vi.fn(), update: vi.fn() });
-
-  it('returns hasSkippedAttachments: true and stores the session when attachments were skipped', async () => {
+  it('returns the project key and lists a skipped attachment as a plain line, with nothing to reply to', async () => {
     const client = new MockJiraClient();
     const service = new TicketService(client);
-    const stream = mockStream();
-    const ws = mockWs();
+    const stream = { markdown: vi.fn() };
 
-    const result = await handleLoadTicket('PROJ-123', service, stream as never, ws as never, [], new Set(), new Set());
+    const result = await handleLoadTicket('PROJ-123', service, stream as never, [], new Set(), new Set());
 
     // heap-dump.bin (application/octet-stream) is skipped in the PROJ-123 fixture.
-    expect(result.hasSkippedAttachments).toBe(true);
     expect(result.projectKey).toBe('PROJ');
-    expect(ws.update).toHaveBeenCalledWith('jira.session.loadSkipped', expect.objectContaining({ ticketKey: 'PROJ-123' }));
+    const text = streamedText(stream);
+    expect(text).toMatch(/^- `heap-dump\.bin` — .+ \(application\/octet-stream\) — unknown binary format$/m);
+    expect(text).not.toContain('command:');
+    expect(text).not.toContain('Reply with a number');
   });
 
-  it('returns hasSkippedAttachments: false and does not touch the session when nothing was skipped', async () => {
+  it('shows no skipped-attachments list when nothing was skipped', async () => {
     const client = new MockJiraClient();
     const originalGetIssue = client.getIssue.bind(client);
     client.getIssue = async (issueKey: string) => {
       const issue = await originalGetIssue(issueKey);
       return { ...issue, fields: { ...issue.fields, attachment: [] } };
     };
-    const service = new TicketService(client);
-    const stream = mockStream();
-    const ws = mockWs();
+    const stream = { markdown: vi.fn() };
 
-    const result = await handleLoadTicket('PROJ-123', service, stream as never, ws as never, [], new Set(), new Set());
+    await handleLoadTicket('PROJ-123', new TicketService(client), stream as never, [], new Set(), new Set());
 
-    expect(result.hasSkippedAttachments).toBe(false);
-    expect(ws.update).not.toHaveBeenCalledWith('jira.session.loadSkipped', expect.anything());
+    const text = streamedText(stream);
+    expect(text).toContain('Loaded **PROJ-123** into `.jira-context/PROJ-123/`');
+    expect(text).not.toContain('Skipped attachments');
+    expect(text).not.toContain('jira_load_ticket');
   });
 });
 
@@ -267,9 +263,8 @@ describe('handleLoadTicket — unsafe attachment filenames', () => {
       return { ...issue, fields: { ...issue.fields, attachment: evil } };
     };
     const stream = { markdown: vi.fn() };
-    const ws = { get: vi.fn(), update: vi.fn() };
 
-    const result = await handleLoadTicket('PROJ-123', new TicketService(client), stream as never, ws as never, [], new Set(), new Set());
+    await handleLoadTicket('PROJ-123', new TicketService(client), stream as never, [], new Set(), new Set());
 
     expect([...fakeFiles.keys()].sort()).toEqual([
       '/workspace/.gitignore',
@@ -281,14 +276,13 @@ describe('handleLoadTicket — unsafe attachment filenames', () => {
     expect(skippedList).toContain('**Skipped attachments:**');
     expect(skippedList).toContain('- Not downloaded because the name is unsafe: `../../evil.txt` (2 KB)');
     expect(skippedList).toContain('- Not downloaded because the name is unsafe: `..\\..\\evil.txt` (2 KB)');
-    // Nothing can be downloaded on request, so nothing is offered.
+    // An unsafe name cannot be fetched by name either, so nothing is offered.
     expect(skippedList).not.toContain('command:');
     expect(skippedList).not.toContain('Reply with a number');
-    expect(result.hasSkippedAttachments).toBe(false);
-    expect(ws.update).not.toHaveBeenCalledWith('jira.session.loadSkipped', expect.anything());
+    expect(skippedList).not.toContain('jira_load_ticket');
   });
 
-  it('numbers and offers only the skipped attachment that can be downloaded, and lists the unsafe one as a plain line', async () => {
+  it('lists the skipped attachments, the unsafe one included, as plain lines and points to jira_load_ticket for the fetchable one', async () => {
     const client = new MockJiraClient();
     const getIssue = client.getIssue.bind(client);
     const attachments: JiraAttachment[] = [
@@ -300,20 +294,17 @@ describe('handleLoadTicket — unsafe attachment filenames', () => {
       return { ...issue, fields: { ...issue.fields, attachment: attachments } };
     };
     const stream = { markdown: vi.fn() };
-    const ws = { get: vi.fn(), update: vi.fn() };
 
-    const result = await handleLoadTicket('PROJ-123', new TicketService(client), stream as never, ws as never, [], new Set(), new Set());
+    await handleLoadTicket('PROJ-123', new TicketService(client), stream as never, [], new Set(), new Set());
 
     const text = streamedText(stream);
-    expect(text).toMatch(/^1\. \[`dump\.bin` — 4 KB \(application\/octet-stream\) — unknown binary format\]\(command:workbench\.action\.chat\.open\?/m);
-    expect(text).not.toMatch(/^2\. /m);
+    expect(text).toContain('**Skipped attachments:**');
+    expect(text).toContain('\n- `dump.bin` — 4 KB (application/octet-stream) — unknown binary format');
     expect(text).toContain('\n- Not downloaded because the name is unsafe: `../evil.txt` (2 KB)');
-    expect(text).toContain('Reply with a number to download it anyway.');
-    expect(result.hasSkippedAttachments).toBe(true);
-    expect(ws.update).toHaveBeenCalledWith('jira.session.loadSkipped', {
-      ticketKey: 'PROJ-123',
-      skipped: [{ filename: 'dump.bin', content: 'https://jira.example.com/a/att041', size: 4096, mimeType: 'application/octet-stream', reason: 'unknown binary format' }],
-    });
+    expect(text).not.toMatch(/^\d+\. /m);
+    expect(text).not.toContain('command:');
+    expect(text).not.toContain('Reply with a number');
+    expect(text).toContain('`jira_load_ticket`');
   });
 });
 

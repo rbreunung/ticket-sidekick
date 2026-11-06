@@ -194,7 +194,6 @@ export function computeJiraFollowups(state: JiraFollowupState): FollowupSuggesti
 export type JiraSessionKind =
   | 'more-comments'
   | 'comment-list'
-  | 'load-skipped'
   | 'creating'
   | 'selecting-create-option'
   | 'previewing'

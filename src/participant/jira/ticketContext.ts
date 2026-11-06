@@ -34,7 +34,7 @@ export function getActiveJiraSession(context: vscode.ChatContext): JiraSessionCo
 
 // U3: same metadata read as getActiveJiraSession, but for an arbitrary history turn rather than
 // only the last one — used by llmHelpers.ts's extractHistoryTurns() to keep filtering
-// session-management responses (e.g. 'previewing', 'load-skipped') out of LLM history context
+// session-management responses (e.g. 'previewing') out of LLM history context
 // now that those turns carry no visible `<!-- jira:TAG -->` marker to text-match against (R3).
 export function turnCarriesJiraSessionKind(
   turn: vscode.ChatRequestTurn | vscode.ChatResponseTurn,

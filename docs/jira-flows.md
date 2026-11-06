@@ -148,7 +148,6 @@ Each session below is looked up by its `workspaceState` key; liveness is checked
 | `ContentSession` | `jira.session.previewing` | metadata — `jiraSession.kinds: ['previewing']` |
 | `MoreCommentsSession` | `jira.session.moreComments` | metadata — `jiraSession.kinds: ['more-comments']` |
 | `CommentListSession` | `jira.session.commentList` | metadata — `jiraSession.kinds: ['comment-list']` |
-| `LoadSkippedSession` | `jira.session.loadSkipped` | metadata — `jiraSession.kinds: ['load-skipped']` |
 | `SprintSelectionSession` | `jira.session.sprintSelection` | metadata — `jiraSession.kinds: ['sprint-selection']` |
 | `FieldSelectionSession` | `jira.session.fieldSelection` | metadata — `jiraSession.kinds: ['field-selection']` |
 | `FieldUpdatePreviewSession` | `jira.session.fieldUpdatePreview` | metadata — `jiraSession.kinds: ['field-update-preview']` |
@@ -171,7 +170,7 @@ Each session below is looked up by its `workspaceState` key; liveness is checked
 | `UploadReviewSession` | `jira.session.uploadReview` | metadata — `jiraSession.kinds: ['upload-review']` |
 | `AwaitUploadTicketSession` | `jira.session.awaitUploadTicket` | metadata — `jiraSession.kinds: ['await-upload-ticket']` |
 
-Detection order in the Jira handler: resolution selection → transition review → guided transition → multi-transition → filter selection → selecting-constraint-match → listing-filters → bulk-update-review → combined template/issue-type selection → shared issue-type ask (R6) → creation → content → more-comments → check command → load-skipped → email content (comment-attach) → batch email template selection → batch email review → veracode template selection → veracode review → Waltz template selection → Waltz review → template-gen await-name (R2) → template-gen type pick → template-gen await-free-type (R3) → template-gen review → template-gen collision → template-gen offer-create → template-gen await-summary → comment list → upload review → await-upload-ticket → greeting/empty-prompt check → intent parse.
+Detection order in the Jira handler: resolution selection → transition review → guided transition → multi-transition → filter selection → selecting-constraint-match → listing-filters → bulk-update-review → combined template/issue-type selection → shared issue-type ask (R6) → creation → content → more-comments → check command → email content (comment-attach) → batch email template selection → batch email review → veracode template selection → veracode review → Waltz template selection → Waltz review → template-gen await-name (R2) → template-gen type pick → template-gen await-free-type (R3) → template-gen review → template-gen collision → template-gen offer-create → template-gen await-summary → comment list → upload review → await-upload-ticket → greeting/empty-prompt check → intent parse.
 
 The shared issue-type ask (`AwaitIssueTypeSession`, R6/KTD4) replaces `resolveIssueTypeOrPrompt()`'s
 former `showInputBox` for every flow that resolves an issue type before creating a ticket —

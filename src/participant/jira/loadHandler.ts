@@ -6,10 +6,9 @@ import type { DiagLogger } from '../../utils/diagTypes';
 import type { JiraComment, JiraFieldMeta } from '../../jira/IJiraClient';
 import { formatIssueFields, formatKeyLink } from '../../services/TicketService';
 import type { TicketService } from '../../services/TicketService';
-import type { LoadSkippedSession } from '../sessionState';
-import { rewriteAttachmentLinks, buildChatCommandLink, extractProjectKeyFromTicketKey, neutralizeMarkdownLinks } from '../sessionState';
-import { trustedChatMarkdown } from '../../utils/chatMarkdown';
-import { loadTicketToWorkspace, type LoadWriter } from './loadCore';
+import { rewriteAttachmentLinks, extractProjectKeyFromTicketKey, neutralizeMarkdownLinks } from '../sessionState';
+import { LOAD_TICKET_TOOL } from '../../mcp/jiraTools/toolNames';
+import { loadTicketToWorkspace, type LoadWriter, type SkipCause } from './loadCore';
 
 export function serializeCommentsForLLM(comments: JiraComment[]): string {
   return comments.map((c) => {
@@ -32,12 +31,13 @@ export function workspaceFsWriter(root: vscode.Uri): LoadWriter {
 /** Load diagnostics go to the Output channel under the `jira.load` scope. */
 const logLoadDiag: DiagLogger = (level, message, details) => logDiag('jira.load', level, message, details);
 
-/** {@link handleLoadTicket}'s result: whether a skipped-attachments resume session started, plus
- * the loaded ticket's own project key/issue type — read off the issue this function
- * already fetches internally, so the `loadedTicket` follow-up chips built from it never need a
- * second `getIssue` call. */
+/** Skip causes that the Copilot tool can fetch again when the attachment is named in its call. */
+const REFETCHABLE: ReadonlySet<SkipCause> = new Set(['not-default-type', 'download-failed']);
+
+/** {@link handleLoadTicket}'s result: the loaded ticket's own project key/issue type — read off
+ * the issue this function already fetches internally, so the `loadedTicket` follow-up chips
+ * built from it never need a second `getIssue` call. */
 export interface LoadTicketResult {
-  hasSkippedAttachments: boolean;
   projectKey: string;
   issueType: string;
 }
@@ -46,7 +46,6 @@ export async function handleLoadTicket(
   ticketKey: string,
   ticketService: TicketService,
   stream: vscode.ChatResponseStream,
-  ws: vscode.Memento,
   fieldMeta: JiraFieldMeta[],
   alwaysShowIds: Set<string>,
   hiddenIds: Set<string>,
@@ -54,7 +53,6 @@ export async function handleLoadTicket(
   // No issue fetched yet on this early-out — fall back to the key's own project prefix and an
   // unknown issue type, same as elsewhere in this file when there's nothing better to read.
   const noWorkspaceResult: LoadTicketResult = {
-    hasSkippedAttachments: false,
     projectKey: extractProjectKeyFromTicketKey(ticketKey) ?? ticketKey.split('-')[0],
     issueType: '',
   };
@@ -107,31 +105,15 @@ export async function handleLoadTicket(
   stream.markdown(summaryLines.join('\n'));
 
   if (skipped.length > 0) {
-    // An attachment skipped for its unsafe name is never written, so it is listed without a
-    // number: only the other skipped attachments can be picked to download anyway.
-    const offered = skipped.filter(s => s.cause !== 'unsafe-filename');
-    const unsafe = skipped.filter(s => s.cause === 'unsafe-filename');
-    const parts = ['\n\n**Skipped attachments:**'];
-    if (offered.length > 0) {
-      parts.push(offered.map((s, i) =>
-        `${i + 1}. ${buildChatCommandLink(`\`${s.filename}\` — ${formatFileSize(s.size)} (${s.mimeType}) — ${s.reason}`, '@jira', String(i + 1))}`,
-      ).join('\n'));
+    // Every skipped attachment is a plain line; names come from Jira, so they are neutralized.
+    const lines = skipped.map(s => s.cause === 'unsafe-filename'
+      ? `- Not downloaded because the name is unsafe: \`${neutralizeMarkdownLinks(s.filename)}\` (${formatFileSize(s.size)})`
+      : `- \`${neutralizeMarkdownLinks(s.filename)}\` — ${formatFileSize(s.size)} (${neutralizeMarkdownLinks(s.mimeType)}) — ${s.reason}`);
+    const parts = ['\n\n**Skipped attachments:**', lines.join('\n')];
+    if (skipped.some(s => REFETCHABLE.has(s.cause))) {
+      parts.push(`_To fetch one of these anyway, ask Copilot to load it with the \`${LOAD_TICKET_TOOL}\` tool, naming the attachment._`);
     }
-    if (unsafe.length > 0) {
-      parts.push(unsafe.map(s =>
-        `- Not downloaded because the name is unsafe: \`${neutralizeMarkdownLinks(s.filename)}\` (${formatFileSize(s.size)})`,
-      ).join('\n'));
-    }
-    if (offered.length > 0) parts.push('Reply with a number to download it anyway.');
-    stream.markdown(trustedChatMarkdown(parts.join('\n\n')));
-    if (offered.length > 0) {
-      // The stored session keeps its own shape; the skip cause is only for the load's callers.
-      const stored = offered.map(({ filename, content, size, mimeType, reason }) => ({ filename, content, size, mimeType, reason }));
-      await ws.update('jira.session.loadSkipped', { ticketKey, skipped: stored } satisfies LoadSkippedSession);
-      // The referenced ticket key is carried on metadata by the caller (JiraParticipant's
-      // loadTicket case) instead of a visible marker here.
-      return { hasSkippedAttachments: true, projectKey, issueType };
-    }
+    stream.markdown(parts.join('\n\n'));
   }
-  return { hasSkippedAttachments: false, projectKey, issueType };
+  return { projectKey, issueType };
 }

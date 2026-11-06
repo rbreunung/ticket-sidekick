@@ -258,7 +258,6 @@ export function extractHistoryTurns(context: vscode.ChatContext): Array<{ role: 
       // Skip session-management responses — they are noise, not findings. Metadata-based (R1/R3):
       // these turns carry no visible `<!-- jira:TAG -->` marker to text-match against any more.
       if (turnCarriesJiraSessionKind(turn, 'previewing')) return [];
-      if (turnCarriesJiraSessionKind(turn, 'load-skipped')) return [];
       const raw = turn.response
         .map((p) => (p instanceof vscode.ChatResponseMarkdownPart ? p.value.value : ''))
         .join('');

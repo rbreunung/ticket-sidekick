@@ -174,18 +174,11 @@ Once loaded, your AI assistant (GitHub Copilot, Cursor, etc.) can read these fil
 | Archives | `.zip`, `.tar`, `.gz`, `.tgz`, `.bz2`, `.7z`, `.rar`, `.jar`, `.war`, `.ear` | Downloaded |
 | Oversized | File larger than 100 MB | Skipped — listed in `ticket.md` with size |
 | Unknown binary | Any other MIME type not covered above | Skipped — listed in `ticket.md` with size |
-| Unsafe name | A name with `/` or `\` in it, or the name `.` or `..` | Never written — listed in `ticket.md`, and in the chat without a number to download it |
+| Unsafe name | A name with `/` or `\` in it, or the name `.` or `..` | Never written — listed in `ticket.md` |
 
 Up to three attachments are downloaded in parallel.
 
-When a load completes with skipped attachments, the response shows a numbered list. To download on demand:
-
-```text
-1              ← download attachment #1
-download 1     ← same
-1 2 3          ← download attachments #1, #2, and #3 in one reply
-download 1 3   ← same, with keyword prefix
-```
+When a load skips attachments, the response lists each one with its name, size and the reason. To fetch a skipped one anyway, ask Copilot to load it with the `jira_load_ticket` tool, naming the attachment (see [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md)). Files over 100 MB and files with an unsafe name are never downloaded.
 
 `.jira-context/` is automatically added to `.gitignore` at your workspace root the first time you run `@jira load`.
 

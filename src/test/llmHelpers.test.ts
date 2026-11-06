@@ -114,23 +114,8 @@ describe('extractHistoryTurns', () => {
     expect(turns).toHaveLength(1);
     expect(turns[0].role).toBe('assistant');
     // Carrying lastTicketKey with empty kinds must NOT exclude the turn from LLM history —
-    // exclusion is keyed on 'previewing'/'load-skipped', not on the ticket key.
+    // exclusion is keyed on the 'previewing' session kind, not on the ticket key.
     expect(turns[0].text).toBe('Here is the ticket.');
-  });
-
-  it('excludes assistant turns carrying the load-skipped session (metadata-based, R1/R3)', () => {
-    const history = [
-      new vscode.ChatRequestTurn('load PROJ-1'),
-      new vscode.ChatResponseTurn(
-        [{ value: 'Ticket loaded.\n\nSkipped attachments:\n\n1. trace.trc — 120 MB\n\nReply with a number to download it anyway.' }],
-        { metadata: { jiraSession: { kinds: ['load-skipped'] } } },
-      ),
-      new vscode.ChatRequestTurn('write a comment about the issue'),
-    ];
-    const turns = extractHistoryTurns({ history } as never);
-    // Load response is noise — only the two user turns should appear
-    expect(turns).toHaveLength(2);
-    expect(turns.every((t) => t.role === 'user')).toBe(true);
   });
 
   it('excludes assistant turns carrying the previewing session (metadata-based, R1/R3)', () => {
