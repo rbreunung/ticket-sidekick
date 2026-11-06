@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import * as http from 'http';
+import * as net from 'net';
 import { z } from 'zod';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -62,6 +63,22 @@ function rawPost(port: number, headers: Record<string, string>): Promise<number>
   });
 }
 
+/** A POST written straight to the socket, so a header can appear twice; resolves the status code. */
+function socketPost(port: number, headerLines: string[]): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(port, '127.0.0.1', () => {
+      socket.write([
+        'POST /mcp HTTP/1.1', `Host: 127.0.0.1:${port}`, 'Content-Type: application/json', 'Content-Length: 2', 'Connection: close',
+        ...headerLines, '', '{}',
+      ].join('\r\n'));
+    });
+    let reply = '';
+    socket.on('data', chunk => { reply += chunk.toString('latin1'); });
+    socket.on('end', () => resolve(Number(/^HTTP\/1\.1 (\d{3})/.exec(reply)?.[1] ?? 0)));
+    socket.on('error', reject);
+  });
+}
+
 function textOf(result: unknown): string {
   const content = (result as { content?: Array<{ type: string; text?: string }> }).content ?? [];
   return content.filter(c => c.type === 'text').map(c => c.text).join('\n');
@@ -98,6 +115,20 @@ describe('localhost MCP server', () => {
     expect(deps.calls).toEqual([]);
     expect(server?.stats().refused['mcp-key-invalid']).toBeGreaterThanOrEqual(2);
     expect(JSON.stringify(server?.stats())).not.toContain(mcpKey);
+  });
+
+  it('refuses the right key sent with a lowercase bearer scheme with 401', async () => {
+    const { port, mcpKey, handled } = await startServer();
+    expect(await rawPost(port, { host: `127.0.0.1:${port}`, authorization: `bearer ${mcpKey}`, 'content-type': 'application/json' })).toBe(401);
+    expect(handled()).toBe(0);
+  });
+
+  it('with two Authorization headers only the first counts', async () => {
+    const { port, mcpKey, handled } = await startServer();
+    expect(await socketPost(port, [`Authorization: Bearer ${generateKey()}`, `Authorization: Bearer ${mcpKey}`])).toBe(401);
+    expect(handled()).toBe(0);
+    expect(await socketPost(port, [`Authorization: Bearer ${mcpKey}`, `Authorization: Bearer ${generateKey()}`])).not.toBe(401);
+    expect(handled()).toBe(1);
   });
 
   it('refuses Host localhost:<port> with 403 even with the right key', async () => {

@@ -6,12 +6,14 @@ import * as path from 'path';
 import { z } from 'zod';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { buildReport, redact, scanForSecret, type ReportFacts } from '../mcp/report';
+import { buildReport, redact, scanForSecret, type KeyScanResult, type ReportFacts } from '../mcp/report';
 import { McpServerController, type ControllerSnapshot } from '../mcp/serverController';
 import { defineTool, type McpToolDefinition } from '../mcp/mcpServer';
 import { evaluateNoProxy } from '../mcp/proxyBypass';
 import { generateKey } from '../mcp/keys';
 import { JiraApiError } from '../utils/apiError';
+
+const MB = 1024 * 1024;
 
 let tmp: string;
 let controller: McpServerController<object> | undefined;
@@ -44,6 +46,14 @@ function snapshot(overrides: Partial<ControllerSnapshot> = {}): ControllerSnapsh
   };
 }
 
+function scan(overrides: Partial<KeyScanResult> = {}): KeyScanResult {
+  return {
+    matches: [], filesScanned: 12, bytesRead: 4096, stopped: undefined, roots: ['/home/u/.copilot'], missingRoots: [],
+    limits: { maxFiles: 20000, maxFileBytes: 8 * MB, maxTotalBytes: 512 * MB },
+    ...overrides,
+  };
+}
+
 function facts(overrides: Partial<ReportFacts> = {}): ReportFacts {
   return {
     generatedAt: '2026-11-05T12:00:00.000Z',
@@ -56,7 +66,8 @@ function facts(overrides: Partial<ReportFacts> = {}): ReportFacts {
     proxy: { noProxy: evaluateNoProxy(['127.0.0.1']), proxySet: false, proxySupport: 'override' },
     jira: { configured: true, authType: 'datacenter', tokenPresent: true },
     chatSettings: { 'chat.mcp.discovery.enabled': true },
-    keyScan: { matches: [], filesScanned: 12, capped: false, roots: ['/home/u/.copilot'], missingRoots: [] },
+    keyScan: scan(),
+    home: { dir: '/home/u', windows: false },
     ...overrides,
   };
 }
@@ -98,9 +109,38 @@ describe('MCP diagnostics report', () => {
 
   it('names the stored-key search result by file path', () => {
     const text = buildReport(facts({
-      keyScan: { matches: ['/home/u/.copilot/session.json'], filesScanned: 3, capped: false, roots: ['/home/u/.copilot'], missingRoots: [] },
+      keyScan: scan({ matches: ['/srv/copilot/session.json'], filesScanned: 3, roots: ['/srv/copilot'] }),
     }));
-    expect(text).toContain('Current MCP key FOUND in: /home/u/.copilot/session.json');
+    expect(text).toContain('Current MCP key FOUND in: /srv/copilot/session.json');
+  });
+
+  it('shows searched folders and found files under the home folder with ~, so the user name stays out', () => {
+    const text = buildReport(facts({
+      home: { dir: '/home/alice', windows: false },
+      keyScan: scan({
+        roots: ['/home/alice/.copilot', '/var/log/code'],
+        missingRoots: ['/home/alice/.vscode-server/data/logs'],
+        matches: ['/home/alice/.config/Code/User/workspaceStorage/abc/state.vscdb'],
+      }),
+    }));
+    expect(text).toContain('Searched: ~/.copilot, /var/log/code');
+    expect(text).toContain('Missing: ~/.vscode-server/data/logs');
+    expect(text).toContain('Current MCP key FOUND in: ~/.config/Code/User/workspaceStorage/abc/state.vscdb');
+    expect(text).not.toContain('/home/alice');
+    expect(text).not.toContain('alice');
+  });
+
+  it('on Windows, replaces the home folder with ~ whatever its letter case', () => {
+    const text = buildReport(facts({
+      home: { dir: 'C:\\Users\\Alice', windows: true },
+      keyScan: scan({
+        roots: ['C:\\Users\\Alice\\.copilot'],
+        matches: ['c:\\users\\alice\\AppData\\Roaming\\Code\\User\\globalStorage\\state.vscdb'],
+      }),
+    }));
+    expect(text).toContain('Searched: ~\\.copilot');
+    expect(text).toContain('Current MCP key FOUND in: ~\\AppData\\Roaming\\Code\\User\\globalStorage\\state.vscdb');
+    expect(text.toLowerCase()).not.toContain('alice');
   });
 
   it('shows the 127.0.0.1 entry with a port as ignored and an internal host only as a count', () => {
@@ -126,11 +166,14 @@ describe('MCP diagnostics report', () => {
 
 describe('MCP diagnostics from a running server', () => {
   it('after a restart, counts a request with the earlier key as from an earlier start and lists both ports', async () => {
-    controller = new McpServerController<object>({ tools: [], toolDeps: {}, serverInfo: { name: 'test', version: '0.0.0' }, isMcpAllowed: () => true });
+    let allowed = true;
+    controller = new McpServerController<object>({ tools: [], toolDeps: {}, serverInfo: { name: 'test', version: '0.0.0' }, isMcpAllowed: () => allowed });
     await controller.start('activation');
     const firstPort = controller.port()!;
     const firstKey = bearerOf(controller);
+    allowed = false;
     await controller.stop('entry removed');
+    allowed = true;
     await controller.start('entry added');
     const secondPort = controller.port()!;
 
@@ -186,7 +229,7 @@ describe('scanForSecret', () => {
     fs.mkdirSync(path.join(root, 'nested'), { recursive: true });
     fs.writeFileSync(path.join(root, 'nested', 'config.json'), `{"headers":{"Authorization":"Bearer ${key}"}}`);
     fs.writeFileSync(path.join(root, 'clean.log'), 'nothing here');
-    const result = await scanForSecret([root], key, { maxFiles: 100, maxFileBytes: 1_000_000 });
+    const result = await scanForSecret([root], key, { maxFiles: 100, maxFileBytes: 1_000_000, maxTotalBytes: 1_000_000 });
     expect(result.matches).toEqual([path.join(root, 'nested', 'config.json')]);
     expect(JSON.stringify(result)).not.toContain(key);
     expect(result.filesScanned).toBe(2);
@@ -196,13 +239,39 @@ describe('scanForSecret', () => {
     const root = path.join(tmp, 'many');
     fs.mkdirSync(root);
     for (let i = 0; i < 5; i++) fs.writeFileSync(path.join(root, `f${i}.txt`), 'x');
-    const result = await scanForSecret([root], generateKey(), { maxFiles: 3, maxFileBytes: 1_000 });
-    expect(result.capped).toBe(true);
+    const result = await scanForSecret([root], generateKey(), { maxFiles: 3, maxFileBytes: 1_000, maxTotalBytes: 1_000_000 });
+    expect(result.stopped).toBe('file-limit');
     expect(buildReport(facts({ keyScan: result }))).toMatch(/stopped after 3 files/);
   });
 
   it('lists a root that does not exist instead of failing', async () => {
-    const result = await scanForSecret([path.join(tmp, 'nope')], generateKey(), { maxFiles: 10, maxFileBytes: 10 });
+    const result = await scanForSecret([path.join(tmp, 'nope')], generateKey(), { maxFiles: 10, maxFileBytes: 10, maxTotalBytes: 10 });
     expect(result.missingRoots).toEqual([path.join(tmp, 'nope')]);
+  });
+
+  it('stops once the files read reach the total size budget and says the search is incomplete', async () => {
+    const root = path.join(tmp, 'big');
+    fs.mkdirSync(root);
+    for (let i = 0; i < 3; i++) fs.writeFileSync(path.join(root, `f${i}.txt`), 'x'.repeat(10));
+    const result = await scanForSecret([root], generateKey(), { maxFiles: 100, maxFileBytes: 1_000, maxTotalBytes: 25 });
+    expect(result.stopped).toBe('byte-limit');
+    expect(result.filesScanned).toBe(2);
+    expect(buildReport(facts({ keyScan: result }))).toContain('search stopped after 25 bytes: 2 files checked; the rest was not searched');
+  });
+
+  it('names the default budget in MB when it is reached', () => {
+    const text = buildReport(facts({ keyScan: scan({ stopped: 'byte-limit', filesScanned: 812 }) }));
+    expect(text).toContain('search stopped after 512 MB: 812 files checked; the rest was not searched');
+  });
+
+  it('stops when cancelled and says so', async () => {
+    const root = path.join(tmp, 'cancel');
+    fs.mkdirSync(root);
+    for (let i = 0; i < 3; i++) fs.writeFileSync(path.join(root, `f${i}.txt`), 'x');
+    let checked = 0;
+    const result = await scanForSecret([root], generateKey(), { maxFiles: 100, maxFileBytes: 1_000, maxTotalBytes: 1_000 }, () => checked++ >= 1);
+    expect(result.stopped).toBe('cancelled');
+    expect(result.filesScanned).toBe(1);
+    expect(buildReport(facts({ keyScan: result }))).toContain('search cancelled: 1 files checked; the rest was not searched');
   });
 });

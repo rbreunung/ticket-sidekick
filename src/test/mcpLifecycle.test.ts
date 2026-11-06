@@ -34,6 +34,10 @@ const h = vi.hoisted(() => ({
   configListeners: [] as Array<(e: { affectsConfiguration(key: string): boolean }) => unknown>,
   logLines: [] as string[],
   token: undefined as string | undefined,
+  bitbucketToken: undefined as string | undefined,
+  chatSettings: {} as Record<string, unknown>,
+  progressOptions: undefined as { cancellable?: boolean } | undefined,
+  cancelRequested: false,
 }));
 
 vi.mock('vscode', () => {
@@ -47,6 +51,7 @@ vi.mock('vscode', () => {
     constructor(public label: string, public uri: { toString(): string }, public headers?: Record<string, string>, public version?: string) {}
   }
   const configuration = (section?: string) => ({
+    ...(section === 'chat' ? h.chatSettings : {}),
     get: (key: string, fallback?: unknown) => {
       if (section === 'http' && key === 'noProxy') return h.noProxy;
       if (section === 'ticketSidekick' && key === 'jira.baseUrl') return 'https://jira.example.com';
@@ -76,7 +81,10 @@ vi.mock('vscode', () => {
       },
       showWarningMessage: async (message: string) => { h.infoMessages.push(message); return undefined; },
       showErrorMessage: async (message: string) => { h.infoMessages.push(message); return undefined; },
-      withProgress: (_options: unknown, task: () => Promise<unknown>) => task(),
+      withProgress: (options: { cancellable?: boolean }, task: (progress: unknown, token: unknown) => Promise<unknown>) => {
+        h.progressOptions = options;
+        return task({ report: () => undefined }, { isCancellationRequested: h.cancelRequested, onCancellationRequested: () => ({ dispose: () => undefined }) });
+      },
     },
     ProgressLocation: { Notification: 15 },
     workspace: {
@@ -94,6 +102,8 @@ vi.mock('vscode', () => {
 import { registerMcp, deactivateMcp, MCP_COMMANDS, MCP_PROVIDER_ID } from '../mcp/register';
 import { ConfigService } from '../services/ConfigService';
 import { CHECK_CONNECTION_TOOL } from '../mcp/jiraTools/catalog';
+import { McpServerController } from '../mcp/serverController';
+import { LocalhostServer } from '../mcp/localhostServer';
 
 let tmp: string;
 let stateUpdates: number;
@@ -107,7 +117,7 @@ function makeContext() {
     globalState: memento,
     workspaceState: memento,
     secrets: {
-      get: async () => h.token,
+      get: async (key: string) => (key === 'ticket-sidekick.bitbucket.token' ? h.bitbucketToken : h.token),
       store: async () => { secretWrites++; },
       delete: async () => { secretWrites++; },
       onDidChange: () => ({ dispose: () => undefined }),
@@ -183,9 +193,14 @@ beforeEach(() => {
   h.configListeners = [];
   h.logLines = [];
   h.token = undefined;
+  h.bitbucketToken = undefined;
+  h.chatSettings = {};
+  h.progressOptions = undefined;
+  h.cancelRequested = false;
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await deactivateMcp();
   delete process.env.COPILOT_HOME;
   fs.rmSync(tmp, { recursive: true, force: true });
@@ -240,6 +255,21 @@ describe('MCP server lifecycle', () => {
     expect(now).toHaveLength(1);
     expect(now[0].uri.toString()).toBe(first.uri.toString());
     expect(now[0].headers?.Authorization).toBe(first.headers?.Authorization);
+  });
+
+  it('adding another http.noProxy entry while 127.0.0.1 is there keeps the server as it is', async () => {
+    await activate({ withApi: true });
+    const first = offered()[0];
+    const before = h.changeEvents;
+    await changeNoProxy(['127.0.0.1', 'build.corp.internal']);
+    expect(h.changeEvents).toBe(before);
+    const now = offered();
+    expect(now).toHaveLength(1);
+    expect(now[0].uri.toString()).toBe(first.uri.toString());
+    expect(bearerOf(now[0])).toBe(bearerOf(first));
+    await h.commands.get(MCP_COMMANDS.copyDiagnostics)!();
+    const history = h.clipboard!.split('## Server history')[1].split('Current port')[0];
+    expect(history.match(/^- .*$/gm)).toEqual([expect.stringMatching(/: started on port \d+ \(activation\)$/)]);
   });
 
   it('a restart of the server yields a different bearer key', async () => {
@@ -319,6 +349,104 @@ describe('MCP server lifecycle', () => {
   });
 });
 
+describe('MCP server lifecycle with overlapping and failing starts', () => {
+  let controller: McpServerController<object> | undefined;
+  let allowed: boolean;
+
+  function newController(): McpServerController<object> {
+    controller = new McpServerController<object>({
+      tools: [], toolDeps: {}, serverInfo: { name: 'test', version: '0.0.0' }, isMcpAllowed: () => allowed,
+    });
+    return controller;
+  }
+
+  function events(c: McpServerController<object>): string[] {
+    return c.snapshot().history.map(e => (e.port === undefined ? `${e.event} (${e.trigger})` : `${e.event} ${e.port} (${e.trigger})`));
+  }
+
+  beforeEach(() => { allowed = true; });
+  afterEach(async () => {
+    allowed = false;
+    await controller?.stop('deactivate');
+    controller = undefined;
+  });
+
+  it('records a failed start, offers nothing, and a later start works', async () => {
+    vi.spyOn(LocalhostServer.prototype, 'start').mockRejectedValueOnce(new Error('listen EADDRINUSE'));
+    const c = newController();
+    await expect(c.start('activation')).resolves.toBeUndefined();
+    expect(events(c)).toEqual(['start failed (activation)']);
+    expect(c.isRunning()).toBe(false);
+    expect(c.definition()).toBeUndefined();
+
+    await c.start('entry added');
+    expect(events(c)).toEqual(['start failed (activation)', `started ${c.port()} (entry added)`]);
+    expect(c.definition()).toBeDefined();
+    expect(await listening(c.port()!)).toBe(true);
+  });
+
+  it('two starts at the same time open one server', async () => {
+    const c = newController();
+    await Promise.all([c.start('activation'), c.start('entry added')]);
+    expect(c.snapshot().history.filter(e => e.event === 'started')).toHaveLength(1);
+    expect(c.isRunning()).toBe(true);
+  });
+
+  it('a stop asked for while a start is under way leaves the server stopped when the entry is gone', async () => {
+    const c = newController();
+    const starting = c.start('entry added');
+    allowed = false;
+    const stopping = c.stop('entry removed');
+    await Promise.all([starting, stopping]);
+    const [started] = c.snapshot().history;
+    expect(events(c)).toEqual([`started ${started.port} (entry added)`, `stopped ${started.port} (entry removed)`]);
+    expect(c.isRunning()).toBe(false);
+    expect(c.definition()).toBeUndefined();
+    expect(await listening(started.port!)).toBe(false);
+  });
+
+  it('a stop finishes before the next start begins, so the history is in real order', async () => {
+    const c = newController();
+    await c.start('activation');
+    const firstPort = c.port()!;
+    // A close that takes a while, as with open connections, so a start could overtake it.
+    const close = LocalhostServer.prototype.stop;
+    vi.spyOn(LocalhostServer.prototype, 'stop').mockImplementationOnce(async function (this: LocalhostServer) {
+      const closed = close.call(this);
+      await new Promise(resolve => setTimeout(resolve, 50));
+      await closed;
+    });
+    allowed = false;
+    const stopping = c.stop('entry removed');
+    allowed = true;
+    const starting = c.start('entry added');
+    await Promise.all([stopping, starting]);
+    const secondPort = c.port()!;
+    expect(events(c)).toEqual([
+      `started ${firstPort} (activation)`,
+      `stopped ${firstPort} (entry removed)`,
+      `started ${secondPort} (entry added)`,
+    ]);
+    expect(await listening(secondPort)).toBe(true);
+  });
+
+  it('entry added, removed and added again before the first start finishes ends with the server running', async () => {
+    h.noProxy = [];
+    await activate({ withApi: true });
+    const fire = (value: unknown) => {
+      h.noProxy = value;
+      return Promise.all(h.configListeners.map(l => l({ affectsConfiguration: key => key === 'http.noProxy' })));
+    };
+    const added = fire(['127.0.0.1']);
+    const removed = fire([]);
+    const addedAgain = fire(['127.0.0.1']);
+    await Promise.all([added, removed, addedAgain]);
+    const definitions = offered();
+    expect(definitions).toHaveLength(1);
+    expect(await listening(portOf(definitions[0]))).toBe(true);
+  });
+});
+
 describe('proxy-entry notice', () => {
   it('without the entry, activation shows the notice and Open Setting opens http.noProxy', async () => {
     h.noProxy = [];
@@ -350,17 +478,34 @@ describe('proxy-entry notice', () => {
 });
 
 describe('Copy MCP diagnostics', () => {
-  it('copies a report naming the running server, with neither the key nor the Jira token', async () => {
+  it('copies a report naming the running server, without the key, the Jira token or the Bitbucket token', async () => {
     h.token = 'jira-pat-secret-value-123';
+    h.bitbucketToken = 'bitbucket-pat-secret-value-456';
     await activate({ withApi: true });
     const definition = offered()[0];
+    h.chatSettings = { mcp: { serverSampling: { note: `Bearer ${bearerOf(definition)} ${h.token} ${h.bitbucketToken}` } } };
     await h.commands.get(MCP_COMMANDS.copyDiagnostics)!();
     expect(h.clipboard).toContain(`State: running on 127.0.0.1:${portOf(definition)}`);
     expect(h.clipboard).toContain('MCP server offered: yes');
     expect(h.clipboard).toContain('Token present: yes');
+    expect(h.clipboard).toContain('chat.mcp.serverSampling.note = "Bearer [redacted] [redacted] [redacted]"');
     expect(h.clipboard).not.toContain(bearerOf(definition));
     expect(h.clipboard).not.toContain(h.token);
+    expect(h.clipboard).not.toContain(h.bitbucketToken);
     expect(h.clipboard).not.toContain('jira.example.com');
+  });
+
+  it('can be cancelled during the key search and still copies the report, with the search marked as cancelled', async () => {
+    const copilot = path.join(tmp, 'copilot-home');
+    fs.mkdirSync(copilot, { recursive: true });
+    fs.writeFileSync(path.join(copilot, 'config.json'), '{}');
+    await activate({ withApi: true });
+    h.cancelRequested = true;
+    await h.commands.get(MCP_COMMANDS.copyDiagnostics)!();
+    expect(h.progressOptions?.cancellable).toBe(true);
+    expect(h.clipboard).toContain('State: running on 127.0.0.1:');
+    expect(h.clipboard).toContain('search cancelled: 0 files checked; the rest was not searched');
+    expect(h.infoMessages.at(-1)).toMatch(/copied to the clipboard/);
   });
 
   it('is registered and reports the missing provider API on an older VS Code', async () => {

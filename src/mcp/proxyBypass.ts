@@ -8,9 +8,9 @@
 
 export const LOOPBACK_HOST = '127.0.0.1';
 
+/** Whether the server may run: the same rule the diagnostics report uses to mark an entry as counting. */
 export function loopbackBypassConfigured(noProxy: unknown): boolean {
-  if (!Array.isArray(noProxy)) return false;
-  return noProxy.some(entry => typeof entry === 'string' && entry.trim() === LOOPBACK_HOST);
+  return evaluateNoProxy(noProxy).loopbackEntries.some(e => e.counts);
 }
 
 /** One loopback-related `http.noProxy` entry and whether it makes the server reachable. */

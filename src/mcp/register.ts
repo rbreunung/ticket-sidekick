@@ -8,7 +8,7 @@ import type { LogLevel } from '../utils/diagTypes';
 import { JIRA_TOOLS } from './jiraTools/catalog';
 import type { JiraAccess, JiraToolDeps } from './jiraTools/jiraAccess';
 import { evaluateNoProxy, loopbackBypassConfigured } from './proxyBypass';
-import { copilotHome, buildReport, redact, scanForSecret, type ReportFacts } from './report';
+import { copilotHome, buildReport, redact, scanForSecret, DEFAULT_SCAN_LIMITS, type ReportFacts } from './report';
 import { McpServerController, type McpDefinition } from './serverController';
 import { detectMcpApi, type McpApi } from './vscodeMcpTypes';
 
@@ -78,9 +78,14 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
   let controller: McpServerController<JiraToolDeps> | undefined;
 
   context.subscriptions.push(vscode.commands.registerCommand(MCP_COMMANDS.copyDiagnostics, async () => {
+    // Cancelling ends only the key search; the report is still built and copied, saying so.
     const text = await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: 'Ticket Sidekick: building the MCP diagnostics (searching for stored keys)…' },
-      () => buildDiagnostics(context, configService, controller, mcp !== undefined),
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: 'Ticket Sidekick: building the MCP diagnostics (searching for stored keys)…',
+        cancellable: true,
+      },
+      (_progress, token) => buildDiagnostics(context, configService, controller, mcp !== undefined, () => token.isCancellationRequested),
     );
     await vscode.env.clipboard.writeText(text);
     void vscode.window.showInformationMessage('Ticket Sidekick: MCP diagnostics copied to the clipboard. They contain no keys or tokens.');
@@ -178,6 +183,7 @@ async function buildDiagnostics(
   configService: ConfigService,
   controller: McpServerController<JiraToolDeps> | undefined,
   providerApiAvailable: boolean,
+  isCancelled: () => boolean,
 ): Promise<string> {
   const key = controller?.currentKey();
   const roots = [
@@ -186,7 +192,7 @@ async function buildDiagnostics(
     path.dirname(context.globalStorageUri.fsPath),
     ...(context.storageUri ? [path.dirname(path.dirname(context.storageUri.fsPath))] : []),
   ];
-  const keyScan = key ? await scanForSecret(roots, key, { maxFiles: 20000, maxFileBytes: 64 * 1024 * 1024 }) : undefined;
+  const keyScan = key ? await scanForSecret(roots, key, DEFAULT_SCAN_LIMITS, isCancelled) : undefined;
 
   const http = vscode.workspace.getConfiguration('http');
   const proxy = http.get<unknown>('proxy');
@@ -208,6 +214,7 @@ async function buildDiagnostics(
     jira: { configured: configService.isConfigured(config), authType: config.authType, tokenPresent: Boolean(config.token) },
     chatSettings: chatSettings(),
     keyScan,
+    home: { dir: os.homedir(), windows: process.platform === 'win32' },
   };
   return redact(buildReport(facts), [key ?? '', config.token ?? '', bitbucket.token ?? '']);
 }

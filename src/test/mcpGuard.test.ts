@@ -45,6 +45,10 @@ describe('checkRequest', () => {
     expect(mcp({ host, authorization: `Bearer ${generateKey()}` })).toMatchObject({ allowed: false, status: 401 });
   });
 
+  it('refuses the right key with a lowercase bearer scheme with 401', () => {
+    expect(mcp({ host, authorization: `bearer ${expectation.mcpKey}` })).toMatchObject({ allowed: false, status: 401, reason: 'mcp-key-invalid' });
+  });
+
   it('allows the right bearer key without an Origin header', () => {
     expect(mcp({ host, authorization: `Bearer ${expectation.mcpKey}` })).toEqual({ allowed: true });
   });

@@ -6,13 +6,21 @@ import type { ControllerSnapshot, HistoryEntry } from './serverController';
 // The MCP diagnostics report: one plain-text block a user copies and sends to support when the
 // Jira tools do not show up in a Copilot chat. Every fact comes from in-memory counters or
 // settings; it never holds tool arguments or results, the Jira base URL, or `http.noProxy`
-// entries other than the loopback ones. `buildReport` formats the facts; `redact` removes every
-// key and token afterwards as a last line of defence.
+// entries other than the loopback ones. The `chat.mcp.*` and sandbox settings are shown with
+// their values, as they are. Paths under the home folder are shown with `~`. `buildReport`
+// formats the facts; `redact` removes every key and token afterwards as a last line of defence.
+
+/** Why the stored-key search ended before it had read every file. */
+export type ScanStop = 'file-limit' | 'byte-limit' | 'cancelled';
 
 export interface KeyScanResult {
   matches: string[];
   filesScanned: number;
-  capped: boolean;
+  /** Bytes of file content read so far, counted against `limits.maxTotalBytes`. */
+  bytesRead: number;
+  /** Undefined when every file under the roots was checked. */
+  stopped: ScanStop | undefined;
+  limits: ScanLimits;
   roots: string[];
   missingRoots: string[];
 }
@@ -46,6 +54,8 @@ export interface ReportFacts {
   chatSettings: Record<string, unknown>;
   /** Undefined when the server is not running, so there is no key to search for. */
   keyScan: KeyScanResult | undefined;
+  /** The user's home folder, shown as `~` in paths; Windows paths compare without letter case. */
+  home: { dir: string; windows: boolean };
 }
 
 function list(values: string[]): string {
@@ -73,6 +83,33 @@ function historyLine(e: HistoryEntry): string {
   if (e.event === 'started') return `- ${e.at}: started on port ${e.port} (${e.trigger})`;
   if (e.event === 'stopped') return `- ${e.at}: stopped (${e.trigger})`;
   return `- ${e.at}: start failed (${e.trigger})`;
+}
+
+/** `p` with a leading home folder replaced by `~` (`~/…`, or `~\…` on Windows). */
+export function withHomeAsTilde(p: string, home: { dir: string; windows: boolean }): string {
+  const separators = home.windows ? ['\\', '/'] : ['/'];
+  let dir = home.dir;
+  while (dir.length > 1 && separators.includes(dir[dir.length - 1])) dir = dir.slice(0, -1);
+  if (!dir) return p;
+  const head = p.slice(0, dir.length);
+  const same = home.windows ? head.toLowerCase() === dir.toLowerCase() : head === dir;
+  if (!same) return p;
+  if (p.length === dir.length) return '~';
+  return separators.includes(p[dir.length]) ? `~${p.slice(dir.length)}` : p;
+}
+
+function formatBytes(bytes: number): string {
+  const mb = 1024 * 1024;
+  return bytes >= mb && bytes % mb === 0 ? `${bytes / mb} MB` : `${bytes} bytes`;
+}
+
+function scanStatus(k: KeyScanResult): string {
+  if (k.stopped === 'file-limit') return ` (stopped after ${k.filesScanned} files)`;
+  if (k.stopped === 'byte-limit') {
+    return ` (search stopped after ${formatBytes(k.limits.maxTotalBytes)}: ${k.filesScanned} files checked; the rest was not searched)`;
+  }
+  if (k.stopped === 'cancelled') return ` (search cancelled: ${k.filesScanned} files checked; the rest was not searched)`;
+  return '';
 }
 
 function earlierPorts(s: ControllerSnapshot): number[] {
@@ -158,10 +195,11 @@ export function buildReport(f: ReportFacts): string {
     lines.push('Not run: the server is not running, so there is no current key to search for.');
   } else {
     const k = f.keyScan;
-    lines.push(`Searched: ${list(k.roots)}`);
-    if (k.missingRoots.length) lines.push(`Missing: ${list(k.missingRoots)}`);
-    lines.push(`Files scanned: ${k.filesScanned}${k.capped ? ` (stopped after ${k.filesScanned} files)` : ''}`);
-    lines.push(k.matches.length ? `Current MCP key FOUND in: ${list(k.matches)}` : 'Current MCP key: not found');
+    const shown = (paths: string[]) => list(paths.map(p => withHomeAsTilde(p, f.home)));
+    lines.push(`Searched: ${shown(k.roots)}`);
+    if (k.missingRoots.length) lines.push(`Missing: ${shown(k.missingRoots)}`);
+    lines.push(`Files scanned: ${k.filesScanned}${scanStatus(k)}`);
+    lines.push(k.matches.length ? `Current MCP key FOUND in: ${shown(k.matches)}` : 'Current MCP key: not found');
   }
   return lines.join('\n');
 }
@@ -181,16 +219,33 @@ export function copilotHome(env: NodeJS.ProcessEnv, homedir: string): string {
 
 export interface ScanLimits {
   maxFiles: number;
+  /** Larger files are skipped. */
   maxFileBytes: number;
+  /** The search stops before a file would take the bytes read past this budget. */
+  maxTotalBytes: number;
 }
 
+/** The limits the diagnostics command searches with. */
+export const DEFAULT_SCAN_LIMITS: ScanLimits = {
+  maxFiles: 20000,
+  maxFileBytes: 8 * 1024 * 1024,
+  maxTotalBytes: 512 * 1024 * 1024,
+};
+
 /**
- * Looks for a secret in every file under the given folders, within limits. Reports only which
- * files contain it; file contents never leave this function.
+ * Looks for a secret in every file under the given folders, within limits, until `isCancelled`
+ * says to stop. Reports only which files contain it; file contents never leave this function.
  */
-export async function scanForSecret(roots: string[], secret: string, limits: ScanLimits): Promise<KeyScanResult> {
+export async function scanForSecret(
+  roots: string[],
+  secret: string,
+  limits: ScanLimits,
+  isCancelled: () => boolean = () => false,
+): Promise<KeyScanResult> {
   const needle = Buffer.from(secret, 'utf8');
-  const result: KeyScanResult = { matches: [], filesScanned: 0, capped: false, roots: [...roots], missingRoots: [] };
+  const result: KeyScanResult = {
+    matches: [], filesScanned: 0, bytesRead: 0, stopped: undefined, limits, roots: [...roots], missingRoots: [],
+  };
 
   async function walk(dir: string): Promise<void> {
     let items: fs.Dirent[];
@@ -200,17 +255,21 @@ export async function scanForSecret(roots: string[], secret: string, limits: Sca
       return;
     }
     for (const item of items) {
-      if (result.capped) return;
+      if (result.stopped) return;
       const full = path.join(dir, item.name);
       if (item.isDirectory()) {
         await walk(full);
       } else if (item.isFile()) {
-        if (result.filesScanned >= limits.maxFiles) { result.capped = true; return; }
+        if (isCancelled()) { result.stopped = 'cancelled'; return; }
+        if (result.filesScanned >= limits.maxFiles) { result.stopped = 'file-limit'; return; }
+        const size = await fs.promises.stat(full).then(st => st.size, () => undefined);
+        const readable = size !== undefined && size <= limits.maxFileBytes;
+        if (readable && result.bytesRead + size > limits.maxTotalBytes) { result.stopped = 'byte-limit'; return; }
         result.filesScanned++;
+        if (!readable) continue;
         try {
-          const stat = await fs.promises.stat(full);
-          if (stat.size > limits.maxFileBytes) continue;
           const content = await fs.promises.readFile(full);
+          result.bytesRead += content.length;
           if (content.includes(needle)) result.matches.push(full);
         } catch {
           // Unreadable files (locked databases, permissions) are skipped.
@@ -220,6 +279,7 @@ export async function scanForSecret(roots: string[], secret: string, limits: Sca
   }
 
   for (const root of roots) {
+    if (result.stopped) break;
     try {
       await fs.promises.access(root);
     } catch {

@@ -5,10 +5,14 @@ import { createMcpHandler, type McpServerInfo, type McpToolDefinition, type Tool
 import { MCP_PATH } from './requestGuard';
 
 // The MCP server's lifecycle for one VS Code window, free of `vscode` so it can be tested over a
-// real socket. Each start makes a new bearer key; a start asked for while one is under way joins
-// it. Everything the diagnostics report needs is kept here in memory: the start/stop history, the
-// definition handshake counts and the tool-call outcomes. Keys of earlier starts are remembered
-// only as short fingerprints, so a stale client can be recognised without keeping its key.
+// real socket. Each start makes a new bearer key. Starts and stops run one after another in the
+// order they were asked for, so a stop has finished before the next start begins and the history
+// shows the real order. After each one the setting is read again and the server follows it, so
+// the last change of the setting wins even when changes arrive faster than a start or stop
+// completes. Everything the diagnostics report needs is kept here in memory: the start/stop
+// history, the definition handshake counts and the tool-call outcomes. Keys of earlier starts are
+// remembered only as short fingerprints, so a stale client can be recognised without keeping its
+// key.
 
 /** What started or stopped the server. */
 export type LifecycleTrigger = 'activation' | 'entry added' | 'entry removed' | 'deactivate';
@@ -63,7 +67,10 @@ interface Running {
 export class McpServerController<Deps> {
   private readonly server: LocalhostServer;
   private running: Running | undefined;
-  private starting: Promise<void> | undefined;
+  /** The start or stop under way and those queued behind it, run one at a time. */
+  private queue: Promise<void> = Promise.resolve();
+  /** Set by the deactivation stop: nothing starts the server afterwards. */
+  private ended = false;
   private readonly earlierFingerprints = new Set<string>();
   private readonly listeners = new Set<() => void>();
   private readonly history: HistoryEntry[] = [];
@@ -96,16 +103,48 @@ export class McpServerController<Deps> {
     return { dispose: () => { this.listeners.delete(listener); } };
   }
 
-  /** Starts the server unless it runs already; a failed start is logged and recorded, not thrown. */
+  /**
+   * Starts the server unless it runs already, after any start or stop asked for earlier. A failed
+   * start is logged and recorded, not thrown, and not retried until the next start is asked for.
+   */
   start(trigger: LifecycleTrigger): Promise<void> {
-    if (this.running) return Promise.resolve();
-    if (!this.starting) {
-      this.starting = this.doStart(trigger).finally(() => { this.starting = undefined; });
-    }
-    return this.starting;
+    return this.enqueue(async () => {
+      if (this.ended) return;
+      const ok = await this.doStart(trigger);
+      await this.followSetting(ok);
+    });
   }
 
-  private async doStart(trigger: LifecycleTrigger): Promise<void> {
+  /**
+   * Stops the server after any start or stop asked for earlier. The deactivation stop is final;
+   * any other stop is followed by a check of the setting, which starts the server again if the
+   * entry came back in the meantime.
+   */
+  stop(trigger: LifecycleTrigger): Promise<void> {
+    return this.enqueue(async () => {
+      await this.doStop(trigger);
+      if (trigger === 'deactivate') this.ended = true;
+      else await this.followSetting(true);
+    });
+  }
+
+  private enqueue(operation: () => Promise<void>): Promise<void> {
+    const run = this.queue.then(operation);
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  /** Brings the server in line with the setting as it is now; a start that just failed is not retried. */
+  private async followSetting(lastStartOk: boolean): Promise<void> {
+    if (this.ended) return;
+    const allowed = this.options.isMcpAllowed();
+    if (allowed && !this.running && lastStartOk) await this.doStart('entry added');
+    else if (!allowed && this.running) await this.doStop('entry removed');
+  }
+
+  /** Returns false only when a start was tried and failed. */
+  private async doStart(trigger: LifecycleTrigger): Promise<boolean> {
+    if (this.running) return true;
     const mcpKey = generateKey();
     try {
       const port = await this.server.start(mcpKey);
@@ -116,14 +155,13 @@ export class McpServerController<Deps> {
       const message = err instanceof Error ? err.message : String(err);
       this.history.push({ at: new Date().toISOString(), event: 'start failed', trigger });
       this.options.onDiag?.('error', `MCP server could not start (${trigger}): ${message}`);
-      return;
+      return false;
     }
     this.emit();
+    return true;
   }
 
-  /** Stops the server, after any start under way has finished. */
-  async stop(trigger: LifecycleTrigger): Promise<void> {
-    if (this.starting) await this.starting;
+  private async doStop(trigger: LifecycleTrigger): Promise<void> {
     const running = this.running;
     if (!running) return;
     this.running = undefined;
