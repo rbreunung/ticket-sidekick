@@ -56,6 +56,7 @@ interface CallOptions {
   client?: IJiraClient;
   folders?: string[];
   timeoutMs?: number;
+  downloadTimeoutMs?: number;
   logs?: Logged[];
   outcomes?: ToolCallOutcome[];
 }
@@ -67,6 +68,7 @@ async function callTool(name: string, args: Record<string, unknown> = {}, option
     getJira: async () => accessFor(config, client),
     workspaceFolders: () => options.folders ?? [],
     jiraTimeoutMs: options.timeoutMs,
+    jiraDownloadTimeoutMs: options.downloadTimeoutMs,
     onDiag: (level, message, details) => options.logs?.push({ level, message, details }),
   };
   server = new LocalhostServer({
@@ -114,6 +116,14 @@ class RecordingSearchClient extends MockJiraClient {
   override async searchJql(jql: string, maxResults?: number, startAt?: number, extraFields?: string[], pageToken?: string): Promise<JiraSearchResult> {
     this.searches.push({ jql, maxResults, startAt, extraFields, pageToken });
     return this.result ?? super.searchJql(jql, maxResults, startAt, extraFields, pageToken);
+  }
+}
+
+/** Jira answers 404 for every ticket. */
+class NotFoundClient extends MockJiraClient {
+  override async getIssue(issueKey: string): Promise<JiraIssue> {
+    const url = `https://jira.example.com/rest/api/2/issue/${issueKey}`;
+    throw new JiraApiError(`Jira API error 404 Not Found at ${url}`, 404, url);
   }
 }
 
@@ -177,6 +187,15 @@ describe('jira_check_connection', () => {
     expect(text).toContain('HTTP 502 (Bad Gateway)');
     expect(text).not.toContain('proxy');
     expect(JSON.stringify(logs)).toContain('Corporate proxy: upstream unavailable');
+  });
+
+  it('ends with the timeout answer when Jira does not answer the signed-in user request in time', async () => {
+    const client = new MockJiraClient();
+    client.getCurrentUser = () => new Promise(() => undefined);
+
+    const text = await callTool(CHECK_CONNECTION_TOOL, {}, { client, timeoutMs: 50 });
+
+    expect(text).toBe('Could not check the Jira connection: Jira did not respond within 1 second. Try again later, or check the connection with jira_check_connection.');
   });
 });
 
@@ -290,6 +309,28 @@ describe('jira_view_ticket', () => {
 
     expect(text).toBe('Could not read PROJ-123: Jira did not respond within 1 second. Try again later, or check the connection with jira_check_connection.');
   });
+
+  it('refuses the ticket key ../evil without asking Jira', async () => {
+    const client = new MockJiraClient();
+    const asked: string[] = [];
+    client.getIssue = async (key: string) => { asked.push(key); throw new Error('must not be called'); };
+
+    const text = await callTool(VIEW_TICKET_TOOL, { ticketKey: '../evil' }, { client });
+
+    expect(text).toBe('"../evil" is not a valid ticket key.');
+    expect(asked).toEqual([]);
+  });
+
+  it('names the branch and folder when the key taken from the branch release/UTF-8-fix is not found', async () => {
+    const repo = makeRepoOnBranch('release/UTF-8-fix');
+
+    const text = await callTool(VIEW_TICKET_TOOL, {}, { client: new NotFoundClient(), folders: [repo] });
+
+    expect(text).toBe(
+      `Could not read UTF-8 (taken from the git branch release/UTF-8-fix of the folder "${repo}"): `
+      + 'Jira answered HTTP 404 (not found, or no permission to see it).',
+    );
+  });
 });
 
 describe('jira_find_tickets', () => {
@@ -332,6 +373,33 @@ describe('jira_find_tickets', () => {
     expect(client.searches.map(s => s.jql)).toEqual([
       '(project = PROJ AND component = Backend) AND (assignee = currentUser() AND issuetype = Bug AND status != Done) ORDER BY created DESC',
     ]);
+  });
+
+  it('narrows a sort-only saved filter by the team JQL, with the team JQL as the whole condition', async () => {
+    const client = new RecordingSearchClient();
+    client.getFilterById = async (): Promise<JiraFilter> => ({ id: '10005', name: 'Newest first', jql: 'ORDER BY created DESC' });
+
+    await callTool(FIND_TICKETS_TOOL, { filter: '10005', myTeam: true }, {
+      client, config: jiraConfig({ myTeamJql: 'project = PROJ AND component = Backend' }),
+    });
+
+    expect(client.searches.map(s => s.jql)).toEqual(['project = PROJ AND component = Backend ORDER BY created DESC']);
+  });
+
+  it('narrows a sort-only JQL by the assignee, with the assignee as the whole condition', async () => {
+    const client = new RecordingSearchClient();
+
+    await callTool(FIND_TICKETS_TOOL, { jql: 'ORDER BY created DESC', assignee: 'me' }, { client });
+
+    expect(client.searches.map(s => s.jql)).toEqual(['assignee = currentUser() ORDER BY created DESC']);
+  });
+
+  it('passes a sort-only JQL without narrowing through unchanged', async () => {
+    const client = new RecordingSearchClient();
+
+    await callTool(FIND_TICKETS_TOOL, { jql: 'ORDER BY updated DESC' }, { client });
+
+    expect(client.searches.map(s => s.jql)).toEqual(['ORDER BY updated DESC']);
   });
 
   it('lists the candidates when a filter name matches more than one filter', async () => {
@@ -485,6 +553,17 @@ describe('jira_workflow', () => {
 
     expect(text).toBe('No workspace folder is open: the workflow is cached in `.jira-workflow-cache.json` in the first workspace folder.');
   });
+
+  it('refuses the ticket key ../evil and writes no cache', async () => {
+    const folder = makeTempDir();
+    const client = new BugTicketClient();
+
+    const text = await callTool(WORKFLOW_TOOL, { ticketKey: '../evil' }, { client, folders: [folder] });
+
+    expect(text).toBe('"../evil" is not a valid ticket key.');
+    expect(client.statusLookups).toBe(0);
+    expect(filesUnder(folder)).toEqual([]);
+  });
 });
 
 describe('jira_list_templates', () => {
@@ -519,15 +598,25 @@ function attachment(id: string, filename: string, mimeType: string, size: number
   return { id, filename, mimeType, size, content: `https://jira.example.com/secure/attachment/${id}`, created: `2024-01-01T00:00:0${id.length % 10}.000+0000` };
 }
 
-/** The fixture ticket with its attachments replaced; each download returns the attachment's id. */
+/**
+ * The fixture ticket with its attachments replaced; each download returns the attachment's id.
+ * `delays` makes a download take that many milliseconds, or never finish with `'never'`.
+ */
 class AttachmentsClient extends MockJiraClient {
-  constructor(private readonly attachments: JiraAttachment[], private readonly failing: string[] = []) { super(); }
+  constructor(
+    private readonly attachments: JiraAttachment[],
+    private readonly failing: string[] = [],
+    private readonly delays: Record<string, number | 'never'> = {},
+  ) { super(); }
   override async getIssue(issueKey: string): Promise<JiraIssue> {
     const issue = await super.getIssue(issueKey);
     return { ...issue, fields: { ...issue.fields, attachment: this.attachments } };
   }
   override async downloadAttachment(contentUrl: string): Promise<Uint8Array> {
     const id = contentUrl.split('/').pop() ?? '';
+    const delay = this.delays[id];
+    if (delay === 'never') return new Promise<Uint8Array>(() => undefined);
+    if (delay !== undefined) await new Promise(resolve => setTimeout(resolve, delay));
     if (this.failing.includes(id)) throw new Error('HTTP 500');
     return new TextEncoder().encode(`content of ${id}`);
   }
@@ -663,6 +752,83 @@ describe('jira_load_ticket', () => {
 
     expect(text.split('\n')[0]).toBe(`_Ticket key PROJ-123 taken from the git branch \`feature/PROJ-123-login\` of the workspace folder \`${repo}\`._`);
     expect(fs.existsSync(path.join(repo, '.jira-context', 'PROJ-123', 'ticket.md'))).toBe(true);
+  });
+
+  it('lists an attachment that does not finish downloading in time as download failed and writes everything else', async () => {
+    const folder = makeTempDir();
+    const ctx = path.join(folder, '.jira-context', 'PROJ-123');
+    // logs.zip takes longer than a Jira read may take, but less than a download may take.
+    const client = new AttachmentsClient([
+      attachment('a1', 'notes.txt', 'text/plain', 10),
+      attachment('a2', 'logs.zip', 'application/zip', 10),
+      attachment('a3', 'stuck.log', 'text/plain', 10),
+    ], [], { a2: 100, a3: 'never' });
+    const logs: Logged[] = [];
+
+    const text = await callTool(LOAD_TICKET_TOOL, { ticketKey: 'PROJ-123' }, { client, folders: [folder], timeoutMs: 50, downloadTimeoutMs: 300, logs });
+
+    expect(filesUnder(ctx)).toEqual(['attachments/logs.zip', 'attachments/notes.txt', 'comments.md', 'ticket.md']);
+    expect(text).toContain(`- \`${path.join(ctx, 'ticket.md')}\``);
+    expect(text).toContain(`- \`${path.join(ctx, 'attachments', 'logs.zip')}\``);
+    expect(text).toContain('- stuck.log (0 KB): download failed');
+    expect(text).toContain('call jira_load_ticket again with ticketKey "PROJ-123" and attachments ["stuck.log"]');
+    expect(text).not.toContain('did not respond');
+    expect(logs.some(l => l.message.includes('stuck.log') && JSON.stringify(l.details).includes('did not respond'))).toBe(true);
+  });
+
+  it('ends with the timeout answer when the field metadata read hangs, and writes nothing', async () => {
+    const folder = makeTempDir();
+    const client = new MockJiraClient();
+    client.getFields = () => new Promise(() => undefined);
+    const logs: Logged[] = [];
+
+    const text = await callTool(LOAD_TICKET_TOOL, { ticketKey: 'PROJ-123' }, { client, folders: [folder], timeoutMs: 50, logs });
+
+    expect(text).toBe('Could not load PROJ-123: Jira did not respond within 1 second. Try again later, or check the connection with jira_check_connection.');
+    expect(filesUnder(folder)).toEqual([]);
+    expect(logs.some(l => l.level === 'error' && l.message.includes('did not respond'))).toBe(true);
+  });
+
+  it('describes only its own ticket.md as the ticket, not an attachment named ticket.md', async () => {
+    const folder = makeTempDir();
+    const ctx = path.join(folder, '.jira-context', 'PROJ-123');
+    const client = new AttachmentsClient([attachment('a1', 'ticket.md', 'text/markdown', 10)]);
+
+    const text = await callTool(LOAD_TICKET_TOOL, { ticketKey: 'PROJ-123' }, { client, folders: [folder] });
+
+    const lines = text.split('\n');
+    expect(lines).toContain(`- \`${path.join(ctx, 'ticket.md')}\`: fields, description, web links, attachment list`);
+    expect(lines).toContain(`- \`${path.join(ctx, 'attachments', 'ticket.md')}\``);
+  });
+
+  it('refuses the ticket key ../evil and writes nothing anywhere', async () => {
+    const folder = makeTempDir();
+    const parent = path.dirname(folder);
+    const before = fs.readdirSync(parent).filter(name => name.includes('evil') || name === '.jira-context');
+
+    const text = await callTool(LOAD_TICKET_TOOL, { ticketKey: '../evil' }, { folders: [folder] });
+
+    expect(text).toBe('"../evil" is not a valid ticket key.');
+    expect(filesUnder(folder)).toEqual([]);
+    expect(fs.readdirSync(parent).filter(name => name.includes('evil') || name === '.jira-context')).toEqual(before);
+  });
+
+  it('names the ticket key in a failure for an explicit key', async () => {
+    const text = await callTool(LOAD_TICKET_TOOL, { ticketKey: 'PROJ-123' }, { client: new NotFoundClient(), folders: [makeTempDir()] });
+
+    expect(text).toBe('Could not load PROJ-123: Jira answered HTTP 404 (not found, or no permission to see it).');
+  });
+
+  it('names the branch and folder when the key taken from the branch release/UTF-8-fix is not found', async () => {
+    const repo = makeRepoOnBranch('release/UTF-8-fix');
+
+    const text = await callTool(LOAD_TICKET_TOOL, {}, { client: new NotFoundClient(), folders: [repo] });
+
+    expect(text).toBe(
+      `Could not load UTF-8 (taken from the git branch release/UTF-8-fix of the folder "${repo}"): `
+      + 'Jira answered HTTP 404 (not found, or no permission to see it).',
+    );
+    expect(fs.existsSync(path.join(repo, '.jira-context'))).toBe(false);
   });
 
   it('without a workspace folder says so and writes nothing', async () => {

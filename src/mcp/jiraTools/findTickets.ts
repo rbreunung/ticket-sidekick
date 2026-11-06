@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { JiraFilter } from '../../jira/IJiraClient';
 import type { TicketService } from '../../services/TicketService';
 import {
+  buildConstraintClauses,
   buildConstraintJql,
   buildTeamJql,
   formatBulletList,
@@ -25,12 +26,13 @@ const NO_TEAM_JQL =
 
 /**
  * Splits a trailing `ORDER BY` off a query, so narrowing clauses can be ANDed onto the condition
- * while the saved ordering stays at the end, where JQL requires it.
+ * while the saved ordering stays at the end, where JQL requires it. A query that only sorts has
+ * an empty condition.
  */
 export function splitOrderBy(jql: string): { where: string; orderBy: string } {
   const match = /(?:^|\s)ORDER\s+BY\s[\s\S]*$/i.exec(jql);
-  if (!match || match.index === 0) return { where: jql, orderBy: '' };
-  return { where: jql.slice(0, match.index).trim(), orderBy: ` ${match[0].trim()}` };
+  if (!match) return { where: jql, orderBy: '' };
+  return { where: jql.slice(0, match.index).trim(), orderBy: match[0].trim() };
 }
 
 async function resolveFilter(filter: string, ticketService: TicketService): Promise<JiraFilter | string> {
@@ -89,7 +91,8 @@ export const findTicketsTool = defineTool<JiraToolDeps, typeof findShape>({
       let narrowed = where;
       if (args.myTeam) {
         if (!config.myTeamJql) return NO_TEAM_JQL;
-        narrowed = buildTeamJql(config.myTeamJql, narrowed);
+        // Without a condition of its own (a query that only sorts), the team JQL is the condition.
+        narrowed = narrowed ? buildTeamJql(config.myTeamJql, narrowed) : config.myTeamJql;
         label += '_Narrowed by the team JQL_\n\n';
       }
 
@@ -110,11 +113,13 @@ export const findTicketsTool = defineTool<JiraToolDeps, typeof findShape>({
             return `Multiple ${kindLabel} matches:\n\n${list}\n\nCall ${FIND_TICKETS_TOOL} again with a more exact ${kindLabel} value.`;
           }
           case 'resolved':
-            narrowed = buildConstraintJql(narrowed, resolution.constraints);
+            narrowed = narrowed
+              ? buildConstraintJql(narrowed, resolution.constraints)
+              : buildConstraintClauses(resolution.constraints).join(' AND ');
             break;
         }
       }
-      const finalJql = narrowed + orderBy;
+      const finalJql = [narrowed, orderBy].filter(part => part.length > 0).join(' ');
 
       const startAt = page && !cloud ? Number(page) : undefined;
       const pageToken = page && cloud ? page : undefined;

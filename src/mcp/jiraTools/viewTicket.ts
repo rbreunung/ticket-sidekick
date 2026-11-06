@@ -1,10 +1,9 @@
 import { z } from 'zod';
 import type { JiraAttachment, JiraComment } from '../../jira/IJiraClient';
 import { formatCommentsInFull } from '../../participant/sessionState';
-import { isSafePathSegment } from '../../tools/pathSafety';
 import { formatFileSize } from '../../utils/attachmentEligibility';
 import { newestFirst } from '../../utils/requirementsSource';
-import { branchSourceNote, noBranchKeyMessage, ticketFromBranch } from '../branchTicket';
+import { resolveTicketKey } from '../branchTicket';
 import { defineTool } from '../mcpServer';
 import type { JiraToolDeps } from './jiraAccess';
 import { runJiraTool } from './runJiraTool';
@@ -45,20 +44,12 @@ export const viewTicketTool = defineTool<JiraToolDeps, { ticketKey: z.ZodOptiona
   },
   annotations: { readOnlyHint: true },
   handler: async ({ ticketKey }, deps) => {
-    let key = ticketKey?.trim() || undefined;
-    return runJiraTool(deps, VIEW_TICKET_TOOL, () => `Could not read ${key ?? 'the ticket'}`, async ({ config, ticketService }) => {
-      let sourceNote = '';
-      if (!key) {
-        const branch = await ticketFromBranch(deps.workspaceFolders());
-        if (branch.kind !== 'found') {
-          if (branch.kind === 'git-failed') deps.onDiag?.('warn', 'Could not read the git branch for a ticket key', { error: branch.error });
-          return noBranchKeyMessage(branch, VIEW_TICKET_TOOL);
-        }
-        key = branch.key;
-        sourceNote = `${branchSourceNote(branch)}\n\n`;
-      } else if (!isSafePathSegment(key)) {
-        return `"${key}" is not a valid ticket key.`;
-      }
+    let subject = ticketKey?.trim() || 'the ticket';
+    return runJiraTool(deps, VIEW_TICKET_TOOL, () => `Could not read ${subject}`, async ({ config, ticketService }) => {
+      const resolved = await resolveTicketKey(ticketKey, deps.workspaceFolders(), VIEW_TICKET_TOOL, deps.onDiag);
+      if (resolved.kind === 'answer') return resolved.text;
+      const { key, sourceNote } = resolved;
+      subject = resolved.failureSubject;
 
       const [issue, fieldMeta, comments] = await Promise.all([
         ticketService.getIssue(key),

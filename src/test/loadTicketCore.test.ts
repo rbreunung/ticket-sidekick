@@ -269,7 +269,7 @@ describe('handleLoadTicket — unsafe attachment filenames', () => {
     const stream = { markdown: vi.fn() };
     const ws = { get: vi.fn(), update: vi.fn() };
 
-    await handleLoadTicket('PROJ-123', new TicketService(client), stream as never, ws as never, [], new Set(), new Set());
+    const result = await handleLoadTicket('PROJ-123', new TicketService(client), stream as never, ws as never, [], new Set(), new Set());
 
     expect([...fakeFiles.keys()].sort()).toEqual([
       '/workspace/.gitignore',
@@ -277,9 +277,47 @@ describe('handleLoadTicket — unsafe attachment filenames', () => {
       '/workspace/.jira-context/PROJ-123/comments.md',
       '/workspace/.jira-context/PROJ-123/ticket.md',
     ]);
-    const skippedList = stream.markdown.mock.calls.map(([md]) => (typeof md === 'string' ? md : (md as { value: string }).value)).join('\n');
+    const skippedList = streamedText(stream);
     expect(skippedList).toContain('**Skipped attachments:**');
-    expect(skippedList).toContain('`../../evil.txt` — 2 KB (text/plain) — unsafe filename');
-    expect(skippedList).toContain('`..\\..\\evil.txt` — 2 KB (text/plain) — unsafe filename');
+    expect(skippedList).toContain('- Not downloaded because the name is unsafe: `../../evil.txt` (2 KB)');
+    expect(skippedList).toContain('- Not downloaded because the name is unsafe: `..\\..\\evil.txt` (2 KB)');
+    // Nothing can be downloaded on request, so nothing is offered.
+    expect(skippedList).not.toContain('command:');
+    expect(skippedList).not.toContain('Reply with a number');
+    expect(result.hasSkippedAttachments).toBe(false);
+    expect(ws.update).not.toHaveBeenCalledWith('jira.session.loadSkipped', expect.anything());
+  });
+
+  it('numbers and offers only the skipped attachment that can be downloaded, and lists the unsafe one as a plain line', async () => {
+    const client = new MockJiraClient();
+    const getIssue = client.getIssue.bind(client);
+    const attachments: JiraAttachment[] = [
+      { id: 'att040', filename: '../evil.txt', mimeType: 'text/plain', size: 2048, content: 'https://jira.example.com/a/att040', created: '2024-01-01T00:00:00.000+0000' },
+      { id: 'att041', filename: 'dump.bin', mimeType: 'application/octet-stream', size: 4096, content: 'https://jira.example.com/a/att041', created: '2024-01-01T00:00:00.000+0000' },
+    ];
+    client.getIssue = async (issueKey: string): Promise<JiraIssue> => {
+      const issue = await getIssue(issueKey);
+      return { ...issue, fields: { ...issue.fields, attachment: attachments } };
+    };
+    const stream = { markdown: vi.fn() };
+    const ws = { get: vi.fn(), update: vi.fn() };
+
+    const result = await handleLoadTicket('PROJ-123', new TicketService(client), stream as never, ws as never, [], new Set(), new Set());
+
+    const text = streamedText(stream);
+    expect(text).toMatch(/^1\. \[`dump\.bin` — 4 KB \(application\/octet-stream\) — unknown binary format\]\(command:workbench\.action\.chat\.open\?/m);
+    expect(text).not.toMatch(/^2\. /m);
+    expect(text).toContain('\n- Not downloaded because the name is unsafe: `../evil.txt` (2 KB)');
+    expect(text).toContain('Reply with a number to download it anyway.');
+    expect(result.hasSkippedAttachments).toBe(true);
+    expect(ws.update).toHaveBeenCalledWith('jira.session.loadSkipped', {
+      ticketKey: 'PROJ-123',
+      skipped: [{ filename: 'dump.bin', content: 'https://jira.example.com/a/att041', size: 4096, mimeType: 'application/octet-stream', reason: 'unknown binary format' }],
+    });
   });
 });
+
+/** Everything the chat flow streamed, trusted Markdown included, as one text. */
+function streamedText(stream: { markdown: ReturnType<typeof vi.fn> }): string {
+  return stream.markdown.mock.calls.map(([md]) => (typeof md === 'string' ? md : (md as { value: string }).value)).join('\n');
+}

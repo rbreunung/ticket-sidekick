@@ -174,6 +174,7 @@ Once loaded, your AI assistant (GitHub Copilot, Cursor, etc.) can read these fil
 | Archives | `.zip`, `.tar`, `.gz`, `.tgz`, `.bz2`, `.7z`, `.rar`, `.jar`, `.war`, `.ear` | Downloaded |
 | Oversized | File larger than 100 MB | Skipped — listed in `ticket.md` with size |
 | Unknown binary | Any other MIME type not covered above | Skipped — listed in `ticket.md` with size |
+| Unsafe name | A name with `/` or `\` in it, or the name `.` or `..` | Never written — listed in `ticket.md`, and in the chat without a number to download it |
 
 Up to three attachments are downloaded in parallel.
 

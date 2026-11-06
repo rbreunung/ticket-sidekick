@@ -7,9 +7,8 @@ import {
   type LoadTicketCoreResult,
   type SkippedAttachment,
 } from '../../participant/jira/loadCore';
-import { isSafePathSegment } from '../../tools/pathSafety';
 import { formatFileSize } from '../../utils/attachmentEligibility';
-import { branchSourceNote, noBranchKeyMessage, ticketFromBranch } from '../branchTicket';
+import { resolveTicketKey } from '../branchTicket';
 import { defineTool } from '../mcpServer';
 import type { JiraToolDeps } from './jiraAccess';
 import { runJiraTool } from './runJiraTool';
@@ -34,9 +33,10 @@ const FETCHABLE: ReadonlySet<SkippedAttachment['cause']> = new Set(['not-default
 function resultMessage(key: string, folder: string, commentCount: number, allNames: string[], result: LoadTicketCoreResult): string {
   const abs = (rel: string) => absolutePathIn(folder, rel);
   const plural = (n: number, word: string) => `${n} ${word}${n !== 1 ? 's' : ''}`;
+  // Only the two files the load renders get a description; an attachment may share their names.
   const describe = (rel: string): string => {
-    if (rel.endsWith('/ticket.md')) return ': fields, description, web links, attachment list';
-    if (rel.endsWith('/comments.md')) {
+    if (rel === `${jiraContextDir(key)}/ticket.md`) return ': fields, description, web links, attachment list';
+    if (rel === `${jiraContextDir(key)}/comments.md`) {
       return `: ${plural(commentCount, 'comment')}${commentCount > 0 ? ' (read these too: they often hold details missing from the description)' : ''}`;
     }
     return '';
@@ -87,22 +87,16 @@ export const loadTicketTool = defineTool<JiraToolDeps, typeof loadShape>({
   inputSchema: loadShape,
   annotations: {},
   handler: async ({ ticketKey, attachments }, deps) => {
-    let key = ticketKey?.trim() || undefined;
-    if (key && !isSafePathSegment(key)) return `"${key}" is not a valid ticket key.`;
-    return runJiraTool(deps, LOAD_TICKET_TOOL, () => `Could not load ${key ?? 'the ticket'}`, async ({ config, ticketService }) => {
+    let subject = ticketKey?.trim() || 'the ticket';
+    return runJiraTool(deps, LOAD_TICKET_TOOL, () => `Could not load ${subject}`, async ({ config, ticketService }) => {
       const folder = deps.workspaceFolders()[0];
       if (!folder) return 'No workspace folder is open: the ticket is loaded into `.jira-context/<KEY>/` in the first workspace folder.';
 
-      let sourceNote = '';
-      if (!key) {
-        const branch = await ticketFromBranch([folder]);
-        if (branch.kind !== 'found') {
-          if (branch.kind === 'git-failed') deps.onDiag?.('warn', 'Could not read the git branch for a ticket key', { error: branch.error });
-          return noBranchKeyMessage(branch, LOAD_TICKET_TOOL);
-        }
-        key = branch.key;
-        sourceNote = `${branchSourceNote(branch)}\n\n`;
-      }
+      // The key goes into the path written, so an unsafe one is refused before anything is written.
+      const resolved = await resolveTicketKey(ticketKey, [folder], LOAD_TICKET_TOOL, deps.onDiag);
+      if (resolved.kind === 'answer') return resolved.text;
+      const { key, sourceNote } = resolved;
+      subject = resolved.failureSubject;
 
       const [issue, comments, fieldMeta, remoteLinks] = await Promise.all([
         ticketService.getIssue(key),

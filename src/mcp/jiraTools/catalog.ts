@@ -1,7 +1,7 @@
 import { checkConnection } from '../connectionCheck';
 import { defineTool, ToolFailure, toolErrorLabel, type McpToolDefinition } from '../mcpServer';
 import type { JiraToolDeps } from './jiraAccess';
-import { describeJiraFailure, runJiraTool } from './runJiraTool';
+import { describeJiraFailure, JiraTimeout, runJiraTool } from './runJiraTool';
 import { CHECK_CONNECTION_TOOL } from './toolNames';
 import { viewTicketTool } from './viewTicket';
 import { findTicketsTool, listMyFiltersTool } from './findTickets';
@@ -26,6 +26,8 @@ const checkConnectionTool = defineTool<JiraToolDeps, Record<string, never>>({
   handler: (_args, deps) =>
     runJiraTool(deps, CHECK_CONNECTION_TOOL, 'Could not check the Jira connection', async ({ access }) => {
       const result = await checkConnection(access, deps.onDiag, describeJiraFailure);
+      // A check Jira did not answer in time gets the same timeout answer as every other tool.
+      if (result.status === 'failed' && result.cause instanceof JiraTimeout) throw result.cause;
       // A failed check still shows the settings it checked, with only the status of the failure.
       if (result.status === 'failed') throw new ToolFailure(result.markdown, toolErrorLabel(result.cause));
       return result.markdown;

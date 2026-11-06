@@ -20,7 +20,12 @@ export interface JiraToolDeps {
    * the git branch is read and where the template and workflow cache files live.
    */
   workspaceFolders(): string[];
-  /** How long a tool's Jira work may take before the tool answers that Jira did not respond; 30 seconds when unset. */
+  /** How long one Jira request may take before the tool answers that Jira did not respond; 30 seconds when unset. */
   jiraTimeoutMs?: number;
+  /**
+   * How long one attachment download may take before the load reports that attachment as not
+   * downloaded and goes on with the rest; 2 minutes when unset.
+   */
+  jiraDownloadTimeoutMs?: number;
   onDiag?: DiagLogger;
 }

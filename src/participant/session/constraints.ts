@@ -76,6 +76,15 @@ function quoteJqlValue(value: string): string {
  * provided returns `baseJql` unchanged.
  */
 export function buildConstraintJql(baseJql: string, constraints: JqlConstraints): string {
+  const clauses = buildConstraintClauses(constraints);
+  if (clauses.length === 0) {
+    return baseJql;
+  }
+  return `(${baseJql}) AND (${clauses.join(' AND ')})`;
+}
+
+/** The JQL clauses of a resolved constraint set, each value quoted and escaped, in a fixed order. */
+export function buildConstraintClauses(constraints: JqlConstraints): string[] {
   const clauses: string[] = [];
 
   if (constraints.fixVersion) {
@@ -89,11 +98,7 @@ export function buildConstraintJql(baseJql: string, constraints: JqlConstraints)
       constraints.assignee === 'me' ? 'assignee = currentUser()' : `assignee = ${quoteJqlValue(constraints.assignee)}`,
     );
   }
-
-  if (clauses.length === 0) {
-    return baseJql;
-  }
-  return `(${baseJql}) AND (${clauses.join(' AND ')})`;
+  return clauses;
 }
 
 /**

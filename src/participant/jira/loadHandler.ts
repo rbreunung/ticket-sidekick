@@ -7,7 +7,7 @@ import type { JiraComment, JiraFieldMeta } from '../../jira/IJiraClient';
 import { formatIssueFields, formatKeyLink } from '../../services/TicketService';
 import type { TicketService } from '../../services/TicketService';
 import type { LoadSkippedSession } from '../sessionState';
-import { rewriteAttachmentLinks, buildChatCommandLink, extractProjectKeyFromTicketKey } from '../sessionState';
+import { rewriteAttachmentLinks, buildChatCommandLink, extractProjectKeyFromTicketKey, neutralizeMarkdownLinks } from '../sessionState';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import { loadTicketToWorkspace, type LoadWriter } from './loadCore';
 
@@ -107,18 +107,31 @@ export async function handleLoadTicket(
   stream.markdown(summaryLines.join('\n'));
 
   if (skipped.length > 0) {
-    const listLines = skipped.map((s, i) =>
-      `${i + 1}. ${buildChatCommandLink(`\`${s.filename}\` — ${formatFileSize(s.size)} (${s.mimeType}) — ${s.reason}`, '@jira', String(i + 1))}`,
-    );
-    stream.markdown(trustedChatMarkdown(
-      `\n\n**Skipped attachments:**\n\n${listLines.join('\n')}\n\nReply with a number to download it anyway.`,
-    ));
-    // The stored session keeps its own shape; the skip cause is only for the load's callers.
-    const stored = skipped.map(({ filename, content, size, mimeType, reason }) => ({ filename, content, size, mimeType, reason }));
-    await ws.update('jira.session.loadSkipped', { ticketKey, skipped: stored } satisfies LoadSkippedSession);
-    // The referenced ticket key is carried on metadata by the caller (JiraParticipant's
-    // loadTicket case) instead of a visible marker here.
-    return { hasSkippedAttachments: true, projectKey, issueType };
+    // An attachment skipped for its unsafe name is never written, so it is listed without a
+    // number: only the other skipped attachments can be picked to download anyway.
+    const offered = skipped.filter(s => s.cause !== 'unsafe-filename');
+    const unsafe = skipped.filter(s => s.cause === 'unsafe-filename');
+    const parts = ['\n\n**Skipped attachments:**'];
+    if (offered.length > 0) {
+      parts.push(offered.map((s, i) =>
+        `${i + 1}. ${buildChatCommandLink(`\`${s.filename}\` — ${formatFileSize(s.size)} (${s.mimeType}) — ${s.reason}`, '@jira', String(i + 1))}`,
+      ).join('\n'));
+    }
+    if (unsafe.length > 0) {
+      parts.push(unsafe.map(s =>
+        `- Not downloaded because the name is unsafe: \`${neutralizeMarkdownLinks(s.filename)}\` (${formatFileSize(s.size)})`,
+      ).join('\n'));
+    }
+    if (offered.length > 0) parts.push('Reply with a number to download it anyway.');
+    stream.markdown(trustedChatMarkdown(parts.join('\n\n')));
+    if (offered.length > 0) {
+      // The stored session keeps its own shape; the skip cause is only for the load's callers.
+      const stored = offered.map(({ filename, content, size, mimeType, reason }) => ({ filename, content, size, mimeType, reason }));
+      await ws.update('jira.session.loadSkipped', { ticketKey, skipped: stored } satisfies LoadSkippedSession);
+      // The referenced ticket key is carried on metadata by the caller (JiraParticipant's
+      // loadTicket case) instead of a visible marker here.
+      return { hasSkippedAttachments: true, projectKey, issueType };
+    }
   }
   return { hasSkippedAttachments: false, projectKey, issueType };
 }
