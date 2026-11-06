@@ -6,7 +6,6 @@ import { TicketService, renderFieldValue, formatKeyLink, PartialTransitionError 
 import type { IJiraClient, JiraFieldMeta, JiraFilter, JiraSprintCandidate, JiraIssue } from '../jira/IJiraClient';
 import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
-import { tokenStatus } from '../utils/diagUtils';
 import { logDiag } from '../utils/diagLog';
 import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type ListedFiltersSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, type JiraFollowupState, type JiraSessionKind, isConfirmation, isCancellation, isGreetingOrEmpty, buildJiraHelp, computeJiraFollowups, buildFilterFailureNote, pickEmailOption, parseSkipInput, applyTicketToggle, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseListedFiltersSelection, parseBulkUpdateReview, applyBulkUpdateToggle, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewMessage } from './sessionState';
 import {
@@ -31,7 +30,7 @@ import type { Operation, ParsedIntent } from './jira/llmHelpers';
 import { parseIntent, extractFixVersionFromPrompt, generateContent, isLmRefusal, synthesizeComments, generateDescriptionAndCommentsSummary, isPointerPrompt, extractLastAssistantText, mapCommandToOperation } from './jira/llmHelpers';
 import { streamFieldUpdatePreview, continueSetField, handleSetField, handleSpellCheck } from './jira/fieldHandler';
 import { getActiveJiraSession, resolveTicketFromBranch, resolveProjectKey, resolveIssueTypeOrPrompt, parseLastTicketFromContext, sessionWasSuperseded } from './jira/ticketContext';
-import { validateBaseUrl } from '../services/configValidation';
+import { checkConnection } from '../mcp/connectionCheck';
 import { gatherFileContent, buildContentContext, streamContentPreview, handleContentSession } from './jira/contentHandler';
 import { streamCreateSelection, continueAfterIssueType, streamNextSection, finishTicketCreation, handleCreateTicket } from './jira/createHandler';
 import { serializeCommentsForLLM, handleLoadTicket, attachmentsDirFor } from './jira/loadHandler';
@@ -836,37 +835,11 @@ export function createJiraParticipant(
     // before the multi-turn session-tag scan below, exactly like the plain-text
     // "check" phrase already was (KTD12).
     if (request.command === 'check' || /^check(\s+(config|connection|setup))?$/i.test(request.prompt.trim())) {
-      const urlError = validateBaseUrl(config.baseUrl);
-      if (urlError) {
-        stream.markdown(`**Jira configuration problem**\n\n${urlError}`);
-        return;
-      }
-      try {
-        const user = await jiraClient.getCurrentUser();
-        stream.markdown(
-          `**Jira connection OK**\n\n` +
-          `| Setting | Value |\n` +
-          `|---|---|\n` +
-          `| Base URL | \`${config.baseUrl ?? ''}\` |\n` +
-          `| API version | v2 |\n` +
-          `| Auth type | ${config.authType} |\n` +
-          `| Token | ${tokenStatus(config.token)} |\n` +
-          `| Logged in as | ${user.displayName} |\n`,
-        );
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        logDiag('jira.participant', 'error', 'Jira connection check failed', { baseUrl: config.baseUrl, authType: config.authType, error: message });
-        stream.markdown(
-          `**Jira connection failed**\n\n` +
-          `| Setting | Value |\n` +
-          `|---|---|\n` +
-          `| Base URL | \`${config.baseUrl ?? ''}\` |\n` +
-          `| API version | v2 |\n` +
-          `| Auth type | ${config.authType} |\n` +
-          `| Token | ${tokenStatus(config.token)} |\n\n` +
-          `Error: ${message}`,
-        );
-      }
+      const result = await checkConnection(
+        { configured: true, config, client: jiraClient },
+        (level, message, details) => logDiag('jira.participant', level, message, details),
+      );
+      stream.markdown(result.markdown);
       return;
     }
 

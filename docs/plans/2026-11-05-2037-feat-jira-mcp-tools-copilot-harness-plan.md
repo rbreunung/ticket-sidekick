@@ -74,6 +74,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 - R18. Add comment, update field and upload attachment keep today's behavior: the duplicate-comment guard, the supported field list with name resolution, and the size limit. Upload accepts only files that, after resolving symlinks, lie inside an open workspace folder (wherever that folder is) and have no dotfile or dotfolder segment; this deliberately narrows today's home-folder rule for MCP, while `@jira upload` keeps today's rule.
 - R19. Free-text inputs (comment text, create description, update-field text values) are taken as Markdown and sent to Jira as wiki markup through the same conversion `@jira` uses.
 - R20. Every tool that fails because Jira is not configured answers with the setup hint `@jira` gives, never a raw error.
+- R29. When a Jira call fails, a tool tells the agent only the HTTP status and a short reason, capped in length, never Jira's or a proxy's response body; the full error text goes to the Ticket Sidekick Output channel for diagnosis. Every Jira call made by an MCP tool times out after about 30 seconds and answers that Jira did not respond in time.
 
 **Skills**
 
@@ -148,6 +149,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 - KTD11. **Skills are contributed through `contributes.chatSkills`** from `skills/jira-brief/SKILL.md` and `skills/jira-create/SKILL.md`, with `name` equal to the folder name and no `disable-model-invocation`.
 - KTD12. **The e2e test drives VS Code's own MCP client.** It writes `http.noProxy` and tool auto-approval into the throwaway profile in `src/e2e/runTest.ts`, starts the server through VS Code, waits for the tools in `vscode.lm.tools`, invokes check connection with `vscode.lm.invokeTool`, then removes the entry and expects the tools to disappear. If VS Code does not expose MCP tools to extensions that way, the test is reduced to activation and server lifecycle, and the plan's coverage note says so.
 - KTD13. **The diagnostic report becomes `Ticket Sidekick: Copy MCP diagnostics`,** without the prototype's rendezvous and launcher sections, keeping the stored-key search over the Copilot home, VS Code logs and VS Code storage, and adding the restart, client, proxy-evaluation and tool-outcome sections of U5.
+- KTD14. **One shared wrapper turns Jira failures into tool answers** for every MCP Jira tool, from the first read tool on: a timeout of about 30 seconds around each tool's Jira work, a short status-and-reason answer for the agent, and the full error logged through `logDiag`. The check connection tool from PR1 moves onto it in the same step.
 
 ### High-Level Technical Design
 
@@ -365,10 +367,10 @@ Waits on: PR1, merge order only.
 ### U7. View ticket and branch key
 
 - **Goal:** the whole-ticket view, with the key taken from the branch when none is given.
-- **Requirements:** R9, R16, R20; KTD4, KTD7.
+- **Requirements:** R9, R16, R20, R29; KTD4, KTD7.
 - **Dependencies:** U4.
 - **Files:** `src/mcp/branchTicket.ts`, `src/mcp/jiraTools/viewTicket.ts`, `src/test/mcpTools.test.ts`, `src/test/mcpBranchTicket.test.ts`.
-- **Approach:** fields through `TicketService.getTicket` with the display settings as `jira_getTicket` does; comments read in full (`getAllComments`), sorted newest first as the requirements source does, cut to 100, with a note saying how many older ones were left out (the paged reader returns oldest first and cannot be used); attachments with name, size and type; branch key per KTD7 with the source named in the result.
+- **Approach:** fields through `TicketService.getTicket` with the display settings as `jira_getTicket` does; comments read in full (`getAllComments`), sorted newest first as the requirements source does, cut to 100, with a note saying how many older ones were left out (the paged reader returns oldest first and cannot be used); attachments with name, size and type; branch key per KTD7 with the source named in the result. Introduce the shared Jira-failure wrapper of KTD14 here (R29), used by every later tool, and move check connection onto it.
 - **Test scenarios:**
   - View returns description, all fixture comments newest first and the attachment list.
   - With 150 comments, view shows the newest 100 and says 50 older ones were left out.
@@ -376,6 +378,8 @@ Waits on: PR1, merge order only.
   - Covers AE2. Without a key on `feature/PROJ-123-login`, view returns PROJ-123 and names the branch.
   - Covers AE2. On `main`, view says the branch holds no key.
   - Not configured gives the setup hint.
+  - A Jira 502 whose body is an HTML proxy page answers the agent with "HTTP 502" and a short reason, without the page; the full text is in the Output channel.
+  - A Jira call that does not answer within the timeout ends the tool call with a timeout answer.
 - **Verification:** tests pass.
 
 ### U8. Find tickets and list filters
