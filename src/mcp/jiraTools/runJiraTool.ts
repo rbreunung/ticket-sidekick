@@ -2,7 +2,7 @@ import { STATUS_CODES } from 'http';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import { TicketService } from '../../services/TicketService';
 import { buildJiraNotConfiguredMessage } from '../../services/setupHints';
-import { ToolFailure, toolErrorLabel, type ToolAnswer } from '../mcpServer';
+import { ToolFailure, toolErrorLabel } from '../mcpServer';
 import type { ConfiguredJiraConfig, JiraAccess, JiraToolDeps } from './jiraAccess';
 import { CHECK_CONNECTION_TOOL, VIEW_TICKET_TOOL } from './toolNames';
 
@@ -112,12 +112,12 @@ export function withRequestTimeouts(client: IJiraClient, requestTimeoutMs: numbe
  * `Could not read PROJ-123`); pass a function when the work itself decides what it names.
  * A `ToolFailure` the work throws is passed on as it is.
  */
-export async function runJiraTool<T extends string | ToolAnswer = string>(
+export async function runJiraTool(
   deps: JiraToolDeps,
   tool: string,
   failurePrefix: string | (() => string),
-  work: (jira: ConfiguredJira) => Promise<T>,
-): Promise<T | string> {
+  work: (jira: ConfiguredJira) => Promise<string>,
+): Promise<string> {
   const access = await deps.getJira();
   if (!access.configured) return buildJiraNotConfiguredMessage(access.config);
 

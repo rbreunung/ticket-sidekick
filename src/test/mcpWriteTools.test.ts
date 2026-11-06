@@ -6,7 +6,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { LocalhostServer } from '../mcp/localhostServer';
 import { createMcpHandler } from '../mcp/mcpServer';
 import { generateKey } from '../mcp/keys';
-import { JIRA_APP_TOOLS, JIRA_TOOLS, JIRA_VIEWS } from '../mcp/jiraTools/catalog';
+import { JIRA_TOOLS } from '../mcp/jiraTools/catalog';
 import type { JiraAccess, JiraToolDeps } from '../mcp/jiraTools/jiraAccess';
 import type { IJiraClient, JiraIssue, JiraSearchResult, JiraTransition } from '../jira/IJiraClient';
 import type { JiraConfig } from '../services/ConfigService';
@@ -58,7 +58,7 @@ async function startSession(client: IJiraClient, options: { folders?: string[]; 
     recentWrites: new RecentCallGuard(),
   };
   server = new LocalhostServer({
-    onMcp: createMcpHandler({ tools: [...JIRA_TOOLS, ...JIRA_APP_TOOLS], views: JIRA_VIEWS }, deps, { name: 'ticket-sidekick', version: '0.0.0-test' }),
+    onMcp: createMcpHandler(JIRA_TOOLS, deps, { name: 'ticket-sidekick', version: '0.0.0-test' }),
   });
   const mcpKey = generateKey();
   const port = await server.start(mcpKey);

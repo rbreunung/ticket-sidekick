@@ -5,7 +5,7 @@ import type { ConfigService } from '../services/ConfigService';
 import { JiraApiClient } from '../jira/JiraApiClient';
 import { logDiag } from '../utils/diagLog';
 import type { LogLevel } from '../utils/diagTypes';
-import { JIRA_APP_TOOLS, JIRA_TOOLS, JIRA_VIEWS } from './jiraTools/catalog';
+import { JIRA_TOOLS } from './jiraTools/catalog';
 import { RecentCallGuard } from '../tools/recentCallGuard';
 import type { JiraAccess, JiraToolDeps } from './jiraTools/jiraAccess';
 import { evaluateNoProxy, loopbackBypassConfigured } from './proxyBypass';
@@ -105,8 +105,7 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
     onDiag: (level, message, details) => logDiag('mcp.tools', level, message, details),
   };
   const started = new McpServerController<JiraToolDeps>({
-    tools: [...JIRA_TOOLS, ...JIRA_APP_TOOLS],
-    views: JIRA_VIEWS,
+    tools: JIRA_TOOLS,
     toolDeps,
     serverInfo: { name: 'ticket-sidekick', version: extensionVersion(context) },
     isMcpAllowed: mcpAllowed,

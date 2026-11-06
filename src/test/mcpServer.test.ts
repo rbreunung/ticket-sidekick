@@ -22,28 +22,6 @@ const echoTool = defineTool<TestDeps, { text: z.ZodString }>({
   },
 });
 
-const viewTool = defineTool<TestDeps, Record<string, never>>({
-  name: 'test_with_view',
-  title: 'With a view',
-  description: 'Answers with text and data for its inline view.',
-  inputSchema: {},
-  annotations: { readOnlyHint: true },
-  viewUri: 'ui://test/view.html',
-  handler: async () => ({ text: 'see the view', structuredContent: { rows: 2 } }),
-});
-
-const appOnlyTool = defineTool<TestDeps, Record<string, never>>({
-  name: 'test_app_only',
-  title: 'App only',
-  description: 'Called only by the inline view.',
-  inputSchema: {},
-  annotations: { readOnlyHint: true },
-  visibility: ['app'],
-  handler: async () => 'from the view',
-});
-
-const view = { name: 'test-view', uri: 'ui://test/view.html', title: 'Test view', html: () => '<!doctype html><p>view</p>' };
-
 const catalog: McpToolDefinition<TestDeps>[] = [echoTool];
 
 let server: LocalhostServer | undefined;
@@ -53,11 +31,10 @@ afterEach(async () => {
   server = undefined;
 });
 
-async function startServer(opts: { allowMcp?: () => boolean; withViews?: boolean } = {}) {
+async function startServer(opts: { allowMcp?: () => boolean } = {}) {
   const deps: TestDeps = { calls: [] };
   let handled = 0;
-  const tools = opts.withViews ? [echoTool, viewTool, appOnlyTool] : catalog;
-  const handler = createMcpHandler({ tools, views: opts.withViews ? [view] : [] }, deps, { name: 'ticket-sidekick', version: '0.0.0-test' });
+  const handler = createMcpHandler(catalog, deps, { name: 'ticket-sidekick', version: '0.0.0-test' });
   server = new LocalhostServer({
     onMcp: async (req, res) => { handled++; await handler(req, res); },
     allowMcp: opts.allowMcp,
@@ -196,33 +173,5 @@ describe('localhost MCP server', () => {
     expect(server?.isRunning()).toBe(false);
     server = undefined;
     await expect(connect(url, mcpKey)).rejects.toThrow();
-  });
-
-  it('marks a tool model-only unless it opts in to views, and links a tool to its inline view', async () => {
-    const { url, mcpKey } = await startServer({ withViews: true });
-    const client = await connect(url, mcpKey);
-    const tools = (await client.listTools()).tools;
-    const meta = (name: string) => tools.find(t => t.name === name)?._meta;
-    expect(meta('test_echo')).toEqual({ ui: { visibility: ['model'] } });
-    expect(meta('test_with_view')).toEqual({ ui: { visibility: ['model'], resourceUri: 'ui://test/view.html' } });
-    expect(meta('test_app_only')).toEqual({ ui: { visibility: ['app'] } });
-    await client.close();
-  });
-
-  it('answers with structured data for the view next to the text', async () => {
-    const { url, mcpKey } = await startServer({ withViews: true });
-    const client = await connect(url, mcpKey);
-    const result = await client.callTool({ name: 'test_with_view', arguments: {} });
-    expect(result.content).toEqual([{ type: 'text', text: 'see the view' }]);
-    expect(result.structuredContent).toEqual({ rows: 2 });
-    await client.close();
-  });
-
-  it('serves an inline view as an MCP App resource', async () => {
-    const { url, mcpKey } = await startServer({ withViews: true });
-    const client = await connect(url, mcpKey);
-    const read = await client.readResource({ uri: 'ui://test/view.html' });
-    expect(read.contents).toEqual([{ uri: 'ui://test/view.html', mimeType: 'text/html;profile=mcp-app', text: '<!doctype html><p>view</p>' }]);
-    await client.close();
   });
 });

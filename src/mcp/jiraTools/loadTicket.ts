@@ -5,12 +5,12 @@ import {
   loadTicketToWorkspace,
   nodeFsWriter,
   type LoadTicketCoreResult,
+  type SkippedAttachment,
 } from '../../participant/jira/loadCore';
 import { formatFileSize } from '../../utils/attachmentEligibility';
 import { resolveTicketKey } from '../branchTicket';
 import { defineTool } from '../mcpServer';
 import type { JiraToolDeps } from './jiraAccess';
-import { FETCHABLE_CAUSES, LOAD_PANEL_URI, loadPanelData } from './loadPanel';
 import { runJiraTool } from './runJiraTool';
 import { LOAD_TICKET_TOOL } from './toolNames';
 
@@ -26,6 +26,9 @@ const loadShape = {
     + '(such as binary files). Files over 100 MB are never downloaded.',
   ),
 };
+
+/** Skipped attachments that calling the tool again with their names can still fetch. */
+const FETCHABLE: ReadonlySet<SkippedAttachment['cause']> = new Set(['not-default-type', 'download-failed']);
 
 function resultMessage(key: string, folder: string, commentCount: number, allNames: string[], result: LoadTicketCoreResult): string {
   const abs = (rel: string) => absolutePathIn(folder, rel);
@@ -54,16 +57,24 @@ function resultMessage(key: string, folder: string, commentCount: number, allNam
     lines.push('', `${key} has no attachment named ${missing}.${existing}`);
   }
   if (result.skipped.length > 0) {
-    lines.push(
-      '',
-      `${plural(result.skipped.length, 'attachment')} not downloaded:`,
-      ...result.skipped.map(s => `- ${s.filename} (${formatFileSize(s.size)}): ${s.reason}`),
-    );
-    const fetchable = [...new Set(result.skipped.filter(s => FETCHABLE_CAUSES.has(s.cause)).map(s => s.filename))];
+    const line = (s: SkippedAttachment) => `${s.filename} (${formatFileSize(s.size)}): ${s.reason}`;
+    // Fetching is by name, so a name skipped twice is offered once.
+    const fetchable = result.skipped.filter((s, i, all) => FETCHABLE.has(s.cause) && all.findIndex(o => o.filename === s.filename) === i);
+    const fetchableNames = new Set(fetchable.map(s => s.filename));
+    const other = result.skipped.filter(s => !FETCHABLE.has(s.cause) || !fetchableNames.has(s.filename));
+    if (fetchable.length > 0) {
+      lines.push('', 'Attachments not downloaded, which can still be fetched:', ...fetchable.map((s, i) => `${i + 1}. ${line(s)}`));
+    }
+    if (other.length > 0) {
+      lines.push('', 'Not downloadable:', ...other.map(s => `- ${line(s)}`));
+    }
     if (fetchable.length > 0) {
       lines.push(
-        `If one of these is needed, call ${LOAD_TICKET_TOOL} again with ticketKey "${key}" and attachments [${fetchable.map(n => JSON.stringify(n)).join(', ')}] `
-        + '(or only the ones needed).',
+        '',
+        'Show the user the numbered list above exactly as written, after your answer, and ask which to download: '
+        + 'numbers such as "1, 2", or "all". '
+        + `When they answer, call ${LOAD_TICKET_TOOL} with ticketKey "${key}" and attachments set to the chosen names. `
+        + "Do not download them without asking, unless the user's request already named them.",
       );
     }
   }
@@ -83,7 +94,6 @@ export const loadTicketTool = defineTool<JiraToolDeps, typeof loadShape>({
     + 'and says which folder and branch it used. Changes nothing in Jira; it only writes local files, overwriting an earlier load.',
   inputSchema: loadShape,
   annotations: {},
-  viewUri: LOAD_PANEL_URI,
   handler: async ({ ticketKey, attachments }, deps) => {
     let subject = ticketKey?.trim() || 'the ticket';
     return runJiraTool(deps, LOAD_TICKET_TOOL, () => `Could not load ${subject}`, async ({ config, ticketService }) => {
@@ -120,10 +130,7 @@ export const loadTicketTool = defineTool<JiraToolDeps, typeof loadShape>({
         skippedCount: result.skipped.length,
         notFoundCount: result.notFound.length,
       });
-      return {
-        text: sourceNote + resultMessage(key, folder, comments.length, ticketAttachments.map(a => a.filename), result),
-        structuredContent: loadPanelData(key, result),
-      };
+      return sourceNote + resultMessage(key, folder, comments.length, ticketAttachments.map(a => a.filename), result);
     });
   },
 });

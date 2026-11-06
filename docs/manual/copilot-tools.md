@@ -34,7 +34,7 @@ These change nothing in Jira. `jira_workflow` and `jira_load_ticket` write local
 | `jira_list_my_filters` | Lists your favourite and own saved filters, each once, with name and id | none |
 | `jira_workflow` | Lists the statuses a ticket can be moved to from its current status, with the transitions that lead there. When no workflow is cached for the ticket's project and issue type, it learns it from Jira and saves it to `.jira-workflow-cache.json`, the same cache `@jira` uses | `ticketKey`; optional `refresh` to learn the workflow again |
 | `jira_list_templates` | Lists the templates in your workspace's `.jira-templates.json`, each with its issue type, the field values it sets and its description sections | none |
-| `jira_load_ticket` | Downloads a ticket into `.jira-context/<KEY>/` in the first workspace folder, like `@jira load`: `ticket.md`, `comments.md` and the text, image, document and archive attachments. It names every file it wrote by its full path and every attachment it skipped, with its size and the reason. Files over 100 MB are never downloaded. An attachment that has not finished downloading after 2 minutes is listed as skipped (download failed), and everything else is still written | `ticketKey` (optional, as for `jira_view_ticket`); optional `attachments`, a list of attachment names to download as well, including ones the default filter skips |
+| `jira_load_ticket` | Downloads a ticket into `.jira-context/<KEY>/` in the first workspace folder, like `@jira load`: `ticket.md`, `comments.md` and the text, image, document and archive attachments. It names every file it wrote by its full path and every attachment it skipped, with its size and the reason. Files over 100 MB are never downloaded. An attachment that has not finished downloading after 2 minutes is listed as skipped (download failed), and everything else is still written. The skipped attachments that can still be fetched are numbered, and Copilot asks you which to download: answer with numbers such as `1, 3`, or `all`, and it loads them | `ticketKey` (optional, as for `jira_view_ticket`); optional `attachments`, a list of attachment names to download as well, including ones the default filter skips |
 
 ### Tools that change Jira
 
@@ -83,7 +83,7 @@ Use this after installing a new build, in a chat that runs in the Copilot harnes
 4. Ask "find open bugs in PROJ with JQL": `jira_find_tickets` answers with a table.
 5. Ask "which statuses can PROJ-123 move to?": `jira_workflow` answers.
 6. Ask "list the Jira templates": `jira_list_templates` answers (or says the workspace has none).
-7. Ask "load PROJ-123": `jira_load_ticket` writes `.jira-context/PROJ-123/` and names the files.
+7. Ask "load PROJ-123": `jira_load_ticket` writes `.jira-context/PROJ-123/` and names the files. On a ticket with a binary attachment (for example a `.bin` or `.dat` file), Copilot shows a numbered list of the skipped ones and asks which to download; answer `all`, and they appear in `.jira-context/PROJ-123/attachments/`.
 8. Type `/jira-brief PROJ-123`: the brief has all eight sections, and its sources list the comments and attachments it used.
 9. Ask "add the comment 'Checked in the Copilot chat' to PROJ-123": Copilot asks first, then `jira_add_comment` adds it. Ask the same again at once: the answer says it was skipped.
 10. Ask "set the priority of PROJ-123 to High": `jira_update_field` asks first and quotes the previous priority.

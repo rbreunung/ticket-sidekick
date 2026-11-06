@@ -1,5 +1,5 @@
 import { checkConnection } from '../connectionCheck';
-import { defineTool, ToolFailure, toolErrorLabel, type McpToolDefinition, type McpViewResource } from '../mcpServer';
+import { defineTool, ToolFailure, toolErrorLabel, type McpToolDefinition } from '../mcpServer';
 import type { JiraToolDeps } from './jiraAccess';
 import { describeJiraFailure, JiraTimeout, runJiraTool } from './runJiraTool';
 import { CHECK_CONNECTION_TOOL } from './toolNames';
@@ -8,7 +8,6 @@ import { findTicketsTool, listMyFiltersTool } from './findTickets';
 import { workflowTool } from './workflow';
 import { listTemplatesTool } from './templates';
 import { loadTicketTool } from './loadTicket';
-import { loadPanelView, panelProbeTool } from './loadPanel';
 import { moveTicketTool } from './moveTicket';
 import { createTicketTool } from './createTicket';
 import { addCommentTool } from './addComment';
@@ -54,12 +53,3 @@ export const JIRA_TOOLS: readonly McpToolDefinition<JiraToolDeps>[] = [
   updateFieldTool,
   uploadAttachmentTool,
 ];
-
-/**
- * Tools only the server's inline views may call. The model never sees them, so they are kept out
- * of `JIRA_TOOLS`, which is what agents and the tools page know about.
- */
-export const JIRA_APP_TOOLS: readonly McpToolDefinition<JiraToolDeps>[] = [panelProbeTool];
-
-/** The inline views the Jira tools point at. */
-export const JIRA_VIEWS: readonly McpViewResource[] = [loadPanelView];
