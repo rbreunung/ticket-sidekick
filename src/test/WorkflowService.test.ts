@@ -288,7 +288,7 @@ describe('resolveAndApplyTransition', () => {
 
     const result = await resolveAndApplyTransition(client, service, '/nonexistent', 'PROJ-123', 'done');
 
-    expect(result).toEqual({ kind: 'direct', toStatus: 'Done' });
+    expect(result).toEqual({ kind: 'direct', fromStatus: 'In Progress', toStatus: 'Done', steps: ['Done'] });
     expect(client.executeTransitionCalls).toEqual([{ issueKey: 'PROJ-123', transitionId: '41', fields: undefined }]);
   });
 
@@ -310,7 +310,7 @@ describe('resolveAndApplyTransition', () => {
 
     const result = await resolveAndApplyTransition(client, service, tmpDir, 'PROJ-123', 'Closed');
 
-    expect(result).toEqual({ kind: 'multiHop', toStatus: 'Closed', hops: 2 });
+    expect(result).toEqual({ kind: 'multiHop', fromStatus: 'In Progress', toStatus: 'Closed', hops: 2, steps: ['Review', 'Close'] });
     expect(client.executeTransitionCalls).toEqual([
       { issueKey: 'PROJ-123', transitionId: '31', fields: undefined },
       { issueKey: 'PROJ-123', transitionId: '99', fields: undefined },

@@ -218,8 +218,8 @@ export async function discoverWorkflow(
  * resolution algorithm itself (R3: one implementation, reused everywhere). */
 export type TransitionResolution =
   | { kind: 'alreadyThere'; currentStatus: string }
-  | { kind: 'direct'; toStatus: string }
-  | { kind: 'multiHop'; toStatus: string; hops: number }
+  | { kind: 'direct'; fromStatus: string; toStatus: string; steps: string[] }
+  | { kind: 'multiHop'; fromStatus: string; toStatus: string; hops: number; steps: string[] }
   // A multi-hop transition failed partway — the ticket already moved through `completedHops` of
   // `totalHops` real Jira writes before the failure, so it's now sitting at `landedStatus`, not
   // its original status. Only surfaced when at least one hop actually completed; a failure on the
@@ -252,7 +252,7 @@ export async function resolveAndApplyTransition(
   const direct = transitions.find((t) => t.to.name.toLowerCase() === targetStatus.toLowerCase());
   if (direct) {
     await ticketService.transitionAlongPath(ticketKey, [{ id: direct.id, name: direct.name, to: direct.to.name }], resolution);
-    return { kind: 'direct', toStatus: direct.to.name };
+    return { kind: 'direct', fromStatus: currentStatus, toStatus: direct.to.name, steps: [direct.name] };
   }
 
   const projectKey = ticketKey.split('-')[0];
@@ -263,7 +263,7 @@ export async function resolveAndApplyTransition(
     if (path && path.length > 0) {
       try {
         await ticketService.transitionAlongPath(ticketKey, path, resolution);
-        return { kind: 'multiHop', toStatus: targetStatus, hops: path.length };
+        return { kind: 'multiHop', fromStatus: currentStatus, toStatus: targetStatus, hops: path.length, steps: path.map(step => step.name) };
       } catch (err) {
         // Only a genuinely partial failure (at least one hop actually landed) gets its own
         // result kind — a failure on the very first hop left no partial state, so it's no

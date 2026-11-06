@@ -9,6 +9,11 @@ import { workflowTool } from './workflow';
 import { listTemplatesTool } from './templates';
 import { loadTicketTool } from './loadTicket';
 import { loadPanelView, panelProbeTool } from './loadPanel';
+import { moveTicketTool } from './moveTicket';
+import { createTicketTool } from './createTicket';
+import { addCommentTool } from './addComment';
+import { updateFieldTool } from './updateField';
+import { uploadAttachmentTool } from './uploadAttachment';
 
 // Every Jira tool the extension's MCP server offers. The server registers its tools from this
 // list, so a tool exists for agents exactly when it is listed here.
@@ -43,6 +48,11 @@ export const JIRA_TOOLS: readonly McpToolDefinition<JiraToolDeps>[] = [
   workflowTool,
   listTemplatesTool,
   loadTicketTool,
+  moveTicketTool,
+  createTicketTool,
+  addCommentTool,
+  updateFieldTool,
+  uploadAttachmentTool,
 ];
 
 /**

@@ -4,13 +4,14 @@ import { TicketService } from '../../services/TicketService';
 import { buildJiraNotConfiguredMessage } from '../../services/setupHints';
 import { ToolFailure, toolErrorLabel, type ToolAnswer } from '../mcpServer';
 import type { ConfiguredJiraConfig, JiraAccess, JiraToolDeps } from './jiraAccess';
-import { CHECK_CONNECTION_TOOL } from './toolNames';
+import { CHECK_CONNECTION_TOOL, VIEW_TICKET_TOOL } from './toolNames';
 
 // The one place where a Jira tool's failures become answers for the agent. Every Jira tool runs
 // its Jira work through `runJiraTool`: without a configured Jira the agent gets the setup hint;
 // every request to Jira has its own time limit, and a read that takes too long ends the tool
 // with a timeout answer (an attachment download that takes too long fails on its own, and the
-// load reports that attachment as not downloaded); a failed call is answered with its HTTP
+// load reports that attachment as not downloaded; a write that takes too long is answered with
+// a warning that the change may still have been saved); a failed call is answered with its HTTP
 // status and a short reason only, never with Jira's or a proxy's response body, while the full
 // error text goes to the Output channel for diagnosis.
 
@@ -57,6 +58,17 @@ function formatSeconds(ms: number): string {
   const seconds = Math.max(1, Math.round(ms / 1000));
   return `${seconds} second${seconds === 1 ? '' : 's'}`;
 }
+
+/** The Jira client calls that change something in Jira. */
+const WRITE_REQUESTS: ReadonlySet<string> = new Set([
+  'updateIssue', 'addComment', 'createIssue', 'createIssueLink', 'executeTransition', 'uploadAttachment',
+]);
+
+/**
+ * How a failed call is labelled when a write timed out: Jira may still have made the change, so a
+ * write tool keeps its duplicate guard for that call instead of releasing it.
+ */
+export const WRITE_TIMEOUT_LABEL = 'write-timeout';
 
 /** A Jira request that did not finish within its time limit. */
 export class JiraTimeout extends Error {
@@ -126,6 +138,14 @@ export async function runJiraTool<T extends string | ToolAnswer = string>(
     if (err instanceof ToolFailure) throw err;
     if (err instanceof JiraTimeout) {
       deps.onDiag?.('error', `${tool}: Jira did not respond to ${err.request} within ${err.timeoutMs} ms`);
+      if (WRITE_REQUESTS.has(err.request)) {
+        // The request was sent and not cancelled, so Jira may still have made the change.
+        throw new ToolFailure(
+          `${prefix()}: Jira did not answer within ${formatSeconds(err.timeoutMs)}. The change may still have been saved: `
+          + `view the ticket with ${VIEW_TICKET_TOOL} before trying again.`,
+          WRITE_TIMEOUT_LABEL,
+        );
+      }
       throw new ToolFailure(
         `${prefix()}: Jira did not respond within ${formatSeconds(err.timeoutMs)}. Try again later, or check the connection with ${CHECK_CONNECTION_TOOL}.`,
         'timeout',

@@ -4,6 +4,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { LocalhostServer } from '../mcp/localhostServer';
 import { createMcpHandler, type ToolCallOutcome } from '../mcp/mcpServer';
 import { generateKey } from '../mcp/keys';
+import { RecentCallGuard } from '../tools/recentCallGuard';
 import {
   JIRA_TOOLS, JIRA_APP_TOOLS, JIRA_VIEWS, CHECK_CONNECTION_TOOL, VIEW_TICKET_TOOL, FIND_TICKETS_TOOL, LIST_MY_FILTERS_TOOL, WORKFLOW_TOOL, LIST_TEMPLATES_TOOL,
   LOAD_TICKET_TOOL,
@@ -69,6 +70,7 @@ async function callTool(name: string, args: Record<string, unknown> = {}, option
     workspaceFolders: () => options.folders ?? [],
     jiraTimeoutMs: options.timeoutMs,
     jiraDownloadTimeoutMs: options.downloadTimeoutMs,
+    recentWrites: new RecentCallGuard(),
     onDiag: (level, message, details) => options.logs?.push({ level, message, details }),
   };
   server = new LocalhostServer({
@@ -131,7 +133,16 @@ describe('Jira tool catalog', () => {
   it('marks every tool that only reads Jira as read-only', () => {
     expect(CHECK_CONNECTION_TOOL).toBe('jira_check_connection');
     expect(VIEW_TICKET_TOOL).toBe('jira_view_ticket');
-    for (const tool of JIRA_TOOLS.filter(t => t.name !== LOAD_TICKET_TOOL)) expect(tool.annotations, tool.name).toEqual({ readOnlyHint: true });
+    const reads = [CHECK_CONNECTION_TOOL, VIEW_TICKET_TOOL, FIND_TICKETS_TOOL, LIST_MY_FILTERS_TOOL, WORKFLOW_TOOL, LIST_TEMPLATES_TOOL];
+    for (const name of reads) expect(JIRA_TOOLS.find(t => t.name === name)?.annotations, name).toEqual({ readOnlyHint: true });
+  });
+
+  it('marks every tool that writes to Jira as destructive and never as read-only, so the harness always asks first', () => {
+    const writes = JIRA_TOOLS.filter(t => !t.annotations.readOnlyHint && t.name !== LOAD_TICKET_TOOL);
+    expect(writes.map(t => t.name).sort()).toEqual(
+      ['jira_add_comment', 'jira_create_ticket', 'jira_move_ticket', 'jira_update_field', 'jira_upload_attachment'],
+    );
+    for (const tool of writes) expect(tool.annotations, tool.name).toEqual({ destructiveHint: true });
   });
 
   it('marks load ticket neither read-only nor destructive, since it writes only local files', () => {

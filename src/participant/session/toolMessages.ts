@@ -3,7 +3,7 @@
 // Pure (vscode-free); re-exported through ../sessionState.ts.
 
 import { formatFileSize } from '../../utils/attachmentEligibility';
-import { LIST_TEMPLATES_TOOL } from '../../mcp/jiraTools/toolNames';
+import { CREATE_TICKET_TOOL, LIST_TEMPLATES_TOOL } from '../../mcp/jiraTools/toolNames';
 import type { ToolConfirmation } from '../../tools/toolConfirmation';
 import type { JiraTemplate, ResolveSpec } from '../../templates/TemplateService';
 import { formatBulletList } from './primitives';
@@ -115,7 +115,7 @@ export function buildUploadAttachmentConfirmation(ticketKey: string, filePath: s
   };
 }
 
-/** The never-guess fallback text for `jira_createTicket` (KTD4): when neither `issueType` nor a
+/** The never-guess fallback text for the create ticket tool (KTD4): when neither `issueType` nor a
  * resolvable `templateName` was given, nothing is created and this lists the project's valid
  * issue types (from `TicketService.getIssueTypes`) as the actionable next step — mirrors the
  * chat create flow's own never-guess sentinel handling
@@ -126,13 +126,13 @@ export function formatIssueTypeOptionsMessage(projectKey: string, issueTypes: st
   if (issueTypes.length === 0) {
     return (
       `No ticket was created: no issue type or resolvable template was given for project ${projectKey}, ` +
-      `and its issue types could not be fetched from Jira. Call jira_createTicket again with an explicit "issueType".`
+      `and its issue types could not be fetched from Jira. Call ${CREATE_TICKET_TOOL} again with an explicit "issueType".`
     );
   }
   const list = formatBulletList(issueTypes);
   return (
     `No ticket was created: no issue type or resolvable template was given. Valid issue types for **${projectKey}**:\n\n${list}\n\n` +
-    `Call jira_createTicket again with one of these as "issueType", or with a "templateName" from ${LIST_TEMPLATES_TOOL}.`
+    `Call ${CREATE_TICKET_TOOL} again with one of these as "issueType", or with a "templateName" from ${LIST_TEMPLATES_TOOL}.`
   );
 }
 

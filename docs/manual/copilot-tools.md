@@ -22,7 +22,9 @@ Ticket Sidekick never changes the setting itself. Until you add the entry, every
 
 ## The tools
 
-All of these read Jira and change nothing there. `jira_workflow` and `jira_load_ticket` write local files in the first workspace folder.
+### Tools that read Jira
+
+These change nothing in Jira. `jira_workflow` and `jira_load_ticket` write local files in the first workspace folder.
 
 | Tool | What it does | Inputs |
 | --- | --- | --- |
@@ -34,7 +36,17 @@ All of these read Jira and change nothing there. `jira_workflow` and `jira_load_
 | `jira_list_templates` | Lists the templates in your workspace's `.jira-templates.json`, each with its issue type, the field values it sets and its description sections | none |
 | `jira_load_ticket` | Downloads a ticket into `.jira-context/<KEY>/` in the first workspace folder, like `@jira load`: `ticket.md`, `comments.md` and the text, image, document and archive attachments. It names every file it wrote by its full path and every attachment it skipped, with its size and the reason. Files over 100 MB are never downloaded. An attachment that has not finished downloading after 2 minutes is listed as skipped (download failed), and everything else is still written | `ticketKey` (optional, as for `jira_view_ticket`); optional `attachments`, a list of attachment names to download as well, including ones the default filter skips |
 
-The Jira tools that change a ticket (comment, update a field, create, move, upload) are still Agent Mode tools for now — see [Agent Mode Tools](agent-mode-tools.md).
+### Tools that change Jira
+
+Copilot asks you before each of these runs (see [Approvals](#approvals)). Free text is written as Markdown and reaches Jira as wiki markup, as from `@jira`. If Jira does not answer within 30 seconds, the tool says the change may still have been saved and asks Copilot to look at the ticket before trying again.
+
+| Tool | What it does | Inputs |
+| --- | --- | --- |
+| `jira_move_ticket` | Moves a ticket to a status, in one transition or along several. When no path is known yet, it learns the workflow from Jira first and saves it to `.jira-workflow-cache.json`. The answer names the status the ticket came from and each transition taken. A move that stops partway says where the ticket landed and is not retried | `ticketKey`, `targetStatus`; optional `resolution` for a last step that asks for one |
+| `jira_create_ticket` | Creates one ticket, preferably from a template in `.jira-templates.json`, and lists the template fields it applied. It never guesses the issue type: without one and without a template that sets one, it lists the project's issue types and creates nothing. The same ticket asked for again within a minute is skipped | `projectKey`, `summary`; `templateName` or `issueType`; optional `description` (Markdown) |
+| `jira_add_comment` | Adds a comment. The same comment on the same ticket within a minute is skipped, so a repeated call does not post it twice | `ticketKey`, `comment` (Markdown) |
+| `jira_update_field` | Sets one field: summary, description, priority, assignee, labels, components or fix version, and quotes the value it had before | `ticketKey`, `fieldName`, `value` (the description as Markdown; labels and components comma-separated; assignee a name, an email or `me`) |
+| `jira_upload_attachment` | Attaches a file to a ticket. Only files inside an open workspace folder are accepted, wherever that folder is; a file in a hidden folder such as `.config`, a symlink that points out of the workspace and a file over 25 MB are refused. The same file to the same ticket within a minute is skipped | `ticketKey`, `filePath` (absolute, or relative to the first workspace folder) |
 
 ## Skills
 
@@ -72,4 +84,9 @@ Use this after installing a new build, in a chat that runs in the Copilot harnes
 6. Ask "list the Jira templates": `jira_list_templates` answers (or says the workspace has none).
 7. Ask "load PROJ-123": `jira_load_ticket` writes `.jira-context/PROJ-123/` and names the files.
 8. Type `/jira-brief PROJ-123`: the brief has all eight sections, and its sources list the comments and attachments it used.
-9. Open the chat's tool list: no Jira capability is listed twice, for example both a view tool from this server and one from Agent Mode.
+9. Ask "add the comment 'Checked in the Copilot chat' to PROJ-123": Copilot asks first, then `jira_add_comment` adds it. Ask the same again at once: the answer says it was skipped.
+10. Ask "set the priority of PROJ-123 to High": `jira_update_field` asks first and quotes the previous priority.
+11. Ask "move PROJ-123 to <a status two steps away>": `jira_move_ticket` asks first and names both transitions.
+12. Ask "create a ticket in PROJ from the template <one of yours> with the summary 'Checklist ticket'": `jira_create_ticket` asks first and lists the template fields it applied. Delete the ticket afterwards.
+13. Ask "attach README.md to PROJ-123": `jira_upload_attachment` asks first and uploads it. Ask to attach a file from outside the workspace: it is refused.
+14. Open the chat's tool list: no Jira capability is listed twice, for example both a comment tool from this server and one from Agent Mode.

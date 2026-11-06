@@ -406,6 +406,11 @@ const SUPPORTED_FIELDS: Record<string, string> = {
   fixversion: 'fixVersions',
 };
 
+/** The Jira field id {@link TicketService.updateField} writes for a field name, or undefined when it does not support the field. */
+export function supportedFieldId(fieldName: string): string | undefined {
+  return SUPPORTED_FIELDS[fieldName.trim().toLowerCase()];
+}
+
 /** Result of {@link TicketService.getRequirementsSource}. */
 export type RequirementsSourceResult =
   | { ok: true; source: RequirementsSource }
