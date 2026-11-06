@@ -24,7 +24,7 @@ execution: code
 
 ### Summary
 
-The extension runs its own MCP server on `127.0.0.1` whenever `127.0.0.1` is in `http.noProxy`. It offers 12 Jira tools: view, find, list filters, load, move, workflow, check connection, list templates, create, comment, update field and upload attachment. The 14 Jira Agent Mode tools are removed as their replacements land. Two skills, `/jira-brief` and `/jira-create`, add the workflows a tool description cannot carry. Users without the proxy entry are told at every start how to enable the tools.
+The extension runs its own MCP server on `127.0.0.1` whenever `127.0.0.1` is in `http.noProxy`. It offers 12 Jira tools: view, find, list filters, load, move, workflow, check connection, list templates, create, comment, update field and upload attachment. The 14 Jira Agent Mode tools are removed as their replacements land. Two skills, `/jira-brief` and `/jira-create`, add the workflows a tool description cannot carry. When load ticket skips attachments it could still fetch, its chat result carries an inline panel with a Load button per file and a Download all button. Users without the proxy entry are told at every start how to enable the tools.
 
 ### Problem Frame
 
@@ -46,6 +46,10 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 - **Free text is written as Markdown and converted to Jira wiki markup, as `@jira` does.** Governs R19. (session-settled: user-directed — chosen over tools that take wiki markup as today.)
 - **Only two skills, both model-invocable: `/jira-brief` and `/jira-create`.** Governs R21, R22, R23. (session-settled: user-directed — chosen over one skill per `@jira` command; MCP prompts are not available in the Copilot harness.)
 - **Tests add an e2e check through VS Code's own MCP client; a real-Jira e2e is a follow-up.** Governs R27, R28. (session-settled: user-directed — chosen over an activation-only e2e or including the real-Jira workflow in this phase.)
+- **The user picks skipped attachments to fetch after the load answer, with buttons in the chat.** Governs R30, R31. (session-settled: user-directed — chosen over a question during the load or leaving it to the agent: the user can click whenever the file turns out to matter.)
+- **The buttons live in an inline panel under the load result.** Governs R30–R32. (session-settled: user-directed — chosen over a canvas side panel, which needs `chat.canvases.enabled`, the launcher folder in the Copilot home and multi-window handling for one list of buttons.)
+- **A click tells the agent through a quiet context note.** Governs R33. (session-settled: user-directed — chosen over a visible chat message or telling the agent nothing: the agent should know the file exists without the chat filling up.)
+- **The panel lists only skipped attachments and ends with Download all.** Governs R31. (session-settled: user-directed — chosen over listing every attachment: the text answer already reports what was written.)
 
 ### Requirements
 
@@ -76,6 +80,14 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 - R20. Every tool that fails because Jira is not configured answers with the setup hint `@jira` gives, never a raw error.
 - R29. When a Jira call fails, a tool tells the agent only the HTTP status and a short reason, capped in length, never Jira's or a proxy's response body; the full error text goes to the Ticket Sidekick Output channel for diagnosis. Every Jira call made by an MCP tool times out after about 30 seconds and answers that Jira did not respond in time.
 
+**Load buttons for skipped attachments**
+
+- R30. When load ticket skips at least one attachment that a second request could fetch (a type not downloaded by default, or a failed download), its result shows an inline panel in the chat; with nothing fetchable, no panel appears.
+- R31. The panel gives each fetchable skipped attachment a Load button, shows too-large and unsafe-name skips as plain lines with their reason, and ends with one Download all button for every fetchable attachment.
+- R32. A click fetches only the chosen attachments into `.jira-context/<KEY>/attachments/`, leaves `ticket.md` and `comments.md` as they are, and the button then shows Loaded or the error.
+- R33. After a successful click the panel adds a note to the chat's context naming each loaded file and its path, without posting a visible chat message.
+- R34. The panel adds no tool to the agent's tool list, and load ticket's text answer keeps its re-fetch hint, so agents and chat clients that show no panel still work.
+
 **Skills**
 
 - R21. The extension contributes exactly two skills, both model-invocable; neither repeats what a tool description already says.
@@ -102,6 +114,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 - AE5. **Covers R19.** Given a comment written with a Markdown heading, a list and a table, when add comment runs, then Jira receives `h2.`, `*` list items and a `||`-headed table.
 - AE6. **Covers R20.** Given no Jira token, when any tool runs, then it answers with the setup hint naming the missing token.
 - AE7. **Covers R22.** Given a ticket whose description has no acceptance criteria, when `/jira-brief` runs, then the acceptance criteria section is marked derived or says "not stated in the ticket", and the sources section lists the comments and attachments used.
+- AE8. **Covers R30–R33.** Given a ticket with `design.zip` (not downloaded by default), `dump.bin` (download failed), `huge.iso` (300 MB) and `../../evil.txt`, when load ticket runs, then the panel shows Load buttons for `design.zip` and `dump.bin` and plain lines for the other two; Download all writes both into `.jira-context/<KEY>/attachments/`, and on the user's next message the agent knows both paths.
 
 ### Success Criteria
 
@@ -112,7 +125,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 
 - Deferred for later: the Bitbucket tools (they stay Agent Mode tools in this phase), the imports, cleanup, `/security-report`, the canvas board and the session engine.
 - Deferred for later: switching `@jira`'s own branch lookup to the explicit-folder lookup of KTD7.
-- Considered and not built: an Agent Mode fallback when MCP cannot run (rejected: it reintroduces duplicates); a concise/full output switch (rejected: results follow settings); MCP prompts as entry points (not supported by the Copilot harness, per `src/vs/platform/agentHost/test/node/e2e/suites/mcpSideChannelSuite.ts`).
+- Considered and not built: an Agent Mode fallback when MCP cannot run (rejected: it reintroduces duplicates); a concise/full output switch (rejected: results follow settings); MCP prompts as entry points (not supported by the Copilot harness, per `src/vs/platform/agentHost/test/node/e2e/suites/mcpSideChannelSuite.ts`); a canvas side panel for the load buttons (see Key Decisions); an Open button in the load panel (inline views may open only web links); listing already loaded attachments in the panel.
 
 ### Deferred to Follow-Up Work
 
@@ -128,7 +141,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 
 - Decision log and test results: [`docs/architecture/copilot-harness-migration.md`](../architecture/copilot-harness-migration.md) §11; prototype plan [`docs/plans/2026-11-05-1230-feat-copilot-harness-localhost-prototype-plan.md`](2026-11-05-1230-feat-copilot-harness-localhost-prototype-plan.md); prototype code on the branch `claude/intelligent-planck-gue5hu` under `src/prototype/`.
 - Today's tools: `src/tools/jiraTools.ts` (14 Jira tools, safeguards), `src/participant/jira/loadHandler.ts` (`loadTicketToWorkspace`, uses `vscode.workspace.fs`), `src/participant/jira/ticketContext.ts` (`resolveTicketFromBranch`, runs `git` without a working directory), `src/participant/JiraParticipant.ts` (`@jira check`), `src/utils/markdownToJiraWiki.ts`.
-- VS Code: extension skills via `contributes.chatSkills` (VS Code docs, agent skills); extension skills are synced to the Agent Host (`agentHostLocalCustomizations.ts`); MCP tools are deferred and found through tool search in the Copilot harness (Agent Host `AGENTS.md`); VS Code registers MCP tools with its language-model tool service (`mcpLanguageModelToolContribution.ts`); `workbench.mcp.startServer` (`mcpCommandIds.ts`).
+- VS Code: extension skills via `contributes.chatSkills` (VS Code docs, agent skills); extension skills are synced to the Agent Host (`agentHostLocalCustomizations.ts`); MCP tools are deferred and found through tool search in the Copilot harness (Agent Host `AGENTS.md`); VS Code registers MCP tools with its language-model tool service (`mcpLanguageModelToolContribution.ts`); `workbench.mcp.startServer` (`mcpCommandIds.ts`); inline MCP App views can call the server's tools on a click (`tools/call`, for tools visible to apps) and add context for the model (`ui/update-model-context`) (`chatMcpAppModel.ts`, `mcpToolCallUI.ts`); the prototype's inline ticket view on the prototype branch (`src/prototype/mcpEndpoint.ts`) shows the pattern in this codebase.
 
 ---
 
