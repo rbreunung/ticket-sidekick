@@ -86,7 +86,8 @@ export const loadTicketTool = defineTool<JiraToolDeps, typeof loadShape>({
   name: LOAD_TICKET_TOOL,
   title: 'Load a Jira ticket into the workspace',
   description:
-    'Downloads one Jira ticket into `.jira-context/<KEY>/` in the first workspace folder, so its content can be read as local files: '
+    'Use when the user asks to load or download a ticket, e.g. "load PROJ-123". '
+    + 'Downloads one Jira ticket into `.jira-context/<KEY>/` in the first workspace folder, so its content can be read as local files: '
     + '`ticket.md` (fields, description, web links, attachment list), `comments.md` (all comments) and, in `attachments/`, '
     + 'the text, image, document and archive attachments. Binary attachments of other types are skipped unless named in attachments; '
     + 'files over 100 MB are always skipped. The answer lists every file written by its absolute path and every skipped attachment '

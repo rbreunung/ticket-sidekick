@@ -131,6 +131,12 @@ describe('the /jira-brief skill', () => {
     expect(brief).toMatch(/attachment you could not read/);
   });
 
+  it('leaves showing, loading and downloading a ticket to the tools', () => {
+    const description = parseFrontmatter(brief)?.description ?? '';
+    expect(description).toMatch(/^Writes a developer brief/);
+    expect(description).toContain('Not for showing, loading or downloading a ticket');
+  });
+
   it('views the ticket, then loads the picked attachments and reads them from .jira-context', () => {
     const at = positions(brief, [VIEW_TICKET_TOOL, LOAD_TICKET_TOOL, '.jira-context/']);
     expect(at.every(p => p >= 0)).toBe(true);
