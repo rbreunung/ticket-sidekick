@@ -12,7 +12,7 @@ execution: code
 ## Goal Capsule
 
 - **Objective:** In a Copilot-harness chat, where `@jira` is not available, a developer can view, find, load, comment on, update, move and create Jira tickets, check the connection, and get a structured developer brief of a ticket, through one set of tools that is never offered twice. `@jira` keeps working unchanged in the Local harness.
-- **Means:** an MCP server inside the extension on a key-protected `127.0.0.1` port (KTD1), carrying 12 Jira tools that replace the 14 Agent Mode Jira tools, plus two skills (KTD11). Direction settled in [`docs/architecture/copilot-harness-migration.md`](../architecture/copilot-harness-migration.md), decision log §11.
+- **Means:** an MCP server inside the extension on a key-protected `127.0.0.1` port (KTD1), carrying 12 Jira tools that replace the 14 Agent Mode Jira tools, plus three skills (KTD11). Direction settled in [`docs/architecture/copilot-harness-migration.md`](../architecture/copilot-harness-migration.md), decision log §11.
 - **Authority:** Product Contract requirements win on behavior; KTDs win on mechanism; units override neither.
 - **Execution profile:** one feature branch, built in three review steps (PR1, PR2, PR3, each a pull request into the feature branch, merged in order; see Implementation Units), then one merge of the feature branch into `main`. `main` therefore never holds a half-moved tool set and stays releasable throughout. Each moved tool is removed as an Agent Mode tool in the same step that adds it to MCP, so no state offers a tool twice. The feature branch starts from `main`, not from the prototype branch; it brings along the architecture document and the two plans, but not `src/prototype/` or the prototype manual page.
 - **Stop conditions:** stop and ask if a moved tool cannot keep a safeguard its Agent Mode version has (for example the never-guess issue type or the duplicate-comment guard), if VS Code refuses the MCP server definition the extension provides, or if the manual checklist fails on a managed Mac or a managed Windows machine.
@@ -44,7 +44,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 - **Check connection is a new tool; the branch ticket is built into view and load.** Governs R15, R16. (session-settled: user-directed — chosen over a separate branch tool or a combined status tool.)
 - **Templates, create, comment, update field and upload stay separate tools.** Governs R17, R18. (session-settled: user-directed — chosen over merging them, which would trigger approval prompts for reads or blur approvals.)
 - **Free text is written as Markdown and converted to Jira wiki markup, as `@jira` does.** Governs R19. (session-settled: user-directed — chosen over tools that take wiki markup as today.)
-- **Only two skills, both model-invocable: `/jira-brief` and `/jira-create`.** Governs R21, R22, R23. (session-settled: user-directed — chosen over one skill per `@jira` command; MCP prompts are not available in the Copilot harness.)
+- **Two workflow skills the agent may pick, `/jira-brief` and `/jira-create`, plus one explicit-only command router, `/ts-jira`.** Governs R21, R22, R23, R35. (session-settled: user-directed — chosen over one model-invocable skill per `@jira` command and over MCP prompts, which the Copilot harness does not offer; the router was added after a plain "load ticket" request ran `/jira-brief`, and was chosen over MCP server instructions, which the Copilot harness includes only for allowlisted servers, and over one explicit-only skill per command, so that one entry with a command table and built-in help covers every tool; the `ts-` prefix keeps it from clashing with other extensions' skills.)
 - **Tests add an e2e check through VS Code's own MCP client; a real-Jira e2e is a follow-up.** Governs R27, R28. (session-settled: user-directed — chosen over an activation-only e2e or including the real-Jira workflow in this phase.)
 - **The user picks skipped attachments to fetch after the load answer, from a numbered list the agent shows.** Governs R30, R31. (session-settled: user-directed — chosen over an inline panel with Load buttons, which VS Code attaches to every load result and which, after a window reload in the Copilot harness, shows a loading error until the MCP server reconnects; also over a question during the load or leaving it to the agent.)
 - **The agent is not told separately what was loaded; it learns it from the answer of the load it makes.** Governs R31. (session-settled: user-directed — chosen over a context note from a panel, which the Copilot harness drops: VS Code passes a generic text attachment from an MCP App on to Local agents only.)
@@ -86,14 +86,15 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 
 **Skills**
 
-- R21. The extension contributes exactly two skills, both model-invocable; neither repeats what a tool description already says.
+- R21. The extension contributes three skills: `/jira-brief` and `/jira-create`, both model-invocable, and the explicit-only `/ts-jira`; none repeats what a tool description already says.
 - R22. `/jira-brief` produces a developer brief with eight sections in order: problem or goal, context, steps to reproduce with expected and actual result, acceptance criteria, decisions and findings from comments with author and date, current state, open questions and missing information, and sources used. A section the ticket does not cover says "not stated in the ticket"; derived acceptance criteria are marked as derived; it reads relevant attachments through load ticket and lists those it could not read.
 - R23. `/jira-create` guides template choice, asks only for missing fields, shows the drafted summary and description, then calls create ticket.
+- R35. `/ts-jira <command> <arguments>` runs only when the user types it and maps each command (load, view, search, filters, comment, field, move, workflow, templates, upload, check, brief, create) to one tool or skill; without a command, or with an unknown one, it shows its command table and does nothing else.
 
 **Diagnostics and documentation**
 
 - R24. Every former basic `@jira` command (`view`, `load`, `search`, `comment`, `field`, `move`, `create`, `check`) maps to at least one tool or skill.
-- R25. The user manual documents the MCP tools, the two skills, the `http.noProxy` requirement and a manual chat checklist; the Agent Mode tools page keeps only the Bitbucket tools.
+- R25. The user manual documents the MCP tools, the three skills, the `http.noProxy` requirement and a manual chat checklist; the Agent Mode tools page keeps only the Bitbucket tools.
 - R26. A command copies a diagnostic report of the MCP server (state, whether it is offered, request counts, Host and Origin values seen, MCP settings, and the stored-key search) with every key and token removed.
 
 **Tests**
@@ -114,7 +115,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 
 ### Success Criteria
 
-- The manual checklist passes in a Copilot-harness chat on a managed Mac and a managed Windows machine, each with `127.0.0.1` in `http.noProxy`: every R8 tool answers, both skills run, and no Jira Agent Mode tool is listed.
+- The manual checklist passes in a Copilot-harness chat on a managed Mac and a managed Windows machine, each with `127.0.0.1` in `http.noProxy`: every R8 tool answers, all three skills run, and no Jira Agent Mode tool is listed.
 - The model's tool list in a Copilot-harness session contains each Jira capability once.
 
 ### Scope Boundaries
@@ -248,6 +249,7 @@ src/test/mcp*.test.ts
 | U15 | Retire the remaining Jira tools; docs | `src/tools/jiraTools.ts`, `package.json`, `docs/manual/*` | U14 |
 | U16 | `/jira-create` skill and command coverage | `skills/jira-create/SKILL.md`, `src/test/mcpSkillsGuard.test.ts` | U14, U12 |
 | U17 | Numbered list of skipped attachments | `src/mcp/jiraTools/loadTicket.ts`, `src/test/mcpTools.test.ts`, `docs/manual/copilot-tools.md` | U9 |
+| U18 | `/ts-jira` command router | `skills/ts-jira/SKILL.md`, `package.json`, `src/test/mcpSkillsGuard.test.ts` | U14, U16 |
 
 ### PR1 (into the feature branch): MCP server and check connection
 
@@ -528,7 +530,7 @@ Waits on: PR2, merge order only. After PR3, the feature branch merges into `main
 - **Test scenarios:**
   - The guard passes for both shipped skills.
   - Removing the create tool from the catalog makes the coverage guard fail for `create`.
-- **Verification:** tests pass; the packaged `.vsix` contains both skills.
+- **Verification:** tests pass; the packaged `.vsix` contains the skills.
 
 ### U17. Numbered list of skipped attachments
 
@@ -546,6 +548,20 @@ Waits on: PR2, merge order only. After PR3, the feature branch merges into `main
   - The answer names no tool outside the catalog.
 - **Verification:** tests pass; in a Copilot-harness chat, loading a ticket with a binary attachment shows the numbered list, and answering `all` writes the files.
 
+
+### U18. `/ts-jira` command router
+
+- **Goal:** a user can run any Jira tool by typing a command, without the agent choosing between tools and skills.
+- **Requirements:** R21, R35.
+- **Dependencies:** U14, U16.
+- **Files:** `skills/ts-jira/SKILL.md`, `package.json`, `src/test/mcpSkillsGuard.test.ts`, `docs/manual/copilot-tools.md`, `README.md`, `CLAUDE.md`.
+- **Approach:** a short skill with `disable-model-invocation: true`, an `argument-hint` listing the commands and one table row per command; create goes through `/jira-create`, which drafts the ticket with the user first. The skill guard requires model invocation off for `ts-` skills and on for every other skill.
+- **Test scenarios:**
+  - Every catalog tool except create ticket has a row, and every row names a tool or skill that exists.
+  - The argument hint lists the table's commands, in the same order.
+  - A `ts-` skill that leaves model invocation on fails the guard; one that turns it off passes.
+- **Verification:** tests pass; in a Copilot-harness chat, `/ts-jira load PROJ-123` calls load ticket directly.
+
 ---
 
 ## Verification Contract
@@ -553,10 +569,10 @@ Waits on: PR2, merge order only. After PR3, the feature branch merges into `main
 | Check | Command or step | Proves |
 | --- | --- | --- |
 | Types | `npm run compile` | Glue and local MCP types compile against `@types/vscode` 1.95 |
-| Unit and integration | `npm test` | U1–U17 scenarios, guards, docs sync, bundle smoke |
+| Unit and integration | `npm test` | U1–U18 scenarios, guards, docs sync, bundle smoke |
 | E2E | `xvfb-run -a npm run test:e2e` (CI `e2e` job) | U6 through VS Code's MCP client, or the recorded reduced form |
-| Package | `npm run package` | `.vsix` contains `out/extension.js` and both skills |
-| Manual | The checklist in `docs/manual/copilot-tools.md` in a Copilot-harness chat, with a `.vsix` from the feature branch, on a managed Mac and a managed Windows machine | R8 tools answer, both skills run, no duplicate tools, a load with a binary attachment shows the numbered list and `all` fetches it; gates the merge into `main` |
+| Package | `npm run package` | `.vsix` contains `out/extension.js` and all three skills |
+| Manual | The checklist in `docs/manual/copilot-tools.md` in a Copilot-harness chat, with a `.vsix` from the feature branch, on a managed Mac and a managed Windows machine | R8 tools answer, all three skills run, no duplicate tools, a load with a binary attachment shows the numbered list and `all` fetches it; gates the merge into `main` |
 
 ---
 
@@ -565,6 +581,6 @@ Waits on: PR2, merge order only. After PR3, the feature branch merges into `main
 - All three PRs are merged into the feature branch in order, each leaving it with no capability offered twice, and the feature branch is merged into `main` after the manual checklist passed on a managed Mac and a managed Windows machine.
 - `npm run compile`, `npm test` and the CI `e2e` job pass on `main`.
 - No `jira_` entry remains in `contributes.languageModelTools`.
-- The manual documents the MCP tools, both skills, the `http.noProxy` requirement and the checklist.
+- The manual documents the MCP tools, all three skills, the `http.noProxy` requirement and the checklist.
 - No log line, report or test output contains a key or token.
 - Code from abandoned approaches is removed from the diff.

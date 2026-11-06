@@ -29,6 +29,15 @@ function parseFrontmatter(text: string): Record<string, string> | undefined {
   return fields;
 }
 
+/**
+ * Skills only the user starts, by typing them: the `ts-` command skills. They keep model
+ * invocation off, so they never compete with the tools for a plain request; every other skill
+ * keeps it on, so the agent can pick it by itself.
+ */
+function isExplicitOnly(folder: string): boolean {
+  return folder.startsWith('ts-');
+}
+
 /** What is wrong with one skill: its folder name, its SKILL.md text, the tool names that exist. */
 function skillProblems(folder: string, text: string, toolNames: readonly string[]): string[] {
   const problems: string[] = [];
@@ -36,7 +45,9 @@ function skillProblems(folder: string, text: string, toolNames: readonly string[
   if (!front) return ['has no frontmatter'];
   if (front.name !== folder) problems.push(`frontmatter name "${front.name ?? ''}" differs from its folder "${folder}"`);
   if (!front.description) problems.push('has no description');
-  if ('disable-model-invocation' in front) problems.push('sets disable-model-invocation, so the agent cannot run it by itself');
+  const explicitOnly = front['disable-model-invocation'] === 'true';
+  if (isExplicitOnly(folder) && !explicitOnly) problems.push('is a ts- command skill but leaves model invocation on');
+  if (!isExplicitOnly(folder) && 'disable-model-invocation' in front) problems.push('sets disable-model-invocation, so the agent cannot run it by itself');
   for (const tool of new Set(text.match(/\bjira_[A-Za-z_]+/g) ?? [])) {
     if (!toolNames.includes(tool)) problems.push(`names ${tool}, which the MCP server does not offer`);
   }
@@ -94,6 +105,16 @@ describe('the skill guard', () => {
   it('fails a skill that turns off model invocation', () => {
     const text = good.replace('description:', 'disable-model-invocation: true\ndescription:');
     expect(skillProblems('jira-sample', text, catalogNames)).toEqual(['sets disable-model-invocation, so the agent cannot run it by itself']);
+  });
+
+  it('fails a ts- command skill that leaves model invocation on', () => {
+    const text = good.replace('name: jira-sample', 'name: ts-sample');
+    expect(skillProblems('ts-sample', text, catalogNames)).toEqual(['is a ts- command skill but leaves model invocation on']);
+  });
+
+  it('passes a ts- command skill with model invocation off', () => {
+    const text = good.replace('name: jira-sample', 'name: ts-sample').replace('description:', 'disable-model-invocation: true\ndescription:');
+    expect(skillProblems('ts-sample', text, catalogNames)).toEqual([]);
   });
 
   it('fails a skill without frontmatter', () => {
@@ -200,5 +221,33 @@ describe('the /jira-create skill', () => {
     expect(create).toMatch(/Ask only for what you cannot take from the request/);
     expect(create).toMatch(/Never pick an issue type yourself/);
     expect(create).toMatch(/Show the user the project, the template or issue type, the summary and the description/);
+  });
+});
+
+describe('the /ts-jira command skill', () => {
+  const router = readFileSync(resolve(root, 'skills/ts-jira/SKILL.md'), 'utf-8');
+  /** The table rows: the command word and what the row does. */
+  const rows = [...router.matchAll(/^\| ([a-z]+)\b[^|]*\| ([^|]+) \|$/gm)].map(m => ({ command: m[1], action: m[2] }));
+
+  it('has a row for every MCP tool, so a new tool cannot be forgotten', () => {
+    const called = rows.flatMap(r => r.action.match(/\bjira_[a-z_]+/g) ?? []);
+    // Creating goes through the jira-create skill, which drafts the ticket with the user first.
+    const direct = catalogNames.filter(name => name !== CREATE_TICKET_TOOL);
+    expect([...new Set(called)].sort()).toEqual([...direct].sort());
+  });
+
+  it('hands brief and create to skills that exist', () => {
+    const followed = rows.flatMap(r => [...r.action.matchAll(/follow the `([a-z-]+)` skill/g)].map(m => m[1]));
+    expect(followed.sort()).toEqual(['jira-brief', 'jira-create']);
+    for (const skill of followed) expect(skillNames, skill).toContain(skill);
+  });
+
+  it('lists every command of the table in its argument hint, in the same order', () => {
+    const hint = parseFrontmatter(router)?.['argument-hint'] ?? '';
+    expect(hint.split(' ')[0].split('|')).toEqual(rows.map(r => r.command));
+  });
+
+  it('shows the table instead of guessing when the command is missing or unknown', () => {
+    expect(router).toContain('No command, or one not in the table: show the table and stop.');
   });
 });
