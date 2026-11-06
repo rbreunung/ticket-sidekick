@@ -97,7 +97,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 
 - AE1. **Covers R4, R5.** Given VS Code 1.101 or later and `http.noProxy` lacking `127.0.0.1`, when VS Code starts, then no server listens, no MCP server is offered, and the notice appears; when the user adds the entry, the server starts and the tools appear without a restart.
 - AE2. **Covers R16.** Given the branch `feature/PROJ-123-login`, when the agent calls view ticket without a key, then it returns PROJ-123 and states that the key came from the branch; on `main` it answers that the branch holds no key.
-- AE3. **Covers R12.** Given a ticket with `design.pdf` (binary) and `log.txt`, when load runs without a list, then `log.txt` is written and `design.pdf` is listed as skipped; with `["design.pdf"]` both are written, along with `ticket.md` and `comments.md`.
+- AE3. **Covers R12.** Given a ticket with `heap-dump.bin` (binary) and `log.txt`, when load runs without a list, then `log.txt` is written and `heap-dump.bin` is listed as skipped; with `["heap-dump.bin"]` both are written, along with `ticket.md` and `comments.md`.
 - AE4. **Covers R13.** Given no cached workflow and a target two transitions away, when move ticket runs, then it discovers the workflow, moves through both steps and names them in its result.
 - AE5. **Covers R19.** Given a comment written with a Markdown heading, a list and a table, when add comment runs, then Jira receives `h2.`, `*` list items and a `||`-headed table.
 - AE6. **Covers R20.** Given no Jira token, when any tool runs, then it answers with the setup hint naming the missing token.
@@ -406,7 +406,7 @@ Waits on: PR1, merge order only.
 - **Execution note:** first confirm `loadTicketCore.test.ts` passes as it is, then move the core and switch the test's checks from the mocked `vscode.workspace.fs` to an in-memory writer, keeping the same scenarios and expected results.
 - **Test scenarios:**
   - Covers AE3. Without a list, the text attachment is written and the binary one is listed as skipped with size and reason.
-  - Covers AE3. With `["design.pdf"]`, both are written along with the ticket files.
+  - Covers AE3. With `["heap-dump.bin"]`, both are written along with the ticket files.
   - A named attachment that does not exist is reported, and the rest of the load still happens.
   - An attachment over the size limit is reported and not written.
   - Attachments named `../../evil.txt` and `..\..\evil.txt` are skipped as unsafe filenames, nothing is written outside the attachments folder, and the other attachments are still written.
