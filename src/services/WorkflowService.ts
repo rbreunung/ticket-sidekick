@@ -231,8 +231,8 @@ export type TransitionResolution =
  * Resolves and applies a Jira ticket transition to `targetStatus`: already-there short-circuit,
  * then a direct transition if one exists, then a cached multi-hop workflow path
  * (`loadWorkflowCache`/`findPath`) as a fallback. Shared by `@jira`'s chat `'transition'`
- * operation and the `jira_transitionTicket` Language Model tool — previously each reimplemented
- * this same lookup independently.
+ * operation and the MCP move ticket tool (`src/mcp/jiraTools/moveTicket.ts`), so both resolve a
+ * move the same way.
  */
 export async function resolveAndApplyTransition(
   jiraClient: IJiraClient,

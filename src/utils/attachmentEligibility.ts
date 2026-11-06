@@ -19,8 +19,7 @@ export const DOWNLOADABLE_EXTENSIONS = new Set([
 ]);
 export const ATTACHMENT_SIZE_LIMIT = 100 * 1024 * 1024;
 
-// upload-attachment-to-ticket plan (U2/U3): a local file being uploaded (chat flow or
-// jira_uploadAttachment) has no declared MIME type the way an email attachment does (see
+// A local file being uploaded (the chat flow or the MCP upload tool) has no declared MIME type the way an email attachment does (see
 // emlParser.ts's `att.mimeType ?? 'application/octet-stream'`), so its Content-Type is inferred
 // from its extension instead, with the same generic fallback. Covers the extensions
 // `DOWNLOADABLE_EXTENSIONS` above already treats as known document/text/archive types. Shared by

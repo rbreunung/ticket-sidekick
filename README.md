@@ -9,7 +9,7 @@ Two independent GitHub Copilot Chat participants — use one or both:
 
 Neither participant requires the other to be configured.
 
-Most operations are also available as tools an agent can call without you typing `@jira`/`@bitbucket`. The Jira tools that read (view, find, filters, workflow, templates, load) come from Ticket Sidekick's own MCP server — see [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md). The Jira tools that change a ticket (comment, update a field, create, move, upload) and the Bitbucket tools are GitHub Copilot **Agent Mode** tools (`jira_*`, `bitbucket_*`) — see [Agent Mode Tools](docs/manual/agent-mode-tools.md) for the list and which tools ask before changing anything.
+Most operations are also available as tools an agent can call without you typing `@jira`/`@bitbucket`. The Jira tools (view, find, filters, workflow, templates, load, move, create, comment, update a field, upload) come from Ticket Sidekick's own MCP server — see [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md). The Bitbucket tools are GitHub Copilot **Agent Mode** tools (`bitbucket_*`) — see [Agent Mode Tools](docs/manual/agent-mode-tools.md) for the list and which tools ask before changing anything.
 
 ---
 

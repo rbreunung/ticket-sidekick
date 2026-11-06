@@ -2058,8 +2058,8 @@ export function createJiraParticipant(
           }
           const targetStatus = intent.targetStatus;
           const transWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-          // Same resolution algorithm `jira_transitionTicket` uses (src/services/WorkflowService.ts) —
-          // R3: one implementation, reused by both the chat flow and the Language Model tool.
+          // Same resolution the MCP move ticket tool uses (src/services/WorkflowService.ts), so the
+          // chat flow and the tool move a ticket the same way.
           const transResult = await resolveAndApplyTransition(
             jiraClient, ticketService, transWorkspaceRoot, ticketKey!, targetStatus, intent.resolution ?? undefined,
           );

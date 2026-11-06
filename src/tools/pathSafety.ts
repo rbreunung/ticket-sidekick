@@ -32,8 +32,7 @@ export function isSafeFilename(value: string): boolean {
 
 /**
  * Security fix (upload-attachment-to-ticket plan, code-review P0/P1): an explicit `filePath` for
- * `@jira upload`/`jira_uploadAttachment` is either LLM-supplied (Agent Mode, autonomously chosen
- * from a prompt) or free-text-typed in chat — either way it's untrusted input that ends up read
+ * `@jira upload` is free text typed in chat — like an agent-supplied path, it's untrusted input that ends up read
  * off the local filesystem and sent to Jira, so an attacker-influenced prompt could otherwise
  * exfiltrate an arbitrary file the VS Code process can read (e.g. `~/.ssh/id_rsa`, `~/.aws/credentials`).
  * Restricts explicit upload paths to: (1) resolving inside the user's home directory, via
