@@ -12,10 +12,10 @@ execution: code
 ## Goal Capsule
 
 - **Objective:** In a Copilot-harness chat, where `@jira` is not available, a developer can view, find, load, comment on, update, move and create Jira tickets, check the connection, and get a structured developer brief of a ticket, through one set of tools that is never offered twice. `@jira` keeps working unchanged in the Local harness.
-- **Means:** an MCP server inside the extension on a key-protected `127.0.0.1` port (KTD1), carrying 12 Jira tools that replace the 14 Agent Mode Jira tools, plus two skills (KTD11) and an inline panel for skipped attachments (KTD15). Direction settled in [`docs/architecture/copilot-harness-migration.md`](../architecture/copilot-harness-migration.md), decision log §11.
+- **Means:** an MCP server inside the extension on a key-protected `127.0.0.1` port (KTD1), carrying 12 Jira tools that replace the 14 Agent Mode Jira tools, plus two skills (KTD11). Direction settled in [`docs/architecture/copilot-harness-migration.md`](../architecture/copilot-harness-migration.md), decision log §11.
 - **Authority:** Product Contract requirements win on behavior; KTDs win on mechanism; units override neither.
 - **Execution profile:** one feature branch, built in three review steps (PR1, PR2, PR3, each a pull request into the feature branch, merged in order; see Implementation Units), then one merge of the feature branch into `main`. `main` therefore never holds a half-moved tool set and stays releasable throughout. Each moved tool is removed as an Agent Mode tool in the same step that adds it to MCP, so no state offers a tool twice. The feature branch starts from `main`, not from the prototype branch; it brings along the architecture document and the two plans, but not `src/prototype/` or the prototype manual page.
-- **Stop conditions:** stop and ask if a moved tool cannot keep a safeguard its Agent Mode version has (for example the never-guess issue type or the duplicate-comment guard), if VS Code refuses the MCP server definition the extension provides, if a load panel with nothing to show still leaves a visible frame in the chat, if either harness lists the panel's tool to the model or drops the panel's tool call or context note, or if the manual checklist fails on a managed Mac or a managed Windows machine.
+- **Stop conditions:** stop and ask if a moved tool cannot keep a safeguard its Agent Mode version has (for example the never-guess issue type or the duplicate-comment guard), if VS Code refuses the MCP server definition the extension provides, or if the manual checklist fails on a managed Mac or a managed Windows machine.
 - **Finished by:** `ce-work` implements, verifies and opens each PR into the feature branch; the user reviews and merges them, runs the manual checklist with a `.vsix` built from the feature branch on a managed Mac and a managed Windows machine, and then merges the feature branch into `main`.
 
 ---
@@ -24,7 +24,7 @@ execution: code
 
 ### Summary
 
-The extension runs its own MCP server on `127.0.0.1` whenever `127.0.0.1` is in `http.noProxy`. It offers 12 Jira tools: view, find, list filters, load, move, workflow, check connection, list templates, create, comment, update field and upload attachment. The 14 Jira Agent Mode tools are removed as their replacements land. Two skills, `/jira-brief` and `/jira-create`, add the workflows a tool description cannot carry. When load ticket skips attachments it could still fetch, its chat result carries an inline panel with a Load button per file and a Download all button. Users without the proxy entry are told at every start how to enable the tools.
+The extension runs its own MCP server on `127.0.0.1` whenever `127.0.0.1` is in `http.noProxy`. It offers 12 Jira tools: view, find, list filters, load, move, workflow, check connection, list templates, create, comment, update field and upload attachment. The 14 Jira Agent Mode tools are removed as their replacements land. Two skills, `/jira-brief` and `/jira-create`, add the workflows a tool description cannot carry. When load ticket skips attachments it could still fetch, the agent shows them to the user as a numbered list to pick from. Users without the proxy entry are told at every start how to enable the tools.
 
 ### Problem Frame
 
@@ -46,10 +46,9 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 - **Free text is written as Markdown and converted to Jira wiki markup, as `@jira` does.** Governs R19. (session-settled: user-directed — chosen over tools that take wiki markup as today.)
 - **Only two skills, both model-invocable: `/jira-brief` and `/jira-create`.** Governs R21, R22, R23. (session-settled: user-directed — chosen over one skill per `@jira` command; MCP prompts are not available in the Copilot harness.)
 - **Tests add an e2e check through VS Code's own MCP client; a real-Jira e2e is a follow-up.** Governs R27, R28. (session-settled: user-directed — chosen over an activation-only e2e or including the real-Jira workflow in this phase.)
-- **The user picks skipped attachments to fetch after the load answer, with buttons in the chat.** Governs R30, R31. (session-settled: user-directed — chosen over a question during the load or leaving it to the agent: the user can click whenever the file turns out to matter.)
-- **The buttons live in an inline panel under the load result.** Governs R30–R32. (session-settled: user-directed — chosen over a canvas side panel, which needs `chat.canvases.enabled`, the launcher folder in the Copilot home and multi-window handling for one list of buttons.)
-- **A click tells the agent through a quiet context note.** Governs R33. (session-settled: user-directed — chosen over a visible chat message or telling the agent nothing: the agent should know the file exists without the chat filling up.)
-- **The panel lists only skipped attachments and ends with Download all.** Governs R31. (session-settled: user-directed — chosen over listing every attachment: the text answer already reports what was written.)
+- **The user picks skipped attachments to fetch after the load answer, from a numbered list the agent shows.** Governs R30, R31. (session-settled: user-directed — chosen over an inline panel with Load buttons, which VS Code attaches to every load result and which, after a window reload in the Copilot harness, shows a loading error until the MCP server reconnects; also over a question during the load or leaving it to the agent.)
+- **The agent is not told separately what was loaded; it learns it from the answer of the load it makes.** Governs R31. (session-settled: user-directed — chosen over a context note from a panel, which the Copilot harness drops: VS Code passes a generic text attachment from an MCP App on to Local agents only.)
+- **A write Jira does not answer within 30 seconds is reported as possibly saved.** Governs R29. (session-settled: user-directed — chosen over no time limit on writes, which leaves a hung call without feedback, or a 2-minute limit, which surfaces a hang later.)
 
 ### Requirements
 
@@ -78,15 +77,12 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 - R18. Add comment, update field and upload attachment keep today's behavior: the duplicate-comment guard, the supported field list with name resolution, and the size limit. Upload accepts only files that, after resolving symlinks, lie inside an open workspace folder (wherever that folder is) and have no dotfile or dotfolder segment; this deliberately narrows today's home-folder rule for MCP, while `@jira upload` keeps today's rule.
 - R19. Free-text inputs (comment text, create description, update-field text values) are taken as Markdown and sent to Jira as wiki markup through the same conversion `@jira` uses.
 - R20. Every tool that fails because Jira is not configured answers with the setup hint `@jira` gives, never a raw error.
-- R29. When a Jira call fails, a tool tells the agent only the HTTP status and a short reason, capped in length, never Jira's or a proxy's response body; the full error text goes to the Ticket Sidekick Output channel for diagnosis. Every Jira call made by an MCP tool times out after about 30 seconds and answers that Jira did not respond in time.
+- R29. When a Jira call fails, a tool tells the agent only the HTTP status and a short reason, capped in length, never Jira's or a proxy's response body; the full error text goes to the Ticket Sidekick Output channel for diagnosis. Every Jira call made by an MCP tool times out after about 30 seconds and answers that Jira did not respond in time, except an attachment download, which times out after about 2 minutes and fails only that file. A write that times out is answered with a warning that the change may still have been saved and that the ticket should be checked before trying again, and an identical write within the following minute is skipped.
 
-**Load buttons for skipped attachments**
+**Skipped attachments**
 
-- R30. When load ticket skips at least one attachment that a second request could fetch (a type not downloaded by default, or a failed download), its result shows an inline panel in the chat; with nothing fetchable, no panel appears.
-- R31. The panel gives each fetchable skipped attachment a Load button, shows too-large and unsafe-name skips as plain lines with their reason, and ends with one Download all button for every fetchable attachment.
-- R32. A click fetches only the chosen attachments into `.jira-context/<KEY>/attachments/`, leaves `ticket.md` and `comments.md` as they are, and the button then shows Loaded or the error.
-- R33. After a successful click the panel adds a note to the chat's context naming each loaded file and its path, without posting a visible chat message.
-- R34. The panel adds no tool to the agent's tool list, and load ticket's text answer keeps its re-fetch hint, so agents and chat clients that show no panel still work.
+- R30. When load ticket skips at least one attachment that a second request could fetch (a type not downloaded by default, or a failed download), its answer lists those attachments numbered, each name once, and lists too-large and unsafe-name skips apart, without numbers, with their reason.
+- R31. The answer tells the agent to show the user the numbered list as written, ask which to download (numbers, or all), and then call load ticket with the chosen names; it does not download them without asking unless the user's request already named them.
 
 **Skills**
 
@@ -114,7 +110,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 - AE5. **Covers R19.** Given a comment written with a Markdown heading, a list and a table, when add comment runs, then Jira receives `h2.`, `*` list items and a `||`-headed table.
 - AE6. **Covers R20.** Given no Jira token, when any tool runs, then it answers with the setup hint naming the missing token.
 - AE7. **Covers R22.** Given a ticket whose description has no acceptance criteria, when `/jira-brief` runs, then the acceptance criteria section is marked derived or says "not stated in the ticket", and the sources section lists the comments and attachments used.
-- AE8. **Covers R30–R33.** Given a ticket with `design.zip` (not downloaded by default), `dump.bin` (download failed), `huge.iso` (300 MB) and `../../evil.txt`, when load ticket runs, then the panel shows Load buttons for `design.zip` and `dump.bin` and plain lines for the other two; Download all writes both into `.jira-context/<KEY>/attachments/`, and on the user's next message the agent knows both paths.
+- AE8. **Covers R30, R31.** Given a ticket with `design.dat` (not downloaded by default), `dump.log` (download failed), `huge.iso` (300 MB) and `../../evil.txt`, when load ticket runs, then its answer numbers `design.dat` and `dump.log`, lists the other two apart with their reasons, and tells the agent to ask the user which to download; when the user answers "all", the agent calls load ticket with both names and they are written into `.jira-context/<KEY>/attachments/`.
 
 ### Success Criteria
 
@@ -125,7 +121,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 
 - Deferred for later: the Bitbucket tools (they stay Agent Mode tools in this phase), the imports, cleanup, `/security-report`, the canvas board and the session engine.
 - Deferred for later: switching `@jira`'s own branch lookup to the explicit-folder lookup of KTD7.
-- Considered and not built: an Agent Mode fallback when MCP cannot run (rejected: it reintroduces duplicates); a concise/full output switch (rejected: results follow settings); MCP prompts as entry points (not supported by the Copilot harness, per `src/vs/platform/agentHost/test/node/e2e/suites/mcpSideChannelSuite.ts`); a canvas side panel for the load buttons (see Key Decisions); an Open button in the load panel (inline views may open only web links); listing already loaded attachments in the panel; merging the context notes of two load panels clicked before the next message (VS Code keeps one note per MCP server, so only the later panel's note reaches the agent; the files are still written and named in that panel; revisit if users load several tickets in one chat turn).
+- Considered and not built: an Agent Mode fallback when MCP cannot run (rejected: it reintroduces duplicates); a concise/full output switch (rejected: results follow settings); MCP prompts as entry points (not supported by the Copilot harness, per `src/vs/platform/agentHost/test/node/e2e/suites/mcpSideChannelSuite.ts`); an inline panel (MCP App) with Load buttons under the load result, built as a probe and removed: VS Code ties the panel to the tool definition, so every load result gets one, and after a window reload in the Copilot harness each shows a loading error until the server reconnects; its context note did not reach the agent there either (revisit if VS Code attaches views per result and forwards app context notes to the Copilot harness).
 
 ### Deferred to Follow-Up Work
 
@@ -141,7 +137,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 
 - Decision log and test results: [`docs/architecture/copilot-harness-migration.md`](../architecture/copilot-harness-migration.md) §11; prototype plan [`docs/plans/2026-11-05-1230-feat-copilot-harness-localhost-prototype-plan.md`](2026-11-05-1230-feat-copilot-harness-localhost-prototype-plan.md); prototype code on the branch `claude/intelligent-planck-gue5hu` under `src/prototype/`.
 - Today's tools: `src/tools/jiraTools.ts` (14 Jira tools, safeguards), `src/participant/jira/loadHandler.ts` (`loadTicketToWorkspace`, uses `vscode.workspace.fs`), `src/participant/jira/ticketContext.ts` (`resolveTicketFromBranch`, runs `git` without a working directory), `src/participant/JiraParticipant.ts` (`@jira check`), `src/utils/markdownToJiraWiki.ts`.
-- VS Code: extension skills via `contributes.chatSkills` (VS Code docs, agent skills); extension skills are synced to the Agent Host (`agentHostLocalCustomizations.ts`); MCP tools are deferred and found through tool search in the Copilot harness (Agent Host `AGENTS.md`); VS Code registers MCP tools with its language-model tool service (`mcpLanguageModelToolContribution.ts`); `workbench.mcp.startServer` (`mcpCommandIds.ts`); inline MCP App views can call the server's tools on a click (`tools/call`, for tools visible to apps) and add context for the model (`ui/update-model-context`) (`chatMcpAppModel.ts`, `mcpToolCallUI.ts`); the prototype's inline ticket view on the prototype branch (`src/prototype/mcpEndpoint.ts`) shows the pattern in this codebase.
+- VS Code: extension skills via `contributes.chatSkills` (VS Code docs, agent skills); extension skills are synced to the Agent Host (`agentHostLocalCustomizations.ts`); MCP tools are deferred and found through tool search in the Copilot harness (Agent Host `AGENTS.md`); VS Code registers MCP tools with its language-model tool service (`mcpLanguageModelToolContribution.ts`); `workbench.mcp.startServer` (`mcpCommandIds.ts`); an MCP App view is attached to a tool's definition, not to a result (`mcpLanguageModelToolContribution.ts`), and the Copilot harness drops generic text attachments such as an app's context note (`agentHostSessionHandler.ts`, `_convertVariableToAttachment`).
 
 ---
 
@@ -151,7 +147,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 
 - KTD1. **Product code lives in `src/mcp/`: vscode-free modules plus one glue file, `src/mcp/register.ts`.** The ported modules are the request guard, keys, `http.noProxy` check, localhost server, MCP server builder and report from `src/prototype/`. The prototype branch is not merged; its code is copied and trimmed. Governs the mechanism of R3, R6, R26.
 - KTD2. **One bearer key, no canvas key.** The canvas route and its key leave with the canvas (deferred), so the guard only knows `/mcp`. A later canvas phase adds its route back.
-- KTD3. **A single tool catalog drives the server, the docs-sync test and the skill guard.** `src/mcp/jiraTools/catalog.ts` exports each tool's name, title, description, input schema, read-only or destructive annotation and handler. The server registers from it, `userDocsSync.test.ts` checks the manual against it, and the skill guard checks skill text against it. The load panel's tool sits outside this catalog (KTD15).
+- KTD3. **A single tool catalog drives the server, the docs-sync test and the skill guard.** `src/mcp/jiraTools/catalog.ts` exports each tool's name, title, description, input schema, read-only or destructive annotation and handler. The server registers from it, `userDocsSync.test.ts` checks the manual against it, and the skill guard checks skill text against it.
 - KTD4. **Handlers reuse today's services and formatters instead of reimplementing them.** `TicketService`, `WorkflowService`, `TemplateService`, `FieldResolver`, `attachmentEligibility`, `pathSafety`, `RecentCallGuard` and the pure message builders in `src/participant/session/toolMessages.ts` stay the single implementation; the MCP handlers are thin, as `jiraTools.ts` is today. Any builder text that names a tool takes the name from the catalog (KTD3), so no message an agent reads points at a removed or renamed tool; skipped attachments are fetched by calling load ticket with their names.
 - KTD5. **Tool names keep the `jira_` prefix in snake case** (`jira_view_ticket`, `jira_find_tickets`, …), so a later Bitbucket phase can share the same server without name clashes.
 - KTD6. **The load core moves to Node `fs` behind a small writer interface,** so it becomes vscode-free and testable. `@jira load` and the MCP load tool both use it; `.gitignore` handling for `.jira-context/` is kept.
@@ -163,7 +159,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 - KTD12. **The e2e test drives VS Code's own MCP client.** It writes `http.noProxy` and tool auto-approval into the throwaway profile in `src/e2e/runTest.ts`, starts the server through VS Code, waits for the tools in `vscode.lm.tools`, invokes check connection with `vscode.lm.invokeTool`, then removes the entry and expects the tools to disappear. If VS Code does not expose MCP tools to extensions that way, the test is reduced to activation and server lifecycle, and the plan's coverage note says so.
 - KTD13. **The diagnostic report becomes `Ticket Sidekick: Copy MCP diagnostics`,** without the prototype's rendezvous and launcher sections, keeping the stored-key search over the Copilot home, VS Code logs and VS Code storage, and adding the restart, client, proxy-evaluation and tool-outcome sections of U5.
 - KTD14. **One shared wrapper turns Jira failures into tool answers** for every MCP Jira tool, from the first read tool on: a timeout of about 30 seconds on each Jira read and a longer one (about 2 minutes) on each attachment download, where a download that times out is reported as a failed download for that file only, a short status-and-reason answer for the agent, and the full error logged through `logDiag`. The check connection tool from PR1 moves onto it in the same step.
-- KTD15. **The load panel is an MCP App on load ticket, and its buttons call one app-only tool.** Load ticket's definition points at an HTML resource of type `text/html;profile=mcp-app` through `_meta.ui.resourceUri`, and its result adds the skipped list as `structuredContent` next to the unchanged text answer. A click calls `jira_load_attachments`, which carries `_meta.ui.visibility: ['app']`, so the model never sees it, and which, like load ticket, carries neither annotation (KTD8). Every catalog tool is marked model-only, so the panel cannot call a write tool without the harness approval. It lives in its own app-tool list that the server registers but the docs-sync test does not require on the tools page; the skill guard treats its name as one a skill may not use. Governs the mechanism of R30–R34. (session-settled: user-directed — an inline panel chosen over a canvas side panel; the tool is app-only rather than an attachments-only switch on load ticket, which R12 rules out, or a click that re-runs load ticket, which would rewrite `ticket.md` and `comments.md` against R32.)
+- KTD15. **Skipped attachments are offered through load ticket's own answer text.** The answer numbers the fetchable skipped attachments with the same fetchable rule that decides what a second request can get (`not-default-type`, `download-failed`), and its closing instruction asks the agent to let the user pick. A number maps back to a name in the same answer, so the agent passes names, never numbers, to load ticket. Governs the mechanism of R30, R31.
 
 ### High-Level Technical Design
 
@@ -204,27 +200,6 @@ stateDiagram-v2
   Running --> Running: Jira config changes (tools re-read config per call)
 ```
 
-Load panel click (KTD15):
-
-```mermaid
-sequenceDiagram
-  participant A as Agent
-  participant H as Chat host
-  participant V as Load panel
-  participant S as MCP server
-  A->>H: call jira_load_ticket
-  H->>S: tools/call jira_load_ticket
-  S-->>H: text answer and skipped list
-  H->>S: resources/read load panel
-  H->>V: render with the tool result
-  V->>V: buttons, or zero height when nothing is fetchable
-  Note over V: user clicks Load or Download all
-  V->>H: tools/call jira_load_attachments
-  H->>S: tools/call jira_load_attachments
-  S-->>V: written paths or the error per file
-  V->>H: ui/update-model-context with every file loaded so far
-  H-->>A: the note is in context on the next message
-```
 
 ### Output Structure
 
@@ -240,8 +215,6 @@ src/mcp/
     catalog.ts            the 12 tool definitions
     viewTicket.ts  findTickets.ts  loadTicket.ts  moveTicket.ts  workflow.ts
     templates.ts  createTicket.ts  addComment.ts  updateField.ts  uploadAttachment.ts
-    loadPanel.ts          the load panel's HTML resource and its pure models
-    loadAttachments.ts    the panel's app-only tool
 skills/
   jira-brief/SKILL.md
   jira-create/SKILL.md
@@ -251,8 +224,6 @@ src/test/mcp*.test.ts
 ### Assumptions
 
 - MCP tools served this way appear in VS Code's tool registry under names VS Code derives from the server and tool names; the e2e unit confirms the exact form first (KTD12).
-- VS Code renders an MCP App view on every load ticket result once the definition names a resource, at 300 px until the view reports its height, so "no panel" (R30) relies on a view that reports zero height at once leaving no visible frame. U17 checks this before building the panel (stop condition).
-- Both harnesses keep a tool with `_meta.ui.visibility: ['app']` out of the model's tool list. VS Code's MCP client parses that field into the tool's visibility (`mcpServer.ts`), which covers the Local harness; the Copilot harness lists MCP tools through its own runtime, so the manual checklist confirms it there (stop condition).
 
 ---
 
@@ -276,7 +247,7 @@ src/test/mcp*.test.ts
 | U14 | Write tools | `moveTicket.ts`, `createTicket.ts`, `addComment.ts`, `updateField.ts`, `uploadAttachment.ts` | U10, U13 |
 | U15 | Retire the remaining Jira tools; docs | `src/tools/jiraTools.ts`, `package.json`, `docs/manual/*` | U14 |
 | U16 | `/jira-create` skill and command coverage | `skills/jira-create/SKILL.md`, `src/test/mcpSkillsGuard.test.ts` | U14, U12 |
-| U17 | Load panel for skipped attachments | `src/mcp/jiraTools/loadPanel.ts`, `loadAttachments.ts`, `loadTicket.ts`, `src/mcp/mcpServer.ts`, `src/participant/jira/loadCore.ts` | U9 |
+| U17 | Numbered list of skipped attachments | `src/mcp/jiraTools/loadTicket.ts`, `src/test/mcpTools.test.ts`, `docs/manual/copilot-tools.md` | U9 |
 
 ### PR1 (into the feature branch): MCP server and check connection
 
@@ -496,7 +467,7 @@ Waits on: PR1, merge order only.
   - Covers AE7. The skill text names all eight sections in order and the "not stated in the ticket" rule.
 - **Verification:** tests pass; the packaged `.vsix` contains `skills/jira-brief/SKILL.md`.
 
-### PR3 (into the feature branch): Write tools, `/jira-create` and the load panel
+### PR3 (into the feature branch): Write tools, `/jira-create` and skipped attachments
 
 Waits on: PR2, merge order only. After PR3, the feature branch merges into `main` once the manual checklist passes (Verification Contract).
 
@@ -559,51 +530,21 @@ Waits on: PR2, merge order only. After PR3, the feature branch merges into `main
   - Removing the create tool from the catalog makes the coverage guard fail for `create`.
 - **Verification:** tests pass; the packaged `.vsix` contains both skills.
 
-### U17. Load panel for skipped attachments
+### U17. Numbered list of skipped attachments
 
-- **Goal:** load ticket's result shows Load buttons for the skipped attachments that can still be fetched, and a click fetches them and tells the agent.
-- **Requirements:** R30, R31, R32, R33, R34; KTD15, KTD14, KTD8.
+- **Goal:** the user picks the skipped attachments to fetch from a numbered list the agent shows after a load.
+- **Requirements:** R30, R31; KTD15.
 - **Dependencies:** U9.
-- **Files:**
-  - `src/mcp/mcpServer.ts`: optional `_meta` on a tool definition, a handler answer that may carry `structuredContent`, and resources registered from a resource list.
-  - `src/mcp/jiraTools/loadPanel.ts` (new, vscode-free): the resource URI, the HTML builder with the inline view script, and the pure models (panel rows from a load result, the context note from the files loaded so far).
-  - `src/mcp/jiraTools/loadAttachments.ts` (new): the app-only tool.
-  - `src/mcp/jiraTools/loadTicket.ts`: `_meta.ui.resourceUri` and the `structuredContent`.
-  - `src/mcp/jiraTools/catalog.ts`: the app-tool list and the resource list beside `JIRA_TOOLS`.
-  - `src/participant/jira/loadCore.ts`: an entry point that downloads named attachments only.
-  - `src/e2e/suite/*`, `docs/manual/copilot-tools.md`, `CLAUDE.md`.
-  - Tests: `src/test/mcpLoadPanel.test.ts` (new), `src/test/mcpTools.test.ts`, `src/test/loadTicketCore.test.ts`, `src/test/mcpSkillsGuard.test.ts`, `src/test/userDocsSync.test.ts`.
+- **Files:** `src/mcp/jiraTools/loadTicket.ts`, `src/test/mcpTools.test.ts`, `docs/manual/copilot-tools.md`.
 - **Approach:**
-  1. Load ticket's `structuredContent` carries the ticket key and each skipped attachment's name, size, reason and whether it is fetchable. Use the same fetchable rule (`not-default-type`, `download-failed`) that already builds the re-fetch hint, so the panel and the text never disagree. The text answer stays as it is (R34).
-  2. `jira_load_attachments` takes a ticket key and a list of names. It reads the ticket's current attachment list and downloads through the new load-core entry point, which applies the same filename safety, containment, size limit and duplicate rule as a full load and never writes `ticket.md`, `comments.md` or `.gitignore`. It runs through `runJiraTool`, so the setup hint, the status-only errors and the download timeout apply unchanged. Its answer lists each written file with its absolute path and each failure with its reason, as text and as `structuredContent`.
-  3. Every tool in `JIRA_TOOLS` is registered with `_meta.ui.visibility: ['model']`, so the panel can call only `jira_load_attachments`. VS Code's default visibility lets a view call any tool without approval (`mcpToolCallUI.ts`), which would bypass the harness approval that R7 relies on for writes.
-  4. The view script follows the prototype's handshake (`ui/initialize`, then `ui/notifications/initialized`) and renders on `ui/notifications/tool-result`. Every Jira-sourced string reaches the page as text, never as HTML. The host's theme variables are used when it sends them.
-  5. A button is disabled while its call runs. A failed button shows the error and can be clicked again. Download all sends only the names not yet Loaded and updates each row to Loaded or its error.
-  6. The view reports a height of 0 through `ui/notifications/size-changed` as soon as its script starts, because VS Code shows each view at 300 px until it reports a height (`chatMcpAppModel.ts`). It reports its content height only once a tool result with at least one fetchable row arrives. A result with `isError`, or without a skipped list in `structuredContent` (the setup hint, a timeout, a branch without a key), renders nothing, unlike the prototype view's text fallback.
-  7. After each successful call the view sends `ui/update-model-context` with one text note naming every file loaded so far in this panel and its path. VS Code replaces the previous note from the same MCP server and attaches the latest one to the user's next message, so the note must be cumulative.
-  8. VS Code discards the view's frame when it scrolls out of sight and renders it again from the original load result. The view therefore keeps each row's state and the note's file list in its webview storage, keyed by the tool call id the host sends, and restores them on render. A row still running when the frame was discarded returns to Load, since a repeat download overwrites the same file. Without storage the panel starts fresh; the files on disk are unaffected.
-- **Execution note:** before building the panel, serve a stub view on load ticket in VS Code 1.145, in the Local and the Copilot harness. The stub reports height 0 at start, reads one value from `structuredContent`, calls a stub app-only tool on a click, and sends one context note. Watch a fresh load result as it first appears, again after scrolling it away and back, and after a window reload. Stop and ask if a visible frame remains, the value or the call does not arrive, or the agent does not see the note on the next message, because R30–R33 cannot then be met as written.
-- **Patterns to follow:** the prototype's `registerResource` and `_meta.ui.resourceUri` pairing and its view handshake (`src/prototype/mcpEndpoint.ts`, `ticketView.ts` on the prototype branch); `defineTool` and `runJiraTool` for the app tool; the in-memory writer of `loadTicketCore.test.ts`.
+  1. Replace load ticket's re-fetch hint with the numbered list, the separate "Not downloadable" list and the closing instruction (KTD15). A name skipped twice is numbered once.
+  2. Leave the rest of the answer, and the load itself, as they are.
 - **Test scenarios:**
-  - Covers AE8. Load ticket with `design.zip` (not a default type), `dump.bin` (download fails), `huge.iso` (300 MB) and `../../evil.txt` puts `design.zip` and `dump.bin` in `structuredContent` as fetchable and the other two as not fetchable with their reasons. The text answer still carries the re-fetch hint for the two fetchable names.
-  - Covers AE8. `jira_load_attachments` with `["design.zip", "dump.bin"]` writes both into `.jira-context/<KEY>/attachments/`, writes no `ticket.md` or `comments.md`, and answers with both absolute paths.
-  - One name of two fails to download: the other is still written, and the answer gives that file's error.
-  - A name the ticket does not have, `../../evil.txt` sent directly, and an attachment over the size limit are each refused with their reason, and nothing is written.
-  - With Jira not configured, the app tool answers with the setup hint.
-  - Over the socket, `tools/list` shows load ticket with the resource URI, every catalog tool with model-only visibility and the app tool with app-only visibility, and `resources/read` returns the HTML with type `text/html;profile=mcp-app`.
-  - In the e2e suite, `jira_load_ticket` is in `vscode.lm.tools` and `jira_load_attachments` is not (R34).
-  - The skill guard fails when a skill names `jira_load_attachments`, and the docs-sync test passes without it on the tools page.
-  - Covers AE8. View script in a `node:vm` context with a minimal fake page and message channel: two fetchable and two plain rows render Load buttons for the fetchable two, plain lines for the others, and one Download all.
-  - View script: a Load click sends one `tools/call` with that name, and a success turns the button into Loaded and sends one context note.
-  - View script: an error answer shows the error on the button, sends no context note, and a second click on that button calls the tool again.
-  - View script: a second success sends a note that names both files.
-  - View script: after one file is Loaded, Download all sends only the other name.
-  - View script: the first message the script sends reports height 0, before `ui/initialize`.
-  - View script: a load result with nothing fetchable, an `isError` result and a text-only setup hint each render no button and report height 0.
-  - View script: rendered again with the same tool call id, the panel shows the Loaded row as Loaded, and its next note still names that file.
-  - View script: a filename of `<img src=x onerror=alert(1)>` shows as literal text.
-  - Seam note: the `vm` tests catch the script's message flow and its text-only rendering, but not how VS Code lays out the view. The manual checklist covers that.
-- **Verification:** tests and e2e pass; in a Copilot-harness chat, a Load click writes the file, and the agent names its path on the next message without a visible chat message.
+  - Covers AE8. The four attachments give two numbered lines, two plain lines with their reasons, and the closing instruction naming load ticket and the ticket key.
+  - Without a list, a ticket with one binary attachment numbers it and asks the agent to let the user pick.
+  - Only unsafe names and too-large files skipped: nothing is numbered and the answer carries no instruction to ask.
+  - The answer names no tool outside the catalog.
+- **Verification:** tests pass; in a Copilot-harness chat, loading a ticket with a binary attachment shows the numbered list, and answering `all` writes the files.
 
 ---
 
@@ -615,7 +556,7 @@ Waits on: PR2, merge order only. After PR3, the feature branch merges into `main
 | Unit and integration | `npm test` | U1–U17 scenarios, guards, docs sync, bundle smoke |
 | E2E | `xvfb-run -a npm run test:e2e` (CI `e2e` job) | U6 through VS Code's MCP client, or the recorded reduced form |
 | Package | `npm run package` | `.vsix` contains `out/extension.js` and both skills |
-| Manual | The checklist in `docs/manual/copilot-tools.md` in a Copilot-harness chat, with a `.vsix` from the feature branch, on a managed Mac and a managed Windows machine | R8 tools answer, both skills run, no duplicate tools, the load panel fetches a skipped attachment and its tool is not on the model's list; gates the merge into `main` |
+| Manual | The checklist in `docs/manual/copilot-tools.md` in a Copilot-harness chat, with a `.vsix` from the feature branch, on a managed Mac and a managed Windows machine | R8 tools answer, both skills run, no duplicate tools, a load with a binary attachment shows the numbered list and `all` fetches it; gates the merge into `main` |
 
 ---
 
@@ -627,17 +568,3 @@ Waits on: PR2, merge order only. After PR3, the feature branch merges into `main
 - The manual documents the MCP tools, both skills, the `http.noProxy` requirement and the checklist.
 - No log line, report or test output contains a key or token.
 - Code from abandoned approaches is removed from the diff.
-
----
-
-## Deferred / Open Questions
-
-Review items left for the author; they do not block implementation.
-
-### From 2026-11-06 review
-
-- **The Jira timeout rule (R29) and the shared failure wrapper (KTD14) disagree on attachment downloads** — Requirements R29 (Jira call timeout) and Planning Contract KTD14 (shared Jira failure wrapper) (P2, coherence, confidence 100)
-
-  An implementer cannot tell whether a download gives up after 30 seconds or after about 2 minutes. R29, the product rule, puts every Jira call at about 30 seconds. KTD14, which PR2 already built, gives each download about 2 minutes and fails only that file. The load panel's download tool inherits whichever value applies, and under the 30-second reading, large attachments fail on slow links.
-
-  Change: R29's timeout sentence says that every Jira call made by an MCP tool times out after about 30 seconds, except an attachment download, which times out after about 2 minutes and fails only that file.
