@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
+import { JIRA_APP_TOOLS } from '../../mcp/jiraTools/catalog';
 import { buildJiraNotConfiguredMessage } from '../../services/setupHints';
 import type { E2eTest } from './index';
 
@@ -11,6 +12,7 @@ import type { E2eTest } from './index';
 // and a read-only tool invoked outside a chat asks no confirmation, so nothing prompts.
 
 const CHECK_CONNECTION_TOOL = 'jira_check_connection';
+const LOAD_TICKET_TOOL = 'jira_load_ticket';
 // The label register.ts gives the server definition. VS Code names an extension-provided server
 // `<extension id in lower case>/<label>` and its tools `mcp_<server prefix>_<tool name>`.
 const SERVER_LABEL = 'Ticket Sidekick';
@@ -53,6 +55,17 @@ export function mcpTests(extensionId: string): E2eTest[] {
         const tool = mcpCheckTool();
         assert.ok(tool, `no MCP tool ending in _${CHECK_CONNECTION_TOOL} within ${START_TIMEOUT_MS / 1000} s of starting ${serverId}`);
         toolName = tool.name;
+      },
+    },
+    {
+      name: 'VS Code lists load ticket but none of the tools only the load panel may call',
+      fn: async () => {
+        if (!hasMcpProviderApi()) return { skipped: noMcpApi() };
+        assert.ok(toolName, 'the check connection tool was not listed');
+        // VS Code prefixes MCP tool names, so match by the name's end, as for the check tool.
+        const listed = (name: string) => vscode.lm.tools.some(t => t.name.endsWith(`_${name}`));
+        assert.ok(listed(LOAD_TICKET_TOOL), `no tool ending in _${LOAD_TICKET_TOOL} is listed`);
+        for (const tool of JIRA_APP_TOOLS) assert.ok(!listed(tool.name), `${tool.name} is listed, although only the load panel may call it`);
       },
     },
     {

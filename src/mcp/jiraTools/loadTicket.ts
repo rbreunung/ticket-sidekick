@@ -5,12 +5,12 @@ import {
   loadTicketToWorkspace,
   nodeFsWriter,
   type LoadTicketCoreResult,
-  type SkippedAttachment,
 } from '../../participant/jira/loadCore';
 import { formatFileSize } from '../../utils/attachmentEligibility';
 import { resolveTicketKey } from '../branchTicket';
 import { defineTool } from '../mcpServer';
 import type { JiraToolDeps } from './jiraAccess';
+import { FETCHABLE_CAUSES, LOAD_PANEL_URI, loadPanelData } from './loadPanel';
 import { runJiraTool } from './runJiraTool';
 import { LOAD_TICKET_TOOL } from './toolNames';
 
@@ -26,9 +26,6 @@ const loadShape = {
     + '(such as binary files). Files over 100 MB are never downloaded.',
   ),
 };
-
-/** Skipped attachments that calling the tool again with their names can still fetch. */
-const FETCHABLE: ReadonlySet<SkippedAttachment['cause']> = new Set(['not-default-type', 'download-failed']);
 
 function resultMessage(key: string, folder: string, commentCount: number, allNames: string[], result: LoadTicketCoreResult): string {
   const abs = (rel: string) => absolutePathIn(folder, rel);
@@ -62,7 +59,7 @@ function resultMessage(key: string, folder: string, commentCount: number, allNam
       `${plural(result.skipped.length, 'attachment')} not downloaded:`,
       ...result.skipped.map(s => `- ${s.filename} (${formatFileSize(s.size)}): ${s.reason}`),
     );
-    const fetchable = [...new Set(result.skipped.filter(s => FETCHABLE.has(s.cause)).map(s => s.filename))];
+    const fetchable = [...new Set(result.skipped.filter(s => FETCHABLE_CAUSES.has(s.cause)).map(s => s.filename))];
     if (fetchable.length > 0) {
       lines.push(
         `If one of these is needed, call ${LOAD_TICKET_TOOL} again with ticketKey "${key}" and attachments [${fetchable.map(n => JSON.stringify(n)).join(', ')}] `
@@ -86,6 +83,7 @@ export const loadTicketTool = defineTool<JiraToolDeps, typeof loadShape>({
     + 'and says which folder and branch it used. Changes nothing in Jira; it only writes local files, overwriting an earlier load.',
   inputSchema: loadShape,
   annotations: {},
+  viewUri: LOAD_PANEL_URI,
   handler: async ({ ticketKey, attachments }, deps) => {
     let subject = ticketKey?.trim() || 'the ticket';
     return runJiraTool(deps, LOAD_TICKET_TOOL, () => `Could not load ${subject}`, async ({ config, ticketService }) => {
@@ -122,7 +120,10 @@ export const loadTicketTool = defineTool<JiraToolDeps, typeof loadShape>({
         skippedCount: result.skipped.length,
         notFoundCount: result.notFound.length,
       });
-      return sourceNote + resultMessage(key, folder, comments.length, ticketAttachments.map(a => a.filename), result);
+      return {
+        text: sourceNote + resultMessage(key, folder, comments.length, ticketAttachments.map(a => a.filename), result),
+        structuredContent: loadPanelData(key, result),
+      };
     });
   },
 });

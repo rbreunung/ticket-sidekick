@@ -5,7 +5,7 @@ import { LocalhostServer } from '../mcp/localhostServer';
 import { createMcpHandler, type ToolCallOutcome } from '../mcp/mcpServer';
 import { generateKey } from '../mcp/keys';
 import {
-  JIRA_TOOLS, CHECK_CONNECTION_TOOL, VIEW_TICKET_TOOL, FIND_TICKETS_TOOL, LIST_MY_FILTERS_TOOL, WORKFLOW_TOOL, LIST_TEMPLATES_TOOL,
+  JIRA_TOOLS, JIRA_APP_TOOLS, JIRA_VIEWS, CHECK_CONNECTION_TOOL, VIEW_TICKET_TOOL, FIND_TICKETS_TOOL, LIST_MY_FILTERS_TOOL, WORKFLOW_TOOL, LIST_TEMPLATES_TOOL,
   LOAD_TICKET_TOOL,
 } from '../mcp/jiraTools/catalog';
 import type { JiraAccess, JiraToolDeps } from '../mcp/jiraTools/jiraAccess';
@@ -72,7 +72,7 @@ async function callTool(name: string, args: Record<string, unknown> = {}, option
     onDiag: (level, message, details) => options.logs?.push({ level, message, details }),
   };
   server = new LocalhostServer({
-    onMcp: createMcpHandler(JIRA_TOOLS, deps, { name: 'ticket-sidekick', version: '0.0.0-test' }, {
+    onMcp: createMcpHandler({ tools: [...JIRA_TOOLS, ...JIRA_APP_TOOLS], views: JIRA_VIEWS }, deps, { name: 'ticket-sidekick', version: '0.0.0-test' }, {
       onToolCall: outcome => options.outcomes?.push(outcome),
     }),
   });

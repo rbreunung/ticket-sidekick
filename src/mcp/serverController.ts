@@ -1,7 +1,7 @@
 import type { DiagLogger } from '../utils/diagTypes';
 import { generateKey, keyFingerprint } from './keys';
 import { LocalhostServer, type ServerStats } from './localhostServer';
-import { createMcpHandler, type McpServerInfo, type McpToolDefinition, type ToolCallOutcome } from './mcpServer';
+import { createMcpHandler, type McpServerInfo, type McpToolDefinition, type McpViewResource, type ToolCallOutcome } from './mcpServer';
 import { MCP_PATH } from './requestGuard';
 
 // The MCP server's lifecycle for one VS Code window, free of `vscode` so it can be tested over a
@@ -52,6 +52,8 @@ export interface McpDefinition {
 
 export interface McpServerControllerOptions<Deps> {
   tools: readonly McpToolDefinition<Deps>[];
+  /** The inline views the tools point at. */
+  views?: readonly McpViewResource[];
   toolDeps: Deps;
   serverInfo: McpServerInfo;
   /** Whether MCP requests may be served and the definition handed out right now. */
@@ -81,7 +83,7 @@ export class McpServerController<Deps> {
 
   constructor(private readonly options: McpServerControllerOptions<Deps>) {
     this.server = new LocalhostServer({
-      onMcp: createMcpHandler(options.tools, options.toolDeps, options.serverInfo, { onToolCall: outcome => this.recordToolCall(outcome) }),
+      onMcp: createMcpHandler({ tools: options.tools, views: options.views }, options.toolDeps, options.serverInfo, { onToolCall: outcome => this.recordToolCall(outcome) }),
       allowMcp: options.isMcpAllowed,
       isEarlierKey: key => this.earlierFingerprints.has(keyFingerprint(key)),
       onRefused: (reason, path) => options.onDiag?.('warn', `MCP request refused: ${reason}`, { path }),
