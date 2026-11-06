@@ -3,6 +3,7 @@
 
 import { ATTACHMENT_SIZE_LIMIT, formatFileSize } from '../../utils/attachmentEligibility';
 import type { ToolConfirmation } from '../../tools/toolConfirmation';
+import type { JiraTemplate, ResolveSpec } from '../../templates/TemplateService';
 import { formatBulletList } from './primitives';
 import { LoadSkippedSession } from './sessionTypes';
 
@@ -226,14 +227,40 @@ export function formatIssueTypeOptionsMessage(projectKey: string, issueTypes: st
   );
 }
 
+const NO_TEMPLATES_MESSAGE =
+  'No templates found. Create a `.jira-templates.json` file in the workspace root to define reusable ticket templates.';
+
+function formatTemplateHeading(t: { name: string; issueType?: string }): string {
+  return `**${t.name}**${t.issueType ? ` (${t.issueType})` : ' (issue type not set on the template)'}`;
+}
+
 /** Result text for `jira_listTemplates` — a missing/empty `.jira-templates.json` is a normal,
  * error-free outcome (an empty list), not a failure. */
 export function formatTemplateListMessage(templates: Array<{ name: string; issueType?: string }>): string {
-  if (templates.length === 0) {
-    return 'No templates found. Create a `.jira-templates.json` file in the workspace root to define reusable ticket templates.';
-  }
-  const list = formatBulletList(
-    templates.map(t => `**${t.name}**${t.issueType ? ` (${t.issueType})` : ' (issue type not set on the template)'}`),
-  );
-  return `Available templates:\n\n${list}`;
+  if (templates.length === 0) return NO_TEMPLATES_MESSAGE;
+  return `Available templates:\n\n${formatBulletList(templates.map(formatTemplateHeading))}`;
+}
+
+function formatResolveSpec(spec: ResolveSpec): string {
+  return spec.id !== undefined ? `${spec.type} id ${spec.id}` : `${spec.type} "${spec.name ?? ''}", looked up when the ticket is created`;
+}
+
+/**
+ * The template list with what each template sets: its default field values, the fields it looks
+ * up by name when a ticket is created, and its description sections. An agent's create call
+ * names only the template, so this is where the values a template adds can be seen beforehand.
+ */
+export function formatTemplateListWithDefaults(templates: JiraTemplate[]): string {
+  if (templates.length === 0) return NO_TEMPLATES_MESSAGE;
+  const blocks = templates.map(t => {
+    const lines = Object.entries(t.defaultFields ?? {}).map(([field, value]) => `  - ${field}: ${formatResolvedFieldValue(value)}`);
+    for (const [field, spec] of Object.entries(t.resolveFields ?? {})) {
+      const specs = Array.isArray(spec) ? spec : [spec];
+      lines.push(`  - ${field}: ${specs.map(formatResolveSpec).join(', ')}`);
+    }
+    if (t.descriptionSections && t.descriptionSections.length > 0) lines.push(`  - Description sections: ${t.descriptionSections.join(', ')}`);
+    if (lines.length === 0) lines.push('  - no default fields');
+    return [`- ${formatTemplateHeading(t)}`, ...lines].join('\n');
+  });
+  return `Available templates:\n\n${blocks.join('\n')}`;
 }

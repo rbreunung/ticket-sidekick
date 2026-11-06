@@ -482,10 +482,21 @@ export class TicketService {
     baseUrl?: string,
   ): Promise<string> {
     const issue = await this.client.getIssue(issueKey);
+    return this.renderTicket(issue, fieldMeta, alwaysShowIds, hiddenIds, baseUrl);
+  }
+
+  /** The Markdown `getTicket` shows, for an issue already read: heading, field table, sections and web links. */
+  async renderTicket(
+    issue: JiraIssue,
+    fieldMeta?: JiraFieldMeta[],
+    alwaysShowIds?: Set<string>,
+    hiddenIds?: Set<string>,
+    baseUrl?: string,
+  ): Promise<string> {
     const meta = fieldMeta ?? await this.client.getFields();
     const showIds = alwaysShowIds ?? new Set<string>();
     const { table, sections } = formatIssueFields(issue, meta, showIds, hiddenIds, baseUrl);
-    const remoteLinks = await this.client.getRemoteLinks(issueKey);
+    const remoteLinks = await this.client.getRemoteLinks(issue.key);
     if (remoteLinks.length > 0) {
       const lines = remoteLinks.map(r => `- [${r.object.title}](${r.object.url})`);
       sections.push(`## Web Links\n\n${lines.join('\n')}`);
@@ -696,7 +707,23 @@ export class TicketService {
     fieldMeta: JiraFieldMeta[] = [],
   ): Promise<string> {
     const result = await this.client.searchJql(jql, undefined, undefined, extraFields);
+    return this.formatSearchResults(result, jql, baseUrl, extraFields, fieldMeta);
+  }
+
+  /**
+   * The search result table `searchTickets` shows, for a result already read. `chatActions: false`
+   * leaves out the Actions column, whose view/load links only work in `@jira`'s chat.
+   */
+  formatSearchResults(
+    result: JiraSearchResult,
+    jql: string,
+    baseUrl?: string,
+    extraFields: string[] = [],
+    fieldMeta: JiraFieldMeta[] = [],
+    options: { chatActions?: boolean } = {},
+  ): string {
     if (result.issues.length === 0) return 'No tickets found.';
+    const chatActions = options.chatActions ?? true;
 
     const columns: ReviewTableColumn<JiraIssue>[] = [
       { header: 'Key', accessor: (issue) => issue.key },
@@ -713,14 +740,14 @@ export class TicketService {
       // markdown link to the real Jira URL, omitted when no baseUrl is configured (matching
       // formatKeyLink's existing no-baseUrl behavior) rather than a command link, since it needs
       // no chat round-trip.
-      {
-        header: 'Actions', accessor: (issue) => {
+      ...(chatActions ? [{
+        header: 'Actions', accessor: (issue: JiraIssue) => {
           const view = buildChatCommandLink('👁 view', '@jira', `show me ${issue.key}`);
           const load = buildChatCommandLink('⤓ load', '@jira', `load ${issue.key}`);
           const open = baseUrl ? `[🌐 open](${baseUrl}/browse/${issue.key})` : '';
           return [view, load, open].filter(Boolean).join(' · ');
         },
-      },
+      }] : []),
       ...buildExtraFieldColumns<JiraIssue>(
         extraFields,
         fieldMeta,
