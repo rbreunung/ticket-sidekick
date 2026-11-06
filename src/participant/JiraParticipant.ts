@@ -7,7 +7,7 @@ import type { IJiraClient, JiraFieldMeta, JiraFilter, JiraSprintCandidate, JiraI
 import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
 import { logDiag } from '../utils/diagLog';
-import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type ListedFiltersSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type LoadSkippedSession, type JiraFollowupState, type JiraSessionKind, isConfirmation, isCancellation, isGreetingOrEmpty, buildJiraHelp, computeJiraFollowups, buildFilterFailureNote, pickEmailOption, parseSkipInput, applyTicketToggle, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseListedFiltersSelection, parseBulkUpdateReview, applyBulkUpdateToggle, parseSkippedAttachmentSelection, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewMessage } from './sessionState';
+import { type CreationSession, type ContentSession, type MoreCommentsSession, type CreateSelectionSession, type TransitionBatchSession, type TransitionBatchTicket, type TransitionSubtask, type ResolutionSelectionSession, type CommentListSession, type FilterSelectionSession, type ListedFiltersSession, type SearchResultSession, type BulkUpdateReviewSession, type BulkUpdateReviewRow, type FieldUpdatePreviewSession, type FieldSelectionSession, type SprintSelectionSession, type JiraFollowupState, type JiraSessionKind, isConfirmation, isCancellation, isGreetingOrEmpty, buildJiraHelp, computeJiraFollowups, buildFilterFailureNote, pickEmailOption, parseSkipInput, applyTicketToggle, parseResolutionSelection, buildCommentListSession, parseCommentIndex, formatCommentsInFull, parseFilterSelection, parseListedFiltersSelection, parseBulkUpdateReview, applyBulkUpdateToggle, rewriteAttachmentLinks, buildTeamJql, buildBulkUpdateReviewMessage } from './sessionState';
 import {
   type ConstraintAmbiguitySession, type ConstraintMatchOption, type PendingSearchConstraints,
   type JqlConstraints, buildConstraintJql, parseConstraintMatchSelection, extractProjectKeyFromJql,
@@ -33,8 +33,7 @@ import { getActiveJiraSession, resolveTicketFromBranch, resolveProjectKey, resol
 import { checkConnection } from '../mcp/connectionCheck';
 import { gatherFileContent, buildContentContext, streamContentPreview, handleContentSession } from './jira/contentHandler';
 import { streamCreateSelection, continueAfterIssueType, streamNextSection, finishTicketCreation, handleCreateTicket } from './jira/createHandler';
-import { serializeCommentsForLLM, handleLoadTicket, attachmentsDirFor } from './jira/loadHandler';
-import { formatFileSize } from '../utils/attachmentEligibility';
+import { serializeCommentsForLLM, handleLoadTicket } from './jira/loadHandler';
 import { streamReviewScreen, executeCleanupBatch, handleRunCleanup, extractExtraFields } from './jira/cleanupHandler';
 import { handleDiscoverWorkflow } from './jira/workflowHandler';
 import { handleSecurityOverview } from './jira/overviewHandler';
@@ -1380,71 +1379,6 @@ export function createJiraParticipant(
       }
     }
 
-    // Load skipped — user replied with a number (or "download N") to download skipped
-    // attachments. Fully self-contained in JiraParticipant.ts — metadata-based (R1/R3).
-    if (getActiveJiraSession(chatContext)?.kinds.includes('load-skipped')) {
-      const loadSkippedSession = ws.get<LoadSkippedSession>('jira.session.loadSkipped');
-      if (loadSkippedSession) {
-        const selection = parseSkippedAttachmentSelection(request.prompt, loadSkippedSession.skipped.length);
-        const skippedList = (items: LoadSkippedSession['skipped']) => items
-          .map((s, i) => `${i + 1}. ${buildChatCommandLink(`\`${s.filename}\` — ${formatFileSize(s.size)} (${s.mimeType}) — ${s.reason}`, '@jira', String(i + 1))}`)
-          .join('\n');
-        if (selection === 'not-a-selection') {
-          await ws.update('jira.session.loadSkipped', undefined);
-          // fall through to intent parsing
-        } else if (selection === 'out-of-range') {
-          stream.markdown(trustedChatMarkdown(
-            `Please reply with a number:\n\n${skippedList(loadSkippedSession.skipped)}\n\nReply with a number to download it anyway.`,
-          ));
-          return { metadata: { jiraSession: { kinds: ['load-skipped'] } } };
-        } else {
-          const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-          if (!workspaceFolder) {
-            await ws.update('jira.session.loadSkipped', undefined);
-            stream.markdown('No workspace folder is open.');
-            return;
-          }
-          const attachmentsDir = attachmentsDirFor(workspaceFolder.uri, loadSkippedSession.ticketKey);
-          const lines: string[] = [];
-          const downloadedSet = new Set(selection.map(i => i - 1));
-          for (const i of selection) {
-            const chosen = loadSkippedSession.skipped[i - 1];
-            try {
-              stream.markdown(`_Downloading \`${chosen.filename}\`…_\n\n`);
-              const bytes = await ticketService.downloadAttachment(chosen.content);
-              await vscode.workspace.fs.createDirectory(attachmentsDir);
-              await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(attachmentsDir, chosen.filename), bytes);
-              // Code-review fix: these lines are joined into a trustedChatMarkdown()-wrapped
-              // response below (unlike the plain "_Downloading..._" progress line above), so the
-              // attachment filename and any error text must be neutralized the same way
-              // skippedList's buildChatCommandLink label already is.
-              lines.push(`✓ \`${neutralizeMarkdownLinks(chosen.filename)}\` downloaded.`);
-            } catch (err) {
-              const message = err instanceof Error ? err.message : String(err);
-              logDiag('jira.participant', 'warn', `Attachment download failed — ${chosen.filename}`, { fileName: chosen.filename, error: message });
-              downloadedSet.delete(i - 1);
-              lines.push(`✗ Failed to download \`${neutralizeMarkdownLinks(chosen.filename)}\`: ${neutralizeMarkdownLinks(message)}`);
-            }
-          }
-          const remaining = loadSkippedSession.skipped.filter((_, i) => !downloadedSet.has(i));
-          if (remaining.length > 0) {
-            await ws.update('jira.session.loadSkipped', { ticketKey: loadSkippedSession.ticketKey, skipped: remaining } satisfies LoadSkippedSession);
-            stream.markdown(trustedChatMarkdown(
-              `${lines.join('\n')}\n\n**Remaining skipped attachments:**\n\n${skippedList(remaining)}\n\n` +
-              `Reply with a number to download another.`,
-            ));
-            // R13: carry the ticket key on metadata instead of a visible marker.
-            return withLastTicket(loadSkippedSession.ticketKey, ['load-skipped']);
-          } else {
-            await ws.update('jira.session.loadSkipped', undefined);
-            stream.markdown(`${lines.join('\n')}\n\nAll attachments saved.`);
-            // R13: carry the ticket key on metadata instead of a visible marker.
-            return withLastTicket(loadSkippedSession.ticketKey);
-          }
-        }
-      }
-    }
-
     // Bulk update review — user replied ok / skip keys / cancel. Only when no explicit slash
     // command was typed this turn: an ordinary reply like "skip PROJ-1 PROJ-2" is meant for this
     // session, but a real `/comment`/`/field`/etc. command whose leftover prompt text happens to
@@ -2253,8 +2187,8 @@ export function createJiraParticipant(
           const loadFieldMeta = await ticketService.getFieldMeta();
           const loadAlwaysShow = new Set<string>(config.additionalDisplayFields);
           const loadHidden = new Set<string>(config.hiddenDisplayFields);
-          const { hasSkippedAttachments, projectKey: loadedProjectKey, issueType: loadedIssueType } =
-            await handleLoadTicket(ticketKey!, ticketService, stream, ws, loadFieldMeta, loadAlwaysShow, loadHidden);
+          const { projectKey: loadedProjectKey, issueType: loadedIssueType } =
+            await handleLoadTicket(ticketKey!, ticketService, stream, loadFieldMeta, loadAlwaysShow, loadHidden);
           // R6/R7: "transition it, create a template from it, discover its workflow" — the
           // flagship examples the plan names for follow-up chips, built from the ticket
           // handleLoadTicket already fetched (KTD4 — no second getIssue call for the chips).
@@ -2264,12 +2198,12 @@ export function createJiraParticipant(
             projectKey: loadedProjectKey,
             issueType: loadedIssueType,
           };
-          // R13: carry the loaded ticket key on metadata instead of a visible marker. Empty
-          // kinds when no load-skipped session started — keeps every detection check false.
+          // Carry the loaded ticket key on metadata instead of a visible marker. Empty kinds: a
+          // load starts no session, so every detection check stays false.
           return {
             metadata: {
               jiraFollowup: loadedState,
-              ...withLastTicket(ticketKey!, hasSkippedAttachments ? ['load-skipped'] : []).metadata,
+              ...withLastTicket(ticketKey!).metadata,
             },
           };
         }

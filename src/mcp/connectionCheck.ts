@@ -20,7 +20,8 @@ export type ConnectionCheckResult =
   | { status: 'not-configured'; missing: 'baseUrl' | 'token'; markdown: string }
   | { status: 'invalid-config'; problem: string; markdown: string }
   | { status: 'ok'; settings: ConnectionSettings; userDisplayName: string; markdown: string }
-  | { status: 'failed'; settings: ConnectionSettings; error: string; markdown: string };
+  /** `error` is the full error text; `cause` is what was thrown. */
+  | { status: 'failed'; settings: ConnectionSettings; error: string; cause: unknown; markdown: string };
 
 function settingsTable(settings: ConnectionSettings): string {
   return (
@@ -36,9 +37,14 @@ function settingsTable(settings: ConnectionSettings): string {
 /**
  * Checks the connection described by `access`. When Jira is not configured the answer is the
  * plain setup hint naming what is missing (`@jira` shows its own linked version of that hint
- * before it reaches the check). A failed call is reported, and logged through `onDiag`, never thrown.
+ * before it reaches the check). A failed call is reported, and logged through `onDiag`, never thrown;
+ * `describeError` words the failure in the Markdown (the full error text by default).
  */
-export async function checkConnection(access: JiraAccess, onDiag?: DiagLogger): Promise<ConnectionCheckResult> {
+export async function checkConnection(
+  access: JiraAccess,
+  onDiag?: DiagLogger,
+  describeError: (err: unknown) => string = err => (err instanceof Error ? err.message : String(err)),
+): Promise<ConnectionCheckResult> {
   if (!access.configured) {
     const { config } = access;
     return { status: 'not-configured', missing: config.baseUrl ? 'token' : 'baseUrl', markdown: buildJiraNotConfiguredMessage(config) };
@@ -60,6 +66,12 @@ export async function checkConnection(access: JiraAccess, onDiag?: DiagLogger): 
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     onDiag?.('error', 'Jira connection check failed', { baseUrl: config.baseUrl, authType: config.authType, error });
-    return { status: 'failed', settings, error, markdown: `**Jira connection failed**\n\n${settingsTable(settings)}\nError: ${error}` };
+    return {
+      status: 'failed',
+      settings,
+      error,
+      cause: err,
+      markdown: `**Jira connection failed**\n\n${settingsTable(settings)}\nError: ${describeError(err)}`,
+    };
   }
 }

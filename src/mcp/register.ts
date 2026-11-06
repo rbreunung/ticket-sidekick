@@ -98,6 +98,8 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
 
   const toolDeps: JiraToolDeps = {
     getJira: () => getJira(configService),
+    // Only folders on this computer's disk: git, the template file and the workflow cache are read there.
+    workspaceFolders: () => (vscode.workspace.workspaceFolders ?? []).filter(f => f.uri.scheme === 'file').map(f => f.uri.fsPath),
     onDiag: (level, message, details) => logDiag('mcp.tools', level, message, details),
   };
   const started = new McpServerController<JiraToolDeps>({

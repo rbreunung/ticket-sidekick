@@ -198,7 +198,7 @@ For history-based calls, an additional grounding note is appended to the task:
 Plain text. Trimmed and stored as `ContentSession.currentContent` for the preview loop. Checked for refusals via `isLmRefusal()` (see [Refusal detection](#refusal-detection)).
 
 **Known limitations:**
-`history-full` includes all visible turns but excludes session-management responses (previewing, load-skipped) that are filtered out in `extractHistoryTurns`. Very long conversations may exceed the model's context window — the call is made unconditionally with no truncation.
+`history-full` includes all visible turns but excludes session-management responses (previewing) that are filtered out in `extractHistoryTurns`. Very long conversations may exceed the model's context window — the call is made unconditionally with no truncation.
 
 ---
 

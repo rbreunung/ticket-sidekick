@@ -106,7 +106,7 @@ describe('extractProjectKeyFromJql (U4/R11 step 1)', () => {
   });
 });
 
-describe('resolveNamedConstraints (U7 — shared by the chat flow and jira_searchByFilter)', () => {
+describe('resolveNamedConstraints (shared by the chat flow and the MCP find tool)', () => {
   const baseJql = 'project = PROJ AND status = Open';
 
   it('resolves a single fixVersion match', async () => {

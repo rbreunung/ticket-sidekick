@@ -15,5 +15,17 @@ export type JiraAccess =
 export interface JiraToolDeps {
   /** The current Jira settings, plus a client when the base URL and the token are both set. */
   getJira(): Promise<JiraAccess>;
+  /**
+   * The open workspace folders as file system paths, read at every call. The first one is where
+   * the git branch is read and where the template and workflow cache files live.
+   */
+  workspaceFolders(): string[];
+  /** How long one Jira request may take before the tool answers that Jira did not respond; 30 seconds when unset. */
+  jiraTimeoutMs?: number;
+  /**
+   * How long one attachment download may take before the load reports that attachment as not
+   * downloaded and goes on with the rest; 2 minutes when unset.
+   */
+  jiraDownloadTimeoutMs?: number;
   onDiag?: DiagLogger;
 }

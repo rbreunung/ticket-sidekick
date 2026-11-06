@@ -46,13 +46,3 @@ export interface PendingSearchConstraints {
   assignee?: string | null;
 }
 
-export interface LoadSkippedSession {
-  ticketKey: string;
-  skipped: Array<{
-    filename: string;
-    content: string;  // Jira download URL
-    size: number;
-    mimeType: string;
-    reason: string;
-  }>;
-}

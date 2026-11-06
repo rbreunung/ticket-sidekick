@@ -49,7 +49,20 @@ export interface McpHandlerHooks {
   onToolCall?(outcome: ToolCallOutcome): void;
 }
 
+/**
+ * Thrown by a handler whose call failed but which still has an answer for the agent: the server
+ * sends `answer` as the tool result, marked as an error, and records the call as failed under
+ * `label` (for example `HTTP 502` or `timeout`).
+ */
+export class ToolFailure extends Error {
+  constructor(readonly answer: string, readonly label: string) {
+    super(answer);
+    this.name = 'ToolFailure';
+  }
+}
+
 export function toolErrorLabel(err: unknown): string {
+  if (err instanceof ToolFailure) return err.label;
   const status = (err as { status?: unknown } | null)?.status;
   if (typeof status === 'number') return `HTTP ${status}`;
   if (err instanceof Error) return err.name || 'Error';
@@ -73,6 +86,7 @@ export function buildMcpServer<Deps>(
           text = await tool.handler(args, deps);
         } catch (err) {
           hooks.onToolCall?.({ tool: tool.name, ok: false, error: toolErrorLabel(err) });
+          if (err instanceof ToolFailure) return { content: [{ type: 'text' as const, text: err.answer }], isError: true };
           throw err;
         }
         hooks.onToolCall?.({ tool: tool.name, ok: true });
