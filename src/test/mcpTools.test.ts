@@ -721,6 +721,24 @@ describe('jira_load_ticket', () => {
     expect(fs.readdirSync(path.dirname(folder)).filter(name => name.includes('evil'))).toEqual([]);
     expect(text).toContain('- ../../evil.txt (0 KB): unsafe filename');
     expect(text).toContain('- ..\\..\\evil.txt (0 KB): unsafe filename');
+    // Calling again cannot fetch an unsafe name, so no re-fetch hint is offered for it.
+    expect(text).not.toContain(`call ${LOAD_TICKET_TOOL} again`);
+    expect(text).not.toContain('evil.txt"');
+  });
+
+  it('offers to fetch only the fetchable attachments again when an unsafe one is skipped with them', async () => {
+    const folder = makeTempDir();
+    const client = new AttachmentsClient([
+      attachment('a1', '../../evil.txt', 'text/plain', 10),
+      attachment('a2', 'dump.bin', 'application/octet-stream', 10),
+    ]);
+
+    const text = await callTool(LOAD_TICKET_TOOL, { ticketKey: 'PROJ-123' }, { client, folders: [folder] });
+
+    expect(text).toContain('- ../../evil.txt (0 KB): unsafe filename');
+    expect(text).toContain('- dump.bin (0 KB): unknown binary format');
+    expect(text).toContain(`call ${LOAD_TICKET_TOOL} again with ticketKey "PROJ-123" and attachments ["dump.bin"] `);
+    expect(text).not.toContain('evil.txt"');
   });
 
   it('names no tool outside the catalog, whatever the reasons for skipping', async () => {
