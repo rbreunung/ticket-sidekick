@@ -2,7 +2,7 @@ import type { JiraConfig } from '../services/ConfigService';
 import { validateBaseUrl } from '../services/configValidation';
 import { tokenStatus } from '../utils/diagUtils';
 import type { DiagLogger } from '../utils/diagTypes';
-import { buildJiraNotConfiguredMessage } from '../participant/session/constraints';
+import { buildJiraNotConfiguredMessage } from '../services/setupHints';
 import type { JiraAccess } from './jiraTools/jiraAccess';
 
 // The Jira connection check behind both `@jira check` and the MCP check connection tool, so both

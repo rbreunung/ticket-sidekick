@@ -51,6 +51,7 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/services/PrReviewService.ts` | PR review logic: diff parsing, file gathering, two-pass LLM prompt building, result formatting |
 | `src/services/ConfigService.ts` | VS Code settings + SecretStorage for both Jira and Bitbucket |
 | `src/services/configValidation.ts` | Pure (vscode-free) config validators; `validateBaseUrl` rejects malformed/non-http(s) base URLs. Surfaced by `@jira check` and `@bitbucket check` (DC) before attempting a connection |
+| `src/services/setupHints.ts` | Pure (vscode-free) `buildJiraNotConfiguredMessage(config)`: the plain-text Jira setup hint the Agent Mode tools, the MCP tools and `@jira check` answer with while Jira is not configured; kept outside the participant layer so `src/mcp/` and `src/tools/` do not depend on it |
 | `src/tools/jiraTools.ts` | Jira `contributes.languageModelTools` registration + `prepareInvocation`/`invoke` for each tool — thin glue over `TicketService`/`WorkflowService`/`TemplateService`, reusing chat-flow safeguards (never-guess-issue-type) rather than reimplementing them |
 | `src/tools/bitbucketTools.ts` | Bitbucket `contributes.languageModelTools` registration, same shape as `jiraTools.ts` — single-object read/write tools over `IBitbucketClient`/`PrReviewService` |
 | `src/tools/toolConfirmation.ts` | Shared `ToolConfirmation` type (`prepareInvocation()`'s title/message) both tool files' confirmation builders return — keeps `sessionState.ts`/`reviewSessionState.ts` from depending on each other |

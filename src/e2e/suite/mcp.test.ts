@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
-import { buildJiraNotConfiguredMessage } from '../../participant/session/constraints';
+import { buildJiraNotConfiguredMessage } from '../../services/setupHints';
 import type { E2eTest } from './index';
 
 // The extension's MCP server as VS Code's own MCP client sees it. runTest.ts puts 127.0.0.1 into
