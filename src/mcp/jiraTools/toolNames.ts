@@ -8,3 +8,4 @@ export const FIND_TICKETS_TOOL = 'jira_find_tickets';
 export const LIST_MY_FILTERS_TOOL = 'jira_list_my_filters';
 export const WORKFLOW_TOOL = 'jira_workflow';
 export const LIST_TEMPLATES_TOOL = 'jira_list_templates';
+export const LOAD_TICKET_TOOL = 'jira_load_ticket';

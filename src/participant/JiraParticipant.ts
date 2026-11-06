@@ -33,7 +33,8 @@ import { getActiveJiraSession, resolveTicketFromBranch, resolveProjectKey, resol
 import { checkConnection } from '../mcp/connectionCheck';
 import { gatherFileContent, buildContentContext, streamContentPreview, handleContentSession } from './jira/contentHandler';
 import { streamCreateSelection, continueAfterIssueType, streamNextSection, finishTicketCreation, handleCreateTicket } from './jira/createHandler';
-import { serializeCommentsForLLM, handleLoadTicket, attachmentsDirFor } from './jira/loadHandler';
+import { serializeCommentsForLLM, handleLoadTicket, workspaceFsWriter } from './jira/loadHandler';
+import { attachmentPath, attachmentsDir } from './jira/loadCore';
 import { formatFileSize } from '../utils/attachmentEligibility';
 import { streamReviewScreen, executeCleanupBatch, handleRunCleanup, extractExtraFields } from './jira/cleanupHandler';
 import { handleDiscoverWorkflow } from './jira/workflowHandler';
@@ -1404,16 +1405,19 @@ export function createJiraParticipant(
             stream.markdown('No workspace folder is open.');
             return;
           }
-          const attachmentsDir = attachmentsDirFor(workspaceFolder.uri, loadSkippedSession.ticketKey);
+          const writer = workspaceFsWriter(workspaceFolder.uri);
           const lines: string[] = [];
           const downloadedSet = new Set(selection.map(i => i - 1));
           for (const i of selection) {
             const chosen = loadSkippedSession.skipped[i - 1];
             try {
+              // An attachment skipped for its unsafe filename stays unwritten when picked here too.
+              const target = attachmentPath(loadSkippedSession.ticketKey, chosen.filename);
+              if (!target) throw new Error('unsafe filename, not written');
               stream.markdown(`_Downloading \`${chosen.filename}\`…_\n\n`);
               const bytes = await ticketService.downloadAttachment(chosen.content);
-              await vscode.workspace.fs.createDirectory(attachmentsDir);
-              await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(attachmentsDir, chosen.filename), bytes);
+              await writer.createDirectory(attachmentsDir(loadSkippedSession.ticketKey));
+              await writer.writeFile(target, bytes);
               // Code-review fix: these lines are joined into a trustedChatMarkdown()-wrapped
               // response below (unlike the plain "_Downloading..._" progress line above), so the
               // attachment filename and any error text must be neutralized the same way

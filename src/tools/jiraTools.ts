@@ -9,9 +9,10 @@ import { TicketService, renderFieldValue } from '../services/TicketService';
 import { TemplateService } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
 import { discoverAndCacheWorkflow, resolveAndApplyTransition } from '../services/WorkflowService';
-import { attachmentsDirFor, ensureJiraContextGitignored, loadTicketToWorkspace } from '../participant/jira/loadHandler';
+import { logLoadDiag, workspaceFsWriter } from '../participant/jira/loadHandler';
+import { attachmentPath, attachmentsDir, ensureJiraContextGitignored, loadTicketToWorkspace } from '../participant/jira/loadCore';
 import { logDiag } from '../utils/diagLog';
-import { isAllowedUploadPath, isSafeFilename, isSafePathSegment } from './pathSafety';
+import { isAllowedUploadPath, isSafePathSegment } from './pathSafety';
 import { RecentCallGuard, fingerprint } from './recentCallGuard';
 import { ATTACHMENT_SIZE_LIMIT, findAttachmentByFilename, formatFileSize, inferContentType } from '../utils/attachmentEligibility';
 import {
@@ -851,7 +852,8 @@ class LoadTicketTool implements vscode.LanguageModelTool<LoadTicketInput> {
         ticketKey, ticketService,
         { issue, comments, attachments, remoteLinks },
         { fieldMeta, alwaysShowIds, hiddenIds, baseUrl: config.baseUrl },
-        workspaceFolder.uri,
+        workspaceFsWriter(workspaceFolder.uri),
+        { onDiag: logLoadDiag },
       );
       logDiag('jira.tools', 'info', `Loaded — ${ticketKey}`, { ticketKey, downloadedCount, skippedCount: skipped.length });
       return textResult(buildLoadTicketResultMessage(ticketKey, comments.length, downloadedCount, skipped, writeErrors, downloadedFiles));
@@ -892,9 +894,10 @@ class DownloadAttachmentTool implements vscode.LanguageModelTool<DownloadAttachm
 
     const filename = options.input.filename?.trim();
     if (!filename) return textResult('A filename is required, e.g. error.log.');
-    // isSafeFilename, not isSafePathSegment (code-review fix): a filename may legitimately
-    // contain ".." as a substring (e.g. "v1..2-notes.txt") without being a traversal attempt.
-    if (!isSafeFilename(filename)) return textResult(`"${filename}" is not a valid filename.`);
+    // The filename check the load uses: a filename may contain ".." as a substring
+    // (e.g. "v1..2-notes.txt") without being a traversal attempt.
+    const target = attachmentPath(ticketKey, filename);
+    if (!target) return textResult(`"${filename}" is not a valid filename.`);
 
     const ctx = await tryGetConfiguredContext(this.configService);
     if (isNotConfiguredResult(ctx)) return ctx;
@@ -914,10 +917,10 @@ class DownloadAttachmentTool implements vscode.LanguageModelTool<DownloadAttachm
       }
 
       const bytes = await ticketService.downloadAttachment(attachment.content);
-      const attachmentsDir = attachmentsDirFor(workspaceFolder.uri, ticketKey);
-      await vscode.workspace.fs.createDirectory(attachmentsDir);
-      await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(attachmentsDir, filename), bytes);
-      await ensureJiraContextGitignored(workspaceFolder.uri);
+      const writer = workspaceFsWriter(workspaceFolder.uri);
+      await writer.createDirectory(attachmentsDir(ticketKey));
+      await writer.writeFile(target, bytes);
+      await ensureJiraContextGitignored(writer, logLoadDiag);
 
       logDiag('jira.tools', 'info', `Downloaded attachment — ${ticketKey}/${filename}`, { ticketKey, filename, matchCount });
       return textResult(buildDownloadAttachmentResultMessage(ticketKey, filename, matchCount));

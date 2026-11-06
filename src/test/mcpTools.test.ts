@@ -6,9 +6,10 @@ import { createMcpHandler, type ToolCallOutcome } from '../mcp/mcpServer';
 import { generateKey } from '../mcp/keys';
 import {
   JIRA_TOOLS, CHECK_CONNECTION_TOOL, VIEW_TICKET_TOOL, FIND_TICKETS_TOOL, LIST_MY_FILTERS_TOOL, WORKFLOW_TOOL, LIST_TEMPLATES_TOOL,
+  LOAD_TICKET_TOOL,
 } from '../mcp/jiraTools/catalog';
 import type { JiraAccess, JiraToolDeps } from '../mcp/jiraTools/jiraAccess';
-import type { IJiraClient, JiraComment, JiraFilter, JiraIssue, JiraSearchResult } from '../jira/IJiraClient';
+import type { IJiraClient, JiraAttachment, JiraComment, JiraFilter, JiraIssue, JiraSearchResult } from '../jira/IJiraClient';
 import type { JiraConfig } from '../services/ConfigService';
 import { JiraApiError } from '../utils/apiError';
 import { MockJiraClient } from './mocks/MockJiraClient';
@@ -120,7 +121,12 @@ describe('Jira tool catalog', () => {
   it('marks every tool that only reads Jira as read-only', () => {
     expect(CHECK_CONNECTION_TOOL).toBe('jira_check_connection');
     expect(VIEW_TICKET_TOOL).toBe('jira_view_ticket');
-    for (const tool of JIRA_TOOLS) expect(tool.annotations, tool.name).toEqual({ readOnlyHint: true });
+    for (const tool of JIRA_TOOLS.filter(t => t.name !== LOAD_TICKET_TOOL)) expect(tool.annotations, tool.name).toEqual({ readOnlyHint: true });
+  });
+
+  it('marks load ticket neither read-only nor destructive, since it writes only local files', () => {
+    expect(LOAD_TICKET_TOOL).toBe('jira_load_ticket');
+    expect(JIRA_TOOLS.find(t => t.name === LOAD_TICKET_TOOL)?.annotations).toEqual({});
   });
 });
 
@@ -506,5 +512,168 @@ describe('jira_list_templates', () => {
     const text = await callTool(LIST_TEMPLATES_TOOL, {}, { folders: [makeTempDir()] });
 
     expect(text).toBe('No templates found. Create a `.jira-templates.json` file in the workspace root to define reusable ticket templates.');
+  });
+});
+
+function attachment(id: string, filename: string, mimeType: string, size: number): JiraAttachment {
+  return { id, filename, mimeType, size, content: `https://jira.example.com/secure/attachment/${id}`, created: `2024-01-01T00:00:0${id.length % 10}.000+0000` };
+}
+
+/** The fixture ticket with its attachments replaced; each download returns the attachment's id. */
+class AttachmentsClient extends MockJiraClient {
+  constructor(private readonly attachments: JiraAttachment[], private readonly failing: string[] = []) { super(); }
+  override async getIssue(issueKey: string): Promise<JiraIssue> {
+    const issue = await super.getIssue(issueKey);
+    return { ...issue, fields: { ...issue.fields, attachment: this.attachments } };
+  }
+  override async downloadAttachment(contentUrl: string): Promise<Uint8Array> {
+    const id = contentUrl.split('/').pop() ?? '';
+    if (this.failing.includes(id)) throw new Error('HTTP 500');
+    return new TextEncoder().encode(`content of ${id}`);
+  }
+}
+
+/** Every file under `dir`, relative to it, with `/` separators. */
+function filesUnder(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (current: string) => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else out.push(path.relative(dir, full).split(path.sep).join('/'));
+    }
+  };
+  walk(dir);
+  return out.sort();
+}
+
+describe('jira_load_ticket', () => {
+  it('without a list writes the ticket files and the eligible attachments, and lists the binary one as skipped', async () => {
+    const folder = makeTempDir();
+    const ctx = path.join(folder, '.jira-context', 'PROJ-123');
+
+    const text = await callTool(LOAD_TICKET_TOOL, { ticketKey: 'PROJ-123' }, { folders: [folder] });
+
+    expect(filesUnder(folder)).toEqual([
+      '.gitignore',
+      '.jira-context/PROJ-123/attachments/error.log',
+      '.jira-context/PROJ-123/attachments/screenshot.png',
+      '.jira-context/PROJ-123/comments.md',
+      '.jira-context/PROJ-123/ticket.md',
+    ]);
+    expect(fs.readFileSync(path.join(folder, '.gitignore'), 'utf-8')).toBe('.jira-context/\n');
+    expect(fs.readFileSync(path.join(ctx, 'ticket.md'), 'utf-8')).toContain('# PROJ-123: Implement user authentication');
+    expect(text).toContain(`- \`${path.join(ctx, 'ticket.md')}\``);
+    expect(text).toContain(`- \`${path.join(ctx, 'comments.md')}\``);
+    expect(text).toContain(`- \`${path.join(ctx, 'attachments', 'screenshot.png')}\``);
+    expect(text).toContain(`- \`${path.join(ctx, 'attachments', 'error.log')}\``);
+    expect(text).toContain('- heap-dump.bin (50.0 MB): unknown binary format');
+    expect(text).toContain('call jira_load_ticket again with ticketKey "PROJ-123" and attachments ["heap-dump.bin"]');
+    expect(text).not.toContain('jira_downloadAttachment');
+  });
+
+  it('with a list also writes the named attachment the default filter skips', async () => {
+    const folder = makeTempDir();
+
+    const text = await callTool(LOAD_TICKET_TOOL, { ticketKey: 'PROJ-123', attachments: ['heap-dump.bin'] }, { folders: [folder] });
+
+    expect(filesUnder(path.join(folder, '.jira-context', 'PROJ-123'))).toEqual([
+      'attachments/error.log',
+      'attachments/heap-dump.bin',
+      'attachments/screenshot.png',
+      'comments.md',
+      'ticket.md',
+    ]);
+    expect(text).toContain(`- \`${path.join(folder, '.jira-context', 'PROJ-123', 'attachments', 'heap-dump.bin')}\``);
+    expect(text).not.toContain('not downloaded');
+  });
+
+  it('reports a named attachment the ticket does not have and still loads the rest', async () => {
+    const folder = makeTempDir();
+
+    const text = await callTool(LOAD_TICKET_TOOL, { ticketKey: 'PROJ-123', attachments: ['design.pdf'] }, { folders: [folder] });
+
+    expect(text).toContain('PROJ-123 has no attachment named `design.pdf`. Its attachments are: screenshot.png, error.log, heap-dump.bin.');
+    expect(fs.existsSync(path.join(folder, '.jira-context', 'PROJ-123', 'ticket.md'))).toBe(true);
+    expect(fs.existsSync(path.join(folder, '.jira-context', 'PROJ-123', 'attachments', 'error.log'))).toBe(true);
+  });
+
+  it('reports an attachment over the size limit and does not write it, even when it is named', async () => {
+    const folder = makeTempDir();
+    const client = new AttachmentsClient([
+      attachment('a1', 'notes.txt', 'text/plain', 1024),
+      attachment('a2', 'huge.zip', 'application/zip', 150 * 1024 * 1024),
+    ]);
+
+    const text = await callTool(LOAD_TICKET_TOOL, { ticketKey: 'PROJ-123', attachments: ['huge.zip'] }, { client, folders: [folder] });
+
+    expect(fs.existsSync(path.join(folder, '.jira-context', 'PROJ-123', 'attachments', 'huge.zip'))).toBe(false);
+    expect(fs.existsSync(path.join(folder, '.jira-context', 'PROJ-123', 'attachments', 'notes.txt'))).toBe(true);
+    expect(text).toContain('- huge.zip (150.0 MB): over 100 MB size limit');
+    expect(text).not.toContain('attachments ["huge.zip"]');
+  });
+
+  it('skips attachments with unsafe filenames and writes nothing outside the attachments folder', async () => {
+    const folder = makeTempDir();
+    const client = new AttachmentsClient([
+      attachment('a1', '../../evil.txt', 'text/plain', 10),
+      attachment('a2', '..\\..\\evil.txt', 'text/plain', 10),
+      attachment('a3', 'notes.txt', 'text/plain', 10),
+    ]);
+
+    const text = await callTool(LOAD_TICKET_TOOL, { ticketKey: 'PROJ-123', attachments: ['../../evil.txt'] }, { client, folders: [folder] });
+
+    expect(filesUnder(folder)).toEqual([
+      '.gitignore',
+      '.jira-context/PROJ-123/attachments/notes.txt',
+      '.jira-context/PROJ-123/comments.md',
+      '.jira-context/PROJ-123/ticket.md',
+    ]);
+    expect(fs.readdirSync(path.dirname(folder)).filter(name => name.includes('evil'))).toEqual([]);
+    expect(text).toContain('- ../../evil.txt (0 KB): unsafe filename');
+    expect(text).toContain('- ..\\..\\evil.txt (0 KB): unsafe filename');
+  });
+
+  it('names no tool outside the catalog, whatever the reasons for skipping', async () => {
+    const folder = makeTempDir();
+    const client = new AttachmentsClient([
+      attachment('a1', 'dump.bin', 'application/octet-stream', 10),
+      attachment('a2', 'notes.txt', 'text/plain', 10),
+      { ...attachment('a3', 'notes.txt', 'text/plain', 10), created: '2025-01-01T00:00:00.000+0000' },
+      attachment('a4', 'huge.zip', 'application/zip', 150 * 1024 * 1024),
+      attachment('a5', '../evil.txt', 'text/plain', 10),
+      attachment('a6', 'broken.log', 'text/plain', 10),
+    ], ['a6']);
+
+    const text = await callTool(LOAD_TICKET_TOOL, { ticketKey: 'PROJ-123' }, { client, folders: [folder] });
+
+    expect(text).toContain('- notes.txt (0 KB): duplicate filename; only the newest attachment with this name is downloaded');
+    expect(text).toContain('- broken.log (0 KB): download failed');
+    expect(text).toContain('attachments ["dump.bin", "broken.log"]');
+    const named = text.match(/\bjira_[A-Za-z_]+/g) ?? [];
+    const catalog = new Set(JIRA_TOOLS.map(t => t.name));
+    expect(named.length).toBeGreaterThan(0);
+    for (const name of named) expect(catalog.has(name), name).toBe(true);
+  });
+
+  it('without a key loads the ticket named in the branch and names folder and branch', async () => {
+    const repo = makeRepoOnBranch('feature/PROJ-123-login');
+
+    const text = await callTool(LOAD_TICKET_TOOL, {}, { folders: [repo] });
+
+    expect(text.split('\n')[0]).toBe(`_Ticket key PROJ-123 taken from the git branch \`feature/PROJ-123-login\` of the workspace folder \`${repo}\`._`);
+    expect(fs.existsSync(path.join(repo, '.jira-context', 'PROJ-123', 'ticket.md'))).toBe(true);
+  });
+
+  it('without a workspace folder says so and writes nothing', async () => {
+    const text = await callTool(LOAD_TICKET_TOOL, { ticketKey: 'PROJ-123' });
+
+    expect(text).toBe('No workspace folder is open: the ticket is loaded into `.jira-context/<KEY>/` in the first workspace folder.');
+  });
+
+  it('answers with the setup hint when Jira is not configured', async () => {
+    const text = await callTool(LOAD_TICKET_TOOL, { ticketKey: 'PROJ-123' }, { config: jiraConfig({ token: undefined }), folders: [makeTempDir()] });
+
+    expect(text).toBe('Jira credentials not configured. Run "Ticket Sidekick: Set Jira Personal Access Token" from the Command Palette.');
   });
 });
