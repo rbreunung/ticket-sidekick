@@ -4,6 +4,6 @@ Use it when you want help writing the ticket. It looks for a fitting template in
 
 Example: /ts-jira-create a bug for the failing login in PROJ
 
-Without it: ask Copilot plainly, e.g. "create a Bug in PROJ: Login fails on Safari", and it calls the create ticket tool directly. Quicker when you already know the project, the template or issue type, and the summary. The tool never guesses the issue type, and Copilot asks you before it creates anything.
+Copilot also starts it by itself when you ask for a new ticket in your own words, e.g. "create a bug for the failing login in PROJ", so a new ticket goes through a template and a draft either way.
 
-Copilot runs /ts-jira-create only when you type it.
+Without it: Copilot can call the create ticket tool directly with a template or issue type you name. The tool never guesses the issue type, and Copilot asks you before it creates anything.

@@ -30,12 +30,16 @@ function parseFrontmatter(text: string): Record<string, string> | undefined {
 }
 
 /**
- * Skills only the user starts, by typing them: the `ts-` skills. They keep model invocation off,
- * so they never compete with the tools for a plain request, and a model without thinking cannot
- * drift into one in place of another request; any other skill keeps it on.
+ * Skills only the user starts, by typing them: the `ts-` skills, except `ts-jira-create`. They
+ * keep model invocation off, so they never compete with the tools for a plain request, and a
+ * model without thinking cannot drift into one in place of another request. `ts-jira-create`
+ * keeps it on on purpose: a plain request for a new ticket then goes through a template and a
+ * draft instead of a bare create.
  */
+const MODEL_INVOCABLE_TS_SKILLS: ReadonlySet<string> = new Set(['ts-jira-create']);
+
 function isExplicitOnly(folder: string): boolean {
-  return folder.startsWith('ts-');
+  return folder.startsWith('ts-') && !MODEL_INVOCABLE_TS_SKILLS.has(folder);
 }
 
 /** What is wrong with one skill: its folder name, its SKILL.md text, the tool names that exist. */
@@ -217,6 +221,13 @@ describe('the /ts-jira-create skill', () => {
     expect(at[0]).toBeLessThan(at[1]);
   });
 
+  it('starts by itself for a plain request for a new ticket, and not for other ticket work', () => {
+    const description = parseFrontmatter(create)?.description ?? '';
+    expect(parseFrontmatter(create)).not.toHaveProperty('disable-model-invocation');
+    expect(description).toContain('Use when asked to create, open, file or raise a Jira ticket, bug or story.');
+    expect(description).toContain('Not for showing, loading, searching or changing existing tickets.');
+  });
+
   it('asks only for what is missing, never picks the issue type, and shows the draft before creating', () => {
     expect(create).toMatch(/Ask only for what you cannot take from the request/);
     expect(create).toMatch(/Never pick an issue type yourself/);
@@ -287,18 +298,18 @@ describe('the /ts-jira command skill', () => {
 
 describe('the help pages /ts-jira prints for brief and create', () => {
   const pages = [
-    { file: 'help-brief.md', skill: 'ts-jira-brief', plain: '/ts-jira view' },
-    { file: 'help-create.md', skill: 'ts-jira-create', plain: 'calls the create ticket tool directly' },
+    { file: 'help-brief.md', skill: 'ts-jira-brief', plain: '/ts-jira view', started: 'Copilot runs /ts-jira-brief only when you type it.' },
+    { file: 'help-create.md', skill: 'ts-jira-create', plain: 'call the create ticket tool directly', started: 'Copilot also starts it by itself when you ask for a new ticket in your own words' },
   ];
 
-  it.each(pages)('$file names a skill that exists, how to use it, and what to do without it', ({ file, skill, plain }) => {
+  it.each(pages)('$file names a skill that exists, how to use it, when it starts, and what to do without it', ({ file, skill, plain, started }) => {
     const page = readFileSync(resolve(root, 'skills/ts-jira', file), 'utf-8');
     expect(skillNames).toContain(skill);
     expect(page.split('\n')[0]).toMatch(new RegExp(`^/${skill} `));
     expect(page).toContain(`Example: /${skill} `);
     expect(page).toContain('Without it:');
     expect(page).toContain(plain);
-    expect(page).toContain(`Copilot runs /${skill} only when you type it.`);
+    expect(page).toContain(started);
   });
 
   it('keeps every skill name out of /ts-jira itself, so it only reaches the model on help brief or help create', () => {

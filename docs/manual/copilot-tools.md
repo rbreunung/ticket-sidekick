@@ -50,7 +50,7 @@ Copilot asks you before each of these runs (see [Approvals](#approvals)). Free t
 
 ## Skills
 
-A skill is a set of instructions Copilot follows, using the tools above. Type its name as a slash command in a Copilot chat. All three run only when you type them, so Copilot never starts one in place of another request. Without a skill, just ask in your own words and Copilot calls the tools directly.
+A skill is a set of instructions Copilot follows, using the tools above. Type its name as a slash command in a Copilot chat. `/ts-jira` and `/ts-jira-brief` run only when you type them, so Copilot never starts one in place of another request. `/ts-jira-create` also starts by itself when you ask for a new ticket in your own words, so a new ticket goes through a template and a draft. For everything else, just ask and Copilot calls the tools directly.
 
 | Skill | What it does |
 | --- | --- |

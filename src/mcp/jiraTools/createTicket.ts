@@ -62,7 +62,8 @@ export const createTicketTool = defineTool<JiraToolDeps, typeof createShape>({
   name: CREATE_TICKET_TOOL,
   title: 'Create a Jira ticket',
   description:
-    `Creates one Jira ticket. Prefer a templateName from ${LIST_TEMPLATES_TOOL}: the template gives the issue type and default fields. `
+    `Creates one Jira ticket. For a ticket the user asks for in their own words, follow the ts-jira-create skill first: it picks a template and shows the user a draft. `
+    + `Prefer a templateName from ${LIST_TEMPLATES_TOOL}: the template gives the issue type and default fields. `
     + 'Without a template, give the issueType; the issue type is never guessed, so a call without either lists the project\'s issue types '
     + 'and creates nothing. Write the description as Markdown. The answer names the template fields applied. '
     + 'The same ticket requested again within a minute is skipped.',
