@@ -4,187 +4,30 @@ How a first-time user of Ticket Sidekick discovers what the extension can do
 and gets to a working first ticket or PR review without reading the README
 first.
 
-## Jira Language Model tools
+## Jira tools
 
-Alongside `@jira` chat, every core Jira read/write operation is also exposed
-as a `contributes.languageModelTools` entry, so GitHub Copilot's Agent Mode
-can call it directly — without the user typing `@jira` at all. Every tool is
-thin glue over the same `TicketService` (→ `IJiraClient` → `JiraApiClient`)
-stack the chat participant uses, so a tool call gets the same business logic
-and safeguards a chat command does — there is no separate, divergent
-implementation of the same operation. Code lives in:
+Every Jira tool an agent calls comes from the extension's MCP server; `package.json` declares no Jira Agent Mode tool, so no Jira capability is offered twice.
 
-- [`src/tools/jiraTools.ts`](../src/tools/jiraTools.ts) — tool registration, `prepareInvocation`/`invoke` implementations.
-- [`src/participant/sessionState.ts`](../src/participant/sessionState.ts) — pure confirmation-text and result-message builders the tools call into (Vitest-loadable; `jiraTools.ts` itself imports `vscode` and is not).
-- `package.json`'s `contributes.languageModelTools` — the tool declarations (name, description, JSON input schema, `when` clause) VS Code reads.
-- [`docs/manual/agent-mode-tools.md`](manual/agent-mode-tools.md) — the user-facing list; a new tool needs a row there (`src/test/userDocsSync.test.ts` fails otherwise).
+- **The tools** read (`jira_check_connection`, `jira_view_ticket`, `jira_find_tickets`, `jira_list_my_filters`, `jira_workflow`, `jira_list_templates`, `jira_load_ticket`) or change a ticket (`jira_move_ticket`, `jira_create_ticket`, `jira_add_comment`, `jira_update_field`, `jira_upload_attachment`). Their definitions live in [`src/mcp/jiraTools/`](../src/mcp/jiraTools/) (`catalog.ts` lists them; `toolNames.ts` holds the names any message text uses). See [`docs/architecture/copilot-harness-migration.md`](architecture/copilot-harness-migration.md) for the design and [`docs/manual/copilot-tools.md`](manual/copilot-tools.md) for the user-facing list; a new MCP tool needs a row there (`src/test/userDocsSync.test.ts` checks the catalog against it).
+- **Skills** (`contributes.chatSkills`, from `skills/<name>/SKILL.md`) build on the tools: `/ts-jira-brief` writes a developer brief of a ticket, `/ts-jira-create` creates one with the user, and `/ts-jira <command>` runs one tool the user names; `/ts-jira help brief` and `help create` print `help-brief.md` and `help-create.md` from its folder, so the other skills' names stay out of the router's own text. `/ts-jira-brief` and `/ts-jira` are explicit-only (`disable-model-invocation: true`), since a model without thinking ran a model-invocable brief skill in place of other requests; `/ts-jira-create` stays model-invocable on purpose, so a plain request for a new ticket goes through a template and a draft instead of a bare create. `src/test/mcpSkillsGuard.test.ts` keeps every contributed skill naming only catalog tools, with a frontmatter `name` equal to its folder, and model invocation off exactly for the `ts-` skills other than `ts-jira-create`.
 
-None of these tools appear in Agent Mode's tool picker until Jira
-credentials are configured — each one's `when` clause gates on the
-`ticketSidekick.jiraCredentialsSet` context key (kept in sync in
-`extension.ts`). If a tool is still invoked with credentials unset (e.g. a
-stale tool list, or a programmatic call), its result is U1's
-`buildJiraNotConfiguredMessage(config)` text naming the missing setup step —
-never a raw `JiraApiError`.
+Every tool is thin glue over the same `TicketService` (→ `IJiraClient` → `JiraApiClient`), `WorkflowService` and `TemplateService` the chat participant uses, so a tool call gets the same business logic and safeguards a chat command does. All of them run their Jira work through `runJiraTool` (`src/mcp/jiraTools/runJiraTool.ts`): without a configured Jira they answer with `buildJiraNotConfiguredMessage(config)`; each Jira request has a time limit; a failure reaches the agent as the HTTP status and a short reason only, while the full error is logged under the `mcp.tools` scope.
 
-### Read tools
+### Approvals
 
-| Tool | Purpose | Required input | Optional input |
-| --- | --- | --- | --- |
-| `jira_getTicket` | Fetch a ticket's fields, description, and attachment filenames | `ticketKey` | — |
-| `jira_searchTickets` | Search tickets with a JQL query | `jql` | — |
-| `jira_getComments` | Fetch a ticket's comments, most recent first | `ticketKey` | `maxResults` (default 20) |
-| `jira_listTemplates` | List the templates in `.jira-templates.json` | — | — |
-| `jira_discoverWorkflow` | Sample and cache a project/issue type's status-transition graph | `projectKey`, `issueType` | — |
-| `jira_listMyFilters` | List the user's favourite and owned Jira saved filters (deduped) | — | — |
-| `jira_searchByFilter` | Run a saved filter by id or name, optionally narrowed by fixVersion/sprint/assignee | one of `filterId`, `filterName` | `fixVersion`, `sprint`, `assignee` |
+The harness decides when to ask before a tool runs, from each tool's annotations; the extension adds no confirmation of its own. Tools that only read Jira carry `readOnlyHint`, the five that change Jira carry `destructiveHint`, and load ticket carries neither, since it writes only local files. Because the harness approval shows only the arguments, the write tools report what they changed: move ticket names the status it came from and each transition, update field quotes the previous value, and create ticket lists the template fields it applied. Every tool is also visible to the model only, so an inline view (MCP App) cannot call a write tool past that approval; only a tool marked for apps, such as the load panel's, can be called from a view.
 
-`jira_listTemplates` returns an empty list — not an error — when the
-workspace has no `.jira-templates.json`. `jira_discoverWorkflow` writes to
-the same `.jira-workflow-cache.json` the chat `@jira discover workflow`
-command does, so a workflow discovered via a tool call also benefits
-`jira_transitionTicket`'s multi-hop lookups (and vice versa). `jira_listMyFilters`
-and `jira_searchByFilter` share the same `TicketService.getMyFilters()`/
-constraint-resolution logic (`resolveNamedConstraints()` in `sessionState.ts`)
-that `@jira`'s "show my filters" and filter-search chat flows use (see
-[`docs/jira-flows.md`](jira-flows.md)) — but unlike those flows, neither tool
-ever opens an interactive pick-list: an ambiguous filter name or an ambiguous
-fixVersion/sprint/assignee match is returned as a plain-text candidate list
-instead, since a tool call carries no session memory to resume a pick
-against (KTD6).
+### Safeguards for agent-supplied input
 
-### Write tools
-
-Every write tool declares an explicit `confirmationMessages` in
-`prepareInvocation()` naming the concrete change about to be made — a tool
-call never writes silently. But because a user's `chat.tools.autoApprove`
-setting can skip that confirmation dialog entirely, each write tool's
-`invoke()` re-validates its own inputs independently rather than trusting
-that the confirmation was actually seen — `invoke()`, not the confirmation
-dialog, is the real safety boundary.
-
-| Tool | Purpose | Required input | Optional input |
-| --- | --- | --- | --- |
-| `jira_addComment` | Add a comment to a ticket | `ticketKey`, `comment` | — |
-| `jira_updateField` | Update one field on one ticket | `ticketKey`, `fieldName`, `value` | — |
-| `jira_createTicket` | Create a new ticket | `projectKey`, `summary` | `issueType`, `templateName`, `description` |
-| `jira_transitionTicket` | Move a ticket to a target status | `ticketKey`, `targetStatus` | `resolution` |
-| `jira_loadTicket` | Download a ticket's description, comments, and attachments into `.jira-context/<key>/` | `ticketKey` | — |
-| `jira_downloadAttachment` | Download one named attachment into `.jira-context/<key>/attachments/`, bypassing `jira_loadTicket`'s eligibility filter | `ticketKey`, `filename` | — |
-| `jira_uploadAttachment` | Upload a local file as an attachment on a ticket | `ticketKey`, `filePath` | — |
-
-`fieldName` for `jira_updateField` accepts: `summary`, `description`,
-`priority`, `assignee`, `labels`, `components`, `fix version` — the same
-allowlist `TicketService.updateField` (reused directly, not reimplemented)
-already backs the `@jira set <field>` chat flow's description-update path
-with. Its confirmation shows the field's **current** value (read fresh from
-Jira) next to the **new** value, e.g. `Critical → High`, before any write
-happens.
-
-Write tools touch exactly one ticket per call — there is no bulk/multi-ticket
-write tool. (`jira_searchTickets` and `jira_discoverWorkflow` are reads and
-aren't bound by this.)
-
-Two additional safeguards apply specifically because tool inputs are
-LLM-supplied rather than typed by a human into chat:
-
-- **Path-safety validation** ([`src/tools/pathSafety.ts`](../src/tools/pathSafety.ts)):
-  every `ticketKey`/`projectKey` (Jira) and `project`/`repo` (Bitbucket) is
-  checked with `isSafePathSegment()` before use — rejecting a value
-  containing `/`, `\`, or `..`, since these values are interpolated
-  unencoded into `JiraApiClient`/`BitbucketApiClient` request URLs and a
-  crafted value could otherwise redirect a request to an unintended
-  endpoint on the same host. `jira_uploadAttachment`'s `filePath` is
-  additionally checked with `isAllowedUploadPath()`, which requires the
-  resolved, symlink-followed path to sit inside the user's home directory
-  and contain no dotfile/dotdir segment (e.g. `~/.ssh`, `~/.aws`) — an
-  LLM-supplied path is otherwise a way to read and exfiltrate an arbitrary
-  local file via a Jira attachment.
-- **Duplicate-write guard** ([`src/tools/recentCallGuard.ts`](../src/tools/recentCallGuard.ts)):
-  `jira_createTicket`, `jira_addComment`, `jira_uploadAttachment`, and
-  `bitbucket_postComment` each create a new artifact per call rather than
-  converging on an idempotent end state, so a retried or looped Agent Mode
-  call with identical inputs is fingerprinted and skipped for one minute
-  rather than creating a duplicate ticket/comment/attachment. A call that
-  fails (not-configured, a template error, an API error) releases its claim
-  immediately, so a genuine retry after a real failure is never mistaken for
-  a duplicate.
-  `jira_loadTicket` and `jira_downloadAttachment` deliberately skip this
-  guard: a repeat call overwrites the same file(s) on disk rather than
-  creating a new artifact, so there is nothing to de-duplicate.
-
-### Loading a ticket's context (`jira_loadTicket`, `jira_downloadAttachment`)
-
-`jira_loadTicket` is the Agent Mode entry point for the same
-"download description/comments/attachments into `.jira-context/<key>/`"
-capability `@jira load` (and the `/load` slash command) already provide in
-chat — one implementation (`loadTicketToWorkspace()` in
-[`src/participant/jira/loadHandler.ts`](../src/participant/jira/loadHandler.ts))
-backs all three entry points. Its result text names the files it wrote and
-explicitly **asks the user before reading them to analyze the ticket** — a
-tool call has no chip mechanism the way `@jira` chat follow-ups do (chips are
-chat-only), so that returned text is the only channel available to keep
-"start analyzing" a user decision rather than something the model does
-automatically after every load.
-
-`jira_downloadAttachment` fetches one named attachment on its own —
-including one a load skipped as oversized or an unrecognized type, since it
-bypasses that eligibility filter by design. Call `jira_getTicket` first to
-discover a ticket's real attachment filenames; if a ticket has more than one
-attachment sharing the given filename (Jira does not enforce per-issue
-uniqueness), the most recently created one is downloaded, matching how the
-Jira web UI itself resolves a same-named attachment.
-
-### Never-guess issue type (`jira_createTicket`)
-
-`jira_createTicket`'s `modelDescription` steers the calling model to call
-`jira_listTemplates` first and prefer `templateName` over a bare
-`issueType`, since a template carries the process's default field values.
-
-When neither `issueType` nor a resolvable `templateName` is given —
-`templateName` doesn't match a template in `.jira-templates.json`, or a
-matched template has no `issueType` of its own — `invoke()` never guesses
-one. Instead it fetches `TicketService.getIssueTypes(projectKey)` and
-returns that list as the actionable result, creating nothing. This mirrors
-the chat create flow's own never-guess sentinel handling, adapted from an
-interactive `showInputBox` prompt (chat has one; Agent Mode doesn't) to a
-returned list the calling model can act on in its next call. See
-[`docs/solutions/logic-errors/combined-create-list-silently-guesses-issue-type-and-drops-no-template-fallback.md`](solutions/logic-errors/combined-create-list-silently-guesses-issue-type-and-drops-no-template-fallback.md)
-for the failure mode this must not repeat.
-
-When `templateName` resolves, `prepareInvocation()` also previews the
-template's own default field values (e.g. priority, labels) below the main
-confirmation line — approving a template-driven create is never blind to
-what the template silently sets beyond project/type/summary. That preview
-is best-effort (never throws); `invoke()` resolves the template for real
-regardless of what the preview managed to show.
-
-`jira_transitionTicket`'s multi-hop path (via a cached workflow graph) can
-fail partway through — each hop is a real Jira write, so a mid-path failure
-leaves the ticket at an intermediate status, not its original one. The tool
-(and the equivalent `@jira` chat `transition` operation, which shares the
-same `resolveAndApplyTransition()` resolution — see
-[`src/services/WorkflowService.ts`](../src/services/WorkflowService.ts))
-reports exactly how many of the planned hops completed and where the
-ticket actually landed, rather than a bare "transition failed" that would
-imply nothing changed.
+- **Ticket keys** are checked with `isSafePathSegment()` ([`src/tools/pathSafety.ts`](../src/tools/pathSafety.ts)) before use, since they are put into request URLs and local paths.
+- **Uploads** accept only a file that, with symlinks resolved, lies inside an open workspace folder, with no dotfile or dotfolder segment, up to 25 MB. An agent-supplied path is otherwise a way to send an arbitrary local file to Jira. `@jira upload` keeps its own home-folder rule (`isAllowedUploadPath()`).
+- **Duplicate writes** ([`src/tools/recentCallGuard.ts`](../src/tools/recentCallGuard.ts), through `writeGuard.ts`): create ticket, add comment and upload attachment create something new per call, so the same call repeated within a minute is skipped. The guard lives in the tools' long-lived dependencies, since each MCP request gets a new server. A call that wrote nothing releases its claim at once, so a real retry goes through; a write that timed out keeps it, since Jira may still have made the change, and its answer says so.
+- **Never-guess issue type:** without an issue type or a template that sets one, create ticket lists the project's issue types (`TicketService.getIssueTypes`) and creates nothing. See [`docs/solutions/logic-errors/combined-create-list-silently-guesses-issue-type-and-drops-no-template-fallback.md`](solutions/logic-errors/combined-create-list-silently-guesses-issue-type-and-drops-no-template-fallback.md) for the failure mode this must not repeat.
+- **Moves that stop partway:** each step of a move is a real Jira write, so a failed step leaves the ticket at an intermediate status. Move ticket reports where it landed and never retries. When no path is known, it discovers the workflow once (`discoverAndCacheWorkflow`) and tries again; the chat `transition` operation shares the same `resolveAndApplyTransition()` ([`src/services/WorkflowService.ts`](../src/services/WorkflowService.ts)).
 
 ### No session memory
 
-Unlike `@jira` chat's twenty-one multi-turn session types (see
-[`docs/jira-flows.md`](jira-flows.md#jira-sessions)), tools carry no session
-state between calls. Every call takes fully-specified parameters — a
-ticket key, a project key — with no last-ticket or branch-derived context to
-fall back on.
-
-### Diagnostics
-
-Every write tool's `invoke()` constructs its `TicketService` with the same
-`onDiag` binding the chat participant uses
-(`(level, message, details) => logDiag('jira.ticketService', level, message, details)`),
-so tool-invoked writes show up in the "Ticket Sidekick" Output Channel the
-same way chat writes do. Tool-specific failures (a fetch, a write) are
-additionally logged under the `jira.tools` scope.
+Unlike `@jira` chat's multi-turn session types (see [`docs/jira-flows.md`](jira-flows.md#jira-sessions)), tools carry no session state between calls. Write tools take a fully specified ticket or project key; only view ticket and load ticket fall back to the key in the current git branch.
 
 ## Bitbucket Language Model tools
 
@@ -421,6 +264,7 @@ setting/command it describes.
 | 3 | `jiraDefaultProject` | `ticketSidekick.jira.defaultProject` setting | `onSettingChanged:ticketSidekick.jira.defaultProject` |
 | 4 | `jiraWorkflow` | Running `@jira discover workflow <PROJ> <IssueType>` | `onContext:ticketSidekick.workflowViewed` — set in `handleDiscoverWorkflow` (`workflowHandler.ts`) right after the workflow graph is actually cached, not on an attempted-but-empty sample |
 | 5 | `jiraFirstTicket` | Generating a template (`@jira generate a template`) and creating a ticket from it, or `@jira create` directly | `onContext:ticketSidekick.firstTicketCreated` — set at every real `ticketService.createTicket()` success point reachable from chat: `contentHandler.ts`'s `createTicket`-operation branch (backs the `createHandler.ts` flow) and `templateGenerationHandler.ts`'s `createFirstTicket()` |
+| 6 | `jiraCopilotTools` | Adding `127.0.0.1` to `http.noProxy`, so the MCP server for Copilot-harness chats starts (`src/mcp/register.ts`); the extension never writes the setting | `onSettingChanged:http.noProxy` |
 
 **First-touch auto-open (KTD11).** `extension.ts`'s `activate()` opens this
 walkthrough automatically once, guarded by the `globalState` flag

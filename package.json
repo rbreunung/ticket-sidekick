@@ -157,428 +157,13 @@
       {
         "command": "ticket-sidekick.importWaltzReport",
         "title": "Ticket Sidekick: Create Jira tickets from OSS report (.xlsx)"
+      },
+      {
+        "command": "ticket-sidekick.mcp.copyDiagnostics",
+        "title": "Ticket Sidekick: Copy MCP diagnostics"
       }
     ],
     "languageModelTools": [
-      {
-        "name": "jira_getTicket",
-        "displayName": "Get Jira Ticket",
-        "modelDescription": "Fetches a Jira ticket's fields, description, and attachment filenames (with size and MIME type) by key. Display only: nothing is saved to the workspace. Use for a quick look-up of ticket details, or to discover an attachment's filename before calling jira_downloadAttachment. When the user says download, load or fetch a ticket, or wants it analyzed or turned into a report, use jira_loadTicket instead.",
-        "userDescription": "View a Jira ticket's fields and description.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "jiraGetTicket",
-        "icon": "$(preview)",
-        "when": "ticketSidekick.jiraCredentialsSet",
-        "tags": [
-          "jira"
-        ],
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "ticketKey": {
-              "type": "string",
-              "description": "Jira ticket key, e.g. PROJ-123"
-            }
-          },
-          "required": [
-            "ticketKey"
-          ]
-        }
-      },
-      {
-        "name": "jira_searchTickets",
-        "displayName": "Search Jira Tickets",
-        "modelDescription": "Searches Jira tickets using JQL (Jira Query Language) and returns a table of matching tickets.",
-        "userDescription": "Search Jira tickets with a JQL query.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "jiraSearchTickets",
-        "icon": "$(search)",
-        "when": "ticketSidekick.jiraCredentialsSet",
-        "tags": [
-          "jira"
-        ],
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "jql": {
-              "type": "string",
-              "description": "JQL query, e.g. 'project = PROJ AND status = \"In Progress\"'"
-            }
-          },
-          "required": [
-            "jql"
-          ]
-        }
-      },
-      {
-        "name": "jira_getComments",
-        "displayName": "Get Jira Comments",
-        "modelDescription": "Fetches the comments on a Jira ticket, most recent first.",
-        "userDescription": "View comments on a Jira ticket.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "jiraGetComments",
-        "icon": "$(comment)",
-        "when": "ticketSidekick.jiraCredentialsSet",
-        "tags": [
-          "jira"
-        ],
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "ticketKey": {
-              "type": "string",
-              "description": "Jira ticket key, e.g. PROJ-123"
-            },
-            "maxResults": {
-              "type": "number",
-              "description": "Maximum number of comments to return (default 20)."
-            }
-          },
-          "required": [
-            "ticketKey"
-          ]
-        }
-      },
-      {
-        "name": "jira_listTemplates",
-        "displayName": "List Jira Templates",
-        "modelDescription": "Lists the ticket templates defined in this workspace's .jira-templates.json, each with its name and issue type. Call this before jira_createTicket to see whether a suitable template exists — a template carries default field values a bare issue type does not. Returns an empty list, not an error, when no templates file exists.",
-        "userDescription": "List the Jira ticket templates configured for this workspace.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "jiraListTemplates",
-        "icon": "$(list-unordered)",
-        "when": "ticketSidekick.jiraCredentialsSet",
-        "tags": [
-          "jira"
-        ],
-        "inputSchema": {
-          "type": "object",
-          "properties": {}
-        }
-      },
-      {
-        "name": "jira_discoverWorkflow",
-        "displayName": "Discover Jira Workflow",
-        "modelDescription": "Discovers and caches the Jira status-transition graph for a project/issue type by sampling real tickets in each status. Run this when jira_transitionTicket reports no direct transition to the target status, then retry the transition — it enables multi-hop transitions.",
-        "userDescription": "Sample a project's Jira workflow and cache its status transitions.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "jiraDiscoverWorkflow",
-        "icon": "$(type-hierarchy)",
-        "when": "ticketSidekick.jiraCredentialsSet",
-        "tags": [
-          "jira"
-        ],
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "projectKey": {
-              "type": "string",
-              "description": "Jira project key, e.g. PROJ"
-            },
-            "issueType": {
-              "type": "string",
-              "description": "Issue type name, e.g. Bug, Story, Task"
-            }
-          },
-          "required": [
-            "projectKey",
-            "issueType"
-          ]
-        }
-      },
-      {
-        "name": "jira_listMyFilters",
-        "displayName": "List My Jira Filters",
-        "modelDescription": "Lists the current user's favourite and owned Jira saved filters (deduped), each with its name and id. Call this before jira_searchByFilter when the user refers to 'my filters' or a filter by name without knowing its exact spelling or id.",
-        "userDescription": "List your favourite and owned Jira saved filters.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "jiraListMyFilters",
-        "icon": "$(filter)",
-        "when": "ticketSidekick.jiraCredentialsSet",
-        "tags": [
-          "jira"
-        ],
-        "inputSchema": {
-          "type": "object",
-          "properties": {}
-        }
-      },
-      {
-        "name": "jira_searchByFilter",
-        "displayName": "Search Jira By Filter",
-        "modelDescription": "Runs a saved Jira filter (by id or name), optionally narrowed to a fixVersion, sprint, and/or assignee. Only these three constraint types are supported — never pass any other narrowing criterion here; for anything else use jira_searchTickets with hand-written JQL instead. If the filter name matches more than one saved filter, or a named fixVersion/sprint/assignee matches more than one candidate, no search is run — the tool instead returns the candidates as text for the caller to disambiguate with a follow-up call.",
-        "userDescription": "Run a saved Jira filter, optionally narrowed by fix version, sprint, or assignee.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "jiraSearchByFilter",
-        "icon": "$(filter)",
-        "when": "ticketSidekick.jiraCredentialsSet",
-        "tags": [
-          "jira"
-        ],
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "filterId": {
-              "type": "string",
-              "description": "Numeric id of a saved Jira filter. Prefer this over filterName when the id is already known (e.g. from jira_listMyFilters)."
-            },
-            "filterName": {
-              "type": "string",
-              "description": "Name of a saved Jira filter to search for and run. Ambiguous names return candidates instead of running a search."
-            },
-            "fixVersion": {
-              "type": "string",
-              "description": "Narrow results to this fix version (substring match against the project's versions). The filter's JQL must scope to exactly one project."
-            },
-            "sprint": {
-              "type": "string",
-              "description": "Narrow results to this sprint by name. The filter's JQL must scope to exactly one project."
-            },
-            "assignee": {
-              "type": "string",
-              "description": "Narrow results to this assignee's display name, username, or the literal 'me' for the current user."
-            }
-          },
-          "anyOf": [
-            {
-              "required": [
-                "filterId"
-              ]
-            },
-            {
-              "required": [
-                "filterName"
-              ]
-            }
-          ]
-        }
-      },
-      {
-        "name": "jira_addComment",
-        "displayName": "Add Jira Comment",
-        "modelDescription": "Adds a comment to a Jira ticket. This writes to Jira — the user is asked to confirm the exact comment text before it is posted.",
-        "userDescription": "Add a comment to a Jira ticket.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "jiraAddComment",
-        "icon": "$(comment-add)",
-        "when": "ticketSidekick.jiraCredentialsSet",
-        "tags": [
-          "jira"
-        ],
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "ticketKey": {
-              "type": "string",
-              "description": "Jira ticket key, e.g. PROJ-123"
-            },
-            "comment": {
-              "type": "string",
-              "description": "The comment text to post, in Jira wiki markup or plain text."
-            }
-          },
-          "required": [
-            "ticketKey",
-            "comment"
-          ]
-        }
-      },
-      {
-        "name": "jira_updateField",
-        "displayName": "Update Jira Field",
-        "modelDescription": "Updates a single field on one Jira ticket. Supported field names: summary, description, priority, assignee, labels, components, fix version. This writes to Jira — the user is shown the current and new value and asked to confirm before it is written.",
-        "userDescription": "Update one field on a Jira ticket.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "jiraUpdateField",
-        "icon": "$(edit)",
-        "when": "ticketSidekick.jiraCredentialsSet",
-        "tags": [
-          "jira"
-        ],
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "ticketKey": {
-              "type": "string",
-              "description": "Jira ticket key, e.g. PROJ-123"
-            },
-            "fieldName": {
-              "type": "string",
-              "description": "Field to update: summary, description, priority, assignee, labels, components, or fix version."
-            },
-            "value": {
-              "type": "string",
-              "description": "New value. For labels/components, a comma-separated list."
-            }
-          },
-          "required": [
-            "ticketKey",
-            "fieldName",
-            "value"
-          ]
-        }
-      },
-      {
-        "name": "jira_createTicket",
-        "displayName": "Create Jira Ticket",
-        "modelDescription": "Creates one new Jira ticket. Call jira_listTemplates first and prefer passing templateName over a bare issueType, since a template carries the process's default field values. If neither issueType nor a resolvable templateName is given, no ticket is created — the tool instead returns the project's valid issue types to choose from. This writes to Jira — the user is asked to confirm the project, issue type, and summary before the ticket is created.",
-        "userDescription": "Create a new Jira ticket, optionally from a template.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "jiraCreateTicket",
-        "icon": "$(add)",
-        "when": "ticketSidekick.jiraCredentialsSet",
-        "tags": [
-          "jira"
-        ],
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "projectKey": {
-              "type": "string",
-              "description": "Jira project key, e.g. PROJ"
-            },
-            "summary": {
-              "type": "string",
-              "description": "Ticket summary/title"
-            },
-            "issueType": {
-              "type": "string",
-              "description": "Issue type name, e.g. Bug, Story, Task. Prefer templateName when a suitable template exists — omit this when passing templateName and letting the template supply it."
-            },
-            "templateName": {
-              "type": "string",
-              "description": "Name of a template returned by jira_listTemplates. Preferred over a bare issueType."
-            },
-            "description": {
-              "type": "string",
-              "description": "Ticket description text"
-            }
-          },
-          "required": [
-            "projectKey",
-            "summary"
-          ]
-        }
-      },
-      {
-        "name": "jira_transitionTicket",
-        "displayName": "Transition Jira Ticket",
-        "modelDescription": "Moves a Jira ticket to a target status, via a direct transition or a cached multi-hop workflow path (see jira_discoverWorkflow). This writes to Jira — the user is asked to confirm the ticket and target status before it is transitioned.",
-        "userDescription": "Move a Jira ticket to a new status.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "jiraTransitionTicket",
-        "icon": "$(arrow-right)",
-        "when": "ticketSidekick.jiraCredentialsSet",
-        "tags": [
-          "jira"
-        ],
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "ticketKey": {
-              "type": "string",
-              "description": "Jira ticket key, e.g. PROJ-123"
-            },
-            "targetStatus": {
-              "type": "string",
-              "description": "Target status name, e.g. Done, In Progress"
-            },
-            "resolution": {
-              "type": "string",
-              "description": "Resolution to set when transitioning to a closed state, e.g. Fixed, Won't Do"
-            }
-          },
-          "required": [
-            "ticketKey",
-            "targetStatus"
-          ]
-        }
-      },
-      {
-        "name": "jira_loadTicket",
-        "displayName": "Load Jira Ticket",
-        "modelDescription": "Downloads a Jira ticket's description, comments, and attachments into .jira-context/<ticketKey>/ in the workspace (ticket.md, comments.md, attachments/). This writes files to the workspace — the user is asked to confirm the ticket and target folder before anything is written. Use this whenever the user says download, load, fetch, pull or save a ticket, or wants it analyzed or reported on (prefer it over jira_getTicket for those requests). The result gives the exact paths of all written files, including comments.md, as the ticket's local source of information; read them from there. Attachments the load skips (binary, over-size, duplicate names) are listed by name and are not blocked: fetch any of them in a follow-up call with jira_downloadAttachment when the analysis needs it.",
-        "userDescription": "Download a ticket's description, comments, and attachments into the workspace.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "jiraLoadTicket",
-        "icon": "$(cloud-download)",
-        "when": "ticketSidekick.jiraCredentialsSet",
-        "tags": [
-          "jira"
-        ],
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "ticketKey": {
-              "type": "string",
-              "description": "Jira ticket key, e.g. PROJ-123"
-            }
-          },
-          "required": [
-            "ticketKey"
-          ]
-        }
-      },
-      {
-        "name": "jira_downloadAttachment",
-        "displayName": "Download Jira Attachment",
-        "modelDescription": "Downloads one named attachment from a Jira ticket into .jira-context/<ticketKey>/attachments/, bypassing jira_loadTicket's type/extension eligibility filter — use this to fetch an attachment a load skipped, or any specific attachment by filename (see jira_getTicket for filenames). This writes a file to the workspace — the user is asked to confirm the ticket, filename, and target path before it is written. If more than one attachment on the ticket shares the given filename, the most recently created one is downloaded.",
-        "userDescription": "Download one named attachment from a Jira ticket into the workspace.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "jiraDownloadAttachment",
-        "icon": "$(cloud-download)",
-        "when": "ticketSidekick.jiraCredentialsSet",
-        "tags": [
-          "jira"
-        ],
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "ticketKey": {
-              "type": "string",
-              "description": "Jira ticket key, e.g. PROJ-123"
-            },
-            "filename": {
-              "type": "string",
-              "description": "Exact attachment filename, e.g. error.log (see jira_getTicket's Attachments output for real filenames)"
-            }
-          },
-          "required": [
-            "ticketKey",
-            "filename"
-          ]
-        }
-      },
-      {
-        "name": "jira_uploadAttachment",
-        "displayName": "Upload Jira Attachment",
-        "modelDescription": "Uploads one local file as an attachment to a Jira ticket. Takes an explicit ticket key and file path — it never guesses which ticket or file to use. The path may be workspace-relative or absolute. The user is asked to confirm the ticket, file, and size before it is uploaded. Rejects a file over 25 MB before attempting the upload. To attach several files, call this tool once per file.",
-        "userDescription": "Upload a local file as an attachment to a Jira ticket.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "jiraUploadAttachment",
-        "icon": "$(cloud-upload)",
-        "when": "ticketSidekick.jiraCredentialsSet",
-        "tags": [
-          "jira"
-        ],
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "ticketKey": {
-              "type": "string",
-              "description": "Jira ticket key, e.g. PROJ-123"
-            },
-            "filePath": {
-              "type": "string",
-              "description": "Workspace-relative or absolute path to the local file to upload, e.g. report.pdf or /Users/me/Downloads/report.pdf"
-            }
-          },
-          "required": [
-            "ticketKey",
-            "filePath"
-          ]
-        }
-      },
       {
         "name": "bitbucket_getPullRequest",
         "displayName": "Get Bitbucket Pull Request",
@@ -692,6 +277,17 @@
             "comment"
           ]
         }
+      }
+    ],
+    "chatSkills": [
+      {
+        "path": "./skills/ts-jira-brief/SKILL.md"
+      },
+      {
+        "path": "./skills/ts-jira-create/SKILL.md"
+      },
+      {
+        "path": "./skills/ts-jira/SKILL.md"
       }
     ],
     "configuration": [
@@ -1105,6 +701,17 @@
             "completionEvents": [
               "onContext:ticketSidekick.firstTicketCreated"
             ]
+          },
+          {
+            "id": "jiraCopilotTools",
+            "title": "Use the Jira tools in Copilot chats",
+            "description": "Copilot-harness chats reach Ticket Sidekick's Jira tools on this computer. Add `127.0.0.1` to `http.noProxy` so those local requests do not go through your network proxy.\n[Open setting](command:workbench.action.openSettings?%22http.noProxy%22)",
+            "media": {
+              "markdown": "walkthroughs/jira/copilot-tools.md"
+            },
+            "completionEvents": [
+              "onSettingChanged:http.noProxy"
+            ]
           }
         ]
       },
@@ -1148,6 +755,12 @@
           }
         ]
       }
+    ],
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "ticket-sidekick.mcp",
+        "label": "Ticket Sidekick"
+      }
     ]
   },
   "scripts": {
@@ -1171,10 +784,12 @@
     "write-excel-file": "^4.1.1"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "exceljs": "^4.4.0",
     "fast-xml-parser": "^5.10.1",
     "minimatch": "^11.0.3",
-    "postal-mime": "^4.2.0"
+    "postal-mime": "^4.2.0",
+    "zod": "^3.25.76"
   },
   "overrides": {
     "uuid": "^11.1.1"

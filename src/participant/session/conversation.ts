@@ -225,21 +225,6 @@ export function parseListedFiltersSelection(reply: string, session: ListedFilter
   return parseFilterSelection(reply, session.filters);
 }
 
-export function parseSkippedAttachmentSelection(
-  reply: string,
-  count: number,
-): number[] | 'out-of-range' | 'not-a-selection' {
-  // Strip optional leading "download" keyword
-  const stripped = reply.trim().replace(/^download\s+/i, '');
-  // Split by whitespace and commas; each token must be a pure integer
-  const tokens = stripped.split(/[\s,]+/).filter(Boolean);
-  if (tokens.length === 0) return 'not-a-selection';
-  if (tokens.some(t => !/^\d+$/.test(t))) return 'not-a-selection';
-  const numbers = tokens.map(t => parseInt(t, 10));
-  if (numbers.some(n => n < 1 || n > count)) return 'out-of-range';
-  return [...new Set(numbers)].sort((a, b) => a - b);
-}
-
 export function rewriteAttachmentLinks(
   md: string,
   downloaded: Set<string>,           // filename → rewrite href to attachments/filename

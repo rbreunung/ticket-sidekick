@@ -406,6 +406,11 @@ const SUPPORTED_FIELDS: Record<string, string> = {
   fixversion: 'fixVersions',
 };
 
+/** The Jira field id {@link TicketService.updateField} writes for a field name, or undefined when it does not support the field. */
+export function supportedFieldId(fieldName: string): string | undefined {
+  return SUPPORTED_FIELDS[fieldName.trim().toLowerCase()];
+}
+
 /** Result of {@link TicketService.getRequirementsSource}. */
 export type RequirementsSourceResult =
   | { ok: true; source: RequirementsSource }
@@ -482,10 +487,21 @@ export class TicketService {
     baseUrl?: string,
   ): Promise<string> {
     const issue = await this.client.getIssue(issueKey);
+    return this.renderTicket(issue, fieldMeta, alwaysShowIds, hiddenIds, baseUrl);
+  }
+
+  /** The Markdown `getTicket` shows, for an issue already read: heading, field table, sections and web links. */
+  async renderTicket(
+    issue: JiraIssue,
+    fieldMeta?: JiraFieldMeta[],
+    alwaysShowIds?: Set<string>,
+    hiddenIds?: Set<string>,
+    baseUrl?: string,
+  ): Promise<string> {
     const meta = fieldMeta ?? await this.client.getFields();
     const showIds = alwaysShowIds ?? new Set<string>();
     const { table, sections } = formatIssueFields(issue, meta, showIds, hiddenIds, baseUrl);
-    const remoteLinks = await this.client.getRemoteLinks(issueKey);
+    const remoteLinks = await this.client.getRemoteLinks(issue.key);
     if (remoteLinks.length > 0) {
       const lines = remoteLinks.map(r => `- [${r.object.title}](${r.object.url})`);
       sections.push(`## Web Links\n\n${lines.join('\n')}`);
@@ -637,13 +653,18 @@ export class TicketService {
   }
 
   async updateField(issueKey: string, fieldName: string, value: string, baseUrl?: string): Promise<string> {
+    return (await this.updateFieldOutcome(issueKey, fieldName, value, baseUrl)).message;
+  }
+
+  /** {@link updateField}, also saying whether Jira was written to (not for a refused field or an unresolved assignee). */
+  async updateFieldOutcome(issueKey: string, fieldName: string, value: string, baseUrl?: string): Promise<{ written: boolean; message: string }> {
     const jiraField = SUPPORTED_FIELDS[fieldName.toLowerCase()];
     if (!jiraField) {
       const supported = Object.keys(SUPPORTED_FIELDS)
         .filter((k) => !k.includes('fix') && k !== 'component' && k !== 'fixversions')
         .concat(['fix version'])
         .join(', ');
-      return `Field "${fieldName}" is not supported. Supported fields: ${supported}.`;
+      return { written: false, message: `Field "${fieldName}" is not supported. Supported fields: ${supported}.` };
     }
 
     let fieldValue: unknown;
@@ -651,7 +672,7 @@ export class TicketService {
       fieldValue = { name: value };
     } else if (jiraField === 'assignee') {
       const resolved = await this.resolveAssignee(value);
-      if (typeof resolved === 'string') return resolved;
+      if (typeof resolved === 'string') return { written: false, message: resolved };
       fieldValue = resolved;
     } else if (jiraField === 'description') {
       fieldValue = value;
@@ -667,7 +688,7 @@ export class TicketService {
 
     await this.client.updateIssue(issueKey, { [jiraField]: fieldValue });
     this.onDiag?.('info', `Field updated — ${issueKey} (${fieldName})`, { issueKey, fieldName });
-    return `Updated ${fieldName} on ${formatKeyLink(issueKey, baseUrl)}.`;
+    return { written: true, message: `Updated ${fieldName} on ${formatKeyLink(issueKey, baseUrl)}.` };
   }
 
   async resolveAssignee(value: string): Promise<Record<string, string> | string> {
@@ -696,7 +717,23 @@ export class TicketService {
     fieldMeta: JiraFieldMeta[] = [],
   ): Promise<string> {
     const result = await this.client.searchJql(jql, undefined, undefined, extraFields);
+    return this.formatSearchResults(result, jql, baseUrl, extraFields, fieldMeta);
+  }
+
+  /**
+   * The search result table `searchTickets` shows, for a result already read. `chatActions: false`
+   * leaves out the Actions column, whose view/load links only work in `@jira`'s chat.
+   */
+  formatSearchResults(
+    result: JiraSearchResult,
+    jql: string,
+    baseUrl?: string,
+    extraFields: string[] = [],
+    fieldMeta: JiraFieldMeta[] = [],
+    options: { chatActions?: boolean } = {},
+  ): string {
     if (result.issues.length === 0) return 'No tickets found.';
+    const chatActions = options.chatActions ?? true;
 
     const columns: ReviewTableColumn<JiraIssue>[] = [
       { header: 'Key', accessor: (issue) => issue.key },
@@ -713,14 +750,14 @@ export class TicketService {
       // markdown link to the real Jira URL, omitted when no baseUrl is configured (matching
       // formatKeyLink's existing no-baseUrl behavior) rather than a command link, since it needs
       // no chat round-trip.
-      {
-        header: 'Actions', accessor: (issue) => {
+      ...(chatActions ? [{
+        header: 'Actions', accessor: (issue: JiraIssue) => {
           const view = buildChatCommandLink('👁 view', '@jira', `show me ${issue.key}`);
           const load = buildChatCommandLink('⤓ load', '@jira', `load ${issue.key}`);
           const open = baseUrl ? `[🌐 open](${baseUrl}/browse/${issue.key})` : '';
           return [view, load, open].filter(Boolean).join(' · ');
         },
-      },
+      }] : []),
       ...buildExtraFieldColumns<JiraIssue>(
         extraFields,
         fieldMeta,

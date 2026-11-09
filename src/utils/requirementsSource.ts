@@ -41,7 +41,7 @@ function trimTo(text: string, max: number): { text: string; trimmed: boolean } {
 }
 
 /** Newest first by timestamp; Jira lists comments oldest first, so an unreadable timestamp keeps that order reversed. */
-function newestFirst(comments: JiraComment[]): JiraComment[] {
+export function newestFirst(comments: JiraComment[]): JiraComment[] {
   return comments
     .map((comment, index) => ({ comment, index, time: Date.parse(comment.created) }))
     .sort((a, b) => (Number.isNaN(a.time) || Number.isNaN(b.time) ? b.index - a.index : b.time - a.time || b.index - a.index))

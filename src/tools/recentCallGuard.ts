@@ -9,6 +9,7 @@
  * to dedupe on.
  */
 export class RecentCallGuard {
+  /** When each claim was made or last refreshed; Infinity while the call it guards is still running. */
   private readonly seen = new Map<string, number>();
 
   constructor(private readonly windowMs: number = 60000) {}
@@ -32,6 +33,16 @@ export class RecentCallGuard {
    * retry of a genuinely failed call is not itself mistaken for a duplicate. */
   release(fingerprint: string): void {
     this.seen.delete(fingerprint);
+  }
+
+  /** Keeps a claim while the call it guards is still running, however long that takes. */
+  hold(fingerprint: string): void {
+    if (this.seen.has(fingerprint)) this.seen.set(fingerprint, Infinity);
+  }
+
+  /** Starts a claim's window again from now: the call it guards just ended with a write, or may have. */
+  refresh(fingerprint: string): void {
+    if (this.seen.has(fingerprint)) this.seen.set(fingerprint, Date.now());
   }
 
   private prune(now: number): void {

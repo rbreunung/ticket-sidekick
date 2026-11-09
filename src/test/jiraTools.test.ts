@@ -1,237 +1,22 @@
 import { describe, it, expect } from 'vitest';
-import {
-  formatFieldChangeDisplay,
-  buildUpdateFieldConfirmation,
-  buildAddCommentConfirmation,
-  buildCreateTicketConfirmation,
-  buildTransitionConfirmation,
-  buildLoadTicketConfirmation,
-  buildLoadTicketResultMessage,
-  buildDownloadAttachmentConfirmation,
-  buildAttachmentNotFoundMessage,
-  buildDownloadAttachmentResultMessage,
-  buildUploadAttachmentConfirmation,
-  formatIssueTypeOptionsMessage,
-  formatTemplateListMessage,
-  formatWorkflowDiscoveryMessage,
-} from '../participant/sessionState';
-import { TicketService } from '../services/TicketService';
-import { MockJiraClient } from './mocks/MockJiraClient';
+import { formatIssueTypeOptionsMessage } from '../participant/sessionState';
+import { CREATE_TICKET_TOOL, LIST_TEMPLATES_TOOL } from '../mcp/jiraTools/catalog';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
-// These tests cover the pure builders `src/tools/jiraTools.ts` (vscode-coupled, not
-// Vitest-loadable — see CLAUDE.md's Testing section) delegates to for every jira_* Language
-// Model tool's confirmation text and result wording (U2).
+// Jira's tools are served by the extension's MCP server alone; package.json declares no Jira
+// Agent Mode tool, so no Jira capability is offered to the model twice.
 
-describe('jira_updateField confirmation (KTD3: current → new)', () => {
-  it('shows "Critical → High" given a current and new value', () => {
-    expect(formatFieldChangeDisplay('Critical', 'High')).toBe('Critical → High');
-  });
+const pkg = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf-8'));
+const declaredTools: Array<{ name: string }> = pkg.contributes.languageModelTools;
 
-  it('names the ticket and field, and shows the change', () => {
-    const confirmation = buildUpdateFieldConfirmation('PROJ-123', 'priority', 'Critical', 'High');
-    expect(confirmation.title).toContain('PROJ-123');
-    expect(confirmation.title).toContain('priority');
-    expect(confirmation.message).toContain('PROJ-123');
-    expect(confirmation.message).toContain('Critical → High');
+describe('Jira tools in Agent Mode', () => {
+  it('declares no Jira Agent Mode tool', () => {
+    expect(declaredTools.map(t => t.name).filter(name => name.startsWith('jira_'))).toEqual([]);
   });
 });
 
-describe('jira_addComment confirmation', () => {
-  it('names the ticket and includes the literal comment text', () => {
-    const confirmation = buildAddCommentConfirmation('PROJ-123', 'This looks good to me.');
-    expect(confirmation.title).toContain('PROJ-123');
-    expect(confirmation.message).toContain('PROJ-123');
-    expect(confirmation.message).toContain('This looks good to me.');
-  });
-});
-
-describe('jira_loadTicket confirmation (R4: names ticket and folder)', () => {
-  it('names both the ticket and the target folder, from the ticket key alone', () => {
-    const confirmation = buildLoadTicketConfirmation('VSJI-38');
-    expect(confirmation.title).toContain('VSJI-38');
-    expect(confirmation.message).toContain('VSJI-38');
-    expect(confirmation.message).toContain('.jira-context/VSJI-38/');
-  });
-});
-
-describe('jira_loadTicket result message (names exactly where the ticket went)', () => {
-  it('gives the full path of every written file, including comments and each downloaded attachment', () => {
-    const message = buildLoadTicketResultMessage('VSJI-38', 3, 2, [], [], ['error.log', 'shot.png']);
-    expect(message).toContain('.jira-context/VSJI-38/ticket.md');
-    expect(message).toContain('.jira-context/VSJI-38/comments.md');
-    expect(message).toContain('3 comments');
-    expect(message).toContain('.jira-context/VSJI-38/attachments/error.log');
-    expect(message).toContain('.jira-context/VSJI-38/attachments/shot.png');
-  });
-
-  it('continues into analysis only when the request already asked for it', () => {
-    const message = buildLoadTicketResultMessage('VSJI-38', 3, 2, [], [], ['error.log', 'shot.png']);
-    expect(message).toMatch(/already asks to analyze/i);
-    expect(message).toMatch(/only asked to download.*stop/i);
-  });
-
-  it('omits attachments/ from the file list when nothing was downloaded', () => {
-    const message = buildLoadTicketResultMessage('VSJI-38', 0, 0, [], []);
-    expect(message).not.toContain('attachments/');
-  });
-
-  it('lists skipped attachments with size and reason and says a follow-up download call is possible', () => {
-    const skipped = [
-      { filename: 'heap-dump.bin', content: 'https://jira.example.com/x', size: 52428800, mimeType: 'application/octet-stream', reason: 'unknown binary format' },
-    ];
-    const message = buildLoadTicketResultMessage('VSJI-38', 1, 1, skipped, []);
-    expect(message).toContain('heap-dump.bin');
-    expect(message).toContain('unknown binary format');
-    expect(message).toMatch(/not blocked/i);
-    expect(message).toContain('jira_downloadAttachment');
-    expect(message).toMatch(/follow-up|if the analysis needs/i);
-  });
-
-  it('says an attachment over 100 MB cannot be fetched by jira_downloadAttachment either', () => {
-    const skipped = [
-      { filename: 'huge.zip', content: 'https://jira.example.com/y', size: 200 * 1024 * 1024, mimeType: 'application/zip', reason: 'over 100 MB size limit' },
-    ];
-    const message = buildLoadTicketResultMessage('VSJI-38', 0, 0, skipped, []);
-    expect(message).toContain('huge.zip');
-    expect(message).toMatch(/cannot fetch them either/i);
-    expect(message).not.toMatch(/not blocked/i);
-  });
-
-  it('surfaces write errors when present', () => {
-    const message = buildLoadTicketResultMessage('VSJI-38', 1, 0, [], ['ticket.md: disk full']);
-    expect(message).toContain('ticket.md: disk full');
-  });
-});
-
-describe('jira_downloadAttachment confirmation (R10: names ticket, filename, and target path)', () => {
-  it('names the ticket, filename, and target path', () => {
-    const confirmation = buildDownloadAttachmentConfirmation('VSJI-38', 'heap-dump.bin');
-    expect(confirmation.title).toContain('VSJI-38');
-    expect(confirmation.title).toContain('heap-dump.bin');
-    expect(confirmation.message).toContain('.jira-context/VSJI-38/attachments/heap-dump.bin');
-  });
-});
-
-describe('jira_downloadAttachment not-found message (R10/KTD5)', () => {
-  it('lists the ticket\'s real attachment filenames instead of a raw not-found error', () => {
-    const message = buildAttachmentNotFoundMessage('VSJI-38', 'wrong-name.txt', ['screenshot.png', 'error.log']);
-    expect(message).toContain('wrong-name.txt');
-    expect(message).toContain('screenshot.png');
-    expect(message).toContain('error.log');
-  });
-
-  it('handles a ticket with no attachments gracefully', () => {
-    const message = buildAttachmentNotFoundMessage('VSJI-38', 'anything.txt', []);
-    expect(message).toContain('no attachments');
-  });
-});
-
-describe('jira_downloadAttachment result message (R9/R10, KTD5)', () => {
-  it('names the ticket, filename, and target path for a single match', () => {
-    const message = buildDownloadAttachmentResultMessage('VSJI-38', 'report.log', 1);
-    expect(message).toContain('report.log');
-    expect(message).toContain('.jira-context/VSJI-38/attachments/report.log');
-    expect(message).not.toMatch(/share that filename/);
-  });
-
-  it('names that a duplicate filename was resolved to the most recent match', () => {
-    const message = buildDownloadAttachmentResultMessage('VSJI-38', 'report.log', 2);
-    expect(message).toMatch(/share that filename/);
-    expect(message).toMatch(/most recently created/);
-  });
-});
-
-describe('jira_uploadAttachment confirmation (R10: names ticket, file, and size)', () => {
-  it('names the ticket, file path, and size', () => {
-    const confirmation = buildUploadAttachmentConfirmation('VSJI-38', '/workspace/report.pdf', 2_097_152);
-    expect(confirmation.title).toContain('VSJI-38');
-    expect(confirmation.message).toContain('VSJI-38');
-    expect(confirmation.message).toContain('/workspace/report.pdf');
-    expect(confirmation.message).toContain('2.0 MB');
-  });
-});
-
-describe('jira_uploadAttachment tool registration (R9)', () => {
-  it('is declared under contributes.languageModelTools with ticketKey and filePath inputs', () => {
-    const pkg = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf-8'));
-    const tool = pkg.contributes.languageModelTools.find((t: { name: string }) => t.name === 'jira_uploadAttachment');
-    expect(tool).toBeDefined();
-    expect(tool.inputSchema.required).toEqual(['ticketKey', 'filePath']);
-    expect(tool.inputSchema.properties).toHaveProperty('ticketKey');
-    expect(tool.inputSchema.properties).toHaveProperty('filePath');
-  });
-});
-
-describe('jira_getTicket modelDescription mentions attachments (R11, AE7)', () => {
-  it('advertises attachment filenames as part of what jira_getTicket returns', () => {
-    const pkg = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf-8'));
-    const tool = pkg.contributes.languageModelTools.find((t: { name: string }) => t.name === 'jira_getTicket');
-    expect(tool.modelDescription.toLowerCase()).toContain('attachment');
-  });
-});
-
-describe('jira_createTicket confirmation (KTD4: names project/type/summary)', () => {
-  it('names project, issue type, and summary when the issue type is already resolved', () => {
-    const confirmation = buildCreateTicketConfirmation('PROJ', 'Bug', 'Login fails on Safari', null);
-    expect(confirmation.message).toContain('PROJ');
-    expect(confirmation.message).toContain('Bug');
-    expect(confirmation.message).toContain('Login fails on Safari');
-  });
-
-  it('names the template when one is supplied', () => {
-    const confirmation = buildCreateTicketConfirmation('PROJ', 'Bug', 'Login fails on Safari', 'Bug report');
-    expect(confirmation.message).toContain('Bug report');
-  });
-
-  it('does not fabricate an issue type when it is not yet resolved', () => {
-    const confirmation = buildCreateTicketConfirmation('PROJ', null, 'Login fails on Safari', null);
-    expect(confirmation.message).not.toMatch(/\*\*null\*\*/);
-    expect(confirmation.message).toContain('to be resolved');
-  });
-
-  it('lists the template\'s resolved field values so approval is not blind to what it sets', () => {
-    const confirmation = buildCreateTicketConfirmation('PROJ', 'Bug', 'Login fails on Safari', 'Bug report', {
-      priority: { name: 'High' },
-      labels: ['frontend', 'safari'],
-      description: 'This should not appear — shown separately.',
-    });
-    expect(confirmation.message).toContain('priority');
-    expect(confirmation.message).toContain('High');
-    expect(confirmation.message).toContain('frontend');
-    expect(confirmation.message).toContain('safari');
-    expect(confirmation.message).not.toContain('should not appear');
-  });
-
-  it('adds no extra note when there are no resolved fields to show', () => {
-    const withNull = buildCreateTicketConfirmation('PROJ', 'Bug', 'Login fails on Safari', null, null);
-    const withEmpty = buildCreateTicketConfirmation('PROJ', 'Bug', 'Login fails on Safari', null, {});
-    expect(withNull.message).not.toContain('will also set');
-    expect(withEmpty.message).not.toContain('will also set');
-  });
-});
-
-describe('jira_transitionTicket confirmation', () => {
-  it('names the ticket and the from/to statuses', () => {
-    const confirmation = buildTransitionConfirmation('PROJ-123', 'In Progress', 'Done');
-    expect(confirmation.message).toContain('PROJ-123');
-    expect(confirmation.message).toContain('In Progress');
-    expect(confirmation.message).toContain('Done');
-  });
-
-  it('includes the resolution when supplied', () => {
-    const confirmation = buildTransitionConfirmation('PROJ-123', 'In Progress', 'Done', 'Fixed');
-    expect(confirmation.message).toContain('Fixed');
-  });
-
-  it('degrades gracefully when the current status could not be fetched', () => {
-    const confirmation = buildTransitionConfirmation('PROJ-123', null, 'Done');
-    expect(confirmation.message).toContain('its current status');
-  });
-});
-
-describe('jira_createTicket never-guess fallback (KTD4)', () => {
+describe('create ticket without an issue type', () => {
   it('lists the project\'s valid issue types and creates nothing', () => {
     const message = formatIssueTypeOptionsMessage('PROJ', ['Bug', 'Story', 'Task']);
     expect(message).toContain('No ticket was created');
@@ -240,84 +25,16 @@ describe('jira_createTicket never-guess fallback (KTD4)', () => {
     expect(message).toContain('Task');
   });
 
+  it('points at the MCP create and list-templates tools for the next call', () => {
+    const message = formatIssueTypeOptionsMessage('PROJ', ['Bug']);
+    expect(message).toContain(CREATE_TICKET_TOOL);
+    expect(message).toContain(LIST_TEMPLATES_TOOL);
+    expect(message).not.toContain('jira_createTicket');
+  });
+
   it('still returns an actionable message when the issue-type fetch itself failed', () => {
     const message = formatIssueTypeOptionsMessage('PROJ', []);
     expect(message).toContain('No ticket was created');
     expect(message).toContain('issueType');
-  });
-});
-
-describe('jira_listTemplates', () => {
-  it('returns an empty-list message, not an error, when no templates are configured', () => {
-    const message = formatTemplateListMessage([]);
-    expect(message).not.toMatch(/error/i);
-    expect(message).toContain('No templates found');
-  });
-
-  it('lists each template with its issue type', () => {
-    const message = formatTemplateListMessage([{ name: 'Bug report', issueType: 'Bug' }, { name: 'Feature', issueType: 'Story' }]);
-    expect(message).toContain('Bug report');
-    expect(message).toContain('Bug');
-    expect(message).toContain('Feature');
-    expect(message).toContain('Story');
-  });
-});
-
-describe('jira_discoverWorkflow result message', () => {
-  it('renders each status and its transitions', () => {
-    const message = formatWorkflowDiscoveryMessage(
-      'PROJ',
-      'Bug',
-      { 'To Do': [{ id: '1', name: 'Start', to: 'In Progress' }], 'In Progress': [{ id: '2', name: 'Finish', to: 'Done' }] },
-      [],
-      [],
-    );
-    expect(message).toContain('To Do');
-    expect(message).toContain('In Progress');
-    expect(message).toContain('Done');
-  });
-
-  it('reports when no tickets were found to sample', () => {
-    const message = formatWorkflowDiscoveryMessage('PROJ', 'Bug', {}, [], []);
-    expect(message).toContain('No tickets found');
-  });
-
-  it('notes a status that kept its cached transitions when it had no representative ticket', () => {
-    const message = formatWorkflowDiscoveryMessage(
-      'PROJ',
-      'Bug',
-      { 'To Do': [{ id: '1', name: 'Start', to: 'In Progress' }], 'Done': [{ id: '9', name: 'Reopen', to: 'To Do' }] },
-      ['Done'],
-      ['Done'],
-    );
-    expect(message).toContain('kept cached transitions');
-    expect(message).toContain('Done');
-    expect(message).not.toContain('re-run jira_discoverWorkflow');
-  });
-
-  it('warns about a status with no tickets and no cached transitions to fall back on', () => {
-    const message = formatWorkflowDiscoveryMessage(
-      'PROJ',
-      'Bug',
-      { 'To Do': [{ id: '1', name: 'Start', to: 'In Progress' }] },
-      ['Blocked'],
-      [],
-    );
-    expect(message).toContain('no cached transitions');
-    expect(message).toContain('Blocked');
-    expect(message).toContain('re-run jira_discoverWorkflow');
-  });
-});
-
-// jira_getTicket / jira_searchTickets / jira_getComments delegate straight to TicketService
-// methods that already have full coverage in TicketService.test.ts — this exercises the exact
-// call shape jiraTools.ts's invoke() uses (fieldMeta + baseUrl), confirming the reused path works
-// end to end via the shared MockJiraClient fixture.
-describe('jira_getTicket (delegates to TicketService.getTicket)', () => {
-  it('returns the ticket via the mock client for a valid key', async () => {
-    const service = new TicketService(new MockJiraClient());
-    const fieldMeta = await service.getFieldMeta();
-    const result = await service.getTicket('PROJ-123', fieldMeta, new Set(), new Set());
-    expect(result).toContain('PROJ-123');
   });
 });

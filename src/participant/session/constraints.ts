@@ -1,8 +1,7 @@
-// JQL constraint building and resolution, filter listings, the not-configured message.
+// JQL constraint building and resolution, filter listings.
 // Pure (vscode-free); re-exported through ../sessionState.ts.
 
 import type { IJiraClient, JiraFilter, JiraFilterSource } from '../../jira/IJiraClient';
-import type { JiraConfig } from '../../services/ConfigService';
 import { formatBulletList, isCancellation } from './primitives';
 import { PendingSearchConstraints } from './sessionTypes';
 
@@ -77,6 +76,15 @@ function quoteJqlValue(value: string): string {
  * provided returns `baseJql` unchanged.
  */
 export function buildConstraintJql(baseJql: string, constraints: JqlConstraints): string {
+  const clauses = buildConstraintClauses(constraints);
+  if (clauses.length === 0) {
+    return baseJql;
+  }
+  return `(${baseJql}) AND (${clauses.join(' AND ')})`;
+}
+
+/** The JQL clauses of a resolved constraint set, each value quoted and escaped, in a fixed order. */
+export function buildConstraintClauses(constraints: JqlConstraints): string[] {
   const clauses: string[] = [];
 
   if (constraints.fixVersion) {
@@ -90,11 +98,7 @@ export function buildConstraintJql(baseJql: string, constraints: JqlConstraints)
       constraints.assignee === 'me' ? 'assignee = currentUser()' : `assignee = ${quoteJqlValue(constraints.assignee)}`,
     );
   }
-
-  if (clauses.length === 0) {
-    return baseJql;
-  }
-  return `(${baseJql}) AND (${clauses.join(' AND ')})`;
+  return clauses;
 }
 
 /**
@@ -195,7 +199,7 @@ export type ConstraintResolutionResult =
  * more than one returns `'ambiguous'` immediately (no guessing, no partial commit to that
  * constraint). `alreadyResolved` carries forward whatever earlier constraint(s) already resolved
  * before a prior ambiguity was hit — the chat flow's resume-after-pick path passes this in;
- * `jira_searchByFilter` (a tool, no session memory) never does.
+ * the MCP find tool (no session memory) never does.
  */
 export async function resolveNamedConstraints(
   baseJql: string,
@@ -281,7 +285,7 @@ export function formatFilterCandidateList(filters: JiraFilter[]): string {
 }
 
 /**
- * U7: `jira_listMyFilters`'s plain-text formatting of `TicketService.getMyFilters()`'s result —
+ * The MCP list-my-filters tool's plain-text formatting of `TicketService.getMyFilters()`'s result —
  * mirrors `handleListMyFilters()`'s chat wording (the same failure note, the same "none found"
  * message) so the tool and the chat flow never drift apart (R3), minus the numbered pick-list
  * (a tool has no session memory to resume a pick against — it just lists every filter as text).
@@ -292,23 +296,4 @@ export function formatMyFiltersList(filters: JiraFilter[], failedSources: JiraFi
     return `${failureNote}No favourite or owned filters found.`;
   }
   return `${failureNote}Your filters:\n\n${formatFilterCandidateList(filters)}`;
-}
-
-/**
- * Plain-text "Jira isn't configured" message naming the specific missing setting or setup
- * command — the same information @jira's chat handler's own not-configured messages give,
- * but without a trusted `MarkdownString` command link (a `LanguageModelToolResult`, unlike a
- * chat stream, can't carry one), so this doubles as both a tool result and plain chat text.
- */
-export function buildJiraNotConfiguredMessage(config: Pick<JiraConfig, 'baseUrl' | 'token' | 'authType'>): string {
-  if (!config.baseUrl) {
-    return (
-      'Jira base URL not configured. Add `ticketSidekick.jira.baseUrl` in VS Code settings ' +
-      '(e.g. `https://jira.mycompany.com`), then set your credentials.'
-    );
-  }
-  const setupLabel = config.authType === 'cloud'
-    ? 'Ticket Sidekick: Configure Jira Cloud Credentials'
-    : 'Ticket Sidekick: Set Jira Personal Access Token';
-  return `Jira credentials not configured. Run "${setupLabel}" from the Command Palette.`;
 }

@@ -188,7 +188,7 @@ export function isUsageRequest(prompt: string): boolean {
 
 /**
  * Plain-text "Bitbucket isn't configured" message naming the specific missing setting or
- * setup command — the Bitbucket equivalent of `buildJiraNotConfiguredMessage` (sessionState.ts).
+ * setup command — the Bitbucket equivalent of `buildJiraNotConfiguredMessage` (services/setupHints.ts).
  * No trusted `MarkdownString` command link (a `LanguageModelToolResult` can't carry one), so
  * this doubles as both a tool result and plain chat text.
  */
@@ -425,7 +425,7 @@ export function formatPullRequestSummary(pr: BitbucketPR): string {
 
 /** Confirmation for `bitbucket_postComment` — names the PR (project/repo/id, which for Cloud
  * is workspace/slug/id — `parsePrUrl` already normalizes both into this same shape) and shows
- * the literal comment text, mirroring `buildAddCommentConfirmation`'s Jira equivalent. */
+ * the literal comment text. */
 export function buildPostCommentConfirmation(project: string, repo: string, prId: number, comment: string): ToolConfirmation {
   return {
     title: `Post comment on ${project}/${repo}#${prId}`,

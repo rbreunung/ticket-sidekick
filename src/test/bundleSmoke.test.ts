@@ -144,4 +144,8 @@ describe('bundled extension (out/extension.js)', () => {
     expect(declared.length).toBeGreaterThan(0);
     expect([...registered.tools].sort()).toEqual(declared);
   });
+
+  it('registers no Jira Agent Mode tool, since the Jira tools are on the MCP server', () => {
+    expect(registered.tools.filter(name => name.startsWith('jira_'))).toEqual([]);
+  });
 });

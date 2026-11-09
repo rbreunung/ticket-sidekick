@@ -9,7 +9,7 @@ Two independent GitHub Copilot Chat participants — use one or both:
 
 Neither participant requires the other to be configured.
 
-Most operations are also available as GitHub Copilot **Agent Mode** tools (`jira_*`, `bitbucket_*`), so an agent can read and create tickets, update fields, read pull requests, and post comments without you typing `@jira`/`@bitbucket` — see [Agent Mode Tools](docs/manual/agent-mode-tools.md) for the list and which tools ask before changing anything.
+Most operations are also available as tools an agent can call without you typing `@jira`/`@bitbucket`. The Jira tools (view, find, filters, workflow, templates, load, move, create, comment, update a field, upload) come from Ticket Sidekick's own MCP server — see [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md). The Bitbucket tools are GitHub Copilot **Agent Mode** tools (`bitbucket_*`) — see [Agent Mode Tools](docs/manual/agent-mode-tools.md) for the list and which tools ask before changing anything.
 
 ---
 
@@ -174,17 +174,11 @@ Once loaded, your AI assistant (GitHub Copilot, Cursor, etc.) can read these fil
 | Archives | `.zip`, `.tar`, `.gz`, `.tgz`, `.bz2`, `.7z`, `.rar`, `.jar`, `.war`, `.ear` | Downloaded |
 | Oversized | File larger than 100 MB | Skipped — listed in `ticket.md` with size |
 | Unknown binary | Any other MIME type not covered above | Skipped — listed in `ticket.md` with size |
+| Unsafe name | A name with `/` or `\` in it, or the name `.` or `..` | Never written — listed in `ticket.md` |
 
 Up to three attachments are downloaded in parallel.
 
-When a load completes with skipped attachments, the response shows a numbered list. To download on demand:
-
-```text
-1              ← download attachment #1
-download 1     ← same
-1 2 3          ← download attachments #1, #2, and #3 in one reply
-download 1 3   ← same, with keyword prefix
-```
+When a load skips attachments, the response lists each one with its name, size and the reason. To fetch a skipped one anyway, ask Copilot to load it with the `jira_load_ticket` tool, naming the attachment (see [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md)). Files over 100 MB and files with an unsafe name are never downloaded.
 
 `.jira-context/` is automatically added to `.gitignore` at your workspace root the first time you run `@jira load`.
 
@@ -410,6 +404,14 @@ Turn a `.eml` email, a Veracode Detailed Report, or a Waltz OSS Report into Jira
 
 Create a `.jira-templates.json` file in your workspace root to define per-application templates with default fields and guided description collection, plus named cleanup rules for bulk status transitions. See [Jira Templates and Cleanup Rules](docs/manual/jira-templates-and-cleanup-rules.md) for how to generate one from an existing ticket, field references, and examples.
 
+### Jira tools in Copilot-harness chats (MCP)
+
+Chats that run in VS Code's **Copilot harness** cannot use `@jira`. For them Ticket Sidekick runs a small MCP server inside VS Code on `127.0.0.1`, on a random port and with a key that changes at every start, and offers it to VS Code as the **Ticket Sidekick** MCP server. Its tools view, find, load, move, create, comment on and update Jira tickets, upload attachments, list filters, workflows and templates, and check the connection. The `/ts-jira-brief` skill writes a developer brief of a ticket, `/ts-jira-create` creates a ticket with you, from a template where one fits, and `/ts-jira <command>` runs one Jira command you type, e.g. `/ts-jira load PROJ-123`. Needs VS Code 1.101 or later.
+
+The server runs only while the VS Code setting `http.noProxy` contains the entry `127.0.0.1` (exactly that; an entry with a port does not count). Ticket Sidekick never changes the setting: until you add the entry, every VS Code start shows a notice with an **Open Setting** button, and the Jira walkthrough has a step for it.
+
+See [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md) for every tool and its inputs, the skills, approvals, `Ticket Sidekick: Copy MCP diagnostics`, troubleshooting and a checklist to try it out.
+
 ### Settings reference
 
 See [Settings Reference → Jira](docs/manual/settings-reference.md#jira-settings-reference) for every `ticketSidekick.jira.*` setting, and [Report import settings](docs/manual/settings-reference.md#report-import-settings) for every `ticketSidekick.email.*` / `ticketSidekick.veracode.*` / `ticketSidekick.waltz.*` setting.
@@ -528,6 +530,10 @@ or findings were in that attempt, and the raw error. If a review or
 follow-up ever shows a failure message, check this channel first — it
 usually explains whether it was a one-off provider hiccup (worth just
 retrying) or something more persistent.
+
+For the MCP server behind the Jira tools in Copilot-harness chats, run
+`Ticket Sidekick: Copy MCP diagnostics` — see
+[Jira Tools for Copilot Chats](docs/manual/copilot-tools.md#diagnostics).
 
 ## Releasing
 
