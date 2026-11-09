@@ -30,15 +30,12 @@ function parseFrontmatter(text: string): Record<string, string> | undefined {
 }
 
 /**
- * Skills only the user starts, by typing them: the `ts-` command skills, and `jira-brief`, which
- * a model without thinking ran in place of other requests. They keep model invocation off, so
- * they never compete with the tools for a plain request; every other skill keeps it on, so the
- * agent can pick it by itself.
+ * Skills only the user starts, by typing them: the `ts-` skills. They keep model invocation off,
+ * so they never compete with the tools for a plain request, and a model without thinking cannot
+ * drift into one in place of another request; any other skill keeps it on.
  */
-const EXPLICIT_ONLY_SKILLS: ReadonlySet<string> = new Set(['jira-brief']);
-
 function isExplicitOnly(folder: string): boolean {
-  return folder.startsWith('ts-') || EXPLICIT_ONLY_SKILLS.has(folder);
+  return folder.startsWith('ts-');
 }
 
 /** What is wrong with one skill: its folder name, its SKILL.md text, the tool names that exist. */
@@ -125,8 +122,8 @@ describe('the skill guard', () => {
   });
 });
 
-describe('the /jira-brief skill', () => {
-  const brief = readFileSync(resolve(root, 'skills/jira-brief/SKILL.md'), 'utf-8');
+describe('the /ts-jira-brief skill', () => {
+  const brief = readFileSync(resolve(root, 'skills/ts-jira-brief/SKILL.md'), 'utf-8');
   const sections = [
     'Problem or goal',
     'Context',
@@ -185,7 +182,7 @@ const BASIC_COMMANDS: Record<string, readonly string[]> = {
   comment: [ADD_COMMENT_TOOL],
   field: [UPDATE_FIELD_TOOL],
   move: [MOVE_TICKET_TOOL],
-  create: [CREATE_TICKET_TOOL, '/jira-create'],
+  create: [CREATE_TICKET_TOOL, '/ts-jira-create'],
   check: [CHECK_CONNECTION_TOOL],
 };
 
@@ -211,8 +208,8 @@ describe('basic @jira commands without @jira', () => {
   });
 });
 
-describe('the /jira-create skill', () => {
-  const create = readFileSync(resolve(root, 'skills/jira-create/SKILL.md'), 'utf-8');
+describe('the /ts-jira-create skill', () => {
+  const create = readFileSync(resolve(root, 'skills/ts-jira-create/SKILL.md'), 'utf-8');
 
   it('looks at the templates first and creates the ticket last', () => {
     const at = positions(create, [LIST_TEMPLATES_TOOL, CREATE_TICKET_TOOL]);
@@ -234,7 +231,7 @@ describe('the /ts-jira command skill', () => {
 
   it('has a row for every MCP tool, so a new tool cannot be forgotten', () => {
     const called = rows.flatMap(r => r.action.match(/\bjira_[a-z_]+/g) ?? []);
-    // Creating is left to the /jira-create skill, which drafts the ticket with the user first.
+    // Creating is left to the /ts-jira-create skill, which drafts the ticket with the user first.
     const direct = catalogNames.filter(name => name !== CREATE_TICKET_TOOL);
     expect([...new Set(called)].sort()).toEqual([...direct].sort());
   });
@@ -263,7 +260,9 @@ describe('the /ts-jira command skill', () => {
   it('checks an empty command, help, an unknown command and a missing argument, in that order, before running anything', () => {
     expect(cases.map(c => c.n)).toEqual([1, 2, 3, 4, 5]);
     expect(cases[0].text).toBe('Nothing typed: call no tool. Reply with exactly the help text below, as a code block. Stop.');
-    expect(cases[1].text).toMatch(/^The first word is `help`: call no tool and run nothing\. If the next word is a command of the help text, reply with only its line/);
+    expect(cases[1].text).toMatch(/^The first word is `help`: run nothing\./);
+    expect(cases[1].text).toContain('read `help-brief.md` or `help-create.md` in this skill\'s folder and reply with its text exactly; read no other file and call no other tool.');
+    expect(cases[1].text).toContain('call no tool and reply with only its line as a code block');
     expect(cases[2].text).toBe('The first word is not a command of the table: call no tool. Reply with exactly the help text. Stop.');
     expect(cases[3].text).toMatch(/^An argument in angle brackets that the command needs is missing: call no tool\./);
     expect(cases[4].text).toMatch(/^Otherwise make the one call the table names/);
@@ -274,13 +273,36 @@ describe('the /ts-jira command skill', () => {
     const help = router.slice(router.indexOf('```text') + 8, router.indexOf('```', router.indexOf('```text') + 8)).split('\n');
     expect(help[0]).toBe('Usage: /ts-jira <command> [arguments]');
     expect(help[1]).toMatch(/^-{20,}$/);
-    expect(help.at(-3)).toMatch(/^-{20,}$/);
-    expect(help.at(-2)).toBe('Without KEY, load and view use the ticket of the git branch.');
+    expect(help.at(-4)).toMatch(/^-{20,}$/);
+    expect(help.at(-3)).toBe('Without KEY, load and view use the ticket of the git branch.');
+    expect(help.at(-2)).toBe('A developer brief or a guided ticket create: help brief, help create');
   });
 
   it('prints a help line for every command of the table, in the same order', () => {
     const help = router.slice(router.indexOf('Usage: /ts-jira'), router.indexOf('```', router.indexOf('Usage: /ts-jira')));
     const helpCommands = [...help.matchAll(/^ {2}([a-z]+)\b/gm)].map(m => m[1]);
     expect(helpCommands).toEqual(rows.map(r => r.command));
+  });
+});
+
+describe('the help pages /ts-jira prints for brief and create', () => {
+  const pages = [
+    { file: 'help-brief.md', skill: 'ts-jira-brief', plain: '/ts-jira view' },
+    { file: 'help-create.md', skill: 'ts-jira-create', plain: 'calls the create ticket tool directly' },
+  ];
+
+  it.each(pages)('$file names a skill that exists, how to use it, and what to do without it', ({ file, skill, plain }) => {
+    const page = readFileSync(resolve(root, 'skills/ts-jira', file), 'utf-8');
+    expect(skillNames).toContain(skill);
+    expect(page.split('\n')[0]).toMatch(new RegExp(`^/${skill} `));
+    expect(page).toContain(`Example: /${skill} `);
+    expect(page).toContain('Without it:');
+    expect(page).toContain(plain);
+    expect(page).toContain(`Copilot runs /${skill} only when you type it.`);
+  });
+
+  it('keeps every skill name out of /ts-jira itself, so it only reaches the model on help brief or help create', () => {
+    const router = readFileSync(resolve(root, 'skills/ts-jira/SKILL.md'), 'utf-8');
+    for (const page of pages) expect(router).not.toContain(page.skill);
   });
 });

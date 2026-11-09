@@ -24,7 +24,7 @@ execution: code
 
 ### Summary
 
-The extension runs its own MCP server on `127.0.0.1` whenever `127.0.0.1` is in `http.noProxy`. It offers 12 Jira tools: view, find, list filters, load, move, workflow, check connection, list templates, create, comment, update field and upload attachment. The 14 Jira Agent Mode tools are removed as their replacements land. Two skills, `/jira-brief` and `/jira-create`, add the workflows a tool description cannot carry. When load ticket skips attachments it could still fetch, the agent shows them to the user as a numbered list to pick from. Users without the proxy entry are told at every start how to enable the tools.
+The extension runs its own MCP server on `127.0.0.1` whenever `127.0.0.1` is in `http.noProxy`. It offers 12 Jira tools: view, find, list filters, load, move, workflow, check connection, list templates, create, comment, update field and upload attachment. The 14 Jira Agent Mode tools are removed as their replacements land. Two skills, `/ts-jira-brief` and `/ts-jira-create`, add the workflows a tool description cannot carry. When load ticket skips attachments it could still fetch, the agent shows them to the user as a numbered list to pick from. Users without the proxy entry are told at every start how to enable the tools.
 
 ### Problem Frame
 
@@ -44,7 +44,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 - **Check connection is a new tool; the branch ticket is built into view and load.** Governs R15, R16. (session-settled: user-directed — chosen over a separate branch tool or a combined status tool.)
 - **Templates, create, comment, update field and upload stay separate tools.** Governs R17, R18. (session-settled: user-directed — chosen over merging them, which would trigger approval prompts for reads or blur approvals.)
 - **Free text is written as Markdown and converted to Jira wiki markup, as `@jira` does.** Governs R19. (session-settled: user-directed — chosen over tools that take wiki markup as today.)
-- **Three skills: `/jira-create`, which the agent may pick, and the explicit-only `/jira-brief` and `/ts-jira` command router.** Governs R21, R22, R23, R35. (session-settled: user-directed — chosen over one model-invocable skill per `@jira` command and over MCP prompts, which the Copilot harness does not offer. The router was added after a plain "load ticket" request ran `/jira-brief`, and was chosen over MCP server instructions, which the Copilot harness includes only for allowlisted servers, and over one explicit-only skill per command; the `ts-` prefix keeps it from clashing with other extensions' skills. `/jira-brief` became explicit-only after a model without thinking kept running it in place of `/ts-jira`, chosen over hardening the wording further or requiring thinking, which a skill cannot enforce.)
+- **Three explicit-only skills under one prefix: `/ts-jira-brief`, `/ts-jira-create` and the `/ts-jira` command router.** Governs R21, R22, R23, R35. (session-settled: user-directed — chosen over one model-invocable skill per `@jira` command and over MCP prompts, which the Copilot harness does not offer. The router was added after a plain "load ticket" request ran the brief skill, and was chosen over MCP server instructions, which the Copilot harness includes only for allowlisted servers, and over one explicit-only skill per command. All three became explicit-only after a model without thinking kept running a model-invocable skill in place of `/ts-jira`, chosen over hardening the wording further or requiring thinking, which a skill cannot enforce; the `ts-` prefix keeps them from clashing with other extensions' skills. The router names no other skill: `help brief` and `help create` print help files from its folder.)
 - **Tests add an e2e check through VS Code's own MCP client; a real-Jira e2e is a follow-up.** Governs R27, R28. (session-settled: user-directed — chosen over an activation-only e2e or including the real-Jira workflow in this phase.)
 - **The user picks skipped attachments to fetch after the load answer, from a numbered list the agent shows.** Governs R30, R31. (session-settled: user-directed — chosen over an inline panel with Load buttons, which VS Code attaches to every load result and which, after a window reload in the Copilot harness, shows a loading error until the MCP server reconnects; also over a question during the load or leaving it to the agent.)
 - **The agent is not told separately what was loaded; it learns it from the answer of the load it makes.** Governs R31. (session-settled: user-directed — chosen over a context note from a panel, which the Copilot harness drops: VS Code passes a generic text attachment from an MCP App on to Local agents only.)
@@ -86,10 +86,10 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 
 **Skills**
 
-- R21. The extension contributes three skills: `/jira-create`, which is model-invocable, and the explicit-only `/jira-brief` and `/ts-jira`, which run only when the user types them; none repeats what a tool description already says.
-- R22. `/jira-brief` produces a developer brief with eight sections in order: problem or goal, context, steps to reproduce with expected and actual result, acceptance criteria, decisions and findings from comments with author and date, current state, open questions and missing information, and sources used. A section the ticket does not cover says "not stated in the ticket"; derived acceptance criteria are marked as derived; it reads relevant attachments through load ticket and lists those it could not read.
-- R23. `/jira-create` guides template choice, asks only for missing fields, shows the drafted summary and description, then calls create ticket.
-- R35. `/ts-jira <command> <arguments>` runs only when the user types it and maps each command (load, view, search, filters, comment, field, move, workflow, templates, upload, check) to one tool and names no skill; without a command, with `help [command]`, with an unknown command or with a missing required argument it shows its help, or the command's help line, and calls no tool. Creating a ticket stays with `/jira-create`.
+- R21. The extension contributes three skills, all explicit-only (they run only when the user types them): `/ts-jira-brief`, `/ts-jira-create` and `/ts-jira`; none repeats what a tool description already says.
+- R22. `/ts-jira-brief` produces a developer brief with eight sections in order: problem or goal, context, steps to reproduce with expected and actual result, acceptance criteria, decisions and findings from comments with author and date, current state, open questions and missing information, and sources used. A section the ticket does not cover says "not stated in the ticket"; derived acceptance criteria are marked as derived; it reads relevant attachments through load ticket and lists those it could not read.
+- R23. `/ts-jira-create` guides template choice, asks only for missing fields, shows the drafted summary and description, then calls create ticket.
+- R35. `/ts-jira <command> <arguments>` runs only when the user types it and maps each command (load, view, search, filters, comment, field, move, workflow, templates, upload, check) to one tool and names no skill; without a command, with `help [command]`, with an unknown command or with a missing required argument it shows its help, or the command's help line, and calls no Jira tool. `help brief` and `help create` print a page on `/ts-jira-brief` and `/ts-jira-create`: what each is for, an example, and what to do without it; the router's own text names no skill.
 
 **Diagnostics and documentation**
 
@@ -110,7 +110,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 - AE4. **Covers R13.** Given no cached workflow and a target two transitions away, when move ticket runs, then it discovers the workflow, moves through both steps and names them in its result.
 - AE5. **Covers R19.** Given a comment written with a Markdown heading, a list and a table, when add comment runs, then Jira receives `h2.`, `*` list items and a `||`-headed table.
 - AE6. **Covers R20.** Given no Jira token, when any tool runs, then it answers with the setup hint naming the missing token.
-- AE7. **Covers R22.** Given a ticket whose description has no acceptance criteria, when `/jira-brief` runs, then the acceptance criteria section is marked derived or says "not stated in the ticket", and the sources section lists the comments and attachments used.
+- AE7. **Covers R22.** Given a ticket whose description has no acceptance criteria, when `/ts-jira-brief` runs, then the acceptance criteria section is marked derived or says "not stated in the ticket", and the sources section lists the comments and attachments used.
 - AE8. **Covers R30, R31.** Given a ticket with `design.dat` (not downloaded by default), `dump.log` (download failed), `huge.iso` (300 MB) and `../../evil.txt`, when load ticket runs, then its answer numbers `design.dat` and `dump.log`, lists the other two apart with their reasons, and tells the agent to ask the user which to download; when the user answers "all", the agent calls load ticket with both names and they are written into `.jira-context/<KEY>/attachments/`.
 
 ### Success Criteria
@@ -156,7 +156,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 - KTD8. **Annotations decide the harness approval:** reads carry `readOnlyHint: true`; Jira writes carry `destructiveHint: true`; load carries neither, since it writes only local files. No extension modal.
 - KTD9. **Markdown conversion happens in the handlers** of add comment, create ticket (description) and update field (text values), with `markdownToJiraWiki()`; the tool descriptions say "Markdown".
 - KTD10. **The connection check becomes a pure function shared with `@jira check`,** so both give the same answer from the same code.
-- KTD11. **Skills are contributed through `contributes.chatSkills`** from `skills/jira-brief/SKILL.md` and `skills/jira-create/SKILL.md`, with `name` equal to the folder name and no `disable-model-invocation`.
+- KTD11. **Skills are contributed through `contributes.chatSkills`** from `skills/<name>/SKILL.md`, with `name` equal to the folder name; every `ts-` skill sets `disable-model-invocation: true`, and help pages a skill prints sit as files in its folder, which VS Code syncs to the Copilot harness with the skill.
 - KTD12. **The e2e test drives VS Code's own MCP client.** It writes `http.noProxy` and tool auto-approval into the throwaway profile in `src/e2e/runTest.ts`, starts the server through VS Code, waits for the tools in `vscode.lm.tools`, invokes check connection with `vscode.lm.invokeTool`, then removes the entry and expects the tools to disappear. If VS Code does not expose MCP tools to extensions that way, the test is reduced to activation and server lifecycle, and the plan's coverage note says so.
 - KTD13. **The diagnostic report becomes `Ticket Sidekick: Copy MCP diagnostics`,** without the prototype's rendezvous and launcher sections, keeping the stored-key search over the Copilot home, VS Code logs and VS Code storage, and adding the restart, client, proxy-evaluation and tool-outcome sections of U5.
 - KTD14. **One shared wrapper turns Jira failures into tool answers** for every MCP Jira tool, from the first read tool on: a timeout of about 30 seconds on each Jira read and a longer one (about 2 minutes) on each attachment download, where a download that times out is reported as a failed download for that file only, a short status-and-reason answer for the agent, and the full error logged through `logDiag`. The check connection tool from PR1 moves onto it in the same step.
@@ -177,7 +177,7 @@ flowchart TB
     REG["src/mcp/register.ts<br/>provider, lifecycle, notice, diagnostics"]
     SRV["Localhost server<br/>guard: Host, Origin, key, noProxy"]
     CAT["Tool catalog<br/>12 Jira tools"]
-    SK["Skills<br/>/jira-brief, /jira-create"]
+    SK["Skills<br/>/ts-jira-brief, /ts-jira-create"]
     SVC["TicketService, WorkflowService,<br/>TemplateService, load core"]
     JP["@jira participant<br/>(Local harness, unchanged)"]
     BB["Bitbucket Agent Mode tools<br/>(unchanged this phase)"]
@@ -217,8 +217,8 @@ src/mcp/
     viewTicket.ts  findTickets.ts  loadTicket.ts  moveTicket.ts  workflow.ts
     templates.ts  createTicket.ts  addComment.ts  updateField.ts  uploadAttachment.ts
 skills/
-  jira-brief/SKILL.md
-  jira-create/SKILL.md
+  ts-jira-brief/SKILL.md
+  ts-jira-create/SKILL.md
 src/test/mcp*.test.ts
 ```
 
@@ -243,11 +243,11 @@ src/test/mcp*.test.ts
 | U9 | Load ticket | `src/mcp/jiraTools/loadTicket.ts`, `src/participant/jira/loadHandler.ts` | U7 |
 | U10 | Workflow and list templates | `src/mcp/jiraTools/workflow.ts`, `templates.ts` | U4 |
 | U11 | Retire the moved read tools; docs | `src/tools/jiraTools.ts`, `package.json`, `docs/manual/*`, `src/test/userDocsSync.test.ts` | U7–U10 |
-| U12 | `/jira-brief` skill and skill guard | `skills/jira-brief/SKILL.md`, `package.json`, `src/test/mcpSkillsGuard.test.ts` | U7, U9 |
+| U12 | `/ts-jira-brief` skill and skill guard | `skills/ts-jira-brief/SKILL.md`, `package.json`, `src/test/mcpSkillsGuard.test.ts` | U7, U9 |
 | U13 | Markdown conversion for text inputs | `src/mcp/jiraTools/text.ts` | U4 |
 | U14 | Write tools | `moveTicket.ts`, `createTicket.ts`, `addComment.ts`, `updateField.ts`, `uploadAttachment.ts` | U10, U13 |
 | U15 | Retire the remaining Jira tools; docs | `src/tools/jiraTools.ts`, `package.json`, `docs/manual/*` | U14 |
-| U16 | `/jira-create` skill and command coverage | `skills/jira-create/SKILL.md`, `src/test/mcpSkillsGuard.test.ts` | U14, U12 |
+| U16 | `/ts-jira-create` skill and command coverage | `skills/ts-jira-create/SKILL.md`, `src/test/mcpSkillsGuard.test.ts` | U14, U12 |
 | U17 | Numbered list of skipped attachments | `src/mcp/jiraTools/loadTicket.ts`, `src/test/mcpTools.test.ts`, `docs/manual/copilot-tools.md` | U9 |
 | U18 | `/ts-jira` command router | `skills/ts-jira/SKILL.md`, `package.json`, `src/test/mcpSkillsGuard.test.ts` | U14, U16 |
 
@@ -374,7 +374,7 @@ Waits on: nothing.
   - After removing the entry, the tool is gone from `vscode.lm.tools`.
 - **Verification:** `xvfb-run -a npm run test:e2e` passes locally and in the CI `e2e` job.
 
-### PR2 (into the feature branch): Read tools and `/jira-brief`
+### PR2 (into the feature branch): Read tools and `/ts-jira-brief`
 
 Waits on: PR1, merge order only.
 
@@ -456,20 +456,20 @@ Waits on: PR1, merge order only.
   - Bundle smoke registers exactly the remaining declared Agent Mode tools.
 - **Verification:** `npm test` passes; no removed tool name remains in `package.json`.
 
-### U12. `/jira-brief` skill and skill guard
+### U12. `/ts-jira-brief` skill and skill guard
 
 - **Goal:** the developer brief and the guard keeping skills honest.
 - **Requirements:** R21, R22, R27.
 - **Dependencies:** U7, U9.
-- **Files:** `skills/jira-brief/SKILL.md`, `package.json` (`contributes.chatSkills`, `.vscodeignore` keeps `skills/`), `src/test/mcpSkillsGuard.test.ts`.
+- **Files:** `skills/ts-jira-brief/SKILL.md`, `package.json` (`contributes.chatSkills`, `.vscodeignore` keeps `skills/`), `src/test/mcpSkillsGuard.test.ts`.
 - **Approach:** the skill tells the agent to call view, pick relevant attachments, call load with them, read them from `.jira-context/`, and write the eight sections of R22 with citations; the guard parses every contributed skill and fails on unknown `jira_` tool names, on a `name` that differs from the folder, and on `disable-model-invocation`.
 - **Test scenarios:**
   - The guard passes for the shipped skill.
   - A skill naming a non-existent tool fails the guard.
   - Covers AE7. The skill text names all eight sections in order and the "not stated in the ticket" rule.
-- **Verification:** tests pass; the packaged `.vsix` contains `skills/jira-brief/SKILL.md`.
+- **Verification:** tests pass; the packaged `.vsix` contains `skills/ts-jira-brief/SKILL.md`.
 
-### PR3 (into the feature branch): Write tools, `/jira-create` and skipped attachments
+### PR3 (into the feature branch): Write tools, `/ts-jira-create` and skipped attachments
 
 Waits on: PR2, merge order only. After PR3, the feature branch merges into `main` once the manual checklist passes (Verification Contract).
 
@@ -520,12 +520,12 @@ Waits on: PR2, merge order only. After PR3, the feature branch merges into `main
   - Bundle smoke and e2e registration checks pass with the Bitbucket tools only.
 - **Verification:** `npm test` and `npm run compile` pass.
 
-### U16. `/jira-create` skill and command coverage
+### U16. `/ts-jira-create` skill and command coverage
 
 - **Goal:** the guided create flow and the coverage guard for former commands.
 - **Requirements:** R21, R23, R24, R27.
 - **Dependencies:** U14, U12.
-- **Files:** `skills/jira-create/SKILL.md`, `package.json`, `src/test/mcpSkillsGuard.test.ts`.
+- **Files:** `skills/ts-jira-create/SKILL.md`, `package.json`, `src/test/mcpSkillsGuard.test.ts`.
 - **Approach:** the skill covers template choice, asking only for missing fields, showing the draft, then create; the guard maps `view`, `load`, `search`, `comment`, `field`, `move`, `create`, `check` to catalog tools or skills and fails on a gap.
 - **Test scenarios:**
   - The guard passes for both shipped skills.
@@ -555,7 +555,7 @@ Waits on: PR2, merge order only. After PR3, the feature branch merges into `main
 - **Requirements:** R21, R35.
 - **Dependencies:** U14, U16.
 - **Files:** `skills/ts-jira/SKILL.md`, `package.json`, `src/test/mcpSkillsGuard.test.ts`, `docs/manual/copilot-tools.md`, `README.md`, `CLAUDE.md`.
-- **Approach:** a short skill with `disable-model-invocation: true`, an `argument-hint` listing the commands, the user's input through `$ARGUMENTS`, four ordered cases (nothing typed, `help`, unknown command, run) and one table row per command. It names no skill, since a weak model ran `/jira-brief` when the table pointed at it; create stays with `/jira-create`, which drafts the ticket with the user first. The skill guard requires model invocation off for `ts-` skills and on for every other skill.
+- **Approach:** a short skill with `disable-model-invocation: true`, an `argument-hint` listing the commands, the user's input through `$ARGUMENTS`, five ordered cases (nothing typed, `help`, unknown command, missing argument, run) and one table row per command. It names no skill, since a weak model ran `/ts-jira-brief` when the table pointed at it; create stays with `/ts-jira-create`, which drafts the ticket with the user first. The skill guard requires model invocation off for `ts-` skills and on for every other skill.
 - **Test scenarios:**
   - Every catalog tool except create ticket has a row, and every row names a tool that exists; the skill names no other skill.
   - The cases come in order before the table, and the help text lists every command of the table.

@@ -281,10 +281,10 @@
     ],
     "chatSkills": [
       {
-        "path": "./skills/jira-brief/SKILL.md"
+        "path": "./skills/ts-jira-brief/SKILL.md"
       },
       {
-        "path": "./skills/jira-create/SKILL.md"
+        "path": "./skills/ts-jira-create/SKILL.md"
       },
       {
         "path": "./skills/ts-jira/SKILL.md"

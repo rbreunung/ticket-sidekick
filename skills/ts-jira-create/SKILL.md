@@ -1,6 +1,8 @@
 ---
-name: jira-create
-description: Creates one Jira ticket with the user, from a workspace template where one fits, asking only for what is missing and showing the draft before creating it. Use when asked to create, open, file or raise a Jira ticket, bug or story.
+name: ts-jira-create
+description: Creates one Jira ticket with you, step by step, from a workspace template where one fits. Type /ts-jira-create and what the ticket is about.
+disable-model-invocation: true
+argument-hint: <what the ticket is about>
 ---
 
 # Create a Jira ticket
