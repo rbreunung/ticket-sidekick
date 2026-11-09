@@ -247,19 +247,23 @@ describe('the /ts-jira command skill', () => {
     expect(hint.split(' ')[0].split('|')).toEqual(rows.map(r => r.command));
   });
 
-  it('checks for a missing or unknown command before anything else, and then calls no tool', () => {
-    const body = router.slice(router.indexOf('\n---', 4) + 4).trim();
-    expect(body.split('\n')[0]).toBe('First check the first word the user typed after /ts-jira.');
-    expect(body).toContain('If there is no word, or it is not a command in the table below: call no tool, reply with exactly the help below and stop.');
-    expect(body.indexOf('call no tool')).toBeLessThan(body.indexOf('| Command |'));
+  /** The numbered cases, in order, from the skill's body. */
+  const cases = [...router.matchAll(/^(\d)\. (.+)$/gm)].map(m => ({ n: Number(m[1]), text: m[2] }));
+
+  it('handles an empty command first, with the help and no tool call', () => {
+    expect(cases[0]).toEqual({ n: 1, text: 'Nothing typed: call no tool. Reply with exactly the help text below. Stop.' });
   });
 
-  it('answers help, with or without a command, before running anything, and never runs the command named after it', () => {
-    const body = router.slice(router.indexOf('\n---', 4) + 4);
-    const helpRule = body.indexOf('If it is `help`: call no tool and run nothing.');
-    expect(helpRule).toBeGreaterThan(-1);
-    expect(helpRule).toBeLessThan(body.indexOf('| Command |'));
-    expect(body).toContain("reply with only that command's line from the help below");
+  it('answers help next, never opening another skill or running the command named after it', () => {
+    expect(cases[1].n).toBe(2);
+    expect(cases[1].text).toMatch(/^The first word is `help`: call no tool, open no other skill, run nothing\./);
+    expect(cases[1].text).toContain('reply with only its line');
+  });
+
+  it('answers an unknown command with the help, and runs a command only as the last case', () => {
+    expect(cases[2].text).toBe('The first word is not a command of the table: call no tool. Reply with exactly the help text. Stop.');
+    expect(cases[3]).toEqual({ n: 4, text: 'Otherwise run that one command with one call, as the table says. Do not plan, explain or add steps.' });
+    expect(router.indexOf('4. Otherwise')).toBeLessThan(router.indexOf('| Command |'));
   });
 
   it('prints a help line for every command of the table, in the same order', () => {

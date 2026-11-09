@@ -5,11 +5,12 @@ disable-model-invocation: true
 argument-hint: help|load|view|search|filters|comment|field|move|workflow|templates|upload|check|brief|create <arguments>
 ---
 
-First check the first word the user typed after /ts-jira.
+Take what the user typed after /ts-jira and use the first case that matches. Do not read ahead to the table before you have checked cases 1 to 3.
 
-If it is `help`: call no tool and run nothing. If the second word is a command in the table below, reply with only that command's line from the help below (for load and view also the last help line); otherwise reply with exactly the help below. Then stop.
-
-If there is no word, or it is not a command in the table below: call no tool, reply with exactly the help below and stop.
+1. Nothing typed: call no tool. Reply with exactly the help text below. Stop.
+2. The first word is `help`: call no tool, open no other skill, run nothing. If the next word is a command of the help text, reply with only its line (for load and view also the last line). Otherwise reply with exactly the help text. Stop.
+3. The first word is not a command of the table: call no tool. Reply with exactly the help text. Stop.
+4. Otherwise run that one command with one call, as the table says. Do not plan, explain or add steps.
 
 ```text
 /ts-jira commands:
@@ -30,7 +31,6 @@ If there is no word, or it is not a command in the table below: call no tool, re
 Without KEY, load and view use the ticket of the git branch.
 ```
 
-Otherwise run that one command with one call. Do not plan, explain or add steps.
 
 | Command | Do |
 | --- | --- |
