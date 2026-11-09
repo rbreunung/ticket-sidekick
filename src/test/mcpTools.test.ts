@@ -405,6 +405,25 @@ describe('jira_find_tickets', () => {
     expect(client.searches.map(s => s.jql)).toEqual(['assignee = currentUser() ORDER BY created DESC']);
   });
 
+  it('does not take ORDER BY inside a quoted value for the sort clause when narrowing', async () => {
+    const client = new RecordingSearchClient();
+
+    await callTool(FIND_TICKETS_TOOL, { jql: 'project = PROJ AND summary ~ "slow ORDER BY query"', assignee: 'me' }, { client });
+    await callTool(FIND_TICKETS_TOOL, {
+      jql: `project = PROJ AND summary ~ 'say \\'ORDER BY x\\' twice' ORDER BY created DESC`, assignee: 'me',
+    }, { client });
+    client.getFilterById = async (): Promise<JiraFilter> => ({ id: '10006', name: 'Slow', jql: 'summary ~ "slow ORDER BY query" ORDER BY key' });
+    await callTool(FIND_TICKETS_TOOL, { filter: '10006', myTeam: true }, {
+      client, config: jiraConfig({ myTeamJql: 'project = PROJ' }),
+    });
+
+    expect(client.searches.map(s => s.jql)).toEqual([
+      '(project = PROJ AND summary ~ "slow ORDER BY query") AND (assignee = currentUser())',
+      `(project = PROJ AND summary ~ 'say \\'ORDER BY x\\' twice') AND (assignee = currentUser()) ORDER BY created DESC`,
+      '(project = PROJ) AND (summary ~ "slow ORDER BY query") ORDER BY key',
+    ]);
+  });
+
   it('passes a sort-only JQL without narrowing through unchanged', async () => {
     const client = new RecordingSearchClient();
 
