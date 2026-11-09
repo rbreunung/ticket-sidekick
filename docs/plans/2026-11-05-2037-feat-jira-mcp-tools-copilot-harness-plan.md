@@ -462,7 +462,7 @@ Waits on: PR1, merge order only.
 - **Requirements:** R21, R22, R27.
 - **Dependencies:** U7, U9.
 - **Files:** `skills/ts-jira-brief/SKILL.md`, `package.json` (`contributes.chatSkills`, `.vscodeignore` keeps `skills/`), `src/test/mcpSkillsGuard.test.ts`.
-- **Approach:** the skill tells the agent to call view, pick relevant attachments, call load with them, read them from `.jira-context/`, and write the eight sections of R22 with citations; the guard parses every contributed skill and fails on unknown `jira_` tool names, on a `name` that differs from the folder, and on `disable-model-invocation`.
+- **Approach:** the skill tells the agent to call view, call load without extra names (unless the user named some), read the relevant downloaded attachments from `.jira-context/`, show the numbered list of skipped ones and load only those the user picks (R31), and write the eight sections of R22 with citations; the guard parses every contributed skill and fails on unknown `jira_` tool names, on a `name` that differs from the folder, and on `disable-model-invocation`.
 - **Test scenarios:**
   - The guard passes for the shipped skill.
   - A skill naming a non-existent tool fails the guard.

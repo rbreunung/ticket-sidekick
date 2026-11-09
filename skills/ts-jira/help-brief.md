@@ -1,6 +1,6 @@
 /ts-jira-brief <KEY>   write a developer brief of a ticket
 
-Use it before you start work on a ticket. It reads the ticket and all its comments, loads the attachments that matter, and writes eight sections a developer can work from: problem or goal, context, steps to reproduce, acceptance criteria, decisions from comments, current state, open questions and the sources it used. Where the ticket says nothing, it writes "not stated in the ticket" instead of guessing.
+Use it before you start work on a ticket. It reads the ticket and all its comments, loads it and reads the attachments that matter (asking you before it downloads any the load skipped), and writes eight sections a developer can work from: problem or goal, context, steps to reproduce, acceptance criteria, decisions from comments, current state, open questions and the sources it used. Where the ticket says nothing, it writes "not stated in the ticket" instead of guessing.
 
 Example: /ts-jira-brief PROJ-123
 

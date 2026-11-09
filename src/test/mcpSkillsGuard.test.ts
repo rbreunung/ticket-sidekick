@@ -162,11 +162,17 @@ describe('the /ts-jira-brief skill', () => {
     expect(front['argument-hint']).toBe('<ticket key>');
   });
 
-  it('views the ticket, then loads the picked attachments and reads them from .jira-context', () => {
+  it('views the ticket, then loads it and reads the attachments from .jira-context', () => {
     const at = positions(brief, [VIEW_TICKET_TOOL, LOAD_TICKET_TOOL, '.jira-context/']);
     expect(at.every(p => p >= 0)).toBe(true);
     expect(at).toEqual([...at].sort((a, b) => a - b));
-    expect(brief).toContain('`attachments`');
+  });
+
+  it('names extra attachments only when the user gave them, and otherwise asks with the numbered list first', () => {
+    expect(brief).toContain('Pass `attachments` only with attachment names the user\'s own request already gave; never add names you picked yourself.');
+    const at = positions(brief, ['numbered list', 'ask which to download', 'Wait for the answer', 'call `jira_load_ticket` again']);
+    expect(at.every(p => p >= 0)).toBe(true);
+    expect(at).toEqual([...at].sort((a, b) => a - b));
   });
 });
 
