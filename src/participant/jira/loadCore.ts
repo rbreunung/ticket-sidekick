@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { JiraAttachment, JiraComment, JiraFieldMeta, JiraIssue, JiraRemoteLink } from '../../jira/IJiraClient';
@@ -26,9 +27,20 @@ import { rewriteAttachmentLinks } from '../sessionState';
 export interface LoadWriter {
   /** Creates the folder and any missing parents. */
   createDirectory(relPath: string): Promise<void>;
+  /**
+   * Replaces the file with `bytes`. A link at the path is replaced by the new file, never written
+   * through, so a link planted in `.jira-context/` cannot redirect the write.
+   */
   writeFile(relPath: string, bytes: Uint8Array): Promise<void>;
   /** Rejects when the file does not exist. */
   readFile(relPath: string): Promise<Uint8Array>;
+  /** Whether the path is a symbolic link or a junction; false when nothing is there. */
+  isLink(relPath: string): Promise<boolean>;
+}
+
+/** A name for a temporary file next to `name`, which load then renames over `name`. */
+export function temporaryName(name: string): string {
+  return `.${name}.${randomBytes(6).toString('hex')}.tmp`;
 }
 
 /** `relPath` (relative, `/`-separated) as a path under `root` on this machine. */
@@ -40,9 +52,36 @@ export function absolutePathIn(root: string, relPath: string): string {
 export function nodeFsWriter(root: string): LoadWriter {
   return {
     createDirectory: async relPath => { await fs.promises.mkdir(absolutePathIn(root, relPath), { recursive: true }); },
-    writeFile: (relPath, bytes) => fs.promises.writeFile(absolutePathIn(root, relPath), bytes),
+    writeFile: async (relPath, bytes) => {
+      const target = absolutePathIn(root, relPath);
+      const temp = path.join(path.dirname(target), temporaryName(path.basename(target)));
+      try {
+        // A fresh file ('wx' refuses an existing one), then a rename, which replaces a link at the
+        // target instead of following it.
+        await fs.promises.writeFile(temp, bytes, { flag: 'wx' });
+        await fs.promises.rename(temp, target);
+      } catch (err) {
+        await fs.promises.rm(temp, { force: true });
+        throw err;
+      }
+    },
     readFile: async relPath => fs.promises.readFile(absolutePathIn(root, relPath)),
+    isLink: async relPath => {
+      try {
+        return (await fs.promises.lstat(absolutePathIn(root, relPath))).isSymbolicLink();
+      } catch {
+        return false;
+      }
+    },
   };
+}
+
+/** Load refuses to write below a link inside `.jira-context/`: `relPath` is such a link. */
+export class LinkedLoadFolderError extends Error {
+  constructor(readonly relPath: string) {
+    super(`${relPath} is a link. Load never writes through a link inside .jira-context; remove it and load again.`);
+    this.name = 'LinkedLoadFolderError';
+  }
 }
 
 /** `.jira-context/<KEY>`, relative to the workspace folder. The key must be a safe path segment. */
@@ -74,6 +113,11 @@ export function attachmentPath(ticketKey: string, filename: string): string | un
  */
 async function ensureJiraContextGitignored(writer: LoadWriter, onDiag?: DiagLogger): Promise<boolean> {
   try {
+    // Rewriting a linked .gitignore would copy the link target's content into the workspace.
+    if (await writer.isLink('.gitignore')) {
+      onDiag?.('warn', '.gitignore is a link, so .jira-context/ was not added to it');
+      return false;
+    }
     let existing = '';
     try {
       existing = new TextDecoder().decode(await writer.readFile('.gitignore'));
@@ -183,6 +227,10 @@ export async function loadTicketToWorkspace(
   const { unique: toDownload, duplicates } = dedupeByLatestFilename([...eligible, ...named]);
 
   const contextDir = jiraContextDir(ticketKey);
+  // `.jira-context` itself may be a link the user set up; below it, nothing is written through one.
+  for (const folder of [contextDir, attachmentsDir(ticketKey)]) {
+    if (await writer.isLink(folder)) throw new LinkedLoadFolderError(folder);
+  }
   await writer.createDirectory(attachmentsDir(ticketKey));
 
   // Download attachments, at most 3 at a time.

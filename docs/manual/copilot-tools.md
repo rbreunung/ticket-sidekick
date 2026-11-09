@@ -72,6 +72,7 @@ The `chat.mcp.*` and sandbox settings appear as they are, so a sandbox allow-lis
 
 - **The tools do not show up.** Check that `http.noProxy` contains `127.0.0.1` exactly and that you run VS Code 1.101 or later.
 - **The Jira tools stop answering after you changed `http.noProxy` or reloaded the window.** Start a new chat. If that does not help, run `Ticket Sidekick: Copy MCP diagnostics` and send the report; read it first, since it shows the `chat.mcp.*` and sandbox settings as they are.
+- **Load answers that `.jira-context/<KEY>` or its `attachments` folder is a link.** Load never writes through a link inside a ticket's folder, since a link planted there (for example by a cloned repository) could redirect its writes outside the workspace. Delete that link and load again. `.jira-context` itself may be a link, for example to another disk.
 - **A tool answers with a setup step.** Jira is not configured yet, or the token is missing: follow the step, or run `@jira check` in a Local chat.
 
 ## Manual checklist for a Copilot chat
