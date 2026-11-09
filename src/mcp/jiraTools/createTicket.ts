@@ -106,7 +106,11 @@ export const createTicketTool = defineTool<JiraToolDeps, typeof createShape>({
           return [templateNote, formatIssueTypeOptionsMessage(projectKey, issueTypes)].filter(Boolean).join('\n\n');
         }
 
-        const templateFieldLines = Object.entries(fields).map(([id, value]) => `- ${id}: ${fieldValueText(value)}`);
+        // The answer lists only the template values the ticket was created with: a description given
+        // here replaces the template's, and the answer says so instead of claiming the template's.
+        const replacedDescription = description !== undefined && 'description' in fields;
+        const applied = Object.entries(fields).filter(([id]) => !(replacedDescription && id === 'description'));
+        const templateFieldLines = applied.map(([id, value]) => `- ${id}: ${fieldValueText(value)}`);
         const created = await ticketService.createTicket(
           projectKey, summary, issueType,
           description ? { ...fields, description: markdownToJiraWiki(description) } : fields,
@@ -115,6 +119,7 @@ export const createTicketTool = defineTool<JiraToolDeps, typeof createShape>({
         markWritten();
         const parts = [created.message];
         if (templateFieldLines.length > 0) parts.push(`Template fields applied from "${templateName}":\n${templateFieldLines.join('\n')}`);
+        if (replacedDescription) parts.push(`The description given replaced the template's description.`);
         if (templateNote) parts.push(templateNote);
         if (created.droppedFields?.length) parts.push(`Jira refused ${created.droppedFields.join(', ')}, so the ticket was created without it.`);
         return parts.join('\n\n');

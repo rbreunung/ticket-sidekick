@@ -333,6 +333,22 @@ describe('create ticket', () => {
     expect(text).toContain('Template fields applied from "Bug Report":\n- priority: {"name":"High"}\n- labels: ["billing"]');
   });
 
+  it('does not list a template description as applied when a description given replaced it', async () => {
+    const client = new MockJiraClient();
+    const folder = makeTempDir('ts-write-');
+    fs.writeFileSync(path.join(folder, '.jira-templates.json'), JSON.stringify({
+      templates: [{ name: 'Story', issueType: 'Story', defaultFields: { description: 'Template default text', labels: ['web'] } }],
+    }));
+    const session = await startSession(client, { folders: [folder] });
+    const { text } = await session.call('jira_create_ticket', {
+      projectKey: 'PROJ', summary: 'Add SSO', templateName: 'Story', description: 'Explicit replacement',
+    });
+    expect(client.createIssueCalls[0].additionalFields).toEqual({ description: 'Explicit replacement', labels: ['web'] });
+    expect(text).toContain('Template fields applied from "Story":\n- labels: ["web"]');
+    expect(text).toContain("The description given replaced the template's description.");
+    expect(text).not.toContain('Template default text');
+  });
+
   it('skips the same ticket requested again in a separate request within a minute', async () => {
     const client = new MockJiraClient();
     const session = await startSession(client);
