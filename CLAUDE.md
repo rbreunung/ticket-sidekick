@@ -52,7 +52,7 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/services/ConfigService.ts` | VS Code settings + SecretStorage for both Jira and Bitbucket |
 | `src/services/configValidation.ts` | Pure (vscode-free) config validators; `validateBaseUrl` rejects malformed/non-http(s) base URLs. Surfaced by `@jira check` and `@bitbucket check` (DC) before attempting a connection |
 | `src/services/setupHints.ts` | Pure (vscode-free) `buildJiraNotConfiguredMessage(config)`: the plain-text Jira setup hint the Agent Mode tools, the MCP tools and `@jira check` answer with while Jira is not configured; kept outside the participant layer so `src/mcp/` and `src/tools/` do not depend on it |
-| `src/tools/jiraTools.ts` | Jira `contributes.languageModelTools` registration + `prepareInvocation`/`invoke` for each tool — thin glue over `TicketService`/`WorkflowService`/`TemplateService`, reusing chat-flow safeguards (never-guess-issue-type) rather than reimplementing them |
+| `src/tools/jiraTools.ts` | The Jira write tools' `contributes.languageModelTools` registration + `prepareInvocation`/`invoke` (comment, update field, create, transition, upload) — thin glue over `TicketService`/`WorkflowService`/`TemplateService`, reusing chat-flow safeguards (never-guess-issue-type) rather than reimplementing them. The Jira read tools live on the MCP server (see "Copilot harness and the MCP server") |
 | `src/tools/bitbucketTools.ts` | Bitbucket `contributes.languageModelTools` registration, same shape as `jiraTools.ts` — single-object read/write tools over `IBitbucketClient`/`PrReviewService` |
 | `src/tools/toolConfirmation.ts` | Shared `ToolConfirmation` type (`prepareInvocation()`'s title/message) both tool files' confirmation builders return — keeps `sessionState.ts`/`reviewSessionState.ts` from depending on each other |
 | `src/participant/JiraParticipant.ts` | Jira chat handler + intent routing; delegates to `src/participant/jira/` handlers. An empty or greeting-shaped prompt (`isGreetingOrEmpty`) streams the full `buildJiraHelp(version)` screen, reading the version from `context.extension.packageJSON` when it is shown. Takes an optional `onRequest` hook that `extension.ts` binds to `endBitbucketSessions`, so any `@jira` request ends a Bitbucket review session without this file importing the other participant |
@@ -61,6 +61,7 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/participant/jira/contentHandler.ts` | Content preview/refinement flow (`streamContentPreview`, `handleContentSession`) |
 | `src/participant/jira/createHandler.ts` | Ticket creation flow (templates, issue type selection, section Q&A) |
 | `src/participant/jira/loadHandler.ts` | Load-ticket handler (attachment download, comment pagination) |
+| `src/participant/jira/loadCore.ts` | vscode-free load core behind a small writer interface: writes `ticket.md`, `comments.md` and the eligible or named attachments into `.jira-context/<KEY>/` and keeps it git-ignored; shared by `@jira load` and the MCP load tool |
 | `src/participant/jira/fieldHandler.ts` | Field update flow + explicit `@jira spell check` command |
 | `src/participant/jira/cleanupHandler.ts` | Bulk cleanup flow (review screen, transition batch execution) |
 | `src/participant/jira/workflowHandler.ts` | Workflow discovery handler |
@@ -263,7 +264,9 @@ matching README table or manual page in the same PR. Updating a domain doc
 does not cover it. `src/test/userDocsSync.test.ts` checks everything
 `package.json` declares: settings, Command Palette commands, slash commands
 (README tables) and Agent Mode tools
-([`docs/manual/agent-mode-tools.md`](docs/manual/agent-mode-tools.md)).
+([`docs/manual/agent-mode-tools.md`](docs/manual/agent-mode-tools.md)), plus
+the MCP server's Jira tools
+([`docs/manual/copilot-tools.md`](docs/manual/copilot-tools.md)).
 Chat flows, reply words and chips are not checked, so review them by hand
 (tracked as KL9 in [`docs/known-limitations.md`](docs/known-limitations.md)).
 
@@ -307,7 +310,7 @@ Emails first pass through a boilerplate cleanup step (patterns, consented model 
 
 ## Copilot harness and the MCP server
 
-Chat participants do not run in VS Code's Copilot harness, so the Jira tools move to an MCP server inside the extension: `src/mcp/` holds vscode-free modules (request guard, keys, `http.noProxy` check, localhost server, MCP server builder, tool catalog in `jiraTools/`, lifecycle controller, diagnostics report) plus `src/mcp/register.ts`, the only one that imports `vscode` at runtime (provider, lifecycle on `http.noProxy`, notice, `Ticket Sidekick: Copy MCP diagnostics`); `vscodeMcpTypes.ts` declares the MCP provider API locally, since `@types/vscode` stays at the 1.95 floor. Design and decision log: [`docs/architecture/copilot-harness-migration.md`](docs/architecture/copilot-harness-migration.md); plan: [`docs/plans/2026-11-05-2037-feat-jira-mcp-tools-copilot-harness-plan.md`](docs/plans/2026-11-05-2037-feat-jira-mcp-tools-copilot-harness-plan.md).
+Chat participants do not run in VS Code's Copilot harness, so the Jira tools move to an MCP server inside the extension; the Jira read tools (check connection, view, find, list filters, workflow, list templates, load) are already there and no longer Agent Mode tools, the Jira write tools are still in `src/tools/jiraTools.ts`. `src/mcp/` holds vscode-free modules (request guard, keys, `http.noProxy` check, localhost server, MCP server builder, tool catalog in `jiraTools/` with the names any message text uses in `jiraTools/toolNames.ts`, lifecycle controller, diagnostics report) plus `src/mcp/register.ts`, the only one that imports `vscode` at runtime (provider, lifecycle on `http.noProxy`, notice, `Ticket Sidekick: Copy MCP diagnostics`); `vscodeMcpTypes.ts` declares the MCP provider API locally, since `@types/vscode` stays at the 1.95 floor. Skills the agent can run on top of the tools live in `skills/<name>/SKILL.md`, contributed through `contributes.chatSkills`; `src/test/mcpSkillsGuard.test.ts` fails on a `jira_` name not in the catalog, a frontmatter `name` other than the folder, or `disable-model-invocation`. User manual page: [`docs/manual/copilot-tools.md`](docs/manual/copilot-tools.md), checked against the catalog by `src/test/userDocsSync.test.ts`. Design and decision log: [`docs/architecture/copilot-harness-migration.md`](docs/architecture/copilot-harness-migration.md); plan: [`docs/plans/2026-11-05-2037-feat-jira-mcp-tools-copilot-harness-plan.md`](docs/plans/2026-11-05-2037-feat-jira-mcp-tools-copilot-harness-plan.md).
 
 ## Onboarding
 

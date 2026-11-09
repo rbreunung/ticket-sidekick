@@ -1,11 +1,18 @@
 import { checkConnection } from '../connectionCheck';
-import { defineTool, type McpToolDefinition } from '../mcpServer';
+import { defineTool, ToolFailure, toolErrorLabel, type McpToolDefinition } from '../mcpServer';
 import type { JiraToolDeps } from './jiraAccess';
+import { describeJiraFailure, JiraTimeout, runJiraTool } from './runJiraTool';
+import { CHECK_CONNECTION_TOOL } from './toolNames';
+import { viewTicketTool } from './viewTicket';
+import { findTicketsTool, listMyFiltersTool } from './findTickets';
+import { workflowTool } from './workflow';
+import { listTemplatesTool } from './templates';
+import { loadTicketTool } from './loadTicket';
 
 // Every Jira tool the extension's MCP server offers. The server registers its tools from this
 // list, so a tool exists for agents exactly when it is listed here.
 
-export const CHECK_CONNECTION_TOOL = 'jira_check_connection';
+export * from './toolNames';
 
 const checkConnectionTool = defineTool<JiraToolDeps, Record<string, never>>({
   name: CHECK_CONNECTION_TOOL,
@@ -16,7 +23,23 @@ const checkConnectionTool = defineTool<JiraToolDeps, Record<string, never>>({
     + 'Takes no input and changes nothing.',
   inputSchema: {},
   annotations: { readOnlyHint: true },
-  handler: async (_args, deps) => (await checkConnection(await deps.getJira(), deps.onDiag)).markdown,
+  handler: (_args, deps) =>
+    runJiraTool(deps, CHECK_CONNECTION_TOOL, 'Could not check the Jira connection', async ({ access }) => {
+      const result = await checkConnection(access, deps.onDiag, describeJiraFailure);
+      // A check Jira did not answer in time gets the same timeout answer as every other tool.
+      if (result.status === 'failed' && result.cause instanceof JiraTimeout) throw result.cause;
+      // A failed check still shows the settings it checked, with only the status of the failure.
+      if (result.status === 'failed') throw new ToolFailure(result.markdown, toolErrorLabel(result.cause));
+      return result.markdown;
+    }),
 });
 
-export const JIRA_TOOLS: readonly McpToolDefinition<JiraToolDeps>[] = [checkConnectionTool];
+export const JIRA_TOOLS: readonly McpToolDefinition<JiraToolDeps>[] = [
+  checkConnectionTool,
+  viewTicketTool,
+  findTicketsTool,
+  listMyFiltersTool,
+  workflowTool,
+  listTemplatesTool,
+  loadTicketTool,
+];

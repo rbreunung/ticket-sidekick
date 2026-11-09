@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderReviewTable, buildChatCommandLink, neutralizeMarkdownLinks, isGreetingOrEmpty, computeJiraFollowups, withLastTicket, type ReviewTableColumn, type JiraFollowupState } from '../participant/sessionState';
+import { renderReviewTable, buildChatCommandLink, neutralizeMarkdownLinks, isGreetingOrEmpty, computeJiraFollowups, withLastTicket, formatWorkflowDiscoveryMessage, type ReviewTableColumn, type JiraFollowupState } from '../participant/sessionState';
 
 interface Widget {
   name: string;
@@ -339,5 +339,51 @@ describe('computeJiraFollowups', () => {
 
       expect(chips.some((c) => c.prompt === 'transition these tickets')).toBe(false);
     });
+  });
+});
+
+describe('@jira discover workflow summary', () => {
+  it('renders each status and its transitions', () => {
+    const message = formatWorkflowDiscoveryMessage(
+      'PROJ',
+      'Bug',
+      { 'To Do': [{ id: '1', name: 'Start', to: 'In Progress' }], 'In Progress': [{ id: '2', name: 'Finish', to: 'Done' }] },
+      [],
+      [],
+    );
+    expect(message).toContain('To Do');
+    expect(message).toContain('In Progress');
+    expect(message).toContain('Done');
+  });
+
+  it('reports when no tickets were found to sample', () => {
+    const message = formatWorkflowDiscoveryMessage('PROJ', 'Bug', {}, [], []);
+    expect(message).toContain('No tickets found');
+  });
+
+  it('notes a status that kept its cached transitions when it had no representative ticket', () => {
+    const message = formatWorkflowDiscoveryMessage(
+      'PROJ',
+      'Bug',
+      { 'To Do': [{ id: '1', name: 'Start', to: 'In Progress' }], 'Done': [{ id: '9', name: 'Reopen', to: 'To Do' }] },
+      ['Done'],
+      ['Done'],
+    );
+    expect(message).toContain('kept cached transitions');
+    expect(message).toContain('Done');
+    expect(message).not.toContain('run `@jira discover workflow` again');
+  });
+
+  it('warns about a status with no tickets and no cached transitions to fall back on', () => {
+    const message = formatWorkflowDiscoveryMessage(
+      'PROJ',
+      'Bug',
+      { 'To Do': [{ id: '1', name: 'Start', to: 'In Progress' }] },
+      ['Blocked'],
+      [],
+    );
+    expect(message).toContain('no cached transitions');
+    expect(message).toContain('Blocked');
+    expect(message).toContain('run `@jira discover workflow` again');
   });
 });

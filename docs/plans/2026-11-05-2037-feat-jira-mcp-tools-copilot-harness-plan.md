@@ -67,7 +67,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 - R11. Find tickets' description tells the agent that "my team" means the `myTeamJql` setting and to prefer a matching saved filter over new JQL; list my filters returns the user's favourite and owned filters.
 - R12. Load ticket always writes `ticket.md`, `comments.md` and the eligible attachments into `.jira-context/<KEY>/`, reports the files it wrote as absolute paths, lists every skipped attachment with size and reason, and additionally downloads attachments named in an optional list without the type filter; the size limit still applies.
 - R13. Move ticket moves a ticket to a target status, directly or along a workflow path; it discovers the workflow itself when no workflow is cached or the cached one has no path to the target. A move that stops partway is reported with the status the ticket landed in and is never retried.
-- R14. Workflow lists the statuses a ticket can reach and refreshes the workflow cache on request.
+- R14. Workflow lists the statuses a ticket can reach, discovering the workflow by itself when nothing usable is cached, and refreshes the workflow cache on request. It stays marked read-only: its only write is the local workflow cache, never Jira.
 - R15. Check connection reports base URL, auth type, token presence and the signed-in user, or a setup hint naming what is wrong; it gives the same answer as `@jira check`.
 - R16. View ticket and load ticket take the ticket key as optional; without one they use the key in the current git branch of the first workspace folder and name that folder and branch in the result, or say that the branch holds no key. Write tools always require an explicit key.
 - R17. List templates returns the workspace templates; create ticket creates one ticket, prefers a template over a bare issue type, and never guesses an issue type.
@@ -97,7 +97,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 
 - AE1. **Covers R4, R5.** Given VS Code 1.101 or later and `http.noProxy` lacking `127.0.0.1`, when VS Code starts, then no server listens, no MCP server is offered, and the notice appears; when the user adds the entry, the server starts and the tools appear without a restart.
 - AE2. **Covers R16.** Given the branch `feature/PROJ-123-login`, when the agent calls view ticket without a key, then it returns PROJ-123 and states that the key came from the branch; on `main` it answers that the branch holds no key.
-- AE3. **Covers R12.** Given a ticket with `design.pdf` (binary) and `log.txt`, when load runs without a list, then `log.txt` is written and `design.pdf` is listed as skipped; with `["design.pdf"]` both are written, along with `ticket.md` and `comments.md`.
+- AE3. **Covers R12.** Given a ticket with `heap-dump.bin` (binary) and `log.txt`, when load runs without a list, then `log.txt` is written and `heap-dump.bin` is listed as skipped; with `["heap-dump.bin"]` both are written, along with `ticket.md` and `comments.md`.
 - AE4. **Covers R13.** Given no cached workflow and a target two transitions away, when move ticket runs, then it discovers the workflow, moves through both steps and names them in its result.
 - AE5. **Covers R19.** Given a comment written with a Markdown heading, a list and a table, when add comment runs, then Jira receives `h2.`, `*` list items and a `||`-headed table.
 - AE6. **Covers R20.** Given no Jira token, when any tool runs, then it answers with the setup hint naming the missing token.
@@ -149,7 +149,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 - KTD11. **Skills are contributed through `contributes.chatSkills`** from `skills/jira-brief/SKILL.md` and `skills/jira-create/SKILL.md`, with `name` equal to the folder name and no `disable-model-invocation`.
 - KTD12. **The e2e test drives VS Code's own MCP client.** It writes `http.noProxy` and tool auto-approval into the throwaway profile in `src/e2e/runTest.ts`, starts the server through VS Code, waits for the tools in `vscode.lm.tools`, invokes check connection with `vscode.lm.invokeTool`, then removes the entry and expects the tools to disappear. If VS Code does not expose MCP tools to extensions that way, the test is reduced to activation and server lifecycle, and the plan's coverage note says so.
 - KTD13. **The diagnostic report becomes `Ticket Sidekick: Copy MCP diagnostics`,** without the prototype's rendezvous and launcher sections, keeping the stored-key search over the Copilot home, VS Code logs and VS Code storage, and adding the restart, client, proxy-evaluation and tool-outcome sections of U5.
-- KTD14. **One shared wrapper turns Jira failures into tool answers** for every MCP Jira tool, from the first read tool on: a timeout of about 30 seconds around each tool's Jira work, a short status-and-reason answer for the agent, and the full error logged through `logDiag`. The check connection tool from PR1 moves onto it in the same step.
+- KTD14. **One shared wrapper turns Jira failures into tool answers** for every MCP Jira tool, from the first read tool on: a timeout of about 30 seconds on each Jira read and a longer one (about 2 minutes) on each attachment download, where a download that times out is reported as a failed download for that file only, a short status-and-reason answer for the agent, and the full error logged through `logDiag`. The check connection tool from PR1 moves onto it in the same step.
 
 ### High-Level Technical Design
 
@@ -406,7 +406,7 @@ Waits on: PR1, merge order only.
 - **Execution note:** first confirm `loadTicketCore.test.ts` passes as it is, then move the core and switch the test's checks from the mocked `vscode.workspace.fs` to an in-memory writer, keeping the same scenarios and expected results.
 - **Test scenarios:**
   - Covers AE3. Without a list, the text attachment is written and the binary one is listed as skipped with size and reason.
-  - Covers AE3. With `["design.pdf"]`, both are written along with the ticket files.
+  - Covers AE3. With `["heap-dump.bin"]`, both are written along with the ticket files.
   - A named attachment that does not exist is reported, and the rest of the load still happens.
   - An attachment over the size limit is reported and not written.
   - Attachments named `../../evil.txt` and `..\..\evil.txt` are skipped as unsafe filenames, nothing is written outside the attachments folder, and the other attachments are still written.

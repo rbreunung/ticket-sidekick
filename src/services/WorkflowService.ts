@@ -306,9 +306,8 @@ export interface WorkflowDiscoveryResult {
  * Samples a project/issue type's workflow (`discoverWorkflow`) and — when at least one status
  * was found — merges it into `.jira-workflow-cache.json`, preserving prior transitions for any
  * status this run didn't sample. Shared by `@jira`'s chat `'discoverWorkflow'` operation
- * (`src/participant/jira/workflowHandler.ts`) and the `jira_discoverWorkflow` Language Model
- * tool (`src/tools/jiraTools.ts`) — previously each reimplemented this same cache read/merge/
- * write sequence independently (R3).
+ * (`src/participant/jira/workflowHandler.ts`) and the MCP workflow tool
+ * (`src/mcp/jiraTools/workflow.ts`), so both read, merge and write the cache the same way.
  */
 export async function discoverAndCacheWorkflow(
   jiraClient: IJiraClient,

@@ -194,7 +194,6 @@ export function computeJiraFollowups(state: JiraFollowupState): FollowupSuggesti
 export type JiraSessionKind =
   | 'more-comments'
   | 'comment-list'
-  | 'load-skipped'
   | 'creating'
   | 'selecting-create-option'
   | 'previewing'
@@ -256,9 +255,8 @@ export function withLastTicket(
   return { metadata: { jiraSession: { kinds, lastTicketKey: ticketKey } } };
 }
 
-/** Result text for `jira_discoverWorkflow` — mirrors `handleDiscoverWorkflow`'s chat summary
- * (`src/participant/jira/workflowHandler.ts`) in plain returned text rather than a streamed
- * response, since a tool result is a single returned string, not a live chat stream. */
+/** The summary `@jira discover workflow` shows (`handleDiscoverWorkflow` in
+ * `src/participant/jira/workflowHandler.ts`) once a workflow has been sampled and cached. */
 export function formatWorkflowDiscoveryMessage(
   projectKey: string,
   issueType: string,
@@ -280,7 +278,7 @@ export function formatWorkflowDiscoveryMessage(
     summary += `\n\n_${preserved.length} status(es) had no tickets and kept cached transitions: ${preserved.join(', ')}._`;
   }
   if (trulySkipped.length > 0) {
-    summary += `\n\n_${trulySkipped.length} status(es) had no tickets and no cached transitions: ${trulySkipped.join(', ')} — re-run jira_discoverWorkflow once tickets exist in those states._`;
+    summary += `\n\n_${trulySkipped.length} status(es) had no tickets and no cached transitions: ${trulySkipped.join(', ')} — run \`@jira discover workflow\` again once tickets exist in those states._`;
   }
   return summary;
 }

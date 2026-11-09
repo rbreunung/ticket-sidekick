@@ -9,7 +9,7 @@ Two independent GitHub Copilot Chat participants — use one or both:
 
 Neither participant requires the other to be configured.
 
-Most operations are also available as GitHub Copilot **Agent Mode** tools (`jira_*`, `bitbucket_*`), so an agent can read and create tickets, update fields, read pull requests, and post comments without you typing `@jira`/`@bitbucket` — see [Agent Mode Tools](docs/manual/agent-mode-tools.md) for the list and which tools ask before changing anything.
+Most operations are also available as tools an agent can call without you typing `@jira`/`@bitbucket`. The Jira tools that read (view, find, filters, workflow, templates, load) come from Ticket Sidekick's own MCP server — see [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md). The Jira tools that change a ticket (comment, update a field, create, move, upload) and the Bitbucket tools are GitHub Copilot **Agent Mode** tools (`jira_*`, `bitbucket_*`) — see [Agent Mode Tools](docs/manual/agent-mode-tools.md) for the list and which tools ask before changing anything.
 
 ---
 
@@ -174,17 +174,11 @@ Once loaded, your AI assistant (GitHub Copilot, Cursor, etc.) can read these fil
 | Archives | `.zip`, `.tar`, `.gz`, `.tgz`, `.bz2`, `.7z`, `.rar`, `.jar`, `.war`, `.ear` | Downloaded |
 | Oversized | File larger than 100 MB | Skipped — listed in `ticket.md` with size |
 | Unknown binary | Any other MIME type not covered above | Skipped — listed in `ticket.md` with size |
+| Unsafe name | A name with `/` or `\` in it, or the name `.` or `..` | Never written — listed in `ticket.md` |
 
 Up to three attachments are downloaded in parallel.
 
-When a load completes with skipped attachments, the response shows a numbered list. To download on demand:
-
-```text
-1              ← download attachment #1
-download 1     ← same
-1 2 3          ← download attachments #1, #2, and #3 in one reply
-download 1 3   ← same, with keyword prefix
-```
+When a load skips attachments, the response lists each one with its name, size and the reason. To fetch a skipped one anyway, ask Copilot to load it with the `jira_load_ticket` tool, naming the attachment (see [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md)). Files over 100 MB and files with an unsafe name are never downloaded.
 
 `.jira-context/` is automatically added to `.gitignore` at your workspace root the first time you run `@jira load`.
 
@@ -412,11 +406,11 @@ Create a `.jira-templates.json` file in your workspace root to define per-applic
 
 ### Jira tools in Copilot-harness chats (MCP)
 
-Chats that run in VS Code's **Copilot harness** cannot use `@jira`. For them Ticket Sidekick runs a small MCP server inside VS Code on `127.0.0.1`, on a random port and with a key that changes at every start, and offers it to VS Code as the **Ticket Sidekick** MCP server. It currently carries one tool, `jira_check_connection`, which gives the same answer as `@jira check`. Needs VS Code 1.101 or later.
+Chats that run in VS Code's **Copilot harness** cannot use `@jira`. For them Ticket Sidekick runs a small MCP server inside VS Code on `127.0.0.1`, on a random port and with a key that changes at every start, and offers it to VS Code as the **Ticket Sidekick** MCP server. Its tools view, find, load and list Jira tickets, filters, workflows and templates, and check the connection, and the `/jira-brief` skill writes a developer brief of a ticket. Needs VS Code 1.101 or later.
 
-The server runs only while the VS Code setting `http.noProxy` contains the entry `127.0.0.1` (exactly that; an entry with a port does not count). Without it, Copilot could send these local requests to your network proxy. Ticket Sidekick never changes the setting: until you add the entry, every VS Code start shows a notice with an **Open Setting** button, and the Jira walkthrough has a step for it. Adding the entry starts the server and removing it stops the server, without a restart. Jira does not need to be configured for the server to run; a tool called before setup answers with the missing step.
+The server runs only while the VS Code setting `http.noProxy` contains the entry `127.0.0.1` (exactly that; an entry with a port does not count). Ticket Sidekick never changes the setting: until you add the entry, every VS Code start shows a notice with an **Open Setting** button, and the Jira walkthrough has a step for it.
 
-If the tools do not show up, run `Ticket Sidekick: Copy MCP diagnostics` from the Command Palette. It copies a report to the clipboard (server state, whether it is offered and why not, request and tool-call counts, the proxy-related settings, the `chat.mcp.*` and sandbox settings, and whether the key turns up in stored files) with every key and token removed. It leaves out tool arguments and your Jira base URL, and of `http.noProxy` it lists only the loopback entries and counts the rest. The `chat.mcp.*` and sandbox settings appear as they are, though, so a sandbox allow-list can name internal hosts: read the report once before you send it on. Folders and files under your home folder appear with `~`. The search for stored keys stops after 512 MB of files, and you can cancel it from the notification; either way the report is still copied and says the search is incomplete.
+See [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md) for every tool and its inputs, the skill, approvals, `Ticket Sidekick: Copy MCP diagnostics`, troubleshooting and a checklist to try it out.
 
 ### Settings reference
 
@@ -539,7 +533,7 @@ retrying) or something more persistent.
 
 For the MCP server behind the Jira tools in Copilot-harness chats, run
 `Ticket Sidekick: Copy MCP diagnostics` — see
-[Jira tools in Copilot-harness chats](#jira-tools-in-copilot-harness-chats-mcp).
+[Jira Tools for Copilot Chats](docs/manual/copilot-tools.md#diagnostics).
 
 ## Releasing
 

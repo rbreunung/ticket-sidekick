@@ -22,8 +22,7 @@ import { isAllowedUploadPath } from '../../tools/pathSafety';
 export const UPLOAD_REVIEW_SESSION_KEY = 'jira.session.uploadReview';
 export const AWAIT_UPLOAD_TICKET_SESSION_KEY = 'jira.session.awaitUploadTicket';
 
-// Code-review fix: Jira does not dedupe attachments by filename (see `findAttachmentByFilename`'s
-// doc comment in attachmentEligibility.ts), so a double-submitted "confirm" reply — a double
+// Code-review fix: Jira does not dedupe attachments by filename, so a double-submitted "confirm" reply — a double
 // click on the rendered link, or two chat turns dispatched before the first completes — would
 // otherwise upload every file twice. Mirrors `jira_uploadAttachment`'s own `RecentCallGuard` use
 // for the same non-idempotent-write reason (KTD7 in jiraTools.ts).

@@ -21,9 +21,9 @@ export async function handleDiscoverWorkflow(
   }
   stream.markdown(`_Discovering workflow for **${projectKey}** / **${issueType}**…_\n\n`);
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-  // Same discover-then-cache sequence jira_discoverWorkflow's tool uses (src/tools/jiraTools.ts,
-  // src/services/WorkflowService.ts), so the chat flow and the Language Model tool never drift
-  // apart on cache handling (R3).
+  // Same discover-then-cache sequence the MCP workflow tool uses (src/mcp/jiraTools/workflow.ts,
+  // src/services/WorkflowService.ts), so the chat flow and the tool never drift apart on cache
+  // handling.
   const { graph, skippedStatuses, preserved } = await discoverAndCacheWorkflow(jiraClient, workspaceRoot, projectKey, issueType);
   const statuses = Object.keys(graph);
   if (statuses.length === 0) {
@@ -34,8 +34,6 @@ export async function handleDiscoverWorkflow(
   // the "no tickets found" bail-out above already returned before reaching here.
   await vscode.commands.executeCommand('setContext', 'ticketSidekick.workflowViewed', true);
 
-  // Same pure formatter jira_discoverWorkflow's tool result uses (src/tools/jiraTools.ts), so
-  // the chat flow and the Language Model tool never drift apart on this wording (R3).
   const summary = formatWorkflowDiscoveryMessage(projectKey, issueType, graph, skippedStatuses, preserved);
   const trulySkippedCount = skippedStatuses.filter(s => !preserved.includes(s)).length;
   logDiag('jira.workflow', 'info', `Workflow discovered — ${projectKey}/${issueType}`, {
