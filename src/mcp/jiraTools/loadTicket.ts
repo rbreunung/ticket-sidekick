@@ -57,16 +57,24 @@ function resultMessage(key: string, folder: string, commentCount: number, allNam
     lines.push('', `${key} has no attachment named ${missing}.${existing}`);
   }
   if (result.skipped.length > 0) {
-    lines.push(
-      '',
-      `${plural(result.skipped.length, 'attachment')} not downloaded:`,
-      ...result.skipped.map(s => `- ${s.filename} (${formatFileSize(s.size)}): ${s.reason}`),
-    );
-    const fetchable = [...new Set(result.skipped.filter(s => FETCHABLE.has(s.cause)).map(s => s.filename))];
+    const line = (s: SkippedAttachment) => `${s.filename} (${formatFileSize(s.size)}): ${s.reason}`;
+    // Fetching is by name, so a name skipped twice is offered once.
+    const fetchable = result.skipped.filter((s, i, all) => FETCHABLE.has(s.cause) && all.findIndex(o => o.filename === s.filename) === i);
+    const fetchableNames = new Set(fetchable.map(s => s.filename));
+    const other = result.skipped.filter(s => !FETCHABLE.has(s.cause) || !fetchableNames.has(s.filename));
+    if (fetchable.length > 0) {
+      lines.push('', 'Attachments not downloaded, which can still be fetched:', ...fetchable.map((s, i) => `${i + 1}. ${line(s)}`));
+    }
+    if (other.length > 0) {
+      lines.push('', 'Not downloadable:', ...other.map(s => `- ${line(s)}`));
+    }
     if (fetchable.length > 0) {
       lines.push(
-        `If one of these is needed, call ${LOAD_TICKET_TOOL} again with ticketKey "${key}" and attachments [${fetchable.map(n => JSON.stringify(n)).join(', ')}] `
-        + '(or only the ones needed).',
+        '',
+        'Show the user the numbered list above exactly as written, after your answer, and ask which to download: '
+        + 'numbers such as "1, 2", or "all". '
+        + `When they answer, call ${LOAD_TICKET_TOOL} with ticketKey "${key}" and attachments set to the chosen names. `
+        + "Do not download them without asking, unless the user's request already named them.",
       );
     }
   }
@@ -78,7 +86,8 @@ export const loadTicketTool = defineTool<JiraToolDeps, typeof loadShape>({
   name: LOAD_TICKET_TOOL,
   title: 'Load a Jira ticket into the workspace',
   description:
-    'Downloads one Jira ticket into `.jira-context/<KEY>/` in the first workspace folder, so its content can be read as local files: '
+    'Use when the user asks to load or download a ticket, e.g. "load PROJ-123". '
+    + 'Downloads one Jira ticket into `.jira-context/<KEY>/` in the first workspace folder, so its content can be read as local files: '
     + '`ticket.md` (fields, description, web links, attachment list), `comments.md` (all comments) and, in `attachments/`, '
     + 'the text, image, document and archive attachments. Binary attachments of other types are skipped unless named in attachments; '
     + 'files over 100 MB are always skipped. The answer lists every file written by its absolute path and every skipped attachment '

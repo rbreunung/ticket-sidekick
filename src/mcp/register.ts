@@ -6,6 +6,7 @@ import { JiraApiClient } from '../jira/JiraApiClient';
 import { logDiag } from '../utils/diagLog';
 import type { LogLevel } from '../utils/diagTypes';
 import { JIRA_TOOLS } from './jiraTools/catalog';
+import { RecentCallGuard } from '../tools/recentCallGuard';
 import type { JiraAccess, JiraToolDeps } from './jiraTools/jiraAccess';
 import { evaluateNoProxy, loopbackBypassConfigured } from './proxyBypass';
 import { copilotHome, buildReport, redact, scanForSecret, DEFAULT_SCAN_LIMITS, type ReportFacts } from './report';
@@ -100,6 +101,7 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
     getJira: () => getJira(configService),
     // Only folders on this computer's disk: git, the template file and the workflow cache are read there.
     workspaceFolders: () => (vscode.workspace.workspaceFolders ?? []).filter(f => f.uri.scheme === 'file').map(f => f.uri.fsPath),
+    recentWrites: new RecentCallGuard(),
     onDiag: (level, message, details) => logDiag('mcp.tools', level, message, details),
   };
   const started = new McpServerController<JiraToolDeps>({

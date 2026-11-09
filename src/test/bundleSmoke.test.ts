@@ -145,8 +145,7 @@ describe('bundled extension (out/extension.js)', () => {
     expect([...registered.tools].sort()).toEqual(declared);
   });
 
-  it('registers only the Jira tools that write as Agent Mode tools; the read tools are on the MCP server', () => {
-    const jiraTools = registered.tools.filter(name => name.startsWith('jira_')).sort();
-    expect(jiraTools).toEqual(['jira_addComment', 'jira_createTicket', 'jira_transitionTicket', 'jira_updateField', 'jira_uploadAttachment']);
+  it('registers no Jira Agent Mode tool, since the Jira tools are on the MCP server', () => {
+    expect(registered.tools.filter(name => name.startsWith('jira_'))).toEqual([]);
   });
 });

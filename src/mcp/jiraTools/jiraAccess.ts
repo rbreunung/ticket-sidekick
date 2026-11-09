@@ -1,5 +1,6 @@
 import type { IJiraClient } from '../../jira/IJiraClient';
 import type { JiraConfig } from '../../services/ConfigService';
+import type { RecentCallGuard } from '../../tools/recentCallGuard';
 import type { DiagLogger } from '../../utils/diagTypes';
 
 // What every Jira tool handler receives. The caller builds one `JiraToolDeps` when the server
@@ -27,5 +28,11 @@ export interface JiraToolDeps {
    * downloaded and goes on with the rest; 2 minutes when unset.
    */
   jiraDownloadTimeoutMs?: number;
+  /**
+   * Remembers the writes of the last minute (comments, created tickets, uploads), so an identical
+   * call repeated in a later request is skipped instead of writing twice. Each MCP request gets a
+   * new server, so the guard lives here, created once when the server starts.
+   */
+  recentWrites: RecentCallGuard;
   onDiag?: DiagLogger;
 }

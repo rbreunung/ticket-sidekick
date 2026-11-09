@@ -16,6 +16,7 @@ vi.mock('vscode', () => ({
       fsPath: [base.fsPath.replace(/\/+$/, ''), ...segments].join('/'),
     }),
   },
+  FileType: { File: 1, Directory: 2, SymbolicLink: 64 },
   workspace: {
     workspaceFolders: [{ uri: { fsPath: '/workspace' } }],
     fs: {
@@ -27,6 +28,18 @@ vi.mock('vscode', () => ({
         const content = fakeFiles.get(uri.fsPath);
         if (!content) throw new Error(`ENOENT: ${uri.fsPath}`);
         return content;
+      }),
+      rename: vi.fn(async (from: { fsPath: string }, to: { fsPath: string }) => {
+        const content = fakeFiles.get(from.fsPath);
+        if (!content) throw new Error(`ENOENT: ${from.fsPath}`);
+        fakeFiles.delete(from.fsPath);
+        fakeFiles.set(to.fsPath, content);
+      }),
+      delete: vi.fn(async (uri: { fsPath: string }) => { fakeFiles.delete(uri.fsPath); }),
+      // Nothing in the fake file system is a link.
+      stat: vi.fn(async (uri: { fsPath: string }) => {
+        if (!fakeFiles.has(uri.fsPath)) throw new Error(`ENOENT: ${uri.fsPath}`);
+        return { type: 1 };
       }),
     },
     getConfiguration: vi.fn(() => ({ get: () => 'https://jira.example.com' })),
@@ -53,6 +66,7 @@ function memoryWriter(initial: Record<string, string> = {}): LoadWriter & { file
     text: relPath => new TextDecoder().decode(files.get(relPath)),
     createDirectory: async () => {},
     writeFile: async (relPath, bytes) => { files.set(relPath, bytes); },
+    isLink: async () => false,
     readFile: async relPath => {
       const content = files.get(relPath);
       if (!content) throw new Error(`ENOENT: ${relPath}`);

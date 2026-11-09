@@ -406,6 +406,11 @@ const SUPPORTED_FIELDS: Record<string, string> = {
   fixversion: 'fixVersions',
 };
 
+/** The Jira field id {@link TicketService.updateField} writes for a field name, or undefined when it does not support the field. */
+export function supportedFieldId(fieldName: string): string | undefined {
+  return SUPPORTED_FIELDS[fieldName.trim().toLowerCase()];
+}
+
 /** Result of {@link TicketService.getRequirementsSource}. */
 export type RequirementsSourceResult =
   | { ok: true; source: RequirementsSource }
@@ -648,13 +653,18 @@ export class TicketService {
   }
 
   async updateField(issueKey: string, fieldName: string, value: string, baseUrl?: string): Promise<string> {
+    return (await this.updateFieldOutcome(issueKey, fieldName, value, baseUrl)).message;
+  }
+
+  /** {@link updateField}, also saying whether Jira was written to (not for a refused field or an unresolved assignee). */
+  async updateFieldOutcome(issueKey: string, fieldName: string, value: string, baseUrl?: string): Promise<{ written: boolean; message: string }> {
     const jiraField = SUPPORTED_FIELDS[fieldName.toLowerCase()];
     if (!jiraField) {
       const supported = Object.keys(SUPPORTED_FIELDS)
         .filter((k) => !k.includes('fix') && k !== 'component' && k !== 'fixversions')
         .concat(['fix version'])
         .join(', ');
-      return `Field "${fieldName}" is not supported. Supported fields: ${supported}.`;
+      return { written: false, message: `Field "${fieldName}" is not supported. Supported fields: ${supported}.` };
     }
 
     let fieldValue: unknown;
@@ -662,7 +672,7 @@ export class TicketService {
       fieldValue = { name: value };
     } else if (jiraField === 'assignee') {
       const resolved = await this.resolveAssignee(value);
-      if (typeof resolved === 'string') return resolved;
+      if (typeof resolved === 'string') return { written: false, message: resolved };
       fieldValue = resolved;
     } else if (jiraField === 'description') {
       fieldValue = value;
@@ -678,7 +688,7 @@ export class TicketService {
 
     await this.client.updateIssue(issueKey, { [jiraField]: fieldValue });
     this.onDiag?.('info', `Field updated — ${issueKey} (${fieldName})`, { issueKey, fieldName });
-    return `Updated ${fieldName} on ${formatKeyLink(issueKey, baseUrl)}.`;
+    return { written: true, message: `Updated ${fieldName} on ${formatKeyLink(issueKey, baseUrl)}.` };
   }
 
   async resolveAssignee(value: string): Promise<Record<string, string> | string> {

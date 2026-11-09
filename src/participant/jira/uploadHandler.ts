@@ -24,8 +24,8 @@ export const AWAIT_UPLOAD_TICKET_SESSION_KEY = 'jira.session.awaitUploadTicket';
 
 // Code-review fix: Jira does not dedupe attachments by filename, so a double-submitted "confirm" reply — a double
 // click on the rendered link, or two chat turns dispatched before the first completes — would
-// otherwise upload every file twice. Mirrors `jira_uploadAttachment`'s own `RecentCallGuard` use
-// for the same non-idempotent-write reason (KTD7 in jiraTools.ts).
+// otherwise upload every file twice. The MCP upload tool guards its writes the same way, for the
+// same non-idempotent-write reason.
 const recentUploadConfirms = new RecentCallGuard();
 
 /** R1-R3: collects every attached-file reference on the current chat message (a `vscode.Uri`
@@ -52,8 +52,8 @@ function collectReferenceUris(refs: readonly vscode.ChatPromptReference[]): vsco
  * `emailHandler.ts`'s `pickAndParseEmlFiles()` precedent.
  *
  * Security fix (code-review P1): an explicit path is free text typed into chat, so — like
- * `jira_uploadAttachment`'s LLM-supplied `filePath` (see `pathSafety.ts`'s `isAllowedUploadPath`
- * doc comment) — it's restricted to the user's home directory, excluding dotfile/dotdir segments.
+ * an agent-supplied file path (see `pathSafety.ts`'s `isAllowedUploadPath` doc comment) — it's
+ * restricted to the user's home directory, excluding dotfile/dotdir segments.
  * File-picker, active-editor, and chat-attachment-reference paths below are human-UI-driven and
  * not reachable via prompt text, so they're left unrestricted. */
 async function resolveSourceUris(explicitFilePath: string | null, request: vscode.ChatRequest, stream: vscode.ChatResponseStream): Promise<vscode.Uri[] | null> {

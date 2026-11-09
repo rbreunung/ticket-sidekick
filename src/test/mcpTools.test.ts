@@ -4,6 +4,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { LocalhostServer } from '../mcp/localhostServer';
 import { createMcpHandler, type ToolCallOutcome } from '../mcp/mcpServer';
 import { generateKey } from '../mcp/keys';
+import { RecentCallGuard } from '../tools/recentCallGuard';
 import {
   JIRA_TOOLS, CHECK_CONNECTION_TOOL, VIEW_TICKET_TOOL, FIND_TICKETS_TOOL, LIST_MY_FILTERS_TOOL, WORKFLOW_TOOL, LIST_TEMPLATES_TOOL,
   LOAD_TICKET_TOOL,
@@ -69,6 +70,7 @@ async function callTool(name: string, args: Record<string, unknown> = {}, option
     workspaceFolders: () => options.folders ?? [],
     jiraTimeoutMs: options.timeoutMs,
     jiraDownloadTimeoutMs: options.downloadTimeoutMs,
+    recentWrites: new RecentCallGuard(),
     onDiag: (level, message, details) => options.logs?.push({ level, message, details }),
   };
   server = new LocalhostServer({
@@ -131,7 +133,16 @@ describe('Jira tool catalog', () => {
   it('marks every tool that only reads Jira as read-only', () => {
     expect(CHECK_CONNECTION_TOOL).toBe('jira_check_connection');
     expect(VIEW_TICKET_TOOL).toBe('jira_view_ticket');
-    for (const tool of JIRA_TOOLS.filter(t => t.name !== LOAD_TICKET_TOOL)) expect(tool.annotations, tool.name).toEqual({ readOnlyHint: true });
+    const reads = [CHECK_CONNECTION_TOOL, VIEW_TICKET_TOOL, FIND_TICKETS_TOOL, LIST_MY_FILTERS_TOOL, WORKFLOW_TOOL, LIST_TEMPLATES_TOOL];
+    for (const name of reads) expect(JIRA_TOOLS.find(t => t.name === name)?.annotations, name).toEqual({ readOnlyHint: true });
+  });
+
+  it('marks every tool that writes to Jira as destructive and never as read-only, so the harness always asks first', () => {
+    const writes = JIRA_TOOLS.filter(t => !t.annotations.readOnlyHint && t.name !== LOAD_TICKET_TOOL);
+    expect(writes.map(t => t.name).sort()).toEqual(
+      ['jira_add_comment', 'jira_create_ticket', 'jira_move_ticket', 'jira_update_field', 'jira_upload_attachment'],
+    );
+    for (const tool of writes) expect(tool.annotations, tool.name).toEqual({ destructiveHint: true });
   });
 
   it('marks load ticket neither read-only nor destructive, since it writes only local files', () => {
@@ -392,6 +403,25 @@ describe('jira_find_tickets', () => {
     await callTool(FIND_TICKETS_TOOL, { jql: 'ORDER BY created DESC', assignee: 'me' }, { client });
 
     expect(client.searches.map(s => s.jql)).toEqual(['assignee = currentUser() ORDER BY created DESC']);
+  });
+
+  it('does not take ORDER BY inside a quoted value for the sort clause when narrowing', async () => {
+    const client = new RecordingSearchClient();
+
+    await callTool(FIND_TICKETS_TOOL, { jql: 'project = PROJ AND summary ~ "slow ORDER BY query"', assignee: 'me' }, { client });
+    await callTool(FIND_TICKETS_TOOL, {
+      jql: `project = PROJ AND summary ~ 'say \\'ORDER BY x\\' twice' ORDER BY created DESC`, assignee: 'me',
+    }, { client });
+    client.getFilterById = async (): Promise<JiraFilter> => ({ id: '10006', name: 'Slow', jql: 'summary ~ "slow ORDER BY query" ORDER BY key' });
+    await callTool(FIND_TICKETS_TOOL, { filter: '10006', myTeam: true }, {
+      client, config: jiraConfig({ myTeamJql: 'project = PROJ' }),
+    });
+
+    expect(client.searches.map(s => s.jql)).toEqual([
+      '(project = PROJ AND summary ~ "slow ORDER BY query") AND (assignee = currentUser())',
+      `(project = PROJ AND summary ~ 'say \\'ORDER BY x\\' twice') AND (assignee = currentUser()) ORDER BY created DESC`,
+      '(project = PROJ) AND (summary ~ "slow ORDER BY query") ORDER BY key',
+    ]);
   });
 
   it('passes a sort-only JQL without narrowing through unchanged', async () => {
@@ -656,8 +686,8 @@ describe('jira_load_ticket', () => {
     expect(text).toContain(`- \`${path.join(ctx, 'comments.md')}\``);
     expect(text).toContain(`- \`${path.join(ctx, 'attachments', 'screenshot.png')}\``);
     expect(text).toContain(`- \`${path.join(ctx, 'attachments', 'error.log')}\``);
-    expect(text).toContain('- heap-dump.bin (50.0 MB): unknown binary format');
-    expect(text).toContain('call jira_load_ticket again with ticketKey "PROJ-123" and attachments ["heap-dump.bin"]');
+    expect(text).toContain('Attachments not downloaded, which can still be fetched:\n1. heap-dump.bin (50.0 MB): unknown binary format');
+    expect(text).toContain('call jira_load_ticket with ticketKey "PROJ-123" and attachments set to the chosen names');
     expect(text).not.toContain('jira_downloadAttachment');
   });
 
@@ -698,8 +728,8 @@ describe('jira_load_ticket', () => {
 
     expect(fs.existsSync(path.join(folder, '.jira-context', 'PROJ-123', 'attachments', 'huge.zip'))).toBe(false);
     expect(fs.existsSync(path.join(folder, '.jira-context', 'PROJ-123', 'attachments', 'notes.txt'))).toBe(true);
-    expect(text).toContain('- huge.zip (150.0 MB): over 100 MB size limit');
-    expect(text).not.toContain('attachments ["huge.zip"]');
+    expect(text).toContain('Not downloadable:\n- huge.zip (150.0 MB): over 100 MB size limit');
+    expect(text).not.toContain('can still be fetched');
   });
 
   it('skips attachments with unsafe filenames and writes nothing outside the attachments folder', async () => {
@@ -721,12 +751,12 @@ describe('jira_load_ticket', () => {
     expect(fs.readdirSync(path.dirname(folder)).filter(name => name.includes('evil'))).toEqual([]);
     expect(text).toContain('- ../../evil.txt (0 KB): unsafe filename');
     expect(text).toContain('- ..\\..\\evil.txt (0 KB): unsafe filename');
-    // Calling again cannot fetch an unsafe name, so no re-fetch hint is offered for it.
-    expect(text).not.toContain(`call ${LOAD_TICKET_TOOL} again`);
-    expect(text).not.toContain('evil.txt"');
+    // An unsafe name cannot be fetched, so it is never offered.
+    expect(text).not.toContain('can still be fetched');
+    expect(text).not.toContain('ask which to download');
   });
 
-  it('offers to fetch only the fetchable attachments again when an unsafe one is skipped with them', async () => {
+  it('numbers only the fetchable attachments when an unsafe one is skipped with them', async () => {
     const folder = makeTempDir();
     const client = new AttachmentsClient([
       attachment('a1', '../../evil.txt', 'text/plain', 10),
@@ -735,10 +765,34 @@ describe('jira_load_ticket', () => {
 
     const text = await callTool(LOAD_TICKET_TOOL, { ticketKey: 'PROJ-123' }, { client, folders: [folder] });
 
-    expect(text).toContain('- ../../evil.txt (0 KB): unsafe filename');
-    expect(text).toContain('- dump.bin (0 KB): unknown binary format');
-    expect(text).toContain(`call ${LOAD_TICKET_TOOL} again with ticketKey "PROJ-123" and attachments ["dump.bin"] `);
-    expect(text).not.toContain('evil.txt"');
+    expect(text).toContain('Attachments not downloaded, which can still be fetched:\n1. dump.bin (0 KB): unknown binary format\n');
+    expect(text).toContain('Not downloadable:\n- ../../evil.txt (0 KB): unsafe filename');
+  });
+
+  it('numbers the fetchable skipped attachments, lists the others apart, and tells the agent to let the user pick', async () => {
+    const folder = makeTempDir();
+    const client = new AttachmentsClient([
+      attachment('a1', 'design.dat', 'application/octet-stream', 2 * 1024 * 1024),
+      attachment('a2', 'dump.log', 'text/plain', 10),
+      attachment('a3', 'huge.iso', 'application/octet-stream', 300 * 1024 * 1024),
+      attachment('a4', '../../evil.txt', 'text/plain', 10),
+    ], ['a2']);
+
+    const text = await callTool(LOAD_TICKET_TOOL, { ticketKey: 'PROJ-123' }, { client, folders: [folder] });
+
+    expect(text).toContain([
+      'Attachments not downloaded, which can still be fetched:',
+      '1. design.dat (2.0 MB): unknown binary format',
+      '2. dump.log (0 KB): download failed',
+      '',
+      'Not downloadable:',
+      '- huge.iso (300.0 MB): over 100 MB size limit',
+      '- ../../evil.txt (0 KB): unsafe filename',
+      '',
+      'Show the user the numbered list above exactly as written, after your answer, and ask which to download: '
+        + 'numbers such as "1, 2", or "all". When they answer, call jira_load_ticket with ticketKey "PROJ-123" and attachments '
+        + "set to the chosen names. Do not download them without asking, unless the user's request already named them.",
+    ].join('\n'));
   });
 
   it('names no tool outside the catalog, whatever the reasons for skipping', async () => {
@@ -754,9 +808,8 @@ describe('jira_load_ticket', () => {
 
     const text = await callTool(LOAD_TICKET_TOOL, { ticketKey: 'PROJ-123' }, { client, folders: [folder] });
 
+    expect(text).toContain('1. dump.bin (0 KB): unknown binary format\n2. broken.log (0 KB): download failed');
     expect(text).toContain('- notes.txt (0 KB): duplicate filename; only the newest attachment with this name is downloaded');
-    expect(text).toContain('- broken.log (0 KB): download failed');
-    expect(text).toContain('attachments ["dump.bin", "broken.log"]');
     const named = text.match(/\bjira_[A-Za-z_]+/g) ?? [];
     const catalog = new Set(JIRA_TOOLS.map(t => t.name));
     expect(named.length).toBeGreaterThan(0);
@@ -788,8 +841,8 @@ describe('jira_load_ticket', () => {
     expect(filesUnder(ctx)).toEqual(['attachments/logs.zip', 'attachments/notes.txt', 'comments.md', 'ticket.md']);
     expect(text).toContain(`- \`${path.join(ctx, 'ticket.md')}\``);
     expect(text).toContain(`- \`${path.join(ctx, 'attachments', 'logs.zip')}\``);
-    expect(text).toContain('- stuck.log (0 KB): download failed');
-    expect(text).toContain('call jira_load_ticket again with ticketKey "PROJ-123" and attachments ["stuck.log"]');
+    expect(text).toContain('1. stuck.log (0 KB): download failed');
+    expect(text).toContain('call jira_load_ticket with ticketKey "PROJ-123" and attachments set to the chosen names');
     expect(text).not.toContain('did not respond');
     expect(logs.some(l => l.message.includes('stuck.log') && JSON.stringify(l.details).includes('did not respond'))).toBe(true);
   });

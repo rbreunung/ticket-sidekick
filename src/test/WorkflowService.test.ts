@@ -1,10 +1,11 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { findPath, findAllPaths, findReachableStatuses, loadWorkflowCache, discoverWorkflow, preserveSkippedStatuses, resolveAndApplyTransition, discoverAndCacheWorkflow, saveWorkflowCache } from '../services/WorkflowService';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService, PartialTransitionError } from '../services/TicketService';
+import { JiraApiError } from '../utils/apiError';
 
 const graph = {
   'Open':        [{ id: '11', name: 'Start Progress', to: 'In Progress' }],
@@ -175,6 +176,22 @@ describe('loadWorkflowCache', () => {
   it('returns empty object when file absent', () => {
     expect(loadWorkflowCache('/nonexistent')).toEqual({});
   });
+
+  it('without a workspace folder neither reads nor writes a cache in the working directory', () => {
+    const cwd = process.cwd();
+    const dir = mkdtempSync(join(tmpdir(), 'ts-wf-cwd-'));
+    const planted = { PROJ: { Bug: { discovered: '2026-01-01', graph: { 'To Do': [{ id: '99', name: 'Planted', to: 'Done' }] } } } };
+    writeFileSync(join(dir, '.jira-workflow-cache.json'), JSON.stringify(planted));
+    try {
+      process.chdir(dir);
+      expect(loadWorkflowCache('')).toEqual({});
+      saveWorkflowCache('', {});
+      expect(JSON.parse(readFileSync(join(dir, '.jira-workflow-cache.json'), 'utf-8'))).toEqual(planted);
+    } finally {
+      process.chdir(cwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('discoverWorkflow', () => {
@@ -288,7 +305,7 @@ describe('resolveAndApplyTransition', () => {
 
     const result = await resolveAndApplyTransition(client, service, '/nonexistent', 'PROJ-123', 'done');
 
-    expect(result).toEqual({ kind: 'direct', toStatus: 'Done' });
+    expect(result).toEqual({ kind: 'direct', fromStatus: 'In Progress', toStatus: 'Done', steps: ['Done'] });
     expect(client.executeTransitionCalls).toEqual([{ issueKey: 'PROJ-123', transitionId: '41', fields: undefined }]);
   });
 
@@ -310,7 +327,7 @@ describe('resolveAndApplyTransition', () => {
 
     const result = await resolveAndApplyTransition(client, service, tmpDir, 'PROJ-123', 'Closed');
 
-    expect(result).toEqual({ kind: 'multiHop', toStatus: 'Closed', hops: 2 });
+    expect(result).toEqual({ kind: 'multiHop', fromStatus: 'In Progress', toStatus: 'Closed', hops: 2, steps: ['Review', 'Close'] });
     expect(client.executeTransitionCalls).toEqual([
       { issueKey: 'PROJ-123', transitionId: '31', fields: undefined },
       { issueKey: 'PROJ-123', transitionId: '99', fields: undefined },
@@ -347,11 +364,43 @@ describe('resolveAndApplyTransition', () => {
       totalHops: 2,
       landedStatus: 'In Review',
       targetStatus: 'Closed',
-      error: expect.stringContaining('Jira 500: internal error'),
+      error: 'Jira 500: internal error',
+      cause: expect.objectContaining({ message: 'Jira 500: internal error' }),
     });
     // Both hops were attempted (the second failed) — the ticket really did move to "In Review".
     expect(client.executeTransitionCalls).toHaveLength(2);
   });
+  it('describes a failed later step by its HTTP status only, never with the response body', async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'ticket-sidekick-workflow-'));
+    saveWorkflowCache(tmpDir, {
+      PROJ: {
+        '': {
+          discovered: '2020-01-01',
+          graph: {
+            'In Progress': [{ id: '31', name: 'Review', to: 'In Review' }],
+            'In Review': [{ id: '99', name: 'Close', to: 'Closed' }],
+          },
+        },
+      },
+    });
+    const client = new MockJiraClient();
+    let calls = 0;
+    client.executeTransition = async (issueKey: string, transitionId: string) => {
+      calls++;
+      client.executeTransitionCalls.push({ issueKey, transitionId });
+      if (calls === 2) {
+        const url = 'https://jira.example.com/rest/api/2/issue/PROJ-123/transitions';
+        throw new JiraApiError('Jira API error 502 Bad Gateway: <html><body>proxy SECRET page</body></html>', 502, url);
+      }
+    };
+    const service = new TicketService(client);
+
+    const result = await resolveAndApplyTransition(client, service, tmpDir, 'PROJ-123', 'Closed');
+
+    expect(result).toMatchObject({ kind: 'partialFailure', error: 'Jira answered HTTP 502 (Bad Gateway).' });
+    expect(JSON.stringify((result as { error: string }).error)).not.toContain('SECRET');
+  });
+
 
   it('does not report a partial failure when the very first hop fails — nothing changed, so it throws normally', async () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'ticket-sidekick-workflow-'));

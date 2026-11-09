@@ -3,6 +3,7 @@ import { JiraApiClient } from '../jira/JiraApiClient';
 import { ConfigService } from '../services/ConfigService';
 import type { JiraConfig } from '../services/ConfigService';
 import { TicketService, renderFieldValue, formatKeyLink, PartialTransitionError } from '../services/TicketService';
+import { describeJiraFailure } from '../utils/jiraFailureText';
 import type { IJiraClient, JiraFieldMeta, JiraFilter, JiraSprintCandidate, JiraIssue } from '../jira/IJiraClient';
 import { TemplateService } from '../templates/TemplateService';
 import type { JiraTemplate } from '../templates/TemplateService';
@@ -529,13 +530,19 @@ async function continueGuidedTransition(
     if (err instanceof PartialTransitionError && err.completedHops > 0) {
       const landedStatus = session.chosenPath![err.completedHops - 1].to;
       stream.markdown(formatPartialTransitionFailure(
-        session.ticketKey, landedStatus, err.completedHops, err.totalHops, session.targetStatus!, err.message,
+        session.ticketKey, landedStatus, err.completedHops, err.totalHops, session.targetStatus!, describeJiraFailure(err.cause),
       ));
+      logDiag('jira.participant', 'warn', `Partial transition — ${session.ticketKey} landed at ${landedStatus}`, {
+        completedHops: err.completedHops, totalHops: err.totalHops, error: err.message,
+      });
       return guidedTransitionLoadedTicketResult(session.ticketKey, session.projectKey, session.issueType);
     }
     const message = err instanceof Error ? err.message : String(err);
     logDiag('jira.participant', 'error', message, {});
-    stream.markdown(message);
+    // A failed first step wraps the Jira error, whose message may carry the response body.
+    stream.markdown(err instanceof PartialTransitionError
+      ? `Could not move **${session.ticketKey}**: ${describeJiraFailure(err.cause)}`
+      : message);
     return guidedTransitionLoadedTicketResult(session.ticketKey, session.projectKey, session.issueType);
   }
   const hops = session.chosenPath!.length;
@@ -2058,8 +2065,8 @@ export function createJiraParticipant(
           }
           const targetStatus = intent.targetStatus;
           const transWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-          // Same resolution algorithm `jira_transitionTicket` uses (src/services/WorkflowService.ts) —
-          // R3: one implementation, reused by both the chat flow and the Language Model tool.
+          // Same resolution the MCP move ticket tool uses (src/services/WorkflowService.ts), so the
+          // chat flow and the tool move a ticket the same way.
           const transResult = await resolveAndApplyTransition(
             jiraClient, ticketService, transWorkspaceRoot, ticketKey!, targetStatus, intent.resolution ?? undefined,
           );
@@ -2256,7 +2263,11 @@ export function createJiraParticipant(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logDiag('jira.participant', 'error', message, { operation: intent.operation });
-      stream.markdown(message);
+      // A move that failed on its first step wraps the Jira error, whose message may carry the
+      // response body; show its status and reason only.
+      stream.markdown(err instanceof PartialTransitionError
+        ? `Could not move **${err.issueKey}**: ${describeJiraFailure(err.cause)}`
+        : message);
     }
   };
 

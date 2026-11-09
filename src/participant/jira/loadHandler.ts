@@ -8,7 +8,7 @@ import { formatIssueFields, formatKeyLink } from '../../services/TicketService';
 import type { TicketService } from '../../services/TicketService';
 import { rewriteAttachmentLinks, extractProjectKeyFromTicketKey, neutralizeMarkdownLinks } from '../sessionState';
 import { LOAD_TICKET_TOOL } from '../../mcp/jiraTools/toolNames';
-import { loadTicketToWorkspace, type LoadWriter, type SkipCause } from './loadCore';
+import { loadTicketToWorkspace, temporaryName, type LoadWriter, type SkipCause } from './loadCore';
 
 export function serializeCommentsForLLM(comments: JiraComment[]): string {
   return comments.map((c) => {
@@ -23,8 +23,26 @@ export function workspaceFsWriter(root: vscode.Uri): LoadWriter {
   const at = (relPath: string) => vscode.Uri.joinPath(root, ...relPath.split('/'));
   return {
     createDirectory: async relPath => { await vscode.workspace.fs.createDirectory(at(relPath)); },
-    writeFile: async (relPath, bytes) => { await vscode.workspace.fs.writeFile(at(relPath), bytes); },
+    writeFile: async (relPath, bytes) => {
+      // A temporary file renamed over the target replaces a link there instead of following it.
+      const parts = relPath.split('/');
+      const temp = vscode.Uri.joinPath(root, ...parts.slice(0, -1), temporaryName(parts[parts.length - 1]));
+      try {
+        await vscode.workspace.fs.writeFile(temp, bytes);
+        await vscode.workspace.fs.rename(temp, at(relPath), { overwrite: true });
+      } catch (err) {
+        try { await vscode.workspace.fs.delete(temp); } catch { /* never created */ }
+        throw err;
+      }
+    },
     readFile: async relPath => vscode.workspace.fs.readFile(at(relPath)),
+    isLink: async relPath => {
+      try {
+        return ((await vscode.workspace.fs.stat(at(relPath))).type & vscode.FileType.SymbolicLink) !== 0;
+      } catch {
+        return false;
+      }
+    },
   };
 }
 

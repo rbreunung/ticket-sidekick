@@ -31,13 +31,14 @@ afterEach(async () => {
   server = undefined;
 });
 
-async function startServer(opts: { allowMcp?: () => boolean } = {}) {
+async function startServer(opts: { allowMcp?: () => boolean; onRefused?: (reason: string, path: string) => void } = {}) {
   const deps: TestDeps = { calls: [] };
   let handled = 0;
   const handler = createMcpHandler(catalog, deps, { name: 'ticket-sidekick', version: '0.0.0-test' });
   server = new LocalhostServer({
     onMcp: async (req, res) => { handled++; await handler(req, res); },
     allowMcp: opts.allowMcp,
+    onRefused: opts.onRefused,
   });
   const mcpKey = generateKey();
   const port = await server.start(mcpKey);
@@ -165,6 +166,21 @@ describe('localhost MCP server', () => {
     const client = await connect(url, mcpKey);
     expect((await client.listTools()).tools).toHaveLength(1);
     await client.close();
+  });
+
+  it('never logs or counts a key sent in the path, in the first, second or a later segment', async () => {
+    const refusedPaths: string[] = [];
+    const { port, mcpKey } = await startServer({ onRefused: (_reason, path) => refusedPaths.push(path) });
+    const marker = 'K'.repeat(43);
+    const get = (path: string) => new Promise<void>((resolve, reject) => {
+      http.get({ host: '127.0.0.1', port, path }, res => { res.resume(); res.on('end', () => resolve()); }).on('error', reject);
+    });
+    for (const p of [`/${marker}`, `/mcp/${marker}`, `/a/b/${marker}/c?q=${marker}`, `/mcp/${mcpKey}`]) await get(p);
+
+    expect(refusedPaths).toEqual(['/[key]', '/mcp/[key]', '/a/b/[key]/c', '/mcp/[key]']);
+    const stats = JSON.stringify(server?.stats());
+    expect(stats).not.toContain(marker);
+    expect(stats).not.toContain(mcpKey);
   });
 
   it('stops accepting connections after stop', async () => {

@@ -9,7 +9,7 @@ Two independent GitHub Copilot Chat participants — use one or both:
 
 Neither participant requires the other to be configured.
 
-Most operations are also available as tools an agent can call without you typing `@jira`/`@bitbucket`. The Jira tools that read (view, find, filters, workflow, templates, load) come from Ticket Sidekick's own MCP server — see [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md). The Jira tools that change a ticket (comment, update a field, create, move, upload) and the Bitbucket tools are GitHub Copilot **Agent Mode** tools (`jira_*`, `bitbucket_*`) — see [Agent Mode Tools](docs/manual/agent-mode-tools.md) for the list and which tools ask before changing anything.
+Most operations are also available as tools an agent can call without you typing `@jira`/`@bitbucket`. The Jira tools (view, find, filters, workflow, templates, load, move, create, comment, update a field, upload) come from Ticket Sidekick's own MCP server — see [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md). The Bitbucket tools are GitHub Copilot **Agent Mode** tools (`bitbucket_*`) — see [Agent Mode Tools](docs/manual/agent-mode-tools.md) for the list and which tools ask before changing anything.
 
 ---
 
@@ -406,11 +406,11 @@ Create a `.jira-templates.json` file in your workspace root to define per-applic
 
 ### Jira tools in Copilot-harness chats (MCP)
 
-Chats that run in VS Code's **Copilot harness** cannot use `@jira`. For them Ticket Sidekick runs a small MCP server inside VS Code on `127.0.0.1`, on a random port and with a key that changes at every start, and offers it to VS Code as the **Ticket Sidekick** MCP server. Its tools view, find, load and list Jira tickets, filters, workflows and templates, and check the connection, and the `/jira-brief` skill writes a developer brief of a ticket. Needs VS Code 1.101 or later.
+Chats that run in VS Code's **Copilot harness** cannot use `@jira`. For them Ticket Sidekick runs a small MCP server inside VS Code on `127.0.0.1`, on a random port and with a key that changes at every start, and offers it to VS Code as the **Ticket Sidekick** MCP server. Its tools view, find, load, move, create, comment on and update Jira tickets, upload attachments, list filters, workflows and templates, and check the connection. The `/ts-jira-brief` skill writes a developer brief of a ticket, `/ts-jira-create` creates a ticket with you, from a template where one fits, and `/ts-jira <command>` runs one Jira command you type, e.g. `/ts-jira load PROJ-123`. Needs VS Code 1.101 or later.
 
 The server runs only while the VS Code setting `http.noProxy` contains the entry `127.0.0.1` (exactly that; an entry with a port does not count). Ticket Sidekick never changes the setting: until you add the entry, every VS Code start shows a notice with an **Open Setting** button, and the Jira walkthrough has a step for it.
 
-See [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md) for every tool and its inputs, the skill, approvals, `Ticket Sidekick: Copy MCP diagnostics`, troubleshooting and a checklist to try it out.
+See [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md) for every tool and its inputs, the skills, approvals, `Ticket Sidekick: Copy MCP diagnostics`, troubleshooting and a checklist to try it out.
 
 ### Settings reference
 
