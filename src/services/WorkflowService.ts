@@ -3,6 +3,7 @@ import { join } from 'path';
 import type { IJiraClient } from '../jira/IJiraClient';
 import type { TicketService } from './TicketService';
 import { PartialTransitionError } from './TicketService';
+import { describeJiraFailure } from '../utils/jiraFailureText';
 
 export interface CachedTransition {
   id: string;
@@ -224,7 +225,9 @@ export type TransitionResolution =
   // `totalHops` real Jira writes before the failure, so it's now sitting at `landedStatus`, not
   // its original status. Only surfaced when at least one hop actually completed; a failure on the
   // very first hop leaves no partial state and is reported as an ordinary thrown error instead.
-  | { kind: 'partialFailure'; completedHops: number; totalHops: number; landedStatus: string; targetStatus: string; error: string }
+  // `error` is a body-free description of the failed step for a reader; `cause` is the error
+  // itself, for classifying it (an HTTP status, a timeout) and for the diagnostic log.
+  | { kind: 'partialFailure'; completedHops: number; totalHops: number; landedStatus: string; targetStatus: string; error: string; cause: unknown }
   | { kind: 'unavailable'; currentStatus: string; available: string[]; projectKey: string; issueType: string; hasCache: boolean };
 
 /**
@@ -275,7 +278,8 @@ export async function resolveAndApplyTransition(
             totalHops: err.totalHops,
             landedStatus: path[err.completedHops - 1].to,
             targetStatus,
-            error: err.message,
+            error: describeJiraFailure(err.cause),
+            cause: err.cause,
           };
         }
         throw err;

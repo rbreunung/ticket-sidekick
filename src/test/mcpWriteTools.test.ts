@@ -47,7 +47,10 @@ interface Session {
 }
 
 /** A running server whose calls share one set of long-lived deps, as the extension's server does. */
-async function startSession(client: IJiraClient, options: { folders?: string[]; config?: JiraConfig; timeoutMs?: number } = {}): Promise<Session> {
+async function startSession(
+  client: IJiraClient,
+  options: { folders?: string[]; config?: JiraConfig; timeoutMs?: number; logs?: Array<{ message: string; details?: Record<string, unknown> }> } = {},
+): Promise<Session> {
   const config = options.config ?? jiraConfig();
   const deps: JiraToolDeps = {
     getJira: async (): Promise<JiraAccess> => (config.baseUrl && config.token
@@ -56,6 +59,7 @@ async function startSession(client: IJiraClient, options: { folders?: string[]; 
     workspaceFolders: () => options.folders ?? [],
     jiraTimeoutMs: options.timeoutMs,
     recentWrites: new RecentCallGuard(),
+    onDiag: (_level, message, details) => options.logs?.push({ message, details }),
   };
   server = new LocalhostServer({
     onMcp: createMcpHandler(JIRA_TOOLS, deps, { name: 'ticket-sidekick', version: '0.0.0-test' }),
@@ -89,6 +93,8 @@ class WorkflowClient extends MockJiraClient {
   };
   status = 'To Do';
   failTransitionId: string | undefined;
+  /** How the failing transition fails: an HTTP 502 with an HTML body, a plain error, or no answer at all. */
+  failWith: 'plain' | 'http502' | 'hang' = 'plain';
   searches = 0;
 
   override async getIssue(issueKey: string): Promise<JiraIssue> {
@@ -100,8 +106,16 @@ class WorkflowClient extends MockJiraClient {
     return next ? [next] : [];
   }
   override async executeTransition(issueKey: string, transitionId: string, fields?: Record<string, unknown>): Promise<void> {
-    if (transitionId === this.failTransitionId) throw new Error('Transition refused by a workflow validator');
+    // Every attempt is recorded, failed ones included, so a retry would show.
     await super.executeTransition(issueKey, transitionId, fields);
+    if (transitionId === this.failTransitionId) {
+      if (this.failWith === 'hang') return new Promise(() => {});
+      if (this.failWith === 'http502') {
+        const url = `https://jira.example.com/rest/api/2/issue/${issueKey}/transitions`;
+        throw new JiraApiError(`Jira API error 502 Bad Gateway at ${url}: <html>\n<body>proxy SENTINEL-BODY</body></html>`, 502, url);
+      }
+      throw new Error('Transition refused by a workflow validator');
+    }
     const next = Object.values(WorkflowClient.NEXT).find(t => t?.id === transitionId);
     if (next) this.status = next.to.name;
   }
@@ -181,15 +195,65 @@ describe('move ticket', () => {
     expect(client.searches).toBe(4);
   });
 
-  it('reports a move that stops partway with the status it landed in, and does not retry it', async () => {
+  it('reports a move that stops partway as a failure, with where the ticket was last confirmed, and does not retry it', async () => {
     const client = new WorkflowClient();
     client.status = 'In Progress';
     client.failTransitionId = '31';
+    client.failWith = 'http502';
+    const logs: Array<{ message: string; details?: Record<string, unknown> }> = [];
+    const session = await startSession(client, { folders: [makeTempDir('ts-move-')], logs });
+    const { text, isError } = await session.call('jira_move_ticket', { ticketKey: 'PROJ-123', targetStatus: 'Done' });
+    expect(isError).toBe(true);
+    expect(text).toBe(
+      'PROJ-123 moved partway: after 1 of 2 steps it was last confirmed in In Review; the step towards Done failed: '
+      + 'Jira answered HTTP 502 (Bad Gateway). The move was not retried; view the ticket with jira_view_ticket before trying again.',
+    );
+    expect(text).not.toContain('SENTINEL-BODY');
+    expect(client.executeTransitionCalls.map(c => c.transitionId)).toEqual(['21', '31']);
+    const logged = logs.find(l => l.message === 'jira_move_ticket: move stopped partway');
+    expect(logged?.details).toMatchObject({ completedHops: 1, totalHops: 2, lastConfirmedStatus: 'In Review', targetStatus: 'Done', status: 502, timedOut: false });
+  });
+
+  it('reports a first step Jira refuses with its HTTP status only, as a failure', async () => {
+    const client = new WorkflowClient();
+    client.status = 'In Review';
+    client.failTransitionId = '31';
+    client.failWith = 'http502';
     const session = await startSession(client, { folders: [makeTempDir('ts-move-')] });
-    const { text } = await session.call('jira_move_ticket', { ticketKey: 'PROJ-123', targetStatus: 'Done' });
-    expect(text).toContain('PROJ-123 moved partway: it is now in In Review, after 1 of 2 steps');
-    expect(text).toContain('The move was not retried');
-    expect(client.executeTransitionCalls.map(c => c.transitionId)).toEqual(['21']);
+    const { text, isError } = await session.call('jira_move_ticket', { ticketKey: 'PROJ-123', targetStatus: 'Done' });
+    expect(isError).toBe(true);
+    expect(text).toBe('Could not move PROJ-123: Jira answered HTTP 502 (Bad Gateway).');
+    expect(client.executeTransitionCalls.map(c => c.transitionId)).toEqual(['31']);
+  });
+
+  it('warns that a first step Jira did not answer in time may still have been saved', async () => {
+    const client = new WorkflowClient();
+    client.status = 'In Review';
+    client.failTransitionId = '31';
+    client.failWith = 'hang';
+    const session = await startSession(client, { folders: [makeTempDir('ts-move-')], timeoutMs: 50 });
+    const { text, isError } = await session.call('jira_move_ticket', { ticketKey: 'PROJ-123', targetStatus: 'Done' });
+    expect(isError).toBe(true);
+    expect(text).toBe(
+      'Could not move PROJ-123: Jira did not answer within 1 second. The change may still have been saved: '
+      + 'view the ticket with jira_view_ticket before trying again.',
+    );
+  });
+
+  it('warns that a later step Jira did not answer in time may still go through, and names no current status', async () => {
+    const client = new WorkflowClient();
+    client.status = 'In Progress';
+    client.failTransitionId = '31';
+    client.failWith = 'hang';
+    const session = await startSession(client, { folders: [makeTempDir('ts-move-')], timeoutMs: 50 });
+    const { text, isError } = await session.call('jira_move_ticket', { ticketKey: 'PROJ-123', targetStatus: 'Done' });
+    expect(isError).toBe(true);
+    expect(text).toBe(
+      'PROJ-123 moved partway: after 1 of 2 steps it was last confirmed in In Review; the step towards Done got no answer '
+      + 'within 1 second and may still go through. The move was not retried; view the ticket with jira_view_ticket before trying again.',
+    );
+    expect(text).not.toContain('is now in');
+    expect(client.executeTransitionCalls.map(c => c.transitionId)).toEqual(['21', '31']);
   });
 
   it('says so when the target cannot be reached even after discovery', async () => {

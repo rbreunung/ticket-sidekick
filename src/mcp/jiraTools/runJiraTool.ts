@@ -1,9 +1,9 @@
-import { STATUS_CODES } from 'http';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import { TicketService } from '../../services/TicketService';
 import { buildJiraNotConfiguredMessage } from '../../services/setupHints';
 import { ToolFailure, toolErrorLabel } from '../mcpServer';
 import type { ConfiguredJiraConfig, JiraAccess, JiraToolDeps } from './jiraAccess';
+import { describeJiraFailure, rootCause } from '../../utils/jiraFailureText';
 import { CHECK_CONNECTION_TOOL, VIEW_TICKET_TOOL } from './toolNames';
 
 // The one place where a Jira tool's failures become answers for the agent. Every Jira tool runs
@@ -19,8 +19,7 @@ import { CHECK_CONNECTION_TOOL, VIEW_TICKET_TOOL } from './toolNames';
 export const JIRA_REQUEST_TIMEOUT_MS = 30_000;
 /** How long one attachment download may take, unless the tool's deps set another limit. */
 export const JIRA_DOWNLOAD_TIMEOUT_MS = 120_000;
-/** The longest reason an agent is told for a failure that carries no HTTP status. */
-export const MAX_FAILURE_REASON_CHARS = 160;
+export { describeJiraFailure, MAX_FAILURE_REASON_CHARS } from '../../utils/jiraFailureText';
 
 export interface ConfiguredJira {
   access: Extract<JiraAccess, { configured: true }>;
@@ -28,39 +27,13 @@ export interface ConfiguredJira {
   ticketService: TicketService;
 }
 
-/** Plainer reasons than the HTTP reason phrase for the statuses an agent can act on. */
-const STATUS_REASONS: Record<number, string> = {
-  401: 'authentication failed; check the stored token',
-  403: 'no permission',
-  404: 'not found, or no permission to see it',
-  429: 'too many requests; try again later',
-};
-
-function cap(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
-}
-
-/**
- * A short, body-free description of a failed Jira call: the HTTP status and its reason, or for an
- * error without a status the first line of its message, capped in length.
- */
-export function describeJiraFailure(err: unknown): string {
-  const status = (err as { status?: unknown } | null)?.status;
-  if (typeof status === 'number') {
-    const reason = STATUS_REASONS[status] ?? STATUS_CODES[status] ?? 'request failed';
-    return `Jira answered HTTP ${status} (${reason}).`;
-  }
-  const firstLine = (err instanceof Error ? err.message : String(err)).split(/\r?\n/)[0].trim();
-  return cap(firstLine || 'unknown error', MAX_FAILURE_REASON_CHARS);
-}
-
-function formatSeconds(ms: number): string {
+export function formatSeconds(ms: number): string {
   const seconds = Math.max(1, Math.round(ms / 1000));
   return `${seconds} second${seconds === 1 ? '' : 's'}`;
 }
 
 /** The Jira client calls that change something in Jira. */
-const WRITE_REQUESTS: ReadonlySet<string> = new Set([
+export const WRITE_REQUESTS: ReadonlySet<string> = new Set([
   'updateIssue', 'addComment', 'createIssue', 'createIssueLink', 'executeTransition', 'uploadAttachment',
 ]);
 
@@ -136,26 +109,30 @@ export async function runJiraTool(
     return await work(jira);
   } catch (err) {
     if (err instanceof ToolFailure) throw err;
-    if (err instanceof JiraTimeout) {
-      deps.onDiag?.('error', `${tool}: Jira did not respond to ${err.request} within ${err.timeoutMs} ms`);
-      if (WRITE_REQUESTS.has(err.request)) {
+    // A move that failed on its first step wraps the real error; classify that one.
+    const cause = rootCause(err);
+    if (cause instanceof JiraTimeout) {
+      deps.onDiag?.('error', `${tool}: Jira did not respond to ${cause.request} within ${cause.timeoutMs} ms`, {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      if (WRITE_REQUESTS.has(cause.request)) {
         // The request was sent and not cancelled, so Jira may still have made the change.
         throw new ToolFailure(
-          `${prefix()}: Jira did not answer within ${formatSeconds(err.timeoutMs)}. The change may still have been saved: `
+          `${prefix()}: Jira did not answer within ${formatSeconds(cause.timeoutMs)}. The change may still have been saved: `
           + `view the ticket with ${VIEW_TICKET_TOOL} before trying again.`,
           WRITE_TIMEOUT_LABEL,
         );
       }
       throw new ToolFailure(
-        `${prefix()}: Jira did not respond within ${formatSeconds(err.timeoutMs)}. Try again later, or check the connection with ${CHECK_CONNECTION_TOOL}.`,
+        `${prefix()}: Jira did not respond within ${formatSeconds(cause.timeoutMs)}. Try again later, or check the connection with ${CHECK_CONNECTION_TOOL}.`,
         'timeout',
       );
     }
-    const status = (err as { status?: unknown } | null)?.status;
+    const status = (cause as { status?: unknown } | null)?.status;
     deps.onDiag?.('error', `${tool} failed`, {
       ...(typeof status === 'number' ? { status } : {}),
       error: err instanceof Error ? err.message : String(err),
     });
-    throw new ToolFailure(`${prefix()}: ${describeJiraFailure(err)}`, toolErrorLabel(err));
+    throw new ToolFailure(`${prefix()}: ${describeJiraFailure(cause)}`, toolErrorLabel(cause));
   }
 }

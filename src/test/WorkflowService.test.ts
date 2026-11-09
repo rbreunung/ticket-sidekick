@@ -5,6 +5,7 @@ import { join } from 'path';
 import { findPath, findAllPaths, findReachableStatuses, loadWorkflowCache, discoverWorkflow, preserveSkippedStatuses, resolveAndApplyTransition, discoverAndCacheWorkflow, saveWorkflowCache } from '../services/WorkflowService';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService, PartialTransitionError } from '../services/TicketService';
+import { JiraApiError } from '../utils/apiError';
 
 const graph = {
   'Open':        [{ id: '11', name: 'Start Progress', to: 'In Progress' }],
@@ -347,11 +348,43 @@ describe('resolveAndApplyTransition', () => {
       totalHops: 2,
       landedStatus: 'In Review',
       targetStatus: 'Closed',
-      error: expect.stringContaining('Jira 500: internal error'),
+      error: 'Jira 500: internal error',
+      cause: expect.objectContaining({ message: 'Jira 500: internal error' }),
     });
     // Both hops were attempted (the second failed) — the ticket really did move to "In Review".
     expect(client.executeTransitionCalls).toHaveLength(2);
   });
+  it('describes a failed later step by its HTTP status only, never with the response body', async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'ticket-sidekick-workflow-'));
+    saveWorkflowCache(tmpDir, {
+      PROJ: {
+        '': {
+          discovered: '2020-01-01',
+          graph: {
+            'In Progress': [{ id: '31', name: 'Review', to: 'In Review' }],
+            'In Review': [{ id: '99', name: 'Close', to: 'Closed' }],
+          },
+        },
+      },
+    });
+    const client = new MockJiraClient();
+    let calls = 0;
+    client.executeTransition = async (issueKey: string, transitionId: string) => {
+      calls++;
+      client.executeTransitionCalls.push({ issueKey, transitionId });
+      if (calls === 2) {
+        const url = 'https://jira.example.com/rest/api/2/issue/PROJ-123/transitions';
+        throw new JiraApiError('Jira API error 502 Bad Gateway: <html><body>proxy SECRET page</body></html>', 502, url);
+      }
+    };
+    const service = new TicketService(client);
+
+    const result = await resolveAndApplyTransition(client, service, tmpDir, 'PROJ-123', 'Closed');
+
+    expect(result).toMatchObject({ kind: 'partialFailure', error: 'Jira answered HTTP 502 (Bad Gateway).' });
+    expect(JSON.stringify((result as { error: string }).error)).not.toContain('SECRET');
+  });
+
 
   it('does not report a partial failure when the very first hop fails — nothing changed, so it throws normally', async () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'ticket-sidekick-workflow-'));

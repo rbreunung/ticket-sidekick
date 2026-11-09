@@ -1,10 +1,10 @@
 import { z } from 'zod';
 import { discoverAndCacheWorkflow, resolveAndApplyTransition, type TransitionResolution } from '../../services/WorkflowService';
-import { defineTool } from '../mcpServer';
+import { defineTool, ToolFailure, toolErrorLabel } from '../mcpServer';
 import type { JiraToolDeps } from './jiraAccess';
-import { runJiraTool } from './runJiraTool';
+import { describeJiraFailure, formatSeconds, JiraTimeout, runJiraTool, WRITE_TIMEOUT_LABEL } from './runJiraTool';
 import { ticketKeyProblem } from './ticketKeyInput';
-import { MOVE_TICKET_TOOL } from './toolNames';
+import { MOVE_TICKET_TOOL, VIEW_TICKET_TOOL } from './toolNames';
 
 // Moves a ticket to a status, directly or along the workflow cached in the first workspace
 // folder (`.jira-workflow-cache.json`, the cache `@jira` uses). When no path to the status is
@@ -16,7 +16,8 @@ const moveShape = {
   resolution: z.string().optional().describe('The resolution to set when the last step asks for one, e.g. "Fixed".'),
 };
 
-function describeMove(key: string, result: TransitionResolution, discovered: boolean): string {
+/** The answer to a move that ended; one that stopped partway is a failure (partialFailureAnswer). */
+function describeMove(key: string, result: Exclude<TransitionResolution, { kind: 'partialFailure' }>, discovered: boolean): string {
   const discoveryNote = discovered ? ' The workflow was discovered from Jira and saved to `.jira-workflow-cache.json` first.' : '';
   switch (result.kind) {
     case 'alreadyThere':
@@ -25,16 +26,33 @@ function describeMove(key: string, result: TransitionResolution, discovered: boo
       return `${key} moved from ${result.fromStatus} to ${result.toStatus} (transition "${result.steps[0]}").${discoveryNote}`;
     case 'multiHop':
       return `${key} moved from ${result.fromStatus} to ${result.toStatus} in ${result.hops} steps: ${result.steps.join(' → ')}.${discoveryNote}`;
-    case 'partialFailure':
-      return `${key} moved partway: it is now in ${result.landedStatus}, after ${result.completedHops} of ${result.totalHops} steps, `
-        + `and the next step towards ${result.targetStatus} failed: ${result.error} The move was not retried; `
-        + 'check the ticket before trying again.';
     case 'unavailable': {
       const available = result.available.length > 0 ? ` Statuses it can reach in one step: ${result.available.join(', ')}.` : '';
       const cause = discovered ? ' even in the workflow discovered from Jira just now' : '';
       return `${key} cannot be moved from ${result.currentStatus} to the target status: no path was found${cause}.${available}`;
     }
   }
+}
+
+/**
+ * A move that stopped after some steps, as a failed tool call: where the ticket was last
+ * confirmed, which step failed and why, with no Jira or proxy response body. A step that got no
+ * answer in time may still go through, so the answer says so and does not name a current status.
+ */
+function partialFailureAnswer(key: string, result: Extract<TransitionResolution, { kind: 'partialFailure' }>): ToolFailure {
+  const progress = `${key} moved partway: after ${result.completedHops} of ${result.totalHops} steps it was last confirmed in ${result.landedStatus}; `;
+  if (result.cause instanceof JiraTimeout) {
+    return new ToolFailure(
+      `${progress}the step towards ${result.targetStatus} got no answer within ${formatSeconds(result.cause.timeoutMs)} and may still go through. `
+      + `The move was not retried; view the ticket with ${VIEW_TICKET_TOOL} before trying again.`,
+      WRITE_TIMEOUT_LABEL,
+    );
+  }
+  return new ToolFailure(
+    `${progress}the step towards ${result.targetStatus} failed: ${describeJiraFailure(result.cause)} `
+    + `The move was not retried; view the ticket with ${VIEW_TICKET_TOOL} before trying again.`,
+    toolErrorLabel(result.cause),
+  );
 }
 
 export const moveTicketTool = defineTool<JiraToolDeps, typeof moveShape>({
@@ -69,7 +87,21 @@ export const moveTicketTool = defineTool<JiraToolDeps, typeof moveShape>({
           result = await move();
         }
       }
-      deps.onDiag?.(result.kind === 'partialFailure' ? 'warn' : 'info', `Move ended: ${result.kind}`);
+      if (result.kind === 'partialFailure') {
+        const status = (result.cause as { status?: unknown } | null)?.status;
+        deps.onDiag?.('error', `${MOVE_TICKET_TOOL}: move stopped partway`, {
+          completedHops: result.completedHops,
+          totalHops: result.totalHops,
+          lastConfirmedStatus: result.landedStatus,
+          targetStatus: result.targetStatus,
+          discovered,
+          ...(typeof status === 'number' ? { status } : {}),
+          timedOut: result.cause instanceof JiraTimeout,
+          error: result.cause instanceof Error ? result.cause.message : String(result.cause),
+        });
+        throw partialFailureAnswer(key, result);
+      }
+      deps.onDiag?.('info', `Move ended: ${result.kind}`);
       return describeMove(key, result, discovered);
     });
   },
