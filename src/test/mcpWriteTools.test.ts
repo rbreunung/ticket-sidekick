@@ -151,6 +151,20 @@ class FailingCommentClient extends MockJiraClient {
   }
 }
 
+/** Never answers a field update, or refuses the first one with a server error. */
+class FieldWriteClient extends MockJiraClient {
+  failWith: 'hang' | 'http502' | undefined;
+  override async updateIssue(issueKey: string, fields: Record<string, unknown>): Promise<void> {
+    await super.updateIssue(issueKey, fields);
+    if (this.failWith === 'hang') return new Promise(() => {});
+    if (this.failWith === 'http502') {
+      this.failWith = undefined;
+      const url = `https://jira.example.com/rest/api/2/issue/${issueKey}`;
+      throw new JiraApiError('Jira API error 502 Bad Gateway: <html>proxy page</html>', 502, url);
+    }
+  }
+}
+
 function workspaceWithTemplates(): string {
   const folder = makeTempDir('ts-write-');
   fs.writeFileSync(path.join(folder, '.jira-templates.json'), JSON.stringify({
@@ -254,6 +268,33 @@ describe('move ticket', () => {
     );
     expect(text).not.toContain('is now in');
     expect(client.executeTransitionCalls.map(c => c.transitionId)).toEqual(['21', '31']);
+  });
+
+  it('does not send a move again that Jira did not answer in time, when the same move comes in a second request', async () => {
+    const client = new WorkflowClient();
+    client.status = 'In Review';
+    client.failTransitionId = '31';
+    client.failWith = 'hang';
+    const session = await startSession(client, { folders: [makeTempDir('ts-move-')], timeoutMs: 50 });
+    await session.call('jira_move_ticket', { ticketKey: 'PROJ-123', targetStatus: 'Done' });
+    const second = await session.call('jira_move_ticket', { ticketKey: 'PROJ-123', targetStatus: 'done' });
+    expect(second.text).toBe(
+      'Skipped: PROJ-123 was moved to done within the last minute. View it with jira_view_ticket, or wait a minute to move it again.',
+    );
+    expect(client.executeTransitionCalls.map(c => c.transitionId)).toEqual(['31']);
+  });
+
+  it('lets a retry through after Jira refused the move', async () => {
+    const client = new WorkflowClient();
+    client.status = 'In Review';
+    client.failTransitionId = '31';
+    client.failWith = 'http502';
+    const session = await startSession(client, { folders: [makeTempDir('ts-move-')] });
+    await session.call('jira_move_ticket', { ticketKey: 'PROJ-123', targetStatus: 'Done' });
+    client.failTransitionId = undefined;
+    const { text } = await session.call('jira_move_ticket', { ticketKey: 'PROJ-123', targetStatus: 'Done' });
+    expect(text).toBe('PROJ-123 moved from In Review to Done (transition "Approve").');
+    expect(client.executeTransitionCalls.map(c => c.transitionId)).toEqual(['31', '31']);
   });
 
   it('says so when the target cannot be reached even after discovery', async () => {
@@ -377,6 +418,29 @@ describe('update field', () => {
     const session = await startSession(client);
     await session.call('jira_update_field', { ticketKey: 'PROJ-123', fieldName: 'description', value: '## Goal\n\n- one' });
     expect(client.updateIssueCalls[0].fields).toEqual({ description: 'h2. Goal\n\n* one' });
+  });
+
+  it('does not send a field update again that Jira did not answer in time, when the same update comes in a second request', async () => {
+    const client = new FieldWriteClient();
+    client.failWith = 'hang';
+    const session = await startSession(client, { timeoutMs: 50 });
+    const first = await session.call('jira_update_field', { ticketKey: 'PROJ-123', fieldName: 'summary', value: 'Add SSO login' });
+    expect(first.text).toContain('The change may still have been saved');
+    const second = await session.call('jira_update_field', { ticketKey: 'PROJ-123', fieldName: 'summary', value: 'Add SSO login' });
+    expect(second.text).toBe('Skipped: summary on PROJ-123 was set to the same value within the last minute. Wait a minute to set it again.');
+    expect(client.updateIssueCalls).toHaveLength(1);
+  });
+
+  it('lets a retry through after Jira refused the update, and writes a different value right away', async () => {
+    const client = new FieldWriteClient();
+    client.failWith = 'http502';
+    const session = await startSession(client);
+    const refused = await session.call('jira_update_field', { ticketKey: 'PROJ-123', fieldName: 'summary', value: 'Add SSO login' });
+    expect(refused.text).toBe('Could not update summary on PROJ-123: Jira answered HTTP 502 (Bad Gateway).');
+    await session.call('jira_update_field', { ticketKey: 'PROJ-123', fieldName: 'summary', value: 'Add SSO login' });
+    const other = await session.call('jira_update_field', { ticketKey: 'PROJ-123', fieldName: 'summary', value: 'Add SAML login' });
+    expect(other.text).toContain('Updated summary on');
+    expect(client.updateIssueCalls.map(c => c.fields.summary)).toEqual(['Add SSO login', 'Add SSO login', 'Add SAML login']);
   });
 });
 

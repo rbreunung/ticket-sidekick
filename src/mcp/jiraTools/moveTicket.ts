@@ -1,10 +1,12 @@
 import { z } from 'zod';
+import { fingerprint } from '../../tools/recentCallGuard';
 import { discoverAndCacheWorkflow, resolveAndApplyTransition, type TransitionResolution } from '../../services/WorkflowService';
 import { defineTool, ToolFailure, toolErrorLabel } from '../mcpServer';
 import type { JiraToolDeps } from './jiraAccess';
 import { describeJiraFailure, formatSeconds, JiraTimeout, runJiraTool, WRITE_TIMEOUT_LABEL } from './runJiraTool';
 import { ticketKeyProblem } from './ticketKeyInput';
 import { MOVE_TICKET_TOOL, VIEW_TICKET_TOOL } from './toolNames';
+import { writeOnce } from './writeGuard';
 
 // Moves a ticket to a status, directly or along the workflow cached in the first workspace
 // folder (`.jira-workflow-cache.json`, the cache `@jira` uses). When no path to the status is
@@ -62,7 +64,7 @@ export const moveTicketTool = defineTool<JiraToolDeps, typeof moveShape>({
     'Moves a Jira ticket to a target status, in one transition or along several when the workflow needs them. '
     + 'When no path is known yet, it discovers the workflow from Jira first, by sampling tickets, and saves it to the workspace cache. '
     + 'The answer names the status the ticket came from and every transition taken. A move that stops partway says where the ticket landed '
-    + 'and is never retried.',
+    + 'and is never retried. The same move within a minute is skipped.',
   inputSchema: moveShape,
   annotations: { destructiveHint: true },
   handler: async (args, deps) => {
@@ -73,36 +75,42 @@ export const moveTicketTool = defineTool<JiraToolDeps, typeof moveShape>({
     if (!target) return 'A target status is required, e.g. "Done".';
     const resolution = args.resolution?.trim() || undefined;
 
-    return runJiraTool(deps, MOVE_TICKET_TOOL, `Could not move ${key}`, async ({ access, ticketService }) => {
-      const folder = deps.workspaceFolders()[0];
-      const move = () => resolveAndApplyTransition(access.client, ticketService, folder ?? '', key, target, resolution);
-      let result = await move();
-      let discovered = false;
-      // No direct transition and no cached path: discover the workflow once, then try again.
-      if (result.kind === 'unavailable' && folder && result.issueType) {
-        const discovery = await discoverAndCacheWorkflow(access.client, folder, result.projectKey, result.issueType);
-        if (Object.keys(discovery.graph).length > 0) {
-          deps.onDiag?.('info', 'Workflow discovered for a move', { statusCount: Object.keys(discovery.graph).length });
-          discovered = true;
-          result = await move();
+    return writeOnce(
+      deps.recentWrites,
+      fingerprint(MOVE_TICKET_TOOL, key, target.toLowerCase(), resolution ?? ''),
+      `Skipped: ${key} was moved to ${target} within the last minute. View it with ${VIEW_TICKET_TOOL}, or wait a minute to move it again.`,
+      markWritten => runJiraTool(deps, MOVE_TICKET_TOOL, `Could not move ${key}`, async ({ access, ticketService }) => {
+        const folder = deps.workspaceFolders()[0];
+        const move = () => resolveAndApplyTransition(access.client, ticketService, folder ?? '', key, target, resolution);
+        let result = await move();
+        let discovered = false;
+        // No direct transition and no cached path: discover the workflow once, then try again.
+        if (result.kind === 'unavailable' && folder && result.issueType) {
+          const discovery = await discoverAndCacheWorkflow(access.client, folder, result.projectKey, result.issueType);
+          if (Object.keys(discovery.graph).length > 0) {
+            deps.onDiag?.('info', 'Workflow discovered for a move', { statusCount: Object.keys(discovery.graph).length });
+            discovered = true;
+            result = await move();
+          }
         }
-      }
-      if (result.kind === 'partialFailure') {
-        const status = (result.cause as { status?: unknown } | null)?.status;
-        deps.onDiag?.('error', `${MOVE_TICKET_TOOL}: move stopped partway`, {
-          completedHops: result.completedHops,
-          totalHops: result.totalHops,
-          lastConfirmedStatus: result.landedStatus,
-          targetStatus: result.targetStatus,
-          discovered,
-          ...(typeof status === 'number' ? { status } : {}),
-          timedOut: result.cause instanceof JiraTimeout,
-          error: result.cause instanceof Error ? result.cause.message : String(result.cause),
-        });
-        throw partialFailureAnswer(key, result);
-      }
-      deps.onDiag?.('info', `Move ended: ${result.kind}`);
-      return describeMove(key, result, discovered);
-    });
+        if (result.kind === 'partialFailure') {
+          const status = (result.cause as { status?: unknown } | null)?.status;
+          deps.onDiag?.('error', `${MOVE_TICKET_TOOL}: move stopped partway`, {
+            completedHops: result.completedHops,
+            totalHops: result.totalHops,
+            lastConfirmedStatus: result.landedStatus,
+            targetStatus: result.targetStatus,
+            discovered,
+            ...(typeof status === 'number' ? { status } : {}),
+            timedOut: result.cause instanceof JiraTimeout,
+            error: result.cause instanceof Error ? result.cause.message : String(result.cause),
+          });
+          throw partialFailureAnswer(key, result);
+        }
+        if (result.kind === 'direct' || result.kind === 'multiHop') markWritten();
+        deps.onDiag?.('info', `Move ended: ${result.kind}`);
+        return describeMove(key, result, discovered);
+      }),
+    );
   },
 });
