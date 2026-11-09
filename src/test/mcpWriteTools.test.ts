@@ -476,4 +476,26 @@ describe('upload attachment', () => {
       .toContain('over the 25 MB limit');
     expect(client.uploadAttachmentCalls).toEqual([]);
   });
+
+  it('refuses a file in a workspace that is itself a dotfolder, lies under one, or is reached through a link into one', async () => {
+    const client = new MockJiraClient();
+    const base = makeTempDir('ts-upload-');
+    const dotRoot = path.join(base, '.aws');
+    const underDot = path.join(base, '.config', 'project');
+    fs.mkdirSync(underDot, { recursive: true });
+    fs.mkdirSync(dotRoot);
+    fs.writeFileSync(path.join(dotRoot, 'credentials'), 'synthetic');
+    fs.writeFileSync(path.join(underDot, 'notes.txt'), 'synthetic');
+    const linkedRoot = path.join(base, 'project-link');
+    fs.symlinkSync(underDot, linkedRoot, 'junction');
+    const session = await startSession(client, { folders: [dotRoot, underDot, linkedRoot] });
+
+    expect((await session.call('jira_upload_attachment', { ticketKey: 'PROJ-123', filePath: path.join(dotRoot, 'credentials') })).text)
+      .toContain('dotfile or dotfolder');
+    expect((await session.call('jira_upload_attachment', { ticketKey: 'PROJ-123', filePath: path.join(underDot, 'notes.txt') })).text)
+      .toContain('dotfile or dotfolder');
+    expect((await session.call('jira_upload_attachment', { ticketKey: 'PROJ-123', filePath: path.join(linkedRoot, 'notes.txt') })).text)
+      .toContain('dotfile or dotfolder');
+    expect(client.uploadAttachmentCalls).toEqual([]);
+  });
 });

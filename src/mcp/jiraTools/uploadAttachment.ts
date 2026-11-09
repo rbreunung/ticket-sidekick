@@ -13,7 +13,8 @@ import { writeOnce } from './writeGuard';
 
 // Uploads one file from an open workspace folder to a ticket. The path comes from the agent and
 // may have been steered by text it read, so only a file that, with symlinks resolved, lies inside
-// an open workspace folder, and has no dotfile or dotfolder on the way there, can be sent to Jira.
+// an open workspace folder, and has no dotfile or dotfolder anywhere in its real path, can be sent
+// to Jira: a workspace opened inside `.aws` or `.ssh`, or reached through a link into one, counts.
 
 const uploadShape = {
   ticketKey: z.string().describe('The ticket key, e.g. PROJ-123.'),
@@ -41,7 +42,7 @@ async function locateUpload(filePath: string, folders: string[]): Promise<Locate
     if (!realFolder) continue;
     const rel = path.relative(realFolder, realPath);
     if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) continue;
-    if (rel.split(path.sep).some(segment => segment.startsWith('.'))) {
+    if (realPath.split(path.sep).some(segment => segment.startsWith('.'))) {
       return { kind: 'refused', answer: `"${filePath}" is in a dotfile or dotfolder, which is never uploaded.` };
     }
     return { kind: 'file', realPath };
