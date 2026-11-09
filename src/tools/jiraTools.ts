@@ -4,6 +4,7 @@ import * as path from 'path';
 import { JiraApiClient, MAX_ATTACHMENT_BYTES } from '../jira/JiraApiClient';
 import type { JiraFilter } from '../jira/IJiraClient';
 import { ConfigService, type JiraConfig } from '../services/ConfigService';
+import { buildJiraNotConfiguredMessage } from '../services/setupHints';
 import { TicketService, renderFieldValue } from '../services/TicketService';
 import { TemplateService } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
@@ -14,7 +15,6 @@ import { isAllowedUploadPath, isSafeFilename, isSafePathSegment } from './pathSa
 import { RecentCallGuard, fingerprint } from './recentCallGuard';
 import { ATTACHMENT_SIZE_LIMIT, findAttachmentByFilename, formatFileSize, inferContentType } from '../utils/attachmentEligibility';
 import {
-  buildJiraNotConfiguredMessage,
   formatCommentsInFull,
   buildUpdateFieldConfirmation,
   buildAddCommentConfirmation,

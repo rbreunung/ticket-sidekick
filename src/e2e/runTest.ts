@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import { runTests } from '@vscode/test-electron';
 
@@ -12,6 +13,15 @@ async function main(): Promise<void> {
   const extensionDevelopmentPath = path.resolve(__dirname, '..', '..');
   const extensionTestsPath = path.resolve(__dirname, 'suite', 'index');
   const sandbox = path.join(extensionDevelopmentPath, '.vscode-test');
+  const userDataDir = path.join(sandbox, 'user-data');
+  // A fresh profile every run, so no MCP server or tool cached by an earlier run is listed. With
+  // 127.0.0.1 in http.noProxy the extension starts its MCP server at activation (mcp.test.ts).
+  fs.rmSync(userDataDir, { recursive: true, force: true });
+  fs.mkdirSync(path.join(userDataDir, 'User'), { recursive: true });
+  fs.writeFileSync(
+    path.join(userDataDir, 'User', 'settings.json'),
+    JSON.stringify({ 'http.noProxy': ['127.0.0.1'] }, null, 2),
+  );
   await runTests({
     extensionDevelopmentPath,
     extensionTestsPath,
@@ -22,7 +32,7 @@ async function main(): Promise<void> {
       '--disable-extensions',
       '--disable-workspace-trust',
       // Separate profile, so a VS Code you already have open is not touched or reused.
-      `--user-data-dir=${path.join(sandbox, 'user-data')}`,
+      `--user-data-dir=${userDataDir}`,
     ],
   });
 }

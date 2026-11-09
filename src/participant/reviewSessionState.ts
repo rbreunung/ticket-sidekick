@@ -188,7 +188,7 @@ export function isUsageRequest(prompt: string): boolean {
 
 /**
  * Plain-text "Bitbucket isn't configured" message naming the specific missing setting or
- * setup command — the Bitbucket equivalent of `buildJiraNotConfiguredMessage` (sessionState.ts).
+ * setup command — the Bitbucket equivalent of `buildJiraNotConfiguredMessage` (services/setupHints.ts).
  * No trusted `MarkdownString` command link (a `LanguageModelToolResult` can't carry one), so
  * this doubles as both a tool result and plain chat text.
  */

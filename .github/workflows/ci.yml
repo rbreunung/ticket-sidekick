@@ -37,7 +37,8 @@ jobs:
   e2e:
     # Real VS Code (downloaded by @vscode/test-electron) under a virtual display: the packaged
     # extension must activate and register every command and language model tool package.json
-    # declares. Kept as its own job so a VS Code download hiccup is visible without hiding the
+    # declares, and VS Code's own MCP client must list and call the extension's MCP tools and see
+    # them go when 127.0.0.1 leaves http.noProxy. Kept as its own job so a VS Code download hiccup is visible without hiding the
     # unit-test result above.
     runs-on: ubuntu-latest
     steps:

@@ -410,6 +410,14 @@ Turn a `.eml` email, a Veracode Detailed Report, or a Waltz OSS Report into Jira
 
 Create a `.jira-templates.json` file in your workspace root to define per-application templates with default fields and guided description collection, plus named cleanup rules for bulk status transitions. See [Jira Templates and Cleanup Rules](docs/manual/jira-templates-and-cleanup-rules.md) for how to generate one from an existing ticket, field references, and examples.
 
+### Jira tools in Copilot-harness chats (MCP)
+
+Chats that run in VS Code's **Copilot harness** cannot use `@jira`. For them Ticket Sidekick runs a small MCP server inside VS Code on `127.0.0.1`, on a random port and with a key that changes at every start, and offers it to VS Code as the **Ticket Sidekick** MCP server. It currently carries one tool, `jira_check_connection`, which gives the same answer as `@jira check`. Needs VS Code 1.101 or later.
+
+The server runs only while the VS Code setting `http.noProxy` contains the entry `127.0.0.1` (exactly that; an entry with a port does not count). Without it, Copilot could send these local requests to your network proxy. Ticket Sidekick never changes the setting: until you add the entry, every VS Code start shows a notice with an **Open Setting** button, and the Jira walkthrough has a step for it. Adding the entry starts the server and removing it stops the server, without a restart. Jira does not need to be configured for the server to run; a tool called before setup answers with the missing step.
+
+If the tools do not show up, run `Ticket Sidekick: Copy MCP diagnostics` from the Command Palette. It copies a report to the clipboard (server state, whether it is offered and why not, request and tool-call counts, the proxy-related settings, the `chat.mcp.*` and sandbox settings, and whether the key turns up in stored files) with every key and token removed. It leaves out tool arguments and your Jira base URL, and of `http.noProxy` it lists only the loopback entries and counts the rest. The `chat.mcp.*` and sandbox settings appear as they are, though, so a sandbox allow-list can name internal hosts: read the report once before you send it on. Folders and files under your home folder appear with `~`. The search for stored keys stops after 512 MB of files, and you can cancel it from the notification; either way the report is still copied and says the search is incomplete.
+
 ### Settings reference
 
 See [Settings Reference → Jira](docs/manual/settings-reference.md#jira-settings-reference) for every `ticketSidekick.jira.*` setting, and [Report import settings](docs/manual/settings-reference.md#report-import-settings) for every `ticketSidekick.email.*` / `ticketSidekick.veracode.*` / `ticketSidekick.waltz.*` setting.
@@ -528,6 +536,10 @@ or findings were in that attempt, and the raw error. If a review or
 follow-up ever shows a failure message, check this channel first — it
 usually explains whether it was a one-off provider hiccup (worth just
 retrying) or something more persistent.
+
+For the MCP server behind the Jira tools in Copilot-harness chats, run
+`Ticket Sidekick: Copy MCP diagnostics` — see
+[Jira tools in Copilot-harness chats](#jira-tools-in-copilot-harness-chats-mcp).
 
 ## Releasing
 
