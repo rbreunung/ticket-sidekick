@@ -247,7 +247,16 @@ describe('the /ts-jira command skill', () => {
     expect(hint.split(' ')[0].split('|')).toEqual(rows.map(r => r.command));
   });
 
-  it('shows the table instead of guessing when the command is missing or unknown', () => {
-    expect(router).toContain('No command, or one not in the table: show the table and stop.');
+  it('checks for a missing or unknown command before anything else, and then calls no tool', () => {
+    const body = router.slice(router.indexOf('\n---', 4) + 4).trim();
+    expect(body.split('\n')[0]).toBe('First check the first word the user typed after /ts-jira.');
+    expect(body).toContain('If there is no word, or it is not a command in the table below: call no tool, reply with exactly the help below and stop.');
+    expect(body.indexOf('call no tool')).toBeLessThan(body.indexOf('| Command |'));
+  });
+
+  it('prints a help line for every command of the table, in the same order', () => {
+    const help = router.slice(router.indexOf('/ts-jira commands:'), router.indexOf('```', router.indexOf('/ts-jira commands:')));
+    const helpCommands = [...help.matchAll(/^ {2}([a-z]+)\b/gm)].map(m => m[1]);
+    expect(helpCommands).toEqual(rows.map(r => r.command));
   });
 });
