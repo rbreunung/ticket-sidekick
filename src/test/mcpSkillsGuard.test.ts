@@ -254,6 +254,14 @@ describe('the /ts-jira command skill', () => {
     expect(body.indexOf('call no tool')).toBeLessThan(body.indexOf('| Command |'));
   });
 
+  it('answers help, with or without a command, before running anything, and never runs the command named after it', () => {
+    const body = router.slice(router.indexOf('\n---', 4) + 4);
+    const helpRule = body.indexOf('If it is `help`: call no tool and run nothing.');
+    expect(helpRule).toBeGreaterThan(-1);
+    expect(helpRule).toBeLessThan(body.indexOf('| Command |'));
+    expect(body).toContain("reply with only that command's line from the help below");
+  });
+
   it('prints a help line for every command of the table, in the same order', () => {
     const help = router.slice(router.indexOf('/ts-jira commands:'), router.indexOf('```', router.indexOf('/ts-jira commands:')));
     const helpCommands = [...help.matchAll(/^ {2}([a-z]+)\b/gm)].map(m => m[1]);

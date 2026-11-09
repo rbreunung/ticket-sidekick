@@ -2,15 +2,18 @@
 name: ts-jira
 description: Runs one Jira command typed as /ts-jira <command> <arguments>, e.g. /ts-jira load PROJ-123. Only when the user types it.
 disable-model-invocation: true
-argument-hint: load|view|search|filters|comment|field|move|workflow|templates|upload|check|brief|create <arguments>
+argument-hint: help|load|view|search|filters|comment|field|move|workflow|templates|upload|check|brief|create <arguments>
 ---
 
 First check the first word the user typed after /ts-jira.
+
+If it is `help`: call no tool and run nothing. If the second word is a command in the table below, reply with only that command's line from the help below (for load and view also the last help line); otherwise reply with exactly the help below. Then stop.
 
 If there is no word, or it is not a command in the table below: call no tool, reply with exactly the help below and stop.
 
 ```text
 /ts-jira commands:
+  help [command]              show this help, or one command's help
   load [KEY] [file ...]       load a ticket into .jira-context/
   view [KEY]                  show a ticket
   search <JQL or filter>      find tickets
@@ -31,6 +34,7 @@ Otherwise run that one command with one call. Do not plan, explain or add steps.
 
 | Command | Do |
 | --- | --- |
+| help [command] | show the help; call no tool |
 | load [KEY] [file ...] | call `jira_load_ticket`; files go in `attachments` |
 | view [KEY] | call `jira_view_ticket` |
 | search <JQL or filter name> | call `jira_find_tickets` |
