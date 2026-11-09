@@ -1,6 +1,6 @@
 ---
 name: ts-jira
-description: Runs one Jira command typed as /ts-jira <command> <arguments>, e.g. /ts-jira load PROJ-123. Only when the user types it.
+description: Runs one Jira command you type, e.g. /ts-jira load PROJ-123. /ts-jira help lists the commands.
 disable-model-invocation: true
 argument-hint: help|load|view|search|filters|comment|field|move|workflow|templates|upload|check <arguments>
 ---
@@ -8,15 +8,17 @@ argument-hint: help|load|view|search|filters|comment|field|move|workflow|templat
 The user typed after /ts-jira: `$ARGUMENTS`
 (If that still shows a dollar-sign placeholder, use the text of the user's message after /ts-jira instead.)
 
-Use the first case that matches what the user typed. Check cases 1 to 3 before you read the table.
+Follow only these rules, and never invoke a skill from here. Use the first case that matches, and check cases 1 to 4 before you read the table.
 
-1. Nothing typed: call no tool. Reply with exactly the help text below. Stop.
-2. The first word is `help`: call no tool, open no skill, run nothing. If the next word is a command of the help text, reply with only its line (for load and view also the last line). Otherwise reply with exactly the help text. Stop.
+1. Nothing typed: call no tool. Reply with exactly the help text below, as a code block. Stop.
+2. The first word is `help`: call no tool and run nothing. If the next word is a command of the help text, reply with only its line as a code block (for load and view add the last line of the help text). Otherwise reply with exactly the help text. Stop.
 3. The first word is not a command of the table: call no tool. Reply with exactly the help text. Stop.
-4. Otherwise run that one command with one call, as the table says. Do not plan, explain or add steps.
+4. An argument in angle brackets that the command needs is missing: call no tool. Reply with only that command's line of the help text, as a code block. Stop.
+5. Otherwise make the one call the table names for the command, with the arguments typed. Do not plan, explain or add steps.
 
 ```text
-/ts-jira commands:
+Usage: /ts-jira <command> [arguments]
+------------------------------------------------------------------
   help [command]              show this help, or one command's help
   load [KEY] [file ...]       load a ticket into .jira-context/
   view [KEY]                  show a ticket
@@ -29,22 +31,23 @@ Use the first case that matches what the user typed. Check cases 1 to 3 before y
   templates                   list the ticket templates
   upload <KEY> <path>         attach a workspace file
   check                       check the Jira connection
+------------------------------------------------------------------
 Without KEY, load and view use the ticket of the git branch.
 ```
 
-| Command | Do |
+| Command | Call |
 | --- | --- |
-| help [command] | show the help; call no tool |
-| load [KEY] [file ...] | call `jira_load_ticket`; files go in `attachments` |
-| view [KEY] | call `jira_view_ticket` |
-| search <JQL or filter name> | call `jira_find_tickets` |
-| filters | call `jira_list_my_filters` |
-| comment <KEY> <text> | call `jira_add_comment` |
-| field <KEY> <field> <value> | call `jira_update_field` |
-| move <KEY> <status> | call `jira_move_ticket` |
-| workflow <KEY> | call `jira_workflow` |
-| templates | call `jira_list_templates` |
-| upload <KEY> <path> | call `jira_upload_attachment` |
-| check | call `jira_check_connection` |
+| help [command] | none; see case 2 |
+| load [KEY] [file ...] | `jira_load_ticket`; the files go in `attachments` |
+| view [KEY] | `jira_view_ticket` |
+| search <JQL or filter> | `jira_find_tickets` |
+| filters | `jira_list_my_filters` |
+| comment <KEY> <text> | `jira_add_comment` |
+| field <KEY> <field> <value> | `jira_update_field` |
+| move <KEY> <status> | `jira_move_ticket` |
+| workflow <KEY> | `jira_workflow` |
+| templates | `jira_list_templates` |
+| upload <KEY> <path> | `jira_upload_attachment` |
+| check | `jira_check_connection` |
 
-Afterwards give the tool's answer briefly. After load, show its numbered list of skipped attachments and ask which to download.
+After the call, show the tool's answer without adding analysis. After load, if it lists skipped attachments with numbers, show that list and ask which to download.

@@ -30,12 +30,15 @@ function parseFrontmatter(text: string): Record<string, string> | undefined {
 }
 
 /**
- * Skills only the user starts, by typing them: the `ts-` command skills. They keep model
- * invocation off, so they never compete with the tools for a plain request; every other skill
- * keeps it on, so the agent can pick it by itself.
+ * Skills only the user starts, by typing them: the `ts-` command skills, and `jira-brief`, which
+ * a model without thinking ran in place of other requests. They keep model invocation off, so
+ * they never compete with the tools for a plain request; every other skill keeps it on, so the
+ * agent can pick it by itself.
  */
+const EXPLICIT_ONLY_SKILLS: ReadonlySet<string> = new Set(['jira-brief']);
+
 function isExplicitOnly(folder: string): boolean {
-  return folder.startsWith('ts-');
+  return folder.startsWith('ts-') || EXPLICIT_ONLY_SKILLS.has(folder);
 }
 
 /** What is wrong with one skill: its folder name, its SKILL.md text, the tool names that exist. */
@@ -46,7 +49,7 @@ function skillProblems(folder: string, text: string, toolNames: readonly string[
   if (front.name !== folder) problems.push(`frontmatter name "${front.name ?? ''}" differs from its folder "${folder}"`);
   if (!front.description) problems.push('has no description');
   const explicitOnly = front['disable-model-invocation'] === 'true';
-  if (isExplicitOnly(folder) && !explicitOnly) problems.push('is a ts- command skill but leaves model invocation on');
+  if (isExplicitOnly(folder) && !explicitOnly) problems.push('is an explicit-only skill but leaves model invocation on');
   if (!isExplicitOnly(folder) && 'disable-model-invocation' in front) problems.push('sets disable-model-invocation, so the agent cannot run it by itself');
   for (const tool of new Set(text.match(/\bjira_[A-Za-z_]+/g) ?? [])) {
     if (!toolNames.includes(tool)) problems.push(`names ${tool}, which the MCP server does not offer`);
@@ -109,7 +112,7 @@ describe('the skill guard', () => {
 
   it('fails a ts- command skill that leaves model invocation on', () => {
     const text = good.replace('name: jira-sample', 'name: ts-sample');
-    expect(skillProblems('ts-sample', text, catalogNames)).toEqual(['is a ts- command skill but leaves model invocation on']);
+    expect(skillProblems('ts-sample', text, catalogNames)).toEqual(['is an explicit-only skill but leaves model invocation on']);
   });
 
   it('passes a ts- command skill with model invocation off', () => {
@@ -152,10 +155,10 @@ describe('the /jira-brief skill', () => {
     expect(brief).toMatch(/attachment you could not read/);
   });
 
-  it('leaves showing, loading and downloading a ticket to the tools', () => {
-    const description = parseFrontmatter(brief)?.description ?? '';
-    expect(description).toMatch(/^Writes a developer brief/);
-    expect(description).toContain('Not for showing, loading or downloading a ticket');
+  it('runs only when the user types it, with the ticket key as its argument', () => {
+    const front = parseFrontmatter(brief) ?? {};
+    expect(front['disable-model-invocation']).toBe('true');
+    expect(front['argument-hint']).toBe('<ticket key>');
   });
 
   it('views the ticket, then loads the picked attachments and reads them from .jira-context', () => {
@@ -253,24 +256,30 @@ describe('the /ts-jira command skill', () => {
   /** The numbered cases, in order, from the skill's body. */
   const cases = [...router.matchAll(/^(\d)\. (.+)$/gm)].map(m => ({ n: Number(m[1]), text: m[2] }));
 
-  it('handles an empty command first, with the help and no tool call', () => {
-    expect(cases[0]).toEqual({ n: 1, text: 'Nothing typed: call no tool. Reply with exactly the help text below. Stop.' });
+  it('never invokes a skill', () => {
+    expect(router).toContain('Follow only these rules, and never invoke a skill from here.');
   });
 
-  it('answers help next, never opening another skill or running the command named after it', () => {
-    expect(cases[1].n).toBe(2);
-    expect(cases[1].text).toMatch(/^The first word is `help`: call no tool, open no skill, run nothing\./);
-    expect(cases[1].text).toContain('reply with only its line');
-  });
-
-  it('answers an unknown command with the help, and runs a command only as the last case', () => {
+  it('checks an empty command, help, an unknown command and a missing argument, in that order, before running anything', () => {
+    expect(cases.map(c => c.n)).toEqual([1, 2, 3, 4, 5]);
+    expect(cases[0].text).toBe('Nothing typed: call no tool. Reply with exactly the help text below, as a code block. Stop.');
+    expect(cases[1].text).toMatch(/^The first word is `help`: call no tool and run nothing\. If the next word is a command of the help text, reply with only its line/);
     expect(cases[2].text).toBe('The first word is not a command of the table: call no tool. Reply with exactly the help text. Stop.');
-    expect(cases[3]).toEqual({ n: 4, text: 'Otherwise run that one command with one call, as the table says. Do not plan, explain or add steps.' });
-    expect(router.indexOf('4. Otherwise')).toBeLessThan(router.indexOf('| Command |'));
+    expect(cases[3].text).toMatch(/^An argument in angle brackets that the command needs is missing: call no tool\./);
+    expect(cases[4].text).toMatch(/^Otherwise make the one call the table names/);
+    expect(router.indexOf('5. Otherwise')).toBeLessThan(router.indexOf('| Command |'));
+  });
+
+  it('starts the help with the usage line and sets the commands apart with separator lines', () => {
+    const help = router.slice(router.indexOf('```text') + 8, router.indexOf('```', router.indexOf('```text') + 8)).split('\n');
+    expect(help[0]).toBe('Usage: /ts-jira <command> [arguments]');
+    expect(help[1]).toMatch(/^-{20,}$/);
+    expect(help.at(-3)).toMatch(/^-{20,}$/);
+    expect(help.at(-2)).toBe('Without KEY, load and view use the ticket of the git branch.');
   });
 
   it('prints a help line for every command of the table, in the same order', () => {
-    const help = router.slice(router.indexOf('/ts-jira commands:'), router.indexOf('```', router.indexOf('/ts-jira commands:')));
+    const help = router.slice(router.indexOf('Usage: /ts-jira'), router.indexOf('```', router.indexOf('Usage: /ts-jira')));
     const helpCommands = [...help.matchAll(/^ {2}([a-z]+)\b/gm)].map(m => m[1]);
     expect(helpCommands).toEqual(rows.map(r => r.command));
   });

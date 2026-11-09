@@ -1,6 +1,8 @@
 ---
 name: jira-brief
-description: Writes a developer brief of one Jira ticket from its description, comments and relevant attachments, so a developer can start work on it. Use only when asked for a brief of a ticket, a summary to start work from, or what a ticket asks for. Not for showing, loading or downloading a ticket; jira_view_ticket and jira_load_ticket do those.
+description: Writes a developer brief of one Jira ticket from its description, comments and relevant attachments, so a developer can start work on it. Type /jira-brief PROJ-123.
+disable-model-invocation: true
+argument-hint: <ticket key>
 ---
 
 # Jira developer brief
