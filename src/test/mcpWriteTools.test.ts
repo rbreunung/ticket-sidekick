@@ -351,7 +351,7 @@ describe('create ticket', () => {
 
   it('creates nothing when the template names no issue type and the issue types cannot be read, and says what to give', async () => {
     const client = new MockJiraClient();
-    client.getIssueTypes = async () => { throw new JiraApiError('Jira API error 503', 503, 'https://jira.example.com/rest/api/2/issue/createmeta'); };
+    client.getProject = async () => { throw new JiraApiError('Jira API error 503', 503, 'https://jira.example.com/rest/api/2/project/PROJ'); };
     const folder = makeTempDir('ts-write-');
     fs.writeFileSync(path.join(folder, '.jira-templates.json'), JSON.stringify({
       templates: [{ name: 'Untyped', defaultFields: { labels: ['web'] } }],
