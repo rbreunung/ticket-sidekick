@@ -46,11 +46,12 @@ export function bearerOf(authorization: string | undefined): string | undefined 
 }
 
 /**
- * A request path safe to log or count. A first segment as long as a key (keys are 43 characters)
- * is masked, so a client that wrongly puts the key in the path never gets it into a report; short
- * paths such as /favicon.ico stay readable. The query string is dropped.
+ * A request path safe to log or count. Every segment as long as a key (keys are 43 characters) is
+ * masked, wherever it is in the path, so a client that wrongly puts the key in the path never gets
+ * it into the Output log or a report; short paths such as /favicon.ico stay readable. The query
+ * string is dropped.
  */
 export function maskPath(path: string): string {
   const bare = path.split('?')[0];
-  return bare.replace(/^\/[^/]{32,}/, '/[key]');
+  return bare.split('/').map(segment => (segment.length >= 32 ? '[key]' : segment)).join('/');
 }

@@ -91,6 +91,13 @@ describe('maskPath', () => {
     expect(maskPath(`/${expectation.mcpKey}/mcp`)).toBe('/[key]/mcp');
   });
 
+  it('masks a key-length segment anywhere in the path, also when text surrounds the key', () => {
+    const marker = 'M'.repeat(43);
+    expect(maskPath(`/mcp/${marker}`)).toBe('/mcp/[key]');
+    expect(maskPath(`/a/b/c/${marker}/d`)).toBe('/a/b/c/[key]/d');
+    expect(maskPath(`/mcp/key=${marker}.json`)).toBe('/mcp/[key]');
+  });
+
   it('keeps short paths readable and drops the query string', () => {
     expect(maskPath('/favicon.ico')).toBe('/favicon.ico');
     expect(maskPath('/.well-known/oauth-protected-resource')).toBe('/.well-known/oauth-protected-resource');
