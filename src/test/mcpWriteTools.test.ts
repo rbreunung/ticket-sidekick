@@ -349,6 +349,20 @@ describe('create ticket', () => {
     expect(text).not.toContain('Template default text');
   });
 
+  it('creates nothing when the template names no issue type and the issue types cannot be read, and says what to give', async () => {
+    const client = new MockJiraClient();
+    client.getIssueTypes = async () => { throw new JiraApiError('Jira API error 503', 503, 'https://jira.example.com/rest/api/2/issue/createmeta'); };
+    const folder = makeTempDir('ts-write-');
+    fs.writeFileSync(path.join(folder, '.jira-templates.json'), JSON.stringify({
+      templates: [{ name: 'Untyped', defaultFields: { labels: ['web'] } }],
+    }));
+    const session = await startSession(client, { folders: [folder] });
+    const { text } = await session.call('jira_create_ticket', { projectKey: 'PROJ', summary: 'Add SSO', templateName: 'Untyped' });
+    expect(client.createIssueCalls).toEqual([]);
+    expect(text).toContain('No ticket was created');
+    expect(text).toContain('again with an explicit "issueType"');
+  });
+
   it('skips the same ticket requested again in a separate request within a minute', async () => {
     const client = new MockJiraClient();
     const session = await startSession(client);
@@ -457,6 +471,28 @@ describe('update field', () => {
     const other = await session.call('jira_update_field', { ticketKey: 'PROJ-123', fieldName: 'summary', value: 'Add SAML login' });
     expect(other.text).toContain('Updated summary on');
     expect(client.updateIssueCalls.map(c => c.fields.summary)).toEqual(['Add SSO login', 'Add SSO login', 'Add SAML login']);
+  });
+});
+
+describe('Jira wiki triggers in Markdown text', () => {
+  const hostile = '## Steps\n\n- open !https://evil.example/x.png! and {html}<b>x</b>{html}\n- {color:red}hi{color}\n\n**bold**';
+  const expectNeutralized = (wiki: unknown) => {
+    expect(wiki).toContain('h2. Steps');
+    expect(wiki).toContain('*bold*');
+    expect(wiki).not.toMatch(/![^\s!]+!/);
+    expect(wiki).not.toMatch(/\{(html|color)/);
+  };
+
+  it('are neutralized in a created ticket, a comment and an updated description, keeping the Markdown formatting', async () => {
+    const client = new MockJiraClient();
+    const session = await startSession(client);
+    await session.call('jira_create_ticket', { projectKey: 'PROJ', summary: 'Login fails', issueType: 'Bug', description: hostile });
+    await session.call('jira_add_comment', { ticketKey: 'PROJ-123', comment: hostile });
+    await session.call('jira_update_field', { ticketKey: 'PROJ-123', fieldName: 'description', value: hostile });
+
+    expectNeutralized(client.createIssueCalls[0].additionalFields?.description);
+    expectNeutralized(client.addCommentCalls[0].body);
+    expectNeutralized(client.updateIssueCalls[0].fields.description);
   });
 });
 

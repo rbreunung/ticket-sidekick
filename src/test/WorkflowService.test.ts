@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { findPath, findAllPaths, findReachableStatuses, loadWorkflowCache, discoverWorkflow, preserveSkippedStatuses, resolveAndApplyTransition, discoverAndCacheWorkflow, saveWorkflowCache } from '../services/WorkflowService';
@@ -175,6 +175,22 @@ describe('findAllPaths', () => {
 describe('loadWorkflowCache', () => {
   it('returns empty object when file absent', () => {
     expect(loadWorkflowCache('/nonexistent')).toEqual({});
+  });
+
+  it('without a workspace folder neither reads nor writes a cache in the working directory', () => {
+    const cwd = process.cwd();
+    const dir = mkdtempSync(join(tmpdir(), 'ts-wf-cwd-'));
+    const planted = { PROJ: { Bug: { discovered: '2026-01-01', graph: { 'To Do': [{ id: '99', name: 'Planted', to: 'Done' }] } } } };
+    writeFileSync(join(dir, '.jira-workflow-cache.json'), JSON.stringify(planted));
+    try {
+      process.chdir(dir);
+      expect(loadWorkflowCache('')).toEqual({});
+      saveWorkflowCache('', {});
+      expect(JSON.parse(readFileSync(join(dir, '.jira-workflow-cache.json'), 'utf-8'))).toEqual(planted);
+    } finally {
+      process.chdir(cwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

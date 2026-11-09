@@ -22,7 +22,12 @@ export interface WorkflowCache {
   };
 }
 
+/**
+ * The workflow cache in `workspaceRoot`. Without a workspace folder (an empty root) there is no
+ * cache: a file in the process's working directory is never read or written in its place.
+ */
 export function loadWorkflowCache(workspaceRoot: string): WorkflowCache {
+  if (!workspaceRoot) return {};
   const path = join(workspaceRoot, '.jira-workflow-cache.json');
   if (!existsSync(path)) return {};
   try {
@@ -33,6 +38,7 @@ export function loadWorkflowCache(workspaceRoot: string): WorkflowCache {
 }
 
 export function saveWorkflowCache(workspaceRoot: string, cache: WorkflowCache): void {
+  if (!workspaceRoot) return;
   const path = join(workspaceRoot, '.jira-workflow-cache.json');
   writeFileSync(path, JSON.stringify(cache, null, 2), 'utf-8');
 }
