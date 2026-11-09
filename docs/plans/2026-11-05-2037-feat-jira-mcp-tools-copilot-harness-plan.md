@@ -89,7 +89,7 @@ VS Code now defaults new chats to the Copilot harness, where chat participants a
 - R21. The extension contributes three skills: `/jira-brief` and `/jira-create`, both model-invocable, and the explicit-only `/ts-jira`; none repeats what a tool description already says.
 - R22. `/jira-brief` produces a developer brief with eight sections in order: problem or goal, context, steps to reproduce with expected and actual result, acceptance criteria, decisions and findings from comments with author and date, current state, open questions and missing information, and sources used. A section the ticket does not cover says "not stated in the ticket"; derived acceptance criteria are marked as derived; it reads relevant attachments through load ticket and lists those it could not read.
 - R23. `/jira-create` guides template choice, asks only for missing fields, shows the drafted summary and description, then calls create ticket.
-- R35. `/ts-jira <command> <arguments>` runs only when the user types it and maps each command (load, view, search, filters, comment, field, move, workflow, templates, upload, check, brief, create) to one tool or skill; without a command, or with an unknown one, it shows its command table and does nothing else.
+- R35. `/ts-jira <command> <arguments>` runs only when the user types it and maps each command (load, view, search, filters, comment, field, move, workflow, templates, upload, check) to one tool and names no skill; without a command, with `help [command]` or with an unknown command it shows its help and calls no tool. Creating a ticket stays with `/jira-create`.
 
 **Diagnostics and documentation**
 
@@ -555,9 +555,10 @@ Waits on: PR2, merge order only. After PR3, the feature branch merges into `main
 - **Requirements:** R21, R35.
 - **Dependencies:** U14, U16.
 - **Files:** `skills/ts-jira/SKILL.md`, `package.json`, `src/test/mcpSkillsGuard.test.ts`, `docs/manual/copilot-tools.md`, `README.md`, `CLAUDE.md`.
-- **Approach:** a short skill with `disable-model-invocation: true`, an `argument-hint` listing the commands and one table row per command; create goes through `/jira-create`, which drafts the ticket with the user first. The skill guard requires model invocation off for `ts-` skills and on for every other skill.
+- **Approach:** a short skill with `disable-model-invocation: true`, an `argument-hint` listing the commands, the user's input through `$ARGUMENTS`, four ordered cases (nothing typed, `help`, unknown command, run) and one table row per command. It names no skill, since a weak model ran `/jira-brief` when the table pointed at it; create stays with `/jira-create`, which drafts the ticket with the user first. The skill guard requires model invocation off for `ts-` skills and on for every other skill.
 - **Test scenarios:**
-  - Every catalog tool except create ticket has a row, and every row names a tool or skill that exists.
+  - Every catalog tool except create ticket has a row, and every row names a tool that exists; the skill names no other skill.
+  - The cases come in order before the table, and the help text lists every command of the table.
   - The argument hint lists the table's commands, in the same order.
   - A `ts-` skill that leaves model invocation on fails the guard; one that turns it off passes.
 - **Verification:** tests pass; in a Copilot-harness chat, `/ts-jira load PROJ-123` calls load ticket directly.

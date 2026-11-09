@@ -231,15 +231,18 @@ describe('the /ts-jira command skill', () => {
 
   it('has a row for every MCP tool, so a new tool cannot be forgotten', () => {
     const called = rows.flatMap(r => r.action.match(/\bjira_[a-z_]+/g) ?? []);
-    // Creating goes through the jira-create skill, which drafts the ticket with the user first.
+    // Creating is left to the /jira-create skill, which drafts the ticket with the user first.
     const direct = catalogNames.filter(name => name !== CREATE_TICKET_TOOL);
     expect([...new Set(called)].sort()).toEqual([...direct].sort());
   });
 
-  it('hands brief and create to skills that exist', () => {
-    const followed = rows.flatMap(r => [...r.action.matchAll(/follow the `([a-z-]+)` skill/g)].map(m => m[1]));
-    expect(followed.sort()).toEqual(['jira-brief', 'jira-create']);
-    for (const skill of followed) expect(skillNames, skill).toContain(skill);
+  it('names no skill, so a weak model is not drawn into running one', () => {
+    for (const skill of skillNames.filter(name => name !== 'ts-jira')) expect(router, skill).not.toContain(skill);
+  });
+
+  it('puts what the user typed next to the cases', () => {
+    const body = router.slice(router.indexOf('\n---', 4) + 4).trim();
+    expect(body.split('\n')[0]).toBe('The user typed after /ts-jira: `$ARGUMENTS`');
   });
 
   it('lists every command of the table in its argument hint, in the same order', () => {
@@ -256,7 +259,7 @@ describe('the /ts-jira command skill', () => {
 
   it('answers help next, never opening another skill or running the command named after it', () => {
     expect(cases[1].n).toBe(2);
-    expect(cases[1].text).toMatch(/^The first word is `help`: call no tool, open no other skill, run nothing\./);
+    expect(cases[1].text).toMatch(/^The first word is `help`: call no tool, open no skill, run nothing\./);
     expect(cases[1].text).toContain('reply with only its line');
   });
 

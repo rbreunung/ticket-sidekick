@@ -2,13 +2,16 @@
 name: ts-jira
 description: Runs one Jira command typed as /ts-jira <command> <arguments>, e.g. /ts-jira load PROJ-123. Only when the user types it.
 disable-model-invocation: true
-argument-hint: help|load|view|search|filters|comment|field|move|workflow|templates|upload|check|brief|create <arguments>
+argument-hint: help|load|view|search|filters|comment|field|move|workflow|templates|upload|check <arguments>
 ---
 
-Take what the user typed after /ts-jira and use the first case that matches. Do not read ahead to the table before you have checked cases 1 to 3.
+The user typed after /ts-jira: `$ARGUMENTS`
+(If that still shows a dollar-sign placeholder, use the text of the user's message after /ts-jira instead.)
+
+Use the first case that matches what the user typed. Check cases 1 to 3 before you read the table.
 
 1. Nothing typed: call no tool. Reply with exactly the help text below. Stop.
-2. The first word is `help`: call no tool, open no other skill, run nothing. If the next word is a command of the help text, reply with only its line (for load and view also the last line). Otherwise reply with exactly the help text. Stop.
+2. The first word is `help`: call no tool, open no skill, run nothing. If the next word is a command of the help text, reply with only its line (for load and view also the last line). Otherwise reply with exactly the help text. Stop.
 3. The first word is not a command of the table: call no tool. Reply with exactly the help text. Stop.
 4. Otherwise run that one command with one call, as the table says. Do not plan, explain or add steps.
 
@@ -26,11 +29,8 @@ Take what the user typed after /ts-jira and use the first case that matches. Do 
   templates                   list the ticket templates
   upload <KEY> <path>         attach a workspace file
   check                       check the Jira connection
-  brief <KEY>                 write a developer brief
-  create <request>            create a ticket with you
 Without KEY, load and view use the ticket of the git branch.
 ```
-
 
 | Command | Do |
 | --- | --- |
@@ -46,7 +46,5 @@ Without KEY, load and view use the ticket of the git branch.
 | templates | call `jira_list_templates` |
 | upload <KEY> <path> | call `jira_upload_attachment` |
 | check | call `jira_check_connection` |
-| brief <KEY> | follow the `jira-brief` skill |
-| create <request> | follow the `jira-create` skill |
 
 Afterwards give the tool's answer briefly. After load, show its numbered list of skipped attachments and ask which to download.
