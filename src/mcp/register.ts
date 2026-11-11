@@ -12,6 +12,7 @@ import { evaluateNoProxy, loopbackBypassConfigured } from './proxyBypass';
 import { copilotHome, buildReport, redact, scanForSecret, DEFAULT_SCAN_LIMITS, type ReportFacts } from './report';
 import { McpServerController, type McpDefinition } from './serverController';
 import { detectMcpApi, type McpApi } from './vscodeMcpTypes';
+import { windowNotesDir, WindowNoteKeeper } from '../canvas/windowNotes';
 
 // VS Code glue for the extension's MCP server. The server runs exactly while 127.0.0.1 is in
 // `http.noProxy`: it starts at activation when the entry is there, starts or stops when the entry
@@ -33,6 +34,7 @@ const PROXY_NOTICE =
   + 'Once you add it, the tools appear without a restart.';
 
 let active: McpServerController<JiraToolDeps> | undefined;
+let activeNotes: WindowNoteKeeper | undefined;
 
 function log(level: LogLevel, message: string, details?: Record<string, unknown>): void {
   logDiag('mcp', level, message, details);
@@ -97,10 +99,11 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
     return Promise.resolve();
   }
 
+  // Only folders on this computer's disk: git, the template file and the workflow cache are read there.
+  const localFolders = () => (vscode.workspace.workspaceFolders ?? []).filter(f => f.uri.scheme === 'file').map(f => f.uri.fsPath);
   const toolDeps: JiraToolDeps = {
     getJira: () => getJira(configService),
-    // Only folders on this computer's disk: git, the template file and the workflow cache are read there.
-    workspaceFolders: () => (vscode.workspace.workspaceFolders ?? []).filter(f => f.uri.scheme === 'file').map(f => f.uri.fsPath),
+    workspaceFolders: localFolders,
     recentWrites: new RecentCallGuard(),
     onDiag: (level, message, details) => logDiag('mcp.tools', level, message, details),
   };
@@ -113,6 +116,16 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
   });
   controller = started;
   active = started;
+  // The note the canvas program reads to find this window's server: written while the server
+  // runs, kept in step with the workspace folders, removed when the server stops.
+  const notes = new WindowNoteKeeper({
+    dir: windowNotesDir(copilotHome(process.env, os.homedir())),
+    pid: process.pid,
+    access: () => started.canvasAccess(),
+    workspaceFolders: localFolders,
+    onError: message => log('warn', 'Could not update the window note for canvases', { error: message }),
+  });
+  activeNotes = notes;
 
   const version = extensionVersion(context);
   const toDefinition = (api: McpApi, d: McpDefinition) =>
@@ -120,7 +133,8 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
   const changed = new vscode.EventEmitter<void>();
   context.subscriptions.push(
     changed,
-    started.onDidChange(() => changed.fire()),
+    started.onDidChange(() => { changed.fire(); void notes.sync(); }),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => { void notes.sync(); }),
     mcp.registerMcpServerDefinitionProvider(MCP_PROVIDER_ID, {
       onDidChangeMcpServerDefinitions: changed.event,
       provideMcpServerDefinitions: () => {
@@ -140,7 +154,7 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
     }),
   );
 
-  if (mcpAllowed()) return started.start('activation');
+  if (mcpAllowed()) return started.start('activation').then(() => notes.whenIdle());
   log('info', 'MCP server not started: 127.0.0.1 is not in http.noProxy');
   showProxyNotice();
   return Promise.resolve();
@@ -148,8 +162,11 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
 
 export async function deactivateMcp(): Promise<void> {
   const controller = active;
+  const notes = activeNotes;
   active = undefined;
+  activeNotes = undefined;
   await controller?.stop('deactivate');
+  await notes?.remove();
 }
 
 // ---------------------------------------------------------------------------------------------

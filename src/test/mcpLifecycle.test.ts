@@ -38,6 +38,8 @@ const h = vi.hoisted(() => ({
   chatSettings: {} as Record<string, unknown>,
   progressOptions: undefined as { cancellable?: boolean } | undefined,
   cancelRequested: false,
+  folderListeners: [] as Array<() => unknown>,
+  folders: [{ uri: { fsPath: '/work/a', scheme: 'file' } }] as Array<{ uri: { fsPath: string; scheme: string } }>,
 }));
 
 vi.mock('vscode', () => {
@@ -88,7 +90,8 @@ vi.mock('vscode', () => {
     },
     ProgressLocation: { Notification: 15 },
     workspace: {
-      workspaceFolders: [{ uri: { fsPath: '/work/a' } }],
+      get workspaceFolders() { return h.folders; },
+      onDidChangeWorkspaceFolders: (listener: () => unknown) => { h.folderListeners.push(listener); return { dispose: () => undefined }; },
       getConfiguration: (section?: string) => configuration(section),
       onDidChangeConfiguration: (listener: (e: { affectsConfiguration(key: string): boolean }) => unknown) => {
         h.configListeners.push(listener);
@@ -197,6 +200,8 @@ beforeEach(() => {
   h.chatSettings = {};
   h.progressOptions = undefined;
   h.cancelRequested = false;
+  h.folderListeners = [];
+  h.folders = [{ uri: { fsPath: '/work/a', scheme: 'file' } }];
 });
 
 afterEach(async () => {
@@ -204,6 +209,58 @@ afterEach(async () => {
   await deactivateMcp();
   delete process.env.COPILOT_HOME;
   fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+function windowNote(): { port: number; canvasKey: string; workspaceFolders: string[] } | undefined {
+  const file = path.join(tmp, 'copilot-home', 'ticket-sidekick', 'windows', `window-${process.pid}.json`);
+  return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : undefined;
+}
+
+/** Lets the note keeper finish the write or removal a lifecycle change started. */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 20; i++) await new Promise(resolve => setTimeout(resolve, 5));
+}
+
+describe('the window note for canvases', () => {
+  it('is written with the server\'s port, a canvas key and the window\'s folders while the server runs', async () => {
+    await activate({ withApi: true });
+    const note = windowNote();
+    expect(note?.port).toBe(portOf(offered()[0]));
+    expect(note?.canvasKey).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(note?.canvasKey).not.toBe(bearerOf(offered()[0]));
+    expect(note?.workspaceFolders).toEqual(['/work/a']);
+  });
+
+  it('is removed when the http.noProxy entry is removed, and written again when it comes back', async () => {
+    await activate({ withApi: true });
+    await changeNoProxy([]);
+    await settle();
+    expect(windowNote()).toBeUndefined();
+    await changeNoProxy(['127.0.0.1']);
+    await settle();
+    expect(windowNote()?.port).toBe(portOf(offered()[0]));
+  });
+
+  it('lists a workspace folder added while the server runs', async () => {
+    await activate({ withApi: true });
+    h.folders = [...h.folders, { uri: { fsPath: '/work/b', scheme: 'file' } }];
+    h.folderListeners.forEach(l => l());
+    await settle();
+    expect(windowNote()?.workspaceFolders).toEqual(['/work/a', '/work/b']);
+  });
+
+  it('is removed on deactivation', async () => {
+    await activate({ withApi: true });
+    await deactivateMcp();
+    expect(windowNote()).toBeUndefined();
+  });
+
+  it('is not written while the server is not running', async () => {
+    h.noProxy = [];
+    await activate({ withApi: true });
+    await settle();
+    expect(windowNote()).toBeUndefined();
+  });
 });
 
 describe('MCP server lifecycle', () => {
