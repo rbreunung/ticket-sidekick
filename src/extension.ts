@@ -21,6 +21,7 @@ import { logDiag } from './utils/diagLog';
 import type { IJiraClient } from './jira/IJiraClient';
 import { registerBitbucketTools } from './tools/bitbucketTools';
 import { registerMcp, deactivateMcp } from './mcp/register';
+import { registerDefaultProjectCheck } from './participant/jira/defaultProjectNotice';
 
 // Shared shape for the two nearly-identical report-import commands (Veracode .xml, Waltz OSS .xlsx):
 // pick a file -> check credentials -> stat+size-cap+read+parse+filter -> empty-result message ->
@@ -357,6 +358,8 @@ export function activate(context: vscode.ExtensionContext): void {
   registerBitbucketTools(context, configService);
   // The MCP server for Copilot-harness chats runs while 127.0.0.1 is in http.noProxy.
   void registerMcp(context, configService);
+  // A wrong default project shows up at start and after the setting changes, not at first use.
+  registerDefaultProjectCheck(context, configService);
 
   // KTD11: auto-open the Jira Getting-Started walkthrough once — on first install/first
   // activation only — guarded by a globalState "seen" flag so it never reopens on later VS Code

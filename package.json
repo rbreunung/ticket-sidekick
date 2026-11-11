@@ -311,7 +311,7 @@
           "ticketSidekick.jira.defaultProject": {
             "type": "string",
             "default": "",
-            "description": "Default Jira project key (e.g. 'PROJ'). Used when creating tickets if no project is specified in your prompt."
+            "description": "Default Jira project key (e.g. 'PROJ'). Used when creating tickets if no project is specified in your prompt. Checked at start and after a change: a value that is not a project key, or a project Jira does not have, brings up a warning."
           },
           "ticketSidekick.jira.overviewCsvDelimiter": {
             "type": "string",
