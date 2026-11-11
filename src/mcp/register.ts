@@ -16,6 +16,9 @@ import { copilotHome } from '../utils/copilotHome';
 import { windowNotesDir, WindowNoteKeeper } from '../canvas/windowNotes';
 import { createCanvasHandler } from '../canvas/canvasRoutes';
 import { openCheckRoute } from '../canvas/openCheck';
+import { reportRoutes, type ThemeKind } from '../canvas/securityReport/reportApi';
+import { PageStore } from '../canvas/securityReport/pageStore';
+import { saveOverviewToFile } from '../participant/jira/overviewHandler';
 import { canvasLogFile, readCanvasLog } from '../canvas/canvasLog';
 
 // VS Code glue for the extension's MCP server. The server runs exactly while 127.0.0.1 is in
@@ -59,6 +62,23 @@ async function getJira(configService: ConfigService): Promise<JiraAccess> {
   });
   return { configured: true, config, client };
 }
+
+function defaultProject(): string {
+  return vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.defaultProject') ?? '';
+}
+
+/** The theme the canvas page takes, from VS Code's active color theme. */
+function themeKind(): ThemeKind {
+  switch (vscode.window.activeColorTheme?.kind) {
+    case vscode.ColorThemeKind.Light: return 'light';
+    case vscode.ColorThemeKind.HighContrast: return 'high-contrast';
+    case vscode.ColorThemeKind.HighContrastLight: return 'high-contrast-light';
+    default: return 'dark';
+  }
+}
+
+/** The readings of this window's open security report pages; one store for the window's lifetime. */
+const pageStore = new PageStore();
 
 function noProxySetting(): unknown {
   return vscode.workspace.getConfiguration('http').get<unknown>('noProxy');
@@ -137,7 +157,15 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
       [
         openCheckRoute({
           isJiraConfigured: async () => configService.isConfigured(await configService.getConfig()),
-          defaultProject: () => vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.defaultProject') ?? '',
+          defaultProject,
+        }),
+        ...reportRoutes({
+          getJira: () => getJira(configService),
+          defaultProject,
+          themeKind,
+          save: saveOverviewToFile,
+          store: pageStore,
+          onDiag: (level, message, details) => logDiag('canvas', level, message, details),
         }),
       ],
       message => logDiag('canvas', 'error', 'Canvas request failed', { error: message }),

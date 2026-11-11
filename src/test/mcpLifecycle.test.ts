@@ -69,6 +69,7 @@ vi.mock('vscode', () => {
   });
   return {
     version: '1.144.0',
+    ColorThemeKind: { Light: 1, Dark: 2, HighContrast: 3, HighContrastLight: 4 },
     EventEmitter,
     McpHttpServerDefinition,
     Uri: { parse: (value: string) => ({ toString: () => value }) },
@@ -78,6 +79,7 @@ vi.mock('vscode', () => {
       executeCommand: async (...args: unknown[]) => { h.executed.push(args); },
     },
     window: {
+      activeColorTheme: { kind: 1 },
       createOutputChannel: () => ({ appendLine: (line: string) => { h.logLines.push(line); } }),
       showInformationMessage: (message: string, ...choices: string[]) => {
         h.infoMessages.push(message);
@@ -297,6 +299,23 @@ describe('the open check the canvas program asks before it opens a page', () => 
     const note = windowNote()!;
     expect((await canvasGet(note.port, `/${note.canvasKey}/api/open-check?project=PROJ`)).body).toEqual({ ok: false, reason: 'not-configured' });
     expect((await canvasGet(note.port, `/${note.canvasKey}/api/open-check`)).body).toEqual({ ok: false, reason: 'no-project' });
+  });
+
+  it('also serves the security report page\'s routes, which say when Jira is not set up in this window', async () => {
+    await activate({ withApi: true });
+    const note = windowNote()!;
+    const res = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port: note.port, path: `/${note.canvasKey}/api/report`, method: 'POST', headers: { 'Content-Type': 'application/json' } }, r => {
+        let text = '';
+        r.on('data', c => { text += c; });
+        r.on('end', () => resolve({ status: r.statusCode ?? 0, body: JSON.parse(text) }));
+      });
+      req.on('error', reject);
+      req.end(JSON.stringify({ project: 'PROJ' }));
+    });
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ kind: 'not-configured' });
+    expect(await canvasGet(note.port, `/${note.canvasKey}/api/page-status?pageId=x`)).toEqual({ status: 200, body: { replaced: false, themeKind: 'light' } });
   });
 
   it('refuses the bearer key of the MCP endpoint in place of the canvas key', async () => {

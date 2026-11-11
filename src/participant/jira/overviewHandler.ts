@@ -23,11 +23,17 @@ const FILE_FORMATS: Record<OverviewFormat, { extension: string; filterName: stri
   xlsx: { extension: 'xlsx', filterName: 'Excel', label: 'Excel file' },
 };
 
+/** What a save of the overview came to: the file written, a cancelled dialog, or a failed write with its reason. */
+export type OverviewSaveOutcome =
+  | { kind: 'saved'; path: string }
+  | { kind: 'cancelled' }
+  | { kind: 'failed'; reason: string };
+
 /**
- * Writes the overview as CSV or Excel through a save dialog and tells the user where it went. A cancelled dialog writes
- * nothing and says so. Shared by the standalone command and the `export csv` / `export xlsx` replies of a report import.
+ * Writes the overview as CSV or Excel through VS Code's save dialog. A cancelled dialog writes nothing. Shared by the chat
+ * (below) and the security report canvas, which shows the outcome on its page.
  */
-export async function saveOverviewFile(overview: Overview, fileLabel: string, format: OverviewFormat, stream: vscode.ChatResponseStream): Promise<boolean> {
+export async function saveOverviewToFile(overview: Overview, fileLabel: string, format: OverviewFormat): Promise<OverviewSaveOutcome> {
   const { extension, filterName, label } = FILE_FORMATS[format];
   const name = `security-overview-${fileLabel}-${localDate()}.${extension}`;
   const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
@@ -36,10 +42,7 @@ export async function saveOverviewFile(overview: Overview, fileLabel: string, fo
     filters: { [filterName]: [extension] },
     saveLabel: 'Save overview',
   });
-  if (!target) {
-    stream.markdown('_Save cancelled — nothing was written._');
-    return false;
-  }
+  if (!target) return { kind: 'cancelled' };
   try {
     const bytes = format === 'xlsx'
       ? await renderOverviewXlsx(overview)
@@ -48,12 +51,22 @@ export async function saveOverviewFile(overview: Overview, fileLabel: string, fo
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logDiag(SCOPE, 'error', `Could not write the overview ${label}`, { format, error: message });
-    stream.markdown(`Could not save the file: ${message}`);
-    return false;
+    return { kind: 'failed', reason: message };
   }
   logDiag(SCOPE, 'info', `Overview ${label} saved`, { format, file: name });
-  stream.markdown(`Saved the security report to \`${target.fsPath}\`.`);
-  return true;
+  return { kind: 'saved', path: target.fsPath };
+}
+
+/**
+ * Writes the overview as CSV or Excel through a save dialog and tells the user where it went. A cancelled dialog writes
+ * nothing and says so. Shared by the standalone command and the `export csv` / `export xlsx` replies of a report import.
+ */
+export async function saveOverviewFile(overview: Overview, fileLabel: string, format: OverviewFormat, stream: vscode.ChatResponseStream): Promise<boolean> {
+  const outcome = await saveOverviewToFile(overview, fileLabel, format);
+  if (outcome.kind === 'cancelled') stream.markdown('_Save cancelled — nothing was written._');
+  else if (outcome.kind === 'failed') stream.markdown(`Could not save the file: ${outcome.reason}`);
+  else stream.markdown(`Saved the security report to \`${outcome.path}\`.`);
+  return outcome.kind === 'saved';
 }
 
 /** Streams the overview tables followed by clickable "Save as CSV" and "Save as Excel" links that send the given `@jira` replies. */
