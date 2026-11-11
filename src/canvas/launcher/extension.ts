@@ -13,7 +13,7 @@ import * as os from 'os';
 import { copilotHome } from '../../utils/copilotHome';
 import { isProcessAlive, readNotes, windowNotesDir } from '../windowNotes';
 import { selectWindow } from '../selectWindow';
-import { asOpenCheck, instanceIdFor, openAnswer, projectFromInput, SECURITY_REPORT_CANVAS_ID, type OpenCheck } from '../openDecision';
+import { asOpenCheck, instanceIdFor, OPEN_STATUS, openAnswer, projectRequest, SECURITY_REPORT_CANVAS_ID, type OpenCheck } from '../openDecision';
 import { repairRestoredCanvases } from '../restoreRepair';
 import { OPEN_CHECK_PATH } from '../openCheck';
 import { appendCanvasLog, canvasLogFile } from '../canvasLog';
@@ -83,7 +83,12 @@ const session = await joinSession({
         additionalProperties: false,
       },
       open: async ctx => {
-        const project = projectFromInput(ctx.input);
+        const request = projectRequest(ctx.input);
+        if (request.kind === 'invalid') {
+          await appendCanvasLog(logFile, { event: 'open', choice: 'none', check: 'invalid-project', opened: false });
+          return { title: 'Security report', status: OPEN_STATUS.invalidProject };
+        }
+        const project = request.kind === 'valid' ? request.project : undefined;
         const { notes } = await readNotes(notesDir);
         const choice = selectWindow(notes, ctx.session?.workingDirectory, isProcessAlive);
         const check = choice.kind === 'selected' ? await openCheck(choice.note.port, choice.note.canvasKey, project) : undefined;

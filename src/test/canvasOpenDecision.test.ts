@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { selectWindow } from '../canvas/selectWindow';
-import { asOpenCheck, instanceIdFor, OPEN_STATUS, openAnswer, projectFromInput, restoreAction, RESTORE_WAIT_MS } from '../canvas/openDecision';
+import { asOpenCheck, instanceIdFor, OPEN_STATUS, openAnswer, projectFromInput, projectRequest, restoreAction, RESTORE_WAIT_MS } from '../canvas/openDecision';
 import { checkOpen } from '../canvas/openCheck';
 import type { WindowNote } from '../canvas/windowNotes';
 
@@ -88,9 +88,30 @@ describe('the open check of a window', () => {
     expect(await checkOpen(null, deps(true, 'OTHER'))).toEqual({ ok: true, project: 'OTHER' });
   });
 
+  it('refuses a named project that is not a project key instead of opening the default project', async () => {
+    expect(await checkOpen('PROJ-1', deps(true, 'OTHER'))).toEqual({ ok: false, reason: 'invalid-project' });
+    expect(await checkOpen('my project', deps(true, 'OTHER'))).toEqual({ ok: false, reason: 'invalid-project' });
+  });
+
   it('says when no project is known or Jira is not set up', async () => {
     expect(await checkOpen(null, deps(true, ''))).toEqual({ ok: false, reason: 'no-project' });
     expect(await checkOpen('PROJ', deps(false, ''))).toEqual({ ok: false, reason: 'not-configured' });
+  });
+});
+
+describe('the project an open request names', () => {
+  it('tells no project, a valid key and a text that is not a key apart', () => {
+    expect(projectRequest({})).toEqual({ kind: 'none' });
+    expect(projectRequest({ project: '  ' })).toEqual({ kind: 'none' });
+    expect(projectRequest({ project: 'proj' })).toEqual({ kind: 'valid', project: 'PROJ' });
+    expect(projectRequest({ project: 'PROJ-1' })).toEqual({ kind: 'invalid' });
+    expect(projectRequest({ project: 42 })).toEqual({ kind: 'invalid' });
+  });
+
+  it('answers an invalid key with a status that asks for a valid one and opens nothing', () => {
+    const answer = openAnswer({ kind: 'selected', note: windowA }, { ok: false, reason: 'invalid-project' });
+    expect(answer.url).toBeUndefined();
+    expect(answer.status).toBe(OPEN_STATUS.invalidProject);
   });
 });
 
@@ -98,6 +119,7 @@ describe('reading a window\'s open-check answer', () => {
   it('accepts the known answers', () => {
     expect(asOpenCheck({ ok: true, project: 'PROJ' })).toEqual({ ok: true, project: 'PROJ' });
     expect(asOpenCheck({ ok: false, reason: 'not-configured' })).toEqual({ ok: false, reason: 'not-configured' });
+    expect(asOpenCheck({ ok: false, reason: 'invalid-project' })).toEqual({ ok: false, reason: 'invalid-project' });
   });
 
   it('drops any other answer, so no text from the port reaches the agent\'s status', () => {
