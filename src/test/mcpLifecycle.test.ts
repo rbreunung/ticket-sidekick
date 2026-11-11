@@ -39,6 +39,7 @@ const h = vi.hoisted(() => ({
   progressOptions: undefined as { cancellable?: boolean } | undefined,
   cancelRequested: false,
   folderListeners: [] as Array<() => unknown>,
+  canvasesEnabled: true as unknown,
   folders: [{ uri: { fsPath: '/work/a', scheme: 'file' } }] as Array<{ uri: { fsPath: string; scheme: string } }>,
 }));
 
@@ -56,6 +57,7 @@ vi.mock('vscode', () => {
     ...(section === 'chat' ? h.chatSettings : {}),
     get: (key: string, fallback?: unknown) => {
       if (section === 'http' && key === 'noProxy') return h.noProxy;
+      if (section === 'chat' && key === 'canvases.enabled') return h.canvasesEnabled;
       if (section === 'ticketSidekick' && key === 'jira.baseUrl') return 'https://jira.example.com';
       return fallback;
     },
@@ -201,6 +203,7 @@ beforeEach(() => {
   h.progressOptions = undefined;
   h.cancelRequested = false;
   h.folderListeners = [];
+  h.canvasesEnabled = true;
   h.folders = [{ uri: { fsPath: '/work/a', scheme: 'file' } }];
 });
 
@@ -260,6 +263,28 @@ describe('the window note for canvases', () => {
     await activate({ withApi: true });
     await settle();
     expect(windowNote()).toBeUndefined();
+  });
+});
+
+describe('the startup notice for canvases', () => {
+  const CANVAS_NOTICE = /security report opens as a canvas in Copilot chats.*chat\.canvases\.enabled/;
+
+  it('appears at every start while canvases are off, and offers to open the setting', async () => {
+    h.canvasesEnabled = false;
+    await activate({ withApi: true });
+    expect(h.infoMessages.filter(m => CANVAS_NOTICE.test(m))).toHaveLength(1);
+  });
+
+  it('does not appear while canvases are on', async () => {
+    await activate({ withApi: true });
+    expect(h.infoMessages.filter(m => CANVAS_NOTICE.test(m))).toEqual([]);
+  });
+
+  it('opens the setting when chosen, and never changes it', async () => {
+    h.canvasesEnabled = undefined;
+    await activate({ withApi: true, choice: 'Open Setting' });
+    expect(h.executed).toContainEqual(['workbench.action.openSettings', 'chat.canvases.enabled']);
+    expect(h.configUpdates).toBe(0);
   });
 });
 
