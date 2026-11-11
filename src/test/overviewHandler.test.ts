@@ -30,7 +30,7 @@ import * as vscode from 'vscode';
 import { handleSecurityOverview } from '../participant/jira/overviewHandler';
 import { TicketService } from '../services/TicketService';
 import { MockJiraClient } from './mocks/MockJiraClient';
-import { makeComponent, makeFlaw, veracodeTicket, waltzTicket } from './helpers/overviewFixtures';
+import { makeComponent, makeFlaw, seedOverviewJira, veracodeTicket, waltzTicket } from './helpers/overviewFixtures';
 import { JiraApiError } from '../utils/apiError';
 
 const markdownText = (arg: unknown): string => (typeof arg === 'string' ? arg : (arg as { value: string }).value);
@@ -41,22 +41,7 @@ const request = (prompt: string) => ({ prompt }) as vscode.ChatRequest;
 let client: MockJiraClient;
 let service: TicketService;
 
-function seed(tickets: ReturnType<typeof veracodeTicket>[]) {
-  vi.spyOn(client, 'searchJql').mockResolvedValue({
-    issues: tickets.map(t => ({
-      id: t.ticket.key, key: t.ticket.key,
-      fields: { summary: t.ticket.summary, status: { name: t.ticket.status }, labels: t.ticket.labels, fixVersions: t.ticket.fixVersions.map(name => ({ name })), duedate: t.ticket.dueDate },
-    })) as never,
-    total: tickets.length, isLast: true,
-  });
-  vi.spyOn(client, 'getIssue').mockImplementation(async key => ({
-    id: key, key, fields: { description: tickets.find(t => t.ticket.key === key)!.description },
-  }) as never);
-  vi.spyOn(client, 'getProject').mockResolvedValue({
-    id: '1', key: 'SEC', name: 'Security', issueTypes: [],
-    versions: [{ id: '1', name: '2026.11', releaseDate: '2026-11-15' }],
-  });
-}
+const seed = (tickets: ReturnType<typeof veracodeTicket>[]) => seedOverviewJira(client, tickets);
 
 beforeEach(() => {
   // The fixtures' due dates (2026-11-01) and release (2026-11-15) only mean "due before release" while today is before them.
@@ -170,6 +155,41 @@ describe('@jira /security-report', () => {
 
     expect(textOf(stream)).toContain('could not read the release dates');
     expect(textOf(stream)).not.toContain('due before release');
+  });
+});
+
+describe('@jira /security-report chat output, word for word', () => {
+  it('streams the progress line, the truncation and release-date warnings, then the tables', async () => {
+    seed([veracodeTicket('SEC-1', [makeFlaw('1')], { fixVersions: ['2026.11'], dueDate: '2026-11-01' })]);
+    vi.spyOn(service, 'listOverviewTickets').mockImplementation(async () => {
+      const issues = (await client.searchJql('', 1)).issues;
+      return { tickets: issues.map(i => ({ key: i.key, summary: String(i.fields.summary), status: 'Open', source: 'veracode', labels: (i.fields.labels ?? []) as string[], fixVersions: ['2026.11'], dueDate: '2026-11-01' })), truncated: true } as never;
+    });
+    vi.spyOn(client, 'getProject').mockRejectedValue(new Error('boom'));
+    const stream = streamOf();
+
+    await handleSecurityOverview(request('SEC'), stream as never, service, 'https://jira.example.com');
+
+    const calls = stream.markdown.mock.calls.map(c => markdownText(c[0]));
+    expect(calls.slice(0, 3)).toEqual([
+      '_Searching SEC for open Veracode and Waltz tickets…_\n\n',
+      '_More tickets matched than can be listed; showing the first 1._\n\n',
+      '_Warning: could not read the release dates, so nothing is flagged as due before its release._\n\n',
+    ]);
+    expect(calls).toHaveLength(4);
+    expect(calls[3]).toContain('SEC-1');
+  });
+
+  it('streams the search failure with Jira\'s error message, as before', async () => {
+    vi.spyOn(client, 'searchJql').mockRejectedValue(new JiraApiError('Jira API error 403', 403, 'https://jira.example.com/rest/api/2/search'));
+    const stream = streamOf();
+
+    await handleSecurityOverview(request('SEC'), stream as never, service);
+
+    expect(stream.markdown.mock.calls.map(c => markdownText(c[0]))).toEqual([
+      '_Searching SEC for open Veracode and Waltz tickets…_\n\n',
+      'Could not search SEC: Jira API error 403',
+    ]);
   });
 });
 

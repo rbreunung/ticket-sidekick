@@ -9,6 +9,7 @@ import { renderOverviewXlsx } from '../../utils/securityOverviewXlsx';
 import { buildChatCommandLink } from '../sessionState';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import { resolveProjectKey } from './ticketContext';
+import { gatherOverview, overviewWarningText } from '../../utils/securityOverviewGather';
 
 const SCOPE = 'jira.overview';
 
@@ -64,7 +65,7 @@ export function streamOverview(overview: Overview, stream: vscode.ChatResponseSt
   stream.markdown(trustedChatMarkdown(text + links));
 }
 
-/** Everything the overview needs from Jira for one project: tickets, release dates and descriptions. Null when the search fails. */
+/** Everything the overview needs from Jira for one project, with its warnings streamed into the chat. Null when the search fails. */
 export async function gatherOverviewInput(
   ticketService: TicketService,
   projectKey: string,
@@ -72,33 +73,13 @@ export async function gatherOverviewInput(
   baseUrl?: string,
 ): Promise<OverviewInput | null> {
   stream.markdown(`_Searching ${projectKey} for open Veracode and Waltz tickets…_\n\n`);
-  let list;
-  try {
-    list = await ticketService.listOverviewTickets(projectKey);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    logDiag(SCOPE, 'error', 'Overview search failed', { projectKey, error: message });
-    stream.markdown(`Could not search ${projectKey}: ${message}`);
+  const result = await gatherOverview(ticketService, projectKey, baseUrl, (level, message, details) => logDiag(SCOPE, level, message, details));
+  if (!result.ok) {
+    stream.markdown(`Could not search ${projectKey}: ${result.error instanceof Error ? result.error.message : String(result.error)}`);
     return null;
   }
-  if (list.truncated) stream.markdown(`_More tickets matched than can be listed; showing the first ${list.tickets.length}._\n\n`);
-
-  let versions: Awaited<ReturnType<TicketService['getProjectVersions']>> = [];
-  try {
-    versions = await ticketService.getProjectVersions(projectKey);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    logDiag(SCOPE, 'warn', 'Could not read the project versions — release dates are not used', { projectKey, error: message });
-    stream.markdown('_Warning: could not read the release dates, so nothing is flagged as due before its release._\n\n');
-  }
-
-  const { texts, failed } = await ticketService.readDescriptions(
-    list.tickets.map(t => t.key),
-    (key, err) => logDiag(SCOPE, 'warn', `Could not read the description of ${key}`, { issueKey: key, error: err instanceof Error ? err.message : String(err) }),
-  );
-  if (failed.length > 0) logDiag(SCOPE, 'warn', 'Some descriptions could not be read', { failed: failed.length });
-
-  return { tickets: list.tickets, descriptions: texts, versions, today: localDate(), baseUrl, projectKey };
+  for (const warning of result.warnings) stream.markdown(`_${overviewWarningText(warning)}_\n\n`);
+  return result.input;
 }
 
 /**

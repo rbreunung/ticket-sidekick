@@ -1,4 +1,6 @@
+import { vi } from 'vitest';
 import type { OverviewTicket } from '../../services/TicketService';
+import type { MockJiraClient } from '../mocks/MockJiraClient';
 import {
   buildGroupDescriptionWiki as buildVeracodeDescription, buildGroupLabels as buildVeracodeLabels, buildGroupSummary as buildVeracodeSummary,
   type VeracodeFlaw,
@@ -49,4 +51,25 @@ export function waltzTicket(key: string, group: WaltzComponent[], over: Partial<
 
 export function descriptionsOf(tickets: FixtureTicket[]): Record<string, string> {
   return Object.fromEntries(tickets.map(t => [t.ticket.key, t.description]));
+}
+
+/**
+ * Makes the mock Jira answer the overview's reads for these tickets: the search, each description and the
+ * project's one release `2026.11` on 2026-11-15.
+ */
+export function seedOverviewJira(client: MockJiraClient, tickets: FixtureTicket[]): void {
+  vi.spyOn(client, 'searchJql').mockResolvedValue({
+    issues: tickets.map(t => ({
+      id: t.ticket.key, key: t.ticket.key,
+      fields: { summary: t.ticket.summary, status: { name: t.ticket.status }, labels: t.ticket.labels, fixVersions: t.ticket.fixVersions.map(name => ({ name })), duedate: t.ticket.dueDate },
+    })) as never,
+    total: tickets.length, isLast: true,
+  });
+  vi.spyOn(client, 'getIssue').mockImplementation(async key => ({
+    id: key, key, fields: { description: tickets.find(t => t.ticket.key === key)!.description },
+  }) as never);
+  vi.spyOn(client, 'getProject').mockResolvedValue({
+    id: '1', key: 'SEC', name: 'Security', issueTypes: [],
+    versions: [{ id: '1', name: '2026.11', releaseDate: '2026-11-15' }],
+  });
 }
