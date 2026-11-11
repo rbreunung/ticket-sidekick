@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { maskKeys } from '../canvas/canvasLog';
+import { maskKeys } from '../utils/keyMask';
 import type { NoProxyEvaluation } from './proxyBypass';
 import type { ControllerSnapshot, HistoryEntry } from './serverController';
 
@@ -220,11 +220,6 @@ export function redact(text: string, secrets: string[]): string {
   return out;
 }
 
-/** The Copilot home folder: `COPILOT_HOME` when set, else `~/.copilot`. */
-export function copilotHome(env: NodeJS.ProcessEnv, homedir: string): string {
-  const custom = env.COPILOT_HOME?.trim();
-  return custom ? custom : path.join(homedir, '.copilot');
-}
 
 export interface ScanLimits {
   maxFiles: number;

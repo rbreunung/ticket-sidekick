@@ -40,6 +40,7 @@ const h = vi.hoisted(() => ({
   cancelRequested: false,
   folderListeners: [] as Array<() => unknown>,
   canvasesEnabled: true as unknown,
+  defaultProject: undefined as string | undefined,
   folders: [{ uri: { fsPath: '/work/a', scheme: 'file' } }] as Array<{ uri: { fsPath: string; scheme: string } }>,
 }));
 
@@ -59,6 +60,7 @@ vi.mock('vscode', () => {
       if (section === 'http' && key === 'noProxy') return h.noProxy;
       if (section === 'chat' && key === 'canvases.enabled') return h.canvasesEnabled;
       if (section === 'ticketSidekick' && key === 'jira.baseUrl') return 'https://jira.example.com';
+      if (section === 'ticketSidekick' && key === 'jira.defaultProject') return h.defaultProject ?? fallback;
       return fallback;
     },
     update: async () => { h.configUpdates++; },
@@ -204,6 +206,7 @@ beforeEach(() => {
   h.cancelRequested = false;
   h.folderListeners = [];
   h.canvasesEnabled = true;
+  h.defaultProject = undefined;
   h.folders = [{ uri: { fsPath: '/work/a', scheme: 'file' } }];
 });
 
@@ -263,6 +266,43 @@ describe('the window note for canvases', () => {
     await activate({ withApi: true });
     await settle();
     expect(windowNote()).toBeUndefined();
+  });
+});
+
+/** A GET to the window's own server under its canvas key, as the canvas program sends it. */
+function canvasGet(port: number, path: string): Promise<{ status: number; body: unknown }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, path, method: 'GET' }, res => {
+      let text = '';
+      res.on('data', chunk => { text += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body: res.headers['content-type']?.includes('json') ? JSON.parse(text) : text }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+describe('the open check the canvas program asks before it opens a page', () => {
+  it('answers through the window\'s server, under the key its note names, for the asked or the default project', async () => {
+    h.token = 'jira-pat';
+    h.defaultProject = 'PAY';
+    await activate({ withApi: true });
+    const note = windowNote()!;
+    expect(await canvasGet(note.port, `/${note.canvasKey}/api/open-check?project=proj`)).toEqual({ status: 200, body: { ok: true, project: 'PROJ' } });
+    expect(await canvasGet(note.port, `/${note.canvasKey}/api/open-check`)).toEqual({ status: 200, body: { ok: true, project: 'PAY' } });
+  });
+
+  it('says Jira is not set up when this window has no Jira token, and asks for a project when none is known', async () => {
+    await activate({ withApi: true });
+    const note = windowNote()!;
+    expect((await canvasGet(note.port, `/${note.canvasKey}/api/open-check?project=PROJ`)).body).toEqual({ ok: false, reason: 'not-configured' });
+    expect((await canvasGet(note.port, `/${note.canvasKey}/api/open-check`)).body).toEqual({ ok: false, reason: 'no-project' });
+  });
+
+  it('refuses the bearer key of the MCP endpoint in place of the canvas key', async () => {
+    await activate({ withApi: true });
+    const note = windowNote()!;
+    expect((await canvasGet(note.port, `/${bearerOf(offered()[0])}/api/open-check?project=PROJ`)).status).toBe(401);
   });
 });
 

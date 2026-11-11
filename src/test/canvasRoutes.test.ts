@@ -103,6 +103,44 @@ describe('canvas pages on the localhost server', () => {
   });
 });
 
+describe('canvas requests the routes refuse', () => {
+  async function serve(routes: CanvasRoute[], errors: string[] = []) {
+    server = new LocalhostServer({ onMcp: async (_req, res) => { res.end(); }, onCanvas: createCanvasHandler(routes, m => errors.push(m)) });
+    const canvasKey = generateKey();
+    const port = await server.start(generateKey(), canvasKey);
+    return { port, canvasKey };
+  }
+
+  it('answers invalid JSON with 400 and a body over 64 KB with 413', async () => {
+    const { port, canvasKey } = await serve(echoRoutes);
+    const json = { 'Content-Type': 'application/json' };
+    expect((await send(port, `/${canvasKey}/echo`, { method: 'POST', headers: json, body: '{ not json' })).status).toBe(400);
+    const big = JSON.stringify({ a: 'x'.repeat(70 * 1024) });
+    expect((await send(port, `/${canvasKey}/echo`, { method: 'POST', headers: json, body: big })).status).toBe(413);
+  });
+
+  it('answers a method a path does not take with 404', async () => {
+    const { port, canvasKey } = await serve([echoRoutes[0]]);
+    expect((await send(port, `/${canvasKey}/echo`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status).toBe(404);
+  });
+
+  it('answers a failing route with a plain 500 and reports the error, which never reaches the page', async () => {
+    const errors: string[] = [];
+    const { port, canvasKey } = await serve([{ method: 'GET', path: '/boom', handle: async () => { throw new Error('Jira said 503 at https://jira.example.com'); } }], errors);
+    const res = await send(port, `/${canvasKey}/boom`);
+    expect(res.status).toBe(500);
+    expect(JSON.parse(res.body)).toEqual({ error: 'Internal error.' });
+    expect(errors).toEqual(['Jira said 503 at https://jira.example.com']);
+  });
+
+  it('answers a canvas path with 404 when the server has a canvas key but no canvas handler', async () => {
+    server = new LocalhostServer({ onMcp: async (_req, res) => { res.end(); } });
+    const canvasKey = generateKey();
+    const port = await server.start(generateKey(), canvasKey);
+    expect((await send(port, `/${canvasKey}/echo`)).status).toBe(404);
+  });
+});
+
 describe('logging canvas requests', () => {
   it('reports each request\'s path after the key, its status and duration, never the key', async () => {
     const served: Array<{ method: string; path: string; status: number; ms: number }> = [];

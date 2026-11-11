@@ -32,6 +32,20 @@ export const OPEN_STATUS = {
   unreachable: 'Not opened: Ticket Sidekick in that window did not answer. Try again in a moment.',
 } as const;
 
+/** A window's open-check answer, accepted only in its known shapes so no other text reaches the agent. */
+export function asOpenCheck(body: unknown): OpenCheck | undefined {
+  const b = body as { ok?: unknown; project?: unknown; reason?: unknown };
+  if (typeof b !== 'object' || b === null) return undefined;
+  if (b.ok === true) {
+    const project = projectFromInput({ project: b.project });
+    return project ? { ok: true, project } : undefined;
+  }
+  if (b.ok === false && (b.reason === 'no-project' || b.reason === 'not-configured' || b.reason === 'unreachable')) {
+    return { ok: false, reason: b.reason };
+  }
+  return undefined;
+}
+
 /** The project key from the canvas input, upper-cased, or undefined when none or an invalid one was given. */
 export function projectFromInput(input: unknown): string | undefined {
   const raw = typeof input === 'object' && input !== null ? (input as { project?: unknown }).project : undefined;
@@ -67,11 +81,12 @@ export const RESTORE_WAIT_MS = 30_000;
 
 /**
  * What to do with a security report canvas found open when the canvas program joins a session:
- * keep it when its page still answers, reopen it once some window's server runs (the reopen asks
- * the chat's window for a fresh address), wait while none runs yet, and close it when the wait is over.
+ * keep it when its page still answers, reopen it once the window holding the chat's folder runs
+ * again (the reopen asks that window for a fresh address), wait while it does not, and close it
+ * when the wait is over.
  */
-export function restoreAction(state: { pageAnswers: boolean; anyWindowRunning: boolean; waitedMs: number }): 'keep' | 'reopen' | 'wait' | 'close' {
+export function restoreAction(state: { pageAnswers: boolean; chatWindowRunning: boolean; waitedMs: number }): 'keep' | 'reopen' | 'wait' | 'close' {
   if (state.pageAnswers) return 'keep';
-  if (state.anyWindowRunning) return 'reopen';
+  if (state.chatWindowRunning) return 'reopen';
   return state.waitedMs >= RESTORE_WAIT_MS ? 'close' : 'wait';
 }

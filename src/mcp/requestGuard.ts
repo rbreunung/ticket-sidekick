@@ -1,4 +1,5 @@
 import { keysMatch } from './keys';
+import { KEY_LENGTH_FLOOR } from '../utils/keyMask';
 
 // The one gate every request to the localhost server passes before any routing or Jira call.
 // Checks run in a fixed order: Host first (blocks DNS rebinding), then Origin (blocks other web
@@ -25,7 +26,6 @@ export type GuardDecision =
   | { allowed: false; status: 401 | 403 | 404; reason: string };
 
 /** A first path segment this long is treated as a key attempt (keys are 43 characters). */
-const KEY_LENGTH_FLOOR = 32;
 
 export const MCP_PATH = '/mcp';
 
@@ -70,5 +70,5 @@ export function bearerOf(authorization: string | undefined): string | undefined 
  */
 export function maskPath(path: string): string {
   const bare = path.split('?')[0];
-  return bare.split('/').map(segment => (segment.length >= 32 ? '[key]' : segment)).join('/');
+  return bare.split('/').map(segment => (segment.length >= KEY_LENGTH_FLOOR ? '[key]' : segment)).join('/');
 }

@@ -38,8 +38,3 @@ export async function readCanvasLog(file: string, maxLines: number): Promise<str
     return [];
   }
 }
-
-/** Masks every run of 32 or more key characters as `[key]`, the length rule the server uses for logged paths. */
-export function maskKeys(text: string): string {
-  return text.replace(/[A-Za-z0-9_-]{32,}/g, '[key]');
-}

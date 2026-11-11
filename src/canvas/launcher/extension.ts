@@ -10,10 +10,10 @@
 import { joinSession, createCanvas } from '@github/copilot-sdk/extension';
 import * as http from 'http';
 import * as os from 'os';
-import { copilotHome } from '../../mcp/report';
+import { copilotHome } from '../../utils/copilotHome';
 import { isProcessAlive, readNotes, windowNotesDir } from '../windowNotes';
 import { selectWindow } from '../selectWindow';
-import { instanceIdFor, openAnswer, projectFromInput, SECURITY_REPORT_CANVAS_ID, type OpenCheck } from '../openDecision';
+import { asOpenCheck, instanceIdFor, openAnswer, projectFromInput, SECURITY_REPORT_CANVAS_ID, type OpenCheck } from '../openDecision';
 import { repairRestoredCanvases } from '../restoreRepair';
 import { OPEN_CHECK_PATH } from '../openCheck';
 import { appendCanvasLog, canvasLogFile } from '../canvasLog';
@@ -48,7 +48,7 @@ async function openCheck(port: number, canvasKey: string, project: string | unde
   const query = project ? `?project=${encodeURIComponent(project)}` : '';
   try {
     const { status, body } = await getJson(port, `/${canvasKey}${OPEN_CHECK_PATH}${query}`);
-    return status === 200 ? (body as OpenCheck) : undefined;
+    return status === 200 ? asOpenCheck(body) : undefined;
   } catch {
     return undefined;
   }
@@ -102,12 +102,25 @@ const session = await joinSession({
   ],
 });
 
+/** The chat's working folder, read once from the session; undefined when the runtime does not tell. */
+let chatFolderRead: Promise<string | undefined> | undefined;
+function chatFolder(): Promise<string | undefined> {
+  chatFolderRead ??= session.rpc.metadata.snapshot().then(s => s.workingDirectory || undefined, () => undefined);
+  return chatFolderRead;
+}
+
 void repairRestoredCanvases({
   listOpen: async () => (await session.rpc.canvas.listOpen()).openCanvases,
   reopen: canvas => session.rpc.canvas.open({ canvasId: canvas.canvasId, instanceId: canvas.instanceId, input: canvas.input as never }),
   close: async instanceId => { await session.rpc.canvas.close({ instanceId }); },
   pageAnswers,
-  anyWindowRunning: async () => (await readNotes(notesDir)).notes.some(n => isProcessAlive(n.pid)),
+  // Without the chat's folder, any running window lets the reopen try; the open request then
+  // carries the folder and picks the window itself.
+  chatWindowRunning: async () => {
+    const { notes } = await readNotes(notesDir);
+    const folder = await chatFolder();
+    return folder ? selectWindow(notes, folder, isProcessAlive).kind === 'selected' : notes.some(n => isProcessAlive(n.pid));
+  },
   sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
   now: () => Date.now(),
   log: record => appendCanvasLog(logFile, record),

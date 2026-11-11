@@ -2,7 +2,8 @@ import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { appendCanvasLog, canvasLogFile, maskKeys, readCanvasLog } from '../canvas/canvasLog';
+import { appendCanvasLog, canvasLogFile, readCanvasLog } from '../canvas/canvasLog';
+import { maskKeys } from '../utils/keyMask';
 
 // The canvas program's own log: one line per decision, user-only, capped in size, and safe to
 // copy into a diagnostics report.
