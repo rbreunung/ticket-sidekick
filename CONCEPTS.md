@@ -45,6 +45,11 @@ The ordered stages a raw LLM finding passes through before appearing in final re
 ### Template-shaped field
 A ticket field whose value is usually the same across many tickets of a kind — priority, labels, components, and team/sprint-type custom fields — as opposed to a field that is always specific to one ticket (summary, description, comments, status, reporter, dates, the ticket key). Only template-shaped fields are proposed as candidates when generating a `.jira-templates.json` template from an existing reference ticket.
 
+## Boards
+
+### Board
+A canvas whose page the extension serves and on which the developer works, with every write shown as a preview before a second Apply click. Three are planned: the ticket list board (searches, cleanup, bulk edits), the import board (Veracode, Waltz, email) and the PR review board. The security report canvas is read-only and is not called a board.
+
 ## Flagged ambiguities
 
 - "Component" is used exclusively for an OSS-dependency entry from a scanned report, never for Jira's own issue-level "Components" categorization field — these are unrelated concepts that happen to share a name.
