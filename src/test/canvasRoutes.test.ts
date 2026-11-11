@@ -102,3 +102,19 @@ describe('canvas pages on the localhost server', () => {
     expect((await send(port, `/${generateKey()}/echo`)).status).toBe(404);
   });
 });
+
+describe('logging canvas requests', () => {
+  it('reports each request\'s path after the key, its status and duration, never the key', async () => {
+    const served: Array<{ method: string; path: string; status: number; ms: number }> = [];
+    const handler = createCanvasHandler(echoRoutes, undefined, entry => served.push(entry));
+    server = new LocalhostServer({ onMcp: async (_req, res) => { res.end(); }, onCanvas: handler });
+    const canvasKey = generateKey();
+    const port = await server.start(generateKey(), canvasKey);
+    await send(port, `/${canvasKey}/echo?project=PROJ`);
+    await send(port, `/${canvasKey}/missing`);
+    expect(served.map(e => [e.method, e.path, e.status])).toEqual([['GET', '/echo', 200], ['GET', '/missing', 404]]);
+    expect(served.every(e => e.ms >= 0)).toBe(true);
+    expect(JSON.stringify(served)).not.toContain(canvasKey);
+  });
+});
+

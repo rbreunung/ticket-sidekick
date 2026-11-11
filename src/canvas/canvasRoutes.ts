@@ -69,12 +69,23 @@ export class CanvasRequestError extends Error {
   }
 }
 
+/** One served canvas request, for the Output channel: the path after the key, never the key. */
+export interface CanvasServed {
+  method: string;
+  path: string;
+  status: number;
+  ms: number;
+}
+
 /** The handler the localhost server calls for paths under the canvas key. */
 export function createCanvasHandler(
   routes: readonly CanvasRoute[],
   onError?: (message: string) => void,
+  onServed?: (entry: CanvasServed) => void,
 ): (req: http.IncomingMessage, res: http.ServerResponse, canvasPath: string) => Promise<void> {
   return async (req, res, canvasPath) => {
+    const started = Date.now();
+    res.once('finish', () => onServed?.({ method: req.method ?? 'GET', path: canvasPath, status: res.statusCode, ms: Date.now() - started }));
     setSecurityHeaders(res);
     const method = req.method ?? 'GET';
     const route = routes.find(r => r.path === canvasPath && r.method === method);

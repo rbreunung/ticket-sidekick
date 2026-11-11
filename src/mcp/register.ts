@@ -15,6 +15,7 @@ import { detectMcpApi, type McpApi } from './vscodeMcpTypes';
 import { windowNotesDir, WindowNoteKeeper } from '../canvas/windowNotes';
 import { createCanvasHandler } from '../canvas/canvasRoutes';
 import { openCheckRoute } from '../canvas/openCheck';
+import { canvasLogFile, readCanvasLog } from '../canvas/canvasLog';
 
 // VS Code glue for the extension's MCP server. The server runs exactly while 127.0.0.1 is in
 // `http.noProxy`: it starts at activation when the entry is there, starts or stops when the entry
@@ -34,6 +35,9 @@ const PROXY_NOTICE =
   'Ticket Sidekick: the Jira tools for Copilot chats need 127.0.0.1 in the http.noProxy setting, '
   + 'so that Copilot\'s requests to the extension on this computer do not go through your network proxy. '
   + 'Once you add it, the tools appear without a restart.';
+
+/** How many of the canvas program's newest log lines the diagnostics report shows. */
+const CANVAS_LOG_LINES = 20;
 
 let active: McpServerController<JiraToolDeps> | undefined;
 let activeNotes: WindowNoteKeeper | undefined;
@@ -122,6 +126,7 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
         }),
       ],
       message => logDiag('canvas', 'error', 'Canvas request failed', { error: message }),
+      served => logDiag('canvas', served.status >= 400 ? 'warn' : 'info', `${served.method} ${served.path}: ${served.status}`, { ms: served.ms }),
     ),
     onDiag: log,
   });
@@ -247,6 +252,8 @@ async function buildDiagnostics(
     chatSettings: chatSettings(),
     keyScan,
     home: { dir: os.homedir(), windows: process.platform === 'win32' },
+    canvasLog: await readCanvasLog(canvasLogFile(copilotHome(process.env, os.homedir())), CANVAS_LOG_LINES),
   };
-  return redact(buildReport(facts), [key ?? '', config.token ?? '', bitbucket.token ?? '']);
+  const canvasKey = controller?.canvasAccess()?.canvasKey;
+  return redact(buildReport(facts), [key ?? '', canvasKey ?? '', config.token ?? '', bitbucket.token ?? '']);
 }

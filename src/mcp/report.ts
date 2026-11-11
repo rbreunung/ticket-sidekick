@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { maskKeys } from '../canvas/canvasLog';
 import type { NoProxyEvaluation } from './proxyBypass';
 import type { ControllerSnapshot, HistoryEntry } from './serverController';
 
@@ -56,6 +57,8 @@ export interface ReportFacts {
   keyScan: KeyScanResult | undefined;
   /** The user's home folder, shown as `~` in paths; Windows paths compare without letter case. */
   home: { dir: string; windows: boolean };
+  /** The newest lines of the canvas program's log, as written (keys are masked here). */
+  canvasLog: string[];
 }
 
 function list(values: string[]): string {
@@ -145,6 +148,7 @@ export function buildReport(f: ReportFacts): string {
     const { stats } = s;
     lines.push('## Requests (since the last start)');
     lines.push(`MCP requests with a valid key: ${stats.allowed.mcp ?? 0}`);
+    lines.push(`Canvas requests with a valid key: ${stats.allowed.canvas ?? 0}`);
     lines.push(`Refused: ${counts(stats.refused)}`);
     lines.push(
       `Refused key checks: key from an earlier start ${stats.refused['mcp-key-earlier-start'] ?? 0}, `
@@ -169,6 +173,11 @@ export function buildReport(f: ReportFacts): string {
     }
     lines.push('');
   }
+
+  lines.push('## Canvas');
+  if (f.canvasLog.length === 0) lines.push('No canvas log yet.');
+  else lines.push('Newest decisions of the canvas program:', ...f.canvasLog.map(line => `- ${maskKeys(line)}`));
+  lines.push('');
 
   lines.push('## Proxy');
   if (f.proxy.noProxy.loopbackEntries.length === 0) lines.push('Loopback entries in http.noProxy: (none)');
