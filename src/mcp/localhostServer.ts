@@ -3,13 +3,17 @@ import type { AddressInfo } from 'net';
 import { bearerOf, checkRequest, maskPath, type GuardExpectation } from './requestGuard';
 
 // The extension's one HTTP server: bound to 127.0.0.1 on a random port, every request through the
-// guard before it reaches the MCP handler. Counters and the recently seen Host/Origin values stay
+// guard before it reaches the MCP handler or, under the canvas key, the canvas handler. Counters and the recently seen Host/Origin values stay
 // in memory for the diagnostics report; nothing here holds a key in a field that could be logged.
 
 export type RouteHandler = (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
+/** Handles a request under the canvas key; `canvasPath` is the path after the key, without the query. */
+export type CanvasHandler = (req: http.IncomingMessage, res: http.ServerResponse, canvasPath: string) => Promise<void>;
 
 export interface LocalhostServerOptions {
   onMcp: RouteHandler;
+  /** Canvas pages; without it, paths under the canvas key are not found. */
+  onCanvas?: CanvasHandler;
   /** Checked on every MCP request after the guard; false refuses it (403) before the handler runs. */
   allowMcp?: () => boolean;
   onError?: (message: string) => void;
@@ -76,8 +80,11 @@ export class LocalhostServer {
 
   constructor(private readonly options: LocalhostServerOptions) {}
 
-  /** Starts listening on 127.0.0.1 with a random port, accepting `mcpKey` as bearer key, and returns the port. */
-  async start(mcpKey: string): Promise<number> {
+  /**
+   * Starts listening on 127.0.0.1 with a random port, accepting `mcpKey` as bearer key and, when
+   * given, `canvasKey` as the first path segment of canvas pages. Returns the port.
+   */
+  async start(mcpKey: string, canvasKey?: string): Promise<number> {
     if (this.server) throw new Error('The MCP server is already running.');
     const server = http.createServer((req, res) => { void this.handle(req, res); });
     await new Promise<void>((resolve, reject) => {
@@ -86,7 +93,7 @@ export class LocalhostServer {
     });
     const port = (server.address() as AddressInfo).port;
     this.server = server;
-    this.expectation = { port, mcpKey };
+    this.expectation = { port, mcpKey, canvasKey };
     this.counters = emptyStats();
     return port;
   }
@@ -152,10 +159,17 @@ export class LocalhostServer {
       this.refuse(res, 403, 'mcp-disabled', path);
       return;
     }
-    this.counters.allowed.mcp = (this.counters.allowed.mcp ?? 0) + 1;
-    noteClient(this.counters.clients, sanitizeShort(header('user-agent')));
+    const onCanvas = this.options.onCanvas;
+    if (decision.canvasPath !== undefined && !onCanvas) {
+      this.refuse(res, 404, 'unknown-path', path);
+      return;
+    }
+    const route = decision.canvasPath !== undefined ? 'canvas' : 'mcp';
+    this.counters.allowed[route] = (this.counters.allowed[route] ?? 0) + 1;
+    if (route === 'mcp') noteClient(this.counters.clients, sanitizeShort(header('user-agent')));
     try {
-      await this.options.onMcp(req, res);
+      if (decision.canvasPath !== undefined && onCanvas) await onCanvas(req, res, decision.canvasPath);
+      else await this.options.onMcp(req, res);
     } catch (err) {
       this.options.onError?.(err instanceof Error ? err.message : String(err));
       if (!res.headersSent) {

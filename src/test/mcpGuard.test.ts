@@ -127,3 +127,39 @@ describe('loopbackBypassConfigured', () => {
     expect(loopbackBypassConfigured([42, null])).toBe(false);
   });
 });
+
+describe('checkRequest for the canvas route', () => {
+  const withCanvas: GuardExpectation = { ...expectation, canvasKey: generateKey() };
+  const get = (path: string, headers: Record<string, string | undefined> = { host }) =>
+    checkRequest({ method: 'GET', path, headers }, withCanvas);
+
+  it('routes a path under the canvas key to the canvas, with the rest of the path', () => {
+    expect(get(`/${withCanvas.canvasKey}/security-report/?project=PROJ`)).toEqual({ allowed: true, canvasPath: '/security-report/' });
+    expect(get(`/${withCanvas.canvasKey}`)).toEqual({ allowed: true, canvasPath: '/' });
+  });
+
+  it('refuses a wrong canvas key, or the MCP key in its place, with 401', () => {
+    expect(get(`/${generateKey()}/security-report/`)).toEqual({ allowed: false, status: 401, reason: 'canvas-key-invalid' });
+    expect(get(`/${withCanvas.mcpKey}/security-report/`)).toEqual({ allowed: false, status: 401, reason: 'canvas-key-invalid' });
+  });
+
+  it('refuses a canvas request from a foreign origin before looking at the key', () => {
+    expect(get(`/${withCanvas.canvasKey}/`, { host, origin: 'https://evil.example' }))
+      .toEqual({ allowed: false, status: 403, reason: 'origin-mismatch' });
+  });
+
+  it('accepts a canvas request from the page itself', () => {
+    expect(get(`/${withCanvas.canvasKey}/api/report`, { host, origin: ownOrigin })).toEqual({ allowed: true, canvasPath: '/api/report' });
+  });
+
+  it('does not accept the canvas key as the MCP bearer key', () => {
+    expect(checkRequest({ method: 'POST', path: '/mcp', headers: { host, authorization: `Bearer ${withCanvas.canvasKey}` } }, withCanvas))
+      .toEqual({ allowed: false, status: 401, reason: 'mcp-key-invalid' });
+  });
+
+  it('keeps short unknown paths a plain 404, and has no canvas route without a canvas key', () => {
+    expect(get('/favicon.ico')).toEqual({ allowed: false, status: 404, reason: 'unknown-path' });
+    expect(checkRequest({ method: 'GET', path: `/${withCanvas.canvasKey}/`, headers: { host } }, expectation))
+      .toEqual({ allowed: false, status: 404, reason: 'unknown-path' });
+  });
+});

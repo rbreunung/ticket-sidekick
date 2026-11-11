@@ -1,6 +1,6 @@
 import type { DiagLogger } from '../utils/diagTypes';
 import { generateKey, keyFingerprint } from './keys';
-import { LocalhostServer, type ServerStats } from './localhostServer';
+import { LocalhostServer, type CanvasHandler, type ServerStats } from './localhostServer';
 import { createMcpHandler, type McpServerInfo, type McpToolDefinition, type ToolCallOutcome } from './mcpServer';
 import { MCP_PATH } from './requestGuard';
 
@@ -56,12 +56,21 @@ export interface McpServerControllerOptions<Deps> {
   serverInfo: McpServerInfo;
   /** Whether MCP requests may be served and the definition handed out right now. */
   isMcpAllowed(): boolean;
+  /** Serves canvas pages under the canvas key; without it, the server has no canvas route. */
+  onCanvas?: CanvasHandler;
   onDiag?: DiagLogger;
 }
 
 interface Running {
   port: number;
   mcpKey: string;
+  canvasKey: string;
+}
+
+/** Where canvas pages of the running server are reached; never logged. */
+export interface CanvasAccess {
+  port: number;
+  canvasKey: string;
 }
 
 export class McpServerController<Deps> {
@@ -82,6 +91,7 @@ export class McpServerController<Deps> {
   constructor(private readonly options: McpServerControllerOptions<Deps>) {
     this.server = new LocalhostServer({
       onMcp: createMcpHandler(options.tools, options.toolDeps, options.serverInfo, { onToolCall: outcome => this.recordToolCall(outcome) }),
+      onCanvas: options.onCanvas,
       allowMcp: options.isMcpAllowed,
       isEarlierKey: key => this.earlierFingerprints.has(keyFingerprint(key)),
       onRefused: (reason, path) => options.onDiag?.('warn', `MCP request refused: ${reason}`, { path }),
@@ -146,9 +156,10 @@ export class McpServerController<Deps> {
   private async doStart(trigger: LifecycleTrigger): Promise<boolean> {
     if (this.running) return true;
     const mcpKey = generateKey();
+    const canvasKey = generateKey();
     try {
-      const port = await this.server.start(mcpKey);
-      this.running = { port, mcpKey };
+      const port = await this.server.start(mcpKey, canvasKey);
+      this.running = { port, mcpKey, canvasKey };
       this.history.push({ at: new Date().toISOString(), event: 'started', trigger, port });
       this.options.onDiag?.('info', `MCP server started on 127.0.0.1:${port} (${trigger})`);
     } catch (err) {
@@ -192,6 +203,11 @@ export class McpServerController<Deps> {
   /** The running server's key, for redacting the report and searching stored files; never logged. */
   currentKey(): string | undefined {
     return this.running?.mcpKey;
+  }
+
+  /** Port and canvas key while the server runs, for the window note; never logged. */
+  canvasAccess(): CanvasAccess | undefined {
+    return this.running ? { port: this.running.port, canvasKey: this.running.canvasKey } : undefined;
   }
 
   snapshot(): ControllerSnapshot {
