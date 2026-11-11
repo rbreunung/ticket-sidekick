@@ -13,6 +13,8 @@ import { copilotHome, buildReport, redact, scanForSecret, DEFAULT_SCAN_LIMITS, t
 import { McpServerController, type McpDefinition } from './serverController';
 import { detectMcpApi, type McpApi } from './vscodeMcpTypes';
 import { windowNotesDir, WindowNoteKeeper } from '../canvas/windowNotes';
+import { createCanvasHandler } from '../canvas/canvasRoutes';
+import { openCheckRoute } from '../canvas/openCheck';
 
 // VS Code glue for the extension's MCP server. The server runs exactly while 127.0.0.1 is in
 // `http.noProxy`: it starts at activation when the entry is there, starts or stops when the entry
@@ -112,6 +114,15 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
     toolDeps,
     serverInfo: { name: 'ticket-sidekick', version: extensionVersion(context) },
     isMcpAllowed: mcpAllowed,
+    onCanvas: createCanvasHandler(
+      [
+        openCheckRoute({
+          isJiraConfigured: async () => configService.isConfigured(await configService.getConfig()),
+          defaultProject: () => vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.defaultProject') ?? '',
+        }),
+      ],
+      message => logDiag('canvas', 'error', 'Canvas request failed', { error: message }),
+    ),
     onDiag: log,
   });
   controller = started;

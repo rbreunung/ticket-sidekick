@@ -761,11 +761,16 @@
         "id": "ticket-sidekick.mcp",
         "label": "Ticket Sidekick"
       }
+    ],
+    "chatPlugins": [
+      {
+        "path": "./out/plugin"
+      }
     ]
   },
   "scripts": {
     "vscode:prepublish": "npm run bundle",
-    "compile": "tsc -p ./",
+    "compile": "tsc -p ./ && tsc -p tsconfig.launcher.json",
     "watch": "tsc -watch -p ./",
     "bundle": "node esbuild.js",
     "package": "vsce package",
@@ -773,6 +778,7 @@
     "test:e2e": "node esbuild.js && tsc -p ./ && node ./out/e2e/runTest.js"
   },
   "devDependencies": {
+    "@github/copilot-sdk": "1.0.28",
     "@types/node": "^26.6.6",
     "@types/vscode": "~1.95.0",
     "@vscode/test-electron": "^3.1.0",

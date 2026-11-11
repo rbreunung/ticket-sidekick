@@ -1,0 +1,6 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "ticket-sidekick",
+  "description": "Ticket Sidekick canvases for Copilot chats: the security report of a Jira project, read from Jira by the Ticket Sidekick VS Code extension.",
+  "version": "0.0.0"
+}
