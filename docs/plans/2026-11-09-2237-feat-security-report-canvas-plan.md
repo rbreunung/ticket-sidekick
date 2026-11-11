@@ -16,14 +16,14 @@ execution: code
 - **Means:** the first Ticket Sidekick canvas, shipped inside the extension as an agent plugin and served and filled from Jira by the extension's localhost server (KTD1, KTD2). It also sets the rule and the shared look that later canvases build on.
 - **Authority:** the Product Contract wins on behaviour; KTDs win on mechanism; units override neither.
 - **Execution profile:** one feature branch `feat/security-report-canvas` from `main`, built in two pull requests into it (PR1, PR2; see Implementation Units), then one merge of the feature branch into `main` after the manual checklist passes. The branch brings this plan along; it does not bring `src/prototype/` from `claude/intelligent-planck-gue5hu`, whose canvas code is ported, not merged.
-- **Stop conditions:** stop and ask if the canvas shipped inside the extension does not start in a Copilot chat on the manual checklist (R15 reopens), if VS Code Elements cannot be styled under the content policy of KTD7, or if the shared report builder cannot keep `@jira /security-report`'s chat output unchanged (R18).
+- **Stop conditions:** stop and ask if the canvas shipped inside the extension does not start in a Copilot chat on the manual checklist (R15 reopens), if the canvas program cannot reopen or close a restored canvas (R13 reopens), if VS Code Elements cannot be styled under the content policy of KTD7, or if the shared report builder cannot keep `@jira /security-report`'s chat output unchanged (R18).
 - **Finished by:** `ce-work` implements, verifies and opens each PR into the feature branch; the user reviews and merges them, runs the manual checklist with a `.vsix` built from the feature branch on a managed Mac and a managed Windows machine, and then merges the feature branch into `main`.
 
 ---
 
 ## Product Contract
 
-Product Contract preservation: changed R14 (only the window whose folder holds the chat's folder serves the page, decided while planning); added R20 (an older page for the same project is marked) and R21 (Save writes the reading shown); Goal Capsule open blockers replaced by stop conditions, since the work starts without a throw-away probe.
+Product Contract preservation: changed R14 (only the window whose folder holds the chat's folder serves the page, decided while planning); added R20 (an older page for the same project is marked) and R21 (Save writes the reading shown); Goal Capsule open blockers replaced by stop conditions, since the work starts without a throw-away probe; changed R13 (after a restart a canvas recovers or closes) and R3 (reusing the open canvas is best effort), both decided while planning.
 
 ### Summary
 
@@ -47,9 +47,10 @@ The report gathers a project's whole open vulnerability list in one place. `@jir
 - **Save writes the Jira reading the page shows.** Governs R21. (session-settled: user-approved — chosen over a fresh reading at Save: the file matches the page.)
 - **Filters and sort reset on every Refresh and on restart; nothing is stored.** Governs R8, R13. (session-settled: user-directed — chosen over keeping them until restart or across restarts.)
 - **After a restart the page is rebuilt fresh from Jira.** Governs R13. (session-settled: user-approved — chosen over showing the last result with Refresh, which would keep vulnerability data on disk, and over a closed tab.)
-- **A restored canvas that stays blank is an accepted known limitation.** Governs R13. (session-settled: user-approved — chosen over holding the release until a restored canvas reloads by itself.)
+- **After a restart a canvas recovers into a working page or is closed, never left blank.** Governs R13. (session-settled: user-directed — chosen over accepting a blank restored canvas as a known limitation, and over always closing on restart.)
 - **Only the window whose folder holds the chat's folder serves the page.** Governs R14. (session-settled: user-directed — chosen over any running window and over "any window when only one runs": workspace settings belong to their workspace, so no other workspace's settings are used by guess.)
 - **A second page for the same project marks the older one.** Governs R20. (session-settled: user-directed — chosen over accepting duplicate tabs as a known limitation.)
+- **Reusing the open canvas is best effort.** Governs R3. (session-settled: user-directed — chosen over a strict R3: only the agent chooses the instance id, and it cannot know the default project.)
 - **The canvas ships inside the extension, as an agent plugin.** Governs R15. (session-settled: user-approved — chosen over the prototype's "Enable canvas" command that copies a launcher into `~/.copilot/extensions`: no install step, no version drift, nothing left behind.)
 - **A notice at every VS Code start while canvases are off.** Governs R16. (session-settled: user-directed — chosen over a notice with "Don't show again" and over the walkthrough and check only; same as the `http.noProxy` notice.)
 - **VS Code Elements gives all Ticket Sidekick canvases their look.** Governs R17. (session-settled: user-directed — chosen over an own shared stylesheet and over Bootstrap: VS Code-style controls, ready for the richer import and review boards.)
@@ -66,7 +67,7 @@ The report gathers a project's whole open vulnerability list in one place. `@jir
 
 - R1. In a Copilot chat, asking for a project's security report, in plain words or with `/ts-jira security-report [PROJECT]`, opens the "Security report" canvas for that project as a tab in the editor area. Without a project named, the canvas opens for `ticketSidekick.jira.defaultProject`; without that setting, the open status asks for a project (R2) and the agent asks the developer.
 - R2. What the agent gets back from opening is a short status: opened for the project, or not opened with the reason (for example, no project given, Jira not configured, no VS Code window holds the chat's folder, or `127.0.0.1` missing from `http.noProxy`). No ticket data, counts or report text reaches the model.
-- R3. Opening the report for a project whose canvas is already open brings that canvas forward instead of opening a second one. Once the developer has closed it, opening again starts a new canvas that reads Jira fresh.
+- R3. Opening the report for a project whose canvas is already open asks Copilot to bring that canvas forward instead of opening a second one; when a second page opens anyway, the older one is marked (R20). Once the developer has closed it, opening again starts a new canvas that reads Jira fresh.
 - R4. The agent is offered no canvas action other than opening it.
 - R5. Where canvases are not available, `/ts-jira security-report` answers with a hint: canvases are off, they are turned on with `chat.canvases.enabled` where the organisation allows it, and `@jira /security-report` shows the report in Local chats.
 
@@ -87,7 +88,7 @@ The report gathers a project's whole open vulnerability list in one place. `@jir
 
 **Restart and several windows**
 
-- R13. After a VS Code restart, a canvas that the Copilot runtime brings back is rebuilt fresh from Jira for the same project, with no filters set. If a restored canvas stays blank, asking for the report again opens a working one; the user manual names this as a known limitation.
+- R13. After a VS Code restart, every security report canvas that the Copilot runtime brings back either recovers into a working page, rebuilt fresh from Jira for the same project with no filters set, or is closed. None is left blank. A canvas closes when the window that holds its chat's folder does not come back within about 30 seconds.
 - R14. With several VS Code windows open, the page is served by the window whose workspace folder holds the chat's folder, the most specific folder winning, so it uses that workspace's settings and its save dialog appears there. When no open window holds the chat's folder, including a chat in a window with no folder open, the canvas does not open and the status says why (R2). If the serving window closes, the page stops working, and asking again opens a new one.
 
 **Delivery and setup**
@@ -138,16 +139,16 @@ flowchart TB
 - F4. Restart
   - **Trigger:** VS Code restarts while a security report canvas is open.
   - **Actors:** A1, A3
-  - **Steps:** a canvas the runtime brings back is rebuilt from Jira; a blank one is closed and the report asked for again.
+  - **Steps:** the canvas program finds each security report canvas the runtime brought back; it reopens it from the chat's window with a fresh address once that window runs, which reads Jira again, or closes it when the window does not come back in time.
   - **Covered by:** R13
 
 ### Acceptance Examples
 
-- AE1. **Covers R3.** Given the PROJ canvas is open, when the developer asks for the PROJ report again, then the same canvas comes forward and no second tab opens. Given it was closed, when they ask again, then a new canvas opens with a new "read at" time.
+- AE1. **Covers R3, R20.** Given the PROJ canvas is open, when the developer asks for the PROJ report again, then the same canvas comes forward, or a second page opens and the first is marked as replaced. Given it was closed, when they ask again, then a new canvas opens with a new "read at" time.
 - AE2. **Covers R7, R9.** Given 12 tickets and the filter "release 2.4, overdue" showing 2, when the developer presses "Save full report as Excel", then the note reads "Saves all 12 tickets, not only the 2 shown" and the saved file has all 12.
 - AE3. **Covers R8.** Given a filter and a sort are set, when the developer presses Refresh, then the page shows the full report in its default order.
 - AE4. **Covers R2, R5.** Given canvases are off, when the developer types `/ts-jira security-report PROJ`, then the chat shows the hint and no ticket data. Given `127.0.0.1` is missing from `http.noProxy`, when the agent tries to open the canvas, then the status names the missing entry.
-- AE5. **Covers R13.** Given the PROJ canvas was open with a filter set, when VS Code restarts and the runtime brings the canvas back, then it shows the PROJ report read after the restart, with no filter set.
+- AE5. **Covers R13.** Given the PROJ canvas was open with a filter set, when VS Code restarts and the runtime brings the canvas back, then it shows the PROJ report read after the restart, with no filter set. Given the window holding the chat's folder is not reopened, when about 30 seconds pass, then the canvas is closed.
 - AE6. **Covers R10.** Given Jira answers 503 to the refresh, when the developer presses Refresh, then the page says Jira could not be read (HTTP 503) with no response body, and Refresh stays available.
 - AE7. **Covers R14.** Given window A has `/work/payments` open and window B has `/work/portal`, when the developer asks for the report in a chat whose folder is `/work/payments/api`, then window A serves it. Given a chat whose folder no open window holds, when the agent tries to open the canvas, then it does not open and the status says to ask from the chat of the window whose workspace holds the project.
 - AE8. **Covers R20.** Given a PROJ page is open and a second PROJ page opens, when the developer switches back to the first page, then it shows that a newer report is open and its Refresh and Save are disabled.
@@ -190,7 +191,7 @@ This plan covers the security report canvas only. The breakdown below is the cur
 - VS Code passes agent plugins that an extension contributes (`contributes.chatPlugins`) to the Copilot harness, and Agent Plugins 1.0 lets a plugin carry a canvas under its `com.github.copilot` namespace. That such a canvas starts in a VS Code Copilot chat is not yet observed; the manual checklist confirms it.
 - The canvas open request carries the chat's working folder (`session.workingDirectory`), as it did for the prototype in one window.
 - The canvas host passes no VS Code theme colours to the page, so the extension supplies the theme to the page itself.
-- The Copilot SDK can bring back canvases that were open at shutdown; whether VS Code does so is not yet observed.
+- The Copilot SDK can bring back canvases that were open at shutdown, and a canvas program in the session can list, reopen and close its open canvases (`session.rpc.canvas.listOpen`, `open`, `close`). Whether VS Code brings canvases back, and whether the canvas program runs again on resume, is not yet observed.
 
 ### Sources / Research
 
@@ -219,8 +220,9 @@ This plan covers the security report canvas only. The breakdown below is the cur
 - KTD7. **Untrusted text is only ever inserted as text, and every page response carries a strict content policy.** The page builds its DOM from element properties and text, never from HTML strings. Ticket links are built from the ticket key and the configured base URL. The policy allows only the page's own script, styles and connections: no inline script or style, no other origin, no forms. Governs R11, R12. (session-settled: user-approved — chosen over plain text only: a later mistake in inserting text could otherwise run code with the page's buttons.)
 - KTD8. **The page script is bundled by esbuild with VS Code Elements and Lit into one file, served by the canvas route.** The shared canvas stylesheet defines the `--vscode-*` variables for light, dark and high-contrast themes, and the page applies the set named by the theme kind the report route returns. Text labels replace icons, so no icon font is needed. Governs R17.
 - KTD9. **Both sides log the canvas path for debugging, never report content or keys.** The extension logs page requests, Jira reads, saves and replaced pages through `logDiag` in a `canvas` scope. The canvas program appends one JSON line per open decision (windows found, match, status returned) to `<Copilot home>/ticket-sidekick/canvas-log.jsonl`, capped in size, and the diagnostics report includes its last lines. (session-settled: user-directed — chosen over a throw-away probe build before the real canvas.)
-- KTD10. **The canvas declaration has the id `security-report`, an input of an optional project key, and no actions.** Its description tells the agent when to open it and to use the instance id `security-report-<PROJECT>` so a second request reuses the open canvas. Governs R1, R3, R4.
+- KTD10. **The canvas declaration has the id `security-report`, an input of an optional project key, and no actions.** Its description tells the agent when to open it and to use the instance id `security-report-<PROJECT>`, or `security-report` when no project is named, so a second request reuses the open canvas. Governs R1, R3, R4.
 - KTD11. **A Playwright test loads the real page from a test server with a mock Jira in headless Chromium.** It runs as its own script in the CI `e2e` job on Ubuntu and checks filters, sort, the save note, a hostile ticket summary shown as text, and that the content policy reports no violation. (session-settled: user-directed — chosen over a manual-only check of the page.)
+- KTD13. **The canvas program repairs its canvases when it joins a session.** It lists the session's open `security-report` canvases; for each, it waits up to about 30 seconds for a window note matching the chat's folder, then reopens the canvas with the same instance id so the host asks for a fresh address, or closes it when no window appears. Reopening goes through the same open decision as a new request (KTD4). Governs R13.
 - KTD12. **`/ts-jira security-report [PROJECT]` is a router row whose call is "open the Security report canvas", with the hint of R5 when no canvas can be opened.** `src/test/mcpSkillsGuard.test.ts` learns a canvas row as a valid call and maps the basic `@jira` command `security-report` to it, removing its exception. Governs R1, R5.
 
 ### High-Level Technical Design
@@ -302,7 +304,7 @@ src/page-tests/securityReportPage.spec.ts
 | Risk | Mitigation |
 | --- | --- |
 | Canvases and extension plugins are Preview and may change shape | Pin `@github/copilot-sdk`; keep the canvas program small; the manual checklist runs on the current VS Code before merge |
-| The agent ignores the instance-id hint and opens a second tab | R20 marks the older page |
+| The agent ignores the instance-id hint, or one request names the project and another uses the default, and a second tab opens | R20 marks the older page |
 | Windows does not restrict the notes folder | Manual checklist item; the notes hold only a port and a per-start key, never a Jira token |
 | The agent sandbox blocks the canvas program from reading notes or reaching `127.0.0.1` | Manual checklist item with the sandbox on; the manual names the limitation if it fails |
 | The page bundle grows the `.vsix` | One bundled file of about 250 KB; checked by the bundle test |
@@ -375,7 +377,7 @@ Waits on: nothing.
 
 **Goal:** the extension ships a plugin whose `security-report` canvas opens the page from the chat's window or returns the reason it cannot.
 
-**Requirements:** R1, R2, R3, R4, R14, R15; KTD2, KTD4, KTD10.
+**Requirements:** R1, R2, R3, R4, R13, R14, R15; KTD2, KTD4, KTD10, KTD13.
 
 **Dependencies:** U1, U2.
 
@@ -389,7 +391,8 @@ Waits on: nothing.
 1. `selectWindow.ts` ports the prototype's matcher without its single-window fallback (KTD4).
 2. `openDecision.ts` is pure: notes, working folder, liveness, the open-check answer and the input project in; URL, title and status text out.
 3. `extension.ts` declares the canvas (KTD10), reads notes, calls the window's open-check route over `http`, and returns the decision.
-4. The build bundles the program into `out/plugin/com.github.copilot/extensions/ticket-sidekick/extension.mjs` and copies `plugin.json`; `.vscodeignore` keeps `out/plugin/**`.
+4. On joining a session, `extension.ts` runs the restart repair of KTD13; the choice between reopen and close lives in `openDecision.ts` with the clock and the notes passed in.
+5. The build bundles the program into `out/plugin/com.github.copilot/extensions/ticket-sidekick/extension.mjs` and copies `plugin.json`; `.vscodeignore` keeps `out/plugin/**`.
 
 **Patterns to follow:** prototype `launcher/extension.ts`, `selectWindow.ts` and the launcher bundling in that branch's `esbuild.js` (including keeping the SDK's FFI host external).
 
@@ -403,6 +406,9 @@ Waits on: nothing.
 - No project in the input and no default project: no URL, and the status asks for a project.
 - The URL carries the project and the canvas key, and the status text carries no ticket data.
 - The packaged extension contains `out/plugin/plugin.json` and the bundled `extension.mjs`, and `package.json` points `chatPlugins` at that folder.
+- Covers AE5. A restored PROJ canvas whose chat's window note appears within the wait is reopened with the new window's address.
+- Covers AE5. A restored canvas whose window does not appear within about 30 seconds is closed.
+- A restored canvas of another canvas id is left alone.
 
 **Verification:** the bundle test finds the plugin; the open decision covers every R2 reason.
 
@@ -608,8 +614,8 @@ Waits on: PR1 (needed before this group can start: the page is served by PR1's c
 - Test: `src/test/userDocsSync.test.ts`
 
 **Approach:**
-1. Manual: a "Security report canvas" section: opening, the page, the hint, the notice, the `http.noProxy` need, and the known limitations of R13 (a restored canvas that stays blank: close the tab, then ask for the report again) and R14 (no canvas from a window without the project's folder).
-2. Known limitations: blank restored canvas (R13), no canvas from a window without the project's folder (R14), workspace settings decide the report.
+1. Manual: a "Security report canvas" section: opening, the page, the hint, the notice, the `http.noProxy` need, what happens after a restart (R13: the canvas recovers or closes), and the known limitation of R14 (no canvas from a window without the project's folder).
+2. Known limitations: no canvas from a window without the project's folder (R14), workspace settings decide the report.
 3. Architecture decision log: canvas delivery by plugin, window notes, matching window only; the outcome of the manual checklist.
 4. `CLAUDE.md`: key-file rows for `src/canvas/` and the canvas line under the Copilot harness section.
 
@@ -632,9 +638,9 @@ Waits on: PR1 (needed before this group can start: the page is served by PR1's c
 Manual checklist, on a managed Mac and a managed Windows machine with a `.vsix` from the feature branch:
 
 1. With `chat.canvases.enabled` on and `127.0.0.1` in `http.noProxy`, "open the security report for PROJ" in a Copilot chat opens the canvas with the report. Record whether the page address (which carries the canvas key) appears in the agent's tool result; if it does, R2 is not met and the plan stops.
-2. Asking again while it is open brings the same canvas forward, or marks the older page (R20).
+2. Asking again while it is open brings the same canvas forward, or marks the older page (R20); also ask once without a project and once naming the default project.
 3. Filters, sort, Refresh and both Save buttons behave as R7 to R9 and R21 say; the saved files match `@jira /security-report PROJ csv` and `xlsx`.
-4. Restart VS Code with the canvas open and record what comes back (R13): whether VS Code asks the canvas program to open it again (the page reloads) or reuses the saved address (always blank, because the port and canvas key change at every start), and whether asking again with the blank tab still open only brings that tab forward.
+4. Restart VS Code with the canvas open: the canvas comes back working with a fresh reading, or is closed; it is never blank (R13). Also restart with the project's window left closed: the canvas closes after about 30 seconds.
 5. With two windows open on different folders, a chat in each opens its own window's report; a chat in a window with no folder gets the R14 status.
 6. With canvases off, the startup notice appears and `/ts-jira security-report PROJ` gives the hint.
 7. On Windows, the `windows` notes folder is readable only by the user.
@@ -651,17 +657,3 @@ Manual checklist, on a managed Mac and a managed Windows machine with a `.vsix` 
 - The manual checklist passed on a managed Mac and a managed Windows machine, and its results are recorded in the architecture decision log.
 - The user manual, known limitations and `CLAUDE.md` describe the canvas.
 - No dead-end or experimental code from abandoned approaches remains in the diff, and nothing from `src/prototype/` is copied unchanged where a port was planned.
-
----
-
-## Deferred / Open Questions
-
-Review items left for the author; they do not block implementation.
-
-### From 2026-11-11 review
-
-- **R13 (restart rebuild) promises a recovery that can leave the user on the same blank tab** — R13 / KTD1 / KTD10 (P2, adversarial, feasibility, confidence 75)
-  After a restart a restored canvas is blank unless VS Code asks the canvas program to open it again, because its saved address carries the previous start's port and canvas key. The SDK focuses an existing panel when the same instance id is opened again, so "asking again" with the blank tab still open may only bring that blank tab forward. The manual text in U11 already says to close the tab first; R13 itself does not.
-  Change: reword R13's last sentence to "A restored canvas loads only if VS Code asks the canvas program to open it again; if it stays blank, close the tab, then ask for the report again. The user manual names this as a known limitation."
-- **Is "bring the open canvas forward" (R3) a hard requirement or best effort?** — R3 / KTD10 / Verification Contract item 2 (P2, coherence, adversarial, confidence 75)
-  Only the agent chooses the instance id that makes a second request reuse the open canvas. When the developer names no project, the agent cannot know `ticketSidekick.jira.defaultProject`, so "show the security report" and a later "security report for PROJ" open two tabs even when the agent follows the hint. Checklist item 2 already accepts a marked older page (R20) as a pass, while R3 and AE1 forbid a second tab, so the checklist can pass with R3 unmet. A decision is needed: keep R3 strict (and accept that the default-project case cannot meet it), or soften R3 to "asks Copilot to bring the open canvas forward; when a second page opens anyway, the older one is marked (R20)", with KTD10 giving a no-project open the instance id `security-report`.
