@@ -180,6 +180,7 @@ This plan covers the security report canvas only. The breakdown below is the cur
 - Not in this work: a tool for the report, a Command Palette command or a plain editor tab for it, saving only the filtered rows, remembering filters, and the prototype's install command for a launcher.
 - Not in this work: any change to `@jira /security-report` or to the import `export` replies (R18).
 - Considered and not built: a throw-away probe build before the real canvas. The user chose to build directly with debug data in the logs (KTD9); the manual checklist confirms the canvas starts before `main` gets the feature.
+- Considered and not built: paging on the page. The ticket list is already capped at 1000 tickets with the truncation warning shown (U8); a slow page with the capped list would reopen it.
 - Considered and not built: a fallback window when no window holds the chat's folder. Workspace settings would leak across projects (R14); evidence that chats commonly carry no folder would reopen it.
 
 ### Dependencies / Assumptions
@@ -255,10 +256,12 @@ stateDiagram-v2
   Loading --> Showing: report read
   Loading --> JiraError: Jira failed
   JiraError --> Loading: Refresh
+  JiraError --> Replaced: newer page for the project
   Showing --> Loading: Refresh (filters cleared)
   Showing --> Showing: filter, sort, Save
   Showing --> RefreshFirst: Save, reading dropped
   RefreshFirst --> Loading: Refresh
+  RefreshFirst --> Replaced: newer page for the project
   Showing --> Replaced: newer page for the project
   Replaced --> [*]
 ```
@@ -291,7 +294,6 @@ src/page-tests/securityReportPage.spec.ts
 
 ### Deferred to Implementation
 
-- Whether very large projects need paging on the page, decided against the size of the mock and real reports during U8.
 - The exact `--vscode-*` variable values per theme, taken from VS Code's default Light Modern, Dark Modern and High Contrast themes during U8.
 - How the bundled licence texts of VS Code Elements and Lit ship in the `.vsix` (esbuild legal comments or a notices file), decided in U8.
 
@@ -357,12 +359,13 @@ Waits on: nothing.
 
 **Approach:**
 1. Port `writeEntry`, `readEntries`, `removeEntry` and `isProcessAlive` from the prototype's `prototypeFolder.ts`, without the launcher copy.
-2. `register.ts` writes the note after each server start and removes it on stop and deactivation; a failed write is logged and leaves the MCP tools working.
+2. `register.ts` writes the note after each server start, rewrites it when the workspace folders change while the server runs, and removes it on stop and deactivation; a failed write is logged and leaves the MCP tools working.
 
 **Test scenarios:**
 - Writing a note creates `windows/window-<pid>.json` with port, canvas key, folders and start time, folder 0700 and file 0600 on POSIX.
 - A second write for the same process replaces the note without a half-written file.
 - Removing the note on stop deletes only this window's file.
+- After a workspace folder is added while the server runs, the note lists it, so a chat in that folder matches this window; a removed folder no longer matches.
 - A malformed file in the folder is skipped and named, not thrown.
 - A note whose process no longer runs is reported as dead.
 
@@ -417,13 +420,13 @@ Waits on: nothing.
 
 **Approach:**
 1. `canvasLog.ts` appends one JSON line per open decision and trims the file to a fixed size; it never writes the canvas key or ticket data.
-2. The diagnostics report adds a "Canvas" section with the last lines, passed through the existing `redact` and key scan.
+2. The diagnostics report adds a "Canvas" section with the last lines, passed through the existing `redact` (with this window's canvas key added to its secrets) and key scan; every token of 32 or more characters in those lines is masked as `[key]`, the length rule of `maskPath`, so other windows' keys are covered too.
 3. Extension-side canvas requests log through `logDiag('canvas', …)`.
 
 **Test scenarios:**
 - An open decision writes a line with windows found, the match reason and the status, and no key.
 - A log over the size cap keeps its newest lines.
-- The diagnostics report includes the last canvas lines and shows `[redacted]` for a planted key.
+- The diagnostics report includes the last canvas lines and masks a planted canvas key taken from another window's note.
 - A missing or unreadable canvas log yields "no canvas log" in the report, not an error.
 
 **Verification:** the report built in tests holds the canvas section without secrets.
@@ -492,8 +495,8 @@ Waits on: PR1 (needed before this group can start: the page is served by PR1's c
 
 **Approach:**
 1. The report route resolves the project (input, else `defaultProject`), builds the overview through U6, stores it under a new page id, marks older pages of the project as replaced, and returns rows, warnings, read time, theme kind and page id.
-2. The save route takes page id and format, finds the kept reading, and calls the injected save function that wraps today's `saveOverviewFile` without the chat stream.
-3. The page-status route answers whether the page id was replaced.
+2. The save route takes page id and format, finds the kept reading, and calls the injected save function that wraps today's `saveOverviewFile` without the chat stream; it answers saved (with the file name), cancelled or failed (short reason), worded as today's chat texts.
+3. The page-status route answers whether the page id was replaced, and with the current theme kind.
 4. Jira failures answer with the status and short reason of `describeJiraFailure`.
 
 **Patterns to follow:** prototype `canvasRoutes.ts` (JSON-only POST, body cap); `src/utils/jiraFailureText.ts`.
@@ -504,6 +507,7 @@ Waits on: PR1 (needed before this group can start: the page is served by PR1's c
 - Jira answers 503: the response says HTTP 503 with no body text from Jira.
 - Covers AE2. Save with a page id writes a file equal to the CSV and Excel `@jira` writes for the same reading.
 - Covers AE9. Save for an unknown or expired page id writes nothing and asks for Refresh.
+- A cancelled save dialog answers cancelled and writes nothing; a write error answers failed with a short reason.
 - Covers AE8. A second report for PROJ marks the first page id as replaced; the status route says so; another project's page is untouched.
 - The store keeps at most 10 readings and drops readings older than an hour.
 - A save POST without `application/json` is refused with 415.
@@ -521,20 +525,26 @@ Waits on: PR1 (needed before this group can start: the page is served by PR1's c
 **Files:**
 - `src/canvas/page/securityReportPage.ts`, `src/canvas/page/reportView.ts`, `src/canvas/page/canvasTheme.css`, `src/canvas/canvasRoutes.ts` (page shell, script and style routes)
 - `esbuild.js`, `package.json` (`@vscode-elements/elements` pinned)
-- Test: `src/test/reportView.test.ts`
+- Test: `src/test/reportView.test.ts`, `src/test/bundleSmoke.test.ts` (the page bundle exists and stays under 300 KB)
 
 **Approach:**
-1. `reportView.ts` is pure: rows and filter state in; visible tables, counts and the save note out; sorting by any column; Refresh state is the default state.
+1. `reportView.ts` is pure: rows and filter state in; visible tables, counts and the save note out; sorting by any column; Refresh state is the default state; an empty reading and a filter matching nothing are their own states.
 2. `securityReportPage.ts` renders with VS Code Elements controls, inserts all Jira text as text (KTD7), builds ticket links from key and base URL, and asks the page-status route on visibility change and before each action.
-3. The shell page loads only the bundled script and stylesheet; the theme class comes from the report response.
+3. The page carries what the chat report carries (R6): U7's warnings (truncated list, release dates unreadable) in a notice line under the title, and on each release table the Jira list link, the fell-back link note, the no-ticket note, other Fix Versions and the unread-description count.
+4. With no tickets it shows the chat's "No unresolved Veracode or Waltz tickets found in this project." with Refresh and both Save buttons available; when filters match nothing it shows "No tickets match these filters." with Clear filters.
+5. While a save is pending both Save buttons are disabled; its result (saved to a file, cancelled, failed) shows in a status line by the buttons.
+6. The shell page loads only the bundled script and stylesheet, with the theme class already written into its root element from the injected theme kind, so loading and error states are themed; the page-status answer also carries the current theme kind, which the page reapplies.
 
 **Test scenarios:**
 - Release "2.4" and flag "overdue" show only matching rows, and the summary counts follow the filter.
 - Tool "Waltz" hides every Veracode row; "Both" shows all.
 - Sorting by Due puts empty dates last; sorting again reverses.
+- Each sort state names its column and direction, so the heading can carry `aria-sort`.
 - With a filter set, the note reads "Saves all 12 tickets, not only the 2 shown"; without one, no note.
 - Covers AE3. Refresh returns the default state: no filters, default order.
 - A replaced page state disables Refresh and Save and carries the replaced text.
+- An empty reading gives the "No unresolved Veracode or Waltz tickets" state; a filter matching nothing gives the "No tickets match these filters." state.
+- A truncated reading carries the truncation warning into the notice line.
 
 **Verification:** the pure view logic is covered; U9 covers rendering.
 
@@ -554,8 +564,10 @@ Waits on: PR1 (needed before this group can start: the page is served by PR1's c
 
 **Test scenarios:**
 - The page loads, shows the summary and per-release tables, and the read time.
+- A truncated mock reading shows the truncation warning under the title.
+- The page is themed (dark theme kind) while the report is still loading.
 - Choosing a release filter hides other releases and shows the save note.
-- Clicking a column heading sorts the table.
+- Clicking a column heading sorts the table; the heading is a focusable button that Enter also activates, and its cell carries `aria-sort`.
 - A ticket summary `<img src=x onerror=alert(1)>` shows as those characters and no dialog fires.
 - The browser reports no content-policy violation, and the VS Code Elements controls are styled.
 - Covers AE6. A mock Jira failure on Refresh shows the HTTP status and keeps Refresh enabled.
@@ -596,7 +608,7 @@ Waits on: PR1 (needed before this group can start: the page is served by PR1's c
 - Test: `src/test/userDocsSync.test.ts`
 
 **Approach:**
-1. Manual: a "Security report canvas" section (opening, the page, the hint, the notice, the `http.noProxy` need) and the checklist items below.
+1. Manual: a "Security report canvas" section: opening, the page, the hint, the notice, the `http.noProxy` need, and the known limitations of R13 (a restored canvas that stays blank: close the tab, then ask for the report again) and R14 (no canvas from a window without the project's folder).
 2. Known limitations: blank restored canvas (R13), no canvas from a window without the project's folder (R14), workspace settings decide the report.
 3. Architecture decision log: canvas delivery by plugin, window notes, matching window only; the outcome of the manual checklist.
 4. `CLAUDE.md`: key-file rows for `src/canvas/` and the canvas line under the Copilot harness section.
@@ -619,10 +631,10 @@ Waits on: PR1 (needed before this group can start: the page is served by PR1's c
 
 Manual checklist, on a managed Mac and a managed Windows machine with a `.vsix` from the feature branch:
 
-1. With `chat.canvases.enabled` on and `127.0.0.1` in `http.noProxy`, "open the security report for PROJ" in a Copilot chat opens the canvas with the report.
+1. With `chat.canvases.enabled` on and `127.0.0.1` in `http.noProxy`, "open the security report for PROJ" in a Copilot chat opens the canvas with the report. Record whether the page address (which carries the canvas key) appears in the agent's tool result; if it does, R2 is not met and the plan stops.
 2. Asking again while it is open brings the same canvas forward, or marks the older page (R20).
 3. Filters, sort, Refresh and both Save buttons behave as R7 to R9 and R21 say; the saved files match `@jira /security-report PROJ csv` and `xlsx`.
-4. Restart VS Code with the canvas open and record what comes back (R13).
+4. Restart VS Code with the canvas open and record what comes back (R13): whether VS Code asks the canvas program to open it again (the page reloads) or reuses the saved address (always blank, because the port and canvas key change at every start), and whether asking again with the blank tab still open only brings that tab forward.
 5. With two windows open on different folders, a chat in each opens its own window's report; a chat in a window with no folder gets the R14 status.
 6. With canvases off, the startup notice appears and `/ts-jira security-report PROJ` gives the hint.
 7. On Windows, the `windows` notes folder is readable only by the user.
@@ -639,3 +651,17 @@ Manual checklist, on a managed Mac and a managed Windows machine with a `.vsix` 
 - The manual checklist passed on a managed Mac and a managed Windows machine, and its results are recorded in the architecture decision log.
 - The user manual, known limitations and `CLAUDE.md` describe the canvas.
 - No dead-end or experimental code from abandoned approaches remains in the diff, and nothing from `src/prototype/` is copied unchanged where a port was planned.
+
+---
+
+## Deferred / Open Questions
+
+Review items left for the author; they do not block implementation.
+
+### From 2026-11-11 review
+
+- **R13 (restart rebuild) promises a recovery that can leave the user on the same blank tab** — R13 / KTD1 / KTD10 (P2, adversarial, feasibility, confidence 75)
+  After a restart a restored canvas is blank unless VS Code asks the canvas program to open it again, because its saved address carries the previous start's port and canvas key. The SDK focuses an existing panel when the same instance id is opened again, so "asking again" with the blank tab still open may only bring that blank tab forward. The manual text in U11 already says to close the tab first; R13 itself does not.
+  Change: reword R13's last sentence to "A restored canvas loads only if VS Code asks the canvas program to open it again; if it stays blank, close the tab, then ask for the report again. The user manual names this as a known limitation."
+- **Is "bring the open canvas forward" (R3) a hard requirement or best effort?** — R3 / KTD10 / Verification Contract item 2 (P2, coherence, adversarial, confidence 75)
+  Only the agent chooses the instance id that makes a second request reuse the open canvas. When the developer names no project, the agent cannot know `ticketSidekick.jira.defaultProject`, so "show the security report" and a later "security report for PROJ" open two tabs even when the agent follows the hint. Checklist item 2 already accepts a marked older page (R20) as a pass, while R3 and AE1 forbid a second tab, so the checklist can pass with R3 unmet. A decision is needed: keep R3 strict (and accept that the default-project case cannot meet it), or soften R3 to "asks Copilot to bring the open canvas forward; when a second page opens anyway, the older one is marked (R20)", with KTD10 giving a no-project open the instance id `security-report`.
