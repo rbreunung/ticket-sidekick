@@ -76,6 +76,8 @@ Made for this plan:
 - **`@jira /security-report` is removed in step 1.** (session-settled: user-approved — chosen over removal with the imports or with `@jira` itself.) Governs R33.
 - **Each step is a preview release first.** (session-settled: user-approved — chosen over a checklist before merge, and over automated tests only.) Governs R35.
 - **The minimum VS Code version rises in step 1.** (session-settled: user-directed — chosen over raising it with the last step, and over keeping the floor and showing a notice.) Governs R36.
+- **The target architecture is documented and approved before any board code.** (session-settled: user-directed — chosen over writing the page while step 1 is built, over rewriting the migration document, and over a folder of separate decision records: the design is settled in advance and later feature work reads one page.) Governs R47 to R49.
+- **The work ends with a full documentation review.** (session-settled: user-directed.) Governs R50.
 - **The Output Channel is the only record of board writes.** (session-settled: user-approved — chosen over a result list on the board and over a journal file: nothing new is stored.) Governs R5.
 
 ### Actors
@@ -142,13 +144,20 @@ Made for this plan:
 **Delivery and removal**
 
 - R31. Implementation starts after the security report canvas, including its page and `/ts-jira security-report`, is merged to `main`.
-- R32. The work ships in three steps, in this order: ticket list board with R28, R29 and R40 to R42, import board, PR review board with R27.
+- R32. The work ships in three steps, in this order, after the architecture page of R47: ticket list board with R28, R29 and R40 to R42, import board, PR review board with R27.
 - R33. Each step deletes the participant flows it replaces. Step 1 removes every `@jira` flow except the imports, including `/security-report`, each only once its row in the Replacement Map is in place. Step 2 removes the imports and `@jira` itself. Step 3 removes `@bitbucket` and the three Bitbucket Agent Mode tools.
 - R34. Step 2 removes the three Command Palette import commands.
 - R35. Each step first goes out on the preview channel with the old flows already removed. It becomes a normal release only after a written manual checklist passes on the maintainer's managed machine, with proxy, canvases and real Jira and Bitbucket Data Center.
 - R36. Step 1 raises the minimum VS Code version to one that has MCP server providers and canvases.
 - R37. After step 3 no participant, `@jira` help screen, follow-up chip, disambiguation entry or Local harness support remains, and both walkthroughs describe the Copilot chat.
 - R38. Each step updates the README tables and the user manual pages for what it adds and removes.
+
+**Architecture and documentation**
+
+- R47. A new page under `docs/architecture/` describes the target design: the layers, what a board is, how a board's page, server routes, tools and skills fit together, the rules every board follows, and how state, restore and model calls work. It is merged, after the maintainer's approval, as its own change before any board code.
+- R48. `CLAUDE.md` gets "Adding a new board", "Adding an MCP tool" and "Adding a skill" checklists, which replace the participant checklists as the participants go. Each step keeps the page of R47 and these checklists current.
+- R49. Each architecture decision of this work is added to the decision log in `docs/architecture/copilot-harness-migration.md`, continued from D7, with the rejected alternatives and the reason. That document stays the historical record and is marked as such.
+- R50. Step 3 ends with a review of every developer and user document: `CLAUDE.md`, `CONCEPTS.md`, `STRATEGY.md`, `README.md`, `docs/manual/`, the domain documents, `docs/onboarding.md`, `docs/solutions/` and `docs/known-limitations.md`. Afterwards none describes `@jira`, `@bitbucket` or a participant mechanism as current behaviour. Plans under `docs/plans/` are historical and stay as they are.
 
 ### Replacement Map
 
@@ -218,6 +227,7 @@ Every `@jira` and `@bitbucket` command, with what replaces it and the step that 
 
 - The maintainer's daily ticket and PR work, bulk cleanup and report imports included, is done in Copilot chats on the managed machine without switching to the Local harness.
 - After step 3 the repository holds no participant code and no test or document that describes one as current behaviour.
+- A contributor who starts a new feature after step 3 can place it, as a tool, a skill or a board, from the architecture page and the `CLAUDE.md` checklists alone.
 
 <!-- ce-section: work-relationships -->
 ### How This Work Fits Together
