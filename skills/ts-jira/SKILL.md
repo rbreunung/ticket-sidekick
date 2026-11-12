@@ -2,7 +2,7 @@
 name: ts-jira
 description: Runs one Jira command you type, e.g. /ts-jira load PROJ-123. /ts-jira help lists the commands.
 disable-model-invocation: true
-argument-hint: help|load|view|search|filters|comment|field|move|workflow|templates|upload|check|security-report|sessions <arguments>
+argument-hint: help|load|view|search|filters|comment|field|fields|check-fields|move|workflow|templates|upload|check|security-report|sessions <arguments>
 ---
 
 The user typed after /ts-jira: `$ARGUMENTS`
@@ -26,6 +26,8 @@ Usage: /ts-jira <command> [arguments]
   filters                     list your saved filters
   comment <KEY> <text>        add a comment
   field <KEY> <field> <value> update a field
+  fields <KEY>                list a ticket's fields with their ids
+  check-fields <KEY>          check the required fields of a ticket
   move <KEY> <status>         move a ticket
   workflow <KEY>              statuses a ticket can reach
   templates                   list the ticket templates
@@ -47,6 +49,8 @@ A developer brief or a guided ticket create: help brief, help create
 | filters | `jira_list_my_filters` |
 | comment <KEY> <text> | `jira_add_comment` |
 | field <KEY> <field> <value> | `jira_update_field` |
+| fields <KEY> | `jira_list_fields` with the key as `ticketKey`; when a project key and an issue type are typed instead, as `projectKey` and `issueType` |
+| check-fields <KEY> | `jira_check_required_fields` |
 | move <KEY> <status> | `jira_move_ticket` |
 | workflow <KEY> | `jira_workflow` |
 | templates | `jira_list_templates` |

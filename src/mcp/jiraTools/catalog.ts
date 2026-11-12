@@ -13,6 +13,7 @@ import { createTicketTool } from './createTicket';
 import { addCommentTool } from './addComment';
 import { updateFieldTool } from './updateField';
 import { uploadAttachmentTool } from './uploadAttachment';
+import { checkRequiredFieldsTool, listFieldsTool } from './fields';
 
 // Every Jira tool the extension's MCP server offers. The server registers its tools from this
 // list, so a tool exists for agents exactly when it is listed here.
@@ -52,4 +53,6 @@ export const JIRA_TOOLS: readonly McpToolDefinition<JiraToolDeps>[] = [
   addCommentTool,
   updateFieldTool,
   uploadAttachmentTool,
+  listFieldsTool,
+  checkRequiredFieldsTool,
 ];

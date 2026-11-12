@@ -426,11 +426,44 @@ describe('add comment', () => {
 });
 
 describe('update field', () => {
-  it('refuses an unsupported field with the supported list and writes nothing', async () => {
+  it('says so when no field has the name, points at the field list, and writes nothing', async () => {
     const client = new MockJiraClient();
     const session = await startSession(client);
     const { text } = await session.call('jira_update_field', { ticketKey: 'PROJ-123', fieldName: 'Story Points', value: '5' });
-    expect(text).toContain('Field "Story Points" is not supported. Supported fields:');
+    expect(text).toBe('No field named "Story Points" was found. Call jira_list_fields with the ticket key to see its fields. Nothing was changed.');
+    expect(client.updateIssueCalls).toEqual([]);
+  });
+
+  it('sets a custom field by its display name or its id, shaped as the field needs it', async () => {
+    const client = new MockJiraClient();
+    const session = await startSession(client);
+    const byName = await session.call('jira_update_field', { ticketKey: 'PROJ-123', fieldName: 'Category', value: 'Option A' });
+    expect(byName.text).toContain('Set Category to Option A on PROJ-123.');
+    await session.call('jira_update_field', { ticketKey: 'PROJ-123', fieldName: 'customfield_10501', value: 'Option B' });
+    expect(client.updateIssueCalls).toEqual([
+      { issueKey: 'PROJ-123', fields: { customfield_10501: [{ value: 'Option A' }] } },
+      { issueKey: 'PROJ-123', fields: { customfield_10501: [{ value: 'Option B' }] } },
+    ]);
+  });
+
+  it('adds labels to the ones a ticket has, and removes single ones, without touching the rest', async () => {
+    const client = new MockJiraClient();
+    const session = await startSession(client);
+    const before = ((await client.getIssue('PROJ-123')).fields.labels ?? []) as string[];
+    const added = await session.call('jira_update_field', { ticketKey: 'PROJ-123', fieldName: 'labels', value: 'cleanup, Urgent', operation: 'add' });
+    expect(added.text).toContain('Added cleanup, Urgent to Labels on PROJ-123.');
+    expect(client.updateIssueCalls[0].fields.labels).toEqual([...before, ...['cleanup', 'Urgent'].filter(v => !before.some(b => b.toLowerCase() === v.toLowerCase()))]);
+    if (before.length > 0) {
+      await session.call('jira_update_field', { ticketKey: 'PROJ-123', fieldName: 'labels', value: before[0], operation: 'remove' });
+      expect(client.updateIssueCalls[1].fields.labels).toEqual(before.slice(1));
+    }
+  });
+
+  it('refuses to add a value to a field that is not a list', async () => {
+    const client = new MockJiraClient();
+    const session = await startSession(client);
+    const { text } = await session.call('jira_update_field', { ticketKey: 'PROJ-123', fieldName: 'summary', value: 'x', operation: 'add' });
+    expect(text).toBe('Summary is not a list field, so a value cannot be added to it. Nothing was changed.');
     expect(client.updateIssueCalls).toEqual([]);
   });
 
@@ -549,5 +582,45 @@ describe('upload attachment', () => {
     expect((await session.call('jira_upload_attachment', { ticketKey: 'PROJ-123', filePath: path.join(linkedRoot, 'notes.txt') })).text)
       .toContain('dotfile or dotfolder');
     expect(client.uploadAttachmentCalls).toEqual([]);
+  });
+});
+
+describe('the field tools', () => {
+  it('lists every field of a ticket with its id and current value', async () => {
+    const session = await startSession(new MockJiraClient());
+    const { text } = await session.call('jira_list_fields', { ticketKey: 'PROJ-123' });
+    expect(text).toContain('`customfield_10501`');
+    expect(text).toContain('| Summary | `summary` |');
+  });
+
+  it('lists the fields an issue type can take on create, required ones first', async () => {
+    const session = await startSession(new MockJiraClient());
+    const { text } = await session.call('jira_list_fields', { projectKey: 'proj', issueType: 'Bug' });
+    expect(text).toContain('Fields of Bug in PROJ (4):');
+    const rows = text.split('\n').filter(line => line.startsWith('| ') && line.includes('`'));
+    expect(rows).toEqual([
+      '| Summary | `summary` | yes |',
+      '| Team | `customfield_10500` | yes |',
+      '| Description | `description` | no |',
+      '| Labels | `labels` | no |',
+    ]);
+  });
+
+  it('names the issue types of the project when the type has no fields', async () => {
+    const session = await startSession(new MockJiraClient());
+    const { text } = await session.call('jira_list_fields', { projectKey: 'PROJ', issueType: 'Unknown' });
+    expect(text).toContain('No fields found for issue type "Unknown" in PROJ. Issue types you can create there:');
+  });
+
+  it('asks for a ticket, or a project with an issue type', async () => {
+    const session = await startSession(new MockJiraClient());
+    expect((await session.call('jira_list_fields', { projectKey: 'PROJ' })).text).toBe('Give a ticketKey, or a projectKey together with an issueType.');
+  });
+
+  it('names the required fields a ticket leaves empty, and says when none are configured', async () => {
+    const withRequired = await startSession(new MockJiraClient(), { config: { ...jiraConfig(), requiredFields: ['summary', 'customfield_99999'] } });
+    expect((await withRequired.call('jira_check_required_fields', { ticketKey: 'PROJ-123' })).text).toBe('PROJ-123 is missing required fields: customfield_99999.');
+    const none = await startSession(new MockJiraClient(), { config: { ...jiraConfig(), requiredFields: [] } });
+    expect((await none.call('jira_check_required_fields', { ticketKey: 'PROJ-123' })).text).toContain('No required fields configured.');
   });
 });

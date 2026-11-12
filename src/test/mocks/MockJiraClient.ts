@@ -17,6 +17,7 @@ import type {
   JiraSprintCandidate,
   JiraTransition,
   JiraUser,
+  JiraCreateField,
 } from '../../jira/IJiraClient';
 
 export const FIXTURE_ATTACHMENT_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
@@ -161,6 +162,11 @@ export class MockJiraClient implements IJiraClient {
 
   async getRequiredFields(_projectKey: string, _issueType: string): Promise<JiraFieldMeta[]> {
     return loadFixture<JiraFieldMeta[]>('createmeta-PROJ.json');
+  }
+
+  async getCreateFields(_projectKey: string, issueType: string): Promise<JiraCreateField[]> {
+    if (issueType.toLowerCase() === 'unknown') return [];
+    return loadFixture<JiraCreateField[]>('createmeta-fields-PROJ.json');
   }
 
   async findSprints(projectKey: string, query: string): Promise<JiraSprintCandidate[]> {

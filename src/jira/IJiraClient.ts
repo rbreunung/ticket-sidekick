@@ -140,6 +140,11 @@ export interface JiraFieldMeta {
   schema: { type: string; items?: string; custom?: string };
 }
 
+/** A field an issue type can take when a ticket is created, and whether Jira requires it. */
+export interface JiraCreateField extends JiraFieldMeta {
+  required: boolean;
+}
+
 export interface JiraSprintCandidate {
   id: number;
   name: string;
@@ -187,6 +192,8 @@ export interface IJiraClient {
   getFields(): Promise<JiraFieldMeta[]>;
   getEditMeta(issueKey: string): Promise<Record<string, JiraEditMetaField>>;
   getRequiredFields(projectKey: string, issueType: string, issueTypeId?: string): Promise<JiraFieldMeta[]>;
+  /** Every field the issue type can take on create, required or not; empty when the type is unknown or not creatable. */
+  getCreateFields(projectKey: string, issueType: string, issueTypeId?: string): Promise<JiraCreateField[]>;
   findSprints(projectKey: string, query: string): Promise<JiraSprintCandidate[]>;
   uploadAttachment(issueKey: string, filename: string, contentType: string, contentBytes: string): Promise<void>;
   getRemoteLinks(issueKey: string): Promise<JiraRemoteLink[]>;
