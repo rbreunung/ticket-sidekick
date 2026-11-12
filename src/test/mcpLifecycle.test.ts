@@ -111,6 +111,7 @@ import { ConfigService } from '../services/ConfigService';
 import { CHECK_CONNECTION_TOOL } from '../mcp/jiraTools/catalog';
 import { McpServerController } from '../mcp/serverController';
 import { LocalhostServer } from '../mcp/localhostServer';
+import { sessionIdFor } from '../sessions/sessionId';
 
 let tmp: string;
 let stateUpdates: number;
@@ -282,27 +283,37 @@ function canvasGet(port: number, path: string): Promise<{ status: number; body: 
   });
 }
 
-describe('the open check the canvas program asks before it opens a page', () => {
-  it('answers through the window\'s server, under the key its note names, for the asked or the default project', async () => {
+const openPath = (key: string, input: unknown) => `/${key}/api/open?kind=security-report&input=${encodeURIComponent(JSON.stringify(input))}`;
+
+describe('the open request the canvas program sends before it opens a board', () => {
+  it('answers through the window\'s server, under the key its note names, with the session of the asked or the default project', async () => {
     h.token = 'jira-pat';
     h.defaultProject = 'PAY';
     await activate({ withApi: true });
     const note = windowNote()!;
-    expect(await canvasGet(note.port, `/${note.canvasKey}/api/open-check?project=proj`)).toEqual({ status: 200, body: { ok: true, project: 'PROJ' } });
-    expect(await canvasGet(note.port, `/${note.canvasKey}/api/open-check`)).toEqual({ status: 200, body: { ok: true, project: 'PAY' } });
+    expect(await canvasGet(note.port, openPath(note.canvasKey, { project: 'proj' })))
+      .toEqual({ status: 200, body: { ok: true, id: sessionIdFor('security-report', 'PROJ'), title: 'Security report: PROJ' } });
+    expect((await canvasGet(note.port, openPath(note.canvasKey, {}))).body)
+      .toEqual({ ok: true, id: sessionIdFor('security-report', 'PAY'), title: 'Security report: PAY' });
   });
 
   it('says Jira is not set up when this window has no Jira token, and asks for a project when none is known', async () => {
     await activate({ withApi: true });
     const note = windowNote()!;
-    expect((await canvasGet(note.port, `/${note.canvasKey}/api/open-check?project=PROJ`)).body).toEqual({ ok: false, reason: 'not-configured' });
-    expect((await canvasGet(note.port, `/${note.canvasKey}/api/open-check`)).body).toEqual({ ok: false, reason: 'no-project' });
+    expect((await canvasGet(note.port, openPath(note.canvasKey, { project: 'PROJ' }))).body).toMatchObject({ ok: false, reason: expect.stringContaining('Jira is not set up') });
+    expect((await canvasGet(note.port, openPath(note.canvasKey, {}))).body).toMatchObject({ ok: false, reason: expect.stringContaining('no project was named') });
+  });
+
+  it('refuses a board it does not know', async () => {
+    await activate({ withApi: true });
+    const note = windowNote()!;
+    expect((await canvasGet(note.port, `/${note.canvasKey}/api/open?kind=other&input=%7B%7D`)).body).toEqual({ ok: false, reason: 'Unknown board.' });
   });
 
   it('refuses the bearer key of the MCP endpoint in place of the canvas key', async () => {
     await activate({ withApi: true });
     const note = windowNote()!;
-    expect((await canvasGet(note.port, `/${bearerOf(offered()[0])}/api/open-check?project=PROJ`)).status).toBe(401);
+    expect((await canvasGet(note.port, openPath(bearerOf(offered()[0]), { project: 'PROJ' }))).status).toBe(401);
   });
 });
 

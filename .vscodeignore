@@ -25,3 +25,5 @@ STRATEGY.md
 out/**
 !out/extension.js
 !out/plugin/**
+!out/canvas-pages/**
+canvas-pages/

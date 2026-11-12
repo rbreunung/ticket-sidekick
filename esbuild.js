@@ -26,6 +26,16 @@ function writePluginFiles() {
   fs.writeFileSync(path.join(canvasDir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
 }
 
+// The board pages are plain files served by the extension's localhost server: the shared client
+// and style, one folder per board, and the VS Code Elements bundle at its pinned version.
+function copyCanvasPages() {
+  const target = './out/canvas-pages';
+  fs.rmSync(target, { recursive: true, force: true });
+  fs.cpSync('./canvas-pages', target, { recursive: true });
+  fs.copyFileSync('./node_modules/@vscode-elements/elements/dist/bundled.js', path.join(target, 'shared', 'vscode-elements.js'));
+}
+copyCanvasPages();
+
 Promise.all([
   build({
     entryPoints: ['./src/extension.ts'],

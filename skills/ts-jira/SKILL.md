@@ -2,7 +2,7 @@
 name: ts-jira
 description: Runs one Jira command you type, e.g. /ts-jira load PROJ-123. /ts-jira help lists the commands.
 disable-model-invocation: true
-argument-hint: help|load|view|search|filters|comment|field|move|workflow|templates|upload|check <arguments>
+argument-hint: help|load|view|search|filters|comment|field|move|workflow|templates|upload|check|security-report|sessions <arguments>
 ---
 
 The user typed after /ts-jira: `$ARGUMENTS`
@@ -31,6 +31,8 @@ Usage: /ts-jira <command> [arguments]
   templates                   list the ticket templates
   upload <KEY> <path>         attach a workspace file
   check                       check the Jira connection
+  security-report [PROJECT]   open the security report in its own tab
+  sessions                    open the stored sessions in their own tab
 ------------------------------------------------------------------
 Without KEY, load and view use the ticket of the git branch.
 A developer brief or a guided ticket create: help brief, help create
@@ -50,5 +52,9 @@ A developer brief or a guided ticket create: help brief, help create
 | templates | `jira_list_templates` |
 | upload <KEY> <path> | `jira_upload_attachment` |
 | check | `jira_check_connection` |
+| security-report [PROJECT] | open the `security-report` canvas, with the project as `input.project` when one is typed |
+| sessions | open the `sessions` canvas |
+
+For a canvas row, open that canvas and reply with only the status it returns; never build the report or the list yourself from other tools. If no canvas can be opened in this chat, say that canvases are off and are turned on with the chat.canvases.enabled setting where the organisation allows it.
 
 After the call, show the tool's answer without adding analysis. After load, if it lists skipped attachments with numbers, show that list and ask which to download.

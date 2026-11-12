@@ -15,7 +15,7 @@ import { detectMcpApi, type McpApi } from './vscodeMcpTypes';
 import { copilotHome } from '../utils/copilotHome';
 import { windowNotesDir, WindowNoteKeeper } from '../canvas/windowNotes';
 import { createCanvasHandler } from '../canvas/canvasRoutes';
-import { openCheckRoute } from '../canvas/openCheck';
+import { registerBoards } from '../boards/registerBoards';
 import { canvasLogFile, readCanvasLog } from '../canvas/canvasLog';
 
 // VS Code glue for the extension's MCP server. The server runs exactly while 127.0.0.1 is in
@@ -113,6 +113,9 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
     void vscode.window.showInformationMessage('Ticket Sidekick: MCP diagnostics copied to the clipboard. They contain no keys or tokens.');
   }));
 
+  // Sessions, the board routes and the clear command exist whether or not the server can start.
+  const boards = registerBoards(context, configService, () => getJira(configService));
+
   if (!mcp) {
     log('info', 'MCP server not started: this VS Code has no MCP server provider API (VS Code 1.101 or later is needed)');
     return Promise.resolve();
@@ -134,12 +137,7 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
     serverInfo: { name: 'ticket-sidekick', version: extensionVersion(context) },
     isMcpAllowed: mcpAllowed,
     onCanvas: createCanvasHandler(
-      [
-        openCheckRoute({
-          isJiraConfigured: async () => configService.isConfigured(await configService.getConfig()),
-          defaultProject: () => vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.defaultProject') ?? '',
-        }),
-      ],
+      boards.routes,
       message => logDiag('canvas', 'error', 'Canvas request failed', { error: message }),
       served => logDiag('canvas', served.status >= 400 ? 'warn' : 'info', `${served.method} ${served.path}: ${served.status}`, { ms: served.ms }),
     ),

@@ -82,6 +82,7 @@ function manager(formatVersion = 1): SessionManager {
     kinds: [registerKind(makeKind(formatVersion), () => source)],
     now: () => clock,
     confirm: async plan => { confirmations.push(plan.title); return confirmAnswer; },
+    saveFile: async () => true,
   });
 }
 
@@ -332,6 +333,7 @@ describe('the cache', () => {
       kinds: [registerKind(makeKind(), () => source)],
       now: () => clock,
       confirm: async () => true,
+      saveFile: async () => true,
     });
     const opened = await m.open('demo', { project: 'PROJ' });
     const state = await ready(m, (opened as { id: string }).id);

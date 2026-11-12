@@ -26,6 +26,14 @@ export interface Applied<D, W> {
   conflicts?: Conflict[];
 }
 
+export interface ExportedFile {
+  fileName: string;
+  /** The name and extension VS Code's save dialog filters by. */
+  filterName: string;
+  extension: string;
+  bytes: Uint8Array;
+}
+
 export interface BoardKind<R, D, W, A, V, X> {
   kind: string;
   /** Raise when the stored shape changes; sessions of another format are discarded. */
@@ -48,6 +56,8 @@ export interface BoardKind<R, D, W, A, V, X> {
   plan?(session: Session<R, D, W>, action: A): Planned;
   /** Reads the targets again, writes the unchanged ones and reports each. */
   apply?(session: Session<R, D, W>, plan: WritePlan, deps: X): Promise<Applied<D, W>>;
+  /** A file the developer saves from the board, always built from the reading the board shows. */
+  exportFile?(session: Session<R, D, W>, format: string, deps: X): Promise<ExportedFile>;
   /** What the page gets: never more than it shows. */
   view(session: Session<R, D, W>): V;
 }

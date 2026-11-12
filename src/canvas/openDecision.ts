@@ -1,18 +1,50 @@
 import type { WindowChoice } from './selectWindow';
-import { normalizeProjectKey } from '../services/configValidation';
 
 // The decisions of the canvas program, kept free of the Copilot SDK and of I/O so they can be
-// tested: what an open request answers, and what to do with a security report canvas the runtime
-// brought back after a restart. The answer's status is the only thing the agent learns, so it
-// names the project or the reason and never carries report data.
+// tested: which canvases exist, what an open request answers, and what to do with a canvas the
+// runtime brought back after a restart. The answer's status is the only thing the agent learns,
+// so it says "opened" or the reason and never carries board data.
+
+export interface BoardCanvas {
+  /** The canvas id, which is also the board kind and the page's folder. */
+  id: string;
+  displayName: string;
+  /** What the agent reads to decide when to open the canvas and what to pass. */
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
 
 export const SECURITY_REPORT_CANVAS_ID = 'security-report';
-export const SECURITY_REPORT_PAGE_PATH = '/security-report/';
+export const SESSIONS_CANVAS_ID = 'sessions';
 
-/** What a window's open check answered for the requested project. */
-export type OpenCheck =
-  | { ok: true; project: string }
-  | { ok: false; reason: 'no-project' | 'invalid-project' | 'not-configured' | 'unreachable' };
+export const BOARD_CANVASES: readonly BoardCanvas[] = [
+  {
+    id: SECURITY_REPORT_CANVAS_ID,
+    displayName: 'Security report',
+    description:
+      'A project\'s open Veracode and Waltz security tickets by release, with Due Date flags, read from Jira by Ticket Sidekick '
+      + 'and shown in its own tab, with filters and CSV or Excel export. Open it when the user asks for the security report. '
+      + 'Pass the project key as input.project when the user names one. Use the instance id "security-report-<PROJECT>", '
+      + 'or "security-report" when no project is named, so an open report is brought forward instead of opened twice.',
+    inputSchema: {
+      type: 'object',
+      properties: { project: { type: 'string', description: 'The Jira project key, e.g. PROJ. Leave out to use the default project.' } },
+      additionalProperties: false,
+    },
+  },
+  {
+    id: SESSIONS_CANVAS_ID,
+    displayName: 'Stored sessions',
+    description:
+      'The work in progress Ticket Sidekick keeps for this workspace (reports, lists, imports, reviews), with reopen and delete, '
+      + 'shown in its own tab. Open it when the user asks for the stored sessions or types /ts-jira sessions. '
+      + 'It takes no input. Use the instance id "sessions".',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+];
+
+/** What a window answered when asked to open a board: the session it belongs to, or the reason it cannot open. */
+export type BoardOpenCheck = { ok: true; id: string; title: string } | { ok: false; reason: string };
 
 export interface OpenAnswer {
   url?: string;
@@ -20,73 +52,48 @@ export interface OpenAnswer {
   status: string;
 }
 
-const TITLE = 'Security report';
-
 export const OPEN_STATUS = {
   notRunning:
     'Not opened: Ticket Sidekick\'s local server is not running in any VS Code window. It runs while 127.0.0.1 is in the http.noProxy setting.',
   noMatch:
-    'Not opened: no open VS Code window holds this chat\'s folder. Ask from the chat of the window whose workspace holds the project; a window without a folder cannot open the report.',
-  noProject:
-    'Not opened: no project was named and ticketSidekick.jira.defaultProject is not set. Ask again with a project key, for example "security report for PROJ".',
-  invalidProject:
-    'Not opened: the project named is not a Jira project key. Ask again with a key that starts with a letter and has only letters, digits and _, for example "security report for PROJ".',
-  notConfigured: 'Not opened: Jira is not set up in that window\'s Ticket Sidekick settings.',
+    'Not opened: no open VS Code window holds this chat\'s folder. Ask from the chat of the window whose workspace holds the project; a window without a folder cannot open a board.',
   unreachable: 'Not opened: Ticket Sidekick in that window did not answer. Try again in a moment.',
 } as const;
 
-/** A window's open-check answer, accepted only in its known shapes so no other text reaches the agent. */
-export function asOpenCheck(body: unknown): OpenCheck | undefined {
-  const b = body as { ok?: unknown; project?: unknown; reason?: unknown };
+const MAX_TEXT = 300;
+
+/** One line of plain text, capped: what a window says is passed to the agent, so it stays short and flat. */
+function plain(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.replace(/[\r\n\t]+/g, ' ').trim();
+  return text ? text.slice(0, MAX_TEXT) : undefined;
+}
+
+/** A window's answer, accepted only in its known shapes. */
+export function asBoardOpenCheck(body: unknown): BoardOpenCheck | undefined {
+  const b = body as { ok?: unknown; id?: unknown; title?: unknown; reason?: unknown };
   if (typeof b !== 'object' || b === null) return undefined;
   if (b.ok === true) {
-    const project = projectFromInput({ project: b.project });
-    return project ? { ok: true, project } : undefined;
+    const title = plain(b.title);
+    return typeof b.id === 'string' && /^[0-9a-f]{0,64}$/.test(b.id) && title ? { ok: true, id: b.id, title } : undefined;
   }
-  if (b.ok === false && (b.reason === 'no-project' || b.reason === 'invalid-project' || b.reason === 'not-configured' || b.reason === 'unreachable')) {
-    return { ok: false, reason: b.reason };
-  }
-  return undefined;
+  const reason = plain(b.reason);
+  return b.ok === false && reason ? { ok: false, reason } : undefined;
 }
 
-/** The project key from the canvas input, upper-cased, or undefined when none or an invalid one was given. */
-export function projectFromInput(input: unknown): string | undefined {
-  const raw = typeof input === 'object' && input !== null ? (input as { project?: unknown }).project : undefined;
-  return typeof raw === 'string' ? normalizeProjectKey(raw) : undefined;
-}
-
-/** What the open request asks for: no project, a valid key, or a named text that is not a project key. */
-export type ProjectRequest = { kind: 'none' } | { kind: 'valid'; project: string } | { kind: 'invalid' };
-
-export function projectRequest(input: unknown): ProjectRequest {
-  const raw = typeof input === 'object' && input !== null ? (input as { project?: unknown }).project : undefined;
-  if (raw === undefined || raw === null || (typeof raw === 'string' && raw.trim() === '')) return { kind: 'none' };
-  const project = typeof raw === 'string' ? normalizeProjectKey(raw) : undefined;
-  return project ? { kind: 'valid', project } : { kind: 'invalid' };
-}
-
-/** The instance id the agent is asked to use, so a second request for the project reuses the open canvas. */
-export function instanceIdFor(project: string | undefined): string {
-  return project ? `${SECURITY_REPORT_CANVAS_ID}-${project}` : SECURITY_REPORT_CANVAS_ID;
-}
-
-/** The open answer for a chosen window and its open check. */
-export function openAnswer(choice: WindowChoice, check: OpenCheck | undefined): OpenAnswer {
-  if (choice.kind === 'not-running') return { title: TITLE, status: OPEN_STATUS.notRunning };
-  if (choice.kind === 'no-match') return { title: TITLE, status: OPEN_STATUS.noMatch };
-  if (!check || !check.ok) {
-    const reason = check?.reason ?? 'unreachable';
-    const status = reason === 'no-project' ? OPEN_STATUS.noProject
-      : reason === 'invalid-project' ? OPEN_STATUS.invalidProject
-        : reason === 'not-configured' ? OPEN_STATUS.notConfigured
-          : OPEN_STATUS.unreachable;
-    return { title: TITLE, status };
-  }
+/** The open answer for a chosen window and what it said. */
+export function openAnswer(canvas: BoardCanvas, choice: WindowChoice, check: BoardOpenCheck | undefined): OpenAnswer {
+  const title = canvas.displayName;
+  if (choice.kind === 'not-running') return { title, status: OPEN_STATUS.notRunning };
+  if (choice.kind === 'no-match') return { title, status: OPEN_STATUS.noMatch };
+  if (!check) return { title, status: OPEN_STATUS.unreachable };
+  if (!check.ok) return { title, status: `Not opened: ${check.reason}` };
   const { port, canvasKey } = choice.note;
+  const query = check.id ? `?s=${check.id}` : '';
   return {
-    url: `http://127.0.0.1:${port}/${canvasKey}${SECURITY_REPORT_PAGE_PATH}?project=${encodeURIComponent(check.project)}`,
-    title: `${TITLE}: ${check.project}`,
-    status: `Opened the security report for ${check.project}.`,
+    url: `http://127.0.0.1:${port}/${canvasKey}/board/${canvas.id}/${query}`,
+    title: check.title,
+    status: `Opened: ${check.title}.`,
   };
 }
 
@@ -94,10 +101,10 @@ export function openAnswer(choice: WindowChoice, check: OpenCheck | undefined): 
 export const RESTORE_WAIT_MS = 30_000;
 
 /**
- * What to do with a security report canvas found open when the canvas program joins a session:
- * keep it when its page still answers, reopen it once the window holding the chat's folder runs
- * again (the reopen asks that window for a fresh address), wait while it does not, and close it
- * when the wait is over.
+ * What to do with a board canvas found open when the canvas program joins a session: keep it when
+ * its page still answers, reopen it once the window holding the chat's folder runs again (the
+ * reopen asks that window for a fresh address, and the page then shows its stored session), wait
+ * while it does not, and close it when the wait is over.
  */
 export function restoreAction(state: { pageAnswers: boolean; chatWindowRunning: boolean; waitedMs: number }): 'keep' | 'reopen' | 'wait' | 'close' {
   if (state.pageAnswers) return 'keep';

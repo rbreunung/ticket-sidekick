@@ -1,6 +1,6 @@
 # Boards and sessions: target architecture
 
-Status: **proposed, waiting for the maintainer's approval**. No board code is written before that (R47 of [`the boards plan`](../plans/2026-11-11-2234-feat-boards-replace-chat-participants-plan.md)).
+Status: **approved by the maintainer on 2026-11-12** (R47 of [the boards plan](../plans/2026-11-11-2234-feat-boards-replace-chat-participants-plan.md)). Built so far: the session core, the generic board routes, the security report board and the sessions board.
 
 This page describes how Ticket Sidekick is built once the chat participants are gone: where state lives, how a canvas shows it, how a write happens, and how to add a feature. It is kept current with the code. The reasons behind earlier choices, and the options that were rejected, stay in [`copilot-harness-migration.md`](copilot-harness-migration.md); new decisions are logged there from D7 on and summarised in [section 11](#11-decisions-made-for-this-design).
 
@@ -148,6 +148,7 @@ stateDiagram-v2
 1. The agent opens a canvas with the recipe: a project, a query and an optional proposed change, a report path, a PR link.
 2. The canvas program finds the window that holds the chat's folder and asks its **open check**. The window validates the recipe and answers with the session ID, or with a reason.
 3. The canvas program returns the page address, which carries the canvas key and the session ID. The agent learns only "opened" or the reason.
+   The agent picks the canvas instance ID from the request (for example `security-report-PROJ`), so asking again brings the open canvas forward.
 4. The page loads and asks for the session's state. A stored session is shown at once with its "as of" time; otherwise the board kind builds it from the sources.
 
 ### 4.2 Freshness and conflicts (R55, R56)
@@ -207,7 +208,7 @@ sequenceDiagram
 
 ### 4.5 Restart
 
-The Copilot runtime brings a canvas back with its old address. The canvas program's existing repair asks the window for a fresh address and reopens the canvas with the same instance ID, which carries the session ID. The page then loads the stored session as in 4.1. If the window does not return, the canvas is closed; the session stays in the cache and is reachable from the sessions board.
+The Copilot runtime brings a canvas back with its old address. The canvas program's repair reopens the canvas with the same input, so the window names the same session and returns a fresh address. The page then loads the stored session as in 4.1. If the window does not return, the canvas is closed; the session stays in the cache and is reachable from the sessions board.
 
 ---
 
@@ -242,12 +243,15 @@ All boards use one set of routes under the canvas key, so a new board adds no ro
 | Route | Purpose |
 | --- | --- |
 | `GET /board/<kind>/` and its assets | The page: static files shipped with the extension |
-| `GET /board/<kind>/state?s=<id>&rev=<n>` | The session's view. With `rev`, waits until the revision changes or a timeout passes, so the page learns of background results without a timer. |
+| `GET /board/<kind>/state?s=<id>&tick=<n>&wait=<ms>` | The session's view. With `tick`, waits until the state changes or the wait passes, so the page learns of background results without a timer. |
 | `POST /board/<kind>/action` | A non-writing action with the revision it is based on |
 | `POST /board/<kind>/refresh` | Runs the check now |
 | `POST /board/<kind>/preview` | Returns a write plan and its plan ID |
 | `POST /board/<kind>/apply` | Redeems a plan ID |
 | `POST /board/<kind>/save` | For boards that export: writes a file through VS Code's save dialog |
+| `POST /board/<kind>/discard` | Deletes the session |
+| `GET /api/open?kind=<kind>&input=<json>` | Asked by the canvas program: validates the request and names the session |
+| `GET /board/theme` | The window's theme kind, since a canvas host passes none |
 
 - The existing guard stays: `Host` check, `Origin` check, the canvas key in the path, a strict content policy, JSON bodies only, no caching.
 - Actions on one session are processed one after another.
@@ -294,6 +298,7 @@ src/
     boardKind.ts       the BoardKind interface and the registry
   boards/
     boardRoutes.ts     the generic routes of section 6
+    registerBoards.ts  the only board file that imports vscode: store folder, confirmation, save dialog, theme, retention, clear command
     securityReport/    one folder per board kind: kind.ts, and what only it needs
     ticketList/
     import/
@@ -302,7 +307,7 @@ src/
   canvas/              the canvas foundation: routes, window notes, open decision, restore repair, launcher
   mcp/                 the MCP server and tools, as today
   services/, jira/, bitbucket/, utils/, templates/   unchanged
-canvas-pages/          page sources: shared client and style, one folder per board
+canvas-pages/          page sources: shared client and style, one folder per board; copied to out/canvas-pages with the VS Code Elements bundle
 ```
 
 `src/participant/` shrinks with each step and is gone after step 3. Pure helpers that boards still need move out of it into `src/boards/<kind>/` or `src/utils/` before their participant code is deleted.
@@ -347,17 +352,16 @@ Logged in full, with rejected alternatives, in `copilot-harness-migration.md` fr
 | D9 | The stored session is a cache: shown at once, checked in the background, never trusted for a write | Maintainer |
 | D10 | One session per source; expiry after unused days, a clear command, a sessions board | Maintainer |
 | D11 | Risky board writes need a native VS Code confirmation | Maintainer |
-| D12 | Session files live in the extension's per-workspace storage folder, one file per session, not in `workspaceState` | Proposed here |
-| D13 | The session ID is derived from kind and source and travels in the canvas instance ID and page address | Proposed here |
-| D14 | A write needs a single-use plan ID issued by a preview | Proposed here |
-| D15 | One generic set of board routes; board kinds are plain objects with pure `reduce`, `plan` and `reconcile` | Proposed here |
-| D16 | The page learns of changes by a waiting state request, not by a timer or a push channel | Proposed here |
+| D12 | Session files live in the extension's per-workspace storage folder, one file per session, not in `workspaceState` | Approved |
+| D13 | The session ID is derived from kind and source and travels in the page address | Approved |
+| D14 | A write needs a single-use plan ID issued by a preview | Approved |
+| D15 | One generic set of board routes; board kinds are plain objects with pure `reduce`, `plan` and `reconcile` | Approved |
+| D16 | The page learns of changes by a waiting state request, not by a timer or a push channel | Approved |
 | D17 | A stored session of another format is discarded, never migrated | Maintainer |
 
 ---
 
-## 12. Points to confirm before code
+## 12. Not yet observed
 
-- **D12 to D16** are my proposals and need your yes or a change.
-- **Not observed yet:** that the Copilot runtime hands a restored canvas its instance ID or open input back. If it does not, a restored canvas is closed and the session is reopened from the sessions board.
-- **Not verifiable outside your machine:** canvas start in a real Copilot chat, the proxy behaviour, and real Jira and Bitbucket Data Center. Code built before those checks is covered by unit and browser tests only.
+- That the Copilot runtime hands a restored canvas its open input back. The restart repair relies on it: it reopens the canvas with the same input, and the window finds the session by its source. If it does not, a restored canvas is closed and the session is reopened from the sessions board.
+- Canvas start in a real Copilot chat, the proxy behaviour, and real Jira and Bitbucket Data Center. These are checked on the maintainer's machine; the code is covered by unit tests and a browser check of the pages against a stubbed Jira.

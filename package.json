@@ -161,6 +161,10 @@
       {
         "command": "ticket-sidekick.mcp.copyDiagnostics",
         "title": "Ticket Sidekick: Copy MCP diagnostics"
+      },
+      {
+        "command": "ticket-sidekick.sessions.clear",
+        "title": "Ticket Sidekick: Clear stored sessions"
       }
     ],
     "languageModelTools": [
@@ -321,7 +325,14 @@
               "tab"
             ],
             "default": "comma",
-            "description": "Column separator in the CSV that `@jira /security-report` and the `export` reply of a report import save. Excel with a German (or other comma-decimal) locale opens a semicolon-separated file in columns, and a comma-separated one in a single column."
+            "description": "Column separator in the CSV that the security report and the `export` reply of a report import save. Excel with a German (or other comma-decimal) locale opens a semicolon-separated file in columns, and a comma-separated one in a single column."
+          },
+          "ticketSidekick.sessions.retentionDays": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365,
+            "default": 14,
+            "description": "How many days a stored board session (a security report, list, import or review in progress) is kept after it was last used. Sessions are a cache in VS Code's storage for the workspace; `Ticket Sidekick: Clear stored sessions` deletes them all at once."
           },
           "ticketSidekick.jira.sprintBoardId": {
             "type": "number",
@@ -781,6 +792,7 @@
     "@github/copilot-sdk": "1.0.28",
     "@types/node": "^26.6.6",
     "@types/vscode": "~1.95.0",
+    "@vscode-elements/elements": "2.5.1",
     "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^4.1.0",
     "esbuild": "^0.28.2",

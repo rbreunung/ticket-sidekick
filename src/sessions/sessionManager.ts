@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import type { DiagLogger } from '../utils/diagTypes';
-import type { RegisteredKind } from './boardKind';
+import type { ExportedFile, RegisteredKind } from './boardKind';
 import { sessionIdFor } from './sessionId';
 import type { SessionStore } from './sessionStore';
 import { SessionError, type ApplyLineResult, type Conflict, type PlanLine, type Session, type SessionSummary, type WritePlan } from './sessionTypes';
@@ -49,6 +49,8 @@ export interface SessionManagerDeps {
   now(): number;
   /** The native confirmation for a risky plan; resolves false when the developer declines. */
   confirm(plan: { title: string; lines: PlanLine[] }): Promise<boolean>;
+  /** Writes a file where the developer chooses in the save dialog; false when the dialog was cancelled. */
+  saveFile(file: ExportedFile): Promise<boolean>;
   onDiag?: DiagLogger;
   /** How long a previewed plan can be applied. */
   planTtlMs?: number;
@@ -338,6 +340,19 @@ export class SessionManager {
       this.changed(entry);
       return { results: applied.results, state: this.toState(entry) };
     });
+  }
+
+  /** Saves a file built from the session through the window's save dialog. */
+  async exportFile(kindName: string, id: string, format: string): Promise<'saved' | 'cancelled'> {
+    const entry = await this.entry(kindName, id);
+    const { kind } = entry.reg;
+    const session = entry.session;
+    if (!kind.exportFile) throw new SessionError(400, 'This board does not save files.');
+    if (!session) throw new SessionError(409, 'The board is still loading.');
+    const file = await kind.exportFile(session, format, await entry.reg.deps());
+    const saved = await this.deps.saveFile(file);
+    this.log('info', saved ? 'Board file saved' : 'Board file save cancelled', { kind: kind.kind, file: file.fileName });
+    return saved ? 'saved' : 'cancelled';
   }
 
   /** Removes a session from memory and from the cache: Finish, Discard and Delete all end here. */

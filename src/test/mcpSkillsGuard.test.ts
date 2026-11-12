@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { basename, dirname, resolve } from 'path';
+import { BOARD_CANVASES } from '../canvas/openDecision';
 import {
   ADD_COMMENT_TOOL, CHECK_CONNECTION_TOOL, CREATE_TICKET_TOOL, FIND_TICKETS_TOOL, JIRA_TOOLS, LIST_TEMPLATES_TOOL,
   LOAD_TICKET_TOOL, MOVE_TICKET_TOOL, UPDATE_FIELD_TOOL, VIEW_TICKET_TOOL,
@@ -194,20 +195,22 @@ const BASIC_COMMANDS: Record<string, readonly string[]> = {
   move: [MOVE_TICKET_TOOL],
   create: [CREATE_TICKET_TOOL, '/ts-jira-create'],
   check: [CHECK_CONNECTION_TOOL],
+  'security-report': ['canvas:security-report'],
 };
 
 /** The basic commands whose tools or skills do not all exist. */
 function coverageGaps(coverage: Record<string, readonly string[]>, toolNames: readonly string[], skillNames: readonly string[]): string[] {
-  const exists = (name: string) => (name.startsWith('/') ? skillNames.includes(name.slice(1)) : toolNames.includes(name));
+  const exists = (name: string) => (name.startsWith('canvas:') ? BOARD_CANVASES.some(c => c.id === name.slice('canvas:'.length))
+    : name.startsWith('/') ? skillNames.includes(name.slice(1)) : toolNames.includes(name));
   return Object.entries(coverage).filter(([, names]) => names.length === 0 || !names.every(exists)).map(([command]) => command);
 }
 
 const skillNames = contributedSkills.map(s => basename(dirname(s.path)));
 
 describe('basic @jira commands without @jira', () => {
-  it('maps every basic @jira slash command, except the security report, to tools and skills that exist', () => {
+  it('maps every basic @jira slash command to tools, skills and canvases that exist', () => {
     const jira = pkg.contributes.chatParticipants.find((p: { id: string }) => p.id === 'ticket-sidekick.jira');
-    const commands = (jira.commands as Array<{ name: string }>).map(c => c.name).filter(name => name !== 'security-report').sort();
+    const commands = (jira.commands as Array<{ name: string }>).map(c => c.name).sort();
     expect(Object.keys(BASIC_COMMANDS).sort()).toEqual(commands);
     expect(coverageGaps(BASIC_COMMANDS, catalogNames, skillNames)).toEqual([]);
   });
@@ -244,7 +247,7 @@ describe('the /ts-jira-create skill', () => {
 describe('the /ts-jira command skill', () => {
   const router = readFileSync(resolve(root, 'skills/ts-jira/SKILL.md'), 'utf-8');
   /** The table rows: the command word and what the row does. */
-  const rows = [...router.matchAll(/^\| ([a-z]+)\b[^|]*\| ([^|]+) \|$/gm)].map(m => ({ command: m[1], action: m[2] }));
+  const rows = [...router.matchAll(/^\| ([a-z][a-z-]*)(?![a-z-])[^|]*\| ([^|]+) \|$/gm)].map(m => ({ command: m[1], action: m[2] }));
 
   it('has a row for every MCP tool, so a new tool cannot be forgotten', () => {
     const called = rows.flatMap(r => r.action.match(/\bjira_[a-z_]+/g) ?? []);
@@ -297,7 +300,7 @@ describe('the /ts-jira command skill', () => {
 
   it('prints a help line for every command of the table, in the same order', () => {
     const help = router.slice(router.indexOf('Usage: /ts-jira'), router.indexOf('```', router.indexOf('Usage: /ts-jira')));
-    const helpCommands = [...help.matchAll(/^ {2}([a-z]+)\b/gm)].map(m => m[1]);
+    const helpCommands = [...help.matchAll(/^ {2}([a-z][a-z-]*)(?![a-z-])/gm)].map(m => m[1]);
     expect(helpCommands).toEqual(rows.map(r => r.command));
   });
 });

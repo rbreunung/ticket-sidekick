@@ -102,6 +102,14 @@ By default `@jira show` already omits several noisy system fields (e.g. `statusC
 
 When enabled, every `@jira` response starts with an italic line showing the active base URL, API version, and auth type. Useful during initial setup or when switching between instances. Off by default.
 
+## Board session settings
+
+| Setting | Key | Default |
+| --- | --- | --- |
+| Session retention | `ticketSidekick.sessions.retentionDays` | `14` |
+
+A board in a Copilot chat (the security report, and later lists, imports and reviews) keeps its work in progress as a **session** in VS Code's storage for the workspace, so it survives a restart. A session not used for this many days is deleted. See [Boards in Copilot Chats](boards.md#stored-sessions).
+
 ## Report import settings
 
 | Setting | Key | Default |

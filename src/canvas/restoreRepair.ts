@@ -1,9 +1,9 @@
-import { restoreAction, SECURITY_REPORT_CANVAS_ID } from './openDecision';
+import { BOARD_CANVASES, restoreAction } from './openDecision';
 
-// After a restart the Copilot runtime may bring a security report canvas back with the address of
+// After a restart the Copilot runtime may bring a board canvas back with the address of
 // the previous start, whose port and canvas key no longer exist. The canvas program repairs each
 // one when it joins the session: it reopens the canvas once the window holding the chat's folder
-// runs again (the reopen asks that window for a fresh address, so the page reads Jira again) or
+// runs again (the reopen asks that window for a fresh address, and the page shows its stored session) or
 // closes it when that window does not come back in time. A canvas whose page still answers is left
 // alone. The wait is counted from the start of the repair, so every canvas is settled within it.
 
@@ -54,7 +54,8 @@ export async function repairRestoredCanvases(deps: RepairDeps): Promise<void> {
     return;
   }
   const started = deps.now();
-  for (const canvas of open.filter(c => c.canvasId === SECURITY_REPORT_CANVAS_ID)) {
+  const ours = new Set(BOARD_CANVASES.map(c => c.id));
+  for (const canvas of open.filter(c => ours.has(c.canvasId))) {
     for (;;) {
       const action = restoreAction({
         pageAnswers: await deps.pageAnswers(canvas.url),

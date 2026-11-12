@@ -1,8 +1,9 @@
 // The Ticket Sidekick canvas program: a small Copilot SDK extension that the extension ships as an
-// agent plugin. The Copilot runtime runs it outside every VS Code window. It declares the security
-// report canvas and, when the agent opens it, finds the window whose workspace holds the chat's
-// folder and returns that window's page address. It holds no credentials: the port and canvas key
-// come from the window notes, and the report itself is read from Jira by the extension.
+// agent plugin. The Copilot runtime runs it outside every VS Code window. It declares the board
+// canvases and, when the agent opens one, finds the window whose workspace holds the chat's folder,
+// asks it for the board's session and returns that window's page address. It holds no credentials
+// and no board data: the port and canvas key come from the window notes, and everything a board
+// shows is read and kept by the extension.
 //
 // Bundled by esbuild into one ESM file (extension.mjs); it is not compiled by tsc. The decisions it
 // takes live in openDecision.ts and selectWindow.ts, where they are tested.
@@ -13,9 +14,9 @@ import * as os from 'os';
 import { copilotHome } from '../../utils/copilotHome';
 import { isProcessAlive, readNotes, windowNotesDir } from '../windowNotes';
 import { selectWindow } from '../selectWindow';
-import { asOpenCheck, instanceIdFor, OPEN_STATUS, openAnswer, projectRequest, SECURITY_REPORT_CANVAS_ID, type OpenCheck } from '../openDecision';
+import { asBoardOpenCheck, BOARD_CANVASES, openAnswer, type BoardOpenCheck } from '../openDecision';
 import { repairRestoredCanvases } from '../restoreRepair';
-import { OPEN_CHECK_PATH } from '../openCheck';
+import { BOARD_OPEN_PATH, BOARD_PING_PATH } from '../boardPaths';
 import { appendCanvasLog, canvasLogFile } from '../canvasLog';
 
 const home = copilotHome(process.env, os.homedir());
@@ -44,11 +45,11 @@ function getJson(port: number, path: string): Promise<{ status: number; body: un
   });
 }
 
-async function openCheck(port: number, canvasKey: string, project: string | undefined): Promise<OpenCheck | undefined> {
-  const query = project ? `?project=${encodeURIComponent(project)}` : '';
+async function askWindow(port: number, canvasKey: string, kind: string, input: unknown): Promise<BoardOpenCheck | undefined> {
+  const query = `?kind=${encodeURIComponent(kind)}&input=${encodeURIComponent(JSON.stringify(input ?? {}))}`;
   try {
-    const { status, body } = await getJson(port, `/${canvasKey}${OPEN_CHECK_PATH}${query}`);
-    return status === 200 ? asOpenCheck(body) : undefined;
+    const { status, body } = await getJson(port, `/${canvasKey}${BOARD_OPEN_PATH}${query}`);
+    return status === 200 ? asBoardOpenCheck(body) : undefined;
   } catch {
     return undefined;
   }
@@ -60,7 +61,7 @@ async function pageAnswers(url: string | undefined): Promise<boolean> {
   try {
     const parsed = new URL(url);
     const key = parsed.pathname.split('/')[1] ?? '';
-    const { status } = await getJson(Number(parsed.port), `/${key}${OPEN_CHECK_PATH}`);
+    const { status } = await getJson(Number(parsed.port), `/${key}${BOARD_PING_PATH}`);
     return status === 200;
   } catch {
     return false;
@@ -68,43 +69,28 @@ async function pageAnswers(url: string | undefined): Promise<boolean> {
 }
 
 const session = await joinSession({
-  canvases: [
-    createCanvas({
-      id: SECURITY_REPORT_CANVAS_ID,
-      displayName: 'Security report',
-      description:
-        'A project\'s open Veracode and Waltz security tickets by release, with Due Date flags, read from Jira by Ticket Sidekick '
-        + 'and shown in its own tab, with filters and CSV or Excel export. Open it when the user asks for the security report. '
-        + 'Pass the project key as input.project when the user names one. Use the instance id "security-report-<PROJECT>", '
-        + 'or "security-report" when no project is named, so an open report is brought forward instead of opened twice.',
-      inputSchema: {
-        type: 'object',
-        properties: { project: { type: 'string', description: 'The Jira project key, e.g. PROJ. Leave out to use the default project.' } },
-        additionalProperties: false,
-      },
-      open: async ctx => {
-        const request = projectRequest(ctx.input);
-        if (request.kind === 'invalid') {
-          await appendCanvasLog(logFile, { event: 'open', choice: 'none', check: 'invalid-project', opened: false });
-          return { title: 'Security report', status: OPEN_STATUS.invalidProject };
-        }
-        const project = request.kind === 'valid' ? request.project : undefined;
-        const { notes } = await readNotes(notesDir);
-        const choice = selectWindow(notes, ctx.session?.workingDirectory, isProcessAlive);
-        const check = choice.kind === 'selected' ? await openCheck(choice.note.port, choice.note.canvasKey, project) : undefined;
-        const answer = openAnswer(choice, check);
-        await appendCanvasLog(logFile, {
-          event: 'open',
-          windows: notes.length,
-          choice: choice.kind,
-          check: check ? (check.ok ? 'ok' : check.reason) : 'none',
-          opened: answer.url !== undefined,
-          expectedInstance: instanceIdFor(check?.ok ? check.project : project) === ctx.instanceId,
-        });
-        return answer;
-      },
-    }),
-  ],
+  canvases: BOARD_CANVASES.map(canvas => createCanvas({
+    id: canvas.id,
+    displayName: canvas.displayName,
+    description: canvas.description,
+    inputSchema: canvas.inputSchema as never,
+    open: async ctx => {
+      const { notes } = await readNotes(notesDir);
+      const choice = selectWindow(notes, ctx.session?.workingDirectory, isProcessAlive);
+      // The window validates the request and names the session; the agent gets only the status.
+      const check = choice.kind === 'selected' ? await askWindow(choice.note.port, choice.note.canvasKey, canvas.id, ctx.input) : undefined;
+      const answer = openAnswer(canvas, choice, check);
+      await appendCanvasLog(logFile, {
+        event: 'open',
+        canvas: canvas.id,
+        windows: notes.length,
+        choice: choice.kind,
+        check: check ? (check.ok ? 'ok' : 'refused') : 'none',
+        opened: answer.url !== undefined,
+      });
+      return answer;
+    },
+  })),
 });
 
 /** The chat's working folder, read once from the session; undefined when the runtime does not tell. */
