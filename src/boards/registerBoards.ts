@@ -12,6 +12,8 @@ import { resolveCsvDelimiter } from '../utils/securityOverviewCsv';
 import type { JiraAccess } from '../mcp/jiraTools/jiraAccess';
 import { boardRoutes } from './boardRoutes';
 import { securityReportKind, type SecurityReportDeps } from './securityReport/kind';
+import { ticketListJiraDeps } from './ticketList/jiraDeps';
+import { ticketListKind } from './ticketList/kind';
 
 // VS Code glue for the boards: where sessions are stored, the native confirmation and save dialog,
 // the theme, the retention setting and the clear command. Everything it wires is free of `vscode`.
@@ -63,7 +65,13 @@ export function registerBoards(
     now: () => Date.now(),
     onDiag: log,
   };
-  const kinds = [registerKind(securityReportKind, () => securityReportDeps)];
+  const ticketListDeps = ticketListJiraDeps({
+    getJira,
+    workspaceFolder: () => vscode.workspace.workspaceFolders?.find(f => f.uri.scheme === 'file')?.uri.fsPath,
+    now: () => Date.now(),
+    onDiag: log,
+  });
+  const kinds = [registerKind(securityReportKind, () => securityReportDeps), registerKind(ticketListKind, () => ticketListDeps)];
 
   // Per workspace, outside the repository; the global folder only when no folder is open.
   const storeDir = path.join((context.storageUri ?? context.globalStorageUri).fsPath, 'sessions');

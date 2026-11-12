@@ -209,7 +209,22 @@ export class SessionManager {
     const title = reg.kind.title(validated.recipe);
     const formatBefore = (await this.deps.store.load(id))?.session.formatVersion;
     const existing = await this.find(reg, id);
-    if (existing) return { ok: true, id, title };
+    if (existing) {
+      const { reopen } = reg.kind;
+      if (reopen && existing.session) {
+        // The same source asked for again: what the new request adds is laid over the session.
+        await this.enqueue(existing, async () => {
+          const session = existing.session;
+          if (!session) return;
+          const working = reopen(session, validated.recipe);
+          if (working === session.working) return;
+          existing.session = { ...session, working, revision: session.revision + 1, lastUsedAt: this.deps.now() };
+          await this.persist(existing);
+          this.changed(existing);
+        });
+      }
+      return { ok: true, id, title };
+    }
     const entry: Entry = {
       id, reg, recipe: validated.recipe, status: 'building', tick: 1, restored: false, stored: false,
       queue: Promise.resolve(), waiters: new Set(),

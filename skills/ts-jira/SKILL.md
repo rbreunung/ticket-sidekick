@@ -22,7 +22,7 @@ Usage: /ts-jira <command> [arguments]
   help [command]              show this help, or one command's help
   load [KEY] [file ...]       load a ticket into .jira-context/
   view [KEY]                  show a ticket
-  search <JQL or filter>      find tickets
+  search <JQL or filter>      open the tickets in their own tab
   filters                     list your saved filters
   comment <KEY> <text>        add a comment
   field <KEY> <field> <value> update a field
@@ -43,7 +43,7 @@ A developer brief or a guided ticket create: help brief, help create
 | help [command] | none; see case 2 |
 | load [KEY] [file ...] | `jira_load_ticket`; the files go in `attachments` |
 | view [KEY] | `jira_view_ticket` |
-| search <JQL or filter> | `jira_find_tickets` |
+| search <JQL or filter> | open the `ticket-list` canvas, with the text as `input.jql`, or as `input.filter` when it is a saved filter's id or name |
 | filters | `jira_list_my_filters` |
 | comment <KEY> <text> | `jira_add_comment` |
 | field <KEY> <field> <value> | `jira_update_field` |

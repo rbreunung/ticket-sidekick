@@ -74,6 +74,8 @@ export function startBoard({ root, render }) {
 
   const board = {
     get state() { return state; },
+    /** Draws the page again from the current state, e.g. after a form field that is not sent yet changed the form's shape. */
+    repaint() { paint(); },
     /** A non-writing action. */
     async act(action) {
       await run(async () => { state = await api('POST', 'action', { s: sessionId, revision: state.revision, action }); });

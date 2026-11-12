@@ -1,6 +1,6 @@
 # Boards and sessions: target architecture
 
-Status: **approved by the maintainer on 2026-11-12** (R47 of [the boards plan](../plans/2026-11-11-2234-feat-boards-replace-chat-participants-plan.md)). Built so far: the session core, the generic board routes, the security report board and the sessions board.
+Status: **approved by the maintainer on 2026-11-12** (R47 of [the boards plan](../plans/2026-11-11-2234-feat-boards-replace-chat-participants-plan.md)). Built so far: the session core, the generic board routes, the security report board, the ticket list board (search, bulk move, bulk field update; not yet cleanup) and the sessions board.
 
 This page describes how Ticket Sidekick is built once the chat participants are gone: where state lives, how a canvas shows it, how a write happens, and how to add a feature. It is kept current with the code. The reasons behind earlier choices, and the options that were rejected, stay in [`copilot-harness-migration.md`](copilot-harness-migration.md); new decisions are logged there from D7 on and summarised in [section 11](#11-decisions-made-for-this-design).
 

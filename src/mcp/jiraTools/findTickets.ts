@@ -76,6 +76,8 @@ export const findTicketsTool = defineTool<JiraToolDeps, typeof findShape>({
   title: 'Find Jira tickets',
   description:
     'Finds Jira tickets by JQL or by a saved filter (id or name); give exactly one of jql and filter. '
+    + 'Use it for your own lookups and to answer a question about tickets. When the user asks to see a list of tickets, or to change more than one ticket, '
+    + 'open the ticket-list canvas instead and do not list the tickets in chat. '
     + `When the request matches one of the user's saved filters (see ${LIST_MY_FILTERS_TOOL}), use that filter rather than writing new JQL. `
     + '"My team" means the team JQL in the ticketSidekick.jira.myTeamJql setting: set myTeam to true to narrow by it instead of guessing who is on the team. '
     + 'Narrow further with fixVersion, sprint and assignee ("me" for the signed-in user). '

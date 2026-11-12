@@ -25,7 +25,8 @@ export const updateFieldTool = defineTool<JiraToolDeps, typeof updateFieldShape>
   name: UPDATE_FIELD_TOOL,
   title: 'Update a field of a Jira ticket',
   description:
-    'Sets one field of a Jira ticket: summary, description, priority, assignee, labels, components or fix version. '
+    'Sets one field of one Jira ticket: summary, description, priority, assignee, labels, components or fix version. '
+    + 'To set a field on several tickets, open the ticket-list canvas with the change as input.change; do not call this once per ticket. '
     + 'The description is written as Markdown. The answer quotes the value the field had before. '
     + 'The same value for the same field within a minute is skipped, so a repeated call does not write it twice.',
   inputSchema: updateFieldShape,

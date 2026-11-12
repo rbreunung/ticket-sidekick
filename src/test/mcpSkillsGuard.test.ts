@@ -189,7 +189,7 @@ describe('the section-order check', () => {
 const BASIC_COMMANDS: Record<string, readonly string[]> = {
   view: [VIEW_TICKET_TOOL],
   load: [LOAD_TICKET_TOOL],
-  search: [FIND_TICKETS_TOOL],
+  search: ['canvas:ticket-list', FIND_TICKETS_TOOL],
   comment: [ADD_COMMENT_TOOL],
   field: [UPDATE_FIELD_TOOL],
   move: [MOVE_TICKET_TOOL],
@@ -252,7 +252,8 @@ describe('the /ts-jira command skill', () => {
   it('has a row for every MCP tool, so a new tool cannot be forgotten', () => {
     const called = rows.flatMap(r => r.action.match(/\bjira_[a-z_]+/g) ?? []);
     // Creating is left to the /ts-jira-create skill, which drafts the ticket with the user first.
-    const direct = catalogNames.filter(name => name !== CREATE_TICKET_TOOL);
+    // Finding is for Copilot's own lookups and questions; a list for the user opens the ticket list board.
+    const direct = catalogNames.filter(name => name !== CREATE_TICKET_TOOL && name !== FIND_TICKETS_TOOL);
     expect([...new Set(called)].sort()).toEqual([...direct].sort());
   });
 

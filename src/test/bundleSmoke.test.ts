@@ -178,7 +178,7 @@ describe('the agent plugin with the canvas program', () => {
 
   it('ships the board pages with the shared client, style and the VS Code Elements bundle', () => {
     const pages = path.join(root, 'out', 'canvas-pages');
-    for (const file of ['shared/board.js', 'shared/board.css', 'shared/vscode-elements.js', 'security-report/index.html', 'security-report/page.js', 'sessions/index.html', 'sessions/page.js']) {
+    for (const file of ['shared/board.js', 'shared/board.css', 'shared/vscode-elements.js', 'security-report/index.html', 'security-report/page.js', 'ticket-list/index.html', 'ticket-list/page.js', 'sessions/index.html', 'sessions/page.js']) {
       expect(fs.existsSync(path.join(pages, file)), file).toBe(true);
     }
     expect(fs.readFileSync(path.join(root, '.vscodeignore'), 'utf8')).toContain('!out/canvas-pages/**');
@@ -186,7 +186,7 @@ describe('the agent plugin with the canvas program', () => {
 
   it('loads no script or style from the web in a board page', () => {
     const pages = path.join(root, 'canvas-pages');
-    for (const board of ['security-report', 'sessions']) {
+    for (const board of ['security-report', 'ticket-list', 'sessions']) {
       const html = fs.readFileSync(path.join(pages, board, 'index.html'), 'utf8');
       expect(html).not.toMatch(/(?:src|href)="(?:https?:)?\/\//);
       expect(html).not.toMatch(/<script(?![^>]*\bsrc=)[^>]*>|style=/);

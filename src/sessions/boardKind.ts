@@ -46,6 +46,8 @@ export interface BoardKind<R, D, W, A, V, X> {
   /** A short description of the source for the sessions board. */
   sourceLabel(recipe: R): string;
   initialWorking(recipe: R): W;
+  /** The working state when the board is asked for again with a new request, e.g. another proposed change. */
+  reopen?(session: Session<R, D, W>, recipe: R): W;
   /** Reads the sources. Used to build a new session and to check a stored one. */
   read(recipe: R, deps: X): Promise<DerivedPart<D>>;
   /** Lays the stored working state over a fresh reading and names what no longer fits. */

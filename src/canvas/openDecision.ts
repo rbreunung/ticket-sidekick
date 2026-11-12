@@ -15,6 +15,7 @@ export interface BoardCanvas {
 }
 
 export const SECURITY_REPORT_CANVAS_ID = 'security-report';
+export const TICKET_LIST_CANVAS_ID = 'ticket-list';
 export const SESSIONS_CANVAS_ID = 'sessions';
 
 export const BOARD_CANVASES: readonly BoardCanvas[] = [
@@ -29,6 +30,38 @@ export const BOARD_CANVASES: readonly BoardCanvas[] = [
     inputSchema: {
       type: 'object',
       properties: { project: { type: 'string', description: 'The Jira project key, e.g. PROJ. Leave out to use the default project.' } },
+      additionalProperties: false,
+    },
+  },
+  {
+    id: TICKET_LIST_CANVAS_ID,
+    displayName: 'Ticket list',
+    description:
+      'The Jira tickets of a JQL query or a saved filter, shown by Ticket Sidekick in their own tab, where the user selects tickets and moves them '
+      + 'to a status or sets a field on them after a preview. Open it whenever the user asks to see a list of tickets, to search Jira, or to change '
+      + 'more than one ticket; do not list the tickets in chat and do not change them one by one. Pass input.jql or input.filter (a saved filter\'s '
+      + 'id or name). When the user asked for a change, pass it as input.change: {"type":"transition","status":"Closed","resolution":"Fixed"} or '
+      + '{"type":"field","field":"labels","value":"cleanup"}; the board shows it as proposed and writes nothing until the user applies it. '
+      + 'You get back only whether it opened, never the tickets. Use the instance id "ticket-list-" followed by a short name of the query.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        jql: { type: 'string', description: 'A JQL query, e.g. project = PROJ AND status = Done.' },
+        filter: { type: 'string', description: 'A saved filter\'s id or name, in place of jql.' },
+        change: {
+          type: 'object',
+          description: 'A change the user asked for, shown as proposed.',
+          properties: {
+            type: { type: 'string', enum: ['transition', 'field'] },
+            status: { type: 'string', description: 'For a transition: the status to move to.' },
+            resolution: { type: 'string', description: 'For a transition: the resolution to set, if any.' },
+            field: { type: 'string', description: 'For a field change: the field\'s name or id.' },
+            value: { type: 'string', description: 'For a field change: the new value.' },
+          },
+          required: ['type'],
+          additionalProperties: false,
+        },
+      },
       additionalProperties: false,
     },
   },
