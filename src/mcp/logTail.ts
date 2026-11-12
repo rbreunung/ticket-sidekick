@@ -3,8 +3,8 @@ import * as path from 'path';
 
 // VS Code writes why it could not start an MCP server into its own log files, not into anything an
 // extension can ask for. For the diagnostics report, this reads the newest lines about MCP from
-// the log files of the current window. Addresses other than this computer's are masked, since a
-// line may name another server's host.
+// the log files of the current window. Addresses other than this computer's, home folders (they
+// carry the user's name), temporary folders and long values are masked.
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_LINE_CHARS = 400;
@@ -13,6 +13,10 @@ const RELEVANT = /mcp|ticket.?sidekick/i;
 /** Masks every address that is not this computer's, and anything shaped like a long key. */
 export function maskLogLine(line: string): string {
   return line
+    // A home folder carries the user's name: /Users/<name>, /home/<name>, C:\\Users\\<name>.
+    .replace(/(\/(?:Users|home)\/|[A-Za-z]:\\Users\\)[^\/\\\s"'<>:]+/g, '~')
+    // A temporary folder's path is as good as an account id on macOS.
+    .replace(/\/var\/folders\/[^\s"'<>#]+/g, '<temporary folder>')
     .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>)]+/gi, url => (/^https?:\/\/(127\.0\.0\.1|localhost)(?=[:/]|$)/i.test(url) ? url.replace(/(:\d+)\/[^\s]*/, '$1/…') : '<address>'))
     .replace(/[A-Za-z0-9_-]{32,}/g, '<long value>')
     .slice(0, MAX_LINE_CHARS);

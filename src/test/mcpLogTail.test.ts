@@ -47,6 +47,12 @@ describe('VS Code\'s log lines about MCP', () => {
     expect(masked).toBe('[error] mcp <address> failed, tried http://127.0.0.1:63521/… with <long value>');
   });
 
+  it('leaves the user name out of home and temporary folder paths', () => {
+    expect(maskLogLine('[info] [CopilotCLI] MCP server started. Lock file: /Users/ada/.copilot/ide/abc.lock')).toBe('[info] [CopilotCLI] MCP server started. Lock file: ~/.copilot/ide/abc.lock');
+    expect(maskLogLine('mcp at /home/ada/x and C:\\Users\\Ada\\AppData\\y')).toBe('mcp at ~/x and ~\\AppData\\y');
+    expect(maskLogLine('[info] Server URI: unix:/var/folders/g3/cm_ftx8x7dz1/T/mcp-XncrNC/mcp.sock#%2Fmcp')).toBe('[info] Server URI: unix:<temporary folder>#%2Fmcp');
+  });
+
   it('answers with nothing when the folder does not exist', async () => {
     expect(await collectMcpLogLines(path.join(dir, 'missing'), 40)).toEqual([]);
   });
