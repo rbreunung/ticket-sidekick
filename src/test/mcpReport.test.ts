@@ -294,3 +294,41 @@ describe('the canvas section of the report', () => {
   });
 });
 
+
+describe('what the report says about VS Code\'s side', () => {
+  const host = {
+    build: 'abc1234 built 2026-11-12T18:00:00.000Z', installFolder: '/home/ada/.vscode/extensions/robertbreunung.ticket-sidekick-0.9.0',
+    otherCopies: [], provideCalls: 2, lastProvideAt: '2026-11-12T18:01:00.000Z', resolveCalls: [], toolsListed: 0,
+    selfCheck: { socket: 'HTTP 200 in 3 ms', http: 'HTTP 200 in 4 ms' }, sameNameIn: [],
+  };
+
+  it('says when VS Code knows the server but never tried to start it', () => {
+    const report = buildReport(facts({ host }));
+    expect(report).toContain('VS Code asked for the server definition: 2 time(s), last at 2026-11-12T18:01:00.000Z');
+    expect(report).toContain('VS Code asked to start the server: 0 time(s)');
+    expect(report).toContain('Reading: VS Code knows the server but never tried to start it through the extension.');
+    expect(report).toContain('Build: abc1234 built 2026-11-12T18:00:00.000Z');
+  });
+
+  it('lists each start request, and gives no reading once VS Code has started the server', () => {
+    const report = buildReport(facts({ host: { ...host, resolveCalls: ['2026-11-12T18:02:00.000Z for "Ticket Sidekick" holding port 50001: given port 50002'], toolsListed: 14 } }));
+    expect(report).toContain('VS Code asked to start the server: 1 time(s): 2026-11-12T18:02:00.000Z for "Ticket Sidekick" holding port 50001: given port 50002');
+    expect(report).toContain('Tools of this server VS Code offers to chats: 14');
+    expect(report).not.toContain('never tried to start it');
+  });
+
+  it('points at the proxy when the server answers directly but not through the proxy handling', () => {
+    const report = buildReport(facts({ host: { ...host, selfCheck: { socket: 'HTTP 200 in 3 ms', http: 'ECONNRESET in 40 ms' } } }));
+    expect(report).toContain('Reading: the server answers, but a request through the proxy handling does not reach it.');
+  });
+
+  it('names other copies of the extension and configuration files with a server of the same name, with ~ for the home folder', () => {
+    const report = buildReport(facts({
+      home: { dir: '/home/ada', windows: false },
+      host: { ...host, otherCopies: ['robertbreunung.ticket-sidekick-0.8.2'], sameNameIn: ['/home/ada/.copilot/mcp-config.json'] },
+    }));
+    expect(report).toContain('Runs from: ~/.vscode/extensions/robertbreunung.ticket-sidekick-0.9.0');
+    expect(report).toContain('Other copies of the extension next to it: robertbreunung.ticket-sidekick-0.8.2');
+    expect(report).toContain('A server of the same name in: ~/.copilot/mcp-config.json');
+  });
+});

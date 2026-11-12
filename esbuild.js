@@ -36,8 +36,21 @@ function copyCanvasPages() {
 }
 copyCanvasPages();
 
+// Which commit and when: shown in the diagnostics report, so an installed build can be told from another of the same version.
+function buildId() {
+  let commit = 'unknown';
+  try {
+    commit = require('child_process').execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+    if (require('child_process').execSync('git status --porcelain', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim()) commit += '+changes';
+  } catch {
+    // Built outside a git checkout.
+  }
+  return `${commit} built ${new Date().toISOString()}`;
+}
+
 Promise.all([
   build({
+    define: { __TS_BUILD__: JSON.stringify(buildId()) },
     entryPoints: ['./src/extension.ts'],
     bundle: true,
     outfile: './out/extension.js',

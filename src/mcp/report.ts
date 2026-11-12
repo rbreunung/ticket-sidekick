@@ -40,6 +40,26 @@ export interface JiraFacts {
   tokenPresent: boolean;
 }
 
+/** What the extension can observe of VS Code's side of the connection. */
+export interface HostFacts {
+  /** The build the running extension was made from. */
+  build: string;
+  /** Where the extension runs from, and other installed copies of it next to that folder. */
+  installFolder: string;
+  otherCopies: string[];
+  /** How often VS Code asked for the server definition, and when last. */
+  provideCalls: number;
+  lastProvideAt?: string;
+  /** Each time VS Code asked for the address and key to start the server. */
+  resolveCalls: string[];
+  /** The tools of this server that VS Code offers to chats. */
+  toolsListed: number;
+  /** The extension's own requests to its server; undefined when the server is not running. */
+  selfCheck?: { socket: string; http: string };
+  /** MCP configuration files that name a server like this one, which can make VS Code disable one of the two. */
+  sameNameIn: string[];
+}
+
 export interface ReportFacts {
   generatedAt: string;
   vscodeVersion: string;
@@ -59,6 +79,7 @@ export interface ReportFacts {
   home: { dir: string; windows: boolean };
   /** The newest lines of the canvas program's log, as written (keys are masked here). */
   canvasLog: string[];
+  host?: HostFacts;
 }
 
 function list(values: string[]): string {
@@ -146,6 +167,33 @@ export function buildReport(f: ReportFacts): string {
     lines.push(`Resolve requests served: ${s.resolveServed}, refused: ${s.resolveRefused}`, '');
 
     const { stats } = s;
+    const h = f.host;
+    if (h) {
+      lines.push(`VS Code asked for the server definition: ${h.provideCalls} time(s)${h.lastProvideAt ? `, last at ${h.lastProvideAt}` : ''}`);
+      lines.push(`VS Code asked to start the server: ${h.resolveCalls.length} time(s)${h.resolveCalls.length ? `: ${h.resolveCalls.join('; ')}` : ''}`);
+      lines.push(`Tools of this server VS Code offers to chats: ${h.toolsListed}`);
+      if (h.provideCalls > 0 && h.resolveCalls.length === 0 && h.toolsListed === 0) {
+        lines.push('Reading: VS Code knows the server but never tried to start it through the extension. Look at "MCP: List Servers" for its state, and below for a server of the same name.');
+      }
+      lines.push('');
+      lines.push('## Self check');
+      if (!h.selfCheck) lines.push('Not run: the server is not running.');
+      else {
+        lines.push(`Direct to 127.0.0.1 (plain socket): ${h.selfCheck.socket}`);
+        lines.push(`Through VS Code's proxy handling (Node http): ${h.selfCheck.http}`);
+        if (h.selfCheck.socket.startsWith('HTTP 200') && !h.selfCheck.http.startsWith('HTTP 200')) {
+          lines.push('Reading: the server answers, but a request through the proxy handling does not reach it. A proxy setting takes requests to 127.0.0.1 elsewhere.');
+        }
+      }
+      lines.push('');
+      lines.push('## Installation');
+      lines.push(`Build: ${h.build}`);
+      lines.push(`Runs from: ${withHomeAsTilde(h.installFolder, f.home)}`);
+      lines.push(`Other copies of the extension next to it: ${list(h.otherCopies)}`);
+      lines.push(`A server of the same name in: ${list(h.sameNameIn.map(p => withHomeAsTilde(p, f.home)))}`);
+      lines.push('');
+    }
+
     lines.push('## Requests (since the last start)');
     lines.push(`MCP requests with a valid key: ${stats.allowed.mcp ?? 0}`);
     lines.push(`Canvas requests with a valid key: ${stats.allowed.canvas ?? 0}`);

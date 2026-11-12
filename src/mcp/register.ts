@@ -17,6 +17,9 @@ import { windowNotesDir, WindowNoteKeeper } from '../canvas/windowNotes';
 import { createCanvasHandler } from '../canvas/canvasRoutes';
 import { registerBoards } from '../boards/registerBoards';
 import { canvasLogFile, readCanvasLog } from '../canvas/canvasLog';
+import * as fs from 'fs';
+import { checkOverHttp, checkOverSocket } from './selfCheck';
+import type { HostFacts } from './report';
 
 // VS Code glue for the extension's MCP server. The server runs exactly while 127.0.0.1 is in
 // `http.noProxy`: it starts at activation when the entry is there, starts or stops when the entry
@@ -39,6 +42,73 @@ const PROXY_NOTICE =
 
 /** How many of the canvas program's newest log lines the diagnostics report shows. */
 const CANVAS_LOG_LINES = 20;
+
+declare const __TS_BUILD__: string | undefined;
+/** The commit and time the bundle was built from, set by esbuild; "development" when run unbundled. */
+const BUILD_ID = typeof __TS_BUILD__ === 'string' ? __TS_BUILD__ : 'development';
+
+/** What VS Code asked of the provider since activation, for the diagnostics report. */
+const providerCalls = { provide: 0, lastProvideAt: undefined as string | undefined, resolves: [] as string[] };
+const MAX_RESOLVE_LINES = 10;
+
+/** A server name as VS Code compares it for collisions: letters and digits only, lower case. */
+function plainName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/** The MCP configuration files, of those given, that name a server like ours. */
+async function filesNamingOurServer(files: string[]): Promise<string[]> {
+  const ours = plainName(MCP_SERVER_LABEL);
+  const found: string[] = [];
+  for (const file of files) {
+    try {
+      const parsed = JSON.parse(await fs.promises.readFile(file, 'utf8')) as { servers?: Record<string, unknown>; mcpServers?: Record<string, unknown> };
+      const names = [...Object.keys(parsed.servers ?? {}), ...Object.keys(parsed.mcpServers ?? {})];
+      if (names.some(name => plainName(name) === ours)) found.push(file);
+    } catch {
+      // No such file, or not JSON: nothing to report.
+    }
+  }
+  return found;
+}
+
+async function hostFacts(context: vscode.ExtensionContext, controller: McpServerController<JiraToolDeps> | undefined): Promise<HostFacts> {
+  const folder = context.extensionPath;
+  let otherCopies: string[] = [];
+  try {
+    const own = path.basename(folder);
+    otherCopies = (await fs.promises.readdir(path.dirname(folder))).filter(name => /ticket-sidekick/i.test(name) && name !== own);
+  } catch {
+    // The parent folder cannot be listed: report none.
+  }
+  const port = controller?.port();
+  const key = controller?.currentKey();
+  const selfCheck = port !== undefined && key
+    ? await Promise.all([checkOverSocket(port, key), checkOverHttp(port, key)]).then(([socket, viaHttp]) => ({
+        socket: `${socket.outcome} in ${socket.ms} ms`, http: `${viaHttp.outcome} in ${viaHttp.ms} ms`,
+      }))
+    : undefined;
+  const userDir = path.dirname(context.globalStorageUri.fsPath);
+  const candidates = [
+    path.join(path.dirname(userDir), 'mcp.json'),
+    path.join(copilotHome(process.env, os.homedir()), 'mcp-config.json'),
+    ...(vscode.workspace.workspaceFolders ?? []).filter(f => f.uri.scheme === 'file').flatMap(f => [
+      path.join(f.uri.fsPath, '.vscode', 'mcp.json'), path.join(f.uri.fsPath, '.mcp.json'),
+    ]),
+  ];
+  return {
+    build: BUILD_ID,
+    installFolder: folder,
+    otherCopies,
+    provideCalls: providerCalls.provide,
+    lastProvideAt: providerCalls.lastProvideAt,
+    resolveCalls: [...providerCalls.resolves],
+    // VS Code lists a server's tools under names that end in the tool's own name.
+    toolsListed: (vscode.lm?.tools ?? []).filter(tool => JIRA_TOOLS.some(t => tool.name === t.name || tool.name.endsWith(`_${t.name}`))).length,
+    selfCheck,
+    sameNameIn: await filesNamingOurServer(candidates),
+  };
+}
 
 let active: McpServerController<JiraToolDeps> | undefined;
 let activeNotes: WindowNoteKeeper | undefined;
@@ -156,7 +226,11 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
   });
   activeNotes = notes;
 
-  const version = extensionVersion(context);
+  // VS Code keeps a server's tools and state per definition version. A build installed from a file
+  // has the version of the release it was branched from, so the commit is added: VS Code then sees
+  // a new server and does not reuse what it kept for the other build.
+  const commit = /^[0-9a-f]{7,}/.exec(BUILD_ID)?.[0];
+  const version = commit ? `${extensionVersion(context)}+${commit}` : extensionVersion(context);
   const toDefinition = (api: McpApi, d: McpDefinition) =>
     new api.McpHttpServerDefinition(MCP_SERVER_LABEL, vscode.Uri.parse(d.url), { ...d.headers }, version);
   const changed = new vscode.EventEmitter<void>();
@@ -168,12 +242,21 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
       onDidChangeMcpServerDefinitions: changed.event,
       provideMcpServerDefinitions: () => {
         const definition = started.definition();
+        providerCalls.provide++;
+        providerCalls.lastProvideAt = new Date().toISOString();
+        log('info', `VS Code asked for the server definition (${definition ? 'one offered' : 'none offered'})`);
         return definition ? [toDefinition(mcp, definition)] : [];
       },
       // VS Code calls this just before it connects, so a client always gets the current port and
       // key, never those of an earlier start; while stopped it gets nothing.
-      resolveMcpServerDefinition: () => {
+      resolveMcpServerDefinition: (asked: { label?: string; uri?: { toString(): string } }) => {
         const definition = started.resolveDefinition();
+        // The port VS Code held tells whether it was working from an earlier start's definition.
+        const heldPort = /:(\d+)\//.exec(asked?.uri?.toString() ?? '')?.[1] ?? 'none';
+        const line = `${new Date().toISOString()} for "${asked?.label ?? ''}" holding port ${heldPort}: ${definition ? `given port ${started.port()}` : 'refused, server stopped'}`;
+        providerCalls.resolves.push(line);
+        if (providerCalls.resolves.length > MAX_RESOLVE_LINES) providerCalls.resolves.shift();
+        log('info', `VS Code asked to start the server: ${line}`);
         return definition ? toDefinition(mcp, definition) : undefined;
       },
     }),
@@ -266,6 +349,7 @@ async function buildDiagnostics(
     keyScan,
     home: { dir: os.homedir(), windows: process.platform === 'win32' },
     canvasLog: await readCanvasLog(canvasLogFile(copilotHome(process.env, os.homedir())), CANVAS_LOG_LINES),
+    host: await hostFacts(context, controller),
   };
   const canvasKey = controller?.canvasAccess()?.canvasKey;
   return redact(buildReport(facts), [key ?? '', canvasKey ?? '', config.token ?? '', bitbucket.token ?? '']);
