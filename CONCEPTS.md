@@ -35,6 +35,14 @@ An import action that rebuilds an existing ticket's title, description and label
 ### Stale ticket
 An open Jira ticket carrying an importer's marker label whose findings are all gone from the current report or no longer match the importer's remediation filter. Applies to both Veracode and Waltz imports. A stale ticket is only offered for a transition, never moved automatically, and a ticket moved to a non-final status stays stale on later imports because it is still open.
 
+## Copilot Chat Surfaces
+
+### Canvas
+A tab in VS Code's editor area that the Copilot agent opens from a chat and whose page the extension serves and fills itself. In this project a canvas holds a large artifact you look at or work on (the security report now, import and review boards later), while talk and decisions stay in the chat. Distinct from an inline MCP App view, which sits inside a chat answer.
+
+### Security report
+A project's unresolved Veracode and Waltz tickets grouped by Fix Version, with Due Date flags (overdue, due before release), shown by `@jira /security-report` or the security report canvas and saved as CSV or Excel. Code and developer docs call the same thing the "security overview".
+
 ## Bitbucket Review
 
 ### Findings funnel

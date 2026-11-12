@@ -29,6 +29,8 @@ Settings for email, Veracode and OSS report imports are listed under [Report imp
 
 When set, the `create` command skips the project input box and uses this key automatically. You can still override it by including a project key in your prompt.
 
+The key is checked when VS Code starts and again after you change it. A value that is not a project key (a project key starts with a letter and has only letters, digits and `_`), or a project Jira does not have, brings up a warning with an **Open Setting** button. When Jira cannot be reached or is not set up yet, only the key's form is checked.
+
 **Optional: sprint board ID**
 
 ```json

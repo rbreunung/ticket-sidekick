@@ -24,3 +24,12 @@ export function validateBaseUrl(url: string | undefined): string | null {
   }
   return null;
 }
+
+/** What a Jira project key looks like: a letter, then letters, digits or `_`, compared in upper case. */
+export const PROJECT_KEY_PATTERN = /^[A-Z][A-Z0-9_]{0,49}$/;
+
+/** The project key in upper case, or undefined when the text is not a project key. */
+export function normalizeProjectKey(text: string): string | undefined {
+  const key = text.trim().toUpperCase();
+  return PROJECT_KEY_PATTERN.test(key) ? key : undefined;
+}

@@ -38,6 +38,10 @@ const h = vi.hoisted(() => ({
   chatSettings: {} as Record<string, unknown>,
   progressOptions: undefined as { cancellable?: boolean } | undefined,
   cancelRequested: false,
+  folderListeners: [] as Array<() => unknown>,
+  canvasesEnabled: true as unknown,
+  defaultProject: undefined as string | undefined,
+  folders: [{ uri: { fsPath: '/work/a', scheme: 'file' } }] as Array<{ uri: { fsPath: string; scheme: string } }>,
 }));
 
 vi.mock('vscode', () => {
@@ -54,7 +58,9 @@ vi.mock('vscode', () => {
     ...(section === 'chat' ? h.chatSettings : {}),
     get: (key: string, fallback?: unknown) => {
       if (section === 'http' && key === 'noProxy') return h.noProxy;
+      if (section === 'chat' && key === 'canvases.enabled') return h.canvasesEnabled;
       if (section === 'ticketSidekick' && key === 'jira.baseUrl') return 'https://jira.example.com';
+      if (section === 'ticketSidekick' && key === 'jira.defaultProject') return h.defaultProject ?? fallback;
       return fallback;
     },
     update: async () => { h.configUpdates++; },
@@ -88,7 +94,8 @@ vi.mock('vscode', () => {
     },
     ProgressLocation: { Notification: 15 },
     workspace: {
-      workspaceFolders: [{ uri: { fsPath: '/work/a' } }],
+      get workspaceFolders() { return h.folders; },
+      onDidChangeWorkspaceFolders: (listener: () => unknown) => { h.folderListeners.push(listener); return { dispose: () => undefined }; },
       getConfiguration: (section?: string) => configuration(section),
       onDidChangeConfiguration: (listener: (e: { affectsConfiguration(key: string): boolean }) => unknown) => {
         h.configListeners.push(listener);
@@ -197,6 +204,10 @@ beforeEach(() => {
   h.chatSettings = {};
   h.progressOptions = undefined;
   h.cancelRequested = false;
+  h.folderListeners = [];
+  h.canvasesEnabled = true;
+  h.defaultProject = undefined;
+  h.folders = [{ uri: { fsPath: '/work/a', scheme: 'file' } }];
 });
 
 afterEach(async () => {
@@ -204,6 +215,117 @@ afterEach(async () => {
   await deactivateMcp();
   delete process.env.COPILOT_HOME;
   fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+function windowNote(): { port: number; canvasKey: string; workspaceFolders: string[] } | undefined {
+  const file = path.join(tmp, 'copilot-home', 'ticket-sidekick', 'windows', `window-${process.pid}.json`);
+  return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : undefined;
+}
+
+/** Lets the note keeper finish the write or removal a lifecycle change started. */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 20; i++) await new Promise(resolve => setTimeout(resolve, 5));
+}
+
+describe('the window note for canvases', () => {
+  it('is written with the server\'s port, a canvas key and the window\'s folders while the server runs', async () => {
+    await activate({ withApi: true });
+    const note = windowNote();
+    expect(note?.port).toBe(portOf(offered()[0]));
+    expect(note?.canvasKey).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(note?.canvasKey).not.toBe(bearerOf(offered()[0]));
+    expect(note?.workspaceFolders).toEqual(['/work/a']);
+  });
+
+  it('is removed when the http.noProxy entry is removed, and written again when it comes back', async () => {
+    await activate({ withApi: true });
+    await changeNoProxy([]);
+    await settle();
+    expect(windowNote()).toBeUndefined();
+    await changeNoProxy(['127.0.0.1']);
+    await settle();
+    expect(windowNote()?.port).toBe(portOf(offered()[0]));
+  });
+
+  it('lists a workspace folder added while the server runs', async () => {
+    await activate({ withApi: true });
+    h.folders = [...h.folders, { uri: { fsPath: '/work/b', scheme: 'file' } }];
+    h.folderListeners.forEach(l => l());
+    await settle();
+    expect(windowNote()?.workspaceFolders).toEqual(['/work/a', '/work/b']);
+  });
+
+  it('is removed on deactivation', async () => {
+    await activate({ withApi: true });
+    await deactivateMcp();
+    expect(windowNote()).toBeUndefined();
+  });
+
+  it('is not written while the server is not running', async () => {
+    h.noProxy = [];
+    await activate({ withApi: true });
+    await settle();
+    expect(windowNote()).toBeUndefined();
+  });
+});
+
+/** A GET to the window's own server under its canvas key, as the canvas program sends it. */
+function canvasGet(port: number, path: string): Promise<{ status: number; body: unknown }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, path, method: 'GET' }, res => {
+      let text = '';
+      res.on('data', chunk => { text += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body: res.headers['content-type']?.includes('json') ? JSON.parse(text) : text }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+describe('the open check the canvas program asks before it opens a page', () => {
+  it('answers through the window\'s server, under the key its note names, for the asked or the default project', async () => {
+    h.token = 'jira-pat';
+    h.defaultProject = 'PAY';
+    await activate({ withApi: true });
+    const note = windowNote()!;
+    expect(await canvasGet(note.port, `/${note.canvasKey}/api/open-check?project=proj`)).toEqual({ status: 200, body: { ok: true, project: 'PROJ' } });
+    expect(await canvasGet(note.port, `/${note.canvasKey}/api/open-check`)).toEqual({ status: 200, body: { ok: true, project: 'PAY' } });
+  });
+
+  it('says Jira is not set up when this window has no Jira token, and asks for a project when none is known', async () => {
+    await activate({ withApi: true });
+    const note = windowNote()!;
+    expect((await canvasGet(note.port, `/${note.canvasKey}/api/open-check?project=PROJ`)).body).toEqual({ ok: false, reason: 'not-configured' });
+    expect((await canvasGet(note.port, `/${note.canvasKey}/api/open-check`)).body).toEqual({ ok: false, reason: 'no-project' });
+  });
+
+  it('refuses the bearer key of the MCP endpoint in place of the canvas key', async () => {
+    await activate({ withApi: true });
+    const note = windowNote()!;
+    expect((await canvasGet(note.port, `/${bearerOf(offered()[0])}/api/open-check?project=PROJ`)).status).toBe(401);
+  });
+});
+
+describe('the startup notice for canvases', () => {
+  const CANVAS_NOTICE = /security report opens as a canvas in Copilot chats.*chat\.canvases\.enabled/;
+
+  it('appears at every start while canvases are off, and offers to open the setting', async () => {
+    h.canvasesEnabled = false;
+    await activate({ withApi: true });
+    expect(h.infoMessages.filter(m => CANVAS_NOTICE.test(m))).toHaveLength(1);
+  });
+
+  it('does not appear while canvases are on', async () => {
+    await activate({ withApi: true });
+    expect(h.infoMessages.filter(m => CANVAS_NOTICE.test(m))).toEqual([]);
+  });
+
+  it('opens the setting when chosen, and never changes it', async () => {
+    h.canvasesEnabled = undefined;
+    await activate({ withApi: true, choice: 'Open Setting' });
+    expect(h.executed).toContainEqual(['workbench.action.openSettings', 'chat.canvases.enabled']);
+    expect(h.configUpdates).toBe(0);
+  });
 });
 
 describe('MCP server lifecycle', () => {

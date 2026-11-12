@@ -9,9 +9,14 @@ import { JIRA_TOOLS } from './jiraTools/catalog';
 import { RecentCallGuard } from '../tools/recentCallGuard';
 import type { JiraAccess, JiraToolDeps } from './jiraTools/jiraAccess';
 import { evaluateNoProxy, loopbackBypassConfigured } from './proxyBypass';
-import { copilotHome, buildReport, redact, scanForSecret, DEFAULT_SCAN_LIMITS, type ReportFacts } from './report';
+import { buildReport, redact, scanForSecret, DEFAULT_SCAN_LIMITS, type ReportFacts } from './report';
 import { McpServerController, type McpDefinition } from './serverController';
 import { detectMcpApi, type McpApi } from './vscodeMcpTypes';
+import { copilotHome } from '../utils/copilotHome';
+import { windowNotesDir, WindowNoteKeeper } from '../canvas/windowNotes';
+import { createCanvasHandler } from '../canvas/canvasRoutes';
+import { openCheckRoute } from '../canvas/openCheck';
+import { canvasLogFile, readCanvasLog } from '../canvas/canvasLog';
 
 // VS Code glue for the extension's MCP server. The server runs exactly while 127.0.0.1 is in
 // `http.noProxy`: it starts at activation when the entry is there, starts or stops when the entry
@@ -32,7 +37,11 @@ const PROXY_NOTICE =
   + 'so that Copilot\'s requests to the extension on this computer do not go through your network proxy. '
   + 'Once you add it, the tools appear without a restart.';
 
+/** How many of the canvas program's newest log lines the diagnostics report shows. */
+const CANVAS_LOG_LINES = 20;
+
 let active: McpServerController<JiraToolDeps> | undefined;
+let activeNotes: WindowNoteKeeper | undefined;
 
 function log(level: LogLevel, message: string, details?: Record<string, unknown>): void {
   logDiag('mcp', level, message, details);
@@ -61,6 +70,18 @@ function mcpAllowed(): boolean {
 
 function extensionVersion(context: vscode.ExtensionContext): string {
   return String((context.extension?.packageJSON as { version?: string } | undefined)?.version ?? 'unknown');
+}
+
+const CANVAS_NOTICE =
+  'Ticket Sidekick: the security report opens as a canvas in Copilot chats, and canvases are off (chat.canvases.enabled). '
+  + 'Turn the setting on to use it, where your organisation allows it.';
+
+/** Shown at every start while canvases are off; the extension never changes the setting itself. */
+function showCanvasNoticeIfOff(): void {
+  if (vscode.workspace.getConfiguration('chat').get<unknown>('canvases.enabled') === true) return;
+  void vscode.window.showInformationMessage(CANVAS_NOTICE, OPEN_SETTING_CHOICE).then(choice => {
+    if (choice === OPEN_SETTING_CHOICE) void vscode.commands.executeCommand('workbench.action.openSettings', 'chat.canvases.enabled');
+  });
 }
 
 function showProxyNotice(): void {
@@ -97,10 +118,13 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
     return Promise.resolve();
   }
 
+  // Only folders on this computer's disk: git, the template file and the workflow cache are read there.
+  const localFolders = () => (vscode.workspace.workspaceFolders ?? []).filter(f => f.uri.scheme === 'file').map(f => f.uri.fsPath);
+  showCanvasNoticeIfOff();
+
   const toolDeps: JiraToolDeps = {
     getJira: () => getJira(configService),
-    // Only folders on this computer's disk: git, the template file and the workflow cache are read there.
-    workspaceFolders: () => (vscode.workspace.workspaceFolders ?? []).filter(f => f.uri.scheme === 'file').map(f => f.uri.fsPath),
+    workspaceFolders: localFolders,
     recentWrites: new RecentCallGuard(),
     onDiag: (level, message, details) => logDiag('mcp.tools', level, message, details),
   };
@@ -109,10 +133,30 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
     toolDeps,
     serverInfo: { name: 'ticket-sidekick', version: extensionVersion(context) },
     isMcpAllowed: mcpAllowed,
+    onCanvas: createCanvasHandler(
+      [
+        openCheckRoute({
+          isJiraConfigured: async () => configService.isConfigured(await configService.getConfig()),
+          defaultProject: () => vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.defaultProject') ?? '',
+        }),
+      ],
+      message => logDiag('canvas', 'error', 'Canvas request failed', { error: message }),
+      served => logDiag('canvas', served.status >= 400 ? 'warn' : 'info', `${served.method} ${served.path}: ${served.status}`, { ms: served.ms }),
+    ),
     onDiag: log,
   });
   controller = started;
   active = started;
+  // The note the canvas program reads to find this window's server: written while the server
+  // runs, kept in step with the workspace folders, removed when the server stops.
+  const notes = new WindowNoteKeeper({
+    dir: windowNotesDir(copilotHome(process.env, os.homedir())),
+    pid: process.pid,
+    access: () => started.canvasAccess(),
+    workspaceFolders: localFolders,
+    onError: message => log('warn', 'Could not update the window note for canvases', { error: message }),
+  });
+  activeNotes = notes;
 
   const version = extensionVersion(context);
   const toDefinition = (api: McpApi, d: McpDefinition) =>
@@ -120,7 +164,8 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
   const changed = new vscode.EventEmitter<void>();
   context.subscriptions.push(
     changed,
-    started.onDidChange(() => changed.fire()),
+    started.onDidChange(() => { changed.fire(); void notes.sync(); }),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => { void notes.sync(); }),
     mcp.registerMcpServerDefinitionProvider(MCP_PROVIDER_ID, {
       onDidChangeMcpServerDefinitions: changed.event,
       provideMcpServerDefinitions: () => {
@@ -140,7 +185,7 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
     }),
   );
 
-  if (mcpAllowed()) return started.start('activation');
+  if (mcpAllowed()) return started.start('activation').then(() => notes.whenIdle());
   log('info', 'MCP server not started: 127.0.0.1 is not in http.noProxy');
   showProxyNotice();
   return Promise.resolve();
@@ -148,8 +193,11 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
 
 export async function deactivateMcp(): Promise<void> {
   const controller = active;
+  const notes = activeNotes;
   active = undefined;
+  activeNotes = undefined;
   await controller?.stop('deactivate');
+  await notes?.remove();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -219,6 +267,8 @@ async function buildDiagnostics(
     chatSettings: chatSettings(),
     keyScan,
     home: { dir: os.homedir(), windows: process.platform === 'win32' },
+    canvasLog: await readCanvasLog(canvasLogFile(copilotHome(process.env, os.homedir())), CANVAS_LOG_LINES),
   };
-  return redact(buildReport(facts), [key ?? '', config.token ?? '', bitbucket.token ?? '']);
+  const canvasKey = controller?.canvasAccess()?.canvasKey;
+  return redact(buildReport(facts), [key ?? '', canvasKey ?? '', config.token ?? '', bitbucket.token ?? '']);
 }

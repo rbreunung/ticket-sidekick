@@ -68,6 +68,7 @@ function facts(overrides: Partial<ReportFacts> = {}): ReportFacts {
     chatSettings: { 'chat.mcp.discovery.enabled': true },
     keyScan: scan(),
     home: { dir: '/home/u', windows: false },
+    canvasLog: [],
     ...overrides,
   };
 }
@@ -275,3 +276,21 @@ describe('scanForSecret', () => {
     expect(buildReport(facts({ keyScan: result }))).toContain('search cancelled: 1 files checked; the rest was not searched');
   });
 });
+
+describe('the canvas section of the report', () => {
+  it('shows the newest canvas log lines with any key masked, including another window\'s', () => {
+    const otherWindowKey = 'Zq9-' + 'k'.repeat(39);
+    const report = buildReport(facts({
+      canvasLog: [`{"event":"open","choice":"selected"}`, `{"event":"restore","url":"http://127.0.0.1:5/${otherWindowKey}/x"}`],
+    }));
+    expect(report).toContain('## Canvas');
+    expect(report).toContain('{"event":"open","choice":"selected"}');
+    expect(report).toContain('/[key]/x');
+    expect(report).not.toContain(otherWindowKey);
+  });
+
+  it('says so when there is no canvas log', () => {
+    expect(buildReport(facts({ canvasLog: [] }))).toContain('No canvas log yet.');
+  });
+});
+

@@ -149,3 +149,31 @@ describe('bundled extension (out/extension.js)', () => {
     expect(registered.tools.filter(name => name.startsWith('jira_'))).toEqual([]);
   });
 });
+
+describe('the agent plugin with the canvas program', () => {
+  const pluginPath = (manifest.contributes as { chatPlugins?: Array<{ path: string }> }).chatPlugins?.[0]?.path ?? '';
+  const pluginDir = path.join(root, pluginPath);
+  const canvasDir = path.join(pluginDir, 'com.github.copilot', 'extensions', 'ticket-sidekick');
+
+  beforeAll(() => {
+    execFileSync(process.execPath, ['esbuild.js'], { cwd: root, stdio: 'pipe' });
+  }, 120_000);
+
+  it('is contributed from the build output and carries the extension\'s version', () => {
+    expect(pluginPath).toBe('./out/plugin');
+    const plugin = JSON.parse(fs.readFileSync(path.join(pluginDir, 'plugin.json'), 'utf8'));
+    expect(plugin.name).toBe('ticket-sidekick');
+    expect(plugin.version).toBe((manifest as { version?: string }).version);
+  });
+
+  it('contains the bundled canvas program as an ES module', () => {
+    expect(fs.existsSync(path.join(canvasDir, 'extension.mjs'))).toBe(true);
+    expect(JSON.parse(fs.readFileSync(path.join(canvasDir, 'package.json'), 'utf8'))).toMatchObject({ type: 'module', main: 'extension.mjs' });
+  });
+
+  it('is packaged into the .vsix', () => {
+    const ignore = fs.readFileSync(path.join(root, '.vscodeignore'), 'utf8').split(/\r?\n/);
+    expect(ignore).toContain('!out/plugin/**');
+  });
+});
+
