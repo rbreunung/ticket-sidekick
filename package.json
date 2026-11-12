@@ -789,7 +789,7 @@
     "test:e2e": "node esbuild.js && tsc -p ./ && node ./out/e2e/runTest.js"
   },
   "devDependencies": {
-    "@github/copilot-sdk": "1.0.28",
+    "@github/copilot-sdk": "1.0.31",
     "@types/node": "^26.6.6",
     "@types/vscode": "~1.95.0",
     "@vscode-elements/elements": "2.5.1",
