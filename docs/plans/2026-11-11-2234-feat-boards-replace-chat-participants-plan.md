@@ -13,9 +13,9 @@ execution: code
 ## Goal Capsule
 
 - **Objective:** A developer does all Ticket Sidekick work in a Copilot chat: searches, cleanup, bulk edits, report imports and PR reviews included. Nothing needs `@jira`, `@bitbucket` or the Local harness any more.
-- **Means:** Three boards on the canvas foundation of the security report (ticket list, import, PR review), Bitbucket tools on the MCP server with a `/ts-bitbucket` command, and two new `/ts-jira` commands. Each release deletes the participant flows it replaces.
+- **Means:** A session model in the extension with a cache on disk, and on it four canvases: the security report, a ticket list board, an import board and a PR review board. Bitbucket tools on the MCP server with a `/ts-bitbucket` command, and new `/ts-jira` commands. Each release deletes the participant flows it replaces.
 - **Product authority:** The decisions in this Product Contract, made by the maintainer. Where this plan and `docs/architecture/copilot-harness-migration.md` disagree, this plan wins.
-- **Open blockers:** None for planning. Implementation starts only after the security report canvas is merged to `main` (R31).
+- **Open blockers:** None for planning. Board code starts only after the maintainer approved the architecture page (R47).
 
 ---
 
@@ -23,8 +23,9 @@ execution: code
 
 ### Summary
 
-Three boards open as canvas tabs from a Copilot chat and replace the remaining `@jira` and `@bitbucket` flows: a ticket list board, an import board for Veracode, Waltz and email, and a PR review board.
-They ship in that order. Each release deletes the participant flows it replaces, and after the third no chat participant is left.
+Boards open as canvas tabs from a Copilot chat and replace the remaining `@jira` and `@bitbucket` flows: a ticket list board, an import board for Veracode, Waltz and email, and a PR review board.
+Each board shows a session that the extension owns and caches on disk, so a reload or restart reconnects to the same work. The security report canvas moves onto the same model.
+The boards ship in that order. Each release deletes the participant flows it replaces, and after the third no chat participant is left.
 
 ### Problem Frame
 
@@ -32,6 +33,8 @@ Release 0.9.0 moved the single-ticket Jira work to MCP tools and skills. The lar
 Chat participants do not run in the Copilot harness, which VS Code uses for new chats. A developer in a Copilot chat therefore has to switch harness for the larger work, and an organisation can turn the Local harness off altogether.
 
 About 15,000 lines of participant and handler code are carried next to the new surface. Every user-facing change has to consider both.
+
+A participant kept each multi-turn flow's state in `workspaceState` and showed it as chat text. A canvas replaces the text, but not the place where that state lives. Without one, a board loses unapplied work on every reload, and a half-finished ticket merge loses the record of which steps already ran.
 
 ### Key Decisions
 
@@ -54,11 +57,16 @@ Made for this plan:
 - **All ticket lists shown to the user go on a canvas, built once as a general ticket list board.** (session-settled: user-directed — chosen over bulk review in chat with one batch tool.) Governs R7 to R9.
 - **The agent keeps its find tool for its own lookups and for questions.** (session-settled: user-approved — chosen over removing the tool, and over a board for bulk work only.) Governs R12.
 - **The agent may fill in the query and a proposed change, never the row choice.** (session-settled: user-approved — chosen over query only, and over a selection made by the model.) Governs R10.
-- **A proposed change is not restored after a restart.** A change the model proposed should not reappear unseen. Governs R13.
+- **A change the agent proposed is part of the session and is restored with it.** It stays marked as proposed until the developer applies or removes it. Governs R10.
 - **An import is driven on the board only; the agent opens it and learns whether that worked.** (session-settled: user-approved — chosen over agent actions on the board, and over chat-driven imports with a read-only board: the board keeps large report tables out of the chat's context.) Governs R17.
 - **An import board keeps every action of today's review screens.** (session-settled: user-approved — chosen over dropping export, and over a core-first release.) Governs R16.
 - **An import starts on the board, with an optional path from chat or from a file dragged into the chat.** (session-settled: user-directed — chosen over board-only file choice and over keeping the Command Palette commands.) Governs R14, R15, R34.
-- **Every board returns after a restart, and the latest review findings per PR are kept.** (session-settled: user-approved — chosen over import boards that stay closed, over replaying unapplied import choices, and over rebuilding with nothing kept: a restored review must not spend model tokens unasked.) Governs R4, R13, R19, R26.
+- **The extension owns a session per board run; the page is a view of it.** (session-settled: user-approved — chosen over state kept in the page, and over rebuilding from the sources on every load: reload, reopened tab and restart reconnect to the same work, and every action is checked in the extension.) Governs R51, R52.
+- **A session is stored in full.** (session-settled: user-directed — chosen over storing only working state and review findings, which would keep vulnerability rows off disk: every board can then show the stored state next to the fresh one.) Governs R53, R56.
+- **The stored session is a cache; Jira, Bitbucket and the report file stay the truth.** (session-settled: user-approved — chosen over checking only on Refresh, and over reading fresh before showing anything.) Governs R55, R57.
+- **One session per source, with expiry, a clear command and a sessions board.** (session-settled: user-directed — chosen over no list, over deleting a session when its tab closes, and over keeping sessions until cleared.) Governs R54, R58, R60.
+- **The sessions list is its own small board.** (session-settled: user-approved — chosen over a tool answer in chat, and over a VS Code quick pick.) Governs R60.
+- **The security report canvas is finished inside this plan, on the session model.** (session-settled: user-directed — chosen over merging its branch first and aligning later, and over leaving it sessionless.) Governs R31, R61.
 - **A dragged report is accepted with its cost.** (session-settled: user-approved — chosen over dropping the drag entry, and over excluding email: the board exists to save context, not to hide reports from the model.) Governs R15.
 - **Bulk, closing and Bitbucket writes from a board also need a native VS Code confirmation.** (session-settled: user-approved — chosen over a dialog for every board write, over accepting the risk, and over leaving the mechanism to planning: the canvas key is readable by every process of the user, the agent's tools included.) Governs R39.
 - **Lists and multi-ticket changes go to the board, by instruction.** (session-settled: user-approved — chosen over write tools that refuse a run of changes, and over typed commands only.) Governs R44.
@@ -78,7 +86,7 @@ Made for this plan:
 - **The minimum VS Code version rises in step 1.** (session-settled: user-directed — chosen over raising it with the last step, and over keeping the floor and showing a notice.) Governs R36.
 - **The target architecture is documented and approved before any board code.** (session-settled: user-directed — chosen over writing the page while step 1 is built, over rewriting the migration document, and over a folder of separate decision records: the design is settled in advance and later feature work reads one page.) Governs R47 to R49.
 - **The work ends with a full documentation review.** (session-settled: user-directed.) Governs R50.
-- **The Output Channel is the only record of board writes.** (session-settled: user-approved — chosen over a result list on the board and over a journal file: nothing new is stored.) Governs R5.
+- **The Output Channel is the only record of board writes.** (session-settled: user-approved — chosen over a result list on the board and over a journal file: no separate audit record is kept.) Governs R5.
 
 ### Actors
 
@@ -93,23 +101,37 @@ Made for this plan:
 - R1. Each board of this plan is a canvas that the agent opens from a Copilot chat and whose page the extension serves, on the canvas foundation the security report canvas introduced.
 - R2. When a canvas cannot open, the command answers with one message that names the cause: canvases are off or `127.0.0.1` is missing from `http.noProxy`, each with the setting to change, or no open window holds the chat's folder.
 - R3. Every write from a board shows a preview of exactly what will be written and runs only after a second Apply click.
-- R4. A board stores nothing on disk except the review findings of R26.
+- R4. A page holds no state of its own. Everything it shows comes from its session (R51).
 - R5. Every board write is logged to the "Ticket Sidekick" Output Channel with its ticket or PR, action and outcome.
 - R6. Only the window whose folder holds the chat's folder serves a board.
 - R39. A board write that changes more than one ticket, closes a ticket or posts to Bitbucket also needs a native VS Code confirmation, so a request that carries only the canvas key cannot write.
 - R45. A prompt that belongs to a board run is a step on that board: the first model pick, the requirements-pass choice and the email consent. No model call starts before the choice, and the board shows afterwards which model ran.
 - R46. Every board control, row selection, preview and Apply works by keyboard with a visible focus order, and results are exposed as text a screen reader announces.
 
+**Sessions and the cache**
+
+- R51. Each board run is a session with an ID that the extension owns. The page displays the session and sends actions; the extension applies and checks every action.
+- R52. A session holds its recipe (report path, query, PR link or project), the data derived from the sources, and the developer's working state: choices, selections, the current screen, and runs in progress with their finished and pending steps.
+- R53. A session is stored in full in the extension's storage for the workspace. It is never written into the repository and never holds credentials.
+- R54. There is one session per source. Opening the same report file, query, PR or project again continues its session.
+- R55. A board opens at once from the stored session with a line saying when its data was read, then reads the sources in the background; Refresh does the same on demand. A PR review is never run again automatically; the board only marks that the PR has moved.
+- R56. Where the stored session and the fresh reading differ, the board can show both, marks each conflict, and lets the developer resolve or drop each one.
+- R57. Every Apply first reads again the tickets or PR it is about to change and refuses the ones that changed since the board last read them.
+- R58. A session is deleted when the developer finishes or discards it, when it has not been used for a number of days set in a setting (default 14), or by the command "Ticket Sidekick: Clear stored sessions".
+- R59. A stored session whose format does not match the running extension is discarded with a notice and never migrated.
+- R60. `/ts-jira sessions` opens a sessions board: one row per stored session with source, kind, age and size, with Reopen, Delete and Delete all. The agent learns only whether it opened.
+- R61. The security report canvas runs on the same model: one session per project, opened from the cache under R55, with its filters and sort kept as working state.
+
 **Ticket list board**
 
 - R7. A search by JQL or saved filter, a cleanup, or a bulk change the developer asks for opens the ticket list board with one row per ticket.
 - R8. The developer selects rows and applies a bulk transition or a bulk field update under R3; the board shows the result per ticket.
 - R9. Cleanup is the ticket list board loaded from the `cleanupRules` in `.jira-templates.json`, with the same rules and extra fields as today's cleanup review.
-- R10. The agent may open the board with a query and a proposed change, a target status or a field and value. The board then opens with all matching rows selected and the change filled in.
+- R10. The agent may open the board with a query and a proposed change, a target status or a field and value. The board then opens with all matching rows selected and the change filled in and marked as proposed.
 - R11. The agent learns only whether the board opened, never the rows.
 - R12. The agent keeps its find tool for its own lookups and for questions the developer asks about tickets.
 - R44. The tool descriptions and skills tell the agent to open the board for a request to see a ticket list or to change more than one ticket, and not to list rows in chat or change tickets one by one. Where no board can open, a plain request gets the message of R2 as well.
-- R13. After a VS Code restart a restored board comes back as a working page, or is closed when its window does not return. The ticket list board returns with a fresh Jira reading for its query, no selection and no proposed change.
+- R13. A board that VS Code brings back after a restart or reload reconnects to its session and shows it under R55. It is closed when the window that holds its chat's folder does not return.
 
 **Import board**
 
@@ -118,7 +140,7 @@ Made for this plan:
 - R16. Every action of today's import review screens exists as a board control with the same rules and results: create, merge and unmerge rows, accept and unaccept CVEs and components (Waltz), add rows to an existing ticket as comment or rewrite, the per-row actions on already-ticketed items, merge tickets, stale close, search, and export.
 - R17. The agent only opens the import board and learns whether that worked. It has no actions on the board and gets no report data from it.
 - R18. The email kind keeps the boilerplate cleanup step with its consent before any email text goes to a model. It has two outcomes: create tickets, or add one email as a comment to an existing ticket.
-- R19. An import board restored under R13 is rebuilt from its report path with a fresh reading of the file and Jira; unapplied choices are lost. For Veracode and Waltz, tickets already created appear as already ticketed.
+- R19. A restored import board continues its session: unapplied choices and a half-finished merge run with its finished and pending steps are still there.
 - R43. Before it creates tickets from emails, the board searches the project for tickets whose summary matches an email's subject and marks likely repeats. The developer decides for each one.
 
 **PR review board**
@@ -129,7 +151,7 @@ Made for this plan:
 - R23. A comment the agent posts on its own goes through the tool approval dialog, not through the board.
 - R24. A setting names the model for the review passes. When it is empty, the first review asks the developer to pick from the models available to them and writes the choice to that setting. The setting and its pick step ship in step 2. The monthly token counters keep their per-model split.
 - R25. A second setting names the model for the email boilerplate check and falls back to the review model when empty. With both empty, the check asks for a model as R24 does.
-- R26. The findings of the latest review of each PR are kept in VS Code's workspace storage. A review board restored under R13 shows them without running the review again, and the agent can still read them.
+- R26. Review findings are part of the review's session. A restored review board shows them without running the review again, and the agent can still read them.
 - R27. Bitbucket offers MCP tools to read a PR, read its diff, post a comment and read review findings, and a typed `/ts-bitbucket` command with `review <url> [quick|smart|deep]`, `check`, `usage` and `help`. A plain request with a PR link also starts a review.
 
 **New `/ts-jira` commands**
@@ -143,8 +165,8 @@ Made for this plan:
 
 **Delivery and removal**
 
-- R31. Implementation starts after the security report canvas, including its page and `/ts-jira security-report`, is merged to `main`.
-- R32. The work ships in three steps, in this order, after the architecture page of R47: ticket list board with R28, R29 and R40 to R42, import board, PR review board with R27.
+- R31. This plan takes over the security report canvas from its branch: the canvas foundation already built there is reused, and its page is built on the session model (R61) instead of that plan's sessionless page.
+- R32. The work ships in three steps, in this order, after the architecture page of R47 and a foundation step with the session model, the security report canvas and the sessions board (R51 to R61): ticket list board with R28, R29 and R40 to R42, import board, PR review board with R27.
 - R33. Each step deletes the participant flows it replaces. Step 1 removes every `@jira` flow except the imports, including `/security-report`, each only once its row in the Replacement Map is in place. Step 2 removes the imports and `@jira` itself. Step 3 removes `@bitbucket` and the three Bitbucket Agent Mode tools.
 - R34. Step 2 removes the three Command Palette import commands.
 - R35. Each step first goes out on the preview channel with the old flows already removed. It becomes a normal release only after a written manual checklist passes on the maintainer's managed machine, with proxy, canvases and real Jira and Bitbucket Data Center.
@@ -212,14 +234,17 @@ Every `@jira` and `@bitbucket` command, with what replaces it and the step that 
 
 - AE1. **Covers R2.** Given `chat.canvases.enabled` is off, when the developer types `/ts-jira search assignee = currentUser()`, then the answer is one message naming that setting and how to turn it on, and no ticket list appears in chat.
 - AE2. **Covers R10, R3.** Given the agent opened the ticket list board with the status "Closed" proposed for 12 tickets, when the developer deselects 2 rows and clicks Apply after the preview, then 10 tickets are transitioned and the board shows 10 results.
-- AE3. **Covers R13.** Given a ticket list board with a proposed change and 5 selected rows, when VS Code restarts and the board comes back, then it shows a fresh reading with nothing selected and no change filled in.
-- AE4. **Covers R19.** Given a Waltz import with 3 tickets created and 2 unapplied merges, when VS Code restarts and the board comes back, then the 3 tickets appear as already ticketed and the merges are gone.
+- AE3. **Covers R13, R55.** Given a ticket list board with a proposed change and 5 selected rows, when VS Code restarts and the board comes back, then it shows the same rows, selection and proposed change at once with the time they were read, and then checks Jira in the background.
+- AE4. **Covers R19, R56.** Given a Waltz import with 3 tickets created, 2 unapplied merges and a merge run stopped after its second step, when VS Code restarts and the board comes back, then the merges and the run are still there. Given a colleague closed one of the merge targets meanwhile, then that merge is marked as a conflict the developer resolves or drops.
 - AE5. **Covers R15, R17.** Given a report path typed in chat, when the board opens loaded, then the agent's result says only that the board opened and the chat holds no report content.
 - AE6. **Covers R24.** Given the review model setting is empty, when the first review starts, then the developer is asked to pick a model, and the next review does not ask again.
 - AE7. **Covers R25.** Given the email model setting is empty and the review model is set, when the developer consents to the boilerplate check, then the check runs with the review model.
 - AE8. **Covers R26.** Given a review board was open, when VS Code restarts and the board comes back, then it shows the same findings, no review runs, and "explain finding 3" still works in chat.
 - AE10. **Covers R39.** Given a preview of 10 transitions, when the developer clicks Apply, then a VS Code dialog asks to confirm and nothing is written before it is accepted. Given a request sent straight to the board's write route with the canvas key, when no dialog is accepted, then nothing is written.
 - AE11. **Covers R43.** Given an email whose subject matches the summary of an existing ticket in the project, when the email board lists it, then it is marked as a likely repeat with that ticket's key and is not selected for creation.
+- AE13. **Covers R57.** Given 10 selected tickets of which one was moved in Jira after the board read it, when the developer applies a transition, then 9 tickets are moved and the tenth is refused with the reason.
+- AE14. **Covers R58, R59.** Given a session last used 15 days ago and the default setting, when the extension starts, then that session is deleted. Given a session stored by an older format, when its board is opened, then a notice says it was discarded and the board starts from the sources.
+- AE15. **Covers R54.** Given an unfinished import of `report.xml`, when the developer asks to import `report.xml` again, then the existing session opens with its choices.
 - AE12. **Covers R44, R2.** Given canvases are off, when the developer asks in plain words to move five tickets to Closed, then the answer is the message of R2 and no ticket is moved.
 - AE9. **Covers R33, R35.** Given step 1 is out as a preview, when a colleague on the stable channel types `@jira search`, then it still works until the step becomes a normal release.
 
@@ -235,7 +260,7 @@ Every `@jira` and `@bitbucket` command, with what replaces it and the step that 
 This plan covers the three boards, the Bitbucket tools and `/ts-bitbucket` command, the two `/ts-jira` commands and the removal of both participants. The breakdown below is the current understanding, not a committed roadmap.
 
 - Security report canvas (`docs/plans/2026-11-09-2237-feat-security-report-canvas-plan.md`, on its feature branch).
-  - This plan depends on its canvas foundation, its shared look and its restart repair, and starts after it is merged.
+  - This plan takes over that work (R31): it keeps the canvas foundation, the shared look and the page's content, and replaces "nothing is stored, rebuilt fresh" (its R8, R11, R13) with the session model.
 - Jira tools over MCP, released in 0.9.0 (`docs/plans/2026-11-05-2037-feat-jira-mcp-tools-copilot-harness-plan.md`).
   - Shares the MCP server, the `/ts-jira` command and the approval dialog this plan builds on.
 - Later candidates, not planned here: agent actions on the import board, Copilot CLI and the GitHub Copilot app as hosts, remote canvases.
@@ -248,10 +273,9 @@ This plan covers the three boards, the Bitbucket tools and `/ts-bitbucket` comma
 - Deferred: remote canvases, where the agent host runs on another machine.
 - Not in this work: a journal or audit file of decisions and writes, as `docs/architecture/copilot-harness-migration.md` proposes.
 - Not in this work: a fallback surface without canvases. Considered and not built: the same page in a plain editor tab; a stable VS Code release that breaks canvas opening with no fix announced would reopen it.
-- Not in this work: keeping or replaying unapplied import choices across a restart.
+- Not in this work: migrating a stored session from an older format (R59), or sharing sessions between machines or workspaces.
 - Not in this work: an Explain control on the review board, or a show-first rule for drafted text.
 - Not in this work: pointer commands in the Command Palette for imports.
-- Not in this work: any change to the security report canvas itself.
 
 ### Dependencies / Assumptions
 
@@ -259,7 +283,7 @@ This plan covers the three boards, the Bitbucket tools and `/ts-bitbucket` comma
 - The canvas program runs again when a session resumes and can close or reopen its canvases. The security report plan lists this as not yet observed.
 - VS Code's Language Model API can be called by the extension outside a chat participant, as its documentation states.
 - A file dragged into a Copilot chat reaches the agent with a path it can pass on when it opens a canvas. This is not yet observed.
-- The Copilot runtime hands a restored canvas its original open input (query, report path or PR link), so the extension stores no recipe itself. This is not yet observed; without it R13 closes the board.
+- The Copilot runtime hands a restored canvas its original open input (query, report path or PR link), or at least its instance ID, from which the extension finds the session. This is not yet observed; without it R13 closes the board and the session stays reachable through the sessions board.
 - Model access is checked on the managed machine at the start of step 2: the extension can call a model outside a chat participant, also with the Local harness disallowed. If it cannot, the review design is reopened before `@bitbucket` is removed.
 - A canvas open request can carry the query, proposed change or report path the agent passes.
 - Colleagues on the stable channel keep the old flows only until each step becomes a normal release; afterwards a machine with canvases off can do single-ticket work only, and a machine without the `http.noProxy` entry has no Ticket Sidekick tools at all, because the MCP server does not start without it.
@@ -275,7 +299,8 @@ Deferred to Planning:
 - The ticket list board's columns, sorting, and its empty, error and partial-failure states with a retry.
 - How the import board lays out its groups and its multi-step actions: stale close, merge, add to ticket.
 - How a bulk field value is entered for different field types.
-- How long kept review findings stay in workspace storage, and what clears them.
+- How a conflict is shown and resolved on each board, within R56.
+- How large a stored session may grow, and what happens at the limit.
 - How the native confirmation of R39 is tied to the previewed write, so the dialog names exactly what Apply will do.
 - Whether the organisation plans to turn the Local harness off, and when. It changes urgency, not scope.
 
