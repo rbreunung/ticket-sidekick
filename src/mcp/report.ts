@@ -253,7 +253,9 @@ export function buildReport(f: ReportFacts): string {
   lines.push('## Settings');
   const settings = Object.entries(f.chatSettings);
   if (settings.length === 0) lines.push('(no chat.mcp or sandbox settings found)');
-  for (const [key, value] of settings) lines.push(`${key} = ${JSON.stringify(value)}`);
+  // A setting's value may be a path under the home folder, which carries the user's name.
+  const withoutHome = (text: string) => text.replace(/((?:\/|%2F|\\\\)(?:Users|home)(?:\/|%2F|\\\\))[^\/\\%"',\]\s]+/gi, '$1~');
+  for (const [key, value] of settings) lines.push(`${key} = ${withoutHome(JSON.stringify(value))}`);
   lines.push('');
 
   lines.push('## Stored key search');

@@ -171,6 +171,12 @@ describe('the agent plugin with the canvas program', () => {
     expect(JSON.parse(fs.readFileSync(path.join(canvasDir, 'package.json'), 'utf8'))).toMatchObject({ type: 'module', main: 'extension.mjs' });
   });
 
+  it('carries a skill, so VS Code 1.146 does not drop it as an empty plugin', () => {
+    const skill = fs.readFileSync(path.join(pluginDir, 'skills', 'ts-boards', 'SKILL.md'), 'utf8');
+    expect(skill).toMatch(/^---\nname: ts-boards\n/);
+    for (const id of ['security-report', 'ticket-list', 'sessions']) expect(skill).toContain(`\`${id}\``);
+  });
+
   it('is packaged into the .vsix', () => {
     const ignore = fs.readFileSync(path.join(root, '.vscodeignore'), 'utf8').split(/\r?\n/);
     expect(ignore).toContain('!out/plugin/**');

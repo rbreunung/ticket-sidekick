@@ -332,3 +332,12 @@ describe('what the report says about VS Code\'s side', () => {
     expect(report).toContain('A server of the same name in: ~/.copilot/mcp-config.json');
   });
 });
+
+describe('settings values in the report', () => {
+  it('leave the user name out of paths under the home folder', () => {
+    const report = buildReport(facts({ chatSettings: { 'chat.plugins.marketplaces': ['github/copilot-plugins', 'file:///c%3A/Users/ada/git/my-plugin', 'file:///Users/ada/Dev/x'] } }));
+    expect(report).not.toContain('ada');
+    expect(report).toContain('file:///c%3A/Users/~/git/my-plugin');
+    expect(report).toContain('github/copilot-plugins');
+  });
+});

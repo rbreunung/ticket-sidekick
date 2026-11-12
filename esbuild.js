@@ -22,6 +22,11 @@ function writePluginFiles() {
   const manifest = JSON.parse(fs.readFileSync('./plugin/plugin.json', 'utf8'));
   fs.mkdirSync(pluginDir, { recursive: true });
   fs.writeFileSync(path.join(pluginDir, 'plugin.json'), JSON.stringify({ ...manifest, version }, null, 2) + '\n');
+  // VS Code up to 1.146 passes a plugin to the agent host only when it finds a skill, agent, command,
+  // hook, instruction or MCP server in it; a plugin with nothing but a canvas program is dropped
+  // (microsoft/vscode#347397, fixed for 1.147). The skill keeps the plugin from looking empty.
+  fs.rmSync(path.join(pluginDir, 'skills'), { recursive: true, force: true });
+  fs.cpSync('./plugin/skills', path.join(pluginDir, 'skills'), { recursive: true });
   const pkg = { name: 'ticket-sidekick-canvases', version, private: true, type: 'module', main: 'extension.mjs' };
   fs.writeFileSync(path.join(canvasDir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
 }

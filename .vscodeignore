@@ -27,3 +27,4 @@ out/**
 !out/plugin/**
 !out/canvas-pages/**
 canvas-pages/
+plugin/**
