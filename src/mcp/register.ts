@@ -290,13 +290,13 @@ export async function deactivateMcp(): Promise<void> {
 // Diagnostics
 // ---------------------------------------------------------------------------------------------
 
-/** The chat.mcp.* and sandbox settings, flattened to dotted keys. */
+/** The chat settings about MCP, plugins, canvases, the harness, managed customization and the sandbox, flattened to dotted keys. */
 function chatSettings(): Record<string, unknown> {
   const flat: Record<string, unknown> = {};
   const walk = (value: unknown, prefix: string) => {
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       for (const [k, v] of Object.entries(value as Record<string, unknown>)) walk(v, `${prefix}.${k}`);
-    } else if (/sandbox|^chat\.mcp\./i.test(prefix)) {
+    } else if (/sandbox|^chat\.mcp\.|mcp|plugin|managed|customization|canvas|harness/i.test(prefix)) {
       flat[prefix] = value;
     }
   };
