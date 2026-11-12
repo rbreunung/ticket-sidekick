@@ -58,6 +58,8 @@ export interface HostFacts {
   selfCheck?: { socket: string; http: string };
   /** MCP configuration files that name a server like this one, which can make VS Code disable one of the two. */
   sameNameIn: string[];
+  /** The newest lines about MCP from VS Code's own log files of this window, masked. */
+  vscodeLog?: string[];
 }
 
 export interface ReportFacts {
@@ -191,6 +193,13 @@ export function buildReport(f: ReportFacts): string {
       lines.push(`Runs from: ${withHomeAsTilde(h.installFolder, f.home)}`);
       lines.push(`Other copies of the extension next to it: ${list(h.otherCopies)}`);
       lines.push(`A server of the same name in: ${list(h.sameNameIn.map(p => withHomeAsTilde(p, f.home)))}`);
+      lines.push('');
+    }
+
+    if (h?.vscodeLog) {
+      lines.push("## VS Code's own log about MCP (this window, newest lines)");
+      if (h.vscodeLog.length === 0) lines.push('No line about MCP in this window\'s log files.');
+      else lines.push(...h.vscodeLog.map(line => `- ${line}`));
       lines.push('');
     }
 

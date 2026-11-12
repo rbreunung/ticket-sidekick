@@ -19,6 +19,7 @@ import { registerBoards } from '../boards/registerBoards';
 import { canvasLogFile, readCanvasLog } from '../canvas/canvasLog';
 import * as fs from 'fs';
 import { checkOverHttp, checkOverSocket } from './selfCheck';
+import { collectMcpLogLines } from './logTail';
 import type { HostFacts } from './report';
 
 // VS Code glue for the extension's MCP server. The server runs exactly while 127.0.0.1 is in
@@ -50,6 +51,8 @@ const BUILD_ID = typeof __TS_BUILD__ === 'string' ? __TS_BUILD__ : 'development'
 /** What VS Code asked of the provider since activation, for the diagnostics report. */
 const providerCalls = { provide: 0, lastProvideAt: undefined as string | undefined, resolves: [] as string[] };
 const MAX_RESOLVE_LINES = 10;
+/** How many of VS Code's own log lines about MCP the diagnostics report shows. */
+const VSCODE_LOG_LINES = 40;
 
 /** A server name as VS Code compares it for collisions: letters and digits only, lower case. */
 function plainName(name: string): string {
@@ -107,6 +110,8 @@ async function hostFacts(context: vscode.ExtensionContext, controller: McpServer
     toolsListed: (vscode.lm?.tools ?? []).filter(tool => JIRA_TOOLS.some(t => tool.name === t.name || tool.name.endsWith(`_${t.name}`))).length,
     selfCheck,
     sameNameIn: await filesNamingOurServer(candidates),
+    // The extension's log folder is <logs>/<session>/window<n>/exthost/<extension id>.
+    vscodeLog: await collectMcpLogLines(path.dirname(path.dirname(context.logUri.fsPath)), VSCODE_LOG_LINES),
   };
 }
 
