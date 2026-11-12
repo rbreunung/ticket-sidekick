@@ -59,6 +59,7 @@ Promise.all([
     platform: 'node',
   }),
   build({
+    define: { __TS_BUILD__: JSON.stringify(buildId()) },
     entryPoints: ['./src/canvas/launcher/extension.ts'],
     bundle: true,
     outfile: `${canvasDir}/extension.mjs`,

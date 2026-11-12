@@ -23,6 +23,8 @@ const home = copilotHome(process.env, os.homedir());
 const notesDir = windowNotesDir(home);
 const logFile = canvasLogFile(home);
 const REQUEST_TIMEOUT_MS = 3_000;
+declare const __TS_BUILD__: string | undefined;
+const BUILD = typeof __TS_BUILD__ === 'string' ? __TS_BUILD__ : 'development';
 
 /** A GET to a window's loopback server, straight to 127.0.0.1 and never through a proxy. */
 function getJson(port: number, path: string): Promise<{ status: number; body: unknown }> {
@@ -68,6 +70,10 @@ async function pageAnswers(url: string | undefined): Promise<boolean> {
   }
 }
 
+// Written before anything else, so the diagnostics report can tell a program that never started
+// from one that started and could not join the chat session.
+await appendCanvasLog(logFile, { event: 'program-start', node: process.version, canvases: BOARD_CANVASES.map(c => c.id).join(','), build: BUILD });
+
 const session = await joinSession({
   canvases: BOARD_CANVASES.map(canvas => createCanvas({
     id: canvas.id,
@@ -91,7 +97,16 @@ const session = await joinSession({
       return answer;
     },
   })),
-});
+}).then(
+  async joined => {
+    await appendCanvasLog(logFile, { event: 'joined' });
+    return joined;
+  },
+  async (err: unknown) => {
+    await appendCanvasLog(logFile, { event: 'join-failed', error: (err instanceof Error ? err.message : String(err)).split(/\r?\n/)[0].slice(0, 200) });
+    throw err;
+  },
+);
 
 /** The chat's working folder, read once from the session; undefined when the runtime does not tell. */
 let chatFolderRead: Promise<string | undefined> | undefined;
