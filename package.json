@@ -322,8 +322,8 @@
           "type": "object",
           "properties": {
             "ticketKey": {
-              "type": "string",
-              "description": "The ticket key, e.g. PROJ-123. Leave it out to use the key in the current git branch."
+              "description": "The ticket key, e.g. PROJ-123. Leave it out to use the key in the current git branch.",
+              "type": "string"
             }
           }
         }
@@ -343,32 +343,32 @@
           "type": "object",
           "properties": {
             "jql": {
-              "type": "string",
-              "description": "A JQL query. Give either jql or filter."
+              "description": "A JQL query. Give either jql or filter.",
+              "type": "string"
             },
             "filter": {
-              "type": "string",
-              "description": "A saved filter, by its id or its name. Give either jql or filter."
+              "description": "A saved filter, by its id or its name. Give either jql or filter.",
+              "type": "string"
             },
             "fixVersion": {
-              "type": "string",
-              "description": "Narrow to a fix version, by name; resolved in the single project the query scopes to."
+              "description": "Narrow to a fix version, by name; resolved in the single project the query scopes to.",
+              "type": "string"
             },
             "sprint": {
-              "type": "string",
-              "description": "Narrow to a sprint, by name; resolved in the single project the query scopes to."
+              "description": "Narrow to a sprint, by name; resolved in the single project the query scopes to.",
+              "type": "string"
             },
             "assignee": {
-              "type": "string",
-              "description": "Narrow to an assignee: a user name, or \"me\" for the signed-in user."
+              "description": "Narrow to an assignee: a user name, or \"me\" for the signed-in user.",
+              "type": "string"
             },
             "myTeam": {
-              "type": "boolean",
-              "description": "Narrow by the team JQL from the ticketSidekick.jira.myTeamJql setting (\"my team\")."
+              "description": "Narrow by the team JQL from the ticketSidekick.jira.myTeamJql setting (\"my team\").",
+              "type": "boolean"
             },
             "page": {
-              "type": "string",
-              "description": "The page value a previous answer gave, to read the next page of the same query."
+              "description": "The page value a previous answer gave, to read the next page of the same query.",
+              "type": "string"
             }
           }
         }
@@ -408,8 +408,8 @@
               "description": "The ticket key, e.g. PROJ-123."
             },
             "refresh": {
-              "type": "boolean",
-              "description": "Discover the workflow from Jira again and rewrite the cache, even when one is cached."
+              "description": "Discover the workflow from Jira again and rewrite the cache, even when one is cached.",
+              "type": "boolean"
             }
           },
           "required": [
@@ -448,15 +448,15 @@
           "type": "object",
           "properties": {
             "ticketKey": {
-              "type": "string",
-              "description": "The ticket key, e.g. PROJ-123. Leave it out to use the key in the current git branch."
+              "description": "The ticket key, e.g. PROJ-123. Leave it out to use the key in the current git branch.",
+              "type": "string"
             },
             "attachments": {
+              "description": "Attachment filenames to download as well, exactly as the ticket lists them, including ones the default filter skips (such as binary files). Files over 100 MB are never downloaded.",
               "type": "array",
               "items": {
                 "type": "string"
-              },
-              "description": "Attachment filenames to download as well, exactly as the ticket lists them, including ones the default filter skips (such as binary files). Files over 100 MB are never downloaded."
+              }
             }
           }
         }
@@ -484,8 +484,8 @@
               "description": "The status to move the ticket to, e.g. \"In Review\" or \"Done\"."
             },
             "resolution": {
-              "type": "string",
-              "description": "The resolution to set when the last step asks for one, e.g. \"Fixed\"."
+              "description": "The resolution to set when the last step asks for one, e.g. \"Fixed\".",
+              "type": "string"
             }
           },
           "required": [
@@ -517,16 +517,16 @@
               "description": "The ticket title, one line."
             },
             "templateName": {
-              "type": "string",
-              "description": "A template name from jira_list_templates; its issue type and fields are applied."
+              "description": "A template name from jira_list_templates; its issue type and fields are applied.",
+              "type": "string"
             },
             "issueType": {
-              "type": "string",
-              "description": "The issue type, e.g. Bug. Needed when no template gives one."
+              "description": "The issue type, e.g. Bug. Needed when no template gives one.",
+              "type": "string"
             },
             "description": {
-              "type": "string",
-              "description": "The description, written as Markdown; it is converted to Jira wiki markup."
+              "description": "The description, written as Markdown; it is converted to Jira wiki markup.",
+              "type": "string"
             }
           },
           "required": [
@@ -591,13 +591,13 @@
               "description": "The new value. The description is written as Markdown and converted to Jira wiki markup; labels and components are comma-separated; assignee is a name, an email or \"me\"; a sprint by its name."
             },
             "operation": {
+              "description": "For a list field such as labels or components: add or remove the given values and keep the others. Default: set, which replaces the whole value.",
               "type": "string",
               "enum": [
                 "set",
                 "add",
                 "remove"
-              ],
-              "description": "For a list field such as labels or components: add or remove the given values and keep the others. Default: set, which replaces the whole value."
+              ]
             }
           },
           "required": [
@@ -651,16 +651,16 @@
           "type": "object",
           "properties": {
             "ticketKey": {
-              "type": "string",
-              "description": "A ticket key, e.g. PROJ-123: lists every field of that ticket with its current value."
+              "description": "A ticket key, e.g. PROJ-123: lists every field of that ticket with its current value.",
+              "type": "string"
             },
             "projectKey": {
-              "type": "string",
-              "description": "Without a ticket: the project key, e.g. PROJ."
+              "description": "Without a ticket: the project key, e.g. PROJ.",
+              "type": "string"
             },
             "issueType": {
-              "type": "string",
-              "description": "Without a ticket: the issue type, e.g. Bug. Lists the fields that type can take on create."
+              "description": "Without a ticket: the issue type, e.g. Bug. Lists the fields that type can take on create.",
+              "type": "string"
             }
           }
         }
@@ -713,18 +713,19 @@
               "description": "security-report: a project's open Veracode and Waltz tickets by release. ticket-list: the tickets of a JQL query or saved filter, where the user selects tickets and moves them or sets a field. sessions: the stored board sessions of this workspace."
             },
             "project": {
-              "type": "string",
-              "description": "security-report: the Jira project key, e.g. PROJ. Leave out to use the default project."
+              "description": "security-report: the Jira project key, e.g. PROJ. Leave out to use the default project.",
+              "type": "string"
             },
             "jql": {
-              "type": "string",
-              "description": "ticket-list: a JQL query, e.g. project = PROJ AND status = Done."
+              "description": "ticket-list: a JQL query, e.g. project = PROJ AND status = Done.",
+              "type": "string"
             },
             "filter": {
-              "type": "string",
-              "description": "ticket-list: a saved filter's id or name, in place of jql."
+              "description": "ticket-list: a saved filter's id or name, in place of jql.",
+              "type": "string"
             },
             "change": {
+              "description": "ticket-list: a change the user asked for. The board shows it as proposed and writes nothing until the user applies it.",
               "type": "object",
               "properties": {
                 "type": {
@@ -735,27 +736,26 @@
                   ]
                 },
                 "status": {
-                  "type": "string",
-                  "description": "For a transition: the status to move to."
+                  "description": "For a transition: the status to move to.",
+                  "type": "string"
                 },
                 "resolution": {
-                  "type": "string",
-                  "description": "For a transition: the resolution to set, if any."
+                  "description": "For a transition: the resolution to set, if any.",
+                  "type": "string"
                 },
                 "field": {
-                  "type": "string",
-                  "description": "For a field change: the field's name or id."
+                  "description": "For a field change: the field's name or id.",
+                  "type": "string"
                 },
                 "value": {
-                  "type": "string",
-                  "description": "For a field change: the new value."
+                  "description": "For a field change: the new value.",
+                  "type": "string"
                 }
               },
               "required": [
                 "type"
               ],
-              "additionalProperties": false,
-              "description": "ticket-list: a change the user asked for. The board shows it as proposed and writes nothing until the user applies it."
+              "additionalProperties": false
             }
           },
           "required": [
@@ -1268,15 +1268,14 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.7",
     "vitest": "^5.0.5",
-    "write-excel-file": "^4.1.1",
-    "zod-to-json-schema": "3.25.2"
+    "write-excel-file": "^4.1.1"
   },
   "dependencies": {
     "exceljs": "^4.4.0",
     "fast-xml-parser": "^5.10.1",
     "minimatch": "^11.0.6",
     "postal-mime": "^4.2.0",
-    "zod": "^3.25.76"
+    "zod": "^4.6.7"
   },
   "overrides": {
     "uuid": "^11.1.1"

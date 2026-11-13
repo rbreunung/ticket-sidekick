@@ -21,7 +21,7 @@ export interface ToolDefinition<Deps, Shape extends z.ZodRawShape = z.ZodRawShap
   inputSchema: Shape;
   annotations: ToolAnnotations;
   /** Answers with Markdown text; a failure the user should see is answered as text too, not thrown. */
-  handler(args: z.objectOutputType<Shape, z.ZodTypeAny>, deps: Deps): Promise<string>;
+  handler(args: z.infer<z.ZodObject<Shape>>, deps: Deps): Promise<string>;
 }
 
 /** Types a tool against its own input schema and returns it in the shape a catalog holds. */
