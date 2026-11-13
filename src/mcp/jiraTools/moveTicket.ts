@@ -62,7 +62,7 @@ export const moveTicketTool = defineTool<JiraToolDeps, typeof moveShape>({
   title: 'Move a Jira ticket to another status',
   description:
     'Moves one Jira ticket to a target status, in one transition or along several when the workflow needs them. '
-    + 'To move several tickets, open the ticket-list canvas with the move as input.change; do not call this once per ticket. '
+    + 'To move several tickets, call jira_open_board with board ticket-list and the move as change; do not call this once per ticket. '
     + 'When no path is known yet, it discovers the workflow from Jira first, by sampling tickets, and saves it to the workspace cache. '
     + 'The answer names the status the ticket came from and every transition taken. A move that stops partway says where the ticket landed '
     + 'and is never retried. The same move within a minute is skipped.',

@@ -45,7 +45,7 @@ A developer brief or a guided ticket create: help brief, help create
 | help [command] | none; see case 2 |
 | load [KEY] [file ...] | `jira_load_ticket`; the files go in `attachments` |
 | view [KEY] | `jira_view_ticket` |
-| search <JQL or filter> | open the `ticket-list` canvas, with the text as `input.jql`, or as `input.filter` when it is a saved filter's id or name |
+| search <JQL or filter> | `jira_open_board` with board `ticket-list` and the text as `jql`, or as `filter` when it is a saved filter's id or name |
 | filters | `jira_list_my_filters` |
 | comment <KEY> <text> | `jira_add_comment` |
 | field <KEY> <field> <value> | `jira_update_field` |
@@ -56,9 +56,9 @@ A developer brief or a guided ticket create: help brief, help create
 | templates | `jira_list_templates` |
 | upload <KEY> <path> | `jira_upload_attachment` |
 | check | `jira_check_connection` |
-| security-report [PROJECT] | open the `security-report` canvas, with the project as `input.project` when one is typed |
-| sessions | open the `sessions` canvas |
+| security-report [PROJECT] | `jira_open_board` with board `security-report`, and the project as `project` when one is typed |
+| sessions | `jira_open_board` with board `sessions` |
 
-For a canvas row, open that canvas and reply with only the status it returns; never build the report or the list yourself from other tools. If no canvas can be opened in this chat, say that canvases are off and are turned on with the chat.canvases.enabled setting where the organisation allows it.
+For a `jira_open_board` row, reply with only the status the tool returns; never build the report or the list yourself from other tools.
 
 After the call, show the tool's answer without adding analysis. After load, if it lists skipped attachments with numbers, show that list and ask which to download.

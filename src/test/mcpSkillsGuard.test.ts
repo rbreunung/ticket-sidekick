@@ -1,10 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { basename, dirname, resolve } from 'path';
-import { BOARD_CANVASES } from '../canvas/openDecision';
 import {
   ADD_COMMENT_TOOL, CHECK_CONNECTION_TOOL, CREATE_TICKET_TOOL, FIND_TICKETS_TOOL, JIRA_TOOLS, LIST_TEMPLATES_TOOL,
-  LOAD_TICKET_TOOL, MOVE_TICKET_TOOL, UPDATE_FIELD_TOOL, VIEW_TICKET_TOOL,
+  LOAD_TICKET_TOOL, MOVE_TICKET_TOOL, OPEN_BOARD_TOOL, UPDATE_FIELD_TOOL, VIEW_TICKET_TOOL,
 } from '../mcp/jiraTools/catalog';
 
 // The skills the extension contributes (package.json `contributes.chatSkills`) are prose an agent
@@ -189,26 +188,25 @@ describe('the section-order check', () => {
 const BASIC_COMMANDS: Record<string, readonly string[]> = {
   view: [VIEW_TICKET_TOOL],
   load: [LOAD_TICKET_TOOL],
-  search: ['canvas:ticket-list', FIND_TICKETS_TOOL],
+  search: [OPEN_BOARD_TOOL, FIND_TICKETS_TOOL],
   comment: [ADD_COMMENT_TOOL],
   field: [UPDATE_FIELD_TOOL],
   move: [MOVE_TICKET_TOOL],
   create: [CREATE_TICKET_TOOL, '/ts-jira-create'],
   check: [CHECK_CONNECTION_TOOL],
-  'security-report': ['canvas:security-report'],
+  'security-report': [OPEN_BOARD_TOOL],
 };
 
 /** The basic commands whose tools or skills do not all exist. */
 function coverageGaps(coverage: Record<string, readonly string[]>, toolNames: readonly string[], skillNames: readonly string[]): string[] {
-  const exists = (name: string) => (name.startsWith('canvas:') ? BOARD_CANVASES.some(c => c.id === name.slice('canvas:'.length))
-    : name.startsWith('/') ? skillNames.includes(name.slice(1)) : toolNames.includes(name));
+  const exists = (name: string) => (name.startsWith('/') ? skillNames.includes(name.slice(1)) : toolNames.includes(name));
   return Object.entries(coverage).filter(([, names]) => names.length === 0 || !names.every(exists)).map(([command]) => command);
 }
 
 const skillNames = contributedSkills.map(s => basename(dirname(s.path)));
 
 describe('basic @jira commands without @jira', () => {
-  it('maps every basic @jira slash command to tools, skills and canvases that exist', () => {
+  it('maps every basic @jira slash command to tools and skills that exist', () => {
     const jira = pkg.contributes.chatParticipants.find((p: { id: string }) => p.id === 'ticket-sidekick.jira');
     const commands = (jira.commands as Array<{ name: string }>).map(c => c.name).sort();
     expect(Object.keys(BASIC_COMMANDS).sort()).toEqual(commands);

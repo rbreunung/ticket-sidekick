@@ -165,6 +165,18 @@
       {
         "command": "ticket-sidekick.sessions.clear",
         "title": "Ticket Sidekick: Clear stored sessions"
+      },
+      {
+        "command": "ticket-sidekick.boards.securityReport",
+        "title": "Ticket Sidekick: Open security report"
+      },
+      {
+        "command": "ticket-sidekick.boards.ticketList",
+        "title": "Ticket Sidekick: Open ticket list"
+      },
+      {
+        "command": "ticket-sidekick.boards.sessions",
+        "title": "Ticket Sidekick: Open stored sessions"
       }
     ],
     "languageModelTools": [
@@ -771,11 +783,6 @@
       {
         "id": "ticket-sidekick.mcp",
         "label": "Ticket Sidekick"
-      }
-    ],
-    "chatPlugins": [
-      {
-        "path": "./out/plugin"
       }
     ]
   },

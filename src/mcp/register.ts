@@ -147,17 +147,6 @@ function extensionVersion(context: vscode.ExtensionContext): string {
   return String((context.extension?.packageJSON as { version?: string } | undefined)?.version ?? 'unknown');
 }
 
-const CANVAS_NOTICE =
-  'Ticket Sidekick: the security report opens as a canvas in Copilot chats, and canvases are off (chat.canvases.enabled). '
-  + 'Turn the setting on to use it, where your organisation allows it.';
-
-/** Shown at every start while canvases are off; the extension never changes the setting itself. */
-function showCanvasNoticeIfOff(): void {
-  if (vscode.workspace.getConfiguration('chat').get<unknown>('canvases.enabled') === true) return;
-  void vscode.window.showInformationMessage(CANVAS_NOTICE, OPEN_SETTING_CHOICE).then(choice => {
-    if (choice === OPEN_SETTING_CHOICE) void vscode.commands.executeCommand('workbench.action.openSettings', 'chat.canvases.enabled');
-  });
-}
 
 function showProxyNotice(): void {
   void vscode.window.showInformationMessage(PROXY_NOTICE, OPEN_SETTING_CHOICE).then(choice => {
@@ -198,12 +187,12 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
 
   // Only folders on this computer's disk: git, the template file and the workflow cache are read there.
   const localFolders = () => (vscode.workspace.workspaceFolders ?? []).filter(f => f.uri.scheme === 'file').map(f => f.uri.fsPath);
-  showCanvasNoticeIfOff();
 
   const toolDeps: JiraToolDeps = {
     getJira: () => getJira(configService),
     workspaceFolders: localFolders,
     recentWrites: new RecentCallGuard(),
+    openBoard: (kind, input) => boards.panels.open(kind, input),
     onDiag: (level, message, details) => logDiag('mcp.tools', level, message, details),
   };
   const started = new McpServerController<JiraToolDeps>({
@@ -220,6 +209,7 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
   });
   controller = started;
   active = started;
+  boards.panels.setAccess(() => started.canvasAccess());
   // The note the canvas program reads to find this window's server: written while the server
   // runs, kept in step with the workspace folders, removed when the server stops.
   const notes = new WindowNoteKeeper({
@@ -241,7 +231,8 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
   const changed = new vscode.EventEmitter<void>();
   context.subscriptions.push(
     changed,
-    started.onDidChange(() => { changed.fire(); void notes.sync(); }),
+    // A start gives the server a new port and key, so every open board tab is drawn again.
+    started.onDidChange(() => { changed.fire(); void notes.sync(); boards.panels.refreshAll(); }),
     vscode.workspace.onDidChangeWorkspaceFolders(() => { void notes.sync(); }),
     mcp.registerMcpServerDefinitionProvider(MCP_PROVIDER_ID, {
       onDidChangeMcpServerDefinitions: changed.event,

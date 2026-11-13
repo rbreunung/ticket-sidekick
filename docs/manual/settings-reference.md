@@ -108,7 +108,7 @@ When enabled, every `@jira` response starts with an italic line showing the acti
 | --- | --- | --- |
 | Session retention | `ticketSidekick.sessions.retentionDays` | `14` |
 
-A board in a Copilot chat (the security report, and later lists, imports and reviews) keeps its work in progress as a **session** in VS Code's storage for the workspace, so it survives a restart. A session not used for this many days is deleted. See [Boards in Copilot Chats](boards.md#stored-sessions).
+A board (the security report, a ticket list, and later imports and reviews) keeps its work in progress as a **session** in VS Code's storage for the workspace, so it survives a restart. A session not used for this many days is deleted. See [Boards](boards.md#stored-sessions).
 
 ## Report import settings
 

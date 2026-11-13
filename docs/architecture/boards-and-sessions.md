@@ -6,6 +6,12 @@ This page describes how Ticket Sidekick is built once the chat participants are 
 
 ---
 
+## 0. How a board is shown today
+
+A board's page is hosted in a **VS Code editor tab**: a webview whose only content is a frame around the page on the extension's local server (`src/boards/boardPanels.ts`, `boardPanelHtml.ts`). The agent asks for a board through the `jira_open_board` tool, a person through three Command Palette commands, and VS Code restores the tabs after a restart.
+
+Boards were designed for VS Code **canvases**, and the sections below still describe that route where they mention the canvas program. It is switched off, not removed: on VS Code 1.146 a plugin an extension contributes does not get its canvas registered in Copilot chats (microsoft/vscode#347397 describes one cause, fixed for 1.147; a skill added to the plugin did not help), and an organisation can block the MCP server or the plugin. The page, the routes, the sessions and the write gate are identical for both hosts, so going back means contributing the plugin again (`contributes.chatPlugins` with `./out/plugin`, which is still built) and pointing the skill at the canvas. Decision D18.
+
 ## 1. The idea in one paragraph
 
 A chat participant used to own a multi-step flow: it kept the flow's state in `workspaceState` and showed it as chat text. Now the **extension owns a session** for each piece of work, a **board** (a canvas page) shows that session and sends actions to it, and the **agent** only opens boards and calls tools. The session is cached on disk so a reload or restart continues the same work. Jira, Bitbucket and the report file stay the truth; the cache is checked against them and never trusted for a write.
@@ -358,6 +364,7 @@ Logged in full, with rejected alternatives, in `copilot-harness-migration.md` fr
 | D15 | One generic set of board routes; board kinds are plain objects with pure `reduce`, `plan` and `reconcile` | Approved |
 | D16 | The page learns of changes by a waiting state request, not by a timer or a push channel | Approved |
 | D17 | A stored session of another format is discarded, never migrated | Maintainer |
+| D18 | A board's page is hosted in an editor tab opened by the extension; the canvas route stays built but is not contributed | Maintainer |
 
 ---
 

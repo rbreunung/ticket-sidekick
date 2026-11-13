@@ -71,6 +71,9 @@ function buildVscodeStub(): Record<string, unknown> {
     window: {
       createOutputChannel: () => ({ appendLine: () => undefined, append: () => undefined, show: () => undefined, dispose: () => undefined }),
       showInformationMessage: async () => undefined,
+      registerWebviewPanelSerializer: () => disposable,
+      createWebviewPanel: () => ({ webview: { html: '' }, reveal: () => undefined, onDidDispose: () => disposable, dispose: () => undefined }),
+      showInputBox: async () => undefined,
       showWarningMessage: async () => undefined,
       showErrorMessage: async () => undefined,
     },
@@ -150,17 +153,18 @@ describe('bundled extension (out/extension.js)', () => {
   });
 });
 
+// The canvas program is still built, so boards can go back to canvases once VS Code delivers a
+// plugin's canvas reliably; until then the extension does not contribute the plugin.
 describe('the agent plugin with the canvas program', () => {
-  const pluginPath = (manifest.contributes as { chatPlugins?: Array<{ path: string }> }).chatPlugins?.[0]?.path ?? '';
-  const pluginDir = path.join(root, pluginPath);
+  const pluginDir = path.join(root, 'out', 'plugin');
   const canvasDir = path.join(pluginDir, 'com.github.copilot', 'extensions', 'ticket-sidekick');
 
   beforeAll(() => {
     execFileSync(process.execPath, ['esbuild.js'], { cwd: root, stdio: 'pipe' });
   }, 120_000);
 
-  it('is contributed from the build output and carries the extension\'s version', () => {
-    expect(pluginPath).toBe('./out/plugin');
+  it('is built with the extension\'s version, and not contributed while boards open as editor tabs', () => {
+    expect((manifest.contributes as { chatPlugins?: unknown }).chatPlugins).toBeUndefined();
     const plugin = JSON.parse(fs.readFileSync(path.join(pluginDir, 'plugin.json'), 'utf8'));
     expect(plugin.name).toBe('ticket-sidekick');
     expect(plugin.version).toBe((manifest as { version?: string }).version);

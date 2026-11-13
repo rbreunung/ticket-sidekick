@@ -16,3 +16,4 @@ export const UPDATE_FIELD_TOOL = 'jira_update_field';
 export const UPLOAD_ATTACHMENT_TOOL = 'jira_upload_attachment';
 export const LIST_FIELDS_TOOL = 'jira_list_fields';
 export const CHECK_REQUIRED_FIELDS_TOOL = 'jira_check_required_fields';
+export const OPEN_BOARD_TOOL = 'jira_open_board';

@@ -2,6 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { boardTests } from './boards.test';
 import { mcpTests } from './mcp.test';
 
 // Smoke checks inside a real VS Code. Deliberately small: the chat flows need Copilot, a language
@@ -26,6 +27,9 @@ export interface E2eTest {
   name: string;
   fn: () => Promise<void | { skipped: string }>;
 }
+
+// Built once: its checks share what the first one finds.
+const mcp = mcpTests(extensionId);
 
 const tests: E2eTest[] = [
   {
@@ -53,8 +57,11 @@ const tests: E2eTest[] = [
       assert.deepStrictEqual(missing, []);
     },
   },
-  // These come last: they remove 127.0.0.1 from http.noProxy, which stops the extension's MCP server.
-  ...mcpTests(extensionId),
+  // The MCP tests come last, and their last one removes 127.0.0.1 from http.noProxy, which stops
+  // the extension's server; the board tests need that server, so they run just before it.
+  ...mcp.slice(0, -1),
+  ...boardTests(),
+  ...mcp.slice(-1),
 ];
 
 export async function run(): Promise<void> {

@@ -1,22 +1,20 @@
-# Boards in Copilot Chats
+# Boards
 
-A **board** is a page Ticket Sidekick opens in its own editor tab when you ask for it in a Copilot chat. Talk stays in the chat; a large table or a piece of work in progress goes on a board. The extension reads Jira and fills the page itself, so the chat model sees only whether the board opened.
+A **board** is a page Ticket Sidekick opens in its own editor tab: a large table, or a piece of work in progress. The extension reads Jira and fills the page itself. When Copilot opens a board for you, it learns only whether the board opened, never what is on it.
 
-Boards available now:
-
-| Board | Ask for it | Typed command |
-| --- | --- | --- |
-| Security report | "show the security report for PROJ" | `/ts-jira security-report [PROJECT]` |
-| Ticket list | "show my open bugs", "move my done tickets to Closed" | `/ts-jira search <JQL or filter>` |
-| Stored sessions | "show the stored sessions" | `/ts-jira sessions` |
+| Board | Ask Copilot | Typed command | Command Palette |
+| --- | --- | --- | --- |
+| Security report | "show the security report for PROJ" | `/ts-jira security-report [PROJECT]` | `Ticket Sidekick: Open security report` |
+| Ticket list | "show my open bugs", "move my done tickets to Closed" | `/ts-jira search <JQL or filter>` | `Ticket Sidekick: Open ticket list` |
+| Stored sessions | "show the stored sessions" | `/ts-jira sessions` | `Ticket Sidekick: Open stored sessions` |
 
 ## What you need
 
-- **Canvases turned on.** Boards are VS Code canvases, a Preview feature of Copilot chats: set `chat.canvases.enabled`, where your organisation allows it. While it is off, Ticket Sidekick shows a notice at every VS Code start. The extension never changes the setting.
-- **`127.0.0.1` in `http.noProxy`.** The extension serves the page from this computer; see [Jira Tools for Copilot Chats](copilot-tools.md).
-- **A chat in the project's window.** A board is served by the VS Code window whose workspace folder holds the chat's folder, so it uses that workspace's settings. A chat in a window without a folder cannot open one.
+- **`127.0.0.1` in `http.noProxy`.** The extension serves the page from this computer; see [Jira Tools for Copilot Chats](copilot-tools.md). While the entry is missing, a board's tab says so and shows the board once the entry is there.
+- **For the Command Palette: nothing else.** The three commands work without Copilot.
+- **For asking Copilot: the Jira tools.** Copilot opens a board through the `jira_open_board` tool. Where your organisation does not allow the Ticket Sidekick MCP server, use the Command Palette commands.
 
-When a board cannot open, the chat answer names the reason.
+`Ticket Sidekick: Open ticket list` asks for a JQL query; type `filter:` and a saved filter's id or name to open a filter instead.
 
 ## Security report
 
@@ -55,7 +53,7 @@ Every board shows a **session**: the data it read and what you set on the board.
 
 - **As of.** The line under the title says when the data was read. Jira, Bitbucket and report files stay the truth; the session is a cache of them.
 - **Opening again.** Asking for the same thing again (the same project, query or filter) continues its session. The board appears at once with the stored data, then checks the source in the background and updates.
-- **After a restart.** A board that VS Code brings back shows its stored session, marked "restored session", and checks the source. If its window does not come back within about 30 seconds, the tab is closed; the session stays stored.
+- **After a restart.** VS Code brings a board's tab back with the window, and the board shows its stored session, marked "restored session", then checks the source.
 - **If the check fails.** The stored data stays on show, with a line saying the check failed and when the data is from.
 - **Discard session** on a board deletes its session.
 
@@ -71,5 +69,5 @@ Sessions are kept in VS Code's storage for the workspace, outside your repositor
 
 ## Limits
 
-- Canvases are a Preview feature. A VS Code update can change them.
-- A board works only in a Copilot chat in VS Code on this computer, not in Copilot CLI, the GitHub Copilot app or a remote agent host.
+- A board is served by the VS Code window that opened it and shows that window's sessions.
+- Boards were first built as VS Code canvases. On VS Code 1.146 a canvas that an extension ships is not registered in Copilot chats, so boards open as editor tabs; the page is the same either way.

@@ -29,7 +29,7 @@ export const updateFieldTool = defineTool<JiraToolDeps, typeof updateFieldShape>
     'Sets one field of one Jira ticket, named by display name or id: summary, description, priority, assignee, labels, components, fix version, sprint, '
     + 'or any other field such as a custom field. For a list field, operation "add" or "remove" changes single values and keeps the rest. '
     + `When you do not know a field's name, look it up with ${LIST_FIELDS_TOOL}. `
-    + 'To set a field on several tickets, open the ticket-list canvas with the change as input.change; do not call this once per ticket. '
+    + 'To set a field on several tickets, call jira_open_board with board ticket-list and the change as change; do not call this once per ticket. '
     + 'The description is written as Markdown. The answer quotes the value the field had before. '
     + 'The same change to the same field within a minute is skipped, so a repeated call does not write it twice.',
   inputSchema: updateFieldShape,

@@ -478,6 +478,8 @@ The canvas launcher is a small Copilot SDK extension (`extension.mjs`) that decl
 | D16 | How a page learns of changes | **A state request that waits until the session changes.** | A timer: delay and idle traffic. A push channel: more to secure under the content policy. |
 | D17 | A stored session of another format | **Discarded with a notice, never migrated.** It is a cache. | Migration code per format change. |
 
+| D18 | Where a board's page is shown | **In a VS Code editor tab the extension opens** (a webview framing the page on the local server), asked for through a tool or a Command Palette command. | Canvases, for now: on VS Code 1.146 a canvas shipped by an extension is not registered in Copilot chats, and an organisation can block the plugin or the MCP server. The canvas program is still built, and the page is the same for both hosts, so the route can be switched back on. |
+
 The design these decisions add up to is described in [`boards-and-sessions.md`](boards-and-sessions.md).
 
 ### Still to settle in the prototype

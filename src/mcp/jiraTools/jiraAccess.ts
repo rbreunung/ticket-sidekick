@@ -34,5 +34,7 @@ export interface JiraToolDeps {
    * new server, so the guard lives here, created once when the server starts.
    */
   recentWrites: RecentCallGuard;
+  /** Opens a board in an editor tab of this window; absent where boards are not available. */
+  openBoard?(kind: string, input: unknown): Promise<{ ok: true; title: string } | { ok: false; reason: string }>;
   onDiag?: DiagLogger;
 }

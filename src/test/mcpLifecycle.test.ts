@@ -40,6 +40,8 @@ const h = vi.hoisted(() => ({
   cancelRequested: false,
   folderListeners: [] as Array<() => unknown>,
   canvasesEnabled: true as unknown,
+  panels: [] as Array<{ title: string; webview: { html: string; options?: unknown }; revealed: number; disposed: boolean }>,
+  serializers: [] as Array<{ deserializeWebviewPanel(panel: unknown, state: unknown): Promise<void> }>,
   defaultProject: undefined as string | undefined,
   folders: [{ uri: { fsPath: '/work/a', scheme: 'file' } }] as Array<{ uri: { fsPath: string; scheme: string } }>,
 }));
@@ -86,6 +88,22 @@ vi.mock('vscode', () => {
         return result;
       },
       showWarningMessage: async (message: string) => { h.infoMessages.push(message); return undefined; },
+      activeColorTheme: { kind: 2 },
+      registerWebviewPanelSerializer: (_viewType: string, serializer: { deserializeWebviewPanel(panel: unknown, state: unknown): Promise<void> }) => {
+        h.serializers.push(serializer);
+        return { dispose: () => undefined };
+      },
+      showInputBox: async () => undefined,
+      createWebviewPanel: (_viewType: string, title: string) => {
+        const panel = {
+          title, webview: { html: '' }, revealed: 0, disposed: false,
+          reveal() { panel.revealed++; },
+          dispose() { panel.disposed = true; },
+          onDidDispose: () => ({ dispose: () => undefined }),
+        };
+        h.panels.push(panel);
+        return panel;
+      },
       showErrorMessage: async (message: string) => { h.infoMessages.push(message); return undefined; },
       withProgress: (options: { cancellable?: boolean }, task: (progress: unknown, token: unknown) => Promise<unknown>) => {
         h.progressOptions = options;
@@ -93,6 +111,8 @@ vi.mock('vscode', () => {
       },
     },
     ProgressLocation: { Notification: 15 },
+    ViewColumn: { Active: -1 },
+    ColorThemeKind: { Light: 1, Dark: 2, HighContrast: 3, HighContrastLight: 4 },
     workspace: {
       get workspaceFolders() { return h.folders; },
       onDidChangeWorkspaceFolders: (listener: () => unknown) => { h.folderListeners.push(listener); return { dispose: () => undefined }; },
@@ -190,6 +210,8 @@ beforeEach(() => {
   secretWrites = 0;
   h.commands.clear();
   h.infoMessages = [];
+  h.panels = [];
+  h.serializers = [];
   h.infoChoice = undefined;
   h.pendingNotification = undefined;
   h.providers = [];
@@ -317,25 +339,71 @@ describe('the open request the canvas program sends before it opens a board', ()
   });
 });
 
-describe('the startup notice for canvases', () => {
-  const CANVAS_NOTICE = /security report opens as a canvas in Copilot chats.*chat\.canvases\.enabled/;
+async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
+  const definition = offered()[0];
+  const client = new Client({ name: 'test', version: '0.0.0' });
+  await client.connect(new StreamableHTTPClientTransport(new URL(definition.uri.toString()), { requestInit: { headers: definition.headers } }));
+  const result = await client.callTool({ name, arguments: args });
+  await client.close();
+  return ((result as { content: Array<{ text?: string }> }).content).map(c => c.text).join('\n');
+}
 
-  it('appears at every start while canvases are off, and offers to open the setting', async () => {
+describe('boards as editor tabs', () => {
+  it('opens a board in an editor tab when Copilot calls the open board tool, and tells Copilot only that it opened', async () => {
+    h.token = 'jira-pat';
+    await activate({ withApi: true });
+    const text = await callTool('jira_open_board', { board: 'security-report', project: 'proj' });
+    expect(text).toBe('Opened in an editor tab: Security report: PROJ.');
+    const note = windowNote()!;
+    expect(h.panels).toHaveLength(1);
+    expect(h.panels[0].title).toBe('Security report: PROJ');
+    expect(h.panels[0].webview.html).toContain(`<iframe src="http://127.0.0.1:${note.port}/${note.canvasKey}/board/security-report/?s=${sessionIdFor('security-report', 'PROJ')}"`);
+  });
+
+  it('brings the tab forward when the same board is asked for again', async () => {
+    h.token = 'jira-pat';
+    await activate({ withApi: true });
+    await callTool('jira_open_board', { board: 'security-report', project: 'PROJ' });
+    await callTool('jira_open_board', { board: 'security-report', project: 'PROJ' });
+    expect(h.panels).toHaveLength(1);
+    expect(h.panels[0].revealed).toBe(1);
+  });
+
+  it('says why a board does not open, and opens no tab', async () => {
+    await activate({ withApi: true });
+    expect(await callTool('jira_open_board', { board: 'security-report', project: 'PROJ' })).toContain('Not opened: Jira is not set up');
+    expect(h.panels).toEqual([]);
+  });
+
+  it('opens the stored sessions from the Command Palette', async () => {
+    await activate({ withApi: true });
+    await h.commands.get('ticket-sidekick.boards.sessions')!();
+    expect(h.panels.map(p => p.title)).toEqual(['Stored sessions']);
+    expect(h.panels[0].webview.html).toContain('/board/sessions/"');
+  });
+
+  it('gives a tab VS Code brings back after a restart the page of its session at the new address', async () => {
+    h.token = 'jira-pat';
+    await activate({ withApi: true });
+    const restored = { title: '', webview: { html: '' }, revealed: 0, disposed: false, reveal() { /* not used */ }, dispose() { restored.disposed = true; }, onDidDispose: () => ({ dispose: () => undefined }) };
+    const id = sessionIdFor('security-report', 'PROJ');
+    await h.serializers[0].deserializeWebviewPanel(restored, { kind: 'security-report', id, title: 'Security report: PROJ' });
+    const note = windowNote()!;
+    expect(restored.title).toBe('Security report: PROJ');
+    expect(restored.webview.html).toContain(`http://127.0.0.1:${note.port}/${note.canvasKey}/board/security-report/?s=${id}`);
+  });
+
+  it('closes a restored tab whose stored state is not a board\'s', async () => {
+    await activate({ withApi: true });
+    const restored = { title: '', webview: { html: '' }, disposed: false, dispose() { restored.disposed = true; }, onDidDispose: () => ({ dispose: () => undefined }) };
+    await h.serializers[0].deserializeWebviewPanel(restored, { kind: 'no-such-board', id: '', title: 'x' });
+    expect(restored.disposed).toBe(true);
+  });
+
+  it('shows no notice about canvases at start', async () => {
     h.canvasesEnabled = false;
     await activate({ withApi: true });
-    expect(h.infoMessages.filter(m => CANVAS_NOTICE.test(m))).toHaveLength(1);
-  });
-
-  it('does not appear while canvases are on', async () => {
-    await activate({ withApi: true });
-    expect(h.infoMessages.filter(m => CANVAS_NOTICE.test(m))).toEqual([]);
-  });
-
-  it('opens the setting when chosen, and never changes it', async () => {
-    h.canvasesEnabled = undefined;
-    await activate({ withApi: true, choice: 'Open Setting' });
-    expect(h.executed).toContainEqual(['workbench.action.openSettings', 'chat.canvases.enabled']);
-    expect(h.configUpdates).toBe(0);
+    expect(h.infoMessages.filter(m => /canvas/i.test(m))).toEqual([]);
   });
 });
 

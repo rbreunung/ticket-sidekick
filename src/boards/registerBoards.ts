@@ -10,16 +10,20 @@ import { logDiag } from '../utils/diagLog';
 import { localDate } from '../utils/securityOverview';
 import { resolveCsvDelimiter } from '../utils/securityOverviewCsv';
 import type { JiraAccess } from '../mcp/jiraTools/jiraAccess';
-import { boardRoutes } from './boardRoutes';
-import { securityReportKind, type SecurityReportDeps } from './securityReport/kind';
+import { boardRoutes, SESSIONS_BOARD } from './boardRoutes';
+import { BOARD_VIEW_TYPE, BoardPanels } from './boardPanels';
+import { SECURITY_REPORT_KIND, securityReportKind, type SecurityReportDeps } from './securityReport/kind';
 import { ticketListJiraDeps } from './ticketList/jiraDeps';
-import { ticketListKind } from './ticketList/kind';
+import { TICKET_LIST_KIND, ticketListKind } from './ticketList/kind';
 
 // VS Code glue for the boards: where sessions are stored, the native confirmation and save dialog,
 // the theme, the retention setting and the clear command. Everything it wires is free of `vscode`.
 
 export const BOARD_COMMANDS = {
   clearSessions: 'ticket-sidekick.sessions.clear',
+  securityReport: 'ticket-sidekick.boards.securityReport',
+  ticketList: 'ticket-sidekick.boards.ticketList',
+  sessions: 'ticket-sidekick.boards.sessions',
 } as const;
 
 const DEFAULT_RETENTION_DAYS = 14;
@@ -43,6 +47,7 @@ function themeKind(): 'light' | 'dark' | 'hc' {
 export interface RegisteredBoards {
   manager: SessionManager;
   routes: CanvasRoute[];
+  panels: BoardPanels;
 }
 
 export function registerBoards(
@@ -108,7 +113,34 @@ export function registerBoards(
   const timer = setInterval(expire, DAY_MS);
   timer.unref?.();
 
+  const panels = new BoardPanels(manager, kinds.map(k => k.kind.kind));
+  /** Opens a board from the Command Palette and says why when it cannot. */
+  const openFromCommand = async (kind: string, input: unknown) => {
+    const opened = await panels.open(kind, input);
+    if (!opened.ok) void vscode.window.showWarningMessage(`Ticket Sidekick: the board was not opened: ${opened.reason}`);
+  };
+
   context.subscriptions.push(
+    vscode.window.registerWebviewPanelSerializer(BOARD_VIEW_TYPE, panels.serializer()),
+    vscode.commands.registerCommand(BOARD_COMMANDS.securityReport, async () => {
+      const project = await vscode.window.showInputBox({
+        title: 'Security report',
+        prompt: 'Jira project key. Leave empty for the default project.',
+        value: securityReportDeps.defaultProject(),
+      });
+      if (project !== undefined) await openFromCommand(SECURITY_REPORT_KIND, { project });
+    }),
+    vscode.commands.registerCommand(BOARD_COMMANDS.ticketList, async () => {
+      const query = await vscode.window.showInputBox({
+        title: 'Ticket list',
+        prompt: 'A JQL query, or "filter:" followed by a saved filter\'s id or name.',
+        placeHolder: 'assignee = currentUser() AND resolution is EMPTY',
+      });
+      if (!query?.trim()) return;
+      const filter = /^filter:\s*(.+)$/i.exec(query.trim())?.[1];
+      await openFromCommand(TICKET_LIST_KIND, filter ? { filter } : { jql: query.trim() });
+    }),
+    vscode.commands.registerCommand(BOARD_COMMANDS.sessions, () => openFromCommand(SESSIONS_BOARD, {})),
     { dispose: () => clearInterval(timer) },
     vscode.commands.registerCommand(BOARD_COMMANDS.clearSessions, async () => {
       const choice = await vscode.window.showWarningMessage(
@@ -125,6 +157,7 @@ export function registerBoards(
 
   return {
     manager,
+    panels,
     routes: boardRoutes({
       manager,
       kinds: kinds.map(k => k.kind.kind),

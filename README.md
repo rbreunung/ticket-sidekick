@@ -412,9 +412,9 @@ The server runs only while the VS Code setting `http.noProxy` contains the entry
 
 See [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md) for every tool and its inputs, the skills, approvals, `Ticket Sidekick: Copy MCP diagnostics`, troubleshooting and a checklist to try it out.
 
-### Boards in Copilot chats
+### Boards
 
-Larger views open as a **board** in their own editor tab when you ask for them in a Copilot chat. The security report opens with "the security report for PROJ" or `/ts-jira security-report PROJ`. A ticket list opens when you ask to see tickets or to change several of them, or with `/ts-jira search <JQL or filter>`: you select tickets there and move them or set a field after a preview. A board keeps its work in progress as a stored session, so it comes back after a restart; `/ts-jira sessions` lists the stored sessions and `Ticket Sidekick: Clear stored sessions` deletes them all. Boards need VS Code's canvases (`chat.canvases.enabled`) and the `http.noProxy` entry above. See [Boards in Copilot Chats](docs/manual/boards.md).
+Larger views open as a **board** in their own editor tab. The security report opens with "the security report for PROJ", `/ts-jira security-report PROJ` or `Ticket Sidekick: Open security report`. A ticket list opens when you ask Copilot to see tickets or to change several of them, with `/ts-jira search <JQL or filter>` or `Ticket Sidekick: Open ticket list`: you select tickets there and move them or set a field after a preview. A board keeps its work in progress as a stored session, so it comes back after a restart; `/ts-jira sessions` or `Ticket Sidekick: Open stored sessions` lists the stored sessions and `Ticket Sidekick: Clear stored sessions` deletes them all. Boards need the `http.noProxy` entry above; the Command Palette commands work without Copilot. See [Boards](docs/manual/boards.md).
 
 ### Settings reference
 

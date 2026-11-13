@@ -52,7 +52,8 @@ Made for this plan:
 
 - **One plan covers everything still participant-only.** (session-settled: user-approved — chosen over separate plans per area: the shared rules are decided once.)
 - **Each participant flow is deleted in the release that ships its replacement.** (session-settled: user-directed — chosen over freezing the participants and removing them last, and over keeping them as a fallback: no code is carried twice.) Governs R32, R33.
-- **A board needs a canvas; there is no other surface.** (session-settled: user-directed — chosen over the same page in a plain editor tab, and over a reduced flow in chat: a web check found canvases being built out, not wound down.) Governs R2.
+- **A board's page is hosted in an editor tab the extension opens; canvases are switched off until VS Code delivers them reliably.** (session-settled: user-directed — chosen over waiting for VS Code 1.147 and over installing the canvas program by hand: neither canvas registration nor the MCP server can be relied on in every environment, the page is the same for both hosts, and editor tabs are not part of what VS Code is deprecating.) Governs R1, R2. This replaces the next entry.
+- **(Replaced) A board needs a canvas; there is no other surface.** (session-settled: user-directed — chosen over the same page in a plain editor tab, and over a reduced flow in chat: a web check found canvases being built out, not wound down.) Governs R2.
 - **The experimental canvas API is a recorded risk with no extra safeguard.** (session-settled: user-directed — chosen over re-running the checklist against VS Code Insiders before each release, and over an automated canvas start test.)
 - **All ticket lists shown to the user go on a canvas, built once as a general ticket list board.** (session-settled: user-directed — chosen over bulk review in chat with one batch tool.) Governs R7 to R9.
 - **The agent keeps its find tool for its own lookups and for questions.** (session-settled: user-approved — chosen over removing the tool, and over a board for bulk work only.) Governs R12.
@@ -98,8 +99,8 @@ Made for this plan:
 
 **Rules for every board**
 
-- R1. Each board of this plan is a canvas that the agent opens from a Copilot chat and whose page the extension serves, on the canvas foundation the security report canvas introduced.
-- R2. When a canvas cannot open, the command answers with one message that names the cause: canvases are off or `127.0.0.1` is missing from `http.noProxy`, each with the setting to change, or no open window holds the chat's folder.
+- R1. Each board of this plan is a page the extension serves and opens in an editor tab, when the agent calls the open-board tool or the developer runs a Command Palette command. The canvas foundation stays built, so the same page can be hosted in a canvas again later.
+- R2. When a board cannot open, the answer names the cause, for example `127.0.0.1` missing from `http.noProxy` with the setting to change. The Command Palette commands work without Copilot and without the MCP server.
 - R3. Every write from a board shows a preview of exactly what will be written and runs only after a second Apply click.
 - R4. A page holds no state of its own. Everything it shows comes from its session (R51).
 - R5. Every board write is logged to the "Ticket Sidekick" Output Channel with its ticket or PR, action and outcome.
