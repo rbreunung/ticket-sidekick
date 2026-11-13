@@ -1,5 +1,5 @@
 import type { JiraAccess } from '../../mcp/jiraTools/jiraAccess';
-import { supportedFieldId, TicketService } from '../../services/TicketService';
+import { TicketService } from '../../services/TicketService';
 import { discoverAndCacheWorkflow, resolveAndApplyTransition } from '../../services/WorkflowService';
 import type { DiagLogger } from '../../utils/diagTypes';
 import { describeJiraFailure } from '../../utils/jiraFailureText';
@@ -127,17 +127,13 @@ export function ticketListJiraDeps(options: TicketListJiraOptions): TicketListDe
       }
     }),
 
+    // The same update the field tool makes: any field by name or id, a sprint by its name, a list
+    // field from comma-separated values. The board sets the whole value; it does not add or remove.
     setField: (key, field, value) => guarded(async () => {
-      const { access, client, ticketService } = await jira();
-      if (supportedFieldId(field)) {
-        const outcome = await ticketService.updateFieldOutcome(key, field, value, access.config.baseUrl);
-        if (!outcome.written) throw new Error(outcome.message);
-        return outcome.message;
-      }
-      // Any other field, by display name or id, with the value shaped as that field needs it.
-      const fieldId = await ticketService.resolveFieldId(field);
-      await client.updateIssue(key, { [fieldId]: await ticketService.buildFieldValue(fieldId, key, value) });
-      return `set ${field}`;
+      const { access, ticketService } = await jira();
+      const outcome = await ticketService.updateAnyField(key, field, value, 'set', access.config.baseUrl);
+      if (!outcome.written) throw new Error(outcome.message);
+      return outcome.message;
     }),
   };
 }

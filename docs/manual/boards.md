@@ -43,7 +43,7 @@ After Apply the board reads the list again and shows a result per ticket: **Done
 - **A change Copilot proposed.** When you asked for a change in chat ("move my done tickets to Closed"), the board opens with that change filled in, marked "Proposed by Copilot", and every row selected. Check it, deselect rows, then preview and apply. Copilot cannot apply it.
 - **Jira is the truth.** Before writing, the board reads each ticket again. A ticket that changed in Jira since the board read it is not written to; it is listed under the title with its stored and its current status, until you press **Drop**. The same happens when a restored list is checked: a selected ticket that changed or left the list is taken out of the selection and named.
 - **Moves** use a direct transition when there is one, else the workflow path Ticket Sidekick has cached for the project and issue type, discovering it once if needed.
-- **Fields** summary, description, priority, assignee, labels, components and fix version are set as the `jira_update_field` tool sets them. Any other field is found by its display name or id.
+- **Fields** are set as the `jira_update_field` tool sets them: any field by its display name or id, a sprint by its name, a list field from comma-separated values. The board replaces a list field's whole value; to add or remove single values, use the tool on one ticket.
 
 Cleanup by the `cleanupRules` of `.jira-templates.json` is not on this board yet; use `@jira cleanup` in a Local chat until it is.
 

@@ -1,20 +1,21 @@
 # Boards and sessions: target architecture
 
-Status: **approved by the maintainer on 2026-11-12** (R47 of [the boards plan](../plans/2026-11-11-2234-feat-boards-replace-chat-participants-plan.md)). Built so far: the session core, the generic board routes, the security report board, the ticket list board (search, bulk move, bulk field update; not yet cleanup) and the sessions board. Of the plan's step 1 tools, the any-field update with add and remove (R40), the field listing (R41) and the required-fields check (R42) are built; spell check (R28), template from a ticket (R29), cleanup on the ticket list board (R9) and the removal of the replaced `@jira` flows are not.
+Status: **approved by the maintainer on 2026-11-12** (R47 of [the boards plan](../plans/2026-11-11-2234-feat-boards-replace-chat-participants-plan.md)); revised on 2026-11-13 for boards in editor tabs and tools over two routes. Section 0 says what is built.
 
-This page describes how Ticket Sidekick is built once the chat participants are gone: where state lives, how a canvas shows it, how a write happens, and how to add a feature. It is kept current with the code. The reasons behind earlier choices, and the options that were rejected, stay in [`copilot-harness-migration.md`](copilot-harness-migration.md); new decisions are logged there from D7 on and summarised in [section 11](#11-decisions-made-for-this-design).
+This page describes how Ticket Sidekick is built once the chat participants are gone: where state lives, how a board shows it, how a write happens, and how to add a feature. It is kept current with the code. The reasons behind earlier choices, and the options that were rejected, stay in [`copilot-harness-migration.md`](copilot-harness-migration.md); new decisions are logged there from D7 on and summarised in [section 11](#11-decisions-made-for-this-design).
 
 ---
 
-## 0. How a board is shown today
+## 0. Where this design stands
 
-A board's page is hosted in a **VS Code editor tab**: a webview whose only content is a frame around the page on the extension's local server (`src/boards/boardPanels.ts`, `boardPanelHtml.ts`). The agent asks for a board through the `jira_open_board` tool, a person through three Command Palette commands, and VS Code restores the tabs after a restart.
-
-Boards were designed for VS Code **canvases**, and the sections below still describe that route where they mention the canvas program. It is switched off, not removed: on VS Code 1.146 a plugin an extension contributes does not get its canvas registered in Copilot chats (microsoft/vscode#347397 describes one cause, fixed for 1.147; a skill added to the plugin did not help), and an organisation can block the MCP server or the plugin. The page, the routes, the sessions and the write gate are identical for both hosts, so going back means contributing the plugin again (`contributes.chatPlugins` with `./out/plugin`, which is still built) and pointing the skill at the canvas. Decision D18.
+- **Host:** a board's page is shown in a VS Code editor tab the extension opens (`src/boards/boardPanels.ts`). Boards were first designed for VS Code canvases. That route is switched off, not removed: on VS Code 1.146 a canvas an extension ships as a plugin is not registered in Copilot chats (microsoft/vscode#347397 describes one cause, fixed for 1.147; adding a skill to the plugin did not help). The page, routes, sessions and write gate are the same for both hosts. Going back means contributing the plugin again (`contributes.chatPlugins` with `./out/plugin`, which is still built) and pointing the skill at the canvas. Decision D18.
+- **Tools:** Copilot reaches the tools over the extension's MCP server or, where an organisation blocks that server, as VS Code language model tools. One catalog, two registrations, chosen by `ticketSidekick.jira.toolsFrom`. Decision D19.
+- **Built:** the session core, the board routes, the security report board, the ticket list board (search, bulk move, bulk field update), the sessions board, and of the plan's step 1 tools R40 to R42.
+- **Not built:** cleanup on the ticket list board (R9), spell check (R28), template from a ticket (R29), the import board, the PR review board with its Bitbucket tool routes, and the removal of `@jira` and `@bitbucket`.
 
 ## 1. The idea in one paragraph
 
-A chat participant used to own a multi-step flow: it kept the flow's state in `workspaceState` and showed it as chat text. Now the **extension owns a session** for each piece of work, a **board** (a canvas page) shows that session and sends actions to it, and the **agent** only opens boards and calls tools. The session is cached on disk so a reload or restart continues the same work. Jira, Bitbucket and the report file stay the truth; the cache is checked against them and never trusted for a write.
+A chat participant used to own a multi-step flow: it kept the flow's state in `workspaceState` and showed it as chat text. Now the **extension owns a session** for each piece of work, a **board** (a page in an editor tab) shows that session and sends actions to it, and the **agent** only opens boards and calls tools. The session is cached on disk so a reload or restart continues the same work. Jira, Bitbucket and the report file stay the truth; the cache is checked against them and never trusted for a write.
 
 ---
 
@@ -24,20 +25,20 @@ A chat participant used to own a multi-step flow: it kept the flow's state in `w
 flowchart TB
   subgraph Chat["Copilot chat"]
     AG["Agent"]
-    SK["Skills<br/>/ts-jira, /ts-bitbucket"]
+    SK["Skills<br/>/ts-jira"]
   end
-  subgraph Outside["Copilot runtime, outside VS Code"]
-    CP["Canvas program<br/>(agent plugin)"]
-  end
-  subgraph Tab["Editor tab"]
+  subgraph Win["VS Code window"]
+    CMD["Command Palette"]
+    TAB["Board tab<br/>(webview framing the page)"]
     PG["Board page<br/>(a view, no state)"]
   end
   subgraph Ext["VS Code extension"]
-    SRV["Localhost server<br/>127.0.0.1, MCP key, canvas key"]
-    TOOLS["MCP tools"]
+    TOOLS["Tools: one catalog<br/>over MCP or as extension tools"]
+    PAN["Board panels"]
+    SRV["Localhost server<br/>127.0.0.1, MCP key, page key"]
     BR["Board routes<br/>(generic)"]
     SM["Session manager"]
-    BK["Board kinds<br/>security report, ticket list,<br/>import, review, sessions"]
+    BK["Board kinds<br/>security report, ticket list,<br/>import, review"]
     ST[("Session store<br/>(cache on disk)")]
     SVC["Services<br/>TicketService, PrReviewService, ..."]
     CL["IJiraClient / IBitbucketClient"]
@@ -46,14 +47,16 @@ flowchart TB
   FILE[("Report files")]
 
   SK -.instructions.-> AG
-  AG -->|tool calls| SRV
-  AG -->|open canvas| CP
-  CP -->|"open check, session id"| SRV
-  CP -->|page address| PG
+  AG -->|tool calls| TOOLS
+  TOOLS -->|open board| PAN
+  CMD -->|open board| PAN
+  PAN -->|opens, restores| TAB
+  TAB --- PG
   PG <-->|"state, actions"| SRV
-  SRV --> TOOLS & BR
+  SRV --> BR
   TOOLS --> SVC
   TOOLS -->|"read findings"| SM
+  PAN --> SM
   BR --> SM
   SM --> BK
   SM <--> ST
@@ -67,8 +70,8 @@ The existing rule holds unchanged: services depend on the client interfaces only
 | Layer | Responsibility | Must not |
 | --- | --- | --- |
 | Skill | Tells the agent which tool to call or which board to open | Carry logic or state |
-| Agent | Opens a board, passes what the developer said, calls tools, reads review findings | See a board's rows (R11, R17), choose rows, or write through a board |
-| Canvas program | Finds the window that holds the chat's folder and returns the page address | Hold credentials or session data |
+| Agent | Asks for a board through the open-board tool, passes what the developer said, calls tools, reads review findings | See a board's rows (R11, R17), choose rows, or write through a board |
+| Board panels | Open a board's editor tab for a tool call or a command, frame the page in it, restore it after a restart | Know any board kind's rules |
 | Board page | Shows the session it is given and sends actions | Keep state, decide anything, or talk to Jira |
 | Board routes | Authenticate, route to the session manager, serialise actions per session | Know any board kind's rules |
 | Session manager | Creates, loads, saves, expires sessions; runs background checks; issues and redeems write plans | Know Jira or Bitbucket |
@@ -151,10 +154,9 @@ stateDiagram-v2
 
 ### 4.1 Opening
 
-1. The agent opens a canvas with the recipe: a project, a query and an optional proposed change, a report path, a PR link.
-2. The canvas program finds the window that holds the chat's folder and asks its **open check**. The window validates the recipe and answers with the session ID, or with a reason.
-3. The canvas program returns the page address, which carries the canvas key and the session ID. The agent learns only "opened" or the reason.
-   The agent picks the canvas instance ID from the request (for example `security-report-PROJ`), so asking again brings the open canvas forward.
+1. The agent calls the open-board tool, or the developer runs a Command Palette command, with the recipe: a project, a query and an optional proposed change, a report path, a PR link.
+2. The board panels ask the session manager to open the board. The board kind validates the recipe; the manager derives the session ID from kind and source and creates or restores the session.
+3. The extension opens an editor tab, or brings the board's existing tab forward. The tab is a webview whose only content is a frame around the board page on the local server; its content policy lets nothing else load. The agent learns only "opened" or the reason.
 4. The page loads and asks for the session's state. A stored session is shown at once with its "as of" time; otherwise the board kind builds it from the sources.
 
 ### 4.2 Freshness and conflicts (R55, R56)
@@ -193,7 +195,7 @@ sequenceDiagram
   M->>M: log each write, save the session
 ```
 
-- A write needs a **plan ID** that only `preview` issues. The manager keeps it in memory, tied to the session revision, and redeems it once. A request that carries only the canvas key cannot write a risky change without the native confirmation, which no page or script can click.
+- A write needs a **plan ID** that only `preview` issues. The manager keeps it in memory, tied to the session revision, and redeems it once. A request that carries only the page key cannot write a risky change without the native confirmation, which no page or script can click.
 - **Risky** means: more than one ticket, closing a ticket, or anything posted to Bitbucket. The board kind's plan states it; the manager enforces it.
 - Before writing, the board kind reads each target again and refuses the ones that changed since the session last read them. A refused target becomes a conflict.
 - Multi-step runs (a ticket merge) are working state: each step is recorded as pending, done, failed or skipped before the next one starts, so a restart continues at the right step and never repeats a done one.
@@ -214,7 +216,7 @@ sequenceDiagram
 
 ### 4.5 Restart
 
-The Copilot runtime brings a canvas back with its old address. The canvas program's repair reopens the canvas with the same input, so the window names the same session and returns a fresh address. The page then loads the stored session as in 4.1. If the window does not return, the canvas is closed; the session stays in the cache and is reachable from the sessions board.
+VS Code restores a board's tab with the window and hands back the small state the tab stored: board kind, session ID and title. The board panels check that state, frame the page at the server's new port and key, and the page loads the stored session as in 4.1. A tab whose state is not a board's is closed. While the local server is not running, the tab says so and shows the board once it is. When the server starts again (a new port and key), every open board tab is drawn again.
 
 ---
 
@@ -244,7 +246,7 @@ Planned kinds: `security-report`, `ticket-list` (also cleanup), `import` (Veraco
 
 ## 6. Page and server
 
-All boards use one set of routes under the canvas key, so a new board adds no route code.
+All boards use one set of routes under the page key (called the canvas key in the code), so a new board adds no route code.
 
 | Route | Purpose |
 | --- | --- |
@@ -256,10 +258,10 @@ All boards use one set of routes under the canvas key, so a new board adds no ro
 | `POST /board/<kind>/apply` | Redeems a plan ID |
 | `POST /board/<kind>/save` | For boards that export: writes a file through VS Code's save dialog |
 | `POST /board/<kind>/discard` | Deletes the session |
-| `GET /api/open?kind=<kind>&input=<json>` | Asked by the canvas program: validates the request and names the session |
-| `GET /board/theme` | The window's theme kind, since a canvas host passes none |
+| `GET /api/open?kind=<kind>&input=<json>` | Used only by the switched-off canvas route: validates a request and names the session |
+| `GET /board/theme` | The window's theme kind, since the framed page does not get VS Code's theme variables |
 
-- The existing guard stays: `Host` check, `Origin` check, the canvas key in the path, a strict content policy, JSON bodies only, no caching.
+- The existing guard stays: `Host` check, `Origin` check, the page key in the path, a strict content policy, JSON bodies only, no caching.
 - Actions on one session are processed one after another.
 - Two tabs on the same session show the same state; neither is "the old one".
 - Pages share one small client module (load state, send action, render banner, conflicts, preview and Apply) and one style built on VS Code Elements. A board supplies its table and controls.
@@ -273,9 +275,9 @@ All boards use one set of routes under the canvas key, so a new board adds no ro
 | Single-ticket work | The Jira tools, each write behind an approval dialog. They reach Copilot through the MCP server or, with `ticketSidekick.jira.toolsFrom` set to `extension`, as VS Code language model tools: one catalog, two registrations, never both at once (decision D19) |
 | Show a list, change several tickets, import a report, review a PR, see the security report | Open the matching board; the answer is "opened" or a reason |
 | Talk about a review | `bitbucket_read_findings` reads findings from the review's session |
-| Typed commands | `/ts-jira` and `/ts-bitbucket` map one typed command to one tool call or one canvas |
+| Typed commands | `/ts-jira` (and later `/ts-bitbucket`) maps one typed command to one tool call |
 
-The agent has no canvas actions. Tool descriptions and skills tell it to open the ticket list board for lists and multi-ticket changes (R44).
+The agent cannot act on a board; it can only ask for one to be opened. Tool descriptions and skills tell it to open the ticket list board for lists and multi-ticket changes (R44).
 
 ---
 
@@ -285,8 +287,8 @@ The agent has no canvas actions. Tool descriptions and skills tell it to open th
 | --- | --- |
 | Another machine or user reaches the server | Bound to `127.0.0.1`, random port, keys required on every request |
 | A web page calls the server | `Host` and `Origin` checks, no CORS headers, JSON bodies only |
-| A process of the same user reads the canvas key | It can read board state, as it can read the session files. It cannot make a risky write: that needs the native confirmation. It cannot write anything without a plan ID from a preview. |
-| A prompt-injected agent | Same as above; in addition the agent gets no rows from a board and has no canvas actions |
+| A process of the same user reads the page key | It can read board state, as it can read the session files. It cannot make a risky write: that needs the native confirmation. It cannot write anything without a plan ID from a preview. |
+| A prompt-injected agent | Same as above; in addition the agent gets no rows from a board and has no way to act on one |
 | Stale cache leads to a wrong write | Targets are read again before every write and changed ones are refused |
 | Session files leak data | They sit in VS Code's per-workspace extension storage with the user's file permissions, hold no credentials, expire, and can be cleared with one command |
 
@@ -304,13 +306,15 @@ src/
     boardKind.ts       the BoardKind interface and the registry
   boards/
     boardRoutes.ts     the generic routes of section 6
-    registerBoards.ts  the only board file that imports vscode: store folder, confirmation, save dialog, theme, retention, clear command
+    boardPanels.ts     the editor tabs: open for a tool or command, frame the page, restore (imports vscode)
+    boardPanelHtml.ts  the tab's markup and content policy (pure)
+    registerBoards.ts  wires it to vscode: store folder, confirmation, save dialog, theme, retention, commands
     securityReport/    one folder per board kind: kind.ts, and what only it needs
     ticketList/
     import/
     review/
     sessionsBoard/
-  canvas/              the canvas foundation: routes, window notes, open decision, restore repair, launcher
+  canvas/              canvasRoutes.ts (request handling every board route uses) and, switched off, the canvas route: window notes, open decision, restore repair, launcher
   mcp/                 the MCP server and tools, as today
   services/, jira/, bitbucket/, utils/, templates/   unchanged
 canvas-pages/          page sources: shared client and style, one folder per board; copied to out/canvas-pages with the VS Code Elements bundle
@@ -336,7 +340,7 @@ canvas-pages/          page sources: shared client and style, one folder per boa
 **A new board**
 1. Decide what is recipe, derived and working state. If there is no working state and the data is cheap to read, it is still a session, just a small one.
 2. Write the board kind in `src/boards/<kind>/` with scenario tests for `reduce`, `plan` and `reconcile`.
-3. Register it; add its canvas to the canvas program and the plugin description.
+3. Register it in `registerBoards.ts`, add it to the open-board tool's `board` values and its inputs, and add a Command Palette command.
 4. Build the page from the shared client and style.
 5. Add a browser test of the page against a stubbed server.
 6. Add the typed command to the skill, the manual page, and a line in `CLAUDE.md`.
@@ -372,5 +376,6 @@ Logged in full, with rejected alternatives, in `copilot-harness-migration.md` fr
 
 ## 12. Not yet observed
 
-- That the Copilot runtime hands a restored canvas its open input back. The restart repair relies on it: it reopens the canvas with the same input, and the window finds the session by its source. If it does not, a restored canvas is closed and the session is reopened from the sessions board.
-- Canvas start in a real Copilot chat, the proxy behaviour, and real Jira and Bitbucket Data Center. These are checked on the maintainer's machine; the code is covered by unit tests and a browser check of the pages against a stubbed Jira.
+- A VS Code restart with a board open, in a real VS Code. The restore path is unit-tested against a stubbed VS Code.
+- Copilot choosing the extension tools in a real chat, and the tools picker hiding and showing them as the setting changes. In a real VS Code the smoke suite calls the tools directly and sees a board tab open and its page load.
+- Real Jira and Bitbucket Data Center behind the boards.

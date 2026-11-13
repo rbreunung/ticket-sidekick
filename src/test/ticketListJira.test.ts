@@ -99,3 +99,29 @@ describe('without Jira set up', () => {
     expect(await d.baseUrl()).toBeUndefined();
   });
 });
+
+describe('setting a field from the board', () => {
+  it('sets a sprint by its name and a custom list field from comma-separated values, like the field tool', async () => {
+    const updates: unknown[] = [];
+    const d = deps({
+      getFields: async () => [
+        { id: 'customfield_10020', name: 'Sprint', schema: { type: 'array', items: 'json', custom: 'com.pyxis.greenhopper.jira:gh-sprint' } },
+        { id: 'customfield_10501', name: 'Category', schema: { type: 'array', items: 'option' } },
+      ],
+      findSprints: async () => [{ id: 77, name: 'Sprint 12', state: 'active' }],
+      getEditMeta: async () => ({ customfield_10501: { schema: { type: 'array', items: 'option' }, allowedValues: [{ id: '1', value: 'A' }] } }),
+      updateIssue: async (key: string, fields: unknown) => { updates.push([key, fields]); },
+    } as never);
+    await d.setField('PROJ-1', 'Sprint', 'Sprint 12');
+    await d.setField('PROJ-1', 'Category', 'A, B');
+    expect(updates).toEqual([
+      ['PROJ-1', { customfield_10020: 77 }],
+      ['PROJ-1', { customfield_10501: [{ value: 'A' }, { value: 'B' }] }],
+    ]);
+  });
+
+  it('says so and writes nothing when no field has the name', async () => {
+    const d = deps({ getFields: async () => [], updateIssue: async () => { throw new Error('must not write'); } } as never);
+    await expect(d.setField('PROJ-1', 'Nope', 'x')).rejects.toThrow('No field named "Nope" was found. Nothing was changed.');
+  });
+});

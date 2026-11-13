@@ -38,10 +38,10 @@ An open Jira ticket carrying an importer's marker label whose findings are all g
 ## Copilot Chat Surfaces
 
 ### Canvas
-A tab in VS Code's editor area that the Copilot agent opens from a chat and whose page the extension serves and fills itself. In this project a canvas holds a large artifact you look at or work on (the security report now, import and review boards later), while talk and decisions stay in the chat. Distinct from an inline MCP App view, which sits inside a chat answer.
+A VS Code tab that the Copilot agent opens through a plugin's canvas program. Boards were designed for canvases and the canvas program is still built, but it is switched off: a board is shown in an editor tab the extension opens (see Board). Use "board" for the thing the developer works on, and "canvas" only for this VS Code feature.
 
 ### Security report
-A project's unresolved Veracode and Waltz tickets grouped by Fix Version, with Due Date flags (overdue, due before release), shown by `@jira /security-report` or the security report canvas and saved as CSV or Excel. Code and developer docs call the same thing the "security overview".
+A project's unresolved Veracode and Waltz tickets grouped by Fix Version, with Due Date flags (overdue, due before release), shown by `@jira /security-report` or the security report board and saved as CSV or Excel. Code and developer docs call the same thing the "security overview".
 
 ## Bitbucket Review
 
@@ -63,6 +63,9 @@ The extension's record of one piece of board work: the recipe (what was asked fo
 
 ### Conflict
 Working state in a session whose target changed or disappeared when the sources were read again. It stays on the board until the developer resolves or drops it.
+
+### Extension tool
+A Jira or Bitbucket tool registered with VS Code as a language model tool, as opposed to the same tool offered by the extension's MCP server. Both come from one tool catalog and have the same names; `ticketSidekick.jira.toolsFrom` chooses which route Copilot gets.
 
 ## Flagged ambiguities
 
