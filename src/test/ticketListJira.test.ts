@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { ticketListJiraDeps } from '../boards/ticketList/jiraDeps';
 import type { IJiraClient, JiraIssue } from '../jira/IJiraClient';
-import type { JiraAccess } from '../mcp/jiraTools/jiraAccess';
+import type { JiraAccess } from '../tools/jiraTools/jiraAccess';
 
 // What the ticket list board reads from and writes to Jira, against a stub client.
 

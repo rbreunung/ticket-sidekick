@@ -148,59 +148,40 @@ describe('bundled extension (out/extension.js)', () => {
     expect([...registered.tools].sort()).toEqual(declared);
   });
 
-  it('registers every Jira tool as an extension tool too, for machines where the MCP server is not allowed', () => {
+  it('registers every Jira tool with VS Code, with no local server and no MCP provider', () => {
     expect(registered.tools.filter(name => name.startsWith('jira_'))).toHaveLength(15);
+    expect((manifest.contributes as { mcpServerDefinitionProviders?: unknown }).mcpServerDefinitionProviders).toBeUndefined();
+    expect((manifest.contributes as { chatPlugins?: unknown }).chatPlugins).toBeUndefined();
   });
 });
 
-// The canvas program is still built, so boards can go back to canvases once VS Code delivers a
-// plugin's canvas reliably; until then the extension does not contribute the plugin.
-describe('the agent plugin with the canvas program', () => {
-  const pluginDir = path.join(root, 'out', 'plugin');
-  const canvasDir = path.join(pluginDir, 'com.github.copilot', 'extensions', 'ticket-sidekick');
+// A board's editor tab loads its page from files shipped in the extension folder.
+describe('the board pages', () => {
+  const boards = ['security-report', 'ticket-list', 'sessions'];
 
   beforeAll(() => {
     execFileSync(process.execPath, ['esbuild.js'], { cwd: root, stdio: 'pipe' });
   }, 120_000);
 
-  it('is built with the extension\'s version, and not contributed while boards open as editor tabs', () => {
-    expect((manifest.contributes as { chatPlugins?: unknown }).chatPlugins).toBeUndefined();
-    const plugin = JSON.parse(fs.readFileSync(path.join(pluginDir, 'plugin.json'), 'utf8'));
-    expect(plugin.name).toBe('ticket-sidekick');
-    expect(plugin.version).toBe((manifest as { version?: string }).version);
-  });
-
-  it('contains the bundled canvas program as an ES module', () => {
-    expect(fs.existsSync(path.join(canvasDir, 'extension.mjs'))).toBe(true);
-    expect(JSON.parse(fs.readFileSync(path.join(canvasDir, 'package.json'), 'utf8'))).toMatchObject({ type: 'module', main: 'extension.mjs' });
-  });
-
-  it('carries a skill, so VS Code 1.146 does not drop it as an empty plugin', () => {
-    const skill = fs.readFileSync(path.join(pluginDir, 'skills', 'ts-boards', 'SKILL.md'), 'utf8');
-    expect(skill).toMatch(/^---\nname: ts-boards\n/);
-    for (const id of ['security-report', 'ticket-list', 'sessions']) expect(skill).toContain(`\`${id}\``);
-  });
-
-  it('is packaged into the .vsix', () => {
-    const ignore = fs.readFileSync(path.join(root, '.vscodeignore'), 'utf8').split(/\r?\n/);
-    expect(ignore).toContain('!out/plugin/**');
-  });
-
-  it('ships the board pages with the shared client, style and the VS Code Elements bundle', () => {
-    const pages = path.join(root, 'out', 'canvas-pages');
-    for (const file of ['shared/board.js', 'shared/board.css', 'shared/vscode-elements.js', 'security-report/index.html', 'security-report/page.js', 'ticket-list/index.html', 'ticket-list/page.js', 'sessions/index.html', 'sessions/page.js']) {
+  it('are built with the shared client, style and the VS Code Elements bundle, and packaged into the .vsix', () => {
+    const pages = path.join(root, 'out', 'board-pages');
+    for (const file of ['shared/board.js', 'shared/board.css', 'shared/vscode-elements.js', ...boards.map(b => `${b}/page.js`)]) {
       expect(fs.existsSync(path.join(pages, file)), file).toBe(true);
     }
-    expect(fs.readFileSync(path.join(root, '.vscodeignore'), 'utf8')).toContain('!out/canvas-pages/**');
+    expect(fs.readFileSync(path.join(root, '.vscodeignore'), 'utf8').split(/\r?\n/)).toContain('!out/board-pages/**');
   });
 
-  it('loads no script or style from the web in a board page', () => {
-    const pages = path.join(root, 'canvas-pages');
-    for (const board of ['security-report', 'ticket-list', 'sessions']) {
-      const html = fs.readFileSync(path.join(pages, board, 'index.html'), 'utf8');
-      expect(html).not.toMatch(/(?:src|href)="(?:https?:)?\/\//);
-      expect(html).not.toMatch(/<script(?![^>]*\bsrc=)[^>]*>|style=/);
+  it('talk to the extension over the tab\'s message channel only: no request to a server, nothing from the web', () => {
+    const pages = path.join(root, 'board-pages');
+    for (const file of ['shared/board.js', ...boards.map(b => `${b}/page.js`)]) {
+      const script = fs.readFileSync(path.join(pages, file), 'utf8');
+      expect(script, file).not.toMatch(/\bfetch\(|XMLHttpRequest|WebSocket|https?:\/\//);
+      expect(script, file).not.toMatch(/innerHTML|insertAdjacentHTML|document\.write/);
     }
+    expect(fs.readFileSync(path.join(pages, 'shared', 'board.js'), 'utf8')).toContain('acquireVsCodeApi()');
+  });
+
+  it('are written by the extension, so no page document is shipped', () => {
+    for (const board of boards) expect(fs.existsSync(path.join(root, 'board-pages', board, 'index.html')), board).toBe(false);
   });
 });
-

@@ -1,8 +1,6 @@
 # Agent Mode Tools
 
-Part of `@bitbucket` — lets GitHub Copilot's Agent Mode work with Bitbucket directly, without you typing `@bitbucket`. See the main [README](../../README.md) for setup first.
-
-The Jira tools are on Ticket Sidekick's MCP server by default; see [Jira Tools for Copilot Chats](copilot-tools.md) for what each does. Where the MCP server is not allowed, the same tools are offered as extension tools, listed [at the end of this page](#jira-tools-as-extension-tools).
+Every tool Ticket Sidekick gives GitHub Copilot's Agent mode, with the name to reference it by. The Bitbucket tools are described here; the Jira tools are listed [at the end of this page](#jira-tools) and described in [Jira Tools for Copilot Chats](copilot-tools.md). See the main [README](../../README.md) for setup first.
 
 ## How to use them
 
@@ -32,11 +30,11 @@ This shows a confirmation with the exact comment text before it runs. Nothing ha
 - **One pull request at a time.** Each tool works on a single pull request.
 - **No accidental duplicates.** If Copilot repeats the same comment within a minute, the repeat is skipped. A retry after a real failure still goes through.
 - **Auto-approve skips the confirmation.** If you turned on VS Code's `chat.tools.autoApprove`, the comment tool runs without asking. It still checks its own inputs.
-- **No full PR review as a tool.** For a complete review, paste the PR link into `@bitbucket` chat — see [Bitbucket PR Review](bitbucket-pr-review.md).
+- **No full PR review as a tool yet.** A complete review still runs in the deprecated `@bitbucket` chat participant: paste the PR link there — see [Bitbucket PR Review](bitbucket-pr-review.md). A review board is planned to replace it.
 
-## Jira tools as extension tools
+## Jira tools
 
-With `ticketSidekick.jira.toolsFrom` set to `"extension"`, Copilot gets the Jira tools from the extension itself and the MCP server is no longer offered. Use this where your organisation blocks the MCP server. The tools, their inputs and their answers are the same as on the MCP server, described in [Jira Tools for Copilot Chats](copilot-tools.md); with the default `"mcp"` they are hidden here, so no tool is offered twice.
+The Jira tools are offered the same way. What each does and which inputs it takes is described in [Jira Tools for Copilot Chats](copilot-tools.md).
 
 A tool marked "asks first" shows a confirmation with every value it is about to write, and nothing happens until you approve it. The others only read, or open a board.
 

@@ -1,7 +1,5 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import type { CanvasRoute } from '../canvas/canvasRoutes';
-import type { ConfigService } from '../services/ConfigService';
 import { TicketService } from '../services/TicketService';
 import { registerKind } from '../sessions/boardKind';
 import { SessionManager } from '../sessions/sessionManager';
@@ -9,15 +7,15 @@ import { SessionStore } from '../sessions/sessionStore';
 import { logDiag } from '../utils/diagLog';
 import { localDate } from '../utils/securityOverview';
 import { resolveCsvDelimiter } from '../utils/securityOverviewCsv';
-import type { JiraAccess } from '../mcp/jiraTools/jiraAccess';
-import { boardRoutes, SESSIONS_BOARD } from './boardRoutes';
+import type { JiraAccess } from '../tools/jiraTools/jiraAccess';
+import { SESSIONS_BOARD } from './boardMessages';
 import { BOARD_VIEW_TYPE, BoardPanels } from './boardPanels';
 import { SECURITY_REPORT_KIND, securityReportKind, type SecurityReportDeps } from './securityReport/kind';
 import { ticketListJiraDeps } from './ticketList/jiraDeps';
 import { TICKET_LIST_KIND, ticketListKind } from './ticketList/kind';
 
 // VS Code glue for the boards: where sessions are stored, the native confirmation and save dialog,
-// the theme, the retention setting and the clear command. Everything it wires is free of `vscode`.
+// the editor tabs, the retention setting and the commands. Everything it wires is free of `vscode`.
 
 export const BOARD_COMMANDS = {
   clearSessions: 'ticket-sidekick.sessions.clear',
@@ -35,24 +33,13 @@ export function retentionDays(): number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 365 ? value : DEFAULT_RETENTION_DAYS;
 }
 
-function themeKind(): 'light' | 'dark' | 'hc' {
-  switch (vscode.window.activeColorTheme.kind) {
-    case vscode.ColorThemeKind.Light: return 'light';
-    case vscode.ColorThemeKind.HighContrast:
-    case vscode.ColorThemeKind.HighContrastLight: return 'hc';
-    default: return 'dark';
-  }
-}
-
 export interface RegisteredBoards {
   manager: SessionManager;
-  routes: CanvasRoute[];
   panels: BoardPanels;
 }
 
 export function registerBoards(
   context: vscode.ExtensionContext,
-  configService: ConfigService,
   getJira: () => Promise<JiraAccess>,
 ): RegisteredBoards {
   const log = (level: 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>) => logDiag('boards', level, message, details);
@@ -113,7 +100,9 @@ export function registerBoards(
   const timer = setInterval(expire, DAY_MS);
   timer.unref?.();
 
-  const panels = new BoardPanels(manager, kinds.map(k => k.kind.kind));
+  // The pages are plain files shipped with the extension and loaded by the tab itself.
+  const pagesRoot = vscode.Uri.joinPath(context.extensionUri, 'out', 'board-pages');
+  const panels = new BoardPanels(manager, kinds.map(k => k.kind.kind), pagesRoot, message => log('error', 'A board request failed', { error: message }));
   /** Opens a board from the Command Palette and says why when it cannot. */
   const openFromCommand = async (kind: string, input: unknown) => {
     const opened = await panels.open(kind, input);
@@ -155,14 +144,5 @@ export function registerBoards(
     }),
   );
 
-  return {
-    manager,
-    panels,
-    routes: boardRoutes({
-      manager,
-      kinds: kinds.map(k => k.kind.kind),
-      pagesDir: path.join(context.extensionPath, 'out', 'canvas-pages'),
-      theme: themeKind,
-    }),
-  };
+  return { manager, panels };
 }

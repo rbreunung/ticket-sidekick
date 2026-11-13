@@ -18,7 +18,8 @@
   "icon": "images/ticket-sidekick.png",
   "activationEvents": [
     "onUri",
-    "onStartupFinished"
+    "onStartupFinished",
+    "onWebviewPanel:ticketSidekick.board"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -157,10 +158,6 @@
       {
         "command": "ticket-sidekick.importWaltzReport",
         "title": "Ticket Sidekick: Create Jira tickets from OSS report (.xlsx)"
-      },
-      {
-        "command": "ticket-sidekick.mcp.copyDiagnostics",
-        "title": "Ticket Sidekick: Copy MCP diagnostics"
       },
       {
         "command": "ticket-sidekick.sessions.clear",
@@ -302,7 +299,6 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraCheckConnection",
         "icon": "$(search)",
-        "when": "ticketSidekick.jiraExtensionTools",
         "tags": [
           "jira"
         ],
@@ -319,7 +315,6 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraViewTicket",
         "icon": "$(search)",
-        "when": "ticketSidekick.jiraExtensionTools",
         "tags": [
           "jira"
         ],
@@ -341,7 +336,6 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraFindTickets",
         "icon": "$(search)",
-        "when": "ticketSidekick.jiraExtensionTools",
         "tags": [
           "jira"
         ],
@@ -387,7 +381,6 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraListMyFilters",
         "icon": "$(search)",
-        "when": "ticketSidekick.jiraExtensionTools",
         "tags": [
           "jira"
         ],
@@ -404,7 +397,6 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraWorkflow",
         "icon": "$(search)",
-        "when": "ticketSidekick.jiraExtensionTools",
         "tags": [
           "jira"
         ],
@@ -433,7 +425,6 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraListTemplates",
         "icon": "$(search)",
-        "when": "ticketSidekick.jiraExtensionTools",
         "tags": [
           "jira"
         ],
@@ -450,7 +441,6 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraLoadTicket",
         "icon": "$(edit)",
-        "when": "ticketSidekick.jiraExtensionTools",
         "tags": [
           "jira"
         ],
@@ -479,7 +469,6 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraMoveTicket",
         "icon": "$(edit)",
-        "when": "ticketSidekick.jiraExtensionTools",
         "tags": [
           "jira"
         ],
@@ -513,7 +502,6 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraCreateTicket",
         "icon": "$(edit)",
-        "when": "ticketSidekick.jiraExtensionTools",
         "tags": [
           "jira"
         ],
@@ -555,7 +543,6 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraAddComment",
         "icon": "$(edit)",
-        "when": "ticketSidekick.jiraExtensionTools",
         "tags": [
           "jira"
         ],
@@ -585,7 +572,6 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraUpdateField",
         "icon": "$(edit)",
-        "when": "ticketSidekick.jiraExtensionTools",
         "tags": [
           "jira"
         ],
@@ -629,7 +615,6 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraUploadAttachment",
         "icon": "$(edit)",
-        "when": "ticketSidekick.jiraExtensionTools",
         "tags": [
           "jira"
         ],
@@ -659,7 +644,6 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraListFields",
         "icon": "$(search)",
-        "when": "ticketSidekick.jiraExtensionTools",
         "tags": [
           "jira"
         ],
@@ -689,7 +673,6 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraCheckRequiredFields",
         "icon": "$(search)",
-        "when": "ticketSidekick.jiraExtensionTools",
         "tags": [
           "jira"
         ],
@@ -714,7 +697,6 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraOpenBoard",
         "icon": "$(search)",
-        "when": "ticketSidekick.jiraExtensionTools",
         "tags": [
           "jira"
         ],
@@ -825,19 +807,6 @@
             ],
             "default": "comma",
             "description": "Column separator in the CSV that the security report and the `export` reply of a report import save. Excel with a German (or other comma-decimal) locale opens a semicolon-separated file in columns, and a comma-separated one in a single column."
-          },
-          "ticketSidekick.jira.toolsFrom": {
-            "type": "string",
-            "enum": [
-              "mcp",
-              "extension"
-            ],
-            "enumDescriptions": [
-              "Copilot reaches the Jira tools through Ticket Sidekick's MCP server.",
-              "Copilot reaches the same Jira tools as tools of the extension, without the MCP server. Choose this where your organisation does not allow the MCP server."
-            ],
-            "default": "mcp",
-            "description": "How Copilot reaches the Jira tools. Both ways offer the same tools with the same names; only one is offered at a time."
           },
           "ticketSidekick.sessions.retentionDays": {
             "type": "integer",
@@ -1228,12 +1197,12 @@
           {
             "id": "jiraCopilotTools",
             "title": "Use the Jira tools in Copilot chats",
-            "description": "Copilot-harness chats reach Ticket Sidekick's Jira tools on this computer. Add `127.0.0.1` to `http.noProxy` so those local requests do not go through your network proxy.\n[Open setting](command:workbench.action.openSettings?%22http.noProxy%22)",
+            "description": "Copilot's agent can read and change Jira tickets through Ticket Sidekick's tools, and open boards (ticket lists, the security report) in editor tabs. Type `/ts-jira help` in a Copilot chat to see the commands.\n[Open stored sessions](command:ticket-sidekick.boards.sessions)",
             "media": {
               "markdown": "walkthroughs/jira/copilot-tools.md"
             },
             "completionEvents": [
-              "onSettingChanged:http.noProxy"
+              "onCommand:ticket-sidekick.boards.sessions"
             ]
           }
         ]
@@ -1278,17 +1247,11 @@
           }
         ]
       }
-    ],
-    "mcpServerDefinitionProviders": [
-      {
-        "id": "ticket-sidekick.mcp",
-        "label": "Ticket Sidekick"
-      }
     ]
   },
   "scripts": {
     "vscode:prepublish": "npm run bundle",
-    "compile": "tsc -p ./ && tsc -p tsconfig.launcher.json",
+    "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "bundle": "node esbuild.js",
     "package": "vsce package",
@@ -1296,7 +1259,6 @@
     "test:e2e": "node esbuild.js && tsc -p ./ && node ./out/e2e/runTest.js"
   },
   "devDependencies": {
-    "@github/copilot-sdk": "1.0.31",
     "@types/node": "^26.6.6",
     "@types/vscode": "~1.95.0",
     "@vscode-elements/elements": "2.5.1",
@@ -1310,7 +1272,6 @@
     "zod-to-json-schema": "3.25.2"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.32.2",
     "exceljs": "^4.4.0",
     "fast-xml-parser": "^5.10.1",
     "minimatch": "^11.0.3",

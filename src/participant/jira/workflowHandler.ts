@@ -21,7 +21,7 @@ export async function handleDiscoverWorkflow(
   }
   stream.markdown(`_Discovering workflow for **${projectKey}** / **${issueType}**…_\n\n`);
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-  // Same discover-then-cache sequence the MCP workflow tool uses (src/mcp/jiraTools/workflow.ts,
+  // Same discover-then-cache sequence the workflow tool uses (src/tools/jiraTools/workflow.ts,
   // src/services/WorkflowService.ts), so the chat flow and the tool never drift apart on cache
   // handling.
   const { graph, skippedStatuses, preserved } = await discoverAndCacheWorkflow(jiraClient, workspaceRoot, projectKey, issueType);

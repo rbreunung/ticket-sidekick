@@ -24,7 +24,7 @@ export const AWAIT_UPLOAD_TICKET_SESSION_KEY = 'jira.session.awaitUploadTicket';
 
 // Code-review fix: Jira does not dedupe attachments by filename, so a double-submitted "confirm" reply — a double
 // click on the rendered link, or two chat turns dispatched before the first completes — would
-// otherwise upload every file twice. The MCP upload tool guards its writes the same way, for the
+// otherwise upload every file twice. The upload tool guards its writes the same way, for the
 // same non-idempotent-write reason.
 const recentUploadConfirms = new RecentCallGuard();
 

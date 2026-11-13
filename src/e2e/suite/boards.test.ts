@@ -2,24 +2,17 @@ import * as assert from 'assert';
 import * as vscode from 'vscode';
 import type { E2eTest } from './index';
 
-// A board opens as an editor tab and its page really loads from the extension's local server.
-// Runs while the MCP server is up (127.0.0.1 is in http.noProxy of the throwaway profile), since
-// the same server serves the board pages.
+// The Jira tools answer when VS Code calls them, and a board opens as an editor tab whose page
+// really loads and talks to the extension over the webview's message channel. Nothing here needs
+// Copilot, a proxy setting or a local server.
 
 const LOAD_TIMEOUT_MS = 30_000;
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
+interface BoardStats { openTabs: number; requestsAnswered: number }
+
 function boardTab(title: string): vscode.Tab | undefined {
   return vscode.window.tabGroups.all.flatMap(group => group.tabs).find(tab => tab.label === title && tab.input instanceof vscode.TabInputWebview);
-}
-
-/** The count of page requests the server answered, read from the diagnostics report. */
-async function pageRequests(): Promise<number> {
-  await vscode.commands.executeCommand('ticket-sidekick.mcp.copyDiagnostics');
-  const report = await vscode.env.clipboard.readText();
-  const match = /Canvas requests with a valid key: (\d+)/.exec(report);
-  assert.ok(match, 'the diagnostics report has no line about page requests');
-  return Number(match[1]);
 }
 
 /** The text a language model tool answered with. */
@@ -27,17 +20,18 @@ function textOf(result: vscode.LanguageModelToolResult): string {
   return result.content.map(part => (part instanceof vscode.LanguageModelTextPart ? part.value : '')).join('');
 }
 
-export function boardTests(): E2eTest[] {
+export function boardTests(extensionId: string): E2eTest[] {
+  const stats = (): BoardStats => (vscode.extensions.getExtension(extensionId)?.exports as { boardStats(): BoardStats }).boardStats();
   return [
     {
-      name: 'a Jira tool answers when VS Code calls it as an extension tool, without the MCP server',
+      name: 'a Jira tool answers when VS Code calls it',
       fn: async () => {
         const result = await vscode.lm.invokeTool('jira_check_connection', { input: {}, toolInvocationToken: undefined });
-        assert.match(textOf(result), /token|base URL/i, 'the extension tool did not answer with the Jira setup hint');
+        assert.match(textOf(result), /token|base URL/i, 'the tool did not answer with the Jira setup hint');
       },
     },
     {
-      name: 'the open board tool, called as an extension tool, opens the stored sessions in an editor tab',
+      name: 'the open board tool opens the stored sessions in an editor tab',
       fn: async () => {
         const result = await vscode.lm.invokeTool('jira_open_board', { input: { board: 'sessions' }, toolInvocationToken: undefined });
         assert.strictEqual(textOf(result), 'Opened in an editor tab: Stored sessions.');
@@ -55,15 +49,16 @@ export function boardTests(): E2eTest[] {
       },
     },
     {
-      name: 'the board\'s page loads from the local server inside that tab',
+      name: 'the board\'s page loads inside that tab and gets its answer from the extension',
       fn: async () => {
+        // The page asks for the stored sessions as soon as its scripts ran, so an answered request
+        // proves the document, its content policy, the scripts and the message channel all work.
+        const before = stats().requestsAnswered;
+        await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+        await vscode.commands.executeCommand('ticket-sidekick.boards.sessions');
         const deadline = Date.now() + LOAD_TIMEOUT_MS;
-        let requests = 0;
-        while (requests === 0 && Date.now() < deadline) {
-          await sleep(1000);
-          requests = await pageRequests();
-        }
-        assert.ok(requests > 0, 'the tab is open, but the local server received no request for the board page');
+        while (stats().requestsAnswered === before && Date.now() < deadline) await sleep(250);
+        assert.ok(stats().requestsAnswered > before, 'the tab is open, but its page sent no request to the extension');
       },
     },
   ];

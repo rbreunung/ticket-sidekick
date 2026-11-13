@@ -1,0 +1,64 @@
+/* One look for every Ticket Sidekick board. A board runs in an editor tab, where VS Code provides
+   its theme colours as --vscode-* variables and marks the theme kind with a class on the body. */
+body { --ts-warn: #cca700; --ts-overdue: #f48771; }
+body.vscode-light { --ts-warn: #8a6100; --ts-overdue: #c72e0f; }
+body.vscode-high-contrast { --ts-warn: #ffd700; --ts-overdue: #f48771; }
+body.vscode-high-contrast-light { --ts-warn: #5c4100; --ts-overdue: #b5200d; }
+
+body {
+  margin: 0;
+  padding: 16px 20px 32px;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  line-height: 1.45;
+}
+h1 { font-size: 1.5em; font-weight: 600; margin: 0 0 4px; }
+h2 { font-size: 1.15em; font-weight: 600; margin: 24px 0 8px; }
+p { margin: 4px 0; }
+a { color: var(--vscode-textLink-foreground); }
+:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+.muted { color: var(--vscode-descriptionForeground); }
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
+.bar label { display: inline-flex; align-items: center; gap: 6px; }
+select, input[type='text'] {
+  font: inherit;
+  color: inherit;
+  background: var(--vscode-editorWidget-background);
+  border: 1px solid var(--vscode-widget-border);
+  border-radius: 2px;
+  padding: 3px 6px;
+}
+.banner {
+  border: 1px solid var(--vscode-widget-border);
+  border-left: 3px solid var(--ts-warn);
+  background: var(--vscode-editorWidget-background);
+  padding: 8px 12px;
+  margin: 8px 0;
+}
+.banner.error { border-left-color: var(--vscode-errorForeground); }
+.banner ul { margin: 6px 0 0; padding-left: 20px; }
+.banner li { margin: 4px 0; }
+table { border-collapse: collapse; width: 100%; margin: 4px 0 12px; }
+th, td { text-align: left; padding: 4px 10px 4px 0; border-bottom: 1px solid var(--vscode-widget-border); vertical-align: top; }
+thead th { font-weight: 600; white-space: nowrap; }
+tbody tr:hover { background: var(--vscode-list-hoverBackground); }
+th button.sort {
+  all: unset;
+  cursor: pointer;
+  font-weight: 600;
+}
+th button.sort:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+.flag-overdue { color: var(--ts-overdue); font-weight: 600; }
+.flag-due-before-release { color: var(--ts-warn); font-weight: 600; }
+.num { text-align: right; padding-right: 16px; }
+dialog.plan {
+  color: inherit;
+  background: var(--vscode-editorWidget-background);
+  border: 1px solid var(--vscode-widget-border);
+  max-width: min(720px, 90vw);
+  max-height: 80vh;
+  overflow: auto;
+}
+dialog.plan::backdrop { background: rgba(0, 0, 0, 0.5); }

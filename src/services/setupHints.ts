@@ -1,6 +1,6 @@
 // The setup hint every surface answers with while Jira is not configured: the Agent Mode tools,
-// the MCP tools and `@jira check`. Pure (vscode-free) and outside the participant layer, so the
-// MCP server and the tools depend on it without depending on a chat participant.
+// the Jira tools and `@jira check`. Pure (vscode-free) and outside the participant layer, so the
+// tools depend on it without depending on a chat participant.
 
 import type { JiraConfig } from './ConfigService';
 

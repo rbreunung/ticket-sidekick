@@ -1,11 +1,11 @@
-import type { JiraAccess } from '../../mcp/jiraTools/jiraAccess';
+import type { JiraAccess } from '../../tools/jiraTools/jiraAccess';
 import { TicketService } from '../../services/TicketService';
 import { discoverAndCacheWorkflow, resolveAndApplyTransition } from '../../services/WorkflowService';
 import type { DiagLogger } from '../../utils/diagTypes';
 import { describeJiraFailure } from '../../utils/jiraFailureText';
 import type { TicketListDeps, TicketRow } from './kind';
 
-// What the ticket list board needs from Jira, built on the services the MCP tools use: the same
+// What the ticket list board needs from Jira, built on the services the Jira tools use: the same
 // search, the same move (direct, along the cached workflow, or after discovering it once) and the
 // same field update. Failures are worded as status and short reason; Jira's response body never
 // reaches the page.

@@ -14,14 +14,8 @@ async function main(): Promise<void> {
   const extensionTestsPath = path.resolve(__dirname, 'suite', 'index');
   const sandbox = path.join(extensionDevelopmentPath, '.vscode-test');
   const userDataDir = path.join(sandbox, 'user-data');
-  // A fresh profile every run, so no MCP server or tool cached by an earlier run is listed. With
-  // 127.0.0.1 in http.noProxy the extension starts its MCP server at activation (mcp.test.ts).
+  // A fresh profile every run, so nothing an earlier run stored is reused.
   fs.rmSync(userDataDir, { recursive: true, force: true });
-  fs.mkdirSync(path.join(userDataDir, 'User'), { recursive: true });
-  fs.writeFileSync(
-    path.join(userDataDir, 'User', 'settings.json'),
-    JSON.stringify({ 'http.noProxy': ['127.0.0.1'] }, null, 2),
-  );
   await runTests({
     extensionDevelopmentPath,
     extensionTestsPath,

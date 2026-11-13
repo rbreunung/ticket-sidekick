@@ -1,60 +1,61 @@
 import { describe, it, expect } from 'vitest';
-import { asBoardPanelState, boardPageUrl, boardPanelHtml, boardUnavailableHtml } from '../boards/boardPanelHtml';
+import { asBoardPanelState, boardPanelHtml } from '../boards/boardPanelHtml';
 
-// A board's editor tab: a frame around the board page on the extension's local server.
+// A board's editor tab: a document the extension writes, loading the board page from the
+// extension's own files.
 
 const state = { kind: 'security-report', id: 'a'.repeat(24), title: 'Security report: PROJ' };
+const assets = {
+  style: 'https://file+.vscode-resource.vscode-cdn.net/ext/out/board-pages/shared/board.css',
+  elements: 'https://file+.vscode-resource.vscode-cdn.net/ext/out/board-pages/shared/vscode-elements.js',
+  page: 'https://file+.vscode-resource.vscode-cdn.net/ext/out/board-pages/security-report/page.js',
+};
+const cspSource = 'https://*.vscode-cdn.net';
 
 describe('a board\'s editor tab', () => {
-  it('frames the board page of its session on this computer', () => {
-    const url = boardPageUrl(50123, 'KEY', 'security-report', state.id);
-    expect(url).toBe(`http://127.0.0.1:50123/KEY/board/security-report/?s=${state.id}`);
-    const html = boardPanelHtml({ url, port: 50123, nonce: 'n1', state });
-    expect(html).toContain(`<iframe src="${url}"`);
+  it('loads the board\'s page script, the shared style and the VS Code Elements bundle', () => {
+    const html = boardPanelHtml({ cspSource, assets, state });
+    expect(html).toContain(`<script type="module" src="${assets.page}"></script>`);
+    expect(html).toContain(`<script type="module" src="${assets.elements}"></script>`);
+    expect(html).toContain(`<link rel="stylesheet" href="${assets.style}">`);
     expect(html).toContain('<title>Security report: PROJ</title>');
   });
 
-  it('lets nothing load but that frame, from the server\'s current port', () => {
-    const html = boardPanelHtml({ url: boardPageUrl(50123, 'KEY', 'ticket-list', state.id), port: 50123, nonce: 'n1', state });
-    expect(html).toContain("default-src 'none'; frame-src http://127.0.0.1:50123; style-src 'nonce-n1'; script-src 'nonce-n1'");
-    expect(html.match(/<script/g)).toHaveLength(1);
-    expect(html).toContain('<script nonce="n1">');
+  it('lets scripts load from the extension\'s own files only, runs no inline script and frames nothing', () => {
+    const html = boardPanelHtml({ cspSource, assets, state });
+    expect(html).toContain(`default-src &#39;none&#39;; script-src ${cspSource}; style-src ${cspSource} &#39;unsafe-inline&#39;; font-src ${cspSource}; img-src ${cspSource} data:`);
+    expect(html).not.toMatch(/<script(?![^>]*\ssrc=)/);
+    expect(html).not.toContain('<iframe');
+    expect(html).not.toContain('127.0.0.1');
+  });
+
+  it('tells the page which board and session it shows', () => {
+    const html = boardPanelHtml({ cspSource, assets, state });
+    expect(html).toContain(`<main id="root" data-kind="security-report" data-session="${state.id}" data-title="Security report: PROJ"></main>`);
   });
 
   it('opens the sessions board without a session', () => {
-    expect(boardPageUrl(50123, 'KEY', 'sessions', '')).toBe('http://127.0.0.1:50123/KEY/board/sessions/');
-  });
-
-  it('stores which session it shows, so VS Code can hand it back after a restart', () => {
-    const html = boardPanelHtml({ url: 'http://127.0.0.1:1/k/board/security-report/', port: 1, nonce: 'n', state });
-    expect(html).toContain(`acquireVsCodeApi().setState(${JSON.stringify(state)});`);
+    const html = boardPanelHtml({ cspSource, assets, state: { kind: 'sessions', id: '', title: 'Stored sessions' } });
+    expect(html).toContain('data-kind="sessions" data-session=""');
   });
 
   it('keeps a title with markup in it as text', () => {
-    const hostile = { ...state, title: 'Tickets: filter "</script><img src=x onerror=alert(1)>"' };
-    const html = boardPanelHtml({ url: 'http://127.0.0.1:1/k/board/ticket-list/', port: 1, nonce: 'n', state: hostile });
-    expect(html).not.toContain('<img');
-    expect(html).not.toContain('</script><');
-  });
-
-  it('says why when the local server is not running, and still remembers its session', () => {
-    const html = boardUnavailableHtml({ nonce: 'n', state, reason: 'The local server is not running.' });
-    expect(html).toContain('<p>The local server is not running.</p>');
-    expect(html).not.toContain('<iframe');
-    expect(html).toContain('setState(');
+    const html = boardPanelHtml({ cspSource, assets, state: { ...state, title: 'Tickets: "<script>alert(1)</script>"' } });
+    expect(html).not.toContain('<script>alert(1)</script>');
+    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
   });
 });
 
-describe('a tab VS Code brings back', () => {
-  it('is accepted with the state the tab stored', () => {
+describe('a board tab VS Code restores after a restart', () => {
+  it('is accepted in its known shape', () => {
     expect(asBoardPanelState(state)).toEqual(state);
     expect(asBoardPanelState({ kind: 'sessions', id: '', title: 'Stored sessions' })).toEqual({ kind: 'sessions', id: '', title: 'Stored sessions' });
   });
 
-  it('is refused when the stored state is not a board\'s', () => {
+  it('is dropped when what was stored is not a board', () => {
     expect(asBoardPanelState(undefined)).toBeUndefined();
     expect(asBoardPanelState({ kind: '../x', id: '', title: 't' })).toBeUndefined();
-    expect(asBoardPanelState({ kind: 'ticket-list', id: '../../etc', title: 't' })).toBeUndefined();
-    expect(asBoardPanelState({ kind: 'ticket-list', id: 'abc' })).toBeUndefined();
+    expect(asBoardPanelState({ kind: 'security-report', id: '../../x', title: 't' })).toBeUndefined();
+    expect(asBoardPanelState({ kind: 'security-report', id: 'abc' })).toBeUndefined();
   });
 });

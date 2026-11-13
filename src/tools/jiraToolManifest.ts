@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
-import type { McpToolDefinition } from '../mcp/mcpServer';
-import { EXTENSION_TOOLS_CONTEXT } from './jiraExtensionTools';
+import type { ToolDefinition } from '../tools/toolDefinition';
 
 // The `contributes.languageModelTools` entries of the Jira tools, derived from the tool catalog.
 // VS Code wants them written out in package.json, so `scripts/sync-jira-tools.mjs` writes what
@@ -16,7 +15,6 @@ export interface ToolManifestEntry {
   canBeReferencedInPrompt: boolean;
   toolReferenceName: string;
   icon: string;
-  when: string;
   tags: string[];
   inputSchema: Record<string, unknown>;
 }
@@ -31,7 +29,7 @@ function firstSentence(text: string): string {
   return (end === -1 ? text : text.slice(0, end + 1)).replace(/:$/, '.');
 }
 
-export function jiraToolManifest(tools: readonly McpToolDefinition<never>[]): ToolManifestEntry[] {
+export function jiraToolManifest(tools: readonly ToolDefinition<never>[]): ToolManifestEntry[] {
   return tools.map(tool => {
     const schema = zodToJsonSchema(z.object(tool.inputSchema), { $refStrategy: 'none', target: 'jsonSchema7' }) as Record<string, unknown>;
     delete schema.$schema;
@@ -44,7 +42,6 @@ export function jiraToolManifest(tools: readonly McpToolDefinition<never>[]): To
       canBeReferencedInPrompt: true,
       toolReferenceName: toolReferenceName(tool.name),
       icon: tool.annotations.readOnlyHint ? '$(search)' : '$(edit)',
-      when: EXTENSION_TOOLS_CONTEXT,
       tags: ['jira'],
       inputSchema: schema,
     };

@@ -1,7 +1,9 @@
-Copilot chats that run in the Copilot harness cannot use `@jira`. Ticket Sidekick offers them its Jira tools instead, through a small server that runs inside VS Code on this computer (`127.0.0.1`), protected by a key that changes at every start.
+Ticket Sidekick gives Copilot's agent its own Jira tools: view, find, create, comment, move, update a field, upload, load a ticket for the agent, and more. They need no extra setup beyond the Jira connection from the earlier steps.
 
-[Open the http.noProxy setting](command:workbench.action.openSettings?%22http.noProxy%22)
+Type `/ts-jira help` in a Copilot chat for the list of commands, for example `/ts-jira view PROJ-123` or `/ts-jira search project = PROJ AND status = Open`. You can also just ask in your own words.
 
-Add the entry `127.0.0.1` to **Http: No Proxy**. Without it, Copilot could send these local requests to your network proxy, which would block them. Ticket Sidekick never changes this setting for you, and offers the tools only while the entry is there. Enter exactly `127.0.0.1`: an entry with a port, such as `127.0.0.1:8080`, does not count, because the server's port changes at every start.
+Lists of tickets and the security report open as a **board** in an editor tab instead of filling the chat. A board shows a preview before it writes anything, and it comes back after a restart. Boards are also in the Command Palette: **Ticket Sidekick: Open ticket list**, **Open security report** and **Open stored sessions**.
 
-The tools appear in Copilot chats as soon as the entry is saved, without a restart. If they do not, run **Ticket Sidekick: Copy MCP diagnostics** from the Command Palette; it copies a report without keys or tokens. The report shows your `chat.mcp` and sandbox settings as they are, and a sandbox allow-list can name internal hosts, so read it once before you share it.
+A tool that changes Jira asks you to confirm first, showing exactly what it will write.
+
+The `@jira` and `@bitbucket` chat participants still work but are deprecated: the tools, `/ts-jira` commands and boards replace them.

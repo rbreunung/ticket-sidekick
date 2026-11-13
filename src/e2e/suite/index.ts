@@ -3,12 +3,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { boardTests } from './boards.test';
-import { mcpTests } from './mcp.test';
 
 // Smoke checks inside a real VS Code. Deliberately small: the chat flows need Copilot, a language
 // model and real Jira/Bitbucket credentials, so they stay covered by the Vitest suite. What only a
 // real host can prove is that the packaged extension activates and registers what package.json
-// declares, and that VS Code's own MCP client reaches the extension's MCP server (mcp.test.ts).
+// declares, that VS Code can call the Jira tools, and that a board opens in an editor tab and its
+// page really talks to the extension (boards.test.ts).
 // Kept dependency-free (no mocha) — test-electron only needs an exported run().
 
 const root = path.resolve(__dirname, '..', '..', '..');
@@ -27,9 +27,6 @@ export interface E2eTest {
   name: string;
   fn: () => Promise<void | { skipped: string }>;
 }
-
-// Built once: its checks share what the first one finds.
-const mcp = mcpTests(extensionId);
 
 const tests: E2eTest[] = [
   {
@@ -57,11 +54,7 @@ const tests: E2eTest[] = [
       assert.deepStrictEqual(missing, []);
     },
   },
-  // The MCP tests come last, and their last one removes 127.0.0.1 from http.noProxy, which stops
-  // the extension's server; the board tests need that server, so they run just before it.
-  ...mcp.slice(0, -1),
-  ...boardTests(),
-  ...mcp.slice(-1),
+  ...boardTests(extensionId),
 ];
 
 export async function run(): Promise<void> {

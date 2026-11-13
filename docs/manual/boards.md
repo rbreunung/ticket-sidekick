@@ -10,9 +10,9 @@ A **board** is a page Ticket Sidekick opens in its own editor tab: a large table
 
 ## What you need
 
-- **`127.0.0.1` in `http.noProxy`.** The extension serves the page from this computer; see [Jira Tools for Copilot Chats](copilot-tools.md). While the entry is missing, a board's tab says so and shows the board once the entry is there.
+- **Jira set up**, as described in the [README](../../README.md). There is nothing else to configure: no server, no port and no proxy setting.
 - **For the Command Palette: nothing else.** The three commands work without Copilot.
-- **For asking Copilot: the Jira tools.** Copilot opens a board through the `jira_open_board` tool. Where your organisation does not allow the Ticket Sidekick MCP server, use the Command Palette commands.
+- **For asking Copilot: Agent mode.** Copilot opens a board through the `jira_open_board` tool; see [Jira Tools for Copilot Chats](copilot-tools.md).
 
 `Ticket Sidekick: Open ticket list` asks for a JQL query; type `filter:` and a saved filter's id or name to open a filter instead.
 
@@ -45,7 +45,7 @@ After Apply the board reads the list again and shows a result per ticket: **Done
 - **Moves** use a direct transition when there is one, else the workflow path Ticket Sidekick has cached for the project and issue type, discovering it once if needed.
 - **Fields** are set as the `jira_update_field` tool sets them: any field by its display name or id, a sprint by its name, a list field from comma-separated values. The board replaces a list field's whole value; to add or remove single values, use the tool on one ticket.
 
-Cleanup by the `cleanupRules` of `.jira-templates.json` is not on this board yet; use `@jira cleanup` in a Local chat until it is.
+Cleanup by the `cleanupRules` of `.jira-templates.json` is not on this board yet; until it is, the deprecated `@jira cleanup` still does it.
 
 ## How a board keeps its data
 
@@ -69,5 +69,5 @@ Sessions are kept in VS Code's storage for the workspace, outside your repositor
 
 ## Limits
 
-- A board is served by the VS Code window that opened it and shows that window's sessions.
-- Boards were first built as VS Code canvases. On VS Code 1.146 a canvas that an extension ships is not registered in Copilot chats, so boards open as editor tabs; the page is the same either way.
+- A board belongs to the VS Code window that opened it and shows that window's workspace sessions.
+- The Veracode, Waltz and email imports and the pull request review have no board yet. Until they do, they run in the deprecated `@jira` and `@bitbucket` chat participants.

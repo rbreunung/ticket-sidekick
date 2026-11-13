@@ -1,6 +1,6 @@
-// What a board's editor tab holds: a frame around the board page that the extension's local server
-// serves. The page is the same one a canvas would show, so nothing about a board depends on which
-// of the two hosts it. Pure, so the markup and its content policy are tested without VS Code.
+// The document in a board's editor tab. The extension writes it; the page script, the shared
+// client and the style are files shipped with the extension and loaded through the webview's own
+// resource addresses. Pure, so the markup and its content policy are tested without VS Code.
 
 export interface BoardPanelState {
   kind: string;
@@ -9,9 +9,13 @@ export interface BoardPanelState {
   title: string;
 }
 
-/** The address of a board page on the local server. */
-export function boardPageUrl(port: number, canvasKey: string, kind: string, id: string): string {
-  return `http://127.0.0.1:${port}/${canvasKey}/board/${encodeURIComponent(kind)}/${id ? `?s=${encodeURIComponent(id)}` : ''}`;
+/** The addresses, as the webview sees them, of the files a board page loads. */
+export interface BoardPageAssets {
+  style: string;
+  /** The VS Code Elements bundle (buttons and the like). */
+  elements: string;
+  /** The board's own page script. */
+  page: string;
 }
 
 function escapeHtml(text: string): string {
@@ -19,43 +23,27 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * The tab's document: only the frame may load, and only from this computer's server on its
- * current port. The small script stores which session the tab shows, so VS Code can hand it back
- * after a restart.
+ * The tab's document. Scripts, styles and fonts load only from the extension's own files
+ * (`cspSource`); nothing loads from the network and no inline script runs. The page reads which
+ * board and session it shows from the root element and stores that with VS Code, which hands it
+ * back when it restores the tab after a restart.
  */
-export function boardPanelHtml(options: { url: string; port: number; nonce: string; state: BoardPanelState }): string {
-  const { url, port, nonce, state } = options;
-  const policy = `default-src 'none'; frame-src http://127.0.0.1:${port}; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'`;
+export function boardPanelHtml(options: { cspSource: string; assets: BoardPageAssets; state: BoardPanelState }): string {
+  const { cspSource, assets, state } = options;
+  const policy = `default-src 'none'; script-src ${cspSource}; style-src ${cspSource} 'unsafe-inline'; font-src ${cspSource}; img-src ${cspSource} data:`;
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="${policy}">
+<meta http-equiv="Content-Security-Policy" content="${escapeHtml(policy)}">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(state.title)}</title>
-<style nonce="${nonce}">html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; } iframe { border: 0; width: 100%; height: 100vh; display: block; }</style>
+<link rel="stylesheet" href="${escapeHtml(assets.style)}">
+<script type="module" src="${escapeHtml(assets.elements)}"></script>
+<script type="module" src="${escapeHtml(assets.page)}"></script>
 </head>
 <body>
-<iframe src="${escapeHtml(url)}" title="${escapeHtml(state.title)}"></iframe>
-<script nonce="${nonce}">acquireVsCodeApi().setState(${JSON.stringify(state).replace(/</g, '\\u003c')});</script>
-</body>
-</html>`;
-}
-
-/** Shown in a board's tab while the local server is not running. */
-export function boardUnavailableHtml(options: { nonce: string; state: BoardPanelState; reason: string }): string {
-  const { nonce, state, reason } = options;
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'">
-<title>${escapeHtml(state.title)}</title>
-<style nonce="${nonce}">body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 16px 20px; }</style>
-</head>
-<body>
-<h1>${escapeHtml(state.title)}</h1>
-<p>${escapeHtml(reason)}</p>
-<script nonce="${nonce}">acquireVsCodeApi().setState(${JSON.stringify(state).replace(/</g, '\\u003c')});</script>
+<main id="root" data-kind="${escapeHtml(state.kind)}" data-session="${escapeHtml(state.id)}" data-title="${escapeHtml(state.title)}"></main>
 </body>
 </html>`;
 }

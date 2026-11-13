@@ -11,5 +11,5 @@
     "types": ["node"]
   },
   "include": ["src"],
-  "exclude": ["src/test", "src/canvas/launcher"]
+  "exclude": ["src/test"]
 }

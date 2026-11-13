@@ -24,7 +24,5 @@ CONCEPTS.md
 STRATEGY.md
 out/**
 !out/extension.js
-!out/plugin/**
-!out/canvas-pages/**
-canvas-pages/
-plugin/**
+!out/board-pages/**
+board-pages/

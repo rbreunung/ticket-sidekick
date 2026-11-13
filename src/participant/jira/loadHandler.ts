@@ -7,7 +7,7 @@ import type { JiraComment, JiraFieldMeta } from '../../jira/IJiraClient';
 import { formatIssueFields, formatKeyLink } from '../../services/TicketService';
 import type { TicketService } from '../../services/TicketService';
 import { rewriteAttachmentLinks, extractProjectKeyFromTicketKey, neutralizeMarkdownLinks } from '../sessionState';
-import { LOAD_TICKET_TOOL } from '../../mcp/jiraTools/toolNames';
+import { LOAD_TICKET_TOOL } from '../../tools/jiraTools/toolNames';
 import { loadTicketToWorkspace, temporaryName, type LoadWriter, type SkipCause } from './loadCore';
 
 export function serializeCommentsForLLM(comments: JiraComment[]): string {

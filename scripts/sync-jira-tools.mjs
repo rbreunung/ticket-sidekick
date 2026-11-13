@@ -9,7 +9,7 @@ import { pathToFileURL } from 'url';
 const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ts-manifest-')), 'manifest.mjs');
 await build({
   stdin: {
-    contents: "import { JIRA_TOOLS } from './src/mcp/jiraTools/catalog'; import { jiraToolManifest } from './src/tools/jiraToolManifest'; export const entries = jiraToolManifest(JIRA_TOOLS);",
+    contents: "import { JIRA_TOOLS } from './src/tools/jiraTools/catalog'; import { jiraToolManifest } from './src/tools/jiraToolManifest'; export const entries = jiraToolManifest(JIRA_TOOLS);",
     resolveDir: process.cwd(),
     loader: 'ts',
   },
