@@ -4,7 +4,7 @@ import type { ToolDefinition } from '../tools/toolDefinition';
 
 // The `contributes.languageModelTools` entries of the Jira tools, derived from the tool catalog.
 // VS Code wants them written out in package.json, so `scripts/sync-jira-tools.mjs` writes what
-// this builds and `jiraExtensionTools.test.ts` fails when package.json and the catalog differ.
+// this builds and `jiraToolManifest.test.ts` fails when package.json and the catalog differ.
 // Only the build script and the test load this module; the extension bundle does not.
 
 export interface ToolManifestEntry {

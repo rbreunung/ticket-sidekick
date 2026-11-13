@@ -1,6 +1,6 @@
 # Settings Reference
 
-Full `ticketSidekick.*` settings for both `@jira` and `@bitbucket`. See the main [README](../../README.md) for setup and core commands first.
+Full `ticketSidekick.*` settings. The Jira connection and display settings apply to the Copilot tools and boards as well as to the deprecated `@jira` chat participant; the Bitbucket review settings apply to the deprecated `@bitbucket` participant until the review board exists. See the main [README](../../README.md) for setup and core commands first.
 
 ## Jira settings reference
 

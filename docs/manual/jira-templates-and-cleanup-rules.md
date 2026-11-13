@@ -1,5 +1,7 @@
 # Jira Templates and Cleanup Rules
 
+> **Note.** `.jira-templates.json` is used by the Copilot tools too (`jira_create_ticket`, `jira_list_templates`, `/ts-jira-create`). The `@jira` commands on this page (generating a template from a ticket, `@jira cleanup`) belong to the deprecated chat participant and stay until the tools and the ticket list board cover them; see [Jira Tools for Copilot Chats](copilot-tools.md).
+
 Part of `@jira` — `.jira-templates.json` defines per-application templates with guided description collection, plus named cleanup rules for bulk status transitions. See the main [README](../../README.md) for setup and core commands first.
 
 ## Templates and cleanup rules

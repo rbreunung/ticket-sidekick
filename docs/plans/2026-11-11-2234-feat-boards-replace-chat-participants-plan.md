@@ -10,7 +10,7 @@ execution: code
 
 # Boards Replace the Chat Participants - Plan
 
-> **Direction as of 2026-11-13, binding for all further planning:** Ticket Sidekick is built on **extension tools** (VS Code language model tools) and **editor views** (boards as webviews in editor tabs). The MCP server, the `ticketSidekick.jira.toolsFrom` setting, the canvas program, the agent plugin and the local HTTP server have been **removed from the code**. `@jira` and `@bitbucket` are **deprecated** and are removed when the import and review boards exist. Requirements and decisions below that mention MCP, canvases or `http.noProxy` are marked Replaced or Withdrawn. The built design is in [`docs/architecture/boards-and-sessions.md`](../architecture/boards-and-sessions.md).
+> **Direction as of 2026-11-13, binding for all further planning:** Ticket Sidekick is built on **extension tools** (VS Code language model tools) and **editor views** (boards as webviews in editor tabs). The MCP server, the `ticketSidekick.jira.toolsFrom` setting, the canvas program, the agent plugin and the local HTTP server have been **removed from the code**. `@jira` and `@bitbucket` are **deprecated** and are removed when the import and review boards exist. Requirements and decisions below that mention MCP, canvases or `http.noProxy` are marked Replaced or Withdrawn. The built design is in [`docs/architecture/boards-and-sessions.md`](../architecture/boards-and-sessions.md), and what is done and still open in [`docs/architecture/migration-status.md`](../architecture/migration-status.md).
 
 ## Goal Capsule
 

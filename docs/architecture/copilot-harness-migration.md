@@ -1,5 +1,7 @@
 # Copilot harness migration: current design, deprecations, and options
 
+> For the current state of the migration see [`migration-status.md`](migration-status.md).
+>
 > **Superseded on 2026-11-13. Historical record only; do not plan against this document.** Ticket Sidekick no longer has an MCP server, a canvas program, an agent plugin or a local HTTP server. The tools are VS Code language model tools ("extension tools") and boards are webviews in editor tabs. The current design is [`docs/architecture/boards-and-sessions.md`](../architecture/boards-and-sessions.md) and the current plan is [`docs/plans/2026-11-11-2234-feat-boards-replace-chat-participants-plan.md`](../plans/2026-11-11-2234-feat-boards-replace-chat-participants-plan.md).
 
 Status: **Historical record.** The options and discussion below led to the decisions in [§11](#11-decision-log); the current design is described in [`boards-and-sessions.md`](boards-and-sessions.md).

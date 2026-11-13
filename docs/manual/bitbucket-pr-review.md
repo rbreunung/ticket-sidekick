@@ -1,5 +1,7 @@
 # Bitbucket PR Review
 
+> **Deprecated.** The `@bitbucket` chat participant this page describes is deprecated. It stays the way to do this until the pull request review has a board; see [Jira Tools for Copilot Chats](copilot-tools.md) and [Boards](boards.md) for the current way to work.
+
 Part of `@bitbucket` — the PR review walkthrough, multi-turn follow-ups, posting comments back to Bitbucket, and options for reducing token usage on large PRs. See the main [README](../../README.md) for setup and core commands first.
 
 ## PR review

@@ -1,5 +1,7 @@
 # Report Imports (Email, Veracode, Waltz)
 
+> **Deprecated.** The `@jira` chat participant this page describes is deprecated. It stays the way to do this until the imports have a board; see [Jira Tools for Copilot Chats](copilot-tools.md) and [Boards](boards.md) for the current way to work.
+
 Part of `@jira` — turns a `.eml` email, a Veracode Detailed Report, or a Waltz OSS Report into Jira tickets. See the main [README](../../README.md) for setup and core commands first.
 
 ## Create Jira ticket from email (.eml)
