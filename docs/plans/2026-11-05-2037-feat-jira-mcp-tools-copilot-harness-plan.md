@@ -9,6 +9,8 @@ execution: code
 
 # Jira Tools over MCP for the Copilot Harness - Plan
 
+> **Superseded on 2026-11-13. Historical record only; do not plan against this document.** Ticket Sidekick no longer has an MCP server, a canvas program, an agent plugin or a local HTTP server. The tools are VS Code language model tools ("extension tools") and boards are webviews in editor tabs. The current design is [`docs/architecture/boards-and-sessions.md`](../architecture/boards-and-sessions.md) and the current plan is [`docs/plans/2026-11-11-2234-feat-boards-replace-chat-participants-plan.md`](../plans/2026-11-11-2234-feat-boards-replace-chat-participants-plan.md).
+
 ## Goal Capsule
 
 - **Objective:** In a Copilot-harness chat, where `@jira` is not available, a developer can view, find, load, comment on, update, move and create Jira tickets, check the connection, and get a structured developer brief of a ticket, through one set of tools that is never offered twice. `@jira` keeps working unchanged in the Local harness.

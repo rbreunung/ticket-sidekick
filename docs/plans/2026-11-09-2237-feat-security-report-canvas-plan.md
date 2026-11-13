@@ -10,6 +10,8 @@ execution: code
 
 # Security Report Canvas - Plan
 
+> **Superseded on 2026-11-13. Historical record only; do not plan against this document.** Ticket Sidekick no longer has an MCP server, a canvas program, an agent plugin or a local HTTP server. The tools are VS Code language model tools ("extension tools") and boards are webviews in editor tabs. The current design is [`docs/architecture/boards-and-sessions.md`](../architecture/boards-and-sessions.md) and the current plan is [`docs/plans/2026-11-11-2234-feat-boards-replace-chat-participants-plan.md`](../plans/2026-11-11-2234-feat-boards-replace-chat-participants-plan.md).
+
 ## Goal Capsule
 
 - **Objective:** In a Copilot chat, a developer opens a project's security report in its own tab, reads, filters and sorts it, and saves it for colleagues. The vulnerability details never pass through the model. `@jira /security-report` keeps working unchanged in Local chats.

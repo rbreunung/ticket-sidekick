@@ -1,5 +1,7 @@
 # Jira Feature Flows
 
+> **Deprecated surface.** This page documents the `@jira` chat participant, which is deprecated and kept for maintenance until its flows have a tool or a board. New work is built as extension tools and boards; see [`docs/architecture/boards-and-sessions.md`](architecture/boards-and-sessions.md). The services, parsers and builders described here are reused by the boards.
+
 How `@jira`'s multi-turn flows work: ticket creation, bulk cleanup, workflow
 discovery, comment handling, content preview/refinement, last-ticket context,
 and the Jira session-state table that ties them together.
@@ -117,7 +119,7 @@ Execution streams one line per ticket (subtasks first), then a summary. Failures
 
 ## Filter discovery
 
-`@jira` can list and run the user's own favourite + owned Jira filters (`show my filters`) without naming one — zero results says so, exactly one runs directly, more than one opens a numbered pick-list (`ListedFiltersSession`); a partial fetch failure is called out above the list rather than shown as a complete one. The greeting response's "Show my filters" chip invokes this same intent. See `handleListMyFilters`/`runResolvedFilterJql` in `JiraParticipant.ts` and `ListedFiltersSession`/`parseListedFiltersSelection` in `sessionState.ts`. The same listing and fixVersion/sprint/assignee narrowing are also offered to agents by the MCP tools `jira_list_my_filters`/`jira_find_tickets` — see [`docs/onboarding.md`](onboarding.md#jira-tools).
+`@jira` can list and run the user's own favourite + owned Jira filters (`show my filters`) without naming one — zero results says so, exactly one runs directly, more than one opens a numbered pick-list (`ListedFiltersSession`); a partial fetch failure is called out above the list rather than shown as a complete one. The greeting response's "Show my filters" chip invokes this same intent. See `handleListMyFilters`/`runResolvedFilterJql` in `JiraParticipant.ts` and `ListedFiltersSession`/`parseListedFiltersSelection` in `sessionState.ts`. The same listing and fixVersion/sprint/assignee narrowing are also offered to agents by the tools `jira_list_my_filters`/`jira_find_tickets` — see [`docs/onboarding.md`](onboarding.md#jira-tools).
 
 ## Attachment upload
 

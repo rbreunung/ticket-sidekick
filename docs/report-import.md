@@ -1,5 +1,7 @@
 # Report Import (EML, Veracode, Waltz)
 
+> **Deprecated surface.** This page documents the `@jira` chat participant, which is deprecated and kept for maintenance until the import board exists. New work is built as extension tools and boards; see [`docs/architecture/boards-and-sessions.md`](architecture/boards-and-sessions.md). The services, parsers and builders described here are reused by the boards.
+
 How `@jira` turns an `.eml` email, a Veracode Detailed Report, or a Waltz OSS
 Report into Jira tickets.
 

@@ -1,5 +1,7 @@
 # Bitbucket PR Review Process
 
+> **Deprecated surface.** This page documents the `@bitbucket` chat participant, which is deprecated and kept for maintenance until the PR review board exists. New work is built as extension tools and boards; see [`docs/architecture/boards-and-sessions.md`](architecture/boards-and-sessions.md). The services, parsers and builders described here are reused by the boards.
+
 How `@bitbucket <pr-url>` turns a pull request into a grounded, line-accurate
 review. **Keep this document in sync whenever the review pipeline changes** — it
 is the single source of truth for how the steps fit together.
