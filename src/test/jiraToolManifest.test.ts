@@ -53,9 +53,9 @@ describe('running a tool', () => {
   it('answers input that does not fit with what is wrong, and does not run the tool', async () => {
     const before = calls.length;
     const refused = await callTool(demo, { comment: 5 }, {});
-    expect(refused.text).toMatch(/^The input for jira_demo is not valid: ticketKey: Required; comment: /);
+    expect(refused.text).toMatch(/^The input for jira_demo is not valid: ticketKey: Invalid input: expected string, received undefined; comment: /);
     expect(refused.failed).toBe(true);
-    expect((await callTool(demo, undefined, {})).text).toContain('ticketKey: Required');
+    expect((await callTool(demo, undefined, {})).text).toContain('ticketKey: Invalid input: expected string, received undefined');
     expect(calls).toHaveLength(before);
   });
 

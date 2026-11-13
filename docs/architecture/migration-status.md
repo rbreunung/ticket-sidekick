@@ -50,11 +50,66 @@ Ordered as the plan orders its steps. "Blocks removal of" names the participant 
 
 | # | Open point | Requirement | Blocks removal of |
 | --- | --- | --- | --- |
-| O7 | Import board: start screen, Veracode, Waltz and email kinds on the session model, every review-screen action as a board control (create, merge and unmerge, accept and unaccept, add to ticket, rewrite, stale close, ticket merge with its resumable run, export) | R14 to R19 | `@jira` imports, the three Command Palette import commands |
+| O7 | Import board: start screen, Veracode, Waltz and email kinds on the session model, and everything marked "Carry over" in the [import board parity ledger](#import-board-parity-ledger) below: every review-screen action as a board control (create, merge and unmerge, accept and unaccept, add to ticket, the Already-ticketed actions including rewrite, stale close, ticket merge with its resumable run, search, export with due-date columns, reload report), the Due Date rules (Veracode SLA Due Date on create, new ticket and rewrite, the backfill flag, the Waltz rewrite Due Date), the out-of-date marking after `unaccept` and a ticket merge, and a drained email import finishing on its own | R14 to R19 | `@jira` imports, the three Command Palette import commands |
 | O8 | Email kind: boilerplate cleanup with consent as a board step; "add one email as a comment"; search for tickets matching an email's subject before creating | R18, R43 | `@jira` email import, email as comment |
 | O9 | Model settings: one for the review passes, one for the email check, with a pick step when empty | R24, R25 | — |
 | O10 | Prompts that belong to a board run happen on the board, before any model call | R45 | — |
 | O11 | Remove the imports, the import commands, `@jira` itself and its help screen | R33, R34 | — |
+
+#### Import board parity ledger
+
+What the `@jira` import does today and what the import board does with it. The list is built from the reply commands (`IMPORT_COMMAND_ENTRIES` in `src/participant/session/importCommands.ts`) and the optional capabilities of `ReportImportDescriptor` and `ImportChangeTracking` (`src/participant/jira/reportImportTypes.ts`); `src/test/importBoardParity.test.ts` fails when one of them is missing here. "Carry over" means the board keeps the behaviour with the same rules and results (R16); "Dropped" means a recorded decision not to. The behaviour is described in [`docs/report-import.md`](../report-import.md). Why this ledger exists: [`docs/solutions/workflow-issues/import-board-parity-list-misses-recent-functional-import-work.md`](../solutions/workflow-issues/import-board-parity-list-misses-recent-functional-import-work.md).
+
+**Reply commands**
+
+| Command (catalog id) | Board | Note |
+| --- | --- | --- |
+| `toggle-rows`, `bulk` | Carry over | Including and excluding New rows, one by one or all |
+| `create` | Carry over | Including the batch cap and the resume message |
+| `fold` | Carry over | Merge and unmerge New rows; add rows to an existing ticket as comment or rewrite |
+| `accept-cve`, `accept-component`, `accepted-list` | Carry over | Waltz: accept, unaccept and list accepted CVEs and components; accepted items stay off New and Already ticketed |
+| `row-action`, `all-action`, `run` | Carry over | Already-ticketed actions per row and for all rows, then apply; a rewrite is all-or-none per target ticket |
+| `merge-tickets` | Carry over | Both modes (Waltz rewrite, Veracode close) with the resumable run, `retry` and `ignore` |
+| `toggle-stale`, `close` | Carry over | Mark stale tickets, then issue type, target status and resolution |
+| `search` | Carry over | Over the tickets the review matched, with no Jira call |
+| `export` | Carry over | Overview by Fix Version, CSV and Excel, with the due-date columns |
+| `reload` | Carry over | Re-read the report file and refresh the review after a confirmation |
+| `show` | Dropped | The board always shows its current screen |
+| `paging` | Dropped | The words go; the board pages or scrolls as it likes. The rule that row actions and `apply` read every row, not only the visible page, carries over |
+| `open`, `exit` | Dropped | Groups are on the board at once; finishing is covered by "a drained import finishes" below |
+| `help` | Dropped | Board controls carry their own labels; the Commands line, help link and help after a refused reply go with it |
+| `email-strip`, `email-keep`, `email-model-check`, `email-rows`, `email-save`, `email-cancel` | Carry over | The email boilerplate cleanup step with its consent (O8, R18) |
+
+**Importer capabilities**
+
+| Capability | Board | Note |
+| --- | --- | --- |
+| `fileFilter`, `filePickerTitle`, `parseAndFilter` | Carry over | The start screen's file choice and report parsing (R14) |
+| `searchLabelOf`, `dedupKeyOf`, `labelToDedupKey` | Carry over | The dedup search that fills Already ticketed |
+| `afterCreate` | Carry over | Email: attachment upload after a ticket is created; a failure is a warning, not a failed row |
+| `onIssueTypeFetchFailed` | Carry over | The warning when the project's issue types cannot be read |
+| `stale` | Carry over | The Stale group |
+| `changeTracking` | Carry over | Change detection on Already-ticketed rows |
+| `deriveActions`, `actionLabels` | Carry over | Veracode and Waltz offer `rewrite`, `leave` and `new ticket` (Waltz's word for follow-up) |
+| `readsTargetDescriptions`, `reportKeysOf` | Carry over | Reading the target tickets' descriptions and the dropped-member pass |
+| `dueDateBackfill` | Carry over | Veracode: an open ticket without a Due Date is flagged for a rewrite |
+| `recordLabelsOf`, `removeLabelPrefix`, `buildUpdateComment`, `rewriteSummary` | Carry over | The record labels, rating-label swap, update comment and summary rewrite of an Already-ticketed write |
+| `fold` | Carry over | See the `fold` command above |
+| `accepted` | Carry over | See the accept commands above |
+| `ticketMerge` | Carry over | See `merge-tickets` and `reload` above, plus the refresh after `unaccept` |
+| `overviewExport` | Carry over | See `export` above |
+| `rewriteDueDate`, `dueDateNote` | Carry over | The Due Date a rewrite writes: Veracode sets it once and only moves it earlier, Waltz takes the regenerated group's date; the result line names it |
+
+**Rules with no command or capability of their own** (not checked by the test)
+
+| Rule | Board | Note |
+| --- | --- | --- |
+| Veracode SLA Due Date on create and new ticket (`ticketSidekick.veracode.slaDays`) | Carry over | Written by `buildTicketFields`/`buildFollowUp`; feeds the security report's overdue and due-before-release flags |
+| A Due Date Jira refuses is dropped and the write repeated once | Carry over | `optionalFields` and `droppedFields` |
+| A drained import finishes without `done` | Carry over | `isNewGroupDrained()`: after `create tickets`, when no New row is left and the importer has no `overviewExport`, `accepted` or `ticketMerge` (in practice email), the import ends in the same step |
+| Screens out of date after `unaccept` or a ticket merge | Carry over | Refresh at once when no choice is unfinished, otherwise mark out of date (`hasUnfinishedChoices`) |
+| The accepted list is never written over a file that could not be read in full | Carry over | `AcceptedListService` |
+| Report and batch size limits | Carry over | `ticketSidekick.<kind>.maxReportSizeMB`/`maxBatchSizeMB` |
 
 ### Step 3: Bitbucket
 
@@ -104,4 +159,4 @@ When O5, O11 and O15 are done, none of the following is left:
 - `workspaceState` keys of the participant sessions (`jira.session.*`, `bitbucket.session.*`)
 - The README sections "@jira — Jira" and "@bitbucket — Bitbucket PR Reviews" as participant manuals; their setup steps move to the top
 - The deprecation notes added on 2026-11-13, since nothing deprecated remains to point at
-- Guard tests tied to the participants (`jiraCommandsGuard.test.ts`, the `@jira` command table in `skillsGuard.test.ts`)
+- Guard tests tied to the participants (`jiraCommandsGuard.test.ts`, `importCommandsGuard.test.ts`, `importBoardParity.test.ts` with the import board parity ledger, the `@jira` command table in `skillsGuard.test.ts`)

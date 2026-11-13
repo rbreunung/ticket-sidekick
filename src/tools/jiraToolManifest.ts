@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { zodToJsonSchema } from 'zod-to-json-schema';
 import type { ToolDefinition } from '../tools/toolDefinition';
 
 // The `contributes.languageModelTools` entries of the Jira tools, derived from the tool catalog.
@@ -31,7 +30,7 @@ function firstSentence(text: string): string {
 
 export function jiraToolManifest(tools: readonly ToolDefinition<never>[]): ToolManifestEntry[] {
   return tools.map(tool => {
-    const schema = zodToJsonSchema(z.object(tool.inputSchema), { $refStrategy: 'none', target: 'jsonSchema7' }) as Record<string, unknown>;
+    const schema = z.toJSONSchema(z.object(tool.inputSchema), { target: 'draft-7', reused: 'inline' }) as Record<string, unknown>;
     delete schema.$schema;
     delete schema.additionalProperties;
     return {
