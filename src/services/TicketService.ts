@@ -792,6 +792,18 @@ export class TicketService {
     return `${issueKey} is missing required fields: ${missing.join(', ')}.`;
   }
 
+  /** The fields an issue type of a project can take on create, as a table: name, id and whether Jira requires it. */
+  async listCreateFields(projectKey: string, issueType: string): Promise<string> {
+    const fields = await this.client.getCreateFields(projectKey, issueType);
+    if (fields.length === 0) {
+      const types = (await this.getIssueTypes(projectKey)).map(t => t.name);
+      return `No fields found for issue type "${issueType}" in ${projectKey}. Issue types you can create there: ${types.join(', ') || 'none'}.`;
+    }
+    const sorted = [...fields].sort((a, b) => Number(b.required) - Number(a.required) || a.name.localeCompare(b.name));
+    const rows = sorted.map(f => `| ${f.name.replace(/\|/g, '\\|')} | \`${f.id}\` | ${f.required ? 'yes' : 'no'} |`);
+    return `Fields of ${issueType} in ${projectKey} (${fields.length}):\n\n| Field | ID | Required |\n| --- | --- | --- |\n${rows.join('\n')}`;
+  }
+
   async getIssueTypes(projectKey: string): Promise<JiraIssueType[]> {
     const project = await this.client.getProject(projectKey);
     return project.issueTypes.filter((t) => !t.subtask);
@@ -1071,6 +1083,69 @@ export class TicketService {
         onProgress(key, false, message);
       }
     }
+  }
+
+  /**
+   * Sets any field by display name or id, or adds or removes single values of a list field. The
+   * seven everyday fields keep their own handling for a plain set (assignee lookup, Markdown
+   * description); every other case shapes the value from the field's schema. Nothing is written
+   * when the field is unknown, a sprint name matches none or several sprints, or add/remove is
+   * asked for a field that is not a list.
+   */
+  async updateAnyField(
+    issueKey: string,
+    fieldName: string,
+    value: string,
+    operation: 'set' | 'add' | 'remove' = 'set',
+    baseUrl?: string,
+  ): Promise<{ written: boolean; message: string; fieldId?: string }> {
+    const supported = supportedFieldId(fieldName);
+    if (supported && operation === 'set') return { ...(await this.updateFieldOutcome(issueKey, fieldName, value, baseUrl)), fieldId: supported };
+
+    const meta = await this.getFieldMeta();
+    let fieldId: string;
+    try {
+      fieldId = supported ?? await this.resolveFieldId(fieldName, meta);
+    } catch {
+      return { written: false, message: `No field named "${fieldName}" was found. Nothing was changed.` };
+    }
+    const field = meta.find(f => f.id === fieldId);
+    const label = field?.name ?? fieldName;
+    const isList = field?.schema.type === 'array';
+    const values = value.split(',').map(v => v.trim()).filter(Boolean);
+    let payload: unknown;
+
+    if (field?.schema.custom?.includes('gh-sprint')) {
+      if (operation !== 'set') return { written: false, message: 'A sprint can only be set, not added to or removed from. Nothing was changed.' };
+      const projectKey = issueKey.split('-')[0];
+      const sprints = await this.findSprints(projectKey, value);
+      if (sprints.length === 0) return { written: false, message: `No active or future sprint matching "${value}" in ${projectKey}. Nothing was changed.` };
+      if (sprints.length > 1) {
+        return { written: false, message: `Several sprints match "${value}": ${sprints.map(s => `${s.name} (${s.state})`).join(', ')}. Name one exactly. Nothing was changed.` };
+      }
+      payload = sprints[0].id;
+    } else if (isList) {
+      if (values.length === 0) return { written: false, message: 'Give at least one value. Nothing was changed.' };
+      const current = operation === 'set' ? null : await this.getRawField(issueKey, fieldId);
+      if (field?.schema.items === 'string') {
+        // Labels and other lists of plain text, which Jira takes as strings and not as named objects.
+        const existing = Array.isArray(current) ? current.filter((v): v is string => typeof v === 'string') : [];
+        const lower = new Set(values.map(v => v.toLowerCase()));
+        payload = operation === 'set' ? values
+          : operation === 'add' ? [...existing, ...values.filter(v => !existing.some(e => e.toLowerCase() === v.toLowerCase()))]
+            : existing.filter(e => !lower.has(e.toLowerCase()));
+      } else {
+        payload = await this.buildArrayValue(fieldId, issueKey, values, operation, current);
+      }
+    } else {
+      if (operation !== 'set') return { written: false, message: `${label} is not a list field, so a value cannot be ${operation === 'add' ? 'added to' : 'removed from'} it. Nothing was changed.` };
+      payload = await this.buildFieldValue(fieldId, issueKey, value);
+    }
+
+    await this.client.updateIssue(issueKey, { [fieldId]: payload });
+    this.onDiag?.('info', `Field updated — ${issueKey}`, { issueKey, fieldId, operation });
+    const what = operation === 'add' ? `Added ${values.join(', ')} to ${label}` : operation === 'remove' ? `Removed ${values.join(', ')} from ${label}` : `Set ${label} to ${value}`;
+    return { written: true, message: `${what} on ${issueKey}.`, fieldId };
   }
 
   async findSprints(projectKey: string, query: string): Promise<JiraSprintCandidate[]> {

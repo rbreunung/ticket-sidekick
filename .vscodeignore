@@ -24,3 +24,5 @@ CONCEPTS.md
 STRATEGY.md
 out/**
 !out/extension.js
+!out/board-pages/**
+board-pages/

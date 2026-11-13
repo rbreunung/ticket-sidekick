@@ -71,6 +71,9 @@ function buildVscodeStub(): Record<string, unknown> {
     window: {
       createOutputChannel: () => ({ appendLine: () => undefined, append: () => undefined, show: () => undefined, dispose: () => undefined }),
       showInformationMessage: async () => undefined,
+      registerWebviewPanelSerializer: () => disposable,
+      createWebviewPanel: () => ({ webview: { html: '' }, reveal: () => undefined, onDidDispose: () => disposable, dispose: () => undefined }),
+      showInputBox: async () => undefined,
       showWarningMessage: async () => undefined,
       showErrorMessage: async () => undefined,
     },
@@ -145,7 +148,40 @@ describe('bundled extension (out/extension.js)', () => {
     expect([...registered.tools].sort()).toEqual(declared);
   });
 
-  it('registers no Jira Agent Mode tool, since the Jira tools are on the MCP server', () => {
-    expect(registered.tools.filter(name => name.startsWith('jira_'))).toEqual([]);
+  it('registers every Jira tool with VS Code, with no local server and no MCP provider', () => {
+    expect(registered.tools.filter(name => name.startsWith('jira_'))).toHaveLength(15);
+    expect((manifest.contributes as { mcpServerDefinitionProviders?: unknown }).mcpServerDefinitionProviders).toBeUndefined();
+    expect((manifest.contributes as { chatPlugins?: unknown }).chatPlugins).toBeUndefined();
+  });
+});
+
+// A board's editor tab loads its page from files shipped in the extension folder.
+describe('the board pages', () => {
+  const boards = ['security-report', 'ticket-list', 'sessions'];
+
+  beforeAll(() => {
+    execFileSync(process.execPath, ['esbuild.js'], { cwd: root, stdio: 'pipe' });
+  }, 120_000);
+
+  it('are built with the shared client, style and the VS Code Elements bundle, and packaged into the .vsix', () => {
+    const pages = path.join(root, 'out', 'board-pages');
+    for (const file of ['shared/board.js', 'shared/board.css', 'shared/vscode-elements.js', ...boards.map(b => `${b}/page.js`)]) {
+      expect(fs.existsSync(path.join(pages, file)), file).toBe(true);
+    }
+    expect(fs.readFileSync(path.join(root, '.vscodeignore'), 'utf8').split(/\r?\n/)).toContain('!out/board-pages/**');
+  });
+
+  it('talk to the extension over the tab\'s message channel only: no request to a server, nothing from the web', () => {
+    const pages = path.join(root, 'board-pages');
+    for (const file of ['shared/board.js', ...boards.map(b => `${b}/page.js`)]) {
+      const script = fs.readFileSync(path.join(pages, file), 'utf8');
+      expect(script, file).not.toMatch(/\bfetch\(|XMLHttpRequest|WebSocket|https?:\/\//);
+      expect(script, file).not.toMatch(/innerHTML|insertAdjacentHTML|document\.write/);
+    }
+    expect(fs.readFileSync(path.join(pages, 'shared', 'board.js'), 'utf8')).toContain('acquireVsCodeApi()');
+  });
+
+  it('are written by the extension, so no page document is shipped', () => {
+    for (const board of boards) expect(fs.existsSync(path.join(root, 'board-pages', board, 'index.html')), board).toBe(false);
   });
 });

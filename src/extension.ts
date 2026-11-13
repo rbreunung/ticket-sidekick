@@ -20,7 +20,9 @@ import { readAndFilterReport } from './participant/jira/reportImportHandler';
 import { logDiag } from './utils/diagLog';
 import type { IJiraClient } from './jira/IJiraClient';
 import { registerBitbucketTools } from './tools/bitbucketTools';
-import { registerMcp, deactivateMcp } from './mcp/register';
+import { registerJiraTools } from './tools/registerJiraTools';
+import type { BoardStats } from './boards/boardPanels';
+import { registerDefaultProjectCheck } from './participant/jira/defaultProjectNotice';
 
 // Shared shape for the two nearly-identical report-import commands (Veracode .xml, Waltz OSS .xlsx):
 // pick a file -> check credentials -> stat+size-cap+read+parse+filter -> empty-result message ->
@@ -164,7 +166,12 @@ function registerReportImportCommand<TRaw, TItem>(
   });
 }
 
-export function activate(context: vscode.ExtensionContext): void {
+/** What `activate` returns: read only by the tests that drive a real VS Code. */
+export interface TicketSidekickApi {
+  boardStats(): BoardStats;
+}
+
+export function activate(context: vscode.ExtensionContext): TicketSidekickApi {
   const configService = new ConfigService(context);
 
   // Keeps `ticketSidekick.jiraCredentialsSet` / `ticketSidekick.bitbucketCredentialsSet` in
@@ -355,8 +362,10 @@ export function activate(context: vscode.ExtensionContext): void {
   createJiraParticipant(context, configService, () => endBitbucketSessions(context.workspaceState));
   createBitbucketParticipant(context, configService);
   registerBitbucketTools(context, configService);
-  // The MCP server for Copilot-harness chats runs while 127.0.0.1 is in http.noProxy.
-  void registerMcp(context, configService);
+  // The Jira tools for Copilot (language model tools) and the boards they open in editor tabs.
+  const boards = registerJiraTools(context, configService);
+  // A wrong default project shows up at start and after the setting changes, not at first use.
+  registerDefaultProjectCheck(context, configService);
 
   // KTD11: auto-open the Jira Getting-Started walkthrough once — on first install/first
   // activation only — guarded by a globalState "seen" flag so it never reopens on later VS Code
@@ -370,8 +379,9 @@ export function activate(context: vscode.ExtensionContext): void {
       false,
     );
   }
+  return { boardStats: () => boards.panels.stats() };
 }
 
-export async function deactivate(): Promise<void> {
-  await deactivateMcp();
+export function deactivate(): void {
+  // Everything is disposed through context.subscriptions.
 }

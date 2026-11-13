@@ -10,6 +10,8 @@ execution: code
 
 # Copilot Harness Localhost Prototype - Plan
 
+> **Superseded on 2026-11-13. Historical record only; do not plan against this document.** Ticket Sidekick no longer has an MCP server, a canvas program, an agent plugin or a local HTTP server. The tools are VS Code language model tools ("extension tools") and boards are webviews in editor tabs. The current design is [`docs/architecture/boards-and-sessions.md`](../architecture/boards-and-sessions.md) and the current plan is [`docs/plans/2026-11-11-2234-feat-boards-replace-chat-participants-plan.md`](../plans/2026-11-11-2234-feat-boards-replace-chat-participants-plan.md).
+
 ## Goal Capsule
 
 - **Objective:** On a managed machine, a user in a Copilot-harness chat session can read and write Jira through Ticket Sidekick, and work on a canvas board, with the extension's localhost server meeting every security rule of decisions D1–D5. Each open prototype check is answered with evidence, so the migration direction is either confirmed or a named decision is reopened.

@@ -1,6 +1,6 @@
 # Settings Reference
 
-Full `ticketSidekick.*` settings for both `@jira` and `@bitbucket`. See the main [README](../../README.md) for setup and core commands first.
+Full `ticketSidekick.*` settings. The Jira connection and display settings apply to the Copilot tools and boards as well as to the deprecated `@jira` chat participant; the Bitbucket review settings apply to the deprecated `@bitbucket` participant until the review board exists. See the main [README](../../README.md) for setup and core commands first.
 
 ## Jira settings reference
 
@@ -28,6 +28,8 @@ Settings for email, Veracode and OSS report imports are listed under [Report imp
 ```
 
 When set, the `create` command skips the project input box and uses this key automatically. You can still override it by including a project key in your prompt.
+
+The key is checked when VS Code starts and again after you change it. A value that is not a project key (a project key starts with a letter and has only letters, digits and `_`), or a project Jira does not have, brings up a warning with an **Open Setting** button. When Jira cannot be reached or is not set up yet, only the key's form is checked.
 
 **Optional: sprint board ID**
 
@@ -99,6 +101,14 @@ By default `@jira show` already omits several noisy system fields (e.g. `statusC
 ```
 
 When enabled, every `@jira` response starts with an italic line showing the active base URL, API version, and auth type. Useful during initial setup or when switching between instances. Off by default.
+
+## Board session settings
+
+| Setting | Key | Default |
+| --- | --- | --- |
+| Session retention | `ticketSidekick.sessions.retentionDays` | `14` |
+
+A board (the security report, a ticket list, and later imports and reviews) keeps its work in progress as a **session** in VS Code's storage for the workspace, so it survives a restart. A session not used for this many days is deleted. See [Boards](boards.md#stored-sessions).
 
 ## Report import settings
 

@@ -18,7 +18,8 @@
   "icon": "images/ticket-sidekick.png",
   "activationEvents": [
     "onUri",
-    "onStartupFinished"
+    "onStartupFinished",
+    "onWebviewPanel:ticketSidekick.board"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -159,8 +160,20 @@
         "title": "Ticket Sidekick: Create Jira tickets from OSS report (.xlsx)"
       },
       {
-        "command": "ticket-sidekick.mcp.copyDiagnostics",
-        "title": "Ticket Sidekick: Copy MCP diagnostics"
+        "command": "ticket-sidekick.sessions.clear",
+        "title": "Ticket Sidekick: Clear stored sessions"
+      },
+      {
+        "command": "ticket-sidekick.boards.securityReport",
+        "title": "Ticket Sidekick: Open security report"
+      },
+      {
+        "command": "ticket-sidekick.boards.ticketList",
+        "title": "Ticket Sidekick: Open ticket list"
+      },
+      {
+        "command": "ticket-sidekick.boards.sessions",
+        "title": "Ticket Sidekick: Open stored sessions"
       }
     ],
     "languageModelTools": [
@@ -277,6 +290,478 @@
             "comment"
           ]
         }
+      },
+      {
+        "name": "jira_check_connection",
+        "displayName": "Check the Jira connection",
+        "modelDescription": "Checks the Jira connection Ticket Sidekick uses. Reports the base URL, the auth type, whether a token is stored and the signed-in Jira user; when the setup is incomplete or wrong, says what is missing or wrong and how to fix it. Takes no input and changes nothing.",
+        "userDescription": "Checks the Jira connection Ticket Sidekick uses.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraCheckConnection",
+        "icon": "$(search)",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "jira_view_ticket",
+        "displayName": "View a Jira ticket",
+        "modelDescription": "Shows one Jira ticket in full: the fields chosen by the Ticket Sidekick display settings, the whole description, the attachments (name, size and type) and the comments, newest first, up to 100, with a note when older ones are left out. Without ticketKey, uses the ticket key in the current git branch of the first workspace folder and says which folder and branch it used, or that the branch holds no key. Changes nothing.",
+        "userDescription": "Shows one Jira ticket in full.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraViewTicket",
+        "icon": "$(search)",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "The ticket key, e.g. PROJ-123. Leave it out to use the key in the current git branch."
+            }
+          }
+        }
+      },
+      {
+        "name": "jira_find_tickets",
+        "displayName": "Find Jira tickets",
+        "modelDescription": "Finds Jira tickets by JQL or by a saved filter (id or name); give exactly one of jql and filter. Use it for your own lookups and to answer a question about tickets. When the user asks to see a list of tickets, or to change more than one ticket, call jira_open_board with board ticket-list instead and do not list the tickets in chat. When the request matches one of the user's saved filters (see jira_list_my_filters), use that filter rather than writing new JQL. \"My team\" means the team JQL in the ticketSidekick.jira.myTeamJql setting: set myTeam to true to narrow by it instead of guessing who is on the team. Narrow further with fixVersion, sprint and assignee (\"me\" for the signed-in user). Shows 50 tickets per page with the columns from the ticketSidekick.jira.searchFields setting; when more tickets match, the answer gives the page value for the next call. Changes nothing.",
+        "userDescription": "Finds Jira tickets by JQL or by a saved filter (id or name); give exactly one of jql and filter.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraFindTickets",
+        "icon": "$(search)",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "jql": {
+              "type": "string",
+              "description": "A JQL query. Give either jql or filter."
+            },
+            "filter": {
+              "type": "string",
+              "description": "A saved filter, by its id or its name. Give either jql or filter."
+            },
+            "fixVersion": {
+              "type": "string",
+              "description": "Narrow to a fix version, by name; resolved in the single project the query scopes to."
+            },
+            "sprint": {
+              "type": "string",
+              "description": "Narrow to a sprint, by name; resolved in the single project the query scopes to."
+            },
+            "assignee": {
+              "type": "string",
+              "description": "Narrow to an assignee: a user name, or \"me\" for the signed-in user."
+            },
+            "myTeam": {
+              "type": "boolean",
+              "description": "Narrow by the team JQL from the ticketSidekick.jira.myTeamJql setting (\"my team\")."
+            },
+            "page": {
+              "type": "string",
+              "description": "The page value a previous answer gave, to read the next page of the same query."
+            }
+          }
+        }
+      },
+      {
+        "name": "jira_list_my_filters",
+        "displayName": "List my Jira filters",
+        "modelDescription": "Lists the user's saved Jira filters, favourites and owned ones, each once, with name and id. Pass a filter's id or name to jira_find_tickets to run it. Takes no input and changes nothing.",
+        "userDescription": "Lists the user's saved Jira filters, favourites and owned ones, each once, with name and id.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraListMyFilters",
+        "icon": "$(search)",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "jira_workflow",
+        "displayName": "Show the statuses a Jira ticket can reach",
+        "modelDescription": "Lists the statuses a Jira ticket can be moved to from its current status, each with the transitions that lead there, from the workflow of the ticket's project and issue type cached in the workspace. When no workflow is cached yet, it is discovered from Jira by sampling tickets and saved to the cache; refresh: true discovers it again. Changes nothing in Jira; it only writes the local cache file.",
+        "userDescription": "Lists the statuses a Jira ticket can be moved to from its current status, each with the transitions that lead there, from the workflow of the ticket's project and issue type cached in the workspace.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraWorkflow",
+        "icon": "$(search)",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "The ticket key, e.g. PROJ-123."
+            },
+            "refresh": {
+              "type": "boolean",
+              "description": "Discover the workflow from Jira again and rewrite the cache, even when one is cached."
+            }
+          },
+          "required": [
+            "ticketKey"
+          ]
+        }
+      },
+      {
+        "name": "jira_list_templates",
+        "displayName": "List the Jira ticket templates",
+        "modelDescription": "Lists the ticket templates defined in the workspace's .jira-templates.json: each template's name, its issue type, the default field values it sets, the fields it looks up when a ticket is created, and its description sections. Takes no input and changes nothing.",
+        "userDescription": "Lists the ticket templates defined in the workspace's .jira-templates.json.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraListTemplates",
+        "icon": "$(search)",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "jira_load_ticket",
+        "displayName": "Load a Jira ticket into the workspace",
+        "modelDescription": "Use when the user asks to load or download a ticket, e.g. \"load PROJ-123\". Downloads one Jira ticket into `.jira-context/<KEY>/` in the first workspace folder, so its content can be read as local files: `ticket.md` (fields, description, web links, attachment list), `comments.md` (all comments) and, in `attachments/`, the text, image, document and archive attachments. Binary attachments of other types are skipped unless named in attachments; files over 100 MB are always skipped. The answer lists every file written by its absolute path and every skipped attachment with its size and the reason. Without ticketKey, uses the ticket key in the current git branch of the first workspace folder and says which folder and branch it used. Changes nothing in Jira; it only writes local files, overwriting an earlier load.",
+        "userDescription": "Use when the user asks to load or download a ticket, e.g.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraLoadTicket",
+        "icon": "$(edit)",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "The ticket key, e.g. PROJ-123. Leave it out to use the key in the current git branch."
+            },
+            "attachments": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Attachment filenames to download as well, exactly as the ticket lists them, including ones the default filter skips (such as binary files). Files over 100 MB are never downloaded."
+            }
+          }
+        }
+      },
+      {
+        "name": "jira_move_ticket",
+        "displayName": "Move a Jira ticket to another status",
+        "modelDescription": "Moves one Jira ticket to a target status, in one transition or along several when the workflow needs them. To move several tickets, call jira_open_board with board ticket-list and the move as change; do not call this once per ticket. When no path is known yet, it discovers the workflow from Jira first, by sampling tickets, and saves it to the workspace cache. The answer names the status the ticket came from and every transition taken. A move that stops partway says where the ticket landed and is never retried. The same move within a minute is skipped.",
+        "userDescription": "Moves one Jira ticket to a target status, in one transition or along several when the workflow needs them.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraMoveTicket",
+        "icon": "$(edit)",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "The ticket key, e.g. PROJ-123."
+            },
+            "targetStatus": {
+              "type": "string",
+              "description": "The status to move the ticket to, e.g. \"In Review\" or \"Done\"."
+            },
+            "resolution": {
+              "type": "string",
+              "description": "The resolution to set when the last step asks for one, e.g. \"Fixed\"."
+            }
+          },
+          "required": [
+            "ticketKey",
+            "targetStatus"
+          ]
+        }
+      },
+      {
+        "name": "jira_create_ticket",
+        "displayName": "Create a Jira ticket",
+        "modelDescription": "Creates one Jira ticket. For a ticket the user asks for in their own words, follow the ts-jira-create skill first: it picks a template and shows the user a draft. Prefer a templateName from jira_list_templates: the template gives the issue type and default fields. Without a template, give the issueType; the issue type is never guessed, so a call without either lists the project's issue types and creates nothing. Write the description as Markdown. The answer names the template fields applied. The same ticket requested again within a minute is skipped.",
+        "userDescription": "Creates one Jira ticket.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraCreateTicket",
+        "icon": "$(edit)",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "projectKey": {
+              "type": "string",
+              "description": "The project key, e.g. PROJ."
+            },
+            "summary": {
+              "type": "string",
+              "description": "The ticket title, one line."
+            },
+            "templateName": {
+              "type": "string",
+              "description": "A template name from jira_list_templates; its issue type and fields are applied."
+            },
+            "issueType": {
+              "type": "string",
+              "description": "The issue type, e.g. Bug. Needed when no template gives one."
+            },
+            "description": {
+              "type": "string",
+              "description": "The description, written as Markdown; it is converted to Jira wiki markup."
+            }
+          },
+          "required": [
+            "projectKey",
+            "summary"
+          ]
+        }
+      },
+      {
+        "name": "jira_add_comment",
+        "displayName": "Add a comment to a Jira ticket",
+        "modelDescription": "Adds one comment to a Jira ticket. Write the comment as Markdown (headings, lists, tables, code); it reaches Jira as wiki markup, as from @jira. The same comment on the same ticket within a minute is skipped, so a repeated call does not post it twice.",
+        "userDescription": "Adds one comment to a Jira ticket.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraAddComment",
+        "icon": "$(edit)",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "The ticket key, e.g. PROJ-123."
+            },
+            "comment": {
+              "type": "string",
+              "description": "The comment text, written as Markdown; it is converted to Jira wiki markup."
+            }
+          },
+          "required": [
+            "ticketKey",
+            "comment"
+          ]
+        }
+      },
+      {
+        "name": "jira_update_field",
+        "displayName": "Update a field of a Jira ticket",
+        "modelDescription": "Sets one field of one Jira ticket, named by display name or id: summary, description, priority, assignee, labels, components, fix version, sprint, or any other field such as a custom field. For a list field, operation \"add\" or \"remove\" changes single values and keeps the rest. When you do not know a field's name, look it up with jira_list_fields. To set a field on several tickets, call jira_open_board with board ticket-list and the change as change; do not call this once per ticket. The description is written as Markdown. The answer quotes the value the field had before. The same change to the same field within a minute is skipped, so a repeated call does not write it twice.",
+        "userDescription": "Sets one field of one Jira ticket, named by display name or id.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraUpdateField",
+        "icon": "$(edit)",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "The ticket key, e.g. PROJ-123."
+            },
+            "fieldName": {
+              "type": "string",
+              "description": "The field, by display name or id: summary, description, priority, assignee, labels, components, fix version, sprint, or any other field such as a custom field."
+            },
+            "value": {
+              "type": "string",
+              "description": "The new value. The description is written as Markdown and converted to Jira wiki markup; labels and components are comma-separated; assignee is a name, an email or \"me\"; a sprint by its name."
+            },
+            "operation": {
+              "type": "string",
+              "enum": [
+                "set",
+                "add",
+                "remove"
+              ],
+              "description": "For a list field such as labels or components: add or remove the given values and keep the others. Default: set, which replaces the whole value."
+            }
+          },
+          "required": [
+            "ticketKey",
+            "fieldName",
+            "value"
+          ]
+        }
+      },
+      {
+        "name": "jira_upload_attachment",
+        "displayName": "Upload a file to a Jira ticket",
+        "modelDescription": "Attaches one file from an open workspace folder to a Jira ticket. Files outside the workspace folders, in a dotfile or dotfolder (after following symlinks) or over 25 MB are refused. The same file uploaded to the same ticket within a minute is skipped.",
+        "userDescription": "Attaches one file from an open workspace folder to a Jira ticket.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraUploadAttachment",
+        "icon": "$(edit)",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "The ticket key, e.g. PROJ-123."
+            },
+            "filePath": {
+              "type": "string",
+              "description": "The file to upload: absolute, or relative to the first workspace folder."
+            }
+          },
+          "required": [
+            "ticketKey",
+            "filePath"
+          ]
+        }
+      },
+      {
+        "name": "jira_list_fields",
+        "displayName": "List the fields of a Jira ticket or issue type",
+        "modelDescription": "With ticketKey: lists every field of that ticket with its name, id and current value, custom fields included. With projectKey and issueType instead: lists the fields that issue type can take when a ticket is created, with name, id and whether Jira requires each. Use it to find a field's name or id for jira_update_field, a template or the display settings. Changes nothing.",
+        "userDescription": "With ticketKey.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraListFields",
+        "icon": "$(search)",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "A ticket key, e.g. PROJ-123: lists every field of that ticket with its current value."
+            },
+            "projectKey": {
+              "type": "string",
+              "description": "Without a ticket: the project key, e.g. PROJ."
+            },
+            "issueType": {
+              "type": "string",
+              "description": "Without a ticket: the issue type, e.g. Bug. Lists the fields that type can take on create."
+            }
+          }
+        }
+      },
+      {
+        "name": "jira_check_required_fields",
+        "displayName": "Check a Jira ticket for the required fields",
+        "modelDescription": "Checks whether a ticket has a value in every field listed in the ticketSidekick.jira.requiredFields setting and names the empty ones. These are the fields the user's team requires, not the ones Jira enforces. Changes nothing.",
+        "userDescription": "Checks whether a ticket has a value in every field listed in the ticketSidekick.jira.requiredFields setting and names the empty ones.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraCheckRequiredFields",
+        "icon": "$(search)",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "The ticket key, e.g. PROJ-123."
+            }
+          },
+          "required": [
+            "ticketKey"
+          ]
+        }
+      },
+      {
+        "name": "jira_open_board",
+        "displayName": "Open a Ticket Sidekick board",
+        "modelDescription": "Opens a board in its own editor tab: the security report of a project, a ticket list for a JQL query or saved filter, or the stored sessions. Use it whenever the user asks to see a list of tickets, to search Jira, to change more than one ticket, or for the security report; do not list the tickets in chat and do not change them one by one. For a change to several tickets, pass it as change: the user reviews and applies it on the board. The answer says only whether the board opened, never its content. Changes nothing in Jira.",
+        "userDescription": "Opens a board in its own editor tab.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraOpenBoard",
+        "icon": "$(search)",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "board": {
+              "type": "string",
+              "enum": [
+                "security-report",
+                "ticket-list",
+                "sessions"
+              ],
+              "description": "security-report: a project's open Veracode and Waltz tickets by release. ticket-list: the tickets of a JQL query or saved filter, where the user selects tickets and moves them or sets a field. sessions: the stored board sessions of this workspace."
+            },
+            "project": {
+              "type": "string",
+              "description": "security-report: the Jira project key, e.g. PROJ. Leave out to use the default project."
+            },
+            "jql": {
+              "type": "string",
+              "description": "ticket-list: a JQL query, e.g. project = PROJ AND status = Done."
+            },
+            "filter": {
+              "type": "string",
+              "description": "ticket-list: a saved filter's id or name, in place of jql."
+            },
+            "change": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "transition",
+                    "field"
+                  ]
+                },
+                "status": {
+                  "type": "string",
+                  "description": "For a transition: the status to move to."
+                },
+                "resolution": {
+                  "type": "string",
+                  "description": "For a transition: the resolution to set, if any."
+                },
+                "field": {
+                  "type": "string",
+                  "description": "For a field change: the field's name or id."
+                },
+                "value": {
+                  "type": "string",
+                  "description": "For a field change: the new value."
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false,
+              "description": "ticket-list: a change the user asked for. The board shows it as proposed and writes nothing until the user applies it."
+            }
+          },
+          "required": [
+            "board"
+          ]
+        }
       }
     ],
     "chatSkills": [
@@ -311,7 +796,7 @@
           "ticketSidekick.jira.defaultProject": {
             "type": "string",
             "default": "",
-            "description": "Default Jira project key (e.g. 'PROJ'). Used when creating tickets if no project is specified in your prompt."
+            "description": "Default Jira project key (e.g. 'PROJ'). Used when creating tickets if no project is specified in your prompt. Checked at start and after a change: a value that is not a project key, or a project Jira does not have, brings up a warning."
           },
           "ticketSidekick.jira.overviewCsvDelimiter": {
             "type": "string",
@@ -321,7 +806,14 @@
               "tab"
             ],
             "default": "comma",
-            "description": "Column separator in the CSV that `@jira /security-report` and the `export` reply of a report import save. Excel with a German (or other comma-decimal) locale opens a semicolon-separated file in columns, and a comma-separated one in a single column."
+            "description": "Column separator in the CSV that the security report and the `export` reply of a report import save. Excel with a German (or other comma-decimal) locale opens a semicolon-separated file in columns, and a comma-separated one in a single column."
+          },
+          "ticketSidekick.sessions.retentionDays": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365,
+            "default": 14,
+            "description": "How many days a stored board session (a security report, list, import or review in progress) is kept after it was last used. Sessions are a cache in VS Code's storage for the workspace; `Ticket Sidekick: Clear stored sessions` deletes them all at once."
           },
           "ticketSidekick.jira.sprintBoardId": {
             "type": "number",
@@ -705,12 +1197,12 @@
           {
             "id": "jiraCopilotTools",
             "title": "Use the Jira tools in Copilot chats",
-            "description": "Copilot-harness chats reach Ticket Sidekick's Jira tools on this computer. Add `127.0.0.1` to `http.noProxy` so those local requests do not go through your network proxy.\n[Open setting](command:workbench.action.openSettings?%22http.noProxy%22)",
+            "description": "Copilot's agent can read and change Jira tickets through Ticket Sidekick's tools, and open boards (ticket lists, the security report) in editor tabs. Type `/ts-jira help` in a Copilot chat to see the commands.\n[Open stored sessions](command:ticket-sidekick.boards.sessions)",
             "media": {
               "markdown": "walkthroughs/jira/copilot-tools.md"
             },
             "completionEvents": [
-              "onSettingChanged:http.noProxy"
+              "onCommand:ticket-sidekick.boards.sessions"
             ]
           }
         ]
@@ -755,12 +1247,6 @@
           }
         ]
       }
-    ],
-    "mcpServerDefinitionProviders": [
-      {
-        "id": "ticket-sidekick.mcp",
-        "label": "Ticket Sidekick"
-      }
     ]
   },
   "scripts": {
@@ -775,16 +1261,17 @@
   "devDependencies": {
     "@types/node": "^26.6.6",
     "@types/vscode": "~1.95.0",
+    "@vscode-elements/elements": "2.5.1",
     "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^4.1.0",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
     "vitest": "^5.0.5",
-    "write-excel-file": "^4.1.1"
+    "write-excel-file": "^4.1.1",
+    "zod-to-json-schema": "3.25.2"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.32.2",
     "exceljs": "^4.4.0",
     "fast-xml-parser": "^5.10.1",
     "minimatch": "^11.0.3",

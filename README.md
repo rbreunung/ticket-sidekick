@@ -2,18 +2,37 @@
 
 [![CI](https://github.com/rbreunung/ticket-sidekick/actions/workflows/ci.yml/badge.svg)](https://github.com/rbreunung/ticket-sidekick/actions/workflows/ci.yml)
 
-Two independent GitHub Copilot Chat participants — use one or both:
+Jira and Bitbucket inside GitHub Copilot Chat in VS Code:
 
-- **`@jira`** — manage Jira tickets in natural language (create, read, update, comment, bulk transitions, create from email)
-- **`@bitbucket`** — review Bitbucket pull requests with structured AI analysis and multi-turn follow-ups
+- **Jira tools for Copilot** — Copilot's agent views, finds, creates, comments on, moves and updates Jira tickets through Ticket Sidekick's tools, or you type a command such as `/ts-jira view PROJ-123`
+- **Boards** — ticket lists and the security report open in an editor tab, where you select, preview and apply changes; a board comes back after a restart
+- **`@jira` and `@bitbucket` chat participants (deprecated)** — the earlier way to do the same, still the only way for report imports and pull request reviews
 
-Neither participant requires the other to be configured.
+> **Deprecation notice.** The `@jira` and `@bitbucket` chat participants are deprecated. They keep working for now, but new features are built as Copilot tools, `/ts-jira` commands and boards only, and the participants will be removed once the imports and the pull request review have moved to boards. Start with [Copilot tools and boards](#copilot-tools-and-boards).
 
-Most operations are also available as tools an agent can call without you typing `@jira`/`@bitbucket`. The Jira tools (view, find, filters, workflow, templates, load, move, create, comment, update a field, upload) come from Ticket Sidekick's own MCP server — see [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md). The Bitbucket tools are GitHub Copilot **Agent Mode** tools (`bitbucket_*`) — see [Agent Mode Tools](docs/manual/agent-mode-tools.md) for the list and which tools ask before changing anything.
+---
+
+## Copilot tools and boards
+
+This is the current way to use Ticket Sidekick. Set up the Jira connection first ([Setup](#setup) below: base URL and token); nothing else is needed.
+
+### Jira tools
+
+In a Copilot chat in **Agent** mode, ask in your own words ("show me PROJ-123", "add a comment to PROJ-123 saying the fix is deployed") and Copilot calls Ticket Sidekick's Jira tools. They view, find, load, move, create, comment on and update Jira tickets, upload attachments, list filters, fields, workflows and templates, and check the connection. A tool that changes something asks first and shows exactly what it will write.
+
+Three skills sit on top of the tools: `/ts-jira <command>` runs one Jira command you type, e.g. `/ts-jira load PROJ-123` (`/ts-jira help` lists them), `/ts-jira-brief` writes a developer brief of a ticket, and `/ts-jira-create` creates a ticket with you, from a template where one fits.
+
+See [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md) for every tool and its inputs, the skills, approvals, troubleshooting and a checklist to try it out. The Bitbucket tools (`bitbucket_*`) are listed in [Agent Mode Tools](docs/manual/agent-mode-tools.md).
+
+### Boards
+
+Larger views open as a **board** in their own editor tab. The security report opens with "the security report for PROJ", `/ts-jira security-report PROJ` or `Ticket Sidekick: Open security report`. A ticket list opens when you ask Copilot to see tickets or to change several of them, with `/ts-jira search <JQL or filter>` or `Ticket Sidekick: Open ticket list`: you select tickets there and move them or set a field after a preview. A board keeps its work in progress as a stored session, so it comes back after a restart; `/ts-jira sessions` or `Ticket Sidekick: Open stored sessions` lists the stored sessions and `Ticket Sidekick: Clear stored sessions` deletes them all. The Command Palette commands work without Copilot. See [Boards](docs/manual/boards.md).
 
 ---
 
 ## @jira — Jira
+
+> **Deprecated.** `@jira` is being replaced by the [Copilot tools and boards](#copilot-tools-and-boards) above. Its setup steps below still apply to them. It remains the way to run the report imports and the bulk cleanup until those have a board.
 
 ### Quickstart
 
@@ -404,14 +423,6 @@ Turn a `.eml` email, a Veracode Detailed Report, or a Waltz OSS Report into Jira
 
 Create a `.jira-templates.json` file in your workspace root to define per-application templates with default fields and guided description collection, plus named cleanup rules for bulk status transitions. See [Jira Templates and Cleanup Rules](docs/manual/jira-templates-and-cleanup-rules.md) for how to generate one from an existing ticket, field references, and examples.
 
-### Jira tools in Copilot-harness chats (MCP)
-
-Chats that run in VS Code's **Copilot harness** cannot use `@jira`. For them Ticket Sidekick runs a small MCP server inside VS Code on `127.0.0.1`, on a random port and with a key that changes at every start, and offers it to VS Code as the **Ticket Sidekick** MCP server. Its tools view, find, load, move, create, comment on and update Jira tickets, upload attachments, list filters, workflows and templates, and check the connection. The `/ts-jira-brief` skill writes a developer brief of a ticket, `/ts-jira-create` creates a ticket with you, from a template where one fits, and `/ts-jira <command>` runs one Jira command you type, e.g. `/ts-jira load PROJ-123`. Needs VS Code 1.101 or later.
-
-The server runs only while the VS Code setting `http.noProxy` contains the entry `127.0.0.1` (exactly that; an entry with a port does not count). Ticket Sidekick never changes the setting: until you add the entry, every VS Code start shows a notice with an **Open Setting** button, and the Jira walkthrough has a step for it.
-
-See [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md) for every tool and its inputs, the skills, approvals, `Ticket Sidekick: Copy MCP diagnostics`, troubleshooting and a checklist to try it out.
-
 ### Settings reference
 
 See [Settings Reference → Jira](docs/manual/settings-reference.md#jira-settings-reference) for every `ticketSidekick.jira.*` setting, and [Report import settings](docs/manual/settings-reference.md#report-import-settings) for every `ticketSidekick.email.*` / `ticketSidekick.veracode.*` / `ticketSidekick.waltz.*` setting.
@@ -419,6 +430,8 @@ See [Settings Reference → Jira](docs/manual/settings-reference.md#jira-setting
 ---
 
 ## @bitbucket — Bitbucket PR Reviews
+
+> **Deprecated.** `@bitbucket` is being replaced by Copilot tools and a review board. Until the review board exists, it remains the way to run a pull request review.
 
 ### Quickstart
 
@@ -531,9 +544,8 @@ follow-up ever shows a failure message, check this channel first — it
 usually explains whether it was a one-off provider hiccup (worth just
 retrying) or something more persistent.
 
-For the MCP server behind the Jira tools in Copilot-harness chats, run
-`Ticket Sidekick: Copy MCP diagnostics` — see
-[Jira Tools for Copilot Chats](docs/manual/copilot-tools.md#diagnostics).
+For the Jira tools in Copilot chats and the boards, the same Output Channel logs every tool call and every board request that failed — see
+[Jira Tools for Copilot Chats](docs/manual/copilot-tools.md#troubleshooting).
 
 ## Releasing
 

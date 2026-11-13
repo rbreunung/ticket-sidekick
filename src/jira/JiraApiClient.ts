@@ -14,8 +14,7 @@ import type {
   JiraSearchResult,
   JiraSprintCandidate,
   JiraTransition,
-  JiraUser,
-} from './IJiraClient';
+  JiraUser, JiraCreateField, } from './IJiraClient';
 import { fetchWithRetry } from '../utils/fetchWithRetry';
 import { ApiError, JiraApiError } from '../utils/apiError';
 import type { DiagLogger } from '../utils/diagTypes';
@@ -490,6 +489,12 @@ export class JiraApiClient implements IJiraClient {
   }
 
   async getRequiredFields(projectKey: string, issueType: string, issueTypeId?: string): Promise<JiraFieldMeta[]> {
+    return (await this.getCreateFields(projectKey, issueType, issueTypeId))
+      .filter(field => field.required)
+      .map(({ id, name, schema }) => ({ id, name, schema }));
+  }
+
+  async getCreateFields(projectKey: string, issueType: string, issueTypeId?: string): Promise<JiraCreateField[]> {
     type CreateMetaFieldItem = {
       fieldId: string;
       name: string;
@@ -516,9 +521,7 @@ export class JiraApiClient implements IJiraClient {
       throw err;
     }
 
-    return fieldItems
-      .filter((field) => field.required)
-      .map((field) => ({ id: field.fieldId, name: field.name, schema: field.schema }));
+    return fieldItems.map((field) => ({ id: field.fieldId, name: field.name, schema: field.schema, required: field.required === true }));
   }
 
   async getRemoteLinks(issueKey: string): Promise<JiraRemoteLink[]> {

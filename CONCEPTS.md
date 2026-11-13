@@ -35,6 +35,14 @@ An import action that rebuilds an existing ticket's title, description and label
 ### Stale ticket
 An open Jira ticket carrying an importer's marker label whose findings are all gone from the current report or no longer match the importer's remediation filter. Applies to both Veracode and Waltz imports. A stale ticket is only offered for a transition, never moved automatically, and a ticket moved to a non-final status stays stale on later imports because it is still open.
 
+## Copilot Chat Surfaces
+
+### Chat participant (deprecated)
+`@jira` and `@bitbucket`: the chat entry points the extension started with. Deprecated; replaced by extension tools, `/ts-jira` commands and boards, and removed once the imports and the pull request review have a board. Nothing new is built on them.
+
+### Security report
+A project's unresolved Veracode and Waltz tickets grouped by Fix Version, with Due Date flags (overdue, due before release), shown by the security report board (and by the deprecated `@jira /security-report`) and saved as CSV or Excel. Code and developer docs call the same thing the "security overview".
+
 ## Bitbucket Review
 
 ### Findings funnel
@@ -44,6 +52,21 @@ The ordered stages a raw LLM finding passes through before appearing in final re
 
 ### Template-shaped field
 A ticket field whose value is usually the same across many tickets of a kind — priority, labels, components, and team/sprint-type custom fields — as opposed to a field that is always specific to one ticket (summary, description, comments, status, reporter, dates, the ticket key). Only template-shaped fields are proposed as candidates when generating a `.jira-templates.json` template from an existing reference ticket.
+
+## Boards
+
+### Board
+A page in an editor tab (a VS Code webview) that shows a session and sends the developer's actions to the extension over the tab's message channel; the page holds no state. Also called an editor view. A write is shown as a preview before a second Apply click, and a write to several tickets, a close or a Bitbucket post also needs a VS Code confirmation. Built: the security report (no writes), the ticket list (search, bulk move, bulk field update) and the sessions board. Planned: cleanup on the ticket list, the import board (Veracode, Waltz, email) and the PR review board.
+*Avoid:* "canvas" — VS Code canvases were tried and removed; a board is never one.
+
+### Session
+The extension's record of one piece of board work: the recipe (what was asked for), the data derived from Jira, Bitbucket, a report file or a model run, and the developer's working state. There is one per source, it is cached on disk so a restart continues it, and it is never the truth: the sources are. Not the same as the old `@jira`/`@bitbucket` multi-turn session kept in `workspaceState`.
+
+### Conflict
+Working state in a session whose target changed or disappeared when the sources were read again. It stays on the board until the developer resolves or drops it.
+
+### Extension tool
+A Jira or Bitbucket tool registered with VS Code as a language model tool, which Copilot's agent calls. It is the only way Copilot reaches Ticket Sidekick's tools; the Jira ones come from one catalog (`src/tools/jiraTools/`). An earlier MCP server offering the same tools was removed.
 
 ## Flagged ambiguities
 

@@ -31,7 +31,7 @@ import type { Operation, ParsedIntent } from './jira/llmHelpers';
 import { parseIntent, extractFixVersionFromPrompt, generateContent, isLmRefusal, synthesizeComments, generateDescriptionAndCommentsSummary, isPointerPrompt, extractLastAssistantText, mapCommandToOperation } from './jira/llmHelpers';
 import { streamFieldUpdatePreview, continueSetField, handleSetField, handleSpellCheck } from './jira/fieldHandler';
 import { getActiveJiraSession, resolveTicketFromBranch, resolveProjectKey, resolveIssueTypeOrPrompt, parseLastTicketFromContext, sessionWasSuperseded } from './jira/ticketContext';
-import { checkConnection } from '../mcp/connectionCheck';
+import { checkConnection } from '../tools/connectionCheck';
 import { gatherFileContent, buildContentContext, streamContentPreview, handleContentSession } from './jira/contentHandler';
 import { streamCreateSelection, continueAfterIssueType, streamNextSection, finishTicketCreation, handleCreateTicket } from './jira/createHandler';
 import { serializeCommentsForLLM, handleLoadTicket } from './jira/loadHandler';
@@ -2065,7 +2065,7 @@ export function createJiraParticipant(
           }
           const targetStatus = intent.targetStatus;
           const transWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-          // Same resolution the MCP move ticket tool uses (src/services/WorkflowService.ts), so the
+          // Same resolution the move ticket tool uses (src/services/WorkflowService.ts), so the
           // chat flow and the tool move a ticket the same way.
           const transResult = await resolveAndApplyTransition(
             jiraClient, ticketService, transWorkspaceRoot, ticketKey!, targetStatus, intent.resolution ?? undefined,

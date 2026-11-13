@@ -199,7 +199,7 @@ export type ConstraintResolutionResult =
  * more than one returns `'ambiguous'` immediately (no guessing, no partial commit to that
  * constraint). `alreadyResolved` carries forward whatever earlier constraint(s) already resolved
  * before a prior ambiguity was hit — the chat flow's resume-after-pick path passes this in;
- * the MCP find tool (no session memory) never does.
+ * the find tool (no session memory) never does.
  */
 export async function resolveNamedConstraints(
   baseJql: string,
@@ -285,7 +285,7 @@ export function formatFilterCandidateList(filters: JiraFilter[]): string {
 }
 
 /**
- * The MCP list-my-filters tool's plain-text formatting of `TicketService.getMyFilters()`'s result —
+ * The list-my-filters tool's plain-text formatting of `TicketService.getMyFilters()`'s result —
  * mirrors `handleListMyFilters()`'s chat wording (the same failure note, the same "none found"
  * message) so the tool and the chat flow never drift apart (R3), minus the numbered pick-list
  * (a tool has no session memory to resume a pick against — it just lists every filter as text).

@@ -1,0 +1,11 @@
+[
+  { "id": "summary", "name": "Summary", "required": true, "schema": { "type": "string" } },
+  { "id": "description", "name": "Description", "required": false, "schema": { "type": "string" } },
+  {
+    "id": "customfield_10500",
+    "name": "Team",
+    "required": true,
+    "schema": { "type": "array", "items": "option", "custom": "com.atlassian.jira.plugin.system.customfieldtypes:multiselect" }
+  },
+  { "id": "labels", "name": "Labels", "required": false, "schema": { "type": "array", "items": "string" } }
+]

@@ -1,8 +1,8 @@
-// Pure message builders for the Jira MCP tools: the issue-type list the create ticket tool answers
+// Pure message builders for the Jira tools: the issue-type list the create ticket tool answers
 // with when it has no issue type, and the template list the list-templates tool answers with.
 // Pure (vscode-free); re-exported through ../sessionState.ts.
 
-import { CREATE_TICKET_TOOL, LIST_TEMPLATES_TOOL } from '../../mcp/jiraTools/toolNames';
+import { CREATE_TICKET_TOOL, LIST_TEMPLATES_TOOL } from '../../tools/jiraTools/toolNames';
 import type { JiraTemplate, ResolveSpec } from '../../templates/TemplateService';
 import { formatBulletList } from './primitives';
 

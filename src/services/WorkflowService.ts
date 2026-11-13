@@ -240,7 +240,7 @@ export type TransitionResolution =
  * Resolves and applies a Jira ticket transition to `targetStatus`: already-there short-circuit,
  * then a direct transition if one exists, then a cached multi-hop workflow path
  * (`loadWorkflowCache`/`findPath`) as a fallback. Shared by `@jira`'s chat `'transition'`
- * operation and the MCP move ticket tool (`src/mcp/jiraTools/moveTicket.ts`), so both resolve a
+ * operation and the move ticket tool (`src/tools/jiraTools/moveTicket.ts`), so both resolve a
  * move the same way.
  */
 export async function resolveAndApplyTransition(
@@ -316,8 +316,8 @@ export interface WorkflowDiscoveryResult {
  * Samples a project/issue type's workflow (`discoverWorkflow`) and — when at least one status
  * was found — merges it into `.jira-workflow-cache.json`, preserving prior transitions for any
  * status this run didn't sample. Shared by `@jira`'s chat `'discoverWorkflow'` operation
- * (`src/participant/jira/workflowHandler.ts`) and the MCP workflow tool
- * (`src/mcp/jiraTools/workflow.ts`), so both read, merge and write the cache the same way.
+ * (`src/participant/jira/workflowHandler.ts`) and the workflow tool
+ * (`src/tools/jiraTools/workflow.ts`), so both read, merge and write the cache the same way.
  */
 export async function discoverAndCacheWorkflow(
   jiraClient: IJiraClient,
