@@ -65,6 +65,12 @@ A skill is a set of instructions Copilot follows, using the tools above. Type it
 
 Copilot decides when to ask you before a tool runs, from its own tool-approval settings; Ticket Sidekick adds no confirmation of its own. The tools that only read Jira are marked as read-only, so Copilot knows they change nothing. Any tool on this server that changes Jira is marked as such and is approved through Copilot's own tool approval, which shows the tool's arguments. If you set Copilot to approve tools automatically, they run without asking.
 
+## When the MCP server is blocked
+
+An organisation can limit which MCP servers Copilot may start. Ticket Sidekick's server then stays stopped: **MCP: List Servers** shows it in an error state, and `Ticket Sidekick: Copy MCP diagnostics` quotes VS Code's log line "MCP server 'Ticket Sidekick' is blocked by policy".
+
+Set `ticketSidekick.jira.toolsFrom` to `"extension"`. Copilot then gets the same Jira tools from the extension itself, with the same names, inputs and answers, and the `/ts-jira` commands and skills work as described on this page. Tools that change Jira ask first and show every value they are about to write. The boards keep working either way, also from the Command Palette; see [Boards](boards.md).
+
 ## Diagnostics
 
 Run `Ticket Sidekick: Copy MCP diagnostics` from the Command Palette. It copies a report to the clipboard: server state, whether it is offered and why not, request and tool-call counts, the proxy-related settings, the `chat.mcp.*` and sandbox settings, and whether the key turns up in stored files. Every key and token is removed. It leaves out tool arguments and your Jira base URL, and of `http.noProxy` it lists only the loopback entries and counts the rest. Folders and files under your home folder appear with `~`. The search for stored keys stops after 512 MB of files, and you can cancel it from the notification; either way the report is still copied and says the search is incomplete.

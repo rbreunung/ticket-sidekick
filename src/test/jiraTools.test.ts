@@ -4,15 +4,18 @@ import { CREATE_TICKET_TOOL, LIST_TEMPLATES_TOOL } from '../mcp/jiraTools/catalo
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
-// Jira's tools are served by the extension's MCP server alone; package.json declares no Jira
-// Agent Mode tool, so no Jira capability is offered to the model twice.
+// Jira's tools are served by the extension's MCP server or, where that is not allowed, as
+// extension tools. Each is declared once and hidden behind one context key, so no Jira capability
+// is offered to the model twice.
 
 const pkg = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf-8'));
 const declaredTools: Array<{ name: string }> = pkg.contributes.languageModelTools;
 
 describe('Jira tools in Agent Mode', () => {
-  it('declares no Jira Agent Mode tool', () => {
-    expect(declaredTools.map(t => t.name).filter(name => name.startsWith('jira_'))).toEqual([]);
+  it('declares each Jira tool once, shown only while the tools come from the extension', () => {
+    const jira = (declaredTools as Array<{ name: string; when?: string }>).filter(t => t.name.startsWith('jira_'));
+    expect(new Set(jira.map(t => t.name)).size).toBe(jira.length);
+    expect(jira.every(t => t.when === 'ticketSidekick.jiraExtensionTools')).toBe(true);
   });
 });
 

@@ -270,7 +270,7 @@ All boards use one set of routes under the canvas key, so a new board adds no ro
 
 | Need | Mechanism |
 | --- | --- |
-| Single-ticket work | MCP tools, each write behind the tool approval dialog |
+| Single-ticket work | The Jira tools, each write behind an approval dialog. They reach Copilot through the MCP server or, with `ticketSidekick.jira.toolsFrom` set to `extension`, as VS Code language model tools: one catalog, two registrations, never both at once (decision D19) |
 | Show a list, change several tickets, import a report, review a PR, see the security report | Open the matching board; the answer is "opened" or a reason |
 | Talk about a review | `bitbucket_read_findings` reads findings from the review's session |
 | Typed commands | `/ts-jira` and `/ts-bitbucket` map one typed command to one tool call or one canvas |
@@ -326,6 +326,7 @@ canvas-pages/          page sources: shared client and style, one folder per boa
 1. Add the service method behind the client interface, with fixture and tests, as today.
 2. Add the tool in `src/mcp/jiraTools/` or the Bitbucket equivalent, with its name in the tool-name module and its entry in the catalog.
 3. A write tool uses the shared duplicate guard and the approval dialog.
+   Run `node scripts/sync-jira-tools.mjs`, which writes the tool into `package.json` as an extension tool as well.
 4. Add its row to `docs/manual/copilot-tools.md` and, if it has a typed form, to the `/ts-jira` or `/ts-bitbucket` skill. The guard tests fail until both exist.
 
 **A new skill**
@@ -365,6 +366,7 @@ Logged in full, with rejected alternatives, in `copilot-harness-migration.md` fr
 | D16 | The page learns of changes by a waiting state request, not by a timer or a push channel | Approved |
 | D17 | A stored session of another format is discarded, never migrated | Maintainer |
 | D18 | A board's page is hosted in an editor tab opened by the extension; the canvas route stays built but is not contributed | Maintainer |
+| D19 | The Jira tools are offered over MCP or as extension tools, chosen by a setting, from one catalog | Maintainer |
 
 ---
 

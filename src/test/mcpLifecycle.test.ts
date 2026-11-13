@@ -26,7 +26,13 @@ const h = vi.hoisted(() => ({
   pendingNotification: undefined as Promise<unknown> | undefined,
   clipboard: undefined as string | undefined,
   configUpdates: 0,
-  lm: {} as Record<string, unknown>,
+  lm: {
+    tools: [] as unknown[],
+    registerTool: (name: string, tool: unknown) => { h.lmTools.set(name, tool as never); return { dispose: () => undefined }; },
+  } as Record<string, unknown>,
+  lmTools: new Map<string, { prepareInvocation(options: { input: unknown }): unknown; invoke(options: { input: unknown }): Promise<{ parts: Array<{ value: string }> }> }>(),
+  contexts: {} as Record<string, unknown>,
+  toolsFrom: undefined as string | undefined,
   providers: [] as Array<{ id: string; provider: unknown }>,
   changeEvents: 0,
   noProxy: ['127.0.0.1'] as unknown,
@@ -63,6 +69,7 @@ vi.mock('vscode', () => {
       if (section === 'chat' && key === 'canvases.enabled') return h.canvasesEnabled;
       if (section === 'ticketSidekick' && key === 'jira.baseUrl') return 'https://jira.example.com';
       if (section === 'ticketSidekick' && key === 'jira.defaultProject') return h.defaultProject ?? fallback;
+      if (section === 'ticketSidekick' && key === 'jira.toolsFrom') return h.toolsFrom ?? fallback;
       return fallback;
     },
     update: async () => { h.configUpdates++; },
@@ -77,7 +84,10 @@ vi.mock('vscode', () => {
     lm: h.lm,
     commands: {
       registerCommand: (id: string, fn: (...args: unknown[]) => unknown) => { h.commands.set(id, fn); return { dispose: () => undefined }; },
-      executeCommand: async (...args: unknown[]) => { h.executed.push(args); },
+      executeCommand: async (...args: unknown[]) => {
+        if (args[0] === 'setContext') h.contexts[String(args[1])] = args[2];
+        else h.executed.push(args);
+      },
     },
     window: {
       createOutputChannel: () => ({ appendLine: (line: string) => { h.logLines.push(line); } }),
@@ -111,6 +121,13 @@ vi.mock('vscode', () => {
       },
     },
     ProgressLocation: { Notification: 15 },
+    LanguageModelTextPart: class { constructor(readonly value: string) {} },
+    LanguageModelToolResult: class { constructor(readonly parts: unknown[]) {} },
+    MarkdownString: class {
+      value = '';
+      appendMarkdown(text: string) { this.value += text; return this; }
+      appendCodeblock(text: string) { this.value += `[${text}]\n`; return this; }
+    },
     ViewColumn: { Active: -1 },
     ColorThemeKind: { Light: 1, Dark: 2, HighContrast: 3, HighContrastLight: 4 },
     workspace: {
@@ -128,7 +145,7 @@ vi.mock('vscode', () => {
 
 import { registerMcp, deactivateMcp, MCP_COMMANDS, MCP_PROVIDER_ID } from '../mcp/register';
 import { ConfigService } from '../services/ConfigService';
-import { CHECK_CONNECTION_TOOL } from '../mcp/jiraTools/catalog';
+import { CHECK_CONNECTION_TOOL, JIRA_TOOLS } from '../mcp/jiraTools/catalog';
 import { McpServerController } from '../mcp/serverController';
 import { LocalhostServer } from '../mcp/localhostServer';
 import { sessionIdFor } from '../sessions/sessionId';
@@ -230,6 +247,9 @@ beforeEach(() => {
   h.folderListeners = [];
   h.canvasesEnabled = true;
   h.defaultProject = undefined;
+  h.toolsFrom = undefined;
+  h.lmTools.clear();
+  h.contexts = {};
   h.folders = [{ uri: { fsPath: '/work/a', scheme: 'file' } }];
 });
 
@@ -407,6 +427,58 @@ describe('boards as editor tabs', () => {
   });
 });
 
+async function changeToolsFrom(value: string | undefined): Promise<void> {
+  h.toolsFrom = value;
+  await Promise.all(h.configListeners.map(l => l({ affectsConfiguration: key => key === 'ticketSidekick.jira.toolsFrom' })));
+}
+
+describe('the Jira tools as extension tools', () => {
+  it('are registered with VS Code but hidden from Copilot while the tools come from the MCP server', async () => {
+    await activate({ withApi: true });
+    expect([...h.lmTools.keys()].sort()).toEqual(JIRA_TOOLS.map(t => t.name).sort());
+    expect(h.contexts['ticketSidekick.jiraExtensionTools']).toBe(false);
+    expect(offered()).toHaveLength(1);
+  });
+
+  it('are shown, and the MCP server is no longer offered, once the setting asks for extension tools', async () => {
+    await activate({ withApi: true });
+    const before = h.changeEvents;
+    await changeToolsFrom('extension');
+    expect(h.contexts['ticketSidekick.jiraExtensionTools']).toBe(true);
+    expect(offered()).toEqual([]);
+    expect(h.changeEvents).toBe(before + 1);
+    await changeToolsFrom('mcp');
+    expect(h.contexts['ticketSidekick.jiraExtensionTools']).toBe(false);
+    expect(offered()).toHaveLength(1);
+  });
+
+  it('answer like the MCP tools: the setup hint without a token, and a board opened in an editor tab', async () => {
+    h.toolsFrom = 'extension';
+    await activate({ withApi: true });
+    const check = await h.lmTools.get(CHECK_CONNECTION_TOOL)!.invoke({ input: {} });
+    expect(check.parts[0].value).toMatch(/token/i);
+    h.token = 'jira-pat';
+    const opened = await h.lmTools.get('jira_open_board')!.invoke({ input: { board: 'security-report', project: 'PROJ' } });
+    expect(opened.parts[0].value).toBe('Opened in an editor tab: Security report: PROJ.');
+    expect(h.panels.map(p => p.title)).toEqual(['Security report: PROJ']);
+  });
+
+  it('keep serving board pages from the local server while the MCP server is not offered', async () => {
+    h.toolsFrom = 'extension';
+    await activate({ withApi: true });
+    expect(windowNote()).toBeDefined();
+  });
+
+  it('ask before a tool that writes, showing what will be written, and not before one that only reads', async () => {
+    await activate({ withApi: true });
+    const asked = h.lmTools.get('jira_add_comment')!.prepareInvocation({ input: { ticketKey: 'PROJ-1', comment: 'Fixed in build 42' } }) as { confirmationMessages?: { title: string; message: { value: string } } };
+    expect(asked.confirmationMessages?.title).toBe('Add a comment to a Jira ticket?');
+    expect(asked.confirmationMessages?.message.value).toContain('[Fixed in build 42]');
+    const read = h.lmTools.get('jira_view_ticket')!.prepareInvocation({ input: { ticketKey: 'PROJ-1' } }) as { confirmationMessages?: unknown };
+    expect(read.confirmationMessages).toBeUndefined();
+  });
+});
+
 describe('MCP server lifecycle', () => {
   it('without 127.0.0.1 in http.noProxy, activation starts no server and the provider offers nothing', async () => {
     h.noProxy = ['localhost'];
@@ -544,7 +616,8 @@ describe('MCP server lifecycle', () => {
   it('without the provider API, activation registers no provider, starts nothing, logs once and does not throw', async () => {
     await expect(activate({ withApi: false })).resolves.toBeDefined();
     expect(h.providers).toEqual([]);
-    expect(h.configListeners).toEqual([]);
+    // Only the extension tools listen for their setting; nothing listens for http.noProxy.
+    expect(h.configListeners).toHaveLength(1);
     expect(h.logLines.filter(l => l.includes('[mcp]'))).toHaveLength(1);
     expect(h.logLines.join('\n')).toMatch(/MCP server provider API/);
   });

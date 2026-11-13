@@ -21,6 +21,8 @@ import * as fs from 'fs';
 import { checkOverHttp, checkOverSocket } from './selfCheck';
 import { collectMcpLogLines } from './logTail';
 import type { HostFacts } from './report';
+import { registerJiraExtensionTools, toolsFrom } from '../tools/registerJiraExtensionTools';
+import { TOOLS_FROM_SETTING } from '../tools/jiraExtensionTools';
 
 // VS Code glue for the extension's MCP server. The server runs exactly while 127.0.0.1 is in
 // `http.noProxy`: it starts at activation when the entry is there, starts or stops when the entry
@@ -180,14 +182,8 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
   // Sessions, the board routes and the clear command exist whether or not the server can start.
   const boards = registerBoards(context, configService, () => getJira(configService));
 
-  if (!mcp) {
-    log('info', 'MCP server not started: this VS Code has no MCP server provider API (VS Code 1.101 or later is needed)');
-    return Promise.resolve();
-  }
-
   // Only folders on this computer's disk: git, the template file and the workflow cache are read there.
   const localFolders = () => (vscode.workspace.workspaceFolders ?? []).filter(f => f.uri.scheme === 'file').map(f => f.uri.fsPath);
-
   const toolDeps: JiraToolDeps = {
     getJira: () => getJira(configService),
     workspaceFolders: localFolders,
@@ -195,6 +191,15 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
     openBoard: (kind, input) => boards.panels.open(kind, input),
     onDiag: (level, message, details) => logDiag('mcp.tools', level, message, details),
   };
+  // The same tools as extension tools, shown to Copilot while the setting asks for them.
+  registerJiraExtensionTools(context, toolDeps);
+
+  if (!mcp) {
+    log('info', 'MCP server not started: this VS Code has no MCP server provider API (VS Code 1.101 or later is needed)');
+    return Promise.resolve();
+  }
+
+
   const started = new McpServerController<JiraToolDeps>({
     tools: JIRA_TOOLS,
     toolDeps,
@@ -237,7 +242,8 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
     mcp.registerMcpServerDefinitionProvider(MCP_PROVIDER_ID, {
       onDidChangeMcpServerDefinitions: changed.event,
       provideMcpServerDefinitions: () => {
-        const definition = started.definition();
+        // While the tools are offered as extension tools, the same tools are not offered over MCP too.
+        const definition = toolsFrom() === 'extension' ? undefined : started.definition();
         providerCalls.provide++;
         providerCalls.lastProvideAt = new Date().toISOString();
         log('info', `VS Code asked for the server definition (${definition ? 'one offered' : 'none offered'})`);
@@ -257,6 +263,7 @@ export function registerMcp(context: vscode.ExtensionContext, configService: Con
       },
     }),
     vscode.workspace.onDidChangeConfiguration(e => {
+      if (e.affectsConfiguration(`ticketSidekick.${TOOLS_FROM_SETTING}`)) changed.fire();
       if (!e.affectsConfiguration('http.noProxy')) return undefined;
       return mcpAllowed() ? started.start('entry added') : started.stop('entry removed');
     }),

@@ -148,8 +148,8 @@ describe('bundled extension (out/extension.js)', () => {
     expect([...registered.tools].sort()).toEqual(declared);
   });
 
-  it('registers no Jira Agent Mode tool, since the Jira tools are on the MCP server', () => {
-    expect(registered.tools.filter(name => name.startsWith('jira_'))).toEqual([]);
+  it('registers every Jira tool as an extension tool too, for machines where the MCP server is not allowed', () => {
+    expect(registered.tools.filter(name => name.startsWith('jira_'))).toHaveLength(15);
   });
 });
 

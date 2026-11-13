@@ -479,6 +479,7 @@ The canvas launcher is a small Copilot SDK extension (`extension.mjs`) that decl
 | D17 | A stored session of another format | **Discarded with a notice, never migrated.** It is a cache. | Migration code per format change. |
 
 | D18 | Where a board's page is shown | **In a VS Code editor tab the extension opens** (a webview framing the page on the local server), asked for through a tool or a Command Palette command. | Canvases, for now: on VS Code 1.146 a canvas shipped by an extension is not registered in Copilot chats, and an organisation can block the plugin or the MCP server. The canvas program is still built, and the page is the same for both hosts, so the route can be switched back on. |
+| D19 | How Copilot reaches the Jira tools where the MCP server is blocked | **The same tool catalog is also registered as VS Code language model tools; the setting `ticketSidekick.jira.toolsFrom` chooses `mcp` or `extension`, and only one is offered.** An organisation's MCP allowlist blocked the extension's server ("blocked by policy") while extension tools still got through. | Asking for the server to be allowlisted only: not in the maintainer's hands, and its address changes at every start. Offering both at once: every tool would appear twice. Detecting the block automatically: the extension cannot ask VS Code for a server's state. |
 
 The design these decisions add up to is described in [`boards-and-sessions.md`](boards-and-sessions.md).
 

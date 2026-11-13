@@ -2,7 +2,7 @@
 
 Part of `@bitbucket` — lets GitHub Copilot's Agent Mode work with Bitbucket directly, without you typing `@bitbucket`. See the main [README](../../README.md) for setup first.
 
-The Jira tools are on Ticket Sidekick's MCP server, which works in Agent Mode and in Copilot-harness chats alike; see [Jira Tools for Copilot Chats](copilot-tools.md). This page lists the Bitbucket tools.
+The Jira tools are on Ticket Sidekick's MCP server by default; see [Jira Tools for Copilot Chats](copilot-tools.md) for what each does. Where the MCP server is not allowed, the same tools are offered as extension tools, listed [at the end of this page](#jira-tools-as-extension-tools).
 
 ## How to use them
 
@@ -33,3 +33,27 @@ This shows a confirmation with the exact comment text before it runs. Nothing ha
 - **No accidental duplicates.** If Copilot repeats the same comment within a minute, the repeat is skipped. A retry after a real failure still goes through.
 - **Auto-approve skips the confirmation.** If you turned on VS Code's `chat.tools.autoApprove`, the comment tool runs without asking. It still checks its own inputs.
 - **No full PR review as a tool.** For a complete review, paste the PR link into `@bitbucket` chat — see [Bitbucket PR Review](bitbucket-pr-review.md).
+
+## Jira tools as extension tools
+
+With `ticketSidekick.jira.toolsFrom` set to `"extension"`, Copilot gets the Jira tools from the extension itself and the MCP server is no longer offered. Use this where your organisation blocks the MCP server. The tools, their inputs and their answers are the same as on the MCP server, described in [Jira Tools for Copilot Chats](copilot-tools.md); with the default `"mcp"` they are hidden here, so no tool is offered twice.
+
+A tool marked "asks first" shows a confirmation with every value it is about to write, and nothing happens until you approve it. The others only read, or open a board.
+
+| Tool | Reference | Before it runs |
+| --- | --- | --- |
+| `jira_check_connection` | `#jiraCheckConnection` | reads |
+| `jira_view_ticket` | `#jiraViewTicket` | reads |
+| `jira_find_tickets` | `#jiraFindTickets` | reads |
+| `jira_list_my_filters` | `#jiraListMyFilters` | reads |
+| `jira_workflow` | `#jiraWorkflow` | reads |
+| `jira_list_templates` | `#jiraListTemplates` | reads |
+| `jira_load_ticket` | `#jiraLoadTicket` | asks first |
+| `jira_move_ticket` | `#jiraMoveTicket` | asks first |
+| `jira_create_ticket` | `#jiraCreateTicket` | asks first |
+| `jira_add_comment` | `#jiraAddComment` | asks first |
+| `jira_update_field` | `#jiraUpdateField` | asks first |
+| `jira_upload_attachment` | `#jiraUploadAttachment` | asks first |
+| `jira_list_fields` | `#jiraListFields` | reads |
+| `jira_check_required_fields` | `#jiraCheckRequiredFields` | reads |
+| `jira_open_board` | `#jiraOpenBoard` | reads |

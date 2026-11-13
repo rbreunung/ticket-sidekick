@@ -10,6 +10,7 @@ Full `ticketSidekick.*` settings for both `@jira` and `@bitbucket`. See the main
 | Auth type | `ticketSidekick.jira.authType` | `"datacenter"` |
 | Default project | `ticketSidekick.jira.defaultProject` | _(empty)_ |
 | Overview CSV separator | `ticketSidekick.jira.overviewCsvDelimiter` | `"comma"` |
+| Jira tools for Copilot from | `ticketSidekick.jira.toolsFrom` | `"mcp"` |
 | Sprint board ID | `ticketSidekick.jira.sprintBoardId` | _(auto)_ |
 | Required fields | `ticketSidekick.jira.requiredFields` | `[]` |
 | Always-show fields | `ticketSidekick.jira.additionalDisplayFields` | `[]` |
@@ -41,6 +42,10 @@ Sprint lookups automatically search all Scrum boards for the project, skipping K
 
 - Modern Jira: `.../jira/software/projects/PROJ/boards/12345`
 - Data Center RapidBoard: `.../jira/secure/RapidBoard.jspa?rapidView=12345` (use the `rapidView` value)
+
+**Jira tools for Copilot: MCP server or extension tools**
+
+Copilot reaches the Jira tools through Ticket Sidekick's MCP server (`"mcp"`, the default). Where your organisation does not allow that server (VS Code's server output then says "blocked by policy"), set `ticketSidekick.jira.toolsFrom` to `"extension"`: the same tools, with the same names and answers, are then offered as tools of the extension and the MCP server is no longer offered. See [Jira Tools for Copilot Chats](copilot-tools.md#when-the-mcp-server-is-blocked).
 
 **Optional: required fields**
 

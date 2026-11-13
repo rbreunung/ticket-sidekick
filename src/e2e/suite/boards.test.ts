@@ -22,8 +22,29 @@ async function pageRequests(): Promise<number> {
   return Number(match[1]);
 }
 
+/** The text a language model tool answered with. */
+function textOf(result: vscode.LanguageModelToolResult): string {
+  return result.content.map(part => (part instanceof vscode.LanguageModelTextPart ? part.value : '')).join('');
+}
+
 export function boardTests(): E2eTest[] {
   return [
+    {
+      name: 'a Jira tool answers when VS Code calls it as an extension tool, without the MCP server',
+      fn: async () => {
+        const result = await vscode.lm.invokeTool('jira_check_connection', { input: {}, toolInvocationToken: undefined });
+        assert.match(textOf(result), /token|base URL/i, 'the extension tool did not answer with the Jira setup hint');
+      },
+    },
+    {
+      name: 'the open board tool, called as an extension tool, opens the stored sessions in an editor tab',
+      fn: async () => {
+        const result = await vscode.lm.invokeTool('jira_open_board', { input: { board: 'sessions' }, toolInvocationToken: undefined });
+        assert.strictEqual(textOf(result), 'Opened in an editor tab: Stored sessions.');
+        assert.ok(boardTab('Stored sessions'), 'the tool said it opened the board, but no such tab exists');
+        await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+      },
+    },
     {
       name: 'the stored sessions board opens as an editor tab from the Command Palette',
       fn: async () => {
