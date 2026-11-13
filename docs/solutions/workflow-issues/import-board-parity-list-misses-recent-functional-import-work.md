@@ -39,7 +39,9 @@ The boards plan (`docs/plans/2026-11-11-2234-feat-boards-replace-chat-participan
 | Drained import finishes without `done` | not named | missing |
 | Export with due-date columns | "export" named | "export" named |
 
-Nothing in the tree checks this. The command guard tests (`importCommandsGuard.test.ts`, `jiraCommandsGuard.test.ts`) tie the chat reply parsers to their catalog, and both are deleted together with the participant.
+Nothing in the tree checked this. The command guard tests (`importCommandsGuard.test.ts`, `jiraCommandsGuard.test.ts`) tie the chat reply parsers to their catalog, and both are deleted together with the participant.
+
+**Fixed the same day:** O7 and R16 now name these rules, `migration-status.md` has an "Import board parity ledger" that gives every reply command and importer capability a Carry over or Dropped decision, and `src/test/importBoardParity.test.ts` fails when a command or capability has no row there.
 
 ## Guidance
 
@@ -47,7 +49,7 @@ Nothing in the tree checks this. The command guard tests (`importCommandsGuard.t
 2. **Treat the most recent functional work as the most likely to be lost.** It is the least settled in anyone's memory and often not yet in the design summary. When a rewrite follows a feature stretch, go through `git log` for that stretch and check each feature against the parity list.
 3. **Separate behaviour from chat presentation.** The Commands line, the help link and "help after a refused reply" exist because a chat reply has to be typed; a board shows controls instead and does not need them. Due Dates, auto-finish, refresh and out-of-date marking are behaviour and must carry over, or be dropped by a recorded decision.
 4. **Keep the working list as detailed as the requirement.** "Same rules and results" in R16 does not help a session that plans from O7. If a rule matters, name it in the open point.
-5. **Recommended check (not written yet):** a guard test, written like `userDocsSync.test.ts`, that fails when a `ReportImportDescriptor` capability or an `IMPORT_COMMAND_ENTRIES` reply kind is named neither in O7/O8 nor in a "dropped on the board" list. It was not added in this run because it would fail on today's tree until the plan and the status page are updated. Reply kinds alone would not catch the Due Date or auto-finish gaps, so the check needs the capability list too.
+5. **Let a test hold the list.** `src/test/importBoardParity.test.ts` reads the reply commands from `IMPORT_COMMAND_ENTRIES` and the optional members of `ReportImportDescriptor` and `ImportChangeTracking`, and fails when one has no row in the parity ledger or a row has no decision. Rules with no command or capability of their own (the SLA Due Date on create, auto-finish, the out-of-date marking) are in the ledger too, but only a reviewer can check them. When a new import feature fails the test, add its row with a decision; do not drop the test before the import participant is removed (O11).
 
 ## Why This Matters
 
@@ -69,7 +71,7 @@ every review-screen action as a board control (create, merge and unmerge, accept
 unaccept, add to ticket, rewrite, stale close, ticket merge with its resumable run, export)
 ```
 
-O7 with the functional rules named (a suggestion; the wording is for the plan's owner to decide):
+O7 with the functional rules named, as an outline of the fix (the actual text and the full ledger are in `migration-status.md`):
 
 ```text
 ... export (with due-date columns), search and show, reload report and the out-of-date
