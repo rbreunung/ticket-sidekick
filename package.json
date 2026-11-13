@@ -1267,7 +1267,7 @@
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
     "vite": "^8.3.7",
-    "vitest": "^5.0.5",
+    "vitest": "^5.1.0",
     "write-excel-file": "^4.1.1",
     "zod-to-json-schema": "3.25.2"
   },
