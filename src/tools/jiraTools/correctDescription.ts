@@ -1,10 +1,10 @@
 import { z } from 'zod';
-import { TicketService } from '../../services/TicketService';
+import type { TicketService } from '../../services/TicketService';
 import { applyCorrections, type Correction, type RefusalReason, type RefusedCorrection } from '../../utils/descriptionCorrections';
 import { fingerprint } from '../../tools/recentCallGuard';
 import { defineTool } from '../toolDefinition';
 import type { JiraToolDeps } from './jiraAccess';
-import { runJiraTool } from './runJiraTool';
+import { previewTicketService, runJiraTool } from './runJiraTool';
 import { ticketKeyProblem } from './ticketKeyInput';
 import { CORRECT_DESCRIPTION_TOOL, VIEW_TICKET_TOOL } from './toolNames';
 import { writeOnce } from './writeGuard';
@@ -25,8 +25,9 @@ const REASONS: Record<RefusalReason, string> = {
   empty: 'no text to replace was given',
   'not found': 'the text is not in the description (any more)',
   'not unique': 'the text appears more than once; give a longer fragment',
-  protected: 'the text is inside code, monospace, a link target or a web address, which are never corrected',
+  protected: 'the text is inside code, monospace, a link target, a web address or an image, which are never corrected',
   overlaps: 'the text overlaps another correction',
+  'adds markup': 'the corrected text adds wiki markup (an image, a link, a macro or a table cell), which a spelling fix never needs',
 };
 
 function describeCorrections(corrections: readonly Correction[]): string {
@@ -63,9 +64,12 @@ export const correctDescriptionTool = defineTool<JiraToolDeps, typeof correction
   inputSchema: correctionsShape,
   annotations: { destructiveHint: true },
   preview: async (args, deps) => {
-    const access = await deps.getJira();
-    if (!access.configured) return [];
-    const plan = await planCorrections(new TicketService(access.client), args.ticketKey.trim(), args.corrections);
+    const key = args.ticketKey.trim();
+    const problem = ticketKeyProblem(key);
+    if (problem) return [{ name: 'Will be refused', value: problem }];
+    const jira = await previewTicketService(deps);
+    if (!jira) return [];
+    const plan = await planCorrections(jira.ticketService, key, args.corrections);
     if ('text' in plan) return [{ name: 'Resulting description', value: plan.text }];
     return [{ name: 'Will be refused', value: 'problem' in plan ? plan.problem : describeRefusal(plan.refused) }];
   },

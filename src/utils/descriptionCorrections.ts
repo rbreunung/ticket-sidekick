@@ -1,14 +1,14 @@
 // Applies spell-check corrections a developer approved to a ticket description as Jira stores it
 // (wiki markup). Only the listed text changes: the rest of the description, markup included, stays
-// as it is, which a round trip through Markdown would not guarantee. Code, monospace, link targets
-// and web addresses are never corrected. Pure, so it is tested without Jira or VS Code.
+// as it is, which a round trip through Markdown would not guarantee. Code, monospace, link targets,
+// web addresses and images are never corrected, and a correction may not add markup. Pure, so it is tested without Jira or VS Code.
 
 export interface Correction {
   before: string;
   after: string;
 }
 
-export type RefusalReason = 'empty' | 'not found' | 'not unique' | 'protected' | 'overlaps';
+export type RefusalReason = 'empty' | 'not found' | 'not unique' | 'protected' | 'overlaps' | 'adds markup';
 
 export interface RefusedCorrection {
   /** The correction's position in the list, counted from 1 as the developer saw it. */
@@ -25,9 +25,12 @@ interface Range {
 }
 
 const BLOCKS = [
-  /\{code(?::[^}]*)?\}[\s\S]*?\{code\}/gi,
-  /\{noformat(?::[^}]*)?\}[\s\S]*?\{noformat\}/gi,
+  // One pass over both block kinds, so a literal {code} shown inside a noformat block is never
+  // taken for the start of a code block, which would leave the real one after it unprotected.
+  /\{(code|noformat)(?::[^}]*)?\}[\s\S]*?\{\1\}/gi,
   /\{\{[\s\S]*?\}\}/g,
+  // An image or attachment embed: !file.png! or !file.png|thumbnail!
+  /!([^!\s|]+?)(?:\|[^!]*)?!/g,
 ];
 const LINK = /\[([^\]\n]*)\]/g;
 const WEB_ADDRESS = /\b[a-z][a-z0-9+.-]*:\/\/[^\s|\]]+/gi;
@@ -51,6 +54,15 @@ export function protectedRanges(wiki: string): Range[] {
 
 const overlaps = (a: Range, b: Range) => a.start < b.end && b.start < a.end;
 
+/** Characters that open wiki markup a spelling fix never needs: images, links, macros, tables. */
+const MARKUP_CHARS = ['!', '[', ']', '{', '}', '|'];
+const count = (text: string, part: string) => text.split(part).length - 1;
+
+/** Whether `after` brings in markup that `before` did not have, such as an image, a link or a macro. */
+function addsMarkup(before: string, after: string): boolean {
+  return [...MARKUP_CHARS, '://'].some(part => count(after, part) > count(before, part));
+}
+
 /**
  * Applies every correction, or none: when any one is refused, nothing changes and each refused
  * correction is named with the reason, so the developer can drop it and run again.
@@ -69,6 +81,7 @@ export function applyCorrections(wiki: string, corrections: readonly Correction[
     const range = { start: first, end: first + before.length };
     if (guarded.some(g => overlaps(g, range))) return refuse('protected');
     if (claimed.some(c => overlaps(c, range))) return refuse('overlaps');
+    if (addsMarkup(before, after)) return refuse('adds markup');
     claimed.push({ ...range, after });
   });
 

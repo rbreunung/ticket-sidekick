@@ -1,11 +1,11 @@
 import { z } from 'zod';
-import { TicketService } from '../../services/TicketService';
+import type { TicketService } from '../../services/TicketService';
 import { TemplateService, type JiraTemplate } from '../../templates/TemplateService';
 import { buildTemplateFromCandidates, formatTemplateFieldValue, nextFreeTemplateName } from '../../templates/templateFromTicket';
 import { fingerprint } from '../../tools/recentCallGuard';
 import { defineTool, type ConfirmationLine } from '../toolDefinition';
 import type { JiraToolDeps } from './jiraAccess';
-import { runJiraTool } from './runJiraTool';
+import { previewTicketService, runJiraTool } from './runJiraTool';
 import { ticketKeyProblem } from './ticketKeyInput';
 import { CREATE_TEMPLATE_TOOL } from './toolNames';
 import { writeOnce } from './writeGuard';
@@ -72,11 +72,16 @@ export const createTemplateTool = defineTool<JiraToolDeps, typeof createTemplate
   inputSchema: createTemplateShape,
   annotations: { destructiveHint: true },
   preview: async (args, deps) => {
-    const access = await deps.getJira();
+    const key = args.ticketKey.trim();
+    const name = args.name.trim();
+    const problem = ticketKeyProblem(key) ?? (name ? undefined : 'A template name is required.');
+    if (problem) return [{ name: 'Will be refused', value: problem }];
     const folder = deps.workspaceFolders()[0];
-    if (!access.configured || !folder) return [];
-    const built = await buildTemplate(new TicketService(access.client), folder, args.ticketKey.trim(), args.name.trim(), access.config.hiddenDisplayFields);
-    return 'problem' in built ? [{ name: 'Will be refused', value: built.problem }] : describeTemplate(built.template, args.name.trim(), built.renamed);
+    if (!folder) return [{ name: 'Will be refused', value: NO_FOLDER }];
+    const jira = await previewTicketService(deps);
+    if (!jira) return [];
+    const built = await buildTemplate(jira.ticketService, folder, key, name, jira.config.hiddenDisplayFields);
+    return 'problem' in built ? [{ name: 'Will be refused', value: built.problem }] : describeTemplate(built.template, name, built.renamed);
   },
   handler: async (args, deps) => {
     const key = args.ticketKey.trim();

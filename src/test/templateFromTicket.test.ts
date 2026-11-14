@@ -22,9 +22,9 @@ describe('the name a new template is saved under', () => {
 describe('a template built from a ticket', () => {
   it('sets every field taken from the ticket, with its value as Jira gave it', () => {
     const template = buildTemplateFromCandidates('Payments bug', 'Bug', [
-      { id: 'priority', name: 'Priority', value: { name: 'High' }, schema: { type: 'priority' } },
-      { id: 'components', name: 'Component/s', value: [{ name: 'Backend' }], schema: { type: 'array', items: 'component' } },
-      { id: 'labels', name: 'Labels', value: ['payments'], schema: { type: 'array', items: 'string' } },
+      { id: 'priority', name: 'Priority', value: { name: 'High' } },
+      { id: 'components', name: 'Component/s', value: [{ name: 'Backend' }] },
+      { id: 'labels', name: 'Labels', value: ['payments'] },
     ]);
     expect(template).toEqual({
       name: 'Payments bug',

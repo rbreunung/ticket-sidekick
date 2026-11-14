@@ -559,6 +559,41 @@ describe('correct description', () => {
     expect(text).toContain('The change may still have been saved');
   });
 
+  it('refuses a description stored as rich text instead of wiki text, and writes nothing', async () => {
+    const client = new DescriptionClient({ type: 'doc', version: 1, content: [] });
+    const session = await startSession(client);
+    const { text } = await session.call('jira_correct_description', { ticketKey: 'PROJ-123', corrections: [{ before: 'a', after: 'b' }] });
+    expect(text).toBe('The description of PROJ-123 is not stored as wiki text, so it cannot be corrected here. Nothing was changed.');
+    expect(client.updateIssueCalls).toEqual([]);
+  });
+
+  it('shows the whole resulting description, also when it is long', async () => {
+    const long = `${'Plain text. '.repeat(400)}The form is shwon.`;
+    const session = await startSession(new DescriptionClient(long));
+    const asked = await session.confirm('jira_correct_description', { ticketKey: 'PROJ-123', corrections: [{ before: 'shwon', after: 'shown' }] });
+    expect(asked.at(-1)).toEqual({ name: 'Resulting description', value: long.replace('shwon', 'shown') });
+  });
+
+  it('does not ask Jira for a ticket key that is not one, and says the call will be refused', async () => {
+    const client = new DescriptionClient(WIKI);
+    let reads = 0;
+    const original = client.getIssue.bind(client);
+    client.getIssue = async key => { reads++; return original(key); };
+    const session = await startSession(client);
+    const asked = await session.confirm('jira_correct_description', { ticketKey: '../../rest/api/2/myself', corrections: [{ before: 'a', after: 'b' }] });
+    expect(asked.at(-1)).toEqual({ name: 'Will be refused', value: '"../../rest/api/2/myself" is not a valid ticket key.' });
+    expect(reads).toBe(0);
+  });
+
+  it('still asks, with the reason, when Jira does not answer the preview in time', async () => {
+    const client = new DescriptionClient(WIKI);
+    client.getIssue = () => new Promise(() => {});
+    const session = await startSession(client, { timeoutMs: 50 });
+    const asked = await session.confirm('jira_correct_description', { ticketKey: 'PROJ-123', corrections: [{ before: 'shwon', after: 'shown' }] });
+    expect(asked.at(-1)?.name).toBe('Preview');
+    expect(asked.at(-1)?.value).toMatch(/^Could not preview what will be written: /);
+  });
+
   it('shows the resulting description before it writes, or that the call will be refused', async () => {
     const session = await startSession(new DescriptionClient(WIKI));
     const ok = await session.confirm('jira_correct_description', { ticketKey: 'PROJ-123', corrections: [{ before: 'shwon', after: 'shown' }] });
@@ -637,6 +672,53 @@ describe('create template', () => {
     const { text } = await session.call('jira_create_template', { ticketKey: 'PROJ-123', name: 'Auth bug' });
     expect(fs.readFileSync(path.join(folder, '.jira-templates.json'), 'utf-8')).toBe('{ not json');
     expect(text).toMatch(/^Could not parse \.jira-templates\.json: .*Nothing was saved\.$/s);
+  });
+
+  it('saves nothing without a name, and says to ask for one', async () => {
+    const folder = workspaceWithTemplates();
+    const before = fs.readFileSync(path.join(folder, '.jira-templates.json'), 'utf-8');
+    const session = await startSession(new TemplateSourceClient(), { folders: [folder] });
+    const { text } = await session.call('jira_create_template', { ticketKey: 'PROJ-123', name: '   ' });
+    expect(text).toBe('A template name is required. Ask the user for one. Nothing was saved.');
+    expect(fs.readFileSync(path.join(folder, '.jira-templates.json'), 'utf-8')).toBe(before);
+  });
+
+  it('saves nothing when no workspace folder is open', async () => {
+    const session = await startSession(new TemplateSourceClient(), { folders: [] });
+    const { text } = await session.call('jira_create_template', { ticketKey: 'PROJ-123', name: 'Auth bug' });
+    expect(text).toBe('No workspace folder is open — templates are saved to .jira-templates.json in the workspace root. Nothing was saved.');
+  });
+
+  it('saves nothing for a ticket whose issue type cannot be read', async () => {
+    const folder = workspaceWithTemplates();
+    const session = await startSession(new MockJiraClient(), { folders: [folder] });
+    const { text } = await session.call('jira_create_template', { ticketKey: 'PROJ-123', name: 'Auth bug' });
+    expect(text).toBe('Could not read the issue type of PROJ-123. Nothing was saved.');
+    expect(templatesIn(folder).templates).toHaveLength(1);
+  });
+
+  it('never replaces a template saved under the same name while the call was running', async () => {
+    const folder = workspaceWithTemplates();
+    const client = new TemplateSourceClient();
+    const original = client.getFields.bind(client);
+    // Someone saves "Auth bug" after the name was found free and before the template is written.
+    client.getFields = async () => {
+      const file = templatesIn(folder);
+      file.templates.push({ name: 'Auth bug', issueType: 'Story', defaultFields: {} });
+      fs.writeFileSync(path.join(folder, '.jira-templates.json'), JSON.stringify(file));
+      return original();
+    };
+    const session = await startSession(client, { folders: [folder] });
+    const { text } = await session.call('jira_create_template', { ticketKey: 'PROJ-123', name: 'Auth bug' });
+    expect(text).toBe('A template named "Auth bug" was saved meanwhile. Call again to save under the next free name. Nothing was saved.');
+    expect(templatesIn(folder).templates.find((t: { name: string }) => t.name === 'Auth bug').issueType).toBe('Story');
+  });
+
+  it('says before saving that a call without a name or with an invalid key will be refused', async () => {
+    const session = await startSession(new TemplateSourceClient(), { folders: [workspaceWithTemplates()] });
+    expect((await session.confirm('jira_create_template', { ticketKey: 'PROJ-123', name: '' })).at(-1))
+      .toEqual({ name: 'Will be refused', value: 'A template name is required.' });
+    expect((await session.confirm('jira_create_template', { ticketKey: '../x', name: 'x' })).at(-1)?.name).toBe('Will be refused');
   });
 
   it('saves the same template once when the call comes again within a minute', async () => {

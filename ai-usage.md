@@ -21,7 +21,6 @@ Ticket Sidekick uses whichever model the user has selected in the VS Code GitHub
 | `@jira write a comment…` / `update the description…` | Drafts content; shows a preview for your approval | Your instruction; optionally conversation history and ticket context |
 | After a content preview — refinement reply | Rewrites the draft based on your feedback | Previous draft, your feedback, original context |
 | `@jira create` + template with `descriptionSections` | Detects which template sections your description already covers | Your description text, section names |
-| `@jira spell check` | Corrects spelling and grammar in the ticket description | Description text |
 
 AI does **not** write to Jira without your explicit confirmation. Content generation always shows a preview first.
 
@@ -53,7 +52,7 @@ Every LLM call sends only the data described in the tables above — ticket fiel
 | 5 | Content refinement | `generateContent` (re-invocation) | `src/participant/jira/contentHandler.ts` |
 | 6 | Ticket summarization | `generateDescriptionAndCommentsSummary` | `src/participant/jira/llmHelpers.ts` |
 | 7 | Template section coverage | `checkSectionCoverage` | `src/participant/jira/createHandler.ts` |
-| 8 | Spell check | `spellCheckValue` | `src/participant/jira/llmHelpers.ts` |
+| 8 | Spell check (removed) | — | — |
 | 9 | PR code review (two-pass) | `PrReviewService.buildPrompt` + `callLLMWithProgress` | `src/services/PrReviewService.ts`, `src/participant/BitbucketParticipant.ts` |
 | 10 | Finding matching | `callLLMWithProgress` (inline prompt) | `src/participant/BitbucketParticipant.ts` |
 | 11 | Finding explanation | `callLLMWithProgress` (`FOLLOW_UP_PROMPT_PREFIX`) | `src/participant/BitbucketParticipant.ts` |
@@ -274,31 +273,9 @@ The response is searched with `/\[[\s\S]*\]/` to extract the first JSON array. O
 
 ---
 
-### 8. Spell check
+### 8. Spell check (removed)
 
-**Trigger:** `spellCheck` operation (`@jira spell check`).
-
-**Inputs assembled:**
-- `text`: the current ticket description formatted as Markdown.
-
-**Framing and grounding:**
-
-```
-User:      "You are a copy editor. Your task is to find and correct
-            spelling and grammar errors in text."
-Assistant: "Understood. I identify and fix spelling and grammar errors."
-User:      "Check this text for spelling and grammar errors:\n\n<text>\n\n
-            If there are no errors, reply with exactly: UNCHANGED
-            If there are errors, reply with ONLY the corrected text, no explanation."
-```
-
-The binary output instruction ("UNCHANGED" vs. corrected text) eliminates the need to diff model output against input — the model declares whether it changed anything.
-
-**Output and parsing:**
-If the trimmed response matches `/^unchanged$/i`, the function returns `null` (no update). Otherwise the trimmed text is returned as the corrected description. A preview loop is started so the user can confirm or discard the correction.
-
-**Known limitations:**
-The model may silently rewrite content beyond spelling corrections. The preview step before posting mitigates this.
+`@jira spell check` and its `spellCheckValue` model call were removed on 2026-11-14. `/ts-jira-spell-check` replaces it: Copilot's own agent, on the model of your chat, reads the description through `jira_view_ticket` and proposes the corrections, and the `jira_correct_description` tool writes only the ones you approve. Ticket Sidekick itself sends nothing to a model for it. See [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md).
 
 ---
 

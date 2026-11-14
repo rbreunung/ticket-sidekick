@@ -5,15 +5,20 @@ import type { ConfirmationLine, ToolDefinition } from './toolDefinition';
 // wording is tested as plain data; `registerJiraTools.ts` hands it to VS Code.
 
 const MAX_VALUE_CHARS = 1500;
+/**
+ * A previewed value, such as a whole corrected description, is what the user approves, so it is
+ * cut only far beyond any ticket description, never at the input-value limit.
+ */
+const MAX_PREVIEW_CHARS = 60_000;
 
 /** Whether Copilot has to ask before the tool runs: every tool that is not read-only. */
 export function needsConfirmation(tool: ToolDefinition<unknown>): boolean {
   return tool.annotations.readOnlyHint !== true;
 }
 
-function shown(value: unknown): string {
+function shown(value: unknown, max = MAX_VALUE_CHARS): string {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
-  return text.length > MAX_VALUE_CHARS ? `${text.slice(0, MAX_VALUE_CHARS)}…` : text;
+  return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
 /**
@@ -44,7 +49,7 @@ export async function confirmationWithPreview<Deps>(
   if (!parsed.success) return asked;
   try {
     const extra = await tool.preview(parsed.data, deps);
-    return { ...asked, lines: [...asked.lines, ...extra.map(line => ({ name: line.name, value: shown(line.value) }))] };
+    return { ...asked, lines: [...asked.lines, ...extra.map(line => ({ name: line.name, value: shown(line.value, MAX_PREVIEW_CHARS) }))] };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     return { ...asked, lines: [...asked.lines, { name: 'Preview', value: `Could not preview what will be written: ${reason}` }] };

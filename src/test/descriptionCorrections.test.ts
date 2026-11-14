@@ -40,6 +40,7 @@ describe('applying approved corrections to a description', () => {
     ['a link target', 'See [the spec|http://wiki/recieved].'],
     ['a link with no text', 'See [http://wiki/recieved].'],
     ['a bare web address', 'See http://wiki/recieved for details.'],
+    ['an image embed', 'Look: !recieved_screen.png|thumbnail! here.'],
   ])('refuses a correction inside %s', (_where, wiki) => {
     expect(applyCorrections(wiki, [{ before: 'recieved', after: 'received' }])).toEqual({
       refused: [{ number: 1, before: 'recieved', reason: 'protected' }],
@@ -61,6 +62,28 @@ describe('applying approved corrections to a description', () => {
     expect(applyCorrections('Teh form is shwon.', [{ before: 'is shwon', after: 'is shown' }, { before: 'shwon.', after: 'shown.' }])).toEqual({
       refused: [{ number: 2, before: 'shwon.', reason: 'overlaps' }],
     });
+  });
+
+  it('keeps a code block protected when a noformat block before it shows a literal code tag', () => {
+    const wiki = '{noformat}write {code} like this{noformat}\nText.\n{code}\nString recieved;\n{code}';
+    expect(applyCorrections(wiki, [{ before: 'recieved', after: 'received' }])).toEqual({
+      refused: [{ number: 1, before: 'recieved', reason: 'protected' }],
+    });
+  });
+
+  it.each([
+    ['an image', 'recieved !http://evil/x.gif!'],
+    ['a link', '[recieved|http://evil]'],
+    ['a macro', '{color:red}received{color}'],
+    ['monospace', '{{received}}'],
+  ])('refuses a correction that would add %s to the description', (_what, after) => {
+    expect(applyCorrections('It was recieved.', [{ before: 'recieved', after }])).toEqual({
+      refused: [{ number: 1, before: 'recieved', reason: 'adds markup' }],
+    });
+  });
+
+  it('accepts a correction that keeps markup characters the original text already had', () => {
+    expect(applyCorrections('See *teh* note.', [{ before: '*teh*', after: '*the*' }])).toEqual({ text: 'See *the* note.' });
   });
 
   it('refuses a correction with no text to replace', () => {

@@ -99,8 +99,6 @@ export interface TemplateFieldCandidate {
   id: string;
   name: string;
   value?: unknown;
-  /** The field's Jira schema, when known. */
-  schema?: JiraFieldMeta['schema'];
 }
 
 export function resolveFieldIdFuzzy(input: string, fields: JiraFieldMeta[]): FieldResolutionResult {
@@ -1204,11 +1202,11 @@ export class TicketService {
       if (fm.schema.custom?.includes('gh-sprint')) {
         const id = extractSprintIdCandidate(rawValue);
         if (id === null) continue; // unparseable — never write an unverified value
-        candidates.push({ id: fieldId, name: fm.name, value: { id }, schema: fm.schema });
+        candidates.push({ id: fieldId, name: fm.name, value: { id } });
         continue;
       }
 
-      candidates.push({ id: fieldId, name: fm.name, value: rawValue, schema: fm.schema });
+      candidates.push({ id: fieldId, name: fm.name, value: rawValue });
     }
 
     return candidates;
