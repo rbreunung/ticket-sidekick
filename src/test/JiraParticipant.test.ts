@@ -4,7 +4,7 @@ vi.mock('vscode', () => ({
   window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
 }));
 
-import { isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseSkipInput, applyTicketToggle, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseListedFiltersSelection, type ListedFiltersSession, parseBulkUpdateReview, rewriteAttachmentLinks, pickEmailOption, buildTeamJql, selectDefaultIssueType, resolveTemplateIssueType, formatIssueTypeOptionLabel, formatIssueTypeInlinePhrase, NO_ISSUE_TYPE, buildImportOverview, buildNewGroupScreen, buildTicketedGroupScreen, buildImportScreen, buildReviewPage, initImportViewState, parseReviewInput, applyReviewToggle, VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION, buildBulkUpdateReviewTable, buildBulkUpdateReviewMessage, applyBulkUpdateToggle, type VeracodeReviewRow, type BulkUpdateReviewRow, type ReviewSession, type TicketedAction } from '../participant/sessionState';
+import { isConfirmation, isCancellation, serializeTurns, stripHiddenMarkers, parseSkipInput, applyTicketToggle, parseResolutionSelection, parseCommentIndex, buildCommentListSession, formatCommentsInFull, parseFilterSelection, parseListedFiltersSelection, type ListedFiltersSession, parseBulkUpdateReview, rewriteAttachmentLinks, pickEmailOption, buildTeamJql, selectDefaultIssueType, resolveTemplateIssueType, formatIssueTypeOptionLabel, formatIssueTypeInlinePhrase, NO_ISSUE_TYPE, buildImportOverview, buildNewGroupScreen, buildTicketedGroupScreen, buildImportScreen, buildReviewPage, initImportViewState, parseReviewInput, applyReviewToggle, isExplicitCancelToken, parseAwaitFreeTextReply, extractProjectKeyFromTicketKey, VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, isSessionExpired, SESSION_EXPIRED_MESSAGE, CURRENT_SESSION_SCHEMA_VERSION, buildBulkUpdateReviewTable, buildBulkUpdateReviewMessage, applyBulkUpdateToggle, type VeracodeReviewRow, type BulkUpdateReviewRow, type ReviewSession, type TicketedAction } from '../participant/sessionState';
 import type { WaltzReviewRow } from '../utils/waltzReport';
 import { isPointerPrompt } from '../participant/jira/llmHelpers';
 import type { TransitionBatchTicket } from '../participant/sessionState';
@@ -1077,54 +1077,6 @@ describe('parseReviewInput — Veracode ids', () => {
   });
 });
 
-// KTD5 — the template-generation review list's `<row-id>=<value>` reply form. Added to
-// parseReviewInput() itself (not a separate parser) so both callers (report-import toggle-only
-// review and the new template-generation review) share one reply-parsing implementation.
-describe('parseReviewInput — setValue (KTD5)', () => {
-  const ids = ['1', '2', '3'];
-
-  it('sets a row value from a bare `<id>=<value>` reply', () => {
-    expect(parseReviewInput('3=High', ids)).toEqual({ action: 'setValue', id: '3', value: 'High' });
-  });
-
-  it('preserves the value\'s original casing even though id matching is case-insensitive', () => {
-    expect(parseReviewInput('3=High', ids)).toEqual({ action: 'setValue', id: '3', value: 'High' });
-    expect(parseReviewInput('3=high priority', ids)).toEqual({ action: 'setValue', id: '3', value: 'high priority' });
-  });
-
-  it('keeps a multi-word value intact instead of splitting on whitespace', () => {
-    expect(parseReviewInput('3=Needs review', ids)).toEqual({ action: 'setValue', id: '3', value: 'Needs review' });
-  });
-
-  it('matches the row id case-insensitively, same as toggle matching', () => {
-    const withLetterIds = ['A1', '2'];
-    expect(parseReviewInput('a1=Backend', withLetterIds)).toEqual({ action: 'setValue', id: 'A1', value: 'Backend' });
-  });
-
-  it('falls through to toggle/invalid parsing when the id half does not match a known row', () => {
-    // '=' present, but '99' isn't a row id — must not be treated as a new failure mode, just the
-    // existing invalid-input outcome.
-    expect(parseReviewInput('99=High', ids)).toEqual({ action: 'invalid' });
-  });
-
-  it('does not match a reply with an empty value half', () => {
-    expect(parseReviewInput('3=', ids)).toEqual({ action: 'invalid' });
-  });
-
-  it('does not treat a leading "=" as a setValue reply', () => {
-    expect(parseReviewInput('=High', ids)).toEqual({ action: 'invalid' });
-  });
-
-  it('is purely additive: every existing no-"=" input still parses exactly as before', () => {
-    expect(parseReviewInput('ok', ids)).toEqual({ action: 'ok' });
-    expect(parseReviewInput('c', ids)).toEqual({ action: 'cancel' });
-    expect(parseReviewInput('2', ids)).toEqual({ action: 'toggle', ids: ['2'] });
-    expect(parseReviewInput('1 2', ids)).toEqual({ action: 'toggle', ids: ['1', '2'] });
-    expect(parseReviewInput('nonsense', ids)).toEqual({ action: 'invalid' });
-    expect(parseReviewInput('', ids)).toEqual({ action: 'invalid' });
-  });
-});
-
 describe('applyReviewToggle — Veracode rows', () => {
   it('flips included for the given row ids and leaves the rest untouched', () => {
     const toggled = applyReviewToggle(sampleRows, ['2']);
@@ -1284,5 +1236,46 @@ describe('isSessionExpired (schemaVersion shape guard — AE7)', () => {
 
   it('exposes a user-facing message that tells the user to re-run the import', () => {
     expect(SESSION_EXPIRED_MESSAGE.toLowerCase()).toContain('re-run the import');
+  });
+});
+
+describe('isExplicitCancelToken', () => {
+  it('recognizes "(c)", case-insensitively and trimmed', () => {
+    expect(isExplicitCancelToken('(c)')).toBe(true);
+    expect(isExplicitCancelToken('(C)')).toBe(true);
+    expect(isExplicitCancelToken('  (c)  ')).toBe(true);
+  });
+
+  it('does not recognize isCancellation()\'s broader word list, e.g. "Stop" or "cancel"', () => {
+    expect(isExplicitCancelToken('Stop')).toBe(false);
+    expect(isExplicitCancelToken('cancel')).toBe(false);
+    expect(isExplicitCancelToken('c')).toBe(false);
+  });
+});
+
+describe('parseAwaitFreeTextReply', () => {
+  it('treats a typed issue type as a value to resume with', () => {
+    expect(parseAwaitFreeTextReply('Bug')).toEqual({ action: 'value', value: 'Bug' });
+  });
+
+  it('reports an empty or whitespace-only reply as empty', () => {
+    expect(parseAwaitFreeTextReply('   ')).toEqual({ action: 'empty' });
+  });
+
+  it('accepts "Stop" as a literal value and only "(c)" as cancellation', () => {
+    expect(parseAwaitFreeTextReply('Stop')).toEqual({ action: 'value', value: 'Stop' });
+    expect(parseAwaitFreeTextReply('(c)')).toEqual({ action: 'cancel' });
+  });
+});
+
+describe('extractProjectKeyFromTicketKey', () => {
+  it('extracts the project key from a real ticket key', () => {
+    expect(extractProjectKeyFromTicketKey('PROJ-123')).toBe('PROJ');
+    expect(extractProjectKeyFromTicketKey('VSJI2-1')).toBe('VSJI2');
+  });
+
+  it('returns null for something that is not a ticket key', () => {
+    expect(extractProjectKeyFromTicketKey('not-a-key')).toBeNull();
+    expect(extractProjectKeyFromTicketKey('')).toBeNull();
   });
 });

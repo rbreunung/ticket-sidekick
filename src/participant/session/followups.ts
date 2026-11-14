@@ -120,18 +120,11 @@ export function computeJiraFollowups(state: JiraFollowupState): FollowupSuggesti
     case 'loadedTicket': {
       // Leave out a suggestion that would just repeat the write the user already performed
       // (e.g. don't offer "transition" right after `transition` succeeded). R1: the comment
-      // chip is gone entirely. R6/R7: template/discover-workflow chips carry the loaded
-      // ticket's own key/project/issue-type — both operations already have everything they
-      // need, so neither can ever land on its own missing-parameter dead end (AE2).
+      // chip is gone entirely. R7: the discover-workflow chip carries the loaded ticket's own
+      // project/issue-type, so it can never land on its own missing-parameter dead end (AE2).
       const chips: FollowupSuggestion[] = [];
       if (state.justDid !== 'transition') {
         chips.push({ prompt: `transition ${state.ticketKey}`, label: 'Transition it' });
-      }
-      if (state.justDid !== 'generateTemplate') {
-        chips.push({
-          prompt: `generate a template from ${state.ticketKey}`,
-          label: `Create a template from ${state.ticketKey}`,
-        });
       }
       // `issueType` is only ever populated where the caller already had the issue in hand
       // (loading/viewing a ticket) — deliberately never worth a fresh fetch just for this chip
@@ -187,8 +180,7 @@ export function computeJiraFollowups(state: JiraFollowupState): FollowupSuggesti
 // production/resume sites) onto this mechanism — every production site for a given kind below
 // is metadata-based and its visible `<!-- jira:TAG -->` marker is gone. U4 finished the rest:
 // the shared issue-type chat-ask (ticketContext.ts), report-import (reportImportHandler.ts,
-// veracodeHandler.ts, waltzHandler.ts, emailHandler.ts), and template generation
-// (templateGenerationHandler.ts). U4 also converted Bitbucket's ReviewSession/
+// veracodeHandler.ts, waltzHandler.ts, emailHandler.ts). U4 also converted Bitbucket's ReviewSession/
 // BitbucketCommentPreviewSession/SmartFallbackSession — see BitbucketSessionContinuity in
 // reviewSessionState.ts for its sibling mechanism.
 export type JiraSessionKind =
@@ -218,13 +210,6 @@ export type JiraSessionKind =
   | 'email-review'
   | 'email-content'
   | 'email-cleanup'
-  | 'template-gen-await-name'
-  | 'template-gen-type-pick'
-  | 'template-gen-await-free-type'
-  | 'template-gen-review'
-  | 'template-gen-collision'
-  | 'template-gen-offer-create'
-  | 'template-gen-await-summary'
   | 'upload-review'
   | 'await-upload-ticket';
 

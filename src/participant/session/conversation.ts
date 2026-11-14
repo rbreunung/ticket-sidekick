@@ -31,13 +31,9 @@ export function serializeTurns(
   return `_(oldest turns omitted to fit context)_\n\n${clean}`;
 }
 
-/** KTD3: unlike isCancellation()'s broad word list (which treats a literal "stop" as
- * cancellation), the template-generation flow's R2/R3 chat-asks (a template name, a free-text
- * issue type) recognize only an explicit "(c)" reply as cancellation, checked before any other
- * interpretation — so a template or issue type genuinely named "Stop" stays enterable there. This
- * is a deliberate, one-time divergence scoped to those two new asks; handleAwaitSummaryReply (an
- * existing, different session type in templateGenerationHandler.ts) keeps its own unmodified
- * isCancellation() check. */
+/** Unlike isCancellation()'s broad word list (which treats a literal "stop" as cancellation), the
+ * shared issue-type ask recognizes only an explicit "(c)" reply as cancellation, checked before any
+ * other interpretation — so an issue type genuinely named "Stop" stays enterable there. */
 export function isExplicitCancelToken(reply: string): boolean {
   return reply.trim().toLowerCase() === '(c)';
 }
@@ -47,11 +43,8 @@ export type AwaitFreeTextReply =
   | { action: 'empty' }
   | { action: 'value'; value: string };
 
-/** Shared parser for the template-generation flow's two free-text chat-asks (R2's template name,
- * R3's free-text issue type) — both just need "a non-empty string, or cancel/re-prompt", so one
- * parser covers both; each caller assigns the returned value to whichever field it means
- * (templateName / issueType). Cancellation uses isExplicitCancelToken() (KTD3), not
- * isCancellation(). */
+/** Parser for a free-text chat ask that needs "a non-empty string, or cancel/re-prompt", such as a
+ * typed issue type. Cancellation uses isExplicitCancelToken(), not isCancellation(). */
 export function parseAwaitFreeTextReply(reply: string): AwaitFreeTextReply {
   if (isExplicitCancelToken(reply)) return { action: 'cancel' };
   const trimmed = reply.trim();
@@ -298,34 +291,12 @@ export type ReviewParseResult =
   | { action: 'ok' }
   | { action: 'cancel' }
   | { action: 'toggle'; ids: string[] }
-  | { action: 'setValue'; id: string; value: string }
   | { action: 'invalid' };
 
 export function parseReviewInput(reply: string, rowIds: string[]): ReviewParseResult {
-  const trimmedOriginal = reply.trim();
-  const normalized = trimmedOriginal.toLowerCase();
+  const normalized = reply.trim().toLowerCase();
   if (isConfirmation(reply)) return { action: 'ok' };
   if (isCancellation(reply)) return { action: 'cancel' };
-
-  // A single `<row-id>=<value>` reply sets that row's value without toggling it (used by
-  // the template-generation review list to fill in a no-reference field with nothing to copy).
-  // Checked against the ORIGINAL casing/spacing (not `normalized`) so the value half survives
-  // exactly as typed — a Jira display value like "High" must not become "high". Splitting only
-  // on the first '=' (rather than tokenizing on whitespace first) lets the value itself contain
-  // spaces (e.g. `3=Needs review`). This is purely additive: a reply with no '=' at all — every
-  // existing caller's toggle/ok/cancel/invalid input — never reaches this branch, and a reply
-  // with '=' whose left-hand side doesn't match a known row id falls through unchanged to the
-  // existing tokenizing/toggle logic below (so a field value that happens to contain '=' but
-  // doesn't look like `<id>=...` still gets the old 'invalid' behavior, not a new failure mode).
-  const eqIndex = trimmedOriginal.indexOf('=');
-  if (eqIndex > 0) {
-    const idPart = trimmedOriginal.slice(0, eqIndex).trim();
-    const valuePart = trimmedOriginal.slice(eqIndex + 1).trim();
-    if (idPart.length > 0 && !/\s/.test(idPart) && valuePart.length > 0) {
-      const foundId = rowIds.find(id => id.toLowerCase() === idPart.toLowerCase());
-      if (foundId) return { action: 'setValue', id: foundId, value: valuePart };
-    }
-  }
 
   const tokens = normalized.split(/[\s,]+/).filter(Boolean);
   const matched: string[] = [];
@@ -342,10 +313,4 @@ export function parseReviewInput(reply: string, rowIds: string[]): ReviewParseRe
 export function applyReviewToggle<TRow extends { id: string; included: boolean }>(rows: TRow[], ids: string[]): TRow[] {
   const toggleSet = new Set(ids);
   return rows.map(r => (toggleSet.has(r.id) ? { ...r, included: !r.included } : r));
-}
-
-// Pure so it's independently testable alongside applyReviewToggle — sets one row's value without
-// touching `included` (the `<id>=<value>` reply is a value-set, not a toggle).
-export function applyReviewSetValue<TRow extends { id: string; value: unknown }>(rows: TRow[], id: string, value: unknown): TRow[] {
-  return rows.map(r => (r.id === id ? { ...r, value } : r));
 }

@@ -1,15 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('vscode', () => ({
   window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
   MarkdownString: class { constructor(public value = '') {} isTrusted?: unknown; },
 }));
-vi.mock('../participant/jira/llmHelpers', () => ({ spellCheckValue: vi.fn() }));
-vi.mock('../participant/jira/contentHandler', () => ({ streamContentPreview: vi.fn() }));
 
-import { handleSpellCheck, streamFieldUpdatePreview, handleSetField, continueSetField } from '../participant/jira/fieldHandler';
-import { spellCheckValue } from '../participant/jira/llmHelpers';
-import { streamContentPreview } from '../participant/jira/contentHandler';
+import { streamFieldUpdatePreview, handleSetField, continueSetField } from '../participant/jira/fieldHandler';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService } from '../services/TicketService';
 
@@ -88,103 +84,5 @@ describe('continueSetField — sprint-selection session', () => {
     const allMarkdown = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('');
     expect(allMarkdown).not.toContain('<!-- jira:');
     expect(chatResult?.metadata?.jiraSession?.kinds).toEqual(['sprint-selection']);
-  });
-});
-
-describe('handleSpellCheck', () => {
-  let client: MockJiraClient;
-  let service: TicketService;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    client = new MockJiraClient();
-    service = new TicketService(client);
-  });
-
-  it('calls streamContentPreview with corrected text and carries the ticket key on metadata (R13)', async () => {
-    vi.mocked(spellCheckValue).mockResolvedValue({
-      correctedText: 'We need OAuth2 authentication for the mobile app.',
-      changeSummary: null,
-    });
-    const previewResult = { metadata: { jiraSession: { kinds: ['previewing'] } } };
-    vi.mocked(streamContentPreview).mockResolvedValue(previewResult as never);
-    const stream = mockStream();
-    const ws = mockWs();
-
-    const chatResult = await handleSpellCheck('PROJ-123', service, nullModel, stream as never, nullToken, ws as never);
-
-    expect(spellCheckValue).toHaveBeenCalledOnce();
-    expect(streamContentPreview).toHaveBeenCalledOnce();
-    const [session] = vi.mocked(streamContentPreview).mock.calls[0];
-    expect(session.ticketKey).toBe('PROJ-123');
-    expect(session.operation).toBe('updateDescription');
-    expect(session.currentContent).toBe('We need OAuth2 authentication for the mobile app.');
-    // R13: no visible marker; the ticket key rides on metadata merged with the preview session.
-    expect(stream.markdown).not.toHaveBeenCalledWith('\n\n<!-- @jira-ticket:PROJ-123 -->');
-    expect(chatResult?.metadata?.jiraSession?.kinds).toEqual(['previewing']);
-    expect(chatResult?.metadata?.jiraSession?.lastTicketKey).toBe('PROJ-123');
-  });
-
-  it('merges the ticket key into streamContentPreview\'s returned metadata (R13)', async () => {
-    vi.mocked(spellCheckValue).mockResolvedValue({
-      correctedText: 'We need OAuth2 authentication for the mobile app.',
-      changeSummary: null,
-    });
-    const previewResult = { metadata: { jiraSession: { kinds: ['previewing'] } } };
-    vi.mocked(streamContentPreview).mockResolvedValue(previewResult as never);
-    const stream = mockStream();
-    const ws = mockWs();
-
-    const chatResult = await handleSpellCheck('PROJ-123', service, nullModel, stream as never, nullToken, ws as never);
-
-    // The preview session's kinds are preserved and the ticket key is added alongside.
-    expect(chatResult?.metadata?.jiraSession?.kinds).toEqual(['previewing']);
-    expect(chatResult?.metadata?.jiraSession?.lastTicketKey).toBe('PROJ-123');
-  });
-
-  it('streams the change summary before the preview when the model provides one', async () => {
-    vi.mocked(spellCheckValue).mockResolvedValue({
-      correctedText: 'We need OAuth2 authentication for the mobile app.',
-      changeSummary: '- Fixed "OAuth" capitalization',
-    });
-    const stream = mockStream();
-    const ws = mockWs();
-
-    await handleSpellCheck('PROJ-123', service, nullModel, stream as never, nullToken, ws as never);
-
-    expect(stream.markdown).toHaveBeenCalledWith('**Changes:**\n- Fixed "OAuth" capitalization\n\n');
-  });
-
-  it('streams a no-description message when description is empty', async () => {
-    client.getIssue = async () => ({
-      id: '1', key: 'PROJ-123',
-      fields: {
-        summary: 'Test', description: null,
-        status: { name: 'Open' }, assignee: null, reporter: null,
-        priority: null, labels: [], fixVersions: [], comment: null,
-      },
-    });
-    const stream = mockStream();
-
-    const chatResult = await handleSpellCheck('PROJ-123', service, nullModel, stream as never, nullToken, mockWs() as never);
-
-    expect(spellCheckValue).not.toHaveBeenCalled();
-    expect(stream.markdown).toHaveBeenCalledWith('**PROJ-123** has no description to check.');
-    // R13: the no-op response still names the ticket, so it rides on metadata for bare follow-ups.
-    expect(chatResult?.metadata?.jiraSession?.kinds).toEqual([]);
-    expect(chatResult?.metadata?.jiraSession?.lastTicketKey).toBe('PROJ-123');
-  });
-
-  it('streams a no-issues message when spellCheckValue returns null', async () => {
-    vi.mocked(spellCheckValue).mockResolvedValue(null);
-    const stream = mockStream();
-
-    const chatResult = await handleSpellCheck('PROJ-123', service, nullModel, stream as never, nullToken, mockWs() as never);
-
-    expect(streamContentPreview).not.toHaveBeenCalled();
-    expect(stream.markdown).toHaveBeenCalledWith('No spelling or grammar issues found in **PROJ-123**.');
-    // R13: a completed no-op still references the ticket.
-    expect(chatResult?.metadata?.jiraSession?.kinds).toEqual([]);
-    expect(chatResult?.metadata?.jiraSession?.lastTicketKey).toBe('PROJ-123');
   });
 });

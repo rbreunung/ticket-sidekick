@@ -22,12 +22,10 @@ export type Operation =
   | 'multiTicketTransition'
   | 'bulkUpdateField'
   | 'loadTicket'
-  | 'spellCheck'
   | 'createFromEmail'
   | 'addEmailComment'
   | 'importVeracode'
   | 'importWaltzReport'
-  | 'generateTemplate'
   | 'uploadAttachment';
 
 export interface FieldUpdate {
@@ -81,7 +79,7 @@ export interface ParsedIntent {
 }
 
 export const INTENT_PROMPT = `Parse this Jira command and respond with ONLY a JSON object. No markdown, no explanation.
-Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|"addComment"|"updateField"|"showFields"|"searchJql"|"listMyFilters"|"validateFields"|"createTicket"|"discoverWorkflow"|"runCleanup"|"transition"|"bulkTransition"|"multiTicketTransition"|"bulkUpdateField"|"loadTicket"|"spellCheck"|"createFromEmail"|"addEmailComment"|"importVeracode"|"importWaltzReport"|"generateTemplate"|"uploadAttachment","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"assignee":string|null,"components":string|null,"description":string|null,"comment":string|null,"commentQuery":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"fieldName":string|null,"fieldValue":string|null,"arrayOp":"set"|"add"|"remove","scope":"single"|"bulk"|null,"jql":string|null,"filterId":string|null,"filterName":string|null,"useMyTeamJql":boolean,"constraintFixVersion":string|null,"constraintSprint":string|null,"constraintAssignee":string|null,"targetStatus":string|null,"bulkFieldName":string|null,"bulkFieldValue":string|null,"cleanupRuleName":string|null,"fixVersion":string|null,"resolution":string|null,"templateName":string|null,"filePath":string|null}
+Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|"addComment"|"updateField"|"showFields"|"searchJql"|"listMyFilters"|"validateFields"|"createTicket"|"discoverWorkflow"|"runCleanup"|"transition"|"bulkTransition"|"multiTicketTransition"|"bulkUpdateField"|"loadTicket"|"createFromEmail"|"addEmailComment"|"importVeracode"|"importWaltzReport"|"uploadAttachment","ticketKey":string|null,"projectKey":string|null,"summary":string|null,"issueType":string|null,"assignee":string|null,"components":string|null,"description":string|null,"comment":string|null,"commentQuery":string|null,"contentSource":"literal"|"generate"|"history-recent"|"history-full","fieldUpdates":[{"fieldName":string,"fieldValue":string}],"fieldName":string|null,"fieldValue":string|null,"arrayOp":"set"|"add"|"remove","scope":"single"|"bulk"|null,"jql":string|null,"filterId":string|null,"filterName":string|null,"useMyTeamJql":boolean,"constraintFixVersion":string|null,"constraintSprint":string|null,"constraintAssignee":string|null,"targetStatus":string|null,"bulkFieldName":string|null,"bulkFieldValue":string|null,"cleanupRuleName":string|null,"fixVersion":string|null,"resolution":string|null,"templateName":string|null,"filePath":string|null}
 - getTicket: show, display, look up a specific ticket; returns all non-null fields, description, and one-line comment summaries
 - summarizeTicket: summarise, summarize, tl;dr, give me an overview; produces a prose paragraph covering the ticket and its comments together
 - showComments: show, list, display all comments in full; shows the actual comment bodies numbered; use when user wants to read the comment text rather than a summary
@@ -102,12 +100,10 @@ Schema: {"operation":"getTicket"|"summarizeTicket"|"showComments"|"getComments"|
 - bulkUpdateField: set/update/change a field on "them" or "these tickets"; only valid when a prior search result is available; bulkFieldName is the field name the user gave, bulkFieldValue is the value string
 - runCleanup: bulk-close or bulk-transition ALL tickets of a type in a project; triggered by "close all", "run cleanup", or "close PROJECT ISSUETYPE" where PROJECT is a project key and ISSUETYPE is an issue type name (not a ticket key like PROJ-123); projectKey and issueType are extracted from the prompt; cleanupRuleName is the quoted rule name if given; fixVersion is the complete string between the quotes after the word "in" — capture every word inside the quotes verbatim (e.g. in "Release 3.2" → "Release 3.2"; in "My Version has Spaces" → "My Version has Spaces"); examples: "@jira close VSJI Bug", "@jira run cleanup 'Close released bugs'", "@jira close BILLING bugs in 'Release 3.2'", "@jira run cleanup 'Close bugs' in 'My Version has Spaces'"
 - loadTicket: download the full ticket context (description, all comments, attachments) into .jira-context/{key}/ in the workspace root; triggered by "load", "fetch context", "download ticket", "load context for"
-- spellCheck: check and correct spelling and grammar on a ticket's description; triggered by "spell check", "fix grammar", "check spelling", "proofread"
 - createFromEmail: create a Jira ticket from an email (.eml file); triggered by "create from email", "ticket from email"; only use this when the session is already loaded via command palette
 - addEmailComment: import an email (.eml) from the chat without using the command palette — opens a file picker; if a ticket key is in the prompt (e.g. PROJ-42) adds the email as a comment, otherwise shows preview to create or comment; triggered by "add email", "add email to", "import email", "email to ticket", "add comment from mail", "create ticket from mail", "create from mail", "add email as comment"
 - importVeracode: import a Veracode Detailed Report XML export and create Jira tickets from its flaws; triggered by "import veracode", "import veracode report", "veracode report", "create tickets from veracode", "veracode scan"; only use this when the session is already loaded via command palette, or to trigger the chat's own file picker if no command was used; projectKey is extracted from the prompt the same as for createTicket when the user names a project (e.g. "import veracode report for PROJ"), otherwise left null so the handler falls back to the default-project setting or an input box
 - importWaltzReport: import a Waltz/SCA OSS report .xlsx export and create Jira tickets from its vulnerable components; triggered by "import oss report", "import waltz report", "oss report", "create tickets from oss report", "sca report"; only use this when the session is already loaded via command palette, or to trigger the chat's own file picker if no command was used; projectKey is extracted from the prompt the same as for createTicket when the user names a project (e.g. "import oss report for PROJ"), otherwise left null so the handler falls back to the default-project setting or an input box
-- generateTemplate: generate/create/make a reusable template for future tickets, not a ticket itself; triggered by "generate a template", "create a template from <ticket>", "make a template for <project>"; ticketKey is the reference ticket key when the user names one to generate from (e.g. "generate a template from PROJ-123") — this is the reference-ticket path; projectKey is set instead when the user names a project with no reference ticket (e.g. "make a template for VSJI"); issueType is set only when the user explicitly names one in the same prompt (e.g. "a template for Bug tickets in VSJI") — otherwise leave it null, never guess it, the flow resolves it interactively; templateName is the quoted or otherwise clearly-named name for the new template if the user gave one (e.g. "called 'Billing Bug'") — otherwise null, the flow will ask for it
 - uploadAttachment: upload/attach a local file to a ticket; triggered by "upload", "attach", "upload the report", "attach this file to PROJ-123"; ticketKey is set only when a ticket key is explicitly named in the prompt (e.g. "upload report.pdf to PROJ-123") — otherwise null, the flow resolves it from the file name or the last-referenced ticket, or asks; filePath is set only when the user explicitly names an absolute or relative file path in the prompt (e.g. "upload /Users/me/report.pdf", "upload report.pdf") — otherwise null, the flow falls back to a chat-attached file, the active editor, or a file picker
 - contentSource: how the comment or description content should be produced
   - "literal": user gave the exact text to post verbatim (e.g. "add comment: LGTM")
@@ -337,44 +333,6 @@ export async function generateDescriptionAndCommentsSummary(
   let text = '';
   for await (const chunk of response.text) text += chunk;
   return text.trim();
-}
-
-export interface SpellCheckResult {
-  correctedText: string;
-  changeSummary: string | null;
-}
-
-export async function spellCheckValue(
-  text: string,
-  model: vscode.LanguageModelChat,
-  token: vscode.CancellationToken,
-): Promise<SpellCheckResult | null> {
-  const roleText = 'You are a copy editor. Your task is to find and correct spelling and grammar errors in text.';
-  const roleAck = 'Understood. I identify and fix spelling and grammar errors.';
-  const taskPrompt =
-    `Check this text for spelling and grammar errors:\n\n${text}\n\n` +
-    'If there are no errors, reply with exactly: UNCHANGED\n' +
-    'If there are errors, reply with the corrected text, then a line containing only "---", ' +
-    'then a short bullet list (max 5 bullets) of what you changed and why. No other explanation.';
-  const response = await model.sendRequest(
-    [
-      vscode.LanguageModelChatMessage.User(roleText),
-      vscode.LanguageModelChatMessage.Assistant(roleAck),
-      vscode.LanguageModelChatMessage.User(taskPrompt),
-    ],
-    {},
-    token,
-  );
-  let raw = '';
-  for await (const chunk of response.text) raw += chunk;
-  const trimmed = raw.trim();
-  if (!trimmed || /^unchanged$/i.test(trimmed)) return null;
-  const separator = trimmed.match(/\n-{3,}\n/);
-  if (!separator) return { correctedText: trimmed, changeSummary: null };
-  const splitAt = separator.index ?? trimmed.length;
-  const correctedText = trimmed.slice(0, splitAt).trim();
-  const changeSummary = trimmed.slice(splitAt + separator[0].length).trim() || null;
-  return correctedText ? { correctedText, changeSummary } : null;
 }
 
 export function isPointerPrompt(prompt: string): boolean {

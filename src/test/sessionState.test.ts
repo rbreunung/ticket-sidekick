@@ -220,7 +220,7 @@ describe('computeJiraFollowups', () => {
     expect(chips.some((c) => /comment/i.test(c.prompt))).toBe(false);
   });
 
-  it('returns "transition it"/"create a template"/"discover workflow"-shaped chips after loading a ticket, with no comment chip', () => {
+  it('returns "transition it" and "discover workflow" chips after loading a ticket, with no comment or template chip', () => {
     const state: JiraFollowupState = { kind: 'loadedTicket', ticketKey: 'PROJ-123', projectKey: 'PROJ', issueType: 'Bug' };
 
     const chips = computeJiraFollowups(state);
@@ -228,17 +228,16 @@ describe('computeJiraFollowups', () => {
     expect(chips.length).toBeLessThanOrEqual(3);
     expect(chips.some((c) => /comment/i.test(c.prompt) || /comment/i.test(c.label ?? ''))).toBe(false);
     expect(chips.some((c) => /transition/i.test(c.prompt) || /transition/i.test(c.label ?? ''))).toBe(true);
-    expect(chips.some((c) => /template/i.test(c.prompt) || /template/i.test(c.label ?? ''))).toBe(true);
+    expect(chips.some((c) => /template/i.test(c.prompt) || /template/i.test(c.label ?? ''))).toBe(false);
     expect(chips.some((c) => /discover workflow/i.test(c.prompt) || /discover workflow/i.test(c.label ?? ''))).toBe(true);
     // The prompt itself names the real ticket key/project/issue type so it works without relying
-    // on pronoun resolution against chat history, and both new chips carry the state's own
+    // on pronoun resolution against chat history, and the workflow chip carries the state's own
     // projectKey/issueType (KTD4) rather than needing a re-fetch when clicked.
     expect(chips.find((c) => /transition/i.test(c.prompt))?.prompt).toContain('PROJ-123');
-    expect(chips.find((c) => /generate a template/i.test(c.prompt))?.prompt).toContain('PROJ-123');
     expect(chips.find((c) => /discover workflow/i.test(c.prompt))?.prompt).toContain('PROJ Bug');
   });
 
-  it('omits the "discover workflow" chip when issueType is unknown, keeping the other two', () => {
+  it('omits the "discover workflow" chip when issueType is unknown, keeping the transition chip', () => {
     // JiraParticipant.ts's shared post-operation tail (addComment, updateField, transition, …)
     // deliberately leaves issueType empty rather than paying for an extra getIssue call just for
     // this one chip — computeJiraFollowups must degrade to omitting it, not render a broken
@@ -249,36 +248,23 @@ describe('computeJiraFollowups', () => {
 
     expect(chips.some((c) => /discover workflow/i.test(c.prompt))).toBe(false);
     expect(chips.some((c) => /transition/i.test(c.prompt))).toBe(true);
-    expect(chips.some((c) => /template/i.test(c.prompt))).toBe(true);
   });
 
-  it('omits the "create a template" chip right after generateTemplate succeeded, keeping the other two', () => {
-    const state: JiraFollowupState = { kind: 'loadedTicket', ticketKey: 'PROJ-123', projectKey: 'PROJ', issueType: 'Bug', justDid: 'generateTemplate' };
-
-    const chips = computeJiraFollowups(state);
-
-    expect(chips.some((c) => /template/i.test(c.prompt))).toBe(false);
-    expect(chips.some((c) => /transition/i.test(c.prompt))).toBe(true);
-    expect(chips.some((c) => /discover workflow/i.test(c.prompt))).toBe(true);
-  });
-
-  it('omits the "discover workflow" chip right after discoverWorkflow succeeded, keeping the other two', () => {
+  it('omits the "discover workflow" chip right after discoverWorkflow succeeded, keeping the transition chip', () => {
     const state: JiraFollowupState = { kind: 'loadedTicket', ticketKey: 'PROJ-123', projectKey: 'PROJ', issueType: 'Bug', justDid: 'discoverWorkflow' };
 
     const chips = computeJiraFollowups(state);
 
     expect(chips.some((c) => /discover workflow/i.test(c.prompt))).toBe(false);
     expect(chips.some((c) => /transition/i.test(c.prompt))).toBe(true);
-    expect(chips.some((c) => /template/i.test(c.prompt))).toBe(true);
   });
 
-  it('omits only the "transition it" chip right after transition succeeded, keeping the two new chips', () => {
+  it('omits only the "transition it" chip right after transition succeeded, keeping the workflow chip', () => {
     const state: JiraFollowupState = { kind: 'loadedTicket', ticketKey: 'PROJ-123', projectKey: 'PROJ', issueType: 'Bug', justDid: 'transition' };
 
     const chips = computeJiraFollowups(state);
 
     expect(chips.some((c) => /transition/i.test(c.prompt))).toBe(false);
-    expect(chips.some((c) => /template/i.test(c.prompt))).toBe(true);
     expect(chips.some((c) => /discover workflow/i.test(c.prompt))).toBe(true);
     expect(chips.length).toBeLessThanOrEqual(3);
   });

@@ -89,7 +89,9 @@ export const createTemplateTool = defineTool<JiraToolDeps, typeof createTemplate
         const built = await buildTemplate(ticketService, folder, key, name, config.hiddenDisplayFields);
         if ('problem' in built) return built.problem;
         try {
-          new TemplateService(folder).saveTemplate(built.template);
+          // The name was free a moment ago; a template saved meanwhile under it is never replaced.
+          const saved = new TemplateService(folder).saveTemplate(built.template);
+          if (saved.status === 'collision') return `A template named "${built.template.name}" was saved meanwhile. Call again to save under the next free name. Nothing was saved.`;
         } catch (err) {
           return `${err instanceof Error ? err.message : String(err)}. Nothing was saved.`;
         }
