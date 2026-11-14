@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { JiraFilter } from '../../jira/IJiraClient';
+import type { IJiraClient, JiraFilter } from '../../jira/IJiraClient';
 import type { TicketService } from '../../services/TicketService';
 import {
   buildConstraintClauses,
@@ -51,7 +51,60 @@ export function splitOrderBy(jql: string): { where: string; orderBy: string } {
   return { where: jql, orderBy: '' };
 }
 
-async function resolveFilter(filter: string, ticketService: TicketService): Promise<JiraFilter | string> {
+export interface Narrowing {
+  fixVersion?: string;
+  sprint?: string;
+  assignee?: string;
+  myTeam?: boolean;
+}
+
+/**
+ * ANDs the narrowing onto a query, the way `@jira` narrowed a filter: the team JQL, then a fix
+ * version, sprint or assignee resolved by name against Jira. The query's own `ORDER BY` stays at
+ * the end. A string answer is the reason it could not, e.g. an ambiguous sprint name.
+ */
+export async function narrowQuery(
+  base: string,
+  narrowing: Narrowing,
+  jira: { client: IJiraClient; myTeamJql?: string },
+  retryWith: string,
+): Promise<{ jql: string; label: string } | string> {
+  const { where, orderBy } = splitOrderBy(base);
+  let narrowed = where;
+  let label = '';
+  if (narrowing.myTeam) {
+    if (!jira.myTeamJql) return NO_TEAM_JQL;
+    // Without a condition of its own (a query that only sorts), the team JQL is the condition.
+    narrowed = narrowed ? buildTeamJql(jira.myTeamJql, narrowed) : jira.myTeamJql;
+    label += '_Narrowed by the team JQL_\n\n';
+  }
+  const named: PendingSearchConstraints = {
+    fixVersion: narrowing.fixVersion?.trim() || undefined,
+    sprint: narrowing.sprint?.trim() || undefined,
+    assignee: narrowing.assignee?.trim() || undefined,
+  };
+  if (named.fixVersion || named.sprint || named.assignee) {
+    const resolution = await resolveNamedConstraints(narrowed, named, jira.client);
+    switch (resolution.kind) {
+      case 'noProjectScope':
+      case 'notFound':
+        return resolution.message;
+      case 'ambiguous': {
+        const kindLabel = resolution.constraintKind === 'fixVersion' ? 'fix version' : resolution.constraintKind;
+        const list = formatBulletList(resolution.options.map(o => o.label));
+        return `Multiple ${kindLabel} matches:\n\n${list}\n\nCall ${retryWith} again with a more exact ${kindLabel} value.`;
+      }
+      case 'resolved':
+        narrowed = narrowed
+          ? buildConstraintJql(narrowed, resolution.constraints)
+          : buildConstraintClauses(resolution.constraints).join(' AND ');
+        break;
+    }
+  }
+  return { jql: [narrowed, orderBy].filter(part => part.length > 0).join(' '), label };
+}
+
+export async function resolveFilter(filter: string, ticketService: TicketService): Promise<JiraFilter | string> {
   if (/^\d+$/.test(filter)) return ticketService.getFilterById(filter);
   const filters = await ticketService.searchFiltersByName(filter);
   if (filters.length === 0) return `No saved filters found matching "${filter}". Call ${LIST_MY_FILTERS_TOOL} to see your saved filters.`;
@@ -105,39 +158,10 @@ export const findTicketsTool = defineTool<JiraToolDeps, typeof findShape>({
         label = `_Using filter: **${resolved.name}**_\n\n`;
       }
 
-      const { where, orderBy } = splitOrderBy(base);
-      let narrowed = where;
-      if (args.myTeam) {
-        if (!config.myTeamJql) return NO_TEAM_JQL;
-        // Without a condition of its own (a query that only sorts), the team JQL is the condition.
-        narrowed = narrowed ? buildTeamJql(config.myTeamJql, narrowed) : config.myTeamJql;
-        label += '_Narrowed by the team JQL_\n\n';
-      }
-
-      const named: PendingSearchConstraints = {
-        fixVersion: args.fixVersion?.trim() || undefined,
-        sprint: args.sprint?.trim() || undefined,
-        assignee: args.assignee?.trim() || undefined,
-      };
-      if (named.fixVersion || named.sprint || named.assignee) {
-        const resolution = await resolveNamedConstraints(narrowed, named, access.client);
-        switch (resolution.kind) {
-          case 'noProjectScope':
-          case 'notFound':
-            return resolution.message;
-          case 'ambiguous': {
-            const kindLabel = resolution.constraintKind === 'fixVersion' ? 'fix version' : resolution.constraintKind;
-            const list = formatBulletList(resolution.options.map(o => o.label));
-            return `Multiple ${kindLabel} matches:\n\n${list}\n\nCall ${FIND_TICKETS_TOOL} again with a more exact ${kindLabel} value.`;
-          }
-          case 'resolved':
-            narrowed = narrowed
-              ? buildConstraintJql(narrowed, resolution.constraints)
-              : buildConstraintClauses(resolution.constraints).join(' AND ');
-            break;
-        }
-      }
-      const finalJql = [narrowed, orderBy].filter(part => part.length > 0).join(' ');
+      const narrowed = await narrowQuery(base, args, { client: access.client, myTeamJql: config.myTeamJql }, FIND_TICKETS_TOOL);
+      if (typeof narrowed === 'string') return narrowed;
+      const finalJql = narrowed.jql;
+      label += narrowed.label;
 
       const startAt = page && !cloud ? Number(page) : undefined;
       const pageToken = page && cloud ? page : undefined;

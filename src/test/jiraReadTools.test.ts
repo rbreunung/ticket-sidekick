@@ -3,7 +3,7 @@ import { callTool as runTool } from '../tools/toolDefinition';
 import { RecentCallGuard } from '../tools/recentCallGuard';
 import {
   JIRA_TOOLS, CHECK_CONNECTION_TOOL, VIEW_TICKET_TOOL, FIND_TICKETS_TOOL, LIST_MY_FILTERS_TOOL, WORKFLOW_TOOL, LIST_TEMPLATES_TOOL,
-  LOAD_TICKET_TOOL,
+  LOAD_TICKET_TOOL, OPEN_BOARD_TOOL,
 } from '../tools/jiraTools/catalog';
 import type { JiraAccess, JiraToolDeps } from '../tools/jiraTools/jiraAccess';
 import type { IJiraClient, JiraAttachment, JiraComment, JiraFilter, JiraIssue, JiraSearchResult } from '../jira/IJiraClient';
@@ -55,6 +55,8 @@ interface CallOptions {
   downloadTimeoutMs?: number;
   logs?: Logged[];
   outcomes?: ToolCallOutcome[];
+  /** Records what a board was opened with. */
+  opened?: Array<{ kind: string; input: unknown }>;
 }
 
 async function callTool(name: string, args: Record<string, unknown> = {}, options: CallOptions = {}): Promise<string> {
@@ -67,6 +69,7 @@ async function callTool(name: string, args: Record<string, unknown> = {}, option
     jiraDownloadTimeoutMs: options.downloadTimeoutMs,
     recentWrites: new RecentCallGuard(),
     onDiag: (level, message, details) => options.logs?.push({ level, message, details }),
+    ...(options.opened ? { openBoard: async (kind: string, input: unknown) => { options.opened!.push({ kind, input }); return { ok: true as const, title: 'Board' }; } } : {}),
   };
   const tool = JIRA_TOOLS.find(t => t.name === name);
   if (!tool) throw new Error(`no tool named ${name}`);
@@ -897,5 +900,44 @@ describe('jira_load_ticket', () => {
     const text = await callTool(LOAD_TICKET_TOOL, { ticketKey: 'PROJ-123' }, { config: jiraConfig({ token: undefined }), folders: [makeTempDir()] });
 
     expect(text).toBe('Jira credentials not configured. Run "Ticket Sidekick: Set Jira Personal Access Token" from the Command Palette.');
+  });
+});
+
+describe('opening a ticket list board', () => {
+  it('opens a cleanup by rule name with a fix version in place of the rule\'s', async () => {
+    const opened: Array<{ kind: string; input: unknown }> = [];
+    const text = await callTool(OPEN_BOARD_TOOL, { board: 'ticket-list', cleanupRule: 'Close released bugs', fixVersion: '3.2' }, { opened });
+    expect(text).toBe('Opened in an editor tab: Board.');
+    expect(opened).toEqual([{ kind: 'ticket-list', input: { cleanupRule: 'Close released bugs', fixVersion: '3.2' } }]);
+  });
+
+  it('refuses a cleanup rule together with a query, or narrowed by sprint', async () => {
+    const opened: Array<{ kind: string; input: unknown }> = [];
+    expect(await callTool(OPEN_BOARD_TOOL, { board: 'ticket-list', cleanupRule: 'x', jql: 'project = PROJ' }, { opened })).toContain('not more than one');
+    expect(await callTool(OPEN_BOARD_TOOL, { board: 'ticket-list', cleanupRule: 'x', sprint: 'S1' }, { opened })).toContain('fixVersion only');
+    expect(opened).toEqual([]);
+  });
+
+  it('narrows a saved filter by sprint and opens the board on the narrowed query', async () => {
+    const client = new RecordingSearchClient();
+    client.searchFiltersByName = async (): Promise<JiraFilter[]> =>
+      [{ id: '10002', name: 'Team open bugs', jql: 'project = PROJ AND issuetype = Bug AND status != Done' }];
+    const opened: Array<{ kind: string; input: unknown }> = [];
+    const text = await callTool(OPEN_BOARD_TOOL, {
+      board: 'ticket-list', filter: 'Team open bugs', sprint: 'Sprint 42', change: { type: 'field', field: 'labels', value: 'x', operation: 'add' },
+    }, { client, opened });
+    expect(text).toBe('Opened in an editor tab: Board.');
+    expect(opened).toEqual([{
+      kind: 'ticket-list',
+      input: { jql: '(project = PROJ AND issuetype = Bug AND status != Done) AND (Sprint = "Sprint 42")', change: { type: 'field', field: 'labels', value: 'x', operation: 'add' } },
+    }]);
+    expect(client.searches).toEqual([]);
+  });
+
+  it('opens nothing when the team JQL is asked for but not configured', async () => {
+    const opened: Array<{ kind: string; input: unknown }> = [];
+    const text = await callTool(OPEN_BOARD_TOOL, { board: 'ticket-list', jql: 'project = PROJ', myTeam: true }, { opened });
+    expect(text).toContain('No team JQL configured');
+    expect(opened).toEqual([]);
   });
 });

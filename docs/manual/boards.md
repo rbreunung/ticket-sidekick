@@ -6,15 +6,16 @@ A **board** is a page Ticket Sidekick opens in its own editor tab: a large table
 | --- | --- | --- | --- |
 | Security report | "show the security report for PROJ" | `/ts-jira security-report [PROJECT]` | `Ticket Sidekick: Open security report` |
 | Ticket list | "show my open bugs", "move my done tickets to Closed" | `/ts-jira search <JQL or filter>` | `Ticket Sidekick: Open ticket list` |
+| Cleanup (a ticket list loaded from a cleanup rule) | "run the cleanup Close released bugs" | `/ts-jira cleanup <rule> [in VERSION]` | `Ticket Sidekick: Run a cleanup rule` |
 | Stored sessions | "show the stored sessions" | `/ts-jira sessions` | `Ticket Sidekick: Open stored sessions` |
 
 ## What you need
 
 - **Jira set up**, as described in the [README](../../README.md). There is nothing else to configure: no server, no port and no proxy setting.
-- **For the Command Palette: nothing else.** The three commands work without Copilot.
+- **For the Command Palette: nothing else.** The board commands work without Copilot.
 - **For asking Copilot: Agent mode.** Copilot opens a board through the `jira_open_board` tool; see [Jira Tools for Copilot Chats](copilot-tools.md).
 
-`Ticket Sidekick: Open ticket list` asks for a JQL query; type `filter:` and a saved filter's id or name to open a filter instead.
+`Ticket Sidekick: Open ticket list` asks for a JQL query; type `filter:` and a saved filter's id or name to open a filter instead. `Ticket Sidekick: Run a cleanup rule` lets you pick a rule from `.jira-templates.json` and, optionally, a fix version.
 
 ## Security report
 
@@ -27,25 +28,38 @@ The report lists a project's unresolved Veracode and Waltz tickets by Fix Versio
 
 ## Ticket list
 
-The ticket list shows the tickets of a JQL query or of a saved filter (by id or name), up to 300, with ticket, summary, status, type, assignee and priority. Click a column title to sort.
+The ticket list shows the tickets of a JQL query or of a saved filter (by id or name), up to 300, 50 to a page, with ticket, summary, status, type, assignee and priority. Click a column title to sort. When more than 300 tickets match, the board says so: narrow the query to see the rest.
 
 Copilot opens this board whenever you ask to see a list of tickets or to change more than one ticket. It does not list the tickets in chat, and it does not get them: the answer says only that the board opened. Ask a question about tickets ("how many open bugs do I have?") and Copilot answers in chat from its own search instead.
 
+- **Narrowing.** Ask for a fix version, a sprint, an assignee ("me" for yourself) or your team ("my team's open bugs", using `ticketSidekick.jira.myTeamJql`), and Copilot opens the board on the narrowed query; the query is shown under the title. A name that matches more than one version or sprint is named back in chat, and nothing opens.
+- **Extra columns.** A list shows one more column for each field id in `ticketSidekick.jira.searchFields`. A list opened with a proposed move, and a cleanup, shows `ticketSidekick.jira.cleanupFields` instead.
+
 **Changing several tickets**
 
-1. Select the tickets with their checkboxes, or **Select all**.
-2. Choose one change: **Move to status** (with an optional resolution) or **Set field** (a field's name or id, and a value), then **Set change**.
+1. Select the tickets with their checkboxes, or **Select all**. The selection holds across pages.
+2. Choose one change: **Move to status** (with an optional resolution) or **Set field** (a field's name or id, how to change it, and a value), then **Set change**. For a list field such as labels or components, **Add value** and **Remove value** change one value and keep the others; **Set to** replaces the whole value.
 3. **Preview** lists exactly what will be written to each selected ticket. Nothing is written yet.
-4. **Apply** writes. When the change touches more than one ticket, or closes a ticket, VS Code asks you to confirm in its own dialog first.
+4. **Apply** writes. When the change touches more than one ticket, or closes a ticket, VS Code asks you to confirm in its own dialog first; the dialog names every selected ticket, on every page.
 
 After Apply the board reads the list again and shows a result per ticket: **Done**, **Failed** with Jira's reason, or **Not written**.
 
-- **A change Copilot proposed.** When you asked for a change in chat ("move my done tickets to Closed"), the board opens with that change filled in, marked "Proposed by Copilot", and every row selected. Check it, deselect rows, then preview and apply. Copilot cannot apply it.
-- **Jira is the truth.** Before writing, the board reads each ticket again. A ticket that changed in Jira since the board read it is not written to; it is listed under the title with its stored and its current status, until you press **Drop**. The same happens when a restored list is checked: a selected ticket that changed or left the list is taken out of the selection and named.
+- **A change Copilot proposed.** When you asked for a change in chat ("move my done tickets to Closed"), the board opens with that change filled in, marked "Proposed by Copilot", and every row selected. Check it, deselect rows, then preview and apply. Copilot cannot apply it. A list opened with a proposed move applies the selected tickets **of the page in view** only, like a cleanup.
+- **Out of date.** When the board finds that tickets changed in Jira, left the query or newly match it, it says it is out of date and you can only page until you press **Refresh**. Refresh shows the tickets as they are now and keeps your selection of every ticket still listed.
+- **Jira is the truth.** Before writing, the board reads each ticket again. A ticket that changed in Jira since the board read it is not written to; it is listed under the title with its stored and its current status, until you press **Drop**.
 - **Moves** use a direct transition when there is one, else the workflow path Ticket Sidekick has cached for the project and issue type, discovering it once if needed.
-- **Fields** are set as the `jira_update_field` tool sets them: any field by its display name or id, a sprint by its name, a list field from comma-separated values. The board replaces a list field's whole value; to add or remove single values, use the tool on one ticket.
+- **Fields** are set as the `jira_update_field` tool sets them: any field by its display name or id, a sprint by its name, a list field from comma-separated values.
 
-Cleanup by the `cleanupRules` of `.jira-templates.json` is not on this board yet; until it is, the deprecated `@jira cleanup` still does it.
+## Cleanup
+
+A cleanup is the ticket list loaded from a rule in the `cleanupRules` of `.jira-templates.json` ([Templates and cleanup rules](jira-templates-and-cleanup-rules.md)). Start it with "run the cleanup Close released bugs", `/ts-jira cleanup "Close released bugs"` or `Ticket Sidekick: Run a cleanup rule`.
+
+- **Which tickets.** The rule's project and issue type, not yet in its target status and unresolved, with the rule's fix version filter and extra JQL. Add `in VERSION` to use another fix version: `released`, `unreleased`, a pattern with `*` such as `Release*`, or a version name; put the name in double quotes (`in "released"`) for a version that is called that.
+- **Rows.** Every ticket starts selected and shows the status it moves to. With `closeSubtasks`, each ticket's open subtasks are listed beneath it with their own target status and resolution. You select tickets only; their subtasks follow.
+- **Paths.** When the board loads, it works out a path through the workflow for every ticket, discovering the workflow once when none is cached. A ticket without a path, or with a subtask without one, shows the reason and cannot be selected.
+- **Resolution.** When the rule moves tickets to a closing status and names no resolution, choose one on the board, or **No resolution**, before you preview.
+- **Applying.** A cleanup applies the selected tickets **of the page in view**; move to the next page and apply again for the rest. Subtasks move before their ticket. When a subtask is not moved, its ticket stays as it is and its result names the subtask.
+- **The rule is read again** on every load and Refresh, so an edit to `.jira-templates.json` shows on the next Refresh. A cleanup asked for again with the same rule and fix version continues its board.
 
 ## How a board keeps its data
 

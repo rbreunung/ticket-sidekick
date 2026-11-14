@@ -172,6 +172,10 @@
         "title": "Ticket Sidekick: Open ticket list"
       },
       {
+        "command": "ticket-sidekick.boards.cleanup",
+        "title": "Ticket Sidekick: Run a cleanup rule"
+      },
+      {
         "command": "ticket-sidekick.boards.sessions",
         "title": "Ticket Sidekick: Open stored sessions"
       }
@@ -769,7 +773,7 @@
       {
         "name": "jira_open_board",
         "displayName": "Open a Ticket Sidekick board",
-        "modelDescription": "Opens a board in its own editor tab: the security report of a project, a ticket list for a JQL query or saved filter, or the stored sessions. Use it whenever the user asks to see a list of tickets, to search Jira, to change more than one ticket, or for the security report; do not list the tickets in chat and do not change them one by one. For a change to several tickets, pass it as change: the user reviews and applies it on the board. The answer says only whether the board opened, never its content. Changes nothing in Jira.",
+        "modelDescription": "Opens a board in its own editor tab: the security report of a project, a ticket list for a JQL query or saved filter, or the stored sessions. Use it whenever the user asks to see a list of tickets, to search Jira, to change more than one ticket, or for the security report; do not list the tickets in chat and do not change them one by one. For a change to several tickets, pass it as change: the user reviews and applies it on the board. For a cleanup by a rule from .jira-templates.json, pass the rule's name as cleanupRule. Narrow a list with fixVersion, sprint, assignee or myTeam instead of writing those clauses into jql yourself. The answer says only whether the board opened, never its content. Changes nothing in Jira.",
         "userDescription": "Opens a board in its own editor tab.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraOpenBoard",
@@ -787,7 +791,7 @@
                 "ticket-list",
                 "sessions"
               ],
-              "description": "security-report: a project's open Veracode and Waltz tickets by release. ticket-list: the tickets of a JQL query or saved filter, where the user selects tickets and moves them or sets a field. sessions: the stored board sessions of this workspace."
+              "description": "security-report: a project's open Veracode and Waltz tickets by release. ticket-list: the tickets of a JQL query or saved filter, where the user selects tickets and moves them or sets a field, or a cleanup rule's tickets. sessions: the stored board sessions of this workspace."
             },
             "project": {
               "description": "security-report: the Jira project key, e.g. PROJ. Leave out to use the default project.",
@@ -800,6 +804,26 @@
             "filter": {
               "description": "ticket-list: a saved filter's id or name, in place of jql.",
               "type": "string"
+            },
+            "cleanupRule": {
+              "description": "ticket-list: the name of a cleanup rule in .jira-templates.json, in place of jql or filter. The board moves the rule's tickets to its target status.",
+              "type": "string"
+            },
+            "fixVersion": {
+              "description": "ticket-list: with jql or filter, narrow to a fix version by name. With cleanupRule, the fix version in place of the rule's own: released, unreleased, a pattern with *, or a version name (\"released\" in double quotes for a version of that name).",
+              "type": "string"
+            },
+            "sprint": {
+              "description": "ticket-list with jql or filter: narrow to a sprint, by name.",
+              "type": "string"
+            },
+            "assignee": {
+              "description": "ticket-list with jql or filter: narrow to an assignee, a user name or \"me\".",
+              "type": "string"
+            },
+            "myTeam": {
+              "description": "ticket-list with jql or filter: narrow by the team JQL of the ticketSidekick.jira.myTeamJql setting.",
+              "type": "boolean"
             },
             "change": {
               "description": "ticket-list: a change the user asked for. The board shows it as proposed and writes nothing until the user applies it.",
@@ -827,6 +851,15 @@
                 "value": {
                   "description": "For a field change: the new value.",
                   "type": "string"
+                },
+                "operation": {
+                  "description": "For a list field such as labels: add or remove the value and keep the others. Default: set.",
+                  "type": "string",
+                  "enum": [
+                    "set",
+                    "add",
+                    "remove"
+                  ]
                 }
               },
               "required": [
