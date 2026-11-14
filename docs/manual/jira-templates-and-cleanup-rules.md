@@ -134,13 +134,15 @@ That confirmation is the only review: approve it and the template is added to `.
 
 ### Cleanup rule fields
 
+A rule missing one of the required fields is not run: asking for it says which field is missing.
+
 | Field | Required | Default | Description |
 |---|---|---|---|
 | `name` | yes | — | Rule identifier — used in `/ts-jira cleanup "name"`, "run the cleanup name" and `Ticket Sidekick: Run a cleanup rule` |
 | `project` | yes | — | Jira project key — always anchors the search query and workflow graph lookup |
 | `issueType` | yes | — | Issue type — always anchors the query; use the exact Jira name (e.g. `Bug`, `Story`) |
 | `targetState` | yes | — | Destination Jira status name (e.g. `Done`, `Closed`) |
-| `resolution` | no | — | Resolution applied to parent ticket transitions (e.g. `Fixed`, `Won't Fix`) |
+| `resolution` | no | — | Resolution applied to parent ticket transitions that end in a final status (e.g. `Fixed`, `Won't Fix`) |
 | `subtaskResolution` | no | same as `resolution` | Resolution applied to subtask transitions — falls back to `resolution` if omitted |
 | `subtaskTargetState` | no | same as `targetState` | Destination status for subtask transitions — falls back to `targetState` if omitted |
 | `closeSubtasks` | no | `false` | When `true`, open subtasks are listed beneath their parent and transitioned before it |

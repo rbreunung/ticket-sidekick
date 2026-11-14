@@ -54,10 +54,11 @@ After Apply the board reads the list again and shows a result per ticket: **Done
 
 A cleanup is the ticket list loaded from a rule in the `cleanupRules` of `.jira-templates.json` ([Templates and cleanup rules](jira-templates-and-cleanup-rules.md)). Start it with "run the cleanup Close released bugs", `/ts-jira cleanup "Close released bugs"` or `Ticket Sidekick: Run a cleanup rule`.
 
-- **Which tickets.** The rule's project and issue type, not yet in its target status and unresolved, with the rule's fix version filter and extra JQL. Add `in VERSION` to use another fix version: `released`, `unreleased`, a pattern with `*` such as `Release*`, or a version name; put the name in double quotes (`in "released"`) for a version that is called that.
+- **Which tickets.** The rule's project and issue type, not yet in its target status and unresolved, with the rule's fix version filter and extra JQL. Add `in VERSION` to use another fix version: `released`, `unreleased`, a pattern with `*` such as `Release*`, or a version name; put the name in double quotes (`in "released"`) for a version that is called that. A rule whose own name contains " in " is still found: the longest rule name the request starts with wins, and what follows is the version.
+- **Incomplete rules.** A rule without `name`, `project`, `issueType` or `targetState` is not run. Asking for it says which field is missing, and the Command Palette command lists only complete rules and names the skipped ones.
 - **Rows.** Every ticket starts selected and shows the status it moves to. With `closeSubtasks`, each ticket's open subtasks are listed beneath it with their own target status and resolution. You select tickets only; their subtasks follow.
 - **Paths.** When the board loads, it works out a path through the workflow for every ticket, discovering the workflow once when none is cached. A ticket without a path, or with a subtask without one, shows the reason and cannot be selected.
-- **Resolution.** When the rule moves tickets to a closing status and names no resolution, choose one on the board, or **No resolution**, before you preview.
+- **Resolution.** A resolution is sent only with a move to a final status: one in Jira's Done category, read with the workflow (in a workflow cached before that, a status named like Done, Resolved, Closed, Won't Fix, Rejected or Cancelled). When the rule moves tickets to a final status and names no resolution, choose one on the board, or **No resolution**, before you preview. A move Jira refuses with a resolution is tried once more without one.
 - **Applying.** A cleanup applies the selected tickets **of the page in view**. The moved tickets leave the list, so the next ones move up onto the same page, still selected: check them and apply again for the rest. Subtasks move before their ticket. When a subtask is not moved, its ticket stays as it is and its result names the subtask.
 - **The rule is read again** on every load and Refresh, so an edit to `.jira-templates.json` shows on the next Refresh. A cleanup asked for again with the same rule and fix version continues its board.
 
@@ -68,7 +69,7 @@ Every board shows a **session**: the data it read and what you set on the board.
 - **As of.** The line under the title says when the data was read. Jira, Bitbucket and report files stay the truth; the session is a cache of them.
 - **Opening again.** Asking for the same thing again (the same project, query or filter) continues its session. The board appears at once with the stored data, then checks the source in the background and updates.
 - **After a restart.** VS Code brings a board's tab back with the window, and the board shows its stored session, marked "restored session", then checks the source.
-- **If the check fails.** The stored data stays on show, with a line saying the check failed and when the data is from.
+- **If the check fails.** The stored data stays on show, with a line saying the check failed and when the data is from. A board that writes applies nothing until a check passes: it offers paging and **Refresh** only.
 - **Discard session** on a board deletes its session.
 
 ## Stored sessions

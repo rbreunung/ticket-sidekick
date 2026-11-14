@@ -27,8 +27,8 @@ The rules the cleanup board keeps from `@jira run cleanup` are below.
 
 The ticket list board runs these rules (`src/boards/ticketList/cleanupSource.ts` for the query, subtasks and paths, `kind.ts` for selection and Apply). `cleanupRules` in `.jira-templates.json` define named rules:
 
-- `project`, `issueType`, `targetState` — required
-- `resolution` — optional; if omitted and the target is a closing status, a resolution (or none) is chosen on the board before Apply
+- `name`, `project`, `issueType`, `targetState` — required; `checkCleanupRules` (`cleanupSource.ts`) sets aside a rule missing one, `lookupCleanupRule` refuses it with the missing field, and the Command Palette picker lists only complete rules
+- `resolution` — optional; sent only with a move to a final status (`isFinalStatus` in `src/utils/finalStatus.ts`: Jira's Done category from `getDoneStatuses`, cached as `doneStatuses` in `.jira-workflow-cache.json`, else the shared name list). If omitted and the target is final, a resolution (or none) is chosen on the board before Apply; a move refused with a resolution is retried once without one
 - `subtaskResolution` — resolution for subtask transitions; falls back to `resolution` if omitted
 - `subtaskTargetState` — target status for subtasks; falls back to `targetState` if omitted
 - `closeSubtasks` — if true, the parents' open subtasks are read a hundred parents per query (`parent in (...)`), listed beneath their parent and moved before it
@@ -38,7 +38,7 @@ The ticket list board runs these rules (`src/boards/ticketList/cleanupSource.ts`
 
 Fix version override: `in VERSION` (`fixVersion` on `jira_open_board`) wins over the rule's fields — `released` / `unreleased` (JQL functions), a value with `*` (pattern), or a version name; a name in double quotes (`"released"`) is always a version of that name.
 
-Start: `/ts-jira cleanup "rule name" [in VERSION]`, a plain request, or `Ticket Sidekick: Run a cleanup rule`. A board opened with a proposed move ("close the PROJ bugs in 3.2") is the ad-hoc form; it has no subtasks but applies page by page too.
+Start: `/ts-jira cleanup "rule name" [in VERSION]`, a plain request, or `Ticket Sidekick: Run a cleanup rule`. The text is matched exactly first; otherwise the longest known rule name followed by ` in ` wins and the rest is the fix version, so a rule named with " in " is still found. A board opened with a proposed move ("close the PROJ bugs in 3.2") is the ad-hoc form; it has no subtasks but applies page by page too.
 
 When the board loads, every row gets its target status and a path through the cached workflow, discovering the workflow once per issue type when none is cached. A parent cannot be selected when it has no path, when one of its subtasks has none, or when its chunk of the subtask search reached the read limit (some open subtasks could not be listed). Only parents are selected; their subtasks follow.
 
