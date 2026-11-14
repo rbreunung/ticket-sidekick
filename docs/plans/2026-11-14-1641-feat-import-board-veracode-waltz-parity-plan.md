@@ -196,18 +196,18 @@ This plan covers the Veracode and Waltz kinds of the import board, Step 2 of the
 
 - KTD1. **One vscode-free board kind `import` serves both report kinds.** The report kind (Veracode or Waltz) is part of the recipe and selects the existing `ReportImportDescriptor`, so the per-kind rules stay in one place. It lives under `src/boards/import/`, like `src/boards/ticketList/`.
 - KTD2. **The importer's cores move into a shared engine under `src/imports/`.** The parts of `src/participant/jira/import*.ts`, `cleanupHandler.ts`, `veracodeHandler.ts` and `waltzHandler.ts` that decide and write (no `stream`, no wording) move there, with logging through an injected `onDiag`. The types they need (`ReviewRowBase`, `MergeRun`, the stale types) move with them, and `src/participant/session/importTypes.ts` re-exports them. The board and the remaining email chat flow both call the engine, so a rule exists once, and `src/boards/` never imports `src/participant/` (`CLAUDE.md`, "pure helpers outside `src/participant/`").
-- KTD3. **The recipe is kind, project, report path, template name and issue type; the id comes from kind, project and the normalised absolute path.** The template is not part of the id, so reopening the same file finds the same session (R6). A changed template setting reaches a stored session only through "Start over", which discards it and opens again.
-- KTD4. **The start screen is a session-less panel, like the sessions board.** It reads the settings, lists templates through `TemplateService` when it must ask, writes the setting through `ConfigService` (R4), and then calls the manager's `open`. The file choice uses VS Code's native open dialog, requested by the page.
-- KTD5. **`BoardKind.apply` gets a progress callback.** The kind reports each finished target. The manager then saves `working` without raising the revision and notifies the page. `working` records each result by target (dedup key for New rows, ticket key otherwise), and `plan` leaves out targets already done (R1, AE1). The ticket list kind adopts the callback too, so R1 holds for every board.
-- KTD6. **On a format mismatch the manager rebuilds from the stored recipe.** `find()` passes the stored recipe through the kind's `validate` and builds a new session with the notice "rebuilt after an update" (R2). Only a recipe that no longer validates keeps today's "no longer exists" message. A restored tab therefore never ends on a dead page while its source still exists.
-- KTD7. **Out-of-date is tracked per tab.** `read` returns each tab's slice with its own fingerprint: New by dedup keys and content, Already ticketed and Stale by ticket key and `updated`, Accepted by the accepted-list file. A `background` reconcile keeps the stored reading and marks the tabs whose slice changed. A tab without unfinished choices takes its fresh slice at once. A Refresh takes the fresh reading and keeps each choice whose dedup key or ticket key still exists, then names the rest (R12, AE2, AE8). Row ids are renumbered from the fresh reading, never used as choice keys.
+- KTD3. **The recipe is kind, project, report path, template name and issue type; the id comes from kind, project and the normalised absolute path.** The template is not part of the id, so reopening the same file finds the same session (R6). A changed template setting reaches a stored session only through "Start over", which discards it and opens again. When "Pick the file again" changes the path, the session moves to the new path's id (KTD13), so the id always matches the current path.
+- KTD4. **The start screen is a session-less panel, like the sessions board.** It reads the settings, lists templates through `TemplateService` when it must ask, writes the setting through `ConfigService` (R4), and then calls the manager's `open`. The file choice uses VS Code's native open dialog. The page's requests (file dialog, template and issue type lists, setting write) go through a start-screen route in `boardMessages.ts`, with the dialog and the setting write supplied by `BoardHost`, so the page never names a session or writes settings itself.
+- KTD5. **`BoardKind.apply` gets a progress callback that returns a promise.** The kind reports each finished target and awaits the save before its next write, so saves never overlap on the store's temporary file. The manager saves `working` without raising the revision and notifies the page. `working` records each write with what identifies it: the dedup keys a New create covered and the created key, or the ticket key with the `updated` value Jira returned after the write. `plan` leaves out targets already done (R1, AE1). The ticket list kind adopts the callback too, so R1 holds for every board, and its Refresh keeps recorded results for targets still listed.
+- KTD6. **On a format mismatch the manager rebuilds from the stored recipe.** A new optional `BoardKind.revalidate(recipe, deps)` checks that a stored recipe still holds without reading open input or settings: the ticket list checks that its query, filter or cleanup rule still resolves; the import kind checks kind and path and keeps the stored template and issue type. `find()` uses it to build a new session with the notice "rebuilt after an update" (R2). A recipe that fails, or a kind without `revalidate`, keeps today's "no longer exists" message.
+- KTD7. **Out-of-date is tracked per tab.** `read` returns each tab's slice with its own fingerprint: New by dedup keys and content, Already ticketed and Stale by ticket key and `updated`, Accepted by the accepted-list file. A `background` reconcile first discounts the changes the board's own recorded writes explain (KTD5): a ticket created for recorded dedup keys, or a ticket whose `updated` equals the recorded value. It then keeps the stored reading and marks the tabs whose slice still changed. A tab without unfinished choices takes its fresh slice at once. A Refresh takes the fresh reading and keeps each choice whose dedup key or ticket key still exists, then names the rest (R12, AE2, AE8). Row ids are renumbered from the fresh reading, never used as choice keys.
 - KTD8. **The revision stays session-wide, and the page is locked during an Apply.** The plan dialog is modal and controls are disabled while an Apply runs (R24), so a preview on one tab cannot go stale through another tab's action.
 - KTD9. **Accept, unaccept and reload report are `plan`/`apply` actions with `risky: false`.** Their apply writes `.jira-oss-accepted.json` through `AcceptedListService` or re-reads the report, then returns new derived data (R22). The accepted-list file is fingerprinted in `derived`, so another session's accept marks this one out of date.
-- KTD10. **The ticket merge run lives in `working` as a small state machine.** Each run step is written by a plan and Apply: the opening plan runs until a step fails or the closing step needs answers. Retry and Ignore each plan one step. The closing answers are `reduce` choices, and one plan closes all sources (R23). The run reads only its own stored steps, never the tab rows, so a Refresh mid-run cannot change what it writes.
+- KTD10. **The ticket merge run lives in `working` as a small state machine.** Each run step is written by a plan and Apply: the opening plan runs until a step fails or the closing step needs answers. It changes the kept ticket and every source, so it is risky and asks the native confirmation (R15). Retry and Ignore each plan one step and are not risky. The closing answers are `reduce` choices, and one risky plan closes all sources (R23). The run reads only its own stored steps, never the tab rows, so a Refresh mid-run cannot change what it writes.
 - KTD11. **`read` also fetches what export needs.** It reads the project's versions and the overview fields of the matched tickets with the dedup, so `exportFile` is pure over `derived` (R16), like the security report board's export.
 - KTD12. **Tabs show all their rows without paging; `plan` applies the cap of 50.** About 50 rows per tab fit with scrolling. The cap keeps `BATCH_LIMIT` from `src/utils/reportImport.ts` and the all-or-none rewrite grouping (R26). KL16 is reworded to the cap alone.
-- KTD13. **A missing report file blocks writes through the existing `writesBlocked`.** `read` throws a typed "report not found" error, so the stored reading stays on show (R25). "Pick the file again" uses a narrow new manager operation that replaces the recipe's path, keeps the session id, and runs a check. A file with other content then reconciles normally.
-- KTD14. **A degraded Jira search makes `read` throw.** A partial dedup would let a reconcile move Already-ticketed rows back to New and invite duplicates. Throwing keeps the stored reading and blocks writes, as a Jira outage does on the other boards.
+- KTD13. **A missing report file blocks writes through the existing `writesBlocked`.** `read` throws a typed "report not found" error, so the stored reading stays on show (R25). "Pick the file again" uses a narrow new manager operation: it replaces the recipe's path, moves the session to the id of the new path (saving it there, deleting the old file and pointing the tab at the new id), and runs a check. It refuses with a note naming the other session when one already exists for the new path. A file with other content then reconciles normally.
+- KTD14. **Only a failed dedup search makes `read` throw.** A partial dedup would let a reconcile move Already-ticketed rows back to New and invite duplicates, so any failed dedup chunk keeps the stored reading and blocks writes, as a Jira outage does on the other boards. A failed stale search keeps today's result: the Stale tab says the search failed and the other tabs stay writable. A target description that cannot be read keeps today's per-row handling: that row gets no date comparison and the tab shows the existing warning.
 - KTD15. **Report text reaches the page only as text.** The page builds every element with the shared `h()` helper and `textContent`, and the Jira-bound text keeps going through the existing sanitizers and builders unchanged ([`docs/solutions/security-issues/waltz-oss-report-markdown-injection-in-jira-wiki-converter.md`](../solutions/security-issues/waltz-oss-report-markdown-injection-in-jira-wiki-converter.md)).
 - KTD16. **One PR.** The maintainer asked for one preview with board and removal together and one checklist in the PR (R18, R21), and no project rule requires a split.
 
@@ -231,7 +231,7 @@ flowchart TB
   MSG --> MGR
 ```
 
-The merge tab's run, as stored in `working` (KTD10). Transitions marked Apply go through Preview and Apply; the closing Apply is risky and asks the native confirmation.
+The merge tab's run, as stored in `working` (KTD10). Transitions marked Apply go through Preview and Apply; the opening Apply and the closing Apply are risky and ask the native confirmation, Retry and Ignore are not.
 
 ```mermaid
 stateDiagram-v2
@@ -257,8 +257,9 @@ flowchart TB
   V -->|no| GONE[no longer exists]
   F -->|yes| SHOW[show stored reading] --> C[background check]
   C -->|report missing| BLK[writes blocked, offer Pick the file again]
-  C -->|Jira degraded or down| BLK2[writes blocked until a check passes]
-  C -->|slice changed| MARK{tab has unfinished choices?}
+  C -->|dedup failed or Jira down| BLK2[writes blocked until a check passes]
+  C -->|stale search failed| STL[Stale tab unavailable, other tabs writable]
+  C -->|slice changed beyond own recorded writes| MARK{tab has unfinished choices?}
   MARK -->|no| TAKE[take fresh slice]
   MARK -->|yes| OOD[out of date, only Refresh]
   C -->|no change| SHOW
@@ -326,12 +327,12 @@ board-pages/import-start/page.js
 - **Goal:** Make every board save after each write, rebuild after a format change, and show an Apply in progress.
 - **Requirements:** R1, R2, R24; KTD5, KTD6, KTD8.
 - **Dependencies:** None.
-- **Files:** `src/sessions/boardKind.ts`, `src/sessions/sessionManager.ts`, `src/sessions/sessionTypes.ts`, `src/boards/ticketList/kind.ts`, `board-pages/shared/board.js`, `src/test/sessionManager.test.ts`, `src/test/ticketListBoard.test.ts`, `src/test/boardMessages.test.ts`.
+- **Files:** `src/sessions/boardKind.ts`, `src/sessions/sessionManager.ts`, `src/sessions/sessionTypes.ts`, `src/boards/ticketList/kind.ts`, `src/boards/securityReport/kind.ts`, `board-pages/shared/board.js`, `src/test/sessionManager.test.ts`, `src/test/ticketListBoard.test.ts`, `src/test/boardMessages.test.ts`.
 - **Approach:**
   1. Add the optional progress callback to `BoardKind.apply`. The manager saves `working` on each call and notifies the page, raising the revision only at the end.
   2. Expose an "applying" state with done/total in `BoardState`. The shared page client disables controls while it is set.
-  3. In `find()`, on a format mismatch, validate the stored recipe and rebuild with a "rebuilt" notice. Keep today's path only for a recipe that no longer validates.
-  4. Let the ticket list kind report each moved or updated ticket through the callback and leave done targets out of a new plan.
+  3. Add the optional `revalidate` member. In `find()`, on a format mismatch, revalidate the stored recipe and rebuild with a "rebuilt" notice. Keep today's path for a recipe that fails or a kind without `revalidate`. Implement `revalidate` for the ticket list and security report kinds.
+  4. Let the ticket list kind report each moved or updated ticket through the callback with the `updated` value Jira returned, leave done targets out of a new plan, discount its own recorded writes in `reconcile`, and keep recorded results through a Refresh (KTD5, KTD7).
 - **Patterns to follow:** `sessionManager.ts` `apply` and `check`; `ticketList/kind.ts` `apply` loop and `writeOne`.
 - **Test scenarios:**
   - Covers AE1. A kind whose apply reports 4 of 7 targets and then throws leaves a stored session whose `working` names the 4. A new plan lists the other 3.
@@ -339,7 +340,9 @@ board-pages/import-start/page.js
   - A stored session with an older `formatVersion` and a valid recipe is rebuilt with the notice. One with an invalid recipe gives "no longer exists".
   - A restored ticket list board with an older format rebuilds from its query instead of failing.
   - `state()` during an Apply reports applying with done and total, and the page disables its controls.
-  - A ticket list bulk move interrupted after 2 of 5 tickets shows those 2 as done after a restore.
+  - A ticket list bulk move interrupted after 2 of 5 tickets shows those 2 as done after a restore. The background check that follows sets no out-of-date mark, and a new plan lists only the other 3.
+  - A ticket the ticket list moved, then changed again in Jira by someone else, still marks the board out of date.
+  - Two progress calls in a row save one after the other; the session stays stored.
 - **Verification:** The session manager and ticket list tests pass with the new cases. The security report board needs no change.
 
 ### U2. Shared import engine
@@ -347,12 +350,13 @@ board-pages/import-start/page.js
 - **Goal:** Move the importer's deciding and writing logic out of the chat folder without changing behaviour.
 - **Requirements:** R13; KTD2.
 - **Dependencies:** None.
-- **Files:** create `src/imports/types.ts`, `review.ts`, `create.ts`, `rewrite.ts`, `ticketedActions.ts`, `accept.ts`, `staleClose.ts`, `merge.ts`, `cleanup.ts`, `veracode.ts`, `waltz.ts`. Modify `src/participant/jira/reportImportHandler.ts`, `importCreate.ts`, `importAddToTicket.ts`, `importTicketedActions.ts`, `importAccept.ts`, `importStaleClose.ts`, `importMerge.ts`, `cleanupHandler.ts`, `veracodeHandler.ts`, `waltzHandler.ts`, `src/participant/session/importTypes.ts`, `src/utils/reportImport.ts`, `src/utils/ticketMerge.ts`. Tests: the existing import tests in `src/test/`.
+- **Files:** create `src/imports/types.ts`, `review.ts`, `create.ts`, `rewrite.ts`, `ticketedActions.ts`, `accept.ts`, `staleClose.ts`, `merge.ts`, `cleanup.ts`, `veracode.ts`, `waltz.ts`. Modify `src/participant/jira/reportImportHandler.ts`, `importCreate.ts`, `importAddToTicket.ts`, `importTicketedActions.ts`, `importAccept.ts`, `importStaleClose.ts`, `importMerge.ts`, `cleanupHandler.ts`, `veracodeHandler.ts`, `waltzHandler.ts`, `src/participant/session/importTypes.ts`, `importReplies.ts`, `importScreens.ts`, `staleTargets.ts`, `importSearch.ts`, `src/utils/reportImport.ts`, `src/utils/ticketMerge.ts`. Tests: the existing import tests in `src/test/`.
 - **Approach:**
   1. Move the types `src/utils/reportImport.ts` and `src/utils/ticketMerge.ts` import from `src/participant/session*` to `src/imports/types.ts`. Re-export them from `importTypes.ts`.
   2. Split each chat module into a core (inputs → results and Jira writes, `onDiag` injected) and the chat wrapper that streams its wording. The review build (`buildImportReview`, `refreshReview`) becomes `src/imports/review.ts`.
   3. Move the Veracode and Waltz descriptors with their settings readers passed in as values, not read through `vscode`.
-  4. Keep the chat wrappers calling the cores, so every chat test still passes in this unit.
+  4. Move the decision parts of the session helpers the board needs, re-exported from their current modules: `mergeNewRows`, `unmergeNewRow` and `restoreMergedRows` (`importReplies.ts`), `applyTicketedActionChange` (`importScreens.ts`), `buildStaleTargetOptions` and `applyStaleTicketToggle` (`staleTargets.ts`), and the matching part of `findTicketsBySummary` without its Markdown wording (`importSearch.ts`).
+  5. Keep the chat wrappers calling the cores, so every chat test still passes in this unit.
 - **Execution note:** Pure moves first, behaviour unchanged. Run the full import test set after each moved module.
 - **Patterns to follow:** `src/services/AcceptedListService.ts` (vscode-free service); the `onDiag` injection in `TicketService`.
 - **Test scenarios:**
@@ -365,11 +369,11 @@ board-pages/import-start/page.js
 - **Goal:** Open an import from a kind and a file, taking template, issue type and project from settings.
 - **Requirements:** R4, R5, R6; KTD3, KTD4.
 - **Dependencies:** U2.
-- **Files:** `package.json` (`ticketSidekick.veracode.template`, `ticketSidekick.waltz.template`, command "Open import board"), `src/services/ConfigService.ts`, `src/boards/import/startScreen.ts`, `board-pages/import-start/page.js`, `src/boards/boardPanels.ts`, `src/boards/registerBoards.ts`, `docs/manual/settings-reference.md`, `src/test/importStartScreen.test.ts`, `src/test/boardPanels.test.ts`.
+- **Files:** `package.json` (`ticketSidekick.veracode.template`, `ticketSidekick.waltz.template`, command "Open import board"), `src/services/ConfigService.ts`, `src/boards/import/startScreen.ts`, `board-pages/import-start/page.js`, `src/boards/boardPanels.ts`, `src/boards/boardMessages.ts` (start-screen route, KTD4), `src/boards/registerBoards.ts`, `docs/manual/settings-reference.md`, `src/test/importStartScreen.test.ts`, `src/test/boardPanels.test.ts`, `src/test/boardMessages.test.ts`.
 - **Approach:**
   1. Add the two settings (string, default empty) and their reader in `ConfigService`.
   2. Build the start screen as a session-less panel. It shows kind and file, and the template, issue type and project from settings for checking. It asks for a template only when the setting is empty or stale, then writes the setting.
-  3. Resolve the template's issue type with `resolveTemplateIssueType`. For a template without one, ask for the issue type from the project's issue types.
+  3. Use the template's own issue type when it names one. For a template without one, ask from the project's issue types, bypassing the `issueTypes[0]` fallback of `resolveTemplateIssueType`.
   4. "Open" calls the manager's `open` with the full recipe. An existing session for the same kind, project and path opens as it is, with a "Start over" control.
 - **Patterns to follow:** the sessions board panel in `boardPanels.ts`; native pickers before open in `registerBoards.ts`.
 - **Test scenarios:**
@@ -378,6 +382,9 @@ board-pages/import-start/page.js
   - A template without an issue type asks for one from the project's issue types. When those cannot be read, it shows the existing warning (`onIssueTypeFetchFailed`).
   - Opening the same file and project twice gives one session. After the template setting changes, the stored session keeps its template until "Start over".
   - A report file over `maxReportSizeMB` is refused on the start screen with the size message.
+  - A cancelled file dialog leaves the start screen as it was.
+  - A report that does not parse shows the parse message on the start screen, and Open stays disabled.
+  - With Jira not configured, the start screen shows the setup hint (`buildJiraNotConfiguredMessage`) instead of Open.
 - **Verification:** `src/test/userDocsSync.test.ts` passes with the settings documented, and `bundleSmoke.test.ts` sees the new command registered.
 
 ### U4. Import board kind: read, reconcile, view
@@ -385,20 +392,25 @@ board-pages/import-start/page.js
 - **Goal:** Build, check and show an import session with per-tab out-of-date state.
 - **Requirements:** R6, R7, R12, R16, R25; KTD1, KTD7, KTD11, KTD13, KTD14.
 - **Dependencies:** U1, U2, U3.
-- **Files:** `src/boards/import/kind.ts`, `src/boards/import/read.ts`, `src/boards/import/jiraDeps.ts`, `src/boards/registerBoards.ts`, `src/sessions/sessionManager.ts` (path replace operation), `src/test/importBoard.test.ts`.
+- **Files:** `src/boards/import/kind.ts`, `src/boards/import/read.ts`, `src/boards/import/jiraDeps.ts`, `src/boards/registerBoards.ts`, `src/boards/boardMessages.ts`, `src/sessions/sessionManager.ts` (path replace operation), `src/test/importBoard.test.ts`, `src/test/boardMessages.test.ts`.
 - **Approach:**
-  1. `read` parses the report through the descriptor and runs the review build from U2. It also reads the versions and overview fields for export (KTD11) and fingerprints the report file and the accepted list. A degraded search throws (KTD14), and so does a missing file (KTD13).
+  1. `read` parses the report through the descriptor and runs the review build from U2; `revalidate` checks kind and path and keeps the stored template and issue type (KTD6). It also reads the versions and overview fields for export (KTD11) and fingerprints the report file and the accepted list. A degraded search throws (KTD14), and so does a missing file (KTD13).
   2. `reconcile` compares the tab slices and marks or takes them per KTD7. Choices are keyed by dedup key or ticket key.
-  3. `view` sends only each tab's visible fields, counts, filters, marks and the merge tab.
-  4. Add the manager operation that replaces the recipe's report path for "Pick the file again".
+  3. `view` sends only each tab's visible fields, counts, filters, marks and the merge tab. It names the opening tab: the first with work, in the order New, Already ticketed, Stale. A tab with no rows stays, with a count of 0 and a one-line empty message.
+  4. Add the manager operation for "Pick the file again" (KTD13) and its `pick-file` session request in `boardMessages.ts`.
 - **Patterns to follow:** `ticketList/kind.ts` (`reconcile`, out-of-date, `jiraDeps.ts`); `securityReport/kind.ts` (derived for export).
 - **Test scenarios:**
   - A Veracode report with 5 new and 3 matched findings gives New 5, Already ticketed 3 and Stale per the stale search, in report order.
   - Covers AE8. A background check that finds one New row's dedup label on a new ticket marks New out of date. Refresh moves the row and names the dropped choice.
   - Covers AE2. After the accepted list changes, Refresh keeps a merge whose two members still exist, and the row ids are renumbered.
   - A tab without unfinished choices takes its changed slice in a background check without a mark (AE3 shape).
-  - Covers AE10. A missing report file at a check blocks writes and keeps the stored rows on show. Picking the file at a new path keeps the session id and the choices.
+  - Covers AE10. A missing report file at a check blocks writes and keeps the stored rows on show. Picking the file at a new path keeps the choices, and opening the file at that new path afterwards finds the same session.
+  - Picking a file whose path already has another session is refused with a note naming it.
+  - Covers AE1. After a restore with 4 of 7 creates recorded, the background check finds those 4 tickets, sets no mark on New, and a Preview lists the other 3.
   - A dedup chunk that fails makes the check fail instead of moving rows to New.
+  - A failed stale search shows the Stale tab as unavailable while New and Already ticketed stay writable.
+  - One unreadable target description opens the board; that row has no date comparison and the tab shows the warning.
+  - A report with only matched findings opens on Already ticketed, and New shows a count of 0 with its empty message.
 - **Verification:** The kind's scenario tests pass without a `vscode` mock.
 
 ### U5. New tab
@@ -475,13 +487,14 @@ board-pages/import-start/page.js
 - **Dependencies:** U4, U6.
 - **Files:** `src/boards/import/merge.ts`, `src/boards/import/kind.ts`, `src/test/importBoardMerge.test.ts`.
 - **Approach:**
-  1. Selecting Already-ticketed rows and a kept ticket builds the merge plan with its warnings, through `src/imports/merge.ts`. Waltz uses rewrite mode and Veracode close mode.
+  1. The developer selects the Already-ticketed rows to merge, then picks the kept ticket from those selected rows or types a ticket key, as the chat's `resolveMergeSides` accepts today. The merge preview shows the kept ticket, the sources, the warnings and the fallbacks before Apply, built through `src/imports/merge.ts`. Waltz uses rewrite mode and Veracode close mode.
   2. The run's state follows the HTD state machine. Each continuation is a plan. Apply on other tabs is refused while a run is unfinished.
   3. On finish, the tabs refresh or are marked per R12. Acknowledge removes the run from `working`.
 - **Patterns to follow:** `startMerge`, `advance`, `closePhase` in today's `importMerge.ts`.
 - **Test scenarios:**
   - A Waltz merge of two sources rewrites the kept ticket, links and comments each source, and closes them.
   - A Veracode merge leaves a source with unlisted items open.
+  - The opening merge plan is risky. A kept ticket typed as a key outside the report is accepted, and one that does not exist is refused with today's message.
   - A failed link offers Retry, Ignore and Stop. Retry applies one step and is not risky.
   - Covers AE12. Sources of two issue types ask both answers, then one risky Apply closes both.
   - Covers AE4. While the run waits, Apply on New is refused and selection still works.
@@ -510,13 +523,19 @@ board-pages/import-start/page.js
 - **Requirements:** R7 to R12, R24; KTD15.
 - **Dependencies:** U5 to U10.
 - **Files:** `board-pages/import/page.js`, `board-pages/shared/board.js`, `board-pages/shared/board.css`, `esbuild.js`, `src/test/boardMessages.test.ts`, `src/test/importBoardPage.test.ts`.
-- **Approach:** Check the bundled `@vscode-elements/elements` for `vscode-tabs` and use it if present, otherwise build a `role="tablist"` with `h()`. Each tab renders its table, filters and controls from `view`. The page keeps only transient drafts, as the ticket list page does.
+- **Approach:**
+  1. Check the bundled `@vscode-elements/elements` for `vscode-tabs` and use it if present, otherwise build a `role="tablist"` with `h()` that follows the WAI-ARIA tabs pattern (arrow keys, `aria-selected`, `aria-controls`). Each tab renders its table, filters and controls from `view`, keeping only transient drafts as the ticket list page does.
+  2. Show a loading state with the read's progress text while a session builds.
+  3. Give each row a result state after an Apply: pending, done with the ticket key as a link, done with a dropped field named, failed with Jira's reason, or skipped. Done rows lose their selection, and the tab shows an Apply summary above its table.
+  4. Put progress, refusal notes and the out-of-date mark in a polite live region, as text, not colour alone (R46 of the boards plan).
 - **Patterns to follow:** `board-pages/ticket-list/page.js`, `board-pages/security-report/page.js`.
 - **Test scenarios:**
   - A finding title holding HTML, Markdown link, Jira wiki and a formula-looking cell renders as plain text on the page.
   - The same crafted title, applied, reaches Jira through the existing sanitizers and the CSV export with the formula prefix.
   - The page posts only the message types `boardMessages.ts` accepts, and the tab, not the page, names the session.
-  - Every control is reachable by keyboard with a visible focus order.
+  - Every control is reachable by keyboard with a visible focus order, and the arrow keys move between tabs.
+  - A partial Apply (4 of 7 done, one failed) shows each row's state, removes the done rows from the selection, and announces the summary in the live region.
+  - The out-of-date mark and an Apply refused by a running merge are announced as text.
 - **Verification:** The board message tests pass with the import kind registered.
 
 ### U12. Parity guard, open-board tool, removal
@@ -524,9 +543,9 @@ board-pages/import-start/page.js
 - **Goal:** Keep parity guarded, open the board from chat, and remove the Veracode and Waltz chat imports.
 - **Requirements:** R5, R13, R17, R18, R20.
 - **Dependencies:** U11.
-- **Files:** `src/test/importBoardParity.test.ts`, `src/boards/import/kind.ts` (parity map), `src/tools/jiraTools/openBoard.ts`, `package.json`, `src/extension.ts`, `src/participant/JiraParticipant.ts`, `src/participant/jira/llmHelpers.ts`, `src/participant/session/jiraCommands.ts`, `src/participant/jira/veracodeHandler.ts`, `src/participant/jira/waltzHandler.ts`, the Veracode/Waltz chat tests in `src/test/`, `src/test/jiraCommandsGuard.test.ts`, `src/test/importCommandsGuard.test.ts`, `docs/architecture/migration-status.md` (ledger).
+- **Files:** `src/test/importBoardParity.test.ts`, `src/tools/jiraTools/openBoard.ts`, `package.json`, `src/extension.ts`, `src/participant/JiraParticipant.ts`, `src/participant/jira/llmHelpers.ts`, `src/participant/session/jiraCommands.ts`, `src/participant/jira/veracodeHandler.ts`, `src/participant/jira/waltzHandler.ts`, the Veracode/Waltz chat tests in `src/test/`, `src/test/jiraCommandsGuard.test.ts`, `src/test/importCommandsGuard.test.ts`, `docs/architecture/migration-status.md` (ledger).
 - **Approach:**
-  1. Add a parity map to the import kind: each Veracode/Waltz "Carry over" ledger id names its board action or rule and its scenario test. The parity test then checks every such row against the map, and the email rows against the chat catalog as today.
+  1. Add a parity map inside `src/test/importBoardParity.test.ts`: each Veracode/Waltz "Carry over" ledger id names its board action or rule and its scenario test. The test checks every such row against the map and that each named action exists on the import kind, and checks the email rows against the chat catalog as today.
   2. Add `import` to `jira_open_board` with `kind` and `path`, then run `node scripts/sync-jira-tools.mjs`.
   3. Remove the two commands, their registration, the Veracode/Waltz intent operations and routes, the `@jira` help entries, and the code only they use. Delete or port the chat-flow tests; split `reportImportHandler.test.ts` to keep its email paths.
   4. Update the guard tests to the email-only `@jira`.
@@ -576,3 +595,15 @@ board-pages/import-start/page.js
 - The PR description carries the use-case checklist, and the same items are in `docs/architecture/manual-checklist.md`.
 - The migration status page, the known limitations and `CLAUDE.md` describe the state after this PR.
 - No code from abandoned attempts is left in the diff, and nothing under `src/boards/` or `src/imports/` imports `src/participant/`.
+
+---
+
+## Deferred / Open Questions
+
+Entries here are review items left for the author; they do not block implementation of the other units.
+
+### From 2026-11-14 review
+
+- **Start screen with an empty or wrong default project** — U3, Template settings and start screen (P2, design-lens, confidence 75)
+
+  A developer whose `ticketSidekick.jira.defaultProject` is empty or names a project Jira does not know reaches the start screen with no way to continue, or the board opens and every dedup search and write fails. The template rule (ask once and save) cannot simply be copied, because the extension's existing rule for this setting is to show Open Setting and never write it (`src/participant/jira/defaultProjectNotice.ts`). Decide whether the start screen asks for a project key and saves it, asks for this import only, or refuses with Open Setting.
