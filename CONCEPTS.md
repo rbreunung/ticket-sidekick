@@ -62,6 +62,9 @@ A page in an editor tab (a VS Code webview) that shows a session and sends the d
 ### Cleanup board
 A ticket list board loaded from a `cleanupRules` rule, or opened with a proposed transition (an ad-hoc bulk close). It shows the `cleanupFields` columns, lists each parent's open subtasks beneath it (they follow the parent's selection), and applies only the selected rows of the page being viewed.
 
+### Import board
+The board that imports a Veracode or Waltz report into Jira, one session per report file. It shows the review's groups as tabs (New, Already ticketed, Stale, and Accepted for Waltz), each with its own Preview and Apply, and gives a running ticket merge a tab of its own. It replaces the `@jira` report imports with the same rules and results; the email kind comes later.
+
 ### Session
 The extension's record of one piece of board work: the recipe (what was asked for), the data derived from Jira, Bitbucket, a report file or a model run, and the developer's working state. There is one per source, it is cached on disk so a restart continues it, and it is never the truth: the sources are. Not the same as the old `@jira`/`@bitbucket` multi-turn session kept in `workspaceState`.
 
