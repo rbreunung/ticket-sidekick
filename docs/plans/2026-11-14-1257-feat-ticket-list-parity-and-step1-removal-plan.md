@@ -44,7 +44,7 @@ The single-ticket Jira work already has tools and skills, but the list flows (se
 - **A changed board offers only Refresh.** (session-settled: user-directed — chosen over a "select again" control and over a side-by-side view.) Governs R13, R14.
 - **Narrowing happens when the board opens.** (session-settled: user-approved — chosen over controls on the board and over an editable JQL box.) Governs R11.
 - **A failed subtask skips its parent.** (session-settled: user-approved — chosen over trying the parent anyway as `@jira` does, and over stopping the whole Apply.) Governs R5.
-- **The native confirmation stays as the boards plan's R39 sets it and counts selected rows.** (session-settled: user-directed — chosen over confirming only above 50 rows, which would weaken R39, and over counting subtasks.) Governs R9.
+- **The native confirmation stays as the boards plan's R39 sets it and counts selected rows.** (session-settled: user-approved — chosen over confirming only above 50 rows, which would weaken R39, and over counting subtasks.) Governs R9.
 - **Transition paths are worked out when the cleanup board loads.** (session-settled: user-directed — chosen over finding the path at Apply and over requiring a cached workflow as `@jira` does.) Governs R25.
 - **Every replaced `@jira` flow goes in this work, and a removed request gets one generic notice.** (session-settled: user-directed — chosen over removing only the list flows, and over per-command pointers or the general fallback.) Governs R15, R17.
 - **One plan, one PR, board work first.** (session-settled: user-directed — chosen over two PRs or two plans.) Governs R24.
@@ -116,11 +116,11 @@ The single-ticket Jira work already has tools and skills, but the list flows (se
 - AE1. **Covers R4, R5.** Given parent PROJ-10 with subtasks PROJ-11 and PROJ-12 is selected, when PROJ-12 fails to move, then PROJ-11 is moved, PROJ-10 is not attempted, and PROJ-10's result names PROJ-12.
 - AE2. **Covers R8.** Given a cleanup board with 120 tickets and all rows selected on pages 1 to 3, when the developer applies from page 2, then only page 2's selected rows change.
 - AE3. **Covers R9.** Given a search board with 120 rows selected across three pages and page 1 in view, when Apply is pressed after the preview, then the native confirmation names 120 tickets and lists all of them.
-- AE8. **Covers R25.** Given a cleanup rule whose target is Done and PROJ-20 sits in a status with no path to Done, when the board loads, then PROJ-20 shows "no path from Blocked to Done" and its checkbox is disabled.
 - AE4. **Covers R8, R10.** Given the agent opens a board for "close PROJ bugs in 3.2" with a proposed transition, then it shows the `cleanupFields` columns and applies per page.
 - AE5. **Covers R13, R14.** Given PROJ-5 is selected and a colleague moves it to Done, when the background check runs, then the board shows it is out of date with only Refresh; after Refresh PROJ-5 is still selected if it still matches the query, and gone if it does not.
 - AE6. **Covers R17.** Given this release, when a developer types `@jira move PROJ-1 Done`, then `@jira` answers with the fixed notice and changes nothing.
 - AE7. **Covers R22, R23.** Given this work is released, when a colleague on the stable channel types `@jira search`, then it still works, because no normal release has shipped since the migration began.
+- AE8. **Covers R25.** Given a cleanup rule whose target is Done and PROJ-20 sits in a status with no path to Done, when the board loads, then PROJ-20 shows "no path from Blocked to Done" and its checkbox is disabled.
 
 ### Scope Boundaries
 
@@ -156,13 +156,13 @@ The single-ticket Jira work already has tools and skills, but the list flows (se
 
 ### Key Technical Decisions
 
-- KTD1. **A check tells the board whether it is a background check or the developer's Refresh.** (session-settled: user-directed — chosen over a ticket-list-only flag that swaps rows anyway, and over no background check for the ticket list.) The session manager passes the mode to `reconcile`; the ticket list keeps the rows it showed and marks itself out of date in background mode, and lays the working state over the fresh rows on Refresh. Kinds that ignore the mode behave as today. Implements R13, R14.
+- KTD1. **A check tells the board whether it is a background check or the developer's Refresh.** (session-settled: user-approved — chosen over a ticket-list-only flag that swaps rows anyway, and over no background check for the ticket list.) The session manager passes the mode to `reconcile`; the ticket list keeps the rows it showed and marks itself out of date in background mode, and lays the working state over the fresh rows on Refresh. Kinds that ignore the mode behave as today. Implements R13, R14.
 - KTD2. **Cleanup is a recipe source of the existing ticket list kind, not a new board kind.** The boards plan's R9 already says cleanup is this board; a source type `rule` beside `jql` and `filter` keeps one set of rules for selection, apply, paging and the out-of-date state. Implements R1, R2.
-- KTD3. **The cleanup session key is the rule name plus the version override.** (session-settled: user-directed — chosen over the resulting JQL and over a fresh board each time.) Implements R1.
-- KTD4. **Stored ticket list sessions are discarded once by raising the kind's `formatVersion`.** (session-settled: user-directed — chosen over migrating them; the session layer never migrates.) Implements the new working shape behind R4, R7, R13.
+- KTD3. **The cleanup session key is the rule name plus the version override.** (session-settled: user-approved — chosen over the resulting JQL and over a fresh board each time.) Implements R1.
+- KTD4. **Stored ticket list sessions are discarded once by raising the kind's `formatVersion`.** (session-settled: user-approved — chosen over migrating them; the session layer never migrates.) Implements the new working shape behind R4, R7, R13.
 - KTD5. **Paths are computed in `read` for a cleanup source, with one workflow discovery when the cache has no graph.** (session-settled: user-directed — see the Key Decision governing R25.) Apply still re-reads each target and refuses a changed one, as today.
 - KTD6. **The page in view is working state.** A `page` action stores it, so a cleanup Apply (R8) plans only that page's selected rows from the session, never from what the page claims.
-- KTD7. **Walkthrough check-offs come from the tools.** (session-settled: user-directed — chosen over checking off on the step's button and over dropping the steps.) `registerJiraTools.ts` sets `ticketSidekick.workflowViewed` after `jira_workflow` succeeds and `ticketSidekick.firstTicketCreated` after `jira_create_ticket` succeeds; the vscode-free catalog stays vscode-free.
+- KTD7. **Walkthrough check-offs come from the tools.** (session-settled: user-approved — chosen over checking off on the step's button and over dropping the steps.) `registerJiraTools.ts` sets `ticketSidekick.workflowViewed` after `jira_workflow` succeeds and `ticketSidekick.firstTicketCreated` after `jira_create_ticket` succeeds; the vscode-free catalog stays vscode-free.
 - KTD8. **The helpers tools, boards and shared services import move out of `src/participant/` in this PR.** (session-settled: user-directed — chosen over leaving them until Step 2.) Helpers only the imports use (the stale close in `cleanupHandler.ts`, `importTypes.ts`) stay, and `sessionState.ts` re-exports the moved ones so participant code keeps importing from it.
 - KTD9. **`@jira` keeps the intent parse for the imports only.** Slash commands are all removed (Dependencies / Assumptions), import sessions keep their routing, and any parsed operation that is not `createFromEmail`, `addEmailComment`, `importVeracode` or `importWaltzReport` gets the notice of R17 without touching Jira.
 
@@ -320,10 +320,10 @@ U1 → U2 → U3 → U4 → U5 are the board work; U6 moves helpers once the boa
 **Goal:** `@jira` runs only the imports and answers anything else with one notice.
 **Requirements:** R15, R16, R17; AE6; KTD7, KTD9.
 **Dependencies:** U6.
-**Files:** `src/participant/JiraParticipant.ts`, `src/participant/jira/` handlers for create, content, load (chat part), field, cleanup (chat part), workflow, upload, overview; `src/participant/jira/llmHelpers.ts`; `src/participant/session/` modules only the removed flows use (guided transition, conversation pieces, followups for removed states, upload); `src/participant/session/jiraCommands.ts`; `src/tools/registerJiraTools.ts`; `package.json` (`chatParticipants` commands, disambiguation, description); `src/test/JiraParticipant.test.ts`, `jiraParticipantCheck.test.ts`, `jiraParticipantHelp.test.ts`, `sessionGuidedTransition.test.ts`, `cleanupHandler.test.ts`, `jiraCommandsGuard.test.ts`, `skillsGuard.test.ts`.
+**Files:** `src/participant/JiraParticipant.ts`, `src/participant/jira/` handlers for create, content, load (chat part), field, cleanup (chat part), workflow and upload, plus the `/security-report` route in `overviewHandler.ts`; `src/participant/jira/llmHelpers.ts` (the `Operation` union); `src/participant/session/` modules only the removed flows use (guided transition, conversation pieces, followups for removed states, upload); `src/participant/session/jiraCommands.ts`; `src/tools/registerJiraTools.ts`; `package.json` (`chatParticipants` commands, disambiguation, description); `src/test/JiraParticipant.test.ts`, `jiraParticipantCheck.test.ts`, `jiraParticipantHelp.test.ts`, `sessionGuidedTransition.test.ts`, `cleanupHandler.test.ts`, `jiraCommandsGuard.test.ts`, `skillsGuard.test.ts`.
 **Approach:**
 1. Remove the slash commands and every operation except the four imports; route sessions of removed kinds nowhere.
-2. Keep `buildStaleTicketGroups` and `transitionTickets` for the imports; delete the chat cleanup.
+2. Keep what the imports and `@bitbucket` still use: `buildStaleTicketGroups` and `transitionTickets` (stale close), `saveOverviewFile` and `streamOverview` in `overviewHandler.ts` (import `export`), `ticketContext.ts`, and `llmHelpers.ts` (`generateContent` is imported by `BitbucketParticipant.ts`; only the `Operation` union shrinks). Delete the chat cleanup and the `/security-report` route.
 3. The greeting and help screen list the imports and the notice.
 4. Lower the guard thresholds and turn `BASIC_COMMANDS` into a check that no `@jira` slash command remains.
 5. Set the walkthrough context keys from `registerJiraTools.ts` after a successful workflow or create call (KTD7).
