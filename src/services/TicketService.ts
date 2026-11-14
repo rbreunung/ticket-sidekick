@@ -1,4 +1,4 @@
-import type { IJiraClient, JiraAttachment, JiraComment, JiraEditMetaField, JiraFieldMeta, JiraFilter, JiraIssue, JiraIssueLink, JiraIssueType, JiraMyFiltersResult, JiraRemoteLink, JiraSearchResult, JiraSprintCandidate } from '../jira/IJiraClient';
+import type { IJiraClient, JiraAttachment, JiraComment, JiraFieldMeta, JiraFilter, JiraIssue, JiraIssueLink, JiraIssueType, JiraMyFiltersResult, JiraRemoteLink, JiraSearchResult, JiraSprintCandidate } from '../jira/IJiraClient';
 import type { DiagLogger } from '../utils/diagTypes';
 import { formatJiraBody } from '../utils/markdownFormatter';
 import { ApiError } from '../utils/apiError';

@@ -130,11 +130,6 @@ function quoteJql(value: string): string {
   return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
-function earliestDate(dates: Array<string | null | undefined>): string | null {
-  const valid = dates.filter((d): d is string => typeof d === 'string' && d !== '');
-  return valid.length === 0 ? null : valid.reduce((a, b) => (b < a ? b : a));
-}
-
 /** The record a flaw of the loaded report corresponds to (exact: it comes straight from the parsed report). */
 export function findingFromFlaw(flaw: VeracodeFlaw): TicketFinding {
   return {

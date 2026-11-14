@@ -15,7 +15,6 @@ import {
   checkEmailBatchCaps, parseEmlFiles, describeEmailFileSelection, EMAIL_TEMPLATE_SESSION_KEY, EMAIL_CLEANUP_SESSION_KEY,
 } from './participant/jira/emailHandler';
 import { buildPendingEmailCleanupSession } from './participant/sessionState';
-import { resolveMaxReportBytes } from './utils/reportImport';
 import { readAndFilterReport } from './participant/jira/reportImportHandler';
 import { logDiag } from './utils/diagLog';
 import type { IJiraClient } from './jira/IJiraClient';

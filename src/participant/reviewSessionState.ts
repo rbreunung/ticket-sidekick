@@ -854,11 +854,6 @@ export type FollowUpIntent =
   | { kind: 'add'; targets: number[] | 'all'; note: string }
   | { kind: 'explain'; findingRef: number | null; question: string };
 
-function resolveByIds(ids: number[], findings: ReviewFinding[]): ReviewFinding[] {
-  const idSet = new Set(ids);
-  return findings.filter((f) => idSet.has(f.id));
-}
-
 /** Words a copy command may carry besides `copy`/`share` and `#N` references (KTD2). */
 const COPY_FILLER_WORDS = new Set(['for', 'to', 'with', 'and', 'teams', 'team', 'chat', 'all', 'the', 'finding', 'findings', 'review', 'please']);
 
