@@ -129,6 +129,10 @@
       {
         "command": "ticket-sidekick.boards.sessions",
         "title": "Ticket Sidekick: Open stored sessions"
+      },
+      {
+        "command": "ticket-sidekick.openImportBoard",
+        "title": "Ticket Sidekick: Open import board"
       }
     ],
     "languageModelTools": [
@@ -1161,6 +1165,11 @@
             },
             "additionalProperties": false,
             "description": "Calendar days from the date Veracode first found a flaw to the Jira Due Date of its ticket, per severity. 0 means no Due Date for that severity. A ticket's Due Date is set once and never overwritten by a later import; flaws added to a ticket can only move it earlier."
+          },
+          "ticketSidekick.veracode.template": {
+            "type": "string",
+            "default": "",
+            "description": "Name of the template in .jira-templates.json that a Veracode import on the import board uses; the issue type comes from that template. When empty, or when it names a template that no longer exists, the import board's start screen asks for a template once and saves the choice here. A stored import keeps the template it was started with until you use Start over."
           }
         }
       },
@@ -1196,6 +1205,11 @@
             "minimum": 1,
             "maximum": 200,
             "description": "Maximum size, in MB, of an OSS Report .xlsx file. Raise this if your report is rejected for exceeding the size limit."
+          },
+          "ticketSidekick.waltz.template": {
+            "type": "string",
+            "default": "",
+            "description": "Name of the template in .jira-templates.json that an OSS report (Waltz) import on the import board uses; the issue type comes from that template. When empty, or when it names a template that no longer exists, the import board's start screen asks for a template once and saves the choice here. A stored import keeps the template it was started with until you use Start over."
           }
         }
       }

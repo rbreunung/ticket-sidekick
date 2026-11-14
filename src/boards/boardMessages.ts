@@ -1,11 +1,15 @@
 import { isSessionId } from '../sessions/sessionId';
 import type { SessionManager } from '../sessions/sessionManager';
 import { SessionError } from '../sessions/sessionTypes';
+import { IMPORT_START_BOARD, type ImportStartScreen } from './import/startScreen';
 
 // What a board page may ask of the extension. A page lives in an editor tab (a webview) and talks
 // to the extension over VS Code's own message channel: it posts a request, the tab's host answers
 // it through `handleBoardRequest`. There is no local server, no port and no key. A board kind adds
-// nothing here: the tab knows its kind and session, and the session manager does the rest.
+// nothing here: the tab knows its kind and session, and the session manager does the rest. The
+// import start screen has no session either: its requests go to the start screen the host holds,
+// which also brings the native file dialog and the setting writes, so its page names no file path,
+// no setting key and no session.
 
 export const SESSIONS_BOARD = 'sessions';
 
@@ -29,6 +33,8 @@ export interface BoardTarget {
 export interface BoardHost {
   /** Opens the board of a stored session in its own tab (the sessions board's Reopen). */
   openStored(kind: string, id: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+  /** The import start screen of this window; absent where imports are not available. */
+  readonly importStart?: ImportStartScreen;
 }
 
 export interface BoardRequest {
@@ -112,7 +118,12 @@ async function sessionBoard(manager: SessionManager, { kind, id }: BoardTarget, 
 /** Answers one request of the page in the tab that shows `target`. Refusals are thrown as `BoardRequestError`. */
 export async function handleBoardRequest(manager: SessionManager, target: BoardTarget, op: string, body: Record<string, unknown>, host: BoardHost): Promise<unknown> {
   try {
-    return target.kind === SESSIONS_BOARD ? await sessionsBoard(manager, op, body, host) : await sessionBoard(manager, target, op, body);
+    if (target.kind === SESSIONS_BOARD) return await sessionsBoard(manager, op, body, host);
+    if (target.kind === IMPORT_START_BOARD) {
+      if (!host.importStart) throw new BoardRequestError(404, 'There is no import start screen here.');
+      return await host.importStart.handle(op, body);
+    }
+    return await sessionBoard(manager, target, op, body);
   } catch (err) {
     if (err instanceof SessionError) throw new BoardRequestError(err.status, err.message);
     throw err;

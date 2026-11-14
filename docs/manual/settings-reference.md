@@ -121,11 +121,15 @@ A board (the security report, a ticket list, and later imports and reviews) keep
 | Veracode included statuses | `ticketSidekick.veracode.includeRemediationStatuses` | `["New", "Open", "Reopened"]` |
 | Veracode report size limit (MB) | `ticketSidekick.veracode.maxReportSizeMB` | `50` |
 | Veracode SLA days | `ticketSidekick.veracode.slaDays` | `{"Very High": 14, "High": 28, "Medium": 0, "Low": 0, "Very Low": 0, "Informational": 0}` |
+| Veracode import template | `ticketSidekick.veracode.template` | `""` |
 | OSS report min vulnerability rating | `ticketSidekick.waltz.minVulnRating` | `"High"` |
 | OSS report included remediation actions | `ticketSidekick.waltz.includeRemediationActions` | `["", "Remediate"]` |
 | OSS report size limit (MB) | `ticketSidekick.waltz.maxReportSizeMB` | `50` |
+| OSS report import template | `ticketSidekick.waltz.template` | `""` |
 
 What the filter settings do is described with each import in [Report Imports](report-imports.md).
+
+The two template settings name the template in `.jira-templates.json` that an import on the import board (`Ticket Sidekick: Open import board`) uses; the issue type comes from that template. When a template setting is empty, or names a template that is no longer in `.jira-templates.json`, the import board's start screen asks for one and saves your choice to the setting. See [Boards](boards.md).
 
 **Veracode SLA days**
 

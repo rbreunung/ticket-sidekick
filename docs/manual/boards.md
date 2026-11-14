@@ -8,12 +8,15 @@ A **board** is a page Ticket Sidekick opens in its own editor tab: a large table
 | Ticket list | "show my open bugs", "move my done tickets to Closed" | `/ts-jira search <JQL or filter>` | `Ticket Sidekick: Open ticket list` |
 | Cleanup (a ticket list loaded from a cleanup rule) | "run the cleanup Close released bugs" | `/ts-jira cleanup <rule> [in VERSION]` | `Ticket Sidekick: Run a cleanup rule` |
 | Stored sessions | "show the stored sessions" | `/ts-jira sessions` | `Ticket Sidekick: Open stored sessions` |
+| Import (Veracode or OSS report) | — | — | `Ticket Sidekick: Open import board` |
 
 ## What you need
 
 - **Jira set up**, as described in the [README](../../README.md). There is nothing else to configure: no server, no port and no proxy setting.
 - **For the Command Palette: nothing else.** The board commands work without Copilot.
 - **For asking Copilot: Agent mode.** Copilot opens a board through the `jira_open_board` tool; see [Jira Tools for Copilot Chats](copilot-tools.md).
+
+`Ticket Sidekick: Open import board` opens a start screen: pick Veracode or Waltz OSS and the report file. The template comes from `ticketSidekick.veracode.template` or `ticketSidekick.waltz.template` (asked for once and saved when the setting is empty or names a template that is gone), the issue type from that template (asked for from the project when the template names none), and the project from `ticketSidekick.jira.defaultProject`. The same file in the same project opens the import that is stored already; **Start over** discards it and starts again.
 
 `Ticket Sidekick: Open ticket list` asks for a JQL query; type `filter:` and a saved filter's id or name to open a filter instead. `Ticket Sidekick: Run a cleanup rule` lets you pick a rule from `.jira-templates.json` and, optionally, a fix version.
 

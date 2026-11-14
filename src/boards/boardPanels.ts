@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import type { SessionManager } from '../sessions/sessionManager';
 import { answerBoardRequest, asBoardRequest, SESSIONS_BOARD, type BoardHost } from './boardMessages';
 import { asBoardPanelState, boardPanelHtml, type BoardPanelState } from './boardPanelHtml';
+import { IMPORT_START_BOARD, IMPORT_START_TITLE, type ImportStartScreen } from './import/startScreen';
 
 // Boards as editor tabs. The extension opens a webview tab, writes its document and answers the
 // page's requests over VS Code's message channel. An agent asks for a board through the
@@ -28,6 +29,8 @@ export class BoardPanels implements BoardHost {
     /** The folder the board pages are shipped in. */
     private readonly pagesRoot: vscode.Uri,
     private readonly onError: (message: string) => void,
+    /** The import start screen: a tab without a session, like the stored sessions board. */
+    readonly importStart?: ImportStartScreen,
   ) {}
 
   stats(): BoardStats {
@@ -87,6 +90,12 @@ export class BoardPanels implements BoardHost {
       this.reveal({ kind, id: '', title: 'Stored sessions' });
       return { ok: true, title: 'Stored sessions' };
     }
+    if (kind === IMPORT_START_BOARD) {
+      if (!this.importStart) return { ok: false, reason: 'there is no board of that name.' };
+      this.importStart.prefill(input);
+      this.reveal({ kind, id: '', title: IMPORT_START_TITLE });
+      return { ok: true, title: IMPORT_START_TITLE };
+    }
     if (!this.kinds.includes(kind)) return { ok: false, reason: 'there is no board of that name.' };
     const opened = await this.manager.open(kind, input ?? {});
     if (!opened.ok) return opened;
@@ -108,7 +117,8 @@ export class BoardPanels implements BoardHost {
     return {
       deserializeWebviewPanel: async (panel, raw) => {
         const state = asBoardPanelState(raw);
-        if (!state || (state.kind !== SESSIONS_BOARD && !this.kinds.includes(state.kind))) {
+        const sessionless = state?.kind === SESSIONS_BOARD || (state?.kind === IMPORT_START_BOARD && this.importStart !== undefined);
+        if (!state || (!sessionless && !this.kinds.includes(state.kind))) {
           panel.dispose();
           return;
         }

@@ -3,6 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { answerBoardRequest, asBoardRequest, type BoardHost } from '../boards/boardMessages';
+import { ImportStartScreen } from '../boards/import/startScreen';
 import { securityReportKind, type SecurityReportDeps } from '../boards/securityReport/kind';
 import { registerKind } from '../sessions/boardKind';
 import { SessionManager } from '../sessions/sessionManager';
@@ -193,5 +194,51 @@ describe('the sessions board', () => {
     const a = await openReady('AAA');
     expect((await ask(SESSIONS, 'state')).status).toBe(404);
     expect((await ask(report(a.id), 'list')).status).toBe(404);
+  });
+});
+
+describe('the import start screen', () => {
+  const START = { kind: 'import-start', id: '' };
+
+  function startHost(picked: string | undefined, written: string[]): BoardHost {
+    const screen = new ImportStartScreen({
+      jira: async () => ({ configured: false, config: { baseUrl: undefined, token: undefined, authType: 'datacenter' } as never }),
+      defaultProject: () => 'PROJ',
+      templateSetting: () => '',
+      writeTemplateSetting: async (_kind, name) => { written.push(name); },
+      templates: () => [{ name: 'OSS finding', issueType: 'Vulnerability' }],
+      reportReader: () => ({ read: async () => ({ items: [1], rawItems: [] }), noMatchMessage: 'none', fileFilter: { label: 'OSS report', extensions: ['xlsx'] } }),
+      pickReportFile: async () => picked,
+      openSetting: async () => undefined,
+      hasSession: async () => false,
+      discardSession: async () => undefined,
+      openImport: async () => ({ ok: true }),
+    });
+    return { ...host, importStart: screen };
+  }
+
+  async function askStart(boardHost: BoardHost, op: string, body: Record<string, unknown> = {}): Promise<{ status: number; body: any }> {
+    const reply = await answerBoardRequest(manager, START, { id: nextId++, op, body }, boardHost, message => errors.push(message));
+    return reply.ok ? { status: 200, body: reply.data } : { status: reply.status, body: { error: reply.error } };
+  }
+
+  it('answers the page through the start screen: the file comes from the native dialog and the template is written by the host', async () => {
+    const written: string[] = [];
+    const boardHost = startHost(path.join(dir, 'report.xlsx'), written);
+    expect((await askStart(boardHost, 'kind', { kind: 'waltz' })).body.kind).toBe('waltz');
+    const picked = (await askStart(boardHost, 'pick-file', { path: '/etc/passwd' })).body;
+    expect(picked.report.path).toBe(path.join(dir, 'report.xlsx'));
+    expect((await askStart(boardHost, 'template', { name: 'OSS finding' })).status).toBe(200);
+    expect(written).toEqual(['OSS finding']);
+    const blocked = await askStart(boardHost, 'open');
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.error).toMatch(/^Jira base URL not configured/);
+  });
+
+  it('knows no session requests, and is not there where the host has no start screen', async () => {
+    const boardHost = startHost(undefined, []);
+    expect((await askStart(boardHost, 'state')).status).toBe(404);
+    expect((await askStart(boardHost, 'apply', { planId: 'x' })).status).toBe(404);
+    expect(await askStart(host, 'view')).toEqual({ status: 404, body: { error: 'There is no import start screen here.' } });
   });
 });

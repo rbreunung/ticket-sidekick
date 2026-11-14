@@ -158,7 +158,7 @@ describe('bundled extension (out/extension.js)', () => {
 
 // A board's editor tab loads its page from files shipped in the extension folder.
 describe('the board pages', () => {
-  const boards = ['security-report', 'ticket-list', 'sessions'];
+  const boards = ['security-report', 'ticket-list', 'sessions', 'import-start'];
 
   beforeAll(() => {
     execFileSync(process.execPath, ['esbuild.js'], { cwd: root, stdio: 'pipe' });
