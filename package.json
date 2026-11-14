@@ -28,66 +28,17 @@
         "id": "ticket-sidekick.jira",
         "name": "jira",
         "fullName": "Ticket Sidekick",
-        "description": "Manage Jira tickets with natural language",
+        "description": "Deprecated: imports emails, Veracode and Waltz reports into Jira. Use /ts-jira or Agent mode for everything else",
         "isSticky": true,
-        "commands": [
-          {
-            "name": "check",
-            "description": "Verify your Jira connection and credentials",
-            "sampleRequest": "check"
-          },
-          {
-            "name": "create",
-            "description": "Create a new Jira ticket",
-            "sampleRequest": "create a bug in PROJ: login fails after password reset"
-          },
-          {
-            "name": "view",
-            "description": "View a ticket's fields, description, and comments",
-            "sampleRequest": "view PROJ-123"
-          },
-          {
-            "name": "load",
-            "description": "Download a ticket's description, comments, and attachments into the workspace",
-            "sampleRequest": "load PROJ-123"
-          },
-          {
-            "name": "comment",
-            "description": "Add a comment to a ticket",
-            "sampleRequest": "PROJ-123 thanks, looks good to merge"
-          },
-          {
-            "name": "field",
-            "description": "Update a field on a ticket",
-            "sampleRequest": "PROJ-123 set priority to High"
-          },
-          {
-            "name": "move",
-            "description": "Transition a ticket to a new status",
-            "sampleRequest": "PROJ-123 to In Progress"
-          },
-          {
-            "name": "search",
-            "description": "Search tickets with JQL or natural language",
-            "sampleRequest": "my open bugs in PROJ"
-          },
-          {
-            "name": "security-report",
-            "description": "List a project's open Veracode and Waltz tickets by release, with Due Dates; add csv or xlsx to save them as a file",
-            "sampleRequest": "PROJ"
-          }
-        ],
         "disambiguation": [
           {
-            "category": "jira_ticket_management",
-            "description": "The user wants to create, view, update, comment on, transition, or search for Jira tickets, or manage Jira ticket templates, bulk cleanup, or workflow discovery.",
+            "category": "jira_report_import",
+            "description": "The user wants to import an email (.eml), a Veracode Detailed Report or a Waltz OSS report into Jira tickets, or add an email to a Jira ticket as a comment.",
             "examples": [
-              "Create a bug ticket in PROJ for the login page crashing on Safari",
-              "Show me PROJ-123",
-              "Add a comment to PROJ-456 saying the fix is deployed",
-              "Move PROJ-789 to Done",
-              "Find all my open tickets in PROJ",
-              "Set the priority on PROJ-42 to High"
+              "Import this Veracode report into PROJ",
+              "Create Jira tickets from the Waltz OSS report",
+              "Create a ticket from this email",
+              "Add this email to PROJ-42 as a comment"
             ]
           }
         ]

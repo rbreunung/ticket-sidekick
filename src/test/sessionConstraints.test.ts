@@ -49,45 +49,6 @@ describe('buildConstraintJql', () => {
   });
 });
 
-describe('parseConstraintMatchSelection (U4/R11 — generic across constraint kinds)', () => {
-  const fixVersionOptions: ConstraintMatchOption[] = [
-    { label: 'Release 3.2', value: 'Release 3.2' },
-    { label: 'Release 3.2.1', value: 'Release 3.2.1' },
-  ];
-  const assigneeOptions: ConstraintMatchOption[] = [
-    { label: 'Jane Doe', value: 'jdoe' },
-    { label: 'John Doe', value: 'jdoe2' },
-  ];
-
-  it('resolves an exact-name reply for a fixVersion ambiguity', () => {
-    expect(parseConstraintMatchSelection('Release 3.2.1', fixVersionOptions)).toEqual(fixVersionOptions[1]);
-  });
-
-  it('resolves a numeric-index reply for a fixVersion ambiguity', () => {
-    expect(parseConstraintMatchSelection('1', fixVersionOptions)).toEqual(fixVersionOptions[0]);
-  });
-
-  it('resolves an exact-name reply for an assignee ambiguity', () => {
-    expect(parseConstraintMatchSelection('John Doe', assigneeOptions)).toEqual(assigneeOptions[1]);
-  });
-
-  it('resolves a numeric-index reply for an assignee ambiguity', () => {
-    expect(parseConstraintMatchSelection('2', assigneeOptions)).toEqual(assigneeOptions[1]);
-  });
-
-  it('reports cancel on a cancellation word', () => {
-    expect(parseConstraintMatchSelection('cancel', fixVersionOptions)).toBe('cancel');
-  });
-
-  it('reports invalid on an out-of-range index', () => {
-    expect(parseConstraintMatchSelection('9', fixVersionOptions)).toBe('invalid');
-  });
-
-  it('reports invalid on unrecognized text', () => {
-    expect(parseConstraintMatchSelection('nonsense', fixVersionOptions)).toBe('invalid');
-  });
-});
-
 describe('extractProjectKeyFromJql (U4/R11 step 1)', () => {
   it('extracts a project key from a quoted project clause', () => {
     expect(extractProjectKeyFromJql('project = "PROJ" AND resolution is EMPTY')).toBe('PROJ');

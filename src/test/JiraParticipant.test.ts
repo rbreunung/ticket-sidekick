@@ -255,46 +255,6 @@ describe('parseSkipInput', () => {
   });
 });
 
-describe('applyTicketToggle (U6/AE4)', () => {
-  function makeTickets(): TransitionBatchTicket[] {
-    return [
-      {
-        key: 'PROJ-10', summary: 'Login bug', currentStatus: 'In Review',
-        transitionPath: [{ id: '41', name: 'Approve', to: 'Done' }], included: true,
-        subtasks: [
-          { key: 'PROJ-11', summary: 'Write tests', currentStatus: 'In Progress', transitionPath: [], included: true },
-          { key: 'PROJ-12', summary: 'Code review', currentStatus: 'Open', transitionPath: [], included: true },
-        ],
-      },
-      { key: 'PROJ-14', summary: 'Dark mode', currentStatus: 'Blocked', transitionPath: [], subtasks: [], included: true },
-    ];
-  }
-
-  it('flips only the mentioned ticket, leaving every other row unchanged', () => {
-    const toggled = applyTicketToggle(makeTickets(), ['PROJ-14']);
-    expect(toggled.find(t => t.key === 'PROJ-14')!.included).toBe(false);
-    expect(toggled.find(t => t.key === 'PROJ-10')!.included).toBe(true);
-  });
-
-  it('cascading a subtask toggle flips both the subtask and its parent together (consistent with parseSkipInput\'s cascade)', () => {
-    const cascaded = parseSkipInput('11', makeTickets()) as { action: 'toggle'; keys: string[] };
-    const toggled = applyTicketToggle(makeTickets(), cascaded.keys);
-    const parent = toggled.find(t => t.key === 'PROJ-10')!;
-    expect(parent.included).toBe(false);
-    expect(parent.subtasks.find(s => s.key === 'PROJ-11')!.included).toBe(false);
-    // The sibling subtask (not mentioned, not cascaded to) stays included.
-    expect(parent.subtasks.find(s => s.key === 'PROJ-12')!.included).toBe(true);
-  });
-
-  it('toggling the same row twice returns it to its original state (repeat clicks flip back, R8)', () => {
-    let tickets = makeTickets();
-    tickets = applyTicketToggle(tickets, ['PROJ-14']);
-    expect(tickets.find(t => t.key === 'PROJ-14')!.included).toBe(false);
-    tickets = applyTicketToggle(tickets, ['PROJ-14']);
-    expect(tickets.find(t => t.key === 'PROJ-14')!.included).toBe(true);
-  });
-});
-
 describe('parseResolutionSelection', () => {
   const options = ['Fixed', "Won't Fix", 'Duplicate', 'Done'];
 
@@ -332,127 +292,6 @@ describe('parseResolutionSelection', () => {
   it('trims whitespace before matching', () => {
     expect(parseResolutionSelection('  2  ', options)).toBe("Won't Fix");
     expect(parseResolutionSelection('  none  ', options)).toBeNull();
-  });
-});
-
-describe('parseCommentIndex', () => {
-  it('returns the number when reply is just a digit', () => {
-    expect(parseCommentIndex('3', 5)).toBe(3);
-  });
-
-  it('extracts number from "show comment 3"', () => {
-    expect(parseCommentIndex('show comment 3', 5)).toBe(3);
-  });
-
-  it('extracts number from "comment 2"', () => {
-    expect(parseCommentIndex('comment 2', 5)).toBe(2);
-  });
-
-  it('extracts number from "full comment 4"', () => {
-    expect(parseCommentIndex('full comment 4', 5)).toBe(4);
-  });
-
-  it('returns invalid for non-numeric input', () => {
-    expect(parseCommentIndex('first comment', 5)).toBe('invalid');
-  });
-
-  it('returns invalid when number exceeds maxIndex', () => {
-    expect(parseCommentIndex('10', 5)).toBe('invalid');
-  });
-
-  it('returns invalid for 0', () => {
-    expect(parseCommentIndex('0', 5)).toBe('invalid');
-  });
-
-  it('returns invalid when no digit present', () => {
-    expect(parseCommentIndex('show me the comments', 5)).toBe('invalid');
-  });
-
-  it('handles whitespace around the number', () => {
-    expect(parseCommentIndex('  2  ', 5)).toBe(2);
-  });
-});
-
-describe('buildCommentListSession', () => {
-  const makeComment = (id: string, displayName: string, text: string, created: string): JiraComment => ({
-    id,
-    author: { accountId: id, displayName, emailAddress: `${id}@x.com` },
-    body: {
-      type: 'doc', version: 1,
-      content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
-    },
-    created,
-  });
-
-  it('sets ticketKey on the session', () => {
-    const session = buildCommentListSession('PROJ-42', []);
-    expect(session.ticketKey).toBe('PROJ-42');
-  });
-
-  it('assigns 1-based indices', () => {
-    const comments = [
-      makeComment('1', 'Alice', 'First', '2024-01-01T00:00:00.000Z'),
-      makeComment('2', 'Bob', 'Second', '2024-01-02T00:00:00.000Z'),
-    ];
-    const session = buildCommentListSession('PROJ-1', comments);
-    expect(session.comments[0].index).toBe(1);
-    expect(session.comments[1].index).toBe(2);
-  });
-
-  it('formats dates as YYYY-MM-DD', () => {
-    const comments = [makeComment('1', 'Alice', 'Hi', '2024-03-15T09:30:00.000Z')];
-    const session = buildCommentListSession('PROJ-1', comments);
-    expect(session.comments[0].date).toBe('2024-03-15');
-  });
-
-  it('stores author display name', () => {
-    const comments = [makeComment('1', 'Jane Doe', 'Hello', '2024-01-01T00:00:00.000Z')];
-    const session = buildCommentListSession('PROJ-1', comments);
-    expect(session.comments[0].author).toBe('Jane Doe');
-  });
-
-  it('converts ADF body to Markdown', () => {
-    const comment: JiraComment = {
-      id: '1',
-      author: { accountId: 'a', displayName: 'Alice', emailAddress: 'a@x.com' },
-      body: {
-        type: 'doc', version: 1,
-        content: [{
-          type: 'paragraph',
-          content: [{ type: 'text', text: 'bold word', marks: [{ type: 'strong' }] }],
-        }],
-      },
-      created: '2024-01-01T00:00:00.000Z',
-    };
-    const session = buildCommentListSession('PROJ-1', [comment]);
-    expect(session.comments[0].bodyMarkdown).toContain('**bold word**');
-  });
-
-  it('converts wiki-markup body (v2 string) to Markdown', () => {
-    const comment: JiraComment = {
-      id: '1',
-      author: { accountId: 'a', displayName: 'Alice', emailAddress: 'a@x.com' },
-      body: '*bold*',
-      created: '2024-01-01T00:00:00.000Z',
-    };
-    const session = buildCommentListSession('PROJ-1', [comment]);
-    expect(session.comments[0].bodyMarkdown).toContain('**bold**');
-  });
-
-  it('falls back to _empty_ when body produces no text', () => {
-    const comment: JiraComment = {
-      id: '1',
-      author: { accountId: 'a', displayName: 'Alice', emailAddress: 'a@x.com' },
-      body: { type: 'doc', version: 1, content: [] },
-      created: '2024-01-01T00:00:00.000Z',
-    };
-    const session = buildCommentListSession('PROJ-1', [comment]);
-    expect(session.comments[0].bodyMarkdown).toBe('_empty_');
-  });
-
-  it('returns empty comments array when passed no comments', () => {
-    const session = buildCommentListSession('PROJ-1', []);
-    expect(session.comments).toHaveLength(0);
   });
 });
 
@@ -518,224 +357,6 @@ describe('formatCommentsInFull', () => {
 
   it('returns empty string for no comments', () => {
     expect(formatCommentsInFull([])).toBe('');
-  });
-});
-
-describe('parseFilterSelection', () => {
-  const filters = [
-    { id: '10001', name: 'My open bugs', jql: 'assignee = currentUser() AND status != Done' },
-    { id: '10002', name: 'My open tasks', jql: 'assignee = currentUser() AND issuetype = Task' },
-    { id: '10003', name: 'Team backlog', jql: 'project = PROJ AND status = Backlog' },
-  ];
-
-  it('selects by 1-based index', () => {
-    expect(parseFilterSelection('1', filters)).toEqual(filters[0]);
-    expect(parseFilterSelection('2', filters)).toEqual(filters[1]);
-    expect(parseFilterSelection('3', filters)).toEqual(filters[2]);
-  });
-
-  it('selects by exact name (case-insensitive)', () => {
-    expect(parseFilterSelection('My open bugs', filters)).toEqual(filters[0]);
-    expect(parseFilterSelection('my open bugs', filters)).toEqual(filters[0]);
-    expect(parseFilterSelection('TEAM BACKLOG', filters)).toEqual(filters[2]);
-  });
-
-  it('returns cancel for c / cancel', () => {
-    expect(parseFilterSelection('c', filters)).toBe('cancel');
-    expect(parseFilterSelection('cancel', filters)).toBe('cancel');
-    expect(parseFilterSelection('Cancel', filters)).toBe('cancel');
-  });
-
-  it('returns invalid for out-of-range index', () => {
-    expect(parseFilterSelection('0', filters)).toBe('invalid');
-    expect(parseFilterSelection('4', filters)).toBe('invalid');
-  });
-
-  it('returns invalid for unrecognised text', () => {
-    expect(parseFilterSelection('something else', filters)).toBe('invalid');
-  });
-
-  it('also recognizes other shared cancellation words, not just c/cancel', () => {
-    expect(parseFilterSelection('stop', filters)).toBe('cancel');
-    expect(parseFilterSelection('never mind', filters)).toBe('cancel');
-  });
-
-  it('selects a real filter by name even when it collides with a cancellation word', () => {
-    const collidingFilters = [
-      { id: '10001', name: 'Stop', jql: 'status = Blocked' },
-      { id: '10002', name: 'My open tasks', jql: 'assignee = currentUser() AND issuetype = Task' },
-    ];
-    expect(parseFilterSelection('Stop', collidingFilters)).toEqual(collidingFilters[0]);
-    expect(parseFilterSelection('stop', collidingFilters)).toEqual(collidingFilters[0]);
-  });
-});
-
-// U3: listMyFilters' numbered pick-list session — parseListedFiltersSelection delegates straight
-// to parseFilterSelection, so these tests mirror parseFilterSelection's own suite above but go
-// through the ListedFiltersSession-shaped entry point the participant actually calls.
-describe('parseListedFiltersSelection', () => {
-  const filters = [
-    { id: '10001', name: 'My favourites bugs', jql: 'assignee = currentUser() AND status != Done' },
-    { id: '10002', name: 'Owned tasks', jql: 'reporter = currentUser() AND issuetype = Task' },
-    { id: '10003', name: 'Team backlog', jql: 'project = PROJ AND status = Backlog' },
-  ];
-  const session: ListedFiltersSession = { filters };
-
-  it('resolves an exact-name match', () => {
-    expect(parseListedFiltersSelection('My favourites bugs', session)).toEqual(filters[0]);
-    expect(parseListedFiltersSelection('team backlog', session)).toEqual(filters[2]);
-  });
-
-  it('resolves a numeric-index reply', () => {
-    expect(parseListedFiltersSelection('2', session)).toEqual(filters[1]);
-  });
-
-  it('returns invalid for an unrecognized reply, matching parseFilterSelection', () => {
-    expect(parseListedFiltersSelection('something else', session)).toBe('invalid');
-    expect(parseListedFiltersSelection('0', session)).toBe('invalid');
-    expect(parseListedFiltersSelection('4', session)).toBe('invalid');
-  });
-
-  it('returns cancel for a cancellation word', () => {
-    expect(parseListedFiltersSelection('cancel', session)).toBe('cancel');
-  });
-
-  it('selects a filter literally named a cancellation word by exact name — regression for the ' +
-    'cancel-word-list-swallows-domain-name-collision bug class', () => {
-    const collidingSession: ListedFiltersSession = {
-      filters: [
-        { id: '10001', name: 'Stop', jql: 'status = Blocked' },
-        { id: '10002', name: 'Cancel', jql: 'status = Cancelled' },
-        { id: '10003', name: 'Owned tasks', jql: 'reporter = currentUser() AND issuetype = Task' },
-      ],
-    };
-    expect(parseListedFiltersSelection('Stop', collidingSession)).toEqual(collidingSession.filters[0]);
-    expect(parseListedFiltersSelection('stop', collidingSession)).toEqual(collidingSession.filters[0]);
-    expect(parseListedFiltersSelection('Cancel', collidingSession)).toEqual(collidingSession.filters[1]);
-  });
-});
-
-describe('parseBulkUpdateReview', () => {
-  it('returns ok for "ok"', () => {
-    expect(parseBulkUpdateReview('ok')).toEqual({ action: 'ok' });
-    expect(parseBulkUpdateReview('yes')).toEqual({ action: 'ok' });
-    expect(parseBulkUpdateReview('OK')).toEqual({ action: 'ok' });
-  });
-
-  it('returns toggle with keys when user lists keys to skip (U6: toggle, not a one-shot skip-and-run)', () => {
-    expect(parseBulkUpdateReview('skip PROJ-2 PROJ-5')).toEqual({ action: 'toggle', keys: ['PROJ-2', 'PROJ-5'] });
-    expect(parseBulkUpdateReview('skip PROJ-1')).toEqual({ action: 'toggle', keys: ['PROJ-1'] });
-  });
-
-  it('accepts a bare key list with no "skip" prefix — the text a row\'s own toggle click resubmits (R8/KTD6)', () => {
-    expect(parseBulkUpdateReview('PROJ-2')).toEqual({ action: 'toggle', keys: ['PROJ-2'] });
-    expect(parseBulkUpdateReview('proj-2 proj-5')).toEqual({ action: 'toggle', keys: ['PROJ-2', 'PROJ-5'] });
-  });
-
-  it('returns cancel for c / cancel', () => {
-    expect(parseBulkUpdateReview('c')).toEqual({ action: 'cancel' });
-    expect(parseBulkUpdateReview('cancel')).toEqual({ action: 'cancel' });
-    expect(parseBulkUpdateReview('Cancel')).toEqual({ action: 'cancel' });
-  });
-
-  it('returns invalid for unrecognised input', () => {
-    expect(parseBulkUpdateReview('something else')).toEqual({ action: 'invalid' });
-    expect(parseBulkUpdateReview('')).toEqual({ action: 'invalid' });
-  });
-
-  it('also recognizes other shared confirmation/cancellation words, not just ok/c/cancel', () => {
-    expect(parseBulkUpdateReview('confirm')).toEqual({ action: 'ok' });
-    expect(parseBulkUpdateReview('stop')).toEqual({ action: 'cancel' });
-  });
-
-  it('a bare "skip" with no keys now cancels — no flow-specific exception (R6)', () => {
-    expect(parseBulkUpdateReview('skip')).toEqual({ action: 'cancel' });
-  });
-});
-
-describe('buildBulkUpdateReviewTable', () => {
-  it('renders Key / Summary / Current value / Update? columns', () => {
-    const rows: BulkUpdateReviewRow[] = [
-      { key: 'PROJ-1', summary: 'Fix login bug', currentValueDisplay: 'High', included: true },
-      { key: 'PROJ-2', summary: 'Update docs', currentValueDisplay: 'Medium', included: true },
-      { key: 'PROJ-3', summary: 'Refactor service', currentValueDisplay: '—', included: true },
-    ];
-    const table = buildBulkUpdateReviewTable(rows);
-    expect(table).toContain('| Key | Summary | Current value | Update? |');
-    expect(table).toContain('| PROJ-1 | Fix login bug | High |');
-    expect(table).toContain('| PROJ-2 | Update docs | Medium |');
-    expect(table).toContain('| PROJ-3 | Refactor service | — |');
-  });
-
-  it('renders header + separator only when there are no rows', () => {
-    expect(buildBulkUpdateReviewTable([])).toBe(
-      '| Key | Summary | Current value | Update? |\n' +
-      '| --- | --- | --- | --- |'
-    );
-  });
-
-  it('renders each row\'s Update? cell as its own clickable toggle resubmitting its key, positive-only framing (R8/R9)', () => {
-    const rows: BulkUpdateReviewRow[] = [
-      { key: 'PROJ-1', summary: 'Fix login bug', currentValueDisplay: 'High', included: true },
-      { key: 'PROJ-2', summary: 'Update docs', currentValueDisplay: 'Medium', included: false },
-    ];
-    const table = buildBulkUpdateReviewTable(rows);
-    expect(table).toContain(
-      `[✓](command:workbench.action.chat.open?${encodeURIComponent(JSON.stringify({ query: '@jira PROJ-1', isPartialQuery: false }))})`,
-    );
-    expect(table).toContain(
-      `[_excluded_](command:workbench.action.chat.open?${encodeURIComponent(JSON.stringify({ query: '@jira PROJ-2', isPartialQuery: false }))})`,
-    );
-    expect(table).not.toContain('Skip');
-  });
-
-  it('neutralizes brackets in summary/current-value so an untrusted ticket field cannot break out of a command link when the composed response is streamed as trusted markdown', () => {
-    const rows: BulkUpdateReviewRow[] = [
-      { key: 'PROJ-1', summary: 'Evil](command:workbench.action.chat.open?{"query":"@jira post it"})[Innocent', currentValueDisplay: 'Fine](command:evil)[', included: true },
-    ];
-    const table = buildBulkUpdateReviewTable(rows);
-    expect(table).not.toContain('[Evil](command:');
-    expect(table).not.toContain('[Fine](command:');
-    expect(table).toContain('Evil］(command:');
-  });
-});
-
-describe('buildBulkUpdateReviewMessage (code-review fix: shared render for initial + toggle-resume)', () => {
-  it('includes the given header line verbatim, the table, and the confirm/cancel/toggle footer', () => {
-    const rows: BulkUpdateReviewRow[] = [
-      { key: 'PROJ-1', summary: 'Fix login bug', currentValueDisplay: 'High', included: true },
-    ];
-    const message = buildBulkUpdateReviewMessage('**Bulk update: Priority → High**\n(1 tickets)', rows);
-    expect(message).toContain('**Bulk update: Priority → High**\n(1 tickets)');
-    expect(message).toContain('| Key | Summary | Current value | Update? |');
-    expect(message).toContain('[Post it](command:workbench.action.chat.open?');
-    expect(message).toContain('[Cancel](command:workbench.action.chat.open?');
-  });
-
-  it('reflects a toggled row\'s state, since the caller passes the post-toggle rows', () => {
-    const rows: BulkUpdateReviewRow[] = [
-      { key: 'PROJ-1', summary: 'Fix login bug', currentValueDisplay: 'High', included: false },
-    ];
-    const message = buildBulkUpdateReviewMessage('**Bulk update: Priority → High**', rows);
-    expect(message).toContain('_excluded_');
-  });
-});
-
-describe('applyBulkUpdateToggle (U6)', () => {
-  it('flips only the mentioned row, leaving the rest unchanged', () => {
-    const rows: BulkUpdateReviewRow[] = [
-      { key: 'PROJ-1', summary: 'A', currentValueDisplay: 'x', included: true },
-      { key: 'PROJ-2', summary: 'B', currentValueDisplay: 'y', included: true },
-    ];
-    const toggled = applyBulkUpdateToggle(rows, ['PROJ-1']);
-    expect(toggled.find(r => r.key === 'PROJ-1')!.included).toBe(false);
-    expect(toggled.find(r => r.key === 'PROJ-2')!.included).toBe(true);
-  });
-
-  it('matches case-insensitively, same as the parser\'s uppercased keys', () => {
-    const rows: BulkUpdateReviewRow[] = [{ key: 'PROJ-1', summary: 'A', currentValueDisplay: 'x', included: true }];
-    const toggled = applyBulkUpdateToggle(rows, ['proj-1']);
-    expect(toggled[0].included).toBe(false);
   });
 });
 
@@ -825,24 +446,6 @@ describe('pickEmailOption', () => {
   });
 });
 
-describe('selectDefaultIssueType', () => {
-  it('prefers Story when present', () => {
-    expect(selectDefaultIssueType(['Bug', 'Story', 'Task'])).toBe('Story');
-  });
-
-  it('falls back to Task when no Story', () => {
-    expect(selectDefaultIssueType(['Bug', 'Task'])).toBe('Task');
-  });
-
-  it('falls back to first type when neither Story nor Task', () => {
-    expect(selectDefaultIssueType(['Epic', 'Bug'])).toBe('Epic');
-  });
-
-  it('returns the never-guess sentinel when list is empty', () => {
-    expect(selectDefaultIssueType([])).toBe('');
-  });
-});
-
 describe('resolveTemplateIssueType', () => {
   it('returns the explicit issue type when the template configures one', () => {
     expect(resolveTemplateIssueType('Bug', ['Story', 'Task'])).toBe('Bug');
@@ -857,7 +460,7 @@ describe('resolveTemplateIssueType', () => {
   });
 });
 
-describe('formatIssueTypeOptionLabel / formatIssueTypeInlinePhrase', () => {
+describe('formatIssueTypeOptionLabel', () => {
   it('renders a real issue type unchanged as a list label', () => {
     expect(formatIssueTypeOptionLabel('Bug')).toBe('Bug');
   });
@@ -866,43 +469,6 @@ describe('formatIssueTypeOptionLabel / formatIssueTypeInlinePhrase', () => {
     expect(formatIssueTypeOptionLabel(NO_ISSUE_TYPE)).toBe('_you will be asked to type it_');
   });
 
-  it('renders a real issue type bolded as an inline phrase', () => {
-    expect(formatIssueTypeInlinePhrase('Bug')).toBe('**Bug**');
-  });
-
-  it('renders the sentinel as the unbolded list label when used inline', () => {
-    expect(formatIssueTypeInlinePhrase(NO_ISSUE_TYPE)).toBe('_you will be asked to type it_');
-  });
-});
-
-describe('isPointerPrompt', () => {
-  it('matches "post it"', () => {
-    expect(isPointerPrompt('post it')).toBe(true);
-  });
-
-  it('matches "use this as a comment on PROJ-123"', () => {
-    expect(isPointerPrompt('use this as a comment on PROJ-123')).toBe(true);
-  });
-
-  it('matches "add that as a comment"', () => {
-    expect(isPointerPrompt('add that as a comment')).toBe(true);
-  });
-
-  it('does not match a standalone generation instruction', () => {
-    expect(isPointerPrompt('write a summary of the investigation findings')).toBe(false);
-  });
-
-  it('does not match a literal comment instruction', () => {
-    expect(isPointerPrompt('add comment: everything looks good')).toBe(false);
-  });
-
-  it('does not match "use this approach"', () => {
-    expect(isPointerPrompt('use this approach when fixing the bug')).toBe(false);
-  });
-
-  it('does not match "take this into account"', () => {
-    expect(isPointerPrompt('take this into account')).toBe(false);
-  });
 });
 
 describe('buildTeamJql', () => {
@@ -1045,63 +611,6 @@ describe('New screen — paging (U4/R6-R7)', () => {
   });
 });
 
-describe('parseReviewInput — Veracode ids', () => {
-  const ids = ['A1', '1', '2'];
-
-  it('recognizes ok and cancel', () => {
-    expect(parseReviewInput('ok', ids)).toEqual({ action: 'ok' });
-    expect(parseReviewInput('c', ids)).toEqual({ action: 'cancel' });
-    expect(parseReviewInput('cancel', ids)).toEqual({ action: 'cancel' });
-  });
-
-  it('toggles a single new-row id (excludes a default-included row)', () => {
-    expect(parseReviewInput('2', ids)).toEqual({ action: 'toggle', ids: ['2'] });
-  });
-
-  it('toggles an already-ticketed row id (forces re-creation)', () => {
-    expect(parseReviewInput('A1', ids)).toEqual({ action: 'toggle', ids: ['A1'] });
-  });
-
-  it('toggles multiple ids at once, case-insensitively', () => {
-    expect(parseReviewInput('a1 2', ids)).toEqual({ action: 'toggle', ids: ['A1', '2'] });
-  });
-
-  it('returns invalid for unrecognized ids or empty input', () => {
-    expect(parseReviewInput('99', ids)).toEqual({ action: 'invalid' });
-    expect(parseReviewInput('', ids)).toEqual({ action: 'invalid' });
-  });
-
-  it('also recognizes other shared confirmation/cancellation words, not just ok/c/cancel', () => {
-    expect(parseReviewInput('yes', ids)).toEqual({ action: 'ok' });
-    expect(parseReviewInput('stop', ids)).toEqual({ action: 'cancel' });
-  });
-});
-
-describe('applyReviewToggle — Veracode rows', () => {
-  it('flips included for the given row ids and leaves the rest untouched', () => {
-    const toggled = applyReviewToggle(sampleRows, ['2']);
-    expect(toggled.find(r => r.id === '2')!.included).toBe(false);
-    expect(toggled.find(r => r.id === '1')!.included).toBe(true);
-  });
-
-  it('flips an already-ticketed row back to included (force re-create)', () => {
-    const toggled = applyReviewToggle(sampleRows, ['A1']);
-    expect(toggled.find(r => r.id === 'A1')!.included).toBe(true);
-  });
-
-  it('toggles multiple ids at once', () => {
-    const toggled = applyReviewToggle(sampleRows, ['1', '2']);
-    expect(toggled.find(r => r.id === '1')!.included).toBe(false);
-    expect(toggled.find(r => r.id === '2')!.included).toBe(false);
-  });
-
-  it('returns new row objects rather than mutating the input (pure function)', () => {
-    const toggled = applyReviewToggle(sampleRows, ['1']);
-    expect(toggled).not.toBe(sampleRows);
-    expect(sampleRows.find(r => r.id === '1')!.included).toBe(true); // original array/objects untouched
-  });
-});
-
 const sampleWaltzRows: WaltzReviewRow[] = [
   {
     id: 'A1',
@@ -1175,37 +684,6 @@ describe('Import screens — Waltz config', () => {
   });
 });
 
-describe('parseReviewInput — Waltz ids', () => {
-  it('recognizes ok/cancel and toggle-id lists', () => {
-    expect(parseReviewInput('ok', ['A1', '1'])).toEqual({ action: 'ok' });
-    expect(parseReviewInput('c', ['A1', '1'])).toEqual({ action: 'cancel' });
-    expect(parseReviewInput('A1 1', ['A1', '1'])).toEqual({ action: 'toggle', ids: ['A1', '1'] });
-    expect(parseReviewInput('nonsense', ['A1', '1'])).toEqual({ action: 'invalid' });
-  });
-
-  it('matches ids case-insensitively', () => {
-    expect(parseReviewInput('a1 1', ['A1', '1'])).toEqual({ action: 'toggle', ids: ['A1', '1'] });
-  });
-
-  it('returns invalid for empty input', () => {
-    expect(parseReviewInput('', ['A1', '1'])).toEqual({ action: 'invalid' });
-  });
-});
-
-describe('applyReviewToggle — Waltz rows', () => {
-  it('flips included for the matching row ids only', () => {
-    const toggled = applyReviewToggle(sampleWaltzRows, ['1']);
-    expect(toggled.find(r => r.id === '1')!.included).toBe(false);
-    expect(toggled.find(r => r.id === 'A1')!.included).toBe(false); // unchanged
-  });
-
-  it('flips an already-ticketed row back to included (force re-create)', () => {
-    const toggled = applyReviewToggle(sampleWaltzRows, ['A1']);
-    expect(toggled.find(r => r.id === 'A1')!.included).toBe(true);
-    expect(toggled.find(r => r.id === '1')!.included).toBe(true); // unchanged
-  });
-});
-
 describe('isSessionExpired (schemaVersion shape guard — AE7)', () => {
   it('treats a session with no schemaVersion (pre-consolidation) as expired', () => {
     expect(isSessionExpired({})).toBe(true);
@@ -1265,17 +743,5 @@ describe('parseAwaitFreeTextReply', () => {
   it('accepts "Stop" as a literal value and only "(c)" as cancellation', () => {
     expect(parseAwaitFreeTextReply('Stop')).toEqual({ action: 'value', value: 'Stop' });
     expect(parseAwaitFreeTextReply('(c)')).toEqual({ action: 'cancel' });
-  });
-});
-
-describe('extractProjectKeyFromTicketKey', () => {
-  it('extracts the project key from a real ticket key', () => {
-    expect(extractProjectKeyFromTicketKey('PROJ-123')).toBe('PROJ');
-    expect(extractProjectKeyFromTicketKey('VSJI2-1')).toBe('VSJI2');
-  });
-
-  it('returns null for something that is not a ticket key', () => {
-    expect(extractProjectKeyFromTicketKey('not-a-key')).toBeNull();
-    expect(extractProjectKeyFromTicketKey('')).toBeNull();
   });
 });

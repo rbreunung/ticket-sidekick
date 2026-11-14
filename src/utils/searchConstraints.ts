@@ -2,7 +2,7 @@
 // Pure (vscode-free); re-exported through ../sessionState.ts.
 
 import type { IJiraClient, JiraFilter, JiraFilterSource } from '../jira/IJiraClient';
-import { formatBulletList, isCancellation } from './chatPrimitives';
+import { formatBulletList } from './chatPrimitives';
 
 export interface PendingSearchConstraints {
   fixVersion?: string | null;
@@ -14,15 +14,6 @@ export interface PendingSearchConstraints {
 // nothing was fetched or configured, so the caller must ask the user rather than guess.
 export const NO_ISSUE_TYPE = '';
 
-export function selectDefaultIssueType(issueTypes: string[]): string {
-  return (
-    issueTypes.find(t => t === 'Story') ??
-    issueTypes.find(t => t === 'Task') ??
-    issueTypes[0] ??
-    NO_ISSUE_TYPE
-  );
-}
-
 // Resolves a template's own configured issue type, falling back to the first fetched project
 // issue type, or the never-guess sentinel when neither is available.
 export function resolveTemplateIssueType(explicit: string | undefined, issueTypes: string[]): string {
@@ -33,11 +24,6 @@ export function resolveTemplateIssueType(explicit: string | undefined, issueType
 // "you'll be asked to type it" indicator instead of a blank or fabricated-looking value.
 export function formatIssueTypeOptionLabel(issueType: string): string {
   return issueType === NO_ISSUE_TYPE ? '_you will be asked to type it_' : issueType;
-}
-
-// Same sentinel, for the inline "as **Bug**" phrasing used outside numbered lists.
-export function formatIssueTypeInlinePhrase(issueType: string): string {
-  return issueType === NO_ISSUE_TYPE ? formatIssueTypeOptionLabel(issueType) : `**${issueType}**`;
 }
 
 export function buildTeamJql(teamJql: string, extraJql: string | null): string {
@@ -119,47 +105,6 @@ export interface ConstraintMatchOption {
 }
 
 /**
- * U4/R11: ONE ambiguous-match pick-list session, parameterized by `kind` rather than three
- * separate session types — the picker behavior (numbered/exact-name reply, cancel) is identical
- * across fixVersion/sprint/assignee. `baseJql`/`jqlLabel` are the filter's (or prior search's) own
- * JQL/label the resolved value eventually gets ANDed onto; `resolvedConstraints` carries whatever
- * earlier constraint(s) in the same message already resolved before this ambiguity was hit;
- * `remainingConstraints` carries whichever named constraint(s) still need resolving after this pick
- * is made (e.g. a message naming both a fixVersion and a sprint, where the fixVersion resolved
- * cleanly but the sprint name was ambiguous — this session's `kind` is 'sprint', and
- * `remainingConstraints` is empty since sprint was the last one to resolve).
- */
-export interface ConstraintAmbiguitySession {
-  kind: 'fixVersion' | 'sprint' | 'assignee';
-  options: ConstraintMatchOption[];
-  baseJql: string;
-  jqlLabel: string;
-  resolvedConstraints: JqlConstraints;
-  remainingConstraints: PendingSearchConstraints;
-}
-
-/** Resolves a reply to a `ConstraintAmbiguitySession`'s pick-list the same way `parseFilterSelection`
- * resolves `FilterSelectionSession`'s — an exact (case-insensitive) label match wins over the
- * generic cancellation word list (so a candidate literally named "Stop" or "Cancel" stays
- * selectable by name), then falls back to a 1-based numeric index. */
-export function parseConstraintMatchSelection(
-  reply: string,
-  options: ConstraintMatchOption[],
-): ConstraintMatchOption | 'cancel' | 'invalid' {
-  const trimmed = reply.trim();
-  const byLabel = options.find(o => o.label.toLowerCase() === trimmed.toLowerCase());
-  if (byLabel) return byLabel;
-  if (isCancellation(reply)) return 'cancel';
-  const byIndex = trimmed.match(/^(\d+)$/);
-  if (byIndex) {
-    const n = parseInt(byIndex[1], 10);
-    if (n >= 1 && n <= options.length) return options[n - 1];
-    return 'invalid';
-  }
-  return 'invalid';
-}
-
-/**
  * U4/R11 step 1: extracts a single scoping project key from a filter's (or prior search's) own
  * JQL, so a named fixVersion/sprint constraint can be resolved against that one project's versions
  * or sprints. Deliberately conservative — never guesses:
@@ -174,11 +119,6 @@ export function parseConstraintMatchSelection(
  * literal elsewhere in the JQL (e.g. `summary ~ "project = FOO"`) would be a false positive, but
  * that shape is vanishingly unlikely in a real saved filter and not worth a full JQL grammar here.
  */
-/** The project key of a ticket key (`PROJ-123` -> `PROJ`), or null for anything that is not one. */
-export function extractProjectKeyFromTicketKey(ticketKey: string): string | null {
-  const match = ticketKey.trim().match(/^([A-Z][A-Z0-9]+)-\d+$/);
-  return match ? match[1] : null;
-}
 
 export function extractProjectKeyFromJql(jql: string): string | null {
   if (/\bproject\s+in\s*\(/i.test(jql)) return null;

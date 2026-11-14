@@ -6,51 +6,6 @@ import { formatKeyLink, buildExtraFieldColumns } from '../../services/TicketServ
 import { ReviewTableColumn, buildChatCommandLink, isCancellation, isConfirmation, neutralizeMarkdownLinks, pickByNumberOrName, renderReviewTable } from './primitives';
 import { TransitionBatchTicket } from './sessionTypes';
 
-export interface CreationSession {
-  template: string;
-  project: string;
-  summary: string | null;
-  issueType: string;
-  allSections: string[];
-  pending: string[];
-  answers: Record<string, string>;
-  fields: Record<string, unknown>;
-}
-
-export type ContentSession =
-  | {
-      operation: 'addComment' | 'updateDescription';
-      ticketKey: string;
-      currentContent: string;
-      historyContext: string | undefined;
-      contentSource: 'generate' | 'history-recent' | 'history-full';
-    }
-  | {
-      operation: 'createTicket';
-      projectKey: string;
-      summary: string;
-      issueType: string;
-      templateName: string | null;
-      extraFields: Record<string, unknown>;
-      currentContent: string;
-    };
-
-export interface MoreCommentsSession {
-  ticketKey: string;
-  commentQuery: string | null;
-  displayMode?: 'full' | 'synthesize';
-}
-
-export interface CreateSelectionSession {
-  templates: Array<{ name: string; issueType: string }>;
-  issueTypes: string[];
-  projectKey: string;
-  summary: string | null;
-  description: string | null;
-  extraFields?: Record<string, unknown>;
-  originalPrompt: string;
-}
-
 export interface TransitionBatchSession {
   tickets: TransitionBatchTicket[];
   resolution: string | undefined;
@@ -244,19 +199,6 @@ export function parseSkipInput(reply: string, tickets: TransitionBatchTicket[]):
     }
   }
   return { action: 'toggle', keys: [...expanded] };
-}
-
-// U6/AE4: flips `included` for every ticket/subtask whose key is in `keys` (the cascaded set
-// parseSkipInput already computed) — pure so it's independently testable, mirroring
-// applyReviewToggle's shape for the import-review tables. The caller re-renders via
-// buildReviewTable() afterward; this never executes anything itself.
-export function applyTicketToggle(tickets: TransitionBatchTicket[], keys: string[]): TransitionBatchTicket[] {
-  const toggleSet = new Set(keys);
-  return tickets.map(t => ({
-    ...t,
-    included: toggleSet.has(t.key) ? !t.included : t.included,
-    subtasks: t.subtasks.map(s => (toggleSet.has(s.key) ? { ...s, included: !s.included } : s)),
-  }));
 }
 
 export function parseResolutionSelection(reply: string, options: string[]): string | null | 'invalid' {

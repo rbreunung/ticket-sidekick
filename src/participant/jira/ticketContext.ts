@@ -1,6 +1,4 @@
 import * as vscode from 'vscode';
-import { execSync } from 'child_process';
-import { extractTicketId } from '../../utils/branchParser';
 import {
   NO_ISSUE_TYPE, CURRENT_SESSION_SCHEMA_VERSION, buildChatCommandLink,
   type AwaitIssueTypeResume, type AwaitIssueTypeSession, type JiraSessionContinuity,
@@ -43,15 +41,6 @@ export function turnCarriesJiraSessionKind(
   if (!(turn instanceof vscode.ChatResponseTurn)) return false;
   const metadata = turn.result.metadata as { jiraSession?: JiraSessionContinuity } | undefined;
   return metadata?.jiraSession?.kinds.includes(kind) ?? false;
-}
-
-export function resolveTicketFromBranch(): string | null {
-  try {
-    const branch = execSync('git branch --show-current', { encoding: 'utf-8' }).trim();
-    return extractTicketId(branch);
-  } catch {
-    return null;
-  }
 }
 
 export async function resolveProjectKey(
@@ -121,18 +110,4 @@ export async function streamAwaitIssueType(
 // must abort, not silently proceed.
 export function sessionWasSuperseded(ws: vscode.Memento, key: string): boolean {
   return ws.get(key) !== undefined;
-}
-
-export function parseLastTicketFromContext(context: vscode.ChatContext): string | null {
-  // R13: the last-referenced ticket key now rides on `metadata.jiraSession.lastTicketKey`
-  // (set by every branch that references a ticket) instead of a visible HTML-comment marker in
-  // the rendered markdown. Scan all turns, latest first — same "latest wins" semantics as before.
-  for (let i = context.history.length - 1; i >= 0; i--) {
-    const turn = context.history[i];
-    if (turn instanceof vscode.ChatResponseTurn) {
-      const key = (turn.result.metadata as { jiraSession?: JiraSessionContinuity } | undefined)?.jiraSession?.lastTicketKey;
-      if (key) return key;
-    }
-  }
-  return null;
 }

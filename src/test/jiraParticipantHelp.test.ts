@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Drives the real `@jira` chat handler for the greeting/help turn only. `vscode` is mocked per the repo's per-test-file
-// convention with just the surface JiraParticipant.ts touches before it reaches the greeting check; the Jira client is a
-// stub because a help turn never calls it.
+// Drives the real `@jira` chat handler: the help turn, a request for a removed flow and an import request. `vscode` is
+// mocked per the repo's per-test-file convention with just the surface JiraParticipant.ts touches; the Jira client is a
+// stub that fails the test when it is called, and the model answers the intent parse with a fixed operation.
 const h = vi.hoisted(() => ({
   handler: undefined as undefined | ((...args: unknown[]) => Promise<unknown>),
 }));
@@ -39,7 +39,18 @@ vi.mock('vscode', () => {
 });
 
 vi.mock('../jira/JiraApiClient', () => ({
-  JiraApiClient: vi.fn().mockImplementation(function () { return {}; }),
+  JiraApiClient: vi.fn().mockImplementation(function () {
+    return new Proxy({}, { get: (_t, name) => () => { throw new Error(`Jira was called: ${String(name)}`); } });
+  }),
+}));
+
+const imports = vi.hoisted(() => ({ veracode: [] as unknown[] }));
+vi.mock('../participant/jira/veracodeHandler', () => ({
+  handleImportVeracodeReport: async (...args: unknown[]) => { imports.veracode.push(args[6]); },
+  handleVeracodeTemplateSelection: async () => undefined,
+  handleVeracodeReviewReply: async () => undefined,
+  handleVeracodeAwaitIssueType: async () => undefined,
+  handleVeracodeStaleClose: async () => undefined,
 }));
 
 import { createJiraParticipant } from '../participant/JiraParticipant';
@@ -59,25 +70,31 @@ const configService = {
   isConfigured: () => true,
 };
 
-async function turn(prompt: string, extension: unknown = { packageJSON: { version: '9.9.9' } }, command?: string): Promise<{ text: string; result: unknown }> {
+/** A model whose intent parse answers with the given operation. */
+function modelAnswering(intent: Record<string, unknown>) {
+  return { sendRequest: async () => ({ text: (async function* () { yield JSON.stringify(intent); })() }) };
+}
+
+async function turn(prompt: string, extension: unknown = { packageJSON: { version: '9.9.9' } }, model: unknown = undefined): Promise<{ text: string; result: unknown }> {
   createJiraParticipant(createContext(extension) as never, configService as never);
   const parts: string[] = [];
   const stream = { markdown: (m: unknown) => { parts.push(typeof m === 'string' ? m : (m as { value: string }).value); }, progress: () => undefined };
-  const result = await h.handler!({ prompt, command, model: undefined }, { history: [] }, stream, { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => undefined }) });
+  const result = await h.handler!({ prompt, command: undefined, model }, { history: [] }, stream, { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => undefined }) });
   return { text: parts.join(''), result };
 }
 
 describe('@jira help screen', () => {
   beforeEach(() => { h.handler = undefined; });
 
-  it.each(['', 'hi', 'help', 'what can you do'])('shows the full help with the version for %j and keeps the greeting chips', async (prompt) => {
-    const { text, result } = await turn(prompt);
+  it.each(['', 'hi', 'help', 'what can you do'])('shows the imports-only help with the version for %j', async (prompt) => {
+    const { text } = await turn(prompt);
 
     expect(text).toContain('**Ticket Sidekick `@jira` · v9.9.9 — Help**');
-    expect(text).toContain('**Security report**');
-    expect(text).toContain('`/security-report PROJ`');
-    expect(text).not.toContain('manages Jira tickets in natural language');
-    expect((result as { metadata: { jiraFollowup: { kind: string } } }).metadata.jiraFollowup.kind).toBe('greeting');
+    expect(text).toContain('`import veracode report`');
+    expect(text).toContain('`@jira` now only imports reports');
+    expect(text).toContain('`/ts-jira help`');
+    expect(text).not.toContain('/security-report');
+    expect(text).not.toContain('`/create`');
   });
 
   it('still shows the help, with version unknown, when the extension has no package.json data', async () => {
@@ -85,10 +102,28 @@ describe('@jira help screen', () => {
 
     expect(text).toContain('**Ticket Sidekick `@jira` · vunknown — Help**');
   });
+});
 
-  it('does not show the help for an operation prompt that merely contains a greeting word', async () => {
-    const { text } = await turn('update HI-1 status');
+describe('@jira and the flows it no longer runs', () => {
+  beforeEach(() => { h.handler = undefined; imports.veracode = []; });
 
-    expect(text).not.toContain('— Help**');
+  it('answers a request for a removed flow with the notice and changes nothing in Jira', async () => {
+    const { text } = await turn('move PROJ-1 to Done', undefined, modelAnswering({ operation: 'other', ticketKey: 'PROJ-1', projectKey: null }));
+
+    expect(text).toContain('`@jira` now only imports reports');
+    expect(text).toContain('Agent mode');
+  });
+
+  it('treats an operation it does not know as a removed flow', async () => {
+    const { text } = await turn('transition these tickets', undefined, modelAnswering({ operation: 'bulkTransition' }));
+
+    expect(text).toContain('`@jira` now only imports reports');
+  });
+
+  it('still starts a report import', async () => {
+    const { text } = await turn('import veracode report for PROJ', undefined, modelAnswering({ operation: 'importVeracode', ticketKey: null, projectKey: 'PROJ' }));
+
+    expect(imports.veracode).toEqual(['PROJ']);
+    expect(text).not.toContain('now only imports reports');
   });
 });
