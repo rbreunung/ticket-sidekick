@@ -90,7 +90,7 @@ Made for this plan:
 - **Fields can be listed per ticket and per project and issue type.** (session-settled: user-directed — chosen over per ticket only, and over every field of the Jira instance.) Governs R41.
 - **`@jira /security-report` is removed in step 1.** (session-settled: user-approved — chosen over removal with the imports or with `@jira` itself.) Governs R33.
 - **Each step is a preview release first.** (session-settled: user-approved — chosen over a checklist before merge, and over automated tests only.) Governs R35.
-- **The minimum VS Code version rises in step 1.** (session-settled: user-directed — chosen over raising it with the last step, and over keeping the floor and showing a notice.) Governs R36.
+- **(Withdrawn, see R36.) The minimum VS Code version rises in step 1.** (session-settled: user-directed — chosen over raising it with the last step, and over keeping the floor and showing a notice.) Governs R36.
 - **The target architecture is documented and approved before any board code.** (session-settled: user-directed — chosen over writing the page while step 1 is built, over rewriting the migration document, and over a folder of separate decision records: the design is settled in advance and later feature work reads one page.) Governs R47 to R49.
 - **The work ends with a full documentation review.** (session-settled: user-directed.) Governs R50.
 - **The Output Channel is the only record of board writes.** (session-settled: user-approved — chosen over a result list on the board and over a journal file: no separate audit record is kept.) Governs R5.
@@ -165,8 +165,8 @@ Made for this plan:
 
 **New `/ts-jira` commands**
 
-- R28. `/ts-jira spell-check KEY` has the agent propose a corrected summary and description, written with the existing update tool after approval.
-- R29. `/ts-jira template KEY` builds a template entry from the ticket's fields with today's deterministic logic and adds it to `.jira-templates.json` after the developer confirms.
+- R28. `/ts-jira-spell-check KEY` has the agent propose numbered spelling and grammar corrections of the description only; a tool applies the approved ones to the description as Jira stores it. (Amended 2026-11-14: a skill of its own, description only, a dedicated tool instead of the update tool; see [`2026-11-14-1009-feat-spell-check-and-template-skills-plan.md`](2026-11-14-1009-feat-spell-check-and-template-skills-plan.md).)
+- R29. `/ts-jira-template KEY` builds a template entry from the ticket's fields with today's deterministic logic and adds it to `.jira-templates.json` after the developer confirms; a taken name gets the next free number. (Amended 2026-11-14: a skill of its own, from a ticket only, no-ticket mode dropped; see [`2026-11-14-1009-feat-spell-check-and-template-skills-plan.md`](2026-11-14-1009-feat-spell-check-and-template-skills-plan.md).)
 - R30. The preview-and-refine session for descriptions and comments is dropped without a replacement.
 - R40. The update tool sets any field by display name or ID, custom fields and sprint included, and can add or remove single values of a list field.
 - R41. `/ts-jira fields KEY` lists every field of a ticket with name, ID and current value. Without a key, for a project and issue type, it lists the fields that type can take with name, ID and whether each is required.
@@ -207,8 +207,8 @@ Every `@jira` and `@bitbucket` command, with what replaces it and the step that 
 | `@jira` bulk transition, bulk field update | Ticket list board (R8) | Step 1 |
 | `@jira` cleanup | Ticket list board (R9) | Step 1 |
 | `@jira` load, upload, workflow, check | Load, upload, workflow and connection tools (0.9.0) | Step 1 |
-| `@jira` spell check | R28 | Step 1 |
-| `@jira` template generation | R29 | Step 1 |
+| `@jira` spell check | `/ts-jira-spell-check`, `jira_correct_description` (R28) | Step 1 |
+| `@jira` template generation | `/ts-jira-template`, `jira_create_template` (R29) | Step 1 |
 | `@jira /security-report` | Security report board | Step 1 |
 | `@jira` description and comment preview | Dropped (R30) | Step 1 |
 | `@jira` help | `/ts-jira help` | Step 2 |

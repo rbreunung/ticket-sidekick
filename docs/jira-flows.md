@@ -115,7 +115,7 @@ Execution streams one line per ticket (subtasks first), then a summary. Failures
 
 ## Template generation
 
-`@jira` can generate a reusable `.jira-templates.json` template from a reference ticket's template-shaped fields, or from a project's required-fields metadata when no reference ticket is given, reviewed as an include/exclude list and saved on confirmation with an offer to create a first ticket from it — see [`docs/plans/2026-08-30-1135-feat-template-generation-from-ticket-plan.md`](plans/2026-08-30-1135-feat-template-generation-from-ticket-plan.md) and [`src/participant/jira/templateGenerationHandler.ts`](../src/participant/jira/templateGenerationHandler.ts).
+`@jira` no longer generates templates. `/ts-jira-template` and the `jira_create_template` tool do it from a reference ticket; see [`docs/manual/copilot-tools.md`](manual/copilot-tools.md).
 
 ## Filter discovery
 
@@ -162,17 +162,10 @@ Each session below is looked up by its `workspaceState` key; liveness is checked
 | `StaleResolutionAskSession` | `jira.session.staleResolution` | metadata — `jiraSession.kinds: ['stale-resolution-selection']` |
 | `EmailTemplateSelectionSession` | `jira.session.emailTemplateSelection` | metadata — `jiraSession.kinds: ['email-template']` |
 | `EmailReviewSession` | `jira.session.emailReview` | metadata — `jiraSession.kinds: ['email-review']` |
-| `TemplateGenerationAwaitNameSession` | `jira.session.templateGenAwaitName` | metadata — `jiraSession.kinds: ['template-gen-await-name']` |
-| `TemplateGenerationTypePickSession` | `jira.session.templateGenTypePick` | metadata — `jiraSession.kinds: ['template-gen-type-pick']` |
-| `TemplateGenerationAwaitFreeTypeSession` | `jira.session.templateGenAwaitFreeType` | metadata — `jiraSession.kinds: ['template-gen-await-free-type']` |
-| `TemplateGenerationReviewSession` | `jira.session.templateGenReview` | metadata — `jiraSession.kinds: ['template-gen-review']` |
-| `TemplateGenerationCollisionSession` | `jira.session.templateGenCollision` | metadata — `jiraSession.kinds: ['template-gen-collision']` |
-| `TemplateGenerationOfferCreateSession` | `jira.session.templateGenOfferCreate` | metadata — `jiraSession.kinds: ['template-gen-offer-create']` |
-| `TemplateGenerationAwaitSummarySession` | `jira.session.templateGenAwaitSummary` | metadata — `jiraSession.kinds: ['template-gen-await-summary']` |
 | `UploadReviewSession` | `jira.session.uploadReview` | metadata — `jiraSession.kinds: ['upload-review']` |
 | `AwaitUploadTicketSession` | `jira.session.awaitUploadTicket` | metadata — `jiraSession.kinds: ['await-upload-ticket']` |
 
-Detection order in the Jira handler: resolution selection → transition review → guided transition → multi-transition → filter selection → selecting-constraint-match → listing-filters → bulk-update-review → combined template/issue-type selection → shared issue-type ask (R6) → creation → content → more-comments → check command → email content (comment-attach) → batch email template selection → batch email review → veracode template selection → veracode review → Waltz template selection → Waltz review → template-gen await-name (R2) → template-gen type pick → template-gen await-free-type (R3) → template-gen review → template-gen collision → template-gen offer-create → template-gen await-summary → comment list → upload review → await-upload-ticket → greeting/empty-prompt check → intent parse.
+Detection order in the Jira handler: resolution selection → transition review → guided transition → multi-transition → filter selection → selecting-constraint-match → listing-filters → bulk-update-review → combined template/issue-type selection → shared issue-type ask (R6) → creation → content → more-comments → check command → email content (comment-attach) → batch email template selection → batch email review → veracode template selection → veracode review → Waltz template selection → Waltz review → comment list → upload review → await-upload-ticket → greeting/empty-prompt check → intent parse.
 
 The shared issue-type ask (`AwaitIssueTypeSession`, R6/KTD4) replaces `resolveIssueTypeOrPrompt()`'s
 former `showInputBox` for every flow that resolves an issue type before creating a ticket —

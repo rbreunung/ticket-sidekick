@@ -17,7 +17,7 @@ to know "what's AI-backed", skip to section 3+ for actual suggestions.
 | 2 | `llmHelpers.ts` → `generateContent` | Writes comment/description text (new, or from conversation history) |
 | 3 | `llmHelpers.ts` → `synthesizeComments` | Summarizes ticket comments, or finds ones matching a topic |
 | 4 | `llmHelpers.ts` → `generateDescriptionAndCommentsSummary` | Writes the one-paragraph TL;DR for `@jira summarize` |
-| 5 | `llmHelpers.ts` → `spellCheckValue` | Spell/grammar-checks a ticket description |
+| 5 | `llmHelpers.ts` → `spellCheckValue` (removed 2026-11-14: `/ts-jira-spell-check` has Copilot's agent find the corrections) | Spell/grammar-checks a ticket description |
 | 6 | `createHandler.ts` → `checkSectionCoverage` | During ticket creation, figures out which template sections your text already answered |
 | 7 | `BitbucketParticipant.ts` pass 1 | First-pass PR review — reads the diff, returns findings |
 | 8 | `BitbucketParticipant.ts` continuation | Re-asks for files the model didn't get to if pass 1 ran out of room |

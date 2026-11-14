@@ -13,9 +13,9 @@ This page describes how Ticket Sidekick is built once the chat participants are 
 - **Tools:** the Jira tool catalog (`src/tools/jiraTools/`) is registered with VS Code as language model tools by `src/tools/registerJiraTools.ts`. That is the only route; no setting chooses one. Decision D21.
 - **Host:** a board is a webview in an editor tab the extension opens (`src/boards/boardPanels.ts`). The tab loads the page from the extension's own files and the page talks to the extension with `postMessage`. Decisions D18 and D20.
 - **Removed on 2026-11-13:** the MCP server with its lifecycle, keys, request guard and diagnostics command; the `ticketSidekick.jira.toolsFrom` setting; the local HTTP server and the `http.noProxy` requirement; the canvas program, the agent plugin and the `@github/copilot-sdk` and `@modelcontextprotocol/sdk` dependencies. Why: an organisation's Copilot policy blocked the MCP server while extension tools got through, VS Code 1.146 did not register an extension's canvas, and two routes for the same tools was a switch nobody wanted to operate.
-- **Built:** the session core, the board message handling, the security report board, the ticket list board (search, bulk move, bulk field update), the sessions board, and of the plan's step 1 tools R40 to R42.
+- **Built:** the session core, the board message handling, the security report board, the ticket list board (search, bulk move, bulk field update), the sessions board, and of the plan's step 1 tools R40 to R42, plus spell check (R28) and template from a ticket (R29) as `/ts-jira-spell-check` and `/ts-jira-template` with their tools.
 - **Open points:** the full list, with the requirement each belongs to and the participant flow it blocks, is in [`migration-status.md`](migration-status.md).
-- **Not built:** cleanup on the ticket list board (R9), spell check (R28), template from a ticket (R29), the import board, the PR review board with its Bitbucket tool additions, and the removal of the deprecated `@jira` and `@bitbucket` participants.
+- **Not built:** cleanup on the ticket list board (R9), the import board, the PR review board with its Bitbucket tool additions, and the removal of the deprecated `@jira` and `@bitbucket` participants.
 
 ## 1. The idea in one paragraph
 

@@ -1,8 +1,8 @@
-Put it all together: generate a reusable ticket template from your project's real required fields (or from an example ticket), then create your first ticket from it.
+Put it all together: turn an example ticket into a reusable ticket template, then create your first ticket from it.
 
-[Ask @jira to generate a template](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40jira%20generate%20a%20template%22%7D%5D)
+[Create a template from a ticket](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%2Fts-jira-template%20%3CKEY%3E%20%3CNAME%3E%22%2C%22isPartialQuery%22%3Atrue%7D%5D)
 
-Follow the prompts to name the template, review its fields, and save it — then reply with a summary (or **yes**) when asked whether to create a first ticket from it.
+Approve the confirmation that lists the template's fields; the answer ends with the `/ts-jira-create` command that creates a ticket from it.
 
 Or skip straight to a direct create:
 

@@ -110,7 +110,6 @@ Open GitHub Copilot Chat and use `@jira`:
 | `@jira check` | Validates the base URL, tests the connection, and shows active configuration |
 | `@jira create from email` | Create a Jira ticket from an imported `.eml` file |
 | `@jira import veracode report` | Create Jira tickets from a Veracode Detailed Report XML export |
-| `@jira generate a template from PROJ-123 called "Billing Bug"` | Generate a reusable `.jira-templates.json` template from a reference ticket's fields — reviewed and confirmed before saving |
 | `@jira upload the report to PROJ-123` | Attach one or more local files to a ticket — shows a confirmation before uploading |
 
 **Slash commands** — typing `@jira /` in Copilot Chat lists shortcuts for the most common operations. Each one is the same as writing the request in your own words (`@jira /view PROJ-123` does what `@jira view PROJ-123` does):
@@ -270,7 +269,7 @@ You can include these directly in the create prompt and the plugin will extract 
 
 **Scope:** if your last search returned multiple tickets, the plugin asks whether to apply to the current ticket or all N results from the search.
 
-**Spell check on demand:** run `@jira spell check PROJ-123` to check and correct spelling and grammar on a ticket's description. The corrected version is shown as a preview before applying.
+**Spell check:** in a Copilot chat, `/ts-jira-spell-check PROJ-123` lists spelling and grammar corrections for a ticket's description and writes only the ones you approve; see [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md).
 
 ### Content generation and preview
 
